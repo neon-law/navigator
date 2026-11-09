@@ -54,7 +54,6 @@ fn catalog_index_content(
 ) -> webapp::catalog_index::CatalogIndexContent {
     webapp::catalog_index::CatalogIndexContent {
         title: title.to_string(),
-        introduction: None,
         lede: lede.to_string(),
         materials: workshops
             .materials()
@@ -72,7 +71,7 @@ fn catalog_index_content(
         footnote: String::new(),
         include_testimonials,
         brand_key: String::new(),
-        kinds: Vec::new(),
+        about_href: String::new(),
     }
 }
 
@@ -291,10 +290,10 @@ fn notation_card(
 /// catalog section — a direct projection of `views::kind_catalog::entries()`,
 /// itself built from `rules::kind::Kind`, so this list can never drift from
 /// the gate.
-fn kind_catalog_entries() -> Vec<webapp::catalog_index::KindCatalogEntry> {
+fn kind_catalog_entries() -> Vec<webapp::notations_about::KindCatalogEntry> {
     views::kind_catalog::entries()
         .into_iter()
-        .map(|entry| webapp::catalog_index::KindCatalogEntry {
+        .map(|entry| webapp::notations_about::KindCatalogEntry {
             kind: entry.kind,
             label: entry.label,
             category: entry.category,
@@ -303,7 +302,7 @@ fn kind_catalog_entries() -> Vec<webapp::catalog_index::KindCatalogEntry> {
             rules: entry
                 .rules
                 .into_iter()
-                .map(|rule| webapp::catalog_index::KindRule {
+                .map(|rule| webapp::notations_about::KindRule {
                     code: rule.code,
                     note: rule.note,
                 })
@@ -635,15 +634,23 @@ fn notation_preview_docs() -> Vec<webapp::notation_preview::PreviewDoc> {
     docs
 }
 
+/// The `/notations/about` story: the format's four slides from the English
+/// catalog and the kind catalog `S103` validates against.
+fn notations_about_content() -> webapp::notations_about::NotationsAboutContent {
+    webapp::notations_about::NotationsAboutContent {
+        introduction: crate::locales::notations_content(),
+        kinds: kind_catalog_entries(),
+    }
+}
+
 /// The public `/notations` catalog: the bundled letters and filings, plus
 /// every government form in `templates/notations/forms/`.
 #[allow(clippy::too_many_lines)] // The literal public inventory stays aligned with the preview catalog above.
 fn notations_index_content() -> webapp::catalog_index::CatalogIndexContent {
-    let introduction = crate::locales::notations_content();
     let mut content = webapp::catalog_index::CatalogIndexContent {
         title: NOTATIONS_INDEX_TITLE.to_string(),
-        lede: introduction.meta_description.clone(),
-        introduction: Some(introduction),
+        lede: crate::locales::notations_content().meta_description,
+        about_href: portal::dioxus_app::NOTATIONS_ABOUT_PATH.to_string(),
         materials: vec![
             notation_card(
                 "Firm",
@@ -895,7 +902,6 @@ fn notations_index_content() -> webapp::catalog_index::CatalogIndexContent {
         footnote: String::new(),
         include_testimonials: false,
         brand_key: String::new(),
-        kinds: kind_catalog_entries(),
     };
     content.materials.push(notation_card(
         "Nevada",
@@ -1045,6 +1051,7 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
         notations_index_content(),
         state.surreal.clone(),
     ));
+    routers.push(dioxus_app::notations_about_router(notations_about_content()));
     // Also carries `navigator notation preview`'s draft door (LAW-29): a
     // pushed template, stored and addressable but explicitly not run. Both
     // mounts share one `FullstackState` deliberately — see the function's
@@ -1993,7 +2000,10 @@ mod formation_engagement_copy_tests {
 mod notation_catalog_tests {
     use std::{collections::BTreeSet, fs, path::Path};
 
-    use super::{notation_preview_docs, notations_index_content, NOTATIONS_BLOB_BASE};
+    use super::{
+        notation_preview_docs, notations_about_content, notations_index_content,
+        NOTATIONS_BLOB_BASE,
+    };
 
     fn collect_markdown_paths(root: &Path, base: &Path, paths: &mut BTreeSet<String>) {
         for entry in fs::read_dir(root).expect("read legal template shelf") {
@@ -2315,10 +2325,10 @@ mod notation_catalog_tests {
     /// exactly — every kind `S103` accepts, with none dropped or invented.
     #[test]
     fn the_kind_catalog_matches_the_shared_source() {
-        let catalog = notations_index_content();
+        let about = notations_about_content();
         let expected = views::kind_catalog::entries();
-        assert_eq!(catalog.kinds.len(), expected.len());
-        let agreement = catalog
+        assert_eq!(about.kinds.len(), expected.len());
+        let agreement = about
             .kinds
             .iter()
             .find(|entry| entry.kind == "agreement")

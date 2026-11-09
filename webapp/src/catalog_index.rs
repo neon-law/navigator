@@ -1,14 +1,16 @@
 //! `/workshops`, `/presentations`, and `/notations` — the firm's material indexes.
 //!
 //! Categories share the public shell and material list. The portal pre-layer
-//! injects each category's content. Notations opens with its searchable template catalog.
+//! injects each category's content. Notations is the searchable template
+//! gallery alone; the format's story lives at `/notations/about`
+//! ([`crate::notations_about`]).
 
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::components::{
-    Accordion, CatalogHero, PlainCodeBlock, PublicShell, SocialMeta, TestimonialCard,
-    TestimonialSection, CATALOG_STYLESHEET_HREF,
+    CatalogHero, PublicShell, SocialMeta, TestimonialCard, TestimonialSection,
+    CATALOG_STYLESHEET_HREF,
 };
 use crate::public_chrome::{PublicChrome, PublicFooter, PublicHeader};
 
@@ -41,29 +43,6 @@ pub struct CatalogMaterial {
     pub category_slug: String,
 }
 
-/// One kind-specific structural lint rule bound to a [`KindCatalogEntry`], as
-/// a `(code, one-sentence requirement)` pair.
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
-pub struct KindRule {
-    pub code: String,
-    pub note: String,
-}
-
-/// One `kind:` value's `/notations` catalog entry (LAW-53) — its definition,
-/// its category, and the structural rules bound to it. Built server-side
-/// from `views::kind_catalog::entries()`, itself a projection of
-/// `rules::kind::Kind` — the same enum `S103` validates a declared `kind:`
-/// against — so this catalog cannot drift from the gate.
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
-pub struct KindCatalogEntry {
-    pub kind: String,
-    pub label: String,
-    pub category: String,
-    pub category_slug: String,
-    pub definition: String,
-    pub rules: Vec<KindRule>,
-}
-
 /// One category index's resolved content, built per request by the portal
 /// pre-layer and injected for [`catalog_index_view`]. The wasm-safe carrier
 /// across the server-function boundary.
@@ -71,9 +50,10 @@ pub struct KindCatalogEntry {
 pub struct CatalogIndexContent {
     /// The category's heading, and the page title after the brand name.
     pub title: String,
-    /// Optional long-form introduction above the material catalog.
+    /// The companion page that explains the format, linked under the
+    /// heading. Empty renders no link.
     #[serde(default)]
-    pub introduction: Option<crate::marketing_page::PageContent>,
+    pub about_href: String,
     /// The hero paragraph, reused as the page's meta description.
     pub lede: String,
     pub materials: Vec<CatalogMaterial>,
@@ -87,11 +67,6 @@ pub struct CatalogIndexContent {
     /// The request's resolved brand, used only for the server-side store read.
     #[serde(default)]
     pub brand_key: String,
-    /// Every `kind:` value `S103` accepts (LAW-53), for `/notations`' kind
-    /// catalog section. Empty for every other catalog (workshops,
-    /// presentations), which has no `kind:` vocabulary to document.
-    #[serde(default)]
-    pub kinds: Vec<KindCatalogEntry>,
 }
 
 /// The [`CatalogIndexContent`] the portal pre-layer injects, read back in
@@ -174,6 +149,9 @@ pub fn CatalogIndexPage(
         PublicFooter { chrome: chrome.clone() }
     };
     let head_title = format!("{} | {}", chrome.brand_name, content.title);
+    // A material with a `kind` is a notation: the catalog is then the
+    // template gallery, with its own heading and stylesheet.
+    let is_gallery = content.materials.iter().any(|m| !m.kind.is_empty());
     rsx! {
         document::Title { "{head_title}" }
         document::Meta { name: "description", content: content.lede.clone() }
@@ -194,8 +172,8 @@ pub fn CatalogIndexPage(
         }
         document::Stylesheet { href: CATALOG_STYLESHEET_HREF }
         PublicShell { header, footer,
-            if content.introduction.is_some() {
-                document::Stylesheet { href: "/public/css/notations.css" }
+            if is_gallery {
+                document::Stylesheet { href: crate::notations_about::NOTATIONS_STYLESHEET_HREF }
             } else {
                 CatalogHero {
                     eyebrow: chrome.brand_name.clone(),
@@ -204,9 +182,14 @@ pub fn CatalogIndexPage(
                 }
             }
             section { id: "templates", class: "catalog-library",
-                class: if content.introduction.is_some() { "catalog-library--notations" },
-            if content.introduction.is_some() {
+                class: if is_gallery { "catalog-library--notations" },
+            if is_gallery {
                 h1 { "{content.title}" }
+            }
+            if !content.about_href.is_empty() {
+                p { class: "catalog-about",
+                    a { href: "{content.about_href}", "About the Notation format →" }
+                }
             }
             if content.materials.is_empty() {
                 p { class: "catalog-empty",
@@ -215,7 +198,7 @@ pub fn CatalogIndexPage(
                     " for the runbook in the meantime."
                 }
             } else {
-                if content.materials.iter().any(|m| !m.kind.is_empty()) {
+                if is_gallery {
                     TemplateGallery { materials: content.materials.clone() }
                 } else {
                     CatalogMaterialList { materials: content.materials.clone() }
@@ -225,14 +208,6 @@ pub fn CatalogIndexPage(
                 }
             }
             }
-            if let Some(introduction) = content.introduction.clone() {
-                Accordion { title: "About the Notation format".to_string(),
-                    NotationsIntroduction { content: introduction }
-                }
-            }
-            if !content.kinds.is_empty() {
-                KindCatalogSection { kinds: content.kinds.clone() }
-            }
             if content.include_testimonials {
                 TestimonialSection {
                     heading: "Testimonials".to_string(),
@@ -240,41 +215,6 @@ pub fn CatalogIndexPage(
                     cards: testimonials,
                 }
             }
-        }
-    }
-}
-
-/// The format's opening specimen, followed by the shared marketing bands.
-#[component]
-fn NotationsIntroduction(content: crate::marketing_page::PageContent) -> Element {
-    let specimen = "---\nkind: agreement\ntitle: Sample agreement\nprompts:\n  delivery: How should notices arrive?\nchoices:\n  delivery:\n    email: By email\n    post: By post\nquestionnaire:\n  BEGIN: { _: custom_single_choice__delivery }\n  custom_single_choice__delivery: { _: END }\n  END: {}\n# … workflow and other metadata\n---\n\n## I. Notices\n\nDelivery method: {{custom_single_choice__delivery}}.";
-    rsx! {
-        document::Stylesheet { href: crate::marketing_page::MARKETING_STYLESHEET_HREF }
-        div { class: "notations-page",
-            section { class: "notations-hero",
-                div { class: "notations-hero__copy",
-                    h2 { "{content.tagline}" }
-                    div { class: "notations-lead",
-                        crate::marketing_page::Prose { runs: content.hero_lead_runs.clone() }
-                    }
-                    div { class: "notations-actions",
-                        if let Some(cta) = &content.hero_cta {
-                            a { class: "nav-btn nav-btn--primary", href: "{cta.href}", "{cta.label} ↗" }
-                        }
-                        a { href: "#notation-flow", "Follow the format ↓" }
-                    }
-                }
-                figure { class: "notations-specimen", id: "notation-source",
-                    figcaption { span { "agreement.md" } }
-                    PlainCodeBlock { code: specimen.to_string() }
-                    div { class: "notations-specimen__footer",
-                        span { "YAML Frontmatter" }
-                        span { "+" }
-                        span { "Markdown body" }
-                    }
-                }
-            }
-            crate::marketing_page::Bands { items: content.bands, notation_mark: true }
         }
     }
 }
@@ -444,52 +384,6 @@ fn TemplateGallery(materials: Vec<CatalogMaterial>) -> Element {
     }
 }
 
-/// The `/notations` kind catalog (LAW-53): every `kind:` value `S103`
-/// accepts, generated from [`rules::kind::Kind`] — the same enum `S103`
-/// validates against — so it can never drift from the gate.
-#[component]
-fn KindCatalogSection(kinds: Vec<KindCatalogEntry>) -> Element {
-    rsx! {
-        section { id: "kinds", class: "kind-catalog",
-            h2 { "Every notation kind" }
-            p { class: "kind-catalog__intro",
-                "Every value S103 accepts, generated from the same source the gate validates \
-                 against — a definition, its category, and the structural rules bound to it."
-            }
-            ul { class: "kind-catalog__list",
-                for entry in kinds.iter() {
-                    li {
-                        class: "kind-catalog__entry",
-                        key: "{entry.kind}",
-                        id: "kind-{entry.kind}",
-                        "data-category": "{entry.category_slug}",
-                        div { class: "kind-catalog__heading",
-                            code { class: "kind-catalog__value", "{entry.kind}" }
-                            span { class: "kind-catalog__category catalog-badge", "{entry.category}" }
-                        }
-                        p { class: "kind-catalog__definition", "{entry.definition}" }
-                        if entry.rules.is_empty() {
-                            p { class: "kind-catalog__rules kind-catalog__rules--none",
-                                "No kind-specific structural rule beyond the shared Markdown \
-                                 checks every file gets, regardless of kind."
-                            }
-                        } else {
-                            ul { class: "kind-catalog__rules",
-                                for rule in entry.rules.iter() {
-                                    li { key: "{rule.code}",
-                                        strong { "{rule.code}" }
-                                        " — {rule.note}"
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
 /// One list of materials.
 #[component]
 fn CatalogMaterialList(materials: Vec<CatalogMaterial>) -> Element {
@@ -554,7 +448,6 @@ mod tests {
     fn workshops() -> CatalogIndexContent {
         CatalogIndexContent {
             title: "Workshops".to_string(),
-            introduction: None,
             lede: "Hands-on classes.".to_string(),
             materials: vec![
                 material("Using Neon Law Navigator", "/workshops/use-the-navigator"),
@@ -567,7 +460,7 @@ mod tests {
             footnote: "More classes land here as we run them.".to_string(),
             include_testimonials: false,
             brand_key: String::new(),
-            kinds: Vec::new(),
+            about_href: String::new(),
         }
     }
 
@@ -642,7 +535,6 @@ mod tests {
         fn app() -> Element {
             let content = CatalogIndexContent {
                 title: "Notations".to_string(),
-                introduction: None,
                 lede: "One markdown file is the template, questionnaire, and workflow.".to_string(),
                 materials: vec![
                     CatalogMaterial {
@@ -664,7 +556,7 @@ mod tests {
                 footnote: String::new(),
                 include_testimonials: false,
                 brand_key: String::new(),
-            kinds: Vec::new(),
+                about_href: String::new(),
             };
             rsx! {
                 CatalogIndexPage { chrome: PublicChrome::default(), content }
@@ -753,25 +645,13 @@ mod tests {
     fn notations_content_with_kind_facets() -> CatalogIndexContent {
         CatalogIndexContent {
             title: "Notations".to_string(),
-            introduction: None,
             lede: "Every kind, documented.".to_string(),
             materials: kind_tagged_materials(),
             contact_email: "support@example.org".to_string(),
             footnote: String::new(),
             include_testimonials: false,
             brand_key: String::new(),
-            kinds: vec![KindCatalogEntry {
-                kind: "agreement".to_string(),
-                label: "Agreement".to_string(),
-                category: "Instrument".to_string(),
-                category_slug: "instrument".to_string(),
-                definition: "A private agreement (employment, contractor, LLC operating)"
-                    .to_string(),
-                rules: vec![KindRule {
-                    code: "N123".to_string(),
-                    note: "Depth-1 sections must be numbered with Roman numerals.".to_string(),
-                }],
-            }],
+            about_href: "/notations/about".to_string(),
         }
     }
 
@@ -827,7 +707,7 @@ mod tests {
     }
 
     #[test]
-    fn the_kind_catalog_section_documents_a_kind_with_its_rule() {
+    fn the_gallery_links_the_format_story_instead_of_telling_it() {
         fn app() -> Element {
             rsx! {
                 CatalogIndexPage {
@@ -837,24 +717,13 @@ mod tests {
             }
         }
         let out = ssr(app);
-        assert!(out.contains("Every notation kind"), "{out}");
-        assert!(out.contains(r#"id="kind-agreement""#), "{out}");
         assert!(
-            out.contains("A private agreement (employment, contractor, LLC operating)"),
-            "{out}"
+            out.contains(r#"href="/notations/about""#),
+            "about link: {out}"
         );
-        assert!(out.contains("N123"), "{out}");
-        assert!(
-            out.contains("Depth-1 sections must be numbered with Roman numerals."),
-            "{out}"
-        );
-    }
-
-    #[test]
-    fn a_catalog_with_no_kinds_renders_no_kind_catalog_section() {
-        // Workshops and presentations carry no `kind:` vocabulary — the
-        // section must stay absent rather than rendering an empty heading.
-        let out = html();
         assert!(!out.contains("Every notation kind"), "{out}");
+        assert!(!out.contains("notations-page"), "{out}");
+        // A catalog without a companion page renders no link at all.
+        assert!(!html().contains("catalog-about"), "{}", html());
     }
 }
