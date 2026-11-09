@@ -1648,7 +1648,16 @@ mod home_page_tests {
         );
         assert!(home.company.is_none());
         assert!(home.signup.is_none());
-        for key in BrandKey::ALL.iter().filter(|key| **key != BrandKey::Neon) {
+        // The IEP Defenders and Lex Tecnica homes are marketing-page band
+        // sequences by design (their `home-marketing` catalogs); every
+        // other brand keeps the legacy home schema without a marketing
+        // page.
+        for key in BrandKey::ALL.iter().filter(|key| {
+            !matches!(
+                key,
+                BrandKey::Neon | BrandKey::IepDefenders | BrandKey::LexTecnica
+            )
+        }) {
             let content = resolve_firm_home_content(
                 key.resolve_branding(&views::brand::DEFAULT_BRANDING),
                 None,
