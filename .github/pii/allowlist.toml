@@ -199,6 +199,10 @@ values = [
 reason = "The published firm and legal Entity names verified at lextecnica.com/terms-conditions/."
 values = ["Lex Tecnica", "Lex Tecnica, Ltd."]
 
+[[names]]
+reason = "Synthetic design-gallery demo attributions: the marketing-band showcase's sample testimonial quotes (webapp/src/design.rs and its SSR test)."
+values = ["Aries Ram", "Taurus Bull"]
+
 [[name_tokens]]
 reason = "Synthetic fixture names: zodiac personas, placeholder people, and the sample matters."
 values = [
