@@ -788,11 +788,21 @@ mod tests {
         let out = render(vec![interactive("custom_text", "First?", vec![]), client]);
         assert!(out.contains("Question 1 of 2"), "{out}");
         assert!(out.contains("All 2 questions · 0 answered"), "{out}");
-        assert!(out.contains("nav-table notation-demo__outline-table"), "{out}");
+        assert!(
+            out.contains("nav-table notation-demo__outline-table"),
+            "{out}"
+        );
         assert!(out.contains(r#"aria-current="step""#), "{out}");
         // Status reads as an icon whose accessible name says it.
-        assert_eq!(out.matches("<title>Not answered</title>").count(), 2, "{out}");
-        assert!(!out.contains("nav-badge"), "status is an icon, not a pill: {out}");
+        assert_eq!(
+            out.matches("<title>Not answered</title>").count(),
+            2,
+            "{out}"
+        );
+        assert!(
+            !out.contains("nav-badge"),
+            "status is an icon, not a pill: {out}"
+        );
         // One tab stop: the current row; arrows move between the rest.
         assert_eq!(out.matches(r#"tabindex="0""#).count(), 1, "{out}");
         assert_eq!(out.matches(r#"tabindex="-1""#).count(), 1, "{out}");
@@ -832,7 +842,10 @@ mod tests {
             ("a".to_string(), "Acme".to_string()),
             ("b".to_string(), "   ".to_string()),
             ("c".to_string(), "[]".to_string()),
-            ("stale".to_string(), "kept from an older template".to_string()),
+            (
+                "stale".to_string(),
+                "kept from an older template".to_string(),
+            ),
         ]);
         assert!(is_answered(&questions[0], &answers));
         assert!(!is_answered(&questions[1], &answers));

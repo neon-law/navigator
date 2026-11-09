@@ -454,7 +454,10 @@ async fn assert_outline_jumps_and_moves_by_keyboard(client: &fantoccini::Client)
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_eq!(count().await, format!("Question {total} of {total}"));
 
-    jumps[0].click().await.expect("jump back to the first question");
+    jumps[0]
+        .click()
+        .await
+        .expect("jump back to the first question");
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_eq!(count().await, format!("Question 1 of {total}"));
     if total > 1 {
@@ -464,13 +467,22 @@ async fn assert_outline_jumps_and_moves_by_keyboard(client: &fantoccini::Client)
             .expect("arrow down");
         tokio::time::sleep(Duration::from_millis(100)).await;
         let focused = client
-            .execute("return document.activeElement.getAttribute('aria-label');", vec![])
+            .execute(
+                "return document.activeElement.getAttribute('aria-label');",
+                vec![],
+            )
             .await
             .expect("focused element");
         assert!(
-            focused.as_str().is_some_and(|label| label.starts_with("Go to question 2:")),
+            focused
+                .as_str()
+                .is_some_and(|label| label.starts_with("Go to question 2:")),
             "ArrowDown moves focus to the next row: {focused:?}"
         );
-        assert_eq!(count().await, format!("Question 1 of {total}"), "arrows move focus, not the walk");
+        assert_eq!(
+            count().await,
+            format!("Question 1 of {total}"),
+            "arrows move focus, not the walk"
+        );
     }
 }

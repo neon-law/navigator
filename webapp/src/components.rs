@@ -673,8 +673,8 @@ mod control_contract {
     /// `×` is left out on purpose — it is the multiplication sign in
     /// `1080×1920`, not a close control.
     const GLYPH_ICONS: &[char] = &[
-        '←', '→', '↑', '↓', '↗', '↘', '↩', '↪', '✓', '✔', '✗', '✘', '✕', '✖', '★', '☆', '⚠',
-        '▸', '▾', '▶', '◀', '►',
+        '←', '→', '↑', '↓', '↗', '↘', '↩', '↪', '✓', '✔', '✗', '✘', '✕', '✖', '★', '☆', '⚠', '▸',
+        '▾', '▶', '◀', '►',
     ];
 
     /// Page modules that still draw an icon as a text glyph — mostly a `← Back`
