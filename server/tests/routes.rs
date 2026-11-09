@@ -11175,11 +11175,15 @@ async fn assert_brand_home_lead_capture(
     db: &store::surreal::SurrealDb,
     brand: views::brand::BrandKey,
 ) {
-    // The band-built Lex Tecnica home closes on a Contact Us link to
-    // `/contact` — its published CTA shape — rather than an inline lead
-    // form. Its lead-capture path runs through the contact page on the
-    // brand's own host, which serves the one lead form.
-    if brand == views::brand::BrandKey::LexTecnica {
+    // The band-built IEP Defenders and Lex Tecnica homes close on a
+    // Contact Us link to `/contact` — their published CTA shape — rather
+    // than an inline lead form. Their lead-capture path runs through the
+    // contact page on the brand's own host, which serves the one lead
+    // form.
+    if matches!(
+        brand,
+        views::brand::BrandKey::IepDefenders | views::brand::BrandKey::LexTecnica
+    ) {
         let host = brand.canonical_host();
         let response = get_on_host(app, "/", host).await;
         assert_eq!(response.status(), StatusCode::OK, "{host} home");
