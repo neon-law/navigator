@@ -198,7 +198,9 @@ pub(crate) fn route_finding(
 /// answer carries no declared set, so neither names an edge. Mirrors
 /// the question-registry type gate in `workflows::spec`
 /// (`routes_by_answer` there); the drift test pins the two together.
-fn routes_by_answer(state: &str) -> bool {
+/// Body-read route safety uses the same gate so a closed choice is not
+/// enumerated as an open-ended answer.
+pub(crate) fn routes_by_answer(state: &str) -> bool {
     let ty = state.split("__").next().unwrap_or(state);
     matches!(ty, "custom_single_choice" | "custom_yes_no")
 }

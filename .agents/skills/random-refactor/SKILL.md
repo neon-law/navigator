@@ -27,14 +27,14 @@ Record the path, the crate, and `rtk git log -1 --oneline -- <path>`. Refuse `ta
 
 ## 2. Read the references that apply
 
-rustc, clippy, and rustfmt review before prose does: run `cargo fmt --check` and `rtk cargo clippy -p <crate>
---all-targets -- -D warnings` first. The standard-library source is installed at `$(rustc --print
-sysroot)/lib/rustlib/src/rust/library/std` (`rustup component add rust-src` restores it): grep it for the same type
-before accepting a local helper, and never invent a std API from memory. Read only the chapters of [The Rust
-Book](https://doc.rust-lang.org/book/) the file's constructs use. Cite the [API
+rustc, clippy, and rustfmt review first (`M-STATIC-VERIFICATION`): `cargo fmt --check` and `rtk cargo clippy -p <crate>
+--all-targets -- -D warnings`. Grep std at `$(rustc --print sysroot)/lib/rustlib/src/rust/library/std` (`rustup
+component add rust-src`) before a local helper; never invent a std API. Read only the
+[Book](https://doc.rust-lang.org/book/) and [Rust by Example](https://doc.rust-lang.org/rust-by-example/) chapters the
+file uses (Foundation [learn catalog](https://www.rust-lang.org/learn); Klabnik/Nichols). Cite the [API
 Guidelines](https://rust-lang.github.io/api-guidelines/checklist.html) (C-CONV, C-GETTER, C-CTOR) or Microsoft's
-[Pragmatic Rust Guidelines](https://microsoft.github.io/rust-guidelines/) only for the finding that rests on them. A
-public item with no caller is unused.
+[Pragmatic Rust Guidelines](https://microsoft.github.io/rust-guidelines/) (`M-UPSTREAM-GUIDELINES`, `M-REGULAR-FN`) only
+for the finding that rests on them. A public item with no caller is unused.
 
 ## 3. Compare similar patterns
 

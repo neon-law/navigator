@@ -242,6 +242,59 @@ mod tests {
     }
 
     #[test]
+    fn closed_yes_no_choices_do_not_invent_fallback_answers() {
+        // Both authored answers collect the read. `_` is only the unknown-answer
+        // sink; enumerating "", "false", or a synthetic truthy value as if this
+        // were open-ended would take that sink and falsely flag the read.
+        let source = file(
+            "---\nkind: onboarding\ntitle: T\nchoices:\n  ok:\n    yes: Yes\n    no: No\n\
+             questionnaire:\n  BEGIN: {_: custom_yes_no__ok}\n  custom_yes_no__ok: \
+             {yes: custom_text__read, no: custom_text__read, _: END}\n  custom_text__read: \
+             {_: END}\n  END: {}\n---\n{{custom_text__read}}\n",
+        );
+        assert!(
+            F120BodyStateGrounding.lint(&source).is_empty(),
+            "{:?}",
+            F120BodyStateGrounding.lint(&source)
+        );
+    }
+
+    #[test]
+    fn an_iterator_must_be_collected_on_every_rendering_route() {
+        use crate::F115PathResolution;
+        let source = file(
+            "---\nkind: onboarding\ntitle: T\nchoices:\n  path:\n    a: A\n    b: B\n\
+             questionnaire:\n  BEGIN: {_: custom_single_choice__path}\n  \
+             custom_single_choice__path: {a: people__members, b: custom_text__b}\n  \
+             people__members: {_: END}\n  custom_text__b: {_: END}\n  END: {}\n---\n\
+             {{#for m in people__members}}{{m.name}}{{/for}}\n",
+        );
+        let route_findings = |source: &SourceFile| {
+            F115PathResolution
+                .lint(source)
+                .into_iter()
+                .filter(|finding| finding.message.contains("questionnaire route"))
+                .count()
+        };
+        assert_eq!(
+            route_findings(&source),
+            1,
+            "{:?}",
+            F115PathResolution.lint(&source)
+        );
+        let guarded = file(&source.contents.replace(
+            "{{#for m in people__members}}{{m.name}}{{/for}}",
+            "{{#if custom_single_choice__path=a}}{{#for m in people__members}}{{m.name}}{{/for}}{{/if}}",
+        ));
+        assert_eq!(
+            route_findings(&guarded),
+            0,
+            "{:?}",
+            F115PathResolution.lint(&guarded)
+        );
+    }
+
+    #[test]
     fn numeric_choice_keys_follow_the_authored_route() {
         let source =
             branched("{{#if custom_single_choice__path=1}}{{custom_text__b}}{{else}}Other{{/if}}");

@@ -263,6 +263,12 @@ fn random_refactor_skill_grounds_a_file_against_stdlib_and_repo() {
         "Presentations or Workshops",
         "/tmp/navigator-random-refactor/",
         "create-pr",
+        "Rust by Example",
+        "learn catalog",
+        "Klabnik",
+        "M-STATIC-VERIFICATION",
+        "M-UPSTREAM-GUIDELINES",
+        "M-REGULAR-FN",
     ] {
         assert!(
             skill.contains(required),
