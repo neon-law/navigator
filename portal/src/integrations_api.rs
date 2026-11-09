@@ -524,38 +524,9 @@ async fn ensure_one_channel(
             Ok(Some(channel)) if !channel.is_private => {
                 return ProjectOutcome::plain(project.code.clone(), "not_private")
             }
-            // The channel exists under another name — the pre-ENG-1286
-            // `project-<code>` or a bare code, or a rename by hand. The
-            // reconcile renames it back: Slack keeps the id, so the recorded
-            // coordinate and the channel's history survive, and the former
-            // name is reported as the detail.
             Ok(Some(channel)) if channel.name != channel_name => {
-                let former = channel.name.clone();
-                let channel = match slack.rename_channel(&channel.id, &channel_name).await {
-                    Ok(channel) => channel,
-                    Err(cloud::SlackError::NameTaken) => {
-                        return ProjectOutcome::with_detail(
-                            project.code.clone(),
-                            "conflict",
-                            former,
-                        )
-                    }
-                    Err(_) => {
-                        return ProjectOutcome::plain(project.code.clone(), "provider_unavailable")
-                    }
-                };
-                if store::projects::set_internal_slack_channel(
-                    &state.surreal,
-                    project.id,
-                    &channel.id,
-                    &cloud::slack_channel_url(&channel.id),
-                )
-                .await
-                .is_err()
-                {
-                    return ProjectOutcome::plain(project.code.clone(), "address_not_recorded");
-                }
-                return ProjectOutcome::with_detail(project.code.clone(), "repaired", former);
+                return repair_channel_name(state, project, slack.as_ref(), &channel, &channel_name)
+                    .await
             }
             Ok(Some(channel)) => {
                 let canonical_url = cloud::slack_channel_url(&channel.id);
@@ -616,6 +587,40 @@ async fn ensure_one_channel(
         project.code.clone(),
         if created { "created" } else { "adopted" },
     )
+}
+
+/// A recorded channel exists under another name — the pre-ENG-1286
+/// `project-<code>` or a bare code, or a rename by hand. The reconcile renames
+/// it back: Slack keeps the id, so the recorded coordinate and the channel's
+/// history survive, and the former name is reported as the detail. A taken
+/// canonical name is an operator decision, reported as `conflict`.
+async fn repair_channel_name(
+    state: &ApiState,
+    project: &store::projects::Project,
+    slack: &dyn cloud::SlackService,
+    channel: &cloud::FirmSlackChannel,
+    channel_name: &str,
+) -> ProjectOutcome {
+    let former = channel.name.clone();
+    let channel = match slack.rename_channel(&channel.id, channel_name).await {
+        Ok(channel) => channel,
+        Err(cloud::SlackError::NameTaken) => {
+            return ProjectOutcome::with_detail(project.code.clone(), "conflict", former)
+        }
+        Err(_) => return ProjectOutcome::plain(project.code.clone(), "provider_unavailable"),
+    };
+    if store::projects::set_internal_slack_channel(
+        &state.surreal,
+        project.id,
+        &channel.id,
+        &cloud::slack_channel_url(&channel.id),
+    )
+    .await
+    .is_err()
+    {
+        return ProjectOutcome::plain(project.code.clone(), "address_not_recorded");
+    }
+    ProjectOutcome::with_detail(project.code.clone(), "repaired", former)
 }
 
 /// `POST /app/api/integrations/slack/notify` — post one closed-vocabulary,
