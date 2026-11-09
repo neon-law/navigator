@@ -78,8 +78,20 @@ impl LspChild {
             "jsonrpc": "2.0",
             "method": "exit",
         }));
-        let _ = self.child.wait();
+        let status = self.child.wait().expect("wait for exit");
+        assert_eq!(status.code(), Some(0), "exit after shutdown");
     }
+}
+
+#[test]
+fn exit_without_shutdown_exits_with_status_one() {
+    let mut server = LspChild::spawn();
+    server.send(&json!({
+        "jsonrpc": "2.0",
+        "method": "exit",
+    }));
+    let status = server.child.wait().expect("wait for exit");
+    assert_eq!(status.code(), Some(1), "exit before shutdown");
 }
 
 #[test]
