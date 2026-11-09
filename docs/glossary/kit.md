@@ -1,10 +1,10 @@
 ---
 title: Kit
-description: "A Kit is the versioned Project Skill a matter applied, recorded on the matter row with the version string."
+description: "A Kit is the versioned Project Skill a matter applied, recorded on the matter with the version string."
 ---
 
 A **Kit** is the versioned [Project Skill](project-skill.md) a [Project](project.md) applies: one public playbook, one
-version. The catalog ships the playbook text and its bundled [Notation](notation.md#notation) codes; nothing in a Kit
+version. The catalog ships the playbook text and its bundled [Notation](notation.md) codes; nothing in a Kit
 names a [Firm](firm.md) or its economics. Financial premises — target minutes, staffing ratios — stay with the Firm as
 [Firm Assumptions](firm-assumption.md), which the Kit references by dotted key and resolves at run time. A missing value
 renders blank. It never renders another Firm's number.
