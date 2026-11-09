@@ -85,6 +85,11 @@ pub struct Project {
     /// The plan's member identifier for this matter, verbatim from the
     /// assignment.
     pub plan_member_id: Option<String>,
+    /// The [Plan Case Number](../../docs/glossary/plan-case-number.md): the
+    /// number the Legal Plan gave this referral (ARAG's CaseAssist number,
+    /// LegalEASE's member case number), verbatim. Every plan email and
+    /// claim cites it, so it is what links the matter back to how it is paid.
+    pub plan_case_number: Option<String>,
     /// The benefit code the plan's assignment named, verbatim.
     pub benefit_code: Option<String>,
     /// Which kind of plan matter this is — a closed vocabulary shared with
@@ -208,6 +213,7 @@ struct ProjectRow {
     /// `onboarding_jurisdiction`.
     legal_plan_id: Option<Uuid>,
     plan_member_id: Option<String>,
+    plan_case_number: Option<String>,
     benefit_code: Option<String>,
     plan_matter_type: Option<String>,
     plan_state: Option<String>,
@@ -257,6 +263,7 @@ impl ProjectRow {
             booking_url: self.booking_url,
             legal_plan_id: self.legal_plan_id,
             plan_member_id: self.plan_member_id,
+            plan_case_number: self.plan_case_number,
             benefit_code: self.benefit_code,
             plan_matter_type: self.plan_matter_type,
             plan_state: self.plan_state,
@@ -283,8 +290,8 @@ const PROJECT_SELECT: &str = "id, code, name, status, brand, entity_id, firm_id,
                               internal_slack_channel_id, \
                               private_notion_page_url, shared_notion_page_url, \
                               calendar_id, booking_url, \
-                              legal_plan_id, plan_member_id, benefit_code, \
-                              plan_matter_type, plan_state, plan_assigned_on, \
+                              legal_plan_id, plan_member_id, plan_case_number, \
+                              benefit_code, plan_matter_type, plan_state, plan_assigned_on, \
                               plan_accepted_on, plan_closed_on, kit_version, \
                               inserted_at, updated_at";
 
@@ -1383,6 +1390,7 @@ pub async fn restore_archived(
                  shared_notion_page_url = $shared_notion_page_url, \
                  calendar_id = $calendar_id, booking_url = $booking_url, \
                  legal_plan_id = $legal_plan_id, plan_member_id = $plan_member_id, \
+                 plan_case_number = $plan_case_number, \
                  benefit_code = $benefit_code, plan_matter_type = $plan_matter_type, \
                  plan_state = $plan_state, plan_assigned_on = $plan_assigned_on, \
                  plan_accepted_on = $plan_accepted_on, plan_closed_on = $plan_closed_on, \
@@ -1436,6 +1444,7 @@ pub async fn restore_archived(
             .bind(("booking_url", project.booking_url.clone()))
             .bind(("legal_plan_id", project.legal_plan_id))
             .bind(("plan_member_id", project.plan_member_id.clone()))
+            .bind(("plan_case_number", project.plan_case_number.clone()))
             .bind(("benefit_code", project.benefit_code.clone()))
             .bind(("plan_matter_type", project.plan_matter_type.clone()))
             .bind(("plan_state", project.plan_state.clone()))
@@ -2578,7 +2587,7 @@ pub async fn set_client_dri_person_id(
 
 /// The legal-plan panel columns staged onto a plan matter (ENG-1269). The
 /// intake path (ENG-1270) sets them when the attorney accepts a staged
-/// matter; every field is optional and a `None` clears the column. The nine
+/// matter; every field is optional and a `None` clears the column. The ten
 /// land in one patch so a staged matter never reads with half its plan
 /// identity.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -2588,6 +2597,9 @@ pub struct PlanColumns {
     /// the value plain.
     pub legal_plan_id: Option<Uuid>,
     pub plan_member_id: Option<String>,
+    /// The plan's own number for this referral, verbatim — what the plan's
+    /// emails and claims cite.
+    pub plan_case_number: Option<String>,
     pub benefit_code: Option<String>,
     /// A word from the closed [`crate::legal_plans::PlanMatterType`]
     /// vocabulary — `as_str()`, so `plan_fee_schedule` and the assumption
@@ -2605,10 +2617,32 @@ pub struct PlanColumns {
     pub kit_version: Option<String>,
 }
 
+impl PlanColumns {
+    /// The plan columns one Project carries now — the base a partial
+    /// update overlays, so a caller changing one field keeps the rest.
+    #[must_use]
+    pub fn of(project: &Project) -> Self {
+        Self {
+            legal_plan_id: project.legal_plan_id,
+            plan_member_id: project.plan_member_id.clone(),
+            plan_case_number: project.plan_case_number.clone(),
+            benefit_code: project.benefit_code.clone(),
+            plan_matter_type: project.plan_matter_type.clone(),
+            plan_state: project.plan_state.clone(),
+            plan_assigned_on: project.plan_assigned_on.clone(),
+            plan_accepted_on: project.plan_accepted_on.clone(),
+            plan_closed_on: project.plan_closed_on.clone(),
+            kit_version: project.kit_version.clone(),
+        }
+    }
+}
+
 const PLAN_MATTER_TYPE_INVALID: &str =
     "plan_matter_type is not one of document_review, letter, uncontested_divorce, court_appearance";
 const PLAN_STATE_INVALID: &str = "plan_state is not a lowercase jurisdiction code";
 const PLAN_DATE_INVALID: &str = "plan date is not an ISO YYYY-MM-DD date";
+const PLAN_CASE_NUMBER_INVALID: &str =
+    "plan_case_number must be 1 to 64 visible characters with no spaces";
 const PLAN_UNKNOWN: &str = "legal_plan_id does not name a legal plan";
 const PLAN_FIRM_MISMATCH: &str = "legal_plan_id names a plan of another firm";
 
@@ -2618,6 +2652,12 @@ const PLAN_FIRM_MISMATCH: &str = "legal_plan_id names a plan of another firm";
 fn valid_plan_date(text: &str) -> bool {
     chrono::NaiveDate::parse_from_str(text, "%F")
         .is_ok_and(|date| date.format("%F").to_string() == text)
+}
+
+/// A Plan Case Number as the plan prints it (`4963680-001`, `412590`): one
+/// token, so an inbox rule can match it as a whole word in a subject line.
+fn valid_plan_case_number(text: &str) -> bool {
+    (1..=64).contains(&text.chars().count()) && text.chars().all(|c| c.is_ascii_graphic())
 }
 
 /// Writes the legal-plan panel columns onto one Project in one patch
@@ -2647,6 +2687,11 @@ pub async fn set_plan_columns(
     if let Some(state) = &columns.plan_state {
         if !crate::legal_plans::valid_state_code(state) {
             return Err(ProjectCommandError::Invalid(PLAN_STATE_INVALID));
+        }
+    }
+    if let Some(case_number) = &columns.plan_case_number {
+        if !valid_plan_case_number(case_number) {
+            return Err(ProjectCommandError::Invalid(PLAN_CASE_NUMBER_INVALID));
         }
     }
     for text in [
@@ -2680,7 +2725,8 @@ pub async fn set_plan_columns(
     let mut response = surreal
         .query(format!(
             "UPDATE $id SET legal_plan_id = $legal_plan_id, \
-             plan_member_id = $plan_member_id, benefit_code = $benefit_code, \
+             plan_member_id = $plan_member_id, \
+             plan_case_number = $plan_case_number, benefit_code = $benefit_code, \
              plan_matter_type = $plan_matter_type, plan_state = $plan_state, \
              plan_assigned_on = $plan_assigned_on, \
              plan_accepted_on = $plan_accepted_on, \
@@ -2690,6 +2736,7 @@ pub async fn set_plan_columns(
         .bind(("id", record_id(PROJECT_TABLE, project_id)))
         .bind(("legal_plan_id", columns.legal_plan_id))
         .bind(("plan_member_id", columns.plan_member_id.clone()))
+        .bind(("plan_case_number", columns.plan_case_number.clone()))
         .bind(("benefit_code", columns.benefit_code.clone()))
         .bind(("plan_matter_type", columns.plan_matter_type.clone()))
         .bind(("plan_state", columns.plan_state.clone()))

@@ -95,6 +95,10 @@ pub enum FirmCapability {
     /// time. The values are the Firm's own economics, so like
     /// [`Self::ViewPlanMetrics`] only the Firm's Admin membership admits it.
     ManageFirmAssumptions,
+    /// Add a Legal Plan to the Firm's vocabulary (its portal, contact, and
+    /// service levels). The Firm's panel relationships are Admin business,
+    /// like [`Self::ManageFirmAssumptions`].
+    ManageLegalPlans,
 }
 
 impl FirmCapability {
@@ -116,6 +120,7 @@ impl FirmCapability {
             | Self::ViewCommunications
             | Self::ViewPlanMetrics
             | Self::ManageFirmAssumptions
+            | Self::ManageLegalPlans
             | Self::ManageBrand => membership == FirmMembership::Admin,
             Self::ManageBrandContent
             | Self::ManageSummaryApprovals
@@ -147,6 +152,7 @@ impl FirmCapability {
             Self::ViewCommunications => "view_communications",
             Self::ViewPlanMetrics => "view_plan_metrics",
             Self::ManageFirmAssumptions => "manage_firm_assumptions",
+            Self::ManageLegalPlans => "manage_legal_plans",
         }
     }
 

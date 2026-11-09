@@ -162,6 +162,9 @@ DEFINE FIELD OVERWRITE updated_at ON project TYPE string;
 -- `store::legal_plans::PlanMatterType` and by the PostgreSQL CHECK.
 DEFINE FIELD OVERWRITE legal_plan_id ON project TYPE option<uuid>;
 DEFINE FIELD OVERWRITE plan_member_id ON project TYPE option<string>;
+-- The Plan Case Number: the plan's own number for this referral (ARAG
+-- CaseAssist, LegalEASE member case), verbatim. Plan email cites it.
+DEFINE FIELD OVERWRITE plan_case_number ON project TYPE option<string>;
 DEFINE FIELD OVERWRITE benefit_code ON project TYPE option<string>;
 DEFINE FIELD OVERWRITE plan_matter_type ON project TYPE option<string>;
 DEFINE FIELD OVERWRITE plan_state ON project TYPE option<string>;
