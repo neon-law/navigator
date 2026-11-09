@@ -152,6 +152,90 @@ async fn lawyer_outside_the_matter_scope_is_404_and_opens_nothing() {
 }
 
 #[tokio::test]
+async fn failed_retainer_creation_appears_in_project_inventory() {
+    if std::env::var_os("NAVIGATOR_POSTGRES_HOST").is_none() {
+        return;
+    }
+    let _repo_guard = REPO_ENV_LOCK.lock().await;
+    let (app, surreal) = build_app().await;
+    let project = open_project(&surreal).await;
+    let code = "onboarding__letter";
+    let lawyer = bearer_new_person(
+        &surreal,
+        "retainer-lawyer@example.com",
+        Role::Lawyer,
+        Some((project.id, "lawyer")),
+    )
+    .await;
+
+    // Simulate repository storage becoming unavailable during creation.
+    std::env::remove_var("NAVIGATOR_GIT_REPO_ROOT");
+    let failed = post_notation(&app, Some(&lawyer), project.id, code, "client@example.com").await;
+    repo_root();
+    assert_eq!(failed.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(notation_count(&surreal, project.id).await, 0);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/app/api/projects/{}/notation-inventory",
+                    project.id
+                ))
+                .header("authorization", &lawyer)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let rows: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    let row = rows
+        .iter()
+        .find(|row| row["template_code"] == code)
+        .unwrap();
+    assert_eq!(row["current_state"], "creation_failed");
+    assert!(row["last_transition_at"].is_string());
+
+    let retry = post_notation(&app, Some(&lawyer), project.id, code, "client@example.com").await;
+    let status = retry.status();
+    let body = retry.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
+    assert_eq!(notation_count(&surreal, project.id).await, 1);
+    let pg = store::postgres::PostgresDb::from_env().await.unwrap();
+    assert!(
+        store::postgres::notation_creation_attempts::unresolved(&pg, project.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    let outsider =
+        bearer_new_person(&surreal, "grid-outsider@example.com", Role::Lawyer, None).await;
+    let denied = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/app/api/projects/{}/notation-inventory",
+                    project.id
+                ))
+                .header("authorization", outsider)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn participant_lawyer_opens_a_notation_and_returns_201_json() {
     let _repo_guard = REPO_ENV_LOCK.lock().await;
     let (app, surreal) = build_app().await;

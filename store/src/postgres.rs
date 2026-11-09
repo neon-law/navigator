@@ -5,6 +5,7 @@ use sqlx::migrate::{Migration, MigrationType, Migrator};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgSslMode};
 use sqlx::{AssertSqlSafe, PgPool, SqlSafeStr};
 
+pub mod notation_creation_attempts;
 pub mod people;
 
 /// PostgreSQL-authoritative Inbox slice (LAW-238 D0): ingest, dedup, threading,

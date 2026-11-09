@@ -170,6 +170,11 @@ pub async fn persist_from_repo(
         .map_err(|error| TemplateSourceError::Store(error.to_string()))?
         .ok_or(TemplateSourceError::RepoEmpty(project_id))?
         .code;
+    // An unopened repository has no Draft to import. Leave provisioning to
+    // the write path so bundled Templates can open on a fresh Project.
+    if !repo.exists_code(&project_code) {
+        return Err(TemplateSourceError::RepoEmpty(project_id));
+    }
     let repo = repo.clone();
     let (commit_sha, tree) = tokio::task::spawn_blocking(move || {
         let commit_sha = repo.head_oid_code(&project_code)?;
