@@ -7825,7 +7825,7 @@ mod tests {
         let source = |name: &str| {
             env.iter()
                 .find(|entry| entry["name"].as_str() == Some(name))
-                .unwrap_or_else(|| panic!("web carries {name}"))["valueFrom"]
+                .expect("web carries each archive variable")["valueFrom"]
                 .clone()
         };
         for password in [
