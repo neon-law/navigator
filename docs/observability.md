@@ -154,6 +154,25 @@ Two counters are recorded once per run, in a journaled step so a replay does not
 failure in the last day, which is critical at five or more for one tag, and no finished run in 26 hours. Dash0 is
 staging-only today, so production relies on the Slack headline until a production row declares `DASH0_ENDPOINT`.
 
+## Archives
+
+The twice-daily `Archives` run ([durable workflows](durable-workflows.md), [Iceberg archive](iceberg-archive.md)) ends
+as a failure when any table with rows fails to write, and its Slack digest opens with `Iceberg data export FAILED` and
+names each table. Two counters are recorded inside the digest step, after the post, so a replay does not double count:
+
+- `navigator.archives.run`, with `outcome` set to `clean` or `failed`.
+- `navigator.archives.table_written`, the number of tables the run wrote. Counts only; never a table name.
+
+Every host that binds Archives — the Restate worker, or `web` when `NAVIGATOR_DBOS_ARCHIVES_ENABLED` is on — starts both
+series at zero on boot, so the first run after a restart is a visible increase.
+
+[`dash0-archives-check-rules.yaml`](../examples/deploy/k8s/observability/dash0-archives-check-rules.yaml) alerts on
+both: a failed run, and no table written in 13 hours. The runs are twelve hours apart, so 13 hours is one missed slot
+plus an hour of slack. The stale rule reads `increase()` over a zero-started series with `or vector(0)`, so it fires
+whether the run failed, never started, or no host is exporting at all. Route both rules to the ops channel with the
+`workflow = archives` label. Dash0 is staging-only today, so production relies on the Slack headline until a production
+row declares `DASH0_ENDPOINT`.
+
 ## Forgejo Actions
 
 The runner controller (`navigator ops forgejo runner-controller`, see [Forgejo deployment](forgejo-deployment.md)) is

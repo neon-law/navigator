@@ -1147,6 +1147,66 @@ fn record_nightly_project_update_with_meter(meter: &Meter, failures: &[(&str, &s
         .add(1, &[KeyValue::new("outcome", outcome)]);
 }
 
+/// The instrumentation scope for the Archives workflow (ENG-1291).
+const ARCHIVES_METER: &str = "navigator.archives";
+
+/// Counter: one increment per finished Archives run, by `outcome`
+/// ([`archives_outcome`]). A `failed` increment is the failed-run signal.
+pub const ARCHIVES_RUN: &str = "navigator.archives.run";
+
+/// Counter: tables an Archives run wrote. Runs fire twice a day, so no
+/// increase over 13 hours is the stale-archive signal, whether the run never
+/// started or ran and wrote nothing. Counts only — never a table name.
+pub const ARCHIVES_TABLE_WRITTEN: &str = "navigator.archives.table_written";
+
+/// Attribute keys emitted by the Archives counters.
+pub const ARCHIVES_ATTRIBUTE_KEYS: &[&str] = &["outcome"];
+
+/// Outcome values for [`ARCHIVES_RUN`].
+pub mod archives_outcome {
+    /// Every table with rows was written.
+    pub const CLEAN: &str = "clean";
+    /// A table failed to write, or PostgreSQL coverage did not publish.
+    pub const FAILED: &str = "failed";
+}
+
+/// Start every Archives series at zero so a missed run after a host restart
+/// is a gap `increase()` can see. Call once wherever Archives is bound.
+pub fn register_archives() {
+    let meter = opentelemetry::global::meter(ARCHIVES_METER);
+    let runs = meter.u64_counter(ARCHIVES_RUN).build();
+    for outcome in [archives_outcome::CLEAN, archives_outcome::FAILED] {
+        runs.add(0, &[KeyValue::new("outcome", outcome)]);
+    }
+    meter
+        .u64_counter(ARCHIVES_TABLE_WRITTEN)
+        .build()
+        .add(0, &[]);
+}
+
+/// Record one finished Archives run: how many tables it wrote and whether
+/// it ended as a failure.
+pub fn record_archives_run(tables_written: u64, failed: bool) {
+    let meter = opentelemetry::global::meter(ARCHIVES_METER);
+    record_archives_run_with_meter(&meter, tables_written, failed);
+}
+
+fn record_archives_run_with_meter(meter: &Meter, tables_written: u64, failed: bool) {
+    meter
+        .u64_counter(ARCHIVES_TABLE_WRITTEN)
+        .build()
+        .add(tables_written, &[]);
+    let outcome = if failed {
+        archives_outcome::FAILED
+    } else {
+        archives_outcome::CLEAN
+    };
+    meter
+        .u64_counter(ARCHIVES_RUN)
+        .build()
+        .add(1, &[KeyValue::new("outcome", outcome)]);
+}
+
 /// The instrumentation scope for the Forgejo runner controller (ENG-1238).
 const FORGEJO_METER: &str = "navigator.forgejo";
 
@@ -1824,6 +1884,44 @@ mod tests {
             rendered.contains("step") && rendered.contains("funnel.review_entered"),
             "counter attributes: {rendered}"
         );
+        provider.shutdown().expect("metric provider shuts down");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn a_failed_archives_run_records_its_outcome_and_the_tables_it_wrote() {
+        use opentelemetry::metrics::MeterProvider as _;
+        use opentelemetry_sdk::metrics::{
+            data::AggregatedMetrics, InMemoryMetricExporter, SdkMeterProvider,
+        };
+
+        let exporter = InMemoryMetricExporter::default();
+        let provider = SdkMeterProvider::builder()
+            .with_periodic_exporter(exporter.clone())
+            .build();
+        let meter = provider.meter(super::ARCHIVES_METER);
+
+        super::record_archives_run_with_meter(&meter, 7, true);
+        provider.force_flush().expect("metric flush");
+
+        let metrics = exporter
+            .get_finished_metrics()
+            .expect("metric export succeeds");
+        let rendered = |name: &str| {
+            let metric = metrics
+                .iter()
+                .flat_map(opentelemetry_sdk::metrics::data::ResourceMetrics::scope_metrics)
+                .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
+                .find(|metric| metric.name() == name)
+                .unwrap_or_else(|| panic!("{name} is registered"));
+            let AggregatedMetrics::U64(sum) = metric.data() else {
+                panic!("{name} is not a sum");
+            };
+            format!("{sum:?}")
+        };
+        let run = rendered(super::ARCHIVES_RUN);
+        assert!(run.contains("value: 1") && run.contains("failed"), "{run}");
+        let written = rendered(super::ARCHIVES_TABLE_WRITTEN);
+        assert!(written.contains("value: 7"), "{written}");
         provider.shutdown().expect("metric provider shuts down");
     }
 

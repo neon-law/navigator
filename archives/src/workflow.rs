@@ -37,6 +37,12 @@
 //!    Slack bot. Each step is journaled, so a retry re-uses the cached
 //!    prior results rather than re-snapshotting. The step name stays `email`
 //!    (its journal key on replay) even though it now posts Slack, not email.
+//!    Once the digest is posted the step records the run's metrics
+//!    (`navigator.archives.run` by outcome and `navigator.archives.table_written`,
+//!    see [`telemetry::record_archives_run`]); the Dash0 rules in
+//!    `examples/deploy/k8s/observability/dash0-archives-check-rules.yaml`
+//!    alert on a failed run and on 13 hours with no table written, which
+//!    also covers a run that never started.
 //!
 //! The `CronJob` `archives-trigger` POSTs to the Restate ingress to start
 //! one invocation at 05:55 and one at 17:55 UTC each day; Restate owns the retry schedule and the
@@ -292,6 +298,7 @@ pub fn register_dbos_with(
     slack_enabled: bool,
     phases: Arc<dyn ArchivesDbosPhases>,
 ) -> dbos::Result<ArchivesDbosWorkflow> {
+    telemetry::register_archives();
     dbos.register_workflow(DBOS_WORKFLOW, move |request: RunRequest| {
         let slack = Arc::clone(&slack);
         let channel_id = channel_id.clone();
@@ -370,7 +377,9 @@ pub fn register_dbos_with(
                             &correlation,
                         )
                         .await
-                        .map_err(|_| dbos::Error::Application(ArchivesDbosError::Notify))
+                        .map_err(|_| dbos::Error::Application(ArchivesDbosError::Notify))?;
+                        record_run_metrics(&summary);
+                        Ok(())
                     }
                 },
             )
@@ -474,6 +483,9 @@ pub struct ArchivesService {
 impl ArchivesService {
     #[must_use]
     pub fn new(slack: Arc<dyn SlackBot>, channel_id: String, slack_enabled: bool) -> Self {
+        // Zero-start the run series where Archives is bound, so a host
+        // restart cannot hide a missed slot from the Dash0 `increase()`.
+        telemetry::register_archives();
         Self {
             slack,
             channel_id,
@@ -600,7 +612,11 @@ impl ArchivesService {
                     {
                         let _ = write!(message, "\n⚠️ {line}");
                     }
-                    post_digest(slack.as_ref(), &channel_id, slack_enabled, &message).await
+                    post_digest(slack.as_ref(), &channel_id, slack_enabled, &message).await?;
+                    // Inside the journaled step, after the post, so a replay
+                    // of a finished run does not count it twice.
+                    record_run_metrics(&summary);
+                    Ok(())
                 }
             })
             .name("email")
@@ -621,27 +637,10 @@ impl ArchivesService {
 /// recovery requires a new invocation. Checked after the digest so the
 /// failure is named in Slack before the engine records it.
 fn run_report(summary: &SnapshotSummary, invocation_id: &str) -> Result<RunReport, RunFailure> {
-    if !summary.failures.is_empty() {
-        return Err(RunFailure::Tables(
-            summary
-                .failures
-                .iter()
-                .map(|failure| failure.table.clone())
-                .collect(),
-        ));
+    if let Some(failure) = run_failure(summary) {
+        return Err(failure);
     }
-    if matches!(summary.postgres, Some(PostgresExport::Failed { .. })) {
-        return Err(RunFailure::Postgres);
-    }
-    let postgres_tables: Vec<_> = match &summary.postgres {
-        Some(PostgresExport::Published(generation)) => generation.tables.iter().collect(),
-        Some(PostgresExport::Paired(generation)) => generation
-            .databases
-            .iter()
-            .flat_map(|database| &database.tables)
-            .collect(),
-        _ => Vec::new(),
-    };
+    let postgres_tables = postgres_tables(summary);
     Ok(RunReport {
         run_date: summary.run_date,
         invocation_id: invocation_id.into(),
@@ -657,6 +656,39 @@ fn run_report(summary: &SnapshotSummary, invocation_id: &str) -> Result<RunRepor
                 .sum::<usize>(),
         failures: summary.failures.len(),
     })
+}
+
+/// Why this summary fails its run, if it does.
+fn run_failure(summary: &SnapshotSummary) -> Option<RunFailure> {
+    if !summary.failures.is_empty() {
+        return Some(RunFailure::Tables(
+            summary
+                .failures
+                .iter()
+                .map(|failure| failure.table.clone())
+                .collect(),
+        ));
+    }
+    matches!(summary.postgres, Some(PostgresExport::Failed { .. })).then_some(RunFailure::Postgres)
+}
+
+fn postgres_tables(summary: &SnapshotSummary) -> Vec<&crate::postgres::PostgresTableEntry> {
+    match &summary.postgres {
+        Some(PostgresExport::Published(generation)) => generation.tables.iter().collect(),
+        Some(PostgresExport::Paired(generation)) => generation
+            .databases
+            .iter()
+            .flat_map(|database| &database.tables)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Record the run's two series: the tables it wrote (the stale-archive
+/// signal reads this one) and its outcome. Counts only, never a table name.
+fn record_run_metrics(summary: &SnapshotSummary) {
+    let written = summary.entries.len() + postgres_tables(summary).len();
+    telemetry::record_archives_run(written as u64, run_failure(summary).is_some());
 }
 
 async fn post_digest(
@@ -1434,6 +1466,30 @@ mod tests {
             );
         }
         assert!(digest.contains("storage.buckets.get denied"), "{digest}");
+    }
+
+    /// ENG-1291: the Dash0 check rules read exactly the series this crate
+    /// records, and the stale window is the one the schedule implies.
+    #[test]
+    fn the_archives_check_rules_read_the_metrics_the_run_exports() {
+        let rules =
+            include_str!("../../examples/deploy/k8s/observability/dash0-archives-check-rules.yaml");
+        assert!(
+            rules.contains(&format!(
+                "otel_metric_name=\"{}\"}}[13h]",
+                telemetry::ARCHIVES_TABLE_WRITTEN
+            )),
+            "{rules}"
+        );
+        assert!(
+            rules.contains(&format!(
+                "otel_metric_name=\"{}\", outcome=\"{}\"",
+                telemetry::ARCHIVES_RUN,
+                telemetry::archives_outcome::FAILED
+            )),
+            "{rules}"
+        );
+        assert!(rules.contains("workflow: archives"));
     }
 
     /// A table that exists but holds no rows is skipped before the bucket is

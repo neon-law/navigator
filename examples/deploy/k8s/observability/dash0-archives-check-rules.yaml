@@ -1,0 +1,64 @@
+# Dash0 check rules for the Archives workflow (the Iceberg archive).
+#
+# Every host that binds Archives — the Restate worker, or `web` when the
+# DBOS schedule is on — exports two counters (telemetry/src/lib.rs):
+#   navigator.archives.run            outcome = clean | failed
+#   navigator.archives.table_written  the tables one run wrote
+# Both carry counts only — never a table name. Both are zero-started when
+# the host boots, so a restart cannot hide a gap from `increase()`.
+#
+# One rule per group, so each group also loads as a Terraform
+# `dash0_check_rule` (which accepts exactly one group with one rule).
+#
+# Apply to the deployment's Dash0 dataset with either:
+#   dash0 check-rules create -f dash0-archives-check-rules.yaml --dataset <dataset>
+#   kubectl apply -f dash0-archives-check-rules.yaml   # Dash0 operator, namespace with a Dash0Monitoring resource
+# Route notifications with a label filter (`workflow = archives`) on the
+# Dash0 notification channel for the ops channel, never a Project channel.
+#
+# Dash0 is a staging-only integration today (docs/observability.md), so these
+# rules watch staging until a production row declares DASH0_ENDPOINT.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: archives
+  namespace: YOUR_NAMESPACE
+  labels:
+    dash0.com/dataset: YOUR_DASH0_DATASET
+spec:
+  groups:
+    - name: archives-stale
+      interval: 5m
+      rules:
+        # Runs fire at 05:55 and 17:55 UTC, twelve hours apart. No table
+        # written in 13 hours is a missed slot plus an hour of slack: the
+        # trigger never fired, the worker is down, or every table failed to
+        # write. `or vector(0)` fires when no host exports the series at all.
+        - alert: ArchivesStale
+          expr: |
+            (
+              sum(increase({otel_metric_name="navigator.archives.table_written"}[13h]))
+              or vector(0)
+            ) < 1
+          for: 15m
+          annotations:
+            summary: "Archives: no table written in 13 hours"
+            description: "Start with `kubectl -n navigator get cronjob archives-trigger`, then the Restate Invocations view for Archives (docs/durable-workflows.md, Debugging)."
+            dash0-enabled: "true"
+          labels:
+            workflow: archives
+    - name: archives-failed
+      interval: 5m
+      rules:
+        # A run that ended as a failure: a table did not write, or PostgreSQL
+        # coverage did not publish. The Slack digest names each table.
+        - alert: ArchivesRunFailed
+          expr: |
+            sum(increase({otel_metric_name="navigator.archives.run", outcome="failed"}[13h])) > 0
+          for: 0m
+          annotations:
+            summary: "Archives: {{ $value }} failed run(s) in the last 13 hours"
+            description: "The Slack digest in the ops messages channel opens with `Iceberg data export FAILED` and names each failing table and its error."
+            dash0-enabled: "true"
+          labels:
+            workflow: archives
