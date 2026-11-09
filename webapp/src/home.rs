@@ -23,6 +23,7 @@ mod estate;
 pub use estate::EstateContent;
 mod privacy;
 pub use privacy::PrivacyContent;
+mod search;
 mod sibling_practice;
 pub use sibling_practice::SiblingPractice;
 
@@ -132,6 +133,8 @@ pub struct ProvenancePillar {
 /// injected into the render context.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
 pub struct HomeContent {
+    #[serde(default)]
+    pub nautilus_search: bool,
     /// The path this page is mounted at, for its canonical and `og:url`
     /// tags. Empty means the root, `/`; `/business` sets its own.
     #[serde(default)]
@@ -479,6 +482,9 @@ pub fn HomePage(
     #[props(default)] testimonials: Vec<TestimonialCard>,
     #[props(default)] video_posts: Vec<HomeVideoPost>,
 ) -> Element {
+    if content.nautilus_search {
+        return rsx! { search::SearchHome { chrome, title: content.head_title } };
+    }
     let signup = content.signup.clone().filter(|_| {
         !chrome
             .utility
@@ -1213,6 +1219,7 @@ mod tests {
                         signup: None,
                         path: String::new(),
                         marketing_page: None,
+                        nautilus_search: false,
                         head_title: "Home".to_string(),
                         meta_description: "AI enablement for law firms.".to_string(),
                         og_description: None,

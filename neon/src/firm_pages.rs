@@ -1048,7 +1048,8 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
         world_copy,
     ));
     let deployment_host = state.canonical_host.host();
-    let home = resolve_firm_home_content(branding, deployment_host);
+    let search_preview = portal::config::hosted_staging_from(|key| std::env::var(key).ok());
+    let home = resolve_firm_home_content(branding, deployment_host, search_preview);
     // The home page (`/`): static copy plus the store's approved testimonials.
     // The practice boxes on `/` are the YAML catalog workshop slides
     // reuse — one list, not a second Rust copy. Slides always expand the
@@ -1057,7 +1058,7 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
         .practices
         .clone();
     let home_copy = branded_map(branding, "/", |resolved| webapp::home::InjectedHome {
-        content: resolve_firm_home_content(resolved, deployment_host),
+        content: resolve_firm_home_content(resolved, deployment_host, search_preview),
         lead_capture: Some(home_lead_capture(resolved)),
         brand_key: resolved.brand_key.as_str().to_string(),
     });
@@ -1568,8 +1569,14 @@ fn resolve_world_content(branding: &views::brand::Branding) -> webapp::world_pag
 pub(crate) fn resolve_firm_home_content(
     branding: &views::brand::Branding,
     deployment_host: Option<&str>,
+    search_preview: bool,
 ) -> webapp::home::HomeContent {
     match branding.brand_key {
+        BrandKey::Neon if search_preview => webapp::home::HomeContent {
+            head_title: "Neon Law".to_string(),
+            nautilus_search: true,
+            ..Default::default()
+        },
         BrandKey::Neon => {
             let page = firm_copy::nautilus(branding, deployment_host);
             webapp::home::HomeContent {
@@ -1614,24 +1621,39 @@ mod home_page_tests {
     use views::brand::BrandKey;
 
     #[test]
-    fn neon_home_publishes_nautilus_without_changing_other_brand_homes() {
-        let home = resolve_firm_home_content(&views::brand::DEFAULT_BRANDING, None);
-        assert!(
-            home.marketing_page
-                == Some(super::firm_copy::nautilus(
-                    &views::brand::DEFAULT_BRANDING,
-                    None
-                )),
-            "Neon's home uses the same Nautilus content as /nautilus"
-        );
+    fn search_preview_requires_explicit_hosted_staging() {
+        for (profile, staging, expected) in [
+            (Some("production"), Some("true"), true),
+            (Some("production"), Some("false"), false),
+            (Some("production"), None, false),
+            (Some("production"), Some("TRUE"), false),
+            (Some("dev"), Some("true"), false),
+            (None, Some("true"), false),
+        ] {
+            let enabled = portal::config::hosted_staging_from(|key| match key {
+                store::config::NAVIGATOR_ENVIRONMENT => profile.map(str::to_owned),
+                store::config::NAVIGATOR_STAGING => staging.map(str::to_owned),
+                _ => None,
+            });
+            let home = resolve_firm_home_content(&views::brand::DEFAULT_BRANDING, None, enabled);
+            assert_eq!(home.nautilus_search, expected);
+            assert_eq!(home.marketing_page.is_some(), !expected);
+        }
+    }
+
+    #[test]
+    fn neon_home_offers_nautilus_search_without_changing_other_brand_homes() {
+        let home = resolve_firm_home_content(&views::brand::DEFAULT_BRANDING, None, true);
+        assert!(home.nautilus_search);
         assert!(home.company.is_none());
         assert!(home.signup.is_none());
         for key in BrandKey::ALL.iter().filter(|key| **key != BrandKey::Neon) {
             let content = resolve_firm_home_content(
                 key.resolve_branding(&views::brand::DEFAULT_BRANDING),
                 None,
+                true,
             );
-            assert!(content.marketing_page.is_none(), "{}", key.as_str());
+            assert!(!content.nautilus_search, "{}", key.as_str());
         }
     }
 
@@ -1641,8 +1663,9 @@ mod home_page_tests {
     fn every_brand_home_has_design_or_a_coming_soon_notice() {
         for key in BrandKey::ALL {
             let branding = key.resolve_branding(&views::brand::DEFAULT_BRANDING);
-            let content = resolve_firm_home_content(branding, None);
-            let authored_design = content.marketing_page.is_some()
+            let content = resolve_firm_home_content(branding, None, false);
+            let authored_design = content.nautilus_search
+                || content.marketing_page.is_some()
                 || !content.heading.is_empty()
                     && (content.service.is_some()
                         || content.estate.is_some()
@@ -1671,7 +1694,7 @@ mod home_page_tests {
 
     #[test]
     fn summons_publishes_the_catalog_and_intake() {
-        let content = resolve_firm_home_content(&views::brand::SUMMONS_BRANDING, None);
+        let content = resolve_firm_home_content(&views::brand::SUMMONS_BRANDING, None, false);
         let copy = content.summons.expect("Summons has a designed home");
         assert!(content.bare.is_none());
         assert_eq!(copy.fees[0][1], "$100");
@@ -1695,7 +1718,8 @@ mod home_page_tests {
 mod guieb_shook_home_tests {
     #[test]
     fn guieb_shook_home_does_not_open_the_account_invitation() {
-        let content = super::resolve_firm_home_content(&views::brand::GUIEB_SHOOK_BRANDING, None);
+        let content =
+            super::resolve_firm_home_content(&views::brand::GUIEB_SHOOK_BRANDING, None, false);
         // The homepage reads the brand's own catalog — the authored classic-NY
         // page, not the holding notice — and the account invitation stays
         // closed on the firm's own site.
