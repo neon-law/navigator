@@ -1,57 +1,75 @@
-//! Read a legal-plan assignment notice from a plan provider (ARAG,
-//! LegalShield) — the email a fixed-fee plan sends when it assigns one of
-//! its members to the firm.
+//! Read a legal-plan notice from a plan provider (ARAG, `LegalEASE`,
+//! `LegalShield`) — the case request a fixed-fee plan sends when one of its
+//! members asks for an attorney, and the messages that follow about that
+//! case. Every one of them names the matter by the plan's own number, the
+//! Plan Case Number.
 //!
-//! This module is pure: text in, an [`Assignment`] out. It opens no
-//! connection and touches no file, so the intake lane in `portal` and any
-//! offline import parse one assignment identically. Detection is
+//! This module is pure: subject and text in, an [`Assignment`] out. It
+//! opens no connection and touches no file, so the intake lane in `portal`
+//! and any offline import parse one notice identically. Detection is
 //! sender-based and conservative: a message from a plan provider that does
 //! not parse is not silently dropped — it falls to triage for a person.
+//!
+//! The Plan Case Number is read from the subject first, because each
+//! provider prints it there and a subject survives the trip through
+//! `SendGrid` unchanged. Plan mail is HTML; when the inbound text is derived
+//! from it, table cells and line breaks collapse into one line, so body
+//! fields are read from whitespace-flattened text, never by line.
 
 use chrono::NaiveDate;
 use serde::Serialize;
 
-/// The plan provider that sent the assignment.
+/// The plan provider that sent the notice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum PlanProvider {
-    /// ARAG legal plan.
+    /// ARAG legal plan: `CaseAssist` case requests and provider mail.
     Arag,
-    /// LegalShield legal plan.
+    /// `LegalEASE` legal plan: case reviews from LAMP and provider mail.
+    LegalEase,
+    /// `LegalShield` legal plan.
     LegalShield,
 }
 
 impl PlanProvider {
-    /// The storage spelling recorded beside the parsed assignment.
+    const ALL: [Self; 3] = [Self::Arag, Self::LegalEase, Self::LegalShield];
+
+    /// The storage spelling recorded beside the parsed notice.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Arag => "arag",
+            Self::LegalEase => "legal_ease",
             Self::LegalShield => "legal_shield",
         }
     }
 
-    /// The provider's sender domain. Routing is sender-based, so a
-    /// lookalike body from an unknown sender never parses.
+    /// The domains the provider sends from. Routing is sender-based, so a
+    /// lookalike body from an unknown sender never parses. ARAG sends case
+    /// requests from `aragconnect.com` and provider mail from
+    /// `araglegal.com`.
     #[must_use]
-    pub const fn sender_domain(self) -> &'static str {
+    pub const fn sender_domains(self) -> &'static [&'static str] {
         match self {
-            Self::Arag => "arag.com",
-            Self::LegalShield => "legalshield.com",
+            Self::Arag => &["aragconnect.com", "araglegal.com", "arag.com"],
+            Self::LegalEase => &["legaleaseplan.com"],
+            Self::LegalShield => &["legalshield.com"],
         }
     }
 
-    /// The body marker every assignment notice from this provider carries.
-    #[must_use]
-    pub const fn body_marker(self) -> &'static str {
+    /// The phrases each provider prints just before its case number, in the
+    /// subject or the body: `CaseAssist #4900000-001`, `Member Case #400001`,
+    /// `Case ID: 400001`, a `| Case ID | 400001 |` table row.
+    const fn case_markers(self) -> &'static [&'static str] {
         match self {
-            Self::Arag => "attorney assignment",
-            Self::LegalShield => "legalshield",
+            Self::Arag => &["caseassist #", "caseassist"],
+            Self::LegalEase => &["case #", "case id"],
+            Self::LegalShield => &["certificate number"],
         }
     }
 }
 
-/// The provider a sender address belongs to. The sender's domain is the
-/// provider's domain or a subdomain of it — the same suffix rule the
+/// The provider a sender address belongs to. The sender's domain is one of
+/// the provider's domains or a subdomain of one — the same suffix rule the
 /// claims-agent vendor route uses.
 #[must_use]
 pub fn provider_for_sender(from: &str) -> Option<PlanProvider> {
@@ -60,127 +78,143 @@ pub fn provider_for_sender(from: &str) -> Option<PlanProvider> {
         .1
         .trim_end_matches('>')
         .to_ascii_lowercase();
-    [PlanProvider::Arag, PlanProvider::LegalShield]
-        .into_iter()
-        .find(|provider| {
-            let suffix = provider.sender_domain();
-            address == suffix || address.ends_with(&format!(".{suffix}"))
-        })
+    PlanProvider::ALL.into_iter().find(|provider| {
+        provider
+            .sender_domains()
+            .iter()
+            .any(|domain| address == *domain || address.ends_with(&format!(".{domain}")))
+    })
 }
 
-/// One plan assignment as the notice describes it.
+/// One plan notice as the provider prints it. Only the Plan Case Number is
+/// required: it is what links the mail to its Project.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Assignment {
     /// The provider that sent the notice.
     pub provider: PlanProvider,
+    /// The plan's own number for this matter — the Project's
+    /// `plan_case_number`.
+    pub case_number: String,
     /// The member's name as the notice prints it.
-    pub member_name: String,
+    pub member_name: Option<String>,
     /// The provider's member or membership identifier.
-    pub member_number: String,
-    /// The plan or certificate number, when the notice prints one.
-    pub plan_number: Option<String>,
-    /// The kind of legal matter the plan assigned, in the notice's words.
-    pub matter_type: String,
-    /// The coverage/assignment effective date, when the notice prints one.
+    pub member_number: Option<String>,
+    /// The kind of legal matter, in the notice's words.
+    pub matter_type: Option<String>,
+    /// The plan or coverage effective date, when the notice prints one.
     pub effective_date: Option<NaiveDate>,
     /// The member's contact email, when the notice prints one.
     pub contact_email: Option<String>,
 }
 
-/// Why a message is not an assignment notice this module can read.
+/// Why a message from a plan provider is not a notice this module can read.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum PlanAssignmentError {
-    #[error("not a legal-plan assignment notice")]
-    NotAnAssignment,
-    #[error("the assignment notice has no `{0}` line")]
+    #[error("the plan notice has no `{0}`")]
     Missing(&'static str),
 }
 
-/// Parse the body text of an assignment notice.
+/// Parse a notice from a sender already resolved to `provider`.
 ///
 /// # Errors
 ///
-/// [`PlanAssignmentError::NotAnAssignment`] when the text carries no plan
-/// provider's marker; [`PlanAssignmentError::Missing`] when a recognized
-/// notice lacks a required field.
-pub fn parse_text(text: &str) -> Result<Assignment, PlanAssignmentError> {
-    let lowered = text.to_ascii_lowercase();
-    let provider = [PlanProvider::Arag, PlanProvider::LegalShield]
-        .into_iter()
-        .find(|provider| lowered.contains(provider.body_marker()))
-        .ok_or(PlanAssignmentError::NotAnAssignment)?;
-    parse_for_provider(provider, text)
-}
-
-/// Parse the body of a notice from a sender already resolved to `provider`.
-///
-/// # Errors
-///
-/// [`PlanAssignmentError::Missing`] when the notice lacks a required field.
-pub fn parse_for_provider(
+/// [`PlanAssignmentError::Missing`] when neither the subject nor the body
+/// carries the provider's case number.
+pub fn parse(
     provider: PlanProvider,
+    subject: &str,
     text: &str,
 ) -> Result<Assignment, PlanAssignmentError> {
-    let fields = FieldLabels::for_provider(provider);
-    let member_name =
-        field(text, fields.member_name).ok_or(PlanAssignmentError::Missing("member name"))?;
-    let member_number =
-        field(text, fields.member_number).ok_or(PlanAssignmentError::Missing("member number"))?;
-    let matter_type =
-        field(text, fields.matter_type).ok_or(PlanAssignmentError::Missing("matter type"))?;
-    Ok(Assignment {
+    let body = flatten(text);
+    let case_number = case_number(provider, subject)
+        .or_else(|| case_number(provider, &body))
+        .ok_or(PlanAssignmentError::Missing("case number"))?;
+    let mut assignment = Assignment {
         provider,
-        member_name,
-        member_number,
-        plan_number: optional_field(text, fields.plan_number),
-        matter_type,
-        effective_date: optional_field(text, fields.effective_date).and_then(|value| {
-            NaiveDate::parse_from_str(&value, "%Y-%m-%d")
-                .or_else(|_| NaiveDate::parse_from_str(&value, "%m/%d/%Y"))
-                .ok()
-        }),
-        contact_email: optional_field(text, fields.contact_email)
-            .map(|value| value.to_ascii_lowercase()),
-    })
-}
-
-/// The field labels one provider prints. Kept beside the parser so a new
-/// provider is one struct literal, not a new match arm.
-struct FieldLabels {
-    member_name: &'static str,
-    member_number: &'static str,
-    plan_number: Option<&'static str>,
-    matter_type: &'static str,
-    effective_date: Option<&'static str>,
-    contact_email: Option<&'static str>,
-}
-
-impl FieldLabels {
-    const fn for_provider(provider: PlanProvider) -> Self {
-        match provider {
-            PlanProvider::Arag => Self {
-                member_name: "member name",
-                member_number: "member number",
-                plan_number: Some("plan number"),
-                matter_type: "matter type",
-                effective_date: Some("effective date"),
-                contact_email: Some("member email"),
-            },
-            PlanProvider::LegalShield => Self {
-                member_name: "member",
-                member_number: "membership id",
-                plan_number: Some("certificate number"),
-                matter_type: "legal matter",
-                effective_date: Some("coverage start"),
-                contact_email: Some("contact"),
-            },
+        case_number,
+        member_name: None,
+        member_number: None,
+        matter_type: None,
+        effective_date: None,
+        contact_email: None,
+    };
+    match provider {
+        PlanProvider::Arag => {
+            // "… local network attorneys that <member> has requested
+            // attorney services in your area for <matter>."
+            assignment.member_name = between(&body, "attorneys that ", " has requested");
+            assignment.matter_type = between(&body, "in your area for ", ".");
+        }
+        PlanProvider::LegalEase => {
+            // Subject: "… Member Case #400001: <member> - <matter>".
+            if let Some((member, matter)) = subject
+                .split_once(": ")
+                .and_then(|(_, rest)| rest.split_once(" - "))
+            {
+                assignment.member_name = non_empty(member);
+                assignment.matter_type = non_empty(matter);
+            }
+            assignment.member_number = token_after(&body, "member id");
+            assignment.effective_date =
+                token_after(&body, "plan effective date").and_then(|value| date(&value));
+        }
+        PlanProvider::LegalShield => {
+            assignment.member_name = field(text, "member");
+            assignment.member_number = field(text, "membership id");
+            assignment.matter_type = field(text, "legal matter");
+            assignment.effective_date =
+                field(text, "coverage start").and_then(|value| date(&value));
+            assignment.contact_email =
+                field(text, "contact").map(|value| value.to_ascii_lowercase());
         }
     }
+    Ok(assignment)
 }
 
-/// The value of an optional `Label: value` line, when the provider prints one.
-fn optional_field(text: &str, label: Option<&str>) -> Option<String> {
-    label.and_then(|label| field(text, label))
+/// Whitespace collapsed to single spaces, so HTML-derived text and real
+/// plain text read alike.
+fn flatten(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn non_empty(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+/// The first case number `provider` prints in `haystack`: a token holding a
+/// digit right after one of its markers.
+fn case_number(provider: PlanProvider, haystack: &str) -> Option<String> {
+    provider
+        .case_markers()
+        .iter()
+        .filter_map(|marker| token_after(haystack, marker))
+        .find(|token| token.chars().any(|c| c.is_ascii_digit()))
+}
+
+/// The token after the first case-insensitive `label` in `haystack`,
+/// skipping the separators a label/value pair is printed with (`:`, `#`,
+/// `|`, spaces). A token runs over letters, digits, `-`, and `/`.
+fn token_after(haystack: &str, label: &str) -> Option<String> {
+    let start = haystack.to_ascii_lowercase().find(label)? + label.len();
+    let token: String = haystack[start..]
+        .trim_start_matches([' ', ':', '#', '|'])
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '/'))
+        .collect();
+    (!token.is_empty()).then_some(token)
+}
+
+/// The text between the first `start` and the next `end` after it.
+fn between(haystack: &str, start: &str, end: &str) -> Option<String> {
+    let rest = &haystack[haystack.find(start)? + start.len()..];
+    non_empty(&rest[..rest.find(end)?])
+}
+
+fn date(value: &str) -> Option<NaiveDate> {
+    NaiveDate::parse_from_str(value, "%Y-%m-%d")
+        .or_else(|_| NaiveDate::parse_from_str(value, "%m/%d/%Y"))
+        .ok()
 }
 
 /// The value of a `Label: value` line, whitespace collapsed. Labels are
@@ -188,47 +222,58 @@ fn optional_field(text: &str, label: Option<&str>) -> Option<String> {
 fn field(text: &str, label: &str) -> Option<String> {
     text.lines().find_map(|line| {
         let (name, value) = line.split_once(':')?;
-        if name.trim().to_ascii_lowercase() == label {
-            let value = value.trim();
-            (!value.is_empty()).then(|| value.split_whitespace().collect::<Vec<_>>().join(" "))
+        if name.trim().eq_ignore_ascii_case(label) {
+            non_empty(&flatten(value))
         } else {
             None
         }
     })
 }
 
-/// Synthetic fixture emails for tests and offline imports: reserved
-/// example.com addresses, 555-prefix phones, no real member. The portal's
-/// intake lane tests parse the same fixtures the store's unit tests do, so
-/// both lanes read one assignment identically.
+/// Synthetic notices in each provider's shape for tests and offline
+/// imports: invented members, `example.com` addresses, and case numbers no
+/// plan issued. The portal's intake lane tests parse the same fixtures the
+/// store's unit tests do, so both lanes read one notice identically.
 pub mod fixtures {
+    /// The subject of an ARAG case request.
+    pub const ARAG_SUBJECT: &str = "New Case Request Alert - CaseAssist #4900000-001";
 
-    /// The ARAG fixture's sender address.
-    pub const ARAG_SENDER: &str = "assignments@notice.arag.example";
-    /// The LegalShield fixture's sender address.
-    pub const LEGAL_SHIELD_SENDER: &str = "assignments@notice.legalshield.example";
-
-    /// A synthetic ARAG attorney-assignment notice.
+    /// The text of an ARAG case request, flattened the way HTML-only mail
+    /// reaches the inbound lane.
     #[must_use]
-    pub fn arag_assignment_text() -> String {
+    pub fn arag_case_request_text() -> String {
         [
-            "ARAG Attorney Assignment",
-            "",
-            "Member Name: Dana Example",
-            "Member Number: AR-004512",
-            "Plan Number: PLAN-778812",
-            "Matter Type: Estate Planning - Will Preparation",
-            "Effective Date: 2026-11-02",
-            "Member Email: dana@example.com",
-            "",
-            "Please contact the member within two business days to schedule",
-            "an initial consultation. Reply to this notice if you must decline",
-            "the assignment.",
+            "Time-sensitive: Please let us know if you are interested in this case.",
+            "Case Request Alert Counsel, We are notifying you and other local",
+            "network attorneys that Dana Example has requested attorney services",
+            "in your area for Will Preparation. Follow these steps: 1. Click on",
+            "Case Details to learn more about the case.",
         ]
         .join("\n")
     }
 
-    /// A synthetic LegalShield membership-assignment notice.
+    /// The subject of a `LegalEASE` case review.
+    pub const LEGAL_EASE_SUBJECT: &str =
+        "LegalEASE NEW CASE REVIEW for Member Case #400001: Harper Sample - Lease Agreement";
+
+    /// The text of a `LegalEASE` case review: its Personal Details table.
+    #[must_use]
+    pub fn legal_ease_case_review_text() -> String {
+        [
+            "Your attorney services are being requested for member case.",
+            "| Personal Details | |",
+            "|---|---|",
+            "| Case ID | 400001 |",
+            "| Name | Harper Sample |",
+            "| Member ID | 9900001 |",
+            "| Plan Effective Date | 1/1/2025 |",
+            "| Legal Matter State | NV |",
+            "| Area of Law | Lease Agreement |",
+        ]
+        .join("\n")
+    }
+
+    /// A synthetic `LegalShield` membership-assignment notice.
     #[must_use]
     pub fn legal_shield_assignment_text() -> String {
         [
@@ -240,9 +285,6 @@ pub mod fixtures {
             "Legal Matter: Consumer Contract Review",
             "Coverage Start: 11/04/2026",
             "Contact: riley@example.com",
-            "",
-            "You have been assigned to this member's matter. Contact the",
-            "member to schedule the covered consultation.",
         ]
         .join("\n")
     }
@@ -250,149 +292,140 @@ pub mod fixtures {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        fixtures, parse_for_provider, parse_text, provider_for_sender, PlanAssignmentError,
-        PlanProvider,
-    };
+    use super::{fixtures, parse, provider_for_sender, PlanAssignmentError, PlanProvider};
 
     #[test]
-    fn the_arag_fixture_parses_with_its_fields_intact() {
-        let assignment = parse_text(&fixtures::arag_assignment_text()).expect("fixture parses");
-        assert_eq!(assignment.provider, PlanProvider::Arag);
-        assert_eq!(assignment.member_name, "Dana Example");
-        assert_eq!(assignment.member_number, "AR-004512");
-        assert_eq!(assignment.plan_number.as_deref(), Some("PLAN-778812"));
-        assert_eq!(assignment.matter_type, "Estate Planning - Will Preparation");
-        assert_eq!(assignment.effective_date.unwrap().to_string(), "2026-11-02");
-        assert_eq!(
-            assignment.contact_email.as_deref(),
-            Some("dana@example.com")
-        );
+    fn an_arag_case_request_reads_its_caseassist_number_member_and_matter() {
+        let notice = parse(
+            PlanProvider::Arag,
+            fixtures::ARAG_SUBJECT,
+            &fixtures::arag_case_request_text(),
+        )
+        .expect("case request parses");
+        assert_eq!(notice.case_number, "4900000-001");
+        assert_eq!(notice.member_name.as_deref(), Some("Dana Example"));
+        assert_eq!(notice.matter_type.as_deref(), Some("Will Preparation"));
+        assert_eq!(notice.member_number, None);
     }
 
     #[test]
-    fn the_legal_shield_fixture_parses_with_its_fields_intact() {
-        let assignment =
-            parse_text(&fixtures::legal_shield_assignment_text()).expect("fixture parses");
-        assert_eq!(assignment.provider, PlanProvider::LegalShield);
-        assert_eq!(assignment.member_name, "Harper Sample");
-        assert_eq!(assignment.member_number, "LS-902441");
-        assert_eq!(assignment.plan_number.as_deref(), Some("CERT-330291"));
-        assert_eq!(assignment.matter_type, "Consumer Contract Review");
-        assert_eq!(assignment.effective_date.unwrap().to_string(), "2026-11-04");
+    fn an_arag_reminder_and_provider_mail_read_the_same_number() {
+        let reminder = parse(
+            PlanProvider::Arag,
+            "REMINDER: Case Request Alert - CaseAssist #4900000-002",
+            "We still need to hear from you about this case.",
+        )
+        .expect("reminder parses");
+        assert_eq!(reminder.case_number, "4900000-002");
+        assert_eq!(reminder.member_name, None);
+
+        let letter = parse(
+            PlanProvider::Arag,
+            "Engagement letter",
+            "Thank you. The signed letter for CaseAssist 4900000-003 is on file.",
+        )
+        .expect("a body citation parses");
+        assert_eq!(letter.case_number, "4900000-003");
+    }
+
+    #[test]
+    fn a_legal_ease_case_review_reads_its_subject_and_table() {
+        let notice = parse(
+            PlanProvider::LegalEase,
+            fixtures::LEGAL_EASE_SUBJECT,
+            &fixtures::legal_ease_case_review_text(),
+        )
+        .expect("case review parses");
+        assert_eq!(notice.case_number, "400001");
+        assert_eq!(notice.member_name.as_deref(), Some("Harper Sample"));
+        assert_eq!(notice.matter_type.as_deref(), Some("Lease Agreement"));
+        assert_eq!(notice.member_number.as_deref(), Some("9900001"));
+        assert_eq!(notice.effective_date.unwrap().to_string(), "2025-01-01");
+    }
+
+    #[test]
+    fn a_legal_ease_table_flattened_from_html_reads_the_same() {
+        // HTML-only mail reaches the lane with its table cells run together.
+        let flat = "Personal Details Case ID 400001 Name Harper Sample Member ID 9900001 \
+                    Plan Effective Date 1/1/2025 Group Name Example Co";
+        let notice = parse(PlanProvider::LegalEase, "Assignment", flat).expect("parses");
+        assert_eq!(notice.case_number, "400001");
+        assert_eq!(notice.member_number.as_deref(), Some("9900001"));
+        assert_eq!(notice.effective_date.unwrap().to_string(), "2025-01-01");
+    }
+
+    #[test]
+    fn legal_ease_provider_mail_reads_the_case_id_subjects() {
+        for (subject, number) in [
+            (
+                "Message for LegalEASE Case #400002: HARPER SAMPLE - Tax",
+                "400002",
+            ),
+            ("LegalEASE Referral (Flat Fee). Case ID: 400003", "400003"),
+            ("Case ID:400004 Client Name:   Harper Sample", "400004"),
+        ] {
+            let notice = parse(PlanProvider::LegalEase, subject, "").expect(subject);
+            assert_eq!(notice.case_number, number, "{subject}");
+        }
+    }
+
+    #[test]
+    fn the_legal_shield_notice_parses_under_its_own_labels() {
+        let notice = parse(
+            PlanProvider::LegalShield,
+            "Member Assignment",
+            &fixtures::legal_shield_assignment_text(),
+        )
+        .expect("notice parses");
+        assert_eq!(notice.case_number, "CERT-330291");
+        assert_eq!(notice.member_name.as_deref(), Some("Harper Sample"));
+        assert_eq!(notice.member_number.as_deref(), Some("LS-902441"));
         assert_eq!(
-            assignment.contact_email.as_deref(),
-            Some("riley@example.com")
+            notice.matter_type.as_deref(),
+            Some("Consumer Contract Review")
         );
+        assert_eq!(notice.effective_date.unwrap().to_string(), "2026-11-04");
+        assert_eq!(notice.contact_email.as_deref(), Some("riley@example.com"));
+    }
+
+    #[test]
+    fn plan_mail_without_a_case_number_is_missing_it() {
+        for provider in PlanProvider::ALL {
+            assert_eq!(
+                parse(
+                    provider,
+                    "ARAG member Dana Example",
+                    "Please call us about the case."
+                ),
+                Err(PlanAssignmentError::Missing("case number")),
+                "{provider:?}"
+            );
+        }
     }
 
     #[test]
     fn provider_spellings_are_stable() {
         assert_eq!(PlanProvider::Arag.as_str(), "arag");
+        assert_eq!(PlanProvider::LegalEase.as_str(), "legal_ease");
         assert_eq!(PlanProvider::LegalShield.as_str(), "legal_shield");
     }
 
     #[test]
-    fn provider_sender_domains_are_the_noticing_vendors() {
-        assert_eq!(PlanProvider::Arag.sender_domain(), "arag.com");
-        assert_eq!(PlanProvider::LegalShield.sender_domain(), "legalshield.com");
-    }
-
-    #[test]
-    fn text_without_a_provider_marker_is_not_an_assignment() {
-        assert_eq!(
-            parse_text("Dear counsel, please advise."),
-            Err(PlanAssignmentError::NotAnAssignment)
-        );
-    }
-
-    #[test]
-    fn a_recognized_notice_without_its_member_number_is_missing_not_unparseable() {
-        let text = fixtures::arag_assignment_text()
-            .lines()
-            .filter(|line| !line.starts_with("Member Number:"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert_eq!(
-            parse_text(&text),
-            Err(PlanAssignmentError::Missing("member number"))
-        );
-    }
-
-    #[test]
-    fn a_recognized_notice_without_a_matter_type_is_missing_not_unparseable() {
-        let text = fixtures::legal_shield_assignment_text()
-            .lines()
-            .filter(|line| !line.starts_with("Legal Matter:"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert_eq!(
-            parse_text(&text),
-            Err(PlanAssignmentError::Missing("matter type"))
-        );
-    }
-
-    #[test]
-    fn labels_are_case_insensitive() {
-        let text = fixtures::arag_assignment_text().replace("Member Name:", "MEMBER NAME:");
-        let assignment = parse_text(&text).expect("case-insensitive labels parse");
-        assert_eq!(assignment.member_name, "Dana Example");
-    }
-
-    #[test]
-    fn crlf_line_endings_and_padding_parse() {
-        let text = fixtures::arag_assignment_text().replace('\n', "\r\n");
-        let assignment = parse_text(&text).expect("crlf parses");
-        assert_eq!(assignment.member_name, "Dana Example");
-    }
-
-    #[test]
-    fn an_optional_field_may_be_absent() {
-        let text = fixtures::arag_assignment_text()
-            .lines()
-            .filter(|line| !line.starts_with("Effective Date:"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let assignment = parse_for_provider(PlanProvider::Arag, &text).expect("parses");
-        assert_eq!(assignment.effective_date, None);
-    }
-
-    #[test]
-    fn an_unreadable_effective_date_is_none_not_an_error() {
-        let text = fixtures::arag_assignment_text().replace("2026-11-02", "next Monday");
-        let assignment = parse_for_provider(PlanProvider::Arag, &text).expect("parses");
-        assert_eq!(assignment.effective_date, None);
-    }
-
-    #[test]
-    fn parse_for_provider_skips_sender_detection() {
-        // A body carrying no provider marker still parses when the lane has
-        // already resolved the sender to a provider.
-        let text = "Member Name: Dana Example\nMember Number: AR-004512\nMatter Type: Advice";
-        let assignment = parse_for_provider(PlanProvider::Arag, text).expect("parses");
-        assert_eq!(assignment.provider, PlanProvider::Arag);
-        assert_eq!(assignment.contact_email, None);
-    }
-
-    #[test]
-    fn provider_sender_routes_match_subdomains_only() {
-        assert_eq!(
-            provider_for_sender("ARAG Assignments <assignments@notice.arag.com>"),
-            Some(PlanProvider::Arag)
-        );
-        assert_eq!(
-            provider_for_sender("mail@legalshield.com"),
-            Some(PlanProvider::LegalShield)
-        );
+    fn provider_senders_are_the_domains_plan_mail_comes_from() {
+        for (from, provider) in [
+            (
+                "CaseRequest <caserequest@aragconnect.com>",
+                PlanProvider::Arag,
+            ),
+            ("provider-desk@araglegal.com", PlanProvider::Arag),
+            ("assignments@notice.arag.com", PlanProvider::Arag),
+            ("no-reply@legaleaseplan.com", PlanProvider::LegalEase),
+            ("mail@legalshield.com", PlanProvider::LegalShield),
+        ] {
+            assert_eq!(provider_for_sender(from), Some(provider), "{from}");
+        }
         assert_eq!(provider_for_sender("spoof@notarag.com"), None);
         assert_eq!(provider_for_sender("someone@example.com"), None);
         assert_eq!(provider_for_sender("no-address"), None);
-    }
-
-    #[test]
-    fn fixtures_use_reserved_synthetic_senders() {
-        for sender in [fixtures::ARAG_SENDER, fixtures::LEGAL_SHIELD_SENDER] {
-            assert!(sender.ends_with(".example"), "{sender} is not synthetic");
-        }
     }
 }

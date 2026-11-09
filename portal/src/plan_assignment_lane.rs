@@ -1,7 +1,7 @@
-//! The plan-assignment intake lane: recognize assignment mail from a
-//! fixed-fee plan provider (ARAG, LegalShield) on the SendGrid inbound
-//! path, parse it with the store's pure parser, and archive the parsed
-//! summary for matter preparation.
+//! The plan-assignment intake lane: recognize mail from a fixed-fee plan
+//! provider (ARAG, `LegalEASE`, `LegalShield`) on the `SendGrid` inbound
+//! path, read its Plan Case Number with the store's pure parser, and
+//! archive the parsed summary for matter preparation.
 //!
 //! Nothing here creates a matter or replies to the member. A parsed
 //! assignment is a summary for a person to confirm; an unparseable
@@ -67,7 +67,7 @@ pub(crate) async fn run(
     let digest = workflows::scoped_email_digest("plan-assignment", provider.as_str(), &email.raw);
     let archive_key = format!("inbound/plan-assignments/{digest}.json");
 
-    match store::plan_assignment::parse_for_provider(provider, &email.text) {
+    match store::plan_assignment::parse(provider, &email.subject, &email.text) {
         Ok(assignment) => {
             archive(
                 storage,
@@ -126,10 +126,10 @@ mod tests {
     use crate::inbound_email::InboundEmail;
     use store::plan_assignment::fixtures;
 
-    fn plan_email(from: &str, text: String) -> InboundEmail {
+    fn plan_email(from: &str, subject: &str, text: String) -> InboundEmail {
         InboundEmail {
             from: from.into(),
-            subject: "Assignment".into(),
+            subject: subject.into(),
             text,
             message_id: Some("<plan-1@mail.example>".into()),
             ..InboundEmail::default()
@@ -137,11 +137,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_recognized_notice_parses_and_archives_its_summary() {
+    async fn an_arag_case_request_parses_and_archives_its_summary() {
         let storage = crate::test_support::fs_storage().await;
         let email = plan_email(
-            "ARAG <assignments@notice.arag.com>",
-            fixtures::arag_assignment_text(),
+            "ARAG <caserequest@aragconnect.com>",
+            fixtures::ARAG_SUBJECT,
+            fixtures::arag_case_request_text(),
         );
         let outcome = run(&storage, &email).await.expect("lane runs");
         let LaneOutcome::Parsed {
@@ -156,16 +157,17 @@ mod tests {
         let record: serde_json::Value = serde_json::from_slice(&archived.bytes).unwrap();
         assert_eq!(record["outcome"], "parsed");
         assert_eq!(record["provider"], "arag");
+        assert_eq!(record["assignment"]["case_number"], "4900000-001");
         assert_eq!(record["assignment"]["member_name"], "Dana Example");
-        assert_eq!(record["assignment"]["member_number"], "AR-004512");
     }
 
     #[tokio::test]
-    async fn a_legal_shield_notice_parses_under_its_own_labels() {
+    async fn a_legal_ease_case_review_parses_under_its_own_shape() {
         let storage = crate::test_support::fs_storage().await;
         let email = plan_email(
-            "LegalShield <assignments@notice.legalshield.com>",
-            fixtures::legal_shield_assignment_text(),
+            "LegalEASE <no-reply@legaleaseplan.com>",
+            fixtures::LEGAL_EASE_SUBJECT,
+            fixtures::legal_ease_case_review_text(),
         );
         let outcome = run(&storage, &email).await.expect("lane runs");
         let LaneOutcome::Parsed {
@@ -175,16 +177,21 @@ mod tests {
         else {
             panic!("expected a parsed outcome, got {outcome:?}");
         };
-        assert_eq!(provider, "legal_shield");
+        assert_eq!(provider, "legal_ease");
         let archived = storage.get(&archive_key).await.expect("archive readable");
         let record: serde_json::Value = serde_json::from_slice(&archived.bytes).unwrap();
-        assert_eq!(record["assignment"]["member_name"], "Harper Sample");
+        assert_eq!(record["assignment"]["case_number"], "400001");
+        assert_eq!(record["assignment"]["member_number"], "9900001");
     }
 
     #[tokio::test]
     async fn unparseable_plan_mail_archives_the_reason_and_stays_in_triage() {
         let storage = crate::test_support::fs_storage().await;
-        let email = plan_email("mail@legalshield.com", "please call us".into());
+        let email = plan_email(
+            "mail@legalshield.com",
+            "Member question",
+            "please call us".into(),
+        );
         let outcome = run(&storage, &email).await.expect("lane runs");
         let LaneOutcome::Unparseable {
             reason,
@@ -194,7 +201,7 @@ mod tests {
             panic!("expected an unparseable outcome, got {outcome:?}");
         };
         assert!(
-            reason.contains("member name"),
+            reason.contains("case number"),
             "reason names the field: {reason}"
         );
         let archived = storage.get(&archive_key).await.expect("archive readable");
@@ -209,7 +216,8 @@ mod tests {
         let storage = crate::test_support::fs_storage().await;
         let email = plan_email(
             "Dana Example <dana@example.com>",
-            fixtures::arag_assignment_text(),
+            fixtures::ARAG_SUBJECT,
+            fixtures::arag_case_request_text(),
         );
         let outcome = run(&storage, &email).await.expect("lane runs");
         assert_eq!(outcome, LaneOutcome::NotPlanMail);
@@ -219,8 +227,9 @@ mod tests {
     async fn a_redelivered_notice_reuses_the_same_archive_key() {
         let storage = crate::test_support::fs_storage().await;
         let email = plan_email(
-            "ARAG <assignments@notice.arag.com>",
-            fixtures::arag_assignment_text(),
+            "ARAG <caserequest@aragconnect.com>",
+            fixtures::ARAG_SUBJECT,
+            fixtures::arag_case_request_text(),
         );
         let first = run(&storage, &email).await.expect("first run");
         let second = run(&storage, &email).await.expect("redelivery");
@@ -237,8 +246,9 @@ mod tests {
     async fn a_lookalike_domain_never_reaches_the_lane() {
         let storage = crate::test_support::fs_storage().await;
         let email = plan_email(
-            "ARAG <assignments@arag.com.example>",
-            fixtures::arag_assignment_text(),
+            "ARAG <caserequest@aragconnect.com.example>",
+            fixtures::ARAG_SUBJECT,
+            fixtures::arag_case_request_text(),
         );
         let outcome = run(&storage, &email).await.expect("lane runs");
         assert_eq!(outcome, LaneOutcome::NotPlanMail);

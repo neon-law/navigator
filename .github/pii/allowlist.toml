@@ -98,6 +98,7 @@ values = [
 reason = "Plan providers' assignment notice-sender domains and the intake lane's invented lookalike: institutional senders and invented mailboxes, no person reads them."
 values = [
   "arag.com",
+  "aragconnect.com",
   "legalshield.com",
   "notarag.com",
 ]
