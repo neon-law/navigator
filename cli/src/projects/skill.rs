@@ -379,6 +379,26 @@ mod tests {
     }
 
     #[test]
+    fn the_layoff_kit_resolves_and_scaffolds_all_its_notations() {
+        let entries = catalog();
+        let kit = find(&entries, "NY", "layoff").expect("ny/layoff should be in the catalog");
+        assert!(
+            !kit.notations.is_empty(),
+            "the kit bundles its deliverables: {kit:?}"
+        );
+        let bundled = portal::template_api::bundled_files();
+        for code in &kit.notations {
+            let found = bundled.iter().any(|(path, _)| {
+                std::path::Path::new(path)
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    == Some(code.as_str())
+            });
+            assert!(found, "bundled Notation `{code}` missing from the catalog");
+        }
+    }
+
+    #[test]
     fn find_is_case_insensitive_on_jurisdiction() {
         let entries = catalog();
         let upper = find(&entries, "NV", "estates").expect("NV estates resolves");

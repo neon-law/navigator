@@ -31,12 +31,17 @@ Each catalog entry's frontmatter (parsed by `rules::project_skill::parse`, `rule
 | `name` | Yes | The human-readable playbook name. |
 | `version` | Yes | The version string a Project pins when it runs `navigator project skill use`. |
 | `notations` | No | A list of Notation `code`s this skill bundles. Absent means an empty list, not an error. |
+| `assumptions` | No | Firm Assumption keys this skill renders; dotted paths the Firm Assumptions catalog defines. |
 
-The body below the frontmatter is the playbook itself — prose, a checklist, whatever the practice area needs.
+The body below the frontmatter is the playbook itself — prose, a checklist, whatever the practice area needs. Every `{{
+key }}` span in the body must name a key the `assumptions:` frontmatter declares; the engine resolves each declared key
+through the Firm's own values and renders an unset key as the empty string.
 
-A malformed entry (missing/empty/non-scalar required field, an unrecognized `jurisdiction`, or a `notations:` that is
-not a list of strings) fails `navigator project gate`/`navigator validate` under rule `N126`. Two entries that declare
-the same `(jurisdiction, practice_area)` pair fail under `N127`. See [`docs/gate.md`](gate.md) for the full rule table.
+A malformed entry (missing/empty/non-scalar required field, an unrecognized `jurisdiction`, a `notations:` or
+`assumptions:` that is not a list of strings, or a body reference to an undeclared assumption key) fails `navigator
+project gate`/`navigator validate` under rule `N126`. Two entries that declare the same `(jurisdiction, practice_area)`
+pair fail under `N127`. An entry whose declared key the Firm Assumptions catalog does not define fails under `N128`. See
+[`docs/gate.md`](gate.md) for the full rule table.
 
 ## Jurisdiction codes
 
