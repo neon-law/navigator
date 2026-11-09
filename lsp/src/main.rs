@@ -19,8 +19,9 @@ fn main() -> Result<()> {
     let mut input = stdin.lock();
     let mut output = stdout.lock();
     let mut server = Server::new();
+    let mut shutdown_requested = false;
     while let Some(message) = read_message(&mut input)? {
-        if let Some(reply) = handle(&mut server, &message)? {
+        if let Some(reply) = handle(&mut server, &message, &mut shutdown_requested)? {
             write_message(&mut output, &reply)?;
         }
     }
@@ -57,7 +58,11 @@ fn write_message<W: Write>(writer: &mut W, value: &Value) -> Result<()> {
     Ok(())
 }
 
-fn handle(server: &mut Server, message: &Value) -> Result<Option<Value>> {
+fn handle(
+    server: &mut Server,
+    message: &Value,
+    shutdown_requested: &mut bool,
+) -> Result<Option<Value>> {
     let method = message
         .get("method")
         .and_then(Value::as_str)
@@ -76,12 +81,16 @@ fn handle(server: &mut Server, message: &Value) -> Result<Option<Value>> {
             })))
         }
         "initialized" => Ok(None),
-        "shutdown" => Ok(Some(json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "result": null,
-        }))),
-        "exit" => std::process::exit(0),
+        "shutdown" => {
+            *shutdown_requested = true;
+            Ok(Some(json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": null,
+            })))
+        }
+        // Status 0 follows a received `shutdown`. Status 1 means the request never arrived.
+        "exit" => std::process::exit(i32::from(!*shutdown_requested)),
         "textDocument/didOpen" => {
             let params: DidOpenTextDocumentParams = serde_json::from_value(params)?;
             let out = server.did_open(params);
