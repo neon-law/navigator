@@ -17,6 +17,19 @@ PostgreSQL only in a deployment that opts in. A deployment without PostgreSQL re
 Production renders the same objects as staging, data-claim size included; a manifest test holds the two equal. Render
 any overlay with `kubectl kustomize <overlay>`.
 
+## Manual commands
+
+The public overlays carry the placeholder namespace `navigator`, in each object's `namespace:` and in the Service host
+`navigator-postgres.navigator.svc.cluster.local`. `navigator ops ship` replaces both with the row's
+`NAVIGATOR_K8S_NAMESPACE`. A manual command makes the same replacement before it applies; otherwise kubectl refuses the
+objects with `the namespace from the provided object "navigator" does not match`. Set the row's namespace and define
+`place` once per shell; every command below uses both:
+
+```bash
+NS=<namespace>
+place() { sed -e "s/namespace: navigator/namespace: $NS/g" -e "s/navigator\.svc\.cluster\.local/$NS.svc.cluster.local/g"; }
+```
+
 ## Server and storage
 
 The shared StatefulSet consumes the published compatibility image digest. GKE uses a dedicated regional balanced PD CSI
@@ -159,13 +172,13 @@ through the deployment Secret's `NAVIGATOR_SURREAL_*` keys. The image is the pla
 That is the release image that carries the `navigator` CLI. Pin it to the release being reconciled, then create the Job:
 
 ```bash
-kubectl kustomize examples/deploy/k8s/gke/postgres/mirror/<env> \
+kubectl kustomize examples/deploy/k8s/gke/postgres/mirror/<env> | place \
   | kubectl set image --local -f - reconcile=<registry>/navigator-surreal-archive@<release-digest> -o yaml \
-  | kubectl --context <context> -n <namespace> create -f -
-kubectl --context <context> -n <namespace> wait --for=condition=complete \
+  | kubectl --context <context> -n "$NS" create -f -
+kubectl --context <context> -n "$NS" wait --for=condition=complete \
   job/navigator-postgres-mirror-reconcile --timeout=30m
-kubectl --context <context> -n <namespace> logs job/navigator-postgres-mirror-reconcile
-kubectl --context <context> -n <namespace> delete job navigator-postgres-mirror-reconcile
+kubectl --context <context> -n "$NS" logs job/navigator-postgres-mirror-reconcile
+kubectl --context <context> -n "$NS" delete job navigator-postgres-mirror-reconcile
 ```
 
 The log is the JSON report. A failed Job is not retried. Read the report, fix the cause (for example a Person or Entity
@@ -219,14 +232,11 @@ The drill restores into scratch storage in the same namespace. It never connects
 first, and in production before calling PostgreSQL recoverable there:
 
 ```bash
-kubectl --context <context> -n <namespace> exec navigator-postgres-0 -- psql -U postgres -d navigator -Atc \
-  "SELECT now()"                 # note the time; the drill below targets it
-kubectl kustomize examples/deploy/k8s/gke/postgres/restore-drill/<env> \
-  | kubectl set env --local -f - -c restore RECOVERY_TARGET_TIME='<that time>' -o yaml \
-  | kubectl --context <context> -n <namespace> apply -f -
-kubectl --context <context> -n <namespace> wait --for=condition=complete \
+kubectl kustomize examples/deploy/k8s/gke/postgres/restore-drill/<env> | place \
+  | kubectl --context <context> -n "$NS" apply -f -
+kubectl --context <context> -n "$NS" wait --for=condition=complete \
   job/navigator-postgres-restore-drill --timeout=4h
-kubectl --context <context> -n <namespace> logs job/navigator-postgres-restore-drill -c restore
+kubectl --context <context> -n "$NS" logs job/navigator-postgres-restore-drill -c restore
 ```
 
 The log reports the recovery point, databases, extensions, row counts per table, AGE graph vertex and edge counts, and
@@ -235,9 +245,23 @@ and release, and the executor identity and release that own each `PENDING` run: 
 an executor with that identity and release ([DBOS durability](dbos-durability.md#several-replicas)). It verifies
 Navigator and, when present, Forgejo separately. The Cloud SDK fetch container runs as its named UID 1000; PostgreSQL
 runs as UID 999, with the shared scratch volume group 999. Compare the counts with
-`k8s/postgres/restore-drill/verify.sql` run against each live database, and record the result. Omit
-`RECOVERY_TARGET_TIME` to recover to the end of the archive; set `RESTORE_BASE_BACKUP` on the `fetch` container to
-restore a specific base backup. Delete the Job afterwards; its scratch claim goes with it.
+`k8s/postgres/restore-drill/verify.sql` run against each live database, and record the result. Delete the Job
+afterwards; its scratch claim goes with it.
+
+The drill recovers to the end of the archive, which is the right default. A fixed `RECOVERY_TARGET_TIME` needs a commit
+after it in the archived WAL: on an idle database, a target later than the last commit fails with `recovery ended before
+configured recovery target was reached`. To recover to an earlier point, or from a specific base backup instead of the
+newest, replace the Job's value in the rendered stream; drop either `-e` to keep its default:
+
+```bash
+kubectl kustomize examples/deploy/k8s/gke/postgres/restore-drill/<env> | place \
+  | sed -e '/name: RECOVERY_TARGET_TIME$/{n;s/value: .*/value: "<time>"/;}' \
+        -e '/name: RESTORE_BASE_BACKUP$/{n;s/value: .*/value: "<base stamp>"/;}' \
+  | kubectl --context <context> -n "$NS" apply -f -
+```
+
+`kubectl set env --local` cannot make this change: it rejects the drill's ConfigMap in the stream and drops it, so a
+namespace without that ConfigMap gets a Job with no scripts.
 
 Measure recovery time from the Job's start to successful completion so it includes fetching and verification.
 `recovery_seconds` measures extraction, WAL replay, and promotion within the restore container. Compare
@@ -279,14 +303,15 @@ its environment's context, namespace, and deployment row.
    the in-progress `.partial` segment needs delete. It also server-side applies the `navigator-postgres-backup-target`
    ConfigMap, whose `bucket` key names that bucket, into the row namespace for the backup workloads.
 
-3. **Server and backups.** `kubectl kustomize examples/deploy/k8s/gke/postgres/<env>`, review, server-side dry-run,
-   then apply. The server restarts once for the replication settings. Wait for `statefulset/navigator-postgres`. A first
-   apply creates the 100 GiB claim. Prove pod replacement keeps the same PVC UID, as staging did, before continuing.
+3. **Server and backups.** Render with `kubectl kustomize examples/deploy/k8s/gke/postgres/<env> | place`, review,
+   pipe the same render to `kubectl --context <context> -n "$NS" apply --dry-run=server -f -`, then apply. The server
+   restarts once for the replication settings. Wait for `statefulset/navigator-postgres`. A first apply creates the 100
+   GiB claim. Prove pod replacement keeps the same PVC UID, as staging did, before continuing.
 4. **Backups verified.** Wait for `navigator-postgres-wal-archive-0` to be ready and `wal/` to fill. Trigger a first
    base backup, then run the restore drill above. Production `web` does not opt in until its own drill passes.
 
    ```bash
-   kubectl --context <context> -n <namespace> create job navigator-postgres-base-backup-initial \
+   kubectl --context <context> -n "$NS" create job navigator-postgres-base-backup-initial \
      --from=cronjob/navigator-postgres-base-backup
    ```
 
@@ -296,19 +321,24 @@ its environment's context, namespace, and deployment row.
    then pin and apply the migration Job as follows:
 
    ```bash
-   kubectl kustomize examples/deploy/k8s/gke/postgres/migrate/<env> \
+   kubectl --context <context> -n "$NS" delete job navigator-postgres-roles navigator-migrate --ignore-not-found
+   kubectl kustomize examples/deploy/k8s/gke/postgres/access/<env> | place \
+     | kubectl --context <context> -n "$NS" apply -f -
+   kubectl --context <context> -n "$NS" wait --for=condition=complete job/navigator-postgres-roles --timeout=15m
+   kubectl kustomize examples/deploy/k8s/gke/postgres/migrate/<env> | place \
      | kubectl set image --local -f - migrate=<registry>/<web-image>@<release-digest> -o yaml \
-     | kubectl --context <context> -n <namespace> apply -f -
-   kubectl --context <context> -n <namespace> wait --for=condition=complete job/navigator-migrate --timeout=15m
+     | kubectl --context <context> -n "$NS" apply -f -
+   kubectl --context <context> -n "$NS" wait --for=condition=complete job/navigator-migrate --timeout=15m
    ```
 
-   Delete the completed Job before the next release's migration.
+   A Job's pod template is immutable, so the first line removes the completed Jobs a release leaves behind, as `ops
+   ship` does.
 6. **`web` env.** Set `NAVIGATOR_POSTGRES_ENABLED = "true"` in `deployments/<name>/config.toml` through a pull
    request. Then ship that release: `navigator ops ship --deployment <name> --tag <release>`.
 7. **Verify.** The `web` log shows the import and triage counts; then smoke the journal through the deployment's API:
 
    ```bash
-   kubectl --context <context> -n <namespace> logs deploy/navigator-web | grep 'legacy journal import completed'
+   kubectl --context <context> -n "$NS" logs deploy/navigator-web | grep 'legacy journal import completed'
    navigator journal --firm <firm-id> --host <deployment-host> list
    ```
 
