@@ -432,9 +432,11 @@ the runner pod, and Dash0 through the controller; see [observability](observabil
 `navigator ops forgejo archive <local-mirror> <object-key> <receipt-path>` creates a bundle from a stable bare mirror,
 uploads it with GCS's create-only generation precondition, downloads that exact generation, checks its byte count and
 SHA-256, and restores every ref and the default branch into a fresh mirror before writing the receipt. Set
-`NAVIGATOR_FORGEJO_ARCHIVES_BUCKET` to the private bucket and provide the operator's GCS credentials through the
-standard GCS credential chain. The object key is an opaque caller-selected name. The receipt contains the key,
-generation, digest, size, default branch, and ref hashes; keep it with the archive under the same access controls.
+`NAVIGATOR_FORGEJO_ARCHIVES_BUCKET` to the locked bundle bucket `navigator ops gcp setup` provisions from
+`--forgejo-archives-project-id` and `--forgejo-archives-bucket` ([archive buckets](environments.md#archive-buckets)) and
+provide the operator's GCS credentials through the standard GCS credential chain. The object key is an opaque
+caller-selected name. The receipt contains the key, generation, digest, size, default branch, and ref hashes; keep it
+with the archive under the same access controls.
 
 `navigator ops forgejo restore <receipt-path> <new-mirror-path>` downloads the receipt's exact generation, verifies the
 digest and bundle integrity, and publishes a fresh bare mirror only after all ref hashes and the default branch match.
@@ -442,9 +444,9 @@ The object key and receipt data may disclose repository information; command sta
 passed. Existing objects, receipts, and restore destinations are never replaced. The CLI operator command uses its
 configured credential for both upload and read-back; the storage API accepts separate writer and reader capabilities for
 a future split-identity caller. This path proves one invoked Git-bundle round trip and does not configure a schedule,
-object retention, bucket lock, encryption key, fleet coverage, or Forgejo metadata/LFS recovery. Restore currently uses
-atomic no-replace directory rename on Linux and macOS; other targets fail explicitly rather than risk replacing an
-existing path.
+encryption key, fleet coverage, or Forgejo metadata/LFS recovery; the bucket's locked retention comes from setup.
+Restore currently uses atomic no-replace directory rename on Linux and macOS; other targets fail explicitly rather than
+risk replacing an existing path.
 
 ## Evidence
 

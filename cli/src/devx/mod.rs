@@ -735,6 +735,30 @@ pub enum GcpCmd {
             requires_all = ["offsite_archives_project_id"]
         )]
         offsite_archives_bucket: Option<String>,
+        /// GCP project id that holds the locked Git bundle archive bucket —
+        /// a different project than the deployment's, like the offsite
+        /// archive. Requires `--forgejo-archives-bucket`. Falls back to
+        /// `NAVIGATOR_FORGEJO_ARCHIVES_PROJECT_ID`.
+        #[arg(
+            long,
+            env = "NAVIGATOR_FORGEJO_ARCHIVES_PROJECT_ID",
+            requires_all = ["forgejo_archives_bucket"]
+        )]
+        forgejo_archives_project_id: Option<String>,
+        /// Git bundle archive bucket name (`<deployment>-bundles`), created in
+        /// the project `--forgejo-archives-project-id` names with a locked
+        /// 7-year retention policy and no lifecycle rule; `navigator ops
+        /// forgejo bundle archive` and the nightly repository backup write
+        /// here, and the deployment identity gets create and read roles only.
+        /// Requires `--forgejo-archives-project-id`. Falls back to
+        /// `NAVIGATOR_FORGEJO_ARCHIVES_BUCKET`, the same variable the runtime
+        /// reads the lane from.
+        #[arg(
+            long,
+            env = "NAVIGATOR_FORGEJO_ARCHIVES_BUCKET",
+            requires_all = ["forgejo_archives_project_id"]
+        )]
+        forgejo_archives_bucket: Option<String>,
         /// Telemetry landing zone (`<deployment>-telemetry`), where the `OTel`
         /// collector writes Parquet before the nightly lane promotes it into
         /// the archive. Provisioned with a flat 90-day object expiry. Omit to
@@ -1130,6 +1154,8 @@ fn dispatch_with_dns_provider(
             telemetry_bucket,
             offsite_archives_project_id,
             offsite_archives_bucket,
+            forgejo_archives_project_id,
+            forgejo_archives_bucket,
             google_service_account_id,
             drive_service_account_id,
             kubernetes_namespace,
@@ -1165,6 +1191,8 @@ fn dispatch_with_dns_provider(
                 telemetry_bucket,
                 offsite_archives_project_id,
                 offsite_archives_bucket,
+                forgejo_archives_project_id,
+                forgejo_archives_bucket,
                 ..gcp::SetupConfig::default()
             };
             if let Some(v) = google_service_account_id {

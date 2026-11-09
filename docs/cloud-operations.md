@@ -295,6 +295,8 @@ gcloud logging buckets list --location=global --project="$NAVIGATOR_GCP_PROJECT_
 | PostgreSQL base backups + WAL | 30 days | `POSTGRES_BACKUPS_RETENTION_DAYS` in `cli/src/devx/gcp/buckets.rs` |
 | Backup for GKE (`navigator-daily`) | 30 days | The backup plan; see [`gke-prod.md`](gke-prod.md) |
 | Surreal archives | Kept indefinitely | No lifecycle rule; see [`surreal-archives.md`](surreal-archives.md) |
+| Git bundles (`<deployment>-bundles`) | Locked, 7 years | `GIT_BUNDLES_RETENTION_SECONDS` in `gcp/buckets.rs` |
+| Offsite Iceberg archive | Locked, 25 years | `OFFSITE_ARCHIVES_RETENTION_SECONDS` in the same file |
 
 Thirty days of PostgreSQL backups always keeps two or more base backups and all the WAL after the oldest.
 

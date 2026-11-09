@@ -202,7 +202,10 @@ bucket in the archive project's context rather than whichever project the viewer
 
 The offsite bucket carries a **locked** GCS Bucket Lock retention policy — 25 years (25 × 365.25 days, expressed in
 seconds as `OFFSITE_ARCHIVES_RETENTION_SECONDS`), set at bucket creation and locked once verified. A locked policy
-rejects both replacement and deletion of any object, so on that lane the writer's contract is **create-only**:
+rejects both replacement and deletion of any object, so on that lane the writer's contract is **create-only**. The Git
+bundle archive is the other locked lane (`<deployment>-bundles`, 7 years, see [archive
+buckets](environments.md#archive-buckets)); it is a separate bucket because this unlocked in-project lane rewrites
+`version-hint.text` every run.
 
 - **Probe before write.** Every writer probes the bucket's policy (`retention_locked`) and branches on the answer. A
   backend that cannot determine its bucket's policy fails the run — an unprobeable locked bucket must never receive a

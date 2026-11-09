@@ -16,15 +16,21 @@
 //!   [`POSTGRES_BACKUPS_RETENTION_DAYS`]-day expiry. Only the
 //!   `navigator-postgres-backup` Kubernetes service account is granted on it.
 //!
-//! One more exists only when the deployment names it, and in a different
-//! project from every bucket above:
+//! Two more exist only when the deployment names them, each in a different
+//! project from every bucket above and each carrying a **locked** retention
+//! policy ([`LockedLane`], provisioned by [`ensure_locked_archive`]):
 //!
 //! - the **offsite** Iceberg archive — a bucket in a different GCP project
-//!   than the deployment that writes it, carrying a **locked**
+//!   than the deployment that writes it, carrying a locked
 //!   [`OFFSITE_ARCHIVES_RETENTION_SECONDS`] retention policy (25 years).
 //!   Enforced-private, no lifecycle rule: the locked policy is the retention
-//!   decision, and nothing in the archive path may ever delete a backup. See
-//!   [`ensure_offsite_archive`].
+//!   decision, and nothing in the archive path may ever delete a backup.
+//! - the **Git bundle** archive (`<deployment>-bundles`) — where
+//!   `navigator ops forgejo bundle archive` and the nightly repository backup
+//!   land, carrying a locked [`GIT_BUNDLES_RETENTION_SECONDS`] policy
+//!   (7 years). Bundles live apart from the Iceberg tables because the
+//!   unlocked Iceberg lane rewrites `metadata/version-hint.text` on every
+//!   run, which a bucket-wide retention policy would refuse.
 //!
 //! Two more exist only when the deployment names them:
 //!
@@ -74,6 +80,7 @@ pub enum BucketKind {
     Telemetry,
     ArchivedProjects,
     OffsiteArchives,
+    GitBundles,
 }
 
 impl BucketKind {
@@ -95,6 +102,7 @@ impl BucketKind {
             | Self::Archives
             | Self::ArchivedProjects
             | Self::OffsiteArchives
+            | Self::GitBundles
             | Self::Telemetry => "STANDARD",
             Self::Logs => "NEARLINE",
         }
@@ -134,6 +142,7 @@ impl BucketKind {
             | Self::Archives
             | Self::ArchivedProjects
             | Self::OffsiteArchives
+            | Self::GitBundles
             | Self::Telemetry
             | Self::PostgresBackups => Some("enforced"),
             _ => None,
@@ -167,6 +176,8 @@ impl BucketKind {
             Self::ArchivedProjects
         } else if name.ends_with(super::OFFSITE_ARCHIVES_BUCKET_SUFFIX) {
             Self::OffsiteArchives
+        } else if name.ends_with(super::GIT_BUNDLES_BUCKET_SUFFIX) {
+            Self::GitBundles
         } else if name.starts_with(super::ARCHIVES_BUCKET_PREFIX) {
             Self::Archives
         } else {
@@ -217,13 +228,56 @@ pub const APPLICATIONS_RETENTION_DAYS: u32 = 3650;
 /// owner. Locking is irreversible, which is the point.
 pub const OFFSITE_ARCHIVES_RETENTION_SECONDS: u64 = 788_940_000;
 
-/// The exact roles the deployment's workflows-service identity holds on the
-/// offsite archive bucket, and nothing else: create and read, with no
+/// Retention on the Git bundle archive: 7 years, in seconds (7 × 365.25
+/// days). Long enough to outlive any matter a repository documents; a locked
+/// period can later be lengthened but never shortened, so the shorter of the
+/// two defensible windows is the one that gets locked first.
+pub const GIT_BUNDLES_RETENTION_SECONDS: u64 = 220_903_200;
+
+/// The two buckets provisioned with a locked retention policy, and how long
+/// each locks. Both live in a project other than the deployment's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockedLane {
+    /// The offsite Iceberg archive.
+    OffsiteArchives,
+    /// The Git bundle archive.
+    GitBundles,
+}
+
+impl LockedLane {
+    #[must_use]
+    pub const fn kind(self) -> BucketKind {
+        match self {
+            Self::OffsiteArchives => BucketKind::OffsiteArchives,
+            Self::GitBundles => BucketKind::GitBundles,
+        }
+    }
+
+    #[must_use]
+    pub const fn retention_seconds(self) -> u64 {
+        match self {
+            Self::OffsiteArchives => OFFSITE_ARCHIVES_RETENTION_SECONDS,
+            Self::GitBundles => GIT_BUNDLES_RETENTION_SECONDS,
+        }
+    }
+
+    /// How the lane is named in stage lines and errors.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::OffsiteArchives => "offsite archive",
+            Self::GitBundles => "Git bundle archive",
+        }
+    }
+}
+
+/// The exact roles the deployment's workflows-service identity holds on a
+/// locked archive bucket, and nothing else: create and read, with no
 /// delete, overwrite, or administration anywhere in the grant. The writer
 /// path in `archives/` never deletes — but even if code changed, IAM has no
 /// delete permission to grant, and GCS's locked retention rejects deletion
 /// regardless.
-const OFFSITE_ARCHIVE_ROLES: &[&str] =
+const LOCKED_ARCHIVE_ROLES: &[&str] =
     &["roles/storage.objectCreator", "roles/storage.objectViewer"];
 
 #[derive(Serialize)]
@@ -234,7 +288,7 @@ struct CreateBucketBody<'a> {
     storage_class: &'a str,
     #[serde(rename = "iamConfiguration")]
     iam_configuration: IamConfig,
-    /// Set only by the offsite archive: a retention policy is fixed at
+    /// Set only by a locked lane: a retention policy is fixed at
     /// creation there and locked once verified. Omitted everywhere else —
     /// no other bucket kind carries one, and inserting a policy a lane
     /// never asked for would be unrecoverable on exactly the buckets that
@@ -412,13 +466,13 @@ pub async fn ensure_lifecycle(client: &GcpClient, name: &str) -> SetupResult<()>
     }
 }
 
-/// Ensure the offsite Iceberg archive bucket exists in `project_id` — the
-/// **archive** project, never the deployment's — with a locked
-/// [`OFFSITE_ARCHIVES_RETENTION_SECONDS`] retention policy, public access
-/// prevention enforced, uniform bucket-level access, and no lifecycle rule.
+/// Ensure a locked archive bucket exists in `project_id` — the **archive**
+/// project, never the deployment's — with the lane's locked retention
+/// policy, public access prevention enforced, uniform bucket-level access,
+/// and no lifecycle rule.
 ///
 /// Locking is irreversible: a locked policy cannot be shortened, removed, or
-/// replaced, and a mistaken object lives out the full 25 years. The sequence
+/// replaced, and a mistaken object lives out the full period. The sequence
 /// is therefore create → verify → lock — the policy is fixed at creation,
 /// verified against the live bucket, and only then locked. A bucket that
 /// already exists with anything but the exact intended policy is refused,
@@ -431,16 +485,17 @@ pub async fn ensure_lifecycle(client: &GcpClient, name: &str) -> SetupResult<()>
 /// [`Mode::DryRun`] the synthesized responses carry no policy to verify and
 /// no metageneration to lock against, so the plan records the create, the
 /// lifecycle clear, and the lock intent without the verification sequence.
-pub async fn ensure_offsite_archive(
+pub async fn ensure_locked_archive(
     client: &GcpClient,
     project_id: &str,
     name: &str,
     location: &str,
+    lane: LockedLane,
 ) -> SetupResult<EnsureOutcome> {
-    let outcome = create_offsite_bucket(client, project_id, name, location).await?;
+    let outcome = create_locked_bucket(client, project_id, name, location, lane).await?;
 
     if client.mode() == Mode::DryRun {
-        clear_offsite_lifecycle(client, name).await?;
+        clear_locked_lifecycle(client, name, lane).await?;
         client
             .post_json(
                 GcpService::Storage,
@@ -455,11 +510,11 @@ pub async fn ensure_offsite_archive(
     // create only means the name is taken. Every later call targets the name
     // alone — confirm the bucket actually lives in the archive project before
     // clearing its lifecycle or locking its policy.
-    verify_offsite_archive_project(client, name, project_id).await?;
-    clear_offsite_lifecycle(client, name).await?;
+    verify_locked_archive_project(client, name, project_id, lane).await?;
+    clear_locked_lifecycle(client, name, lane).await?;
 
-    let metadata = get_bucket_metadata(client, name).await?;
-    verify_offsite_archive_policy(name, &metadata)?;
+    let metadata = get_bucket_metadata(client, name, lane).await?;
+    verify_locked_archive_policy(lane, name, &metadata)?;
 
     if metadata.pointer("/retentionPolicy/isLocked") == Some(&serde_json::Value::Bool(true)) {
         return Ok(outcome);
@@ -468,20 +523,21 @@ pub async fn ensure_offsite_archive(
         .pointer("/metageneration")
         .and_then(serde_json::Value::as_str)
         .expect("invariant: get_bucket_metadata returns a JSON object; a missing or non-string metageneration is a malformed bucket resource");
-    lock_offsite_policy(client, name, metageneration).await?;
+    lock_locked_policy(client, name, metageneration, lane).await?;
     Ok(outcome)
 }
 
-/// Create the offsite bucket with its retention policy already in place, or
+/// Create the locked bucket with its retention policy already in place, or
 /// report that it exists. A pre-existing bucket is never rewritten — the
 /// verify step below judges the live resource instead.
-async fn create_offsite_bucket(
+async fn create_locked_bucket(
     client: &GcpClient,
     project_id: &str,
     name: &str,
     location: &str,
+    lane: LockedLane,
 ) -> SetupResult<EnsureOutcome> {
-    let kind = BucketKind::OffsiteArchives;
+    let kind = lane.kind();
     let body = CreateBucketBody {
         name,
         location,
@@ -491,11 +547,11 @@ async fn create_offsite_bucket(
             public_access_prevention: kind.public_access_prevention(),
         },
         retention_policy: Some(RetentionPolicyBody {
-            retention_period: OFFSITE_ARCHIVES_RETENTION_SECONDS.to_string(),
+            retention_period: lane.retention_seconds().to_string(),
         }),
     };
     let body_json = serde_json::to_value(&body).map_err(|source| SetupError::Json {
-        what: "create offsite archive bucket request body",
+        what: "create locked archive bucket request body",
         source,
     })?;
     let resp = client
@@ -509,7 +565,7 @@ async fn create_offsite_bucket(
         200..=299 => Ok(EnsureOutcome::Created),
         409 => Ok(EnsureOutcome::AlreadyExists),
         other => Err(SetupError::BadStatus {
-            operation: format!("create offsite archive bucket {name}"),
+            operation: format!("create {} bucket {name}", lane.label()),
             status: other,
             body: resp.into_text(),
         }),
@@ -521,7 +577,11 @@ async fn create_offsite_bucket(
 /// accident waiting for the day the policy and the rule disagree. Clear
 /// unconditionally — the desired rule set is empty, so the write is
 /// already idempotent.
-async fn clear_offsite_lifecycle(client: &GcpClient, name: &str) -> SetupResult<()> {
+async fn clear_locked_lifecycle(
+    client: &GcpClient,
+    name: &str,
+    lane: LockedLane,
+) -> SetupResult<()> {
     let resp = client
         .patch_json(
             GcpService::Storage,
@@ -532,7 +592,7 @@ async fn clear_offsite_lifecycle(client: &GcpClient, name: &str) -> SetupResult<
     match resp.status_u16() {
         200..=299 => Ok(()),
         other => Err(SetupError::BadStatus {
-            operation: format!("clear lifecycle for offsite archive bucket {name}"),
+            operation: format!("clear lifecycle for {} bucket {name}", lane.label()),
             status: other,
             body: resp.into_text(),
         }),
@@ -543,10 +603,11 @@ async fn clear_offsite_lifecycle(client: &GcpClient, name: &str) -> SetupResult<
 /// bucket, so a policy modified between verify and lock fails instead of
 /// locking the wrong terms. The lock is irreversible; the response must
 /// report the policy as locked.
-async fn lock_offsite_policy(
+async fn lock_locked_policy(
     client: &GcpClient,
     name: &str,
     metageneration: &str,
+    lane: LockedLane,
 ) -> SetupResult<()> {
     let resp = client
         .post_json(
@@ -572,7 +633,7 @@ async fn lock_offsite_policy(
             Ok(())
         }
         other => Err(SetupError::BadStatus {
-            operation: format!("lock retention policy on offsite archive bucket {name}"),
+            operation: format!("lock retention policy on {} bucket {name}", lane.label()),
             status: other,
             body: resp.into_text(),
         }),
@@ -580,20 +641,24 @@ async fn lock_offsite_policy(
 }
 
 /// Read the live bucket resource for the verify-then-lock sequence.
-async fn get_bucket_metadata(client: &GcpClient, name: &str) -> SetupResult<serde_json::Value> {
+async fn get_bucket_metadata(
+    client: &GcpClient,
+    name: &str,
+    lane: LockedLane,
+) -> SetupResult<serde_json::Value> {
     let resp = client
         .get(GcpService::Storage, &format!("/storage/v1/b/{name}"))
         .await?;
     let status = resp.status_u16();
     if !(200..=299).contains(&status) {
         return Err(SetupError::BadStatus {
-            operation: format!("read offsite archive bucket {name}"),
+            operation: format!("read {} bucket {name}", lane.label()),
             status,
             body: resp.into_text(),
         });
     }
     serde_json::from_str(&resp.into_text()).map_err(|source| SetupError::Json {
-        what: "offsite archive bucket metadata",
+        what: "locked archive bucket metadata",
         source,
     })
 }
@@ -605,14 +670,19 @@ async fn get_bucket_metadata(client: &GcpClient, name: &str) -> SetupResult<serd
 /// wrote a rule after the clear. Any mismatch refuses the run — the lock is
 /// irreversible, so the provisioner must never lock a policy it has not just
 /// asserted.
-fn verify_offsite_archive_policy(name: &str, metadata: &serde_json::Value) -> SetupResult<()> {
-    let expected_period = OFFSITE_ARCHIVES_RETENTION_SECONDS.to_string();
+fn verify_locked_archive_policy(
+    lane: LockedLane,
+    name: &str,
+    metadata: &serde_json::Value,
+) -> SetupResult<()> {
+    let expected_period = lane.retention_seconds().to_string();
+    let operation = || format!("verify {} bucket {name}", lane.label());
     let period = metadata
         .pointer("/retentionPolicy/retentionPeriod")
         .and_then(serde_json::Value::as_str);
     if period != Some(expected_period.as_str()) {
         return Err(SetupError::AmbiguousLiveState {
-            operation: format!("verify offsite archive bucket {name}"),
+            operation: operation(),
             detail: format!(
                 "retention period is {period:?}, expected {expected_period} seconds; \
                  refusing to lock a policy this pipeline did not write"
@@ -622,7 +692,7 @@ fn verify_offsite_archive_policy(name: &str, metadata: &serde_json::Value) -> Se
     let pap = metadata.pointer("/iamConfiguration/publicAccessPrevention");
     if pap != Some(&serde_json::Value::String("enforced".into())) {
         return Err(SetupError::AmbiguousLiveState {
-            operation: format!("verify offsite archive bucket {name}"),
+            operation: operation(),
             detail: format!(
                 "public access prevention is {pap:?}, expected \"enforced\"; \
                  refusing to lock a policy this pipeline did not write"
@@ -632,7 +702,7 @@ fn verify_offsite_archive_policy(name: &str, metadata: &serde_json::Value) -> Se
     let ubla = metadata.pointer("/iamConfiguration/uniformBucketLevelAccess/enabled");
     if ubla != Some(&serde_json::Value::Bool(true)) {
         return Err(SetupError::AmbiguousLiveState {
-            operation: format!("verify offsite archive bucket {name}"),
+            operation: operation(),
             detail: format!(
                 "uniform bucket-level access is {ubla:?}, expected enabled; \
                  refusing to lock a policy this pipeline did not write"
@@ -645,7 +715,7 @@ fn verify_offsite_archive_policy(name: &str, metadata: &serde_json::Value) -> Se
         .map_or(0, Vec::len);
     if lifecycle_rules != 0 {
         return Err(SetupError::AmbiguousLiveState {
-            operation: format!("verify offsite archive bucket {name}"),
+            operation: operation(),
             detail: format!(
                 "the bucket carries {lifecycle_rules} lifecycle rule(s), expected an \
                  empty rule set; refusing to lock a policy this pipeline did not write"
@@ -655,15 +725,16 @@ fn verify_offsite_archive_policy(name: &str, metadata: &serde_json::Value) -> Se
     Ok(())
 }
 
-/// Confirm the offsite bucket actually lives in the archive project. Bucket
+/// Confirm the locked bucket actually lives in the archive project. Bucket
 /// names are global, so a 409 on create only means the name is taken — it
 /// says nothing about which project owns the bucket — and every later call
 /// targets the name alone. Listing the archive project's buckets settles
 /// ownership with the same Storage API surface everything else here uses.
-async fn verify_offsite_archive_project(
+async fn verify_locked_archive_project(
     client: &GcpClient,
     name: &str,
     archive_project: &str,
+    lane: LockedLane,
 ) -> SetupResult<()> {
     let resp = client
         .get(
@@ -696,7 +767,7 @@ async fn verify_offsite_archive_project(
         return Ok(());
     }
     Err(SetupError::AmbiguousLiveState {
-        operation: format!("verify offsite archive bucket {name}"),
+        operation: format!("verify {} bucket {name}", lane.label()),
         detail: format!(
             "bucket {name} does not appear in project {archive_project}; a bucket name \
              is global, so refusing to clear or lock a bucket that lives in another project"
@@ -705,19 +776,19 @@ async fn verify_offsite_archive_project(
 }
 
 /// Grant the deployment's workflows-service identity — the pod service
-/// account behind the archive writer — exactly [`OFFSITE_ARCHIVE_ROLES`]
-/// on the offsite bucket: create and read, with no administration and no
+/// account behind the archive writer — exactly [`LOCKED_ARCHIVE_ROLES`]
+/// on a locked bucket: create and read, with no administration and no
 /// delete permission anywhere in the grant. The member is named cross-project
 /// on the archive bucket itself; `gcloud` merges additive bindings, so
 /// re-running setup leaves an existing grant alone.
-pub async fn ensure_offsite_archive_writer(
+pub async fn ensure_locked_archive_writer(
     client: &GcpClient,
     deployment_project_id: &str,
     account_id: &str,
     bucket: &str,
 ) -> SetupResult<()> {
     let gsa = format!("{account_id}@{deployment_project_id}.iam.gserviceaccount.com");
-    for role in OFFSITE_ARCHIVE_ROLES {
+    for role in LOCKED_ARCHIVE_ROLES {
         classify(
             client
                 .shell_out(
@@ -734,7 +805,7 @@ pub async fn ensure_offsite_archive_writer(
                     ],
                 )
                 .await?,
-            "bind offsite archive writer role",
+            "bind locked archive writer role",
         )?;
     }
     Ok(())
@@ -796,10 +867,11 @@ mod tests {
     use super::super::client::{GcpClient, GcpService, StaticToken};
     use super::{
         assets_font_cors_rule, ensure_assets_cors, ensure_bucket, ensure_lifecycle,
-        ensure_offsite_archive, ensure_offsite_archive_writer, legacy_assets_font_cors_rule,
-        BucketKind, CreateBucketBody, EnsureOutcome, IamConfig, UniformAccess,
-        APPLICATIONS_RETENTION_DAYS, OFFSITE_ARCHIVES_RETENTION_SECONDS,
-        POSTGRES_BACKUPS_RETENTION_DAYS, TELEMETRY_RETENTION_DAYS,
+        ensure_locked_archive, ensure_locked_archive_writer, legacy_assets_font_cors_rule,
+        BucketKind, CreateBucketBody, EnsureOutcome, IamConfig, LockedLane, UniformAccess,
+        APPLICATIONS_RETENTION_DAYS, GIT_BUNDLES_RETENTION_SECONDS,
+        OFFSITE_ARCHIVES_RETENTION_SECONDS, POSTGRES_BACKUPS_RETENTION_DAYS,
+        TELEMETRY_RETENTION_DAYS,
     };
 
     const PUBLIC_BASE_URL: &str = "https://www.neonlaw.com";
@@ -1390,6 +1462,62 @@ mod tests {
         assert_eq!(OFFSITE_ARCHIVES_RETENTION_SECONDS, 788_940_000);
     }
 
+    /// ENG-1292: Git bundles get their own locked bucket, apart from the
+    /// Iceberg lane whose `version-hint.text` rewrite a bucket-wide policy
+    /// would refuse.
+    #[test]
+    fn git_bundle_archive_is_classified_by_suffix_and_locked_for_seven_years() {
+        assert_eq!(
+            BucketKind::from_name("example-deployment-bundles"),
+            BucketKind::GitBundles
+        );
+        assert_eq!(BucketKind::GitBundles.storage_class(), "STANDARD");
+        assert_eq!(BucketKind::GitBundles.retention_days(), None);
+        assert_eq!(
+            BucketKind::GitBundles.public_access_prevention(),
+            Some("enforced")
+        );
+        // 7 × 365.25 days in seconds. A locked period can be lengthened later
+        // and never shortened, so the shorter defensible window locks first.
+        assert_eq!(GIT_BUNDLES_RETENTION_SECONDS, 220_903_200);
+        assert_eq!(
+            LockedLane::GitBundles.retention_seconds(),
+            GIT_BUNDLES_RETENTION_SECONDS
+        );
+        assert_eq!(LockedLane::GitBundles.kind(), BucketKind::GitBundles);
+    }
+
+    /// The dry-run plan for the bundle lane: created with its retention
+    /// policy, lifecycle cleared, lock intent recorded — the shape a locked
+    /// bucket the writer cannot delete from takes before any object lands.
+    #[tokio::test]
+    async fn git_bundle_archive_plan_creates_with_retention_and_locks() {
+        let client = GcpClient::new(Arc::new(StaticToken("t".into()))).with_dry_run();
+        ensure_locked_archive(
+            &client,
+            "example-archive",
+            "example-deployment-bundles",
+            "us-west4",
+            LockedLane::GitBundles,
+        )
+        .await
+        .unwrap();
+        let calls = client.recorded_calls();
+        assert_eq!(calls.len(), 3, "{calls:?}");
+        let create = calls[0].body.as_deref().unwrap_or_default();
+        assert!(
+            create.contains("\"retentionPeriod\":\"220903200\"")
+                && create.contains("\"publicAccessPrevention\":\"enforced\""),
+            "{create}"
+        );
+        assert!(calls[1]
+            .url
+            .ends_with("/storage/v1/b/example-deployment-bundles"));
+        assert!(calls[2]
+            .url
+            .ends_with("/storage/v1/b/example-deployment-bundles/lockRetentionPolicy"));
+    }
+
     /// The ownership check lists the archive project's buckets; `owns`
     /// selects whether the offsite bucket is among them.
     async fn mount_archive_project_listing(server: &MockServer, owns: bool) {
@@ -1466,11 +1594,12 @@ mod tests {
             .mount(&server)
             .await;
 
-        let outcome = ensure_offsite_archive(
+        let outcome = ensure_locked_archive(
             &client_pointed_at(&server),
             "example-archive",
             "example-deployment-archives-offsite",
             "us-west4",
+            LockedLane::OffsiteArchives,
         )
         .await
         .unwrap();
@@ -1520,11 +1649,12 @@ mod tests {
             .mount(&server)
             .await;
 
-        let outcome = ensure_offsite_archive(
+        let outcome = ensure_locked_archive(
             &client_pointed_at(&server),
             "example-archive",
             "example-deployment-archives-offsite",
             "us-west4",
+            LockedLane::OffsiteArchives,
         )
         .await
         .unwrap();
@@ -1575,11 +1705,12 @@ mod tests {
             .mount(&server)
             .await;
 
-        let err = ensure_offsite_archive(
+        let err = ensure_locked_archive(
             &client_pointed_at(&server),
             "example-archive",
             "example-deployment-archives-offsite",
             "us-west4",
+            LockedLane::OffsiteArchives,
         )
         .await
         .unwrap_err();
@@ -1620,11 +1751,12 @@ mod tests {
             .mount(&server)
             .await;
 
-        let err = ensure_offsite_archive(
+        let err = ensure_locked_archive(
             &client_pointed_at(&server),
             "example-archive",
             "example-deployment-archives-offsite",
             "us-west4",
+            LockedLane::OffsiteArchives,
         )
         .await
         .unwrap_err();
@@ -1675,11 +1807,12 @@ mod tests {
             .mount(&server)
             .await;
 
-        let err = ensure_offsite_archive(
+        let err = ensure_locked_archive(
             &client_pointed_at(&server),
             "example-archive",
             "example-deployment-archives-offsite",
             "us-west4",
+            LockedLane::OffsiteArchives,
         )
         .await
         .unwrap_err();
@@ -1690,7 +1823,7 @@ mod tests {
     #[tokio::test]
     async fn offsite_archive_writer_grant_is_exactly_creator_and_viewer() {
         let client = GcpClient::new(Arc::new(StaticToken("t".into()))).with_dry_run();
-        ensure_offsite_archive_writer(
+        ensure_locked_archive_writer(
             &client,
             "example-deployment",
             "navigator-web",
