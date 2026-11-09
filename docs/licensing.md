@@ -76,16 +76,17 @@ agreements are not rewritten by this document.
 
 ## Trademarks
 
-NEON LAW, U.S. Reg. No. 6,325,650, is owned by Neon Law IP LLC. DELETEYOURDATA.COM is a mark of Shook Law PC. Neither
-license grants general trademark permission; Apache-2.0 section 6 states that limit for the Apache option. Configure a
-fork's branding through `views::brand_bundle`; copyright permission does not authorize presenting a deployment as Neon
-Law.
+NEON LAW, U.S. Reg. No. 6,325,650, is owned by Neon Law IP LLC. DELETEYOURDATA.COM is a mark of Guieb & Shook PC.
+Neither license grants general trademark permission; Apache-2.0 section 6 states that limit for the Apache option.
+Configure a fork's branding through `views::brand_bundle`; copyright permission does not authorize presenting a
+deployment as Neon Law.
 
 <!-- Draft — pending review by counsel. -->
 Lex Tecnica and IEP Defenders material belongs to Lex Tecnica, Ltd.: the page copy, logos, names, marks, and brand
-presentation for both brands, listed in [NOTICE](../NOTICE). `MIT OR Apache-2.0` does not cover it. Neither license
-grants any right to copy or use it, or the names LEX TECNICA or IEP DEFENDERS. Permission must come from Lex Tecnica,
-Ltd. in writing.
+presentation for both brands, listed in [NOTICE](../NOTICE) and in the generated THIRD-PARTY-NOTICES.txt, which derives
+one such paragraph from `views::brand` for every firm the registry encodes other than the deployment's own. `MIT OR
+Apache-2.0` does not cover it. Neither license grants any right to copy or use it, or the names LEX TECNICA or IEP
+DEFENDERS. Permission must come from Lex Tecnica, Ltd. in writing.
 
 ## Distributed notices
 

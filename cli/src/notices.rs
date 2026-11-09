@@ -34,6 +34,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use views::brand::{BrandKey, DEFAULT_BRANDING};
+
 /// One crate in the dependency tree, as `Cargo.lock` names it.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Crate {
@@ -279,15 +281,14 @@ pub fn render(notices: &Notices) -> String {
          public API is first-party work under the licence above. A provider's own SDKs,\n\
          documentation, assets, and terms are not part of this project, are not reproduced in it,\n\
          and stay under that provider's terms.\n\
-         \n\
-         Guieb & Shook PC practice names. Guieb & Shook PC uses these practice names:\n\
-         Abhaya Immigration, Aegis Criminal Defense, CyberInjuryLaw, Daybridge Divorce Law,\n\
-         DeleteYourData.com, DeleteYourDebt.com, Groundwork Real Estate Law,\n\
-         Misericordia Injury Law, Summons Defense, and Vesta Estate Planning. Whatever rights\n\
-         Guieb & Shook PC or its affiliates hold in those names are reserved, and this project\n\
-         grants none. NEON LAW is addressed in NOTICE.\n\
-         \n\
-         Other organizations. Justice Technology Association appears as a membership badge, and\n\
+         \n",
+    );
+    for paragraph in firm_paragraphs() {
+        out.push_str(&paragraph);
+        out.push_str("\n\n");
+    }
+    out.push_str(
+        "Other organizations. Justice Technology Association appears as a membership badge, and\n\
          PandA Law as a firm to which DeleteYourDebt.com refers visitors. Both names belong to\n\
          those organizations and imply no endorsement of or by this project.\n\
          \n\
@@ -346,6 +347,113 @@ pub fn render(notices: &Notices) -> String {
 
 /// What an operator reads when the registry is only partly unpacked.
 ///
+/// The column the hand-written header wraps at; generated paragraphs match it.
+const WRAP_WIDTH: usize = 88;
+
+/// One paragraph per firm the brand registry encodes, in registry order. They
+/// are derived from `views::brand` rather than written here so that a firm
+/// added to the registry is named in the next regenerated file instead of
+/// depending on someone remembering this one. The deployment's own firm — the
+/// legal entity behind [`DEFAULT_BRANDING`] — licenses its site copy and
+/// templates under the licence above and reserves only its names. Every other
+/// organization's material is outside the grant entirely, which is what NOTICE
+/// states for it; the two paragraphs say the same thing in the same words.
+fn firm_paragraphs() -> Vec<String> {
+    let house = DEFAULT_BRANDING.firm.legal_entity;
+    let mut firms: Vec<(&'static str, Vec<BrandKey>)> = Vec::new();
+    for key in BrandKey::ALL {
+        // NEON LAW is the registered mark NOTICE addresses on its own; the
+        // brand paragraphs cover the trading names around it.
+        if *key == BrandKey::Neon {
+            continue;
+        }
+        let entity = key.resolve_branding(&DEFAULT_BRANDING).firm.legal_entity;
+        match firms.iter_mut().find(|(known, _)| *known == entity) {
+            Some((_, keys)) => keys.push(*key),
+            None => firms.push((entity, vec![*key])),
+        }
+    }
+    firms
+        .into_iter()
+        .map(|(entity, keys)| {
+            let names: Vec<&str> = keys
+                .iter()
+                .map(|key| key.resolve_branding(&DEFAULT_BRANDING).firm.site_name)
+                .collect();
+            let text = if entity == house {
+                format!(
+                    "{entity} brands. {entity} trades under these names: {}. Whatever rights \
+                     {entity} or its affiliates hold in those names are reserved, and this \
+                     project grants none. NEON LAW is addressed in NOTICE.",
+                    list(&names)
+                )
+            } else {
+                let copy: Vec<String> = keys
+                    .iter()
+                    .map(|key| format!("neon/locales/en/{}/", key.as_str()))
+                    .collect();
+                let logos: Vec<String> = keys
+                    .iter()
+                    .map(|key| format!("server/public/brand/{}/", key.as_str()))
+                    .collect();
+                let marks: Vec<String> = names.iter().map(|name| name.to_uppercase()).collect();
+                format!(
+                    "{entity} brands. [Draft — pending review by counsel.] {} material belongs to \
+                     {entity}: the page copy under {}, the logos under {}, and the names, marks, \
+                     contact details, disclaimers, and brand presentation for those brands in \
+                     views/src/brand.rs and views/src/brand_presentation.rs. The licence above \
+                     does not cover that material and grants no right to copy or use it, or the \
+                     names {}. Permission must come from {entity} in writing.",
+                    list(&names),
+                    list(&copy),
+                    list(&logos),
+                    list_or(&marks),
+                )
+            };
+            wrap(&text)
+        })
+        .collect()
+}
+
+/// `a`, `a and b`, or `a, b, and c`.
+fn list<S: AsRef<str>>(items: &[S]) -> String {
+    join(items, "and")
+}
+
+/// `a`, `a or b`, or `a, b, or c`.
+fn list_or<S: AsRef<str>>(items: &[S]) -> String {
+    join(items, "or")
+}
+
+fn join<S: AsRef<str>>(items: &[S], conjunction: &str) -> String {
+    let items: Vec<&str> = items.iter().map(AsRef::as_ref).collect();
+    match items.as_slice() {
+        [] => String::new(),
+        [one] => (*one).to_string(),
+        [first, second] => format!("{first} {conjunction} {second}"),
+        [init @ .., last] => format!("{}, {conjunction} {last}", init.join(", ")),
+    }
+}
+
+/// Greedy word wrap at [`WRAP_WIDTH`] columns, measured in characters.
+fn wrap(text: &str) -> String {
+    let mut out = String::new();
+    let mut column = 0;
+    for word in text.split_whitespace() {
+        let width = word.chars().count();
+        if column > 0 && column + 1 + width > WRAP_WIDTH {
+            out.push('\n');
+            column = 0;
+        } else if column > 0 {
+            out.push(' ');
+            column += 1;
+        }
+        out.push_str(word);
+        column += width;
+    }
+    out
+}
+
 /// A pure function so the message an operator has to act on is covered by a
 /// test rather than only by running the command. Names at most ten crates: the
 /// remedy is the same for one as for four hundred, and a full list buries it.
@@ -434,8 +542,11 @@ pub fn run(out_path: &Path, check: bool) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        absent_source_error, collect, is_notice_file, registry_crates, render, Crate, Undeclared,
+        absent_source_error, collect, is_notice_file, registry_crates, render, wrap, Crate,
+        Undeclared, WRAP_WIDTH,
     };
+    use std::path::Path;
+    use views::brand::{BrandKey, DEFAULT_BRANDING};
 
     #[test]
     fn notice_filenames_match_the_conventional_spellings() {
@@ -702,7 +813,8 @@ source = "git+https://example.invalid/repo"
     /// missing from it is a name a reader may assume is.
     #[test]
     fn rendered_header_disclaims_every_third_party_name_it_shows() {
-        let out = render(&collect(&[], &[]));
+        // Flattened: a generated paragraph may wrap inside a name.
+        let out = render(&collect(&[], &[])).replace('\n', " ");
         for provider in [
             "Array",
             "DocuSign",
@@ -716,21 +828,26 @@ source = "git+https://example.invalid/repo"
         ] {
             assert!(out.contains(provider), "{provider} missing: {out}");
         }
-        for practice in [
-            "Abhaya Immigration",
-            "Aegis Criminal Defense",
-            "CyberInjuryLaw",
-            "Daybridge Divorce Law",
-            "DeleteYourData.com",
-            "DeleteYourDebt.com",
-            "Groundwork Real Estate Law",
-            "Misericordia Injury Law",
-            "Summons Defense",
-            "Vesta Estate Planning",
-            "Justice Technology Association",
-            "PandA Law",
-        ] {
-            assert!(out.contains(practice), "{practice} missing: {out}");
+        for organization in ["Justice Technology Association", "PandA Law"] {
+            assert!(out.contains(organization), "{organization} missing: {out}");
+        }
+        // Every firm the brand registry encodes, and every name it trades
+        // under, is disclaimed — so a firm added to the registry cannot ship
+        // in the notices without a paragraph of its own.
+        for key in BrandKey::ALL {
+            let brand = key.resolve_branding(&DEFAULT_BRANDING).firm;
+            assert!(
+                out.contains(brand.legal_entity),
+                "{} missing: {out}",
+                brand.legal_entity
+            );
+            if *key != BrandKey::Neon {
+                assert!(
+                    out.contains(brand.site_name),
+                    "{} missing: {out}",
+                    brand.site_name
+                );
+            }
         }
         assert!(
             out.contains("nothing here grants a right to use one"),
@@ -740,5 +857,78 @@ source = "git+https://example.invalid/repo"
             out.contains("first-party work under the licence above"),
             "{out}"
         );
+    }
+    /// The deployment's own firm licenses its copy under the project licence
+    /// and reserves only its names. Guieb & Shook PC's paragraph therefore
+    /// lists its practice names and nothing more.
+    #[test]
+    fn the_deployments_own_firm_reserves_its_names_and_licenses_the_rest() {
+        let out = render(&collect(&[], &[]));
+        let house = DEFAULT_BRANDING.firm.legal_entity;
+        let paragraph = out
+            .split("\n\n")
+            .find(|paragraph| paragraph.starts_with(&format!("{house} brands.")))
+            .unwrap_or_else(|| panic!("no paragraph for {house}: {out}"));
+        let flat = paragraph.replace('\n', " ");
+        assert!(
+            flat.contains("DeleteYourData.com, DeleteYourDebt.com, Vesta Estate Planning,"),
+            "{flat}"
+        );
+        assert!(flat.contains(", and Guieb & Shook."), "{flat}");
+        assert!(flat.contains("NEON LAW is addressed in NOTICE."), "{flat}");
+        assert!(!flat.contains("Permission must come from"), "{flat}");
+    }
+
+    /// A firm that is not the deployment's own — Lex Tecnica, Ltd. today — is
+    /// outside the grant entirely: its copy, logos, and brand presentation are
+    /// named, with the same reservation NOTICE states, and the paths the
+    /// paragraph points a reader at exist in the tree.
+    #[test]
+    fn another_firms_brands_are_excluded_from_the_grant_at_real_paths() {
+        let out = render(&collect(&[], &[]));
+        let paragraph = out
+            .split("\n\n")
+            .find(|paragraph| paragraph.starts_with("Lex Tecnica, Ltd. brands."))
+            .unwrap_or_else(|| panic!("no paragraph for Lex Tecnica, Ltd.: {out}"));
+        let flat = paragraph.replace('\n', " ");
+        for phrase in [
+            "[Draft — pending review by counsel.]",
+            "Lex Tecnica and IEP Defenders material belongs to Lex Tecnica, Ltd.",
+            "the names LEX TECNICA or IEP DEFENDERS",
+            "Permission must come from Lex Tecnica, Ltd. in writing.",
+            "views/src/brand.rs and views/src/brand_presentation.rs",
+        ] {
+            assert!(flat.contains(phrase), "{phrase:?} missing: {flat}");
+        }
+        let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        for path in [
+            "neon/locales/en/lex-tecnica/",
+            "neon/locales/en/iep-defenders/",
+            "server/public/brand/lex-tecnica/",
+            "server/public/brand/iep-defenders/",
+        ] {
+            assert!(flat.contains(path), "{path} missing: {flat}");
+            assert!(workspace.join(path).is_dir(), "{path} is not in the tree");
+        }
+    }
+
+    /// Generated paragraphs wrap like the hand-written ones, so the file keeps
+    /// the plain-text width its header promises.
+    #[test]
+    fn generated_paragraphs_wrap_at_the_header_width() {
+        let out = render(&collect(&[], &[]));
+        let header = out.split("----").next().unwrap_or_default();
+        for line in header.lines() {
+            assert!(
+                line.chars().count() <= WRAP_WIDTH,
+                "{} columns: {line}",
+                line.chars().count()
+            );
+        }
+        assert_eq!(wrap(""), "");
+        assert_eq!(wrap("one  two"), "one two");
+        let long = wrap(&"word ".repeat(40));
+        assert!(long.lines().all(|line| line.len() <= WRAP_WIDTH), "{long}");
+        assert_eq!(long.lines().count(), 3, "{long}");
     }
 }
