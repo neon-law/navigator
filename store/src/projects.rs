@@ -1506,7 +1506,7 @@ pub async fn find_by_code(
         .and_then(surrealdb::IndexedResults::check)?;
     let row: Option<ProjectRow> = response.take(0)?;
     let mut project = row.and_then(ProjectRow::into_project);
-    overlay_lifecycle(project.as_mut_slice()).await?;
+    Box::pin(overlay_lifecycle(project.as_mut_slice())).await?;
     crate::postgres_shadow::project_read(
         crate::postgres_shadow::ShadowKey::Text(code.to_string()),
         project.as_ref(),
@@ -1635,7 +1635,7 @@ pub async fn find_by_id(
         .and_then(surrealdb::IndexedResults::check)?;
     let row: Option<ProjectRow> = response.take(0)?;
     let mut project = row.and_then(ProjectRow::into_project);
-    overlay_lifecycle(project.as_mut_slice()).await?;
+    Box::pin(overlay_lifecycle(project.as_mut_slice())).await?;
     crate::postgres_shadow::project_read(
         crate::postgres_shadow::ShadowKey::Id(id),
         project.as_ref(),
@@ -1673,7 +1673,7 @@ pub async fn all(surreal: &SurrealDb) -> Result<Vec<Project>, ProjectStoreError>
         .into_iter()
         .filter_map(ProjectRow::into_project)
         .collect();
-    overlay_lifecycle(&mut projects).await?;
+    Box::pin(overlay_lifecycle(&mut projects)).await?;
     Ok(projects)
 }
 
