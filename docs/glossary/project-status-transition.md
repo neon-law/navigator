@@ -11,5 +11,4 @@ ledger keeps earlier closures when the Project reopens and records date correcti
 `navigator project status` shows entries in recording order. An effective time may be backdated, so it does not
 determine the order of entries. Historical facts with no source record remain unset.
 
-The table is `project_status_transition`. See the
-[PostgreSQL migration](../../store/postgres/migrations/20261109120000_add_project_status_transition.sql).
+The table is `project_status_transition`. See the [PostgreSQL schema](../../store/postgres/schema.sql).
