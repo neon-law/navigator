@@ -13,7 +13,10 @@
 //! 1. `ctx.run("snapshot", …)` — open the database + object storage,
 //!    snapshot every registered table to Parquet on GCS, return a
 //!    journaled [`SnapshotSummary`]. A transient failure (database or
-//!    GCS unreachable) replays just this step.
+//!    GCS unreachable) replays just this step. A table that fails to
+//!    write is recorded in the summary and, once the digest is posted,
+//!    ends the run as a failure ([`RunFailure::Tables`]): the engine
+//!    marks the run failed and the digest names each table.
 //! 2. `ctx.run("cost", …)` — when `BILLING_EXPORT_TABLE` is set, query
 //!    every listed GCP billing export (one table per billing account)
 //!    for trailing-window spend, merge the accounts by service, and
@@ -94,8 +97,21 @@ pub enum ArchivesDbosError {
     Cost,
     #[error("archive notification failed")]
     Notify,
-    #[error("archive result could not be reported")]
-    Report,
+    /// The digest was posted and the run still failed: a table did not
+    /// write, or PostgreSQL coverage did not publish ([`RunFailure`]).
+    #[error("archive run failed: {0}")]
+    Report(String),
+}
+
+/// Why a run ends as a failure after its digest is delivered. Terminal in
+/// both engines: replaying the journaled snapshot cannot re-extract data,
+/// so recovery is a new run, not a retry.
+#[derive(Debug, thiserror::Error)]
+pub enum RunFailure {
+    #[error("{} table(s) failed to write: {}", .0.len(), .0.join(", "))]
+    Tables(Vec<String>),
+    #[error("PostgreSQL coverage failed; no paired generation was published")]
+    Postgres,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -361,8 +377,9 @@ pub fn register_dbos_with(
             .await?;
 
             let invocation_id = dbos::workflow_id().unwrap_or_default();
-            run_report(&summary, &invocation_id)
-                .map_err(|_| dbos::Error::Application(ArchivesDbosError::Report))
+            run_report(&summary, &invocation_id).map_err(|failure| {
+                dbos::Error::Application(ArchivesDbosError::Report(failure.to_string()))
+            })
         }
     })
 }
@@ -589,7 +606,9 @@ impl ArchivesService {
             .name("email")
             .await?;
 
-            Ok(Json(run_report(&summary, &invocation_id)?))
+            let report = run_report(&summary, &invocation_id)
+                .map_err(|failure| TerminalError::new(failure.to_string()))?;
+            Ok(Json(report))
         }
         .instrument(span)
         .await
@@ -597,13 +616,22 @@ impl ArchivesService {
 }
 
 /// Validate the journaled source outcomes after delivering their digest.
-/// A failed coverage attempt is terminal: replaying its recorded snapshot
-/// cannot re-extract data, so recovery requires a new invocation.
-fn run_report(summary: &SnapshotSummary, invocation_id: &str) -> Result<RunReport, TerminalError> {
-    if matches!(summary.postgres, Some(PostgresExport::Failed { .. })) {
-        return Err(TerminalError::new(
-            "PostgreSQL coverage failed; no paired generation was published",
+/// Any table that failed to write, or a failed coverage attempt, is
+/// terminal: replaying the recorded snapshot cannot re-extract data, so
+/// recovery requires a new invocation. Checked after the digest so the
+/// failure is named in Slack before the engine records it.
+fn run_report(summary: &SnapshotSummary, invocation_id: &str) -> Result<RunReport, RunFailure> {
+    if !summary.failures.is_empty() {
+        return Err(RunFailure::Tables(
+            summary
+                .failures
+                .iter()
+                .map(|failure| failure.table.clone())
+                .collect(),
         ));
+    }
+    if matches!(summary.postgres, Some(PostgresExport::Failed { .. })) {
+        return Err(RunFailure::Postgres);
     }
     let postgres_tables: Vec<_> = match &summary.postgres {
         Some(PostgresExport::Published(generation)) => generation.tables.iter().collect(),
@@ -1315,7 +1343,120 @@ mod tests {
         summary.postgres = Some(crate::postgres::PostgresExport::Failed {
             error: "synthetic coverage failure".into(),
         });
-        assert!(super::run_report(&summary, "synthetic").is_err());
+        assert!(matches!(
+            super::run_report(&summary, "synthetic"),
+            Err(super::RunFailure::Postgres)
+        ));
+    }
+
+    /// A storage double whose bucket-policy probe is denied, the shape of
+    /// the 2026-11-05 outage: the writer's identity could put objects but
+    /// not read the bucket, so every non-empty table failed to write.
+    struct DeniedProbeStorage(std::sync::Arc<crate::test_support::CollisionStorage>);
+
+    #[async_trait::async_trait]
+    impl cloud::StorageService for DeniedProbeStorage {
+        async fn put(&self, key: &str, bytes: &[u8], ct: &str) -> Result<(), StorageError> {
+            self.0.put(key, bytes, ct).await
+        }
+        async fn get(&self, key: &str) -> Result<cloud::StoredObject, StorageError> {
+            self.0.get(key).await
+        }
+        async fn delete(&self, key: &str) -> Result<(), StorageError> {
+            self.0.delete(key).await
+        }
+        async fn signed_url(
+            &self,
+            key: &str,
+            ttl: std::time::Duration,
+        ) -> Result<String, StorageError> {
+            self.0.signed_url(key, ttl).await
+        }
+        async fn list(&self, prefix: &str) -> Result<Vec<cloud::ObjectListing>, StorageError> {
+            self.0.list(prefix).await
+        }
+        async fn retention_locked(&self) -> Result<bool, StorageError> {
+            Err(StorageError::Gcs {
+                key: "<bucket-policy>".into(),
+                message: "probe the bucket retention policy: 403 storage.buckets.get denied".into(),
+            })
+        }
+    }
+
+    /// ENG-1290: a denied bucket-policy probe fails every table with rows,
+    /// the run ends as a failure naming each of them, and the digest leads
+    /// with the failure instead of reading as a normal export.
+    #[tokio::test]
+    async fn a_denied_bucket_probe_fails_the_run_and_the_digest_names_every_table() {
+        let db = store::surreal::test_support::mem().await;
+        db.query("CREATE person:sample SET name = 'Sample', email = 'sample@example.com'")
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        let storage = DeniedProbeStorage(crate::test_support::CollisionStorage::unlocked());
+        let slot: chrono::DateTime<chrono::Utc> = "2026-11-05T05:55:00Z".parse().unwrap();
+
+        // Every table with rows fails (the seeded store has more than one);
+        // nothing is written, and each failing table is named downstream.
+        let summary = crate::snapshot_all(&db, &storage, Some(slot)).await;
+        assert!(summary.entries.is_empty(), "{:?}", summary.entries);
+        let failed: Vec<&str> = summary
+            .failures
+            .iter()
+            .map(|failure| failure.table.as_str())
+            .collect();
+        assert!(failed.contains(&"person"), "{failed:?}");
+
+        let Err(failure) = super::run_report(&summary, "synthetic") else {
+            panic!("a run whose tables failed to write must not report success");
+        };
+        let message = failure.to_string();
+        assert!(
+            message.starts_with(&format!("{} table(s) failed to write: ", failed.len())),
+            "{message}"
+        );
+
+        let digest = digest_message(
+            &summary,
+            lookup(&[("NAVIGATOR_ARCHIVES_BUCKET", "proj-archives")]),
+        )
+        .unwrap();
+        assert!(
+            digest.starts_with("⚠️ *Iceberg data export FAILED — 2026-11-05*"),
+            "{digest}"
+        );
+        for table in &failed {
+            assert!(message.contains(table), "{table} missing from {message}");
+            assert!(
+                digest.contains(&format!("• ⚠️ *{table}* — snapshot failed: ")),
+                "{table} missing from {digest}"
+            );
+        }
+        assert!(digest.contains("storage.buckets.get denied"), "{digest}");
+    }
+
+    /// A table that exists but holds no rows is skipped before the bucket is
+    /// probed, so a run with only empty tables still succeeds — even on a
+    /// bucket whose probe would be denied.
+    #[tokio::test]
+    async fn a_run_with_only_empty_tables_still_succeeds() {
+        let db = store::surreal::test_support::mem().await;
+        // Empty every seeded table so each exists with zero rows.
+        for table in crate::tables::source_tables(&db).await.unwrap() {
+            db.query(format!("DELETE {table}"))
+                .await
+                .unwrap()
+                .check()
+                .unwrap();
+        }
+        let storage = DeniedProbeStorage(crate::test_support::CollisionStorage::unlocked());
+
+        let summary = crate::snapshot_all(&db, &storage, None).await;
+        assert!(summary.failures.is_empty(), "{:?}", summary.failures);
+        assert!(summary.entries.is_empty());
+        let report = super::run_report(&summary, "synthetic").unwrap();
+        assert_eq!((report.tables, report.failures), (0, 0));
     }
 
     fn lookup(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
@@ -1423,8 +1564,14 @@ mod tests {
             lookup(&[("NAVIGATOR_ARCHIVES_BUCKET", "proj-archives")]),
         )
         .expect("a named bucket resolves");
-        assert!(msg.starts_with("🧊"), "leads with the iceberg glyph: {msg}");
-        assert!(msg.contains("(1 tables)"), "header counts snapshots: {msg}");
+        assert!(
+            msg.starts_with("⚠️ *Iceberg data export FAILED"),
+            "a failure leads the digest: {msg}"
+        );
+        assert!(
+            msg.contains("(1 of 2 tables failed to write)"),
+            "header counts the failure: {msg}"
+        );
         assert!(
             msg.contains("• *persons* — 312 rows · "),
             "per-table line: {msg}"

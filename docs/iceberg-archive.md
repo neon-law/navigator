@@ -97,6 +97,11 @@ same TLS settings. Missing configuration, denied reads, or source failures recor
 terminate the invocation. Completed SurrealDB snapshots remain available. Recovery requires a new invocation because
 replay retains the journaled extraction outcome.
 
+The same rule holds for every table with rows: a table that fails to write fails the run. The digest is posted first,
+opening with `Iceberg data export FAILED`, the failure count, and one line per failing table with the first line of its
+error; then the run ends with a terminal error naming those tables, so Restate and DBOS both record it as failed. A
+table that is empty is skipped before the bucket is touched and does not fail the run.
+
 1. **Verify coverage.** Read `pg_catalog` so denied privileges cannot hide relations. Check every application schema,
    DBOS table, AGE catalog and graph relation, migration ledger, sequence, materialized view, and large-object table
    against the reviewed manifest. Added, dropped, inaccessible, unclassified, and unsupported relations fail the run. An
