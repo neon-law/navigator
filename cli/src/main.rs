@@ -47,6 +47,7 @@ mod notation_import;
 mod notation_kinds;
 mod notations_preview;
 mod notices;
+mod ops_private_terms;
 mod palette;
 mod postgres_backfill;
 mod postgres_mirror;
@@ -3565,6 +3566,15 @@ enum OpsCmd {
         #[command(subcommand)]
         action: FirmsAction,
     },
+    /// Every matter whose pre-filing PII check would be refused, with the
+    /// record that breaks it (LAW-301). Reads the admin-tier
+    /// `GET /app/api/project-private-terms-reconciliation` door over the
+    /// `site login` session — no local database coordinates — and never
+    /// repairs a row: a finding names the work, and a human decides.
+    PrivateTerms {
+        #[command(flatten)]
+        host: HostOpt,
+    },
     /// Inspect the fixed Solana devnet SAS program account.
     #[command(subcommand)]
     Sas(SasCmd),
@@ -5609,6 +5619,7 @@ fn run() -> ExitCode {
             | OpsCmd::Release { .. }
             | OpsCmd::Notices { .. }
             | OpsCmd::Firms { .. }
+            | OpsCmd::PrivateTerms { .. }
             | OpsCmd::Postgres(_)
             | OpsCmd::Sas(_)),
         ) => match action {
@@ -5616,6 +5627,9 @@ fn run() -> ExitCode {
             OpsCmd::Firms { action } => match action {
                 FirmsAction::Doctor => firms_doctor::run(),
             },
+            OpsCmd::PrivateTerms { host } => {
+                runtime().block_on(ops_private_terms::run(host.host.as_deref()))
+            }
             OpsCmd::Sas(SasCmd::Program) => match runtime().block_on(sas::program()) {
                 Ok(code) => code,
                 Err(error) => {

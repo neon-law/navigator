@@ -430,6 +430,18 @@ fn the_two_doctors_keep_distinct_headlines() {
     );
 }
 
+/// The private-terms diagnostic keeps the terse headline convention; the
+/// read-only promise stays in the Rust documentation beside the command
+/// (LAW-301).
+#[test]
+fn ops_private_terms_help_keeps_its_headline() {
+    let output = unwrapped(&help(&["ops", "private-terms", "--help"]));
+    assert!(
+        output.contains("Every matter whose pre-filing PII check would be refused, with."),
+        "ops private-terms headline: {output}"
+    );
+}
+
 /// The glossary Notion helper prints the page for a push out of the repository.
 #[test]
 fn the_glossary_notion_helper_keeps_its_headline() {
@@ -1012,6 +1024,7 @@ fn ops_help_lists_operator_members() {
             "notices",
             "observability",
             "postgres",
+            "private-terms",
             "public-snapshot",
             "rebrand",
             "release",
