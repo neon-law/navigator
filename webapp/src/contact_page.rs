@@ -127,6 +127,12 @@ pub fn ContactPage(
                     }
                 }
                 a { class: "nav-btn nav-btn--primary", href: "{content.booking_href}", "{content.booking_label}" }
+                // Plan-referred members land here from their provider's
+                // letter; the same booking step starts their covered matter.
+                p { class: "contact-plan-note",
+                    "Sent here by your legal plan? "
+                    a { href: "{content.booking_href}", "Start here." }
+                }
                 LeadCaptureForm {
                     copy: content.lead_capture.clone(),
                     context: lead_capture,
@@ -267,6 +273,24 @@ mod tests {
         assert!(
             !out.contains("Appointment"),
             "no priced appointment offer: {out}"
+        );
+    }
+
+    #[test]
+    fn greets_plan_referred_members_and_starts_them_booking() {
+        let out = html();
+        assert!(
+            out.contains("Sent here by your legal plan?"),
+            "plan note: {out}"
+        );
+        // "Start here" is the same booking step every visitor gets.
+        let note = out
+            .split_once("contact-plan-note")
+            .expect("plan note paragraph")
+            .1;
+        assert!(
+            note.contains(r#"href="https://calendar.example/book""#),
+            "plan note links the booking: {note}"
         );
     }
 

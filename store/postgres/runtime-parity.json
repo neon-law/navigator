@@ -966,6 +966,44 @@
       "Cross-Project and cross-Firm refusal in application reads, authorization decisions, and read cutover remain outside this mirror acceptance."
     ]
   },
+  "plan_intake": {
+    "scenario": "one staged row per inbound notice; the conflict check attaches before any matter write; attorney attestation gates every open; one decision per staged row",
+    "runtime_tests": [
+      {
+        "file": "store/src/plan_intake.rs",
+        "function": "staging_anchors_the_member_and_records_the_conflict_check_pre_write",
+        "proves": "Staging fills the plan columns and records the conflict report before any matter write."
+      },
+      {
+        "file": "store/src/plan_intake.rs",
+        "function": "staging_is_idempotent_per_source_message",
+        "proves": "Re-landing the same notice reuses the one staged row."
+      },
+      {
+        "file": "store/src/plan_intake.rs",
+        "function": "acceptance_refuses_to_open_without_the_attorney_attestation",
+        "proves": "No code path opens a matter without the attorney attestation."
+      },
+      {
+        "file": "store/src/plan_intake.rs",
+        "function": "acceptance_opens_the_matter_with_plan_columns_and_deadlines",
+        "proves": "Acceptance opens the matter with plan columns and deadlines dated from the notice's landing time."
+      },
+      {
+        "file": "store/src/plan_intake.rs",
+        "function": "a_staged_assignment_declines_with_a_reason_without_opening_a_matter",
+        "proves": "Decline records a reason and never opens a matter."
+      },
+      {
+        "file": "store/src/plan_intake.rs",
+        "function": "the_review_queue_lists_a_firms_staged_assignments_newest_first",
+        "proves": "The review queue is firm-scoped and ordered newest first."
+      }
+    ],
+    "remaining": [
+      "PostgreSQL-cutover read parity is unexercised: the record is SurrealDB-authored with no PostgreSQL mirror yet."
+    ]
+  },
   "person": {
     "scenario": "case-folded unique email; stable external identity; singular role; Firm directory and Project participation isolation",
     "runtime_tests": [

@@ -5917,6 +5917,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_replayed_reserve_never_mints_a_second_send() {
+        let db = mem_surreal().await;
+        let world = world(&db).await;
+        let ingested = ingest_inbound(
+            &db,
+            &inbound(
+                world.firm,
+                channel::EMAIL,
+                "support",
+                "msg-ack-replay-1",
+                "replay-sender@example.com",
+            ),
+        )
+        .await
+        .unwrap();
+
+        // The accept door reserves the member intro before sending. A
+        // redelivered webhook or a retried door runs the reserve again —
+        // the reservation must hold so the send fires at most once.
+        let reserved = reserve_acknowledgment(&db, &ingested, "Welcome to the matter.")
+            .await
+            .unwrap();
+        assert!(reserved.is_some(), "the first reserve wins the send");
+        let replayed = reserve_acknowledgment(&db, &ingested, "Welcome to the matter.")
+            .await
+            .unwrap();
+        assert!(
+            replayed.is_none(),
+            "a replayed reserve must not mint a second send"
+        );
+        assert!(acknowledgment_for(&db, ingested.message_id)
+            .await
+            .unwrap()
+            .is_some());
+    }
+
+    #[tokio::test]
     async fn a_sender_identity_never_satisfies_a_dispatch_or_privilege_check() {
         let db = mem_surreal().await;
         let world = world(&db).await;

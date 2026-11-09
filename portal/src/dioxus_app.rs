@@ -5140,6 +5140,24 @@ pub fn triage_queue_router(
     )
 }
 
+/// `/app/plan-intake` — the plan-assignment review queue. Firm-tier only:
+/// Owner, Admin, Lawyer, and Clerk; the doors re-check the actor.
+pub fn plan_intake_router(
+    sessions: crate::session::SessionStore,
+    policy: crate::policy::PolicyClient,
+    auth: crate::auth::AuthConfig,
+    surreal: store::surreal::SurrealDb,
+) -> Router {
+    csrf_page_router(
+        webapp::plan_intake::PLAN_INTAKE_PATH,
+        webapp::plan_intake::PlanIntake,
+        surreal,
+        sessions,
+        policy,
+        auth,
+    )
+}
+
 /// `/app/inbox/{conversation_id}`.
 pub fn owner_inbox_thread_router(
     sessions: crate::session::SessionStore,

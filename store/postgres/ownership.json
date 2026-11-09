@@ -572,6 +572,12 @@
     "target_only": true,
     "through": "notation_id -> Notation Project when present; ephemeral runtime ownership grants no matter access"
   },
+  "plan_intake": {
+    "migration_slice": "workflow-storage",
+    "parity_scenario": "one staged row per inbound notice; the conflict check attaches before any matter write; attorney attestation gates every open; one decision per staged row",
+    "scope": "project-or-firm",
+    "through": "explicit owning Firm while staged; project_id after acceptance"
+  },
   "person": {
     "migration_slice": "identity-storage",
     "parity_scenario": "case-folded unique email; stable external identity; singular role; Firm directory and Project participation isolation",

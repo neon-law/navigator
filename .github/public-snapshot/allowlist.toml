@@ -164,8 +164,8 @@ reason = "The claims-agent noticing vendor domain and its lookalike are the beha
 [[allow]]
 class = "email"
 match = '''[a-z0-9-]+@(?:[a-z0-9-]+\.)*(?:arag\.com|aragconnect\.com|araglegal\.com|legaleaseplan\.com|legalshield\.com|notarag\.com)'''
-paths = ["store/src/plan_assignment.rs", "portal/src/plan_assignment_lane.rs"]
-reason = "Plan providers' notice-sender domains (ARAG's aragconnect.com case requests and araglegal.com provider mail, LegalEASE's legaleaseplan.com) are the behaviour under test in the plan-assignment sender matcher and intake lane; the mailboxes are invented. notarag.com is the near-miss negative."
+paths = ["store/src/plan_assignment.rs", "portal/src/plan_assignment_lane.rs", "portal/src/email_acknowledgment.rs"]
+reason = "Plan providers' notice-sender domains (ARAG's aragconnect.com case requests and araglegal.com provider mail, LegalEASE's legaleaseplan.com) are the behaviour under test in the plan-assignment sender matcher, intake lane, and acknowledgment lane; the mailboxes are invented. notarag.com is the near-miss negative."
 
 [[allow]]
 class = "email"

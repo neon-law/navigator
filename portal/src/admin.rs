@@ -289,6 +289,14 @@ pub fn routes(
             post(crate::inbox::triage_rerun_post),
         )
         .route(
+            "/app/plan-intake/{staged_id}/accept",
+            post(crate::plan_intake::plan_accept_post),
+        )
+        .route(
+            "/app/plan-intake/{staged_id}/decline",
+            post(crate::plan_intake::plan_decline_post),
+        )
+        .route(
             "/app/owner/inbox/{conversation_id}/assign",
             post(crate::inbox::assign_post),
         )

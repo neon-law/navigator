@@ -2957,3 +2957,66 @@ DEFINE FIELD OVERWRITE output_tokens ON assistant_turn TYPE option<int>;
 DEFINE FIELD OVERWRITE inserted_at ON assistant_turn TYPE datetime DEFAULT time::now();
 DEFINE FIELD OVERWRITE updated_at ON assistant_turn TYPE datetime DEFAULT time::now();
 DEFINE INDEX OVERWRITE assistant_turn_owner ON assistant_turn FIELDS person_id;
+
+-- `plan_intake`: one staged plan-assignment notice per inbound provider
+-- email, the prepare half of the prepare-and-confirm intake flow. A parsed
+-- notice from `store::plan_assignment` is anchored to its member (when the
+-- notice printed a contact email), carries the firm's resolved plan, the
+-- fee quote from the plan's schedule, and the pre-write conflict report —
+-- and then stops: SCHEMAFULL pre-matter state, with no Project behind it.
+-- Nothing here opens a matter. Only an attorney's attested acceptance
+-- (`store::plan_intake::accept`, which delegates to `open_matter` and its
+-- attestation audit) moves the row to `accepted` beside the opened
+-- Project; `declined` rows stay for the audit trail with their reason.
+-- `plan_assigned_on`-style dates live on the Project's plan columns at
+-- acceptance; the acceptance clock starts at `assigned_at`, the moment
+-- the assignment email landed, not when a person reads it. The fee
+-- columns are the snapshot the review screen showed and the accepted
+-- matter keeps; the plan-economics margin queries re-resolve from the
+-- Project's plan columns and the effective-dated schedule.
+--
+-- `conflict_summary` is newline-joined finding lines so one field carries
+-- the report; `conflict_checked` is false — and acceptance refuses — when
+-- no member contact email anchored the check.
+--
+-- Idempotency: staging is idempotent per `source_message_id` (unique
+-- index), so a redelivered email re-stages the same row instead of
+-- duplicating the review queue.
+DEFINE TABLE IF NOT EXISTS plan_intake SCHEMAFULL PERMISSIONS NONE;
+DEFINE FIELD OVERWRITE firm_id ON plan_intake TYPE record<firm>;
+DEFINE FIELD OVERWRITE conversation_id ON plan_intake TYPE record<inbox_conversation>;
+DEFINE FIELD OVERWRITE source_message_id ON plan_intake TYPE record<message>;
+DEFINE FIELD OVERWRITE provider ON plan_intake TYPE string;
+DEFINE FIELD OVERWRITE member_name ON plan_intake TYPE string;
+DEFINE FIELD OVERWRITE member_email ON plan_intake TYPE option<string>;
+DEFINE FIELD OVERWRITE member_person_id ON plan_intake TYPE option<record<person>>;
+DEFINE FIELD OVERWRITE member_entity_id ON plan_intake TYPE option<record<entity>>;
+DEFINE FIELD OVERWRITE plan_member_id ON plan_intake TYPE option<string>;
+DEFINE FIELD OVERWRITE benefit_code ON plan_intake TYPE option<string>;
+-- The verbatim plan/certificate number from the notice; becomes the
+-- project's `plan_case_number` at acceptance.
+DEFINE FIELD OVERWRITE plan_number ON plan_intake TYPE option<string>;
+DEFINE FIELD OVERWRITE plan_matter_type ON plan_intake TYPE string;
+DEFINE FIELD OVERWRITE plan_state ON plan_intake TYPE option<string>;
+DEFINE FIELD OVERWRITE assigned_at ON plan_intake TYPE datetime;
+DEFINE FIELD OVERWRITE legal_plan_id ON plan_intake TYPE option<string>;
+DEFINE FIELD OVERWRITE legal_plan_name ON plan_intake TYPE option<string>;
+DEFINE FIELD OVERWRITE plan_portal_only ON plan_intake TYPE bool;
+DEFINE FIELD OVERWRITE fee_covered_benefit ON plan_intake TYPE option<string>;
+DEFINE FIELD OVERWRITE fee_plan_fee_cents ON plan_intake TYPE option<int>;
+DEFINE FIELD OVERWRITE fee_supplemental_flat_cents ON plan_intake TYPE option<int>;
+DEFINE FIELD OVERWRITE fee_supplemental_hourly_cents ON plan_intake TYPE option<int>;
+DEFINE FIELD OVERWRITE fee_effective_on ON plan_intake TYPE option<string>;
+DEFINE FIELD OVERWRITE conflict_summary ON plan_intake TYPE string;
+DEFINE FIELD OVERWRITE conflict_blocking ON plan_intake TYPE bool;
+DEFINE FIELD OVERWRITE conflict_checked ON plan_intake TYPE bool;
+DEFINE FIELD OVERWRITE status ON plan_intake TYPE string
+    ASSERT $value IN ['staged', 'accepted', 'declined'];
+DEFINE FIELD OVERWRITE project_id ON plan_intake TYPE option<record<project>>;
+DEFINE FIELD OVERWRITE accepted_by ON plan_intake TYPE option<record<person>>;
+DEFINE FIELD OVERWRITE decided_at ON plan_intake TYPE option<datetime>;
+DEFINE FIELD OVERWRITE decline_reason ON plan_intake TYPE option<string>;
+DEFINE FIELD OVERWRITE inserted_at ON plan_intake TYPE datetime DEFAULT time::now();
+DEFINE FIELD OVERWRITE updated_at ON plan_intake TYPE datetime DEFAULT time::now();
+DEFINE INDEX OVERWRITE plan_intake_source ON plan_intake FIELDS source_message_id UNIQUE;
+DEFINE INDEX OVERWRITE plan_intake_firm ON plan_intake FIELDS firm_id, status;
