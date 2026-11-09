@@ -312,6 +312,13 @@
       {
         "action": "export",
         "schema": "public",
+        "name": "astrocartography_reference_geometry",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
         "name": "attestation",
         "kind": "table",
         "accessible": true
@@ -411,6 +418,20 @@
         "action": "export",
         "schema": "public",
         "name": "communication",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "contingency_term",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "contingency_term_tier",
         "kind": "table",
         "accessible": true
       },
@@ -564,6 +585,13 @@
       {
         "action": "export",
         "schema": "public",
+        "name": "esignature_webhook_journal",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
         "name": "estate_asset",
         "kind": "table",
         "accessible": true
@@ -620,6 +648,13 @@
       {
         "action": "export",
         "schema": "public",
+        "name": "firm_assumption",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
         "name": "firm_brand",
         "kind": "table",
         "accessible": true
@@ -647,6 +682,26 @@
           "accessible": true
         },
         "reason": "Plain view over person_firm_role, person_project_role and project, all exported; rebuilt by migration 20261104000000_create_person_directory_views.sql."
+      },
+      {
+        "action": "derived",
+        "relation": {
+          "schema": "public",
+          "name": "geography_columns",
+          "kind": "view",
+          "accessible": true
+        },
+        "reason": "PostGIS catalog view over spatial_ref_sys and the system catalogs; recreated by CREATE EXTENSION postgis in migration 20261107150000_enable_postgis.sql."
+      },
+      {
+        "action": "derived",
+        "relation": {
+          "schema": "public",
+          "name": "geometry_columns",
+          "kind": "view",
+          "accessible": true
+        },
+        "reason": "PostGIS catalog view over spatial_ref_sys and the system catalogs; recreated by CREATE EXTENSION postgis in migration 20261107150000_enable_postgis.sql."
       },
       {
         "action": "export",
@@ -819,7 +874,21 @@
       {
         "action": "export",
         "schema": "public",
+        "name": "legal_plan",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
         "name": "letter",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "mail_signature",
         "kind": "table",
         "accessible": true
       },
@@ -848,6 +917,13 @@
         "action": "export",
         "schema": "public",
         "name": "matter_flat_fee",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "matter_outcome",
         "kind": "table",
         "accessible": true
       },
@@ -904,6 +980,13 @@
         "action": "export",
         "schema": "public",
         "name": "notation_clause",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "notation_creation_attempt",
         "kind": "table",
         "accessible": true
       },
@@ -994,6 +1077,13 @@
       {
         "action": "export",
         "schema": "public",
+        "name": "outcome_estimate",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
         "name": "person",
         "kind": "table",
         "accessible": true
@@ -1047,6 +1137,13 @@
         "action": "export",
         "schema": "public",
         "name": "person_project_role",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "plan_fee_schedule",
         "kind": "table",
         "accessible": true
       },
@@ -1228,6 +1325,13 @@
       {
         "action": "export",
         "schema": "public",
+        "name": "sent_email_export",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
         "name": "signature",
         "kind": "table",
         "accessible": true
@@ -1264,6 +1368,13 @@
         "action": "export",
         "schema": "public",
         "name": "social_publication",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "spatial_ref_sys",
         "kind": "table",
         "accessible": true
       },
