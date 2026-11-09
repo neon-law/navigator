@@ -7878,9 +7878,10 @@ mod tests {
         for key in [NAVIGATOR_DBOS_ENABLED, ARCHIVES_SCHEDULE_ENV] {
             deployment.coordinates.insert(key.into(), "true".into());
         }
+        // General Nag is on wherever the executor runs, so it retires too.
         assert_eq!(
             retired_cronjobs(&deployment).unwrap(),
-            ["archives-trigger", "heartbeat-trigger"]
+            ["general-nag", "archives-trigger", "heartbeat-trigger"]
         );
     }
 

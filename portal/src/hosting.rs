@@ -948,27 +948,7 @@ async fn boot(brand: Site, host_dbos: bool) -> anyhow::Result<()> {
             lookup,
             workflows::notify::notifier_from_lookup(lookup),
             dbos_schedules,
-            move |dbos| {
-                let mut starters: Vec<dbos_engine::ScheduleStarter> = Vec::new();
-                if let Some(source) = sent_email_export {
-                    let workflow = archives::sent_email_export::register(dbos, source)?;
-                    starters.push(Box::new(move |stop| {
-                        tokio::spawn(archives::sent_email_export::schedule(workflow, stop))
-                    }));
-                }
-                if let Some(context) = archives {
-                    let workflow = archives::workflow::register_dbos(
-                        dbos,
-                        context.slack,
-                        context.channel_id,
-                        true,
-                    )?;
-                    starters.push(Box::new(move |stop| {
-                        tokio::spawn(archives::workflow::schedule_dbos(workflow, stop))
-                    }));
-                }
-                Ok(starters)
-            },
+            move |dbos| register_archive_schedules(dbos, sent_email_export, archives),
             serve,
         )
         .await
@@ -977,6 +957,30 @@ async fn boot(brand: Site, host_dbos: bool) -> anyhow::Result<()> {
     };
     telemetry_guard.shutdown();
     served
+}
+
+/// Register the archive crate's DBOS schedules this host enabled, returning
+/// a starter for each.
+fn register_archive_schedules(
+    dbos: &dbos::DBOS,
+    sent_email_export: Option<Arc<dyn archives::sent_email_export::ExportSource>>,
+    archives: Option<archives::workflow::DbosContext>,
+) -> dbos::Result<Vec<dbos_engine::ScheduleStarter>> {
+    let mut starters: Vec<dbos_engine::ScheduleStarter> = Vec::new();
+    if let Some(source) = sent_email_export {
+        let workflow = archives::sent_email_export::register(dbos, source)?;
+        starters.push(Box::new(move |stop| {
+            tokio::spawn(archives::sent_email_export::schedule(workflow, stop))
+        }));
+    }
+    if let Some(context) = archives {
+        let workflow =
+            archives::workflow::register_dbos(dbos, context.slack, context.channel_id, true)?;
+        starters.push(Box::new(move |stop| {
+            tokio::spawn(archives::workflow::schedule_dbos(workflow, stop))
+        }));
+    }
+    Ok(starters)
 }
 
 /// The Sent Email Export's source, when this host runs DBOS and the schedule's

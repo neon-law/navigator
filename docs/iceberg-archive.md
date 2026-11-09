@@ -293,7 +293,7 @@ change that adds one updates this file in the same pull request:
 A draft gives every view an empty reconstruction reason, and the archive refuses an empty reason. A reviewer must write
 how each view is rebuilt before it can ship. `person_directory` and `firm_visible_person` are derived this way: each is
 a plain view over exported tables, rebuilt by its migration. PostGIS's `geometry_columns` and `geography_columns` are
-derived from the system catalogs and are recreated by `CREATE EXTENSION postgis`; its `spatial_ref_sys` table is exported.
+derived from the system catalogs and recreated by `CREATE EXTENSION postgis`; its `spatial_ref_sys` table is exported.
 
 ## Recovery: physical backups first
 
