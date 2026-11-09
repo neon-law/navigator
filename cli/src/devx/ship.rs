@@ -403,7 +403,7 @@ where
     )?);
     substitutions.push(web_patch_substitution(deployment, &get, &DBOS_WEB_PATCH)?);
     substitutions.extend(dbos_schedule_substitutions(deployment, &get)?);
-    substitutions.extend(archives_substitutions(deployment, &get)?);
+    substitutions.extend(archives_substitutions(&get));
     substitutions.extend(replica_substitutions(deployment, &get)?);
     substitutions.extend(mirror_substitutions(&get)?);
     // Not in PLAINTEXT_SUBSTITUTIONS and not read from `get` at all: the additional brand
@@ -554,11 +554,13 @@ const DBOS_WEB_PATCH: WebPatch = WebPatch {
 /// A daily workflow the DBOS executor in `web` hosts: its `config.toml`
 /// switch, the Restate trigger `CronJob` it retires (none for a workflow born
 /// on DBOS), the `config.toml` coordinates rendered into `web` beside the
-/// switch, the row secret `web` refuses to boot without, and whether an
-/// absent switch means on wherever the executor runs.
+/// switch, the row secret `web` refuses to boot without, whether an absent
+/// switch means on wherever the executor runs, and whether the workflow reads
+/// PostgreSQL from `web`.
 struct DbosSchedule {
     env: &'static str,
     default_on: bool,
+    needs_postgres: bool,
     retires: Option<RetiredCronJob>,
     coordinates: &'static [&'static str],
     secret: Option<&'static str>,
@@ -581,6 +583,7 @@ const DBOS_SCHEDULES: [DbosSchedule; 6] = [
     DbosSchedule {
         env: "NAVIGATOR_DBOS_GENERAL_NAG_ENABLED",
         default_on: true,
+        needs_postgres: false,
         retires: Some(retired("general-nag", "  - cron-general-nag.yaml\n")),
         coordinates: &["SLACK_GENERAL_CHANNEL_ID"],
         secret: Some("SLACK_BOT_TOKEN"),
@@ -588,6 +591,7 @@ const DBOS_SCHEDULES: [DbosSchedule; 6] = [
     DbosSchedule {
         env: "NAVIGATOR_DBOS_DRI_DIGEST_ENABLED",
         default_on: false,
+        needs_postgres: false,
         retires: Some(retired(
             "dri-digest-trigger",
             "  - cron-dri-digest-trigger.yaml\n",
@@ -598,6 +602,7 @@ const DBOS_SCHEDULES: [DbosSchedule; 6] = [
     DbosSchedule {
         env: "NAVIGATOR_DBOS_BILLING_DIGEST_ENABLED",
         default_on: false,
+        needs_postgres: false,
         retires: Some(retired(
             "billing-digest-trigger",
             "  - cron-billing-digest-trigger.yaml\n",
@@ -608,6 +613,7 @@ const DBOS_SCHEDULES: [DbosSchedule; 6] = [
     DbosSchedule {
         env: "NAVIGATOR_DBOS_NOTATION_RESET_ENABLED",
         default_on: false,
+        needs_postgres: false,
         retires: Some(retired(
             "notation-reset-trigger",
             "  - cron-notation-reset-trigger.yaml\n",
@@ -621,6 +627,7 @@ const DBOS_SCHEDULES: [DbosSchedule; 6] = [
     DbosSchedule {
         env: "NAVIGATOR_DBOS_PROFIT_DIGEST_ENABLED",
         default_on: true,
+        needs_postgres: true,
         retires: None,
         coordinates: &[
             "SLACK_MESSAGES_CHANNEL_ID",
@@ -633,6 +640,7 @@ const DBOS_SCHEDULES: [DbosSchedule; 6] = [
     DbosSchedule {
         env: ARCHIVES_SCHEDULE_ENV,
         default_on: false,
+        needs_postgres: true,
         retires: Some(retired(
             "archives-trigger",
             "  - cron-archives-trigger.yaml\n",
@@ -680,17 +688,12 @@ where
 /// PostgreSQL connection beside the executor. Its patch adds the read-only
 /// archive login and the coverage manifest; off, both placeholders render
 /// empty and the tree is unchanged.
-fn archives_substitutions<F>(deployment: &str, get: &F) -> Result<Vec<Substitution>>
+fn archives_substitutions<F>(get: &F) -> Vec<Substitution>
 where
     F: Fn(&str) -> Option<String>,
 {
     let enabled = archives_on_dbos(get);
-    ensure!(
-        !enabled || non_empty_env(NAVIGATOR_POSTGRES_ENABLED, get).as_deref() == Some("true"),
-        "{ARCHIVES_SCHEDULE_ENV} requires {NAVIGATOR_POSTGRES_ENABLED} = \"true\" in \
-         deployments/{deployment}/config.toml: the archive reads PostgreSQL from web"
-    );
-    Ok(vec![
+    vec![
         Substitution {
             token: ARCHIVES_WEB_PATCH_TOKEN,
             env: ARCHIVES_SCHEDULE_ENV,
@@ -709,7 +712,7 @@ where
                 String::new()
             },
         },
-    ])
+    ]
 }
 
 /// The whole-line placeholder in `web-dbos.yaml` that becomes the schedule
@@ -721,19 +724,20 @@ const SLACK_WEBHOOK_URL: &str = "SLACK_WEBHOOK_URL";
 
 /// Each schedule's switch, read as `"true"` or `"false"`, in
 /// [`DBOS_SCHEDULES`] order. An absent switch is off, except that a
-/// `default_on` schedule is on wherever `NAVIGATOR_DBOS_ENABLED = "true"`. A
-/// schedule on DBOS needs the executor, so an explicit `"true"` without
-/// `NAVIGATOR_DBOS_ENABLED = "true"` is refused rather than left inert while
-/// its Restate `CronJob` is gone.
+/// `default_on` schedule is on wherever `NAVIGATOR_DBOS_ENABLED = "true"` and
+/// `web` has everything it reads. A schedule on DBOS needs the executor, and
+/// a `needs_postgres` one needs `NAVIGATOR_POSTGRES_ENABLED = "true"`, so an
+/// explicit `"true"` without them is refused at ship rather than at boot.
 fn dbos_schedule_flags<F>(deployment: &str, get: &F) -> Result<Vec<bool>>
 where
     F: Fn(&str) -> Option<String>,
 {
     let dbos_on = non_empty_env(NAVIGATOR_DBOS_ENABLED, get).as_deref() == Some("true");
+    let postgres_on = non_empty_env(NAVIGATOR_POSTGRES_ENABLED, get).as_deref() == Some("true");
     let mut flags = Vec::with_capacity(DBOS_SCHEDULES.len());
     for schedule in &DBOS_SCHEDULES {
         let flag = match non_empty_env(schedule.env, get).as_deref() {
-            None => schedule.default_on && dbos_on,
+            None => schedule.default_on && dbos_on && (postgres_on || !schedule.needs_postgres),
             Some("false") => false,
             Some("true") => true,
             Some(_) => bail!(
@@ -744,6 +748,12 @@ where
         ensure!(
             !flag || dbos_on,
             "{} requires {NAVIGATOR_DBOS_ENABLED} = \"true\" in deployments/{deployment}/config.toml",
+            schedule.env
+        );
+        ensure!(
+            !flag || postgres_on || !schedule.needs_postgres,
+            "{} requires {NAVIGATOR_POSTGRES_ENABLED} = \"true\" in \
+             deployments/{deployment}/config.toml: it reads PostgreSQL from web",
             schedule.env
         );
         flags.push(flag);
@@ -7875,7 +7885,11 @@ mod tests {
         let mut deployment =
             super::super::deployments::Deployment::load(&fixture_tree(), "example-deployment")
                 .expect("fixture row loads");
-        for key in [NAVIGATOR_DBOS_ENABLED, ARCHIVES_SCHEDULE_ENV] {
+        for key in [
+            NAVIGATOR_DBOS_ENABLED,
+            NAVIGATOR_POSTGRES_ENABLED,
+            ARCHIVES_SCHEDULE_ENV,
+        ] {
             deployment.coordinates.insert(key.into(), "true".into());
         }
         // General Nag is on wherever the executor runs, so it retires too.
@@ -7992,9 +8006,9 @@ mod tests {
     }
 
     #[test]
-    fn profit_digest_is_on_by_default_wherever_dbos_runs() {
+    fn profit_digest_is_on_by_default_wherever_dbos_runs_with_postgres() {
         let dbos_on = |key: &str| match key {
-            NAVIGATOR_DBOS_ENABLED => Some("true".to_owned()),
+            NAVIGATOR_DBOS_ENABLED | NAVIGATOR_POSTGRES_ENABLED => Some("true".to_owned()),
             "NAVIGATOR_DBOS_PROFIT_DIGEST_ENABLED" => None,
             _ => env_getter(FULL_ENV)(key),
         };
@@ -8030,12 +8044,44 @@ mod tests {
         );
     }
 
+    /// The 26.11.9 production roll: DBOS on, `web` without PostgreSQL. The
+    /// digest must default off there, and an explicit opt-in must fail the
+    /// ship instead of crash-looping `web` at boot.
     #[test]
-    fn profit_digest_reaches_web_with_both_messages_channels_and_retires_nothing() {
-        let switched = |key: &str| match key {
+    fn profit_digest_needs_web_postgres() {
+        let dbos_without_postgres = |key: &str| match key {
+            NAVIGATOR_DBOS_ENABLED => Some("true".to_owned()),
+            _ => env_getter(FULL_ENV)(key),
+        };
+        let web = manifest_doc(
+            &rendered_manifests(dbos_without_postgres),
+            "Deployment",
+            WEB_DEPLOYMENT,
+        );
+        assert_eq!(
+            web_env_value(&web, "NAVIGATOR_DBOS_PROFIT_DIGEST_ENABLED").as_deref(),
+            Some("false")
+        );
+        let opted_in_without_postgres = |key: &str| match key {
             NAVIGATOR_DBOS_ENABLED | "NAVIGATOR_DBOS_PROFIT_DIGEST_ENABLED" => {
                 Some("true".to_owned())
             }
+            _ => env_getter(FULL_ENV)(key),
+        };
+        let error =
+            dbos_schedule_flags("synthetic-deployment", &opted_in_without_postgres).unwrap_err();
+        assert!(
+            error.to_string().contains(NAVIGATOR_POSTGRES_ENABLED),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn profit_digest_reaches_web_with_both_messages_channels_and_retires_nothing() {
+        let switched = |key: &str| match key {
+            NAVIGATOR_DBOS_ENABLED
+            | NAVIGATOR_POSTGRES_ENABLED
+            | "NAVIGATOR_DBOS_PROFIT_DIGEST_ENABLED" => Some("true".to_owned()),
             "NAVIGATOR_DBOS_GENERAL_NAG_ENABLED" => Some("false".to_owned()),
             _ => env_getter(FULL_ENV)(key),
         };
