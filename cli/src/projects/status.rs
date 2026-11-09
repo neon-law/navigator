@@ -61,6 +61,21 @@ fn print_status(value: &serde_json::Value) {
     ] {
         println!("{field}: {}", value[field].as_str().unwrap_or("none"));
     }
+    if let Some(history) = value["history"].as_array() {
+        println!("status history:");
+        for entry in history {
+            let field = |key: &str| entry[key].as_str().unwrap_or("none");
+            println!(
+                "  {} -> {} (effective: {}, recorded: {}, reason: {}, attester: {})",
+                field("from_status"),
+                field("to_status"),
+                field("effective_at"),
+                field("recorded_at"),
+                field("reason"),
+                field("attesting_person_id")
+            );
+        }
+    }
     let onboarding = &value["onboarding"];
     println!("onboarding filed: {}", onboarding["filed"]);
     println!(
