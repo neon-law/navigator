@@ -416,7 +416,7 @@
 {"file":"cli/src/projects/set.rs","line":434,"function":"replace_project_key","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/projects/set.rs","line":624,"function":"the_dry_run_plan_names_every_write_the_real_run_would_make","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/projects/set.rs","line":628,"function":"the_dry_run_plan_names_every_write_the_real_run_would_make","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cli/src/projects/setup.rs","line":154,"function":"setup_one","operation":"insert","sql_operations":[],"tables":["project"],"transaction":false}
+{"file":"cli/src/projects/setup.rs","line":161,"function":"setup_one","operation":"insert","sql_operations":[],"tables":["project"],"transaction":false}
 {"file":"cli/src/projects/skill.rs","line":240,"function":"record_kit_version","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/projects/source_import.rs","line":43,"function":"tree_from_checkout","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/projects/source_import.rs","line":97,"function":"import_tree","operation":"query","sql_operations":[],"tables":[],"transaction":false}
@@ -633,7 +633,7 @@
 {"file":"neon/src/lib.rs","line":235,"function":"sitemap_paths","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"neon/src/lib.rs","line":236,"function":"sitemap_paths","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"neon/src/lib.rs","line":238,"function":"sitemap_paths","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"neon/src/locales.rs","line":1515,"function":"legal_aid","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"neon/src/locales.rs","line":1520,"function":"legal_aid","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"pdf/src/acroform.rs","line":120,"function":"fill_acroform","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"pdf/src/acroform.rs","line":335,"function":"collect_named_fields","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"pdf/src/acroform.rs","line":606,"function":"add_radio_group","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
