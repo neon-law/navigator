@@ -24,6 +24,7 @@ use clap::Subcommand;
 pub mod brand;
 mod brand_readiness;
 mod browser_e2e;
+pub(crate) mod call_script;
 // The scraper framework resolves the same pinned Chrome for Testing the
 // e2e harnesses use, so the resolver is crate-reachable.
 pub(crate) mod chrome;
@@ -1474,6 +1475,27 @@ fn dispatch_with_dns_provider(
             apply,
             dns_provider,
         ),
+        crate::Command::Ops(crate::OpsCmd::CallScript {
+            number,
+            greeting,
+            extensions,
+            fallback,
+            apply,
+        }) => {
+            let script = call_script::CallScript {
+                greeting,
+                extensions,
+                fallback,
+            };
+            let twilio = call_script::TwilioStudio::from_lookup(|name| std::env::var(name).ok())?;
+            let outcome = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .context("build tokio runtime")?
+                .block_on(call_script::reconcile(&twilio, &number, &script, apply))?;
+            println!("{}", outcome.line());
+            Ok(())
+        }
         crate::Command::Ops(crate::OpsCmd::BrandReadiness {
             deployment,
             deployments_dir,

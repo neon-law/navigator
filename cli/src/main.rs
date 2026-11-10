@@ -3403,6 +3403,30 @@ enum OpsCmd {
         #[arg(long)]
         namespace: Option<String>,
     },
+    /// Reconcile a Twilio receiving number's Call Script: the greeting a
+    /// caller hears, the extensions that forward to a person's phone, and
+    /// the message everyone else hears. Renders the number's Studio Flow
+    /// from the flags and compares it with the published one; read-only
+    /// until `--apply`. Reads `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN`.
+    /// Full recipe: `docs/third-party-integrations.md`.
+    CallScript {
+        /// The receiving number, E.164. Its Studio Flow is the one edited.
+        #[arg(long)]
+        number: String,
+        /// The opening sentence, before the extensions are offered.
+        #[arg(long)]
+        greeting: String,
+        /// One person a caller can reach (repeatable): the digits to key,
+        /// the name the greeting speaks, and the E.164 phone to forward to.
+        #[arg(long = "extension", value_name = "DIGITS=NAME=NUMBER", required = true)]
+        extensions: Vec<devx::call_script::Extension>,
+        /// Said to a caller who keys nothing or an unknown extension.
+        #[arg(long)]
+        fallback: String,
+        /// Publish the script. Without it the command only reports drift.
+        #[arg(long)]
+        apply: bool,
+    },
     /// DNS provisioning for a public deploy — reachability, the apex→www
     /// redirect, and both mail lanes — via the configured DNS provider
     /// (`DNSimple` today). Reads `DNS_ZONE` / `DNS_ACCT` / `DNS_SIMPLE`
