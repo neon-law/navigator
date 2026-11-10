@@ -67,6 +67,7 @@ const WORKSPACE_DEPENDENCIES: &[&str] = &[
     "google-cloud-auth",
     "google-cloud-storage",
     "google-cloud-token",
+    "hex",
     "hifitime",
     "hmac",
     "http-body-util",
