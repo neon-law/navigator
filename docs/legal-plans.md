@@ -38,11 +38,13 @@ Record a plan once per Firm, with the portal and contact the Firm actually uses:
 navigator legal-plans --firm <firm-id> --host <host> create --name ARAG \
   --portal https://www.araglegal.com/account --contact "866-272-4529" \
   --acceptance-sla-hours 24 --turnaround-sla-days 90
-navigator legal-plans --firm <firm-id> --host <host> list
+navigator legal-plans --firm "Example Practice PC" --host <host> list
 ```
 
-`create` needs the `manage_legal_plans` capability, which only Owner and an Admin of the Firm hold. Any member of the
-Firm may run `list`.
+`--firm` accepts a Firm UUID or a display name. Display names resolve case-insensitively in the caller's authorized Firm
+directory. A Firm member without directory access can run `list` with the UUID.
+
+`create` needs the `manage_legal_plans` capability, which only Owner and an Admin of the Firm hold.
 
 ## A plan matter, from referral to payment
 
