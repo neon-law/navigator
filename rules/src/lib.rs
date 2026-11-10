@@ -46,6 +46,7 @@ pub mod f129;
 pub mod f130;
 pub mod f131;
 pub mod f133;
+pub mod f134;
 pub mod final_document;
 pub mod frontmatter;
 pub mod kind;
@@ -164,6 +165,7 @@ pub use f129::F129AudiencesOnlyCustom;
 pub use f130::F130PleadingBodyHasNoCaption;
 pub use f131::F131TemplateHasNoDraftingMarkers;
 pub use f133::F133PleadingDocketUndeclared;
+pub use f134::F134AgreementLetterOutput;
 pub use kind::Kind;
 pub use m001::M001HeadingIncrement;
 pub use m003::M003HeadingStyle;
@@ -412,6 +414,7 @@ pub fn description_for_code(code: &str) -> &'static str {
         "N132" => "Clause references name a pinned version and bind its required inputs; an onboarding includes `engagement_arbitration`",
         "N131" => "A notation template carries no drafting markers: brackets, fill-in blanks outside a signature block, notes, or the render's Signer Box marker",
         "N133" => "A pleading in a Project repository declares no `docket:`; the caption cannot say which case the filing serves",
+        "N134" => "An agreement selects a letter render profile instead of its contract frame",
         "E001" => "Event must declare both a `starts_at` timestamp and a `timezone`",
         "E002" => "A file is either an event or a notation template, never both",
         "E004" => "Event must declare a `luma_url` to check it out on Luma",
@@ -497,13 +500,8 @@ pub enum Severity {
 
 /// The [`Severity`] for a Neon Law Navigator rule code.
 ///
-/// Every rule is [`Severity::Error`] — a violation blocks the gate —
-/// except the "not built yet" advisories (currently `N112`), which are
-/// [`Severity::Warning`]: they surface as a yellow squiggle and are
-/// reported by `navigator project gate` without failing it. The `N112`
-/// *rule* (the emitter) lands in a later change; its severity and
-/// description are declared here first so the gate is severity-aware
-/// before anything emits a warning.
+/// Errors block the gate. Advisories surface as warnings without failing
+/// `navigator project gate`.
 #[must_use]
 pub fn severity_for_code(code: &str) -> Severity {
     match code {
@@ -514,7 +512,7 @@ pub fn severity_for_code(code: &str) -> Severity {
         // than blocking. (M057, the disk-resolution check, stays an
         // error — a broken path is a bug.) N108 blocks once this package
         // is newer than `F108TemplateCodeRequired::FINAL_COMPATIBILITY_RELEASE`.
-        "N112" | "N133" | "M061" => Severity::Warning,
+        "N112" | "N133" | "N134" | "M061" => Severity::Warning,
         "N108" if !n108_compatibility_expired() => Severity::Warning,
         _ => Severity::Error,
     }
