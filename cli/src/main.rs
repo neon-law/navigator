@@ -879,8 +879,9 @@ enum Command {
     /// A Firm's Legal Plans: where each is logged into, who to call, and its
     /// service levels.
     LegalPlans {
+        /// Firm UUID, or a display name visible in the authorized Firm directory.
         #[arg(long)]
-        firm: uuid::Uuid,
+        firm: String,
         #[arg(long)]
         host: Option<String>,
         #[command(subcommand)]

@@ -128,16 +128,22 @@ fn finish(command: &str, result: Result<Value>) -> ExitCode {
     }
 }
 
-pub(crate) async fn run(firm: Uuid, host: Option<String>, action: LegalPlansCmd) -> ExitCode {
+pub(crate) async fn run(firm: String, host: Option<String>, action: LegalPlansCmd) -> ExitCode {
     let result = async {
         let (base, token) = remote::resolve(host.as_deref())?;
-        firm_command(&base, &token, firm, action).await
+        firm_command(&base, &token, &firm, action).await
     }
     .await;
     finish("legal-plans", result)
 }
 
-async fn firm_command(base: &str, token: &str, firm: Uuid, action: LegalPlansCmd) -> Result<Value> {
+async fn firm_command(base: &str, token: &str, firm: &str, action: LegalPlansCmd) -> Result<Value> {
+    let firm = match Uuid::parse_str(firm) {
+        Ok(id) => id,
+        Err(_) => remote::resolve_firm(base, token, firm, None)
+            .await
+            .context("resolve Firm by name (pass a Firm UUID if you lack directory access)")?,
+    };
     let route = format!("{base}/app/api/firms/{firm}/legal-plans");
     let client = reqwest::Client::new();
     match action {
@@ -217,9 +223,49 @@ pub(crate) async fn set(
 #[cfg(test)]
 mod tests {
     use super::{finish, firm_command, LegalPlansCmd, PlanFields};
+    use crate::{Cli, Command};
+    use clap::Parser;
     use std::process::ExitCode;
     use wiremock::matchers::{body_json, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn list_resolves_a_display_name_through_the_authorized_firm_directory() {
+        let server = MockServer::start().await;
+        let firm_id = uuid::Uuid::nil();
+        Mock::given(method("GET"))
+            .and(path("/app/api/firms"))
+            .and(header("authorization", "Bearer token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"id": firm_id, "name": "Example Practice PC"}
+            ])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/app/api/firms/{firm_id}/legal-plans")))
+            .and(header("authorization", "Bearer token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let cli = Cli::try_parse_from([
+            "navigator",
+            "legal-plans",
+            "--firm",
+            "example practice pc",
+            "list",
+        ])
+        .unwrap();
+        let Some(Command::LegalPlans { firm, action, .. }) = cli.command else {
+            panic!("expected legal-plans command");
+        };
+        let plans = firm_command(&server.uri(), "token", &firm, action)
+            .await
+            .unwrap();
+        assert_eq!(plans, serde_json::json!([]));
+    }
 
     #[test]
     fn the_patch_carries_only_the_flags_given_and_keeps_an_empty_one_to_clear() {
@@ -244,6 +290,12 @@ mod tests {
     async fn create_posts_the_plan_to_the_firm_and_a_refusal_names_its_action() {
         let server = MockServer::start().await;
         let firm = uuid::Uuid::nil();
+        Mock::given(method("GET"))
+            .and(path("/app/api/firms"))
+            .respond_with(ResponseTemplate::new(403))
+            .expect(0)
+            .mount(&server)
+            .await;
         Mock::given(method("POST"))
             .and(path(format!("/app/api/firms/{firm}/legal-plans")))
             .and(header("authorization", "Bearer token"))
@@ -269,7 +321,7 @@ mod tests {
         let created = firm_command(
             &server.uri(),
             "token",
-            firm,
+            &firm.to_string(),
             LegalPlansCmd::Create {
                 name: "Sample Panel Plan".into(),
                 portal: Some("https://plan.example.com/account".into()),
@@ -282,9 +334,14 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(created["name"], "Sample Panel Plan");
-        let refused = firm_command(&server.uri(), "token", firm, LegalPlansCmd::List)
-            .await
-            .unwrap_err();
+        let refused = firm_command(
+            &server.uri(),
+            "token",
+            &firm.to_string(),
+            LegalPlansCmd::List,
+        )
+        .await
+        .unwrap_err();
         assert!(refused.to_string().contains("legal plan list refused: 404"));
         assert_eq!(finish("legal-plans", Err(refused)), ExitCode::FAILURE);
     }
