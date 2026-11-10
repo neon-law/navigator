@@ -90,6 +90,15 @@ a client configuration, not by hand: started in a terminal it waits on stdin and
 Use `https://neonlaw.com/app/mcp` as the Streamable HTTP URL. Calls without credentials can use `list_templates`. Calls
 with a bearer token go through the existing authentication and authorization checks.
 
+## Sign in for account-scoped tools
+
+Run `navigator site login --host www.neonlaw.com` and configure your local agent to run the signed-in stdio bridge
+above. The bridge reads the credential from `~/.navigator.json` on each call, so signing in again refreshes the
+credential without restarting the agent. Keep the file local and let the bridge send the bearer token over HTTPS.
+
+A remote client that securely stores custom headers can send `Authorization: Bearer <token>` to `/app/mcp`. Hosted
+connectors cannot read a file on your computer. Browser-based account linking requires a separate OAuth flow.
+
 ## Find a Template in chat
 
 Ask Claude to list Navigator Templates or describe the document you want. The read-only `list_templates` tool returns
