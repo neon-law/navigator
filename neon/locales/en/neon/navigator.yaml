@@ -58,6 +58,29 @@ bands:
       - Twilio
       - Xero
   - kind: steps
+    anchor: connect-mcp
+    overline: Remote MCP
+    heading: Connect Navigator to your AI assistant
+    description: >-
+      Browse public legal Templates from a chat app that supports remote MCP.
+      You can use Template discovery without a Navigator account.
+    items:
+      - title: Add a custom connector
+        body:
+          - - text: >-
+                Open your assistant's connector settings and choose the option to add a custom MCP server.
+                In Grok, open Connectors, choose New Connector, then select Custom.
+      - title: Enter the Navigator URL
+        body:
+          - - text: https://neonlaw.com/app/mcp
+              code: true
+            - text: " is the server URL. If asked for a transport, choose Streamable HTTP."
+      - title: Try a request in chat
+        body:
+          - - text: >-
+                Ask “List Navigator’s public Templates.” If you ask “Create a work in progress,”
+                Navigator asks whether you want a matter summary or want to record time or a cost.
+  - kind: steps
     anchor: declare
     overline: Declarative matters
     heading: Declare the matter. Git keeps the history.

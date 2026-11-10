@@ -85,6 +85,11 @@ navigator site mcp --host http://localhost:3001
 The server speaks protocol on stdout and diagnostics on stderr, because the client parses every stdout line. Run it from
 a client configuration, not by hand: started in a terminal it waits on stdin and looks hung.
 
+## Public remote connector
+
+Use `https://neonlaw.com/app/mcp` as the Streamable HTTP URL. Calls without credentials can use `list_templates`. Calls
+with a bearer token go through the existing authentication and authorization checks.
+
 ## Find a Template in chat
 
 Ask Claude to list Navigator Templates or describe the document you want. The read-only `list_templates` tool returns

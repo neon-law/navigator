@@ -1256,7 +1256,8 @@ pub fn bootstrap_with_forgejo_oidc(
         &state.auth,
     );
     // MCP rides on the same Pod / host as the public site, served at
-    // `POST /app/mcp`. The layer stack (outermost first):
+    // `POST /app/mcp`. Anonymous calls get public Template discovery.
+    // Calls with an Authorization header use the following stack:
     //
     //   1. google_oauth::require_google_oauth — prod: validates the
     //      Google OAuth access token an agent client sends as
@@ -1340,20 +1341,29 @@ pub fn bootstrap_with_forgejo_oidc(
                 state.sessions.clone(),
                 crate::auth::inject_bearer_session,
             ))
-            // Outermost: shed an over-budget IP with 429 before any auth or
-            // tokeninfo work runs.
+    };
+    let app_mcp = Router::new().nest(
+        "/app",
+        mcp_layered(mcp_state.clone())
+            .route_layer(axum::middleware::from_fn(
+                |request: axum::extract::Request, next: Next| async move {
+                    if request.method() != Method::POST {
+                        StatusCode::METHOD_NOT_ALLOWED.into_response()
+                    } else if request.headers().contains_key(header::AUTHORIZATION) {
+                        next.run(request).await
+                    } else {
+                        mcp::public_discovery(request).await
+                    }
+                },
+            ))
             .route_layer(axum::middleware::from_fn_with_state(
                 state.rate_limit.clone(),
                 crate::rate_limit::enforce,
-            ))
-    };
-    // `mcp::build_router` registers at the literal path `/mcp`; nesting it
-    // under `/app` is what produces `/app/mcp` without forking the handler
-    // or the layer stack above.
-    let app_mcp = Router::new().nest("/app", mcp_layered(mcp_state.clone()));
+            )),
+    );
     // A2A surface — the agent card at `/app/api/mcp.json` and JSON-RPC
     // at `/app/api/mcp/rpc`, the latter behind the same auth stack as
-    // `/app/mcp`. Both are private, like every path under `/app/api`: the
+    // authenticated calls to `/app/mcp`. Both A2A routes are private: the
     // card composes behind `session_boundary` below, so an anonymous
     // fetch gets the unauthenticated protocol document rather than the
     // transport and security schemes. Self-service A2A registration is

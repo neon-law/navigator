@@ -5,8 +5,8 @@
 
 use std::sync::Arc;
 
-use axum::extract::State;
-use axum::http::StatusCode;
+use axum::extract::{Request as HttpRequest, State};
+use axum::http::{header, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::post;
 use axum::{Extension, Json, Router};
@@ -94,7 +94,10 @@ impl McpState {
 /// it into the web router (embedded mode).
 pub fn build_router(state: McpState) -> Router {
     Router::new()
-        .route("/mcp", post(rpc_handler))
+        .route(
+            "/mcp",
+            post(rpc_handler).get(|| async { StatusCode::METHOD_NOT_ALLOWED }),
+        )
         .with_state(state)
 }
 
@@ -104,50 +107,105 @@ async fn rpc_handler(
     body: String,
 ) -> impl IntoResponse {
     let principal = principal.map(|Extension(p)| p);
-    // Parse JSON first so a malformed body produces a JSON-RPC parse
-    // error rather than an axum-level 400 with no envelope.
-    let parsed: Value = match serde_json::from_str(&body) {
-        Ok(v) => v,
-        Err(e) => {
-            return (
-                StatusCode::OK,
-                Json(serialize(Response::err(
-                    Value::Null,
-                    codes::PARSE_ERROR,
-                    format!("parse error: {e}"),
-                ))),
-            );
-        }
+    let response = match parse_request(&body) {
+        Ok(request) => dispatch(&state, principal.as_ref(), &request).await,
+        Err(response) => response,
     };
-
-    let request: Request = match serde_json::from_value(parsed) {
-        Ok(r) => r,
-        Err(e) => {
-            return (
-                StatusCode::OK,
-                Json(serialize(Response::err(
-                    Value::Null,
-                    codes::INVALID_REQUEST,
-                    format!("invalid request: {e}"),
-                ))),
-            );
-        }
-    };
-
-    if request.jsonrpc != "2.0" {
-        let id = request.id.clone().unwrap_or(Value::Null);
-        return (
-            StatusCode::OK,
-            Json(serialize(Response::err(
-                id,
-                codes::INVALID_REQUEST,
-                "jsonrpc must be exactly \"2.0\"",
-            ))),
-        );
-    }
-
-    let response = dispatch(&state, principal.as_ref(), &request).await;
     (StatusCode::OK, Json(serialize(response)))
+}
+
+/// Handle anonymous discovery on the shared MCP endpoint.
+pub async fn public_discovery(request: HttpRequest) -> axum::response::Response {
+    // Public connectors call from their server. Browser origins are not supported.
+    if request.headers().contains_key(header::ORIGIN) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let Ok(body) = axum::body::to_bytes(request.into_body(), 16 * 1024).await else {
+        return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+    };
+    let Ok(body) = std::str::from_utf8(&body) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    let response = match parse_request(body) {
+        Ok(request) => match request.id {
+            Some(id) => dispatch_public(id, &request.method, &request.params),
+            None => return StatusCode::ACCEPTED.into_response(),
+        },
+        Err(response) => response,
+    };
+    (StatusCode::OK, Json(serialize(response))).into_response()
+}
+
+fn parse_request(body: &str) -> Result<Request, Response> {
+    // Parse JSON first to distinguish malformed JSON from invalid JSON-RPC.
+    let parsed: Value = serde_json::from_str(body).map_err(|error| {
+        Response::err(
+            Value::Null,
+            codes::PARSE_ERROR,
+            format!("parse error: {error}"),
+        )
+    })?;
+    let request: Request = serde_json::from_value(parsed).map_err(|error| {
+        Response::err(
+            Value::Null,
+            codes::INVALID_REQUEST,
+            format!("invalid request: {error}"),
+        )
+    })?;
+    if request.jsonrpc != "2.0" {
+        return Err(Response::err(
+            request.id.unwrap_or(Value::Null),
+            codes::INVALID_REQUEST,
+            "jsonrpc must be exactly \"2.0\"",
+        ));
+    }
+    Ok(request)
+}
+
+fn initialize(id: Value) -> Response {
+    Response::ok(
+        id,
+        json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "capabilities": { "tools": {} },
+            "serverInfo": {
+                "name": "navigator-mcp",
+                "version": env!("CARGO_PKG_VERSION")
+            },
+        }),
+    )
+}
+
+fn dispatch_public(id: Value, method: &str, params: &Value) -> Response {
+    match method {
+        "initialize" => initialize(id),
+        "ping" => Response::ok(id, json!({})),
+        "tools/list" => Response::ok(
+            id,
+            json!({ "tools": [tools::list_templates::descriptor()] }),
+        ),
+        "tools/call" => {
+            let Some(name) = params.get("name").and_then(Value::as_str) else {
+                return Response::err(id, codes::INVALID_PARAMS, "`name` is required");
+            };
+            let result = match name {
+                "list_templates" => {
+                    let empty = json!({});
+                    tools::list_templates::call(params.get("arguments").unwrap_or(&empty))
+                }
+                _ => Err(ToolError::Unknown(name.to_owned())),
+            };
+            Response::ok(
+                id,
+                result.unwrap_or_else(|error| tool_error_payload(&error)),
+            )
+        }
+        _ => Response::err(
+            id,
+            codes::METHOD_NOT_FOUND,
+            format!("method not found: {method}"),
+        ),
+    }
 }
 
 fn serialize(resp: Response) -> Value {
@@ -158,17 +216,7 @@ fn serialize(resp: Response) -> Value {
 async fn dispatch(state: &McpState, principal: Option<&Principal>, req: &Request) -> Response {
     let id = req.id.clone().unwrap_or(Value::Null);
     match req.method.as_str() {
-        "initialize" => Response::ok(
-            id,
-            json!({
-                "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": { "tools": {} },
-                "serverInfo": {
-                    "name": "navigator-mcp",
-                    "version": env!("CARGO_PKG_VERSION")
-                }
-            }),
-        ),
+        "initialize" => initialize(id),
         // The advertised catalog, NOT the whole one: the confirmation-gated
         // tools are withheld from every model client. See
         // `tools::advertised_catalog` for why the two differ.
