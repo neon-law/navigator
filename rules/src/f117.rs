@@ -239,6 +239,12 @@ pub const ALLOWED_CUSTOM_TEXT_ROLES: &[&str] = &[
     "incident_date", // the DV application's most-recent-incident date, which intake may answer "ongoing" — the lawyer confirms the field
     "incident_location", // where the most recent DV incident happened
     "what_happened", // the DV application's own-words incident narrative
+    // Uncontested-divorce kit blanks (ENG-1271d, New York Supreme Court).
+    // The typed states carry the parties; these are composed form lines
+    // the lookups do not seed and narratives only the spouses can supply.
+    "index_number", // the Supreme Court index number the clerk assigns, as the caption prints it
+    "place_of_marriage", // where the parties married (city and state), as the certificate prints it
+    "prior_proceedings", // prior matrimonial proceedings between the spouses, in the client's own words
     // The engagement letter's minimum scope — the one sentence saying what
     // the Firm is committing to right now. It cannot be typed: the Matter
     // does not exist as a record until this letter opens it, and the scope
