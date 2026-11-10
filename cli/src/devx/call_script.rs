@@ -12,8 +12,10 @@
 //! never compiled in or echoed back.
 //!
 //! Auth is the Twilio account's own `TWILIO_ACCOUNT_SID` and
-//! `TWILIO_AUTH_TOKEN`. Tests stand up a `wiremock` server and point
-//! [`TwilioStudio::with_base_urls`] at it.
+//! `TWILIO_AUTH_TOKEN`. With `--project-id` both are read from that
+//! deployment's Secret Manager for the one run and held only in memory;
+//! otherwise they come from the environment. Tests stand up a `wiremock`
+//! server and point [`TwilioStudio::with_base_urls`] at it.
 
 use std::str::FromStr;
 
@@ -235,6 +237,23 @@ impl TwilioStudio {
         Ok(Self::new(
             read("TWILIO_ACCOUNT_SID")?,
             read("TWILIO_AUTH_TOKEN")?,
+        ))
+    }
+
+    /// Build from a deployment's own Secret Manager: the same two objects
+    /// its pods receive, read at `versions/latest` and never written down.
+    pub async fn from_secret_manager(
+        client: &super::gcp::client::GcpClient,
+        project_id: &str,
+    ) -> Result<Self> {
+        let read = |key: &'static str| async move {
+            super::deployments::record_value(client, project_id, key)
+                .await
+                .map(|value| value.trim().to_string())
+        };
+        Ok(Self::new(
+            read("TWILIO_ACCOUNT_SID").await?,
+            read("TWILIO_AUTH_TOKEN").await?,
         ))
     }
 
@@ -615,6 +634,41 @@ mod tests {
         assert!(reconcile(&twilio, "5555550100", &script(), false)
             .await
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn credentials_are_read_from_the_deployment_secret_manager() {
+        use crate::devx::gcp::client::{GcpClient, GcpService, StaticToken};
+        use base64::Engine as _;
+        let server = MockServer::start().await;
+        for (key, value) in [
+            ("TWILIO_ACCOUNT_SID", "AC1\n"),
+            ("TWILIO_AUTH_TOKEN", "token"),
+        ] {
+            Mock::given(method("GET"))
+                .and(path(format!(
+                    "/v1/projects/example-test/secrets/{key}/versions/latest:access"
+                )))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "payload": {"data": base64::engine::general_purpose::STANDARD.encode(value)},
+                })))
+                .mount(&server)
+                .await;
+        }
+        let client = GcpClient::new(std::sync::Arc::new(StaticToken("t".into())))
+            .with_base_url(GcpService::SecretManager, server.uri());
+
+        let twilio = TwilioStudio::from_secret_manager(&client, "example-test")
+            .await
+            .unwrap();
+        assert_eq!(twilio.account_sid, "AC1", "a trailing newline is trimmed");
+        assert_eq!(twilio.auth_token, "token");
+
+        let error = TwilioStudio::from_secret_manager(&client, "example-empty")
+            .await
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("TWILIO_ACCOUNT_SID"), "{error}");
     }
 
     #[test]

@@ -3407,7 +3407,8 @@ enum OpsCmd {
     /// caller hears, the extensions that forward to a person's phone, and
     /// the message everyone else hears. Renders the number's Studio Flow
     /// from the flags and compares it with the published one; read-only
-    /// until `--apply`. Reads `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN`.
+    /// until `--apply`. Reads `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN`
+    /// from the environment, or from a deployment with `--project-id`.
     /// Full recipe: `docs/third-party-integrations.md`.
     CallScript {
         /// The receiving number, E.164. Its Studio Flow is the one edited.
@@ -3423,6 +3424,10 @@ enum OpsCmd {
         /// Said to a caller who keys nothing or an unknown extension.
         #[arg(long)]
         fallback: String,
+        /// Read the Twilio credentials from this GCP project's Secret
+        /// Manager for this run only, in memory. Requires ADC.
+        #[arg(long)]
+        project_id: Option<String>,
         /// Publish the script. Without it the command only reports drift.
         #[arg(long)]
         apply: bool,

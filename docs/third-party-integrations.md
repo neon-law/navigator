@@ -174,7 +174,9 @@ shows that Person and their role in the Inbox; the Owner or a Brand-content Admi
 thread by entering the Person's email. A phone is an address, not proof of identity, and grants nothing.
 
 A receiving number answers calls with its [Call Script](glossary/call-script.md), run by the number's Twilio Studio
-Flow. Reconcile it with `TWILIO_ACCOUNT_SID` and `TWILIO_AUTH_TOKEN` in the environment:
+Flow. Reconcile it with `TWILIO_ACCOUNT_SID` and `TWILIO_AUTH_TOKEN` in the environment, or pass `--project-id
+<gcp-project>` to read both from that deployment's Secret Manager for the one run, in memory, with nothing written to
+disk:
 
 ```bash
 navigator ops call-script \

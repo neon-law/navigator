@@ -1480,6 +1480,7 @@ fn dispatch_with_dns_provider(
             greeting,
             extensions,
             fallback,
+            project_id,
             apply,
         }) => {
             let script = call_script::CallScript {
@@ -1487,12 +1488,24 @@ fn dispatch_with_dns_provider(
                 extensions,
                 fallback,
             };
-            let twilio = call_script::TwilioStudio::from_lookup(|name| std::env::var(name).ok())?;
             let outcome = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .context("build tokio runtime")?
-                .block_on(call_script::reconcile(&twilio, &number, &script, apply))?;
+                .block_on(async {
+                    let twilio = match project_id {
+                        Some(project_id) => {
+                            let client =
+                                gcp::client::GcpClient::new(gcp::auth::adc_token_provider().await?);
+                            call_script::TwilioStudio::from_secret_manager(&client, &project_id)
+                                .await?
+                        }
+                        None => {
+                            call_script::TwilioStudio::from_lookup(|name| std::env::var(name).ok())?
+                        }
+                    };
+                    call_script::reconcile(&twilio, &number, &script, apply).await
+                })?;
             println!("{}", outcome.line());
             Ok(())
         }
