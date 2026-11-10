@@ -3786,6 +3786,28 @@ a.nav-link:hover {
   display: inline;
 }
 
+/* The matter header's action bar: every link and the View as Client button in
+ * one wrapping row, on its own line under the facts. */
+.lawyer-detail__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  flex-basis: 100%;
+}
+
+/* Overview's jump menu: one wrapping row of in-page links above the first
+ * section. */
+.lawyer-detail__jump {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  margin: 0 0 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--nav-color-border);
+  font-size: 0.9rem;
+}
+
 /* The summary strip's fact values — a count or a due date reads at a glance,
  * so the value carries the tile and the title stays small above it. */
 .lawyer-detail__fact-value {

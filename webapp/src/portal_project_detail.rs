@@ -162,6 +162,25 @@ pub struct NotationRow {
     pub contact_href: Option<String>,
 }
 
+/// One document the firm shared with the client.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct SharedDocument {
+    /// The asset id the download route resolves, under the client lens.
+    pub id: String,
+    /// The path below `documents/` (`Work Product/memo.pdf`).
+    pub path: String,
+}
+
+#[cfg(test)]
+impl From<&str> for SharedDocument {
+    fn from(path: &str) -> Self {
+        Self {
+            id: "00000000-0000-0000-0000-0000000000aa".to_string(),
+            path: path.to_string(),
+        }
+    }
+}
+
 /// One attorney-advanced draft the client may read and comment on.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct ReviewDocRow {
@@ -212,9 +231,8 @@ pub struct ProjectDetailView {
     #[serde(default)]
     pub trust: TrustView,
     pub notations: Vec<NotationRow>,
-    /// Each shared document's path below `documents/`
-    /// (`Work Product/memo.pdf`), one per document.
-    pub documents: Vec<String>,
+    /// Each shared document, one row per document.
+    pub documents: Vec<SharedDocument>,
     pub review_docs: Vec<ReviewDocRow>,
     /// The matter's collaboration resources, filtered to a client's audience:
     /// the shared Slack channel, the shared Notion page, and the portal. The
@@ -529,7 +547,10 @@ pub async fn get_project_detail() -> Result<ProjectDetailView, ServerFnError> {
                 group.revisions.into_iter().find(|d| d.visibility == shared)
             }
         })
-        .map(|d| d.documents_path())
+        .map(|d| SharedDocument {
+            id: d.id.to_string(),
+            path: d.documents_path(),
+        })
         .collect();
 
     // Every invoice from the local mirror, newest first; only client-facing
@@ -1032,17 +1053,21 @@ fn testimonial_fields(view: &ProjectDetailView) -> Vec<Field> {
 }
 
 /// The client's shared documents grouped by top folder, folders and the
-/// names below them in alphabetical order. Only a folder holding a shared
-/// document appears: the client never sees the shape of the internal tree.
-fn shared_document_folders(paths: &[String]) -> Vec<(String, Vec<String>)> {
-    let mut groups: std::collections::BTreeMap<String, Vec<String>> =
+/// names below them in alphabetical order, each name with its asset id. Only
+/// a folder holding a shared document appears: the client never sees the
+/// shape of the internal tree.
+fn shared_document_folders(documents: &[SharedDocument]) -> Vec<(String, Vec<(String, String)>)> {
+    let mut groups: std::collections::BTreeMap<String, Vec<(String, String)>> =
         std::collections::BTreeMap::new();
-    for path in paths {
-        let (folder, name) = path.split_once('/').unwrap_or(("", path));
+    for document in documents {
+        let (folder, name) = document
+            .path
+            .split_once('/')
+            .unwrap_or(("", &document.path));
         groups
             .entry(folder.to_string())
             .or_default()
-            .push(name.to_string());
+            .push((name.to_string(), document.id.clone()));
     }
     groups
         .into_iter()
@@ -1051,6 +1076,15 @@ fn shared_document_folders(paths: &[String]) -> Vec<(String, Vec<String>)> {
             (folder, names)
         })
         .collect()
+}
+
+/// A stored lifecycle word (`open`) as a client reads it (`Open`).
+fn capitalized(word: &str) -> String {
+    let mut chars = word.chars();
+    chars
+        .next()
+        .map(|first| first.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
 }
 
 /// The pure matter-detail page. Prop-driven so SSR tests can render it without
@@ -1081,20 +1115,126 @@ pub fn ClientProjectDetailPage(view: ProjectDetailView) -> Element {
                 tabs: view.page_tabs.clone(),
                 current: view.selected_tab.href(&view.code),
             }
-            p { span { class: "status-chip", "{view.status}" } }
-            if !view.onboarding_status.is_empty() {
-                p {
-                    span {
-                        class: "status-chip",
-                        title: if view.onboarding_status == "official" {
-                            "Onboarding is official: the matter's onboarding document completed a signature loop driven by Navigator — every recipient signed."
+            p { class: "portal-detail__actions",
+                span { class: "status-chip", "{capitalized(&view.status)}" }
+                // The stored reading is `pitch` or `official`; a client reads
+                // what it means for them, in the chip itself — a tooltip
+                // never opens on a phone.
+                if !view.onboarding_status.is_empty() {
+                    span { class: "status-chip",
+                        if view.onboarding_status == "official" {
+                            "Engagement signed"
                         } else {
-                            "This matter is still a pitch: its onboarding document has not completed a signature loop driven by Navigator."
-                        },
-                        "Onboarding: {view.onboarding_status}"
+                            "Engagement not yet signed"
+                        }
                     }
                 }
             }
+
+            // What the client is asked to do comes first: the intake to
+            // finish, the agreements to sign, the drafts to review. What they
+            // may only read follows.
+            if let Some(notation_id) = view.pending_intake.as_ref() {
+                p { class: "portal-detail__actions",
+                    a {
+                        class: "nav-btn nav-btn--primary",
+                        href: "/app/projects/{view.code}/intake/{notation_id}",
+                        role: "button",
+                        "Continue intake"
+                    }
+                }
+            }
+
+            if !view.notations.is_empty() {
+                section { class: "portal-detail__section",
+                    h2 { "Your agreements" }
+                    div { class: "portal-agreements",
+                        for n in view.notations.iter() {
+                            div { class: "portal-agreement", key: "{n.id}",
+                                span {
+                                    "{n.title}"
+                                    span { class: "status-chip", " {n.status}" }
+                                }
+                                if let Some(href) = n.contact_href.as_ref() {
+                                    p { a { href: "{href}", "Contact the firm" } }
+                                }
+                                p { class: "nav-muted", "{n.whats_next}" }
+                                span { class: "portal-agreement__links",
+                                    if n.signable {
+                                        a {
+                                            class: "nav-btn nav-btn--primary",
+                                            href: "/app/notations/{n.id}/sign",
+                                            role: "button",
+                                            "Review and sign"
+                                        }
+                                    }
+                                    a {
+                                        class: "nav-link",
+                                        href: "{crate::notation_outline::notation_outline_href(&view.code, &n.id)}",
+                                        "Outline"
+                                    }
+                                    if n.rendered_ready {
+                                        a {
+                                            class: "nav-link",
+                                            href: "/app/notations/{n.id}/documents/retainer",
+                                            "Agreement"
+                                        }
+                                    }
+                                    if n.signed_ready {
+                                        a {
+                                            class: "nav-link",
+                                            href: "/app/notations/{n.id}/documents/signed",
+                                            "Signed copy"
+                                        }
+                                    }
+                                    if n.certificate_ready {
+                                        a {
+                                            class: "nav-link",
+                                            href: "/app/notations/{n.id}/documents/certificate",
+                                            "Certificate"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if has_review_docs {
+                section { class: "portal-detail__section",
+                    h2 { "Documents to review" }
+                    div { class: "nav-table-wrap",
+                        table { class: "nav-table",
+                            thead {
+                                tr {
+                                    th { scope: "col", "Document" }
+                                    th { scope: "col", "Type" }
+                                    th { scope: "col", "Status" }
+                                    th { scope: "col", class: "nav-table__end", "Action" }
+                                }
+                            }
+                            tbody {
+                                for doc in view.review_docs.iter() {
+                                    tr {
+                                        td { "{doc.title}" }
+                                        td { span { class: "status-chip", "{doc.kind}" } }
+                                        td { span { class: "status-chip", "{doc.status}" } }
+                                        td { class: "nav-table__end",
+                                            a {
+                                                class: "nav-btn nav-btn--secondary",
+                                                href: "/app/projects/{view.code}/review/{doc.id}",
+                                                "Review"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
 
             crate::project_resources::ProjectResourcesPanel { view: view.resources.clone() }
 
@@ -1159,73 +1299,6 @@ pub fn ClientProjectDetailPage(view: ProjectDetailView) -> Element {
                 }
             }
 
-            if let Some(notation_id) = view.pending_intake.as_ref() {
-                p { class: "portal-detail__actions",
-                    a {
-                        class: "nav-btn nav-btn--primary",
-                        href: "/app/projects/{view.code}/intake/{notation_id}",
-                        role: "button",
-                        "Continue intake"
-                    }
-                }
-            }
-
-            if !view.notations.is_empty() {
-                section { class: "portal-detail__section",
-                    h2 { "Your agreements" }
-                    div { class: "portal-agreements",
-                        for n in view.notations.iter() {
-                            div { class: "portal-agreement", key: "{n.id}",
-                                span {
-                                    "{n.title}"
-                                    span { class: "status-chip", " {n.status}" }
-                                }
-                                if let Some(href) = n.contact_href.as_ref() {
-                                    p { a { href: "{href}", "Contact the firm" } }
-                                }
-                                p { class: "nav-muted", "{n.whats_next}" }
-                                span { class: "portal-agreement__links",
-                                    if n.signable {
-                                        a {
-                                            class: "nav-btn nav-btn--primary",
-                                            href: "/app/notations/{n.id}/sign",
-                                            role: "button",
-                                            "Review and sign"
-                                        }
-                                    }
-                                    a {
-                                        class: "nav-btn nav-btn--secondary",
-                                        href: "{crate::notation_outline::notation_outline_href(&view.code, &n.id)}",
-                                        "Outline"
-                                    }
-                                    if n.rendered_ready {
-                                        a {
-                                            class: "nav-btn nav-btn--secondary",
-                                            href: "/app/notations/{n.id}/documents/retainer",
-                                            "Agreement"
-                                        }
-                                    }
-                                    if n.signed_ready {
-                                        a {
-                                            class: "nav-btn nav-btn--secondary",
-                                            href: "/app/notations/{n.id}/documents/signed",
-                                            "Signed copy"
-                                        }
-                                    }
-                                    if n.certificate_ready {
-                                        a {
-                                            class: "nav-btn nav-btn--secondary",
-                                            href: "/app/notations/{n.id}/documents/certificate",
-                                            "Certificate"
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
             if testimonial_selected {
                 if let Some(error) = view.error.as_ref() {
                     p { class: "nav-form-error", role: "alert", "{error}" }
@@ -1252,64 +1325,42 @@ pub fn ClientProjectDetailPage(view: ProjectDetailView) -> Element {
                 }
                 section { class: "portal-detail__section",
                     h2 { "Your documents" }
-                    div { class: "nav-table-wrap",
-                        table { class: "nav-table",
-                            thead {
-                                tr { th { scope: "col", "Document" } }
-                            }
-                            for (folder, names) in shared_document_folders(&view.documents) {
-                                tbody {
-                                    if !folder.is_empty() {
-                                        tr { th { scope: "colgroup", "documents/{folder}/" } }
-                                    }
-                                    for name in names {
-                                        tr { td { "{name}" } }
-                                    }
+                    if has_documents {
+                        div { class: "nav-table-wrap",
+                            table { class: "nav-table",
+                                thead {
+                                    tr { th { scope: "col", "Document" } }
                                 }
-                            }
-                        }
-                    }
-                }
-            }
-
-            if has_review_docs {
-                section { class: "portal-detail__section",
-                    h2 { "Documents to review" }
-                    div { class: "nav-table-wrap",
-                        table { class: "nav-table",
-                            thead {
-                                tr {
-                                    th { scope: "col", "Document" }
-                                    th { scope: "col", "Type" }
-                                    th { scope: "col", "Status" }
-                                    th { scope: "col", class: "nav-table__end", "Action" }
-                                }
-                            }
-                            tbody {
-                                for doc in view.review_docs.iter() {
-                                    tr {
-                                        td { "{doc.title}" }
-                                        td { span { class: "status-chip", "{doc.kind}" } }
-                                        td { span { class: "status-chip", "{doc.status}" } }
-                                        td { class: "nav-table__end",
-                                            a {
-                                                class: "nav-btn nav-btn--secondary",
-                                                href: "/app/projects/{view.code}/review/{doc.id}",
-                                                "Review"
+                                for (folder, names) in shared_document_folders(&view.documents) {
+                                    tbody {
+                                        if !folder.is_empty() {
+                                            tr { th { scope: "colgroup", "documents/{folder}/" } }
+                                        }
+                                        for (name, id) in names {
+                                            tr {
+                                                td {
+                                                    a {
+                                                        class: "nav-link",
+                                                        href: "/app/projects/{view.code}/documents/{id}/download",
+                                                        "{name}"
+                                                    }
+                                                }
                                             }
                                         }
                                     }
                                 }
                             }
                         }
+                    } else {
+                        p { class: "nav-muted", "The firm has not shared any documents with you yet." }
                     }
                 }
             }
+
         }
-        if !view.brand_name.is_empty() && !view.legal_entity.is_empty() {
+        if !view.legal_entity.is_empty() {
             crate::firm_footer::ClientPortalFooter {
                 model: crate::firm_footer::ClientPortalFooterModel {
-                    brand_name: view.brand_name.clone(),
                     legal_entity: view.legal_entity.clone(),
                     copyright_year: view.copyright_year,
                 }
@@ -1399,22 +1450,20 @@ mod render_tests {
         };
         // No status set (an older payload path) renders no chip at all.
         let unset = render_page(base.clone());
-        assert!(!unset.contains("Onboarding:"), "{unset}");
+        assert!(!unset.contains("Engagement"), "{unset}");
 
         let pitch = render_page(ProjectDetailView {
             onboarding_status: "pitch".into(),
             ..base.clone()
         });
-        assert!(pitch.contains("Onboarding: pitch"), "{pitch}");
-        assert!(pitch.contains("still a pitch"), "{pitch}");
-        assert!(!pitch.contains("Onboarding: official"), "{pitch}");
+        assert!(pitch.contains("Engagement not yet signed"), "{pitch}");
+        assert!(!pitch.contains("Engagement signed"), "{pitch}");
 
         let official = render_page(ProjectDetailView {
             onboarding_status: "official".into(),
             ..base
         });
-        assert!(official.contains("Onboarding: official"), "{official}");
-        assert!(official.contains("Onboarding is official"), "{official}");
+        assert!(official.contains("Engagement signed"), "{official}");
     }
 
     fn saved_testimonial_view() -> ProjectDetailView {
@@ -1497,9 +1546,36 @@ mod render_tests {
             .find("documents/onboarding/")
             .expect("onboarding folder");
         assert!(docket < work && work < onboarding, "{html}");
-        assert!(html.contains("<td>pleadings/complaint.pdf</td>"), "{html}");
+        assert!(
+            html.contains(
+                r#"href="/app/projects/acme/documents/00000000-0000-0000-0000-0000000000aa/download">pleadings/complaint.pdf</a>"#
+            ),
+            "each shared document downloads on its own: {html}"
+        );
         assert!(!html.contains("documents/Discovery/"), "{html}");
         assert!(!html.contains("documents/Client Production/"), "{html}");
+    }
+
+    #[test]
+    fn the_clients_next_steps_precede_what_they_only_read() {
+        let html = render_page(ProjectDetailView {
+            code: "acme".into(),
+            name: "Sample Matter".into(),
+            status: "open".into(),
+            pending_intake: Some("n1".into()),
+            ..ProjectDetailView::default()
+        });
+        let intake = html.find("Continue intake").expect("intake action");
+        let documents = html.find("Your documents").expect("documents");
+        assert!(intake < documents, "{html}");
+        assert!(
+            html.contains(r#"<span class="status-chip">Open</span>"#),
+            "{html}"
+        );
+        assert!(
+            html.contains("The firm has not shared any documents with you yet."),
+            "{html}"
+        );
     }
 
     #[test]
@@ -1532,7 +1608,7 @@ mod render_tests {
     }
 
     #[test]
-    fn client_portal_wears_the_project_brand_in_its_header_and_footer() {
+    fn client_portal_wears_the_project_brand_and_names_only_the_firm_in_its_footer() {
         let html = render_page(ProjectDetailView {
             code: "abhaya-case".into(),
             name: "Sample Matter".into(),
@@ -1548,11 +1624,10 @@ mod render_tests {
         });
         assert!(html.contains("/public/brand/abhaya/logo.svg"), "{html}");
         assert!(
-            html.contains(
-                "Abhaya Immigration is powered by Neon Law Navigator. © 2026 Guieb &#38; Shook PC"
-            ),
+            html.contains(r#"<p class="app-footer__copyright">© 2026 Guieb &#38; Shook PC</p>"#),
             "{html}"
         );
+        assert!(!html.contains("powered by"), "{html}");
         assert!(html.contains("app-footer--client-portal"), "{html}");
     }
 

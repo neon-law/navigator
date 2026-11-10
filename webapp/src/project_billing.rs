@@ -340,6 +340,7 @@ pub fn BillingTab(
     /// Today as `yyyy-mm-dd`, pre-filling the log-time form's date.
     today: String,
 ) -> Element {
+    let error_shown = error.is_some();
     rsx! {
         section { class: "lawyer-detail__section lawyer-detail__billing",
             h2 { "Billing" }
@@ -371,7 +372,7 @@ pub fn BillingTab(
                     title: "Log time by hand".to_string(),
                     action: "/app/projects/{code}/time-entries",
                     submit_label: "Log time".to_string(),
-                    heading: Heading::H2,
+                    disclosure: Some(error_shown),
                     csrf_token: Some(csrf.clone()),
                     fields: vec![
                         Field::input("Date", "performed_on", "{today}", "date").required(),

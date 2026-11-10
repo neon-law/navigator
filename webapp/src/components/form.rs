@@ -1105,10 +1105,21 @@ pub fn FormCard(
     /// They post with the rest of the form.
     #[props(default)]
     extra_fields: Option<Element>,
+    /// Fold the card behind a native `<details>` whose summary is `title`,
+    /// seeded open or closed. A workbench that reads far more often than it
+    /// writes keeps its forms one click away rather than open down the page;
+    /// pass `Some(true)` when a refused write must show its fields again.
+    #[props(default)]
+    disclosure: Option<bool>,
     fields: Vec<Field>,
 ) -> Element {
     let enctype = multipart.then(|| "multipart/form-data".to_string());
-    rsx! {
+    let heading = if disclosure.is_some() {
+        Heading::Hidden
+    } else {
+        heading
+    };
+    let card = rsx! {
         div { class: "nav-card nav-form-card",
             div { class: "nav-card__body",
                 if heading == Heading::H1 {
@@ -1147,6 +1158,15 @@ pub fn FormCard(
                 }
             }
         }
+    };
+    match disclosure {
+        Some(open) => rsx! {
+            details { class: "inline-create", open,
+                summary { class: "inline-create__summary", "{title}" }
+                {card}
+            }
+        },
+        None => card,
     }
 }
 
@@ -1304,6 +1324,41 @@ mod tests {
              matches it: {help}"
         );
         assert_forms_accessible(&html, "embedded form");
+    }
+
+    #[test]
+    fn a_disclosed_form_card_folds_behind_its_title_until_opened() {
+        fn app() -> Element {
+            rsx! {
+                FormCard {
+                    title: "Add a task".to_string(),
+                    action: "/tasks".to_string(),
+                    submit_label: "Add task".to_string(),
+                    disclosure: Some(false),
+                    fields: vec![Field::text("Title", "title", "")],
+                }
+                FormCard {
+                    title: "Log time".to_string(),
+                    action: "/time".to_string(),
+                    submit_label: "Log time".to_string(),
+                    disclosure: Some(true),
+                    fields: vec![Field::text("Minutes", "minutes", "")],
+                }
+            }
+        }
+        let html = ssr(app);
+        assert!(
+            html.contains(
+                r#"<details class="inline-create"><summary class="inline-create__summary">Add a task</summary>"#
+            ),
+            "{html}"
+        );
+        assert!(
+            html.contains(r#"<details class="inline-create" open"#),
+            "{html}"
+        );
+        assert!(!html.contains("nav-form-card__title"), "{html}");
+        assert!(html.contains(r#"aria-label="Add a task""#), "{html}");
     }
 
     #[test]
