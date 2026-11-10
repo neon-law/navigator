@@ -2778,6 +2778,29 @@ mod tests {
         }
     }
 
+    /// Every Brand Guieb & Shook PC stands behind publishes the firm's own Reno
+    /// box as its Nevada footer office, not just the default Brand.
+    #[test]
+    fn every_guieb_shook_brand_publishes_the_firm_nevada_box() {
+        for key in BrandKey::ALL {
+            let branding = key.resolve_branding(&DEFAULT_BRANDING);
+            if branding.firm.legal_entity != "Guieb & Shook PC" {
+                continue;
+            }
+            let nevada: Vec<&str> = branding
+                .firm_offices
+                .iter()
+                .filter(|office| office.state == "Nevada")
+                .map(|office| office.address)
+                .collect();
+            assert_eq!(
+                nevada,
+                ["5150 Mae Anne Ave, Ste 405-9002, Reno, NV 89523"],
+                "{key:?} footer Nevada office"
+            );
+        }
+    }
+
     #[test]
     fn the_neon_nav_links_its_three_products() {
         let nav: Vec<(&str, &str)> = FIRM_BRAND.nav.iter().map(|n| (n.label, n.href)).collect();
