@@ -435,6 +435,9 @@ pub enum PageSkin {
     Practice,
     /// Aquatic product presentation using the shared practice components.
     Nautilus,
+    /// Neon's home: the practice components on the light surface, with a short
+    /// hero so the first band sits under the question it asks.
+    Home,
 }
 
 impl PageSkin {
@@ -445,6 +448,7 @@ impl PageSkin {
             Self::Marketing => "",
             Self::Practice => " fm-page--practice",
             Self::Nautilus => " fm-page--practice fm-page--nautilus",
+            Self::Home => " fm-page--practice fm-page--home",
         }
     }
 }
@@ -651,8 +655,8 @@ pub fn MarketingPage(
             description: content.meta_description.clone(),
             og_description: content.og_description.clone(),
             path: path.clone(),
-            firm_components: matches!(content.skin, PageSkin::Practice | PageSkin::Nautilus) || content.hero_mark.is_some(),
-            commitment_components: matches!(content.skin, PageSkin::Practice | PageSkin::Nautilus),
+            firm_components: !matches!(content.skin, PageSkin::Marketing) || content.hero_mark.is_some(),
+            commitment_components: !matches!(content.skin, PageSkin::Marketing),
             home_components: content.bands.iter().any(Band::is_downloads),
             div { class: "fm-page{content.skin.modifier()}",
                 section { class: "fm-hero fm-hero--page commitment-hero",
@@ -661,7 +665,7 @@ pub fn MarketingPage(
                     // practice page the statement is the headline and the
                     // practice name is the label above it. The marketing skin
                     // keeps the title as the headline.
-                    if matches!(content.skin, PageSkin::Practice | PageSkin::Nautilus) {
+                    if !matches!(content.skin, PageSkin::Marketing) {
                         div { class: "firm-glow fm-hero__glow", "aria-hidden": "true" }
                         div { class: "fm-hero__inner commitment-hero__statement",
                             if let Some(mark) = content.hero_mark {
