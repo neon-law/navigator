@@ -245,13 +245,12 @@ fn missing_route(definition: &Definition, read: &str, predicates: &[(&str, bool)
         if required.contains(state) {
             visited.insert(state);
         }
-        let role = state.split_once("__").map_or(state, |(_, role)| role);
-        let closed_choices = matches!(
-            state.split_once("__").map(|(kind, _)| kind),
-            Some("custom_single_choice" | "custom_yes_no")
-        )
-        .then(|| definition.choices.get(role))
-        .flatten();
+        let closed_choices = crate::f118::routes_by_answer(state)
+            .then(|| {
+                let role = state.split_once("__").map_or(state, |(_, role)| role);
+                definition.choices.get(role)
+            })
+            .flatten();
         let mut values: BTreeSet<&str> = if let Some(choices) = closed_choices {
             choices.keys().map(String::as_str).collect()
         } else {
