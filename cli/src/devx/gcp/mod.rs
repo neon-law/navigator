@@ -1150,7 +1150,8 @@ mod tests {
         // assets CORS read + 1 assets CORS patch + 1 postgres-backups lifecycle
         // patch + 1 applications lifecycle patch = 15.
         // Runtime identity: runtime GSA + isolated Drive GSA + 2 project roles
-        // + 5 bucket roles + self-signing role = 9.
+        // + 5 bucket roles + self-signing role + Drive-account signing role
+        // = 10.
         // Artifact Registry: repo
         // create + cleanup patch + SA create +
         // writer get/set + reader get/set + WIF pool + WIF provider +
@@ -1163,7 +1164,7 @@ mod tests {
         // Log retention: logs lifecycle patch + Cloud Logging `_Default` = 2.
         // No ship flags, so the release-ship stage records nothing; the
         // backup-target ConfigMap adds get-credentials + apply = 2.
-        assert_eq!(calls.len(), 52, "expected 52 calls, got {calls:?}");
+        assert_eq!(calls.len(), 53, "expected 53 calls, got {calls:?}");
         let urls: Vec<&str> = calls.iter().map(|c| c.url.as_str()).collect();
         let methods: Vec<&str> = calls.iter().map(|c| c.method).collect();
 
@@ -1296,127 +1297,133 @@ mod tests {
         assert!(urls[20].contains("roles/secretmanager.secretAccessor"));
         assert!(urls[21].contains("roles/aiplatform.user"));
         assert!(urls[27].contains("roles/iam.serviceAccountTokenCreator"));
-
-        // Steps 28..=38 are the Artifact Registry REST calls.
         assert!(
-            urls[28].contains("/repositories?repositoryId=navigator"),
-            "step 5a repo create: {}",
+            urls[28].contains("service-accounts add-iam-policy-binding navigator-drive@")
+                && urls[28].contains("roles/iam.serviceAccountTokenCreator"),
+            "the web account signs as the Workspace account: {}",
             urls[28]
         );
-        assert_eq!(methods[29], "PATCH", "step 5b cleanup policy: {}", urls[29]);
+
+        // Steps 29..=39 are the Artifact Registry REST calls.
+        assert!(
+            urls[29].contains("/repositories?repositoryId=navigator"),
+            "step 5a repo create: {}",
+            urls[29]
+        );
+        assert_eq!(methods[30], "PATCH", "step 5b cleanup policy: {}", urls[30]);
         // Retention is a version COUNT, not an age. Both halves are asserted
         // because the DELETE half matches every version and would empty the
         // repository without its KEEP partner.
-        assert_body_contains(&calls[29], "\"keepCount\":10", "step 5b retained versions");
-        assert_body_contains(&calls[29], "\"action\":\"KEEP\"", "step 5b keep policy");
+        assert_body_contains(&calls[30], "\"keepCount\":10", "step 5b retained versions");
+        assert_body_contains(&calls[30], "\"action\":\"KEEP\"", "step 5b keep policy");
         assert!(
-            urls[30].ends_with("/serviceAccounts"),
+            urls[31].ends_with("/serviceAccounts"),
             "step 5c CI service account: {}",
-            urls[30]
+            urls[31]
         );
         assert!(
-            urls[36].contains("workloadIdentityPools/github/providers"),
+            urls[37].contains("workloadIdentityPools/github/providers"),
             "step 5j WIF provider: {}",
-            urls[36]
+            urls[37]
         );
         assert_body_contains(
-            &calls[36],
+            &calls[37],
             "assertion.repository_owner == 'neon-law' && assertion.ref == 'refs/heads/main'",
             "step 5j WIF provider owner condition",
         );
         assert_body_contains(
-            &calls[36],
+            &calls[37],
             &super::artifact_registry::wif_attribute_condition(super::DEFAULT_GITHUB_REPO),
             "step 5j WIF provider Navigator grant",
         );
         assert_body_contains(
-            &calls[36],
+            &calls[37],
             super::artifact_registry::GITHUB_OIDC_ISSUER,
             "step 5j WIF provider issuer",
         );
-        // Steps 39..=45 create GKE, bind its pool, then add integrations.
+        // Steps 40..=46 create GKE, bind its pool, then add integrations.
         // Bounded rather than open-ended: these are the shell-out steps, not
         // "everything after 36" — the KMS stage below is REST and follows them.
-        for (i, m) in methods.iter().enumerate().take(46).skip(39) {
+        for (i, m) in methods.iter().enumerate().take(47).skip(40) {
             assert_eq!(*m, "SHELL", "step {i} should be SHELL, got {m}");
         }
         assert!(
-            urls[39].contains("compute addresses create"),
+            urls[40].contains("compute addresses create"),
             "step 6a static IP: {}",
-            urls[39]
-        );
-        assert!(
-            urls[40].contains("container clusters create-auto"),
-            "step 6b cluster: {}",
             urls[40]
         );
-        assert!(urls[41].contains("navigator/navigator-web"));
-        assert!(urls[42].contains("navigator/workflows-service"));
         assert!(
-            urls[43].contains("fleet config-management enable"),
-            "step 6c fleet enable: {}",
-            urls[43]
+            urls[41].contains("container clusters create-auto"),
+            "step 6b cluster: {}",
+            urls[41]
         );
+        assert!(urls[42].contains("navigator/navigator-web"));
+        assert!(urls[43].contains("navigator/workflows-service"));
         assert!(
-            urls[44].contains(&format!(
-                "container clusters update {}",
-                config.cluster_name
-            )) && urls[44].contains("--enable-fleet"),
-            "step 6d fleet reconciliation through the GKE cluster API: {}",
+            urls[44].contains("fleet config-management enable"),
+            "step 6c fleet enable: {}",
             urls[44]
         );
         assert!(
-            urls[45].starts_with("kubectl apply"),
-            "step 6e kubectl apply: {}",
+            urls[45].contains(&format!(
+                "container clusters update {}",
+                config.cluster_name
+            )) && urls[45].contains("--enable-fleet"),
+            "step 6d fleet reconciliation through the GKE cluster API: {}",
             urls[45]
+        );
+        assert!(
+            urls[46].starts_with("kubectl apply"),
+            "step 6e kubectl apply: {}",
+            urls[46]
         );
         // Step 8: the key this deployment's `secrets.enc.yaml` is encrypted
         // against. Ring before key — the key create 404s otherwise.
         assert!(
-            urls[46].contains("keyRings?keyRingId=navigator-secrets"),
+            urls[47].contains("keyRings?keyRingId=navigator-secrets"),
             "step 8a key ring: {}",
-            urls[46]
+            urls[47]
         );
         assert!(
-            urls[47]
+            urls[48]
                 .contains("keyRings/navigator-secrets/cryptoKeys?cryptoKeyId=deployment-config"),
             "step 8b crypto key: {}",
-            urls[47]
-        );
-        assert_body_contains(&calls[47], "ENCRYPT_DECRYPT", "step 8b key purpose");
-        // Step 10: logs keep for the log window, independent of backups.
-        assert_eq!(
-            methods[48], "PATCH",
-            "step 10a logs lifecycle: {}",
             urls[48]
         );
-        assert!(urls[48].contains("my-project-logs"), "{}", urls[48]);
+        assert_body_contains(&calls[48], "ENCRYPT_DECRYPT", "step 8b key purpose");
+        // Step 10: logs keep for the log window, independent of backups.
+        assert_eq!(
+            methods[49], "PATCH",
+            "step 10a logs lifecycle: {}",
+            urls[49]
+        );
+        assert!(urls[49].contains("my-project-logs"), "{}", urls[49]);
         assert_body_contains(
-            &calls[48],
+            &calls[49],
             &format!("\"age\":{}", super::logging::LOG_RETENTION_DAYS),
             "step 10a logs bucket expires at the log window",
         );
         assert!(
-            urls[49].contains("logging buckets update _Default")
-                && urls[49].contains("--retention-days 180")
-                && urls[49].contains("--project my-project"),
-            "step 10b Cloud Logging retention: {}",
-            urls[49]
-        );
-        assert!(
-            urls[50].contains("container clusters get-credentials navigator-prod")
+            urls[50].contains("logging buckets update _Default")
+                && urls[50].contains("--retention-days 180")
                 && urls[50].contains("--project my-project"),
-            "step 12a cluster credentials: {}",
+            "step 10b Cloud Logging retention: {}",
             urls[50]
         );
         assert!(
-            urls[51].contains("kubectl --context gke_my-project_example-region_navigator-prod")
-                && urls[51].contains("--server-side"),
-            "step 12b backup target apply: {}",
+            urls[51].contains("container clusters get-credentials navigator-prod")
+                && urls[51].contains("--project my-project"),
+            "step 12a cluster credentials: {}",
             urls[51]
         );
+        assert!(
+            urls[52].contains("kubectl --context gke_my-project_example-region_navigator-prod")
+                && urls[52].contains("--server-side"),
+            "step 12b backup target apply: {}",
+            urls[52]
+        );
         assert_body_contains(
-            &calls[51],
+            &calls[52],
             "name: navigator-postgres-backup-target\n  namespace: navigator\ndata:\n  bucket: my-project-postgres-backups",
             "step 12b backup target names the backups bucket",
         );
