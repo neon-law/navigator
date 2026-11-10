@@ -42,7 +42,7 @@ use workflows_service::{
 };
 
 macro_rules! bind_common_services {
-    ($endpoint:expr, $surreal:expr, $email:expr, $storage:expr, $assets_storage:expr, $kms:expr, $email_summary:expr, $inbound_triage:expr, $notifier:expr, $ops_delivery:expr, $slack_bot:expr, $project_slack_bots:expr, $general_channel:expr, $finance_channel:expr, $messages_channel:expr, $staging_messages_channel:expr, $slack_bot_enabled:expr, $simulated_matters:expr, $forge:expr, $repository_forge:expr, $portal_origin:expr, $environment_label:expr) => {
+    ($endpoint:expr, $surreal:expr, $email:expr, $storage:expr, $assets_storage:expr, $kms:expr, $email_summary:expr, $inbound_triage:expr, $notifier:expr, $ops_delivery:expr, $slack_bot:expr, $project_slack_bots:expr, $general_channel:expr, $finance_channel:expr, $messages_channel:expr, $staging_messages_channel:expr, $slack_bot_enabled:expr, $simulated_matters:expr, $repository_forge:expr, $portal_origin:expr, $environment_label:expr) => {
         $endpoint
             .bind(NotationService::new(
                 $surreal.clone(),
@@ -114,7 +114,7 @@ macro_rules! bind_common_services {
                 $surreal.clone(),
                 $project_slack_bots,
                 $portal_origin,
-                $forge.clone(),
+                $repository_forge.clone(),
             ))
             .bind(RepositoryTagService::new(
                 $surreal.clone(),
@@ -586,18 +586,16 @@ async fn main() -> anyhow::Result<()> {
     let youtube_dbos = youtube_dbos_enabled
         .then(|| YoutubeCommentsPollerService::new(surreal.clone(), kms.clone()));
     let dbos_social_assets_storage = assets_storage.clone();
-    // The nightly `repository` tag: on Forgejo each Project's own Firm
-    // client, which also governs the repository and proposes the version
-    // update; otherwise the deployment's GitHub forge, detection only.
+    // The nightly `repository` and `slack` tags: on Forgejo each Project's
+    // own Firm client, which also governs the repository and proposes the
+    // version update; otherwise the deployment's GitHub forge, detection only.
     let repository_forge = match cloud::ForgeBackend::from_lookup(|key| std::env::var(key).ok())
         .context("select the Project forge")?
     {
         cloud::ForgeBackend::Forgejo => {
             RepositoryForge::Forgejo(Arc::new(EnvFirmForges::new(kms.clone())))
         }
-        cloud::ForgeBackend::GitHub => forge
-            .clone()
-            .map_or(RepositoryForge::None, RepositoryForge::GitHub),
+        cloud::ForgeBackend::GitHub => forge.map_or(RepositoryForge::None, RepositoryForge::GitHub),
     };
     let sandbox_credit_reset_stores = if sandbox_credit_reset_enabled {
         Some((
@@ -619,7 +617,6 @@ async fn main() -> anyhow::Result<()> {
     let dbos_project_slack_surreal = surreal.clone();
     let dbos_project_slack_bots = project_slack_bots.clone();
     let dbos_nightly_repository_forge = repository_forge.clone();
-    let dbos_nightly_github_forge = forge.clone();
     let dbos_nightly_portal_origin = portal_origin.clone();
     let dbos_nightly_messages_channel = messages_channel.clone();
     let dbos_nightly_staging_messages_channel = staging_messages_channel.clone();
@@ -684,7 +681,6 @@ async fn main() -> anyhow::Result<()> {
             staging_messages_channel,
             slack_bot_enabled,
             simulated_matters,
-            forge,
             repository_forge,
             portal_origin,
             environment_label
@@ -792,7 +788,6 @@ async fn main() -> anyhow::Result<()> {
                                         outcome_channel,
                                         simulated_matters,
                                         workflows_service::dbos_nightly_project_update::Providers {
-                                            github_forge: dbos_nightly_github_forge.clone(),
                                             repository_forge: dbos_nightly_repository_forge,
                                             runtime_version: workflows_service::nightly_project_update::repository::RUNTIME_VERSION.into(),
                                             portal_origin: dbos_nightly_portal_origin,

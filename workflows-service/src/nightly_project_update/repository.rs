@@ -296,13 +296,13 @@ async fn read_pin(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use cloud::forge::FakeForge;
     use store::projects::{create, NewProject};
     use store::test_support::{mem_surreal, seed_entity};
 
-    fn github(forge: &FakeForge) -> RepositoryForge {
+    pub(crate) fn github(forge: &FakeForge) -> RepositoryForge {
         RepositoryForge::GitHub(Arc::new(forge.clone()))
     }
 
@@ -320,7 +320,7 @@ mod tests {
         }
     }
 
-    fn forgejo(forge: &FakeForge) -> RepositoryForge {
+    pub(crate) fn forgejo(forge: &FakeForge) -> RepositoryForge {
         RepositoryForge::Forgejo(Arc::new(FakeFirms(forge.clone())))
     }
 

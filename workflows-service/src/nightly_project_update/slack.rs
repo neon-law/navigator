@@ -1,6 +1,10 @@
 //! The `slack` tag: one open Project's internal channel canvas and the
 //! daily notice with repository activity and open stored deadlines.
 //!
+//! Repository activity reads through the same forge the `repository` tag
+//! uses — on Forgejo the Project's own Firm client — and the recorded
+//! repository is linked whether or not that read succeeds.
+//!
 //! The canvas carries the synopsis, the Client DRI directory emails, the Lawyer
 //! DRIs, the portal link, and the Project's recorded handles. It is the
 //! channel's one canvas, edited in place on every run. Both write only to the
@@ -18,6 +22,7 @@ use store::surreal::SurrealDb;
 use uuid::Uuid;
 use workflows::{upsert_channel_canvas, CanvasWrite, SlackBot};
 
+use super::repository::RepositoryForge;
 use super::{slack_error, tag_retry_policy, ProjectTagRequest};
 use crate::firm_slack::ProjectSlackBots;
 use crate::project_slack::LaneError;
@@ -46,7 +51,7 @@ pub struct SlackTagService {
     surreal: SurrealDb,
     bots: Arc<dyn ProjectSlackBots>,
     portal_origin: Option<String>,
-    forge: Option<Arc<dyn ForgeService>>,
+    forge: RepositoryForge,
 }
 
 impl SlackTagService {
@@ -58,7 +63,7 @@ impl SlackTagService {
         surreal: SurrealDb,
         bots: Arc<dyn ProjectSlackBots>,
         portal_origin: Option<String>,
-        forge: Option<Arc<dyn ForgeService>>,
+        forge: RepositoryForge,
     ) -> Self {
         Self {
             surreal,
@@ -111,15 +116,9 @@ impl SlackTagService {
                     .for_project(&surreal, project_id)
                     .await
                     .map_err(LaneError::into_handler_error)?;
-                post_notice(
-                    &surreal,
-                    slack.as_ref(),
-                    forge.as_deref(),
-                    &ran_on,
-                    project_id,
-                )
-                .await
-                .map(Json)
+                post_notice(&surreal, slack.as_ref(), &forge, &ran_on, project_id)
+                    .await
+                    .map(Json)
             })
             .name("post-notice")
             .retry_policy(tag_retry_policy())
@@ -194,7 +193,7 @@ pub(crate) fn notice(ran_on: &str) -> String {
 pub async fn post_notice(
     surreal: &SurrealDb,
     slack: &dyn SlackBot,
-    forge: Option<&dyn ForgeService>,
+    forge: &RepositoryForge,
     ran_on: &str,
     project_id: Uuid,
 ) -> Result<bool, HandlerError> {
@@ -212,22 +211,10 @@ pub async fn post_notice(
     };
     let mut text = notice(ran_on);
     if let Some(url) = project.repository_url.as_deref() {
-        let github = match forge {
-            Some(forge) => match forge.find_repository(&project.code).await {
-                Ok(Some(repository)) if repository.url == url => {
-                    match forge.head_commit_committed_at(&project.code).await {
-                        Ok(Some(date)) => format!("Latest default-branch commit: {date}."),
-                        Ok(None) => "No default-branch commit date available.".into(),
-                        Err(_) => "GitHub activity unavailable; retry on the next update.".into(),
-                    }
-                }
-                _ => "GitHub activity unavailable for the recorded repository.".into(),
-            },
-            None => "GitHub activity unavailable: no forge provider configured.".into(),
-        };
+        let activity = repository_activity(surreal, forge, &project, url).await;
         let _ = write!(
             text,
-            "\n{github} <{}/commits|View commits>",
+            "\n{activity} <{}|View repository>",
             url.trim_end_matches('/')
         );
     }
@@ -270,6 +257,43 @@ pub async fn post_notice(
     Ok(true)
 }
 
+/// One line on the recorded repository's default branch. A forge that cannot
+/// be reached degrades to a line saying so; the notice still posts.
+async fn repository_activity(
+    surreal: &SurrealDb,
+    forge: &RepositoryForge,
+    project: &store::projects::Project,
+    url: &str,
+) -> String {
+    let firm_forge;
+    let forge: &dyn ForgeService = match forge {
+        RepositoryForge::None => {
+            return "Repository activity unavailable: no forge provider configured.".into()
+        }
+        RepositoryForge::GitHub(forge) => forge.as_ref(),
+        RepositoryForge::Forgejo(firms) => match firms.for_project(surreal, project.id).await {
+            Ok(forge) => {
+                firm_forge = forge;
+                firm_forge.as_ref()
+            }
+            Err(_) => {
+                return "Repository activity unavailable: the Firm's forge could not be opened."
+                    .into()
+            }
+        },
+    };
+    match forge.find_repository(&project.code).await {
+        Ok(Some(repository)) if repository.url == url => {
+            match forge.head_commit_committed_at(&project.code).await {
+                Ok(Some(date)) => format!("Latest default-branch commit: {date}."),
+                Ok(None) => "No default-branch commit date available.".into(),
+                Err(_) => "Repository activity unavailable; retry on the next update.".into(),
+            }
+        }
+        _ => "Repository activity unavailable for the recorded repository.".into(),
+    }
+}
+
 // Escape Slack control characters so a citation cannot mention a channel or person.
 fn slack_plain_text(value: &str) -> String {
     value
@@ -288,7 +312,7 @@ pub(crate) async fn reconcile_slack(
     project_id: Uuid,
 ) -> Result<SlackOutcome, HandlerError> {
     let canvas = upsert_canvas(surreal, slack, portal_origin, ran_on, project_id).await;
-    let posted = post_notice(surreal, slack, None, ran_on, project_id).await?;
+    let posted = post_notice(surreal, slack, &RepositoryForge::None, ran_on, project_id).await?;
     Ok(canvas_outcome(&canvas, posted))
 }
 
@@ -356,6 +380,7 @@ pub(crate) fn render_canvas(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::nightly_project_update::repository::tests::{forgejo, github};
     use std::sync::Mutex;
     use store::persons::{self, NewPerson, Role};
     use store::projects::{self, create, designate_dri_in_surreal, DriSide, NewProject};
@@ -427,14 +452,14 @@ mod tests {
             .await
             .unwrap();
         let slack = CapturingSlackBot::new();
-        post_notice(&surreal, &slack, Some(&forge), "2026-10-06", project.id)
+        post_notice(&surreal, &slack, &github(&forge), "2026-10-06", project.id)
             .await
             .unwrap();
         let posted = slack.posted_messages();
         assert_eq!(posted[0].0, INTERNAL);
         let text = &posted[0].1;
         assert!(text.contains("2026-10-05T12:00:00Z"));
-        assert!(text.contains(&format!("{}/commits", repository.url)));
+        assert!(text.contains(&format!("<{}|View repository>", repository.url)));
         assert!(text.contains(&open.due_at));
         assert!(text.contains("Synthetic Rule 12"));
         assert!(!text.contains("Completed synthetic date"));
@@ -457,12 +482,57 @@ mod tests {
         .await
         .unwrap();
         let slack = CapturingSlackBot::new();
-        post_notice(&surreal, &slack, None, "2026-10-06", project.id)
+        post_notice(
+            &surreal,
+            &slack,
+            &RepositoryForge::None,
+            "2026-10-06",
+            project.id,
+        )
+        .await
+        .unwrap();
+        let text = &slack.posted_messages()[0].1;
+        assert!(text.contains("no forge provider configured"), "{text}");
+        assert!(
+            text.contains("<https://forge.example/example/sample-no-forge|View repository>"),
+            "the recorded repository is linked even without a forge client: {text}"
+        );
+    }
+
+    /// A Forgejo deployment reads the latest commit through the Project's own
+    /// Firm forge and links the Forgejo repository in the channel.
+    #[tokio::test]
+    async fn a_forgejo_repository_reports_activity_through_the_firm_forge() {
+        use cloud::forge::{FakeForge, ForgeService};
+        let surreal = mem_surreal().await;
+        let project = seeded(&surreal, "sample-forgejo", "open").await;
+        let forge = FakeForge::new();
+        let repository = forge.ensure_repository(&project.code).await.unwrap();
+        forge.set_head_commit_committed_at(&project.code, "2026-11-08T09:00:00Z");
+        projects::update_project(
+            &surreal,
+            project.id,
+            &projects::UpdateProjectCommand {
+                repository_url: Some(repository.url.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let slack = CapturingSlackBot::new();
+        post_notice(&surreal, &slack, &forgejo(&forge), "2026-11-09", project.id)
             .await
             .unwrap();
-        assert!(slack.posted_messages()[0]
-            .1
-            .contains("no forge provider configured"));
+        let text = &slack.posted_messages()[0].1;
+        assert!(
+            text.contains("Latest default-branch commit: 2026-11-08T09:00:00Z."),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!("<{}|View repository>", repository.url)),
+            "{text}"
+        );
+        assert!(!text.contains("GitHub"), "{text}");
     }
 
     #[tokio::test]
@@ -470,12 +540,24 @@ mod tests {
         let surreal = mem_surreal().await;
         let project = seeded(&surreal, "sample-notice-receipt", "open").await;
         let slack = CapturingSlackBot::new();
-        post_notice(&surreal, &slack, None, "2026-10-06", project.id)
-            .await
-            .unwrap();
-        post_notice(&surreal, &slack, None, "2026-10-06", project.id)
-            .await
-            .unwrap();
+        post_notice(
+            &surreal,
+            &slack,
+            &RepositoryForge::None,
+            "2026-10-06",
+            project.id,
+        )
+        .await
+        .unwrap();
+        post_notice(
+            &surreal,
+            &slack,
+            &RepositoryForge::None,
+            "2026-10-06",
+            project.id,
+        )
+        .await
+        .unwrap();
         assert_eq!(slack.posted_messages().len(), 1);
     }
 
@@ -498,7 +580,7 @@ mod tests {
         .await
         .unwrap();
         let slack = CapturingSlackBot::new();
-        post_notice(&surreal, &slack, Some(&forge), "2026-10-06", project.id)
+        post_notice(&surreal, &slack, &github(&forge), "2026-10-06", project.id)
             .await
             .unwrap();
         let text = &slack.posted_messages()[0].1;
@@ -517,9 +599,15 @@ mod tests {
                 .unwrap(),
             CanvasStep::Skipped
         ));
-        assert!(!post_notice(&surreal, &slack, None, "2026-10-06", missing)
-            .await
-            .unwrap());
+        assert!(!post_notice(
+            &surreal,
+            &slack,
+            &RepositoryForge::None,
+            "2026-10-06",
+            missing
+        )
+        .await
+        .unwrap());
         assert!(slack.posted_messages().is_empty());
         assert!(slack.canvas_writes().is_empty());
     }
@@ -542,7 +630,7 @@ mod tests {
         .await
         .unwrap();
         let slack = CapturingSlackBot::new();
-        post_notice(&surreal, &slack, Some(&forge), "2026-10-06", project.id)
+        post_notice(&surreal, &slack, &github(&forge), "2026-10-06", project.id)
             .await
             .unwrap();
         let text = &slack.posted_messages()[0].1;

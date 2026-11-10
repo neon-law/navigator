@@ -26,7 +26,6 @@ pub type TagWorkflow =
 
 #[derive(Clone)]
 pub struct Providers {
-    pub github_forge: Option<Arc<dyn cloud::forge::ForgeService>>,
     pub repository_forge: crate::nightly_project_update::repository::RepositoryForge,
     pub runtime_version: String,
     pub portal_origin: Option<String>,
@@ -52,7 +51,6 @@ pub struct Context {
     bots: Arc<dyn ProjectSlackBots>,
     outcome_channel: String,
     simulated: bool,
-    github_forge: Option<Arc<dyn cloud::forge::ForgeService>>,
     repository_forge: crate::nightly_project_update::repository::RepositoryForge,
     runtime_version: String,
     portal_origin: Option<String>,
@@ -74,7 +72,6 @@ impl Context {
             bots,
             outcome_channel,
             simulated,
-            github_forge: providers.github_forge,
             repository_forge: providers.repository_forge,
             runtime_version: providers.runtime_version,
             portal_origin: providers.portal_origin,
@@ -338,7 +335,7 @@ fn register_tag(dbos: &DBOS, context: Context, tag: Tag) -> dbos::Result<TagWork
                                 crate::nightly_project_update::slack::post_notice(
                                     &context.surreal,
                                     slack.as_ref(),
-                                    context.github_forge.as_deref(),
+                                    &context.repository_forge,
                                     &ran_on,
                                     project_id,
                                 )
@@ -445,7 +442,6 @@ pub(crate) async fn unlaunched_workflow() -> NightlyWorkflow {
             "C_STAGING_MESSAGES".to_owned(),
             true,
             Providers {
-                github_forge: None,
                 repository_forge: crate::nightly_project_update::repository::RepositoryForge::None,
                 runtime_version: "test".to_owned(),
                 portal_origin: None,
