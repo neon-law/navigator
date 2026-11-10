@@ -1315,24 +1315,17 @@ a.nav-pagination__link:hover {
   text-decoration: none;
 }
 
-/* Hover and keyboard focus brighten the tile behind the glyph, which says the
-   whole mark is clickable without restyling the wordmark as a link. The
-   browser's own focus ring still marks it for a keyboard reader; this only
-   matches the pointer treatment so the two states agree. */
-.site-footer__brand:hover .site-footer__logo,
-.site-footer__brand:focus-visible .site-footer__logo {
+.site-footer__logo {
   border-color: color-mix(in oklab, var(--nav-color-primary) 60%, transparent);
   background: color-mix(in oklab, var(--nav-color-primary) 16%, transparent);
 }
 
+/* The mark sits on the footer's own background, like the header logo: no
+   tile, border, or tint behind it. */
 .site-footer__logo {
   display: block;
-  width: 3.4rem;
-  height: 3.4rem;
-  padding: 0.45rem;
-  border: 1px solid color-mix(in oklab, var(--nav-color-primary) 35%, transparent);
-  border-radius: 0.9rem;
-  background: color-mix(in oklab, var(--nav-color-primary) 8%, transparent);
+  width: 2.5rem;
+  height: 2.5rem;
 }
 
 .site-footer__wordmark {
