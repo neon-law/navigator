@@ -118,6 +118,8 @@ pub enum PageSkin {
     Marketing,
     Practice,
     Nautilus,
+    /// Neon's home: the practice components on the light surface.
+    Home,
 }
 
 /// The firm home page catalog.

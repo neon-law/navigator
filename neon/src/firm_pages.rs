@@ -1777,7 +1777,7 @@ fn resolve_world_content(branding: &views::brand::Branding) -> webapp::world_pag
 /// Brand-safe like [`resolve_firm_contact_content`]: the `<title>` names the
 /// mounted brand, resolved at router-build time.
 ///
-/// Neon presents the Nautilus subscription through the shared marketing bands.
+/// Neon asks "What is your legal need?" through the shared marketing bands.
 /// Other house brands resolve their own home catalogs.
 pub(crate) fn resolve_firm_home_content(
     branding: &views::brand::Branding,
@@ -1791,7 +1791,7 @@ pub(crate) fn resolve_firm_home_content(
             ..Default::default()
         },
         BrandKey::Neon => {
-            let page = firm_copy::nautilus(branding, deployment_host);
+            let page = locales::neon_home(branding, deployment_host);
             webapp::home::HomeContent {
                 head_title: page.head_title.clone(),
                 meta_description: page.meta_description.clone(),

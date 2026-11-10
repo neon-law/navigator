@@ -344,7 +344,7 @@ pub fn llms_txt(state: &AppState, key: BrandKey) -> portal::LlmsTxt {
             let mark = views::brand::FIRM_BRAND.site_name;
             portal::LlmsTxt {
                 title: mark.to_string(),
-                summary: locales::nautilus(&views::brand::DEFAULT_BRANDING, None).meta_description,
+                summary: locales::neon_home(&views::brand::DEFAULT_BRANDING, None).meta_description,
                 pages: indexed_pages(mark),
                 sections: [("Workshop Corpus", "workshops")]
                     .into_iter()
@@ -383,7 +383,7 @@ fn indexed_pages(mark: &str) -> Vec<portal::LlmsTxtLink> {
         indexed_page(
             mark,
             "/",
-            &locales::nautilus(&views::brand::DEFAULT_BRANDING, None).meta_description,
+            &locales::neon_home(&views::brand::DEFAULT_BRANDING, None).meta_description,
         ),
         indexed_page(
             "Debt relief with PandA Law",

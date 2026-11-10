@@ -218,12 +218,13 @@ async fn the_home_publishes_nautilus_and_links_the_three_products() {
     let app = site_app().await;
     let body = body_string(anon_get(&app, "/").await).await;
     for text in [
-        "Your shell in a connected world.",
+        "What is your legal need?",
         "data-nautilus-intake",
         r#"data-phone="ios""#,
         r#"data-phone="android""#,
         "Cancel anytime",
         "Form an LLC",
+        r#"href="/nautilus""#,
         r#"href="/navigator""#,
         r#"href="/notations""#,
     ] {
@@ -232,6 +233,10 @@ async fn the_home_publishes_nautilus_and_links_the_three_products() {
     for retired in [r#"href="/business""#, "company-pricing"] {
         assert!(!body.contains(retired), "{retired} survives: {body}");
     }
+    // The product page keeps its own headline; only the home asks the question.
+    let nautilus = body_string(anon_get(&app, "/nautilus").await).await;
+    assert!(nautilus.contains("Your shell in a connected world."));
+    assert!(!nautilus.contains("What is your legal need?"));
     assert_eq!(
         anon_get(&app, "/disputes").await.status(),
         StatusCode::NOT_FOUND
@@ -904,7 +909,7 @@ async fn home_presents_nautilus_subscription_and_checks() {
     let body = body_string(anon_get(&app, "/").await).await;
     assert_eq!(body.matches("<h1").count(), 1);
     for text in [
-        "Your shell in a connected world.",
+        "What is your legal need?",
         "$29",
         "$290",
         "Your checks",
@@ -923,7 +928,7 @@ async fn home_metadata_describes_nautilus_at_the_root_url() {
     let app = site_app().await;
     let body = body_string(anon_get(&app, "/").await).await;
     assert!(
-        body.contains("Nautilus is one subscription for your privacy and your paperwork"),
+        body.contains("Legal paperwork, handled for $29/mo or $290/year prepaid"),
         "{body}"
     );
     assert!(
