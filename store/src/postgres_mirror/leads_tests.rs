@@ -37,6 +37,8 @@ fn event(at: DateTime<Utc>, phone: Option<&str>, opt_in: bool) -> NewConsentEven
         sms_consent_version: "sms-v1".into(),
         sms_policy_version: "policy-v3".into(),
         sms_opt_in: opt_in,
+        call_consent_version: "call-v1".into(),
+        call_opt_in: opt_in,
     }
 }
 

@@ -14,6 +14,7 @@ pub const SMS_POLICY_VERSION: &str = "2026-09-18";
 
 const SMS_PHONE_HELPER: &str = "Optional. Message frequency varies. Message and data rates may apply. Reply STOP to opt out or HELP for help. Our Privacy Policy and texting terms explain how we text and what we keep.";
 const SMS_LABEL: &str = "Yes, {site_name} may send me text messages about this inquiry at this number, including automated texts. Texting is not a condition of hiring the firm.";
+const CALL_LABEL: &str = "Yes, {site_name} may call me at this number about this inquiry.";
 
 /// The copy the brand shows next to a lead form.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -21,6 +22,7 @@ pub struct LeadCaptureCopy {
     pub consent_sentence: String,
     pub phone_helper: String,
     pub sms_label: String,
+    pub call_label: String,
 }
 
 impl LeadCaptureCopy {
@@ -71,6 +73,13 @@ pub fn server_sms_consent_version(site_name: &str) -> String {
     )
 }
 
+/// Derive the current callback evidence from server-owned copy, the same way
+/// [`server_sms_consent_version`] does for texting.
+#[must_use]
+pub fn server_call_consent_version(site_name: &str) -> String {
+    CALL_LABEL.replace("{site_name}", site_name)
+}
+
 /// Render a public lead form beside the page's ordinary mail action.
 #[component]
 pub fn LeadCaptureForm(
@@ -115,6 +124,7 @@ pub(crate) fn lead_capture_fields(copy: &LeadCaptureCopy) -> Vec<Field> {
                 "Privacy Policy and texting terms",
                 "/privacy#text-messaging-sms",
             )),
+        Field::checkbox(copy.call_label.clone(), "call_consent", "on", false),
         Field::checkbox(copy.sms_label.clone(), "sms_consent", "on", false).help_runs(linked_runs(
             &copy.consent_sentence,
             "Privacy Policy",
@@ -174,6 +184,7 @@ mod tests {
                         consent_sentence: "By sending this, you agree that Neon Law may email you about this inquiry. Sending it does not make you a client, and nothing on this page is legal advice. See our Privacy Policy.".to_string(),
                         phone_helper: "Optional. Message frequency varies. Message and data rates may apply. Reply STOP to opt out or HELP for help. Our Privacy Policy and texting terms explain how we text and what we keep.".to_string(),
                         sms_label: "Yes, Neon Law may send me text messages about this inquiry at this number, including automated texts. Texting is not a condition of hiring the firm.".to_string(),
+                        call_label: "Yes, Neon Law may call me at this number about this inquiry.".to_string(),
                     },
                     context: LeadCaptureContext {
                         csrf_token: "csrf-token".to_string(),
@@ -190,6 +201,8 @@ mod tests {
             "name=\"email\"",
             "name=\"phone\"",
             "name=\"sms_consent\"",
+            "name=\"call_consent\"",
+            "Yes, Neon Law may call me at this number about this inquiry.",
             "name=\"website\"",
             "value=\"csrf-token\"",
             "value=\"/services\"",

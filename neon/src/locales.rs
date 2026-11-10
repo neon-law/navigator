@@ -987,6 +987,7 @@ pub fn lead_capture(branding: &views::brand::Branding) -> LeadCaptureCopy {
         consent_sentence: copy("lead.consent"),
         phone_helper: copy("lead.phone_helper"),
         sms_label: copy("lead.sms_label"),
+        call_label: copy("lead.call_label"),
     }
 }
 
@@ -2040,6 +2041,7 @@ mod tests {
             "lead.consent".to_string(),
             "lead.phone_helper".to_string(),
             "lead.sms_label".to_string(),
+            "lead.call_label".to_string(),
         ]);
         // Account copy is read directly by the shared SSR components.
         referenced.extend(

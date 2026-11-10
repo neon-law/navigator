@@ -216,6 +216,7 @@ mod tests {
                     consent_sentence: "By sending this, you agree to our Privacy Policy.".into(),
                     phone_helper: "Optional. See Privacy Policy and texting terms.".into(),
                     sms_label: "Yes, send me text messages about this inquiry.".into(),
+                    call_label: "Yes, Neon Law may call me at this number about this inquiry.".to_string(),
                 }),
                 lead_context: LeadCaptureContext {
                     csrf_token: "csrf-token".into(),

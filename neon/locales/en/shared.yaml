@@ -49,3 +49,4 @@ entries:
   lead.consent: By sending this, you agree that {site_name} may email you about this inquiry. Sending it does not make you a client, and nothing on this page is legal advice. See our Privacy Policy.
   lead.phone_helper: Optional. Message frequency varies. Message and data rates may apply. Reply STOP to opt out or HELP for help. Our Privacy Policy and texting terms explain how we text and what we keep.
   lead.sms_label: Yes, {site_name} may send me text messages about this inquiry at this number, including automated texts. Texting is not a condition of hiring the firm.
+  lead.call_label: Yes, {site_name} may call me at this number about this inquiry.
