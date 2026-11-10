@@ -2848,6 +2848,9 @@ struct TemplateFrontmatter {
     #[serde(default)]
     code: Option<String>,
     title: String,
+    #[serde(default)]
+    description: Option<String>,
+    confidential: Option<bool>,
     respondent_type: String,
     /// forms-registry code of the government form this template fills
     /// (`form: nv__llc_formation`); absent for Typst-rendered
@@ -2866,6 +2869,33 @@ pub fn seeded_template_codes() -> anyhow::Result<Vec<String>> {
         .iter()
         .map(|template| template_code(template.label).map(str::to_string))
         .collect()
+}
+
+/// Metadata for a public Template in the bundled shared catalog.
+#[derive(Debug, serde::Serialize)]
+pub struct PublicTemplate {
+    pub code: String,
+    pub title: String,
+    pub description: Option<String>,
+}
+
+/// List bundled Templates explicitly marked public, without bodies or questionnaires.
+pub fn public_seeded_templates() -> anyhow::Result<Vec<PublicTemplate>> {
+    let mut templates = Vec::new();
+    for template in SEEDED_TEMPLATES {
+        let (frontmatter, _) = split_template(template.markdown)
+            .ok_or_else(|| anyhow::anyhow!("{}: missing frontmatter", template.label))?;
+        let metadata: TemplateFrontmatter = serde_yaml::from_str(frontmatter)?;
+        if metadata.confidential == Some(false) {
+            templates.push(PublicTemplate {
+                code: template_code(template.label)?.to_owned(),
+                title: metadata.title,
+                description: metadata.description,
+            });
+        }
+    }
+    templates.sort_by(|a, b| a.title.cmp(&b.title).then(a.code.cmp(&b.code)));
+    Ok(templates)
 }
 
 /// The `code@version` Clause sources the seeded shared Template `code` pins,

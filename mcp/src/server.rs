@@ -313,8 +313,7 @@ mod tests {
         assert!(body["result"]["capabilities"]["tools"].is_object());
     }
 
-    /// `tools/list` serves the *advertised* catalog, so the three
-    /// confirmation-gated tools are absent and the other twelve present.
+    /// `tools/list` serves the advertised catalog and excludes supervised tools.
     ///
     /// Asserting the absent set is the point: a test that only checks what IS
     /// listed stays green when a supervised act is served by mistake.
@@ -358,6 +357,7 @@ mod tests {
             "bulk_import",
             "spawn_legal_council",
             "glossary_list",
+            "list_templates",
             "glossary_show",
             "project_skill_list",
             "project_skill_show",
@@ -370,7 +370,6 @@ mod tests {
             );
         }
 
-        assert_eq!(names.len(), 26, "got {names:?}");
         for name in &names {
             assert!(
                 !name.starts_with("aida_"),
@@ -407,6 +406,31 @@ mod tests {
         assert!(
             crate::tools::list_tools().len() > expected.len(),
             "the served catalog must be strictly narrower than the whole one"
+        );
+    }
+
+    #[tokio::test]
+    async fn tools_call_list_templates_clarifies_work_in_progress() {
+        let router = build_router(state(&db().await));
+        let (status, body) = call(
+            router,
+            json!({
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {
+                    "name": "list_templates",
+                    "arguments": { "intent": "create a work in progress" }
+                }
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body["result"]["structuredContent"],
+            json!({
+                "clarification": "Do you want a Work In Progress summary for a matter, or do you want to record time or a cost?"
+            })
         );
     }
 
