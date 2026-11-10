@@ -350,6 +350,9 @@ jobs:
 /// document check, live `seeds/` reconciliation (never `--overwrite`), and
 /// the Project's private main-push notice. The notice runs whatever the other
 /// two did and reports their combined outcome; it never fails the run.
+/// `continue-on-error` sits on the notify step, not the job: Forgejo still
+/// reports a job-level `continue-on-error` job as failed, so a refused notice
+/// (a Project with no Slack channel) would turn every `cd` red.
 #[must_use]
 pub fn forgejo_cd_workflow() -> String {
     format!(
@@ -387,9 +390,9 @@ jobs:
     if: always()
     runs-on: self-hosted
     enable-openid-connect: true
-    continue-on-error: true
     steps:
 {checkout}{install}      - name: notify the Project channel of this push
+        continue-on-error: true
         env:
           GATE: ${{{{ (needs.documents.result == 'success' && needs.seeds.result == 'success') && 'pass' || 'fail' }}}}
         run: navigator project notify-main-push --ci --gate "${{GATE}}"
@@ -681,7 +684,13 @@ mod tests {
         assert!(!run_of("seeds").contains("--overwrite"));
         assert!(run_of("notify").starts_with("navigator project notify-main-push --ci"));
         assert_eq!(jobs["notify"]["if"].as_str(), Some("always()"));
-        assert_eq!(jobs["notify"]["continue-on-error"].as_bool(), Some(true));
+        assert!(jobs["notify"]["continue-on-error"].is_null());
+        let notify_step = jobs["notify"]["steps"]
+            .as_sequence()
+            .unwrap()
+            .last()
+            .unwrap();
+        assert_eq!(notify_step["continue-on-error"].as_bool(), Some(true));
         for job in ["documents", "seeds", "notify"] {
             assert_eq!(jobs[job]["enable-openid-connect"].as_bool(), Some(true));
         }

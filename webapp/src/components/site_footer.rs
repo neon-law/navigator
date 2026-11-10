@@ -963,7 +963,7 @@ mod tests {
                     // footer breaks a line on.
                     offices: [
                         ("California", "1990 N California Blvd, Ste 800, Walnut Creek, CA 94596", None),
-                        ("Nevada", "5150 Mae Anne Ave, Ste 405-9777, Reno, NV 89523", None),
+                        ("Nevada", "5150 Mae Anne Ave, Ste 405-9002, Reno, NV 89523", None),
                         (
                             "New York",
                             "12 E 49th St, 18th Floor, New York, NY 10017",
@@ -1095,7 +1095,7 @@ mod tests {
                 "Ste 800",
                 "Walnut Creek, CA 94596",
             ),
-            ("5150 Mae Anne Ave", "Ste 405-9777", "Reno, NV 89523"),
+            ("5150 Mae Anne Ave", "Ste 405-9002", "Reno, NV 89523"),
             ("12 E 49th St", "18th Floor", "New York, NY 10017"),
             ("720 Seneca St", "Ste 107-715", "Seattle, WA 98101"),
         ] {

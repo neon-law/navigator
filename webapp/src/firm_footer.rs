@@ -40,24 +40,21 @@ pub fn FirmFooter(model: FirmFooterModel) -> Element {
     }
 }
 
-/// The compact footer for the client-facing matter portal. Unlike the
-/// application-wide [`FirmFooter`], this names the Project's own brand: one
-/// signed-in person can have matters opened through different practices.
+/// The footer for the client's view of a Project. Unlike the
+/// application-wide [`FirmFooter`], this names the firm behind the Project's
+/// own brand: one signed-in person can have matters with different firms.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
 pub struct ClientPortalFooterModel {
-    pub brand_name: String,
     pub legal_entity: String,
     pub copyright_year: i32,
 }
 
-/// The matter page's one-line attribution and copyright notice.
+/// The matter page's one-line copyright notice: the firm's name alone.
 #[component]
 pub fn ClientPortalFooter(model: ClientPortalFooterModel) -> Element {
     rsx! {
         footer { class: "app-footer app-footer--client-portal",
-            p { class: "app-footer__copyright",
-                "{model.brand_name} is powered by Neon Law Navigator. © {model.copyright_year} {model.legal_entity}"
-            }
+            p { class: "app-footer__copyright", "© {model.copyright_year} {model.legal_entity}" }
         }
     }
 }

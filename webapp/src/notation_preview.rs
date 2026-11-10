@@ -20,12 +20,13 @@
 //! `/presentations/{slug}` — a shareable, bookmarkable URL per document
 //! rather than one page keyed by a query string. An unknown slug 404s,
 //! exactly as an unknown workshop or presentation material does. A
-//! [`BackBreadcrumb`] returns to the `/notations` catalog, and "View source
-//! on GitHub" sits on the title's own line rather than the `/notations`
-//! catalog card — the card's own link now opens this page directly.
+//! [`BackBreadcrumb`] returns to the `/notations` catalog. The title's action
+//! row carries the off-site links — the blank government form and "Edit on
+//! GitHub" for the template's source — each an [`ExternalLink`].
 //!
 //! Template frontmatter precedes the questionnaire and its live Body section. The Workflow disclosure
-//! follows them. Preview answers are saved per notation in the browser; they create no real records.
+//! follows them and, on the published catalog, ends with a sign-in door to run the workflow on a
+//! Matter. Preview answers are saved per notation in the browser; they create no real records.
 
 //! The slug also drives the browser tab title for free: every
 //! server-rendered route's `<title>` is replaced by `stamp_document_title`
@@ -43,7 +44,8 @@ use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::components::{
-    Accordion, BackBreadcrumb, CodeBlock, PublicShell, SocialMeta, CATALOG_STYLESHEET_HREF,
+    Accordion, BackBreadcrumb, CodeBlock, ExternalLink, PublicShell, SocialMeta,
+    CATALOG_STYLESHEET_HREF,
 };
 use crate::harvard_outline::{HARVARD_OUTLINE_SCRIPT_HREF, HARVARD_OUTLINE_STYLESHEET_HREF};
 use crate::notation_demo::{
@@ -90,6 +92,10 @@ pub struct PreviewDoc {
 /// and injects it for [`notation_preview_view`] to read back synchronously.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
 pub struct NotationPreviewContent {
+    /// The `/notations/{slug}` path segment; the Workflow's start door hangs
+    /// beneath it.
+    #[serde(default)]
+    pub slug: String,
     pub title: String,
     pub source_href: String,
     /// The template's YAML frontmatter, verbatim. Empty renders nothing.
@@ -159,6 +165,31 @@ pub fn NotationPreviewEntry() -> Element {
     }
 }
 
+/// The notation page's funnel steps, as each Plausible site's Goals panel
+/// names them. The page segments them: Plausible records which notation the
+/// click came from, and the run click continues into the start door's
+/// server-side `Intake: Started`.
+pub const FORM_VIEWED_GOAL: &str = "Notation: Form Viewed";
+/// See [`FORM_VIEWED_GOAL`].
+pub const EDIT_CLICKED_GOAL: &str = "Notation: Edit Clicked";
+/// See [`FORM_VIEWED_GOAL`].
+pub const RUN_CLICKED_GOAL: &str = "Notation: Run Clicked";
+
+/// GitHub's web editor for a template whose source is a `github.com` blob
+/// link — the same path under `/edit/`. Any other source (a local file, none)
+/// has no editor to open.
+fn github_edit_href(source_href: &str) -> Option<String> {
+    source_href
+        .strip_prefix("https://github.com/")
+        .filter(|rest| rest.contains("/blob/"))
+        .map(|rest| {
+            format!(
+                "https://github.com/{}",
+                rest.replacen("/blob/", "/edit/", 1)
+            )
+        })
+}
+
 /// The pure preview page: the highlighted stage inside the public shell,
 /// with an optional link to a form's blank government original. Prop-driven,
 /// so it server-renders and unit-tests without a server future.
@@ -206,8 +237,19 @@ pub fn NotationPreviewPage(
                     h1 { "{content.title}" }
                     div { class: "notation-preview-header__actions",
                         if let Some(origin_url) = &content.origin_url {
-                            a { class: "nav-btn nav-btn--secondary", href: "{origin_url}",
+                            ExternalLink {
+                                class: "nav-btn nav-btn--secondary".to_string(),
+                                href: origin_url.clone(),
+                                funnel_event: FORM_VIEWED_GOAL.to_string(),
                                 "View the form"
+                            }
+                        }
+                        if let Some(edit_href) = github_edit_href(&content.source_href) {
+                            ExternalLink {
+                                class: "nav-btn nav-btn--secondary".to_string(),
+                                href: edit_href,
+                                funnel_event: EDIT_CLICKED_GOAL.to_string(),
+                                "Edit on GitHub"
                             }
                         }
                     }
@@ -247,6 +289,18 @@ pub fn NotationPreviewPage(
                 if !content.demo_workflow.is_empty() {
                     Accordion { title: "Workflow".to_string(),
                         WorkflowDiagram { states: content.demo_workflow.clone() }
+                        if mode == NotationPreviewMode::Published && !content.slug.is_empty() {
+                            div { class: "notation-preview-header__actions",
+                                a {
+                                    class: "nav-btn nav-btn--primary",
+                                    // The start door is behind sign-in; an
+                                    // anonymous reader signs in and returns.
+                                    href: "/notations/{content.slug}/start",
+                                    "data-funnel-event": RUN_CLICKED_GOAL,
+                                    "Sign in to run this workflow"
+                                }
+                            }
+                        }
                     }
                 }
         }
@@ -266,6 +320,7 @@ mod tests {
 
     fn letter_content() -> NotationPreviewContent {
         NotationPreviewContent {
+            slug: "onboarding-letter".to_string(),
             title: "Onboarding Letter".to_string(),
             source_href: "https://github.com/neon-law/navigator/blob/main/templates/notations/neon_law/onboarding__letter.md".to_string(),
             frontmatter: "title: Onboarding Letter\ncode: onboarding__letter".to_string(),
@@ -282,6 +337,7 @@ mod tests {
 
     fn form_content() -> NotationPreviewContent {
         NotationPreviewContent {
+            slug: "nevada-llc-formation".to_string(),
             title: "Nevada LLC Formation".to_string(),
             source_href: "https://github.com/neon-law/navigator/blob/main/templates/notations/forms/united_states/nevada/state/nv__llc_formation.md".to_string(),
             frontmatter: "title: Nevada LLC Formation\ncode: nv__llc_formation".to_string(),
@@ -322,20 +378,27 @@ mod tests {
     }
 
     #[test]
-    fn published_preview_links_the_repository_without_a_template_source_action() {
+    fn the_header_offers_editing_the_template_on_github_off_site() {
         let out = html();
         assert!(
-            out.contains(r#"href="https://github.com/neon-law/navigator""#),
-            "public footer repository link: {out}"
+            out.contains(r#"href="https://github.com/neon-law/navigator/edit/main/templates/notations/neon_law/onboarding__letter.md""#)
+                && out.contains(r#"target="_blank" rel="noopener noreferrer">Edit on GitHub"#),
+            "GitHub editor, off-site: {out}"
         );
+        assert!(out.contains("Edit on GitHub"), "link label: {out}");
         assert!(
-            !out.contains(&letter_content().source_href),
-            "no template-specific source action: {out}"
+            out.contains(r#"data-funnel-event="Notation: Edit Clicked""#),
+            "the edit click is a funnel step: {out}"
         );
-        assert!(!out.contains("View on GitHub"), "link label: {out}");
-        assert!(
-            out.contains(r#"class="notation-preview-header""#),
-            "title remains in the header: {out}"
+    }
+
+    #[test]
+    fn a_source_off_github_has_no_edit_link() {
+        assert_eq!(github_edit_href("/tmp/sample.md"), None);
+        assert_eq!(github_edit_href(""), None);
+        assert_eq!(
+            github_edit_href("https://github.com/neon-law/navigator"),
+            None
         );
     }
 
@@ -461,6 +524,10 @@ mod tests {
         assert!(out.contains("Scope of the engagement"), "body: {out}");
         assert!(out.contains("Try answering this"), "questionnaire: {out}");
         assert!(out.contains("notation-workflow"), "workflow: {out}");
+        assert!(
+            !out.contains("Sign in to run this workflow"),
+            "a local preview points at `--push`, not the sign-in: {out}"
+        );
     }
 
     /// LAW-203's honest label: a local author preview is dry — it opens no
@@ -514,8 +581,16 @@ mod tests {
         assert!(
             out.contains(
                 r#"href="https://www.nvsos.gov/businesses/commercial-recordings/forms-fees/all-business-forms""#
-            ) && out.contains("View the form"),
-            "link to the blank government form: {out}"
+            ) && out.contains(r#"target="_blank" rel="noopener noreferrer">View the form"#),
+            "off-site link to the blank government form: {out}"
+        );
+        assert!(
+            out.contains("<title>opens in a new tab</title>"),
+            "the up-right off-site glyph: {out}"
+        );
+        assert!(
+            out.contains(r#"data-funnel-event="Notation: Form Viewed""#),
+            "the form click is a funnel step: {out}"
         );
         assert!(
             out.contains(r#"class="notation-preview-header__actions""#),
@@ -530,7 +605,7 @@ mod tests {
     }
 
     #[test]
-    fn a_form_with_no_origin_url_has_no_header_links() {
+    fn a_form_with_no_origin_url_has_no_government_form_link() {
         fn app() -> Element {
             let chrome = PublicChrome {
                 brand_name: "Neon Law".to_string(),
@@ -543,7 +618,7 @@ mod tests {
             rsx! { NotationPreviewPage { chrome, content } }
         }
         let out = ssr(app);
-        assert_eq!(out.matches("nav-btn--secondary").count(), 0, "{out}");
+        assert!(!out.contains("View the form"), "{out}");
     }
 
     #[test]
@@ -642,5 +717,14 @@ mod tests {
         assert!(out.contains("notation-workflow"), "{out}");
         assert!(out.contains("Workflow"), "accordion title: {out}");
         assert!(out.contains("review"), "task chip: {out}");
+        assert!(
+            out.contains(r#"href="/notations/onboarding-letter/start""#)
+                && out.contains("Sign in to run this workflow"),
+            "the workflow ends with the sign-in door to a real run: {out}"
+        );
+        assert!(
+            out.contains(r#"data-funnel-event="Notation: Run Clicked""#),
+            "the run click is a funnel step: {out}"
+        );
     }
 }
