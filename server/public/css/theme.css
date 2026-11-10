@@ -1315,11 +1315,6 @@ a.nav-pagination__link:hover {
   text-decoration: none;
 }
 
-.site-footer__logo {
-  border-color: color-mix(in oklab, var(--nav-color-primary) 60%, transparent);
-  background: color-mix(in oklab, var(--nav-color-primary) 16%, transparent);
-}
-
 /* The mark sits on the footer's own background, like the header logo: no
    tile, border, or tint behind it. */
 .site-footer__logo {
