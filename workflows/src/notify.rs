@@ -183,6 +183,18 @@ pub trait SlackBot: Send + Sync {
             correlation_id: correlation_id.map(str::to_string),
         })
     }
+    /// Post a Block Kit message and retain Slack's delivery coordinates.
+    /// Implementors that cannot post blocks degrade to the plain-text
+    /// fallback derived from the blocks, so existing operational callers
+    /// keep compiling and keep delivering.
+    async fn post_blocks(
+        &self,
+        channel_id: &str,
+        blocks: &[serde_json::Value],
+    ) -> Result<SlackMessageReceipt, SlackBotError> {
+        self.post_message_with_receipt(channel_id, &cloud::blocks_to_fallback_text(blocks), None)
+            .await
+    }
     /// Look up a correlated notice without sending it again. Absence is not
     /// proof of non-delivery; callers retain an unknown result.
     async fn message_receipt_by_correlation(
@@ -684,7 +696,18 @@ impl SlackBot for SlackBotClient {
         text: &str,
         correlation_id: Option<&str>,
     ) -> Result<SlackMessageReceipt, SlackBotError> {
-        self.chat_post(channel_id, text, correlation_id, None).await
+        self.chat_post(channel_id, text, correlation_id, None, &[])
+            .await
+    }
+
+    async fn post_blocks(
+        &self,
+        channel_id: &str,
+        blocks: &[serde_json::Value],
+    ) -> Result<SlackMessageReceipt, SlackBotError> {
+        let fallback = cloud::blocks_to_fallback_text(blocks);
+        let text = cloud::outbound_slack_text(&fallback, self.from_staging);
+        self.chat_post(channel_id, &text, None, None, blocks).await
     }
 
     async fn message_receipt_by_correlation(
@@ -816,7 +839,7 @@ impl SlackBot for SlackBotClient {
         thread_ts: &str,
         text: &str,
     ) -> Result<(), SlackBotError> {
-        self.chat_post(channel_id, text, None, Some(thread_ts))
+        self.chat_post(channel_id, text, None, Some(thread_ts), &[])
             .await
             .map(|_| ())
     }
@@ -885,6 +908,7 @@ impl SlackBotClient {
         text: &str,
         correlation_id: Option<&str>,
         thread_ts: Option<&str>,
+        blocks: &[serde_json::Value],
     ) -> Result<SlackMessageReceipt, SlackBotError> {
         let text = cloud::outbound_slack_text(text, self.from_staging);
         let mut body = json!({
@@ -898,6 +922,9 @@ impl SlackBotClient {
         }
         if let Some(thread_ts) = thread_ts {
             body["thread_ts"] = json!(thread_ts);
+        }
+        if !blocks.is_empty() {
+            body["blocks"] = json!(blocks);
         }
         let response: PostMessageResponse = self.post("chat.postMessage", &body).await?;
         if response.ok {
@@ -2547,5 +2574,66 @@ mod tests {
             .expect_err("a Slack failure must surface to the caller");
 
         assert!(matches!(err, EmailError::Transport(_)));
+    }
+
+    /// The Web API client posts the blocks themselves, with the fallback text
+    /// derived from them — Slack renders blocks only when a top-level `text`
+    /// accompanies them.
+    #[tokio::test]
+    async fn post_blocks_posts_the_block_kit_payload() {
+        use wiremock::matchers::{body_partial_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let blocks = serde_json::json!([
+            { "type": "header", "text": { "type": "plain_text", "text": "Push to sample-project" } },
+            { "type": "section", "text": { "type": "mrkdwn", "text": "*qvrpxyq* — amend the filing" } }
+        ]);
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat.postMessage"))
+            .and(body_partial_json(serde_json::json!({
+                "channel": "synthetic-channel",
+                "text": "Push to sample-project\n*qvrpxyq* — amend the filing",
+                "blocks": blocks
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true, "channel": "synthetic-channel", "ts": "1773000000.000100"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let bot = SlackBotClient::with_base_url("synthetic-token", server.uri());
+        let receipt = bot
+            .post_blocks("synthetic-channel", blocks.as_array().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(receipt.timestamp, "1773000000.000100");
+        assert_eq!(receipt.channel_id, "synthetic-channel");
+    }
+
+    /// An implementor without a blocks capability inherits the trait default:
+    /// the plain-text fallback derived from the blocks, through the receipt
+    /// operation it already has — existing implementors keep compiling.
+    #[tokio::test]
+    async fn an_implementor_without_blocks_degrades_to_the_plain_text_fallback() {
+        let bot = CapturingSlackBot::new();
+        let blocks = serde_json::json!([
+            { "type": "header", "text": { "type": "plain_text", "text": "Push to sample-project" } },
+            { "type": "section", "text": { "type": "mrkdwn", "text": "*qvrpxyq* — amend the filing" } }
+        ]);
+        let receipt = bot
+            .post_blocks("synthetic-channel", blocks.as_array().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            bot.posted_messages(),
+            vec![(
+                "synthetic-channel".to_string(),
+                "Push to sample-project\n*qvrpxyq* — amend the filing".to_string()
+            )]
+        );
+        assert_eq!(receipt.channel_id, "synthetic-channel");
+        assert_eq!(receipt.timestamp, "1.000000");
     }
 }

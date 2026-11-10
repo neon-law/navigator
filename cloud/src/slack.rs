@@ -66,6 +66,56 @@ pub fn outbound_slack_text(text: &str, from_staging: bool) -> String {
     format!("{trimmed}\n{SLACK_STAGING_MARK}")
 }
 
+/// A plain-text stand-in for a Block Kit payload. Slack requires a top-level
+/// `text` alongside `blocks` (for notifications and screen readers), and an
+/// implementor that cannot post blocks delivers this instead. The words come
+/// from the blocks themselves — section text and fields, header text, context
+/// text — so a degraded delivery degrades to the same message, and an
+/// image-only payload degrades to empty rather than to invented copy.
+#[must_use]
+pub fn blocks_to_fallback_text(blocks: &[serde_json::Value]) -> String {
+    let mut texts = Vec::new();
+    for block in blocks {
+        collect_block_text(block, &mut texts);
+    }
+    texts.join("\n")
+}
+
+fn collect_block_text(block: &serde_json::Value, texts: &mut Vec<String>) {
+    let Some(object) = block.as_object() else {
+        return;
+    };
+    match object.get("type").and_then(serde_json::Value::as_str) {
+        Some("section") => {
+            push_block_text(object.get("text"), texts);
+            if let Some(fields) = object.get("fields").and_then(serde_json::Value::as_array) {
+                for field in fields {
+                    push_block_text(Some(field), texts);
+                }
+            }
+        }
+        Some("header") => push_block_text(object.get("text"), texts),
+        Some("context") => {
+            if let Some(elements) = object.get("elements").and_then(serde_json::Value::as_array) {
+                for element in elements {
+                    push_block_text(Some(element), texts);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn push_block_text(value: Option<&serde_json::Value>, texts: &mut Vec<String>) {
+    if let Some(text) = value
+        .and_then(|value| value.get("text"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|text| !text.trim().is_empty())
+    {
+        texts.push(text.to_string());
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum SlackError {
     #[error("Slack credential is unavailable")]
@@ -532,6 +582,98 @@ impl SlackClient {
     }
 }
 
+impl SlackClient {
+    /// `chat.postMessage` carrying a Block Kit payload. The top-level `text`
+    /// is the fallback derived from the blocks themselves, so notifications
+    /// and screen readers preview the same words the blocks render.
+    pub async fn post_blocks(
+        &self,
+        channel_id: &str,
+        blocks: &[serde_json::Value],
+    ) -> Result<(), SlackError> {
+        let body = self
+            .post(
+                "chat.postMessage",
+                json!({
+                    "channel": channel_id,
+                    "text": blocks_to_fallback_text(blocks),
+                    "blocks": blocks,
+                    "unfurl_links": false,
+                    "unfurl_media": false,
+                }),
+            )
+            .await?;
+        let response: BasicResponse =
+            serde_json::from_value(body).map_err(|_| SlackError::IncompleteResponse)?;
+        if response.ok {
+            Ok(())
+        } else {
+            Err(SlackError::Api)
+        }
+    }
+
+    /// The private file-upload flow (Slack's v2 external upload): request a
+    /// one-use upload URL, post the raw bytes to it, then complete the
+    /// upload and return the file id an image block references through
+    /// `slack_file`. The bytes never touch a publicly fetchable URL —
+    /// confidential content stays inside Slack, per the jj build-out's
+    /// locked image decision.
+    ///
+    /// The upload step is an HTTP `POST` of raw bytes to the returned
+    /// `upload_url` (`application/octet-stream`), per Slack's documented
+    /// v2 contract; no bearer header is sent to that pre-issued URL.
+    pub async fn upload_file(&self, filename: &str, bytes: &[u8]) -> Result<String, SlackError> {
+        let body = self
+            .post(
+                "files.getUploadURLExternal",
+                json!({ "filename": filename, "length": bytes.len() }),
+            )
+            .await?;
+        let requested: UploadUrlResponse =
+            serde_json::from_value(body).map_err(|_| SlackError::IncompleteResponse)?;
+        if !requested.ok {
+            return Err(SlackError::Api);
+        }
+        let upload_url = requested.upload_url.ok_or(SlackError::IncompleteResponse)?;
+        let file_id = requested.file_id.ok_or(SlackError::IncompleteResponse)?;
+
+        let uploaded = self
+            .http
+            .post(&upload_url)
+            .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+            .body(bytes.to_vec())
+            .send()
+            .await
+            .map_err(|_| SlackError::Transport)?;
+        if !uploaded.status().is_success() {
+            return Err(SlackError::HttpStatus(uploaded.status().as_u16()));
+        }
+
+        let body = self
+            .post(
+                "files.completeUploadExternal",
+                json!({ "files": [{ "id": file_id, "title": filename }] }),
+            )
+            .await?;
+        let response: BasicResponse =
+            serde_json::from_value(body).map_err(|_| SlackError::IncompleteResponse)?;
+        if response.ok {
+            Ok(file_id)
+        } else {
+            Err(SlackError::Api)
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct UploadUrlResponse {
+    ok: bool,
+    #[serde(default)]
+    upload_url: Option<String>,
+    #[serde(default)]
+    file_id: Option<String>,
+}
+
 #[async_trait]
 impl SlackService for SlackClient {
     async fn find_private_channel(
@@ -739,8 +881,9 @@ struct ResponseMetadata {
 #[cfg(test)]
 mod tests {
     use super::{
-        ensure_private_channel, labels_slack_from_staging_from, outbound_slack_text, FakeSlack,
-        SlackClient, SlackError, SlackMemberId, SlackService, SLACK_STAGING_MARK,
+        blocks_to_fallback_text, ensure_private_channel, labels_slack_from_staging_from,
+        outbound_slack_text, FakeSlack, SlackClient, SlackError, SlackMemberId, SlackService,
+        SLACK_STAGING_MARK,
     };
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -1083,5 +1226,168 @@ mod tests {
             super::channel_url("C0123456789"),
             "https://slack.com/archives/C0123456789"
         );
+    }
+
+    #[test]
+    fn blocks_to_fallback_text_carries_the_blocks_own_words() {
+        let blocks = serde_json::json!([
+            {
+                "type": "header",
+                "text": { "type": "plain_text", "text": "Push to sample-project" }
+            },
+            {
+                "type": "section",
+                "text": { "type": "mrkdwn", "text": "*qvrpxyq* — amend the filing" },
+                "fields": [
+                    { "type": "mrkdwn", "text": "*Author:* T-bot" },
+                    { "type": "plain_text", "text": "+12 −3" }
+                ]
+            },
+            {
+                "type": "context",
+                "elements": [{ "type": "mrkdwn", "text": "by Navigator" }]
+            },
+            { "type": "image", "image_url": "irrelevant", "alt_text": "chart" }
+        ]);
+        assert_eq!(
+            blocks_to_fallback_text(blocks.as_array().unwrap()),
+            "Push to sample-project\n*qvrpxyq* — amend the filing\n*Author:* T-bot\n+12 −3\nby Navigator"
+        );
+    }
+
+    #[test]
+    fn blocks_without_text_degrade_to_an_empty_fallback() {
+        let blocks = serde_json::json!([
+            { "type": "image", "image_url": "internal", "alt_text": "diff chart" },
+            { "type": "divider" }
+        ]);
+        assert_eq!(blocks_to_fallback_text(blocks.as_array().unwrap()), "");
+        assert_eq!(blocks_to_fallback_text(&[]), "");
+    }
+
+    /// `chat.postMessage` must carry the blocks themselves plus the derived
+    /// fallback text — Slack renders blocks only when a top-level `text`
+    /// accompanies them.
+    #[tokio::test]
+    async fn post_blocks_posts_the_block_kit_payload() {
+        use wiremock::matchers::{body_partial_json, method, path};
+
+        let blocks = serde_json::json!([
+            { "type": "header", "text": { "type": "plain_text", "text": "Push to sample-project" } },
+            { "type": "section", "text": { "type": "mrkdwn", "text": "*qvrpxyq* — amend the filing" } }
+        ]);
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat.postMessage"))
+            .and(body_partial_json(serde_json::json!({
+                "channel": "C1",
+                "text": "Push to sample-project\n*qvrpxyq* — amend the filing",
+                "blocks": blocks
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true, "channel": "C1", "ts": "1773000000.000100"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = SlackClient::with_base_url("test-token", server.uri());
+        client
+            .post_blocks("C1", blocks.as_array().unwrap())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_blocks_refusal_is_an_api_error() {
+        use wiremock::matchers::{method, path};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat.postMessage"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "ok": false, "error": "invalid_blocks" })),
+            )
+            .mount(&server)
+            .await;
+        let client = SlackClient::with_base_url("test-token", server.uri());
+        assert!(matches!(
+            client.post_blocks("C1", &[]).await,
+            Err(SlackError::Api)
+        ));
+    }
+
+    /// The private upload flow: request the one-use URL, post the raw bytes
+    /// to it, complete the upload, and keep the file id an image block
+    /// references through `slack_file` — no publicly fetchable URL anywhere.
+    #[tokio::test]
+    async fn the_upload_flow_completes_and_yields_the_file_id() {
+        use wiremock::matchers::{body_partial_json, header, method, path};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/files.getUploadURLExternal"))
+            .and(body_partial_json(
+                serde_json::json!({ "filename": "diff-chart.png", "length": 12 }),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "upload_url": format!("{}/files-upload/one-use", server.uri()),
+                "file_id": "F012AB3CDE4"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        // The byte upload goes to Slack's file-upload service, not the Web
+        // API origin: no bearer header, raw octet-stream body.
+        Mock::given(method("POST"))
+            .and(path("/files-upload/one-use"))
+            .and(header("content-type", "application/octet-stream"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/files.completeUploadExternal"))
+            .and(body_partial_json(serde_json::json!({
+                "files": [{ "id": "F012AB3CDE4", "title": "diff-chart.png" }]
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "files": [{ "id": "F012AB3CDE4" }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = SlackClient::with_base_url("test-token", server.uri());
+        let file_id = client
+            .upload_file("diff-chart.png", b"PNG-DATA-12\n")
+            .await
+            .unwrap();
+        assert_eq!(file_id, "F012AB3CDE4");
+    }
+
+    #[tokio::test]
+    async fn an_upload_url_refusal_fails_before_any_bytes_move() {
+        use wiremock::matchers::{method, path};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/files.getUploadURLExternal"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "ok": false, "error": "not_allowed" })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = SlackClient::with_base_url("test-token", server.uri());
+        assert!(matches!(
+            client.upload_file("diff-chart.png", b"PNG-DATA").await,
+            Err(SlackError::Api)
+        ));
     }
 }
