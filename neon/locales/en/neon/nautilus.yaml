@@ -1,134 +1,32 @@
 head_title: "{site_name} | Nautilus"
 meta_description: >-
-  Legal paperwork, handled for $29/mo or $290/year prepaid: form an LLC, write
-  a will, change your name, file small claims, and fill contracts from your
-  answers, with data removal, privacy protection, credit monitoring, dark web
-  monitoring, identity theft insurance, unclaimed property, and estate planning
-  included. Cancel anytime. Legal work is a separate retainer with our partner
-  firm Lex Tecnica. Attorney advertisement.
+  Nautilus is one subscription for your privacy and your paperwork: data
+  removal, privacy protection, credit monitoring, dark web monitoring, identity
+  theft insurance, unclaimed property, estate planning, contract templates, and
+  basic form filings such as forming an LLC, for $29/mo or $290/year prepaid.
+  Cancel anytime. A lawyer can review your work from $20. Coming to iPhone and
+  Android. Attorney advertisement.
 title: Nautilus
 hero_mark: helm
-tagline: What is your legal need?
+tagline: Your shell in a connected world.
 hero_lead: >-
-  Pick it below. We prepare the papers for one fixed price: $29/mo, or
+  Delete your data, watch your credit and the dark web, insure your identity,
+  form your LLC, and keep a lawyer a tap away. Every check for $29/mo, or
   $290/year with two months free. Cancel anytime, even after one month.
 hero_cta:
   href: "#enrollment"
   label: Start for $29/mo
 skin: nautilus
 bands:
-  - kind: cards
-    anchor: needs
-    overline: Included for $29 a month
-    heading: Each of these is included. Government fees are separate.
-    items:
-      - title: Start an LLC
-        chips: ["Nevada"]
-        body:
-          - - text: Articles of organization, prepared from a few answers.
-        href: /notations/nevada-llc-formation
-        href_label: See the filing
-      - title: Write a will
-        chips: ["California", "Nevada", "New York", "Washington"]
-        body:
-          - - text: A basic last will and testament, with a yearly check-in on your plan.
-        href: /notations/basic-will
-        href_label: See the will
-      - title: Change your name
-        chips: ["California", "Nevada", "New York", "Washington"]
-        body:
-          - - text: The court petition for an adult name change, filled for your state.
-        href: /notations
-        href_label: See the petitions
-      - title: File in small claims
-        chips: ["Nevada", "New York", "Washington"]
-        body:
-          - - text: The complaint or statement of claim that opens your case.
-        href: /notations
-        href_label: See the forms
-      - title: Send an NDA
-        chips: ["Business"]
-        body:
-          - - text: Mutual or one-way confidentiality before you share anything.
-        href: /notations/mutual-nda
-        href_label: See the agreement
-      - title: Make a job offer
-        chips: ["Business"]
-        body:
-          - - text: An offer letter for any U.S. state, with role, pay, and benefit terms.
-        href: /notations/employee-offer-letter
-        href_label: See the letter
-      - title: Publish a privacy policy
-        chips: ["Business"]
-        body:
-          - - text: Data practices, cookies, and privacy requests, with U.S. state and GDPR clauses.
-        href: /notations/privacy-policy
-        href_label: See the policy
-      - title: Delete your data
-        chips: ["Privacy"]
-        body:
-          - - text: Requests that companies delete your personal data, with a record of every reply.
-        href: "#enrollment"
-        href_label: Start for $29/mo
-      - title: Find unclaimed property
-        chips: ["Money"]
-        body:
-          - - text: We search government databases and file the claims for you.
-        href: "#enrollment"
-        href_label: Start for $29/mo
-  - kind: cards
-    anchor: pricing
-    overline: Pricing
-    heading: One fixed price. Cancel anytime.
-    description: >-
-      Every document and every check is included in either price. Keep Nautilus
-      for one month or for years. Government fees are separate. Nautilus is a
-      non-legal service: legal fees are excluded from both plans and must be
-      prepaid to Lex Tecnica before any legal work begins.
-    pricing_style: true
-    items:
-      - title: Monthly
-        body:
-          - - text: Everything, billed each month. Cancel anytime.
-        href: "#enrollment"
-        href_label: Start monthly
-      - title: Annual
-        body:
-          - - text: Everything, prepaid for the year. Two months free.
-        href: "#enrollment"
-        href_label: Start annual
-  - kind: steps
-    anchor: how-it-works
-    overline: How it works
-    heading: Tell us what you need, and we prepare it.
-    items:
-      - title: Tell us what you need
-        body:
-          - - text: Share your contact details below. No account is needed to start.
-      - title: Book a short enrollment call
-        body:
-          - - text: >-
-                We confirm your choices and the subscription terms, then send
-                the paperwork to sign. Pay $29/mo, or prepay $290 for the year.
-      - title: Answer the questions
-        body:
-          - - text: >-
-                Each document asks plain questions and fills itself from your
-                answers. Your privacy checks start running alongside.
-      - title: Add a lawyer when you want one
-        body:
-          - - text: >-
-                Ask a licensed attorney at Lex Tecnica, our partner firm, to
-                review what you prepared. Lex Tecnica sets its own fees under a
-                separate, prepaid retainer.
   - kind: app_preview
     anchor: app
     overline: Coming to iPhone and Android
-    heading: The same subscription, in your pocket.
+    heading: Eight checks. One app. One price.
     description: >-
-      Nautilus is coming to the App Store and Google Play. Each check will
-      report back in the app, so you see what was requested, what was found,
-      and what was filed. Until then, enroll below. Screens are illustrative.
+      Download Nautilus from the App Store or Google Play and subscribe for
+      $29/mo through the store you already use. Each check runs for you and
+      reports back in the app, so you see what was requested, what was found,
+      and what was filed. Screens are illustrative.
     app_name: Nautilus
     app_subtitle: Privacy and paperwork
     install_label: Get
@@ -161,26 +59,106 @@ bands:
       - title: Unclaimed property
         detail: Claims you can follow from search to filing.
       - title: Ask a lawyer
-        detail: Request a review from Lex Tecnica, our partner firm.
+        detail: Request a review of your work. From $20, prepaid.
     app_store_label: App Store
     play_store_label: Google Play
     availability: Coming soon to
   - kind: cards
-    anchor: lawyer-review
-    overline: When you want a lawyer
-    heading: A lawyer, on a separate retainer.
+    anchor: included
+    overline: What you get
+    heading: More than a privacy app. More than a legal-forms site.
     description: >-
-      Legal work is offered by Lex Tecnica, our partner law firm, under its own
-      retainer. Lex Tecnica sets its fees and tells you the number before the
-      work starts.
+      Privacy services and online legal-form sites each sell one piece at a
+      time. Nautilus runs all of it for one price, and keeps the record of
+      every request, claim, and filing in one place.
     items:
-      - title: Lawyer review
-        chips: ["Priced by Lex Tecnica"]
+      - title: Your privacy, handled
+        chips: ["Included"]
         body:
           - - text: >-
-                A licensed attorney at Lex Tecnica reviews a document or
-                question you prepared. Lex Tecnica quotes the fee before the
-                work starts.
+                Data removal requests with a record of every reply, privacy
+                protection, credit monitoring, dark web monitoring, and
+                identity theft insurance. Coverage is confirmed before
+                activation.
+        href: "#enrollment"
+        href_label: Start for $29/mo
+      - title: Your paperwork, included
+        chips: ["Included"]
+        body:
+          - - text: >-
+                Form an LLC from a few answers. Fill NDAs, offer letters,
+                consulting agreements, and privacy notices from the template
+                library, and file court and agency forms from the same answers.
+                Government fees are separate.
+        href: /notations
+        href_label: See the templates
+      - title: Your money and your plan
+        chips: ["Included"]
+        body:
+          - - text: >-
+                We search government databases for unclaimed property and file
+                the claims for you, and check in on your will, beneficiaries,
+                and plan documents once a year.
+        href: "#enrollment"
+        href_label: Start for $29/mo
+  - kind: cards
+    anchor: pricing
+    overline: Pricing
+    heading: One subscription. Cancel anytime.
+    description: >-
+      Every check is included in either price. Keep Nautilus for one month or
+      for years; cancel anytime from the same account. Government fees are
+      separate. Nautilus is a non-legal service: legal fees are excluded from
+      both plans and must be prepaid before any legal work begins.
+    pricing_style: true
+    items:
+      - title: Monthly
+        body:
+          - - text: Every check, billed each month. Cancel anytime.
+        href: "#enrollment"
+        href_label: Start monthly
+      - title: Annual
+        body:
+          - - text: Every check, prepaid for the year. Two months free.
+        href: "#enrollment"
+        href_label: Start annual
+  - kind: steps
+    anchor: how-it-works
+    overline: How it works
+    heading: Download, subscribe, and we run the checks.
+    items:
+      - title: Download Nautilus
+        body:
+          - - text: Get the app from the App Store or Google Play.
+      - title: Subscribe in the app
+        body:
+          - - text: >-
+                Pay $29/mo through your App Store or Google Play account, or
+                prepay $290 for the year. Cancel anytime from the same account.
+      - title: Your checks run
+        body:
+          - - text: >-
+                Data removal, monitoring, unclaimed property, and your
+                paperwork report back in the app as each one moves.
+      - title: Add a lawyer when you want one
+        body:
+          - - text: >-
+                Ask a licensed attorney to review what you prepared. Reviews
+                start at $20 and are prepaid under their own engagement.
+  - kind: cards
+    anchor: lawyer-review
+    overline: When you want a lawyer
+    heading: Have a lawyer review your work.
+    description: >-
+      Draft it yourself, then ask a lawyer to check it. A review is legal work
+      under its own engagement, priced before it starts and prepaid.
+    items:
+      - title: Lawyer review
+        chips: ["From $20"]
+        body:
+          - - text: >-
+                A licensed attorney reviews a document or question you prepared.
+                The fee depends on the work and starts at $20.
       - title: Private legal sandbox
         chips: ["$5 of usage included monthly"]
         body:
@@ -197,7 +175,7 @@ bands:
             Nautilus is a non-legal service. Subscribing, the app, and the
             sandbox do not make us your attorney or establish attorney-client
             privilege. Legal advice, representation, and lawyer review require a
-            separate retainer with Lex Tecnica and must be prepaid.
+            separate engagement and must be prepaid.
       - - text: >-
             Attorney advertisement. Data removal does not guarantee that a
             company will comply or prevent a future leak. Monitoring and

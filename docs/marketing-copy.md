@@ -272,29 +272,33 @@ links use the same Notion booking calendar as Neon and Vesta. Plus Jakarta Sans 
 Pricing uses the shared `PricingSection` with the brand palette and typeface. The cloak crossing an internet grid is
 decorative; reduced-motion preferences disable animation. The Solana section carries the approved request-record and
 litigation copy. The page uses the same footer treatment as Neon and Vesta. The subscription is also called [Neon Law
-Nautilus](glossary/neon-law-nautilus.md). Neon publishes Nautilus at `/` and `/nautilus` from
-`neon/locales/en/neon/nautilus.yaml`. The page opens by asking "What is your legal need?" and answers inside the first
-screen: a `needs` card band names each piece of paperwork the subscription covers (an LLC, a will, a name change, small
-claims, an NDA, an offer letter, a privacy policy, data removal, unclaimed property) and links each to its notation or
-to enrollment. Pricing follows, then the steps, which describe the enrollment the page actually offers. An `app_preview`
-band draws an iPhone in its body proportions, listing every check as an equal peer: data removal, privacy protection,
-credit monitoring, dark web monitoring, identity theft insurance, unclaimed property, estate planning, and basic form
-filings. Its `android_items` draw a Pixel beside it with a second screen, the paperwork view; screens are labelled
-illustrative. The page wears the same light surface as the Notations index, with a short hero so the cards sit under the
-question. The page sells the subscription as cancel-anytime, with LLC formation and the contract-template library
-included. Its listing price, like the $29/mo and $290/year pricing cards, resolves from DeleteYourData's home catalog.
-The store badges read "Coming soon" and link nowhere until the apps are published. Nautilus is a non-legal service:
-legal work is a separate, prepaid retainer with the partner firm Lex Tecnica. Lex Tecnica sets its own fees and the page
-publishes no price for legal work; the private legal sandbox includes $5 of model usage a month, then is priced à la
-carte by Lex Tecnica. Monitoring and insurance coverage are confirmed before activation. Its CTA opens a three-step
+Nautilus](glossary/neon-law-nautilus.md). Neon publishes Nautilus at `/nautilus` from
+`neon/locales/en/neon/nautilus.yaml`. An `app_preview` band draws an iPhone in its body proportions, listing every check
+as an equal peer: data removal, privacy protection, credit monitoring, dark web monitoring, identity theft insurance,
+unclaimed property, estate planning, and basic form filings. Its `android_items` draw a Pixel beside it with a second
+screen, the paperwork view; screens are labelled illustrative. The ocean palette fills the viewport, header to
+enrollment band, and the shell swims through the opening screen; reduced-motion preferences hold it still. The page
+sells the subscription as cancel-anytime, billed through the App Store or Google Play, with LLC formation and the
+contract-template library included. Its listing price, like the $29/mo and $290/year pricing cards, resolves from
+DeleteYourData's home catalog. The store badges read "Coming soon" and link nowhere until the apps are published. A
+lawyer review starts at $20 and is prepaid; the private legal sandbox includes $5 of model usage a month, then is priced
+à la carte by Lex Tecnica. Monitoring and insurance coverage are confirmed before activation. Its CTA opens a three-step
 public contact intake before sign-in; the signed-in page exposes the configured enrollment booking link. DocuSign
 paperwork follows the enrollment review. The page expressly distinguishes privacy from attorney-client privilege. Every
 other brand host answers `/nautilus` with a 404.
 
-Neon's header names its three products: Nautilus at `/`, Navigator at `/navigator`, and Notations at `/notations`. Its
-fee schedule stays at `/services`. Business counsel is not sold separately: `/business` answers a 301 to `/`, because
-formation and the contract templates are part of the Nautilus subscription. The `/disputes` route returns a 404. Other
-brands retain their own home layouts. The business template inventory is documented in [business
+Neon's home at `/` reads `neon/locales/en/neon/home-marketing.yaml` and wears the `home` skin: the light surface of the
+Notations index with a short hero. It opens by asking "What is your legal need?" and answers inside the first screen: a
+`needs` card band names each piece of paperwork the Nautilus subscription covers (an LLC, a will, a name change, small
+claims, an NDA, an offer letter, a privacy policy, data removal, unclaimed property) and links each to its notation or
+to enrollment. Pricing, the enrollment steps, the app preview, and the enrollment intake follow, resolving the same
+prices as `/nautilus`. The home publishes no price for legal work: legal work is a separate, prepaid retainer with the
+partner firm Lex Tecnica, which sets its own fees.
+
+Neon's header names its three products: Nautilus at `/nautilus`, Navigator at `/navigator`, and Notations at
+`/notations`. Its fee schedule stays at `/services`. Business counsel is not sold separately: `/business` answers a 301
+to `/`, because formation and the contract templates are part of the Nautilus subscription. The `/disputes` route
+returns a 404. Other brands retain their own home layouts. The business template inventory is documented in [business
 notations](business-notations.md).
 
 ## A copy-only pull request

@@ -146,10 +146,10 @@ const FIRM_NAV: &[NavLink] = &[
 ];
 
 /// Neon's header names its three products: Nautilus, the subscription at
-/// `/`; Navigator, the engine; and Notations, the document format. The shared
+/// `/nautilus`; Navigator, the engine; and Notations, the document format. The shared
 /// footer row still links Navigator and Notations for every brand.
 const NEON_NAV: &[NavLink] = &[
-    NavLink::leaf("Nautilus", "/"),
+    NavLink::leaf("Nautilus", "/nautilus"),
     NavLink::leaf("Navigator", "/navigator"),
     NavLink::leaf("Notations", "/notations"),
 ];
@@ -2784,7 +2784,7 @@ mod tests {
         assert_eq!(
             nav,
             [
-                ("Nautilus", "/"),
+                ("Nautilus", "/nautilus"),
                 ("Navigator", "/navigator"),
                 ("Notations", "/notations"),
             ]

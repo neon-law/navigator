@@ -45,6 +45,9 @@ const NEON_GATEWAY_DELETE_YOUR_DATA_YAML: &str =
     include_str!("../locales/en/neon/gateway-delete-your-data.yaml");
 /// Nautilus subscription and optional Vesta Death Check.
 const NEON_NAUTILUS_YAML: &str = include_str!("../locales/en/neon/nautilus.yaml");
+/// Neon's home: the question "What is your legal need?" over the needs the
+/// Nautilus subscription covers.
+const NEON_HOME_MARKETING_YAML: &str = include_str!("../locales/en/neon/home-marketing.yaml");
 /// `/immigration` — Neon's own gateway to the Abhaya Immigration practice.
 /// Same family as [`NEON_GATEWAY_DELETE_YOUR_DEBT_YAML`].
 const NEON_GATEWAY_IMMIGRATION_YAML: &str =
@@ -199,6 +202,7 @@ pub fn catalog_yaml(key: BrandKey, page: &str) -> Option<&'static str> {
         (BrandKey::Neon, "navigator") => Some(NEON_NAVIGATOR_YAML),
         (BrandKey::Neon, "legal-aid") => Some(NEON_LEGAL_AID_YAML),
         (BrandKey::Neon, "nautilus") => Some(NEON_NAUTILUS_YAML),
+        (BrandKey::Neon, "home-marketing") => Some(NEON_HOME_MARKETING_YAML),
         (BrandKey::Neon, "gateway-delete-your-debt") => Some(NEON_GATEWAY_DELETE_YOUR_DEBT_YAML),
         (BrandKey::Neon, "gateway-delete-your-data") => Some(NEON_GATEWAY_DELETE_YOUR_DATA_YAML),
         (BrandKey::Neon, "gateway-immigration") => Some(NEON_GATEWAY_IMMIGRATION_YAML),
@@ -448,6 +452,7 @@ fn page_skin(skin: PageSkin) -> webapp::marketing_page::PageSkin {
         PageSkin::Marketing => webapp::marketing_page::PageSkin::Marketing,
         PageSkin::Practice => webapp::marketing_page::PageSkin::Practice,
         PageSkin::Nautilus => webapp::marketing_page::PageSkin::Nautilus,
+        PageSkin::Home => webapp::marketing_page::PageSkin::Home,
     }
 }
 
@@ -1618,7 +1623,16 @@ pub fn iep_home(branding: &views::brand::Branding, _deployment_host: Option<&str
 
 /// Nautilus uses the same prices and billing periods as `DeleteYourData`.
 pub fn nautilus(branding: &views::brand::Branding, _deployment_host: Option<&str>) -> PageContent {
-    let mut content = marketing_page(load_page(branding, "nautilus"), None, branding);
+    subscription_page(branding, "nautilus")
+}
+
+/// Neon's home sells the same subscription, so it resolves the same prices.
+pub fn neon_home(branding: &views::brand::Branding, _deployment_host: Option<&str>) -> PageContent {
+    subscription_page(branding, "home-marketing")
+}
+
+fn subscription_page(branding: &views::brand::Branding, page: &str) -> PageContent {
+    let mut content = marketing_page(load_page(branding, page), None, branding);
     let privacy = home(&views::brand::DELETE_YOUR_DATA_BRANDING).privacy;
     for band in &mut content.bands {
         match band {
@@ -2573,6 +2587,7 @@ mod tests {
                 include_str!("../locales/en/neon/gateway-delete-your-data.yaml"),
             ),
             ("Nautilus", include_str!("../locales/en/neon/nautilus.yaml")),
+            ("Neon home", NEON_HOME_MARKETING_YAML),
             ("Vesta", include_str!("../locales/en/vesta/home.yaml")),
             (
                 "Cyber Injury Law",
@@ -2593,6 +2608,12 @@ mod tests {
                 "{name}"
             );
             for retired in ["$30", "$300", "$20", "$200", "additional member"] {
+                // Nautilus prices a lawyer review "From $20"; the retired
+                // $20 offer was a subscription price, which carries a cadence.
+                if name == "Nautilus" && retired == "$20" {
+                    assert!(!text.contains("$20/"), "{name}: retired offer {retired}");
+                    continue;
+                }
                 assert!(!text.contains(retired), "{name}: retired offer {retired}");
             }
         }
@@ -2693,7 +2714,8 @@ mod tests {
                 "Identity theft insurance",
                 "Unclaimed property",
                 "Estate planning",
-                "Priced by Lex Tecnica",
+                "From $20",
+                "Lex Tecnica",
                 "App Store",
                 "Google Play",
                 "legal fees are excluded",
@@ -2714,6 +2736,20 @@ mod tests {
             }
             assert!(!text.contains("$50"), "{host}: the retired price survives");
         }
+    }
+
+    /// The home asks the question, lists the needs first, and prices the
+    /// subscription from the same catalog as `/nautilus`.
+    #[test]
+    fn neon_home_asks_the_legal_need_and_resolves_the_nautilus_prices() {
+        let content = neon_home(&views::brand::DEFAULT_BRANDING, None);
+        assert_eq!(content.tagline, "What is your legal need?");
+        assert!(content.skin == webapp::marketing_page::PageSkin::Home);
+        let json = serde_yaml::to_string(&content).expect("home serializes");
+        for copy in ["Start an LLC", "$29/mo", "$290/year", "Priced by Lex Tecnica"] {
+            assert!(json.contains(copy), "home copy: {copy}");
+        }
+        assert!(!json.contains("From $20"), "the home publishes no legal price");
     }
 
     #[test]

@@ -224,6 +224,7 @@ async fn the_home_publishes_nautilus_and_links_the_three_products() {
         r#"data-phone="android""#,
         "Cancel anytime",
         "Form an LLC",
+        r#"href="/nautilus""#,
         r#"href="/navigator""#,
         r#"href="/notations""#,
     ] {
@@ -232,6 +233,10 @@ async fn the_home_publishes_nautilus_and_links_the_three_products() {
     for retired in [r#"href="/business""#, "company-pricing"] {
         assert!(!body.contains(retired), "{retired} survives: {body}");
     }
+    // The product page keeps its own headline; only the home asks the question.
+    let nautilus = body_string(anon_get(&app, "/nautilus").await).await;
+    assert!(nautilus.contains("Your shell in a connected world."));
+    assert!(!nautilus.contains("What is your legal need?"));
     assert_eq!(
         anon_get(&app, "/disputes").await.status(),
         StatusCode::NOT_FOUND

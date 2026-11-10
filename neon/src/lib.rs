@@ -344,7 +344,7 @@ pub fn llms_txt(state: &AppState, key: BrandKey) -> portal::LlmsTxt {
             let mark = views::brand::FIRM_BRAND.site_name;
             portal::LlmsTxt {
                 title: mark.to_string(),
-                summary: locales::nautilus(&views::brand::DEFAULT_BRANDING, None).meta_description,
+                summary: locales::neon_home(&views::brand::DEFAULT_BRANDING, None).meta_description,
                 pages: indexed_pages(mark),
                 sections: [("Workshop Corpus", "workshops")]
                     .into_iter()
@@ -383,7 +383,7 @@ fn indexed_pages(mark: &str) -> Vec<portal::LlmsTxtLink> {
         indexed_page(
             mark,
             "/",
-            &locales::nautilus(&views::brand::DEFAULT_BRANDING, None).meta_description,
+            &locales::neon_home(&views::brand::DEFAULT_BRANDING, None).meta_description,
         ),
         indexed_page(
             "Debt relief with PandA Law",
@@ -407,8 +407,8 @@ fn indexed_pages(mark: &str) -> Vec<portal::LlmsTxtLink> {
              $290/year prepaid, cancel anytime: data removal, privacy protection, credit \
              monitoring, dark web monitoring, identity theft insurance, unclaimed property, estate \
              planning, contract templates, and basic form filings such as forming an LLC. \
-             Government fees are separate. Legal fees are excluded and must be prepaid; legal \
-             work is a separate retainer priced by the partner firm Lex Tecnica. Coming to iPhone and Android.",
+             Government fees are separate. Legal fees are excluded and must be prepaid; a lawyer \
+             review starts at $20. Coming to iPhone and Android.",
         ),
     ];
     pages.extend(immigration_indexed_pages());
