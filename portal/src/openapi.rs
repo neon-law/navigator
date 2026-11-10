@@ -6119,6 +6119,10 @@ pub fn documented_operations() -> Vec<(String, String)> {
 /// of that pressure, so it needs a reason a reader can disagree with.
 pub const TOOLS_WITHOUT_AN_API_OPERATION: &[(&str, &str)] = &[
     (
+        "list_templates",
+        "Public bundled Template metadata and intent clarification are compiled reference lookups, with no API command twin.",
+    ),
+    (
         "project_skill_list",
         "No route today. Project Skills are compiled reference data; the CLI and MCP share rules::project_skill_catalog.",
     ),
