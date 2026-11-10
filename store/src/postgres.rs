@@ -12,6 +12,8 @@ pub mod people;
 /// first, consume second, with the guarded status machine the replay sweep
 /// drains by.
 pub mod forgejo_push_webhook_journal;
+#[cfg(test)]
+mod forgejo_push_webhook_journal_tests;
 
 /// PostgreSQL-authoritative Inbox slice (LAW-238 D0): ingest, dedup, threading,
 /// attribution, and the reads the renderers use, behind an opt-in cutover flag.
