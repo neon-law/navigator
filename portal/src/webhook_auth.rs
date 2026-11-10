@@ -51,6 +51,26 @@ pub fn verify_hmac_sha256_b64(key: &[u8], body: &[u8], provided_b64: &str) -> bo
     mac.verify_slice(&provided).is_ok()
 }
 
+/// Verify a hex-encoded HMAC-SHA256 digest over `body` keyed by `key`.
+/// This is Forgejo's signature shape: the `X-Forgejo-Signature` header
+/// carries the digest as lowercase hex. Same discipline as
+/// [`verify_hmac_sha256_b64`]: a malformed header is as untrusted as a
+/// wrong one, and the compare is constant-time.
+#[must_use]
+pub fn verify_hmac_sha256_hex(key: &[u8], body: &[u8], provided_hex: &str) -> bool {
+    let Ok(provided) = hex::decode(provided_hex.trim()) else {
+        return false;
+    };
+    // `new_from_slice` only errors on a zero-length key for some MAC
+    // backends; HMAC accepts any key length, so this never fails in
+    // practice — treat an error as "cannot verify" = untrusted.
+    let Ok(mut mac) = Hmac::<Sha256>::new_from_slice(key) else {
+        return false;
+    };
+    mac.update(body);
+    mac.verify_slice(&provided).is_ok()
+}
+
 /// Compute the base64-encoded HMAC-SHA256 digest of `body` keyed by
 /// `key`. The signing side of [`verify_hmac_sha256_b64`]; used by tests
 /// (and any local tooling) to forge a *valid* provider callback so the
@@ -60,6 +80,17 @@ pub fn sign_hmac_sha256_b64(key: &[u8], body: &[u8]) -> String {
     let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts any key length");
     mac.update(body);
     base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes())
+}
+
+/// Compute the hex-encoded HMAC-SHA256 digest of `body` keyed by `key`.
+/// The signing side of [`verify_hmac_sha256_hex`]; like
+/// [`sign_hmac_sha256_b64`], used by tests and local tooling to forge a
+/// *valid* Forgejo delivery without a live Forgejo.
+#[must_use]
+pub fn sign_hmac_sha256_hex(key: &[u8], body: &[u8]) -> String {
+    let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts any key length");
+    mac.update(body);
+    hex::encode(mac.finalize().into_bytes())
 }
 
 /// Verify SendGrid's "Signed Event Webhook" ECDSA/P-256 signature.
