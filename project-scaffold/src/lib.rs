@@ -685,7 +685,11 @@ mod tests {
         assert!(run_of("notify").starts_with("navigator project notify-main-push --ci"));
         assert_eq!(jobs["notify"]["if"].as_str(), Some("always()"));
         assert!(jobs["notify"]["continue-on-error"].is_null());
-        let notify_step = jobs["notify"]["steps"].as_sequence().unwrap().last().unwrap();
+        let notify_step = jobs["notify"]["steps"]
+            .as_sequence()
+            .unwrap()
+            .last()
+            .unwrap();
         assert_eq!(notify_step["continue-on-error"].as_bool(), Some(true));
         for job in ["documents", "seeds", "notify"] {
             assert_eq!(jobs[job]["enable-openid-connect"].as_bool(), Some(true));
