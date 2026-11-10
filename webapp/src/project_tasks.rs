@@ -16,7 +16,7 @@
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::components::{Badge, BadgeTone, Choice, Empty, Field, FormCard, Heading};
+use crate::components::{Badge, BadgeTone, Choice, Empty, Field, FormCard};
 #[cfg(feature = "server")]
 use crate::people::ViewerRole;
 
@@ -211,6 +211,7 @@ pub fn TasksTab(
             )
             .collect();
 
+    let error_shown = error.is_some();
     rsx! {
         section { class: "lawyer-detail__section lawyer-detail__tasks",
             h2 { "Tasks" }
@@ -301,7 +302,7 @@ pub fn TasksTab(
                 title: "Add a task".to_string(),
                 action: "/app/projects/{code}/tasks",
                 submit_label: "Add task".to_string(),
-                heading: Heading::H2,
+                disclosure: Some(error_shown || tasks.is_empty()),
                 csrf_token: Some(csrf.clone()),
                 fields: vec![
                     Field::text("Title", "title", "")

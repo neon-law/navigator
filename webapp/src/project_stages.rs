@@ -21,7 +21,7 @@
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::components::{Badge, BadgeTone, Choice, Empty, Field, FormCard, Heading};
+use crate::components::{Badge, BadgeTone, Choice, Empty, Field, FormCard};
 #[cfg(feature = "server")]
 use crate::people::ViewerRole;
 
@@ -96,6 +96,7 @@ pub fn StageSection(
     #[props(default)]
     error: Option<String>,
 ) -> Element {
+    let error_shown = error.is_some();
     rsx! {
         section { class: "lawyer-detail__section lawyer-detail__stage",
             h2 { "Case stage" }
@@ -122,6 +123,9 @@ pub fn StageSection(
                 },
             }
             if !stage.history.is_empty() {
+                // The current stage is the fact; how the matter got there is
+                // the record, one click away rather than a table down the page.
+                crate::components::Accordion { title: format!("Stage history ({})", stage.history.len()),
                 div { class: "nav-table-wrap",
                     table { class: "nav-table",
                         thead {
@@ -148,6 +152,7 @@ pub fn StageSection(
                         }
                     }
                 }
+                }
             }
             if stage.definitions.is_empty() {
                 Empty {
@@ -170,7 +175,7 @@ pub fn StageSection(
                             title: "Set stage".to_string(),
                             action: "/app/projects/{code}/stages/set",
                             submit_label: "Set stage".to_string(),
-                            heading: Heading::H2,
+                            disclosure: Some(error_shown || stage.current.is_none()),
                             csrf_token: Some(csrf.clone()),
                             fields: vec![
                                 Field::select("Stage", "stage_id", choices, selected)
