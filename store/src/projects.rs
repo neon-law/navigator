@@ -1737,6 +1737,28 @@ pub fn code_from_name(name: &str, project_id: Uuid) -> String {
     format!("{base}-{suffix}")
 }
 
+/// How many hex characters of the digest a [`random_code`] keeps: 64 bits,
+/// so two self-serve intakes never meet on one code in practice.
+const RANDOM_CODE_LEN: usize = 16;
+
+/// A fresh, unguessable matter code for a Project opened by self-serve
+/// intake: the leading hex of a SHA-256 over 32 random bytes. It carries
+/// nothing about the client — the code is a URL segment, a repository name,
+/// and a storage prefix, so a name- or email-derived code would publish it.
+#[must_use]
+pub fn random_code() -> String {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write as _;
+    let seed: [u8; 32] = rand::random();
+    Sha256::digest(seed).iter().take(RANDOM_CODE_LEN / 2).fold(
+        String::with_capacity(RANDOM_CODE_LEN),
+        |mut out, byte| {
+            let _ = write!(out, "{byte:02x}");
+            out
+        },
+    )
+}
+
 /// Normalize a manually supplied matter code. Returns `None` when the
 /// input is blank.
 #[must_use]
@@ -6287,6 +6309,24 @@ mod onboarding_status_tests {
         assert_eq!(
             OnboardingStatus::from_completed_envelope(false),
             OnboardingStatus::Pitch
+        );
+    }
+
+    #[test]
+    fn a_random_code_is_a_valid_unique_hex_code() {
+        let first = super::random_code();
+        assert_eq!(first.len(), 16, "{first}");
+        assert!(
+            first
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()),
+            "{first}"
+        );
+        assert!(super::is_valid_code(&first), "{first}");
+        assert_ne!(
+            first,
+            super::random_code(),
+            "each call draws fresh randomness"
         );
     }
 }

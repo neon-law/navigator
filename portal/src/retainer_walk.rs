@@ -264,10 +264,7 @@ pub(crate) async fn open_intake_matter(
     let project = match store::projects::create(
         surreal,
         &store::projects::NewProject {
-            code: store::projects::code_from_name(
-                &format!("(pending) {client_email}"),
-                Uuid::now_v7(),
-            ),
+            code: store::projects::random_code(),
             name: format!("(pending) {client_email}"),
             status: status.to_string(),
             brand: brand.as_str().to_string(),

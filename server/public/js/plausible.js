@@ -15,6 +15,11 @@
 // carries as `data-booking`. Plausible records each event's page, and the
 // visit's source and `utm_*` campaign, itself; the props name only the link
 // followed — the firm's own number or URL — never anything the visitor typed.
+//
+// Any element marked `data-funnel-event="<Goal>"` reports that goal when
+// clicked, so a funnel step is declared in the markup that renders it. The
+// event carries no props: Plausible's own page and source dimensions are the
+// segments.
 window.plausible =
   window.plausible ||
   function () {
@@ -33,6 +38,8 @@ plausible.init({ outboundLinks: true, formSubmissions: true });
   document.addEventListener(
     "click",
     function (event) {
+      var named = event.target.closest && event.target.closest("[data-funnel-event]");
+      if (named) plausible(named.dataset.funnelEvent);
       var link = event.target.closest && event.target.closest("a[href]");
       if (!link) return;
       if (link.protocol === "tel:") {
