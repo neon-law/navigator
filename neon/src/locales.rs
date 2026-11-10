@@ -2746,10 +2746,18 @@ mod tests {
         assert_eq!(content.tagline, "What is your legal need?");
         assert!(content.skin == webapp::marketing_page::PageSkin::Home);
         let json = serde_yaml::to_string(&content).expect("home serializes");
-        for copy in ["Start an LLC", "$29/mo", "$290/year", "Priced by Lex Tecnica"] {
+        for copy in [
+            "Start an LLC",
+            "$29/mo",
+            "$290/year",
+            "Priced by Lex Tecnica",
+        ] {
             assert!(json.contains(copy), "home copy: {copy}");
         }
-        assert!(!json.contains("From $20"), "the home publishes no legal price");
+        assert!(
+            !json.contains("From $20"),
+            "the home publishes no legal price"
+        );
     }
 
     #[test]
