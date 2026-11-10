@@ -1532,7 +1532,16 @@ mod tests {
                 ),
             ),
             ("20261108130000_add_notation_creation_attempt.sql", include_str!("../postgres/migrations/20261108130000_add_notation_creation_attempt.sql")),
-            ("20261109120000_add_project_status_transition.sql", include_str!("../postgres/migrations/20261109120000_add_project_status_transition.sql")),
+            (
+                "20261109120000_add_project_status_transition.sql",
+                include_str!("../postgres/migrations/20261109120000_add_project_status_transition.sql"),
+            ),
+            (
+                "20261110000000_create_forgejo_push_webhook_journal.sql",
+                include_str!(
+                    "../postgres/migrations/20261110000000_create_forgejo_push_webhook_journal.sql"
+                ),
+            ),
             (
                 "20261110120000_add_lead_consent_call_opt_in.sql",
                 include_str!(

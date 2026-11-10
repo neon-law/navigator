@@ -8,6 +8,11 @@ use sqlx::{AssertSqlSafe, PgPool, SqlSafeStr};
 pub mod notation_creation_attempts;
 pub mod people;
 
+/// PostgreSQL journal of verified Forgejo push webhook receipts: journal
+/// first, consume second, with the guarded status machine the replay sweep
+/// drains by.
+pub mod forgejo_push_webhook_journal;
+
 /// PostgreSQL-authoritative Inbox slice (LAW-238 D0): ingest, dedup, threading,
 /// attribution, and the reads the renderers use, behind an opt-in cutover flag.
 pub mod inbox;
