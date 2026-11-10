@@ -38,14 +38,25 @@ pub const PLAUSIBLE_ORIGIN: &str = "https://plausible.io";
 pub const PLAUSIBLE_LOADER_HREF: &str = "/public/js/plausible.js";
 
 /// The goals the browser reports, as each site's Goals panel must name them:
-/// a `tel:` click, a booking-link click (both fired by the loader), and
+/// a `tel:` click, a booking-link click (both fired by the loader),
 /// Plausible's own outbound-link and form-submission events, which the
-/// loader's `init()` turns on.
-pub const BROWSER_GOALS: [&str; 4] = [
+/// loader's `init()` turns on, and the [`MARKUP_GOALS`].
+pub const BROWSER_GOALS: [&str; 7] = [
     "Phone: Clicked",
     "Booking: Clicked",
     "Outbound Link: Click",
     "Form: Submission",
+    MARKUP_GOALS[0],
+    MARKUP_GOALS[1],
+    MARKUP_GOALS[2],
+];
+
+/// The funnel steps declared in page markup with `data-funnel-event`, which
+/// the loader reports on click.
+pub const MARKUP_GOALS: [&str; 3] = [
+    webapp::notation_preview::FORM_VIEWED_GOAL,
+    webapp::notation_preview::EDIT_CLICKED_GOAL,
+    webapp::notation_preview::RUN_CLICKED_GOAL,
 ];
 const UNCONFIGURED_AEGIS_ID: &str = "pa-unconfigured-aegis";
 const UNCONFIGURED_GROUNDWORK_ID: &str = "pa-unconfigured-groundwork";
@@ -293,7 +304,7 @@ impl ConversionReporter {
 mod tests {
     use super::{
         conversion_domain, enabled_from, script_id, ConversionGoal, ConversionReporter,
-        PlausibleSite, BROWSER_GOALS, PLAUSIBLE_LOADER_HREF,
+        PlausibleSite, BROWSER_GOALS, MARKUP_GOALS, PLAUSIBLE_LOADER_HREF,
     };
     use views::brand::BrandKey;
 
@@ -387,9 +398,16 @@ mod tests {
     #[test]
     fn the_loader_fires_every_browser_goal() {
         let loader = include_str!("../../server/public/js/plausible.js");
-        for goal in BROWSER_GOALS {
+        for goal in BROWSER_GOALS
+            .iter()
+            .filter(|goal| !MARKUP_GOALS.contains(goal))
+        {
             assert!(loader.contains(&format!("\"{goal}\"")), "{goal}");
         }
+        assert!(
+            loader.contains("dataset.funnelEvent"),
+            "the markup goals' hook"
+        );
         assert!(loader.contains("outboundLinks: true, formSubmissions: true"));
     }
 

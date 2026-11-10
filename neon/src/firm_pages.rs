@@ -385,6 +385,24 @@ const FORM_WA_SMALL_CLAIMS_PLAINTIFF_PACKET: &str = include_str!(
     "../../templates/notations/forms/united_states/washington/king_county_district_court/wa__small_claims_plaintiff_packet.md"
 );
 
+/// Every published notation whose Workflow the start door may open intake
+/// for: one per show page that declares a `workflow:`, keyed by its slug, with
+/// the template code its source file names.
+fn notation_start_offers() -> Vec<portal::start_door::NotationOffer> {
+    notation_preview_docs()
+        .into_iter()
+        .filter(|doc| !doc.demo_workflow.is_empty())
+        .filter_map(|doc| {
+            let file = doc.source_href.rsplit('/').next()?;
+            Some(portal::start_door::NotationOffer {
+                template_code: file.strip_suffix(".md")?.to_string(),
+                slug: doc.slug,
+                title: doc.title,
+            })
+        })
+        .collect()
+}
+
 /// Every bundled notation's show-page content — the sample letters, fixture
 /// filings, and every government form — the content
 /// [`portal::dioxus_app::notation_preview_router`] serves at
@@ -1583,7 +1601,11 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
             .as_ref()
             .map(|catalog| catalog.purchase.clone()),
     ));
-    routers.push(portal::start_door::routes(state, services_catalog));
+    routers.push(portal::start_door::routes(
+        state,
+        services_catalog,
+        notation_start_offers(),
+    ));
     routers
         .into_iter()
         .map(|router| router.layer(from_fn(reject_unpublished_firm_path)))

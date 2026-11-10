@@ -36,6 +36,10 @@ pub fn ExternalLink(
     #[props(default)] class: Option<String>,
     #[props(default)] title: Option<String>,
     #[props(default)] current: bool,
+    /// The Plausible goal a click reports, through the loader's
+    /// `data-funnel-event` hook.
+    #[props(default)]
+    funnel_event: Option<String>,
     children: Element,
 ) -> Element {
     rsx! {
@@ -44,6 +48,7 @@ pub fn ExternalLink(
             class: class,
             title: title,
             "aria-current": if current { Some("page") } else { None },
+            "data-funnel-event": funnel_event,
             target: "_blank",
             rel: "noopener noreferrer",
             {children}

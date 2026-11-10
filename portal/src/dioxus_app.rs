@@ -4217,6 +4217,7 @@ async fn inject_notation_preview(
         return (StatusCode::NOT_FOUND, webapp::error_pages::not_found()).into_response();
     };
     let content = webapp::notation_preview::NotationPreviewContent {
+        slug: found.slug.clone(),
         title: found.title.clone(),
         source_href: found.source_href.clone(),
         frontmatter: found.frontmatter.clone(),

@@ -15,6 +15,9 @@ use crate::public_chrome::{PublicChrome, PublicFooter, PublicHeader};
 pub struct StartDoorContent {
     pub service_id: String,
     pub service_name: String,
+    /// The door's own path, which the confirmation form posts back to.
+    #[serde(default)]
+    pub action: String,
     pub disclosure: String,
     pub refusal: String,
     pub start_label: String,
@@ -92,7 +95,7 @@ pub fn StartDoorPage(
                 h1 { "{content.service_name}" }
                 p { class: "start-door__disclosure", "{content.disclosure}" }
                 if content.can_start {
-                    form { method: "post", action: "/start/{content.service_id}",
+                    form { method: "post", action: "{content.action}",
                         input { type: "hidden", name: "_csrf", value: "{csrf_token}" }
                         button { class: "nav-btn nav-btn--primary", r#type: "submit",
                             "{content.start_label}"
@@ -135,6 +138,7 @@ mod tests {
         let html = render(StartDoorContent {
             service_id: "llc-file".into(),
             service_name: "Start a company".into(),
+            action: "/start/llc-file".into(),
             disclosure: "Disclosure copy".into(),
             refusal: "Refusal copy".into(),
             start_label: "Start".into(),
@@ -152,6 +156,7 @@ mod tests {
         let html = render(StartDoorContent {
             service_id: "llc-file".into(),
             service_name: "Start a company".into(),
+            action: "/start/llc-file".into(),
             disclosure: "Disclosure copy".into(),
             refusal: "Refusal copy".into(),
             start_label: "Start".into(),

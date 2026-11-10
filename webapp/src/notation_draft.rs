@@ -131,6 +131,7 @@ pub fn project_draft_source(source: &str) -> NotationPreviewContent {
         })
         .collect();
     NotationPreviewContent {
+        slug: String::new(),
         title: doc.title.clone(),
         source_href: String::new(),
         demo_questions,
@@ -272,6 +273,7 @@ mod tests {
 
     fn draft_content() -> NotationPreviewContent {
         NotationPreviewContent {
+            slug: String::new(),
             title: "Engagement Letter".to_string(),
             source_href: String::new(),
             frontmatter: "title: Engagement Letter\ncode: engagement__letter".to_string(),

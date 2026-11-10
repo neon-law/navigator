@@ -1,6 +1,10 @@
 //! The authenticated visitor's service start door.
 //!
-//! A service card names the only services this route can open. The visitor's
+//! A service card names the only services `/start/{service_id}` can open, and
+//! a published notation's Workflow section names the only notations
+//! `/notations/{slug}/start` can open. Either door runs the same intake: it
+//! opens a Project under a [`store::projects::random_code`] and the Firm's
+//! intake notation. The visitor's
 //! ordinary session supplies the client Person; the boot-resolved lawyer DRI
 //! supplies the firm-side participant. The route performs the same immediate
 //! commits as the existing lawyer walk and compensates them on refusal.
@@ -21,6 +25,8 @@ use crate::{gated, AppState, SessionData};
 
 /// The brand-mounted start route.
 pub const START_PATH: &str = "/start/{service_id}";
+/// The notation-mounted start route a published notation's Workflow links to.
+pub const NOTATION_START_PATH: &str = "/notations/{slug}/start";
 const MAX_BODY_BYTES: usize = 8 * 1024;
 const ON_CALL_ENV: &str = "NAVIGATOR_ON_CALL_LAWYER_EMAIL";
 
@@ -38,10 +44,59 @@ pub(crate) fn bundled_start_copy() -> Option<views::locales::services::StartDoor
     .clone()
 }
 
+/// A published notation a signed-in client may start intake for.
+#[derive(Clone, Debug)]
+pub struct NotationOffer {
+    /// The `/notations/{slug}` path segment.
+    pub slug: String,
+    pub title: String,
+    pub template_code: String,
+}
+
 #[derive(Clone)]
 struct DoorState {
     app: AppState,
     catalog: Option<views::locales::services::ServicesCatalog>,
+    /// `Some` for the notation door, whose ids are notation slugs.
+    notations: Option<std::sync::Arc<Vec<NotationOffer>>>,
+}
+
+/// What one door opens, from either a service card or a notation.
+struct Offer {
+    name: String,
+    blurb: String,
+    template: String,
+    /// The door's own path: the form's action and the conversion's page.
+    path: String,
+    /// The funnel's `service_id`: the service id, or `notation:{slug}`.
+    funnel_id: String,
+}
+
+impl DoorState {
+    fn offer(&self, id: &str) -> Option<Offer> {
+        if let Some(notations) = &self.notations {
+            return notations.iter().find(|n| n.slug == id).map(|n| Offer {
+                name: n.title.clone(),
+                blurb: n.title.clone(),
+                template: n.template_code.clone(),
+                path: NOTATION_START_PATH.replace("{slug}", &n.slug),
+                funnel_id: format!("notation:{}", n.slug),
+            });
+        }
+        let service = self
+            .catalog
+            .as_ref()?
+            .services
+            .iter()
+            .find(|s| s.id == id)?;
+        Some(Offer {
+            name: service.name.clone(),
+            blurb: service.blurb.clone(),
+            template: service.template.clone()?,
+            path: START_PATH.replace("{service_id}", &service.id),
+            funnel_id: service.id.clone(),
+        })
+    }
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -58,14 +113,29 @@ struct StartForm {
 pub fn routes(
     state: &AppState,
     catalog: Option<views::locales::services::ServicesCatalog>,
+    notations: Vec<NotationOffer>,
 ) -> Router {
-    let door_state = DoorState {
+    let notation_state = DoorState {
         app: state.clone(),
-        catalog,
+        catalog: catalog.clone(),
+        notations: Some(std::sync::Arc::new(notations)),
     };
+    door_routes(
+        state,
+        START_PATH,
+        DoorState {
+            app: state.clone(),
+            catalog,
+            notations: None,
+        },
+    )
+    .merge(door_routes(state, NOTATION_START_PATH, notation_state))
+}
+
+fn door_routes(state: &AppState, path: &'static str, door_state: DoorState) -> Router {
     let render = Router::<FullstackState>::new()
         .route(
-            START_PATH,
+            path,
             get(render_handler)
                 .layer(from_fn(inject_public_context))
                 .layer(from_fn_with_state(door_state.clone(), inject_start_content))
@@ -77,7 +147,7 @@ pub fn routes(
             webapp::start_door::StartDoorEntry,
         ));
     let command = Router::new()
-        .route(START_PATH, post(post_start))
+        .route(path, post(post_start))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .route_layer(from_fn_with_state(
             (state.sessions.clone(), CsrfMode::Strict),
@@ -117,14 +187,11 @@ async fn inject_start_content(
         return StatusCode::NOT_FOUND.into_response();
     };
     let Some(catalog) = state.catalog.as_ref() else {
-        insert_refusal(&mut req, service_id, None);
+        let path = START_PATH.replace("{service_id}", &service_id);
+        insert_refusal(&mut req, service_id, path, None);
         return next.run(req).await;
     };
-    let Some(service) = catalog
-        .services
-        .iter()
-        .find(|service| service.id == service_id && service.template.is_some())
-    else {
+    let Some(offer) = state.offer(&service_id) else {
         return StatusCode::NOT_FOUND.into_response();
     };
     let brand = views::brand::brand_key();
@@ -140,7 +207,8 @@ async fn inject_start_content(
         .insert(webapp::start_door::InjectedStartDoor(
             webapp::start_door::StartDoorContent {
                 service_id,
-                service_name: service.name.clone(),
+                service_name: offer.name,
+                action: offer.path,
                 disclosure: catalog.start.disclosure.clone(),
                 refusal: catalog.start.refusal.clone(),
                 start_label: catalog.start.label.clone(),
@@ -153,6 +221,7 @@ async fn inject_start_content(
 fn insert_refusal(
     req: &mut Request,
     service_id: String,
+    action: String,
     catalog: Option<&views::locales::services::ServicesCatalog>,
 ) {
     let (disclosure, refusal, start_label) = catalog.map_or_else(
@@ -178,6 +247,7 @@ fn insert_refusal(
             webapp::start_door::StartDoorContent {
                 service_id,
                 service_name: String::new(),
+                action,
                 disclosure,
                 refusal,
                 start_label,
@@ -193,10 +263,10 @@ fn insert_refusal(
 /// writer refuses a term whose question the opened notation's
 /// questionnaire does not declare, so a template without a state simply
 /// gets no proposal for it.
-fn offer_terms(service: &views::locales::services::ServiceCopy) -> Vec<(&'static str, String)> {
+fn offer_terms(offer: &Offer) -> Vec<(&'static str, String)> {
     vec![
-        ("project__engagement", service.name.clone()),
-        ("custom_text__engagement_scope", service.blurb.clone()),
+        ("project__engagement", offer.name.clone()),
+        ("custom_text__engagement_scope", offer.blurb.clone()),
     ]
 }
 
@@ -285,20 +355,17 @@ async fn configured_lawyer(
 async fn post_start(
     State(state): State<DoorState>,
     Extension(session): Extension<SessionData>,
-    Path(service_id): Path<String>,
+    Path(path_id): Path<String>,
     headers: axum::http::HeaderMap,
     Form(_body): Form<StartForm>,
 ) -> Response {
     let Some(catalog) = state.catalog.as_ref() else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let Some(service) = catalog
-        .services
-        .iter()
-        .find(|service| service.id == service_id && service.template.is_some())
-    else {
+    let Some(offer) = state.offer(&path_id) else {
         return StatusCode::NOT_FOUND.into_response();
     };
+    let service_id = offer.funnel_id.clone();
     let brand = views::brand::brand_key();
     if session.role.is_lawyer_tier() {
         return Redirect::to("/app/lawyer/retainers/new").into_response();
@@ -322,19 +389,8 @@ async fn post_start(
         );
         return (StatusCode::OK, catalog.start.refusal.clone()).into_response();
     };
-    let Some(template_code) = service.template.as_deref() else {
-        audit(
-            &session,
-            None,
-            None,
-            &service_id,
-            brand,
-            "rejected_template",
-        );
-        return (StatusCode::OK, catalog.start.refusal.clone()).into_response();
-    };
     let repo = repos::RepoStore::from_env().ok();
-    let Some(template) = start_template(&state.app, brand, template_code, repo.as_ref()).await
+    let Some(template) = start_template(&state.app, brand, &offer.template, repo.as_ref()).await
     else {
         audit(
             &session,
@@ -395,7 +451,7 @@ async fn post_start(
             // proposal never blocks the acceptance itself: the lawyer is
             // asked the question instead.
             let mut proposed = 0usize;
-            for (state_name, term) in offer_terms(service) {
+            for (state_name, term) in offer_terms(&offer) {
                 match workflows::notation_session::record_extracted_answer(
                     &state.app.surreal,
                     Some(&state.app.storage),
@@ -439,7 +495,7 @@ async fn post_start(
                 .record(
                     brand,
                     crate::plausible::ConversionGoal::IntakeStarted,
-                    &START_PATH.replace("{service_id}", &service_id),
+                    &offer.path,
                     crate::rate_limit::client_ip_from_headers(&headers),
                     headers
                         .get(axum::http::header::USER_AGENT)
@@ -731,6 +787,7 @@ mod tests {
             State(DoorState {
                 app: state.clone(),
                 catalog: Some(catalog),
+                notations: None,
             }),
             Extension(session),
             Path(service_id.to_string()),
@@ -1103,7 +1160,8 @@ mod tests {
     async fn t4_anonymous_get_redirects_and_authenticated_get_carries_verbatim_disclosure() {
         let (state, surreal) = seeded_state().await;
         let catalog = catalog();
-        let app = routes(&state, Some(catalog.clone())).layer(CookieManagerLayer::new());
+        let app =
+            routes(&state, Some(catalog.clone()), Vec::new()).layer(CookieManagerLayer::new());
         let response = app
             .clone()
             .oneshot(
@@ -1139,6 +1197,78 @@ mod tests {
         assert!(html.contains(&catalog.start.disclosure), "{html}");
     }
 
+    fn notation_offer() -> NotationOffer {
+        NotationOffer {
+            slug: "onboarding-letter".into(),
+            title: "Onboarding Letter".into(),
+            template_code: "onboarding__letter".into(),
+        }
+    }
+
+    /// A published notation's Workflow door signs the reader in, then opens
+    /// intake on a Project whose code is random hex — nothing about the
+    /// client — and lands them in that intake.
+    #[tokio::test]
+    async fn the_notation_door_signs_in_then_opens_intake_under_a_random_code() {
+        let (state, surreal) = seeded_state().await;
+        let app = routes(&state, Some(onboarding_catalog()), vec![notation_offer()])
+            .layer(CookieManagerLayer::new());
+        let anonymous = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/notations/onboarding-letter/start")
+                    .body(Body::empty())
+                    .expect("anonymous request"),
+            )
+            .await
+            .expect("anonymous response");
+        assert_eq!(
+            location(&anonymous),
+            "/auth/login?return_to=/notations/onboarding-letter/start"
+        );
+
+        let client = client(&surreal, "Notation Client", "notation-client@example.com").await;
+        let session = session(&client);
+        let unknown = app
+            .oneshot(
+                Request::builder()
+                    .uri("/notations/not-a-notation/start")
+                    .header("cookie", session_cookie(&state, &session))
+                    .body(Body::empty())
+                    .expect("unknown request"),
+            )
+            .await
+            .expect("unknown response");
+        assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+
+        let response = post_start(
+            State(DoorState {
+                app: state.clone(),
+                catalog: Some(onboarding_catalog()),
+                notations: Some(std::sync::Arc::new(vec![notation_offer()])),
+            }),
+            Extension(session),
+            Path("onboarding-letter".to_string()),
+            axum::http::HeaderMap::new(),
+            Form(StartForm::default()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let projects = store::projects::all(&surreal).await.expect("list projects");
+        let code = &projects[0].code;
+        assert!(
+            code.len() == 16 && code.bytes().all(|b| b.is_ascii_hexdigit()),
+            "{code}"
+        );
+        assert!(!code.contains("notation-client"), "{code}");
+        assert!(
+            location(&response).starts_with(&format!("/app/projects/{code}/intake/")),
+            "{}",
+            location(&response)
+        );
+    }
+
     #[tokio::test]
     async fn t5_strict_csrf_and_rate_limit_protect_the_cookie_post() {
         let (mut state, surreal) = seeded_state().await;
@@ -1150,7 +1280,7 @@ mod tests {
         .await;
         state.rate_limit = crate::rate_limit::RateLimit::new(1, Duration::from_mins(1));
         let session = session(&client);
-        let app = routes(&state, Some(catalog())).layer(CookieManagerLayer::new());
+        let app = routes(&state, Some(catalog()), Vec::new()).layer(CookieManagerLayer::new());
         let request = || {
             Request::builder()
                 .method("POST")
