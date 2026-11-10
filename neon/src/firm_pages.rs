@@ -204,6 +204,20 @@ const CA_TRAFFIC_CITATION_INTAKE: &str =
     include_str!("../../templates/notations/neon_law/traffic_citation_intake__california.md");
 const NY_TRAFFIC_CITATION_INTAKE: &str =
     include_str!("../../templates/notations/neon_law/traffic_citation_intake__new_york.md");
+const NY_DIVORCE_FILING_CHECKLIST: &str =
+    include_str!("../../templates/notations/neon_law/divorce_filing_checklist__new_york.md");
+const NY_SUMMONS_WITH_NOTICE: &str =
+    include_str!("../../templates/notations/neon_law/summons_with_notice__new_york.md");
+const NY_VERIFIED_COMPLAINT: &str =
+    include_str!("../../templates/notations/neon_law/verified_complaint__new_york.md");
+const NY_AFFIDAVIT_OF_DEFENDANT: &str =
+    include_str!("../../templates/notations/neon_law/affidavit_of_defendant__new_york.md");
+const NY_SETTLEMENT_AGREEMENT: &str =
+    include_str!("../../templates/notations/neon_law/settlement_agreement__new_york.md");
+const NY_FINDINGS_OF_FACT: &str =
+    include_str!("../../templates/notations/neon_law/findings_of_fact__new_york.md");
+const NY_JUDGMENT_OF_DIVORCE: &str =
+    include_str!("../../templates/notations/neon_law/judgment_of_divorce__new_york.md");
 const FORM_990: &str =
     include_str!("../../templates/notations/forms/united_states/federal/irs/us__form_990.md");
 const NATURALIZATION: &str = include_str!(
@@ -546,6 +560,41 @@ fn notation_preview_docs() -> Vec<webapp::notation_preview::PreviewDoc> {
             "new-york-traffic-citation-intake",
             "notations/neon_law/traffic_citation_intake__new_york.md",
             NY_TRAFFIC_CITATION_INTAKE,
+        ),
+        preview_doc(
+            "new-york-divorce-filing-checklist",
+            "notations/neon_law/divorce_filing_checklist__new_york.md",
+            NY_DIVORCE_FILING_CHECKLIST,
+        ),
+        preview_doc(
+            "new-york-summons-with-notice",
+            "notations/neon_law/summons_with_notice__new_york.md",
+            NY_SUMMONS_WITH_NOTICE,
+        ),
+        preview_doc(
+            "new-york-verified-complaint",
+            "notations/neon_law/verified_complaint__new_york.md",
+            NY_VERIFIED_COMPLAINT,
+        ),
+        preview_doc(
+            "new-york-affidavit-of-defendant",
+            "notations/neon_law/affidavit_of_defendant__new_york.md",
+            NY_AFFIDAVIT_OF_DEFENDANT,
+        ),
+        preview_doc(
+            "new-york-settlement-agreement",
+            "notations/neon_law/settlement_agreement__new_york.md",
+            NY_SETTLEMENT_AGREEMENT,
+        ),
+        preview_doc(
+            "new-york-findings-of-fact",
+            "notations/neon_law/findings_of_fact__new_york.md",
+            NY_FINDINGS_OF_FACT,
+        ),
+        preview_doc(
+            "new-york-judgment-of-divorce",
+            "notations/neon_law/judgment_of_divorce__new_york.md",
+            NY_JUDGMENT_OF_DIVORCE,
         ),
         preview_doc(
             "irs-form-990",
@@ -928,6 +977,55 @@ fn notations_index_content() -> webapp::catalog_index::CatalogIndexContent {
                 "new-york-traffic-citation-intake",
                 "The intake questionnaire for a New York traffic citation, by county (`traffic_citation_intake__new_york`).",
                 NY_TRAFFIC_CITATION_INTAKE,
+        ),
+            notation_card(
+                "New York",
+                "Uncontested Divorce Filing Checklist",
+                "new-york-divorce-filing-checklist",
+                "The Firm's ordered filing steps, from the index number to the certificate of dissolution (`divorce_filing_checklist__new_york`).",
+                NY_DIVORCE_FILING_CHECKLIST,
+            ),
+            notation_card(
+                "New York",
+                "Summons with Notice",
+                "new-york-summons-with-notice",
+                "The first filing route: a summons that states the divorce action without a complaint (`summons_with_notice__new_york`).",
+                NY_SUMMONS_WITH_NOTICE,
+            ),
+            notation_card(
+                "New York",
+                "Verified Complaint",
+                "new-york-verified-complaint",
+                "The second filing route: the complaint the plaintiff-spouse verifies (`verified_complaint__new_york`).",
+                NY_VERIFIED_COMPLAINT,
+            ),
+            notation_card(
+                "New York",
+                "Affidavit of Defendant",
+                "new-york-affidavit-of-defendant",
+                "The defendant-spouse's acknowledgment that service arrived and the action is not contested (`affidavit_of_defendant__new_york`).",
+                NY_AFFIDAVIT_OF_DEFENDANT,
+            ),
+            notation_card(
+                "New York",
+                "Settlement Agreement",
+                "new-york-settlement-agreement",
+                "The couple's agreed terms, assembled from the Clause library (`settlement_agreement__new_york`).",
+                NY_SETTLEMENT_AGREEMENT,
+            ),
+            notation_card(
+                "New York",
+                "Findings of Fact and Conclusions of Law",
+                "new-york-findings-of-fact",
+                "The findings supporting the judgment of divorce (`findings_of_fact__new_york`).",
+                NY_FINDINGS_OF_FACT,
+            ),
+            notation_card(
+                "New York",
+                "Judgment of Divorce",
+                "new-york-judgment-of-divorce",
+                "The decree the court signs, incorporating the agreement without merging it (`judgment_of_divorce__new_york`).",
+                NY_JUDGMENT_OF_DIVORCE,
             ),
             notation_card(
                 "Federal",
