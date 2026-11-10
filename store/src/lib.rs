@@ -180,6 +180,7 @@ pub mod person_merge;
 pub mod person_phones;
 pub mod persons;
 pub mod plan_assignment;
+pub mod plan_intake;
 pub mod plan_metrics;
 pub mod plan_seeds;
 pub mod playbooks;

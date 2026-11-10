@@ -121,6 +121,7 @@ pub mod outcome_calibration;
 pub mod owner_home;
 pub mod people;
 pub mod person_show;
+pub mod plan_intake;
 pub mod playbooks;
 pub mod portal_project_detail;
 pub mod portal_project_list;

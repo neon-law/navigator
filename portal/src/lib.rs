@@ -188,6 +188,7 @@ pub mod password_reset;
 pub mod people_commands;
 pub mod people_list_answer;
 pub(crate) mod plan_assignment_lane;
+pub mod plan_intake;
 pub mod plausible;
 pub mod policy;
 pub mod portal_only;
@@ -1112,6 +1113,12 @@ pub fn bootstrap_with_forgejo_oidc(
         state.surreal.clone(),
     );
     let dioxus_triage_queue = dioxus_app::triage_queue_router(
+        state.sessions.clone(),
+        state.policy.clone(),
+        state.auth.clone(),
+        state.surreal.clone(),
+    );
+    let dioxus_plan_intake = dioxus_app::plan_intake_router(
         state.sessions.clone(),
         state.policy.clone(),
         state.auth.clone(),
@@ -2102,6 +2109,7 @@ pub fn bootstrap_with_forgejo_oidc(
         dioxus_deployment_keys,
         dioxus_owner_inbox,
         dioxus_triage_queue,
+        dioxus_plan_intake,
         dioxus_owner_inbox_thread,
         dioxus_project_inbox,
         dioxus_project_inbox_thread,

@@ -564,13 +564,20 @@
       "extra_column": null,
       "extra_table": null,
       "missing_column": null,
+      "missing_table": "plan_intake",
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": null,
+      "missing_column": null,
       "missing_table": "schema_version",
       "table": null
     }
   ],
   "source": {
     "name": "SurrealDB",
-    "table_count": 113,
+    "table_count": 114,
     "tables": {
       "address": {
         "city": "string",
@@ -1603,6 +1610,41 @@
         "person_id": "record<person>",
         "project_id": "record<project>",
         "updated_at": "string"
+      },
+      "plan_intake": {
+        "accepted_by": "option<record<person>>",
+        "assigned_at": "datetime",
+        "benefit_code": "option<string>",
+        "conflict_blocking": "bool",
+        "conflict_checked": "bool",
+        "conflict_summary": "string",
+        "conversation_id": "record<inbox_conversation>",
+        "decided_at": "option<datetime>",
+        "decline_reason": "option<string>",
+        "fee_covered_benefit": "option<string>",
+        "fee_effective_on": "option<string>",
+        "fee_plan_fee_cents": "option<int>",
+        "fee_supplemental_flat_cents": "option<int>",
+        "fee_supplemental_hourly_cents": "option<int>",
+        "firm_id": "record<firm>",
+        "id": "record",
+        "inserted_at": "datetime",
+        "legal_plan_id": "option<string>",
+        "legal_plan_name": "option<string>",
+        "member_email": "option<string>",
+        "member_entity_id": "option<record<entity>>",
+        "member_name": "option<string>",
+        "member_person_id": "option<record<person>>",
+        "plan_matter_type": "string",
+        "plan_member_id": "option<string>",
+        "plan_number": "option<string>",
+        "plan_portal_only": "bool",
+        "plan_state": "option<string>",
+        "project_id": "option<record<project>>",
+        "provider": "string",
+        "source_message_id": "record<message>",
+        "status": "string",
+        "updated_at": "datetime"
       },
       "playbook": {
         "active": "bool",

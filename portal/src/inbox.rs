@@ -142,6 +142,44 @@ pub async fn ingest_support_email(
     ingest_support_email_for_firm(db, storage, email, inbox_firm_id()).await
 }
 
+/// Which Firm a public inbound email lands for, the same rule
+/// [`ingest_support_email`] applies: the owning Brand's Firm, else the
+/// configured inbox Firm. `Ok(None)` means the mail is not intake for any
+/// Firm — the caller skips it the way ingest does.
+fn resolve_inbound_firm(
+    configured_firm: Option<Uuid>,
+    owning_firm: Option<Uuid>,
+    public_mailbox: bool,
+) -> Result<Option<Uuid>, String> {
+    match (configured_firm, owning_firm) {
+        (Some(configured), Some(owner)) if configured != owner => {
+            Err("receiving Brand belongs to another Firm".into())
+        }
+        (_, Some(owner)) => Ok(Some(owner)),
+        (Some(configured), None) if !public_mailbox => Ok(Some(configured)),
+        (_, None) if public_mailbox => Err("receiving Brand has no owning Firm".into()),
+        _ => Ok(None),
+    }
+}
+
+/// The Firm the plan-assignment lane scopes its staged record to — resolved
+/// exactly as [`ingest_support_email`] resolved it when it saved the message.
+pub(crate) async fn inbound_firm_id(
+    db: &store::surreal::SurrealDb,
+    email: &InboundEmail,
+) -> Result<Uuid, String> {
+    let (_, brand) = receiving_email_identity(email)?;
+    let owning_firm = if let Some(brand) = brand.as_ref() {
+        store::firms::firm_id_for_brand_key(db, brand.as_str())
+            .await
+            .map_err(|error| error.to_string())?
+    } else {
+        None
+    };
+    resolve_inbound_firm(inbox_firm_id(), owning_firm, brand.is_some())?
+        .ok_or_else(|| "receiving mailbox has no owning Firm".into())
+}
+
 async fn ingest_support_email_for_firm(
     db: &store::surreal::SurrealDb,
     storage: &std::sync::Arc<dyn cloud::StorageService>,
@@ -157,14 +195,8 @@ async fn ingest_support_email_for_firm(
     } else {
         None
     };
-    let firm_id = match (configured_firm, owning_firm) {
-        (Some(configured), Some(owner)) if configured != owner => {
-            return Err("receiving Brand belongs to another Firm".into())
-        }
-        (_, Some(owner)) => owner,
-        (Some(configured), None) if !public_mailbox => configured,
-        (_, None) if public_mailbox => return Err("receiving Brand has no owning Firm".into()),
-        _ => return Ok(None),
+    let Some(firm_id) = resolve_inbound_firm(configured_firm, owning_firm, public_mailbox)? else {
+        return Ok(None);
     };
     let from = extract_addr(&email.from);
     if let Some(person) = store::persons::find_by_email_ci(db, &from)
@@ -845,11 +877,11 @@ pub async fn intake_reply_post(
     Redirect::to(&back).into_response()
 }
 
-fn actor_id(session: Option<Extension<SessionData>>) -> Option<Uuid> {
+pub(crate) fn actor_id(session: Option<Extension<SessionData>>) -> Option<Uuid> {
     session.and_then(|extension| extension.person_id)
 }
 
-fn redirect_error(back: &str, message: &str) -> Response {
+pub(crate) fn redirect_error(back: &str, message: &str) -> Response {
     Redirect::to(&format!(
         "{back}?error={}",
         crate::admin::encode_query_value(message)

@@ -28,6 +28,8 @@ pub(crate) enum LaneOutcome {
         provider: &'static str,
         /// The archive object key holding the summary.
         archive_key: String,
+        /// The parsed assignment, for staging the attorney review record.
+        assignment: store::plan_assignment::Assignment,
     },
     /// Plan mail the parser could not read; the failure and its reason
     /// are archived and the message waits in triage for a person.
@@ -84,6 +86,7 @@ pub(crate) async fn run(
             Ok(LaneOutcome::Parsed {
                 provider: provider.as_str(),
                 archive_key,
+                assignment: assignment.clone(),
             })
         }
         Err(error) => {
@@ -120,6 +123,88 @@ async fn archive(
         .map_err(|error| error.to_string())
 }
 
+/// The persisted landing time of one ingested message — the origin of the
+/// plan's acceptance clock. The message row is written before the lane runs,
+/// so an unreadable row or timestamp skips staging rather than fabricating a
+/// clock the SLA deadline would silently trust.
+async fn landing_time(
+    db: &store::surreal::SurrealDb,
+    message_id: uuid::Uuid,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    let message = store::inbox::message_by_id(db, message_id)
+        .await
+        .ok()
+        .flatten()?;
+    chrono::DateTime::parse_from_rfc3339(&message.occurred_at)
+        .ok()
+        .map(|time| time.with_timezone(&chrono::Utc))
+}
+
+/// Stage a parsed notice for attorney review, anchored to the ingested
+/// message. The firm is resolved exactly as ingest resolved it; without
+/// PostgreSQL the plan and fee quote stay unresolved for the attorney to
+/// price on the review screen. A staging failure never fails the intake —
+/// the raw mail is already durable and triage still holds the message — so
+/// the outcome is logged and returned as `None`.
+pub(crate) async fn stage_for_review(
+    db: &store::surreal::SurrealDb,
+    email: &InboundEmail,
+    inbound: &store::inbox::IngestedInbound,
+    outcome: &LaneOutcome,
+) -> Option<store::plan_intake::StagedAssignment> {
+    let LaneOutcome::Parsed {
+        provider,
+        assignment,
+        ..
+    } = outcome
+    else {
+        return None;
+    };
+    let firm_id = match crate::inbox::inbound_firm_id(db, email).await {
+        Ok(firm_id) => firm_id,
+        Err(error) => {
+            tracing::warn!(error = %error, "plan-assignment staging skipped: no firm");
+            return None;
+        }
+    };
+    let Some(landing_at) = landing_time(db, inbound.message_id).await else {
+        tracing::warn!(
+            message_id = %inbound.message_id,
+            "plan-assignment staging skipped: no persisted landing time"
+        );
+        return None;
+    };
+    let input = store::plan_intake::StageInput {
+        firm_id,
+        conversation_id: inbound.conversation_id,
+        source_message_id: inbound.message_id,
+        landing_at,
+        provider: (*provider).to_string(),
+        assignment: assignment.clone(),
+    };
+    // PostgreSQL is resolved on demand: an unconfigured or unreachable
+    // database stages the notice with an unresolved plan and fee quote.
+    let pg = store::postgres::PostgresDb::from_env().await.ok();
+    match store::plan_intake::stage(db, pg.as_ref(), &input).await {
+        Ok(staged) => {
+            tracing::info!(
+                staged_id = %staged.id,
+                message_id = %inbound.message_id,
+                "plan-assignment staged for attorney review"
+            );
+            Some(staged)
+        }
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                message_id = %inbound.message_id,
+                "plan-assignment staging failed; the message stays in triage"
+            );
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{run, LaneOutcome};
@@ -148,6 +233,7 @@ mod tests {
         let LaneOutcome::Parsed {
             provider,
             archive_key,
+            assignment: _,
         } = outcome
         else {
             panic!("expected a parsed outcome, got {outcome:?}");
@@ -173,6 +259,7 @@ mod tests {
         let LaneOutcome::Parsed {
             provider,
             archive_key,
+            assignment: _,
         } = outcome
         else {
             panic!("expected a parsed outcome, got {outcome:?}");

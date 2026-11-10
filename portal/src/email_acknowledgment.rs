@@ -69,6 +69,9 @@ fn receipt_allowed(email: &InboundEmail) -> bool {
 
 /// Save support intake before acknowledging it, including the summary lane.
 /// Reservation is at most once: uncertain sends remain visible in the inbox.
+/// Plan-provider mail never takes the generic receipt: the member intro the
+/// attorney's acceptance sends reserves that same per-inbound slot, and a
+/// generic receipt here would take it first.
 pub(crate) async fn receive(
     db: &store::surreal::SurrealDb,
     storage: &std::sync::Arc<dyn cloud::StorageService>,
@@ -78,16 +81,25 @@ pub(crate) async fn receive(
     let Some(inbound) = ingest_support_email(db, storage, email).await? else {
         return Ok(());
     };
-    match crate::plan_assignment_lane::run(storage, email).await? {
-        crate::plan_assignment_lane::LaneOutcome::NotPlanMail => {}
-        outcome => tracing::info!(
-            message_id = %inbound.message_id,
-            outcome = ?outcome,
-            "plan-assignment lane recorded the intake"
-        ),
-    }
+    let plan_mail = match crate::plan_assignment_lane::run(storage, email).await? {
+        crate::plan_assignment_lane::LaneOutcome::NotPlanMail => false,
+        outcome => {
+            let staged =
+                crate::plan_assignment_lane::stage_for_review(db, email, &inbound, &outcome).await;
+            tracing::info!(
+                message_id = %inbound.message_id,
+                staged = staged.is_some(),
+                outcome = ?outcome,
+                "plan-assignment lane recorded the intake"
+            );
+            true
+        }
+    };
     crate::inbox::start_inbound_message_alert(inbound.message_id).await?;
     crate::inbox::start_inbound_message_triage(inbound.message_id).await?;
+    if plan_mail {
+        return Ok(());
+    }
     let Some(mailbox) = mailbox(email).filter(|_| receipt_allowed(email)) else {
         return Ok(());
     };
@@ -204,6 +216,66 @@ mod tests {
             from: Some(String::new()),
         });
         assert!(!receipt_allowed(&email));
+    }
+
+    #[tokio::test]
+    async fn plan_assignment_mail_stages_once_and_never_takes_a_generic_receipt() {
+        let db = store::test_support::mem_surreal().await;
+        store::test_support::seed_firm_with_brand(&db, "neon").await;
+        let service = crate::email::CapturingEmail::new();
+        let storage = crate::test_support::fs_storage().await;
+        let mut email = sample_email();
+        email.from = "ARAG <assignments@notice.arag.com>".into();
+        email.to = "staging@neonlaw.com".into();
+        email.subject = store::plan_assignment::fixtures::ARAG_SUBJECT.into();
+        email.text = store::plan_assignment::fixtures::arag_case_request_text();
+        email.message_id = Some("<plan-notice-1@notice.arag.com>".into());
+        receive(&db, &storage, &service, &email).await.unwrap();
+        // No generic receipt: the member intro the acceptance sends reserves
+        // this message's acknowledgment slot.
+        assert!(service.captured().is_empty());
+        // A redelivery stages the same record once, not twice.
+        receive(&db, &storage, &service, &email).await.unwrap();
+        assert!(service.captured().is_empty());
+        let firm_id = store::firms::firm_id_for_brand_key(&db, "neon")
+            .await
+            .unwrap()
+            .unwrap();
+        let queue = store::plan_intake::list_by_firm(&db, firm_id)
+            .await
+            .unwrap();
+        assert_eq!(queue.len(), 1);
+        assert_eq!(
+            queue[0].source_message_id,
+            inbound_message_id(&db, &email).await,
+            "the staged record anchors the ingested message"
+        );
+    }
+
+    async fn inbound_message_id(
+        db: &store::surreal::SurrealDb,
+        email: &InboundEmail,
+    ) -> uuid::Uuid {
+        let storage = crate::test_support::fs_storage().await;
+        let inbound = ingest_support_email(db, &storage, email)
+            .await
+            .unwrap()
+            .unwrap();
+        inbound.message_id
+    }
+
+    #[tokio::test]
+    async fn unparseable_plan_mail_skips_the_generic_receipt_and_stays_in_triage() {
+        let db = store::test_support::mem_surreal().await;
+        store::test_support::seed_firm_with_brand(&db, "neon").await;
+        let service = crate::email::CapturingEmail::new();
+        let storage = crate::test_support::fs_storage().await;
+        let mut email = sample_email();
+        email.from = "mail@legalshield.com".into();
+        email.to = "staging@neonlaw.com".into();
+        email.text = "please call us".into();
+        receive(&db, &storage, &service, &email).await.unwrap();
+        assert!(service.captured().is_empty());
     }
 
     #[tokio::test]

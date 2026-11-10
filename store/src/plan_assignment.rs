@@ -99,12 +99,19 @@ pub struct Assignment {
     pub member_name: Option<String>,
     /// The provider's member or membership identifier.
     pub member_number: Option<String>,
+    /// The member's plan or certificate number, when the notice prints one.
+    pub plan_number: Option<String>,
     /// The kind of legal matter, in the notice's words.
     pub matter_type: Option<String>,
     /// The plan or coverage effective date, when the notice prints one.
     pub effective_date: Option<NaiveDate>,
     /// The member's contact email, when the notice prints one.
     pub contact_email: Option<String>,
+    /// The matter's jurisdiction as the notice prints it, lowercased. Never
+    /// a validated code: the intake sanitizes against
+    /// [`crate::legal_plans::valid_state_code`] so a notice's odd spelling
+    /// refuses the fee lookup rather than the parse.
+    pub state: Option<String>,
 }
 
 /// Why a message from a plan provider is not a notice this module can read.
@@ -134,9 +141,11 @@ pub fn parse(
         case_number,
         member_name: None,
         member_number: None,
+        plan_number: None,
         matter_type: None,
         effective_date: None,
         contact_email: None,
+        state: None,
     };
     match provider {
         PlanProvider::Arag => {
@@ -157,15 +166,20 @@ pub fn parse(
             assignment.member_number = token_after(&body, "member id");
             assignment.effective_date =
                 token_after(&body, "plan effective date").and_then(|value| date(&value));
+            // The Personal Details table prints a "Legal Matter State" row.
+            assignment.state =
+                token_after(&body, "legal matter state").map(|value| value.to_ascii_lowercase());
         }
         PlanProvider::LegalShield => {
             assignment.member_name = field(text, "member");
             assignment.member_number = field(text, "membership id");
+            assignment.plan_number = field(text, "certificate number");
             assignment.matter_type = field(text, "legal matter");
             assignment.effective_date =
                 field(text, "coverage start").and_then(|value| date(&value));
             assignment.contact_email =
                 field(text, "contact").map(|value| value.to_ascii_lowercase());
+            assignment.state = field(text, "state").map(|value| value.to_ascii_lowercase());
         }
     }
     Ok(assignment)
@@ -285,6 +299,7 @@ pub mod fixtures {
             "Legal Matter: Consumer Contract Review",
             "Coverage Start: 11/04/2026",
             "Contact: riley@example.com",
+            "State: NY",
         ]
         .join("\n")
     }
@@ -306,6 +321,7 @@ mod tests {
         assert_eq!(notice.member_name.as_deref(), Some("Dana Example"));
         assert_eq!(notice.matter_type.as_deref(), Some("Will Preparation"));
         assert_eq!(notice.member_number, None);
+        assert_eq!(notice.plan_number, None);
     }
 
     #[test]
@@ -341,6 +357,7 @@ mod tests {
         assert_eq!(notice.matter_type.as_deref(), Some("Lease Agreement"));
         assert_eq!(notice.member_number.as_deref(), Some("9900001"));
         assert_eq!(notice.effective_date.unwrap().to_string(), "2025-01-01");
+        assert_eq!(notice.state.as_deref(), Some("nv"));
     }
 
     #[test]
@@ -380,12 +397,14 @@ mod tests {
         assert_eq!(notice.case_number, "CERT-330291");
         assert_eq!(notice.member_name.as_deref(), Some("Harper Sample"));
         assert_eq!(notice.member_number.as_deref(), Some("LS-902441"));
+        assert_eq!(notice.plan_number.as_deref(), Some("CERT-330291"));
         assert_eq!(
             notice.matter_type.as_deref(),
             Some("Consumer Contract Review")
         );
         assert_eq!(notice.effective_date.unwrap().to_string(), "2026-11-04");
         assert_eq!(notice.contact_email.as_deref(), Some("riley@example.com"));
+        assert_eq!(notice.state.as_deref(), Some("ny"));
     }
 
     #[test]
@@ -427,5 +446,27 @@ mod tests {
         assert_eq!(provider_for_sender("spoof@notarag.com"), None);
         assert_eq!(provider_for_sender("someone@example.com"), None);
         assert_eq!(provider_for_sender("no-address"), None);
+    }
+
+    #[test]
+    fn a_missing_state_line_is_none_not_an_error() {
+        let text = fixtures::legal_shield_assignment_text()
+            .lines()
+            .filter(|line| !line.starts_with("State:"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let notice =
+            parse(PlanProvider::LegalShield, "Member Assignment", &text).expect("notice parses");
+        assert_eq!(notice.state, None);
+    }
+
+    #[test]
+    fn an_unreadable_state_is_kept_verbatim_for_sanitizing() {
+        // The parser reports what the notice printed; the intake layer
+        // validates the word against the fee-schedule vocabulary.
+        let text = fixtures::legal_shield_assignment_text().replace("State: NY", "State: Unknown");
+        let notice =
+            parse(PlanProvider::LegalShield, "Member Assignment", &text).expect("notice parses");
+        assert_eq!(notice.state.as_deref(), Some("unknown"));
     }
 }
