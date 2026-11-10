@@ -136,6 +136,12 @@ pub(crate) struct ProcessRequest {
     /// False serves the plan only; true records the classification.
     #[serde(default)]
     pub apply: bool,
+    /// Asset-lane kind an attributed message's attachments file under, as
+    /// internal documents, on apply. Absent files none and reports how many
+    /// wait: the kind is a decision, never a default. A court notice files
+    /// through its own pipeline and ignores this.
+    #[serde(default)]
+    pub kind: Option<String>,
 }
 
 /// `POST /app/api/inbox/process` — the plan (apply: false) and the
@@ -156,6 +162,20 @@ pub(crate) async fn process(
         .map_err(map_inbox)?;
     if !request.apply {
         return Ok(Json(view(context.row, context.state)).into_response());
+    }
+    let kind = request
+        .kind
+        .as_deref()
+        .map(str::trim)
+        .filter(|kind| !kind.is_empty());
+    if let Some(kind) = kind {
+        let accepted = crate::api::accepted_asset_kinds();
+        if !accepted.contains(&kind) {
+            return Ok(crate::api::bad_request(
+                "invalid_kind",
+                &format!("Accepted values are: {}.", accepted.join(", ")),
+            ));
+        }
     }
     // Admit the caller before allocating a lock, then read the recorded
     // truth again after any preceding apply has finished.
@@ -179,17 +199,7 @@ pub(crate) async fn process(
     // through the recorded `nef_outcome`.
     let nef_outcome = if decision.route == crate::inbound_email::InboxRoute::Nef {
         if let Some(project_id) = context.row.project_id {
-            let viewer = store::access::matter_viewer(
-                &state.surreal,
-                session.person_id,
-                session.role,
-                project_id,
-            )
-            .await
-            .map_err(ApiError::Db)?;
-            if !viewer.is_some_and(store::access::MatterViewer::is_firm_side) {
-                return Err(ApiError::NotFound);
-            }
+            require_firm_side(&state, &session, project_id).await?;
         }
         let outcome = crate::nef_pipeline::process_nef(&state, &context.row).await?;
         let spelling = outcome.spelling();
@@ -197,6 +207,10 @@ pub(crate) async fn process(
     } else {
         None
     };
+    // Every other route on an attributed matter files the message's
+    // attachments when the lawyer named their kind, and counts them when not.
+    let attachments =
+        apply_attachments(&state, &session, &context.row, decision.route, kind).await?;
     // LAW-166: apply always records the route and the processing time, so
     // a re-run reports idempotency instead of duplicating work.
     store::inbox::mark_processed(
@@ -229,6 +243,7 @@ pub(crate) async fn process(
         recorded_at,
         already_recorded,
         nef: nef_outcome.map(|(outcome, _)| outcome),
+        attachments,
         slack_notice,
     })
     .into_response())
@@ -249,8 +264,66 @@ pub(crate) struct ProcessApplyView {
     /// What the NEF pipeline filed, when the message classified as a
     /// CM/ECF notice (LAW-171). `None` for every other route.
     pub nef: Option<crate::nef_pipeline::NefOutcome>,
+    /// What filed from an attributed, non-NEF message's attachments.
+    pub attachments: AttachmentFiling,
     /// The best-effort Slack notice outcome.
     pub slack_notice: SlackNotice,
+}
+
+/// An apply's attachment outcome: parts filed as matter documents, and
+/// parts left waiting because no kind was named.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub(crate) struct AttachmentFiling {
+    pub filed: usize,
+    pub unfiled: usize,
+}
+
+/// Every route but a court notice, on an attributed matter, files the
+/// message's attachments when the lawyer named their kind and counts them
+/// when not. A court notice files through its own pipeline.
+async fn apply_attachments(
+    state: &ApiState,
+    session: &SessionData,
+    row: &store::inbox::UnprocessedRow,
+    route: crate::inbound_email::InboxRoute,
+    kind: Option<&str>,
+) -> Result<AttachmentFiling, ApiError> {
+    let Some(project_id) = row.project_id else {
+        return Ok(AttachmentFiling::default());
+    };
+    if route == crate::inbound_email::InboxRoute::Nef {
+        return Ok(AttachmentFiling::default());
+    }
+    require_firm_side(state, session, project_id).await?;
+    Ok(match kind {
+        Some(kind) => AttachmentFiling {
+            filed: crate::nef_pipeline::file_message_attachments(state, row, project_id, kind)
+                .await?,
+            unfiled: 0,
+        },
+        None => AttachmentFiling {
+            filed: 0,
+            unfiled: crate::nef_pipeline::attachment_count(state, row).await?,
+        },
+    })
+}
+
+/// Out-of-scope for a matter that the caller cannot see firm-side: 404,
+/// the same refusal every matter-scoped door gives.
+async fn require_firm_side(
+    state: &ApiState,
+    session: &SessionData,
+    project_id: Uuid,
+) -> Result<(), ApiError> {
+    let viewer =
+        store::access::matter_viewer(&state.surreal, session.person_id, session.role, project_id)
+            .await
+            .map_err(ApiError::Db)?;
+    if viewer.is_some_and(store::access::MatterViewer::is_firm_side) {
+        Ok(())
+    } else {
+        Err(ApiError::NotFound)
+    }
 }
 
 /// The best-effort Slack notice outcome. The recording succeeds whether or

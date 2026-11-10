@@ -147,6 +147,10 @@ pub enum MailAction {
         /// Navigator host. Defaults to host in navigator.yaml.
         #[arg(long)]
         host: Option<String>,
+        /// Asset-lane kind the messages' attachments file under, as internal
+        /// documents. Defaults to `letter`.
+        #[arg(long, value_parser = crate::parse_asset_kind)]
+        kind: Option<String>,
     },
     /// File one message as a matter Communication: a Gmail web-URL message, a
     /// local .eml, or a PDF/file path through the document-upload lane.
@@ -160,8 +164,8 @@ pub enum MailAction {
         /// Navigator host. Defaults to host in navigator.yaml.
         #[arg(long)]
         host: Option<String>,
-        /// Asset-lane kind for a file-path upload, or for a local .eml's
-        /// attachments. Defaults to `letter`.
+        /// Asset-lane kind for a file-path upload, or for the attachments of
+        /// a Gmail message or local .eml, filed internal. Defaults to `letter`.
         #[arg(long, value_parser = crate::parse_asset_kind)]
         kind: Option<String>,
     },
@@ -1018,6 +1022,15 @@ enum GmailWebId {
 /// decode offline to the API's hex id. None when `token` is not a web id
 /// at all.
 fn gmail_web_id(token: &str) -> Option<GmailWebId> {
+    let (kind, value) = decode_web_id(token)?;
+    match value.parse::<u64>() {
+        Ok(number) if kind.ends_with('f') => Some(GmailWebId::Decoded(format!("{number:x}"))),
+        _ => Some(GmailWebId::Opaque),
+    }
+}
+
+/// A browser web id's `(kind, value)` pair, both still text.
+fn decode_web_id(token: &str) -> Option<(String, String)> {
     const WEB: &[u8] = b"BCDFGHJKLMNPQRSTVWXZbcdfghjklmnpqrstvwxz";
     const BASE64: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     const STANDARD_ANY_PAD: base64::engine::GeneralPurpose = base64::engine::GeneralPurpose::new(
@@ -1052,10 +1065,7 @@ fn gmail_web_id(token: &str) -> Option<GmailWebId> {
     if kind.is_empty() || !kind.bytes().all(|b| b.is_ascii_lowercase() || b == b'-') {
         return None;
     }
-    match value.parse::<u64>() {
-        Ok(number) if kind.ends_with('f') => Some(GmailWebId::Decoded(format!("{number:x}"))),
-        _ => Some(GmailWebId::Opaque),
-    }
+    Some((kind.to_string(), value.to_string()))
 }
 
 /// The error for a reference that names no message: a web id that cannot
@@ -1736,7 +1746,16 @@ async fn run_inner(action: MailAction) -> Result<()> {
             thread,
             project,
             host,
-        } => file_thread(&thread, project.as_deref(), host.as_deref()).await,
+            kind,
+        } => {
+            file_thread(
+                &thread,
+                project.as_deref(),
+                host.as_deref(),
+                kind.as_deref(),
+            )
+            .await
+        }
         MailAction::Parse {
             reference,
             project,
@@ -2078,7 +2097,9 @@ async fn file_thread(
     thread_id: &str,
     project_code: Option<&str>,
     host: Option<&str>,
+    kind: Option<&str>,
 ) -> Result<()> {
+    let kind = kind.unwrap_or(DEFAULT_PARSE_UPLOAD_KIND);
     let local = crate::projects::manifest::read(Path::new("."));
     let project_code = project_code
         .or_else(|| {
@@ -2108,18 +2129,6 @@ async fn file_thread(
         expected_contact.as_deref(),
     )
     .await?;
-    for message in &thread.messages {
-        if let Some(part) = &message.payload {
-            let mut names = Vec::new();
-            attachments(part, &mut names);
-            if !names.is_empty() {
-                return Err(anyhow!(
-                    "thread contains attachments ({}); no messages were filed because this CLI cannot archive attachments yet",
-                    names.join(", ")
-                ));
-            }
-        }
-    }
     let bodies = thread
         .messages
         .iter()
@@ -2143,15 +2152,63 @@ async fn file_thread(
         project_id,
         mailbox: &profile.email_address,
     };
+    let mut attachments_filed = 0;
     for (message, body) in thread.messages.iter().zip(bodies) {
-        file_message(&target, message, &body).await?;
+        if has_attachments(message) {
+            let filed = file_raw_message(&gmail, &target, &message.id, kind).await?;
+            attachments_filed += filed.attachments_filed;
+        } else {
+            file_message(&target, message, &body).await?;
+        }
     }
     println!(
         "Filed {} message(s) from thread {} as Communications",
         thread.messages.len(),
         thread.id
     );
+    if attachments_filed > 0 {
+        println!("Filed {attachments_filed} attachment(s) as {kind} documents");
+    }
     Ok(())
+}
+
+/// Whether a message carries a part a lawyer would call an attachment.
+fn has_attachments(message: &GmailMessage) -> bool {
+    message.payload.as_ref().is_some_and(|part| {
+        let mut names = Vec::new();
+        attachments(part, &mut names);
+        !names.is_empty()
+    })
+}
+
+/// File a message that carries attachments: fetch its RFC 822 copy through
+/// the read-only Gmail path and post it to the `mail/eml` door, which files
+/// the Communication and each attachment as a linked, internal document of
+/// `kind`. The door dedupes on the message's own Message-ID, so a re-run
+/// writes nothing twice.
+async fn file_raw_message(
+    gmail: &GmailClient,
+    target: &FileTarget<'_>,
+    message_id: &str,
+    kind: &str,
+) -> Result<EmlFiled> {
+    let raw_field = gmail.raw_message(message_id).await?;
+    let raw = decode_gmail_raw(
+        raw_field
+            .raw
+            .as_deref()
+            .ok_or_else(|| anyhow!("message {message_id} came back with no raw copy"))?,
+    )?;
+    let filed = post_eml(
+        target.base,
+        target.navigator_token,
+        target.project_id,
+        &raw,
+        kind,
+        Some(target.mailbox),
+    )
+    .await?;
+    Ok(eml_filing_summary(&filed))
 }
 
 struct FileTarget<'a> {
@@ -2180,14 +2237,38 @@ async fn parse_command(
             "the reference is neither an existing file, a Gmail web URL, nor a Gmail message id",
         )
     })?;
-    parse_gmail_message(&message_id, project, host).await
+    let names_conversation = reference_names_conversation(reference);
+    parse_gmail_message(&message_id, names_conversation, project, host, kind).await
+}
+
+/// Whether a reference names a whole conversation rather than one message:
+/// a Gmail web URL whose id is a thread (the browser's `#inbox/<id>` view, a
+/// `thread-f:` web id, or the legacy hex and `?th=` forms). A bare id and a
+/// `msg-f:` web id name one message.
+fn reference_names_conversation(reference: &str) -> bool {
+    if Url::parse(reference).is_err() {
+        return false;
+    }
+    let Some(segment) = reference_id_segment(reference) else {
+        return false;
+    };
+    !web_id_kind(&segment).is_some_and(|kind| kind.starts_with("msg"))
+}
+
+/// The `<kind>` of a browser web id (`thread-f`, `msg-f`, `f`), or None
+/// when `token` is not one.
+fn web_id_kind(token: &str) -> Option<String> {
+    decode_web_id(token).map(|(kind, _)| kind)
 }
 
 async fn parse_gmail_message(
     message_id: &str,
+    names_conversation: bool,
     project: Option<&str>,
     host: Option<&str>,
+    kind: Option<&str>,
 ) -> Result<()> {
+    let kind = kind.unwrap_or(DEFAULT_PARSE_UPLOAD_KIND);
     let local = crate::projects::manifest::read(Path::new("."));
     let project_code = project
         .or_else(|| local.as_ref().and_then(|m| m.project.as_deref()))
@@ -2199,6 +2280,27 @@ async fn parse_gmail_message(
             .await?;
     let gmail = client().await?;
     let profile = gmail.profile().await?;
+    // A conversation link names the thread, whose id is its first message.
+    // The lawyer means the message in front of them: the newest one.
+    let message_id = if names_conversation {
+        let thread = gmail.thread(message_id).await?;
+        let latest = thread
+            .messages
+            .last()
+            .ok_or_else(|| anyhow!("thread {message_id} has no messages"))?;
+        if thread.messages.len() > 1 {
+            println!(
+                "The link names a {}-message conversation; filing its latest message, {} ({})",
+                thread.messages.len(),
+                latest.id,
+                now_or_message_date(latest).unwrap_or_default()
+            );
+        }
+        latest.id.clone()
+    } else {
+        message_id.to_string()
+    };
+    let message_id = message_id.as_str();
     let message = gmail.message(message_id).await?;
     let payload = message
         .payload
@@ -2206,13 +2308,6 @@ async fn parse_gmail_message(
         .ok_or_else(|| anyhow!("message {message_id} has no supported body"))?;
     let mut names = Vec::new();
     attachments(payload, &mut names);
-    if !names.is_empty() {
-        return Err(anyhow!(
-            "message {message_id} carries attachments ({}); \
-             this CLI cannot file email attachments yet, so nothing was filed",
-            names.join(", ")
-        ));
-    }
     let body = plain_text(payload)
         .filter(|body| !body.trim().is_empty())
         .ok_or_else(|| {
@@ -2238,8 +2333,22 @@ async fn parse_gmail_message(
         project_id,
         mailbox: &profile.email_address,
     };
-    file_message(&target, &message, &body).await?;
+    if names.is_empty() {
+        file_message(&target, &message, &body).await?;
+        println!("Filed the message as a Communication");
+        return Ok(());
+    }
+    let filed = file_raw_message(&gmail, &target, message_id, kind).await?;
     println!("Filed the message as a Communication");
+    if filed.deduped {
+        println!("Already filed (deduped on {})", filed.source_ref);
+    }
+    println!(
+        "Filed {} of {} attachment(s) as internal {kind} documents: {}",
+        filed.attachments_filed,
+        names.len(),
+        names.join(", ")
+    );
     Ok(())
 }
 
@@ -2296,7 +2405,7 @@ async fn parse_eml_file(
         crate::projects::surfaces::resolve_project_id(&base, &navigator_token, project_code)
             .await?;
     let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
-    let filed = post_eml(&base, &navigator_token, project_id, &bytes, kind).await?;
+    let filed = post_eml(&base, &navigator_token, project_id, &bytes, kind, None).await?;
     let summary = eml_filing_summary(&filed);
     println!("Filed {} as a Communication", path.display());
     if summary.deduped {
@@ -2321,12 +2430,17 @@ async fn post_eml(
     project_id: Uuid,
     bytes: &[u8],
     kind: &str,
+    mailbox: Option<&str>,
 ) -> Result<serde_json::Value> {
     let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+    let mut request = json!({ "raw_base64": encoded, "kind": kind });
+    if let Some(mailbox) = mailbox {
+        request["mailbox"] = json!(mailbox);
+    }
     let response = reqwest::Client::new()
         .post(format!("{base}/app/api/projects/{project_id}/mail/eml"))
         .bearer_auth(navigator_token)
-        .json(&json!({ "raw_base64": encoded, "kind": kind }))
+        .json(&request)
         .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
@@ -2539,6 +2653,87 @@ mod tests {
             gmail_message_id("18fa3bc2d4e5f6a7").as_deref(),
             Some("18fa3bc2d4e5f6a7")
         );
+    }
+
+    #[test]
+    fn a_conversation_link_names_the_thread_and_a_message_link_names_one_message() {
+        // Synthetic web ids for the decimal id 1234567890123456789.
+        let thread =
+            "https://mail.google.com/mail/u/0/#inbox/NHgvNZFVxQXXXjLLNMnkPsxfnNsvVMQRDgQWNfRSckg";
+        let message =
+            "https://mail.google.com/mail/u/0/#inbox/CXKnWZngLGgrlKSJsQCLdJqbQBNrBFBFHmpvwkg";
+        assert!(reference_names_conversation(thread));
+        assert!(reference_names_conversation(
+            "https://mail.google.com/mail/u/0/#inbox/112210f47de98115"
+        ));
+        assert!(!reference_names_conversation(message));
+        assert!(!reference_names_conversation("112210f47de98115"));
+        assert_eq!(
+            gmail_message_id(thread).as_deref(),
+            Some("112210f47de98115")
+        );
+        assert_eq!(
+            gmail_message_id(message).as_deref(),
+            Some("112210f47de98115")
+        );
+        assert_eq!(
+            web_id_kind("CXKnWZngLGgrlKSJsQCLdJqbQBNrBFBFHmpvwkg").as_deref(),
+            Some("msg-f")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_message_with_attachments_files_its_raw_copy_through_the_eml_door() {
+        use wiremock::matchers::{body_partial_json, method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let raw = b"From: client@example.test\r\nTo: lawyer@example.test\r\n\
+Date: Tue, 10 Nov 2026 11:36:29 -0500\r\nSubject: Update\r\n\
+MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n\
+--b\r\nContent-Type: text/plain\r\n\r\nScreenshots attached.\r\n\
+--b\r\nContent-Type: image/png\r\nContent-Disposition: attachment; filename=\"a.png\"\r\n\r\nPNG\r\n\
+--b--\r\n";
+        let gmail = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/users/me/messages/message-1"))
+            .and(query_param("format", "raw"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "message-1",
+                "raw": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw),
+            })))
+            .expect(1)
+            .mount(&gmail)
+            .await;
+        let navigator = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path(format!("/app/api/projects/{}/mail/eml", Uuid::nil())))
+            .and(body_partial_json(json!({
+                "kind": "exhibit",
+                "mailbox": "lawyer@example.test",
+                "raw_base64": base64::engine::general_purpose::STANDARD.encode(raw),
+            })))
+            .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+                "source_ref": "eml:synthetic",
+                "deduped": false,
+                "filed": [{ "slug": "mail/synthetic/0.png" }],
+            })))
+            .expect(1)
+            .mount(&navigator)
+            .await;
+        let client = GmailClient::with_base_url("t".into(), Url::parse(&gmail.uri()).unwrap());
+        let base = navigator.uri();
+        let target = FileTarget {
+            base: &base,
+            navigator_token: "navigator-token",
+            project_id: Uuid::nil(),
+            mailbox: "lawyer@example.test",
+        };
+        let filed = file_raw_message(&client, &target, "message-1", "exhibit")
+            .await
+            .unwrap();
+        assert_eq!(filed.attachments_filed, 1);
+        assert!(!filed.deduped);
+        assert_eq!(filed.source_ref, "eml:synthetic");
     }
 
     #[test]
@@ -4291,7 +4486,7 @@ see docs/mail-cli.md#provision-gmail-for-navigator-mail."
             "{error}"
         );
 
-        let error = file_thread("thread-1", None, None).await.unwrap_err();
+        let error = file_thread("thread-1", None, None, None).await.unwrap_err();
         assert!(error.to_string().contains("pass --project"), "{error}");
     }
 
@@ -4413,6 +4608,7 @@ see docs/mail-cli.md#provision-gmail-for-navigator-mail."
             Uuid::nil(),
             b"From: lawyer@example.test\r\n\r\nbody\r\n",
             "letter",
+            None,
         )
         .await
         .unwrap_err()
@@ -4748,7 +4944,7 @@ see docs/mail-cli.md#provision-gmail-for-navigator-mail."
                 .unwrap_err();
             assert!(error.to_string().contains("pass --project"), "{error}");
         }
-        let error = parse_gmail_message("18fa3bc2d4e5f6a7", None, None)
+        let error = parse_gmail_message("18fa3bc2d4e5f6a7", false, None, None, None)
             .await
             .unwrap_err();
         assert!(error.to_string().contains("pass --project"), "{error}");
