@@ -196,7 +196,6 @@ async fn registered_nightly_parent_resumes_the_same_date_and_deduplicates_notice
         "synthetic-messages".into(),
         true,
         Providers {
-            github_forge: None,
             repository_forge: RepositoryForge::None,
             runtime_version: "26.10.22".into(),
             portal_origin: None,
@@ -306,7 +305,6 @@ async fn registered_slack_child_reuses_receipt_after_acceptance_before_checkpoin
         "synthetic-messages".into(),
         true,
         Providers {
-            github_forge: None,
             repository_forge: RepositoryForge::None,
             runtime_version: "26.10.22".into(),
             portal_origin: None,

@@ -84,13 +84,15 @@ The `slack` child, for every **open** Project with an internal channel, runs two
 `upsert-canvas` writes the channel's one canvas: the synopsis (`Project.description`, else name, code, and status), the
 Client DRI directory emails, the Lawyer DRI names and emails, the Portal link, and the Project's handles (code, status,
 repository URL when recorded). The canvas is edited in place, so a later run never stacks a second one; `post-notice`
-posts the run date, the recorded repository's latest default-branch commit date and commits link, and up to 20 open
-stored Deadlines with their `due_at`, calendar role, and authority. It reports unavailable GitHub activity explicitly
-and still runs after a canvas failure. This reports the latest commit, rather than a complete activity feed of pull
-requests or every commit since the previous run. Stored dates are quoted; no legal dates are calculated. The worker
-links the portal under `https://$NAVIGATOR_PUBLIC_HOST` when that variable is set and by path otherwise. The customer
-Slack channel (`external_slack_channel_url`) is not read or written. The journal records only whether the canvas was
-created, edited, or skipped; the directory emails exist only in the canvas body.
+posts the run date, a link to the recorded repository with its latest default-branch commit date, and up to 20 open
+stored Deadlines with their `due_at`, calendar role, and authority. The commit date reads through the same forge as the
+`repository` tag — the Project's own Firm client on Forgejo, the deployment's GitHub client otherwise. It reports
+unavailable repository activity explicitly, still links the recorded repository, and still runs after a canvas failure.
+This reports the latest commit, rather than a complete activity feed of pull requests or every commit since the previous
+run. Stored dates are quoted; no legal dates are calculated. The worker links the portal under
+`https://$NAVIGATOR_PUBLIC_HOST` when that variable is set and by path otherwise. The customer Slack channel
+(`external_slack_channel_url`) is not read or written. The journal records only whether the canvas was created, edited,
+or skipped; the directory emails exist only in the canvas body.
 
 The `repository` child creates or adopts the open Project's private repository and records its URL, then reads the
 committed `navigator.yaml` `version:` through the forge and grades it against the worker's own release: `current` (the
