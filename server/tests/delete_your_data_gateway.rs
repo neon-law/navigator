@@ -150,7 +150,7 @@ async fn the_nautilus_page_renders_on_neon_hosts_with_the_app_checks_and_pricing
             "$29/mo",
             "$290/year",
             "forming an LLC",
-            "From $20",
+            "Priced by Lex Tecnica",
             "Lex Tecnica",
             r##"href="#enrollment""##,
             r#"action="/leads""#,

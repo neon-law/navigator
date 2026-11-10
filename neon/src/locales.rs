@@ -2593,12 +2593,6 @@ mod tests {
                 "{name}"
             );
             for retired in ["$30", "$300", "$20", "$200", "additional member"] {
-                // Nautilus prices a lawyer review "From $20"; the retired
-                // $20 offer was a subscription price, which carries a cadence.
-                if name == "Nautilus" && retired == "$20" {
-                    assert!(!text.contains("$20/"), "{name}: retired offer {retired}");
-                    continue;
-                }
                 assert!(!text.contains(retired), "{name}: retired offer {retired}");
             }
         }
@@ -2699,8 +2693,7 @@ mod tests {
                 "Identity theft insurance",
                 "Unclaimed property",
                 "Estate planning",
-                "From $20",
-                "Lex Tecnica",
+                "Priced by Lex Tecnica",
                 "App Store",
                 "Google Play",
                 "legal fees are excluded",
