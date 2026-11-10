@@ -109,7 +109,7 @@ async fn rpc_handler(
     let principal = principal.map(|Extension(p)| p);
     let response = match parse_request(&body) {
         Ok(request) => dispatch(&state, principal.as_ref(), &request).await,
-        Err(response) => response,
+        Err(response) => *response,
     };
     (StatusCode::OK, Json(serialize(response)))
 }
@@ -131,33 +131,33 @@ pub async fn public_discovery(request: HttpRequest) -> axum::response::Response 
             Some(id) => dispatch_public(id, &request.method, &request.params),
             None => return StatusCode::ACCEPTED.into_response(),
         },
-        Err(response) => response,
+        Err(response) => *response,
     };
     (StatusCode::OK, Json(serialize(response))).into_response()
 }
 
-fn parse_request(body: &str) -> Result<Request, Response> {
+fn parse_request(body: &str) -> Result<Request, Box<Response>> {
     // Parse JSON first to distinguish malformed JSON from invalid JSON-RPC.
     let parsed: Value = serde_json::from_str(body).map_err(|error| {
-        Response::err(
+        Box::new(Response::err(
             Value::Null,
             codes::PARSE_ERROR,
             format!("parse error: {error}"),
-        )
+        ))
     })?;
     let request: Request = serde_json::from_value(parsed).map_err(|error| {
-        Response::err(
+        Box::new(Response::err(
             Value::Null,
             codes::INVALID_REQUEST,
             format!("invalid request: {error}"),
-        )
+        ))
     })?;
     if request.jsonrpc != "2.0" {
-        return Err(Response::err(
+        return Err(Box::new(Response::err(
             request.id.unwrap_or(Value::Null),
             codes::INVALID_REQUEST,
             "jsonrpc must be exactly \"2.0\"",
-        ));
+        )));
     }
     Ok(request)
 }
