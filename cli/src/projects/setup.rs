@@ -113,7 +113,14 @@ fn surface_results(
 fn succeeded(outcome: &ResourceOutcome) -> bool {
     matches!(
         outcome.outcome.as_str(),
-        "created" | "present" | "adopted" | "unchanged" | "repaired" | "notified" | "read_only"
+        "created"
+            | "present"
+            | "adopted"
+            | "unchanged"
+            | "repaired"
+            | "notified"
+            | "read_only"
+            | "synced"
     )
 }
 

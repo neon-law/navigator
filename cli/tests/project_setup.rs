@@ -74,6 +74,14 @@ async fn mount_setup_doors(
             .mount(server)
             .await;
     }
+    Mock::given(method("POST"))
+        .and(path("/app/api/integrations/contacts/sync"))
+        .and(header("authorization", "Bearer test-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "results": [{ "project_code": code, "outcome": "synced" }]
+        })))
+        .mount(server)
+        .await;
 }
 
 fn command() -> Command {
@@ -255,6 +263,10 @@ async fn setup_runs_every_door_and_repeat_execution_is_successful() {
         assert_eq!(
             report["results"][0]["resources"]["calendar"]["outcome"],
             "present"
+        );
+        assert_eq!(
+            report["results"][0]["resources"]["contacts"]["outcome"],
+            "synced"
         );
     }
 }
