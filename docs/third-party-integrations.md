@@ -124,6 +124,9 @@ names the gap.
   `https://www.googleapis.com/auth/calendar` under domain-wide delegation. Delegation grants each scope separately, so
   an account authorized only for Drive passes this check and then fails its calendar calls. A calendar with one of its
   two variables set reports the other.
+- **Contacts** ([Member Contacts](glossary/member-contacts.md)) reads the same two variables and acts as each firm
+  member rather than the delegated user. A Workspace administrator also authorizes
+  `https://www.googleapis.com/auth/contacts` for the Drive account's client id.
 
 After setting the values, apply and restart the deployment:
 

@@ -1,16 +1,15 @@
-//! Google Contacts for a Person's phone numbers.
+//! Each firm member's own Google Contacts, kept in step with their matters.
 //!
-//! When a Person's phone changes in Navigator, the same number belongs on
-//! the Firm's Google contact for that person, so a lawyer dialing from
-//! their phone sees what Navigator knows. This adapter updates one
-//! contact's `phoneNumbers` through the People API, matched by email.
+//! Google Voice and Google Fi both name an incoming caller from the signed-in
+//! Workspace user's own Google Contacts. So the contacts that matter belong to
+//! each lawyer and clerk, not to a shared mailbox: a [`ContactBooks`] opens one
+//! member's book by acting as that member through the Workspace service account
+//! ([`crate::delegation`]), and the account's domain-wide delegation must grant
+//! the Contacts scope (`auth/contacts`).
 //!
-//! It sits beside [`crate::calendar::GoogleCalendar`] on purpose: the same
-//! Workspace service account and delegated user authenticate both, and the
-//! account's domain-wide delegation must also grant the Contacts scope
-//! (`auth/contacts`) before a live call succeeds. That grant is an account
-//! fact the repository cannot supply, so live verification is external;
-//! the code and its mocked tests build without it.
+//! Navigator owns only the contacts it created. Each carries a `clientData`
+//! entry keyed [`MANAGED_KEY`] holding the Person id. A member's own contacts
+//! have no such entry, so a sync never reads, changes, or removes them.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -21,31 +20,40 @@ use thiserror::Error;
 
 const CONTACTS_SCOPE: &str = "https://www.googleapis.com/auth/contacts";
 const PEOPLE_BASE_URL: &str = "https://people.googleapis.com/v1";
+const PERSON_FIELDS: &str = "names,emailAddresses,phoneNumbers,clientData";
+const UPDATE_FIELDS: &str = "names,emailAddresses,phoneNumbers";
 
-/// The environment variables a contacts provider needs. They are Drive's
-/// Workspace coordinates, because the same delegated user owns the firm
-/// directory.
+/// The `clientData` key that marks a contact as Navigator's, holding the
+/// Person id it mirrors.
+pub const MANAGED_KEY: &str = "navigator_person_id";
+
+/// The environment variables a contacts provider needs: the Workspace
+/// delegation Drive and Calendar use.
 pub const CONTACTS_CONFIGURATION_KEYS: [&str; 2] = crate::delegation::WORKSPACE_DELEGATION_KEYS;
 
-/// One phone number as a Google contact carries it: the E.164 value and a
-/// free-form type label. The value is never attached to a tracing span.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// One phone number as a Google contact carries it: the E.164 value and its
+/// label. The value is never attached to a tracing span.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ContactPhone {
-    /// Canonical E.164 spelling, normalized by the store before it gets here.
     pub value: String,
-    /// A People API `type`, conventionally `mobile`, `work`, `home`, or a
-    /// custom label.
     pub label: String,
 }
 
-/// Replace this label's entry; keep every other label so a mobile write cannot
-/// drop a fax.
-fn replace_labeled_phone(phones: &mut Vec<ContactPhone>, label: &str, phone: &ContactPhone) {
-    phones.retain(|existing| existing.label != label);
-    phones.push(ContactPhone {
-        value: phone.value.clone(),
-        label: label.to_string(),
-    });
+/// What a member's book should hold for one Person.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedContact {
+    pub person_id: String,
+    pub name: String,
+    pub email: Option<String>,
+    pub phones: Vec<ContactPhone>,
+}
+
+/// A Navigator contact as the book holds it now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredContact {
+    pub resource_name: String,
+    pub etag: String,
+    pub contact: ManagedContact,
 }
 
 #[derive(Debug, Error)]
@@ -68,68 +76,52 @@ pub enum ContactsError {
         #[source]
         source: reqwest::Error,
     },
-    #[error("no Google contact answers to the email {0}")]
-    NoContact(String),
-    #[error("several Google contacts answer to the email {0}; refusing to guess")]
-    AmbiguousContact(String),
 }
 
-/// Update a Google contact's phone numbers, matched by email.
+/// One member's contact book, limited to the contacts Navigator manages.
 #[async_trait]
-pub trait ContactsService: Send + Sync {
-    /// Replace the contact's stored number for `label` with `phone`,
-    /// creating the entry when the contact has none of that label. The
-    /// number must already be canonical E.164: Navigator normalizes at
-    /// the store boundary, and this adapter does not guess spelling.
-    ///
-    /// # Errors
-    /// [`ContactsError::NoContact`] when no directory contact carries the
-    /// email; [`ContactsError::AmbiguousContact`] when more than one does.
-    async fn set_phone(
+pub trait ContactBook: Send + Sync {
+    /// Every contact carrying [`MANAGED_KEY`].
+    async fn managed_contacts(&self) -> Result<Vec<StoredContact>, ContactsError>;
+    async fn create_contact(&self, contact: &ManagedContact) -> Result<(), ContactsError>;
+    async fn update_contact(
         &self,
-        email: &str,
-        label: &str,
-        phone: &ContactPhone,
+        stored: &StoredContact,
+        contact: &ManagedContact,
     ) -> Result<(), ContactsError>;
+    async fn delete_contact(&self, stored: &StoredContact) -> Result<(), ContactsError>;
 }
 
-/// People API client authenticated as the Workspace service account with
-/// domain-wide delegation.
-pub struct GoogleContacts {
-    token_source: Arc<dyn google_cloud_token::TokenSource>,
-    http: reqwest::Client,
+/// Opens a firm member's contact book.
+#[async_trait]
+pub trait ContactBooks: Send + Sync {
+    async fn book(&self, member_email: &str) -> Result<Arc<dyn ContactBook>, ContactsError>;
+}
+
+/// Opens books through the People API, acting as each member.
+pub struct GoogleContactBooks {
+    service_account: String,
     base_url: String,
 }
 
-impl GoogleContacts {
-    /// Build a client that acts as `delegation.delegated_user`.
-    ///
-    /// # Errors
-    /// [`ContactsError::Authentication`] when no runtime credential exists.
-    pub async fn new(
-        delegation: &crate::delegation::WorkspaceDelegation,
-    ) -> Result<Self, ContactsError> {
-        let token_source = delegation
-            .token_source(&[CONTACTS_SCOPE])
-            .await
-            .map_err(|_| ContactsError::Authentication)?;
-        Ok(Self::from_parts(token_source, PEOPLE_BASE_URL))
-    }
-
+impl GoogleContactBooks {
     /// Build from [`CONTACTS_CONFIGURATION_KEYS`], naming every missing key.
     ///
     /// # Errors
-    /// [`ContactsError::MissingConfig`] or an authentication failure.
-    pub async fn from_env() -> Result<Self, ContactsError> {
-        Self::from_lookup(|key| std::env::var(key).ok()).await
+    /// [`ContactsError::MissingConfig`].
+    pub fn from_env() -> Result<Self, ContactsError> {
+        Self::from_lookup(|key| std::env::var(key).ok())
     }
 
-    async fn from_lookup<F>(get: F) -> Result<Self, ContactsError>
+    fn from_lookup<F>(get: F) -> Result<Self, ContactsError>
     where
         F: Fn(&str) -> Option<String>,
     {
         match crate::delegation::WorkspaceDelegation::from_lookup(get) {
-            Ok(delegation) => Self::new(&delegation).await,
+            Ok(delegation) => Ok(Self {
+                service_account: delegation.service_account,
+                base_url: PEOPLE_BASE_URL.to_string(),
+            }),
             Err(crate::delegation::DelegationError::MissingConfig(missing)) => {
                 Err(ContactsError::MissingConfig(missing))
             }
@@ -138,7 +130,34 @@ impl GoogleContacts {
             }
         }
     }
+}
 
+#[async_trait]
+impl ContactBooks for GoogleContactBooks {
+    async fn book(&self, member_email: &str) -> Result<Arc<dyn ContactBook>, ContactsError> {
+        let delegation = crate::delegation::WorkspaceDelegation {
+            service_account: self.service_account.clone(),
+            delegated_user: member_email.to_string(),
+        };
+        let token_source = delegation
+            .token_source(&[CONTACTS_SCOPE])
+            .await
+            .map_err(|_| ContactsError::Authentication)?;
+        Ok(Arc::new(GoogleContactBook::from_parts(
+            token_source,
+            &self.base_url,
+        )))
+    }
+}
+
+/// One member's book through the People API.
+pub struct GoogleContactBook {
+    token_source: Arc<dyn google_cloud_token::TokenSource>,
+    http: reqwest::Client,
+    base_url: String,
+}
+
+impl GoogleContactBook {
     fn from_parts(token_source: Arc<dyn google_cloud_token::TokenSource>, base_url: &str) -> Self {
         Self {
             token_source,
@@ -156,11 +175,16 @@ impl GoogleContacts {
         Ok(raw.strip_prefix("Bearer ").unwrap_or(&raw).to_string())
     }
 
-    fn checked(
-        response: Result<reqwest::Response, reqwest::Error>,
+    async fn send(
+        &self,
+        request: reqwest::RequestBuilder,
         action: &'static str,
     ) -> Result<reqwest::Response, ContactsError> {
-        let response = response.map_err(|source| ContactsError::Request { action, source })?;
+        let response = request
+            .bearer_auth(self.token().await?)
+            .send()
+            .await
+            .map_err(|source| ContactsError::Request { action, source })?;
         if response.status().is_success() {
             Ok(response)
         } else {
@@ -170,196 +194,260 @@ impl GoogleContacts {
             })
         }
     }
-
-    /// Find the directory contact whose `emailAddresses` carry exactly
-    /// `email` (case-insensitively). The search API is prefix-fuzzy, so the
-    /// adapter filters its results and refuses an ambiguous match.
-    async fn find_contact(
-        &self,
-        email: &str,
-    ) -> Result<Option<(String, String, Vec<ContactPhone>)>, ContactsError> {
-        let action = "searching contacts";
-        let response = self
-            .http
-            .get(format!("{}/people:searchContacts", self.base_url))
-            .bearer_auth(self.token().await?)
-            .query(&[
-                ("query", email),
-                ("readMask", "emailAddresses,phoneNumbers,metadata"),
-            ])
-            .send()
-            .await;
-        let body: SearchResponse = Self::checked(response, action)?
-            .json()
-            .await
-            .map_err(|source| ContactsError::Response { action, source })?;
-
-        let wanted = email.trim().to_ascii_lowercase();
-        let matches: Vec<&SearchPerson> = body
-            .results
-            .iter()
-            .filter_map(|found| found.person.as_ref())
-            .filter(|person| {
-                person
-                    .email_addresses
-                    .iter()
-                    .any(|address| address.value.trim().to_ascii_lowercase() == wanted)
-            })
-            .collect();
-        match matches.as_slice() {
-            [person] => Ok(Some((
-                person.resource_name.clone(),
-                person.etag.clone(),
-                person
-                    .phone_numbers
-                    .iter()
-                    .map(|phone| ContactPhone {
-                        value: phone.value.clone(),
-                        label: phone
-                            .type_field
-                            .clone()
-                            .unwrap_or_else(|| "other".to_string()),
-                    })
-                    .collect(),
-            ))),
-            [] => Ok(None),
-            _ => Err(ContactsError::AmbiguousContact(email.to_string())),
-        }
-    }
 }
 
 #[derive(Deserialize)]
-struct SearchResponse {
+#[serde(rename_all = "camelCase")]
+struct ConnectionsPage {
     #[serde(default)]
-    results: Vec<SearchResult>,
+    connections: Vec<ApiPerson>,
+    next_page_token: Option<String>,
 }
 
-#[derive(Deserialize)]
-struct SearchResult {
-    #[serde(default)]
-    person: Option<SearchPerson>,
-}
-
-#[derive(Deserialize)]
-struct SearchPerson {
-    /// The `people/{id}` path the update call addresses.
-    #[serde(rename = "resourceName")]
+#[derive(Deserialize, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct ApiPerson {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     resource_name: String,
-    /// Optimistic-concurrency token; the update carries it back.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     etag: String,
-    #[serde(default, rename = "emailAddresses")]
-    email_addresses: Vec<EmailAddress>,
-    #[serde(default, rename = "phoneNumbers")]
+    #[serde(default)]
+    names: Vec<ApiName>,
+    #[serde(default)]
+    email_addresses: Vec<ApiValue>,
+    #[serde(default)]
     phone_numbers: Vec<ApiPhone>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    client_data: Vec<ApiClientData>,
 }
 
-#[derive(Deserialize)]
-struct EmailAddress {
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ApiName {
+    #[serde(default)]
+    unstructured_name: String,
+}
+
+#[derive(Deserialize, Serialize)]
+struct ApiValue {
     value: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct ApiPhone {
     value: String,
-    #[serde(rename = "type")]
-    type_field: Option<String>,
+    #[serde(rename = "type", default)]
+    label: Option<String>,
 }
 
-#[derive(Serialize)]
-struct UpdateContactBody<'a> {
-    etag: &'a str,
-    #[serde(rename = "phoneNumbers")]
-    phone_numbers: Vec<ApiPhoneOut<'a>>,
+#[derive(Deserialize, Serialize)]
+struct ApiClientData {
+    key: String,
+    value: String,
 }
 
-#[derive(Serialize)]
-struct ApiPhoneOut<'a> {
-    value: &'a str,
-    #[serde(rename = "type")]
-    type_field: &'a str,
+impl ApiPerson {
+    fn from_contact(contact: &ManagedContact) -> Self {
+        Self {
+            names: vec![ApiName {
+                unstructured_name: contact.name.clone(),
+            }],
+            email_addresses: contact
+                .email
+                .iter()
+                .map(|value| ApiValue {
+                    value: value.clone(),
+                })
+                .collect(),
+            phone_numbers: contact
+                .phones
+                .iter()
+                .map(|phone| ApiPhone {
+                    value: phone.value.clone(),
+                    label: Some(phone.label.clone()),
+                })
+                .collect(),
+            client_data: vec![ApiClientData {
+                key: MANAGED_KEY.to_string(),
+                value: contact.person_id.clone(),
+            }],
+            ..Self::default()
+        }
+    }
+
+    /// The contact this entry mirrors, or `None` for one Navigator did not
+    /// create.
+    fn into_stored(self) -> Option<StoredContact> {
+        let person_id = self
+            .client_data
+            .iter()
+            .find(|entry| entry.key == MANAGED_KEY)?
+            .value
+            .clone();
+        Some(StoredContact {
+            resource_name: self.resource_name,
+            etag: self.etag,
+            contact: ManagedContact {
+                person_id,
+                name: self
+                    .names
+                    .into_iter()
+                    .next()
+                    .map(|name| name.unstructured_name)
+                    .unwrap_or_default(),
+                email: self.email_addresses.into_iter().next().map(|e| e.value),
+                phones: self
+                    .phone_numbers
+                    .into_iter()
+                    .map(|phone| ContactPhone {
+                        value: phone.value,
+                        label: phone.label.unwrap_or_else(|| "other".to_string()),
+                    })
+                    .collect(),
+            },
+        })
+    }
 }
 
 #[async_trait]
-impl ContactsService for GoogleContacts {
-    async fn set_phone(
-        &self,
-        email: &str,
-        label: &str,
-        phone: &ContactPhone,
-    ) -> Result<(), ContactsError> {
-        let Some((resource_name, etag, mut phones)) = self.find_contact(email).await? else {
-            return Err(ContactsError::NoContact(email.to_string()));
-        };
+impl ContactBook for GoogleContactBook {
+    async fn managed_contacts(&self) -> Result<Vec<StoredContact>, ContactsError> {
+        let action = "listing contacts";
+        let mut managed = Vec::new();
+        let mut page_token: Option<String> = None;
+        loop {
+            let mut query = vec![("personFields", PERSON_FIELDS), ("pageSize", "1000")];
+            if let Some(token) = page_token.as_deref() {
+                query.push(("pageToken", token));
+            }
+            let request = self
+                .http
+                .get(format!("{}/people/me/connections", self.base_url))
+                .query(&query);
+            let page: ConnectionsPage = self
+                .send(request, action)
+                .await?
+                .json()
+                .await
+                .map_err(|source| ContactsError::Response { action, source })?;
+            managed.extend(
+                page.connections
+                    .into_iter()
+                    .filter_map(ApiPerson::into_stored),
+            );
+            match page.next_page_token {
+                Some(token) if !token.is_empty() => page_token = Some(token),
+                _ => return Ok(managed),
+            }
+        }
+    }
 
-        replace_labeled_phone(&mut phones, label, phone);
-
-        let action = "updating the contact";
-        let body = UpdateContactBody {
-            etag: &etag,
-            phone_numbers: phones
-                .iter()
-                .map(|p| ApiPhoneOut {
-                    value: &p.value,
-                    type_field: &p.label,
-                })
-                .collect(),
-        };
-        let response = self
+    async fn create_contact(&self, contact: &ManagedContact) -> Result<(), ContactsError> {
+        let request = self
             .http
-            .patch(format!("{}/{resource_name}", self.base_url))
-            .bearer_auth(self.token().await?)
-            .query(&[("updatePersonFields", "phoneNumbers")])
-            .json(&body)
-            .send()
-            .await;
-        Self::checked(response, action)?;
-        Ok(())
+            .post(format!("{}/people:createContact", self.base_url))
+            .json(&ApiPerson::from_contact(contact));
+        self.send(request, "creating a contact").await.map(drop)
+    }
+
+    async fn update_contact(
+        &self,
+        stored: &StoredContact,
+        contact: &ManagedContact,
+    ) -> Result<(), ContactsError> {
+        let mut body = ApiPerson::from_contact(contact);
+        body.resource_name.clone_from(&stored.resource_name);
+        body.etag.clone_from(&stored.etag);
+        let request = self
+            .http
+            .patch(format!(
+                "{}/{}:updateContact",
+                self.base_url, stored.resource_name
+            ))
+            .query(&[("updatePersonFields", UPDATE_FIELDS)])
+            .json(&body);
+        self.send(request, "updating a contact").await.map(drop)
+    }
+
+    async fn delete_contact(&self, stored: &StoredContact) -> Result<(), ContactsError> {
+        let request = self.http.delete(format!(
+            "{}/{}:deleteContact",
+            self.base_url, stored.resource_name
+        ));
+        self.send(request, "deleting a contact").await.map(drop)
     }
 }
 
-/// An in-memory directory for tests: no network, no credentials, and a
-/// deterministic record of what was written.
-#[derive(Default)]
-pub struct FakeContacts {
-    /// email -> (etag, phones). Emails are matched case-insensitively,
-    /// like the real directory.
-    directory: Mutex<BTreeMap<String, (u64, Vec<ContactPhone>)>>,
+/// In-memory books for tests: each member's Navigator contacts by Person id.
+#[derive(Debug, Default, Clone)]
+pub struct FakeContactBooks {
+    books: Arc<Mutex<BTreeMap<String, BTreeMap<String, ManagedContact>>>>,
 }
 
-impl FakeContacts {
-    /// Seed the directory with a contact at `email` carrying `phones`.
-    pub fn with_contact(&self, email: &str, phones: Vec<ContactPhone>) {
-        self.directory
+impl FakeContactBooks {
+    /// The Navigator contacts in `member_email`'s book, by Person id.
+    #[must_use]
+    pub fn contacts(&self, member_email: &str) -> BTreeMap<String, ManagedContact> {
+        self.books
             .lock()
             .expect("fake contacts lock")
-            .insert(email.to_ascii_lowercase(), (1, phones));
-    }
-
-    /// The phones the directory now holds for `email`.
-    pub fn phones(&self, email: &str) -> Vec<ContactPhone> {
-        self.directory
-            .lock()
-            .expect("fake contacts lock")
-            .get(&email.to_ascii_lowercase())
-            .map(|(_, phones)| phones.clone())
+            .get(member_email)
+            .cloned()
             .unwrap_or_default()
     }
 }
 
 #[async_trait]
-impl ContactsService for FakeContacts {
-    async fn set_phone(
+impl ContactBooks for FakeContactBooks {
+    async fn book(&self, member_email: &str) -> Result<Arc<dyn ContactBook>, ContactsError> {
+        Ok(Arc::new(FakeContactBook {
+            books: Arc::clone(&self.books),
+            member: member_email.to_string(),
+        }))
+    }
+}
+
+struct FakeContactBook {
+    books: Arc<Mutex<BTreeMap<String, BTreeMap<String, ManagedContact>>>>,
+    member: String,
+}
+
+impl FakeContactBook {
+    fn with_book<T>(&self, apply: impl FnOnce(&mut BTreeMap<String, ManagedContact>) -> T) -> T {
+        let mut books = self.books.lock().expect("fake contacts lock");
+        apply(books.entry(self.member.clone()).or_default())
+    }
+}
+
+#[async_trait]
+impl ContactBook for FakeContactBook {
+    async fn managed_contacts(&self) -> Result<Vec<StoredContact>, ContactsError> {
+        Ok(self.with_book(|book| {
+            book.values()
+                .map(|contact| StoredContact {
+                    resource_name: format!("people/{}", contact.person_id),
+                    etag: "etag".to_string(),
+                    contact: contact.clone(),
+                })
+                .collect()
+        }))
+    }
+
+    async fn create_contact(&self, contact: &ManagedContact) -> Result<(), ContactsError> {
+        self.with_book(|book| book.insert(contact.person_id.clone(), contact.clone()));
+        Ok(())
+    }
+
+    async fn update_contact(
         &self,
-        email: &str,
-        label: &str,
-        phone: &ContactPhone,
+        _stored: &StoredContact,
+        contact: &ManagedContact,
     ) -> Result<(), ContactsError> {
-        let mut directory = self.directory.lock().expect("fake contacts lock");
-        let entry = directory
-            .get_mut(&email.to_ascii_lowercase())
-            .ok_or_else(|| ContactsError::NoContact(email.to_string()))?;
-        entry.0 += 1;
-        replace_labeled_phone(&mut entry.1, label, phone);
+        self.create_contact(contact).await
+    }
+
+    async fn delete_contact(&self, stored: &StoredContact) -> Result<(), ContactsError> {
+        self.with_book(|book| book.remove(&stored.contact.person_id));
         Ok(())
     }
 }
@@ -368,83 +456,14 @@ impl ContactsService for FakeContacts {
 mod tests {
     use std::sync::Arc;
 
-    use super::{ContactPhone, ContactsError, ContactsService, FakeContacts, GoogleContacts};
-
     use async_trait::async_trait;
-    use wiremock::matchers::{method, path, query_param};
+    use wiremock::matchers::{body_partial_json, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    #[tokio::test]
-    async fn missing_configuration_names_every_key() {
-        let error = GoogleContacts::from_lookup(|_| None)
-            .await
-            .err()
-            .expect("no configuration is refused");
-        let message = error.to_string();
-        assert!(
-            message.contains("NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER"),
-            "{message}"
-        );
-        assert!(
-            message.contains("NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT"),
-            "{message}"
-        );
-    }
-
-    #[tokio::test]
-    async fn an_unknown_contact_is_refused_not_created() {
-        let fake = FakeContacts::default();
-        let error = fake
-            .set_phone(
-                "stranger@example.com",
-                "mobile",
-                &ContactPhone {
-                    value: "+15550142".to_string(),
-                    label: "mobile".to_string(),
-                },
-            )
-            .await
-            .expect_err("an unknown contact is refused");
-        assert!(matches!(error, ContactsError::NoContact(_)), "{error}");
-    }
-
-    #[tokio::test]
-    async fn a_write_replaces_only_its_own_label() {
-        let fake = FakeContacts::default();
-        fake.with_contact(
-            "client@example.com",
-            vec![
-                ContactPhone {
-                    value: "+15550142".to_string(),
-                    label: "mobile".to_string(),
-                },
-                ContactPhone {
-                    value: "+15550100".to_string(),
-                    label: "work".to_string(),
-                },
-            ],
-        );
-        fake.set_phone(
-            "Client@example.com",
-            "mobile",
-            &ContactPhone {
-                value: "+15550199".to_string(),
-                label: "mobile".to_string(),
-            },
-        )
-        .await
-        .expect("a known contact accepts the write");
-        let phones = fake.phones("client@example.com");
-        assert_eq!(phones.len(), 2, "the work number survives");
-        assert!(phones.contains(&ContactPhone {
-            value: "+15550199".to_string(),
-            label: "mobile".to_string(),
-        }));
-        assert!(phones.contains(&ContactPhone {
-            value: "+15550100".to_string(),
-            label: "work".to_string(),
-        }));
-    }
+    use super::{
+        ContactBook, ContactPhone, ContactsError, GoogleContactBook, GoogleContactBooks,
+        ManagedContact, StoredContact, MANAGED_KEY, UPDATE_FIELDS,
+    };
 
     #[derive(Debug)]
     struct StaticToken;
@@ -456,155 +475,126 @@ mod tests {
         }
     }
 
-    fn google(server: &MockServer) -> GoogleContacts {
-        GoogleContacts::from_parts(Arc::new(StaticToken), &server.uri())
+    fn book(server: &MockServer) -> GoogleContactBook {
+        GoogleContactBook::from_parts(Arc::new(StaticToken), &server.uri())
     }
 
-    fn directory_person(resource_name: &str, email: &str) -> serde_json::Value {
-        serde_json::json!({
-            "resourceName": resource_name,
-            "etag": "%etag-1",
-            "emailAddresses": [{ "value": email }],
-            "phoneNumbers": [{ "value": "+15550100", "type": "work" }]
-        })
+    fn contact() -> ManagedContact {
+        ManagedContact {
+            person_id: "person-1".into(),
+            name: "Ada Client".into(),
+            email: Some("ada@example.com".into()),
+            phones: vec![ContactPhone {
+                value: "+15555550100".into(),
+                label: "mobile".into(),
+            }],
+        }
+    }
+
+    #[test]
+    fn missing_configuration_names_every_key() {
+        let Err(ContactsError::MissingConfig(missing)) = GoogleContactBooks::from_lookup(|_| None)
+        else {
+            panic!("no configuration is refused");
+        };
+        assert!(missing.contains("NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER"));
+        assert!(missing.contains("NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT"));
     }
 
     #[tokio::test]
-    async fn a_live_write_searches_by_email_then_patches_the_phones() {
+    async fn lists_only_navigator_contacts_across_pages() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/people:searchContacts"))
-            .and(query_param("query", "client@example.com"))
+            .and(path("/people/me/connections"))
+            .and(query_param("pageToken", "next"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "results": [
-                    { "person": directory_person("people/123", "other@example.com") },
-                    { "person": directory_person("people/456", "client@example.com") }
-                ]
+                "connections": [{
+                    "resourceName": "people/c2",
+                    "etag": "e2",
+                    "names": [{ "unstructuredName": "Ada Client" }],
+                    "clientData": [{ "key": MANAGED_KEY, "value": "person-1" }]
+                }]
             })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/people/me/connections"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "connections": [{
+                    "resourceName": "people/c1",
+                    "etag": "e1",
+                    "names": [{ "unstructuredName": "A personal friend" }]
+                }],
+                "nextPageToken": "next"
+            })))
+            .mount(&server)
+            .await;
+
+        let managed = book(&server).managed_contacts().await.unwrap();
+        assert_eq!(managed.len(), 1, "a contact without the marker is not ours");
+        assert_eq!(managed[0].resource_name, "people/c2");
+        assert_eq!(managed[0].contact.person_id, "person-1");
+        assert_eq!(managed[0].contact.name, "Ada Client");
+    }
+
+    #[tokio::test]
+    async fn creates_a_marked_contact() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/people:createContact"))
+            .and(body_partial_json(serde_json::json!({
+                "names": [{ "unstructuredName": "Ada Client" }],
+                "phoneNumbers": [{ "value": "+15555550100", "type": "mobile" }],
+                "clientData": [{ "key": MANAGED_KEY, "value": "person-1" }]
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
             .expect(1)
             .mount(&server)
             .await;
-        // The patch carries the exact previous phones for every other
-        // label, the new mobile, and the etag for optimistic concurrency.
+        book(&server).create_contact(&contact()).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn updates_with_the_etag_and_deletes_by_resource_name() {
+        let server = MockServer::start().await;
+        let stored = StoredContact {
+            resource_name: "people/c2".into(),
+            etag: "e2".into(),
+            contact: contact(),
+        };
         Mock::given(method("PATCH"))
-            .and(path("/people/456"))
-            .and(query_param("updatePersonFields", "phoneNumbers"))
-            .respond_with(move |request: &wiremock::Request| {
-                let body: serde_json::Value =
-                    serde_json::from_slice(&request.body).expect("request body is json");
-                let etag = body["etag"].as_str().expect("etag present");
-                let phones = body["phoneNumbers"].as_array().expect("phones present");
-                let values: Vec<&str> = phones.iter().filter_map(|p| p["value"].as_str()).collect();
-                if etag != "%etag-1" || values != ["+15550100", "+15550199"] {
-                    ResponseTemplate::new(400)
-                } else {
-                    ResponseTemplate::new(200)
-                }
-            })
+            .and(path("/people/c2:updateContact"))
+            .and(query_param("updatePersonFields", UPDATE_FIELDS))
+            .and(body_partial_json(serde_json::json!({ "etag": "e2" })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .expect(1)
             .mount(&server)
             .await;
-
-        google(&server)
-            .set_phone(
-                "client@example.com",
-                "mobile",
-                &ContactPhone {
-                    value: "+15550199".to_string(),
-                    label: "mobile".to_string(),
-                },
-            )
-            .await
-            .expect("the mock directory accepts the write");
+        Mock::given(method("DELETE"))
+            .and(path("/people/c2:deleteContact"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let book = book(&server);
+        book.update_contact(&stored, &contact()).await.unwrap();
+        book.delete_contact(&stored).await.unwrap();
     }
 
     #[tokio::test]
-    async fn a_fuzzy_search_hit_that_misses_the_exact_email_is_no_contact() {
+    async fn a_refused_call_names_its_action() {
         let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/people:searchContacts"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                // The People search is prefix-fuzzy: `client` also returns
-                // `clientco@example.com`, which is not the person asked for.
-                "results": [
-                    { "person": directory_person("people/789", "clientco@example.com") }
-                ]
-            })))
-            .mount(&server)
-            .await;
-        let error = google(&server)
-            .set_phone(
-                "client@example.com",
-                "mobile",
-                &ContactPhone {
-                    value: "+15550199".to_string(),
-                    label: "mobile".to_string(),
-                },
-            )
-            .await
-            .expect_err("a fuzzy-only match is refused");
-        assert!(matches!(error, ContactsError::NoContact(_)), "{error}");
-    }
-
-    #[tokio::test]
-    async fn two_directory_hits_for_one_email_are_refused() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/people:searchContacts"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "results": [
-                    { "person": directory_person("people/456", "client@example.com") },
-                    { "person": directory_person("people/999", "Client@example.com") }
-                ]
-            })))
-            .mount(&server)
-            .await;
-        let error = google(&server)
-            .set_phone(
-                "client@example.com",
-                "mobile",
-                &ContactPhone {
-                    value: "+15550199".to_string(),
-                    label: "mobile".to_string(),
-                },
-            )
-            .await
-            .expect_err("two contacts for one email are refused");
-        assert!(
-            matches!(error, ContactsError::AmbiguousContact(_)),
-            "{error}"
-        );
-    }
-
-    #[tokio::test]
-    async fn an_api_failure_names_its_action_and_status() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/people:searchContacts"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "results": [
-                    { "person": directory_person("people/456", "client@example.com") }
-                ]
-            })))
-            .mount(&server)
-            .await;
-        Mock::given(method("PATCH"))
+        Mock::given(method("POST"))
             .respond_with(ResponseTemplate::new(403))
             .mount(&server)
             .await;
-        let error = google(&server)
-            .set_phone(
-                "client@example.com",
-                "mobile",
-                &ContactPhone {
-                    value: "+15550199".to_string(),
-                    label: "mobile".to_string(),
-                },
-            )
-            .await
-            .expect_err("a refused patch surfaces its error");
-        assert!(
-            error.to_string().contains("updating the contact"),
-            "{error}"
-        );
+        let error = book(&server).create_contact(&contact()).await.unwrap_err();
+        assert!(matches!(
+            error,
+            ContactsError::Api {
+                action: "creating a contact",
+                status: 403
+            }
+        ));
     }
 }

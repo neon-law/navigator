@@ -5,9 +5,9 @@ description: "A Person Phone is one of a Person's phone numbers, normalized to E
 
 A single phone number belonging to a [Person](person.md), stored as one row in the `person_phone` table. The number is
 normalized to E.164 — a leading `+`, then 8–15 digits — at the write boundary by `store::person_phones::normalize_e164`,
-so every reader, including the Google Contacts sync, sees one spelling. A bare number without a country code is read as
-North American (ten digits, or eleven opening with the US country code); anything else without a `+` is refused rather
-than guessed at.
+so every reader, including the [Member Contacts](member-contacts.md) sync, sees one spelling. A bare number without a
+country code is read as North American (ten digits, or eleven opening with the US country code); anything else without a
+`+` is refused rather than guessed at.
 
 `label` is a closed vocabulary — `mobile`, `work`, `home`, `fax`, `other` — validated by the store. `is_primary` marks
 the one number a filing or a callback uses first: at most one row per Person carries it, enforced by store convention

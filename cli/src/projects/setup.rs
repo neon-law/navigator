@@ -143,48 +143,29 @@ async fn setup_one(base: &str, token: &str, project: &VisibleProject) -> Project
     resources.extend(surface_results(
         surfaces::post_reconcile(base, token, project.id).await,
     ));
-    resources.insert(
-        "slack".to_string(),
-        integration_result(
-            &project.code,
-            remote::post_integration_door(
-                base,
-                token,
-                "/app/api/integrations/slack/ensure",
-                serde_json::json!({ "project_code": project.code }),
-            )
-            .await
-            .and_then(|report| one_integration_result(&report.results)),
-        ),
-    );
-    resources.insert(
-        "calendar".to_string(),
-        integration_result(
-            &project.code,
-            remote::post_integration_door(
-                base,
-                token,
-                "/app/api/integrations/calendar/ensure",
-                serde_json::json!({ "project_code": project.code }),
-            )
-            .await
-            .and_then(|report| one_integration_result(&report.results)),
-        ),
-    );
-    resources.insert(
-        "notion".to_string(),
-        integration_result(
-            &project.code,
-            remote::post_integration_door(
-                base,
-                token,
-                "/app/api/integrations/notion/ensure",
-                serde_json::json!({ "project_code": project.code }),
-            )
-            .await
-            .and_then(|report| one_integration_result(&report.results)),
-        ),
-    );
+    // Contacts runs after the calendar so a matter's people reach each
+    // member's phone once the matter is set up.
+    for (name, door) in [
+        ("slack", "/app/api/integrations/slack/ensure"),
+        ("calendar", "/app/api/integrations/calendar/ensure"),
+        ("contacts", "/app/api/integrations/contacts/sync"),
+        ("notion", "/app/api/integrations/notion/ensure"),
+    ] {
+        resources.insert(
+            name.to_string(),
+            integration_result(
+                &project.code,
+                remote::post_integration_door(
+                    base,
+                    token,
+                    door,
+                    serde_json::json!({ "project_code": project.code }),
+                )
+                .await
+                .and_then(|report| one_integration_result(&report.results)),
+            ),
+        );
+    }
     ProjectSetupOutcome {
         project_code: project.code.clone(),
         resources,

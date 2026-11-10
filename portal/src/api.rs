@@ -390,6 +390,11 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
         ),
         (
             "POST",
+            "/app/api/integrations/contacts/sync",
+            post(crate::integrations_api::contacts_sync_door),
+        ),
+        (
+            "POST",
             "/app/api/integrations/calendar/deadline-mirror",
             post(crate::integrations_api::calendar_deadline_mirror_door),
         ),
