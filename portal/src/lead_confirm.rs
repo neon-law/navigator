@@ -97,10 +97,9 @@ pub async fn send(state: &AppState, lead_id: Uuid, email: &str) {
 
 /// Answer an accepted lead with its confirmation link, off the request path
 /// so the visitor's redirect never waits on mail. The spawned send keeps the
-/// request's mail sender, which a new task would otherwise lose.
+/// request's Brand and mail sender, which a new task would otherwise lose.
 pub fn spawn_send(state: AppState, lead_id: Uuid, email: String) {
-    let sender = views::brand::request_sender_email();
-    tokio::spawn(views::brand::scope_sender(sender, async move {
+    tokio::spawn(views::brand::carry_request_scope(async move {
         send(&state, lead_id, &email).await;
     }));
 }
@@ -211,6 +210,39 @@ mod tests {
         assert!(
             read(&sessions, &session_cookie, 1_001).is_none(),
             "a session is no token"
+        );
+    }
+
+    /// The confirmation is sent off the request path, where the request's
+    /// Brand would otherwise fall back to the deployment default.
+    #[tokio::test]
+    async fn the_confirmation_speaks_for_the_brand_that_took_the_request() {
+        let email = std::sync::Arc::new(crate::email::CapturingEmail::new());
+        let mut state =
+            crate::test_support::app_state(store::test_support::mem_surreal().await).await;
+        state.email = email.clone();
+        let branding = &views::brand::IEP_DEFENDERS_BRANDING;
+        views::brand::scope(branding, async {
+            spawn_send(state, Uuid::new_v4(), "visitor@example.com".to_string());
+        })
+        .await;
+        let mut sent = Vec::new();
+        for _ in 0..50 {
+            sent = email.captured();
+            if !sent.is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert_eq!(sent.len(), 1);
+        assert_eq!(
+            sent[0].subject,
+            format!("Confirm your email for {}", branding.firm.site_name)
+        );
+        assert!(
+            sent[0].body.contains(branding.firm_email),
+            "{}",
+            sent[0].body
         );
     }
 

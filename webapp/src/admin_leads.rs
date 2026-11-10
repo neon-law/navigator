@@ -64,6 +64,8 @@ pub struct LeadDetail {
     pub consented_at: String,
     pub sms_consented_at: String,
     pub sms_opt_in: String,
+    /// Whether the latest submission agreed to a call at its phone number.
+    pub call_opt_in: String,
     pub sms_consent_phone: String,
     pub sms_consent_source_path: String,
     pub sms_consent_version: String,
@@ -283,6 +285,9 @@ pub async fn lead_show_view() -> Result<LeadShowView, ServerFnError> {
     };
     let existing_person_id = existing_person_id(&surreal, &lead).await?;
     let latest_consent = latest_consent(&surreal, lead.id).await?;
+    let call_opt_in = latest_consent
+        .as_ref()
+        .map_or_else(|| "—".to_string(), |event| event.call_opt_in.to_string());
     let (
         sms_consented_at,
         sms_opt_in,
@@ -316,6 +321,7 @@ pub async fn lead_show_view() -> Result<LeadShowView, ServerFnError> {
             consented_at: format_time(lead.consented_at),
             sms_consented_at,
             sms_opt_in,
+            call_opt_in,
             sms_consent_phone,
             sms_consent_source_path,
             sms_consent_version,
@@ -572,6 +578,8 @@ fn conversion_controls(lead: &LeadDetail, csrf: &str) -> Element {
 
 fn sms_consent_facts(lead: &LeadDetail) -> Element {
     rsx! {
+        dt { "Callback consent" }
+        dd { "{lead.call_opt_in}" }
         dt { "SMS opt-in" }
         dd { "{lead.sms_opt_in}" }
         dt { "SMS consent phone" }
@@ -648,6 +656,7 @@ mod tests {
                 consented_at: "2026-01-01T00:00:00Z".to_string(),
                 sms_consented_at: "—".to_string(),
                 sms_opt_in: "—".to_string(),
+                call_opt_in: "true".to_string(),
                 sms_consent_phone: "—".to_string(),
                 sms_consent_source_path: "—".to_string(),
                 sms_consent_version: "—".to_string(),
@@ -662,6 +671,10 @@ mod tests {
         }));
         assert!(html.contains("+1 (555) 010-9876"), "{html}");
         assert!(html.contains("professional ethics"), "{html}");
+        assert!(
+            html.contains("<dt>Callback consent</dt><dd>true</dd>"),
+            "{html}"
+        );
         assert!(html.contains("Create Person"), "{html}");
         assert!(!html.contains(r#"value="converted""#), "{html}");
         assert!(
@@ -693,6 +706,7 @@ mod tests {
                 consented_at: "2026-01-01T00:00:00Z".to_string(),
                 sms_consented_at: "—".to_string(),
                 sms_opt_in: "—".to_string(),
+                call_opt_in: "true".to_string(),
                 sms_consent_phone: "—".to_string(),
                 sms_consent_source_path: "—".to_string(),
                 sms_consent_version: "—".to_string(),
@@ -733,6 +747,7 @@ mod tests {
                 consented_at: "2026-01-01T00:00:00Z".to_string(),
                 sms_consented_at: "—".to_string(),
                 sms_opt_in: "—".to_string(),
+                call_opt_in: "true".to_string(),
                 sms_consent_phone: "—".to_string(),
                 sms_consent_source_path: "—".to_string(),
                 sms_consent_version: "—".to_string(),

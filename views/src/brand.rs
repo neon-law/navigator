@@ -1683,6 +1683,13 @@ pub fn request_sender_email() -> Option<String> {
     REQUEST_SENDER.try_with(Clone::clone).ok().flatten()
 }
 
+/// Carry the calling request's branding and mail sender into `future`, for
+/// work spawned off the request path: a new task starts outside both scopes
+/// and would speak for the deployment's default Brand.
+pub fn carry_request_scope<R>(future: impl Future<Output = R>) -> impl Future<Output = R> {
+    scope(current(), scope_sender(request_sender_email(), future))
+}
+
 static PROCESS_BRANDING: OnceLock<&'static Branding> = OnceLock::new();
 
 /// Install the immutable branding used by spawned work in a production

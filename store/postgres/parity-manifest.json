@@ -1297,6 +1297,8 @@
         "updated_at": "datetime"
       },
       "lead_consent": {
+        "call_consent_version": "option<string>",
+        "call_opt_in": "option<bool>",
         "consented_at": "datetime",
         "id": "record",
         "lead_id": "record<lead>",
@@ -3816,6 +3818,8 @@
       },
       "lead_consent": {
         "columns": {
+          "call_consent_version": "TEXT",
+          "call_opt_in": "BOOLEAN",
           "consented_at": "TIMESTAMPTZ",
           "id": "UUID",
           "lead_id": "UUID",
