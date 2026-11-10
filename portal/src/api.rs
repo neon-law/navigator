@@ -3128,10 +3128,10 @@ async fn update_entity(
     State(state): State<ApiState>,
     _lawyer: LawyerSession,
     Path(id): Path<Uuid>,
-    JsonOrForm(input): JsonOrForm<store::entity_commands::UpdateEntityCommand>,
+    JsonOrForm(input): JsonOrForm<store::entity_commands::EntityPatch>,
 ) -> Result<Json<store::entities::Entity>, ApiError> {
     let updated =
-        store::entity_commands::update_entity(&state.surreal, id, &state.bootstrap_company, &input)
+        store::entity_commands::patch_entity(&state.surreal, id, &state.bootstrap_company, &input)
             .await?;
     Ok(Json(updated))
 }

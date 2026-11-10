@@ -31,22 +31,22 @@ own persistence logic.
   `navigator site import --ci --host <host>` and exchanges OIDC at `POST /auth/ci/seed-token` for a project-scoped seed
   session, without reading `~/.navigator.json`. Supported models are `person`, `entity`, `person_project_role`,
   `person_entity_role`, `address`, `relationship_log`, and `project_reference`. Join-table documents use nested natural
-  keys (`person.email` with `project.code`, or `person.email` with `entity.name`) rather than UUIDs; `address` nests
-  `person.email` too, keyed by `(person.email, line1, postal_code)` rather than UUIDs. A `relationship_log` record names
-  its subject Person as `subject.email` and is keyed by `(subject.email, action, detail)`: the Relationship Log stays
-  append-only, and re-importing an identical row appends nothing. The session's Person is recorded as its actor. An
-  optional `project.code` records the Project the row belongs to; a project-scoped session always records its own
-  Project and refuses a row naming another. A `project_reference` record names exactly one of `person` (`email`, `name`)
-  or `entity` (`name`, `entity_type` with its `jurisdiction`) and a `reason`, keyed by `(project, party, reason)`; it
-  creates the referenced row when absent and writes no participation. It is the one model through which a project-scoped
-  session may create an Entity, and only as the referenced party. `navigator project reference add` sends the same
-  one-record document. Add `--as-ci` to a `--dry-run` to plan under the scoped-session rules CI carries, for the Project
-  this checkout's `navigator.yaml` names: the server answers a scope violation as the same `403 scope_violation` CI
-  would hit on `main`, so it fails here instead. Three more models carry the estate and cap-table rows: `fiduciary_role`
-  keyed by role and successor order, `estate_asset` keyed by category and description, and `cap_table_holding` keyed by
-  holder (`holder_id`) and share class, each within its Project. Each takes an optional `project.code`, which a
-  project-scoped session may only set to its own Project. Each names an existing Person as `person.email` or Entity as
-  `entity.name` and never creates either; `--overwrite` replaces the other fields of a match.
+  keys (`person.email` with `project.code`, or `person.email` with `entity.name`) rather than UUIDs. See
+  [Address](glossary/address.md) for both address seed shapes. A `relationship_log` record names its subject Person as
+  `subject.email` and is keyed by `(subject.email, action, detail)`. The Relationship Log stays append-only, and
+  re-importing an identical row appends nothing. The session's Person is recorded as its actor. An optional
+  `project.code` records the Project the row belongs to; a project-scoped session always records its own Project and
+  refuses a row naming another. A `project_reference` record names exactly one of `person` (`email`, `name`) or `entity`
+  (`name`, `entity_type` with its `jurisdiction`) and a `reason`, keyed by `(project, party, reason)`; it creates the
+  referenced row when absent and writes no participation. It is the one model through which a project-scoped session may
+  create an Entity, and only as the referenced party. `navigator project reference add` sends the same one-record
+  document. Add `--as-ci` to a `--dry-run` to plan under the scoped-session rules CI carries, for the Project this
+  checkout's `navigator.yaml` names: the server answers a scope violation as the same `403 scope_violation` CI would hit
+  on `main`, so it fails here instead. Three more models carry the estate and cap-table rows: `fiduciary_role` keyed by
+  role and successor order, `estate_asset` keyed by category and description, and `cap_table_holding` keyed by holder
+  (`holder_id`) and share class, each within its Project. Each takes an optional `project.code`, which a project-scoped
+  session may only set to its own Project. Each names an existing Person as `person.email` or Entity as `entity.name`
+  and never creates either; `--overwrite` replaces the other fields of a match.
 - **Record adversity.** `navigator project adverse add (--person-email <email> | --entity-name <name>) [--subject
   entity|client_dri]` calls `POST /app/api/projects/{id}/relationships/adverse`, which lands a `manual`, full-confidence
   `adverse_to` edge from the client to a party the Project already references.

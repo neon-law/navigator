@@ -440,6 +440,25 @@ pub async fn find_by_name(db: &SurrealDb, name: &str) -> Result<Option<Entity>, 
     one(response)
 }
 
+/// Resolve a name-only reference only when it identifies exactly one Entity.
+pub(crate) async fn find_unique_by_name(
+    db: &SurrealDb,
+    name: &str,
+) -> Result<Option<Entity>, EntityError> {
+    let mut response = db
+        .query(format!(
+            "SELECT {SELECT} FROM {TABLE} WHERE name = $name LIMIT 2"
+        ))
+        .bind(("name", name.trim().to_string()))
+        .await?
+        .check()?;
+    let rows: Vec<EntityRow> = response.take(0)?;
+    match rows.as_slice() {
+        [_] => Ok(rows.into_iter().next().and_then(EntityRow::into_entity)),
+        _ => Ok(None),
+    }
+}
+
 /// Resolve an entity by the `(name, entity_type_id)` pair the canonical
 /// seed keys on.
 ///
@@ -697,10 +716,9 @@ pub async fn all(db: &SurrealDb) -> Result<Vec<Entity>, EntityError> {
     many(response)
 }
 
-/// The `SET` clause every write shares, so a new column cannot be
-/// stored by only one of them.
+/// The shared fields written by Entity creation and updates.
 const WRITE_FIELDS: &str = "name = $name, entity_type_id = $entity_type_id, \
-                            jurisdiction_id = $jurisdiction_id, phone = $phone, url = $url, \
+                            jurisdiction_id = $jurisdiction_id, \
                             xero_id = $xero_id, \
                             firm_anchor_key = $firm_anchor_key, updated_at = time::now()";
 
@@ -712,6 +730,14 @@ const WRITE_FIELDS: &str = "name = $name, entity_type_id = $entity_type_id, \
 /// anchor, and [`EntityError::Db`] for anything else.
 pub async fn create(db: &SurrealDb, input: &NewEntity) -> Result<Entity, EntityError> {
     upsert_with_id(db, Uuid::now_v7(), input).await
+}
+
+pub(crate) async fn create_with_metadata(
+    db: &SurrealDb,
+    input: &NewEntity,
+    metadata: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Result<Entity, EntityError> {
+    upsert_with_metadata(db, Uuid::now_v7(), input, metadata).await
 }
 
 /// Create or update the entity carrying `id`.
@@ -730,8 +756,17 @@ pub async fn upsert_with_id(
     id: Uuid,
     input: &NewEntity,
 ) -> Result<Entity, EntityError> {
+    upsert_with_metadata(db, id, input, None).await
+}
+
+async fn upsert_with_metadata(
+    db: &SurrealDb,
+    id: Uuid,
+    input: &NewEntity,
+    metadata: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Result<Entity, EntityError> {
     let claimed = take_claim(db, id, input.firm_anchor_key.as_deref()).await?;
-    let written = upsert_row(db, id, input).await;
+    let written = upsert_row(db, id, input, metadata).await;
     if claimed && written.is_err() {
         surrender_claim(db, id).await;
     }
@@ -741,14 +776,21 @@ pub async fn upsert_with_id(
 }
 
 /// The `UPSERT` half of [`upsert_with_id`], after the claim is settled.
-async fn upsert_row(db: &SurrealDb, id: Uuid, input: &NewEntity) -> Result<Entity, EntityError> {
+async fn upsert_row(
+    db: &SurrealDb,
+    id: Uuid,
+    input: &NewEntity,
+    metadata: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Result<Entity, EntityError> {
     let mut response = writing(|| {
         db.query(format!(
-            "UPSERT $id SET {WRITE_FIELDS}, \
+            "UPSERT $id SET {WRITE_FIELDS}, phone = $phone, url = $url, \
+             metadata = IF $metadata IS NONE THEN metadata ELSE $metadata END, \
              inserted_at = IF inserted_at THEN inserted_at ELSE time::now() END \
              RETURN {SELECT}"
         ))
         .bind(("id", record_id(TABLE, id)))
+        .bind(("metadata", metadata.cloned().map(serde_json::Value::Object)))
         .bind(("name", input.name.trim().to_string()))
         .bind((
             "entity_type_id",
@@ -810,8 +852,35 @@ pub(crate) async fn update_with_metadata(
     input: &NewEntity,
     metadata: Option<&serde_json::Map<String, serde_json::Value>>,
 ) -> Result<Option<Entity>, EntityError> {
+    update_fields(
+        db,
+        id,
+        input,
+        metadata,
+        ContactUpdate {
+            phone: true,
+            url: true,
+        },
+    )
+    .await
+}
+
+pub(crate) struct ContactUpdate {
+    pub phone: bool,
+    pub url: bool,
+}
+
+/// Apply requested contact values while keeping omitted columns at their
+/// current values at write time.
+pub(crate) async fn update_fields(
+    db: &SurrealDb,
+    id: Uuid,
+    input: &NewEntity,
+    metadata: Option<&serde_json::Map<String, serde_json::Value>>,
+    contact: ContactUpdate,
+) -> Result<Option<Entity>, EntityError> {
     let claimed = take_claim(db, id, input.firm_anchor_key.as_deref()).await?;
-    let written = update_row(db, id, input, metadata).await;
+    let written = update_row(db, id, input, metadata, contact).await;
     // `Ok(None)` is the refused rename, not a write — a claim taken for it
     // has to go back, or one refused edit would strand the anchor.
     if claimed && !matches!(written, Ok(Some(_))) {
@@ -826,10 +895,13 @@ async fn update_row(
     id: Uuid,
     input: &NewEntity,
     metadata: Option<&serde_json::Map<String, serde_json::Value>>,
+    contact: ContactUpdate,
 ) -> Result<Option<Entity>, EntityError> {
     let mut response = writing(|| {
         db.query(format!(
             "UPDATE $id SET {WRITE_FIELDS}, \
+             phone = IF $set_phone THEN $phone ELSE phone END, \
+             url = IF $set_url THEN $url ELSE url END, \
              metadata = IF $metadata IS NONE THEN metadata ELSE $metadata END \
              WHERE name = $name OR firm_anchor_key IS NONE \
              RETURN {SELECT}"
@@ -845,6 +917,8 @@ async fn update_row(
             "jurisdiction_id",
             record_id("jurisdiction", input.jurisdiction_id),
         ))
+        .bind(("set_phone", contact.phone))
+        .bind(("set_url", contact.url))
         .bind(("phone", input.phone.clone()))
         .bind(("url", input.url.clone()))
         .bind(("xero_id", input.xero_id.clone()))
