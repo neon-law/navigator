@@ -148,6 +148,8 @@ pub async fn version_state(
 /// `ops secrets apply --check` compares credential values with decrypted SOPS
 /// by constant-time equality. Cloud-backed ships read only their dedicated
 /// deployment configuration object, which contains coordinates and key names.
+/// `ops call-script --project-id` holds the Twilio credentials in memory for
+/// one run.
 /// Credential values returned here must never be logged, printed, or included
 /// in an error — only the comparison's `match`/`differs` verdict may leave this
 /// process. A missing secret or version is `Ok(None)`, matching
