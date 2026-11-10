@@ -165,6 +165,9 @@ pub struct Conversation {
     /// ingest (primary or `person_mailbox` alias match). A lawyer- or
     /// clerk-tier sender never links here; see `sender_identity`.
     pub person_id: Option<Uuid>,
+    /// When the conversation was moved to the Inbox trash; `None` while it
+    /// is in the Inbox. See [`set_trashed`].
+    pub trashed_at: Option<DateTime<Utc>>,
     pub inserted_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -297,6 +300,7 @@ pub struct DispatchReport {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[allow(clippy::struct_excessive_bools)] // Independent list facts: unread, attachments, sent, trashed.
 pub struct IntakeRow {
     /// The Person whose recorded phone is this text's number, when known.
     pub contact: Option<ContactLink>,
@@ -324,6 +328,10 @@ pub struct IntakeRow {
     /// an outbound message with an author. What the inbox's Sent folder
     /// lists; an automated acknowledgement has no author and never counts.
     pub sent: bool,
+    /// Whether the conversation is in the Inbox trash. The store lists
+    /// trashed conversations too — billing and reporting read every row —
+    /// and the Inbox shows them only in its Trash folder.
+    pub trashed: bool,
     /// Opening snippet of the conversation's most recent written message
     /// (same `occurred_at, id` order as [`IntakeRow::direction`]), whitespace
     /// collapsed and ellipsized — what a list row renders beneath the
@@ -485,6 +493,7 @@ struct ConversationRow {
     promotional_opt_out: bool,
     email_conversation_id: Option<surrealdb::types::RecordId>,
     person_id: Option<surrealdb::types::RecordId>,
+    trashed_at: Option<surrealdb::types::Datetime>,
     inserted_at: surrealdb::types::Datetime,
     updated_at: surrealdb::types::Datetime,
 }
@@ -536,7 +545,7 @@ struct ProjectPick {
 const CONVERSATION_SELECT: &str = "id, firm_id, brand_key, interaction_type, provider_post_id, project_id, channel, external_address, \
     external_name, subject, unread, provider_account, provider_thread_ref, source_page, \
     source_channel, matter_consent, promotional_opt_in, promotional_opt_out, \
-    email_conversation_id, person_id, inserted_at, updated_at";
+    email_conversation_id, person_id, trashed_at, inserted_at, updated_at";
 
 const MESSAGE_SELECT: &str =
     "id, conversation_id, parent_message_id, visibility, direction, body, author_person_id, \
@@ -569,6 +578,7 @@ impl ConversationRow {
             promotional_opt_out: self.promotional_opt_out,
             email_conversation_id: self.email_conversation_id.as_ref().and_then(record_uuid),
             person_id: self.person_id.as_ref().and_then(record_uuid),
+            trashed_at: self.trashed_at.map(Into::into),
             inserted_at: self.inserted_at.into(),
             updated_at: self.updated_at.into(),
         })
@@ -1168,8 +1178,9 @@ async fn ingest_inbound_surreal(
     if let Err(error) = create_ingress(db, inbound, message_id).await {
         return recover_deduped_ingress(db, inbound, message_id, error).await;
     }
+    // A new delivery re-flags the thread unread and takes it out of the trash.
     let _ = db
-        .query("UPDATE $id SET unread = true, updated_at = time::now()")
+        .query("UPDATE $id SET unread = true, trashed_at = NONE, updated_at = time::now()")
         .bind(("id", record_id(CONVERSATION, conversation.id)))
         .await;
     after_write(db, MirrorKey::InboxConversation(conversation.id)).await;
@@ -2448,6 +2459,49 @@ pub async fn record_promotional_opt_out(
     Ok(suppressed)
 }
 
+/// Move a conversation to the Inbox trash, or restore it. Trash hides the
+/// conversation from the Inbox lists and the Project unread count; it removes
+/// nothing, and a new inbound message restores the conversation.
+///
+/// # Errors
+///
+/// [`InboxError::Denied`] unless the actor is an Owner, or a Lawyer or Clerk
+/// in the conversation's Firm. [`InboxError::NotFound`] when the conversation
+/// is missing.
+pub async fn set_trashed(
+    db: &SurrealDb,
+    actor_id: Uuid,
+    conversation_id: Uuid,
+    trashed: bool,
+) -> Result<(), InboxError> {
+    let actor = load_person(db, actor_id).await?;
+    let conversation = conversation_by_id(db, conversation_id)
+        .await?
+        .ok_or(InboxError::NotFound)?;
+    let allowed = match actor.role {
+        Role::Owner => true,
+        Role::Lawyer | Role::Clerk => crate::firms::memberships_for_person(db, actor_id)
+            .await
+            .map_err(|error| InboxError::Db(error.to_string()))?
+            .iter()
+            .any(|membership| membership.firm_id == conversation.firm_id),
+        Role::Admin | Role::Client => false,
+    };
+    if !allowed {
+        return Err(InboxError::Denied);
+    }
+    if let Some(pg) = inbox_authority().await? {
+        return crate::postgres::inbox::set_trashed_on(&pg, conversation_id, trashed).await;
+    }
+    let stamp = if trashed { "time::now()" } else { "NONE" };
+    db.query(format!("UPDATE $id SET trashed_at = {stamp}"))
+        .bind(("id", record_id(CONVERSATION, conversation_id)))
+        .await?
+        .check()?;
+    after_write(db, MirrorKey::InboxConversation(conversation_id)).await;
+    Ok(())
+}
+
 /// Firm intake list. Message bodies are not included.
 ///
 /// # Errors
@@ -2608,6 +2662,7 @@ async fn intake_rows(
             person,
             has_attachments: has_attachments(&messages),
             sent: has_sent(&messages),
+            trashed: conversation.trashed_at.is_some(),
             updated_at: conversation.updated_at,
         });
     }
@@ -3103,6 +3158,7 @@ pub async fn list_project(
             person,
             has_attachments: has_attachments(&messages),
             sent: has_sent(&messages),
+            trashed: conversation.trashed_at.is_some(),
             updated_at: conversation.updated_at,
         });
     }
@@ -3130,7 +3186,7 @@ pub async fn unread_count_for_project(db: &SurrealDb, project_id: Uuid) -> Resul
     let mut response = db
         .query(format!(
             "SELECT VALUE count() FROM {CONVERSATION} WHERE project_id = $project \
-             AND unread = true GROUP ALL"
+             AND unread = true AND trashed_at = NONE GROUP ALL"
         ))
         .bind(("project", record_id(projects::PROJECT_TABLE, project_id)))
         .await?
@@ -4135,12 +4191,18 @@ pub(crate) async fn assignee_label(
         .map_or_else(|| "Unassigned".to_string(), |project| project.name))
 }
 
+/// The Firm's Projects a conversation may be assigned to: every one that is
+/// not closed. The reading pane's picker, the triage override form, and the
+/// classifier's menu all read this list.
 pub async fn projects_in_firm(
     db: &SurrealDb,
     firm_id: Uuid,
 ) -> Result<Vec<ProjectChoice>, InboxError> {
     let mut response = db
-        .query("SELECT id, code, name FROM project WHERE firm_id = $firm ORDER BY name")
+        .query(
+            "SELECT id, code, name FROM project \
+             WHERE firm_id = $firm AND status != 'closed' ORDER BY name",
+        )
         .bind(("firm", record_id(crate::firms::TABLE, firm_id)))
         .await?
         .check()?;
@@ -4823,6 +4885,95 @@ mod tests {
         assert_eq!(audit.len(), 1);
         assert_eq!(audit[0].to_project_id, world.project);
         assert!(audit[0].from_project_id.is_none());
+    }
+
+    async fn trashed(db: &SurrealDb, actor: Uuid, conversation: Uuid) -> bool {
+        list_intake(db, actor)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|row| row.id == conversation)
+            .unwrap()
+            .trashed
+    }
+
+    #[tokio::test]
+    async fn trash_hides_a_conversation_until_restore_or_new_mail() {
+        let db = mem_surreal().await;
+        let world = world(&db).await;
+        let first = inbound(
+            world.firm,
+            channel::EMAIL,
+            "support",
+            "msg-1",
+            "sender@example.com",
+        );
+        let id = ingest_inbound(&db, &first).await.unwrap().conversation_id;
+        assign(&db, world.owner, id, world.project).await.unwrap();
+        assert_eq!(
+            unread_count_for_project(&db, world.project).await.unwrap(),
+            1
+        );
+
+        for actor in [world.admin, world.client, world.outsider] {
+            assert!(matches!(
+                set_trashed(&db, actor, id, true).await,
+                Err(InboxError::Denied)
+            ));
+        }
+        assert!(!trashed(&db, world.owner, id).await);
+
+        set_trashed(&db, world.lawyer, id, true).await.unwrap();
+        assert!(trashed(&db, world.owner, id).await);
+        assert_eq!(
+            unread_count_for_project(&db, world.project).await.unwrap(),
+            0
+        );
+        // Nothing is removed: the thread and its messages still read.
+        assert_eq!(messages_for(&db, id).await.unwrap().len(), 1);
+
+        set_trashed(&db, world.clerk, id, false).await.unwrap();
+        assert!(!trashed(&db, world.owner, id).await);
+
+        set_trashed(&db, world.owner, id, true).await.unwrap();
+        let mut second = inbound(
+            world.firm,
+            channel::EMAIL,
+            "support",
+            "msg-2",
+            "sender@example.com",
+        );
+        second.project_id = Some(world.project);
+        assert_eq!(
+            ingest_inbound(&db, &second).await.unwrap().conversation_id,
+            id
+        );
+        assert!(!trashed(&db, world.owner, id).await);
+    }
+
+    #[tokio::test]
+    async fn the_project_menu_drops_a_closed_project() {
+        let db = mem_surreal().await;
+        let world = world(&db).await;
+        let open: Vec<Uuid> = projects_in_firm(&db, world.firm)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|project| project.id)
+            .collect();
+        assert!(open.contains(&world.project), "{open:?}");
+
+        db.query("UPDATE $id SET status = 'closed'")
+            .bind(("id", record_id(projects::PROJECT_TABLE, world.project)))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        let open = projects_in_firm(&db, world.firm).await.unwrap();
+        assert!(
+            open.iter().all(|project| project.id != world.project),
+            "{open:?}"
+        );
     }
 
     #[tokio::test]

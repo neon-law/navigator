@@ -1533,6 +1533,7 @@ mod tests {
             ),
             ("20261108130000_add_notation_creation_attempt.sql", include_str!("../postgres/migrations/20261108130000_add_notation_creation_attempt.sql")),
             ("20261109120000_add_project_status_transition.sql", include_str!("../postgres/migrations/20261109120000_add_project_status_transition.sql")),
+            ("20261110120000_inbox_conversation_trashed_at.sql", include_str!("../postgres/migrations/20261110120000_inbox_conversation_trashed_at.sql")),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

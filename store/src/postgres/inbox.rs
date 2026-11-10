@@ -77,7 +77,7 @@ fn db_error(error: sqlx::Error) -> InboxError {
 const CONVERSATION_COLUMNS: &str = "id, firm_id, brand_key, interaction_type, provider_post_id, \
     project_id, channel, external_address, external_name, subject, unread, provider_account, \
     provider_thread_ref, source_page, source_channel, matter_consent, promotional_opt_in, \
-    promotional_opt_out, email_conversation_id, person_id, inserted_at, updated_at";
+    promotional_opt_out, email_conversation_id, person_id, trashed_at, inserted_at, updated_at";
 
 /// The read image of a Message: the columns `store::inbox`'s Surreal reads
 /// select. The alert trio stays delivery-alert surface, outside the reads
@@ -116,6 +116,7 @@ fn conversation(row: &sqlx::postgres::PgRow) -> Result<Conversation, sqlx::Error
         promotional_opt_out: row.try_get("promotional_opt_out")?,
         email_conversation_id: row.try_get("email_conversation_id")?,
         person_id: row.try_get("person_id")?,
+        trashed_at: row.try_get("trashed_at")?,
         inserted_at: row.try_get("inserted_at")?,
         updated_at: row.try_get("updated_at")?,
     })
@@ -592,11 +593,13 @@ async fn ingest_on(
     // A new delivery on an existing thread re-flags it unread. The Surreal
     // ingest treats this update as best effort — a stale flag is cosmetic —
     // so a failure here is logged, not fatal.
-    if let Err(error) =
-        sqlx::query("UPDATE inbox_conversation SET unread = true, updated_at = now() WHERE id = $1")
-            .bind(conversation.id)
-            .execute(&pg.0)
-            .await
+    if let Err(error) = sqlx::query(
+        "UPDATE inbox_conversation SET unread = true, trashed_at = NULL, updated_at = now() \
+             WHERE id = $1",
+    )
+    .bind(conversation.id)
+    .execute(&pg.0)
+    .await
     {
         tracing::warn!(error = %error, "inbox unread re-flag failed");
     }
@@ -689,7 +692,7 @@ pub(crate) async fn ingest_fi_message_in(
         .await?
     };
     if existing.is_none() {
-        sqlx::query("UPDATE inbox_conversation SET unread=true,updated_at=now() WHERE id=$1")
+        sqlx::query("UPDATE inbox_conversation SET unread=true,trashed_at=NULL,updated_at=now() WHERE id=$1")
             .bind(conversation_id)
             .execute(&mut *connection)
             .await
@@ -955,6 +958,7 @@ async fn create_conversation_on(
         promotional_opt_out: false,
         email_conversation_id: inbound.email_conversation_id,
         person_id,
+        trashed_at: None,
         inserted_at: Utc::now(),
         updated_at: Utc::now(),
     })
@@ -1954,6 +1958,23 @@ async fn find_by_email_conversation_on(
         .map_err(db_error)
 }
 
+/// Stamp or clear `trashed_at`. The caller has authorized the actor.
+pub(crate) async fn set_trashed_on(
+    pg: &PostgresDb,
+    conversation_id: Uuid,
+    trashed: bool,
+) -> Result<(), InboxError> {
+    sqlx::query(
+        "UPDATE inbox_conversation SET trashed_at = CASE WHEN $2 THEN now() END WHERE id = $1",
+    )
+    .bind(conversation_id)
+    .bind(trashed)
+    .execute(&pg.0)
+    .await
+    .map_err(db_error)?;
+    Ok(())
+}
+
 pub(crate) async fn list_intake_on(
     pg: &PostgresDb,
     db: &SurrealDb,
@@ -2100,6 +2121,7 @@ async fn intake_rows(
             person,
             has_attachments,
             sent,
+            trashed: conversation.trashed_at.is_some(),
             updated_at: conversation.updated_at,
         });
     }
@@ -2179,7 +2201,7 @@ pub(crate) async fn unread_count_for_project_on(
 ) -> Result<i64, InboxError> {
     use sqlx::Row;
     let row = sqlx::query(sqlx::AssertSqlSafe(
-        "SELECT count(*) FROM inbox_conversation WHERE project_id = $1 AND unread".to_string(),
+        "SELECT count(*) FROM inbox_conversation WHERE project_id = $1 AND unread AND trashed_at IS NULL".to_string(),
     ))
     .bind(project_id)
     .fetch_one(&pg.0)

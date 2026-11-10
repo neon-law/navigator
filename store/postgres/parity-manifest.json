@@ -1185,6 +1185,7 @@
         "source_channel": "option<string>",
         "source_page": "option<string>",
         "subject": "option<string>",
+        "trashed_at": "option<datetime>",
         "unread": "bool",
         "updated_at": "datetime"
       },
@@ -3420,6 +3421,7 @@
           "source_channel": "TEXT",
           "source_page": "TEXT",
           "subject": "TEXT",
+          "trashed_at": "TIMESTAMPTZ",
           "unread": "BOOLEAN",
           "updated_at": "TIMESTAMPTZ"
         },

@@ -125,6 +125,7 @@ pub struct ProjectOption {
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(clippy::struct_excessive_bools)] // Independent URL filters, one per rail group.
 pub struct InboxPage {
     pub role: ViewerRole,
     pub title: String,
@@ -144,6 +145,10 @@ pub struct InboxPage {
     /// Whether the Sent folder (`?sent=true`) is selected.
     #[serde(default)]
     pub sent_only: bool,
+    /// Whether the Trash folder (`?trash=true`) is selected. Every other
+    /// view leaves trashed conversations out.
+    #[serde(default)]
+    pub trash_only: bool,
     #[serde(default)]
     pub brands: Vec<String>,
     #[serde(default)]
@@ -168,6 +173,7 @@ pub struct InboxPage {
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(clippy::struct_excessive_bools)] // Independent conversation facts the thread renders.
 pub struct InboxThreadPage {
     pub role: ViewerRole,
     pub title: String,
@@ -201,6 +207,13 @@ pub struct InboxThreadPage {
     /// text's number; absent once a Person is linked or for other channels.
     #[serde(default)]
     pub link_phone_action: Option<String>,
+    /// Where an Owner, Lawyer, or Clerk posts to move the conversation to
+    /// the trash or restore it.
+    #[serde(default)]
+    pub trash_action: Option<String>,
+    /// Whether the conversation is in the trash.
+    #[serde(default)]
+    pub trashed: bool,
     pub csrf_token: String,
     pub error: Option<String>,
     #[serde(default)]
@@ -358,9 +371,33 @@ async fn sent_only() -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(feature = "server")]
+async fn trash_only() -> bool {
+    #[derive(serde::Deserialize, Default)]
+    struct Filter {
+        trash: Option<bool>,
+    }
+    dioxus_fullstack_core::FullstackContext::extract::<axum::extract::Query<Filter>, _>()
+        .await
+        .ok()
+        .and_then(|axum::extract::Query(filter)| filter.trash)
+        .unwrap_or(false)
+}
+
+/// Where the trash control posts, for the roles that may use it.
+#[cfg(feature = "server")]
+fn trash_action(role: ViewerRole, conversation_id: uuid::Uuid) -> Option<String> {
+    matches!(
+        role,
+        ViewerRole::Owner | ViewerRole::Lawyer | ViewerRole::Clerk
+    )
+    .then(|| format!("/app/inbox/{conversation_id}/trash"))
+}
+
 /// The filters in effect on one inbox list — what every rail link carries
 /// forward except the one it changes.
 #[derive(Clone, Copy, Default)]
+#[allow(clippy::struct_excessive_bools)] // Mirrors InboxPage's independent URL filters.
 struct Filters<'a> {
     channel: Option<&'a str>,
     brand: Option<&'a str>,
@@ -368,6 +405,7 @@ struct Filters<'a> {
     direction: Option<&'a str>,
     attachments: bool,
     sent: bool,
+    trash: bool,
 }
 
 impl<'a> Filters<'a> {
@@ -379,11 +417,12 @@ impl<'a> Filters<'a> {
             direction: page.direction_filter.as_deref(),
             attachments: page.attachments_only,
             sent: page.sent_only,
+            trash: page.trash_only,
         }
     }
 
     fn href(self, base: &str) -> String {
-        filter_href(
+        let href = filter_href(
             base,
             self.channel,
             self.brand,
@@ -391,7 +430,12 @@ impl<'a> Filters<'a> {
             self.direction,
             self.attachments,
             self.sent,
-        )
+        );
+        if !self.trash {
+            return href;
+        }
+        let join = if href.contains('?') { '&' } else { '?' };
+        format!("{href}{join}trash=true")
     }
 }
 
@@ -855,6 +899,7 @@ pub async fn owner_inbox_page() -> Result<InboxPage, ServerFnError> {
     let direction_filter = selected_direction().await;
     let attachments_only = attachments_only().await;
     let sent_only = sent_only().await;
+    let trash_only = trash_only().await;
     let brands = store::inbox::intake_brands(&surreal, actor)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?;
@@ -867,15 +912,16 @@ pub async fn owner_inbox_page() -> Result<InboxPage, ServerFnError> {
     let rows = scoped_rows
         .into_iter()
         .filter(|row| {
-            row_matches(
-                row,
-                channel_filter.as_deref(),
-                brand_filter.as_deref(),
-                unread_only,
-                direction_filter.as_deref(),
-                attachments_only,
-                sent_only,
-            )
+            row.trashed == trash_only
+                && row_matches(
+                    row,
+                    channel_filter.as_deref(),
+                    brand_filter.as_deref(),
+                    unread_only,
+                    direction_filter.as_deref(),
+                    attachments_only,
+                    sent_only,
+                )
         })
         .collect::<Vec<_>>();
     let (logo, tokens_href, firm_name) = chrome().await;
@@ -889,6 +935,7 @@ pub async fn owner_inbox_page() -> Result<InboxPage, ServerFnError> {
         direction_filter,
         attachments_only,
         sent_only,
+        trash_only,
         brands,
         channels: inbox_channels(),
         project_code: None,
@@ -1004,6 +1051,8 @@ async fn firm_thread_page(conversation_id: uuid::Uuid) -> Result<InboxThreadPage
             .then(|| format!("/app/inbox/{conversation_id}/replies")),
         link_phone_action: (detail.can_sms_reply && detail.contact.is_none())
             .then(|| format!("/app/inbox/{conversation_id}/contact")),
+        trash_action: trash_action(role, conversation_id),
+        trashed: detail.conversation.trashed_at.is_some(),
         csrf_token: csrf_token().await,
         error: query_error().await,
         logo,
@@ -1043,6 +1092,7 @@ pub async fn project_inbox_page() -> Result<InboxPage, ServerFnError> {
     let direction_filter = selected_direction().await;
     let attachments_only = attachments_only().await;
     let sent_only = sent_only().await;
+    let trash_only = trash_only().await;
     let all_rows = store::inbox::list_project(&surreal, actor, project.id)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?;
@@ -1051,15 +1101,16 @@ pub async fn project_inbox_page() -> Result<InboxPage, ServerFnError> {
     let rows = all_rows
         .into_iter()
         .filter(|row| {
-            row_matches(
-                row,
-                channel_filter.as_deref(),
-                brand_filter.as_deref(),
-                unread_only,
-                direction_filter.as_deref(),
-                attachments_only,
-                sent_only,
-            )
+            row.trashed == trash_only
+                && row_matches(
+                    row,
+                    channel_filter.as_deref(),
+                    brand_filter.as_deref(),
+                    unread_only,
+                    direction_filter.as_deref(),
+                    attachments_only,
+                    sent_only,
+                )
         })
         .collect::<Vec<_>>();
     let (logo, tokens_href, firm_name) = chrome().await;
@@ -1073,6 +1124,7 @@ pub async fn project_inbox_page() -> Result<InboxPage, ServerFnError> {
         direction_filter,
         attachments_only,
         sent_only,
+        trash_only,
         brands,
         channels: inbox_channels(),
         project_code: Some(project_code.clone()),
@@ -1142,6 +1194,7 @@ async fn project_thread_page(
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?;
     let (logo, tokens_href, firm_name) = chrome().await;
+    let trashed = thread.conversation.trashed_at.is_some();
     Ok(InboxThreadPage {
         role,
         title: thread
@@ -1187,6 +1240,8 @@ async fn project_thread_page(
             .can_send
             .then(|| format!("/app/projects/{project_code}/inbox/{conversation_id}/replies")),
         link_phone_action: None,
+        trash_action: trash_action(role, conversation_id),
+        trashed,
         csrf_token: csrf_token().await,
         error: query_error().await,
         logo,
@@ -1330,12 +1385,16 @@ fn compose_dialog(page: &InboxPage) -> Element {
 
 #[allow(clippy::too_many_lines)]
 fn inbox_list(page: &InboxPage, selected: Signal<Option<String>>) -> Element {
-    let title = if page.sent_only {
+    let title = if page.trash_only {
+        "Trash".to_string()
+    } else if page.sent_only {
         "Sent".to_string()
     } else {
         page.title.clone()
     };
-    let subtitle = if page.sent_only {
+    let subtitle = if page.trash_only {
+        "Conversations moved out of the inbox. Nothing here is deleted; new mail restores a conversation."
+    } else if page.sent_only {
         "Conversations someone at the firm wrote in, newest first."
     } else {
         "Every email, text, and message to the firm, newest first."
@@ -1447,19 +1506,31 @@ fn inbox_rail(page: &InboxPage) -> Element {
             "Inbox",
             Filters {
                 sent: false,
+                trash: false,
                 ..current
             }
             .href(base),
-            !page.sent_only,
+            !page.sent_only && !page.trash_only,
         ),
         rail_option(
             "Sent",
             Filters {
                 sent: true,
+                trash: false,
                 ..current
             }
             .href(base),
-            page.sent_only,
+            page.sent_only && !page.trash_only,
+        ),
+        rail_option(
+            "Trash",
+            Filters {
+                sent: false,
+                trash: true,
+                ..current
+            }
+            .href(base),
+            page.trash_only,
         ),
     ];
     let mut channel_options = vec![rail_option(
@@ -1678,7 +1749,8 @@ pub fn inbox_pane_body(page: &InboxThreadPage, href: &str) -> Element {
                 li { class: "inbox-chip", "{brand}" }
                 li { class: "inbox-chip", "Project: {page.assignee}" }
             }
-            { pane_assign(page) }
+            { assign_control(page, true) }
+            { trash_control(page) }
             if page.bodies_visible {
                 { messages }
             } else {
@@ -1690,10 +1762,11 @@ pub fn inbox_pane_body(page: &InboxThreadPage, href: &str) -> Element {
     }
 }
 
-/// The pane's one-line assign control: a Project picker posting to the
-/// conversation's assign action and returning to the inbox. Absent without an
+/// The one-line assign control: a Project picker posting to the
+/// conversation's assign action. The reading pane returns to the inbox
+/// (`to_inbox`); the full thread stays on the conversation. Absent without an
 /// action or a Project to choose.
-fn pane_assign(page: &InboxThreadPage) -> Element {
+fn assign_control(page: &InboxThreadPage, to_inbox: bool) -> Element {
     let Some(action) = page.assign_action.clone() else {
         return rsx! {};
     };
@@ -1710,7 +1783,9 @@ fn pane_assign(page: &InboxThreadPage) -> Element {
             if !page.csrf_token.is_empty() {
                 input { r#type: "hidden", name: "_csrf", value: "{page.csrf_token}" }
             }
-            input { r#type: "hidden", name: "next", value: "inbox" }
+            if to_inbox {
+                input { r#type: "hidden", name: "next", value: "inbox" }
+            }
             label { r#for: "inbox-assign-project", class: "inbox-assign__label", "{label}" }
             select { id: "inbox-assign-project", name: "project_id", class: "nav-input", required: true,
                 option { value: "", "Choose a project…" }
@@ -1719,6 +1794,31 @@ fn pane_assign(page: &InboxThreadPage) -> Element {
                 }
             }
             button { class: "nav-btn nav-btn--primary", r#type: "submit", "Assign" }
+        }
+    }
+}
+
+/// The trash control: one button that moves the conversation to the trash,
+/// or restores it when it is already there. Absent for a viewer who may not.
+fn trash_control(page: &InboxThreadPage) -> Element {
+    let Some(action) = page.trash_action.clone() else {
+        return rsx! {};
+    };
+    let label = if page.trashed {
+        "Restore to inbox"
+    } else {
+        "Move to trash"
+    };
+    rsx! {
+        form { class: "inbox-assign", method: "post", action: "{action}",
+            if !page.csrf_token.is_empty() {
+                input { r#type: "hidden", name: "_csrf", value: "{page.csrf_token}" }
+            }
+            if page.trashed {
+                input { r#type: "hidden", name: "restore", value: "true" }
+                span { class: "inbox-assign__label", "In trash" }
+            }
+            button { class: "nav-btn", r#type: "submit", "{label}" }
         }
     }
 }
@@ -1843,6 +1943,7 @@ pub fn inbox_thread_body(page: &InboxThreadPage) -> Element {
     let firm_name = page.firm_name.clone();
     let title = page.title.clone();
     let unread = if page.unread { "Unread" } else { "Read" };
+    let brand = page.brand_key.as_deref().unwrap_or("unbranded");
     let fi_metadata = page.provider_account.starts_with("google_fi:");
     let next_action = if page.next_action == "Reassign"
         && page.assign_action.is_none()
@@ -1856,23 +1957,6 @@ pub fn inbox_thread_body(page: &InboxThreadPage) -> Element {
         .messages
         .iter()
         .map(|message| inbox_message_article(message, page));
-    let assign = page.assign_action.clone().map(|action| {
-        let choices = page
-            .projects
-            .iter()
-            .map(|project| Choice::new(project.id.clone(), project.label.clone()))
-            .collect();
-        rsx! {
-            FormCard {
-                title: "Assign to a project".to_string(),
-                action,
-                submit_label: "Assign".to_string(),
-                heading: Heading::H2,
-                csrf_token: Some(page.csrf_token.clone()),
-                fields: vec![Field::select("Project", "project_id", choices, None).required()],
-            }
-        }
-    });
     let note = page.note_action.clone().map(|action| {
         rsx! {
             FormCard {
@@ -1955,19 +2039,33 @@ pub fn inbox_thread_body(page: &InboxThreadPage) -> Element {
             a { href: INBOX_PATH, "Back to Inbox" }
             header { class: "page-header",
                 h1 { "{title}" }
-                p { class: "page-subtitle",
-                    "Channel: {page.channel}. Assignee: {page.assignee}. {unread}. Delivery: {page.delivery}."
+                ul { class: "inbox-chips", "aria-label": "Conversation facts",
+                    li { class: "inbox-chip",
+                        {channel_icon(&page.channel)}
+                        "{channel_name(&page.channel)}"
+                    }
+                    li { class: "inbox-chip", "{brand}" }
+                    li { class: "inbox-chip", "Project: {page.assignee}" }
+                    li { class: "inbox-chip", "{unread}" }
+                    li { class: "inbox-chip", "Delivery: {page.delivery}" }
+                    li { class: "inbox-chip", "Next: {next_action}" }
+                    li { class: "inbox-chip", "From: {page.sender}" }
+                    li { class: "inbox-chip", "Account: {page.provider_account}" }
+                    li { class: "inbox-chip", "{page.interaction_type}" }
+                    if let Some(source) = page.source_page.as_ref() {
+                        li { class: "inbox-chip", "Received via: {source}" }
+                    }
+                    if let Some(reference) = page.provider_post_id.as_ref() {
+                        li { class: "inbox-chip", "Provider post: {reference}" }
+                    }
+                    if let Some(reference) = page.provider_thread_ref.as_ref() {
+                        li { class: "inbox-chip", "Provider thread: {reference}" }
+                    }
                 }
-                p { class: "page-subtitle", "Brand: " {page.brand_key.as_deref().unwrap_or("unbranded")} }
-                p { class: "page-subtitle", "From: {page.sender}. Source account: {page.provider_account}. Interaction: {page.interaction_type}." }
-                if let Some(source) = page.source_page.as_ref() {
-                    p { class: "nav-muted", "Received via: {source}" }
-                }
-                if let Some(reference) = page.provider_post_id.as_ref() { p { class: "nav-muted", "Provider post: {reference}" } }
-                if let Some(reference) = page.provider_thread_ref.as_ref() { p { class: "nav-muted", "Provider thread: {reference}" } }
-                p { class: "page-subtitle", "Next: {next_action}" }
+                { assign_control(page, false) }
+                { trash_control(page) }
                 if unsupported_private {
-                    p { "This channel supports public comment replies only; private replies are unavailable." }
+                    p { class: "nav-muted", "This channel supports public comment replies only; private replies are unavailable." }
                 }
                 if fi_metadata {
                     p { class: "nav-muted", "Imported Fi history cannot send external replies." }
@@ -1985,7 +2083,6 @@ pub fn inbox_thread_body(page: &InboxThreadPage) -> Element {
                     "Message bodies stay on the project. Assign or reassign from here."
                 }
             }
-            {assign}
             {note}
             {reply}
             {link_phone}
@@ -2097,6 +2194,7 @@ mod tests {
             direction: store::inbox::direction::INBOUND.into(),
             has_attachments: true,
             sent: false,
+            trashed: false,
             preview: None,
             person: None,
             updated_at: chrono::Utc::now(),
@@ -2250,6 +2348,7 @@ mod tests {
             direction_filter: None,
             attachments_only: false,
             sent_only: false,
+            trash_only: false,
             brands,
             compose_action: None,
             csrf_token: String::new(),
@@ -2322,6 +2421,8 @@ mod tests {
             note_action: None,
             reply_action: None,
             link_phone_action: None,
+            trash_action: Some("/app/inbox/c1/trash".into()),
+            trashed: false,
             csrf_token: "token".into(),
             error: None,
             logo: None,
@@ -2415,7 +2516,46 @@ mod tests {
         let mut no_projects = base_thread();
         no_projects.projects.clear();
         let html = dioxus_ssr::render_element(inbox_pane_body(&no_projects, "/app/inbox/c1"));
-        assert!(!html.contains("inbox-assign"), "{html}");
+        assert!(!html.contains("inbox-assign-project"), "{html}");
+    }
+
+    #[test]
+    fn the_thread_offers_trash_then_restore_and_the_rail_links_the_trash_folder() {
+        let mut page = base_thread();
+        let html = thread(&page);
+        assert!(html.contains(r#"action="/app/inbox/c1/trash""#), "{html}");
+        assert!(html.contains("Move to trash"), "{html}");
+        assert!(!html.contains(r#"name="restore""#), "{html}");
+
+        page.trashed = true;
+        let html = dioxus_ssr::render_element(inbox_pane_body(&page, "/app/inbox/c1"));
+        assert!(html.contains("Restore to inbox"), "{html}");
+        assert!(html.contains(r#"name="restore" value="true""#), "{html}");
+
+        page.trash_action = None;
+        assert!(!thread(&page).contains("/trash"));
+
+        let mut list = super::tests::page(ViewerRole::Owner, Vec::new());
+        list.unread_only = true;
+        let html = list_html(&list);
+        assert!(
+            html.contains(r#"href="/app/inbox?unread=true&#38;trash=true""#),
+            "{html}"
+        );
+        list.trash_only = true;
+        let html = list_html(&list);
+        assert!(html.contains("<h1>Trash</h1>"), "{html}");
+    }
+
+    #[test]
+    fn the_full_thread_assigns_above_the_messages_and_stays_on_the_conversation() {
+        let html = dioxus_ssr::render_element(inbox_thread_body(&base_thread()));
+        let assign = html
+            .find(r#"action="/app/owner/inbox/c1/assign""#)
+            .expect(&html);
+        let messages = html.find(r#"id="inbox-messages""#).expect(&html);
+        assert!(assign < messages, "{html}");
+        assert!(!html.contains(r#"name="next""#), "{html}");
     }
 
     #[test]
@@ -2664,6 +2804,7 @@ mod tests {
             direction: store::inbox::direction::INBOUND.into(),
             has_attachments: false,
             sent: false,
+            trashed: false,
             preview: None,
             person: None,
             updated_at: chrono::Utc::now(),
@@ -3363,6 +3504,7 @@ mod tests {
                 direction: store::inbox::direction::INBOUND.into(),
                 has_attachments: false,
                 sent: false,
+                trashed: false,
                 preview: None,
                 person: None,
                 updated_at: chrono::Utc::now(),

@@ -2711,6 +2711,9 @@ DEFINE FIELD OVERWRITE source_channel ON inbox_conversation TYPE option<string>;
 DEFINE FIELD OVERWRITE matter_consent ON inbox_conversation TYPE bool DEFAULT false;
 DEFINE FIELD OVERWRITE promotional_opt_in ON inbox_conversation TYPE bool DEFAULT false;
 DEFINE FIELD OVERWRITE promotional_opt_out ON inbox_conversation TYPE bool DEFAULT false;
+-- When the Conversation was moved to the Inbox trash; NONE while it is in
+-- the Inbox. A new inbound Message clears it. See the `Inbox Trash` glossary term.
+DEFINE FIELD OVERWRITE trashed_at ON inbox_conversation TYPE option<datetime>;
 DEFINE FIELD OVERWRITE email_conversation_id ON inbox_conversation
     TYPE option<record<email_conversation>>;
 -- The Person the inbound email sender resolves to — written at ingest from

@@ -32,7 +32,7 @@ use crate::surreal::SurrealDb;
 /// The version this build applies. Bump it for schema definitions or
 /// versioned data repairs so a database still needing an upgrade reports
 /// as drifted instead of silently disagreeing.
-pub const SCHEMA_VERSION: u32 = 115;
+pub const SCHEMA_VERSION: u32 = 116;
 
 /// The table holding the applied version.
 const VERSION_TABLE: &str = "schema_version";
