@@ -485,7 +485,7 @@ fn boot_and_nightly_environment_paths_are_isolated_and_do_not_initialize_unconfi
             .env("NAVIGATOR_FOLDER_ENV_PROBE", mode)
             .env_remove("NAVIGATOR_DRIVE_NEON_LAW_PROJECTS_DRIVE_ID")
             .env_remove("NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER")
-            .env_remove("NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT_JSON");
+            .env_remove("NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT");
         if mode != "unconfigured" {
             command.env(
                 "NAVIGATOR_DRIVE_NEON_LAW_PROJECTS_DRIVE_ID",

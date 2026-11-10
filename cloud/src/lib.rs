@@ -23,6 +23,7 @@ pub mod archives_project;
 pub mod audio;
 pub mod calendar;
 pub mod contacts;
+pub mod delegation;
 pub mod drive;
 pub mod forge;
 pub mod forgejo_forge;

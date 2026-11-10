@@ -75,7 +75,27 @@ pub async fn ensure_runtime_identity(
     .await?;
     bind_project_roles(client, project_id, &gsa).await?;
     bind_bucket_roles(client, &gsa, buckets).await?;
-    bind_self_signing(client, project_id, &gsa).await
+    bind_token_creator(
+        client,
+        project_id,
+        &gsa,
+        &gsa,
+        "bind deployment self-signing role",
+    )
+    .await?;
+    // The Workspace delegation is keyless: the runtime identity signs the
+    // Drive account's delegation JWT (`cloud::delegation`).
+    bind_token_creator(
+        client,
+        project_id,
+        &format!(
+            "{}@{project_id}.iam.gserviceaccount.com",
+            config.drive_service_account_id
+        ),
+        &gsa,
+        "bind Workspace delegation signing role",
+    )
+    .await
 }
 
 async fn create_service_account(
@@ -306,7 +326,14 @@ pub async fn bind_kubernetes_accounts(
     Ok(())
 }
 
-async fn bind_self_signing(client: &GcpClient, project_id: &str, gsa: &str) -> SetupResult<()> {
+/// Let `member` sign as `account`.
+async fn bind_token_creator(
+    client: &GcpClient,
+    project_id: &str,
+    account: &str,
+    member: &str,
+    operation: &'static str,
+) -> SetupResult<()> {
     classify(
         client
             .shell_out(
@@ -315,17 +342,17 @@ async fn bind_self_signing(client: &GcpClient, project_id: &str, gsa: &str) -> S
                     "iam",
                     "service-accounts",
                     "add-iam-policy-binding",
-                    gsa,
+                    account,
                     "--project",
                     project_id,
                     "--role",
                     "roles/iam.serviceAccountTokenCreator",
                     "--member",
-                    &format!("serviceAccount:{gsa}"),
+                    &format!("serviceAccount:{member}"),
                 ],
             )
             .await?,
-        "bind deployment self-signing role",
+        operation,
     )
 }
 
@@ -458,7 +485,14 @@ mod tests {
         assert!(plan.contains("neon-law-test.svc.id.goog[example-a/navigator-web]"));
         assert!(plan.contains("neon-law-test.svc.id.goog[example-a/workflows-service]"));
         assert!(plan.contains("roles/iam.serviceAccountTokenCreator"));
-        assert_eq!(client.recorded_calls().len(), 12);
+        // The runtime identity may sign as the Workspace account.
+        assert!(client.recorded_calls().iter().any(|call| {
+            let command = call.url.as_str();
+            command.contains("add-iam-policy-binding example-a-drive@")
+                && command.contains("roles/iam.serviceAccountTokenCreator")
+                && command.contains("--member serviceAccount:example-a-web@")
+        }));
+        assert_eq!(client.recorded_calls().len(), 13);
     }
 
     /// ENG-1039: the archive writer can probe its bucket's policy, and that

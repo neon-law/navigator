@@ -311,7 +311,40 @@ where
     ];
     substitutions.extend(summary_substitutions(deployment, get));
     substitutions.extend(optional_provider_substitutions(get));
+    substitutions.extend(workspace_delegation_substitutions(get));
     substitutions
+}
+
+/// The Workspace user the Drive service account acts as, and that account's
+/// email. A row that names no delegated user renders both blank, which the
+/// runtime reads as "no Workspace"; one that does gets the account derived
+/// from its own project, so no key and no second coordinate exist
+/// (`cloud::delegation`).
+fn workspace_delegation_substitutions<F>(get: &F) -> [Substitution; 2]
+where
+    F: Fn(&str) -> Option<String>,
+{
+    use cloud::workspace::{
+        NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER, NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT,
+    };
+    let delegated_user = non_empty_env(NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER, get);
+    let service_account = delegated_user
+        .as_ref()
+        .and(non_empty_env("NAVIGATOR_DRIVE_GCP_SERVICE_ACCOUNT_ID", get))
+        .zip(non_empty_env("NAVIGATOR_GCP_PROJECT_ID", get))
+        .map(|(account, project)| format!("{account}@{project}.iam.gserviceaccount.com"));
+    [
+        Substitution {
+            token: "YOUR_DRIVE_DELEGATED_USER",
+            env: NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER,
+            value: delegated_user.unwrap_or_default(),
+        },
+        Substitution {
+            token: "YOUR_DRIVE_SERVICE_ACCOUNT",
+            env: NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT,
+            value: service_account.unwrap_or_default(),
+        },
+    ]
 }
 
 /// Manifest tokens and the required `config.toml` coordinates that fill them.
@@ -6894,6 +6927,8 @@ mod tests {
         "YOUR_BOOTSTRAP_OWNER_EMAIL",
         "YOUR_SUMMARY_ENVELOPE_RECIPIENTS",
         "YOUR_SMS_NUMBER",
+        "YOUR_DRIVE_DELEGATED_USER",
+        "YOUR_DRIVE_SERVICE_ACCOUNT",
         "YOUR_OAUTH_MICROSOFT_CLIENT_ID",
         "YOUR_OAUTH_MICROSOFT_ALLOWED_TENANTS",
         RELEASE_TAG_TOKEN,
@@ -7459,6 +7494,32 @@ mod tests {
             .and_then(serde_yaml::Value::as_sequence)
             .expect("web container has an env list")
             .clone()
+    }
+
+    #[test]
+    fn workspace_delegation_reaches_the_web_pod_only_when_the_row_names_a_user() {
+        const USER: &str = "NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER";
+        const ACCOUNT: &str = "NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT";
+        let delegated = rendered_web_deployment(|key| match key {
+            USER => Some("calendar@example.com".into()),
+            "NAVIGATOR_DRIVE_GCP_SERVICE_ACCOUNT_ID" => Some("example-drive".into()),
+            _ => env_getter(FULL_ENV)(key),
+        });
+        assert_eq!(
+            web_env_value(&delegated, USER).as_deref(),
+            Some("calendar@example.com")
+        );
+        assert_eq!(
+            web_env_value(&delegated, ACCOUNT).as_deref(),
+            Some("example-drive@example-production-project.iam.gserviceaccount.com")
+        );
+
+        let undeclared = rendered_web_deployment(|key| match key {
+            "NAVIGATOR_DRIVE_GCP_SERVICE_ACCOUNT_ID" => Some("example-drive".into()),
+            _ => env_getter(FULL_ENV)(key),
+        });
+        assert_eq!(web_env_value(&undeclared, USER).as_deref(), Some(""));
+        assert_eq!(web_env_value(&undeclared, ACCOUNT).as_deref(), Some(""));
     }
 
     fn with_postgres(value: Option<&'static str>) -> impl Fn(&str) -> Option<String> {

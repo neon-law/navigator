@@ -125,11 +125,11 @@ impl FirmRuntimeGap {
 /// [`cloud::calendar::CALENDAR_CONFIGURATION_KEYS`].
 fn calendar_gap(missing: &str) -> String {
     format!(
-        "{missing} unset; the Project calendar uses the Workspace service account Drive uses: \
-         set NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER in the deployment's config.toml and \
-         NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT_JSON in its secrets.enc.yaml, authorize \
-         the account's client id for https://www.googleapis.com/auth/calendar under \
-         domain-wide delegation, then `navigator ops secrets apply --deployment <row>` \
+        "{missing} unset; the Project calendar acts as a Workspace user through the \
+         deployment's Drive service account, with no key: set \
+         NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER on the row (`navigator ops deployments set`), \
+         authorize the Drive account's client id for https://www.googleapis.com/auth/calendar \
+         under domain-wide delegation, then `navigator ops ship` renders both keys \
          (see {RUNTIME_DOC})"
     )
 }
@@ -483,11 +483,11 @@ mod tests {
         let detail = error.detail().unwrap();
         assert!(detail.starts_with(
             "NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER and \
-             NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT_JSON unset"
+             NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT unset"
         ));
 
         let half = calendar_from_resolution(Err(cloud::CalendarError::MissingConfig(
-            "NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT_JSON".into(),
+            "NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT".into(),
         )))
         .err()
         .unwrap();
@@ -495,7 +495,7 @@ mod tests {
         assert!(half
             .detail()
             .unwrap()
-            .starts_with("NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT_JSON unset"));
+            .starts_with("NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT unset"));
     }
 
     #[test]

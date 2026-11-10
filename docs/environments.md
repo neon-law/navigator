@@ -204,12 +204,12 @@ The selected Workspace block in each deployment's config is:
 
 Every deployment supplies `NAVIGATOR_DRIVE_NEON_LAW_PROJECTS_DRIVE_ID` and its selected root ID:
 `NAVIGATOR_DRIVE_NEON_LAW_STAGING_PROJECTS_ROOT_FOLDER_ID` or
-`NAVIGATOR_DRIVE_NEON_LAW_PRODUCTION_PROJECTS_ROOT_FOLDER_ID`. The common Neon Law Workspace credentials remain
-`NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER` and `NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT_JSON`. Drive ingest is optional:
-a deployment that sets none of these four keys has it disabled, and `navigator project doctor` reports that as a
-warning. Setting some but not all is a misconfiguration the doctor reports with every missing key at once. No local
-Drive mount is read. Workspace Admin domain-wide delegation is global rather than regional and remains a one-time
-administrative prerequisite; the regional GCP provisioner cannot grant it.
+`NAVIGATOR_DRIVE_NEON_LAW_PRODUCTION_PROJECTS_ROOT_FOLDER_ID`. The common Neon Law Workspace delegation is
+`NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER` and `NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT`, which Calendar and Contacts
+share. Drive ingest is optional: a deployment that sets neither the shared Drive ID nor its root ID has it disabled, and
+`navigator project doctor` reports that as a warning. Setting some but not all is a misconfiguration the doctor reports
+with every missing key at once. No local Drive mount is read. Workspace Admin domain-wide delegation is global rather
+than regional and remains a one-time administrative prerequisite; the regional GCP provisioner cannot grant it.
 
 ## Project ownership
 

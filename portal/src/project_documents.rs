@@ -316,15 +316,12 @@ pub async fn drive_import(
     drive_import_with(&state, project_id, &session_data, &drive, &form, None).await
 }
 
-/// Whether the deployment sets none of the Drive credential settings.
+/// Whether the deployment declares no Projects shared drive. The delegation
+/// keys are shared with Calendar and Contacts, so only the drive declares
+/// Drive ingest.
 fn drive_settings_absent() -> bool {
-    [
-        "NAVIGATOR_DRIVE_NEON_LAW_PROJECTS_DRIVE_ID",
-        cloud::workspace::NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER,
-        cloud::workspace::NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT_JSON,
-    ]
-    .iter()
-    .all(|key| std::env::var(key).map_or(true, |value| value.trim().is_empty()))
+    std::env::var("NAVIGATOR_DRIVE_NEON_LAW_PROJECTS_DRIVE_ID")
+        .map_or(true, |value| value.trim().is_empty())
 }
 
 /// The authorization and import behind [`drive_import`], with the Drive client

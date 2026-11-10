@@ -394,8 +394,8 @@ mod tests {
                 "ingest@example.test",
             ),
             (
-                cloud::workspace::NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT_JSON,
-                "{}",
+                cloud::workspace::NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT,
+                "drive@example.iam.gserviceaccount.com",
             ),
             (NAVIGATOR_GITHUB_ORG, AN_ORGANIZATION),
         ]
@@ -627,7 +627,7 @@ mod tests {
         for key in [
             "NAVIGATOR_DRIVE_NEON_LAW_STAGING_PROJECTS_ROOT_FOLDER_ID",
             cloud::workspace::NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER,
-            cloud::workspace::NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT_JSON,
+            cloud::workspace::NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT,
         ] {
             assert!(drive.detail.contains(key), "{}", drive.detail);
         }

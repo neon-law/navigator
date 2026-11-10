@@ -1202,21 +1202,24 @@ deployment's GCS also rejects an emulator endpoint. `SESSION_SECRET` must contai
 the same database, document bucket, email backend, branding bundle, and deployment profile as web so a journaled step
 never crosses environments. Published images bake the release identity in; local source builds leave it `unknown`.
 
-The Neon Law-controlled Workspace service account has domain-wide delegation. Keep its shared Drive coordinate and
-credential together: `NAVIGATOR_DRIVE_NEON_LAW_PROJECTS_DRIVE_ID`, `NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER`, and
-`NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT_JSON`. The two Projects-root variables are
+The Neon Law-controlled Workspace service account has domain-wide delegation and no key: the organization policy forbids
+service-account keys, so the web pod's runtime identity signs each delegation as that account. Drive ingest reads
+`NAVIGATOR_DRIVE_NEON_LAW_PROJECTS_DRIVE_ID`, `NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER`, and
+`NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT`, the account's email, which `ops ship` derives from
+`NAVIGATOR_DRIVE_GCP_SERVICE_ACCOUNT_ID`. The two Projects-root variables are
 `NAVIGATOR_DRIVE_NEON_LAW_PRODUCTION_PROJECTS_ROOT_FOLDER_ID` and
 `NAVIGATOR_DRIVE_NEON_LAW_STAGING_PROJECTS_ROOT_FOLDER_ID`; configure each only in the approved operator-managed
 environment that uses that root.
 
 The typed workspace map selects a distinct Projects root for each configured deployment. An unknown deployment fails
-closed rather than borrowing another root. Drive ingest is optional: configure the shared Drive ID, delegated user, and
-service-account JSON together with the matching Projects-root ID, or omit the set. The regional GCP command enables the
+closed rather than borrowing another root. Drive ingest is optional: configure the shared Drive ID and delegated user
+together with the matching Projects-root ID, or omit the shared Drive ID and root. The regional GCP command enables the
 Drive and Admin SDK APIs, but a Workspace administrator must still grant domain-wide delegation and create the selected
 Drive root.
 
 For each deployment, setup creates the identity named by `NAVIGATOR_DRIVE_GCP_SERVICE_ACCOUNT_ID` with no runtime GCP
-roles. Complete the global Workspace attachment once:
+roles, and grants the runtime identity `roles/iam.serviceAccountTokenCreator` on it. Complete the global Workspace
+attachment once:
 
 1. Read that service account's OAuth client ID:
 
@@ -1226,17 +1229,13 @@ roles. Complete the global Workspace attachment once:
      --project "$NAVIGATOR_GCP_PROJECT_ID" --format 'value(oauth2ClientId)'
    ```
 
-2. In the selected Workspace Admin console, authorize that client ID for `https://www.googleapis.com/auth/drive`. Do not
-   grant a broader Admin SDK scope merely because the API is enabled.
+2. In the selected Workspace Admin console, authorize that client ID for each scope the deployment uses —
+   `https://www.googleapis.com/auth/drive`, `https://www.googleapis.com/auth/calendar`,
+   `https://www.googleapis.com/auth/contacts`. Do not grant a broader Admin SDK scope merely because the API is enabled.
 3. Create that deployment's otherwise-empty Projects shared drive and record its ID. Staging creates its own drive,
    separate from production's.
-4. Create one JSON key for the dedicated Drive account and place the complete JSON value directly into the selected
-   deployment's `secrets.enc.yaml` under the `*_SERVICE_ACCOUNT_JSON` key (`sops set` — never an editor buffer for a key
-   this size). Never paste it into Slack, a ticket, shell history, or this repository in plaintext; revoke the key
-   immediately after its encrypted replacement is proven during rotation.
-5. Set the selected `*_PROJECTS_DRIVE_ID` and `*_DELEGATED_USER` coordinates in the same deployment's `config.toml`, run
-   `navigator ops secrets apply --deployment "$ROW" --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR"`, and verify the key
-   names with its `--dry-run` plan — see [`docs/deployment-secrets.md`](/docs/deployment-secrets).
+4. Set the row's `*_DELEGATED_USER` with `navigator ops deployments set`, and its `*_PROJECTS_DRIVE_ID` when Drive
+   ingest is wanted, then roll with `navigator ops ship`. Create no key for the account.
 
 ### Deployed runtime: identity and access
 

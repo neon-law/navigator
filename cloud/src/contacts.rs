@@ -25,10 +25,7 @@ const PEOPLE_BASE_URL: &str = "https://people.googleapis.com/v1";
 /// The environment variables a contacts provider needs. They are Drive's
 /// Workspace coordinates, because the same delegated user owns the firm
 /// directory.
-pub const CONTACTS_CONFIGURATION_KEYS: [&str; 2] = [
-    "NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER",
-    "NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT_JSON",
-];
+pub const CONTACTS_CONFIGURATION_KEYS: [&str; 2] = crate::delegation::WORKSPACE_DELEGATION_KEYS;
 
 /// One phone number as a Google contact carries it: the E.164 value and a
 /// free-form type label. The value is never attached to a tracing span.
@@ -105,33 +102,18 @@ pub struct GoogleContacts {
 }
 
 impl GoogleContacts {
-    /// Build from the delegated user and the service-account key.
+    /// Build a client that acts as `delegation.delegated_user`.
     ///
     /// # Errors
-    /// [`ContactsError::Authentication`] when the key does not parse or no
-    /// token source can be built.
+    /// [`ContactsError::Authentication`] when no runtime credential exists.
     pub async fn new(
-        delegated_user: &str,
-        service_account_json: &str,
+        delegation: &crate::delegation::WorkspaceDelegation,
     ) -> Result<Self, ContactsError> {
-        let credentials =
-            google_cloud_auth::credentials::CredentialsFile::new_from_str(service_account_json)
-                .await
-                .map_err(|_| ContactsError::Authentication)?;
-        let scopes = [CONTACTS_SCOPE];
-        let auth_config = google_cloud_auth::project::Config::default()
-            .with_scopes(&scopes)
-            .with_sub(delegated_user);
-        let provider = google_cloud_auth::token::DefaultTokenSourceProvider::new_with_credentials(
-            auth_config,
-            Box::new(credentials),
-        )
-        .await
-        .map_err(|_| ContactsError::Authentication)?;
-        Ok(Self::from_parts(
-            google_cloud_token::TokenSourceProvider::token_source(&provider),
-            PEOPLE_BASE_URL,
-        ))
+        let token_source = delegation
+            .token_source(&[CONTACTS_SCOPE])
+            .await
+            .map_err(|_| ContactsError::Authentication)?;
+        Ok(Self::from_parts(token_source, PEOPLE_BASE_URL))
     }
 
     /// Build from [`CONTACTS_CONFIGURATION_KEYS`], naming every missing key.
@@ -146,16 +128,13 @@ impl GoogleContacts {
     where
         F: Fn(&str) -> Option<String>,
     {
-        let [user_key, json_key] = CONTACTS_CONFIGURATION_KEYS;
-        let value = |key: &str| get(key).filter(|value| !value.trim().is_empty());
-        match (value(user_key), value(json_key)) {
-            (Some(user), Some(json)) => Self::new(&user, &json).await,
-            (user, json) => {
-                let missing: Vec<&str> = [(user_key, user.is_none()), (json_key, json.is_none())]
-                    .into_iter()
-                    .filter_map(|(key, absent)| absent.then_some(key))
-                    .collect();
-                Err(ContactsError::MissingConfig(missing.join(", ")))
+        match crate::delegation::WorkspaceDelegation::from_lookup(get) {
+            Ok(delegation) => Self::new(&delegation).await,
+            Err(crate::delegation::DelegationError::MissingConfig(missing)) => {
+                Err(ContactsError::MissingConfig(missing))
+            }
+            Err(crate::delegation::DelegationError::Authentication) => {
+                Err(ContactsError::Authentication)
             }
         }
     }
@@ -407,7 +386,7 @@ mod tests {
             "{message}"
         );
         assert!(
-            message.contains("NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT_JSON"),
+            message.contains("NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT"),
             "{message}"
         );
     }
