@@ -368,6 +368,7 @@ fn projects_help_lists_the_project_workspace_verbs() {
             "finance",
             "gate",
             "import-source",
+            "jj",
             "legal-plan",
             "lifecycle",
             "migrate-letter",
