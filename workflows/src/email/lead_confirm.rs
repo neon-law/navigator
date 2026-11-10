@@ -47,7 +47,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_body_carries_the_link_and_the_google_offer_and_no_tokens() {
+    fn the_body_carries_the_link_and_the_callback_promise_and_no_tokens() {
         let body = render_lead_confirm_body(
             "visitor@example.com",
             "https://example.test/leads/confirm?token=abc",
@@ -57,7 +57,7 @@ mod tests {
             body.contains("(https://example.test/leads/confirm?token=abc)"),
             "{body}"
         );
-        assert!(body.contains("sign in with Google"), "{body}");
+        assert!(body.contains("we will call the number you gave"), "{body}");
         assert!(!body.contains("{{"), "every token substituted: {body}");
         assert!(!body.starts_with("---"), "{body}");
     }

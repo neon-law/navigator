@@ -4574,3 +4574,11 @@ $$;
 CREATE TRIGGER project_status_protect_history
     BEFORE UPDATE OR DELETE ON project_status_transition
     FOR EACH ROW EXECUTE FUNCTION project_status_protect_history();
+
+-- Migration: 20261110120000_add_lead_consent_call_opt_in.sql
+-- The callback choice a Lead makes beside the SMS one
+-- (docs/glossary/lead-consent.md): the exact wording shown and whether the
+-- box was ticked. Rows captured before the choice existed carry no wording
+-- and no consent to a call.
+ALTER TABLE lead_consent ADD COLUMN call_consent_version TEXT;
+ALTER TABLE lead_consent ADD COLUMN call_opt_in BOOLEAN NOT NULL DEFAULT false;

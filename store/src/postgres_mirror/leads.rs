@@ -41,6 +41,8 @@ pub(super) struct ConsentImage {
     sms_consent_version: String,
     sms_policy_version: String,
     sms_opt_in: bool,
+    call_consent_version: Option<String>,
+    call_opt_in: bool,
 }
 
 #[derive(SurrealValue)]
@@ -71,10 +73,12 @@ struct ConsentSource {
     sms_consent_version: String,
     sms_policy_version: String,
     sms_opt_in: bool,
+    call_consent_version: Option<String>,
+    call_opt_in: Option<bool>,
 }
 
 const LEAD_FIELDS: &str = "id, email, email_lower, phone, brand_key, source_path, consent_version, consented_at, status, unsubscribed_at, person_id, submissions, inserted_at, updated_at";
-const CONSENT_FIELDS: &str = "id, lead_id, consented_at, phone, source_path, sms_consent_version, sms_policy_version, sms_opt_in";
+const CONSENT_FIELDS: &str = "id, lead_id, consented_at, phone, source_path, sms_consent_version, sms_policy_version, sms_opt_in, call_consent_version, call_opt_in";
 
 fn uuid(id: &RecordId) -> Result<Uuid, MirrorError> {
     record_uuid(id).ok_or(MirrorError::Source)
@@ -118,6 +122,8 @@ impl TryFrom<ConsentSource> for ConsentImage {
             sms_consent_version: row.sms_consent_version,
             sms_policy_version: row.sms_policy_version,
             sms_opt_in: row.sms_opt_in,
+            call_consent_version: row.call_consent_version,
+            call_opt_in: row.call_opt_in.unwrap_or_default(),
         })
     }
 }
@@ -194,7 +200,7 @@ async fn target_leads(pg: &PostgresDb) -> Result<BTreeMap<MirrorKey, Columns>, M
 }
 
 async fn target_consents(pg: &PostgresDb) -> Result<BTreeMap<MirrorKey, Columns>, MirrorError> {
-    let rows = sqlx::query("SELECT id,lead_id,consented_at,phone,source_path,sms_consent_version,sms_policy_version,sms_opt_in FROM lead_consent")
+    let rows = sqlx::query("SELECT id,lead_id,consented_at,phone,source_path,sms_consent_version,sms_policy_version,sms_opt_in,call_consent_version,call_opt_in FROM lead_consent")
         .fetch_all(&pg.0).await?;
     rows.into_iter()
         .map(|row| {
@@ -236,6 +242,8 @@ fn consent_from_row(row: &PgRow) -> Result<ConsentImage, sqlx::Error> {
         sms_consent_version: row.try_get("sms_consent_version")?,
         sms_policy_version: row.try_get("sms_policy_version")?,
         sms_opt_in: row.try_get("sms_opt_in")?,
+        call_consent_version: row.try_get("call_consent_version")?,
+        call_opt_in: row.try_get("call_opt_in")?,
     })
 }
 
@@ -250,9 +258,10 @@ async fn upsert_lead(pg: &PostgresDb, row: &LeadImage) -> Result<Mirrored, Mirro
 async fn insert_consent(pg: &PostgresDb, row: &ConsentImage) -> Result<Mirrored, MirrorError> {
     // The UUID is stable source identity. Conflicts preserve the first stored
     // evidence, whether it matches or needs operator review in parity.
-    let result = sqlx::query("INSERT INTO lead_consent (id,lead_id,consented_at,phone,source_path,sms_consent_version,sms_policy_version,sms_opt_in) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (id) DO NOTHING")
+    let result = sqlx::query("INSERT INTO lead_consent (id,lead_id,consented_at,phone,source_path,sms_consent_version,sms_policy_version,sms_opt_in,call_consent_version,call_opt_in) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (id) DO NOTHING")
         .bind(row.id).bind(row.lead_id).bind(micros(row.consented_at)).bind(&row.phone).bind(&row.source_path)
-        .bind(&row.sms_consent_version).bind(&row.sms_policy_version).bind(row.sms_opt_in).execute(&pg.0).await?;
+        .bind(&row.sms_consent_version).bind(&row.sms_policy_version).bind(row.sms_opt_in)
+        .bind(&row.call_consent_version).bind(row.call_opt_in).execute(&pg.0).await?;
     Ok(changed(result.rows_affected(), Mirrored::Written))
 }
 

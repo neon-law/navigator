@@ -79,8 +79,8 @@ pub use notion_reconcile::{
 };
 pub use s3::{S3Storage, S3StorageConfig};
 pub use slack::{
-    channel_url as slack_channel_url, ensure_private_channel, labels_slack_from_staging_env,
-    labels_slack_from_staging_from, outbound_slack_text, FakeSlack,
+    blocks_to_fallback_text, channel_url as slack_channel_url, ensure_private_channel,
+    labels_slack_from_staging_env, labels_slack_from_staging_from, outbound_slack_text, FakeSlack,
     SlackChannel as FirmSlackChannel, SlackClient, SlackError, SlackMemberId, SlackService,
     SLACK_STAGING_MARK,
 };

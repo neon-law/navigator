@@ -5057,6 +5057,7 @@
       "cli/src/scraper/file.rs",
       "cli/src/scraper/intake.rs",
       "cli/src/scraper/mod.rs",
+      "cloud/src/slack.rs",
       "features/src/journey.rs",
       "forms/src/lib.rs",
       "lsp/src/state.rs",
@@ -5165,6 +5166,7 @@
       "workflows/src/document.rs",
       "workflows/src/guardrail.rs",
       "workflows/src/intake.rs",
+      "workflows/src/notify.rs",
       "workflows/src/step.rs"
     ],
     "query_call_ids": [
@@ -7548,6 +7550,8 @@
     "source_table": "lead_consent",
     "migration_disposition": "migrate",
     "source_fields": {
+      "call_consent_version": "option<string>",
+      "call_opt_in": "option<bool>",
       "consented_at": "datetime",
       "id": "record",
       "lead_id": "record<lead>",
@@ -7575,7 +7579,9 @@
       "DEFINE FIELD OVERWRITE source_path ON lead_consent TYPE string READONLY",
       "DEFINE FIELD OVERWRITE sms_consent_version ON lead_consent TYPE string READONLY",
       "DEFINE FIELD OVERWRITE sms_policy_version ON lead_consent TYPE string READONLY",
-      "DEFINE FIELD OVERWRITE sms_opt_in ON lead_consent TYPE bool READONLY"
+      "DEFINE FIELD OVERWRITE sms_opt_in ON lead_consent TYPE bool READONLY",
+      "DEFINE FIELD OVERWRITE call_consent_version ON lead_consent TYPE option<string> READONLY",
+      "DEFINE FIELD OVERWRITE call_opt_in ON lead_consent TYPE option<bool> READONLY"
     ],
     "source_table_declaration": "DEFINE TABLE IF NOT EXISTS lead_consent SCHEMAFULL PERMISSIONS NONE",
     "candidate_rust_callers": [
@@ -8273,6 +8279,7 @@
       "cloud/src/gcs.rs",
       "cloud/src/lib.rs",
       "cloud/src/s3.rs",
+      "cloud/src/slack.rs",
       "cloud/src/solana_evidence.rs",
       "cloud/src/speech.rs",
       "cloud/src/vertex.rs",
