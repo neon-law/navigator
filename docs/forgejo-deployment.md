@@ -112,7 +112,8 @@ and `sync-skills` restores them. A push to `main` runs three jobs:
 1. `documents` runs `navigator project gate --check --ci` against the merged tree.
 2. `seeds` runs `navigator site import --ci`. It never passes `--overwrite`.
 3. `notify` runs `navigator project notify-main-push --ci`, which posts the main-push notice to the Project's private
-   channel. It runs after the first two, reports their combined outcome, and never fails the run.
+   channel. It runs after the first two, reports their combined outcome, and never fails the run: `continue-on-error`
+   sits on its step, because Forgejo reports a job marked `continue-on-error` as failed all the same.
 
 A pull request's `gate.yml` also dry-runs `seeds/`. Forgejo ignores `.github/workflows/`, so a checkout that carries
 `.forgejo/` no longer needs `ci.yml`, `cd.yml` or `automerge.yml`. The gate still checks any of them it finds.
