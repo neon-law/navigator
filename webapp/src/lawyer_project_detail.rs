@@ -31,7 +31,7 @@
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::components::{FactCard, FactGrid, Field, FormCard, Heading, Toast, ToastTone};
+use crate::components::{FactCard, FactGrid, Field, FormCard, Toast, ToastTone};
 #[cfg(feature = "server")]
 use crate::csrf::CsrfToken;
 use crate::lawyer_project_communications::{communications_tab, notes_tab, CommunicationRow};
@@ -924,30 +924,30 @@ pub fn LawyerProjectDetail() -> Element {
                     StageChip { current: view.stage.current.as_ref().map(|row| row.label.clone()) }
                     " · Brand: {brand_disp}"
                     " · Entity: {entity_disp}"
-                    if let Some(entity_id) = view.entity_id.as_ref() {
-                        " · "
-                        a { class: "nav-link", href: "/app/admin/entities/{entity_id}/edit", "Edit entity" }
-                    }
                     " · Lawyer DRI: {lawyer_dri_disp}"
                     " · Client DRI: {client_dri_disp}"
-                    " · "
-                    a { class: "nav-link", href: "/app/projects/{view.code}/edit", "Edit project" }
-                    " · "
-                    a { class: "nav-link", href: "/app/projects/{view.code}/notations/new", "New notation" }
+                }
+                // Every action on the matter in one bar, apart from the facts
+                // above it: a reader scanning the facts never has to pick the
+                // links out of the prose.
+                nav { class: "lawyer-detail__actions", "aria-label": "Project actions",
+                    a { class: "nav-btn nav-btn--primary", href: "/app/projects/{view.code}/notations/new", "New notation" }
+                    a { class: "nav-btn nav-btn--secondary", href: "/app/projects/{view.code}/edit", "Edit project" }
+                    if let Some(entity_id) = view.entity_id.as_ref() {
+                        a { class: "nav-btn nav-btn--secondary", href: "/app/admin/entities/{entity_id}/edit", "Edit entity" }
+                    }
                     if view.role.is_lawyer_tier() {
-                        " · "
                         // The conflict check, made visible: the matter's
                         // relationship-graph page, fed by the read-only
                         // graph door.
-                        a { class: "nav-link", href: "/app/projects/{view.code}/graph", "Relationship graph" }
+                        a { class: "nav-btn nav-btn--secondary", href: "/app/projects/{view.code}/graph", "Relationship graph" }
                     }
-                }
-                form {
-                    class: "lawyer-detail__inline-form",
-                    method: "post",
-                    action: "/app/projects/{view.code}/view-as-client",
-                    input { r#type: "hidden", name: "_csrf", value: "{csrf}" }
-                    button { class: "nav-btn nav-btn--secondary", r#type: "submit", "View as Client" }
+                    form {
+                        method: "post",
+                        action: "/app/projects/{view.code}/view-as-client",
+                        input { r#type: "hidden", name: "_csrf", value: "{csrf}" }
+                        button { class: "nav-btn nav-btn--secondary", r#type: "submit", "View as Client" }
+                    }
                 }
                 // The reader's open Timer — on every tab, because time runs
                 // while you work. The table row in PostgreSQL is the truth;
@@ -972,14 +972,31 @@ pub fn LawyerProjectDetail() -> Element {
             {
                 match view.active_tab {
                     MatterTab::Overview => rsx! {
-                        StageSection {
-                            code: view.code.clone(),
-                            csrf: csrf.clone(),
-                            stage: view.stage.clone(),
-                            error: view.error.clone(),
+                        // Overview is the matter's whole narrative on one
+                        // page; the menu takes a reader straight to a part of
+                        // it. Each target is a wrapper here, so the shared
+                        // panels stay free of this page's anchors.
+                        nav { class: "lawyer-detail__jump", "aria-label": "On this page",
+                            a { class: "nav-link", href: "#stage", "Case stage" }
+                            a { class: "nav-link", href: "#resources", "Resources" }
+                            a { class: "nav-link", href: "#deadlines", "Deadlines" }
+                            a { class: "nav-link", href: "#calendar", "Calendar" }
+                            a { class: "nav-link", href: "#notations", "Notations" }
+                            a { class: "nav-link", href: "#notes", "Notes" }
                         }
 
-                        crate::project_resources::ProjectResourcesPanel { view: view.resources.clone() }
+                        div { id: "stage",
+                            StageSection {
+                                code: view.code.clone(),
+                                csrf: csrf.clone(),
+                                stage: view.stage.clone(),
+                                error: view.error.clone(),
+                            }
+                        }
+
+                        div { id: "resources",
+                            crate::project_resources::ProjectResourcesPanel { view: view.resources.clone() }
+                        }
 
                         crate::project_deadlines::ProjectDeadlinesPanel {
                             section_class: "lawyer-detail__section".to_string(),
@@ -996,6 +1013,7 @@ pub fn LawyerProjectDetail() -> Element {
                         // The matter timeline: every docket entry on this matter's cases
                         // joined with every open deadline, in date order. Documents,
                         // participations, and notations stay out of it.
+                        div { id: "calendar",
                         crate::project_calendar::ProjectCalendar {
                             section_class: "lawyer-detail__section project-calendar".to_string(),
                             heading: "Calendar".to_string(),
@@ -1007,13 +1025,16 @@ pub fn LawyerProjectDetail() -> Element {
                             dir: view.calendar_dir.clone(),
                             events: view.calendar_events.clone(),
                         }
+                        }
 
-                        ProjectNotationBoard { rows: view.notations.clone() }
+                        div { id: "notations",
+                            ProjectNotationBoard { rows: view.notations.clone() }
+                        }
 
                         // The firm's internal observations about this matter:
                         // the note channel of the correspondence log, kept on
                         // Overview where the matter's full narrative lives.
-                        {notes_tab(&view)}
+                        div { id: "notes", {notes_tab(&view)} }
 
                         // Closing a matter is bespoke: it is asked for by email and opened
                         // by the lawyer DRI, never fired from a button here. Every firm
@@ -1086,7 +1107,7 @@ pub fn LawyerProjectDetail() -> Element {
                                 title: "Upload documents".to_string(),
                                 action: "/app/projects/{view.code}/documents/upload",
                                 submit_label: "Upload".to_string(),
-                                heading: Heading::H2,
+                                disclosure: Some(view.documents.is_empty()),
                                 multipart: true,
                                 csrf_token: Some(csrf.clone()),
                                 fields: vec![

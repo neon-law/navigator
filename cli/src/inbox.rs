@@ -55,6 +55,10 @@ pub enum InboxAction {
         /// Gmail web URL or message id to archive after processing finishes.
         #[arg(long)]
         gmail: Option<String>,
+        /// On --apply, file an attributed message's attachments as internal
+        /// documents of this kind. Without it, none file and the count shows.
+        #[arg(long, value_parser = crate::parse_asset_kind)]
+        kind: Option<String>,
         /// Navigator host. Defaults to host in navigator.yaml.
         #[arg(long)]
         host: Option<String>,
@@ -123,8 +127,18 @@ async fn run_inner(action: InboxAction) -> Result<()> {
             message,
             apply,
             gmail,
+            kind,
             host,
-        } => process(message, apply, gmail.as_deref(), host.as_deref()).await,
+        } => {
+            process(
+                message,
+                apply,
+                gmail.as_deref(),
+                kind.as_deref(),
+                host.as_deref(),
+            )
+            .await
+        }
     }
 }
 
@@ -141,8 +155,12 @@ fn process_request(base: &str) -> (Method, String) {
 }
 
 /// The body the process door reads: which message, and whether to record.
-fn process_body(message: Uuid, apply: bool) -> serde_json::Value {
-    serde_json::json!({ "message": message, "apply": apply })
+fn process_body(message: Uuid, apply: bool, kind: Option<&str>) -> serde_json::Value {
+    let mut body = serde_json::json!({ "message": message, "apply": apply });
+    if let Some(kind) = kind {
+        body["kind"] = serde_json::json!(kind);
+    }
+    body
 }
 
 /// One message's plan, as the doors serve it. The body never travels.
@@ -174,6 +192,15 @@ struct ProcessApplyView {
     slack_notice: String,
     #[serde(default)]
     nef: Option<NefFiling>,
+    #[serde(default)]
+    attachments: AttachmentFiling,
+}
+
+/// What filed from a non-NEF message's attachments on apply.
+#[derive(Debug, Default, Deserialize)]
+struct AttachmentFiling {
+    filed: usize,
+    unfiled: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -273,6 +300,18 @@ fn print_plan(view: &ProcessView, apply: Option<&ProcessApplyView>) {
         if let Some(filing) = &apply.nef {
             println!("Filing       {}", filing.outcome);
         }
+        if apply.attachments.filed > 0 {
+            println!(
+                "Attachments  {} filed as internal documents",
+                apply.attachments.filed
+            );
+        }
+        if apply.attachments.unfiled > 0 {
+            println!(
+                "Attachments  {} not filed; re-run with --apply --kind <kind> to file them",
+                apply.attachments.unfiled
+            );
+        }
     } else {
         if let (Some(route), Some(recorded_at)) = (&view.recorded_route, &view.recorded_at) {
             println!("Recorded     {route} at {recorded_at}");
@@ -287,6 +326,7 @@ async fn process(
     message: Uuid,
     apply: bool,
     gmail: Option<&str>,
+    kind: Option<&str>,
     host: Option<&str>,
 ) -> Result<()> {
     let (base, token) = crate::remote::resolve(host)?;
@@ -294,7 +334,7 @@ async fn process(
     let response = reqwest::Client::new()
         .request(method, url)
         .bearer_auth(token)
-        .json(&process_body(message, apply))
+        .json(&process_body(message, apply, kind))
         .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
@@ -352,13 +392,15 @@ mod tests {
         assert_eq!(method, Method::POST);
         assert_eq!(url, format!("{base}/app/api/inbox/process"));
 
-        let body = process_body(message, false);
+        let body = process_body(message, false, None);
         assert_eq!(body["message"], serde_json::json!(message));
         assert_eq!(body["apply"], serde_json::json!(false));
+        assert!(body.get("kind").is_none(), "no kind is sent unless named");
 
-        let body = process_body(message, true);
+        let body = process_body(message, true, Some("exhibit"));
         assert_eq!(body["message"], serde_json::json!(message));
         assert_eq!(body["apply"], serde_json::json!(true));
+        assert_eq!(body["kind"], serde_json::json!("exhibit"));
     }
 
     #[test]
@@ -548,6 +590,7 @@ mod tests {
             message: Uuid::from_u128(7),
             apply: false,
             gmail: None,
+            kind: None,
             host: Some(base),
         })
         .await;
@@ -568,6 +611,7 @@ mod tests {
             message: Uuid::from_u128(7),
             apply: true,
             gmail: None,
+            kind: None,
             host: Some(base),
         })
         .await;
@@ -598,6 +642,7 @@ mod tests {
                 Uuid::from_u128(7),
                 true,
                 Some("invalid-gmail-reference"),
+                None,
                 Some(&base),
             )
             .await
@@ -623,6 +668,7 @@ mod tests {
             message: Uuid::from_u128(7),
             apply: false,
             gmail: None,
+            kind: None,
             host: Some(base),
         })
         .await;

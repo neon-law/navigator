@@ -336,7 +336,7 @@
 {"file":"cli/src/import.rs","line":300,"function":"question_codes_skip_control_states_and_strip_labels","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/import.rs","line":302,"function":"question_codes_skip_control_states_and_strip_labels","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/journal.rs","line":78,"function":"run","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cli/src/mail.rs","line":321,"function":"call","operation":"query","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/mail.rs","line":325,"function":"call","operation":"query","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/mail/login.rs","line":415,"function":"prompt_hidden","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/main.rs","line":8644,"function":"parse_notarization","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/notices.rs","line":611,"function":"identical_texts_collapse_into_one_entry","operation":"insert","sql_operations":[],"tables":[],"transaction":false}

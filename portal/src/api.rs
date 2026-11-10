@@ -8298,7 +8298,7 @@ async fn update_playbook_door(
 }
 
 /// A `400 Bad Request` JSON body in the shared `{error, message}` shape.
-fn bad_request(error: &str, message: &str) -> Response {
+pub(crate) fn bad_request(error: &str, message: &str) -> Response {
     (
         StatusCode::BAD_REQUEST,
         Json(serde_json::json!({ "error": error, "message": message })),
@@ -9656,7 +9656,7 @@ impl IntoResponse for ApiError {
 /// Derived from the same predicate the ingest boundary enforces
 /// (`valid_for(Lane::Asset)`) rather than written out here, so the list a
 /// rejected caller is shown cannot drift from the list actually accepted.
-fn accepted_asset_kinds() -> Vec<&'static str> {
+pub(crate) fn accepted_asset_kinds() -> Vec<&'static str> {
     rules::kind::Kind::ALL
         .iter()
         .filter(|k| k.valid_for(rules::kind::Lane::Asset))

@@ -5,7 +5,7 @@
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::components::{Field, FormCard, Heading};
+use crate::components::{Field, FormCard};
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
 pub struct AdminTestimonialView {
@@ -64,7 +64,7 @@ pub(crate) fn admin_testimonial_card(
                 title: "Enter client testimonial".to_string(),
                 action: format!("/app/admin/projects/{code}/testimonial"),
                 submit_label: "Save testimonial".to_string(),
-                heading: Heading::Hidden,
+                disclosure: Some(!has_testimonial),
                 csrf_token: Some(csrf.to_string()),
                 intro: rsx! {
                     p { class: "nav-muted",

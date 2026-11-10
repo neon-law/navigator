@@ -368,6 +368,52 @@ async fn read_raw_source(state: &crate::api::ApiState, key: &str) -> Result<Vec<
 
 /// Every attachment asset the message links, with their bytes read back
 /// from storage in message-part order.
+/// How many attachment assets an inbox message carries.
+pub(crate) async fn attachment_count(
+    state: &crate::api::ApiState,
+    row: &store::inbox::UnprocessedRow,
+) -> Result<usize, ApiError> {
+    Ok(
+        store::inbox::message_assets(&state.surreal, row.firm_id, row.id)
+            .await
+            .map_err(map_inbox)?
+            .len(),
+    )
+}
+
+/// File an attributed inbox message's attachment assets onto its matter as
+/// internal documents of `kind` — any route, not only a court notice. Slugs
+/// follow the NEF lane (`mail/<message id>/<index>`) and each part files
+/// exactly once, so a replayed apply converges. Returns how many it filed.
+pub(crate) async fn file_message_attachments(
+    state: &crate::api::ApiState,
+    row: &store::inbox::UnprocessedRow,
+    project_id: Uuid,
+    kind: &str,
+) -> Result<usize, ApiError> {
+    let attachments = attachment_bytes(state, row).await?;
+    if attachments.is_empty() {
+        return Ok(0);
+    }
+    crate::api::file_mail_attachments(
+        state,
+        project_id,
+        kind,
+        store::documents::visibility::INTERNAL,
+        &crate::api::MailAttachmentSource {
+            exactly_once: true,
+            attachment_kinds: None,
+            message_id: &row.id.to_string(),
+            sender: &row.external_address,
+            received_at: &row.occurred_at,
+            subject: row.subject.as_deref().unwrap_or_default(),
+        },
+        &attachments,
+    )
+    .await?;
+    Ok(attachments.len())
+}
+
 async fn attachment_bytes(
     state: &crate::api::ApiState,
     row: &store::inbox::UnprocessedRow,

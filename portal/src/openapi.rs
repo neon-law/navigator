@@ -4500,7 +4500,9 @@ fn canonical_document(base: &str) -> Value {
                     "message": { "type": "string", "format": "uuid",
                                  "description": "The inbox message to plan or record" },
                     "apply": { "type": "boolean", "default": false,
-                               "description": "False serves the plan only; true records the classification" }
+                               "description": "False serves the plan only; true records the classification" },
+                    "kind": { "type": "string",
+                              "description": "Asset-lane kind an attributed, non-NEF message's attachments file under as internal documents on apply. Absent files none; the response counts them as unfiled." }
                   }
                 }
               } }
