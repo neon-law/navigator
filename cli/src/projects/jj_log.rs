@@ -141,3 +141,106 @@ fn brief_timestamp(raw: &str) -> String {
         None => raw.to_string(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Real `jj log --template {RECORD_TEMPLATE}` output from a colocated
+    /// checkout (jj 0.47.1): a merge conflict, two clean changes, and the
+    /// empty plumbing changes jj's workflow leaves along the way.
+    fn fixture_log() -> String {
+        [
+            "swwomtxqxqwm\u{1f}merged\u{1f}Ada Lawyer\u{1f}2026-11-10 21:40:36.000 +00:00\u{1f}empty\u{1f}conflicted",
+            "qzxyrmqwsxzw\u{1f}right\u{1f}Ada Lawyer\u{1f}2026-11-10 21:40:35.000 +00:00\u{1f}filled\u{1f}clean",
+            "nrszvlulpzwv\u{1f}left\u{1f}Ada Lawyer\u{1f}2026-11-10 21:40:35.000 +00:00\u{1f}filled\u{1f}clean",
+            "mokmnrmvszqr\u{1f}\u{1f}\u{1f}2026-11-10 21:39:28.000 +00:00\u{1f}empty\u{1f}clean",
+            "zzzzzzzzzzzz\u{1f}\u{1f}\u{1f}1970-01-01 00:00:00.000 +00:00\u{1f}empty\u{1f}clean",
+        ]
+        .join("\n")
+    }
+
+    #[test]
+    fn fixture_records_parse_into_change_entries() {
+        let entries = parse_log_records(&fixture_log());
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].change_id, "swwomtxqxqwm");
+        assert_eq!(entries[0].description, "merged");
+        assert_eq!(entries[0].author, "Ada Lawyer");
+        assert!(entries[0].conflicted);
+        assert!(!entries[1].conflicted);
+        assert_eq!(entries[2].description, "left");
+    }
+
+    #[test]
+    fn empty_undescribed_plumbing_changes_are_dropped() {
+        let entries = parse_log_records(&fixture_log());
+        assert!(
+            entries
+                .iter()
+                .all(|entry| entry.conflicted || !entry.description.is_empty()),
+            "every kept entry is described or conflicted"
+        );
+    }
+
+    #[test]
+    fn a_conflicted_change_is_never_dropped_even_when_undescribed() {
+        let raw = "abcdefgqwxlm\u{1f}\u{1f}\u{1f}2026-11-10 21:40:36.000 +00:00\u{1f}empty\u{1f}conflicted\n";
+        let entries = parse_log_records(raw);
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].conflicted);
+    }
+
+    #[test]
+    fn stray_lines_without_six_fields_are_skipped() {
+        let raw = format!("warning: nothing here\n{}\n", fixture_log());
+        assert_eq!(parse_log_records(&raw).len(), 3);
+    }
+
+    #[test]
+    fn the_view_renders_in_lawyer_terms() {
+        let rendered = render_log(&parse_log_records(&fixture_log()));
+        assert_eq!(
+            rendered,
+            "merged\n  change swwomtxqxqwm · Ada Lawyer · 2026-11-10 21:40:36\n  \
+             ⚠ conflicted — resolve before sending\n\n\
+             right\n  change qzxyrmqwsxzw · Ada Lawyer · 2026-11-10 21:40:35\n\n\
+             left\n  change nrszvlulpzwv · Ada Lawyer · 2026-11-10 21:40:35\n\n"
+        );
+    }
+
+    #[test]
+    fn the_default_view_names_no_commit_sha() {
+        // The fixture's Git commit ids, exactly as jj's own log would show
+        // them (4f35bf9b, 390dc8b8, f532581e…). The view renders change ids,
+        // so none may appear.
+        let rendered = render_log(&parse_log_records(&fixture_log()));
+        for sha in ["4f35bf9b", "390dc8b8", "f532581e", "990ecc98", "d2044c8b"] {
+            assert!(!rendered.contains(sha), "a Git SHA leaked into the view");
+        }
+    }
+
+    #[test]
+    fn a_change_without_description_or_author_still_reads_clearly() {
+        let entry = ChangeEntry {
+            change_id: "qzxyrmqwsxzw".into(),
+            description: String::new(),
+            author: String::new(),
+            timestamp: "2026-11-10 21:40:35.000 +00:00".into(),
+            empty: false,
+            conflicted: false,
+        };
+        let rendered = render_log(&[entry]);
+        assert!(rendered.contains("(no description)"));
+        assert!(rendered.contains("(unknown)"));
+    }
+
+    #[test]
+    fn timestamps_lose_their_fraction_and_offset() {
+        assert_eq!(
+            brief_timestamp("2026-11-10 21:40:36.000 +00:00"),
+            "2026-11-10 21:40:36"
+        );
+        assert_eq!(brief_timestamp("unknown shape"), "unknown shape");
+    }
+}
