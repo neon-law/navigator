@@ -759,7 +759,12 @@ pub fn validate_yaml(model: SeedModel, yaml: &str) -> anyhow::Result<()> {
             )
         }
         SeedModel::Entity => {
-            let records = parse_seed::<EntityRec>(yaml, model, &["name", "entity_type_id"])?;
+            let records =
+                parse_seed::<OperatorEntityRec>(yaml, model, &["name", "entity_type_id"])?;
+            for record in &records {
+                crate::entity_commands::validate_metadata(record.metadata.as_ref())
+                    .map_err(|error| anyhow::anyhow!(error.user_message()))?;
+            }
             require_unique(
                 model,
                 "name and entity_type.name",
@@ -809,25 +814,7 @@ pub fn validate_yaml(model: SeedModel, yaml: &str) -> anyhow::Result<()> {
                 }),
             )
         }
-        SeedModel::Address => {
-            let records = parse_seed::<OperatorAddressRec>(
-                yaml,
-                model,
-                &["person_id", "line1", "postal_code"],
-            )?;
-            require_unique(
-                model,
-                "person.email, line1, and postal_code",
-                records.iter().map(|record| {
-                    format!(
-                        "{}\u{0}{}\u{0}{}",
-                        record.person.email.to_ascii_lowercase(),
-                        record.line1.to_ascii_lowercase(),
-                        record.postal_code.to_ascii_lowercase()
-                    )
-                }),
-            )
-        }
+        SeedModel::Address => parse_address_seed(yaml).map(|_| ()),
         SeedModel::RelationshipLog => validate_relationship_logs(yaml),
         SeedModel::ProjectReference => validate_project_references(yaml),
         SeedModel::FiduciaryRole => module_records::validate_fiduciary_roles(yaml),
@@ -1225,6 +1212,16 @@ async fn update_person_from_seed(
     Ok(())
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OperatorEntityRec {
+    name: String,
+    entity_type: EntityTypeRef,
+    phone: Option<String>,
+    url: Option<String>,
+    metadata: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
 async fn reconcile_entities(
     surreal: &SurrealDb,
     yaml: &str,
@@ -1237,7 +1234,9 @@ async fn reconcile_entities(
         model: SeedModel::Entity.term().to_string(),
         ..ReconcileReport::default()
     };
-    for rec in parse_seed::<EntityRec>(yaml, SeedModel::Entity, &["name", "entity_type_id"])? {
+    for rec in
+        parse_seed::<OperatorEntityRec>(yaml, SeedModel::Entity, &["name", "entity_type_id"])?
+    {
         let entity_type = crate::entity_types::find_by_name(surreal, &rec.entity_type.name)
             .await?
             .ok_or_else(|| {
@@ -1254,14 +1253,18 @@ async fn reconcile_entities(
             })?;
         let existing =
             crate::entities::find_by_name_and_type(surreal, &rec.name, entity_type.id).await?;
-        let key = format!("{} / {}", rec.name, rec.entity_type.name);
-        match existing {
+        let mut record = ReconcileRecord {
+            key: format!("{} / {}", rec.name, rec.entity_type.name),
+            jurisdiction: Some(jurisdiction_name.to_string()),
+            ..ReconcileRecord::default()
+        };
+        record.action = match existing {
             None => {
                 if scope_project.is_some() {
                     return Err(anyhow::Error::new(ScopeViolation::EntityCreateNotScopable));
                 }
                 if !dry_run {
-                    crate::entity_commands::create_entity(
+                    crate::entity_commands::create_entity_with_contact(
                         surreal,
                         firm_anchor,
                         &crate::entity_commands::CreateEntityCommand {
@@ -1269,26 +1272,19 @@ async fn reconcile_entities(
                             entity_type_id: entity_type.id,
                             jurisdiction_id: jurisdiction.id,
                         },
+                        rec.phone.as_deref(),
+                        rec.url.as_deref(),
+                        rec.metadata.as_ref(),
                     )
                     .await
                     .map_err(|error| anyhow::anyhow!(error.user_message()))?;
                 }
                 report.created += 1;
-                report.records.push(ReconcileRecord {
-                    key,
-                    action: ReconcileAction::New,
-                    jurisdiction: Some(jurisdiction_name.to_string()),
-                    ..ReconcileRecord::default()
-                });
+                ReconcileAction::New
             }
             Some(_) if !overwrite => {
                 report.unchanged += 1;
-                report.records.push(ReconcileRecord {
-                    key,
-                    action: ReconcileAction::Unchanged,
-                    jurisdiction: Some(jurisdiction_name.to_string()),
-                    ..ReconcileRecord::default()
-                });
+                ReconcileAction::Unchanged
             }
             Some(existing) => {
                 if let Some(project) = scope_project {
@@ -1296,38 +1292,28 @@ async fn reconcile_entities(
                         return Err(anyhow::Error::new(ScopeViolation::CrossProject));
                     }
                 }
-                let changed_fields = entity_changed_fields(&existing, jurisdiction.id);
+                let changed_fields = entity_changed_fields(&existing, jurisdiction.id, &rec);
                 if changed_fields.is_empty() {
                     report.unchanged += 1;
-                    report.records.push(ReconcileRecord {
-                        key,
-                        action: ReconcileAction::Unchanged,
-                        jurisdiction: Some(jurisdiction_name.to_string()),
-                        ..ReconcileRecord::default()
-                    });
+                    ReconcileAction::Unchanged
                 } else {
                     report.updated += 1;
-                    report.records.push(ReconcileRecord {
-                        key,
-                        action: ReconcileAction::Changed,
-                        changed_fields,
-                        jurisdiction: Some(jurisdiction_name.to_string()),
-                        ..ReconcileRecord::default()
-                    });
+                    record.changed_fields = changed_fields;
                     if !dry_run {
                         update_entity_from_seed(
                             surreal,
                             existing.id,
                             firm_anchor,
-                            rec.name,
-                            entity_type.id,
                             jurisdiction.id,
+                            rec,
                         )
                         .await?;
                     }
+                    ReconcileAction::Changed
                 }
             }
-        }
+        };
+        report.records.push(record);
     }
     Ok(report)
 }
@@ -1336,20 +1322,21 @@ async fn update_entity_from_seed(
     surreal: &SurrealDb,
     id: Uuid,
     firm_anchor: &str,
-    name: String,
-    entity_type_id: Uuid,
     jurisdiction_id: Uuid,
+    record: OperatorEntityRec,
 ) -> anyhow::Result<()> {
-    crate::entity_commands::update_entity(
+    crate::entity_commands::patch_entity(
         surreal,
         id,
         firm_anchor,
-        &crate::entity_commands::UpdateEntityCommand {
-            name: Some(name),
-            entity_type_id: Some(entity_type_id),
-            jurisdiction_id: Some(jurisdiction_id),
-            xero_id: None,
-            metadata: None,
+        &crate::entity_commands::EntityPatch {
+            update: crate::entity_commands::UpdateEntityCommand {
+                jurisdiction_id: Some(jurisdiction_id),
+                metadata: record.metadata,
+                ..Default::default()
+            },
+            phone: record.phone,
+            url: record.url,
         },
     )
     .await
@@ -1464,21 +1451,66 @@ struct OperatorPersonEntityRoleRec {
     role: String,
 }
 
-/// A person's postal address (LAW-57). The natural key is
-/// `(person.email, line1, postal_code)` — the same (street, ZIP) pair
-/// `store::addresses::find_or_create_for_person` matches on, scoped to the
-/// referenced person.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct OperatorAddressRec {
-    person: OperatorPersonRef,
+    person: Option<OperatorPersonRef>,
+    entity: Option<AddressEntityRef>,
+    #[serde(alias = "street")]
     line1: String,
-    #[serde(default)]
     line2: Option<String>,
     city: String,
+    #[serde(alias = "state")]
     region: String,
+    #[serde(alias = "zip")]
     postal_code: String,
     country: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AddressEntityRef {
+    name: String,
+    entity_type: Option<EntityTypeRef>,
+}
+
+fn parse_address_seed(yaml: &str) -> anyhow::Result<Vec<OperatorAddressRec>> {
+    let parsed: SeedRecords<OperatorAddressRec> = serde_yaml::from_str(yaml)
+        .map_err(|error| anyhow::anyhow!("parse address seed: {error}"))?;
+    let fields: Vec<&str> = parsed.lookup_fields.iter().map(String::as_str).collect();
+    let by_entity = match fields.as_slice() {
+        ["person_id", "line1", "postal_code"] => false,
+        ["entity_id", "street", "zip"] => true,
+        _ => anyhow::bail!(
+            "address seed must declare lookup_fields: person_id, line1, postal_code or entity_id, street, zip"
+        ),
+    };
+    let mut keys = Vec::new();
+    for record in &parsed.records {
+        let owner = match (&record.person, &record.entity, by_entity) {
+            (Some(person), None, false) => person.email.to_ascii_lowercase(),
+            (None, Some(entity), true) => format!(
+                "{}\u{0}{}",
+                entity.name.trim().to_ascii_lowercase(),
+                entity
+                    .entity_type
+                    .as_ref()
+                    .map_or("", |kind| kind.name.as_str())
+                    .to_ascii_lowercase()
+            ),
+            _ => {
+                anyhow::bail!("address seed must name exactly the owner declared by lookup_fields")
+            }
+        };
+        keys.push(format!(
+            "{}\u{0}{}\u{0}{}",
+            owner,
+            record.line1.to_ascii_lowercase(),
+            record.postal_code.to_ascii_lowercase()
+        ));
+    }
+    require_unique(SeedModel::Address, "owner, street, and postal code", keys)?;
+    Ok(parsed.records)
 }
 
 async fn reconcile_person_project_roles(
@@ -1843,12 +1875,7 @@ async fn resolve_reference_party(
     }
 }
 
-/// Attach a person's postal address (LAW-57). Like
-/// [`reconcile_person_project_roles`] and [`reconcile_person_entity_roles`],
-/// this is a fact table keyed by its natural key rather than a mutable
-/// record: an existing (person, line1, postal_code) match is left
-/// untouched — `overwrite` has no meaning here, since the natural key
-/// already names every field this model's identity depends on.
+/// Reconcile an Address by its owner, street, and postal code.
 async fn reconcile_addresses(
     surreal: &SurrealDb,
     yaml: &str,
@@ -1859,37 +1886,68 @@ async fn reconcile_addresses(
         model: SeedModel::Address.term().to_string(),
         ..ReconcileReport::default()
     };
-    for rec in parse_seed::<OperatorAddressRec>(
-        yaml,
-        SeedModel::Address,
-        &["person_id", "line1", "postal_code"],
-    )? {
-        let key = format!("{} / {} {}", rec.person.email, rec.line1, rec.postal_code);
-        let person = crate::persons::find_by_email_ci(surreal, &rec.person.email)
-            .await?
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "address seed references unknown person email {:?}",
-                    rec.person.email
-                )
-            })?;
-        if let Some(scope) = scope_project {
-            authorize_person_project_scope(surreal, person.id, scope).await?;
-        }
-        let new = crate::addresses::NewAddress {
-            person_id: Some(person.id),
-            entity_id: None,
+    for rec in parse_address_seed(yaml)? {
+        let mut new = crate::addresses::NewAddress {
             line1: rec.line1,
             line2: rec.line2,
             city: rec.city,
             region: rec.region,
             postal_code: rec.postal_code,
             country: rec.country,
+            ..Default::default()
         };
-        let existing = crate::addresses::for_person(surreal, person.id)
-            .await?
+        let (owner, addresses) = if let Some(person) = rec.person {
+            let found = crate::persons::find_by_email_ci(surreal, &person.email)
+                .await?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "address seed references unknown person email {:?}",
+                        person.email
+                    )
+                })?;
+            if let Some(scope) = scope_project {
+                authorize_person_project_scope(surreal, found.id, scope).await?;
+            }
+            new.person_id = Some(found.id);
+            (
+                person.email,
+                crate::addresses::for_person(surreal, found.id).await?,
+            )
+        } else if let Some(entity) = rec.entity {
+            let found = if let Some(kind) = entity.entity_type {
+                let kind = crate::entity_types::find_by_name(surreal, &kind.name)
+                    .await?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "address seed references unknown entity type {:?}",
+                            kind.name
+                        )
+                    })?;
+                crate::entities::find_by_name_and_type(surreal, &entity.name, kind.id).await?
+            } else {
+                crate::entities::find_unique_by_name(surreal, &entity.name).await?
+            }
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "address seed requires an unambiguous Entity {:?}",
+                    entity.name
+                )
+            })?;
+            if scope_project.is_some_and(|scope| scope.entity_id != found.id) {
+                return Err(anyhow::Error::new(ScopeViolation::CrossProject));
+            }
+            new.entity_id = Some(found.id);
+            (
+                entity.name,
+                crate::addresses::for_entity(surreal, found.id).await?,
+            )
+        } else {
+            anyhow::bail!("address seed must name an owner");
+        };
+        let key = format!("{} / {} {}", owner, new.line1, new.postal_code);
+        let existing = addresses
             .into_iter()
-            .any(|a| a.line1 == new.line1 && a.postal_code == new.postal_code);
+            .any(|address| address.line1 == new.line1 && address.postal_code == new.postal_code);
         if existing {
             report.unchanged += 1;
             report.records.push(ReconcileRecord {
@@ -1926,12 +1984,40 @@ fn person_changed_fields(existing: &crate::persons::Person, incoming: &PersonRec
     fields
 }
 
-fn entity_changed_fields(existing: &crate::entities::Entity, jurisdiction_id: Uuid) -> Vec<String> {
-    if existing.jurisdiction_id == jurisdiction_id {
-        Vec::new()
-    } else {
-        vec!["jurisdiction".to_string()]
+fn entity_changed_fields(
+    existing: &crate::entities::Entity,
+    jurisdiction_id: Uuid,
+    incoming: &OperatorEntityRec,
+) -> Vec<String> {
+    let mut fields = Vec::new();
+    if existing.jurisdiction_id != jurisdiction_id {
+        fields.push("jurisdiction".to_string());
     }
+    for (name, value, saved) in [
+        (
+            "phone",
+            incoming.phone.as_deref(),
+            existing.phone.as_deref(),
+        ),
+        ("url", incoming.url.as_deref(), existing.url.as_deref()),
+    ] {
+        if let Some(value) = value {
+            let trimmed = value.trim();
+            if (!trimmed.is_empty()).then_some(trimmed) != saved {
+                fields.push(name.to_string());
+            }
+        }
+    }
+    if incoming.metadata.as_ref().is_some_and(|metadata| {
+        existing
+            .metadata
+            .as_ref()
+            .and_then(serde_json::Value::as_object)
+            != Some(metadata)
+    }) {
+        fields.push("metadata".to_string());
+    }
+    fields
 }
 
 /// Run the full canonical seed pass against `db`. Each entity table
@@ -6473,6 +6559,80 @@ records:
             .await
             .unwrap()
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn entity_seed_imports_contact_details_and_entity_address() {
+        let surreal = mem_surreal().await;
+        entity_type_and_jurisdiction(&surreal).await;
+        let yaml = format!(
+            "{}    phone: 'example-phone'\n    url: https://example.com\n    metadata: {{category: printing}}\n",
+            entity_yaml("Example Vendor")
+        );
+        let actor = unrestricted_actor();
+        let imported = reconcile_yaml(&surreal, SeedModel::Entity, &yaml, "Firm", false, &actor)
+            .await
+            .unwrap();
+        assert_eq!(imported.created, 1);
+        let entity = crate::entities::find_by_name(&surreal, "Example Vendor")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(entity.phone.as_deref(), Some("example-phone"));
+        assert_eq!(entity.url.as_deref(), Some("https://example.com"));
+        assert_eq!(
+            entity.metadata,
+            Some(serde_json::json!({"category": "printing"}))
+        );
+
+        let overwrite = format!(
+            "{}    phone: ''\n    metadata: {{}}\n",
+            entity_yaml("Example Vendor")
+        );
+        let updated = reconcile_yaml(
+            &surreal,
+            SeedModel::Entity,
+            &overwrite,
+            "Firm",
+            true,
+            &actor,
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.records[0].changed_fields, ["phone", "metadata"]);
+        let entity = crate::entities::find_by_id(&surreal, entity.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(entity.phone, None);
+        assert_eq!(entity.url.as_deref(), Some("https://example.com"));
+        assert_eq!(entity.metadata, Some(serde_json::json!({})));
+
+        let address = r"
+lookup_fields: [entity_id, street, zip]
+records:
+  - entity:
+      name: Example Vendor
+    street: Example Street
+    city: Reno
+    state: NV
+    zip: '89501'
+    country: US
+";
+        validate_yaml(SeedModel::Address, address).unwrap();
+        let first = reconcile_yaml(&surreal, SeedModel::Address, address, "Firm", false, &actor)
+            .await
+            .unwrap();
+        let again = reconcile_yaml(&surreal, SeedModel::Address, address, "Firm", false, &actor)
+            .await
+            .unwrap();
+        assert_eq!(first.created, 1);
+        assert_eq!(again.unchanged, 1);
+        let saved = crate::addresses::for_entity(&surreal, entity.id)
+            .await
+            .unwrap();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].line1, "Example Street");
     }
 
     /// LAW-57: importing an address attaches it to the Person.

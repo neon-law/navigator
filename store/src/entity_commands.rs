@@ -76,6 +76,17 @@ pub struct UpdateEntityCommand {
     pub metadata: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
+/// Entity PATCH body, including optional contact fields. A blank contact
+/// value clears its column, while an omitted value preserves it.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EntityPatch {
+    #[serde(flatten)]
+    pub update: UpdateEntityCommand,
+    pub phone: Option<String>,
+    pub url: Option<String>,
+}
+
 #[derive(Debug)]
 pub enum EntityCommandError {
     /// The request is malformed in a way the caller can correct.
@@ -234,6 +245,18 @@ pub async fn create_entity(
     firm_anchor: &str,
     input: &CreateEntityCommand,
 ) -> Result<Entity, EntityCommandError> {
+    create_entity_with_contact(surreal, firm_anchor, input, None, None, None).await
+}
+
+pub(crate) async fn create_entity_with_contact(
+    surreal: &SurrealDb,
+    firm_anchor: &str,
+    input: &CreateEntityCommand,
+    phone: Option<&str>,
+    url: Option<&str>,
+    metadata: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Result<Entity, EntityCommandError> {
+    validate_metadata(metadata)?;
     let name = input.name.trim();
     if name.is_empty() {
         return Err(EntityCommandError::Invalid("Name is required."));
@@ -248,19 +271,50 @@ pub async fn create_entity(
         }
     }
 
-    Ok(entities::create(
+    Ok(entities::create_with_metadata(
         surreal,
         &NewEntity {
             name: name.to_string(),
             entity_type_id: input.entity_type_id,
             jurisdiction_id: input.jurisdiction_id,
-            phone: None,
-            url: None,
+            phone: optional_contact(phone),
+            url: optional_contact(url),
             xero_id: None,
             firm_anchor_key: anchor_key,
         },
+        metadata,
     )
     .await?)
+}
+
+fn optional_contact(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+pub(crate) fn validate_metadata(
+    metadata: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Result<(), EntityCommandError> {
+    if let Some(ein) = metadata.and_then(|m| m.get("ein")) {
+        let valid = ein.as_str().is_some_and(|value| {
+            value.len() == 10
+                && value.bytes().enumerate().all(|(i, byte)| {
+                    if i == 2 {
+                        byte == b'-'
+                    } else {
+                        byte.is_ascii_digit()
+                    }
+                })
+        });
+        if !valid {
+            return Err(EntityCommandError::Invalid(
+                "EIN must be a string formatted as NN-NNNNNNN.",
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Refuse a write that references a jurisdiction with no row behind it.
@@ -315,23 +369,40 @@ pub async fn update_entity(
     firm_anchor: &str,
     input: &UpdateEntityCommand,
 ) -> Result<Entity, EntityCommandError> {
-    if let Some(ein) = input.metadata.as_ref().and_then(|m| m.get("ein")) {
-        let valid = ein.as_str().is_some_and(|value| {
-            value.len() == 10
-                && value.bytes().enumerate().all(|(i, byte)| {
-                    if i == 2 {
-                        byte == b'-'
-                    } else {
-                        byte.is_ascii_digit()
-                    }
-                })
-        });
-        if !valid {
-            return Err(EntityCommandError::Invalid(
-                "EIN must be a string formatted as NN-NNNNNNN.",
-            ));
-        }
-    }
+    update_entity_with_contact(surreal, id, firm_anchor, input, None, None).await
+}
+
+/// Apply an authenticated partial Entity edit, including phone and URL.
+///
+/// # Errors
+///
+/// Returns the same validation, persistence, and anchor errors as [`update_entity`].
+pub async fn patch_entity(
+    surreal: &SurrealDb,
+    id: Uuid,
+    firm_anchor: &str,
+    patch: &EntityPatch,
+) -> Result<Entity, EntityCommandError> {
+    update_entity_with_contact(
+        surreal,
+        id,
+        firm_anchor,
+        &patch.update,
+        patch.phone.as_deref(),
+        patch.url.as_deref(),
+    )
+    .await
+}
+
+async fn update_entity_with_contact(
+    surreal: &SurrealDb,
+    id: Uuid,
+    firm_anchor: &str,
+    input: &UpdateEntityCommand,
+    phone: Option<&str>,
+    url: Option<&str>,
+) -> Result<Entity, EntityCommandError> {
+    validate_metadata(input.metadata.as_ref())?;
     let existing = entities::find_by_id(surreal, id)
         .await?
         .ok_or(EntityCommandError::NotFound)?;
@@ -353,11 +424,10 @@ pub async fn update_entity(
     // Absent leaves the Xero contact alone; a blank submission clears it —
     // the same blank-clears convention `UpdateProjectCommand`'s optional text
     // columns document.
-    let xero_id = match input.xero_id.as_deref() {
-        None => existing.xero_id.clone(),
-        Some(value) if value.trim().is_empty() => None,
-        Some(value) => Some(value.trim().to_string()),
-    };
+    let xero_id = input
+        .xero_id
+        .as_deref()
+        .map_or(existing.xero_id, |value| optional_contact(Some(value)));
 
     // Compared byte for byte against the stored name, deliberately: a firm
     // anchor's name is immutable down to case and spacing. `store::seed` looks
@@ -380,22 +450,23 @@ pub async fn update_entity(
         }
     }
 
-    if let Some(updated) = entities::update_with_metadata(
+    if let Some(updated) = entities::update_fields(
         surreal,
         id,
         &NewEntity {
             name,
             entity_type_id,
             jurisdiction_id,
-            // The port carries these across untouched: they are set by
-            // the bulk-contact importer and by no field on this command, so
-            // a partial update must not blank them.
-            phone: existing.phone,
-            url: existing.url,
+            phone: optional_contact(phone),
+            url: optional_contact(url),
             xero_id,
             firm_anchor_key: anchor_key,
         },
         input.metadata.as_ref(),
+        entities::ContactUpdate {
+            phone: phone.is_some(),
+            url: url.is_some(),
+        },
     )
     .await?
     {
@@ -532,9 +603,41 @@ mod tests {
             name: Some(name.into()),
             entity_type_id: Some(type_id),
             jurisdiction_id: Some(jur_id),
-            xero_id: None,
-            metadata: None,
+            ..Default::default()
         }
+    }
+
+    #[tokio::test]
+    async fn entity_contact_patch_updates_and_clears_contact_fields() {
+        assert!(serde_json::from_value::<super::EntityPatch>(
+            serde_json::json!({"unknown": "value"})
+        )
+        .is_err());
+        let (db, type_id, jur_id) = fixture().await;
+        let entity = create_entity(
+            &db,
+            "Example Firm",
+            &command("Example Vendor", type_id, jur_id),
+        )
+        .await
+        .unwrap();
+        let patch = serde_json::from_value(serde_json::json!({
+            "phone": "example-phone",
+            "url": "https://example.com"
+        }))
+        .unwrap();
+        let updated = super::patch_entity(&db, entity.id, "Example Firm", &patch)
+            .await
+            .unwrap();
+        assert_eq!(updated.phone.as_deref(), Some("example-phone"));
+        assert_eq!(updated.url.as_deref(), Some("https://example.com"));
+
+        let patch = serde_json::from_value(serde_json::json!({"phone": " "})).unwrap();
+        let updated = super::patch_entity(&db, entity.id, "Example Firm", &patch)
+            .await
+            .unwrap();
+        assert_eq!(updated.phone, None);
+        assert_eq!(updated.url.as_deref(), Some("https://example.com"));
     }
 
     #[tokio::test]
@@ -1195,8 +1298,7 @@ mod tests {
                 name: None,
                 entity_type_id: None,
                 jurisdiction_id: Some(other_jurisdiction),
-                xero_id: None,
-                metadata: None,
+                ..Default::default()
             },
         )
         .await

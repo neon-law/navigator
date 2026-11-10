@@ -22,3 +22,6 @@ authenticated `PATCH /app/api/entities/{id}` accepts `metadata`: omitting it pre
 object replaces it, and `{}` clears it. Other Entity edits preserve metadata. Client identifiers belong in Navigator's
 private records. Approved public firm facts may be included in the canonical seed. The firm overview displays its linked
 Entity's EIN beneath the firm name.
+
+`navigator site import entity` and `PATCH /app/api/entities/{id}` accept `phone`, `url`, and `metadata`. For PATCH and
+seed overwrite, omit a contact field to preserve it or supply a blank string to clear it.
