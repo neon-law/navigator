@@ -366,6 +366,40 @@ async fn the_calendar_ensure_creates_then_reconciles_the_shared_calendar() {
 }
 
 #[tokio::test]
+async fn the_contacts_sync_reports_counts_and_converges() {
+    let f = fixture_with_integrations(std::sync::Arc::new(
+        portal::integrations::FakeIntegrations::new(),
+    ))
+    .await;
+    let selector = json!({ "project_code": f.project_code });
+    let first = post_json(
+        &f.app,
+        "/app/api/integrations/contacts/sync",
+        selector.clone(),
+        &f.admin,
+    )
+    .await;
+    assert_eq!(first.status(), axum::http::StatusCode::OK);
+    let first = first_result(&body_json(first).await).clone();
+    assert_eq!(first["outcome"], "synced");
+    let second = post_json(
+        &f.app,
+        "/app/api/integrations/contacts/sync",
+        selector,
+        &f.admin,
+    )
+    .await;
+    let second = first_result(&body_json(second).await).clone();
+    assert!(
+        second["detail"]
+            .as_str()
+            .unwrap()
+            .ends_with("0 created, 0 updated, 0 removed"),
+        "a re-run changes nothing: {second}"
+    );
+}
+
+#[tokio::test]
 async fn slack_notify_rejects_an_event_outside_the_closed_vocabulary() {
     let f = fixture().await;
     let response = post_json(

@@ -48,6 +48,10 @@ pub use calendar::{
     CalendarError, CalendarMember, CalendarRole, CalendarService, FakeCalendar, GoogleCalendar,
     ProjectCalendar,
 };
+pub use contacts::{
+    ContactBook, ContactBooks, ContactPhone, ContactsError, FakeContactBooks, GoogleContactBooks,
+    ManagedContact, StoredContact,
+};
 pub use drive::{
     md5_hex, DriveError, DriveFile, DriveFileDownload, DriveFolder, DriveMember, DriveMemberKind,
     DriveRole, DriveService, DriveWorkspace, DriveWorkspaceConfig, FakeDrive, GoogleDrive,

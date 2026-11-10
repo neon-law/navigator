@@ -96,6 +96,7 @@ pub mod cm_ecf_stamp;
 pub mod communications;
 pub mod config;
 pub mod conflicts;
+pub mod contact_sync;
 pub mod contingency_terms;
 pub mod contract_reviews;
 pub mod court_seeds;
