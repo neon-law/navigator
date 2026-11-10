@@ -1497,8 +1497,7 @@ fn dispatch_with_dns_provider(
                         Some(project_id) => {
                             let client =
                                 gcp::client::GcpClient::new(gcp::auth::adc_token_provider().await?);
-                            call_script::TwilioStudio::from_secret_manager(&client, &project_id)
-                                .await?
+                            call_script::TwilioStudio::for_deployment(&client, &project_id).await?
                         }
                         None => {
                             call_script::TwilioStudio::from_lookup(|name| std::env::var(name).ok())?

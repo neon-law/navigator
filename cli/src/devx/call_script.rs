@@ -200,7 +200,9 @@ impl CallScript {
 /// The Twilio account that owns the receiving number and its Studio Flow.
 pub struct TwilioStudio {
     http: reqwest::Client,
-    account_sid: String,
+    /// The Twilio Account SID: the account's public identifier, which
+    /// Twilio's own resource paths carry. The auth token is the credential.
+    sid: String,
     auth_token: String,
     api_base_url: String,
     studio_base_url: String,
@@ -216,10 +218,10 @@ pub struct Flow {
 
 impl TwilioStudio {
     #[must_use]
-    pub fn new(account_sid: impl Into<String>, auth_token: impl Into<String>) -> Self {
+    pub fn new(sid: impl Into<String>, auth_token: impl Into<String>) -> Self {
         Self {
             http: reqwest::Client::new(),
-            account_sid: account_sid.into(),
+            sid: sid.into(),
             auth_token: auth_token.into(),
             api_base_url: TWILIO_API_BASE_URL.into(),
             studio_base_url: TWILIO_STUDIO_BASE_URL.into(),
@@ -242,7 +244,7 @@ impl TwilioStudio {
 
     /// Build from a deployment's own Secret Manager: the same two objects
     /// its pods receive, read at `versions/latest` and never written down.
-    pub async fn from_secret_manager(
+    pub async fn for_deployment(
         client: &super::gcp::client::GcpClient,
         project_id: &str,
     ) -> Result<Self> {
@@ -266,7 +268,7 @@ impl TwilioStudio {
 
     async fn json(&self, request: reqwest::RequestBuilder, what: &str) -> Result<Value> {
         let response = request
-            .basic_auth(&self.account_sid, Some(&self.auth_token))
+            .basic_auth(&self.sid, Some(&self.auth_token))
             .send()
             .await
             .with_context(|| format!("{what}: Twilio was unreachable"))?;
@@ -287,7 +289,7 @@ impl TwilioStudio {
     async fn flow_sid_for_number(&self, number: &str) -> Result<String> {
         let url = format!(
             "{}/2010-04-01/Accounts/{}/IncomingPhoneNumbers.json",
-            self.api_base_url, self.account_sid
+            self.api_base_url, self.sid
         );
         let body = self
             .json(
@@ -658,13 +660,13 @@ mod tests {
         let client = GcpClient::new(std::sync::Arc::new(StaticToken("t".into())))
             .with_base_url(GcpService::SecretManager, server.uri());
 
-        let twilio = TwilioStudio::from_secret_manager(&client, "example-test")
+        let twilio = TwilioStudio::for_deployment(&client, "example-test")
             .await
             .unwrap();
-        assert_eq!(twilio.account_sid, "AC1", "a trailing newline is trimmed");
+        assert_eq!(twilio.sid, "AC1", "a trailing newline is trimmed");
         assert_eq!(twilio.auth_token, "token");
 
-        let error = TwilioStudio::from_secret_manager(&client, "example-empty")
+        let error = TwilioStudio::for_deployment(&client, "example-empty")
             .await
             .err()
             .unwrap();
@@ -678,10 +680,7 @@ mod tests {
             "TWILIO_AUTH_TOKEN" => Some("token".to_string()),
             _ => None,
         };
-        assert_eq!(
-            TwilioStudio::from_lookup(lookup).unwrap().account_sid,
-            "AC1"
-        );
+        assert_eq!(TwilioStudio::from_lookup(lookup).unwrap().sid, "AC1");
         let error = TwilioStudio::from_lookup(|_| None).err().unwrap();
         assert!(error.to_string().contains("TWILIO_ACCOUNT_SID"), "{error}");
     }
