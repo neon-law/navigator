@@ -8,7 +8,10 @@
 //! the assertions it cannot serve (the house fixture, as in
 //! `nautilus_gate.rs`).
 
-use axum::{body::Body, http::{Request, StatusCode}};
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+};
 use portal::forgejo_webhook::PushConsumer;
 use store::postgres::forgejo_push_webhook_journal::{self, ForgejoPushReceipt, NewPushReceipt};
 use tower::ServiceExt;
