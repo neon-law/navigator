@@ -100,5 +100,5 @@ navigator project gate
 The Project code is immutable. Correct a mistaken code through the lifecycle and data-governance process. Do not rename
 the repository or manifest independently.
 
-Follow the [Project agent contract](../../../cli/src/projects/agent_contract.md#people-and-entities-in-matter-work) when
-matter work identifies a new Person or Entity.
+Follow the **People and Entities in matter work** section of the Project's root `AGENTS.md` when matter work identifies
+a new Person or Entity.
