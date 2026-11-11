@@ -46,7 +46,7 @@ upstream notice in the repository `NOTICE`.
 After `navigator site login --host <deployment>`, run:
 
 ```bash
-navigator ephemeris download --host <deployment> --dir ./jpl-reference
+scorpio download --host <deployment> --dir ./jpl-reference
 ```
 
 The deployment authorizes the signed session as Owner or Admin through `GET /app/api/ephemeris/sources` before any
@@ -147,9 +147,9 @@ Resolved chart results carry a `ChartInstant`, pairing the physical epoch with e
 `lines_for_instant`, and `LineProvenance::for_instant` for these results. Raw `Epoch` line APIs interpret their input
 through hifitime's proleptic UTC model and do not resolve historical birth clocks. The algorithm identity is chart-v3.
 
-`navigator ephemeris tables` authorizes through the protected source catalog and creates bounded local Parquet/CSV
-[Ephemeris Reference Table](ephemeris-reference-table.md#authenticated-local-files) bundles from the verified raw DE440
-bundle. Derived manifests identify exact content separately from source manifests and generation time.
+`scorpio tables` authorizes through the protected source catalog and creates bounded local Parquet/CSV [Ephemeris
+Reference Table](ephemeris-reference-table.md#authenticated-local-files) bundles from the verified raw DE440 bundle.
+Derived manifests identify exact content separately from source manifests and generation time.
 
 The optional `--iceberg` mode adds a [local Iceberg v2
 layout](ephemeris-reference-table.md#fixed-location-iceberg-layout) over those files. Its layout artifact identity

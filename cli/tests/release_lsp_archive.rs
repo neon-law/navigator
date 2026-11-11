@@ -32,16 +32,18 @@ fn deploy_job(name: &str) -> serde_yaml::Value {
         .unwrap_or_else(|| panic!("deploy.yml must define the `{name}` job"))
 }
 
-/// Every platform's build job compiles `navigator-lsp` alongside the CLI, in
-/// the SAME `cargo build` invocation — one compile of the shared dependency
-/// graph rather than a second cold build per platform.
+/// Each platform builds `navigator-lsp` in a job of its own, compiling only
+/// the `lsp` package, so the LSP archive never waits on a CLI compile.
 #[test]
-fn every_platform_build_compiles_the_lsp_binary_too() {
-    let workflow = deploy_workflow();
-    assert!(
-        workflow.contains("cargo build --locked --release -p cli -p lsp"),
-        "every CLI release build must also compile `lsp`, so one command produces both binaries"
-    );
+fn every_platform_builds_the_lsp_in_its_own_job() {
+    for platform in ["linux", "macos"] {
+        let job = serde_yaml::to_string(&deploy_job(&format!("release-lsp-build-{platform}")))
+            .expect("the job serializes");
+        assert!(
+            job.contains("cargo build --locked --release -p lsp --bin navigator-lsp"),
+            "release-lsp-build-{platform} must compile only the `lsp` package"
+        );
+    }
 }
 
 #[test]
@@ -167,6 +169,11 @@ fn no_cli_archive_path_can_match_an_lsp_archive() {
             .expect("an archive path has a filename");
         let cli = format!("navigator-{tag}-");
         let lsp = format!("navigator-lsp-{tag}-");
+        // `navigator-deploy` archives share the prefix but never a match set:
+        // its tag follows `navigator-deploy-`, never `navigator-`.
+        if name.starts_with(&format!("navigator-deploy-{tag}-")) {
+            continue;
+        }
         assert!(
             name.starts_with(&cli) ^ name.starts_with(&lsp),
             "`{path}` resolves to `{name}`, which must name the CLI archive (`{cli}<platform>`) or the LSP archive (`{lsp}<platform>`), never both"

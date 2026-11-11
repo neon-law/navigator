@@ -29,7 +29,7 @@ namespace: navigator
 # exit naming the value it wanted.
 #
 # `triggers_source_every_projected_key_from_the_deployment_secret` in
-# `cli/src/devx/ship.rs` fails the build if any trigger inlines a key this
+# `deploy/src/devx/ship.rs` fails the build if any trigger inlines a key this
 # Secret projects.
 #
 # The `archives-trigger`, `general-nag`, `billing-digest-trigger`,

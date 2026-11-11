@@ -99,10 +99,10 @@ Regenerate dependency notices when the dependency graph changes:
 
 ```bash
 cargo fetch
-cargo run -p cli -- ops notices
+cargo run -p deploy -- ops notices
 ```
 
-`navigator ops notices --check` verifies the retained file against the unpacked dependency sources. The command refuses
-to publish notices when sources are missing; font and other non-Cargo notices require their own review.
+`navigator-deploy ops notices --check` verifies the retained file against the unpacked dependency sources. The command
+refuses to publish notices when sources are missing; font and other non-Cargo notices require their own review.
 
 For private vulnerability reporting, see [SECURITY.md](../SECURITY.md).

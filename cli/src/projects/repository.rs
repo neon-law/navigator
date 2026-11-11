@@ -67,7 +67,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::devx::github_setup::REQUIRED_CHECK;
+use crate::host::REQUIRED_CHECK;
 use anyhow::Context;
 
 /// The alias spelling of [`DRAFT_DIRECTORY`]; the gate warns until it is renamed.
@@ -99,7 +99,7 @@ const MAIL_DIRECTORY: &str = "mail";
 ///
 /// The canonical bytes live in `project-scaffold` so this CLI's scaffold and
 /// the server-side repository seeding write the same bytes.
-pub(crate) use project_scaffold::ROOT_GITIGNORE;
+pub use project_scaffold::ROOT_GITIGNORE;
 /// The [`ROOT_GITIGNORE`] lines whose absence is an error rather than drift:
 /// without them a document's bytes, a rendered pleading, a downloaded
 /// exhibit, or a handoff note can be committed (LAW-181).
@@ -110,26 +110,26 @@ const DOCUMENT_DIRECTORY: &str = crate::document_sync::DOCUMENT_DIRECTORY;
 const POINTER_DIRECTORY: &str = crate::document_sync::POINTER_DIRECTORY;
 /// The legacy Portal's Vite workspace.
 ///
-/// `pub(crate)` because [`super::super::devx::github_setup`] still uses its
+/// `pub` because [`super::super::devx::github_setup`] still uses its
 /// presence while reconciling the supported application layouts.
-pub(crate) const PORTAL_DIRECTORY: &str = "portal";
+pub const PORTAL_DIRECTORY: &str = "portal";
 /// Application workspaces, each declared by `apps/<app>/package.json`.
 const APPLICATIONS_DIRECTORY: &str = "apps";
-/// `pub(crate)` because [`super::super::devx::github_setup`] reconciles the
+/// `pub` because [`super::super::devx::github_setup`] reconciles the
 /// live file at this path against [`workflow`]'s output, the same template
 /// `scaffold` writes, read back rather than duplicated.
-pub(crate) const WORKFLOW: &str = ".github/workflows/ci.yml";
+pub const WORKFLOW: &str = ".github/workflows/ci.yml";
 /// The retired generated-gate filename. Reconcile still reads it so a
 /// repository that has not yet been rewritten is classified, not ignored.
-pub(crate) const RETIRED_WORKFLOW: &str = ".github/workflows/gate.yml";
-/// `pub(crate)` for the same reason as [`WORKFLOW`], but for [`cd_workflow`].
-pub(crate) const CD_WORKFLOW: &str = ".github/workflows/cd.yml";
+pub const RETIRED_WORKFLOW: &str = ".github/workflows/gate.yml";
+/// `pub` for the same reason as [`WORKFLOW`], but for [`cd_workflow`].
+pub const CD_WORKFLOW: &str = ".github/workflows/cd.yml";
 /// The retired generated-publish filename, accepted the same one-release way
 /// as [`RETIRED_WORKFLOW`]: `validate_layout` reports a warning naming the
 /// replacement rather than refusing outright, so a repository has a release
 /// to rename it in before the gate stops accepting the old name. See
 /// [`docs/gate.md`](../../../docs/gate.md) for the documented transition.
-pub(crate) const RETIRED_CD_WORKFLOW: &str = ".github/workflows/publish.yml";
+pub const RETIRED_CD_WORKFLOW: &str = ".github/workflows/publish.yml";
 /// The last Navigator CLI release that still accepts [`RETIRED_WORKFLOW`] or
 /// [`RETIRED_CD_WORKFLOW`] with a warning, closing the "one further release"
 /// transition [`docs/gate.md`](../../../docs/gate.md) documents. `resolve_workflow`
@@ -141,7 +141,7 @@ pub(crate) const RETIRED_CD_WORKFLOW: &str = ".github/workflows/publish.yml";
 const FINAL_RETIRED_WORKFLOW_RELEASE: &str = "26.9.23";
 /// The manifest a Project repository declares its Project in.
 ///
-/// `pub(crate)` rather than private because [`super::drift`] and
+/// `pub` rather than private because [`super::drift`] and
 /// [`super::super::devx::github_setup`] each read the same file and must not
 /// spell it a second time: two constants for one filename is a rename waiting
 /// to leave one of them stale, and the gate that *admits* the file, the
@@ -152,7 +152,7 @@ const FINAL_RETIRED_WORKFLOW_RELEASE: &str = "26.9.23";
 /// different tools, not two schemas that happen to overlap.
 /// The Project manifest's canonical bytes live in `project-scaffold` so this
 /// CLI's scaffold and the server-side repository seeding agree on the file.
-pub(crate) use project_scaffold::PROJECT_MANIFEST;
+pub use project_scaffold::PROJECT_MANIFEST;
 const CODEOWNERS: &str = "# CODEOWNERS\n\n* @shicholas\n";
 /// Seed-shaped YAML documents for `navigator site import`, one file per model.
 const SEED_DIRECTORY: &str = "seeds";
@@ -316,7 +316,7 @@ const FORBIDDEN_DOCUMENT_EXTENSIONS: &[&str] = &["doc", "docx", "odt", "pdf"];
 /// counsel will sign and clears the marks to finalize it.
 /// The canonical bytes live in `project-scaffold` so this CLI's scaffold and
 /// the server-side repository seeding write the same copies.
-pub(crate) use project_scaffold::SYNCED_SKILLS;
+pub use project_scaffold::SYNCED_SKILLS;
 
 #[derive(Debug)]
 struct Finding {
@@ -337,11 +337,12 @@ impl Finding {
 /// that manifest declares a `project`.
 ///
 /// This is the one admission check every write into a repository's agent
-/// contract owes before it touches disk — `cli/src/main.rs` applies the same
+/// contract owes before it touches disk — `cli/src/commands.rs` applies the same
 /// check before both `project gate`'s Project-repository layout pass and its
 /// own document-pointer pass, so a tree with no `navigator.yaml` is read as
 /// ordinary source, never as a Project repository missing its manifest.
-pub(crate) fn is_project_repository(dir: &Path) -> bool {
+#[must_use]
+pub fn is_project_repository(dir: &Path) -> bool {
     let Ok(raw) = fs::read_to_string(dir.join(PROJECT_MANIFEST)) else {
         return false;
     };
@@ -356,9 +357,9 @@ pub(crate) fn is_project_repository(dir: &Path) -> bool {
 /// this pass's own "0 error(s)" summary as though it spoke for the whole
 /// `navigator project gate` run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct LayoutOutcome {
-    pub(crate) errors: usize,
-    pub(crate) warnings: usize,
+pub struct LayoutOutcome {
+    pub errors: usize,
+    pub warnings: usize,
 }
 
 /// Validate one Project's repository.
@@ -374,11 +375,8 @@ pub(crate) struct LayoutOutcome {
 /// Commit-state rules read the files Git would carry, not the files on disk:
 /// the gate judges what a pull request proposes, and an untracked scratch file
 /// is not part of that.
-pub(crate) fn validate_gate(
-    root: &Path,
-    repository: Option<&str>,
-    write_fixes: bool,
-) -> LayoutOutcome {
+#[must_use]
+pub fn validate_gate(root: &Path, repository: Option<&str>, write_fixes: bool) -> LayoutOutcome {
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
 
@@ -466,7 +464,8 @@ pub(crate) fn validate_gate(
 /// The Draft directory a command writes into: `drafts/`, or the
 /// `templates/` alias when only that spelling is present. An ambiguous tree
 /// gets the canonical spelling, and the gate refuses it.
-pub(crate) fn draft_directory(root: &Path) -> &'static str {
+#[must_use]
+pub fn draft_directory(root: &Path) -> &'static str {
     use rules::project_blueprints::{BlueprintDirectory, BlueprintSelection};
     match rules::project_blueprints::select(
         root.join(TEMPLATE_DIRECTORY).is_dir(),
@@ -886,7 +885,7 @@ fn slash_separated_path(path: &Path) -> String {
 /// [`AUTOMERGE_WORKFLOW_CONTENTS`], the same shape as [`CODEOWNERS`] — no
 /// repository has a legitimate reason to differ from another, so any
 /// variation is drift rather than local intent.
-pub(crate) const AUTOMERGE_WORKFLOW: &str = ".github/workflows/automerge.yml";
+pub const AUTOMERGE_WORKFLOW: &str = ".github/workflows/automerge.yml";
 /// The byte-exact content [`AUTOMERGE_WORKFLOW`] must carry.
 ///
 /// Arms as the merge-queue App, never as `GITHUB_TOKEN` — a token minted from
@@ -1500,7 +1499,7 @@ fn validate_skills(root: &Path, errors: &mut Vec<Finding>) {
 /// redirects for `uses:` references, so the old source slug is invalid after
 /// transfer. [`workflow_for`] and [`cd_workflow_for`] still accept an explicit
 /// `workflow_home` for forks with their own workflow host.
-pub(crate) const DEFAULT_WORKFLOW_HOME: &str = "neon-law/navigator";
+pub const DEFAULT_WORKFLOW_HOME: &str = "neon-law/navigator";
 
 /// The `uses:` prefix a `ci.yml` job calling the reusable Project gate
 /// workflow must start with, for an arbitrary `workflow_home`.
@@ -1509,13 +1508,15 @@ pub(crate) const DEFAULT_WORKFLOW_HOME: &str = "neon-law/navigator";
 /// `neon-law/navigator/.github/workflows/project-gate.yml@` — a
 /// test in this module pins that equality down so the two can never drift
 /// apart silently.
-pub(crate) fn gate_workflow_prefix(workflow_home: &str) -> String {
+#[must_use]
+pub fn gate_workflow_prefix(workflow_home: &str) -> String {
     format!("{workflow_home}/.github/workflows/project-gate.yml@")
 }
 
 /// Same as [`gate_workflow_prefix`], for the `publish` job's reusable
 /// project-publish workflow.
-pub(crate) fn publish_workflow_prefix(workflow_home: &str) -> String {
+#[must_use]
+pub fn publish_workflow_prefix(workflow_home: &str) -> String {
     format!("{workflow_home}/.github/workflows/project-publish.yml@")
 }
 
@@ -1927,14 +1928,14 @@ fn validate_cd_workflow(
 }
 
 fn is_release_tag(version: &str) -> bool {
-    crate::devx::registry::is_release_tag(version)
+    crate::release::is_release_version(version)
 }
 
 /// What `is_release_tag` requires, spelled out once so `scaffold`'s CLI-time
 /// refusal, `validate_workflow`'s CI-time finding, and
 /// [`super::super::devx::github_setup`]'s own refusal describe the one rule in
 /// one sentence rather than three that are free to drift.
-pub(crate) const RELEASE_TAG_SHAPE: &str =
+pub const RELEASE_TAG_SHAPE: &str =
     "an exact release tag, such as YY.M.D or YY.M.D-hotfix.N — never `main` or `latest`";
 
 fn validate_templates(
@@ -2180,7 +2181,7 @@ const TRACKED_EXTENSIONS: &[&str] = &["md", "yml", "yaml"];
 const REFUSED_YAML_TOOLING: &[&str] = &["pnpm-lock.yaml", "pnpm-workspace.yaml", ".yarnrc.yml"];
 
 /// The canonical `.gitattributes`: every text file is normalized to LF.
-pub(crate) const CANONICAL_GITATTRIBUTES: &str = "* text=auto eol=lf\n";
+pub const CANONICAL_GITATTRIBUTES: &str = "* text=auto eol=lf\n";
 
 /// The only tracked files that are neither Markdown nor YAML, each paired
 /// with the bytes this release holds it to, or `None` where another pass
@@ -2416,7 +2417,8 @@ fn repair_root_gitignore(root: &Path, repaired: &mut Vec<String>) -> anyhow::Res
 /// `navigator project gate --tracked-files`: only [`TRACKED_FILE_CODE`], for
 /// the shared workflow's required `ci` job. Nothing is written. Prints each
 /// finding and returns how many there were.
-pub(crate) fn validate_tracked_files_only(root: &Path) -> usize {
+#[must_use]
+pub fn validate_tracked_files_only(root: &Path) -> usize {
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
     validate_tracked_files(root, false, &mut errors, &mut warnings);
@@ -2441,7 +2443,7 @@ pub(crate) fn validate_tracked_files_only(root: &Path) -> usize {
 /// client-visible pointer the tracked tree proposes, which is precisely what
 /// a pull request's merge would add or change. A warning, never an error:
 /// client visibility is a deliberate choice to make, not a thing to forbid.
-pub(crate) const CLIENT_VISIBILITY_CODE: &str = "Y025";
+pub const CLIENT_VISIBILITY_CODE: &str = "Y025";
 
 /// Whether a tracked relative path is a committed document pointer.
 fn is_pointer_path(relative: &str) -> bool {
@@ -3070,7 +3072,7 @@ const AGENT_CONTRACT_BASE: &str = include_str!("agent_contract.md");
 
 /// [`emit_scaffold_for`] a GitHub-backed Project.
 #[cfg(test)]
-pub(crate) fn emit_scaffold(
+pub fn emit_scaffold(
     root: &Path,
     code: &str,
     host: &str,
@@ -3091,7 +3093,7 @@ pub(crate) fn emit_scaffold(
 /// embedded in this CLI release. No checkout of Navigator is needed. A
 /// Forgejo-backed Project also gets [`FORGEJO_GATE_WORKFLOW`] and
 /// [`FORGEJO_CD_WORKFLOW`].
-pub(crate) fn emit_scaffold_for(
+pub fn emit_scaffold_for(
     root: &Path,
     code: &str,
     host: &str,
@@ -3188,7 +3190,7 @@ pub(crate) fn emit_scaffold_for(
 
 /// Write Navigator's canonical Agent Skills. The scaffold always writes them;
 /// [`repair_skills`] restores a drifted copy and reports what changed.
-pub(crate) fn emit_synced_skills(root: &Path) -> anyhow::Result<()> {
+pub fn emit_synced_skills(root: &Path) -> anyhow::Result<()> {
     for (relative, contents) in project_scaffold::synced_skill_files() {
         let path = root.join(relative);
         let parent = path
@@ -3208,15 +3210,12 @@ pub(crate) fn emit_synced_skills(root: &Path) -> anyhow::Result<()> {
 /// (`NAVIGATOR_FORGE_BACKEND=forgejo`, or a checkout that already carries
 /// `.forgejo/`). Returns the repository-relative paths whose bytes changed.
 /// Custom skills and every other Project file stay untouched.
-pub(crate) fn repair_skills(root: &Path) -> anyhow::Result<Vec<String>> {
+pub fn repair_skills(root: &Path) -> anyhow::Result<Vec<String>> {
     repair_skills_for(root, forge_backend_from_env()?)
 }
 
 /// [`repair_skills`] for a named forge.
-pub(crate) fn repair_skills_for(
-    root: &Path,
-    forge: cloud::ForgeBackend,
-) -> anyhow::Result<Vec<String>> {
+pub fn repair_skills_for(root: &Path, forge: cloud::ForgeBackend) -> anyhow::Result<Vec<String>> {
     let root = root.canonicalize()?;
     let navigator_root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -3333,7 +3332,8 @@ fn restore_canonical(
 /// reusable workflow reads `project`/`host` from this repository's own
 /// `navigator.yaml`, so the pinned `version` in `uses:` is the only value a
 /// caller repeats.
-pub(crate) fn workflow_for(workflow_home: &str, action_version: &str) -> String {
+#[must_use]
+pub fn workflow_for(workflow_home: &str, action_version: &str) -> String {
     let gate = gate_workflow_prefix(workflow_home);
     format!(
         r"name: {REQUIRED_CHECK}
@@ -3357,7 +3357,8 @@ jobs:
 /// its own `workflow_home` explicitly through [`workflow_for`] instead, which
 /// is why this convenience wrapper is test-only.
 #[cfg(test)]
-pub(crate) fn workflow(action_version: &str) -> String {
+#[must_use]
+pub fn workflow(action_version: &str) -> String {
     workflow_for(DEFAULT_WORKFLOW_HOME, action_version)
 }
 
@@ -3372,7 +3373,8 @@ pub(crate) fn workflow(action_version: &str) -> String {
 /// a `with:` block or a token-scoping comment: what the reusable workflow
 /// does with the token, and where it reads `project`/`host` from, is
 /// documented in the shared workflow, not repeated in every caller.
-pub(crate) fn cd_workflow_for(workflow_home: &str, action_version: &str) -> String {
+#[must_use]
+pub fn cd_workflow_for(workflow_home: &str, action_version: &str) -> String {
     let gate = gate_workflow_prefix(workflow_home);
     let publish = publish_workflow_prefix(workflow_home);
     format!(
@@ -3400,16 +3402,16 @@ jobs:
 /// The required check is named by the gate tests and by Forgejo deployment
 /// fixtures; no production path re-derives it.
 #[cfg(test)]
-pub(crate) use project_scaffold::FORGEJO_REQUIRED_CHECK;
+pub use project_scaffold::FORGEJO_REQUIRED_CHECK;
 /// The gate workflow a Forgejo-backed Project repository carries, and the
 /// commit-status context it posts. The canonical bytes live in
 /// `project-scaffold` so this CLI's scaffold and the server-side repository
 /// seeding write the same workflow.
-pub(crate) use project_scaffold::{FORGEJO_CD_WORKFLOW, FORGEJO_GATE_WORKFLOW};
+pub use project_scaffold::{FORGEJO_CD_WORKFLOW, FORGEJO_GATE_WORKFLOW};
 
 /// The forge this process scaffolds for, from `NAVIGATOR_FORGE_BACKEND`
 /// (unset is GitHub).
-pub(crate) fn forge_backend_from_env() -> anyhow::Result<cloud::ForgeBackend> {
+pub fn forge_backend_from_env() -> anyhow::Result<cloud::ForgeBackend> {
     cloud::ForgeBackend::from_lookup(|name| std::env::var(name).ok())
         .map_err(|error| anyhow::anyhow!("{error}"))
 }
@@ -3418,7 +3420,8 @@ pub(crate) fn forge_backend_from_env() -> anyhow::Result<cloud::ForgeBackend> {
 /// comment: test-only, because production now threads `workflow_home`
 /// explicitly through [`cd_workflow_for`] instead.
 #[cfg(test)]
-pub(crate) fn cd_workflow(action_version: &str) -> String {
+#[must_use]
+pub fn cd_workflow(action_version: &str) -> String {
     cd_workflow_for(DEFAULT_WORKFLOW_HOME, action_version)
 }
 
@@ -3809,7 +3812,7 @@ jobs:
 
     /// ENG-931's cross-organization Project fixture: a Project repository in
     /// an organization other than `neon-law-source-code` — the same
-    /// `acme/navigator`-shaped fixture `cli/src/devx/github_setup.rs` already
+    /// `acme/navigator`-shaped fixture `deploy/src/devx/github_setup.rs` already
     /// uses — reconciles cleanly to a `ci.yml`/`cd.yml` pinned to an
     /// alternate, always-public `workflow_home` rather than this repository.
     /// This is the round trip the reusable-workflow relocation must prove
@@ -4315,7 +4318,7 @@ jobs:
             "navigator project deadline update",
             "navigator project deadline complete",
             "navigator project deadline cancel",
-            "navigator glossary show \"Deadline\"",
+            "navigator-deploy glossary show \"Deadline\"",
             "private_slack_channel",
             "--client-lead-days",
             "Never compute court days",
@@ -4344,7 +4347,7 @@ jobs:
             "navigator project docket link-document",
             "navigator project docket supersede",
             "navigator project docket ingest",
-            "navigator glossary show \"Docket Entry\"",
+            "navigator-deploy glossary show \"Docket Entry\"",
             "--scheduled-on",
             "--dry-run",
             "A hearing is a Docket Entry",
@@ -4382,7 +4385,7 @@ jobs:
         ] {
             assert!(canonical.contains(expected), "skill must name `{expected}`");
         }
-        for retired in ["navigator site sync", "navigator site pull"] {
+        for retired in ["navigator-deploy site sync", "navigator-deploy site pull"] {
             assert!(
                 !canonical.contains(retired),
                 "skill still names `{retired}`"
@@ -4459,7 +4462,7 @@ jobs:
     }
 
     /// ENG-870 named this doc specifically: it still documented the
-    /// retired `navigator site document verify` after that verb moved onto
+    /// retired `navigator-deploy site document verify` after that verb moved onto
     /// `navigator project gate --check`.
     #[test]
     fn project_repositories_doc_documents_only_commands_that_resolve() {
@@ -5574,7 +5577,7 @@ jobs:
         scaffold_minimal(root.path());
         std::fs::write(
             root.path().join("AGENTS.md"),
-            "# contract\n\nRun `navigator template render file.md` then `navigator notation preview`.\n",
+            "# contract\n\nRun `navigator template render file.md` then `navigator-deploy notation preview`.\n",
         )
         .unwrap();
         let mut errors: Vec<Finding> = Vec::new();
@@ -5732,7 +5735,7 @@ jobs:
         }
     }
 
-    /// LAW-62: `--check` (`run_document_check_gate` in `cli/src/main.rs`)
+    /// LAW-62: `--check` (`run_document_check_gate` in `cli/src/commands.rs`)
     /// runs only the live document check. `verify` already ran the whole
     /// offline gate.
     #[test]

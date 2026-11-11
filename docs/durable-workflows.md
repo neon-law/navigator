@@ -160,7 +160,7 @@ Restate admits at most one invocation per workflow key, so a run that *completed
 such as `input_digest_mismatch` — can't be resubmitted through its normal trigger. `EmailSummary` keys on the receipt
 id, and intake only submits on the inbound webhook: SendGrid never re-POSTs a message that already got a 202.
 
-`navigator ops email-summary redrive --receipt <uuid>` recovers that case:
+`navigator-deploy ops email-summary redrive --receipt <uuid>` recovers that case:
 
 1. Refuses when the receipt's Slack delivery is already `confirmed` — this can never risk a second post. When the
    confirmed post was a provider-failure notice (`Failure: ...` in the channel), `--after-failed-result <actor>` vouches
@@ -205,7 +205,7 @@ the k8s secret — which is the failure this section exists to prevent.
 Restate routes the ingress to **registered** services. Registration is a **snapshot of the worker's handler list at
 register time** — it does not follow new deploys.
 
-- In **KIND**, `cargo run -p cli -- ops restate register` wires the worker URL into the in-cluster broker, so the dev
+- In **KIND**, `cargo run -p deploy -- ops restate register` wires the worker URL into the in-cluster broker, so the dev
   loop just works.
 - In **Restate Cloud**, registration is an **explicit admin operation**. Rolling a new worker image does **not**
   re-register, so a service or handler added since the last registration is invisible at the ingress:
@@ -310,14 +310,14 @@ through the stages above. Four sources, in the order that usually pays off:
 - **GitHub Actions.** The `ci` and `deploy` runs (`gh run list`, `gh run view <id> --log`). Did the worker and trigger
   images actually build and publish, and did the deploy job succeed? A red or skipped deploy explains a stale image
   faster than any cluster probe.
-- **Logs.** The trigger pod and worker logs (`kubectl -n navigator dev logs ...`) for the live failure; Cloud Logging /
-  BigQuery for history. The worker prints its backends and per-invocation status; the trigger logs whether the ingress
-  accepted the call.
+- **Logs.** The trigger pod and worker logs (`kubectl -n navigator-deploy dev logs ...`) for the live failure; Cloud
+  Logging / BigQuery for history. The worker prints its backends and per-invocation status; the trigger logs whether the
+  ingress accepted the call.
 - **Google Cloud.** Cloud Trace for the invocation's spans (`web` → ingress → handler), GKE workload state, and the
   Restate Cloud console's Invocations view for which step failed and retried.
 
-`navigator ops doctor` is a shortcut for the cluster slice — it surfaces wedged trigger Jobs and unready workloads in
-plain language. Triage with it, then confirm against the evidence above.
+`navigator-deploy ops doctor` is a shortcut for the cluster slice — it surfaces wedged trigger Jobs and unready
+workloads in plain language. Triage with it, then confirm against the evidence above.
 
 ## Guardrails: keep a fixed bug fixed
 

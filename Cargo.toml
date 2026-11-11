@@ -7,6 +7,8 @@ members = [
     "repos",
     "import",
     "cli",
+    "deploy",
+    "scorpio",
     "server",
     "neon",
     "webapp",
@@ -201,6 +203,8 @@ live-inquiry = { path = "live-inquiry" }
 gateway = { path = "gateway" }
 mcp = { path = "mcp" }
 pdf = { path = "pdf" }
+# The lean `navigator` library `navigator-deploy` and `scorpio` reuse.
+cli = { path = "cli" }
 portal = { path = "portal" }
 neon = { path = "neon" }
 repos = { path = "repos" }

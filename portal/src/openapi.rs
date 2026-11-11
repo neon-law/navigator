@@ -901,6 +901,19 @@ fn canonical_document(base: &str) -> Value {
           }
         },
         "/app/api/brands/{key}": {
+          "delete": {
+            "operationId": "deleteBrand",
+            "summary": "Delete an unworn Brand",
+            "description": "Deletes the Brand row. Refused while any Firm wears it or any Project names it: detach it first. Uploaded logo and font objects stay in the public assets bucket. Owner, or the owning Firm's Admin DRI.",
+            "parameters": [{ "name": "key", "in": "path", "required": true, "schema": { "type": "string" } }],
+            "responses": {
+              "204": { "description": "The Brand is deleted" },
+              "401": { "description": "No authenticated session" },
+              "403": { "description": "Caller is not Owner or Admin, or holds a scoped session" },
+              "404": { "description": "Brand unavailable to this caller" },
+              "409": { "description": "A Firm still wears the Brand or a Project names it" }
+            }
+          },
           "patch": {
             "summary": "Update a brand's typeface and palette",
             "description":
@@ -1004,6 +1017,74 @@ fn canonical_document(base: &str) -> Value {
               "403": { "description": "Authenticated caller is not Owner or Admin", "content": { "application/json": {
                 "schema": { "$ref": "#/components/schemas/ApiError" }
               } } }
+            }
+          }
+        },
+        "/app/api/firms/{id}": {
+          "patch": {
+            "operationId": "renameFirm",
+            "summary": "Rename a Firm",
+            "description": "Sets the Firm's display name. The slug, and the Forgejo organization it names, is unchanged. Owner, or an Admin whose membership admits `manage_membership` on the Firm.",
+            "tags": ["Firms"],
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": {
+              "type": "object", "required": ["name"], "properties": { "name": { "type": "string" } } } } } },
+            "responses": {
+              "200": { "description": "The renamed Firm", "content": { "application/json": { "schema": {
+                "type": "object", "required": ["id", "name", "slug"], "properties": {
+                  "id": { "type": "string", "format": "uuid" }, "name": { "type": "string" }, "slug": { "type": "string" } } } } } },
+              "400": { "description": "The name is empty" },
+              "401": { "description": "No authenticated session" },
+              "403": { "description": "Caller is not Owner or Admin, or holds a scoped session" },
+              "404": { "description": "Firm unavailable to this caller" }
+            }
+          },
+          "delete": {
+            "operationId": "deleteFirm",
+            "summary": "Delete an empty Firm",
+            "description": "Deletes a Firm and its memberships. Refused while the Firm owns any Project or Brand: move those first. Owner, or an Admin whose membership admits `manage_membership` on the Firm.",
+            "tags": ["Firms"],
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
+            "responses": {
+              "204": { "description": "The Firm is deleted" },
+              "401": { "description": "No authenticated session" },
+              "403": { "description": "Caller is not Owner or Admin, or holds a scoped session" },
+              "404": { "description": "Firm unavailable to this caller" },
+              "409": { "description": "The Firm still owns a Project or a Brand" }
+            }
+          }
+        },
+        "/app/api/firms/{id}/brands/{key}": {
+          "delete": {
+            "operationId": "detachFirmBrand",
+            "summary": "Stop a Firm wearing a Brand",
+            "description": "Removes the Firm's seat on the Brand; the Brand row itself remains. A key the Firm does not wear is a no-op. Owner, or an Admin whose membership admits `manage_membership` on the Firm.",
+            "tags": ["Firms"],
+            "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "key", "in": "path", "required": true, "schema": { "type": "string" } }],
+            "responses": {
+              "204": { "description": "The Firm no longer wears the Brand" },
+              "401": { "description": "No authenticated session" },
+              "403": { "description": "Caller is not Owner or Admin, or holds a scoped session" },
+              "404": { "description": "Firm unavailable to this caller" }
+            }
+          }
+        },
+        "/app/api/brands/{key}/firm": {
+          "put": {
+            "operationId": "moveBrand",
+            "summary": "Move a Brand to another Firm",
+            "description": "Re-points the Brand's owning Firm and its seat in one transaction, so its public pages name the target Firm's legal entity. Owner only.",
+            "tags": ["Firms"],
+            "parameters": [{ "name": "key", "in": "path", "required": true, "schema": { "type": "string" } }],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": {
+              "type": "object", "required": ["firm_id"], "properties": { "firm_id": { "type": "string", "format": "uuid" } } } } } },
+            "responses": {
+              "200": { "description": "The Brand and the Firm it now belongs to", "content": { "application/json": { "schema": {
+                "type": "object", "required": ["brand", "firm_id"], "properties": {
+                  "brand": { "type": "string" }, "firm_id": { "type": "string", "format": "uuid" } } } } } },
+              "401": { "description": "No authenticated session" },
+              "403": { "description": "Caller is not Owner or Admin, or holds a scoped session" },
+              "404": { "description": "Brand or target Firm unavailable to this caller" }
             }
           }
         },

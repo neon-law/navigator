@@ -19,14 +19,15 @@ use crate::remote;
 /// The one-line refusal for `--ci` outside a CI runner (ENG-951), or `None`
 /// when the flag may proceed. `ci_env` is the value of the `CI` variable; unset
 /// and empty both mean "not a runner", the way CI systems define the variable.
-pub(crate) fn ci_flag_refusal(ci: bool, ci_env: Option<&str>) -> Option<&'static str> {
+#[must_use]
+pub fn ci_flag_refusal(ci: bool, ci_env: Option<&str>) -> Option<&'static str> {
     (ci && ci_env.is_none_or(|value| value.trim().is_empty())).then_some(
         "error: --ci is for CI runners (CI is not set). Run `navigator project gate` locally; log in with `navigator site login --host <host>` for the live checks.",
     )
 }
 
 /// Refuse local repairs when declared ownership cannot be verified.
-pub(crate) async fn ownership_preflight(dir: &Path, ci: bool) -> ExitCode {
+pub async fn ownership_preflight(dir: &Path, ci: bool) -> ExitCode {
     if ci || !super::repository::is_project_repository(dir) {
         return ExitCode::SUCCESS;
     }
@@ -69,7 +70,7 @@ async fn check_ownership_before_fixes(dir: &Path) -> Result<()> {
 
 /// Check a Project's live status and required coordinates through an
 /// authorized local or CI session.
-pub(crate) async fn live_status(dir: &Path, ci: bool) -> ExitCode {
+pub async fn live_status(dir: &Path, ci: bool) -> ExitCode {
     let host = match manifest_host(dir) {
         Ok(host) => host,
         Err(reason) => {
@@ -173,15 +174,15 @@ const SECTION_SOURCES: &[SectionSource] = &[
 
 /// One `Y023` warning, located at the page entry that declares the section.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SectionDataFinding {
-    pub(crate) line: usize,
-    pub(crate) message: String,
+pub struct SectionDataFinding {
+    pub line: usize,
+    pub message: String,
 }
 
 impl SectionDataFinding {
     /// `Y023` never fails the gate: a brand-new matter legitimately has an
     /// empty timeline, and every section renders an empty state.
-    pub(crate) const SEVERITY: rules::Severity = rules::Severity::Warning;
+    pub const SEVERITY: rules::Severity = rules::Severity::Warning;
 
     fn render(&self) -> String {
         crate::diagnostic_line(
@@ -199,11 +200,7 @@ impl SectionDataFinding {
 /// reported as an inconclusive warning, never a pass and never an error. A
 /// manifest that declares `no_live_row`, or whose Project the session cannot
 /// see, has no live matter to ask about; the row check reports that.
-pub(crate) async fn section_data_findings(
-    dir: &Path,
-    base: &str,
-    token: &str,
-) -> Vec<SectionDataFinding> {
+pub async fn section_data_findings(dir: &Path, base: &str, token: &str) -> Vec<SectionDataFinding> {
     let Ok(contents) = std::fs::read_to_string(dir.join(manifest::FILE)) else {
         return Vec::new();
     };
@@ -289,7 +286,7 @@ pub(crate) async fn section_data_findings(
 /// The section names whose live source holds at least one row, asked with
 /// the same read-only aggregate `GET` that `Y023` sends. A refused or failed read
 /// contributes nothing, so a caller treats "unknown" as "no rows".
-pub(crate) async fn populated_sections(
+pub async fn populated_sections(
     base: &str,
     token: &str,
     project_id: uuid::Uuid,
@@ -617,7 +614,7 @@ fn disagreement(
 fn repository_urls_agree(live: &str, here: &str) -> bool {
     fn normalize(url: &str) -> String {
         let url = url.trim();
-        let Some((host, path)) = crate::devx::github_setup::split_remote(url) else {
+        let Some((host, path)) = crate::host::split_remote(url) else {
             return url.trim_end_matches('/').to_ascii_lowercase();
         };
         let host = host.to_ascii_lowercase();

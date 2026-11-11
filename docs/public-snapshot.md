@@ -1,6 +1,6 @@
 # Public snapshot
 
-Navigator is published from a fresh root commit, not from the private repository's history. `navigator ops
+Navigator is published from a fresh root commit, not from the private repository's history. `navigator-deploy ops
 public-snapshot` builds that commit: a new local Git repository whose only commit is a checked-out `main` commit's tree
 minus the paths in [`.public-snapshot-exclude`](../.public-snapshot-exclude). Nothing in the private history, including
 files deleted long ago, can reach the public repository through it.
@@ -51,8 +51,8 @@ From a clean worktree with `main` checked out:
 ```bash
 git fetch origin main
 git switch --detach origin/main
-navigator ops public-snapshot --out ../navigator-public-a
-navigator ops public-snapshot --out ../navigator-public-b
+navigator-deploy ops public-snapshot --out ../navigator-public-a
+navigator-deploy ops public-snapshot --out ../navigator-public-b
 ```
 
 Each run prints the snapshot commit SHA on stdout, then the snapshot tree, the source tree, and the number of excluded
@@ -124,7 +124,7 @@ These steps change hosted repositories, so they stay with the maintainer who pub
    If the new repository requires signed commits, push before enabling that rule, or create the snapshot with `--sign`.
 8. Confirm the public repository's `main` SHA equals the recorded snapshot SHA, or its tree hash equals the recorded
    tree hash when signed.
-9. Apply branch protection and repository settings with `navigator ops github setup neon-law/navigator`, then
+9. Apply branch protection and repository settings with `navigator-deploy ops github setup neon-law/navigator`, then
    re-enable secret scanning and the required `ci` check.
 10. Point every working checkout at the public repository: `git remote set-url origin` to the new URL, then `git fetch`.
     Old local branches share no history with the new `main`; rebase their changes onto it with `git rebase --onto`, or

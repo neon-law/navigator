@@ -10,7 +10,7 @@
 use std::collections::BTreeSet;
 use std::fs;
 
-/// `Y001` is the seed-document pass's rule code. It lives in `cli/src/main.rs`, not the `rules`
+/// `Y001` is the seed-document pass's rule code. It lives in `cli/src/commands.rs`, not the `rules`
 /// crate, because the pass it guards runs outside `ClassifiedRuleEngine` entirely.
 const SEED_DOCUMENT_CODE: &str = "Y001";
 const LOCALE_DOCUMENT_CODE: &str = "Y002";

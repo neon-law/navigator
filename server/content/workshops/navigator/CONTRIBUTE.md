@@ -55,7 +55,7 @@ SECURITY.md for private vulnerability reports.
 
 **Scope is not the gate — the local KIND loop is.** A contribution may be as ambitious as the problem demands: a
 sweeping refactor, a new service beside the existing ones, even replacing a subsystem. What every change must do is run
-inside the local KIND cluster that `cargo run --release -p cli -- dev up` stands up — the loop that already runs
+inside the local KIND cluster that `cargo run --release -p deploy -- dev up` stands up — the loop that already runs
 SurrealDB, Rauthy, SeaweedFS, Restate, and OpenObserve in one KIND dependency tier. A change that introduces a new
 dependency wires it into that loop in the same pull request, with a KIND manifest beside the existing ones, so the whole
 stack still comes up locally.
@@ -72,7 +72,7 @@ The repository deliberately leaves published blog, presentation, and workshop im
 site locally, hydrate the images referenced by the content tree from the public asset route:
 
 ```bash
-cargo run -p cli -- ops assets fetch-referenced \
+cargo run -p deploy -- ops assets fetch-referenced \
   --base-url https://www.neonlaw.com/assets
 cargo run -p neon
 ```
@@ -99,8 +99,8 @@ Save each finished PNG or JPEG under `server/public/img/<deck-slug>/` and refere
 in the presentation. Run these commands from the Navigator repository root:
 
 ```bash
-navigator ops assets upload --dir server/public/img --bucket neon-law-stg-assets
-navigator ops assets verify --base-url https://staging.neonlaw.com/assets
+navigator-deploy ops assets upload --dir server/public/img --bucket neon-law-stg-assets
+navigator-deploy ops assets verify --base-url https://staging.neonlaw.com/assets
 ```
 
 Publish to staging first. Each deployment has its own assets bucket.
@@ -135,7 +135,7 @@ GitOps keeps ordinary contributors out of settings drift. Branch protections and
 CLI, so an authorized operator reviews the planned change before applying it to one named repository:
 
 ```bash
-navigator ops github setup neon-law/navigator --dry-run
+navigator-deploy ops github setup neon-law/navigator --dry-run
 ```
 
 The repository name is optional — it falls back to `GITHUB_REPOSITORY` and then this checkout's `origin` — but the

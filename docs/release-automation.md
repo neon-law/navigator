@@ -52,11 +52,11 @@ Each ship job records a GitHub Deployment, installs the signed CLI image by dige
 reports the release tag, and runs:
 
 ```bash
-navigator ops ship --deployment <row> --project-id <project> --tag <tag> --image-digests /tmp/image-digests.json --assert-signing-iam --quiet --log-sink <sink>
+navigator-deploy ops ship --deployment <row> --project-id <project> --tag <tag> --image-digests /tmp/image-digests.json --assert-signing-iam --quiet --log-sink <sink>
 ```
 
 The runner checks out no deployment tree. `--project-id` reads the row's published record — the only source of a row,
-created with `navigator ops deployments init` or `import` and edited with `set` / `unset` (see
+created with `navigator-deploy ops deployments init` or `import` and edited with `set` / `unset` (see
 [`manual-roll.md`](manual-roll.md#the-published-record-is-the-row)) — from the `STAGING_GCP_PROJECT_ID` or
 `PRODUCTION_GCP_PROJECT_ID` environment secret. A row edit takes effect on the next ship with no merge to `main`. `ops
 ship` writes the GKE credentials and a short-lived registry login for `cosign` to its own scratch directory, so neither
@@ -77,7 +77,7 @@ See `glossary show "Ship Transcript"` for details.
 Operators retrieve a run using their own credentials:
 
 ```sh
-navigator ops logs --deployment <row> --run <run-id>-<attempt> [--prefix <prefix>]
+navigator-deploy ops logs --deployment <row> --run <run-id>-<attempt> [--prefix <prefix>]
 ```
 
 That is the full reconcile: manifests, the Secret checks, CronJob pins, and Restate registration. `--assert-signing-iam`
@@ -94,8 +94,8 @@ When a tag changes the brand host inventory, `ops ship` requests the shared Firm
 before the ordered release, so Google issues it while the release rolls. After the rollouts it waits for that
 certificate to serve every host, then deletes the one it replaced, so brand readiness runs against serving certificates.
 The wait is bounded at 45 minutes (`--certificate-timeout-minutes`), and a test pins both ship jobs' `timeout-minutes`
-above that wait plus the roll. `navigator ops certificates pre-roll` does the same ahead of the release, and the ship
-then finds the certificate serving. See [Changing shared certificate
+above that wait plus the roll. `navigator-deploy ops certificates pre-roll` does the same ahead of the release, and the
+ship then finds the certificate serving. See [Changing shared certificate
 domains](dns.md#changing-shared-certificate-domains).
 
 ### Prereleases stay on staging
@@ -110,9 +110,9 @@ the tag was held at staging, and no production Deployment is recorded. A hotfix 
 
 Every tag without a prerelease suffix rolls on to production as soon as staging's health checks pass. No person stands
 between the two: neither deploy environment carries a required reviewer or a wait timer, and each admits only `main`.
-That is desired state, not a hand setting — `navigator ops github setup neon-law/navigator` reconciles both environments
-and removes a reviewer anyone adds in the settings UI. The prerelease hold above is the only thing that keeps a tag off
-production.
+That is desired state, not a hand setting — `navigator-deploy ops github setup neon-law/navigator` reconciles both
+environments and removes a reviewer anyone adds in the settings UI. The prerelease hold above is the only thing that
+keeps a tag off production.
 
 ## The gate
 
@@ -216,8 +216,8 @@ retains the ten newest versions per image.
    Nothing infers them:
 
    ```bash
-   navigator ops deployments import <row> --deployments-dir <private-root>
-   navigator ops gcp setup --project-id <project-id> \
+   navigator-deploy ops deployments import <row> --deployments-dir <private-root>
+   navigator-deploy ops gcp setup --project-id <project-id> \
      --ship-deployment <row> --ship-repository <owner>/<repository> --ship-environment <github-environment>
    ```
 
@@ -241,8 +241,8 @@ retains the ten newest versions per image.
    `PERMISSION_DENIED`. Secret Manager returns 403, not 404, for a secret the caller cannot read, so a secret that was
    never published fails the same way. The ship error names both commands above.
 
-2. **Create `staging-deploy` and `production-deploy`** with `navigator ops github setup neon-law/navigator`, which
-   limits each to the `main` branch with no reviewer, then add the secrets and variables above. Set the repository
+2. **Create `staging-deploy` and `production-deploy`** with `navigator-deploy ops github setup neon-law/navigator`,
+   which limits each to the `main` branch with no reviewer, then add the secrets and variables above. Set the repository
    variable `DEPLOY_EXPECTED_REPOSITORY`. `*_SHIP_WIF_PROVIDER` is
    `projects/<number>/locations/global/workloadIdentityPools/navigator-release/providers/github`.
 3. **Rehearse on staging.** With `DEPLOY_AUTOMATION_ENABLED` still unset, dispatch a published `-rc` tag by hand and

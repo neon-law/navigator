@@ -15,7 +15,7 @@
 
 /// The steps whose absence keeps an issue open after its code merges.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PendingStep {
+pub enum PendingStep {
     Rollout,
     Apply,
     CallerPin,
@@ -34,7 +34,7 @@ impl PendingStep {
 /// One refused closing trailer: the issues it would close and the sentence
 /// that says their work is unfinished.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct Refusal {
+pub struct Refusal {
     pub issues: Vec<String>,
     pub step: PendingStep,
     pub sentence: String,
@@ -43,7 +43,8 @@ pub(crate) struct Refusal {
 impl Refusal {
     /// The message an author reads, naming the issues, the step, and the
     /// trailer to use instead.
-    pub(crate) fn message(&self) -> String {
+    #[must_use]
+    pub fn message(&self) -> String {
         let ids = self.issues.join(", ");
         format!(
             "the body closes {ids} but says {} is still pending: \"{}\". Use `Refs {ids}` instead, and name the \
@@ -57,7 +58,8 @@ impl Refusal {
 /// Every refusal for `body`. Empty when the body closes nothing, or when no
 /// sentence outside a code block or quote says a rollout, apply, or caller
 /// pin is still pending.
-pub(crate) fn refusals(body: &str) -> Vec<Refusal> {
+#[must_use]
+pub fn refusals(body: &str) -> Vec<Refusal> {
     let mut closed = Vec::new();
     let mut prose = Vec::new();
     let mut fenced = false;
@@ -102,7 +104,7 @@ pub(crate) fn refusals(body: &str) -> Vec<Refusal> {
 
 /// The pull-request body from a GitHub Actions event payload, when the event
 /// is a pull request. `None` for any other event, or a payload with no body.
-pub(crate) fn pull_request_body(event_name: &str, payload: &str) -> Option<String> {
+pub fn pull_request_body(event_name: &str, payload: &str) -> Option<String> {
     if !event_name.starts_with("pull_request") {
         return None;
     }
@@ -117,7 +119,8 @@ pub(crate) fn pull_request_body(event_name: &str, payload: &str) -> Option<Strin
 /// The refusals for the pull request this CI run is gating, read from the
 /// runner's own event payload (`GITHUB_EVENT_NAME`, `GITHUB_EVENT_PATH`).
 /// Empty outside a pull-request run.
-pub(crate) fn refusals_for_this_pull_request() -> Vec<Refusal> {
+#[must_use]
+pub fn refusals_for_this_pull_request() -> Vec<Refusal> {
     let (Ok(name), Ok(path)) = (
         std::env::var("GITHUB_EVENT_NAME"),
         std::env::var("GITHUB_EVENT_PATH"),

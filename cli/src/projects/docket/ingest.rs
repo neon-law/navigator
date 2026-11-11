@@ -538,7 +538,7 @@ fn items_for_claims(claims: &ClaimsNotice, docket: &str, kind_override: Option<&
 enum Handoff {
     #[error(
         "manual download needed: D.I. {doc_no} could not be fetched from {url} — download it in a \
-         browser and file it with `navigator site document upload`; the Docket Entry is recorded \
+         browser and file it with `navigator-deploy site document upload`; the Docket Entry is recorded \
          as source pending"
     )]
     Manual { doc_no: String, url: String },
@@ -667,7 +667,7 @@ fn accept(scope: &ProjectScope, options: &Options, report: &mut Report) -> Vec<A
                         println!(
                             "{} · manual download needed: {} names no docket entry number — \
                              download {} in a browser and file it with \
-                             `navigator site document upload`",
+                             `navigator-deploy site document upload`",
                             case_no,
                             truncate(&link.label, 80),
                             link.url
@@ -1374,7 +1374,7 @@ mod tests {
     }
 
     // `NAVIGATOR_CREDENTIALS_FILE` is process-global env, so tests that set
-    // it must not run concurrently — the discipline `cli::remote` uses.
+    // it must not run concurrently — the discipline `crate::remote` uses.
     static CREDENTIALS_ENV_LOCK: LazyLock<tokio::sync::Mutex<()>> =
         LazyLock::new(|| tokio::sync::Mutex::new(()));
 

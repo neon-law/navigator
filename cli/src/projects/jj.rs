@@ -23,16 +23,16 @@ use super::lifecycle::git;
 /// The bookmark `jj git push --change` names, in the `push/` namespace the
 /// `navigator project repository push` lane already branches into, so one
 /// forge rule over `push/*` covers both.
-pub(crate) const PUSH_BOOKMARK_TEMPLATE: &str = r#""push/" ++ change_id.short()"#;
+pub const PUSH_BOOKMARK_TEMPLATE: &str = r#""push/" ++ change_id.short()"#;
 
 /// The Git settings jj needs to mirror. Read once from the checkout.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub(crate) struct GitIdentity {
-    pub(crate) name: Option<String>,
-    pub(crate) email: Option<String>,
-    pub(crate) sign_commits: bool,
-    pub(crate) signing_format: Option<String>,
-    pub(crate) signing_key: Option<String>,
+pub struct GitIdentity {
+    pub name: Option<String>,
+    pub email: Option<String>,
+    pub sign_commits: bool,
+    pub signing_format: Option<String>,
+    pub signing_key: Option<String>,
 }
 
 impl GitIdentity {
@@ -57,7 +57,7 @@ impl GitIdentity {
 /// An author is required: jj refuses to push a change with no name or email,
 /// and the forge would attribute it to nobody. Signing follows `commit.gpgsign`
 /// so a jj change is signed exactly when a Git commit would be.
-pub(crate) fn jj_settings(identity: &GitIdentity) -> Result<Vec<(&'static str, String)>> {
+pub fn jj_settings(identity: &GitIdentity) -> Result<Vec<(&'static str, String)>> {
     let (Some(name), Some(email)) = (&identity.name, &identity.email) else {
         bail!(
             "set git's user.name and user.email in this checkout first; jj commits need an author"
@@ -88,7 +88,7 @@ pub(crate) fn jj_settings(identity: &GitIdentity) -> Result<Vec<(&'static str, S
 
 /// Refuse every host but macOS: the CLI targets macOS for development, and
 /// Homebrew is how this command acquires `jj`.
-pub(crate) fn require_macos(os: &str) -> Result<()> {
+pub fn require_macos(os: &str) -> Result<()> {
     if os == "macos" {
         Ok(())
     } else {
@@ -98,7 +98,7 @@ pub(crate) fn require_macos(os: &str) -> Result<()> {
 
 /// Install `jj` if needed, colocate it over the checkout at `dir`, and write
 /// its repo-level settings.
-pub(crate) fn run(dir: &Path) -> Result<()> {
+pub fn run(dir: &Path) -> Result<()> {
     require_macos(std::env::consts::OS)?;
     if !dir.join(".git").exists() {
         bail!(
@@ -111,8 +111,8 @@ pub(crate) fn run(dir: &Path) -> Result<()> {
     if Command::new("jj").arg("--version").output().is_ok() {
         println!("jj: already installed");
     } else {
-        crate::devx::require_homebrew()?;
-        crate::devx::brew(&["install", "jj"])?;
+        crate::host::require_homebrew()?;
+        crate::host::brew(&["install", "jj"])?;
         println!("jj: installed with Homebrew");
     }
 

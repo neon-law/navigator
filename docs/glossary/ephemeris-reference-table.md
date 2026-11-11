@@ -87,11 +87,10 @@ error bound when the underlying model supplies none.
 
 ## Authenticated local files
 
-The administrative CLI calculates a bounded table from an immutable raw DE440 bundle acquired by `navigator ephemeris
-download`:
+The administrative CLI calculates a bounded table from an immutable raw DE440 bundle acquired by `scorpio download`:
 
 ```bash
-navigator ephemeris tables --host <deployment> --source-dir <raw-bundle> \
+scorpio tables --host <deployment> --source-dir <raw-bundle> \
   --from 1900-01-01 --to-exclusive 1900-01-03 --dir <new-table-bundle>
 ```
 
@@ -134,8 +133,8 @@ universal reference dates and a pinned raw bundle only; it has no personal-chart
 
 ## Fixed-location Iceberg layout
 
-`navigator ephemeris tables --iceberg` adds one immutable local Iceberg v2 table over the same reference Parquet file.
-It accepts the same raw DE440 bundle and bounded dates. Authorization through the protected catalog precedes output path
+`scorpio tables --iceberg` adds one immutable local Iceberg v2 table over the same reference Parquet file. It accepts
+the same raw DE440 bundle and bounded dates. Authorization through the protected catalog precedes output path
 canonicalization and every local source/output read, calculation or reuse.
 
 The full canonical output path must be URI-safe ASCII, with no spaces, percent signs, non-ASCII characters or other
@@ -184,18 +183,18 @@ each other's existing directory shapes. There is no append, expiry, deletion or 
 
 ## Portable DuckDB file
 
-`navigator ephemeris tables --duckdb-bin /path/to/duckdb` adds a materialized `reference.duckdb`, a typed
-`duckdb-manifest.json` receipt and tested `query.sql` Moon/date-range query. It combines with `--iceberg`; the ordinary
-four-file bundle and its stable reference-content snapshot ID retain the same format. The native receipt separately
-binds the actual database/query bytes, reference snapshot and creator executable. Native layout bytes need not match
-between independent creations. Reruns verify and preserve the existing files, generation time and timestamps.
+`scorpio tables --duckdb-bin /path/to/duckdb` adds a materialized `reference.duckdb`, a typed `duckdb-manifest.json`
+receipt and tested `query.sql` Moon/date-range query. It combines with `--iceberg`; the ordinary four-file bundle and
+its stable reference-content snapshot ID retain the same format. The native receipt separately binds the actual
+database/query bytes, reference snapshot and creator executable. Native layout bytes need not match between independent
+creations. Reruns verify and preserve the existing files, generation time and timestamps.
 
 The operator supplies an executable expanded from the exact platform asset in the [official DuckDB 2.0.0
 release](https://github.com/duckdb/duckdb/releases/tag/v2.0.0), using the [checked-in
-pins](../../cli/src/ephemeris_duckdb_pins.json) for macOS arm64 or Linux amd64 GNU/musl. Expanded size and SHA-256 must
-match; the version string alone is insufficient. Match the GNU or musl engine to the available Linux runtime. Navigator
-does not install or download it. Linux engine runtime requirements remain separate from Navigator's static musl
-executable. Authorization through the protected source catalog precedes opening the tool, raw source or output.
+pins](../../scorpio/src/ephemeris_duckdb_pins.json) for macOS arm64 or Linux amd64 GNU/musl. Expanded size and SHA-256
+must match; the version string alone is insufficient. Match the GNU or musl engine to the available Linux runtime.
+Navigator does not install or download it. Linux engine runtime requirements remain separate from Navigator's static
+musl executable. Authorization through the protected source catalog precedes opening the tool, raw source or output.
 Navigator copies the executable through a regular-file descriptor into a private directory, verifies its exact size and
 SHA-256, and executes that copy with an empty environment and owned home. User startup files and agents are disabled.
 
@@ -227,11 +226,11 @@ lifecycle services.
 
 ## Existing-bundle observations
 
-`navigator ephemeris tables --measure` observes an existing matching DuckDB bundle. Supply the same source directory,
-coverage and output directory as the completed bundle, an explicit `--duckdb-bin`, and `--iceberg` when that layout is
-present. The command never creates a missing bundle or changes its files, permissions, modification times, reference
-identity or generation time. A missing, mismatched or corrupt bundle is refused. Server-authoritative Owner/Admin
-admission precedes local tool, source and output access; a cached role grants no access.
+`scorpio tables --measure` observes an existing matching DuckDB bundle. Supply the same source directory, coverage and
+output directory as the completed bundle, an explicit `--duckdb-bin`, and `--iceberg` when that layout is present. The
+command never creates a missing bundle or changes its files, permissions, modification times, reference identity or
+generation time. A missing, mismatched or corrupt bundle is refused. Server-authoritative Owner/Admin admission precedes
+local tool, source and output access; a cached role grants no access.
 
 Source, coverage, schema, exact artifact bytes and native table semantics are verified before observations begin.
 Verification recalculates the bounded expected reference rows with the current validated source/model/release. Queries
@@ -272,10 +271,10 @@ documentation](https://duckdb.org/docs/2.0/sql/statements/profiling).
 
 ## Local latest-validated manifest
 
-Use `navigator ephemeris promote` with `--release-dir`, `--bundle`, `--source-dir`, `--from`, and `--to-exclusive` to
-select a completed bundle. The release directory is an existing operator-owned local directory without group or world
-write permission. The bundle is its direct child, named with ASCII letters, digits, hyphens or underscores and beginning
-with a letter or digit. Supply `--iceberg` and `--duckdb-bin` when the completed bundle contains those artifacts. The
+Use `scorpio promote` with `--release-dir`, `--bundle`, `--source-dir`, `--from`, and `--to-exclusive` to select a
+completed bundle. The release directory is an existing operator-owned local directory without group or world write
+permission. The bundle is its direct child, named with ASCII letters, digits, hyphens or underscores and beginning with
+a letter or digit. Supply `--iceberg` and `--duckdb-bin` when the completed bundle contains those artifacts. The
 protected catalogue authorizes Owner/Admin before the command accesses local files, and the existing bundle verification
 checks the pinned source, data and any native artifacts before promotion.
 

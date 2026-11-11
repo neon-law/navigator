@@ -70,8 +70,8 @@ fn secret_catalogs_do_not_name_database_url() {
         ".env.example",
         "examples/deploy/",
         "k8s/",
-        "cli/tests/fixtures/deployment-tree/",
-        "cli/src/devx/ship.rs",
+        "deploy/tests/fixtures/deployment-tree/",
+        "deploy/src/devx/ship.rs",
     ];
     let mut hits = Vec::new();
     for path in tracked_files() {

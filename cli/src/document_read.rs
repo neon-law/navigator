@@ -1,4 +1,4 @@
-//! `navigator site document log`, `get`, and `diff` — the offline-checkout read
+//! `navigator-deploy site document log`, `get`, and `diff` — the offline-checkout read
 //! verbs for a matter document's revision chain (#485).
 //!
 //! All three take a pointer path below `documents/` (the committed `.yaml`,
@@ -43,7 +43,7 @@ where
 /// pointer extension stripped, or the path below `documents/` of the bytes it
 /// points at — the same rule `navigator project sync` derives a slug from, so
 /// either the committed Blob or the pulled-down copy names the same document.
-pub(crate) fn slug_from_pointer(root: &Path, pointer: &Path) -> Result<String> {
+pub fn slug_from_pointer(root: &Path, pointer: &Path) -> Result<String> {
     let absolute = if pointer.is_absolute() {
         pointer.to_path_buf()
     } else {
@@ -114,7 +114,7 @@ fn manifest_at(root: &Path) -> Result<(String, Option<String>)> {
 ///
 /// Named explicitly rather than silently falling back to whatever the live
 /// chain's own newest row is.
-pub(crate) fn check_pointer_drift(
+pub fn check_pointer_drift(
     local: Option<&DocumentPointer>,
     live: &[RevisionSummary],
 ) -> Result<()> {
@@ -184,8 +184,8 @@ async fn revisions_for(
     Ok((slug, live, local))
 }
 
-/// `navigator site document log <pointer>`.
-pub(crate) async fn log(pointer: &Path) -> ExitCode {
+/// `navigator-deploy site document log <pointer>`.
+pub async fn log(pointer: &Path) -> ExitCode {
     run(async {
         let root = Path::new(".");
         let (slug, live, _local) = revisions_for(root, pointer).await?;
@@ -252,7 +252,8 @@ fn select_version(live: &RevisionsResponse, version: Option<usize>) -> Result<&R
 /// A path lexically resolved against `root` without touching the filesystem
 /// (the destination need not exist yet), so `.` and `..` collapse the same
 /// way a canonicalized path would.
-pub(crate) fn lexical(root: &Path, path: &Path) -> PathBuf {
+#[must_use]
+pub fn lexical(root: &Path, path: &Path) -> PathBuf {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
     } else {
@@ -308,8 +309,8 @@ fn refuse_destination_in_documents(root: &Path, pointer: &Path, out: &Path) -> R
     crate::document_sync::ensure_managed_copy_target(root, &target)
 }
 
-/// `navigator site document get <pointer> [--version N] --out <path>`.
-pub(crate) async fn get(pointer: &Path, version: Option<usize>, out: &Path) -> ExitCode {
+/// `navigator-deploy site document get <pointer> [--version N] --out <path>`.
+pub async fn get(pointer: &Path, version: Option<usize>, out: &Path) -> ExitCode {
     run(async {
         let root = Path::new(".");
         refuse_destination_in_documents(root, pointer, out)?;
@@ -466,9 +467,9 @@ fn line_diff(left: &str, right: &str) -> Result<String> {
     Ok(out)
 }
 
-/// `navigator site document diff <pointer> <a> <b>` — a redline between two
+/// `navigator-deploy site document diff <pointer> <a> <b>` — a redline between two
 /// revision numbers.
-pub(crate) async fn diff(pointer: &Path, a: usize, b: usize) -> ExitCode {
+pub async fn diff(pointer: &Path, a: usize, b: usize) -> ExitCode {
     run(async {
         let root = Path::new(".");
         let (_slug, live, _local) = revisions_for(root, pointer).await?;
@@ -495,7 +496,7 @@ pub(crate) async fn diff(pointer: &Path, a: usize, b: usize) -> ExitCode {
 /// order. `root` carrying no `blobs/` at all yields an empty list rather than
 /// an error — the common case for every repository that has not adopted the
 /// asset lane.
-pub(crate) fn discover_pointers(root: &Path) -> Result<Vec<PathBuf>> {
+pub fn discover_pointers(root: &Path) -> Result<Vec<PathBuf>> {
     let blobs = root.join(crate::document_sync::POINTER_DIRECTORY);
     if !blobs.is_dir() {
         return Ok(Vec::new());
@@ -518,7 +519,7 @@ pub(crate) fn discover_pointers(root: &Path) -> Result<Vec<PathBuf>> {
 
 /// The read-only local `validate` lane. Offline pointer checks have already
 /// run; a valid session for the manifest's exact host enables live reads.
-pub(crate) async fn validate_live_pointers(root: &Path) -> Result<()> {
+pub async fn validate_live_pointers(root: &Path) -> Result<()> {
     let pointers = discover_pointers(root)?;
     if pointers.is_empty() {
         return Ok(());

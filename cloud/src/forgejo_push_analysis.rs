@@ -30,7 +30,7 @@ use crate::forgejo_forge::ForgejoForge;
 
 /// A pushed change's diff statistics — the shape the journal persists and
 /// the Block Kit message renders.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct FileStats {
     pub insertions: i64,
     pub deletions: i64,

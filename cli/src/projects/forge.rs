@@ -16,42 +16,42 @@ use serde::Serialize;
 
 /// A forge run pinned to the commit whose effects it verifies.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(crate) struct DeploymentRun {
-    pub(crate) url: String,
-    pub(crate) commit: String,
-    pub(crate) conclusion: Option<String>,
-    pub(crate) jobs: Vec<DeploymentJob>,
+pub struct DeploymentRun {
+    pub url: String,
+    pub commit: String,
+    pub conclusion: Option<String>,
+    pub jobs: Vec<DeploymentJob>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(crate) struct DeploymentJob {
-    pub(crate) name: String,
-    pub(crate) conclusion: Option<String>,
+pub struct DeploymentJob {
+    pub name: String,
+    pub conclusion: Option<String>,
 }
 
 /// A review request's coordinates once it exists on the forge.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ReviewRef {
-    pub(crate) number: u64,
+pub struct ReviewRef {
+    pub number: u64,
     /// The head commit the review request was opened from.
-    pub(crate) head_sha: String,
-    pub(crate) url: String,
+    pub head_sha: String,
+    pub url: String,
 }
 
 /// What a backend needs to open a review request. Always ready for review —
 /// a draft is how a ready request is held open, and this lane holds nothing.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ReviewRequest {
-    pub(crate) head_branch: String,
-    pub(crate) base_branch: String,
-    pub(crate) title: String,
-    pub(crate) body: String,
+pub struct ReviewRequest {
+    pub head_branch: String,
+    pub base_branch: String,
+    pub title: String,
+    pub body: String,
 }
 
 /// What arming merge-when-green did. GitHub's arm is read back; Forgejo
 /// acknowledges scheduling and the watcher requires an observed merge.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ArmOutcome {
+pub enum ArmOutcome {
     /// Merge-when-green is armed and was read back as enabled.
     Armed,
     /// An earlier run of the verb armed it already.
@@ -66,7 +66,7 @@ pub(crate) enum ArmOutcome {
 
 /// The required check's verdict on a review request's head commit.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum CheckVerdict {
+pub enum CheckVerdict {
     /// At least one required check is still running.
     Pending,
     /// Every required check passed.
@@ -86,7 +86,7 @@ pub(crate) enum CheckVerdict {
 /// forge-neutral terms so the agent-facing verb and its report do not change
 /// when the forge does.
 #[async_trait]
-pub(crate) trait Forge: Send + Sync {
+pub trait Forge: Send + Sync {
     /// Who this run authenticates as; an error when no forge authentication
     /// is present (LAW-220 preflight, first question).
     async fn identity(&self) -> Result<String>;

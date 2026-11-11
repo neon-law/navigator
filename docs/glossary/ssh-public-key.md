@@ -5,8 +5,8 @@ description: >-
 ---
 
 A Firm user's SSH public key, owned by one [Person](person.md) and stored in the PostgreSQL `ssh_public_key` table. A
-Person registers a key once, on their profile page (`/app/profile`) or with `navigator site person ssh-key add`, and
-Navigator makes it a key on their account on the installation's [Forge](forge.md). Only the public half is accepted:
+Person registers a key once, on their profile page (`/app/profile`) or with `navigator-deploy site person ssh-key add`,
+and Navigator makes it a key on their account on the installation's [Forge](forge.md). Only the public half is accepted:
 `store::ssh_public_keys::parse` refuses anything that looks like a private key, admits only `ssh-ed25519` and the three
 NIST ECDSA curves (`ecdsa-sha2-nistp256`, `-nistp384`, `-nistp521`), checks that the base64 body is a well-formed key of
 its declared type, and stores the canonical `<algorithm> <base64>` line without its comment.
@@ -24,8 +24,8 @@ silently removed.
 
 Removing a key is a revocation first. `revoked_at` (and `revoked_by_person_id`) takes it out of the desired list at
 once, and the row is deleted only after a reconciliation has removed the key from Forgejo, so a sync that fails part-way
-still leaves the operator sweep (`navigator ops forgejo ssh-keys sync`) a row to revisit. A Person manages only their
-own keys; an Owner, or an Admin who may manage one of the key owner's Firm memberships, may also revoke one.
+still leaves the operator sweep (`navigator-deploy ops forgejo ssh-keys sync`) a row to revisit. A Person manages only
+their own keys; an Owner, or an Admin who may manage one of the key owner's Firm memberships, may also revoke one.
 
 The reconciliation runs under a dedicated key-sync service identity, never the reserved `navigator-admin` seat or an
 operator's own account; see [Forgejo beside Navigator](../forgejo-deployment.md#ssh-public-keys).

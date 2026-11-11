@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Record {
+pub enum Record {
     Court,
     Correspondence,
     ClientStatement,
@@ -70,7 +70,7 @@ struct Report {
     coverage: Coverage,
 }
 
-pub(crate) async fn run(
+pub async fn run(
     pattern: &str,
     dir: &Path,
     ignore_case: bool,

@@ -44,6 +44,8 @@ COPY project-scaffold project-scaffold
 COPY store             store
 COPY repos             repos
 COPY cli               cli
+COPY deploy            deploy
+COPY scorpio           scorpio
 COPY LICENSE        LICENSE
 COPY LICENSE-MIT    LICENSE-MIT
 COPY LICENSE-APACHE-2 LICENSE-APACHE-2

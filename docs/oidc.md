@@ -57,8 +57,8 @@ network-path URLs, backslashes, and control characters fall back to the person's
 token validation remain mandatory. A callback missing its pre-auth cookie is refused with a message pointing to the
 configured primary sign-in URL.
 
-`navigator ops host setup --host <host> --deployment <name>` checks a new host's sign-in detour along with its DNS and
-certificate.
+`navigator-deploy ops host setup --host <host> --deployment <name>` checks a new host's sign-in detour along with its
+DNS and certificate.
 
 [`server/tests/oauth_host.rs`](../server/tests/oauth_host.rs) exercises these boundaries through the composed router,
 including the full handoff round trip and a refused handoff without the nonce cookie. Its live browser case uses the
@@ -598,7 +598,7 @@ Do this one deployment at a time, staging first. `CLOUDSDK_CORE_PROJECT` pins th
    holds its own project's key, or none.
 5. **Grant the web identity** `roles/identitytoolkit.admin`, which the confirmation and reset flows need to mark an
    address verified and set a new password.
-6. **Apply and restart:** `navigator ops secrets apply --deployment <name> --deployments-dir .`, then restart
+6. **Apply and restart:** `navigator-deploy ops secrets apply --deployment <name> --deployments-dir .`, then restart
    `navigator-web`.
 7. **Verify** with a synthetic account: direct browser-key signup is refused, Navigator signup creates an unverified
    account, a wrong password is refused, an unverified address gets the confirmation page, the confirmed address signs
@@ -621,7 +621,7 @@ The `navigator-forgejo-oidc` ConfigMap carries `name` and `discovery_url`; the S
 `client_id` and `client_secret` ([deployment secrets](deployment-secrets.md)). At each start,
 [`k8s/forgejo/identity.sh`](../k8s/forgejo/identity.sh) converges one `openidConnect` source from them, using discovery.
 Missing values leave external sign-in off. In KIND the Forgejo pod reaches Rauthy's one public issuer through the same
-loopback bridge as `navigator-web`, and `navigator dev forgejo up` aligns its port.
+loopback bridge as `navigator-web`, and `navigator-deploy dev forgejo up` aligns its port.
 
 ### Identity is issuer plus subject
 
@@ -665,8 +665,8 @@ Verified-email and exact-domain admission remain required. Local password sign-i
 stay disabled. Repository access remains a separate authorization decision; signing in grants no Project membership or
 repository administration.
 
-`navigator dev forgejo smoke` proves each rule above against the KIND Rauthy with synthetic users only ([Forgejo on
-KIND](forgejo-kind.md#the-smoke)).
+`navigator-deploy dev forgejo smoke` proves each rule above against the KIND Rauthy with synthetic users only ([Forgejo
+on KIND](forgejo-kind.md#the-smoke)).
 
 ## Authorization is decided elsewhere
 

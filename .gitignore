@@ -47,7 +47,7 @@
 /deployments/**/*.dec.*
 /deployments/**/*.decrypted.*
 
-# Output of `scripts/publish-oss.sh` / `cargo run -p cli -- oss-publish`
+# Output of `scripts/publish-oss.sh` / `cargo run -p deploy -- oss-publish`
 # (Phase 6 — the clean-history snapshot used to seed the public repo).
 /dist-oss/
 

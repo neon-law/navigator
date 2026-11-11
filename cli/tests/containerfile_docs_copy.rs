@@ -26,12 +26,12 @@ fn images_dir() -> PathBuf {
 /// bails only when someone runs `dev build-webapp`, and the image copies an
 /// empty directory into `/app/public/dioxus`. #860 corrupted exactly this.
 ///
-/// So pin that `cli/src/devx/webapp.rs` and the host images name the same path.
+/// So pin that `deploy/src/devx/webapp.rs` and the host images name the same path.
 #[test]
 fn the_dx_bundle_path_agrees_between_the_cli_and_the_images() {
     const PLATFORM_DIR: &str = "web/public";
 
-    let cli_src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/devx/webapp.rs");
+    let cli_src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../deploy/src/devx/webapp.rs");
     let body =
         fs::read_to_string(&cli_src).unwrap_or_else(|e| panic!("read {}: {e}", cli_src.display()));
     assert!(
@@ -78,7 +78,7 @@ fn the_dx_bundle_path_agrees_between_the_cli_and_the_images() {
 fn the_release_wasm_client_build_strips_debug_symbols() {
     const FLAG: &str = "--debug-symbols false";
 
-    let cli_src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/devx/webapp.rs");
+    let cli_src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../deploy/src/devx/webapp.rs");
     let body =
         fs::read_to_string(&cli_src).unwrap_or_else(|e| panic!("read {}: {e}", cli_src.display()));
     assert!(
@@ -882,7 +882,7 @@ fn the_pinned_wasm_bindgen_cli_matches_the_locked_wasm_bindgen_crate() {
 /// A Containerfile that compiles `cli` must stage the root files `cli` bakes in.
 ///
 /// The same class of drift as the `views`/`docs` invariant above, one crate
-/// over: `cli/src/main.rs` carries `include_str!("../../LICENSE")`,
+/// over: `cli/src/commands.rs` carries `include_str!("../../LICENSE")`,
 /// `include_str!("../../LICENSE-MIT")`, `include_str!("../../LICENSE-APACHE-2")`,
 /// `include_str!("../../NOTICE")`, and
 /// `include_str!("../../THIRD-PARTY-NOTICES.txt")` so a downloaded binary can
@@ -903,13 +903,13 @@ fn images_that_copy_cli_also_copy_the_root_files_it_embeds() {
 
     // Pin the reason this test exists: if the embeds move or are removed, this
     // fails first and points at the guard rather than at eight image builds.
-    let main_rs = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/main.rs");
+    let main_rs = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/commands.rs");
     let main_body =
         fs::read_to_string(&main_rs).unwrap_or_else(|e| panic!("read {}: {e}", main_rs.display()));
     for file in embedded {
         assert!(
             main_body.contains(&format!("include_str!(\"../../{file}\")")),
-            "cli/src/main.rs no longer embeds `{file}`; if that is deliberate, drop it \
+            "cli/src/commands.rs no longer embeds `{file}`; if that is deliberate, drop it \
              from this guard and from the images' COPY lists"
         );
     }

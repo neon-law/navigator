@@ -132,7 +132,7 @@ async fn init(dir: &Path, write: bool, force: bool) -> Result<(), String> {
     if pages.is_empty() {
         return Err(
             "nothing to propose: no pinned Project Skill, engagement Draft, or live data \
-             suggests a page; declare one by hand (see `navigator glossary show \"Matter Page\"`)"
+             suggests a page; declare one by hand (see `navigator-deploy glossary show \"Matter Page\"`)"
                 .to_string(),
         );
     }

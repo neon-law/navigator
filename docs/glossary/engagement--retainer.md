@@ -9,9 +9,9 @@ Workflow, and rendering its document.
 
 The **engagement is a matter's first Notation**: a [Project](project.md) is opened first (its own step — `navigator
 project create` — which seeds the client and lawyer participation), then the engagement is created on it like any other
-Notation (`navigator site notation create <retainer_code> --project <code>`). Opening a Project never opens a Notation
-with it; no door creates a retainer alongside the matter. An open Project with no Notations is a pitch and may start
-with an offboarding Notation so it can be closed without an engagement.
+Notation (`navigator-deploy site notation create <retainer_code> --project <code>`). Opening a Project never opens a
+Notation with it; no door creates a retainer alongside the matter. An open Project with no Notations is a pitch and may
+start with an offboarding Notation so it can be closed without an engagement.
 
 The engagement-first rule is enforced at create time on the **self-serve doors** — `web`'s project-scoped create route
 and the CLI, which share `workflows::notation_session::create_notation_from_repo`. A first Notation must be a template

@@ -240,9 +240,9 @@ jobs:
         with:
           shared-key: gate-cli
       - name: build navigator CLI
-        run: cargo build -p cli --quiet
+        run: cargo build -p deploy --quiet
       - name: gate the content tree with navigator
-        run: "${CARGO_TARGET_DIR:-target}/debug/navigator project gate --ci"
+        run: "${CARGO_TARGET_DIR:-target}/debug/navigator-deploy project gate --ci"
       - name: start the local PII analyzer
         run: |
           # Start the analyzer as a plain docker step, not a job service: its
@@ -265,7 +265,7 @@ jobs:
         # reports as exit 56 and would otherwise not retry at all.
         run: curl --fail --silent --output /dev/null --retry 30 --retry-all-errors --retry-delay 2 http://127.0.0.1:3000/health
       - name: scan for personal data with Presidio
-        run: '"${CARGO_TARGET_DIR:-target}/debug/navigator" pii --analyzer-url http://127.0.0.1:3000'
+        run: '"${CARGO_TARGET_DIR:-target}/debug/navigator-deploy" pii --analyzer-url http://127.0.0.1:3000'
       - name: scan the working tree for secrets
         run: |
           scan_root="$(mktemp -d)"
@@ -288,16 +288,16 @@ jobs:
       # a skipped `rust`. `gate` is unconditional and its result is required
       # with no skip allowance, and it has already built the CLI above.
       - name: do the self-referencing action pins name the workspace version
-        run: "${CARGO_TARGET_DIR:-target}/debug/navigator ops release pins"
+        run: "${CARGO_TARGET_DIR:-target}/debug/navigator-deploy ops release pins"
       # Source CI uses only synthetic deployment rows. The private deployment
       # tree is supplied by operators through NAVIGATOR_DEPLOYMENTS_DIR.
       - name: validate the SOPS key inventory
         run: ./scripts/tests/check-sops-inventory.sh
       - name: check the deployment tree
         run: >-
-          "${CARGO_TARGET_DIR:-target}/debug/navigator"
+          "${CARGO_TARGET_DIR:-target}/debug/navigator-deploy"
           ops deployments
-          --deployments-dir cli/tests/fixtures/deployment-tree
+          --deployments-dir deploy/tests/fixtures/deployment-tree
       - name: test the external deployment-coordinate denylist scanner
         run: python3 scripts/validate-deployment-coordinates.py --self-test
   rust:
@@ -636,14 +636,14 @@ jobs:
       # `${CARGO_TARGET_DIR:-target}`, not `./target`: the step above may have
       # moved the build directory onto the larger disk.
       - name: build navigator CLI
-        run: cargo build -p cli --quiet
+        run: cargo build -p deploy --quiet
       - name: verify generated SendGrid adapter
-        run: "${CARGO_TARGET_DIR:-target}/debug/navigator dev sendgrid-openapi --verify"
+        run: "${CARGO_TARGET_DIR:-target}/debug/navigator-deploy dev sendgrid-openapi --verify"
       # One content validator over the whole tree: lint every `.md` against the
       # classified rule set, run the typed event checks over each event file,
       # and parse every `.yaml`/`.yml` in the same walk.
       - name: gate the content tree with navigator
-        run: "${CARGO_TARGET_DIR:-target}/debug/navigator project gate --ci"
+        run: "${CARGO_TARGET_DIR:-target}/debug/navigator-deploy project gate --ci"
       # ---- The release preflight, run on every pull request ----------------
       #
       # THESE CHECKS USED TO LIVE ONLY IN A SCRIPT SOMEONE REMEMBERED TO RUN.
@@ -656,7 +656,7 @@ jobs:
       # ordinary PR and only have anything to say when a bump is involved.
       #
       - name: is the workspace version a releasable one
-        run: "${CARGO_TARGET_DIR:-target}/debug/navigator ops release check"
+        run: "${CARGO_TARGET_DIR:-target}/debug/navigator-deploy ops release check"
       # `ops notices --check` is here now. It could not be while `notices_for`
       # read "this crate's source is absent" and "this crate ships no licence
       # file" as the same empty result: `Cargo.lock` is deliberately
@@ -672,7 +672,7 @@ jobs:
       # correct, so it is not tidiness and must not be dropped.
       #
       # It earns a required check because THIRD-PARTY-NOTICES.txt is compiled
-      # into the binary with `include_str!` (cli/src/main.rs) and printed by
+      # into the binary with `include_str!` (cli/src/commands.rs) and printed by
       # `navigator --third-party-notices`. Whatever is committed is what every
       # published archive ships, on both platforms at once, and a
       # permissive licence whose text was never read is one whose notice did
@@ -690,7 +690,7 @@ jobs:
           rm -rf "${CARGO_HOME:-$HOME/.cargo}/registry/src"
           cargo fetch --locked
           df -h
-          "${CARGO_TARGET_DIR:-target}/debug/navigator" ops notices --check
+          "${CARGO_TARGET_DIR:-target}/debug/navigator-deploy" ops notices --check
       # `Cargo.lock` pins every workspace crate's version too, and the release
       # builds with `--locked` in four places. A bump that carried only
       # `Cargo.toml` would fail those builds AFTER the release tag exists, which
@@ -837,7 +837,7 @@ jobs:
         run: |
           python3 - <<'PYTHON'
           import hashlib, io, json, os, pathlib, subprocess, tarfile, time, urllib.error, urllib.request
-          pins = json.loads(pathlib.Path('cli/src/ephemeris_duckdb_pins.json').read_text())
+          pins = json.loads(pathlib.Path('scorpio/src/ephemeris_duckdb_pins.json').read_text())
           pin = next(p for p in pins['binaries'] if p['platform'] == 'linux-amd64-gnu')
           root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'navigator-duckdb-reference-fixture'
           root.mkdir(mode=0o700)
@@ -886,7 +886,7 @@ jobs:
           # `NAV_REQUIRE_HARNESS`, which arms the browser suites and the
           # Restate broker fixture: this job starts database fixtures only, so that
           # flag would fail every suite whose fixture belongs to
-          # `navigator dev e2e` instead.
+          # `navigator-deploy dev e2e` instead.
           NAVIGATOR_SURREAL_ENDPOINT: ws://127.0.0.1:8000
           NAVIGATOR_SURREAL_NAMESPACE: navigator
           NAVIGATOR_SURREAL_DATABASE: navigator
@@ -1015,8 +1015,8 @@ jobs:
           # the number without measuring anything. They are proven by the
           # deploy.yml browser/e2e gates instead. The pure decision logic each
           # one sits beside is deliberately NOT excluded and keeps its tests:
-          # `cli/src/devx/mod.rs` (KindConfig derivation, env rendering,
-          # deploy-order guards), `cli/src/devx/lifecycle.rs` (every staging
+          # `deploy/src/devx/mod.rs` (KindConfig derivation, env rendering,
+          # deploy-order guards), `deploy/src/devx/lifecycle.rs` (every staging
           # decision, against a fake), and `harness_decision` in features.
           # Anything here that grows a decision belongs on the other side of
           # that seam, not in this regex. `email_summary_e2e/harness.rs` and
@@ -1035,7 +1035,7 @@ jobs:
           # `scraper/session.rs` with their tests.
           cargo llvm-cov report \
               --fail-under-lines 90.2 \
-              --ignore-filename-regex '(cli/src/devx/(browser_e2e|chrome|e2e|seaweedfs|orchestrate|staging)|cli/src/devx/forgejo/(cluster|oidc|smoke)|cli/src/devx/email_summary_e2e/(harness|scenarios)|features/src/webdriver|cli/src/scraper/browser)\.rs$'
+              --ignore-filename-regex '(deploy/src/devx/(browser_e2e|chrome|e2e|seaweedfs|orchestrate|staging)|deploy/src/devx/forgejo/(cluster|oidc|smoke)|deploy/src/devx/email_summary_e2e/(harness|scenarios)|features/src/webdriver|deploy/src/scraper/browser)\.rs$'
       - name: stop covered PostgreSQL fixture
         if: always()
         run: docker rm -f test-postgres
@@ -1069,7 +1069,7 @@ jobs:
   # goes on waiting for the old one, which never arrives. That does not read as
   # a broken gate — the pull request simply sits on an expected check forever,
   # or, if the rule is dropped to fix it, merges with nothing enforced at all.
-  # `navigator ops github setup` asserts this job exists before it will bind
+  # `navigator-deploy ops github setup` asserts this job exists before it will bind
   # the gate, so the two halves cannot drift apart.
   #
   # `if: always()` with an explicit result test, rather than a bare `needs:`.

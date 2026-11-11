@@ -31,7 +31,7 @@ bucket.
 already names (documents, exports, assets, applications, LFS, or either analytical archive), or an `fs` root equal to
 `NAVIGATOR_STORAGE_FS_ROOT`. Nothing falls back to another lane.
 
-`navigator ops gcp setup` creates the bucket with public access prevention enforced and no lifecycle delete rule.
+`navigator-deploy ops gcp setup` creates the bucket with public access prevention enforced and no lifecycle delete rule.
 Retention is decided by the governed purge, never by bucket age.
 
 ## Generations
@@ -39,8 +39,8 @@ Retention is decided by the governed purge, never by bucket age.
 Archive state lives in PostgreSQL, in `project_archive_generation` and `project_archive_item`.
 
 1. **Request.** `store::project_archives::request` records a durable request under a caller-chosen operation key. The
-   same key returns the same generation. A Project with a repository must supply the private receipt `navigator ops
-   forgejo bundle archive` wrote, so its source and history are part of the archive.
+   same key returns the same generation. A Project with a repository must supply the private receipt `navigator-deploy
+   ops forgejo bundle archive` wrote, so its source and history are part of the archive.
 2. **Plan.** Each run reads the Project's current record and lists every expected item. The inventory digest and the
    cutoff are recorded. The cutoff changes only when the inventory does.
 3. **Copy.** Bytes go to `firms/<firm>/projects/<project>/objects/<sha256>`. Each item is read back and checked by
@@ -99,7 +99,7 @@ ids, with the same revision chains, checksums, provenance, visibility, Soft Dele
 revision comes back as its tombstone only. The target must already hold the Project's Firm and client Entity. An
 existing row or object that differs stops the restore rather than being replaced, and a rerun converges.
 
-Restore the repository from the reported Git bundle receipt with `navigator ops forgejo bundle restore`.
+Restore the repository from the reported Git bundle receipt with `navigator-deploy ops forgejo bundle restore`.
 
 ## Soft-deleted chains and the purge
 

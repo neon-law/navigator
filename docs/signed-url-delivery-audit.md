@@ -129,8 +129,8 @@ Checked on 2026-09-12 with `gcloud` pinned to `neon-law-stg`:
 The public asset lane is the app's own `/assets` proxy ([`docs/assets.md`](assets.md)), so even the marketing bucket
 stays private at the bucket.
 
-**Recommendation.** Set `publicAccessPrevention: enforced` on every bucket `navigator ops gcp setup` creates, so a
-future hand-added `allUsers` binding is refused rather than honoured. Have `ops gcp verify` assert it.
+**Recommendation.** Set `publicAccessPrevention: enforced` on every bucket `navigator-deploy ops gcp setup` creates, so
+a future hand-added `allUsers` binding is refused rather than honoured. Have `ops gcp verify` assert it.
 
 **Follow-up.** Enforce public-access prevention in the bucket provisioning stage and verify it.
 
@@ -237,8 +237,8 @@ tools; full-disk encryption on the laptop is the control that applies, and it is
 
 **Recommendation.** Three changes, in order of value.
 
-1. Add `navigator site clean`: remove every file below `documents/`, the same set the repository gate refuses to see
-   tracked, and print the count. A `--dry-run` lists them.
+1. Add `navigator-deploy site clean`: remove every file below `documents/`, the same set the repository gate refuses to
+   see tracked, and print the count. A `--dry-run` lists them.
 2. Print a closing line from `project sync` naming the count of privileged files now on disk and the `clean` command.
 3. Do not make downloading opt-in behind a flag. Its only purpose is to write these bytes, so a flag would be confirmed
    by reflex; the warning and the clean command are what change behaviour.
@@ -332,7 +332,7 @@ deleted, and `/app/projects/{code}/portal` redirects to the matter show page. No
 prefix, so there is no publisher identity left to converge. Any publisher accounts and bindings still present in a
 deployment, and the stale `<code>/portal/` objects, are operator cleanup. The record below is kept as read.
 
-**What the code provisioned.** `cli/src/devx/gcp/app_publisher.rs`, since deleted: one `nav-pub-<code>` account per
+**What the code provisioned.** `deploy/src/devx/gcp/app_publisher.rs`, since deleted: one `nav-pub-<code>` account per
 Project; a custom role holding exactly `storage.objects.create`, `get`, and `update`, bound on the applications bucket
 under a condition confining it to `<code>/portal` and `<code>/portal/`; an `app-publisher` pool with a `ghe-oidc`
 provider whose condition was the applications organization on `main`; and an impersonation binding pinned to one

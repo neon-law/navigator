@@ -16,7 +16,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use rules::source_archive::{self, CanonicalTree};
 
 /// Read the files Git would track under `directory`, as UTF-8 text.
-pub(crate) fn tree_from_checkout(directory: &Path) -> Result<CanonicalTree> {
+pub fn tree_from_checkout(directory: &Path) -> Result<CanonicalTree> {
     let output = Command::new("git")
         .args([
             "ls-files",
@@ -47,7 +47,8 @@ pub(crate) fn tree_from_checkout(directory: &Path) -> Result<CanonicalTree> {
 
 /// The default operation key: the code and the first 16 hex digits of the
 /// tree digest, so the same tree retries the same import.
-pub(crate) fn default_operation_key(code: &str, tree: &CanonicalTree) -> String {
+#[must_use]
+pub fn default_operation_key(code: &str, tree: &CanonicalTree) -> String {
     format!("{code}-{}", &tree.digest()[..16])
 }
 

@@ -83,9 +83,9 @@ The graph projects from the relational mirrors, so the relational tables must be
 the graph arm last, after every source group is converged:
 
 ```bash
-navigator ops postgres backfill --dry-run --json          # the plan; writes nothing
-navigator ops postgres backfill --batch-size 500 --json   # the run; resumable by run id
-navigator ops postgres mirror parity                      # must be clean before you trust it
+navigator-deploy ops postgres backfill --dry-run --json          # the plan; writes nothing
+navigator-deploy ops postgres backfill --batch-size 500 --json   # the run; resumable by run id
+navigator-deploy ops postgres mirror parity                      # must be clean before you trust it
 ```
 
 The graph arm rebuilds the projection wholesale — vertices keyed by the Surreal record UUIDs, so `source_id` provenance

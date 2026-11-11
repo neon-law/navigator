@@ -22,9 +22,9 @@ on `/app/admin/firms/{id}/edit`. An Owner who is a Firm's Admin DRI holds that F
 (integration secrets, brand creation). `store::firms::refuse_admin_dri_orphaning` is the guard every membership-removal
 door consults before deleting a row or changing it away from `admin`, so a direct edit cannot orphan an active Firm's
 designation either. `store::firms::admin_dri_invariant_report` is a read-only, deployment-wide scan for a Firm that is
-missing, has multiple, or holds an ineligible designation regardless — `navigator ops firms doctor` prints it. None of
-these repair a row; a reported Firm is fixed by a human appointing or transferring through the Owner surface. See
-[Directly Responsible Individual (DRI)](directly-responsible-individual-dri.md) for how this differs from a matter's
+missing, has multiple, or holds an ineligible designation regardless — `navigator-deploy ops firms doctor` prints it.
+None of these repair a row; a reported Firm is fixed by a human appointing or transferring through the Owner surface.
+See [Directly Responsible Individual (DRI)](directly-responsible-individual-dri.md) for how this differs from a matter's
 lawyer/client DRI.
 
 **A newly created Lawyer or Clerk joins a Firm as a standing rule, not a one-time backfill.**

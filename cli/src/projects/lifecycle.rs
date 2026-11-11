@@ -14,7 +14,7 @@ mod letter;
 /// The lifecycle kinds live in `project-scaffold` beside the Draft stubs
 /// they name, so the CLI's lifecycle commands and the shared scaffold
 /// cannot disagree on what an unedited stub is.
-pub(crate) use project_scaffold::{OFFBOARDING, ONBOARDING};
+pub use project_scaffold::{OFFBOARDING, ONBOARDING};
 
 /// Open the onboarding notation, deriving the matter and client from
 /// `navigator.yaml` in `root`.
@@ -264,12 +264,12 @@ fn template_path(root: &Path, kind: &str) -> Result<PathBuf> {
 /// the shared scaffold wrote; production commands write through
 /// [`write_template_stub`] and never re-derive the path.
 #[cfg(test)]
-pub(crate) use project_scaffold::scaffold_draft;
+pub use project_scaffold::scaffold_draft;
 /// The repository-relative path and stub bytes of `kind`'s letter Draft, as
 /// `repository scaffold` writes it into a new Project repository. The
 /// canonical bytes live in `project-scaffold` so the CLI's scaffold and the
 /// server-side repository seeding write the same placeholder.
-pub(crate) use project_scaffold::{template_code, template_placeholder, template_stub};
+pub use project_scaffold::{template_code, template_placeholder, template_stub};
 
 fn write_template_stub(path: &Path, kind: &str) -> Result<()> {
     std::fs::create_dir_all(path.parent().unwrap_or(Path::new("."))).with_context(|| {
@@ -283,7 +283,8 @@ fn write_template_stub(path: &Path, kind: &str) -> Result<()> {
 
 /// Whether `contents` is a lifecycle letter stub nobody has drafted yet.
 /// Such a file is a placeholder, never an attorney's edit.
-pub(crate) fn is_unedited_stub(contents: &str) -> bool {
+#[must_use]
+pub fn is_unedited_stub(contents: &str) -> bool {
     let body = rules::frontmatter::split(contents).map(|(_, body)| body.trim());
     [ONBOARDING, OFFBOARDING].iter().any(|kind| {
         contents == template_stub(kind)
@@ -313,7 +314,7 @@ const LINEAGE_FIELD: &str = "derived_from";
 /// The migration retypes the Draft and rewrites its page references together;
 /// `Kind::opens_a_matter` and the rule engine are untouched, and
 /// `derived_from` stays documentation-only.
-pub(crate) fn migrate_letter(root: &Path) -> Result<()> {
+pub fn migrate_letter(root: &Path) -> Result<()> {
     let directory = super::repository::draft_directory(root);
     let legacy = if let Some(relative) = letter::declared(root)? {
         let path = letter::checked_path(root, &relative)?;
@@ -523,7 +524,7 @@ fn ensure_archive_ready(root: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn git_text(root: &Path, args: &[&str]) -> Result<String> {
+pub fn git_text(root: &Path, args: &[&str]) -> Result<String> {
     let output = git(root, args)?;
     if !output.status.success() {
         return Err(anyhow!(
@@ -535,7 +536,7 @@ pub(crate) fn git_text(root: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-pub(crate) fn git(root: &Path, args: &[&str]) -> Result<std::process::Output> {
+pub fn git(root: &Path, args: &[&str]) -> Result<std::process::Output> {
     Command::new("git")
         .arg("-C")
         .arg(root)
@@ -566,7 +567,7 @@ async fn archive_forge_repository(root: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn github_token() -> Result<String> {
+pub fn github_token() -> Result<String> {
     for key in ["GH_TOKEN", "GITHUB_TOKEN"] {
         if let Ok(value) = std::env::var(key) {
             if !value.trim().is_empty() {
@@ -590,7 +591,7 @@ pub(crate) fn github_token() -> Result<String> {
     Ok(token)
 }
 
-pub(crate) fn github_owner_name(remote: &str) -> Result<(String, String)> {
+pub fn github_owner_name(remote: &str) -> Result<(String, String)> {
     let url = remote.trim().trim_end_matches(".git");
     let path = if let Some(rest) = url.strip_prefix("git@github.com:") {
         rest

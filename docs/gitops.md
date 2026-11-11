@@ -14,8 +14,8 @@ operator a deliberate rollout. This flow supports the actions in [`agent-workflo
 ## The branch → PR → auto-merge flow
 
 1. **Task worktree + branch.** Start with **New Worktree** in Codex or Claude and verify the current path is a
-   non-primary `git worktree` entry. Then run `cargo run -p cli -- dev worktree-env up --branch <kebab-topic>` once. The
-   CLI names that worktree's PR branch; it does not create another checkout. See
+   non-primary `git worktree` entry. Then run `cargo run -p deploy -- dev worktree-env up --branch <kebab-topic>` once.
+   The CLI names that worktree's PR branch; it does not create another checkout. See
    [`agent-workflows.md`](agent-workflows.md#create-a-pr) for the stop condition when a task did not start in New
    Worktree.
 2. **Push + open a PR.** `git push -u origin <branch>` then `gh pr create`.
@@ -43,9 +43,9 @@ gh api repos/neon-law/navigator/commits/<sha>/check-runs \
     --jq '.check_runs[] | "\(.name) \(.app.id) \(.app.slug)"'
 ```
 
-`navigator ops github setup [repository]` reconciles one repository at a time, and it governs **every** repository the
-Firm administers rather than a checked-in pair. The target resolves in precedence order — the explicit `owner/name`
-argument, then `GITHUB_REPOSITORY`, then the checkout's `origin` remote.
+`navigator-deploy ops github setup [repository]` reconciles one repository at a time, and it governs **every**
+repository the Firm administers rather than a checked-in pair. The target resolves in precedence order — the explicit
+`owner/name` argument, then `GITHUB_REPOSITORY`, then the checkout's `origin` remote.
 
 The authorization boundary is a **`(host, organization)` pair**: the source organizations — `neon-law` and
 `neon-law-source-code` — and this deployment's own `NAVIGATOR_GITHUB_ORG`, on the host `NAVIGATOR_GIT_HOST` names. A
@@ -167,7 +167,7 @@ The `uses:` lines themselves default to this repository (`gate_workflow_prefix`/
 repository is public, so any Project repository, public or private, can call `project-gate.yml`, `project-publish.yml`,
 and the composite actions they use. The override is for a fork that hosts its own copies; it sweeps the fleet the same
 way an `--action-version` bump does. It is proven only against the cross-organization Project fixture in
-`cli/src/devx/github_setup.rs`'s tests, so prove a live gate and publish from the fork's home before repointing real
+`deploy/src/devx/github_setup.rs`'s tests, so prove a live gate and publish from the fork's home before repointing real
 repositories.
 
 **A drifted file becomes a pull request, never a direct commit to `main`.** Every other reconciled artifact in this
@@ -187,8 +187,8 @@ makes any writes. A dry run can still show the plan.
 Run a dry run before applying drift, then rerun without it:
 
 ```bash
-navigator ops github setup neon-law/navigator --dry-run
-navigator ops github setup neon-law/ui --dry-run
+navigator-deploy ops github setup neon-law/navigator --dry-run
+navigator-deploy ops github setup neon-law/ui --dry-run
 ```
 
 A second dry run after applying must report *no drift*. That is the only proof the reconcile actually converged, and it
@@ -456,8 +456,8 @@ Reading the version out of the merged manifest answers all four by construction:
 | PROVENANCE — the tag's commit is reachable from `main` | a push to `main` **is** the provenance |
 
 What survives is the one question none of them asked, and it is now the whole gate: **is this version newer than every
-version already published?** `navigator ops release check` reads the manifest, lists every release tag, and compares
-them with semver's own ordering. Three answers:
+version already published?** `navigator-deploy ops release check` reads the manifest, lists every release tag, and
+compares them with semver's own ordering. Three answers:
 
 | Answer | What happens |
 | --- | --- |
@@ -551,7 +551,7 @@ the rest of `accessibility_e2e`) appear only in `dev browser-e2e`. Bring up the 
 not running, source `.devx/env`, and run:
 
 ```bash
-cargo run -p cli -- dev browser-e2e
+cargo run -p deploy -- dev browser-e2e
 ```
 
 A harness skip is not a pass. Do not treat `vendor_assets` as a substitute. See
@@ -609,7 +609,7 @@ identifier, so `hotfix.08` is not a version. Nothing derives `N`; `ops release v
 Write the version the same way as any other release, then land it:
 
 ```bash
-cargo run -p cli -- ops release version --tag 26.8.23-hotfix.1
+cargo run -p deploy -- ops release version --tag 26.8.23-hotfix.1
 ```
 
 **A prerelease does not become the default download.** Exactly one thing behaves differently from an ordinary release,
@@ -646,7 +646,7 @@ sort strictly above. Every bump is an upgrade, whatever the shape of either tag.
 A prerelease is still a full release up to staging: it proves the workspace in KIND, publishes every image, and rolls to
 staging. `release-deploy.yml` holds it there and never rolls it to production.
 
-**The bump carries `Cargo.lock` too.** `navigator ops release version --tag <version>` writes
+**The bump carries `Cargo.lock` too.** `navigator-deploy ops release version --tag <version>` writes
 `[workspace.package].version` — the value every crate inherits through `version.workspace = true` and `cli/build.rs`
 bakes into `navigator --version` — and refreshes `Cargo.lock` in the same commit. Every workspace crate is pinned there
 as well, and the archive jobs build with `--locked`, which refuses a lock the manifest has moved past. `ci.yml` runs
@@ -695,7 +695,7 @@ The same two build jobs also compile and attach `navigator-lsp-<tag>-<platform>`
 platform, from the same `cargo build` invocation as the CLI. It is a distinct filename prefix (`navigator-lsp-<tag>-`
 versus `navigator-<tag>-`) on the same tag, so an editor extension — a Zed marketplace listing, first — can resolve a
 specific released version of the language server the way a `gh release`-based extension expects, rather than the
-"latest" key `navigator ops lsp publish` writes to the public assets bucket for the site's own use. The prefix
+"latest" key `navigator-deploy ops lsp publish` writes to the public assets bucket for the site's own use. The prefix
 distinguishes the assets for a consumer, not for the upload: a `navigator-*` shell glob also matches
 `navigator-lsp-<tag>-*`, so every archive path in `deploy.yml` names its file tag-exactly and
 [`cli/tests/release_lsp_archive.rs`](../cli/tests/release_lsp_archive.rs) refuses a wildcard there. See [editor
@@ -861,7 +861,7 @@ Three lanes, cheapest first.
 
    ```bash
    gh release download YY.M.D --pattern navigator-image-digests.json --dir /tmp
-   navigator ops ship --deployment <row> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --tag YY.M.D \
+   navigator-deploy ops ship --deployment <row> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --tag YY.M.D \
      --image-digests /tmp/navigator-image-digests.json
    ```
 
@@ -1000,8 +1000,8 @@ the two publish jobs exchange a credential.
 
 Every roll target is a directory in this repository's `deployments/` tree: `<deployment>` and `<deployment>`, each a
 `config.toml` of plaintext coordinates and a `secrets.enc.yaml` of SOPS ciphertext. `ci.yml`'s `gate` job runs Run
-`scripts/validate-sops-inventory.sh` and `navigator ops deployments` against the external tree before each pull request;
-both read key names only.
+`scripts/validate-sops-inventory.sh` and `navigator-deploy ops deployments` against the external tree before each pull
+request; both read key names only.
 
 Staging is the gate on the way to production. It runs the same `<deployment>` image over a sample data plane, so a
 failure there is evidence about the version rather than about real people's matters.
@@ -1020,7 +1020,7 @@ failure there is evidence about the version rather than about real people's matt
 `notify` posts what was published, the CLI installation instructions, and whether the rollout was dispatched, with the
 manual `ops ship` command beside it. Row names in that message are placeholders; every literal `--deployment <name>` in
 a workflow or document must name a real row, which `every_instructed_deployment_names_a_real_row` in
-`cli/src/devx/deployments.rs` enforces.
+`deploy/src/devx/deployments.rs` enforces.
 
 ### The manual deploy
 
@@ -1030,7 +1030,7 @@ own short-lived credentials, staging first:
 ```bash
 gcloud auth application-default login
 gh release download YY.M.D --pattern navigator-image-digests.json --dir /tmp
-navigator ops ship --deployment <row> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --tag YY.M.D \
+navigator-deploy ops ship --deployment <row> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --tag YY.M.D \
   --image-digests /tmp/navigator-image-digests.json
 ```
 

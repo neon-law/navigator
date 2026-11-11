@@ -5,8 +5,8 @@ Forgejo runs in the local KIND tier beside PostgreSQL and Rauthy, with one Actio
 
 ```bash
 set -a; source .devx/env; set +a          # select this worktree's KIND tier
-cargo run -p cli -- dev forgejo up         # converge Forgejo into the tier
-cargo run -p cli -- dev forgejo smoke      # prove it end to end
+cargo run -p deploy -- dev forgejo up         # converge Forgejo into the tier
+cargo run -p deploy -- dev forgejo smoke      # prove it end to end
 ```
 
 `up` leaves Forgejo at `http://localhost:3300/` (`NAVIGATOR_KIND_FORGEJO_PORT`) and PostgreSQL at `127.0.0.1:15432`
@@ -95,12 +95,12 @@ uses. The rules are in [OIDC](oidc.md#forgejo).
    deletion of `main` still fail. A synthetic pending check supplies this phase's context.
 7. **Squash merge.** The account registers a synthetic OpenPGP key, proving possession through Forgejo's token, and
    creates `merge-proof`, whose initial commit Forgejo signs. One signed commit adds three synthetic workflows from
-   [`cli/src/devx/forgejo/fixtures/`](../cli/src/devx/forgejo/fixtures): `gate` on pull requests, `publish` on pushes to
-   `main`, and `bot-push` on dispatch. Three signed pull requests open: `red-proof`, whose gate fails; a draft; and
-   `green-proof`. The required check is the context the gate run posts, `gate / gate (pull_request)`. Scheduling refuses
-   before `main` requires it; reconciliation then reports drift, applies, and reruns with none. `ops forgejo
-   schedule-open` schedules the red and green pull requests while green's gate is pending, and skips the draft. Green
-   then merges with no further action: `main` is one Forgejo-signed squash commit on the previous head, titled and
+   [`deploy/src/devx/forgejo/fixtures/`](../deploy/src/devx/forgejo/fixtures): `gate` on pull requests, `publish` on
+   pushes to `main`, and `bot-push` on dispatch. Three signed pull requests open: `red-proof`, whose gate fails; a
+   draft; and `green-proof`. The required check is the context the gate run posts, `gate / gate (pull_request)`.
+   Scheduling refuses before `main` requires it; reconciliation then reports drift, applies, and reruns with none. `ops
+   forgejo schedule-open` schedules the red and green pull requests while green's gate is pending, and skips the draft.
+   Green then merges with no further action: `main` is one Forgejo-signed squash commit on the previous head, titled and
    bodied from the pull request; `green-proof` is deleted; and `publish` succeeds on the merge commit. Red's gate fails;
    an immediate merge and the repository owner's forced merge each answer 405, and it stays open. A site administrator's
    forced merge is not refused: Forgejo 15.0.9 lets an instance administrator skip branch protection whatever
@@ -127,7 +127,7 @@ It ends with the allowlist empty and purges its accounts at the start of the nex
 cluster from [`k8s/kind-forgejo-config.yaml`](../k8s/kind-forgejo-config.yaml), builds the CLI, and runs `dev forgejo
 up` and `dev forgejo smoke`. The cluster maps Rauthy's NodePort to `localhost:30080`, the issuer the tier advertises. It
 runs on changes to the Forgejo, PostgreSQL, and Rauthy KIND manifests, the GKE Forgejo overlays, or
-`cli/src/devx/forgejo/`. It is not a required check.
+`deploy/src/devx/forgejo/`. It is not a required check.
 
 To reproduce it without a tier, create the same cluster and point the CLI at it. If `localhost:30080` is taken, map
 another host port and set `NAVIGATOR_KIND_RAUTHY_PORT` to it:
@@ -136,8 +136,8 @@ another host port and set `NAVIGATOR_KIND_RAUTHY_PORT` to it:
 kind create cluster --name forgejo-smoke --config k8s/kind-forgejo-config.yaml --kubeconfig /tmp/forgejo-kind.config
 export KUBECONFIG=/tmp/forgejo-kind.config NAVIGATOR_KIND_CLUSTER=forgejo-smoke
 kubectl --context kind-forgejo-smoke create namespace navigator
-cargo run -p cli -- dev forgejo up
-cargo run -p cli -- dev forgejo smoke
+cargo run -p deploy -- dev forgejo up
+cargo run -p deploy -- dev forgejo smoke
 kind delete cluster --name forgejo-smoke
 ```
 

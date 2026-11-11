@@ -1,9 +1,9 @@
-# `navigator inbox import`
+# `navigator-deploy inbox import`
 
 Import exported email and LinkedIn messages into a Firm's Inbox. The server retains the original payload, parses
 Messages, threads and deduplicates them, and files attachments when a Project is supplied.
 
-The command is ingest-only: there is no `navigator inbox send` command. `--dry-run` needs no login.
+The command is ingest-only: there is no `navigator-deploy inbox send` command. `--dry-run` needs no login.
 
 Log in with `navigator site login --host https://your-deployment.example` before transferring imports.
 
@@ -17,14 +17,14 @@ Supported sources:
 
 ```bash
 # Import one message and attribute its Conversation to a Project.
-navigator inbox import --source=email --mailbox=lawyer@neonlaw.com \
+navigator-deploy inbox import --source=email --mailbox=lawyer@neonlaw.com \
   --file=notice.eml --project=sample-litigation
 
 # Import a directory of messages.
-navigator inbox import --source=email --mailbox=lawyer@neonlaw.com --dir=./thread
+navigator-deploy inbox import --source=email --mailbox=lawyer@neonlaw.com --dir=./thread
 
 # Import a LinkedIn export using the exporting account's profile URL.
-navigator inbox import --source=linkedin --mailbox='https://www.linkedin.com/in/your-profile' \
+navigator-deploy inbox import --source=linkedin --mailbox='https://www.linkedin.com/in/your-profile' \
   --file=messages.csv
 ```
 

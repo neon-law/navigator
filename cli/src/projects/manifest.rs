@@ -117,7 +117,7 @@ const REQUIRED_HANDLE_KEYS: &[&str] = &[
 /// Accepting the word alone would let a manifest claim "not provisioned"
 /// forever, even after Slack or Notion is set up live, so nothing here
 /// checks it against reality — that is
-/// `cli::projects::gate::check_live_handles`'s job. Its
+/// `crate::projects::gate::check_live_handles`'s job. Its
 /// `handle_matches_live` only accepts this sentinel when the live
 /// coordinate is actually absent, so the live gate — not this offline
 /// lint — is what keeps the claim honest.
@@ -178,14 +178,14 @@ pub struct Manifest {
     /// sync` stores them with the Project, and the matter page renders them.
     pub pages: Vec<rules::pages::PageEntry>,
     /// The raw `scrapers:` section, carried untyped: its shape is owned by
-    /// `crate::scraper::config`, the one reader the lint (`Y024`) and the
-    /// `navigator scraper` commands share.
+    /// `crate::scraper_config`, the one reader the lint (`Y024`) and the
+    /// `navigator-deploy scraper` commands share.
     pub scrapers: Option<serde_yaml::Value>,
 }
 
 impl Manifest {
     /// Refuse drift from declared ownership; an absent pair can be filled from live.
-    pub(crate) fn check_live_ownership(
+    pub fn check_live_ownership(
         &self,
         firm_id: Option<uuid::Uuid>,
         brand: Option<&str>,
@@ -216,12 +216,7 @@ pub struct ManifestFinding {
 }
 
 impl ManifestFinding {
-    pub(crate) fn at(
-        path: &Path,
-        line: usize,
-        code: &'static str,
-        message: impl Into<String>,
-    ) -> Self {
+    pub fn at(path: &Path, line: usize, code: &'static str, message: impl Into<String>) -> Self {
         Self {
             path: path.to_path_buf(),
             line,
@@ -710,13 +705,13 @@ fn lint_skills(path: &Path, mapping: &serde_yaml::Mapping) -> Vec<ManifestFindin
 }
 
 /// `Y024` — the `scrapers:` section must be shaped as the scraper
-/// commands parse it. The shape is owned by `crate::scraper::config`, so a
+/// commands parse it. The shape is owned by `crate::scraper_config`, so a
 /// manifest the lint passes is a manifest `scraper sites` can read.
 fn lint_scrapers(path: &Path, mapping: &serde_yaml::Mapping) -> Vec<ManifestFinding> {
     let Some(section) = mapping.get("scrapers") else {
         return Vec::new();
     };
-    match crate::scraper::config::parse_value(section) {
+    match crate::scraper_config::parse_value(section) {
         Ok(_) => Vec::new(),
         Err(error) => vec![ManifestFinding::at(
             path,
@@ -852,7 +847,7 @@ fn lint_version(path: &Path, mapping: &serde_yaml::Mapping) -> Vec<ManifestFindi
     match mapping.get("version") {
         None => Vec::new(),
         Some(value) => match scalar_string(value) {
-            Some(version) if crate::devx::registry::is_release_tag(&version) => Vec::new(),
+            Some(version) if crate::release::is_release_version(&version) => Vec::new(),
             Some(version) => vec![ManifestFinding::at(
                 path,
                 1,
@@ -1098,6 +1093,7 @@ fn lint_rowless(path: &Path, mapping: &serde_yaml::Mapping) -> Vec<ManifestFindi
 /// file and one that fails to parse — callers that only want an optional
 /// fallback (a default `--host` or Project code) treat both the same way,
 /// the same as `project gate`'s own live-status check does.
+#[must_use]
 pub fn read(dir: &Path) -> Option<Manifest> {
     let contents = std::fs::read_to_string(dir.join(FILE)).ok()?;
     parse(&contents).ok()
@@ -1440,13 +1436,13 @@ mod tests {
     #[test]
     fn a_well_shaped_scrapers_section_parses_into_the_manifest() {
         let manifest = parse(SCRAPERS_SECTION).expect("the section deserializes");
-        let parsed = crate::scraper::config::parse_value(
+        let parsed = crate::scraper_config::parse_value(
             manifest.scrapers.as_ref().expect("the section is carried"),
         )
         .expect("the section parses");
         assert_eq!(parsed.sites.len(), 1);
         let entry = parsed
-            .find_site(&crate::scraper::adapter::SiteKey::new("la-superior").expect("valid key"))
+            .find_site(&crate::scraper_config::SiteKey::new("la-superior").expect("valid key"))
             .expect("configured");
         assert_eq!(entry.adapter, "la-superior");
         let findings = codes(SCRAPERS_SECTION);

@@ -355,9 +355,9 @@ fn each_ship_refuses_to_run_quiet_without_a_log_sink() {
             .position(|step| {
                 step["run"]
                     .as_str()
-                    .is_some_and(|run| run.contains("navigator ops ship "))
+                    .is_some_and(|run| run.contains("navigator-deploy ops ship "))
             })
-            .expect("the ship runs `navigator ops ship`");
+            .expect("the ship runs `navigator-deploy ops ship`");
         assert!(
             guard < ship,
             "`{job_name}` must check `{secret}` before `ops ship`: `--quiet` requires a sink and \
@@ -603,7 +603,8 @@ fn both_ship_jobs_run_the_full_ship_without_writing_iam() {
     for job_name in ["ship-staging", "ship-production"] {
         let text = job_text(job_name);
         assert!(
-            text.contains("navigator ops ship --deployment") && !text.contains("--image-only"),
+            text.contains("navigator-deploy ops ship --deployment")
+                && !text.contains("--image-only"),
             "`{job_name}` must run the full `ops ship`"
         );
         assert!(
@@ -766,7 +767,7 @@ fn run_registration_check(
         .expect("the registration check runs a script")
         .to_string();
     let stub_dir = tempfile::tempdir().expect("stub dir");
-    let stub = stub_dir.path().join("navigator");
+    let stub = stub_dir.path().join("navigator-deploy");
     let help = if supports_project_id {
         "--project-id <PROJECT_ID>"
     } else {
@@ -775,7 +776,7 @@ fn run_registration_check(
     std::fs::write(
         &stub,
         format!(
-            "#!/usr/bin/env bash\ncase \"$*\" in *--help*) echo '{help}' ;; *) echo \"navigator $*\" ;; esac\n"
+            "#!/usr/bin/env bash\ncase \"$*\" in *--help*) echo '{help}' ;; *) echo \"navigator-deploy $*\" ;; esac\n"
         ),
     )
     .expect("write stub");
@@ -822,7 +823,7 @@ fn the_registration_check_targets_the_rows_own_worker() {
         assert_eq!(
             String::from_utf8_lossy(&output.stdout).trim(),
             format!(
-                "navigator ops restate register --deployment {row} --project-id example-project"
+                "navigator-deploy ops restate register --deployment {row} --project-id example-project"
             ),
             "`{job_name}` must register `{row}`'s own worker"
         );
@@ -838,7 +839,7 @@ fn an_older_cli_skips_the_registration_check_rather_than_register_the_brand_defa
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        !stdout.contains("navigator ops restate register"),
+        !stdout.contains("navigator-deploy ops restate register"),
         "nothing may be registered by a CLI that cannot read the row's worker URL: {stdout}"
     );
     assert!(stdout.contains("::warning::"));

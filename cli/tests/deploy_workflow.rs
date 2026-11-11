@@ -558,7 +558,7 @@ fn the_release_tag_is_created_between_the_proof_and_the_publish() {
 /// The tag this workflow CREATES must be one the `release-tags` ruleset
 /// protects.
 ///
-/// `cli/src/devx/github_setup.rs` restricts `refs/tags/[0-9]*.[0-9]*.[0-9]*`
+/// `deploy/src/devx/github_setup.rs` restricts `refs/tags/[0-9]*.[0-9]*.[0-9]*`
 /// against deletion, update, and non-fast-forward with no bypass actor. That is
 /// what makes a published version's ref immutable — and it only binds if the
 /// name this job creates matches the glob. A version that fell outside it would
@@ -567,7 +567,7 @@ fn the_release_tag_is_created_between_the_proof_and_the_publish() {
 #[test]
 fn the_created_tag_matches_the_protected_glob() {
     let glob = "refs/tags/[0-9]*.[0-9]*.[0-9]*";
-    let setup = repo_file("cli/src/devx/github_setup.rs");
+    let setup = repo_file("deploy/src/devx/github_setup.rs");
     assert!(
         setup.contains(glob),
         "the `release-tags` ruleset must still protect `{glob}`"
@@ -686,18 +686,25 @@ fn no_job_can_write_repository_contents() {
         }
     }
 
-    // TWO JOBS, AND THE LIST IS THE POINT. `release-tag` creates the release ref
-    // once integration has proved the tree; `release-cli-publish`
-    // creates the GitHub Release that hangs off it and uploads the CLI archives.
+    // THREE JOBS, AND THE LIST IS THE POINT. `release-tag` creates the release
+    // ref once integration has proved the tree; `release-cli-publish` creates
+    // the GitHub Release that hangs off it and uploads the CLI archives;
+    // `release-operator-cli-publish` uploads the `navigator-deploy` and
+    // `scorpio` archives to that same Release.
     // Neither can MOVE a ref — see
     // `creating_the_release_tag_is_idempotent_but_never_forced` — and
     // `release-version`, which makes the decision, holds `contents: read`: the
     // job that decides is not the job that writes.
     assert_eq!(
         writers,
-        ["release-tag", "release-cli-publish"],
-        "exactly two jobs may hold `contents: write`: the one that creates the release ref and \
-         the one that creates the Release against it"
+        [
+            "release-tag",
+            "release-cli-publish",
+            "release-operator-cli-publish"
+        ],
+        "exactly three jobs may hold `contents: write`: the one that creates the release ref, \
+         the one that creates the Release against it, and the one that attaches the operator \
+         CLI archives to it"
     );
 
     assert_eq!(
@@ -1133,7 +1140,7 @@ fn build_exports_an_actions_cache_scope_only_where_publish_service_reads_it() {
 /// the very front of the release train where nothing else can start.
 ///
 /// The published Linux archive is the same code, already built. Downloading it
-/// keeps the rule in exactly one place — `cli/src/release_check.rs` — while
+/// keeps the rule in exactly one place — `deploy/src/release_check.rs` — while
 /// removing the compile.
 ///
 /// **The bootstrap caveat is real and accepted.** The checker is release N-1's,
@@ -1153,7 +1160,7 @@ fn the_release_decision_runs_a_published_binary_rather_than_a_compile() {
          compiling the CLI to answer a yes/no question is ~8 minutes of latency on every merge"
     );
     assert!(
-        job.contains("navigator ops release check --github-output"),
+        job.contains("navigator-deploy ops release check --github-output"),
         "the downloaded binary must answer the question through the same `ops release check` \
          command, so the release rule lives in one place"
     );
@@ -1193,7 +1200,7 @@ fn an_unavailable_checker_falls_back_to_building_from_source() {
     let job = release_version_job(&workflow);
 
     assert!(
-        job.contains("cargo run --locked -p cli --quiet -- ops release check --github-output"),
+        job.contains("cargo run --locked -p deploy --quiet -- ops release check --github-output"),
         "`release-version` must keep the in-tree fallback: a download that failed must compile \
          the checker, never answer the release question by default"
     );

@@ -5,8 +5,8 @@ services run in KIND.
 
 `templates/notations/forms/united_states/federal/uscis/us__naturalization.md` defines ten questions and parks at
 [`lawyer_review`](glossary/lawyer-review.md) before generating the vendored N-400 AcroForm. The blank lives in the
-assets bucket. First run [`navigator forms sync`](gov-forms.md#vendoring) against this environment to upload a prepared
-blank or verify its pin.
+assets bucket. First run [`navigator-deploy forms sync`](gov-forms.md#vendoring) against this environment to upload a
+prepared blank or verify its pin.
 
 ## Prerequisites
 
@@ -20,7 +20,7 @@ Every command below runs from the repository root.
 ## 1. Start the dependency stack
 
 ```bash
-cargo run --release -p cli -- dev up
+cargo run --release -p deploy -- dev up
 ```
 
 This creates or reuses the persistent `navigator` cluster, restores port-forwards, and writes `.devx/env`. "Already
@@ -30,7 +30,7 @@ On `bind: address already in use`, clear stale port-forwards and rerun:
 
 ```bash
 pkill -f "kubectl.*port-forward"
-cargo run --release -p cli -- dev up
+cargo run --release -p deploy -- dev up
 ```
 
 ## 2. Boot `web`
@@ -50,8 +50,8 @@ Load the environment `dev up` wrote, then import the template catalog and pre-se
 
 ```bash
 set -a; source .devx/env; set +a
-cargo run --release -p cli --quiet -- site seed templates
-cargo run --release -p cli --quiet -- dev grant-lawyer
+cargo run --release -p deploy --quiet -- site seed templates
+cargo run --release -p deploy --quiet -- dev grant-lawyer
 ```
 
 `site seed` validates and idempotently seeds clean templates and referenced question codes; any skipped error-level file
@@ -61,14 +61,14 @@ session carries the seeded role.
 ## 4. Sign in
 
 ```bash
-cargo run --release -p cli --quiet -- site login --host http://localhost:3001
+cargo run --release -p deploy --quiet -- site login --host http://localhost:3001
 ```
 
 Sign in through local Rauthy as `lawyer@neonlaw.com` / `password`. The CLI stores its short-lived loopback token in
 `~/.navigator.json`. Confirm:
 
 ```bash
-cargo run --release -p cli --quiet -- site whoami
+cargo run --release -p deploy --quiet -- site whoami
 ```
 
 Expect `lawyer@neonlaw.com (lawyer)` and token lifetime.
@@ -76,7 +76,7 @@ Expect `lawyer@neonlaw.com (lawyer)` and token lifetime.
 ## 5. Open the matter
 
 ```bash
-cargo run --release -p cli --quiet -- site notation create us__naturalization \
+cargo run --release -p deploy --quiet -- site notation create us__naturalization \
   --client-email applicant@example.com
 ```
 
@@ -92,9 +92,9 @@ signed-in firm-side account.
 ## 7. Review as lawyer: approve and download
 
 ```bash
-cargo run --release -p cli --quiet -- site notation status <notation-id>
-cargo run --release -p cli --quiet -- site notation approve <notation-id>
-cargo run --release -p cli --quiet -- site notation document <notation-id> --out /tmp/n400.pdf
+cargo run --release -p deploy --quiet -- site notation status <notation-id>
+cargo run --release -p deploy --quiet -- site notation approve <notation-id>
+cargo run --release -p deploy --quiet -- site notation document <notation-id> --out /tmp/n400.pdf
 ```
 
 Before approval, expect `lawyer_review` and `document_ready false`. Approval generates the N-400. Verify the downloaded
@@ -110,7 +110,7 @@ Reload it through the CLI:
 
 ```bash
 set -a; source .devx/env; set +a
-cargo run -p cli -- dev worker-reload
+cargo run -p deploy -- dev worker-reload
 ```
 
 The command rebuilds, loads, and waits for the RestateDeployment. Then retry the site intake page.

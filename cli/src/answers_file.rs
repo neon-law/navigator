@@ -104,7 +104,8 @@ pub fn pdf_answers(path: &Path, overrides: Vec<(String, String)>) -> Result<Vec<
     Ok(fields.into_iter().collect())
 }
 
-pub(crate) fn pdf_placeholders(text: &str) -> std::collections::BTreeSet<&str> {
+#[must_use]
+pub fn pdf_placeholders(text: &str) -> std::collections::BTreeSet<&str> {
     text.split("{{")
         .skip(1)
         .filter_map(|part| part.split_once("}}"))
@@ -118,7 +119,7 @@ pub(crate) fn pdf_placeholders(text: &str) -> std::collections::BTreeSet<&str> {
         .collect()
 }
 
-pub(crate) fn report_pdf_sources(
+pub fn report_pdf_sources(
     placeholders: std::collections::BTreeSet<&str>,
     sources: &BTreeMap<String, &str>,
 ) {
@@ -138,7 +139,7 @@ pub(crate) fn report_pdf_sources(
     }
 }
 
-pub(crate) fn pdf_fields(saved: SavedAnswers) -> Result<BTreeMap<String, String>> {
+pub fn pdf_fields(saved: SavedAnswers) -> Result<BTreeMap<String, String>> {
     let mut fields = BTreeMap::new();
     for (state, saved) in saved {
         let value = saved.get("value").unwrap_or(&saved);

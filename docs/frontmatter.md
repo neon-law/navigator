@@ -256,7 +256,7 @@ own name (`output: client_letter`).
   onto an official government form (an AcroForm fill). A `form` template carries no legal prose — its body is the field
   map — so it always rides with the two form keys below (`form:` and `origin_url:`), and the checker (N109) requires
   them. Conversely a typeset profile (`letter`, `agreement`, `pleading`, or no `output:` at all) must **not** carry a
-  `form:` key. `navigator notation kinds` prints every `kind:` and its default frame.
+  `form:` key. `navigator-deploy notation kinds` prints every `kind:` and its default frame.
 
 `letter`, `client_letter`, `contract` (or its retired spelling `agreement`), `pleading`, `form`, and `resume` are the
 values the checker accepts today (N109); leaving the key off gives you the kind's default profile. `output` is where a
