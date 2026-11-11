@@ -56,6 +56,13 @@ pub const ALLOWED_CUSTOM_TEXT_ROLES: &[&str] = &[
     "document_summary", // The member's summary of the document under review.
     "letter_subject",   // The one-clause subject of a member-directed plan letter.
     "business_forum",   // Negotiated courts; governing law remains a jurisdiction reference.
+    // Traffic-citation intake: facts copied verbatim from the citation. No
+    // registry seeds traffic courts (they sit below the county), and the
+    // number, charge, and prior record are as printed or as the driver says.
+    "traffic_citation_number", // The citation number, verbatim.
+    "traffic_court",           // The court printed on the citation, verbatim.
+    "traffic_prior_record",    // The driver's own account of recent tickets, deferrals, or traffic school.
+    "traffic_violation",       // The charge as printed, with speed and posted limit.
     // Business instruments: lawyer-authored schedules and negotiated provisions.
     // Parties, dates, notice addresses, and governing law use typed states.
     "business_acceptance", // Describe the actual notice and assent mechanism, including how changes are accepted.
