@@ -84,6 +84,9 @@ harness = false
 [[test]]
 name = "template_validate"
 harness = false
+[[test]]
+name = "offer_letter_signing"
+harness = false
 
 [[test]]
 name = "brand_routing"

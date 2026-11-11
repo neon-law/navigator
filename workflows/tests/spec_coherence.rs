@@ -114,3 +114,117 @@ fn every_bundled_spec_yaml_matches_its_template_frontmatter() {
         );
     }
 }
+
+/// Signer roles spelled by a standalone yaml's `signers:` key, if any —
+/// bare strings and `{role: …}` entries both count. An absent or null
+/// `signers:` yields an empty list (nothing declared on the yaml side).
+fn yaml_signer_roles(yaml: &str) -> Vec<String> {
+    let Ok(value) = serde_yaml::from_str::<serde_yaml::Value>(yaml) else {
+        return Vec::new();
+    };
+    let Some(signers) = value.get("signers").filter(|s| !s.is_null()) else {
+        return Vec::new();
+    };
+    match signers.as_sequence() {
+        Some(entries) => entries
+            .iter()
+            .filter_map(|entry| {
+                if entry.is_string() {
+                    entry.as_str().map(String::from)
+                } else {
+                    entry
+                        .get("role")
+                        .and_then(|role| role.as_str().map(String::from))
+                }
+            })
+            .collect(),
+        None => Vec::new(),
+    }
+}
+
+/// The compile-time signer gate: a bundled template whose workflow
+/// collects a signature — or that declares its own `signers:` list —
+/// must pair that declaration with questionnaire backing and body
+/// anchors, and the standalone yaml must tell the same signer story as
+/// the template frontmatter. Drift in any direction (a signer with no
+/// questionnaire state, a binding naming no question, a role with no
+/// anchor, yaml and markdown disagreeing) fails here, at compile time,
+/// instead of at the provider.
+#[test]
+fn every_signing_template_pairs_signers_questionnaire_and_anchors() {
+    for (code, yaml) in BUNDLED_SPEC_YAML {
+        let Some(markdown) = read_template_for(code) else {
+            continue;
+        };
+
+        let set = rules::f107::signer_set(&markdown)
+            .unwrap_or_else(|e| panic!("signers for `{code}` failed to parse: {e}"));
+        if !set.explicit && !rules::f107::declares_signing_state(&markdown) {
+            continue;
+        }
+
+        let questionnaire = questionnaire_spec_from_yaml(yaml).unwrap_or_else(|e| {
+            panic!("standalone questionnaire yaml for `{code}` failed to parse: {e}")
+        });
+
+        for signer in &set.signers {
+            let role = signer.role.as_str();
+            // The firm countersigns from the configured signer, not a
+            // questionnaire state — the same carve-out N115 makes.
+            if role != "firm" {
+                let state = format!("person__{role}");
+                assert!(
+                    questionnaire
+                        .0
+                        .states
+                        .keys()
+                        .any(|name| name.as_str() == state),
+                    "`{code}`: signer role `{role}` has no `{state}` question in the bundled questionnaire"
+                );
+            }
+            // A declared identity binding must name a real question, or the
+            // send flow resolves nothing at signature time.
+            for binding in [signer.name.as_deref(), signer.email.as_deref()]
+                .into_iter()
+                .flatten()
+            {
+                assert!(
+                    questionnaire
+                        .0
+                        .states
+                        .keys()
+                        .any(|name| name.as_str() == binding),
+                    "`{code}`: signer role `{role}` binds `{binding}` but the bundled questionnaire has no such question"
+                );
+            }
+            // Anchor pairing (the N107 direction): a declared role must
+            // have somewhere in the body to sign.
+            assert!(
+                markdown.contains(&format!("{{{{{role}.signature}}}}"))
+                    || markdown.contains(&format!("{{{{{role}.initials}}}}")),
+                "`{code}`: signer role `{role}` has no `{{{role}.signature}}` or `{{{role}.initials}}` anchor in the body"
+            );
+        }
+
+        // Reverse anchor pairing: a template whose workflow declares a
+        // signing state must carry at least one anchor for the field to
+        // land on — the live retainer bug shape.
+        if rules::f107::declares_signing_state(&markdown) {
+            assert!(
+                markdown.contains(".signature}}") || markdown.contains(".initials}}"),
+                "`{code}` declares a sent_for_signature state but its body has no signature anchor"
+            );
+        }
+
+        // Signer drift between the standalone yaml and the template
+        // frontmatter, in both directions and in order.
+        let yaml_roles = yaml_signer_roles(yaml);
+        if !yaml_roles.is_empty() {
+            let markdown_roles: Vec<String> = set.roles().map(String::from).collect();
+            assert_eq!(
+                yaml_roles, markdown_roles,
+                "`{code}`: signer drift between the standalone yaml and the template frontmatter"
+            );
+        }
+    }
+}
