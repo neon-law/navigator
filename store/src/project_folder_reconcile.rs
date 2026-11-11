@@ -803,12 +803,8 @@ pub async fn reconcile_from_env(
     db: &SurrealDb,
     project_id: Uuid,
 ) -> Result<Option<FolderReconcileReport>, FolderReconcileError> {
-    let keys = [
-        "NAVIGATOR_DRIVE_NEON_LAW_PROJECTS_DRIVE_ID",
-        "NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER",
-        "NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT_JSON",
-    ];
-    if !keys.iter().any(|key| std::env::var_os(key).is_some()) {
+    // The shared drive declares Drive; the delegation keys also serve Calendar.
+    if std::env::var_os("NAVIGATOR_DRIVE_NEON_LAW_PROJECTS_DRIVE_ID").is_none() {
         return Ok(None);
     }
     let project = crate::projects::find_by_id(db, project_id)

@@ -6452,15 +6452,14 @@ mod tests {
 
     /// The mint path's requests carry the 30 s bound: a hung endpoint burns
     /// an attempt instead of hanging the job. The clock is paused, so the
-    /// four timed-out attempts and their delays pass without real waiting —
-    /// the wall-clock assert below proves it.
+    /// timed-out attempts and their delays pass without real waiting. An
+    /// attempt may time out while connecting, before the mock receives it.
     #[tokio::test(start_paused = true)]
     async fn a_hung_mint_times_out_instead_of_hanging() {
         let navigator = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/auth/ci/document-token"))
             .respond_with(ResponseTemplate::new(200).set_delay(std::time::Duration::from_secs(60)))
-            .expect(4)
             .mount(&navigator)
             .await;
 

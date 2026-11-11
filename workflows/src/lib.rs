@@ -40,6 +40,7 @@ pub mod message_alert;
 pub mod notation_reset;
 pub mod notation_session;
 pub mod notify;
+pub mod notify_blocks;
 pub mod post_questionnaire;
 pub mod post_slack_notification;
 pub mod runtime;

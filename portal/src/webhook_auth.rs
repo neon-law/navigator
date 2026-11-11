@@ -51,6 +51,26 @@ pub fn verify_hmac_sha256_b64(key: &[u8], body: &[u8], provided_b64: &str) -> bo
     mac.verify_slice(&provided).is_ok()
 }
 
+/// Verify a hex-encoded HMAC-SHA256 digest over `body` keyed by `key`.
+/// This is Forgejo's signature shape: the `X-Forgejo-Signature` header
+/// carries the digest as lowercase hex. Same discipline as
+/// [`verify_hmac_sha256_b64`]: a malformed header is as untrusted as a
+/// wrong one, and the compare is constant-time.
+#[must_use]
+pub fn verify_hmac_sha256_hex(key: &[u8], body: &[u8], provided_hex: &str) -> bool {
+    let Ok(provided) = hex::decode(provided_hex.trim()) else {
+        return false;
+    };
+    // `new_from_slice` only errors on a zero-length key for some MAC
+    // backends; HMAC accepts any key length, so this never fails in
+    // practice — treat an error as "cannot verify" = untrusted.
+    let Ok(mut mac) = Hmac::<Sha256>::new_from_slice(key) else {
+        return false;
+    };
+    mac.update(body);
+    mac.verify_slice(&provided).is_ok()
+}
+
 /// Compute the base64-encoded HMAC-SHA256 digest of `body` keyed by
 /// `key`. The signing side of [`verify_hmac_sha256_b64`]; used by tests
 /// (and any local tooling) to forge a *valid* provider callback so the
@@ -60,6 +80,17 @@ pub fn sign_hmac_sha256_b64(key: &[u8], body: &[u8]) -> String {
     let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts any key length");
     mac.update(body);
     base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes())
+}
+
+/// Compute the hex-encoded HMAC-SHA256 digest of `body` keyed by `key`.
+/// The signing side of [`verify_hmac_sha256_hex`]; like
+/// [`sign_hmac_sha256_b64`], used by tests and local tooling to forge a
+/// *valid* Forgejo delivery without a live Forgejo.
+#[must_use]
+pub fn sign_hmac_sha256_hex(key: &[u8], body: &[u8]) -> String {
+    let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts any key length");
+    mac.update(body);
+    hex::encode(mac.finalize().into_bytes())
 }
 
 /// Verify SendGrid's "Signed Event Webhook" ECDSA/P-256 signature.
@@ -103,7 +134,10 @@ pub fn verify_ecdsa_p256_der_b64(
 
 #[cfg(test)]
 mod tests {
-    use super::{sign_hmac_sha256_b64, verify_ecdsa_p256_der_b64, verify_hmac_sha256_b64};
+    use super::{
+        sign_hmac_sha256_b64, sign_hmac_sha256_hex, verify_ecdsa_p256_der_b64,
+        verify_hmac_sha256_b64, verify_hmac_sha256_hex,
+    };
     use base64::Engine;
     use p256::ecdsa::{signature::Signer, Signature, SigningKey};
     use p256::pkcs8::EncodePublicKey;
@@ -154,6 +188,83 @@ mod tests {
         let sig = sign_hmac_sha256_b64(&key, BODY);
         let padded = format!("  {sig}\n");
         assert!(verify_hmac_sha256_b64(&key, BODY, &padded));
+    }
+
+    // --- hex / Forgejo push webhooks ---
+
+    /// Independently generated (python3:
+    /// `hmac.new(key, body, sha256).hexdigest()`) so the test pins the
+    /// hex wire format, not just our signer agreeing with our verifier.
+    fn fixed_hex_vector() -> (&'static [u8], &'static [u8], &'static str) {
+        (
+            b"forgejo-test-key",
+            b"{\"ref\":\"refs/heads/push/qvrpxyq\"}",
+            "cb00454dd4316f8aa990828f5880c6a215b2d878457c291270e5df22ae6250ac",
+        )
+    }
+
+    #[test]
+    fn a_known_hex_digest_verifies() {
+        let (key, body, digest) = fixed_hex_vector();
+        assert!(verify_hmac_sha256_hex(key, body, digest));
+    }
+
+    #[test]
+    fn the_signer_agrees_with_the_verifier_over_hex() {
+        let key = test_key();
+        assert!(verify_hmac_sha256_hex(
+            &key,
+            BODY,
+            &sign_hmac_sha256_hex(&key, BODY)
+        ));
+    }
+
+    #[test]
+    fn a_tampered_body_fails_against_the_hex_signature() {
+        let key = test_key();
+        let sig = sign_hmac_sha256_hex(&key, BODY);
+        let tampered = br#"{"envelopeId":"evil-999","status":"completed"}"#;
+        assert!(!verify_hmac_sha256_hex(&key, tampered, &sig));
+    }
+
+    #[test]
+    fn the_wrong_key_fails_against_the_hex_signature() {
+        let key = test_key();
+        let sig = sign_hmac_sha256_hex(&key, BODY);
+        assert!(!verify_hmac_sha256_hex(&test_key(), BODY, &sig));
+    }
+
+    #[test]
+    fn a_truncated_hex_header_is_rejected_not_panicked() {
+        let key = test_key();
+        let sig = sign_hmac_sha256_hex(&key, BODY);
+        assert!(!verify_hmac_sha256_hex(&key, BODY, &sig[..sig.len() - 1]));
+    }
+
+    #[test]
+    fn a_non_hex_header_is_rejected_not_panicked() {
+        let key = test_key();
+        assert!(!verify_hmac_sha256_hex(&key, BODY, "@@@not hex@@@"));
+    }
+
+    #[test]
+    fn an_empty_hex_signature_is_rejected() {
+        let key = test_key();
+        assert!(!verify_hmac_sha256_hex(&key, BODY, ""));
+    }
+
+    #[test]
+    fn a_zero_length_key_is_untrusted() {
+        let sig = sign_hmac_sha256_hex(b"forgejo-test-key", BODY);
+        assert!(!verify_hmac_sha256_hex(b"", BODY, &sig));
+    }
+
+    #[test]
+    fn surrounding_whitespace_in_the_hex_header_is_tolerated() {
+        let key = test_key();
+        let sig = sign_hmac_sha256_hex(&key, BODY);
+        let padded = format!("  {sig}\n");
+        assert!(verify_hmac_sha256_hex(&key, BODY, &padded));
     }
 
     // --- ECDSA / P-256 (SendGrid Signed Event Webhook) ---

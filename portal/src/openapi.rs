@@ -1684,6 +1684,31 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/integrations/contacts/sync": {
+          "post": {
+            "summary": "Sync each firm member's Google Contacts with their matters (admin)",
+            "description":
+              "For every firm-side participant on each selected Project, makes the contacts Navigator manages in that member's own Google Contacts exactly the other people on the member's open matters: creates missing ones, updates changed names, emails, and phone numbers, and removes people no longer on any of the member's open matters. Google Voice and Google Fi read those contacts to name a caller. Contacts Navigator did not create are never read or changed. Outcomes: `synced` with a `detail` of counts, `runtime_not_configured`, `credential_unusable`, `provider_unavailable`, `address_not_recorded`. The response carries counts only, never names or numbers. Authorization: admin-tier, plus `use_integrations` on the Project's owning Firm.",
+            "requestBody": { "required": true, "content": { "application/json": {
+              "schema": { "$ref": "#/components/schemas/ProjectSelector" }
+            } } },
+            "responses": {
+              "200": { "description": "One outcome per selected Project", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/IntegrationReport" } } } },
+              "400": { "description": "The selector is not accepted", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } },
+              "401": { "description": "No authenticated session", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } },
+              "403": { "description": "Authenticated caller is not admin-tier", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } },
+              "404": { "description": "No Project with that code is visible to the caller, or the caller may not use its Firm's integrations — the two answer identically on purpose", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } }
+            }
+          }
+        },
         "/app/api/integrations/calendar/deadline-mirror": {
           "post": {
             "summary": "Reconcile each Project's mirrored Deadline events to its rows (admin)",
@@ -6118,6 +6143,10 @@ pub fn documented_operations() -> Vec<(String, String)> {
 /// of reaching into `store::` on its own — an exemption opts a tool out
 /// of that pressure, so it needs a reason a reader can disagree with.
 pub const TOOLS_WITHOUT_AN_API_OPERATION: &[(&str, &str)] = &[
+    (
+        "list_templates",
+        "Public bundled Template metadata and intent clarification are compiled reference lookups, with no API command twin.",
+    ),
     (
         "project_skill_list",
         "No route today. Project Skills are compiled reference data; the CLI and MCP share rules::project_skill_catalog.",

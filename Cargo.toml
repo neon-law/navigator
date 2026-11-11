@@ -33,7 +33,7 @@ members = [
 ]
 
 [workspace.package]
-version = "26.11.10"
+version = "26.11.11"
 edition = "2021"
 rust-version = "1.95"
 # First-party source and original template material use MIT OR Apache-2.0.
@@ -139,6 +139,8 @@ bs58 = "0.5"
 # `alloc` + `pkcs8` encode Restate request-identity test keys as Ed25519 DER
 # for `restate-jwt`. Encoding is feature-gated in 3.x.
 ed25519-dalek = { version = "3", features = ["alloc", "pkcs8"] }
+# Forgejo signs webhook deliveries with hex-encoded HMAC-SHA256 digests.
+hex = "0.4.3"
 hmac = "0.13"
 # DE440 + small-body SPK reading for the astrocartography calculator:
 # UTC→TAI→TT→TDB conversion with the leap-second table pinned by hifitime,

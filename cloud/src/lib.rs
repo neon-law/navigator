@@ -23,11 +23,13 @@ pub mod archives_project;
 pub mod audio;
 pub mod calendar;
 pub mod contacts;
+pub mod delegation;
 pub mod drive;
 pub mod forge;
 pub mod forgejo_forge;
 pub mod forgejo_governance;
 pub mod forgejo_organization;
+pub mod forgejo_push_analysis;
 pub mod forgejo_user_keys;
 pub mod fs;
 pub mod gcloud;
@@ -46,6 +48,10 @@ pub use audio::{decode_to_mono_pcm16, AudioError, DecodedAudio};
 pub use calendar::{
     CalendarError, CalendarMember, CalendarRole, CalendarService, FakeCalendar, GoogleCalendar,
     ProjectCalendar,
+};
+pub use contacts::{
+    ContactBook, ContactBooks, ContactPhone, ContactsError, FakeContactBooks, GoogleContactBooks,
+    ManagedContact, StoredContact,
 };
 pub use drive::{
     md5_hex, DriveError, DriveFile, DriveFileDownload, DriveFolder, DriveMember, DriveMemberKind,

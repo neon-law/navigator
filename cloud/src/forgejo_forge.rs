@@ -136,6 +136,52 @@ struct GitCommitDetail {
     message: Option<String>,
 }
 
+/// The single-commit endpoint's diff statistics (`stat=true`, the
+/// documented default).
+#[derive(Deserialize)]
+struct CommitStatsBody {
+    additions: i64,
+    deletions: i64,
+}
+
+#[derive(Deserialize)]
+/// A commit author as the single-commit endpoint names one.
+struct CommitAuthorBody {
+    name: Option<String>,
+    email: Option<String>,
+}
+
+#[derive(Deserialize)]
+/// The commit core the endpoint nests under `commit`.
+struct CommitCoreBody {
+    author: Option<CommitAuthorBody>,
+    message: Option<String>,
+}
+
+#[derive(Deserialize)]
+/// The single-commit endpoint's JSON envelope.
+struct CommitDetailBody {
+    commit: Option<CommitCoreBody>,
+    stats: Option<CommitStatsBody>,
+}
+
+/// One pushed commit's analysis-relevant facts, as the forge's
+/// single-commit endpoint reports them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PushCommit {
+    pub author_name: Option<String>,
+    pub author_email: Option<String>,
+    pub message: Option<String>,
+    pub stats: Option<CommitStats>,
+}
+
+/// The forge's own count of a commit's insertions and deletions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CommitStats {
+    pub insertions: i64,
+    pub deletions: i64,
+}
+
 #[derive(Deserialize)]
 struct BranchBody {
     commit: BranchCommit,
@@ -295,6 +341,89 @@ impl ForgejoForge {
                 name: project_code.to_string(),
             })
         }
+    }
+}
+
+impl ForgejoForge {
+    /// The single-commit URL for `sha`, refusing an id that is not a hex
+    /// commit SHA before it can reach a URL path — the ref update a
+    /// verified payload carries is still payload input, not a constant.
+    fn commit_url(
+        &self,
+        project_code: &str,
+        sha: &str,
+        suffix: &str,
+    ) -> Result<String, ForgeError> {
+        let is_sha = sha.len() >= 40 && sha.bytes().all(|byte| byte.is_ascii_hexdigit());
+        if !is_sha {
+            return Err(ForgeError::InvalidConfig("commit SHA"));
+        }
+        Ok(format!(
+            "{}/git/commits/{sha}{suffix}",
+            self.repo_url(project_code)?
+        ))
+    }
+
+    /// One commit's analysis-relevant facts — author, message, and the
+    /// forge's own diff statistics — read through the Firm's credential.
+    /// A missing commit is an error, not `None`: the journaled push named
+    /// it, so a read that cannot find it is a consumption failure the
+    /// journal replays.
+    ///
+    /// # Errors
+    /// [`ForgeError`] when the SHA is malformed or the read fails.
+    pub async fn commit_detail(
+        &self,
+        project_code: &str,
+        sha: &str,
+    ) -> Result<PushCommit, ForgeError> {
+        let action = "reading a pushed commit";
+        let response = Self::checked(
+            self.request(self.http.get(self.commit_url(project_code, sha, "")?))
+                .send()
+                .await,
+            action,
+        )?;
+        let body = response
+            .json::<CommitDetailBody>()
+            .await
+            .map_err(|source| ForgeError::Response { action, source })?;
+        let core = body.commit.unwrap_or(CommitCoreBody {
+            author: None,
+            message: None,
+        });
+        let author = core.author.unwrap_or(CommitAuthorBody {
+            name: None,
+            email: None,
+        });
+        Ok(PushCommit {
+            author_name: author.name,
+            author_email: author.email,
+            message: core.message,
+            stats: body.stats.map(|stats| CommitStats {
+                insertions: stats.additions,
+                deletions: stats.deletions,
+            }),
+        })
+    }
+
+    /// One commit's unified diff text — where a jj conflict's Git-visible
+    /// markers are read. Same discipline as [`ForgejoForge::commit_detail`].
+    ///
+    /// # Errors
+    /// [`ForgeError`] when the SHA is malformed or the read fails.
+    pub async fn commit_diff(&self, project_code: &str, sha: &str) -> Result<String, ForgeError> {
+        let action = "reading a pushed commit's diff";
+        let response = Self::checked(
+            self.request(self.http.get(self.commit_url(project_code, sha, ".diff")?))
+                .send()
+                .await,
+            action,
+        )?;
+        response
+            .text()
+            .await
+            .map_err(|source| ForgeError::Response { action, source })
     }
 }
 

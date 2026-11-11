@@ -30,11 +30,10 @@ use crate::persons;
 use crate::projects::{self, set_drive_folder_id, ProjectCommandError, ProjectStoreError};
 use crate::surreal::SurrealDb;
 
-const DRIVE_CONFIGURATION_KEYS: [&str; 3] = [
-    "NAVIGATOR_DRIVE_NEON_LAW_PROJECTS_DRIVE_ID",
-    "NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER",
-    "NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT_JSON",
-];
+/// The Projects shared drive alone declares Drive: the delegation keys are
+/// shared with Calendar and Contacts, so a deployment can carry them with no
+/// Drive at all.
+const DRIVE_CONFIGURATION_KEYS: [&str; 1] = ["NAVIGATOR_DRIVE_NEON_LAW_PROJECTS_DRIVE_ID"];
 
 /// The deployment's public host, which a seeded Project manifest pins as
 /// the gate workflow's OIDC audience.
@@ -910,11 +909,7 @@ mod tests {
 
     #[test]
     fn partial_provider_configuration_is_not_treated_as_disabled() {
-        let drive_keys = [
-            "NAVIGATOR_DRIVE_NEON_LAW_PROJECTS_DRIVE_ID",
-            "NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER",
-            "NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT_JSON",
-        ];
+        let drive_keys = super::DRIVE_CONFIGURATION_KEYS;
         let forge_keys = [
             "NAVIGATOR_GITHUB_ORG",
             "NAVIGATOR_GIT_HOST",
@@ -929,6 +924,11 @@ mod tests {
         assert!(!super::provider_configured(&drive_keys, |_| None));
         assert!(super::provider_configured(&drive_keys, |key| {
             (key == "NAVIGATOR_DRIVE_NEON_LAW_PROJECTS_DRIVE_ID").then(|| "drive-id".to_string())
+        }));
+        // Calendar's delegation alone does not declare Drive.
+        assert!(!super::provider_configured(&drive_keys, |key| {
+            (key == "NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER")
+                .then(|| "calendar@example.com".to_string())
         }));
         assert!(!super::provider_configured(&forge_keys, |_| None));
         assert!(super::provider_configured(&forge_keys, |key| {

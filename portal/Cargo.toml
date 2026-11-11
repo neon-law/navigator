@@ -36,6 +36,7 @@ forms.workspace = true
 gateway.workspace = true
 futures.workspace = true
 hmac.workspace = true
+hex.workspace = true
 include_dir.workspace = true
 image.workspace = true
 jsonwebtoken.workspace = true

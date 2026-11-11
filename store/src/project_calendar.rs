@@ -191,10 +191,7 @@ pub async fn close(
 /// [`CalendarError::MissingConfig`] naming each absent key, or an
 /// authentication failure.
 pub async fn calendar_from_env() -> Result<Option<cloud::GoogleCalendar>, CalendarError> {
-    let configured = cloud::calendar::CALENDAR_CONFIGURATION_KEYS
-        .iter()
-        .any(|key| std::env::var(key).is_ok());
-    if configured {
+    if cloud::delegation::WorkspaceDelegation::declared(|key| std::env::var(key).ok()) {
         cloud::GoogleCalendar::from_env().await.map(Some)
     } else {
         Ok(None)

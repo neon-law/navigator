@@ -144,6 +144,14 @@ spec:
             # Once set, TWILIO_AUTH_TOKEN and TWILIO_ACCOUNT_SID must be on the Secret rail.
             - name: NAVIGATOR_SMS_NUMBER
               value: "YOUR_SMS_NUMBER"
+            # The Workspace user Drive, Calendar, and Contacts act as, and the
+            # Drive service account the pod signs delegation tokens as — no key
+            # (cloud::delegation). Both render blank on a row that names no
+            # delegated user, which keeps the Workspace off.
+            - name: NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER
+              value: "YOUR_DRIVE_DELEGATED_USER"
+            - name: NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT
+              value: "YOUR_DRIVE_SERVICE_ACCOUNT"
             # Enable only after Google Workspace routes the support mailbox
             # to the SendGrid Parse host and the inbound public key is present
             # in the SecretProviderClass.

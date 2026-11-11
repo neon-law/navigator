@@ -28,9 +28,11 @@ use thiserror::Error;
 pub const NAVIGATOR_GCP_PROJECT_ID: &str = "NAVIGATOR_GCP_PROJECT_ID";
 /// The Workspace user the Drive service account impersonates.
 pub const NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER: &str = "NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER";
-/// The Drive service account's credential, held in the deployment's secrets.
-pub const NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT_JSON: &str =
-    "NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT_JSON";
+/// The Workspace service account's email, which the runtime identity signs
+/// delegation tokens as ([`crate::delegation`]). `ops ship` renders it from the
+/// row's `NAVIGATOR_DRIVE_GCP_SERVICE_ACCOUNT_ID`.
+pub const NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT: &str =
+    "NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT";
 /// Environment key naming the organization that holds this deployment's
 /// Project repositories.
 ///
@@ -475,7 +477,7 @@ impl WorkspaceConfig {
 
     /// Every deployment-owned setting the optional Drive ingest needs: the
     /// shared drive, this deployment's own Projects root, the delegated user,
-    /// and the service-account credential. Another deployment's root key is
+    /// and the Workspace service account. Another deployment's root key is
     /// never one of them.
     #[must_use]
     pub fn drive_settings(&self) -> [&'static str; 4] {
@@ -483,25 +485,26 @@ impl WorkspaceConfig {
             self.shared_drive_id_key,
             self.projects_root_folder_id_key,
             NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER,
-            NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT_JSON,
+            NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT,
         ]
     }
 
-    /// Whether this deployment uses Drive ingest. None of
-    /// [`Self::drive_settings`] set means the optional ingest is disabled;
-    /// some set means a misconfiguration, reported with every missing key at
-    /// once rather than one per run.
+    /// Whether this deployment uses Drive ingest. Neither the shared drive nor
+    /// this deployment's Projects root set means the optional ingest is
+    /// disabled — the delegation keys alone serve Calendar and Contacts. Either
+    /// one set with any other setting absent is a misconfiguration, reported
+    /// with every missing key at once rather than one per run.
     pub fn drive_setup<F: Fn(&str) -> Option<String>>(&self, get: F) -> DriveSetup {
         let present = |key: &&'static str| get(key).is_some_and(|value| !value.trim().is_empty());
         let settings = self.drive_settings();
+        if !settings[..2].iter().any(present) {
+            return DriveSetup::Disabled;
+        }
         let missing: Vec<&'static str> = settings
             .iter()
             .filter(|key| !present(key))
             .copied()
             .collect();
-        if missing.len() == settings.len() {
-            return DriveSetup::Disabled;
-        }
         if !missing.is_empty() {
             return DriveSetup::Incomplete(missing);
         }
@@ -540,9 +543,8 @@ mod tests {
         documents_prefix, is_navigator_repository, is_valid_slug, DeploymentWorkspace,
         GoogleWorkspace, WorkspaceConfig, WorkspaceConfigError, WorkspaceCustomer,
         DEFAULT_GIT_HOST, LEGACY_NAVIGATOR_REPOSITORY_URL, NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER,
-        NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT_JSON, NAVIGATOR_GCP_PROJECT_ID,
-        NAVIGATOR_GITHUB_ORG, NAVIGATOR_GIT_HOST, NAVIGATOR_REPOSITORY_URL, RESERVED_PROJECT_CODES,
-        SLUG_MAX_LEN,
+        NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT, NAVIGATOR_GCP_PROJECT_ID, NAVIGATOR_GITHUB_ORG,
+        NAVIGATOR_GIT_HOST, NAVIGATOR_REPOSITORY_URL, RESERVED_PROJECT_CODES, SLUG_MAX_LEN,
     };
     use std::collections::HashMap;
 
@@ -681,6 +683,20 @@ mod tests {
         ] {
             let workspace = WorkspaceConfig::from_lookup(lookup(&forge(project_id))).unwrap();
             assert_eq!(workspace.drive_setup(lookup(&[])), DriveSetup::Disabled);
+            // Calendar's delegation alone leaves Drive ingest off.
+            assert_eq!(
+                workspace.drive_setup(lookup(&[
+                    (
+                        NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER,
+                        "calendar@example.test"
+                    ),
+                    (
+                        NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT,
+                        "drive@example.iam.gserviceaccount.com"
+                    ),
+                ])),
+                DriveSetup::Disabled
+            );
             // Another deployment's root is the wrong scope, not this one's.
             assert_eq!(
                 workspace.drive_setup(lookup(&[
@@ -693,7 +709,7 @@ mod tests {
                 DriveSetup::Incomplete(vec![
                     root_key,
                     NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER,
-                    NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT_JSON,
+                    NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT,
                 ])
             );
             let configured = workspace.drive_setup(lookup(&[
@@ -706,7 +722,10 @@ mod tests {
                     NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER,
                     "ingest@example.test",
                 ),
-                (NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT_JSON, "{}"),
+                (
+                    NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT,
+                    "drive@example.iam.gserviceaccount.com",
+                ),
             ]));
             let DriveSetup::Configured(drive) = configured else {
                 panic!("a complete setup resolves: {configured:?}");

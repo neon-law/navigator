@@ -675,6 +675,23 @@ erDiagram
         int version
         string wrapped_dek
     }
+    forgejo_push_webhook_journal {
+        string author
+        string change_id
+        boolean conflict_signal
+        datetime delivered_at
+        string description_summary
+        string event_key
+        string failure_detail
+        uuid id
+        datetime inserted_at
+        string payload
+        json ref_updates
+        string repo_full_name
+        json stats
+        string status
+        datetime updated_at
+    }
     git_access_token {
         datetime expires_at
         uuid id

@@ -22,8 +22,9 @@ use crate::agent_router::{AgentRouter, RoutedCall, RouterError, Step, Turn};
 const SYSTEM_PROMPT: &str = "You are the assistant inside Neon Law Navigator, talking with a \
      signed-in person. Use Navigator's tools to ground answers in the firm's own vocabulary: \
      look terms up with glossary_list and glossary_show rather than guessing what a Navigator \
-     word means. You give general information, not legal advice, and you say so when a question \
-     calls for a lawyer's judgment.";
+     word means. Use list_templates to match document requests to public Templates. Ask a clarifying \
+     question when the user's goal is ambiguous. Give general information and say when a question \
+     calls for a lawyer's judgment rather than giving legal advice.";
 
 /// What the chat shows when the model declines a request.
 pub const REFUSAL_TEXT: &str = "I can't help with that request.";
@@ -59,6 +60,11 @@ impl ClaudeVertexRouter {
 #[async_trait]
 impl AgentRouter for ClaudeVertexRouter {
     async fn next_step(&self, history: &[Turn], skills: &[Value]) -> Result<Step, RouterError> {
+        if let Some(Turn::User(intent)) = history.last() {
+            if let Some(question) = mcp::tools::list_templates::clarify_intent(intent) {
+                return Ok(Step::Done(question.to_owned()));
+            }
+        }
         let request = ClaudeChatRequest {
             project_id: self.project_id.clone(),
             model: self.model.clone(),
@@ -185,6 +191,26 @@ mod tests {
             "glossary_show" => mcp::tools::glossary_show::call(&arguments).await.unwrap(),
             other => panic!("unexpected tool {other}"),
         }
+    }
+
+    #[tokio::test]
+    async fn ambiguous_work_in_progress_asks_before_calling_any_tool() {
+        let server = MockServer::start().await;
+        let outcome = run_tool_loop(
+            &router(&server),
+            vec![Turn::User("create a work in progress".into())],
+            &mcp::tools::assistant_catalog(),
+            6,
+            |name, _| async move { panic!("unexpected tool {name}") },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            outcome.text,
+            "Do you want a Work In Progress summary for a matter, or do you want to record time or a cost?"
+        );
+        assert!(server.received_requests().await.unwrap().is_empty());
     }
 
     #[tokio::test]

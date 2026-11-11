@@ -125,11 +125,11 @@ impl FirmRuntimeGap {
 /// [`cloud::calendar::CALENDAR_CONFIGURATION_KEYS`].
 fn calendar_gap(missing: &str) -> String {
     format!(
-        "{missing} unset; the Project calendar uses the Workspace service account Drive uses: \
-         set NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER in the deployment's config.toml and \
-         NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT_JSON in its secrets.enc.yaml, authorize \
-         the account's client id for https://www.googleapis.com/auth/calendar under \
-         domain-wide delegation, then `navigator ops secrets apply --deployment <row>` \
+        "{missing} unset; the Project calendar acts as a Workspace user through the \
+         deployment's Drive service account, with no key: set \
+         NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER on the row (`navigator ops deployments set`), \
+         authorize the Drive account's client id for https://www.googleapis.com/auth/calendar \
+         under domain-wide delegation, then `navigator ops ship` renders both keys \
          (see {RUNTIME_DOC})"
     )
 }
@@ -196,6 +196,33 @@ pub trait IntegrationProviders: Send + Sync {
     ) -> Result<Arc<dyn cloud::CalendarService>, IntegrationError> {
         calendar_from_resolution(store::project_calendar::calendar_from_env().await)
     }
+
+    /// The firm members' own Google Contacts, opened through the same
+    /// Workspace delegation as the calendar.
+    async fn contacts(&self) -> Result<Arc<dyn cloud::ContactBooks>, IntegrationError> {
+        let declared =
+            cloud::delegation::WorkspaceDelegation::declared(|key| std::env::var(key).ok());
+        match cloud::GoogleContactBooks::from_env() {
+            Ok(books) => Ok(Arc::new(books)),
+            Err(_) if !declared => Err(IntegrationError::NotConfigured(contacts_gap(
+                &cloud::contacts::CONTACTS_CONFIGURATION_KEYS.join(" and "),
+            ))),
+            Err(cloud::ContactsError::MissingConfig(missing)) => {
+                Err(IntegrationError::NotConfigured(contacts_gap(&missing)))
+            }
+            Err(_) => Err(IntegrationError::CredentialUnusable),
+        }
+    }
+}
+
+/// The detail for a contacts runtime missing `missing`.
+fn contacts_gap(missing: &str) -> String {
+    format!(
+        "{missing} unset; members' Google Contacts are written through the deployment's \
+         Workspace delegation: set NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER on the row and \
+         authorize the Drive account's client id for https://www.googleapis.com/auth/contacts \
+         (see {RUNTIME_DOC})"
+    )
 }
 
 /// The resolver for a deployment missing part of the Firm integration
@@ -381,6 +408,7 @@ pub struct FakeIntegrations {
     pub notion: cloud::FakeNotion,
     pub slack: cloud::FakeSlack,
     pub calendar: cloud::FakeCalendar,
+    pub contacts: cloud::FakeContactBooks,
     notion_calls: Arc<AtomicUsize>,
     slack_calls: Arc<AtomicUsize>,
     calendar_calls: Arc<AtomicUsize>,
@@ -436,6 +464,10 @@ impl IntegrationProviders for FakeIntegrations {
         self.calendar_calls.fetch_add(1, Ordering::Relaxed);
         Ok(Arc::new(self.calendar.clone()))
     }
+
+    async fn contacts(&self) -> Result<Arc<dyn cloud::ContactBooks>, IntegrationError> {
+        Ok(Arc::new(self.contacts.clone()))
+    }
 }
 
 #[cfg(test)]
@@ -483,11 +515,11 @@ mod tests {
         let detail = error.detail().unwrap();
         assert!(detail.starts_with(
             "NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER and \
-             NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT_JSON unset"
+             NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT unset"
         ));
 
         let half = calendar_from_resolution(Err(cloud::CalendarError::MissingConfig(
-            "NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT_JSON".into(),
+            "NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT".into(),
         )))
         .err()
         .unwrap();
@@ -495,7 +527,7 @@ mod tests {
         assert!(half
             .detail()
             .unwrap()
-            .starts_with("NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT_JSON unset"));
+            .starts_with("NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT unset"));
     }
 
     #[test]
