@@ -27,6 +27,9 @@ pub enum ConsumptionError {
     /// A journal write failed.
     #[error(transparent)]
     Database(#[from] sqlx::Error),
+    /// The receipt's journal row is gone — it cannot be consumed.
+    #[error("the journaled receipt vanished before consumption")]
+    MissingReceipt,
 }
 
 /// The analysis columns a receipt already carries, as an analysis value.
@@ -60,11 +63,14 @@ fn persist(analysis: &analysis::PushAnalysis) -> journal::PushAnalysis {
     }
 }
 
-/// Drive a journaled push receipt through analysis. A terminal receipt
-/// (`delivered` or `skipped`) re-runs nothing; a receipt already carrying
-/// analysis answers from its row; otherwise the push is analyzed, the
-/// analysis persisted with the `analyzed` status, and a push naming no
-/// `push/*` bookmark is marked `skipped`.
+/// Drive a journaled push receipt through analysis. Every decision
+/// checks the last durable state — the journal row, re-read by event
+/// key, never the caller's copy: a redelivery can arrive after a prior
+/// attempt advanced the row (`delivered`, `skipped`, or carrying
+/// analysis) out from under it. A receipt already carrying analysis
+/// answers from its row; otherwise the push is analyzed, the analysis
+/// persisted with the `analyzed` status, and a push naming no `push/*`
+/// bookmark is marked `skipped`.
 ///
 /// Returns the analysis when the receipt carries or gained one — the
 /// delivery stage's input — and `None` for a terminal or skipped receipt.
@@ -76,10 +82,13 @@ pub async fn consume_receipt(
     forge: &ForgejoForge,
     receipt: &ForgejoPushReceipt,
 ) -> Result<Option<journal::PushAnalysis>, ConsumptionError> {
+    let Some(receipt) = journal::by_event_key(db, &receipt.event_key).await? else {
+        return Err(ConsumptionError::MissingReceipt);
+    };
     if receipt.status.is_terminal() {
         return Ok(None);
     }
-    if let Some(persisted) = persisted_analysis(receipt) {
+    if let Some(persisted) = persisted_analysis(&receipt) {
         return Ok(Some(persisted));
     }
     let Some(analyzed) =
