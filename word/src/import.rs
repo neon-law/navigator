@@ -702,6 +702,68 @@ mod tests {
     }
 
     #[test]
+    fn dropping_a_clause_include_is_refused_naming_it() {
+        // The lawyer deleted the sentence that carried the `{{> scope}}`
+        // partial. The refusal names the include, it does not silently bake
+        // the paragraph's rendered value into the template.
+        let docx = export_then_edit(TEMPLATE, |document| {
+            *document = replace_paragraph_text(
+                document,
+                "The Firm will provide services described in {{&gt; scope}}.",
+                "The Firm will provide the services described above.",
+            );
+        });
+        let error = plan_import(TEMPLATE, TEMPLATE.as_bytes(), &docx).unwrap_err();
+        assert!(matches!(error, ImportError::PlaceholderRemoved(ref code) if code == "> scope"));
+    }
+
+    #[test]
+    fn adding_a_clause_include_is_refused() {
+        let docx = export_then_edit(TEMPLATE, |document| {
+            *document = replace_paragraph_text(
+                document,
+                "Fees are due on the first of each month.",
+                "Fees are due on the first of each month. See {{&gt; termination}} for terms.",
+            );
+        });
+        let error = plan_import(TEMPLATE, TEMPLATE.as_bytes(), &docx).unwrap_err();
+        assert!(
+            matches!(error, ImportError::PlaceholderAdded(ref code) if code == "> termination")
+        );
+    }
+
+    #[test]
+    fn splitting_a_placeholder_across_paragraphs_is_refused() {
+        // The lawyer broke the placeholder itself in two: each half is plain
+        // prose on its own paragraph, so the guard sees the span disappear.
+        let docx = export_then_edit(TEMPLATE, |document| {
+            *document = replace_paragraph_text(
+                document,
+                "{{client_name}}",
+                "{{clie</w:t></w:r></w:p><w:p><w:r><w:t xml:space=\"preserve\">nt_name}}",
+            );
+        });
+        let error = plan_import(TEMPLATE, TEMPLATE.as_bytes(), &docx).unwrap_err();
+        assert!(
+            matches!(error, ImportError::PlaceholderRemoved(ref code) if code == "client_name")
+        );
+    }
+
+    #[test]
+    fn replacing_a_placeholder_with_its_filled_value_is_refused() {
+        // Baking the rendered answer into the template is the same defect as
+        // dropping the placeholder: the next render would print the baked
+        // value for every client.
+        let docx = export_then_edit(TEMPLATE, |document| {
+            *document = replace_paragraph_text(document, "{{client_name}}", "Widget Works, Inc.");
+        });
+        let error = plan_import(TEMPLATE, TEMPLATE.as_bytes(), &docx).unwrap_err();
+        assert!(
+            matches!(error, ImportError::PlaceholderRemoved(ref code) if code == "client_name")
+        );
+    }
+
+    #[test]
     fn inventing_a_placeholder_is_refused() {
         let docx = export_then_edit(TEMPLATE, |document| {
             *document = replace_paragraph_text(
