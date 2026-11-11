@@ -5,6 +5,20 @@ title: Employee Offer Letter
 jurisdiction: US
 respondent_type: person_and_entity
 confidential: false
+# Who signs the offer, in what order, and how — the template owns the
+# declaration; the send flow builds the envelope from it. The client's
+# authorized officer signs embedded (Navigator serves the embedded
+# ceremony only to the notation's bound client), and the employee is
+# emailed: non-client roles cannot keep the embedded default. The
+# employee's name falls back to the `person__employee` answer; the email
+# binds to its own questionnaire answer.
+signers:
+  - role: client
+    routing_order: 1
+  - role: employee
+    routing_order: 2
+    delivery: emailed
+    email: custom_text__employee_email
 clauses:
   california:
     source: california_employment@1
@@ -21,7 +35,9 @@ clauses:
     source: employee_acceptance@1
 prompts:
   company: "What is the company’s full legal name and entity type?"
+  company_officer: "Who signs the offer for the company — full legal name and title?"
   employee: "What is the employee’s full legal name?"
+  employee_email: "What email address should receive the employee’s offer for signature?"
   work_state: "In which state will the employee primarily work? Its law governs this letter."
   accept_by: "What is the acceptance deadline?"
   business_role: "State title, actual duties, manager, work location, and start date."
@@ -50,8 +66,12 @@ questionnaire:
   BEGIN:
     _: entity__company
   entity__company:
+    _: person__client
+  person__client:
     _: person__employee
   person__employee:
+    _: custom_text__employee_email
+  custom_text__employee_email:
     _: jurisdiction__work_state
   jurisdiction__work_state:
     _: custom_datetime__accept_by
@@ -82,10 +102,15 @@ workflow:
   BEGIN:
     _: lawyer_review
   lawyer_review:
-    approved: END
+    approved: generate_pdf__offer_letter_pdf
     changes_requested: reask__draft
   reask__draft:
     resubmitted: lawyer_review
+  generate_pdf__offer_letter_pdf:
+    pdf_persisted: sent_for_signature__pending
+  sent_for_signature__pending:
+    signature_received: END
+    signature_declined: END
   END: {}
 ---
 
@@ -147,3 +172,17 @@ letter imposes no noncompete or class-action waiver.
 ## Acceptance
 
 {{> acceptance}}
+
+## Signatures
+
+**Offered for {{entity__company.name}}:**
+
+By: {{client.signature}}\
+{{person__client.name}}, for {{entity__company.name}}\
+Date: {{client.date}}
+
+**Accepted by the employee:**
+
+By: {{employee.signature}}\
+{{person__employee.name}}\
+Date: {{employee.date}}
