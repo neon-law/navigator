@@ -603,20 +603,24 @@ pub(crate) async fn assign_matches(
         }
         let outcome = decide_assign_match(&state, &row).await?;
         log_assign_decision(row.id, &outcome);
-        if request.apply {
-            if let store::inbox::assign_match::MatchOutcome::Assigned { project_id } = &outcome {
+        let applied =
+            if let (true, store::inbox::assign_match::MatchOutcome::Assigned { project_id }) =
+                (request.apply, &outcome)
+            {
                 store::inbox::assign(&state.surreal, actor_id, row.conversation_id, *project_id)
                     .await
                     .map_err(map_inbox)?;
-            }
-        }
+                true
+            } else {
+                false
+            };
         views.push(AssignMatchView {
             message: row.id,
             conversation_id: row.conversation_id,
             from: row.external_address,
             subject: row.subject,
             decision: outcome,
-            applied: request.apply,
+            applied,
         });
     }
     Ok(Json(views).into_response())

@@ -1119,7 +1119,7 @@ mod tests {
                 "from": "efiling-notice@courts.example.test",
                 "subject": null,
                 "decision": {"decision": "left_in_inbox", "reason": "no_match"},
-                "applied": true
+                "applied": false
             }]"#,
         )
         .unwrap();
@@ -1130,7 +1130,7 @@ mod tests {
         assert_eq!(views[1].decision.decision, "left_in_inbox");
         assert_eq!(views[1].decision.reason.as_deref(), Some("no_match"));
         assert!(views[1].decision.project_id.is_none());
-        assert!(views[1].applied);
+        assert!(!views[1].applied);
     }
 
     #[tokio::test]
