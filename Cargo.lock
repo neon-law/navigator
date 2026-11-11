@@ -8649,6 +8649,7 @@ dependencies = [
  "forms",
  "futures",
  "gateway",
+ "hex",
  "hmac 0.13.0",
  "http-body-util",
  "image",
