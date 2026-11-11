@@ -676,7 +676,8 @@ pub async fn update(
 
 /// Delete a Firm. Owner, or that Firm's own Admin membership, only
 /// (`authorize_manage_firm`). Refused when any Project still names it as
-/// `firm_id`: a matter must never lose its owning practice. Its
+/// `firm_id`: a matter must never lose its owning practice — or while any
+/// Brand row names it as owner, which would orphan that Brand. Its
 /// `person_firm_role` and `firm_brand` rows are removed in the same
 /// transaction — nothing is left pointing at a Firm that no longer exists.
 pub async fn delete(
@@ -702,6 +703,13 @@ pub async fn delete(
     let owned: Vec<ProjectIdRow> = projects.take(0)?;
     if !owned.is_empty() {
         return Err(FirmError::FirmOwnsProjects(firm_id));
+    }
+    if !crate::brands::for_firm(surreal, firm_id)
+        .await
+        .map_err(|error| FirmError::Brand(Box::new(error)))?
+        .is_empty()
+    {
+        return Err(FirmError::FirmOwnsBrands(firm_id));
     }
     let mut removed: Vec<MirrorKey> = memberships_for_firm(surreal, firm_id)
         .await?
