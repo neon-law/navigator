@@ -476,6 +476,152 @@ async fn notify_inbox_routed(state: &ApiState, project_id: Uuid) -> SlackNotice 
     }
 }
 
+/// The body the assign-matches door reads: serve the proposals, or make them.
+#[derive(Debug, Deserialize)]
+pub(crate) struct AssignMatchesRequest {
+    /// False lists what the address-match would assign; true assigns each
+    /// uniquely matched thread.
+    #[serde(default)]
+    pub apply: bool,
+}
+
+/// One thread's address-match proposal: a plan lists every candidate
+/// thread, an apply reports what it did.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct AssignMatchView {
+    pub message: Uuid,
+    pub conversation_id: Uuid,
+    pub from: String,
+    pub subject: Option<String>,
+    pub decision: store::inbox::assign_match::MatchOutcome,
+    /// Whether this run assigned (apply: true) or only proposed (plan).
+    pub applied: bool,
+}
+
+/// Decide one thread by LAW-347's address-match: the From/To/Cc candidate
+/// set comes from the archived raw `.eml` when the message carries one,
+/// falling back to the stored From; each candidate resolves against the
+/// Person CRM, and its open-Project participations — same Firm as the
+/// thread, `status = 'open'` — feed the pure matcher. Entities carry no
+/// email field in the schema, so the candidate set is Persons today; when
+/// Entities gain email storage they join `ResolvedAddress` unchanged.
+async fn decide_assign_match(
+    state: &ApiState,
+    row: &store::inbox::UnprocessedRow,
+) -> Result<store::inbox::assign_match::MatchOutcome, ApiError> {
+    let stored_from = row.external_address.trim().to_owned();
+    let mut candidates = vec![stored_from.clone()];
+    if let Some(raw) = crate::nef_pipeline::raw_source(state, row).await? {
+        let envelope = crate::inbound_email::envelope_addresses_from_raw(&raw);
+        if !envelope.is_empty() {
+            candidates.clear();
+            candidates.extend(envelope);
+            // The stored From always candidates: keep it first when the
+            // envelope spells the mailbox differently.
+            if candidates
+                .iter()
+                .all(|seen| !seen.eq_ignore_ascii_case(&stored_from))
+            {
+                candidates.insert(0, stored_from.clone());
+            }
+        }
+    }
+    let mut resolved = Vec::with_capacity(candidates.len());
+    for address in &candidates {
+        let person = store::persons::find_by_any_email(&state.surreal, address)
+            .await
+            .map_err(ApiError::Person)?;
+        let open_projects = match &person {
+            Some(person) => {
+                let mut projects = Vec::new();
+                for participation in
+                    store::projects::participations_for_person(&state.surreal, person.id)
+                        .await
+                        .map_err(|error| ApiError::Db(error.to_string()))?
+                {
+                    let Some(project) =
+                        store::projects::find_by_id(&state.surreal, participation.project_id)
+                            .await
+                            .map_err(|error| ApiError::Db(error.to_string()))?
+                    else {
+                        continue;
+                    };
+                    if project.status == "open" && project.firm_id == Some(row.firm_id) {
+                        projects.push(participation.project_id);
+                    }
+                }
+                projects
+            }
+            None => Vec::new(),
+        };
+        resolved.push(store::inbox::assign_match::ResolvedAddress {
+            address: address.clone(),
+            person_id: person.map(|person| person.id),
+            open_projects,
+        });
+    }
+    Ok(store::inbox::assign_match::decide(&stored_from, &resolved))
+}
+
+/// Every decision — assigned or left — logs the method, the Project it
+/// matched (or none), and that an unmatched thread stayed in the inbox.
+/// The entry's `model_id` and `probabilities` fields stay `None` here:
+/// they belong to the TypeSafe/Jev method, which is unreachable until the
+/// LAW-346 zero-data-retention gate confirms, and ride this same shape.
+fn log_assign_decision(message: Uuid, outcome: &store::inbox::assign_match::MatchOutcome) {
+    let entry = outcome.decision_log(message);
+    tracing::info!(
+        decision = %serde_json::to_string(&entry).expect("a decision log always serializes"),
+        "inbox assignment decision"
+    );
+}
+
+/// `POST /app/api/inbox/assign-matches` — the LAW-347 address-match door
+/// behind `navigator inbox assign-matches`. Every unprocessed, unattributed
+/// email thread proposes an assignment from its From/To/Cc addresses
+/// (`store::inbox::assign_match`); apply: true makes each unique match
+/// through the same `inbox assign` door the triage surface uses, so the
+/// existing authorization, Firm, and billing gates all hold. Filing and
+/// archiving stay where they live — the process door's thresholds and
+/// confirmations — and nothing here touches them. Every decision logs
+/// server-side; unmatched and ambiguous threads stay in the inbox.
+pub(crate) async fn assign_matches(
+    State(state): State<ApiState>,
+    LawyerSession(session): LawyerSession,
+    Json(request): Json<AssignMatchesRequest>,
+) -> Result<Response, ApiError> {
+    let actor_id = actor_id(&session)?;
+    let rows = store::inbox::unprocessed_inbox(&state.surreal, actor_id)
+        .await
+        .map_err(map_inbox)?;
+    let mut views = Vec::new();
+    for row in rows {
+        // An already-attributed thread needs no match; a non-email channel
+        // has no envelope addresses to read.
+        if row.project_id.is_some() || row.channel != store::inbox::channel::EMAIL {
+            continue;
+        }
+        let outcome = decide_assign_match(&state, &row).await?;
+        log_assign_decision(row.id, &outcome);
+        if request.apply {
+            if let store::inbox::assign_match::MatchOutcome::Assigned { project_id } = &outcome {
+                store::inbox::assign(&state.surreal, actor_id, row.conversation_id, *project_id)
+                    .await
+                    .map_err(map_inbox)?;
+            }
+        }
+        views.push(AssignMatchView {
+            message: row.id,
+            conversation_id: row.conversation_id,
+            from: row.external_address,
+            subject: row.subject,
+            decision: outcome,
+            applied: request.apply,
+        });
+    }
+    Ok(Json(views).into_response())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{message_lock, ApplyLocks};

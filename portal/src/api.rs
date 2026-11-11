@@ -1025,6 +1025,11 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
         ),
         (
             "POST",
+            "/app/api/inbox/assign-matches",
+            post(crate::inbox_api::assign_matches),
+        ),
+        (
+            "POST",
             "/app/api/projects/{id}/documents/upload-session",
             post(create_upload_session_door),
         ),

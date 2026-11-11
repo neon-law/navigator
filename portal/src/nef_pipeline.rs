@@ -317,7 +317,7 @@ async fn file_notice_documents(
 
 /// The current message's archived RFC 822 source, with a linked email-hop
 /// fallback for messages whose normalized row has no source key.
-async fn raw_source(
+pub(crate) async fn raw_source(
     state: &crate::api::ApiState,
     row: &store::inbox::UnprocessedRow,
 ) -> Result<Option<Vec<u8>>, ApiError> {
@@ -357,7 +357,10 @@ async fn raw_source(
     read_raw_source(state, &key).await.map(Some)
 }
 
-async fn read_raw_source(state: &crate::api::ApiState, key: &str) -> Result<Vec<u8>, ApiError> {
+pub(crate) async fn read_raw_source(
+    state: &crate::api::ApiState,
+    key: &str,
+) -> Result<Vec<u8>, ApiError> {
     Ok(state
         .storage
         .get(key)
