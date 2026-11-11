@@ -63,13 +63,15 @@ Daybridge Divorce Law (`daybridge/`):
 | `neon/locales/en/daybridge/services.yaml` | `/services` scope, timing, and cost disclosures |
 
 Daybridge serves couples who agree for a one-time $333 fee for a mutual split. Its public pages present that single fee.
-The home page leads with pace and care: the firm keeps its own part moving, and the court sets its own schedule. The
-copy states no turnaround time. The hero carries an original bridge-at-sunrise illustration, a tracked static asset,
-with the fee beneath it. A sibling-practice card points to Vesta Estate Planning for a review after the divorce is
-final, under a separate engagement and without a price. Joint representation is subject to applicable rules, conflict
-review, and informed written consent. Its pages explain shared information, independent advice, and stopping joint work
-when a conflict prevents it. Contested proceedings sit outside the joint engagement. Agreement and consent alone do not
-establish eligibility for joint representation.
+The home page leads with moving on: the firm keeps its own part moving, and the court sets its own schedule. The copy
+states no turnaround time. The hero carries an original bridge-at-sunrise illustration, a tracked static asset, with the
+fee beneath it. The sunrise palette is the same in light and dark mode. The hero and the closing offer the brand's phone
+line and the Notion booking calendar, and the home Lead form carries its own heading and a sentence on what to expect. A
+sibling-practice card points to Vesta Estate Planning for a review after the divorce is final, under a separate
+engagement and without a price. Joint representation is subject to applicable rules, conflict review, and informed
+written consent. Its pages explain shared information, independent advice, and stopping joint work when a conflict
+prevents it. Contested proceedings sit outside the joint engagement. Agreement and consent alone do not establish
+eligibility for joint representation.
 
 [Nevada conflict rules](https://www.leg.state.nv.us/courtrules/rpc.html) restrict claims between clients in the same
 proceeding. The copy preserves that limit.

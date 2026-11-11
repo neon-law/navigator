@@ -100,12 +100,15 @@ pub(super) fn DaybridgeHome(content: HomeContent, daybridge: DaybridgeContent) -
                     h2 { id: "daybridge-closing-title", "{daybridge.closing_heading}" }
                     p { "{daybridge.closing_body}" }
                 }
-                a {
-                    class: "nav-btn nav-btn--primary daybridge-cta",
-                    href: "{content.contact_href}",
-                    target: if contact_external { Some("_blank") } else { None },
-                    rel: if contact_external { Some("noopener noreferrer") } else { None },
-                    "{content.contact_label}"
+                div { class: "daybridge-closing__actions",
+                    super::HeroCall { content: content.clone() }
+                    a {
+                        class: "{content.cta_class()} daybridge-cta",
+                        href: "{content.contact_href}",
+                        target: if contact_external { Some("_blank") } else { None },
+                        rel: if contact_external { Some("noopener noreferrer") } else { None },
+                        "{content.contact_label}"
+                    }
                 }
             }
         }

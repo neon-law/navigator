@@ -1,9 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 560">
   <defs>
     <linearGradient id="sky" x2="0" y2="1">
-      <stop stop-color="#DDEDEF"/>
-      <stop offset=".62" stop-color="#F8E7D0"/>
-      <stop offset="1" stop-color="#F6D9B8"/>
+      <stop stop-color="#CFEAF2"/>
+      <stop offset=".5" stop-color="#FFE9A8"/>
+      <stop offset="1" stop-color="#FFC861"/>
     </linearGradient>
     <linearGradient id="water" x2="0" y2="1">
       <stop stop-color="#BCD9DD"/>
@@ -17,11 +17,11 @@
   </defs>
   <g clip-path="url(#frame)">
     <path fill="url(#sky)" d="M0 0h640v400H0Z"/>
-    <circle cx="320" cy="372" r="230" fill="url(#glow)"/>
-    <circle cx="320" cy="372" r="92" fill="#F4B860"/>
+    <circle cx="320" cy="372" r="300" fill="url(#glow)"/>
+    <circle cx="320" cy="372" r="118" fill="#FFB52E"/>
     <path fill="#A9CBD0" d="M0 372c70-34 128-40 190-18 54-30 118-30 168 4 60-30 150-34 282 14v28H0Z" opacity=".55"/>
     <path fill="url(#water)" d="M0 388h640v172H0Z"/>
-    <path fill="#F4B860" opacity=".5" d="M262 404h116v6H262Zm18 22h80v6h-80Zm16 22h48v6h-48Z"/>
+    <path fill="#FFB52E" opacity=".7" d="M262 404h116v6H262Zm18 22h80v6h-80Zm16 22h48v6h-48Z"/>
     <g fill="none" stroke="#255C67" stroke-linecap="round" stroke-linejoin="round">
       <path stroke-width="12" d="M-10 356h660"/>
       <path stroke-width="9" d="M48 356c34-112 126-176 272-176s238 64 272 176"/>

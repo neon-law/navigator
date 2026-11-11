@@ -1323,6 +1323,8 @@ pub fn home_for_host(
         // Filled from the request's chrome at render.
         phone: String::new(),
         signup: Some(signup_prompt(branding)),
+        lead_heading: copy.lead_heading,
+        lead_intro: copy.lead_intro,
         photo: copy.photo.map(|photo| webapp::home::HomePhoto {
             src: views::assets::asset_url(&photo.src),
             alt: photo.alt,

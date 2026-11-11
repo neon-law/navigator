@@ -72,8 +72,11 @@ async fn daybridge_home_leads_with_pace_and_keeps_the_fee_and_limits() {
         assert_own_brand_head(&html, host);
         for expected in [
             "Daybridge Divorce Law",
-            "Agreed divorce, kept moving.",
-            "we keep our part moving",
+            "A brighter way to move on.",
+            "Prefer to write first?",
+            r#"href="https://calendar.notion.so/meet/nick-shook/or15n4yy7""#,
+            r#"href="tel:+15108002090""#,
+            "We keep our part moving",
             "The court sets its own schedule.",
             "/public/brand/daybridge/crossing.svg",
             "$333",

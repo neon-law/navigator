@@ -1,7 +1,8 @@
 /* Daybridge stays calm and direct: a crossing at sunrise, three commitments, one path forward. */
 .daybridge-home {
-  --daybridge-rule: var(--nav-color-border);
+  --daybridge-rule: #E7CF9C;
   --daybridge-ink: var(--nav-color-text);
+  --daybridge-sun: #FFC861;
 }
 
 .daybridge-home h1,
@@ -30,6 +31,7 @@
   align-items: center;
   gap: clamp(2rem, 7vw, 7rem);
   padding: clamp(4rem, 9vw, 8rem) 0;
+  background: radial-gradient(closest-side at 78% 45%, rgb(255 200 97 / 32%), transparent);
 }
 
 .daybridge-hero h1 {
@@ -117,12 +119,14 @@
   gap: 3rem;
   padding: clamp(3rem, 6vw, 5rem);
   border-radius: 1.25rem;
-  background: var(--nav-color-surface-subtle);
+  background: linear-gradient(135deg, #FFE9A8, var(--daybridge-sun));
 }
 
 .daybridge-closing h2 { margin: 0 0 .75rem; font-size: clamp(2.3rem, 4vw, 3.5rem); }
-.daybridge-closing p { max-width: 38rem; margin: 0; color: var(--nav-color-text-muted); }
-.daybridge-closing .daybridge-cta { flex: none; margin: 0; }
+.daybridge-closing p { max-width: 38rem; margin: 0; color: var(--daybridge-ink); }
+.daybridge-closing__actions { display: flex; flex: none; flex-wrap: wrap; gap: .75rem; }
+.daybridge-closing .daybridge-cta { margin: 0; }
+.daybridge-closing .nav-btn--secondary { background: #FFFAF0; }
 
 @media (max-width: 760px) {
   .daybridge-hero { grid-template-columns: 1fr; }
@@ -130,3 +134,4 @@
   .daybridge-promises article + article { border-top: 1px solid var(--daybridge-rule); border-left: 0; }
   .daybridge-closing { align-items: flex-start; flex-direction: column; }
 }
+.daybridge-hero .home-call { margin-right: .75rem; }

@@ -160,6 +160,12 @@ pub struct HomeContent {
     /// each hero dials the number of the brand that served it.
     #[serde(default)]
     pub phone: String,
+    /// The heading over the home Lead form; empty keeps the shared default.
+    #[serde(default)]
+    pub lead_heading: String,
+    /// What the visitor can expect after sending the Lead form.
+    #[serde(default)]
+    pub lead_intro: String,
     /// Optional public photograph with its resolved asset URL and accessible copy.
     #[serde(default)]
     pub photo: Option<HomePhoto>,
@@ -607,7 +613,12 @@ fn HomePageBody(
                         cards: testimonials,
                     }
                     if let Some(copy) = lead_capture {
-                        HomeLeadSection { copy, context: lead_context }
+                        HomeLeadSection {
+                            copy,
+                            context: lead_context,
+                            heading: content.lead_heading.clone(),
+                            intro: content.lead_intro.clone(),
+                        }
                     }
                 }
                 // The same footer every other page of the firm's sites
@@ -754,7 +765,12 @@ fn HomePageBody(
                 if content.company.is_some() {
                     HomeLeadModal { copy, context: lead_context }
                 } else {
-                    HomeLeadSection { copy, context: lead_context }
+                    HomeLeadSection {
+                        copy,
+                        context: lead_context,
+                        heading: content.lead_heading.clone(),
+                        intro: content.lead_intro.clone(),
+                    }
                 }
             }
         }
@@ -777,10 +793,23 @@ pub(crate) fn HeroCall(content: HomeContent) -> Element {
 
 /// An inline contact request for home layouts without a dedicated form.
 #[component]
-fn HomeLeadSection(copy: LeadCaptureCopy, context: LeadCaptureContext) -> Element {
+fn HomeLeadSection(
+    copy: LeadCaptureCopy,
+    context: LeadCaptureContext,
+    #[props(default)] heading: String,
+    #[props(default)] intro: String,
+) -> Element {
+    let heading = if heading.is_empty() {
+        "Get in touch".to_string()
+    } else {
+        heading
+    };
     rsx! {
         section { class: "nav-theme home-lead", id: "home-lead", "aria-labelledby": "home-lead-title",
-            h2 { id: "home-lead-title", "Get in touch" }
+            h2 { id: "home-lead-title", "{heading}" }
+            if !intro.is_empty() {
+                p { class: "home-lead__intro", "{intro}" }
+            }
             LeadCaptureForm { copy, context }
         }
     }
@@ -1229,6 +1258,8 @@ mod tests {
                         contact_href: "mailto:contact@neonlaw.com".to_string(),
                         contact_label: "Contact us".to_string(),
                         phone: String::new(),
+                        lead_heading: String::new(),
+                        lead_intro: String::new(),
                         practices_heading: "The rest of what we do".to_string(),
                         practices: vec![PracticeLink {
                             mark: PracticeMark::Scales,
