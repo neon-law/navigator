@@ -179,6 +179,65 @@ fn client_letter_carries_no_letterhead_but_keeps_the_letter_blocks() {
     ));
 }
 
+/// A declaration goes out as the party's own document (LAW-340), so the
+/// rendered client_letter PDF carries zero letterhead: none of the
+/// Brand's identity — name, entity, web, phone, email, postal address —
+/// appears anywhere in the document's text layer. The branded `letter`
+/// frame is the parity half: it really does wear the identity, so the
+/// zero assertions can never pass for the wrong reason.
+#[test]
+fn a_client_letter_render_carries_zero_letterhead() {
+    let blocks = LetterBlocks {
+        date: Some("September 29, 2026".to_string()),
+        ..LetterBlocks::default()
+    };
+    let letterhead = Letterhead::default();
+    let branded = pdf::render_document(
+        "Body of the declaration.",
+        OutputFormat::Letter(blocks.clone()),
+        &letterhead,
+    )
+    .expect("letter renders");
+    let rendered = pdf::render_document(
+        "Body of the declaration.",
+        OutputFormat::ClientLetter(blocks),
+        &letterhead,
+    )
+    .expect("client letter renders");
+
+    let worn = |field: &str| pdf::occurrence_count(&branded, field).unwrap_or(0);
+    assert!(
+        worn(&letterhead.name) >= 1,
+        "parity: the letter frame must wear the firm name"
+    );
+    assert!(
+        worn(&letterhead.web) >= 1,
+        "parity: the letter frame must wear the firm web"
+    );
+
+    let carries =
+        |field: &str| pdf::occurrence_count(&rendered, field).expect("the rendered PDF parses");
+    assert_eq!(carries(&letterhead.name), 0, "no firm name");
+    assert_eq!(carries(&letterhead.web), 0, "no firm web");
+    assert_eq!(carries(&letterhead.phone), 0, "no firm phone");
+    assert_eq!(carries(&letterhead.email), 0, "no firm email");
+    if !letterhead.entity.is_empty() {
+        assert_eq!(carries(&letterhead.entity), 0, "no firm legal entity");
+    }
+    if !letterhead.postal_address.is_empty() {
+        assert_eq!(
+            carries(&letterhead.postal_address),
+            0,
+            "no firm postal address"
+        );
+    }
+
+    // The frame subtracts the letterhead, not the document: the body and
+    // the letter blocks still render.
+    assert_eq!(carries("Body of the declaration."), 1);
+    assert_eq!(carries("September 29, 2026"), 1);
+}
+
 fn render_with(blocks: LetterBlocks, body: &str, options: &pdf::RenderOptions) -> Vec<u8> {
     pdf::render_document_with_options(
         body,
