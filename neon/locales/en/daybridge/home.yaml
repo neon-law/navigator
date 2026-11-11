@@ -1,12 +1,13 @@
-head_title: "{site_name} | A brighter way through divorce"
+head_title: "{site_name} | Agreed divorce, kept moving"
 meta_description: >-
-  Daybridge Divorce Law helps couples who agree move forward together.
+  Daybridge Divorce Law helps couples who agree keep their divorce moving.
   Joint representation where permitted, after conflict review and informed
-  written consent. A one-time $333 fee for a mutual split.
-  Attorney advertisement.
-heading: A brighter way through divorce.
+  written consent. A one-time $333 fee for a mutual split. The court sets its
+  own schedule. Attorney advertisement.
+heading: Agreed divorce, kept moving.
 lead: >-
-  You agree it is time for a new chapter. We help you take that step together.
+  This is a hard season, and we do not want to make it longer. When you both
+  agree, we keep our part moving so you can reach what comes next.
   Daybridge represents the couple in an agreed divorce where joint
   representation is permitted, after conflict review and informed written consent.
 contact_label: Book Consultation
@@ -21,43 +22,46 @@ daybridge:
     One fee for a mutual split.
   fee_note: >-
     Your written retainer defines the work.
-  response_heading: Both of you, moving forward
+  response_heading: We keep our part moving
   response_body: >-
-    Bring the decisions you have made together. We help you understand the
-    remaining steps, put your agreement into words, and prepare for life ahead.
-  motions_heading: An agreement you both understand
+    Bring the decisions you have made together. We tell you what is left, put
+    your agreement into words, and tell you what comes next at each step.
+  motions_heading: Care before speed
   motions_body: >-
     We explain the documents and decisions to both of you. Before work begins,
     we confirm that we can represent you jointly and explain how shared
     information, conflicts, and independent advice will be handled.
-  costs_heading: A shared path forward
+  costs_heading: Honest about what we do not control
   costs_body: >-
-    If a disagreement prevents joint representation, we stop the joint work
-    and explain the need for separate counsel. Contested proceedings are
-    outside this joint engagement.
-  process_label: The way forward
-  process_heading: A shared plan for separate futures.
+    The court sets its own schedule. If a disagreement prevents joint
+    representation, we stop the joint work and explain the need for separate
+    counsel. Contested proceedings are outside this joint engagement.
+  process_label: The way across
+  process_heading: Three steps, and you know what is next.
   steps:
-    - - Start with what you agree on
+    - - Tell us what you agree on
       - >-
         Tell us about your decisions, any remaining questions, and whether a
         case has been filed. We check conflicts and whether joint representation
         is permitted for your situation.
-    - - Put the plan in writing
+    - - Confirm it in writing
       - >-
         We define the work, fees, and joint-representation terms in writing.
         Each of you gives informed written consent before we begin.
-    - - Take the next step together
+    - - File with the court
       - >-
         We prepare the agreed documents, explain them to both of you, and guide
         you through the filing steps in your engagement. The court decides
         whether and when to grant the divorce.
   closing_heading: There is life on the other side.
   closing_body: >-
-    You have already found common ground. Tell us where you are, what you have
-    agreed on, and what you need help finishing.
-
-photo:
-  src: img/architecture/stone-church.jpg
-  alt: A stone church and steeple beside trees.
-  caption: ""
+    You have already found common ground. Tell us where you are and what you
+    have agreed on, and we will tell you what we need to begin.
+  sibling_practices:
+    - brand: vesta
+      eyebrow: After the divorce is final
+      heading: Review your will and beneficiaries.
+      body: >-
+        A final divorce is a good time to review your estate plan. Vesta Estate
+        Planning can help with that under a separate engagement.
+      cta_label: Visit Vesta Estate Planning

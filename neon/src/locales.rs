@@ -1222,7 +1222,10 @@ fn cyber_injury_content(
     }
 }
 
-fn daybridge_content(copy: views::locales::DaybridgeCopy) -> webapp::home::DaybridgeContent {
+fn daybridge_content(
+    copy: views::locales::DaybridgeCopy,
+    deployment_host: Option<&str>,
+) -> webapp::home::DaybridgeContent {
     webapp::home::DaybridgeContent {
         eyebrow: copy.eyebrow,
         fee_label: copy.fee_label,
@@ -1241,6 +1244,7 @@ fn daybridge_content(copy: views::locales::DaybridgeCopy) -> webapp::home::Daybr
         steps: copy.steps,
         closing_heading: copy.closing_heading,
         closing_body: copy.closing_body,
+        sibling_practices: sibling_practices(copy.sibling_practices, deployment_host),
     }
 }
 
@@ -1385,7 +1389,9 @@ pub fn home_for_host(
         privacy: copy
             .privacy
             .map(|privacy| privacy_content(privacy, deployment_host)),
-        daybridge: copy.daybridge.map(daybridge_content),
+        daybridge: copy
+            .daybridge
+            .map(|daybridge| daybridge_content(daybridge, deployment_host)),
         cyber_injury: copy
             .cyber_injury
             .map(|cyber| cyber_injury_content(cyber, deployment_host)),
