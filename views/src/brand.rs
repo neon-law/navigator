@@ -394,7 +394,8 @@ pub struct Branding {
     /// inbound call resolves to its Brand (a voice-lane Brand Phone Number in
     /// `brand_phone_number`) and so to that brand's call script. A brand without a line of its own publishes
     /// the firm's shared number. A deployment that mounts its own manifest
-    /// publishes its own number.
+    /// publishes its own number, and [`NAVIGATOR_VOICE_NUMBER`] replaces it on
+    /// every Brand — read it through [`Branding::published_phone`].
     pub firm_phone: &'static str,
     /// Every office the firm publishes, rendered in the public footer. See
     /// [`FIRM_OFFICES`] for why this is not [`SiteBrand::postal_address`].
@@ -1692,6 +1693,56 @@ pub fn carry_request_scope<R>(future: impl Future<Output = R>) -> impl Future<Ou
 
 static PROCESS_BRANDING: OnceLock<&'static Branding> = OnceLock::new();
 
+/// The deployment's own Twilio voice line, in E.164. Set, every Brand this
+/// deployment serves publishes it — header call button, home hero, footer,
+/// `/contact` — in place of the compiled per-Brand number, so a staging
+/// deployment's callers dial staging's Twilio number rather than production's.
+/// Unset, each Brand publishes its compiled [`Branding::firm_phone`].
+pub const NAVIGATOR_VOICE_NUMBER: &str = "NAVIGATOR_VOICE_NUMBER";
+
+static DEPLOYMENT_VOICE_NUMBER: OnceLock<&'static str> = OnceLock::new();
+
+/// Install [`NAVIGATOR_VOICE_NUMBER`] for this process. The caller validates
+/// E.164; this only formats it for display.
+pub fn install_deployment_voice_number(e164: &str) -> Result<(), &'static str> {
+    DEPLOYMENT_VOICE_NUMBER
+        .set(Box::leak(display_phone(e164).into_boxed_str()))
+        .map_err(|_| "deployment voice number is already installed")
+}
+
+/// Space a North American E.164 number the way the compiled Brands publish
+/// theirs (`+15108002090` → `+1 510 800 2090`); any other number is returned
+/// as given.
+#[must_use]
+pub fn display_phone(e164: &str) -> String {
+    let e164 = e164.trim();
+    match e164.strip_prefix("+1") {
+        Some(rest) if rest.len() == 10 && rest.bytes().all(|b| b.is_ascii_digit()) => {
+            format!("+1 {} {} {}", &rest[..3], &rest[3..6], &rest[6..])
+        }
+        _ => e164.to_string(),
+    }
+}
+
+impl Branding {
+    /// The voice line this Brand publishes on this deployment:
+    /// [`NAVIGATOR_VOICE_NUMBER`] when installed, else the compiled number.
+    #[must_use]
+    pub fn published_phone(&self) -> &'static str {
+        published_phone(DEPLOYMENT_VOICE_NUMBER.get().copied(), self.firm_phone)
+    }
+}
+
+const fn published_phone(
+    deployment: Option<&'static str>,
+    compiled: &'static str,
+) -> &'static str {
+    match deployment {
+        Some(number) => number,
+        None => compiled,
+    }
+}
+
 /// Install the immutable branding used by spawned work in a production
 /// binary. Request-scoped branding takes precedence, which keeps library tests
 /// and independently constructed routers isolated from one another.
@@ -1988,10 +2039,10 @@ pub fn brand_key() -> BrandKey {
     current().brand_key
 }
 
-/// The firm's published voice line from request-scoped branding.
+/// The voice line request-scoped branding publishes on this deployment.
 #[must_use]
 pub fn firm_phone() -> &'static str {
-    current().firm_phone
+    current().published_phone()
 }
 
 /// The firm's published offices from request-scoped branding.
@@ -2645,6 +2696,20 @@ mod tests {
     /// deliberately different values here so that swap cannot pass, and the
     /// pair is asserted distinct so a future edit collapsing them fails loudly
     /// rather than making this test vacuous.
+    /// A deployment's Twilio voice line replaces every Brand's compiled
+    /// number; without one each Brand keeps its own.
+    #[test]
+    fn the_deployment_voice_number_replaces_the_compiled_one() {
+        let compiled = super::MISERICORDIA_BRANDING.firm_phone;
+        assert_eq!(super::published_phone(None, compiled), compiled);
+        assert_eq!(
+            super::published_phone(Some("+1 555 010 0100"), compiled),
+            "+1 555 010 0100"
+        );
+        assert_eq!(super::display_phone(" +15550100100 "), "+1 555 010 0100");
+        assert_eq!(super::display_phone("+442071234567"), "+442071234567");
+    }
+
     #[test]
     fn each_brand_accessor_reads_its_own_field() {
         assert_eq!(super::base_url(), DEFAULT_BRANDING.base_url);

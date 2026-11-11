@@ -75,6 +75,7 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
     views::brand::install_process_branding(branding)
         .map_err(anyhow::Error::msg)
         .context("installing process branding")?;
+    install_voice_number(std::env::var(views::brand::NAVIGATOR_VOICE_NUMBER).ok().as_deref())?;
     tracing::info!(custom = brand_bundle.is_some(), "brand bundle configured");
     tracing::info!(
         environment = cfg.environment.as_str(),
@@ -647,6 +648,29 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
         state,
         public_dir,
     })
+}
+
+/// Install the deployment's Twilio voice line ([`views::brand::NAVIGATOR_VOICE_NUMBER`]),
+/// which every Brand header then publishes. Unset or blank leaves each Brand's
+/// compiled number; anything but E.164 stops the boot rather than publishing a
+/// number no caller can dial.
+fn install_voice_number(value: Option<&str>) -> anyhow::Result<()> {
+    if let Some(number) = voice_number(value)? {
+        views::brand::install_deployment_voice_number(number).map_err(anyhow::Error::msg)?;
+    }
+    Ok(())
+}
+
+fn voice_number(value: Option<&str>) -> anyhow::Result<Option<&str>> {
+    let Some(number) = value.map(str::trim).filter(|number| !number.is_empty()) else {
+        return Ok(None);
+    };
+    anyhow::ensure!(
+        store::brand_phone_numbers::is_e164(number),
+        "{} must be E.164, e.g. +15108002090",
+        views::brand::NAVIGATOR_VOICE_NUMBER
+    );
+    Ok(Some(number))
 }
 
 /// Resolve when the process receives `SIGINT` (Ctrl-C) or `SIGTERM`.
@@ -1562,8 +1586,18 @@ mod tests {
         should_host_billing_digest, should_host_deadline_mirror, should_host_dri_digest,
         should_host_general_nag, should_host_notation_reset, should_host_profit_digest,
         should_host_project_recovery, should_host_purchase_activation, should_host_retention_purge,
-        should_host_source_imports,
+        should_host_source_imports, voice_number,
     };
+
+    /// A deployment's voice line is optional, but a set one must be dialable.
+    #[test]
+    fn the_deployment_voice_number_is_optional_and_e164() {
+        assert_eq!(voice_number(None).unwrap(), None);
+        assert_eq!(voice_number(Some("  ")).unwrap(), None);
+        assert_eq!(voice_number(Some(" +15550100100 ")).unwrap(), Some("+15550100100"));
+        let refused = voice_number(Some("555-010-0100")).unwrap_err().to_string();
+        assert!(refused.contains("NAVIGATOR_VOICE_NUMBER"), "{refused}");
+    }
 
     /// The export opens PostgreSQL and the archive bucket only when the
     /// executor and its own switch are both on, and a malformed switch fails
