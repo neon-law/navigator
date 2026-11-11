@@ -1186,6 +1186,15 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             "/app/api/brands/{key}",
             patch(update_brand_presentation),
         ),
+        // The CLI's `notation` render reads a Brand's letterhead row through
+        // this door (LAW-341) instead of the deployment's stores directly:
+        // one authenticated read of presentation data, the same resolve
+        // `/app/admin/brands` saves through.
+        (
+            "GET",
+            "/app/api/brands/{key}/letterhead",
+            get(brand_letterhead_door),
+        ),
     ]
 }
 
@@ -1655,6 +1664,35 @@ async fn update_brand_presentation(
             tracing::error!(error = %error, "api: brand presentation update failed");
             ApiError::Db(error).into_response()
         }
+    }
+}
+
+/// `GET /app/api/brands/{key}/letterhead` — the resolved letterhead row the
+/// Brand's letters wear (LAW-341). The CLI's `notation` render reads this
+/// door with the lawyer's `site login` bearer instead of the deployment's
+/// stores directly: the render frame travels over the same authenticated
+/// HTTPS surface every other CLI read uses, and the resolve is the exact
+/// `store::brand_letterheads::for_brand_key` the admin save answers with —
+/// so a row served here frames a byte-identical render to the row the
+/// stores hold. A Brand with no admin-set row still answers (the resolve
+/// applies the Brand's own fallbacks); an unknown key is the same bare 404
+/// every brand door gives (ENG-626).
+async fn brand_letterhead_door(
+    State(state): State<ApiState>,
+    _lawyer: LawyerSession,
+    Path(key): Path<String>,
+) -> Result<Response, ApiError> {
+    let pg = store::postgres::PostgresDb::from_env()
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))?;
+    match store::brand_letterheads::for_brand_key(&state.surreal, &pg, &key).await {
+        Ok(Some(row)) => Ok((StatusCode::OK, Json(row)).into_response()),
+        // An unknown key is the same bare 404 whether the stores answer
+        // None or the typed NotFound.
+        Ok(None) | Err(store::brand_letterheads::LetterheadError::NotFound) => {
+            Err(ApiError::NotFound)
+        }
+        Err(error) => Err(ApiError::Db(error.to_string())),
     }
 }
 

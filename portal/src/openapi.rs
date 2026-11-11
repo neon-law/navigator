@@ -951,6 +951,37 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/brands/{key}/letterhead": {
+          "get": {
+            "summary": "Read a brand's resolved letterhead",
+            "description":
+              "Returns the letterhead row the brand's letters wear, fully resolved — an \
+               unset line is the brand's own fallback, and the firm's legal name is always \
+               the brand's own `legal_entity`. The CLI's `notation` render reads this door \
+               with the `site login` bearer (LAW-341) instead of the deployment's stores \
+               directly. Authorization: lawyer tier and above; a client or clerk session \
+               is refused, and an unknown key answers the same bare 404 every brand door \
+               gives (ENG-626).",
+            "parameters": [
+              { "name": "key", "in": "path", "required": true,
+                "schema": { "type": "string" } }
+            ],
+            "responses": {
+              "200": { "description": "The resolved letterhead row", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/BrandLetterhead" }
+              } } },
+              "401": { "description": "No authenticated session", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } },
+              "403": { "description": "Caller is below lawyer tier", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } },
+              "404": { "description": "No brand with that key", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } }
+            }
+          }
+        },
         "/app/api/entities": {
           "get": {
             "summary": "List all entities",
@@ -6104,6 +6135,25 @@ fn canonical_document(base: &str) -> Value {
               "font_family": { "type": "string" },
               "font_object_key": { "type": "string" },
               "font_licence": { "type": "string" }
+            }
+          },
+          "BrandLetterhead": {
+            "type": "object",
+            "required": ["brand_key", "wordmark", "mark"],
+            "properties": {
+              "brand_key": { "type": "string" },
+              "wordmark": { "type": "string" },
+              "mark": { "type": "string", "enum": ["wordmark", "logo"] },
+              "logo_object_key": { "type": "string" },
+              "firm_legal_name": { "type": "string" },
+              "phone": { "type": "string" },
+              "email": { "type": "string" },
+              "web": { "type": "string" },
+              "postal_address": { "type": "string" },
+              "font_family": { "type": "string" },
+              "font_object_key": { "type": "string" },
+              "updated_at": { "type": "string",
+                             "description": "RFC 3339 — the revision a render's provenance names." }
             }
           },
           "CreateEntityRequest": {

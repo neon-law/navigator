@@ -3186,6 +3186,29 @@ test_graph_views_are_read_only_and_shape_bound if {
     not authz.allow with input as {"path": ["app", "api", "graph", "matter", "seed-1"], "method": "GET", "session": lawyer_session}
 }
 
+# ---------- The CLI's letterhead row door ----------
+# The CLI's `notation` render reads a Brand's letterhead through
+# GET /app/api/brands/{key}/letterhead with the site-login bearer (LAW-341):
+# lawyer tier at admission, GET only, one key segment, nothing deeper.
+
+test_lawyer_tier_reads_brand_letterhead if {
+    every session in [owner_session, admin_session, lawyer_session] {
+        authz.allow with input as {"path": ["app", "api", "brands", "vesta", "letterhead"], "method": "GET", "session": session}
+    }
+}
+
+test_lower_tiers_denied_brand_letterhead if {
+    every session in [clerk_session, client_session, null] {
+        not authz.allow with input as {"path": ["app", "api", "brands", "vesta", "letterhead"], "method": "GET", "session": session}
+    }
+}
+
+test_brand_letterhead_is_read_only_and_shape_bound if {
+    not authz.allow with input as {"path": ["app", "api", "brands", "vesta", "letterhead"], "method": "POST", "session": lawyer_session}
+    not authz.allow with input as {"path": ["app", "api", "brands", "vesta"], "method": "GET", "session": lawyer_session}
+    not authz.allow with input as {"path": ["app", "api", "brands", "vesta", "letterhead", "extra"], "method": "GET", "session": lawyer_session}
+}
+
 # ---------- Relationship-graph pages ----------
 # The pages the graph islands live on. The lawyer-graph page carries its own
 # lawyer-tier rule (the avatar rule's shape); the project and firm pages ride
