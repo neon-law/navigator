@@ -205,9 +205,12 @@ fn a_client_letter_render_carries_zero_letterhead() {
     )
     .expect("client letter renders");
 
-    let worn = |field: &str| pdf::occurrence_count(&branded, field).unwrap_or(0);
+    // The wordmark renders through Typst's `#upper[]`, so the text
+    // layer wears the name uppercased.
+    let worn =
+        |field: &str| pdf::occurrence_count(&branded, field).expect("the branded PDF parses");
     assert!(
-        worn(&letterhead.name) >= 1,
+        worn(&letterhead.name.to_uppercase()) >= 1,
         "parity: the letter frame must wear the firm name"
     );
     assert!(
