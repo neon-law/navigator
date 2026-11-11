@@ -7,14 +7,9 @@
 //! `store::projects::matter_flags`'s missing-onboarding signal — the pill is
 //! the one place that flag surfaces now; see [`get_project_list`]).
 //!
-//! Owner and Admin read every matter here (`store::projects::all`), not only
-//! their own: this is the administrative *listing* surface
-//! (`webapp::admin_listing::MatterScope::Unscoped` names the same idea
-//! elsewhere), not the matter surface. Every firm tier needs a firm-side
-//! participation row before `/app/projects/{code}` renders matter content;
-//! Owner/Admin route admission and administrative-listing reach do not bypass
-//! that gate. `store::access::visible_projects_as_lawyer` is the scoped read
-//! for the matter surface.
+//! The active Brand or Firm narrows the directory after its role and
+//! participation checks. Every firm tier needs a firm-side participation row
+//! to open the matter surface at `/app/projects/{code}`.
 //! The resolved entity-name column and the pill are computed server-side, so
 //! all five sort columns (`code` / `name` / `status` / `entity_name` /
 //! `created_at`) sort in one in-memory composite comparator. The "Add project"
@@ -125,6 +120,9 @@ pub struct ProjectListView {
     /// white-label deploy's tab reads its own name.
     #[serde(default)]
     pub firm_name: String,
+    pub brand: Option<String>,
+    pub host_brand: String,
+    pub brands: Vec<(String, String)>,
 }
 
 /// The projects list `?sort=` query, plus the `?error=` flash a refused delete
@@ -133,6 +131,8 @@ pub struct ProjectListView {
 pub struct ProjectListQuery {
     #[serde(default)]
     pub sort: Option<String>,
+    pub brand: Option<String>,
+    pub firm: Option<bool>,
     #[serde(default)]
     pub error: Option<String>,
 }
@@ -311,18 +311,71 @@ async fn last_committed_at(
     forge.head_commit_committed_at(&project.code).await.ok()?
 }
 
+#[cfg(feature = "server")]
+struct ProjectBrandScope {
+    host_brand: String,
+    brand: Option<String>,
+    firm_keys: Vec<String>,
+}
+
+#[cfg(feature = "server")]
+impl ProjectBrandScope {
+    fn choices(&self, brands: &[store::brands::Brand]) -> Vec<(String, String)> {
+        self.firm_keys
+            .iter()
+            .map(|key| (key.clone(), resolve_brand_name(brands, key)))
+            .collect()
+    }
+}
+
+#[cfg(feature = "server")]
+async fn scope_project_list(
+    surreal: &store::surreal::SurrealDb,
+    matters: &mut Vec<store::projects::Project>,
+    requested_brand: Option<String>,
+    firm: Option<bool>,
+) -> Result<ProjectBrandScope, ServerFnError> {
+    let host_brand = crate::app_chrome::request_brand().await;
+    let host_key = host_brand.as_str();
+    let firm_id = store::firms::firm_id_for_brand_key(surreal, host_key)
+        .await
+        .map_err(loader_error)?;
+    let firm_keys = if let Some(id) = firm_id {
+        store::firms::brand_keys_for_firm(surreal, id)
+            .await
+            .map_err(loader_error)?
+    } else {
+        vec![host_key.to_string()]
+    };
+    let brand = if firm == Some(true) {
+        None
+    } else {
+        Some(
+            requested_brand
+                .filter(|key| firm_keys.contains(key))
+                .unwrap_or_else(|| host_key.to_string()),
+        )
+    };
+    matters.retain(|project| {
+        let in_firm = project.firm_id.map_or_else(
+            || firm_keys.contains(&project.brand),
+            |id| Some(id) == firm_id,
+        );
+        in_firm && brand.as_ref().is_none_or(|key| &project.brand == key)
+    });
+    Ok(ProjectBrandScope {
+        host_brand: host_key.to_string(),
+        brand,
+        firm_keys,
+    })
+}
+
 /// Fetch the lawyer projects list for the current request: refuse non-lawyer,
 /// resolve each matter's entity name and lifecycle badge, and sort in memory
 /// (one composite comparator so the first requested `?sort=` field is
 /// primary). The lifecycle lookup errors propagate rather than badging every
 /// matter as missing its onboarding.
 ///
-/// Owner and Admin read [`store::projects::all`] — every matter in the
-/// deployment — the same way `reconcile_project_repositories_door` does for
-/// its own administrative question: privileged reach is a place you navigate
-/// to, not a silent widening of the matter surface. An ordinary Lawyer still
-/// reads through `store::access::visible_projects_as_lawyer`, which grants no
-/// such bypass.
 #[server]
 pub async fn get_project_list() -> Result<ProjectListView, ServerFnError> {
     // A non-lawyer caller (client / clerk) gets the `projects_index` handler's
@@ -374,6 +427,8 @@ pub async fn get_project_list() -> Result<ProjectListView, ServerFnError> {
             .await
             .map_err(loader_error)?
     };
+
+    let brand_scope = scope_project_list(&surreal, &mut matters, query.brand, query.firm).await?;
 
     // The tab is the filter: Open hides every terminal matter (the common
     // case — a firm tier working the docket does not want every inactive
@@ -437,6 +492,9 @@ pub async fn get_project_list() -> Result<ProjectListView, ServerFnError> {
     Ok(ProjectListView {
         firm_name: crate::app_chrome::firm_name_from_context().await,
         rows,
+        brands: brand_scope.choices(&brands),
+        brand: brand_scope.brand,
+        host_brand: brand_scope.host_brand,
         sort,
         role,
         scope,
@@ -474,6 +532,22 @@ pub fn LawyerProjects() -> Element {
     } else {
         "/app/projects"
     };
+    let scope_query = |brand: Option<&str>| match brand {
+        Some(key) if key == view.host_brand => Vec::new(),
+        Some(key) => vec![("brand".to_string(), key.to_string())],
+        None => vec![("firm".to_string(), "true".to_string())],
+    };
+    let extra_query = scope_query(view.brand.as_deref());
+    let list_href = |path: &str, query: &[(String, String)]| {
+        if query.is_empty() && view.sort.is_empty() {
+            path.to_string()
+        } else {
+            crate::components::data_table::sort_href(path, &view.sort, query)
+        }
+    };
+    let open_href = list_href("/app/projects", &extra_query);
+    let closed_href = list_href("/app/projects/closed", &extra_query);
+    let firm_href = list_href(base_path, &scope_query(None));
     let open_tab_class = if is_closed_tab {
         "nav-tab"
     } else {
@@ -514,9 +588,20 @@ pub fn LawyerProjects() -> Element {
                 h1 { "Projects" }
                 p { a { class: "nav-btn nav-btn--primary", href: "/app/projects/new", "Add project" } }
             }
+            nav { class: "nav-tabs", aria_label: "Project scope",
+                a { class: if view.brand.is_none() { "nav-tab is-active" } else { "nav-tab" },
+                    href: "{firm_href}", "Firm" }
+                for (key, name) in &view.brands {
+                    a { key: "{key}",
+                        class: if view.brand.as_ref() == Some(key) { "nav-tab is-active" } else { "nav-tab" },
+                        href: list_href(base_path, &scope_query(Some(key))),
+                        "{name}"
+                    }
+                }
+            }
             nav { class: "nav-tabs", aria_label: "Project status",
-                a { class: "{open_tab_class}", href: "/app/projects", "Open" }
-                a { class: "{closed_tab_class}", href: "/app/projects/closed", "Closed" }
+                a { class: "{open_tab_class}", href: "{open_href}", "Open" }
+                a { class: "{closed_tab_class}", href: "{closed_href}", "Closed" }
             }
             if let Some(error) = error.as_ref() {
                 p { class: "nav-form-error", role: "alert", "{error}" }
@@ -533,6 +618,7 @@ pub fn LawyerProjects() -> Element {
                     columns,
                     sort,
                     base_path: base_path.to_string(),
+                    extra_query,
                     for row in view.rows.iter() {
                         tr { class: "project-row",
                             td { class: "project-code",

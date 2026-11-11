@@ -94,11 +94,10 @@ a plain enum. The authority order is `owner > admin > lawyer > clerk > client`.
 
 The human accountable for and in control of the deployed system. Owner is the highest tier and inherits every Admin and
 Lawyer capability. `/app/projects/{code}` still requires a firm-side `person_project_role` row before it renders the
-full workbench — Owner included: a matter nobody put them on renders only the participation ledger (add, edit, or remove
-who is assigned), never that matter's documents, notations, or other content. `/app/projects` itself is unscoped for
-Owner — it lists every matter in the deployment, the same administrative-listing shape a reconciliation report already
-reads for its own deployment-wide question — which is what gives the detail page's participation-only carve-out
-somewhere to navigate from. `/app/owner` is Owner only: it lists every practice and the house brands each one wears.
+full workbench. A matter nobody put the Owner on renders the participation ledger for adding, editing, or removing
+participants. The Projects list gives Owner a way to reach those pages within the current Brand or Firm. `/app/owner`
+lists every practice and its house brands for Owner.
+
 Admin is denied that inventory. `/app/admin/brands` is the house-of-brands home: Owner and Admin reach it through the
 same `/app/admin` route bypass as the people directory and the lead queue; Lawyer and Clerk stay denied. Every `brand`
 row is Firm-scoped (ENG-659) — the listing is every Firm-scoped row for Owner, or only the Firms an Admin holds
@@ -173,16 +172,16 @@ A **licensed lawyer** with system-administration authority — manage the person
 Admin is a superset of Lawyer. Like Owner, a matter nobody has put an Admin on still gates its full content: the
 workbench, documents, and notations at `/app/projects/{code}` stay behind the participation row every tier needs. What
 Admin sees instead of a `404` there is a participation-only rendering — enough to see the matter and manage who is
-assigned to it, nothing it discloses beyond that — and `/app/projects` lists every matter so there is something to
-navigate to. The people directory and the matter directory at `/app/admin` are scoped to the firms the Admin holds a
-`person_firm_role` row on; an Admin with no membership sees those two listings empty. Privileged reach is a surface you
-navigate to rather than an invisible widening of a shared route, which is what makes a lens bug distinguishable from an
-intended bypass — the two are otherwise indistinguishable from a response body. Admin cannot create, edit, or demote an
-Owner. `/app/owner` is not an Admin surface. `/app/admin/brands` is: Owner and Admin reach the registry. An Admin sees
-only their own Firm-scoped rows, never another Firm's — every brand is Firm-scoped now (ENG-659), so there is no
-system-wide row left to also see. That Firm's Admin DRI creates its brand, and may change its palette, replace its logo
-and uploaded font, and choose among its own already-uploaded font family names — never a compiled catalog, and never
-another Firm's row. `/app/admin/leads` is the same Owner/Admin door: the public contact queue, not a matter surface.
+assigned to it. The Projects list includes unassigned matters within the selected Brand or Firm. The people directory
+and the matter directory at `/app/admin` use the Admin's `person_firm_role` memberships to scope their lists. Privileged
+reach is a surface you navigate to rather than an invisible widening of a shared route, which is what makes a lens bug
+distinguishable from an intended bypass — the two are otherwise indistinguishable from a response body. Admin cannot
+create, edit, or demote an Owner. `/app/owner` is not an Admin surface. `/app/admin/brands` is: Owner and Admin reach
+the registry. An Admin sees only their own Firm-scoped rows, never another Firm's — every brand is Firm-scoped now
+(ENG-659), so there is no system-wide row left to also see. That Firm's Admin DRI creates its brand, and may change its
+palette, replace its logo and uploaded font, and choose among its own already-uploaded font family names — never a
+compiled catalog, and never another Firm's row. `/app/admin/leads` is the same Owner/Admin door: the public contact
+queue, not a matter surface.
 
 ### *anonymous*
 
