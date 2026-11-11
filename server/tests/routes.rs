@@ -6863,8 +6863,6 @@ async fn api_projects_lifecycle_404s_for_an_unknown_matter() {
 /// once per role in a loop, re-seeding the client of record (unique `email`).
 /// A blind insert would hit a duplicate-key panic before any assertion runs.
 async fn open_matter_prereqs(surreal: &store::surreal::SurrealDb) -> (uuid::Uuid, uuid::Uuid) {
-    store::test_support::approve_test_brand_domain(surreal, "neon").await;
-    store::test_support::approve_test_brand_domain(surreal, "delete-your-data").await;
     let client = match store::persons::find_by_email_ci(surreal, "client-of-record@example.com")
         .await
         .unwrap()
@@ -6885,7 +6883,8 @@ async fn open_matter_prereqs(surreal: &store::surreal::SurrealDb) -> (uuid::Uuid
 #[tokio::test]
 async fn api_projects_open_authorizes_only_lawyer_and_admin() {
     // The authorization matrix for matter open. Lawyer and admin (both
-    // attorneys at this firm) open; anonymous (401) and client (403) are
+    // attorneys at this firm) open, including a lawyer whose email domain the
+    // owning Firm has not approved. Anonymous (401) and client (403) are
     // rejected and open no matter. Lawyer/admin carry a person-backed session so
     // the attester resolves.
     let (state, surreal) = state_with_engines().await;
@@ -6916,8 +6915,8 @@ async fn api_projects_open_authorizes_only_lawyer_and_admin() {
         (
             "external-lawyer",
             Some(store::persons::Role::Lawyer),
-            StatusCode::BAD_REQUEST,
-            "invalid_request",
+            StatusCode::CREATED,
+            "",
         ),
         (
             "admin",

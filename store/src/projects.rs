@@ -3948,7 +3948,6 @@ fn person_lookup_failed(err: &crate::persons::PersonError) -> OpenMatterError {
 async fn validate_open_references(
     surreal: &SurrealDb,
     input: &OpenMatterCommand,
-    firm_id: Uuid,
 ) -> Result<Role, OpenMatterError> {
     let client = lock_person(surreal, input.client_id)
         .await?
@@ -3975,23 +3974,6 @@ async fn validate_open_references(
     // attorney, whichever door (web form, CLI, or API) drove the open.
     if !attester.role.is_lawyer_tier() {
         return Err(OpenMatterError::AttesterNotAllowed);
-    }
-    let keys = crate::firms::brand_keys_for_firm(surreal, firm_id)
-        .await
-        .map_err(|error| OpenMatterError::Db(error.to_string()))?;
-    let mut brands = Vec::with_capacity(keys.len());
-    for key in keys {
-        if let Some(brand) = crate::brands::find_by_key(surreal, &key)
-            .await
-            .map_err(|error| OpenMatterError::Db(error.to_string()))?
-        {
-            brands.push(brand);
-        }
-    }
-    if !crate::brand_domains::DomainPolicy::from_brands(&brands).admits(&attester.email) {
-        return Err(OpenMatterError::Invalid(
-            "The lawyer DRI must have an approved Firm or Brand email domain.",
-        ));
     }
     if let Some(jurisdiction_id) = input.jurisdiction_id {
         if crate::jurisdictions::find_by_id(surreal, jurisdiction_id)
@@ -4126,7 +4108,7 @@ pub async fn open_matter(
     // transaction conflicts retry with jitter. `lock_person` remains the
     // accepted narrowing.
     let attester_participation =
-        participation_for_role(validate_open_references(surreal, input, firm_id).await?);
+        participation_for_role(validate_open_references(surreal, input).await?);
     // Conflict check, before any write. The relationship graph is advisory to
     // clear but authoritative to block: a confident adverse link to a current
     // client hard-stops the open, and no attestation overrides it (a waiver is

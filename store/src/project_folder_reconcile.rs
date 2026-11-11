@@ -1151,7 +1151,6 @@ mod tests {
             .bind(("kind", crate::surreal::record_id("entity_type", crate::test_support::SEED_ENTITY_TYPE_ID)))
             .await.unwrap().check().unwrap();
         crate::test_support::seed_firm_with_brand(&db, "neon").await;
-        crate::test_support::approve_test_brand_domain(&db, "neon").await;
         let entity = crate::test_support::seed_entity(&db).await;
         let lawyer = crate::persons::create(
             &db,

@@ -337,7 +337,6 @@ mod tests {
         store::firms::attach_brand(surreal, store::persons::Role::Owner, None, firm.id, "neon")
             .await
             .unwrap();
-        store::test_support::approve_test_brand_domain(surreal, "neon").await;
         admin
     }
 

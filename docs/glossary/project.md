@@ -8,9 +8,9 @@ Has a `status` (`open`, `closed`, `archived`) and is **always opened against an 
 organization, or a `Human` entity for a solo natural person. The `entity_id` FK is `NOT NULL`: a matter without an
 entity is a bug.
 
-Opening a Project requires an attesting attorney eligible to serve as its lawyer DRI. Their email domain must match an
-approved domain on a [Brand](brand.md) the owning Firm wears. The shared opening command checks this before it writes
-the Project or its participation rows.
+Opening a Project requires an attesting attorney on the lawyer tier (`owner`, `admin`, or `lawyer`) to serve as its
+lawyer DRI. The shared opening command checks that tier before it writes the Project or its participation rows. Any such
+attorney may be the lawyer DRI on any [Firm](firm.md) or [Brand](brand.md) in the deployment.
 
 Lifecycle status changes move through the shared transition command (`store::projects::transition_project_with_reason`):
 the REST door is `POST /app/api/projects/{id}/lifecycle`, which the CLI's `project close` calls, and the `close_project`
