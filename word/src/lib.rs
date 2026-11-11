@@ -18,6 +18,7 @@ pub mod paper;
 mod preflight;
 pub mod protocol;
 pub mod provenance;
+pub mod redline;
 mod render;
 pub mod service;
 

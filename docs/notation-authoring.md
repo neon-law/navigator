@@ -398,8 +398,18 @@ Letter geometry, and page fields; a notation whose frame is `letter` receives th
 separate first-page and running headers. A `pleading` gets the same court-paper calibration in both formats: under
 `jurisdiction: CA` or `NV`, a 28-line numbered rail on a 24pt line pitch with line 1 an inch down the page, the footer's
 page number and paper title, and the first-page caption described under [Pleading paper](#pleading-paper). Both commands
-validate the file against the same rule set as `navigator project gate`, fill placeholders through the same notation
-evaluator, and produce byte-identical output when the source revision and answers are unchanged.
+fill placeholders through the same notation evaluator, and produce byte-identical output when the source revision and
+answers are unchanged.
+
+**Redlining a revision — `--redline-against`.** When a notation has been delivered before and the template (or its
+answers) have since changed, `navigator notation word <template.md> --out <new.docx> --redline-against
+<previous.docx>` renders the current template exactly as `notation word` does, then writes the difference from the
+previous document as real Word tracked changes (`w:ins`/`w:del`) instead of clean prose. The revisions are attributed
+to the signing lawyer — `--redline-author` if given, else `matter.counsel.name` from the Project's `navigator.yaml`,
+the same name the `/s/` signature line signs with — and a run with no author available from either source is refused.
+The revisions open in Microsoft Word's review pane for the counterparty to accept or reject; a redlined document is
+for review, never for splicing back, so `notation import` continues to refuse it. Rendering without
+`--redline-against` is unchanged.
 
 ### Final documents only
 

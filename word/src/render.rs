@@ -1214,7 +1214,7 @@ fn core_xml(revision: Option<&str>) -> String {
     )
 }
 
-fn xml(value: &str) -> String {
+pub(crate) fn xml(value: &str) -> String {
     value
         .replace('&', "&amp;")
         .replace('<', "&lt;")
