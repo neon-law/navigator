@@ -1990,7 +1990,7 @@ fn canonical_document(base: &str) -> Value {
                row and designated the accountable lawyer DRI — never taken from the request body. \
                Authorization: the caller's `persons.role` must be `lawyer` or `admin`; at this firm \
                `lawyer` is an attorney, so this is the 'an attorney is opening and attesting' gate. \
-               The lawyer DRI's email must use an approved domain on a Brand worn by the owning Firm. \
+               Any lawyer-tier attester may be the lawyer DRI on any Firm or Brand. \
                Anonymous, `client`, and non-lawyer `clerk` callers are rejected. Optionally opens \
                the matter already closed: `status: \"closed\"` with a required `closed_at` records \
                an engagement that ended before anyone opened its row, in one call, through the \
