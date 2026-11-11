@@ -31,6 +31,7 @@ mod ephemeris_release;
 mod ephemeris_tables;
 mod firm_forgejo;
 mod firms_doctor;
+mod forms_render;
 mod forms_sync;
 mod glossary;
 mod inbox;
@@ -2660,6 +2661,13 @@ enum NotationCmd {
         /// outside a signature block, or drafting note.
         #[arg(long)]
         preview: bool,
+        /// Refuse to fetch render inputs over the network: render only
+        /// from bytes already pinned in the checkout or the local blank
+        /// cache (LAW-19). A form template whose blank is neither vendored
+        /// nor cached is a loud refusal, never a silent download that
+        /// could change the bytes between two runs.
+        #[arg(long)]
+        ci: bool,
     },
     /// Render a single notation template to editable Word, framed the same
     /// way as `pdf` — see its documentation for how the frame, jurisdiction,
@@ -5647,6 +5655,7 @@ fn run() -> ExitCode {
                 answers_file,
                 answers_from,
                 preview,
+                ci,
             } => {
                 let answers = match answers_file {
                     Some(path) => match answers_file::pdf_answers(&path, answers) {
@@ -5668,14 +5677,14 @@ fn run() -> ExitCode {
                         }
                     },
                 };
-                run_render(&file, &out, &answers, "pdf", preview)
+                run_render(&file, &out, &answers, "pdf", preview, ci)
             }
             NotationCmd::Word {
                 file,
                 out,
                 answers,
                 preview,
-            } => run_render(&file, &out, &answers, "docx", preview),
+            } => run_render(&file, &out, &answers, "docx", preview, false),
             NotationCmd::Import {
                 file,
                 edited,
@@ -8828,6 +8837,7 @@ fn run_render(
     answers: &[(String, String)],
     output_extension: &str,
     preview: bool,
+    ci: bool,
 ) -> ExitCode {
     if !has_extension(out, output_extension) {
         eprintln!("navigator: output file extension does not match the render format");
@@ -8856,10 +8866,12 @@ fn run_render(
     // author (LAW-15). `output:` is now the only override, and it lives
     // in the document it frames.
     //
-    // An `output:` value with no Typst counterpart (`form`, the AcroForm
-    // mode this preview never renders) falls back to plain, as does a
-    // template that declares no `kind:` at all. A *misspelled* `output:`
-    // never reaches here: N109 refuses it at the validation gate above.
+    // An `output:` value with no Typst counterpart never reaches the
+    // frame selection below: `form` — the AcroForm fill mode, the one
+    // profile that is not a Typst format at all — branched away above,
+    // and a template that declares no `kind:` at all renders plain. A
+    // *misspelled* `output:` never reaches here either: N109 refuses it
+    // at the validation gate above.
     let field = |key: &str| {
         rules::frontmatter::extract(&contents)
             .and_then(|fm| rules::frontmatter::field(fm, key))
@@ -8872,6 +8884,15 @@ fn run_render(
                 .map(|k| k.default_output().to_string())
         })
         .unwrap_or_else(|| PLAIN_PROFILE.to_string());
+    // `form` is the AcroForm fill mode, not a Typst frame: it fills the
+    // pinned blank from the vendored forms registry (or refuses loudly)
+    // and never reaches the body renderer below. `Kind::Filing`'s
+    // default output is this profile, so a `kind: filing` template that
+    // declares no `output:` fills too — `kind:` is not a second silent
+    // path into the old plain fallback.
+    if profile == forms_render::FORM_PROFILE {
+        return forms_render::run(file, &contents, out, answers, output_extension, ci);
+    }
     // `pleading` is the one profile a bare name cannot construct: court
     // geometry is calibrated by the template's `jurisdiction:`, a second
     // field `OutputFormat::parse` never sees, so it returns `None` for the
