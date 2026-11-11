@@ -66,8 +66,14 @@ impl PushConsumer for ScriptedConsumer {
     }
 }
 
-const HMAC_KEY: &str = "forgejo-receiver-test-key";
 const PATH_SECRET: &str = "forgejo-test-secret";
+
+/// A fresh HMAC key for one fixture, generated at runtime — no reusable
+/// webhook credential ships in fixtures (the `webhook_auth` tests'
+/// discipline).
+fn hmac_key() -> String {
+    hex::encode(rand::random::<[u8; 32]>())
+}
 
 /// The isolated Postgres database the receiver's tests read, mirroring
 /// the house fixture: absent locally, so the caller skips the assertions
@@ -102,6 +108,7 @@ struct Fixture {
     app: axum::Router,
     pg: store::postgres::PostgresDb,
     consumer: std::sync::Arc<ScriptedConsumer>,
+    hmac_key: String,
 }
 
 /// A router whose receiver is fully armed: both gates configured, a real
@@ -109,22 +116,24 @@ struct Fixture {
 async fn fixture(failures: usize) -> Option<Fixture> {
     let pg = database().await?;
     let consumer = ScriptedConsumer::with_failures(failures);
+    let hmac_key = hmac_key();
     let mut state = portal::test_support::app_state(store::test_support::mem_surreal().await).await;
     state.forgejo_webhook_secret = Some(PATH_SECRET.into());
-    state.forgejo_webhook_hmac_key = Some(HMAC_KEY.into());
+    state.forgejo_webhook_hmac_key = Some(hmac_key.clone());
     state.forgejo_push_store = Some(std::sync::Arc::new(pg.clone()));
     state.forgejo_push_consumer = consumer.clone();
     Some(Fixture {
         app: portal::router(state),
         pg,
         consumer,
+        hmac_key,
     })
 }
 
 /// POST raw bytes to the receiver with a validly signed body.
-async fn post_signed(app: &axum::Router, body: &[u8]) -> StatusCode {
-    let signature = portal::webhook_auth::sign_hmac_sha256_hex(HMAC_KEY.as_bytes(), body);
-    post_with(app, body, Some(&signature)).await
+async fn post_signed(fixture: &Fixture, body: &[u8]) -> StatusCode {
+    let signature = portal::webhook_auth::sign_hmac_sha256_hex(fixture.hmac_key.as_bytes(), body);
+    post_with(&fixture.app, body, Some(&signature)).await
 }
 
 async fn post_with(app: &axum::Router, body: &[u8], signature: Option<&str>) -> StatusCode {
@@ -170,7 +179,7 @@ async fn a_valid_push_delivery_journals_and_consumes() {
     };
     let body = push_body("refs/heads/push/qvrpxyq");
 
-    let status = post_signed(&fixture.app, &body).await;
+    let status = post_signed(&fixture, &body).await;
 
     assert_eq!(status, StatusCode::OK);
     let receipt = forgejo_push_webhook_journal::by_event_key(&fixture.pg, &event_key_for(&body))
@@ -191,7 +200,8 @@ async fn a_tampered_body_is_refused_before_any_write() {
         return;
     };
     let signed = push_body("refs/heads/push/qvrpxyq");
-    let signature = portal::webhook_auth::sign_hmac_sha256_hex(HMAC_KEY.as_bytes(), &signed);
+    let signature =
+        portal::webhook_auth::sign_hmac_sha256_hex(fixture.hmac_key.as_bytes(), &signed);
     let tampered = push_body("refs/heads/push/evil999");
 
     let status = post_with(&fixture.app, &tampered, Some(&signature)).await;
@@ -240,7 +250,7 @@ async fn a_path_secret_mismatch_is_refused() {
         return;
     };
     let body = push_body("refs/heads/push/qvrpxyq");
-    let signature = portal::webhook_auth::sign_hmac_sha256_hex(HMAC_KEY.as_bytes(), &body);
+    let signature = portal::webhook_auth::sign_hmac_sha256_hex(fixture.hmac_key.as_bytes(), &body);
 
     let status = fixture
         .app
@@ -270,7 +280,7 @@ async fn a_push_outside_the_push_namespace_journals_as_skipped() {
     };
     let body = push_body("refs/heads/main");
 
-    let status = post_signed(&fixture.app, &body).await;
+    let status = post_signed(&fixture, &body).await;
 
     assert_eq!(status, StatusCode::OK);
     let receipt = forgejo_push_webhook_journal::by_event_key(&fixture.pg, &event_key_for(&body))
@@ -294,8 +304,8 @@ async fn a_redelivery_answers_200_and_signals_nothing() {
         return;
     };
     let body = push_body("refs/heads/push/qvrpxyq");
-    let first = post_signed(&fixture.app, &body).await;
-    let redelivery = post_signed(&fixture.app, &body).await;
+    let first = post_signed(&fixture, &body).await;
+    let redelivery = post_signed(&fixture, &body).await;
 
     assert_eq!(first, StatusCode::OK);
     assert_eq!(redelivery, StatusCode::OK, "answered from the journal");
@@ -318,7 +328,7 @@ async fn a_failing_consumption_answers_5xx_and_recovers_at_replay() {
     };
     let body = push_body("refs/heads/push/qvrpxyq");
 
-    let status = post_signed(&fixture.app, &body).await;
+    let status = post_signed(&fixture, &body).await;
 
     assert_eq!(
         status,
@@ -440,7 +450,7 @@ async fn the_boot_sweep_reconsumes_pending_and_failed_but_not_delivered() {
     post_signed_with_failures(&fixture, &failed_body).await;
     // Delivered by first delivery, through the handler.
     let delivered_body = push_body("refs/heads/push/aaaaaaa");
-    post_signed(&fixture.app, &delivered_body).await;
+    post_signed(&fixture, &delivered_body).await;
     // Pending: journaled, never consumed.
     let pending_body = push_body("refs/heads/push/bbbbbbb");
     let pending = forgejo_push_webhook_journal::journal_verified_push(
@@ -506,7 +516,7 @@ async fn the_boot_sweep_reconsumes_pending_and_failed_but_not_delivered() {
 async fn post_signed_with_failures(fixture: &Fixture, body: &[u8]) {
     // The shared fixture consumer was built with failures; this helper
     // is called on fixtures built with exactly one scripted failure.
-    let signature = portal::webhook_auth::sign_hmac_sha256_hex(HMAC_KEY.as_bytes(), body);
+    let signature = portal::webhook_auth::sign_hmac_sha256_hex(fixture.hmac_key.as_bytes(), body);
     let status = post_with(&fixture.app, body, Some(&signature)).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
@@ -517,11 +527,13 @@ async fn post_signed_with_failures(fixture: &Fixture, body: &[u8]) {
 async fn a_verified_push_without_a_journal_store_is_refused() {
     let mut state = portal::test_support::app_state(store::test_support::mem_surreal().await).await;
     state.forgejo_webhook_secret = Some(PATH_SECRET.into());
-    state.forgejo_webhook_hmac_key = Some(HMAC_KEY.into());
+    let hmac_key = hmac_key();
+    state.forgejo_webhook_hmac_key = Some(hmac_key.clone());
     let app = portal::router(state);
     let body = push_body("refs/heads/push/qvrpxyq");
 
-    let status = post_signed(&app, &body).await;
+    let signature = portal::webhook_auth::sign_hmac_sha256_hex(hmac_key.as_bytes(), &body);
+    let status = post_with(&app, &body, Some(&signature)).await;
 
     assert_eq!(
         status,
