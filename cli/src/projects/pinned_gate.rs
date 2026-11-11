@@ -11,13 +11,13 @@ use sha2::{Digest as _, Sha256};
 const DELEGATED_RELEASE: &str = "NAVIGATOR_PINNED_GATE_DELEGATED";
 
 /// The mutually exclusive gate modes admitted by the command parser.
-pub(crate) enum GateMode {
+pub enum GateMode {
     TrackedFiles,
     Content { ci: bool, check: bool, deep: bool },
 }
 
 /// Select the manifest's release for every gate mode before any content pass.
-pub(crate) async fn dispatch(mode: GateMode) -> ExitCode {
+pub async fn dispatch(mode: GateMode) -> ExitCode {
     let (ci, check, deep, tracked_files) = match mode {
         GateMode::TrackedFiles => (false, false, false, true),
         GateMode::Content { ci, check, deep } => (ci, check, deep, false),
@@ -65,7 +65,7 @@ async fn run(root: &Path, running_release: &str, arguments: &[&str]) -> Result<O
     else {
         return Ok(None);
     };
-    if !crate::devx::registry::is_release_tag(&pin) {
+    if !crate::release::is_release_version(&pin) {
         return Err(anyhow!(
             "navigator.yaml version `{pin}` must be an exact Navigator release tag"
         ));
@@ -148,7 +148,7 @@ async fn download(pin: &str, platform: &str, destination: &Path) -> Result<()> {
         .build()?;
     download_from(
         &client,
-        crate::lsp_download::RELEASE_DOWNLOAD_BASE,
+        project_scaffold::RELEASE_DOWNLOAD_BASE,
         pin,
         platform,
         destination,

@@ -34,7 +34,7 @@ not authorize a Clerk's substantive reply or grant matter or promotional consent
 
 ## End-to-end status
 
-The `navigator dev email-summary-e2e` command still exercises the real intake and durable workflow topology on a
+The `navigator-deploy dev email-summary-e2e` command still exercises the real intake and durable workflow topology on a
 worktree KIND cluster. Its model-success and Gemini-failure expectations are not satisfied while the worker admission
 gate requires verified Firm/provider-account approvals. The model-success scenario still needs an approved,
 email-confirmed sender fixture for its synthetic provider account. Do not treat the command as a passing proof until the
@@ -43,7 +43,7 @@ KIND scenario succeeds.
 The remaining topology contract is:
 
 - Docker's *selected* engine must be OrbStack. The command reads it and never changes the global context.
-- The worktree's cluster must exist (`navigator dev worktree-env up --runtime kind`) with the `workflows-service`
+- The worktree's cluster must exist (`navigator-deploy dev worktree-env up --runtime kind`) with the `workflows-service`
   `RestateDeployment` present.
 - The command builds the worker image from the checked-out source under an immutable tag
   (`navigator-workflows-service:e2e-<12 hex>`, a hash of the commit plus every tracked change and untracked file), loads

@@ -56,16 +56,16 @@ Collector**, whose **fail-closed redaction processor** (`allow_all_keys: false`)
 no-content rule. Telemetry is the operational half; the Iceberg archive is the data half. The landing map, sink, and
 collector config live in [`docs/observability.md`](../../../docs/observability.md#where-it-lands-direct-openobserve).
 
-**Locally**, OTLP export goes to an in-cluster **OpenObserve**. `navigator dev up` wires host and in-cluster `web` to it
-and writes the UI URL, OTLP endpoint, credentials, organization, and stream into `.devx/env`, on per-worktree ports. To
-see what you emitted, follow
+**Locally**, OTLP export goes to an in-cluster **OpenObserve**. `navigator-deploy dev up` wires host and in-cluster
+`web` to it and writes the UI URL, OTLP endpoint, credentials, organization, and stream into `.devx/env`, on
+per-worktree ports. To see what you emitted, follow
 [`docs/observability.md`](../../../docs/observability.md#seeing-telemetry-locally-openobserve).
 
 ## Debugging a missing periodic job
 
-1. **`navigator ops doctor`**: names any trigger Job wedged in `ImagePullBackOff` or `CrashLoopBackOff`, or active too
-   long (under a `CronJob`'s `concurrencyPolicy: Forbid`, that silently skips every run), and any unready workload, each
-   with the exact `kubectl` fix.
+1. **`navigator-deploy ops doctor`**: names any trigger Job wedged in `ImagePullBackOff` or `CrashLoopBackOff`, or
+   active too long (under a `CronJob`'s `concurrencyPolicy: Forbid`, that silently skips every run), and any unready
+   workload, each with the exact `kubectl` fix.
 2. **BigQuery or logs**: query `navigator.workflow.trigger.fired` by `service` and `outcome`. `rejected status=401` is a
    stale `RESTATE_AUTH_TOKEN`; `404` is a service not re-registered; `transport_error` is a hung or unreachable ingress.
 3. **Restate Cloud console, Invocations**: did the worker run it, and which step failed.

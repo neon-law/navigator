@@ -35,10 +35,10 @@ claim status, and ask providersupport@legaleaseplan.com before working hours the
 Record a plan once per Firm, with the portal and contact the Firm actually uses:
 
 ```bash
-navigator legal-plans --firm <firm-id> --host <host> create --name ARAG \
+navigator-deploy legal-plans --firm <firm-id> --host <host> create --name ARAG \
   --portal https://www.araglegal.com/account --contact "866-272-4529" \
   --acceptance-sla-hours 24 --turnaround-sla-days 90
-navigator legal-plans --firm "Example Practice PC" --host <host> list
+navigator-deploy legal-plans --firm "Example Practice PC" --host <host> list
 ```
 
 `--firm` accepts a Firm UUID or a display name. Display names resolve case-insensitively in the caller's authorized Firm

@@ -16,7 +16,7 @@ use std::process::ExitCode;
 use anyhow::{bail, Context, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ScaffoldPlan {
+pub struct ScaffoldPlan {
     pub name: String,
     pub code: String,
     pub client_name: String,
@@ -102,7 +102,7 @@ fn validate(plan: &ScaffoldPlan) -> Result<()> {
 
 /// What a scaffold run does after the Project exists.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ScaffoldOptions {
+pub struct ScaffoldOptions {
     /// Ask the server to create or adopt the Project's source repository.
     pub provision_repository: bool,
     pub firm: Option<String>,
@@ -308,7 +308,7 @@ fn write_tree(base: &str, directory: &Path, code: &str, client_email: Option<&st
         .ok()
         .and_then(|url| url.host_str().map(str::to_string))
         .context("deployment URL has no host")?;
-    if cli::letterhead::resolve_brand(None, Some(&manifest_host)).is_err() {
+    if crate::letterhead::resolve_brand(None, Some(&manifest_host)).is_err() {
         eprintln!(
             "navigator: warning: deployment host is missing from the Brand registry; \
              continuing with the configured host"

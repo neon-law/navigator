@@ -400,7 +400,7 @@ fn live_patch(
 
 /// Replace or add a scalar in the nested `project:` map while retaining all
 /// unrelated YAML text and comments.
-pub(crate) fn replace_project_key(contents: &str, key: &str, value: &str) -> Result<String> {
+pub fn replace_project_key(contents: &str, key: &str, value: &str) -> Result<String> {
     let serialized = serde_yaml::to_string(value)?.trim().to_string();
     let mut lines: Vec<String> = contents.lines().map(str::to_string).collect();
     let project_line = lines

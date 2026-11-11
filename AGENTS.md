@@ -14,12 +14,13 @@ Navigator-managed systems and approved stores. Follow [public contributor safety
 - Keep private plans, firm records, operational details, and client content out of Git, PRs, comments, and captures.
 
 Use Cargo, isolated worktrees, focused TDD, and shared code. Follow the [Agent Skills](.agents/skills) and name domain
-tables from the glossary. The load-bearing members of the 29-crate workspace: `store` owns PostgreSQL-backed accessors
+tables from the glossary. The load-bearing members of the 31-crate workspace: `store` owns PostgreSQL-backed accessors
 and the graph; `portal` is the mountable Axum application (authenticated API, inbound email, Dioxus server-side
 rendering); `webapp` is the Dioxus client bundle; `neon` is the brand binary that publishes the public face; `server`
-runs the integration tests against the mounted app; `cli` is the `navigator` binary and its dev tooling; `views`,
-`workflows`, `workflows-service`, `billing`, `cloud`, and `archives` round out the surfaces the docs name. `Cargo.toml`
-is the authoritative member list.
+runs the integration tests against the mounted app; `cli` is the lean `navigator` binary (Projects, Jujutsu
+repositories, `validate`) and the library that holds their rules; `deploy` is `navigator-deploy`, the operator CLI
+(`dev`, `ops`, site, mail, notation); `scorpio` is the Ephemeris CLI; `views`, `workflows`, `workflows-service`,
+`billing`, `cloud`, and `archives` round out the surfaces the docs name. `Cargo.toml` is the authoritative member list.
 
 Target macOS for development and the CLI, and Linux/amd64 for deployed services. Add no Windows paths, jobs, or release
 archives.
@@ -34,10 +35,10 @@ fixtures, or duplicate another check. Keep coverage for authorization, isolation
 
 ## Find the term first
 
-Before naming a table, field, state, or UI concept, search the glossary. Run `navigator glossary list` for term titles
-and plain-language descriptions. Then run `navigator glossary show "<Term>"` for a term's full definition. Use the
-glossary's term when one fits; when none fits, add a glossary entry in `docs/glossary/` in the same change rather than
-inventing a synonym.
+Before naming a table, field, state, or UI concept, search the glossary. Run `navigator-deploy glossary list` for term
+titles and plain-language descriptions. Then run `navigator-deploy glossary show "<Term>"` for a term's full definition.
+Use the glossary's term when one fits; when none fits, add a glossary entry in `docs/glossary/` in the same change
+rather than inventing a synonym.
 
 ## The omnichannel inbox and the Person CRM
 
@@ -69,8 +70,8 @@ helpers into the sanctioned seams, and name a test before the change that satisf
 ### Reading the ontology
 
 ```bash
-cargo run -p cli -- glossary list
-cargo run -p cli -- glossary show "Lawyer Review"
+cargo run -p deploy -- glossary list
+cargo run -p deploy -- glossary show "Lawyer Review"
 ```
 
 ### Reading the Project Skill catalog
@@ -87,7 +88,7 @@ cargo run -p cli -- project skill show nv estates
 ### Starting web
 
 ```bash
-cargo run -p cli -- dev up --path "$PWD"
+cargo run -p deploy -- dev up --path "$PWD"
 set -a; source .devx/env; set +a
 cargo run -p neon
 ```
@@ -95,7 +96,7 @@ cargo run -p neon
 ### Lifecycle commands
 
 ```bash
-cargo run -p cli -- dev down --path "$PWD"
+cargo run -p deploy -- dev down --path "$PWD"
 ```
 
 ### e2e Testing
@@ -103,7 +104,7 @@ cargo run -p cli -- dev down --path "$PWD"
 Run if doing UI changes.
 
 ```bash
-cargo run -p cli -- dev browser-e2e
+cargo run -p deploy -- dev browser-e2e
 ```
 
 ### Testing

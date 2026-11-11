@@ -334,6 +334,7 @@ fn report(diagnosis: &Diagnosis) -> ExitCode {
 /// Reads the live environment and the stored credentials. Writes nothing, and makes no network or database call: the
 /// diagnosis is now a pure function of its [`Probe`] all the way out to the
 /// command, because there is no registry left to read.
+#[must_use]
 pub fn run(host: Option<&str>, project_code: Option<&str>) -> ExitCode {
     let creds = match credentials::load(&credentials::default_credentials_path()) {
         Ok(creds) => creds,

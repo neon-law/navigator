@@ -1,5 +1,5 @@
 //! Temporary local vendoring helper (untracked; delete before commit).
-//! Mirrors `cli/src/forms_sync.rs::run_reauthor` byte for byte but reads
+//! Mirrors `deploy/src/forms_sync.rs::run_reauthor` byte for byte but reads
 //! the blank from the working tree instead of the assets bucket: loads the
 //! `<code>.fields.toml` map beside the blank, runs the pure transform
 //! (`strip_static_xfa` → `field_names` → `plan` → `reauthor`), writes the
@@ -109,7 +109,7 @@ fn main() -> Result<(), BoxErr> {
 }
 
 /// The sibling notation's declared questionnaire states — copied from
-/// `cli/src/forms_sync.rs::questionnaire_states`.
+/// `deploy/src/forms_sync.rs::questionnaire_states`.
 fn questionnaire_states(contents: &str) -> Result<Vec<String>, BoxErr> {
     #[derive(serde::Deserialize)]
     struct Notation {

@@ -246,8 +246,8 @@ Verify that exact rebased head before submitting your review.
 ## 8. Approve at the pushed head
 
 Approve after the push, never before. `dismiss_stale_reviews_on_push` is set on the review ruleset
-(`cli/src/devx/github_setup.rs`), so your own commits discard any earlier approval. Confirm the pushed head is the head
-you gated, then approve it:
+(`deploy/src/devx/github_setup.rs`), so your own commits discard any earlier approval. Confirm the pushed head is the
+head you gated, then approve it:
 
 ```bash
 git rev-parse HEAD

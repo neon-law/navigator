@@ -1,15 +1,16 @@
 # Navigator CLI
 
-The `cli` crate builds the `navigator` command, Navigator's control plane for every machine-bound workflow. It validates
-and renders Notations, manages local KIND environments, operates deployments, maintains assets and forms, and drives
-authorized matter work against a live site.
+The `cli` crate builds the lean `navigator` command a lawyer's Mac and every Project repository's CI install: Projects,
+their Jujutsu repositories, the offline `validate` gate, and the site session and `seeds/` import those commands use.
+Its rules live in the crate's library, so a host other than the terminal links the same code.
 
-It serves developers, deployment operators, and authorized firm lawyers who need one auditable interface instead of
-independent scripts or manual infrastructure steps. Centralizing those flows in Rust keeps validation, environment
-selection, safety checks, and production boundaries consistent with the application.
+Two more binaries live beside it. `navigator-deploy` (the `deploy` crate) is the operator CLI: the local KIND loop
+(`dev`), production operations (`ops`), and the site, mail, notation, forms, and firm commands; it also carries every
+`navigator` command. `scorpio` (the `scorpio` crate) is the Ephemeris CLI. Each builds in its own release job, so the
+`navigator` archive never compiles the web client, the cloud SDKs, or the Arrow and Iceberg stack.
 
-The local staging lifecycle (`navigator dev staging`) runs under the `NAVIGATOR_ENVIRONMENT=dev` application profile;
-staging is a lifecycle target, not an application environment.
+The local staging lifecycle (`navigator-deploy dev staging`) runs under the `NAVIGATOR_ENVIRONMENT=dev` application
+profile; staging is a lifecycle target, not an application environment.
 
 Run `navigator --help` for the current command surface. Use [AGENTS.md](../AGENTS.md) for the local development loop,
 [agent workflows](../docs/agent-workflows.md) for repository work, and [cloud operations](../docs/cloud-operations.md)
@@ -58,10 +59,10 @@ offboarding notation; later work uses other kinds. The shared catalog codes are 
 `offboarding__letter` to close:
 
 ```bash
-navigator site notation create onboarding__letter \
+navigator-deploy site notation create onboarding__letter \
   --project <project-code> \
   --client-email <client@example.com>
-navigator site notation create offboarding__letter \
+navigator-deploy site notation create offboarding__letter \
   --project <project-code> \
   --client-email <client@example.com>
 ```
@@ -70,8 +71,8 @@ Before opening another instrument, inspect the matter's private notation invento
 answers and their source provenance for a particular Notation:
 
 ```bash
-navigator site notation list --project <project-code>
-navigator site notation answers <notation-uuid>
+navigator-deploy site notation list --project <project-code>
+navigator-deploy site notation answers <notation-uuid>
 ```
 
 Both read matter content, so both require a firm-side participation row on the matter — of every tier, Owner and Admin
@@ -84,7 +85,7 @@ own actions by an absolute tag rather than by the ref the caller used, so a bump
 gate no consumer can run:
 
 ```bash
-navigator ops release pins
+navigator-deploy ops release pins
 ```
 
 It takes no version — the manifest is the answer. It walks `.github/` and `docs/examples/`, exits `0` when every pin
@@ -120,15 +121,15 @@ import stops there and prints `committed N of M records`.
 
 ## `drafts` and `templates` are `notation`, spelled the way you reach for it
 
-`navigator drafts …` and `navigator templates …` are visible aliases of `navigator notation …` — the same group, same
-subcommands, same dispatch. `navigator drafts preview`, `navigator templates preview`, and `navigator notation preview`
-run identically; so do `pdf` and `word`. Use whichever noun fits.
+`navigator-deploy drafts …` and `navigator-deploy templates …` are visible aliases of `navigator-deploy notation …` —
+the same group, same subcommands, same dispatch. `navigator-deploy drafts preview`, `navigator-deploy templates
+preview`, and `navigator-deploy notation preview` run identically; so do `pdf` and `word`. Use whichever noun fits.
 
 ## Reading a template the way a reader will
 
 ```bash
-navigator notation preview templates/notations/neon_law/onboarding__letter.md
-navigator notation preview onboarding                 # a name, looked up under templates/
+navigator-deploy notation preview templates/notations/neon_law/onboarding__letter.md
+navigator-deploy notation preview onboarding                 # a name, looked up under templates/
 ```
 
 A name is looked up in three places, in order: a Project repository's flat `templates/`, Navigator's own nested
@@ -144,20 +145,21 @@ Notation, no workflow instance, no PDF.
 Outside a Project repository, or without a login, pass `--offline` to render the same show page locally instead as a
 **lint**, not a preview: nothing is pushed and nothing is stored. It binds only to `127.0.0.1`, always on an OS-assigned
 port chosen at random so two lints can run at once, and prints the URL. Stepping the questions is hydration, so it needs
-the Dioxus client bundle `navigator dev build-webapp` stages; without one the page still renders every question and the
-graph, and the command says so rather than leaving a dead "Next" button unexplained.
+the Dioxus client bundle `navigator-deploy dev build-webapp` stages; without one the page still renders every question
+and the graph, and the command says so rather than leaving a dead "Next" button unexplained.
 
 ## Rendering a template to PDF or Word
 
 ```bash
-navigator notation pdf templates/notations/neon_law/onboarding__letter.md --out /tmp/onboarding.pdf --preview
-navigator notation word templates/notations/neon_law/onboarding__letter.md --out /tmp/onboarding.docx --preview
+navigator-deploy notation pdf templates/notations/neon_law/onboarding__letter.md --out /tmp/onboarding.pdf --preview
+navigator-deploy notation word templates/notations/neon_law/onboarding__letter.md --out /tmp/onboarding.docx --preview
 ```
 
 Both validate the file against the same rule set as `navigator project gate` first, resolve the render frame from the
 template's own `kind:`/`output:` frontmatter, fill any `{{code}}` placeholders passed with `--answer`, and compile the
 result in pure Rust. See [`pdf/README.md`](../pdf/README.md) for the render pipeline and output formats.
 
-You do not need a site to work locally. Use `navigator project gate`, the `navigator notation` authoring commands, and
-the KIND-backed `navigator dev` loop; seed a local catalog with `navigator site seed` when that command's local store
-and storage environment are available, or import deployment data with `navigator site import` after logging in.
+You do not need a site to work locally. Use `navigator project gate`, the `navigator-deploy notation` authoring
+commands, and the KIND-backed `navigator-deploy dev` loop; seed a local catalog with `navigator-deploy site seed` when
+that command's local store and storage environment are available, or import deployment data with `navigator site import`
+after logging in.

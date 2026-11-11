@@ -14,36 +14,36 @@ use uuid::Uuid;
 
 /// The committed pointer's claim about one document.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct PointerFact<'a> {
-    pub(crate) asset_id: Uuid,
-    pub(crate) sha256: &'a str,
+pub struct PointerFact<'a> {
+    pub asset_id: Uuid,
+    pub sha256: &'a str,
 }
 
 /// The live Project's view of one document chain.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct LiveFact<'a> {
+pub struct LiveFact<'a> {
     /// The newest revision: the one a lawyer reads and a new upload follows.
-    pub(crate) operative: Uuid,
-    pub(crate) sha256: &'a str,
+    pub operative: Uuid,
+    pub sha256: &'a str,
     /// Every revision id on the chain, newest first.
-    pub(crate) chain: &'a [Uuid],
+    pub chain: &'a [Uuid],
 }
 
 /// Everything [`decide`] reads about one document.
 #[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct Facts<'a> {
+pub struct Facts<'a> {
     /// SHA-256 of the local bytes; `None` when the file is absent.
-    pub(crate) local: Option<&'a str>,
-    pub(crate) pointer: Option<PointerFact<'a>>,
-    pub(crate) live: Option<LiveFact<'a>>,
+    pub local: Option<&'a str>,
+    pub pointer: Option<PointerFact<'a>>,
+    pub live: Option<LiveFact<'a>>,
     /// The commit that removed this document's pointer from the repository,
     /// when the pointer existed before and is now gone.
-    pub(crate) removed_in: Option<&'a str>,
+    pub removed_in: Option<&'a str>,
 }
 
 /// What `project sync` does about one document.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Decision {
+pub enum Decision {
     /// Local bytes, pointer, and live operative revision agree.
     Nothing,
     /// The bytes already match the live revision; only the pointer is written.
@@ -69,7 +69,8 @@ pub(crate) enum Decision {
 }
 
 /// The decision table of ENG-861.
-pub(crate) fn decide(facts: &Facts<'_>) -> Decision {
+#[must_use]
+pub fn decide(facts: &Facts<'_>) -> Decision {
     let Some(live) = facts.live else {
         return match (facts.pointer, facts.local) {
             (None, Some(_)) => Decision::UploadNew,
@@ -119,7 +120,7 @@ pub(crate) fn decide(facts: &Facts<'_>) -> Decision {
 
 /// One answer to a yes/no prompt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Answer {
+pub enum Answer {
     Yes,
     No,
     /// Yes to this and every remaining prompt of the same kind.
@@ -129,7 +130,7 @@ pub(crate) enum Answer {
 
 /// One answer to a which-side-wins prompt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Side {
+pub enum Side {
     Local,
     Live,
     Skip,
@@ -137,20 +138,20 @@ pub(crate) enum Side {
 }
 
 /// Where a prompt's answer comes from.
-pub(crate) trait Prompter {
+pub trait Prompter {
     fn confirm(&mut self, question: &str, offer_all: bool) -> Result<Answer>;
     fn choose_side(&mut self, question: &str, offer_local: bool) -> Result<Side>;
 }
 
 /// Answers typed at a terminal. Questions go to stderr so stdout keeps the
 /// report.
-pub(crate) struct TerminalPrompter<R, W> {
+pub struct TerminalPrompter<R, W> {
     input: R,
     output: W,
 }
 
 impl<R: BufRead, W: Write> TerminalPrompter<R, W> {
-    pub(crate) fn new(input: R, output: W) -> Self {
+    pub fn new(input: R, output: W) -> Self {
         Self { input, output }
     }
 
@@ -203,7 +204,7 @@ impl<R: BufRead, W: Write> Prompter for TerminalPrompter<R, W> {
 }
 
 /// How a decision that overwrites a revision gets its yes.
-pub(crate) enum Approval {
+pub enum Approval {
     /// `--yes`: every yes/no is answered yes. A conflict and a deletion are not
     /// yes/no questions, so `--yes` does not answer them.
     Yes,
@@ -215,7 +216,7 @@ pub(crate) enum Approval {
 
 /// The outcome of asking about one item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Resolution {
+pub enum Resolution {
     Apply,
     /// Apply the local side of a conflict.
     ApplyLocal,
@@ -225,14 +226,15 @@ pub(crate) enum Resolution {
 }
 
 /// Remembers `a` and `q` across the prompts of one run.
-pub(crate) struct Asker {
+pub struct Asker {
     approval: Approval,
     all: bool,
     quit: bool,
 }
 
 impl Asker {
-    pub(crate) fn new(approval: Approval) -> Self {
+    #[must_use]
+    pub fn new(approval: Approval) -> Self {
         Self {
             approval,
             all: false,
@@ -241,7 +243,7 @@ impl Asker {
     }
 
     /// A yes/no question. `a` answers it and every later one.
-    pub(crate) fn confirm(&mut self, question: &str) -> Result<Resolution> {
+    pub fn confirm(&mut self, question: &str) -> Result<Resolution> {
         if self.quit {
             return Ok(Resolution::Decline);
         }
@@ -265,7 +267,7 @@ impl Asker {
     }
 
     /// A which-side question. `--yes` never picks a side.
-    pub(crate) fn choose_side(&mut self, question: &str, offer_local: bool) -> Result<Resolution> {
+    pub fn choose_side(&mut self, question: &str, offer_local: bool) -> Result<Resolution> {
         if self.quit {
             return Ok(Resolution::Decline);
         }
@@ -285,11 +287,7 @@ impl Asker {
 
     /// A deletion: always individual, never covered by `a`. `yes_delete` is
     /// the `--yes-delete` flag.
-    pub(crate) fn confirm_deletion(
-        &mut self,
-        question: &str,
-        yes_delete: bool,
-    ) -> Result<Resolution> {
+    pub fn confirm_deletion(&mut self, question: &str, yes_delete: bool) -> Result<Resolution> {
         if yes_delete {
             return Ok(Resolution::Apply);
         }

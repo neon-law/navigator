@@ -205,12 +205,13 @@ pub fn standing(
 /// unpadded month, unpadded day. `now` being August 22nd 2026 UTC gives
 /// `26.8.22`.
 ///
-/// This is a NAME, not a validity claim. It is `pub(crate)` because
+/// This is a NAME, not a validity claim. It is `pub` because
 /// [`crate::release_default_tag`] and [`crate::cut_release`] are the callers
 /// with a clock to give it — an operator names a release explicitly, through
 /// `ops release version --tag`, and that command never reads one. See
 /// [`default_tag`] for where this fits.
-pub(crate) fn today_tag(now: DateTime<Utc>) -> String {
+#[must_use]
+pub fn today_tag(now: DateTime<Utc>) -> String {
     date_tag(now.date_naive())
 }
 
@@ -248,7 +249,7 @@ const LOOKAHEAD_DAYS: u32 = 366;
 /// `release_check`, there is no commit yet whose manifest could carry this
 /// candidate, so the idempotent-rerun case cannot arise here.
 #[must_use]
-pub(crate) fn default_tag(now: DateTime<Utc>, tags: &[String]) -> Option<Version> {
+pub fn default_tag(now: DateTime<Utc>, tags: &[String]) -> Option<Version> {
     let highest = highest_release(tags);
     let releasable =
         |version: &Version| standing(version, highest.as_ref(), false) == Standing::Releasable;

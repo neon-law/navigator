@@ -23,14 +23,14 @@ use crate::{
 };
 
 /// The deployment, the Project, and the manifest the verbs read.
-pub(crate) struct Coordinates {
-    pub(crate) base: String,
-    pub(crate) token: String,
-    pub(crate) project_id: Uuid,
-    pub(crate) project_code: String,
+pub struct Coordinates {
+    pub base: String,
+    pub token: String,
+    pub project_id: Uuid,
+    pub project_code: String,
 }
 
-pub(crate) async fn coordinates(host: Option<&str>, project: Option<&str>) -> Result<Coordinates> {
+pub async fn coordinates(host: Option<&str>, project: Option<&str>) -> Result<Coordinates> {
     let local = manifest::read(Path::new("."));
     let project = project
         .or_else(|| local.as_ref().and_then(|m| m.project.as_deref()))
@@ -50,7 +50,7 @@ pub(crate) async fn coordinates(host: Option<&str>, project: Option<&str>) -> Re
 /// `--docket` case number, or the manifest's only one. The caption is the
 /// `matter:` parties joined with `v.` when the block is present, so a case
 /// the server opens on the first write reads like the court's own.
-pub(crate) fn case_coordinates(root: &Path, docket: Option<&str>) -> Result<Value> {
+pub fn case_coordinates(root: &Path, docket: Option<&str>) -> Result<Value> {
     let path = root.join(manifest::FILE);
     let contents = std::fs::read_to_string(&path)
         .with_context(|| format!("read {} — run this from a Project checkout", manifest::FILE))?;
@@ -144,7 +144,7 @@ async fn call(request: reqwest::RequestBuilder, action: &str) -> Result<Value> {
 }
 
 /// Record an entry and attach an upload that arrived after a source-pending row.
-pub(crate) async fn post_entry(coordinates: &Coordinates, body: &Value) -> Result<Value> {
+pub async fn post_entry(coordinates: &Coordinates, body: &Value) -> Result<Value> {
     let row = call(
         reqwest::Client::new()
             .post(format!(
@@ -232,7 +232,7 @@ pub async fn list(host: Option<&str>, project: Option<&str>) -> ExitCode {
 }
 
 /// The Docket Entry rows of a Project, from `GET …/docket`.
-pub(crate) async fn list_rows(c: &Coordinates) -> Result<Vec<Value>> {
+pub async fn list_rows(c: &Coordinates) -> Result<Vec<Value>> {
     let body = call(
         reqwest::Client::new()
             .get(format!(

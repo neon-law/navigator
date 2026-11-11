@@ -6,7 +6,7 @@ name: deploy
 # reports it. In strict order:
 #
 #   0. release-version — DECIDE whether this commit is a release, by running
-#      `navigator ops release check`. It reads `[workspace.package].version` and
+#      `navigator-deploy ops release check`. It reads `[workspace.package].version` and
 #      compares it against every release tag in the repository, using semver's
 #      own ordering. Three answers, and the middle one is the ordinary case:
 #
@@ -161,7 +161,7 @@ name: deploy
 #
 # The distinction worth holding: "publish an image" and "deploy to a cluster"
 # are different powers. Publishing costs a registry push; deploying is what put
-# cloud credentials in CI, and it is a human act (`navigator ops ship`).
+# cloud credentials in CI, and it is a human act (`navigator-deploy ops ship`).
 on:
   push:
     branches:
@@ -174,7 +174,7 @@ on:
       # the four validations a bare ref needs — shape, date, manifest equality,
       # and provenance — for a second path nobody uses. The tag this workflow
       # CREATES still matches the `release-tags` ruleset glob
-      # (`cli/src/devx/github_setup.rs`), which is what makes every published
+      # (`deploy/src/devx/github_setup.rs`), which is what makes every published
       # version's ref one GitHub refuses to delete or move.
       - main
       # CI-iteration seam, and the ONLY way to prove a change to this file.
@@ -452,7 +452,7 @@ jobs:
       # THE WHOLE RELEASE DECISION, in one step so the job has one place to read
       # its outputs from. `ops release check` reads
       # `[workspace.package].version`, lists every release tag, and compares them
-      # with semver's own ordering — see `cli/src/release_check.rs` for why the
+      # with semver's own ordering — see `deploy/src/release_check.rs` for why the
       # tags are the anchor rather than the previous commit's manifest.
       #
       # It writes `tag`, `publishable`, and `prerelease` to `$GITHUB_OUTPUT`, and
@@ -501,9 +501,9 @@ jobs:
           fi
 
           if [ "${CHECKER_READY}" = "true" ]; then
-              navigator ops release check --github-output
+              navigator-deploy ops release check --github-output
           else
-              cargo run --locked -p cli --quiet -- ops release check --github-output
+              cargo run --locked -p deploy --quiet -- ops release check --github-output
           fi
       # AN UNSET PUBLISHER VARIABLE MUST NOT LOOK LIKE A FORK. `github.repository
       # != vars.DEPLOY_EXPECTED_REPOSITORY` is true for every repository when
@@ -730,7 +730,7 @@ jobs:
         if: matrix.image == 'neon-server'
         run: |
           set -euo pipefail
-          cargo run -p cli --quiet -- ops assets stub-referenced --out server/public
+          cargo run -p deploy --quiet -- ops assets stub-referenced --out server/public
           grep -vxF -e 'server/public/img/' \
             -e 'server/public/fonts/gorp-serif/*.woff2' \
             .dockerignore > /tmp/navigator-dockerignore
@@ -1061,7 +1061,7 @@ jobs:
       # within seconds of the apply regardless of cache warmth.
       - name: compile navigator CLI
         timeout-minutes: 90
-        run: cargo build -p cli
+        run: cargo build -p deploy
       - uses: ./.github/actions/slack-progress
         timeout-minutes: 90
         with:
@@ -1084,7 +1084,7 @@ jobs:
       # The StatefulSet waits for that Secret, then bootstrap creates all buckets.
       - name: bootstrap SeaweedFS object storage
         timeout-minutes: 90
-        run: cargo run -p cli -- dev seaweedfs-bootstrap
+        run: cargo run -p deploy -- dev seaweedfs-bootstrap
       - uses: ./.github/actions/slack-progress
         timeout-minutes: 90
         with:
@@ -1094,7 +1094,7 @@ jobs:
           step: "wait for rollouts, ClamAV readiness, and run attachment smoke checks"
       - name: wait for rollouts, ClamAV readiness, and run attachment smoke checks
         timeout-minutes: 90
-        run: cargo run -p cli -- dev e2e
+        run: cargo run -p deploy -- dev e2e
 
       # ---------- cross-binary interop ----------
       # Proves that `cli` and the in-cluster `web` cohabit on the same
@@ -1144,7 +1144,7 @@ jobs:
           NAVIGATOR_SURREAL_PASSWORD: root
         run: |
           set -euo pipefail
-          cargo run -p cli --quiet -- glossary show jurisdiction
+          cargo run -p deploy --quiet -- glossary show jurisdiction
 
       - uses: ./.github/actions/slack-progress
         timeout-minutes: 90
@@ -1162,7 +1162,7 @@ jobs:
       # origin is probed here.
       - name: verify content images are served by KIND web
         timeout-minutes: 90
-        run: cargo run -p cli --quiet -- ops assets verify --base-url http://localhost:8080/public
+        run: cargo run -p deploy --quiet -- ops assets verify --base-url http://localhost:8080/public
 
       - uses: ./.github/actions/slack-progress
         timeout-minutes: 90
@@ -1227,7 +1227,7 @@ jobs:
           NAVIGATOR_SURREAL_DATABASE: navigator
           NAVIGATOR_SURREAL_USER: root
           NAVIGATOR_SURREAL_PASSWORD: root
-        run: cargo run -p cli -- dev grant-lawyer
+        run: cargo run -p deploy -- dev grant-lawyer
       - uses: ./.github/actions/slack-progress
         timeout-minutes: 90
         with:
@@ -2509,10 +2509,9 @@ jobs:
     # the tag, gated on `publishable`.
     needs: [integration, release-version, release-tag]
     if: needs.release-version.outputs.publishable == 'true'
-    # Standard runner. One `--release` build of two binaries, with no cache and
-    # no linked test set: 20.8 min on Blacksmith's four vCPU (run 40152667654)
-    # against the same four vCPU here, inside the 90-minute cap. The same
-    # compile already runs GitHub-hosted for the macOS archive below. Unlike
+    # Standard runner. One `--release` build of the lean `navigator` binary
+    # alone: every other CLI and the LSP build in jobs of their own, so this
+    # graph carries no web client, operator tooling, or Ephemeris stack. Unlike
     # `build` and the publish legs, nothing here runs inside buildx, so the
     # image layers that need Blacksmith's ~145 GB root never touch this disk.
     runs-on: ubuntu-24.04
@@ -2529,8 +2528,7 @@ jobs:
     # not found". A static-pie binary runs on Alpine and on `ubuntu-latest`
     # alike, and the `FROM scratch` CLI image below needs one too. The
     # surreal-archive trigger image already builds this same `cli` crate for
-    # musl with nothing beyond `musl-tools`. The LSP stays glibc: only editors
-    # on a desktop consume it.
+    # musl with nothing beyond `musl-tools`.
     timeout-minutes: 90
     permissions:
       contents: read
@@ -2545,14 +2543,18 @@ jobs:
         timeout-minutes: 90
         with:
           toolchain: 1.98.0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        timeout-minutes: 90
+        with:
+          shared-key: release-navigator-linux
       - uses: ./.github/actions/slack-progress
         timeout-minutes: 90
         with:
           webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
           tag: "${{ needs.release-version.outputs.tag }}"
           stage: "release-cli-build-linux"
-          step: "build the tagged Navigator CLI and LSP"
-      - name: build the tagged Navigator CLI and LSP
+          step: "build the tagged Navigator CLI"
+      - name: build the tagged Navigator CLI
         timeout-minutes: 90
         env:
           NAVIGATOR_RELEASE_TAG: ${{ needs.release-version.outputs.tag }}
@@ -2562,7 +2564,6 @@ jobs:
           sudo apt-get install -y --no-install-recommends musl-tools
           rustup target add x86_64-unknown-linux-musl
           cargo build --locked --release --target x86_64-unknown-linux-musl -p cli --bin navigator
-          cargo build --locked --release -p lsp
       - uses: ./.github/actions/slack-progress
         timeout-minutes: 90
         with:
@@ -2579,19 +2580,11 @@ jobs:
           bin=target/x86_64-unknown-linux-musl/release/navigator
           file "${bin}" | grep -q 'static-pie linked\|statically linked' \
             || { file "${bin}"; echo "::error::the Linux CLI must be statically linked (ENG-1228)"; exit 1; }
-          image="$(grep -o 'data\.forgejo\.org/forgejo/runner@sha256:[0-9a-f]\{64\}' cli/src/devx/forgejo/runner.rs | head -n 1)"
-          test -n "${image}" || { echo "::error::no pinned runner image in cli/src/devx/forgejo/runner.rs"; exit 1; }
+          image="$(grep -o 'data\.forgejo\.org/forgejo/runner@sha256:[0-9a-f]\{64\}' deploy/src/devx/forgejo/runner.rs | head -n 1)"
+          test -n "${image}" || { echo "::error::no pinned runner image in deploy/src/devx/forgejo/runner.rs"; exit 1; }
           got="$(docker run --rm --entrypoint /b/navigator -v "${PWD}/$(dirname "${bin}"):/b:ro" "${image}" --version)"
           test "${got}" = "navigator ${TAG}" \
             || { echo "::error::${image} ran the CLI as '${got}', not 'navigator ${TAG}'"; exit 1; }
-          # `--version` falls back to the Cargo version, which a release
-          # commit stamps to the tag, so it cannot prove the tag was baked.
-          # The gate compares the pin against the published release, empty
-          # unless build.rs saw NAVIGATOR_RELEASE_TAG; without it every pinned
-          # gate re-runs itself. `--action-version` defaults to that value.
-          docker run --rm --entrypoint /b/navigator -v "${PWD}/$(dirname "${bin}"):/b:ro" "${image}" ops github setup --help \
-            | grep -qF "[default: ${TAG}]" \
-            || { echo "::error::the Linux CLI was built without NAVIGATOR_RELEASE_TAG; its published release is empty"; exit 1; }
       - uses: ./.github/actions/slack-progress
         timeout-minutes: 90
         with:
@@ -2645,42 +2638,6 @@ jobs:
             dist/navigator-${{ needs.release-version.outputs.tag }}-linux.tar.gz
             dist/navigator-${{ needs.release-version.outputs.tag }}-linux.tar.gz.sha256
           if-no-files-found: error
-      - uses: ./.github/actions/slack-progress
-        timeout-minutes: 90
-        with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          tag: "${{ needs.release-version.outputs.tag }}"
-          stage: "release-cli-build-linux"
-          step: "package the Linux LSP"
-      - name: package the Linux LSP
-        timeout-minutes: 90
-        env:
-          TAG: ${{ needs.release-version.outputs.tag }}
-        run: |
-          set -euo pipefail
-          mkdir -p dist/navigator-lsp-linux
-          install -m 0755 target/release/navigator-lsp dist/navigator-lsp-linux/navigator-lsp
-          install -m 0644 LICENSE dist/navigator-lsp-linux/LICENSE
-          install -m 0644 LICENSE-MIT dist/navigator-lsp-linux/LICENSE-MIT
-          install -m 0644 LICENSE-APACHE-2 dist/navigator-lsp-linux/LICENSE-APACHE-2
-          install -m 0644 NOTICE dist/navigator-lsp-linux/NOTICE
-          tar -czf "dist/navigator-lsp-${TAG}-linux.tar.gz" \
-              -C dist/navigator-lsp-linux navigator-lsp LICENSE LICENSE-MIT LICENSE-APACHE-2 NOTICE
-      - uses: ./.github/actions/slack-progress
-        timeout-minutes: 90
-        with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          tag: "${{ needs.release-version.outputs.tag }}"
-          stage: "release-cli-build-linux"
-          step: "upload the Linux LSP archive"
-      - name: upload the Linux LSP archive
-        timeout-minutes: 90
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: navigator-linux-lsp
-          path: dist/navigator-lsp-${{ needs.release-version.outputs.tag }}-linux.tar.gz
-          if-no-files-found: error
-
   release-cli-build-macos:
     name: build macOS navigator CLI release archive
     # Same stage as the other two archives: the e2e gate plus the tag, gated on
@@ -2702,12 +2659,11 @@ jobs:
     # bought here. State it rather than let someone infer "macOS" means
     # universal.
     #
-    # A cold release build of `cli` + `lsp` overran 90 minutes here (run
-    # 42957229465) while Linux finished in 47. The workspace release profile's
-    # thin LTO and single codegen unit serialize the final codegen of a
-    # 1,000-crate graph on the runner's few cores, so this job builds with LTO
-    # off and 16 codegen units — a slightly larger, equally correct binary —
-    # and restores a Rust dependency cache from the previous release.
+    # It builds the lean `navigator` alone. A cold release build of the old
+    # all-in-one `cli` + `lsp` overran 90 minutes here (run 42957229465), so
+    # every other binary now builds in its own job, and this one also builds
+    # with LTO off and 16 codegen units (a slightly larger, equally correct
+    # binary) and restores a Rust dependency cache from the previous release.
     timeout-minutes: 150
     env:
       CARGO_INCREMENTAL: "0"
@@ -2726,30 +2682,22 @@ jobs:
         timeout-minutes: 90
         with:
           toolchain: 1.98.0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        timeout-minutes: 90
+        with:
+          shared-key: release-navigator-macos
       - uses: ./.github/actions/slack-progress
         timeout-minutes: 90
         with:
           webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
           tag: "${{ needs.release-version.outputs.tag }}"
           stage: "release-cli-build-macos"
-          step: "cache the Rust dependencies"
-      - name: cache the Rust dependencies
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-        timeout-minutes: 90
-        with:
-          shared-key: release-cli-macos
-      - uses: ./.github/actions/slack-progress
-        timeout-minutes: 90
-        with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          tag: "${{ needs.release-version.outputs.tag }}"
-          stage: "release-cli-build-macos"
-          step: "build the tagged Navigator CLI and LSP"
-      - name: build the tagged Navigator CLI and LSP
+          step: "build the tagged Navigator CLI"
+      - name: build the tagged Navigator CLI
         timeout-minutes: 140
         env:
           NAVIGATOR_RELEASE_TAG: ${{ needs.release-version.outputs.tag }}
-        run: cargo build --locked --release -p cli -p lsp
+        run: cargo build --locked --release -p cli --bin navigator
       # ENG-115: a Developer ID signing identity, its .p12, and a notarization
       # API key are operator-provisioned secrets that do not exist yet. This
       # step is the only place that inspects them, so every step below reads
@@ -2961,12 +2909,129 @@ jobs:
         timeout-minutes: 90
         if: always() && steps.apple-signing.outputs.present == 'true'
         run: security delete-keychain "${RUNNER_TEMP}/navigator-signing.keychain-db" || true
+
+  release-lsp-build-linux:
+    name: build Linux navigator-lsp release archive
+    needs: [integration, release-version, release-tag]
+    if: needs.release-version.outputs.publishable == 'true'
+    runs-on: ubuntu-24.04
+    # The editor language server, built apart from every CLI so its archive
+    # never waits on a CLI compile. Desktop editors are its only consumer, so
+    # the Linux build stays glibc.
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_RELEASE_LTO: "false"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        timeout-minutes: 90
+        with:
+          ref: ${{ github.sha }}
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        timeout-minutes: 90
+        with:
+          toolchain: 1.98.0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        timeout-minutes: 90
+        with:
+          shared-key: release-lsp-linux
       - uses: ./.github/actions/slack-progress
         timeout-minutes: 90
         with:
           webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
           tag: "${{ needs.release-version.outputs.tag }}"
-          stage: "release-cli-build-macos"
+          stage: "release-lsp-build-linux"
+          step: "build the tagged Navigator LSP"
+      - name: build the tagged Navigator LSP
+        timeout-minutes: 50
+        env:
+          NAVIGATOR_RELEASE_TAG: ${{ needs.release-version.outputs.tag }}
+        run: cargo build --locked --release -p lsp --bin navigator-lsp
+      - uses: ./.github/actions/slack-progress
+        timeout-minutes: 90
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          tag: "${{ needs.release-version.outputs.tag }}"
+          stage: "release-lsp-build-linux"
+          step: "package the Linux LSP"
+      - name: package the Linux LSP
+        timeout-minutes: 90
+        env:
+          TAG: ${{ needs.release-version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist/navigator-lsp-linux
+          install -m 0755 target/release/navigator-lsp dist/navigator-lsp-linux/navigator-lsp
+          install -m 0644 LICENSE dist/navigator-lsp-linux/LICENSE
+          install -m 0644 LICENSE-MIT dist/navigator-lsp-linux/LICENSE-MIT
+          install -m 0644 LICENSE-APACHE-2 dist/navigator-lsp-linux/LICENSE-APACHE-2
+          install -m 0644 NOTICE dist/navigator-lsp-linux/NOTICE
+          tar -czf "dist/navigator-lsp-${TAG}-linux.tar.gz" \
+              -C dist/navigator-lsp-linux navigator-lsp LICENSE LICENSE-MIT LICENSE-APACHE-2 NOTICE
+      - uses: ./.github/actions/slack-progress
+        timeout-minutes: 90
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          tag: "${{ needs.release-version.outputs.tag }}"
+          stage: "release-lsp-build-linux"
+          step: "upload the Linux LSP archive"
+      - name: upload the Linux LSP archive
+        timeout-minutes: 90
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: navigator-linux-lsp
+          path: dist/navigator-lsp-${{ needs.release-version.outputs.tag }}-linux.tar.gz
+          if-no-files-found: error
+
+  release-lsp-build-macos:
+    name: build macOS navigator-lsp release archive
+    needs: [integration, release-version, release-tag]
+    if: needs.release-version.outputs.publishable == 'true'
+    runs-on: macos-latest
+    # The editor language server, built apart from every CLI so its archive
+    # never waits on a CLI compile. Desktop editors are its only consumer, so
+    # the Linux build stays glibc.
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_RELEASE_LTO: "false"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        timeout-minutes: 90
+        with:
+          ref: ${{ github.sha }}
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        timeout-minutes: 90
+        with:
+          toolchain: 1.98.0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        timeout-minutes: 90
+        with:
+          shared-key: release-lsp-macos
+      - uses: ./.github/actions/slack-progress
+        timeout-minutes: 90
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          tag: "${{ needs.release-version.outputs.tag }}"
+          stage: "release-lsp-build-macos"
+          step: "build the tagged Navigator LSP"
+      - name: build the tagged Navigator LSP
+        timeout-minutes: 50
+        env:
+          NAVIGATOR_RELEASE_TAG: ${{ needs.release-version.outputs.tag }}
+        run: cargo build --locked --release -p lsp --bin navigator-lsp
+      - uses: ./.github/actions/slack-progress
+        timeout-minutes: 90
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          tag: "${{ needs.release-version.outputs.tag }}"
+          stage: "release-lsp-build-macos"
           step: "package the macOS LSP"
       - name: package the macOS LSP
         timeout-minutes: 90
@@ -2987,7 +3052,7 @@ jobs:
         with:
           webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
           tag: "${{ needs.release-version.outputs.tag }}"
-          stage: "release-cli-build-macos"
+          stage: "release-lsp-build-macos"
           step: "upload the macOS LSP archive"
       - name: upload the macOS LSP archive
         timeout-minutes: 90
@@ -2995,6 +3060,273 @@ jobs:
         with:
           name: navigator-macos-lsp
           path: dist/navigator-lsp-${{ needs.release-version.outputs.tag }}-macos.tar.gz
+          if-no-files-found: error
+
+  release-deploy-cli-build-linux:
+    name: build Linux navigator-deploy release archive
+    needs: [integration, release-version, release-tag]
+    if: needs.release-version.outputs.publishable == 'true'
+    runs-on: ubuntu-24.04
+    # `navigator-deploy`: the operator CLI (`dev`, `ops`, site, mail,
+    # notation, firm). It links the web client, the cloud SDKs, and the KIND
+    # tooling, which is why it builds apart from the lean `navigator` and is
+    # never in the Homebrew tap.
+    timeout-minutes: 120
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_RELEASE_LTO: "false"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        timeout-minutes: 90
+        with:
+          ref: ${{ github.sha }}
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        timeout-minutes: 90
+        with:
+          toolchain: 1.98.0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        timeout-minutes: 90
+        with:
+          shared-key: release-navigator-deploy-linux
+      - uses: ./.github/actions/slack-progress
+        timeout-minutes: 90
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          tag: "${{ needs.release-version.outputs.tag }}"
+          stage: "release-deploy-cli-build-linux"
+          step: "build the tagged Navigator Deploy CLI"
+      - name: build the tagged Navigator Deploy CLI
+        timeout-minutes: 110
+        env:
+          NAVIGATOR_RELEASE_TAG: ${{ needs.release-version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # Static musl, like `navigator`: the `navigator-cli` image is
+          # `FROM scratch`, and `release-deploy.yml` runs this binary from it.
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends musl-tools
+          rustup target add x86_64-unknown-linux-musl
+          cargo build --locked --release --target x86_64-unknown-linux-musl -p deploy --bin navigator-deploy
+      - uses: ./.github/actions/slack-progress
+        timeout-minutes: 90
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          tag: "${{ needs.release-version.outputs.tag }}"
+          stage: "release-deploy-cli-build-linux"
+          step: "prove the release tag was baked in"
+      - name: prove the release tag was baked in
+        timeout-minutes: 10
+        env:
+          TAG: ${{ needs.release-version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # `--version` falls back to the Cargo version, which a release
+          # commit stamps to the tag, so it cannot prove the tag was baked.
+          # Pinned Project gates compare against the published release, empty
+          # unless build.rs saw NAVIGATOR_RELEASE_TAG; `--action-version`
+          # defaults to that value. The `cli` library both binaries link is
+          # built with the same variable, so this proves it for `navigator`.
+          target/x86_64-unknown-linux-musl/release/navigator-deploy ops github setup --help \
+            | grep -qF "[default: ${TAG}]" \
+            || { echo "::error::navigator-deploy was built without NAVIGATOR_RELEASE_TAG; its published release is empty"; exit 1; }
+      - uses: ./.github/actions/slack-progress
+        timeout-minutes: 90
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          tag: "${{ needs.release-version.outputs.tag }}"
+          stage: "release-deploy-cli-build-linux"
+          step: "package the Navigator Deploy CLI"
+      - name: package the Navigator Deploy CLI
+        timeout-minutes: 90
+        env:
+          TAG: ${{ needs.release-version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist/navigator-deploy-linux
+          install -m 0755 target/x86_64-unknown-linux-musl/release/navigator-deploy dist/navigator-deploy-linux/navigator-deploy
+          install -m 0644 LICENSE dist/navigator-deploy-linux/LICENSE
+          install -m 0644 LICENSE-MIT dist/navigator-deploy-linux/LICENSE-MIT
+          install -m 0644 LICENSE-APACHE-2 dist/navigator-deploy-linux/LICENSE-APACHE-2
+          install -m 0644 NOTICE dist/navigator-deploy-linux/NOTICE
+          tar -czf "dist/navigator-deploy-${TAG}-linux.tar.gz" \
+              -C dist/navigator-deploy-linux navigator-deploy LICENSE LICENSE-MIT LICENSE-APACHE-2 NOTICE
+          (cd dist && shasum -a 256 "navigator-deploy-${TAG}-linux.tar.gz" > "navigator-deploy-${TAG}-linux.tar.gz.sha256")
+      - uses: ./.github/actions/slack-progress
+        timeout-minutes: 90
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          tag: "${{ needs.release-version.outputs.tag }}"
+          stage: "release-deploy-cli-build-linux"
+          step: "upload the Navigator Deploy CLI archive"
+      - name: upload the Navigator Deploy CLI archive
+        timeout-minutes: 90
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: navigator-deploy-linux
+          path: |
+            dist/navigator-deploy-${{ needs.release-version.outputs.tag }}-linux.tar.gz
+            dist/navigator-deploy-${{ needs.release-version.outputs.tag }}-linux.tar.gz.sha256
+          if-no-files-found: error
+
+  release-deploy-cli-build-macos:
+    name: build macOS navigator-deploy release archive
+    needs: [integration, release-version, release-tag]
+    if: needs.release-version.outputs.publishable == 'true'
+    runs-on: macos-latest
+    # `navigator-deploy`: the operator CLI (`dev`, `ops`, site, mail,
+    # notation, firm). It links the web client, the cloud SDKs, and the KIND
+    # tooling, which is why it builds apart from the lean `navigator` and is
+    # never in the Homebrew tap.
+    timeout-minutes: 150
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_RELEASE_LTO: "false"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        timeout-minutes: 90
+        with:
+          ref: ${{ github.sha }}
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        timeout-minutes: 90
+        with:
+          toolchain: 1.98.0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        timeout-minutes: 90
+        with:
+          shared-key: release-navigator-deploy-macos
+      - uses: ./.github/actions/slack-progress
+        timeout-minutes: 90
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          tag: "${{ needs.release-version.outputs.tag }}"
+          stage: "release-deploy-cli-build-macos"
+          step: "build the tagged Navigator Deploy CLI"
+      - name: build the tagged Navigator Deploy CLI
+        timeout-minutes: 140
+        env:
+          NAVIGATOR_RELEASE_TAG: ${{ needs.release-version.outputs.tag }}
+        run: cargo build --locked --release -p deploy --bin navigator-deploy
+      - uses: ./.github/actions/slack-progress
+        timeout-minutes: 90
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          tag: "${{ needs.release-version.outputs.tag }}"
+          stage: "release-deploy-cli-build-macos"
+          step: "package the Navigator Deploy CLI"
+      - name: package the Navigator Deploy CLI
+        timeout-minutes: 90
+        env:
+          TAG: ${{ needs.release-version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist/navigator-deploy-macos
+          install -m 0755 target/release/navigator-deploy dist/navigator-deploy-macos/navigator-deploy
+          install -m 0644 LICENSE dist/navigator-deploy-macos/LICENSE
+          install -m 0644 LICENSE-MIT dist/navigator-deploy-macos/LICENSE-MIT
+          install -m 0644 LICENSE-APACHE-2 dist/navigator-deploy-macos/LICENSE-APACHE-2
+          install -m 0644 NOTICE dist/navigator-deploy-macos/NOTICE
+          tar -czf "dist/navigator-deploy-${TAG}-macos.tar.gz" \
+              -C dist/navigator-deploy-macos navigator-deploy LICENSE LICENSE-MIT LICENSE-APACHE-2 NOTICE
+          (cd dist && shasum -a 256 "navigator-deploy-${TAG}-macos.tar.gz" > "navigator-deploy-${TAG}-macos.tar.gz.sha256")
+      - uses: ./.github/actions/slack-progress
+        timeout-minutes: 90
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          tag: "${{ needs.release-version.outputs.tag }}"
+          stage: "release-deploy-cli-build-macos"
+          step: "upload the Navigator Deploy CLI archive"
+      - name: upload the Navigator Deploy CLI archive
+        timeout-minutes: 90
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: navigator-deploy-macos
+          path: |
+            dist/navigator-deploy-${{ needs.release-version.outputs.tag }}-macos.tar.gz
+            dist/navigator-deploy-${{ needs.release-version.outputs.tag }}-macos.tar.gz.sha256
+          if-no-files-found: error
+
+  release-scorpio-build-linux:
+    name: build Linux scorpio release archive
+    needs: [integration, release-version, release-tag]
+    if: needs.release-version.outputs.publishable == 'true'
+    runs-on: ubuntu-24.04
+    # `scorpio`: the Ephemeris CLI (Arrow, Parquet, Iceberg), built apart so
+    # that stack never reaches the lean `navigator`. Linux only.
+    timeout-minutes: 90
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_RELEASE_LTO: "false"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        timeout-minutes: 90
+        with:
+          ref: ${{ github.sha }}
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        timeout-minutes: 90
+        with:
+          toolchain: 1.98.0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        timeout-minutes: 90
+        with:
+          shared-key: release-scorpio-linux
+      - uses: ./.github/actions/slack-progress
+        timeout-minutes: 90
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          tag: "${{ needs.release-version.outputs.tag }}"
+          stage: "release-scorpio-build-linux"
+          step: "build the tagged Scorpio CLI"
+      - name: build the tagged Scorpio CLI
+        timeout-minutes: 80
+        env:
+          NAVIGATOR_RELEASE_TAG: ${{ needs.release-version.outputs.tag }}
+        run: cargo build --locked --release -p scorpio --bin scorpio
+      - uses: ./.github/actions/slack-progress
+        timeout-minutes: 90
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          tag: "${{ needs.release-version.outputs.tag }}"
+          stage: "release-scorpio-build-linux"
+          step: "package the Scorpio CLI"
+      - name: package the Scorpio CLI
+        timeout-minutes: 90
+        env:
+          TAG: ${{ needs.release-version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist/scorpio-linux
+          install -m 0755 target/release/scorpio dist/scorpio-linux/scorpio
+          install -m 0644 LICENSE dist/scorpio-linux/LICENSE
+          install -m 0644 LICENSE-MIT dist/scorpio-linux/LICENSE-MIT
+          install -m 0644 LICENSE-APACHE-2 dist/scorpio-linux/LICENSE-APACHE-2
+          install -m 0644 NOTICE dist/scorpio-linux/NOTICE
+          tar -czf "dist/scorpio-${TAG}-linux.tar.gz" \
+              -C dist/scorpio-linux scorpio LICENSE LICENSE-MIT LICENSE-APACHE-2 NOTICE
+          (cd dist && shasum -a 256 "scorpio-${TAG}-linux.tar.gz" > "scorpio-${TAG}-linux.tar.gz.sha256")
+      - uses: ./.github/actions/slack-progress
+        timeout-minutes: 90
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          tag: "${{ needs.release-version.outputs.tag }}"
+          stage: "release-scorpio-build-linux"
+          step: "upload the Scorpio CLI archive"
+      - name: upload the Scorpio CLI archive
+        timeout-minutes: 90
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: scorpio-linux
+          path: |
+            dist/scorpio-${{ needs.release-version.outputs.tag }}-linux.tar.gz
+            dist/scorpio-${{ needs.release-version.outputs.tag }}-linux.tar.gz.sha256
           if-no-files-found: error
 
   release-cli-publish:
@@ -3011,6 +3343,8 @@ jobs:
       [
         release-cli-build-linux,
         release-cli-build-macos,
+        release-lsp-build-linux,
+        release-lsp-build-macos,
         publish-service,
         publish-triggers,
         publish-cli-image,
@@ -3299,6 +3633,49 @@ jobs:
   # What stays true: a hotfix is still marked `--prerelease` on GitHub, so it is
   # not the front-page download. Only `brew`, which resolves one version and
   # needs that version to be the newest good build, follows it.
+  release-operator-cli-publish:
+    name: attach the operator CLI archives to the GitHub Release
+    # `navigator-deploy` and `scorpio` attach after the Release exists, in a job
+    # of their own: the Homebrew tap, the gate action, and every downstream
+    # job wait only on `release-cli-publish`, so a slow operator build never
+    # holds the Projects CLI back.
+    needs:
+      [
+        release-cli-publish,
+        release-deploy-cli-build-linux,
+        release-deploy-cli-build-macos,
+        release-scorpio-build-linux,
+        release-version,
+      ]
+    if: needs.release-version.outputs.publishable == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: download the operator CLI archives
+        timeout-minutes: 10
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: "{navigator-deploy,scorpio}-*"
+          merge-multiple: true
+          path: dist
+      - name: attach the operator CLI archives
+        timeout-minutes: 10
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release-version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          GH_HOST="${GITHUB_SERVER_URL#https://}"
+          export GH_HOST
+          gh release upload "${TAG}" dist/navigator-deploy-${TAG}-linux.tar.gz \
+              dist/navigator-deploy-${TAG}-linux.tar.gz.sha256 --repo "${GITHUB_REPOSITORY}" --clobber
+          gh release upload "${TAG}" dist/navigator-deploy-${TAG}-macos.tar.gz \
+              dist/navigator-deploy-${TAG}-macos.tar.gz.sha256 --repo "${GITHUB_REPOSITORY}" --clobber
+          gh release upload "${TAG}" dist/scorpio-${TAG}-linux.tar.gz \
+              dist/scorpio-${TAG}-linux.tar.gz.sha256 --repo "${GITHUB_REPOSITORY}" --clobber
+
   release-homebrew-tap:
     name: hand the release to the Homebrew tap
     needs: [release-cli-publish, release-version]
@@ -3711,7 +4088,7 @@ jobs:
       # recovery or a rehearsal, run from this repository's own checkout, where
       # `deployments/` holds the rows. Row names stay placeholders here:
       # `no_public_source_instructs_a_deployment_by_name` in
-      # cli/src/devx/deployments.rs requires any literal row to exist.
+      # deploy/src/devx/deployments.rs requires any literal row to exist.
       # Quoted: an unquoted `#` starts a YAML comment.
       - name: "post the ship instructions to #navigator"
         timeout-minutes: 90
@@ -3730,7 +4107,7 @@ jobs:
           ${ROLLOUT}
 
           *To ship by hand*, from a checkout of this repository with \`gcloud auth application-default login\` current:
-          \`navigator ops ship --deployment <row> --deployments-dir . --tag ${TAG}\`
+          \`navigator-deploy ops ship --deployment <row> --deployments-dir . --tag ${TAG}\`
 
           The rows are the directories under \`deployments/\`; roll the \`-stg\` row and look at it before the one clients are on. \`--dry-run\` renders and diffs without applying. Then confirm the roll landed:
           \`curl -fsS https://<host>/version | jq .release\`
@@ -3751,7 +4128,7 @@ jobs:
 
   publish-cli-image:
     name: publish the Navigator CLI container
-    needs: [release-version, release-tag, release-cli-build-linux]
+    needs: [release-version, release-tag, release-cli-build-linux, release-deploy-cli-build-linux]
     if: needs.release-version.outputs.publishable == 'true'
     # Standard runner. The image is `FROM scratch` plus the already-built
     # binary, so buildx compiles nothing.
@@ -3767,14 +4144,21 @@ jobs:
         with:
           name: navigator-linux-cli
           path: dist
-      - name: extract the release CLI
+      # `release-deploy.yml` rolls a release with `navigator-deploy ops ship`
+      # from this image, so it carries the operator CLI beside `navigator`.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: navigator-deploy-linux
+          path: dist
+      - name: extract the release CLIs
         env:
           TAG: ${{ needs.release-version.outputs.tag }}
         run: |
           set -euo pipefail
           mkdir cli-image
           tar -xzf "dist/navigator-${TAG}-linux.tar.gz" -C cli-image navigator
-          printf 'FROM scratch\nCOPY navigator /navigator\nENTRYPOINT ["/navigator"]\n' > cli-image/Containerfile
+          tar -xzf "dist/navigator-deploy-${TAG}-linux.tar.gz" -C cli-image navigator-deploy
+          printf 'FROM scratch\nCOPY navigator /navigator\nCOPY navigator-deploy /navigator-deploy\nENTRYPOINT ["/navigator"]\n' > cli-image/Containerfile
       - name: authenticate to Artifact Registry
         id: auth
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
@@ -3920,7 +4304,13 @@ jobs:
         publish-triggers,
         release-cli-build-linux,
         release-cli-build-macos,
+        release-lsp-build-linux,
+        release-lsp-build-macos,
+        release-deploy-cli-build-linux,
+        release-deploy-cli-build-macos,
+        release-scorpio-build-linux,
         release-cli-publish,
+        release-operator-cli-publish,
         release-homebrew-tap,
         release-zed-extension,
         notify,

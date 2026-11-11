@@ -27,7 +27,7 @@ const OSS_INSTALL: &str = include_str!(concat!(
 
 const ORCHESTRATE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/src/devx/orchestrate.rs"
+    "/../deploy/src/devx/orchestrate.rs"
 ));
 
 const DEPLOY_YML: &str = include_str!(concat!(
@@ -90,7 +90,7 @@ fn prerequisites_name_every_tool_the_kind_cluster_lane_requires() {
     for tool in cluster_lane_tools() {
         assert!(
             section.to_lowercase().contains(&tool.to_lowercase()),
-            "`docs/oss-install.md` §0 must name `{tool}`: `cli/src/devx/orchestrate.rs` refuses to \
+            "`docs/oss-install.md` §0 must name `{tool}`: `deploy/src/devx/orchestrate.rs` refuses to \
              start the KIND cluster lane without it, so a reader who installs only what §0 lists \
              is turned away by a tool the page never mentioned"
         );
@@ -177,7 +177,7 @@ fn every_source_citation_on_the_page_resolves() {
     assert!(
         found
             .iter()
-            .any(|(path, _)| *path == "cli/src/devx/orchestrate.rs"),
+            .any(|(path, _)| *path == "deploy/src/devx/orchestrate.rs"),
         "the page must cite the code that gates the cluster lane"
     );
 

@@ -18,18 +18,18 @@ use crate::document_sync::{
 
 /// What an upload resolved before it touches the network.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct UploadTarget {
+pub struct UploadTarget {
     /// The checkout the upload belongs to: the directory holding the
     /// `navigator.yaml` above `--file`, or the working directory when none
     /// names this Project.
-    pub(crate) root: PathBuf,
+    pub root: PathBuf,
     /// `--file` made absolute, so it reads the same wherever it was typed.
-    pub(crate) file: PathBuf,
+    pub file: PathBuf,
     /// The slug to file under. `None` leaves the server to name the document
     /// by its filename.
-    pub(crate) slug: Option<String>,
+    pub slug: Option<String>,
     /// Said on stderr when the slug came from a sibling pointer.
-    pub(crate) notice: Option<String>,
+    pub notice: Option<String>,
 }
 
 /// Resolve the checkout, file and slug for an upload of `file`.
@@ -37,7 +37,7 @@ pub(crate) struct UploadTarget {
 /// # Errors
 /// A sibling pointer that is unreadable, ambiguous (`.yaml` and `.yml`), not a
 /// regular file, or that names a different slug than an explicit `--slug`.
-pub(crate) fn resolve(
+pub fn resolve(
     cwd: &Path,
     project_code: &str,
     file: &Path,
@@ -111,7 +111,7 @@ pub(crate) fn resolve(
         return Err(anyhow!(
             "`--slug {explicit}` would file a new document beside {}, which already names `{slug}`; \
              drop `--slug` to file a revision of `{slug}`, or move that document with \
-             `navigator site document reslug`",
+             `navigator-deploy site document reslug`",
             sibling.display()
         ));
     }
@@ -129,7 +129,7 @@ pub(crate) fn resolve(
 }
 
 /// Deterministic, nonrecursive regular-file enumeration. Symlinks are excluded.
-pub(crate) fn directory_files(dir: &Path) -> Result<Vec<PathBuf>> {
+pub fn directory_files(dir: &Path) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     for entry in
         std::fs::read_dir(dir).with_context(|| format!("read directory {}", dir.display()))?

@@ -39,7 +39,7 @@ To run the local tier, also:
 ```bash
 git clone https://github.com/neon-law/navigator.git
 cd navigator
-cargo run -p cli -- dev up --path "$PWD"
+cargo run -p deploy -- dev up --path "$PWD"
 set -a; source .devx/env; set +a
 cargo run -p neon
 ```
@@ -67,7 +67,7 @@ curl --fail "http://127.0.0.1:${PORT}/app/health"
 The response begins with `ok`. Stop the host `web` process with Ctrl-C, then tear the tier down with:
 
 ```bash
-cargo run -p cli -- dev down --path "$PWD"
+cargo run -p deploy -- dev down --path "$PWD"
 ```
 
 ### Failure messages
@@ -79,11 +79,11 @@ cargo run -p cli -- dev down --path "$PWD"
 | `could not find workspace root containing Cargo.toml and k8s/` | Run from inside the checkout, or pass `--path`. |
 
 Two tests hold this path. `cli/tests/help.rs` runs `dev up --path` with an empty environment and asserts it stops only
-at a missing public tool, never at a cloud credential. `cli/src/devx/mod.rs` renders `.devx/env` with every private
+at a missing public tool, never at a cloud credential. `deploy/src/devx/mod.rs` renders `.devx/env` with every private
 credential variable stripped and asserts it passes the web boot invariants and names no private registry, bucket, or
 project.
 
-For parallel worktrees, the per-worktree lane is `navigator dev worktree-env up`; see
+For parallel worktrees, the per-worktree lane is `navigator-deploy dev worktree-env up`; see
 [`env-driven-devx.md`](env-driven-devx.md).
 
 ## Images
@@ -107,7 +107,7 @@ Point the CLI's image lookups at a public or self-run registry with `NAVIGATOR_I
 
 ```bash
 export NAVIGATOR_IMAGE_REGISTRY=ghcr.io/<owner>/navigator
-cargo run -p cli -- dev deploy
+cargo run -p deploy -- dev deploy
 ```
 
 `dev deploy` runs the full in-cluster stack from published images. `dev up` never contacts a registry for Navigator's
@@ -130,7 +130,7 @@ cargo run -p store --bin navigator-migrate                          # every pend
 cargo run -p store --bin navigator-migrate -- --through <version>   # pending migrations up to <version>
 ```
 
-Locally, `cargo run -p cli -- dev forgejo up` adds PostgreSQL, its roles, and Forgejo to the tier, forwarded on
+Locally, `cargo run -p deploy -- dev forgejo up` adds PostgreSQL, its roles, and Forgejo to the tier, forwarded on
 `NAVIGATOR_KIND_POSTGRES_PORT` (default `15432`). In a cluster, run the Job in `k8s/postgres/migrate/` with a migration
 role, and start services only after it completes. `web` connects to PostgreSQL only when
 `NAVIGATOR_POSTGRES_ENABLED=true`.
@@ -145,8 +145,8 @@ Firm uses. Moving a Project names the target Firm and Brand together. Membership
 `person_project_role`.
 
 Every table's scope is declared in `store/postgres/ownership.json` and enforced in queries, not by row-level security
-alone. Look up each term with `cargo run -p cli -- glossary show "Firm"`. [`postgres-tenancy.md`](postgres-tenancy.md)
-has the per-table matrix.
+alone. Look up each term with `cargo run -p deploy -- glossary show "Firm"`.
+[`postgres-tenancy.md`](postgres-tenancy.md) has the per-table matrix.
 
 A self-hosted deployment brands itself through a brand bundle, not by editing views. See
 [`oss-install.md`](oss-install.md#brand-bundle).
@@ -172,9 +172,9 @@ data when changing its storage engine. Production continues to use its configure
   Cloud Storage bucket the operator names in the `navigator-postgres-backup-target` ConfigMap.
   `k8s/postgres/restore-drill/` restores into scratch storage and reports row counts and AGE graph counts. See
   [`postgres-kubernetes.md`](postgres-kubernetes.md#backups-and-point-in-time-recovery).
-- **SurrealDB (Interim).** `navigator ops surreal-archive export` writes a best-effort recovery archive by default, and
-  `navigator ops surreal-archive restore-drill --key <key>` checks it against its export receipt when available. This
-  verifies recovery only; strict consistency requires an explicitly quiesced-writer export. See
+- **SurrealDB (Interim).** `navigator-deploy ops surreal-archive export` writes a best-effort recovery archive by
+  default, and `navigator-deploy ops surreal-archive restore-drill --key <key>` checks it against its export receipt
+  when available. This verifies recovery only; strict consistency requires an explicitly quiesced-writer export. See
   [`surreal-archives.md`](surreal-archives.md).
 - **Projects.** Each Project has verified recovery archives under `/app/api/projects/{id}/recovery-archives`. See
   [`project-recovery-archives.md`](project-recovery-archives.md).
@@ -206,10 +206,10 @@ same PostgreSQL server. [`forgejo-deployment.md`](forgejo-deployment.md) is the 
 - **Sign-in.** Forgejo uses Google OAuth with its own client and callback, without a separate local password or factor,
   and keeps registration closed until the email-domain allowlist is synced. KIND uses the synthetic Rauthy OIDC fixture.
 - **The Project gate.** `navigator project scaffold` writes `.forgejo/workflows/gate.yml` for a Forgejo-backed Project.
-- **Git bundle archive and restore.** `navigator ops forgejo archive` and `navigator ops forgejo restore` prove one Git
-  bundle round trip per invocation.
+- **Git bundle archive and restore.** `navigator-deploy ops forgejo archive` and `navigator-deploy ops forgejo restore`
+  prove one Git bundle round trip per invocation.
 
-Locally, `cargo run -p cli -- dev forgejo up` starts it; see [`forgejo-kind.md`](forgejo-kind.md).
+Locally, `cargo run -p deploy -- dev forgejo up` starts it; see [`forgejo-kind.md`](forgejo-kind.md).
 
 The Iceberg export covers the databases only; it does not cover Git repositories, LFS objects, or attachments. Those
 live on Forgejo's retained `/var/lib/gitea` claim and need their own backup, restored to a matching recovery point. See
@@ -231,15 +231,15 @@ ingress, and secrets. [`multi-cloud.md`](multi-cloud.md) and [`oss-install.md`](
 
 ## Deployment configuration
 
-`navigator ops ship` reads an operator-supplied root through `--deployments-dir`, then `NAVIGATOR_DEPLOYMENTS_DIR`, then
-the source checkout. The root contains `deployments/<name>/config.toml` and `.sops.yaml`; pass the containing directory,
-not `deployments/` itself. Keep live rows and encrypted secrets in a private operator checkout. The source tree carries
-only the synthetic `example-deployment` row.
+`navigator-deploy ops ship` reads an operator-supplied root through `--deployments-dir`, then
+`NAVIGATOR_DEPLOYMENTS_DIR`, then the source checkout. The root contains `deployments/<name>/config.toml` and
+`.sops.yaml`; pass the containing directory, not `deployments/` itself. Keep live rows and encrypted secrets in a
+private operator checkout. The source tree carries only the synthetic `example-deployment` row.
 
 From the source checkout, render an offline upgrade plan using that example:
 
 ```bash
-cargo run -p cli -- ops ship --deployment example-deployment --deployments-dir "$PWD" \
+cargo run -p deploy -- ops ship --deployment example-deployment --deployments-dir "$PWD" \
   --tag 26.10.19 --dry-run
 ```
 

@@ -137,7 +137,7 @@ exists:
 
 1. Add `NAVIGATOR_POSTGRES_DBOS_PASSWORD` to the deployment's `postgres-secrets.enc.yaml` through a pull request, beside
    the client logins.
-2. Run `navigator ops secrets apply --deployment <name> --service postgres --deployments-dir .`. That writes
+2. Run `navigator-deploy ops secrets apply --deployment <name> --service postgres --deployments-dir .`. That writes
    `navigator-postgres-dbos`.
 3. Ship. The release's roles step converges `navigator_dbos` and the `dbos` schema before `web` rolls.
 

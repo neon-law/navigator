@@ -11,8 +11,8 @@ reference>/<index>`). Re-uploading the same message dedupes rather than writing 
 
 - Door: `POST /app/api/projects/{id}/mail/eml` —
   [`portal/src/api.rs`](../../portal/src/api.rs), parser in [`portal/src/eml_filing.rs`](../../portal/src/eml_filing.rs)
-- CLI: `navigator mail parse <path>.eml` —
-  [`cli/src/mail.rs`](../../cli/src/mail.rs)
+- CLI: `navigator-deploy mail parse <path>.eml` —
+  [`deploy/src/mail.rs`](../../deploy/src/mail.rs)
 
 The message's `Message-ID` header scopes the source reference (`eml:<message-id>`, else a content digest), the same
 reference shape the stored-inbound `mail/file` door uses for provider message ids. The firm mailbox — the request's

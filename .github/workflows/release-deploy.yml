@@ -342,8 +342,10 @@ jobs:
           docker pull "${cli_ref}@${cli_digest}"
           container="$(docker create "${cli_ref}@${cli_digest}" --version)"
           docker cp "${container}:/navigator" /tmp/navigator
+          docker cp "${container}:/navigator-deploy" /tmp/navigator-deploy
           docker rm "${container}" >/dev/null
           sudo install -m 0755 /tmp/navigator /usr/local/bin/navigator
+          sudo install -m 0755 /tmp/navigator-deploy /usr/local/bin/navigator-deploy
           reported="$(navigator --version)"
           case "${reported}" in
               *"${TAG}"*) echo "navigator reports ${reported}" ;;
@@ -370,13 +372,13 @@ jobs:
         run: |
           set -euo pipefail
           # `--project-id` arrived in 26.10.20; a rollback to an older tag needs a hand roll.
-          if ! navigator ops ship --help | grep -q -- '--project-id'; then
+          if ! navigator-deploy ops ship --help | grep -q -- '--project-id'; then
               echo "::error::navigator ${TAG} cannot read published configuration; roll it by hand (docs/manual-roll.md)"
               exit 1
           fi
           printf '%s' "${IMAGE_DIGESTS}" > /tmp/image-digests.json
           # `ops ship` fetches its own cluster credentials and registry login.
-          navigator ops ship --deployment "${DEPLOYMENT}" --project-id "${GCP_PROJECT_ID}" --tag "${TAG}" --image-digests /tmp/image-digests.json --assert-signing-iam --quiet --log-sink "${SHIP_LOG_SINK}"
+          navigator-deploy ops ship --deployment "${DEPLOYMENT}" --project-id "${GCP_PROJECT_ID}" --tag "${TAG}" --image-digests /tmp/image-digests.json --assert-signing-iam --quiet --log-sink "${SHIP_LOG_SINK}"
 
       - name: "health check: brand readiness"
         id: brand-readiness
@@ -384,11 +386,11 @@ jobs:
           set -euo pipefail
           # The CLI is the tag being rolled; a tag older than this check's flag
           # leaves the smoke check `ops ship` already ran to stand in.
-          if ! navigator ops brand-readiness --help | grep -q -- '--project-id'; then
+          if ! navigator-deploy ops brand-readiness --help | grep -q -- '--project-id'; then
               echo "::warning::navigator ${TAG} predates \`ops brand-readiness --project-id\`; relying on the smoke check in ops ship"
               exit 0
           fi
-          navigator ops brand-readiness --deployment "${DEPLOYMENT}" --project-id "${GCP_PROJECT_ID}"
+          navigator-deploy ops brand-readiness --deployment "${DEPLOYMENT}" --project-id "${GCP_PROJECT_ID}"
 
       - name: "post the brand readiness result to #navigator"
         if: always() && steps.brand-readiness.outcome != 'skipped'
@@ -411,11 +413,11 @@ jobs:
           RESTATE_ADMIN_TOKEN: ${{ secrets.STAGING_RESTATE_ADMIN_TOKEN }}
         run: |
           set -euo pipefail
-          if ! navigator ops restate register --help | grep -q -- '--project-id'; then
+          if ! navigator-deploy ops restate register --help | grep -q -- '--project-id'; then
               echo "::warning::navigator ${TAG} predates \`ops restate register --project-id\`; relying on the registration in ops ship"
               exit 0
           fi
-          navigator ops restate register --deployment "${DEPLOYMENT}" --project-id "${GCP_PROJECT_ID}"
+          navigator-deploy ops restate register --deployment "${DEPLOYMENT}" --project-id "${GCP_PROJECT_ID}"
 
       - name: "post the Restate registration result to #navigator"
         if: always() && steps.restate-registration.outcome != 'skipped'
@@ -573,8 +575,10 @@ jobs:
           docker pull "${cli_ref}@${cli_digest}"
           container="$(docker create "${cli_ref}@${cli_digest}" --version)"
           docker cp "${container}:/navigator" /tmp/navigator
+          docker cp "${container}:/navigator-deploy" /tmp/navigator-deploy
           docker rm "${container}" >/dev/null
           sudo install -m 0755 /tmp/navigator /usr/local/bin/navigator
+          sudo install -m 0755 /tmp/navigator-deploy /usr/local/bin/navigator-deploy
           reported="$(navigator --version)"
           case "${reported}" in
               *"${TAG}"*) echo "navigator reports ${reported}" ;;
@@ -601,13 +605,13 @@ jobs:
         run: |
           set -euo pipefail
           # `--project-id` arrived in 26.10.20; a rollback to an older tag needs a hand roll.
-          if ! navigator ops ship --help | grep -q -- '--project-id'; then
+          if ! navigator-deploy ops ship --help | grep -q -- '--project-id'; then
               echo "::error::navigator ${TAG} cannot read published configuration; roll it by hand (docs/manual-roll.md)"
               exit 1
           fi
           printf '%s' "${IMAGE_DIGESTS}" > /tmp/image-digests.json
           # `ops ship` fetches its own cluster credentials and registry login.
-          navigator ops ship --deployment "${DEPLOYMENT}" --project-id "${GCP_PROJECT_ID}" --tag "${TAG}" --image-digests /tmp/image-digests.json --assert-signing-iam --quiet --log-sink "${SHIP_LOG_SINK}"
+          navigator-deploy ops ship --deployment "${DEPLOYMENT}" --project-id "${GCP_PROJECT_ID}" --tag "${TAG}" --image-digests /tmp/image-digests.json --assert-signing-iam --quiet --log-sink "${SHIP_LOG_SINK}"
 
       - name: "health check: brand readiness"
         id: brand-readiness
@@ -615,11 +619,11 @@ jobs:
           set -euo pipefail
           # The CLI is the tag being rolled; a tag older than this check's flag
           # leaves the smoke check `ops ship` already ran to stand in.
-          if ! navigator ops brand-readiness --help | grep -q -- '--project-id'; then
+          if ! navigator-deploy ops brand-readiness --help | grep -q -- '--project-id'; then
               echo "::warning::navigator ${TAG} predates \`ops brand-readiness --project-id\`; relying on the smoke check in ops ship"
               exit 0
           fi
-          navigator ops brand-readiness --deployment "${DEPLOYMENT}" --project-id "${GCP_PROJECT_ID}"
+          navigator-deploy ops brand-readiness --deployment "${DEPLOYMENT}" --project-id "${GCP_PROJECT_ID}"
 
       - name: "post the brand readiness result to #navigator"
         if: always() && steps.brand-readiness.outcome != 'skipped'
@@ -637,11 +641,11 @@ jobs:
           RESTATE_ADMIN_TOKEN: ${{ secrets.PRODUCTION_RESTATE_ADMIN_TOKEN }}
         run: |
           set -euo pipefail
-          if ! navigator ops restate register --help | grep -q -- '--project-id'; then
+          if ! navigator-deploy ops restate register --help | grep -q -- '--project-id'; then
               echo "::warning::navigator ${TAG} predates \`ops restate register --project-id\`; relying on the registration in ops ship"
               exit 0
           fi
-          navigator ops restate register --deployment "${DEPLOYMENT}" --project-id "${GCP_PROJECT_ID}"
+          navigator-deploy ops restate register --deployment "${DEPLOYMENT}" --project-id "${GCP_PROJECT_ID}"
 
       - name: "post the Restate registration result to #navigator"
         if: always() && steps.restate-registration.outcome != 'skipped'

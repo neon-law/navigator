@@ -4,7 +4,7 @@
 //! The draft never leaves this process. The command reads the matter's own
 //! `navigator.yaml` for Kit provenance, resolves the matter's private terms
 //! through the same pre-filing door `navigator project feedback-check` uses,
-//! and scans the draft with the shared [`cli::feedback_scan`] scanner. A clean
+//! and scans the draft with the shared [`crate::feedback_scan`] scanner. A clean
 //! draft prints the prepared issue; a draft carrying an identifier prints the
 //! placeholder to use instead and exits non-zero. Filing itself stays with
 //! the tracker: the command prepares, a person or an agent files.
@@ -170,8 +170,8 @@ async fn run_checked(
         }
     }
     // 4. The scan, over the draft with the matter's terms merged in.
-    let merged = cli::pii_audit::merge_terms(&terms, &[]);
-    let findings = cli::feedback_scan::scan(&draft, &merged);
+    let merged = crate::pii_audit::merge_terms(&terms, &[]);
+    let findings = crate::feedback_scan::scan(&draft, &merged);
     if findings.is_empty() {
         println!("{}", prepared_issue(&pin, &draft));
         return Outcome::Prepared;

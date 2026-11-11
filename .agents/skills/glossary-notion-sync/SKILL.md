@@ -11,7 +11,8 @@ The two copies are not peers:
 - **[`docs/glossary/`](../../../docs/glossary/README.md) is the source of truth.** One file per term, with a
   one-sentence plain-text `description:` in frontmatter, reviewed in pull requests, embedded in the binary through
   `store::glossary::GLOSSARY`, materialized into `glossary_term` rows on every boot, published at `/glossary`, and read
-  by `navigator glossary list` / `navigator glossary show <term>`. A definition is not real until it lands here.
+  by `navigator-deploy glossary list` / `navigator-deploy glossary show <term>`. A definition is not real until it lands
+  here.
 - **The Notion page is the reading and proposing surface** for colleagues without a checkout. Find it with a Notion
   search for the page titled **Glossary**; its URL is a private firm coordinate and stays out of this repository. Every
   push rewrites it wholesale, so an edit made there is lost unless pulled into the repository first. Say so when handing
@@ -38,7 +39,7 @@ The two copies are not peers:
 Generate the page; never hand-edit it.
 
 ```bash
-cargo run -p cli --quiet -- glossary notion > /tmp/glossary-notion.md
+cargo run -p deploy --quiet -- glossary notion > /tmp/glossary-notion.md
 ```
 
 The output joins every term into one page (`## Title` then body, alphabetical by slug), resolves repository paths to
@@ -61,7 +62,7 @@ Verify with `notion-fetch` on the page URL. Its heading count must match the num
 **A pull is a pull request.** Fetch, read, and hand-apply each change to the term's own file. Never paste the Notion
 page over the directory: it has absolute GitHub URLs, flowed paragraphs, and no links between terms.
 
-1. `notion-fetch` the page and diff it against `cargo run -p cli --quiet -- glossary notion` output. Ignore Notion's
+1. `notion-fetch` the page and diff it against `cargo run -p deploy --quiet -- glossary notion` output. Ignore Notion's
    own re-serialization: it returns a Markdown table as a native `<table>` block and drops blank lines between blocks.
    What remains is what somebody typed.
 2. **Read every difference before applying it.** Notion holds real matters and this repository is public, so a Notion

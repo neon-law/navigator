@@ -14,7 +14,7 @@ use super::forge::{
 };
 use super::lifecycle::git_text;
 
-pub(crate) struct ForgejoForge {
+pub struct ForgejoForge {
     http: reqwest::Client,
     root: String,
     repository: String,
@@ -23,7 +23,7 @@ pub(crate) struct ForgejoForge {
 }
 
 impl ForgejoForge {
-    pub(crate) fn new(root: &str, repository: &str, token: String) -> Result<Self> {
+    pub fn new(root: &str, repository: &str, token: String) -> Result<Self> {
         cloud::forgejo_governance::repository_target(repository)?;
         let governance = Forgejo::new(root, token.clone())?;
         Ok(Self {
@@ -38,7 +38,7 @@ impl ForgejoForge {
         })
     }
 
-    pub(crate) fn from_checkout(dir: &Path) -> Result<Self> {
+    pub fn from_checkout(dir: &Path) -> Result<Self> {
         let remote = git_text(dir, &["remote", "get-url", "origin"])?;
         let root = std::env::var("NAVIGATOR_FORGEJO_ROOT_URL")
             .context("configure NAVIGATOR_FORGEJO_ROOT_URL for this Forgejo checkout")?;

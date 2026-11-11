@@ -49,4 +49,5 @@ and message. Run it before committing any `.md` change; CI also validates the co
 ## Don't
 
 - Don't reach for `markdownlint`, `mdformat`, or any non-Rust linter. See [[rust]] for the Rust-only stance.
-- Don't disable a rule by editing `cli/src/main.rs`. If a rule is wrong, fix it in `rules/src/<code>.rs` with a test.
+- Don't disable a rule by editing `cli/src/commands.rs`. If a rule is wrong, fix it in `rules/src/<code>.rs` with a
+  test.
