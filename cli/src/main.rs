@@ -9448,14 +9448,11 @@ fn notation_render_timestamp(file: &Path) -> chrono::DateTime<chrono::Utc> {
 /// YAML frontmatter block. When there is no recognized frontmatter, the
 /// whole string is the body.
 fn strip_frontmatter(contents: &str) -> &str {
-    let Some(after_open) = contents.strip_prefix("---\n") else {
-        return contents;
-    };
-    if let Some(end) = after_open.find("\n---\n") {
-        return after_open[end + "\n---\n".len()..].trim_start_matches('\n');
-    }
-    // Closer at EOF with no body, or no closer at all.
-    after_open.strip_suffix("\n---").map_or(contents, |_| "")
+    // Delegated to the Word import so the renderer and the importer cannot
+    // disagree about where a template's frontmatter ends: the exporter hands
+    // Word exactly `body_offset`'s slice, so the importer baselines exactly
+    // that slice.
+    &contents[word::body_offset(contents)..]
 }
 
 struct FixReport {

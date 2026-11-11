@@ -22,7 +22,9 @@ mod render;
 pub mod service;
 
 pub use adapter::{AdapterError, ManagedAdapter, WordAdapter};
-pub use import::{apply_import, dry_run_import, plan_import, ImportError, ImportPlan};
+pub use import::{
+    apply_import, body_offset, diff_report, dry_run_import, plan_import, ImportError, ImportPlan,
+};
 pub use model::{
     Block, BreakKind, Comment, Diagnostic, DiagnosticCode, DiagnosticSeverity, Document,
     DocumentModel, FieldKind, Inline, NumberingDefinition, NumberingIdentity, OriginalSource,
