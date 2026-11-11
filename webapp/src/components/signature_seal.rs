@@ -280,3 +280,227 @@ pub fn SignatureSeal(seal: SignatureSealData) -> Element {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn render_seal(seal: SignatureSealData) -> String {
+        fn app(seal: SignatureSealData) -> Element {
+            rsx! { SignatureSeal { seal } }
+        }
+        let mut dom = VirtualDom::new_with_props(app, seal);
+        dom.rebuild_in_place();
+        dioxus_ssr::render(&dom)
+    }
+
+    /// The fixture webhook payload the completion webhook classifies, and
+    /// the seal facts its classification leaves behind: the completed
+    /// `signature` row (stamped `signed_at`) and the two archived
+    /// `CompletedDocuments`. This is the payload shape
+    /// `portal/src/esignature_webhook.rs` parses on
+    /// `/webhook/esignature/:secret`.
+    const FIXTURE_COMPLETED_WEBHOOK: &str = r#"{
+        "event": "envelope-completed",
+        "data": {
+            "envelopeId": "env-seal-1",
+            "envelopeSummary": { "status": "completed" }
+        }
+    }"#;
+
+    /// The seal facts a completed webhook payload leaves behind, with the
+    /// declared signers the envelope named.
+    fn fixture_seal() -> SignatureSealData {
+        let payload: serde_json::Value = serde_json::from_str(FIXTURE_COMPLETED_WEBHOOK).unwrap();
+        assert_eq!(payload["event"], "envelope-completed");
+        SignatureSealData {
+            state: SealState::Signed,
+            provider: "docusign".into(),
+            signed_at: Some("2026-06-30T00:00:00Z".into()),
+            signers: vec![
+                SealSigner {
+                    name: "Avery Client".into(),
+                    role: SealRole::Client,
+                    bar_number: None,
+                    signed_at: Some("2026-06-30T17:05:00-07:00".into()),
+                },
+                SealSigner {
+                    name: "Nicholas Shook".into(),
+                    role: SealRole::Firm,
+                    bar_number: Some("12345".into()),
+                    signed_at: Some("2026-06-30T17:06:00-07:00".into()),
+                },
+            ],
+            envelope_id: Some("env-seal-1".into()),
+            signed_sha256: Some(
+                "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08".into(),
+            ),
+            signed_href: Some("/app/notations/n1/documents/signed".into()),
+            certificate_href: Some("/app/notations/n1/documents/certificate".into()),
+        }
+    }
+
+    #[test]
+    fn the_seal_renders_the_executed_element_with_its_documents() {
+        let html = render_seal(fixture_seal());
+        assert!(html.contains(r#"class="navigator-signature""#), "{html}");
+        assert!(html.contains(r#"data-state="executed""#), "{html}");
+        assert!(html.contains("Executed"), "{html}");
+        assert!(
+            html.contains("Signed through DocuSign on 2026-06-30."),
+            "{html}"
+        );
+        assert!(
+            html.contains(r#"href="/app/notations/n1/documents/signed""#),
+            "{html}"
+        );
+        assert!(
+            html.contains(r#"href="/app/notations/n1/documents/certificate""#),
+            "{html}"
+        );
+        assert!(!html.contains("style="), "{html}");
+    }
+
+    #[test]
+    fn the_seal_mark_names_the_provider_its_signers_and_their_stamps() {
+        let html = render_seal(fixture_seal());
+        assert!(
+            html.contains("Signed electronically via DocuSign"),
+            "{html}"
+        );
+        assert!(html.contains("Avery Client — client"), "{html}");
+        assert!(html.contains("2026-06-30T17:05:00-07:00"), "{html}");
+        assert!(
+            html.contains("Nicholas Shook — firm, Bar No. 12345"),
+            "{html}"
+        );
+        assert!(
+            html.contains(r#"class="navigator-signature__seal""#),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn the_seal_carries_the_envelope_pointer_and_the_signed_hash() {
+        let html = render_seal(fixture_seal());
+        assert!(html.contains("Envelope env-seal-1."), "{html}");
+        assert!(
+            html.contains(
+                "SHA-256 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08."
+            ),
+            "{html}"
+        );
+    }
+
+    /// A seal whose archive is still landing shows the executed mark and
+    /// the signing date — the webhook already confirmed execution — with
+    /// only the links that exist yet, never a dead one.
+    #[test]
+    fn a_seal_with_a_missing_archive_omits_only_that_link() {
+        let mut seal = fixture_seal();
+        seal.certificate_href = None;
+        let html = render_seal(seal);
+        assert!(html.contains(r#"data-state="executed""#), "{html}");
+        assert!(
+            html.contains(r#"href="/app/notations/n1/documents/signed""#),
+            "{html}"
+        );
+        assert!(!html.contains("documents/certificate"), "{html}");
+        assert!(!html.contains(" · "), "{html}");
+    }
+
+    /// The awaiting state shows empty labelled signature lines — one per
+    /// declared signer — and never the seal mark. The ruled line is
+    /// decoration; the real text carries the meaning for a screen reader.
+    #[test]
+    fn the_awaiting_state_shows_labelled_empty_lines_not_a_seal() {
+        let mut seal = fixture_seal();
+        seal.state = SealState::Awaiting;
+        seal.signed_at = None;
+        seal.envelope_id = None;
+        seal.signed_sha256 = None;
+        seal.signed_href = None;
+        seal.certificate_href = None;
+        let html = render_seal(seal);
+        assert!(html.contains(r#"data-state="awaiting""#), "{html}");
+        assert!(!html.contains("navigator-signature__seal"), "{html}");
+        assert!(html.contains("Awaiting signature"), "{html}");
+        assert!(
+            html.contains("Awaiting signature from Avery Client (client)."),
+            "{html}"
+        );
+        assert!(
+            html.contains("Awaiting signature from Nicholas Shook (firm)."),
+            "{html}"
+        );
+        // The ruled line is decoration only — hidden from the accessibility
+        // tree, with no label of its own to contradict its hiding.
+        assert!(
+            html.contains(r#"class="navigator-signature__line" aria-hidden="true""#),
+            "{html}"
+        );
+        assert!(!html.contains("aria-label="), "{html}");
+        assert!(
+            !html.contains("href="),
+            "an unexecuted envelope links to nothing: {html}"
+        );
+    }
+
+    /// A declined, voided, or expired envelope is marked in so many words —
+    /// role-labelled so the reason reads as text — and never renders the
+    /// seal mark or any executed fact.
+    #[test]
+    fn the_refused_states_are_marked_in_words_and_never_a_seal() {
+        for (state, wording) in [
+            (SealState::Declined, "A signer declined the envelope."),
+            (
+                SealState::Voided,
+                "The envelope was voided before completion.",
+            ),
+            (
+                SealState::Expired,
+                "The envelope expired before completion.",
+            ),
+        ] {
+            let mut seal = fixture_seal();
+            seal.state = state;
+            let html = render_seal(seal);
+            assert!(
+                html.contains(r#"class="navigator-signature navigator-signature--refused""#),
+                "{state:?}: {html}"
+            );
+            assert!(!html.contains("navigator-signature__seal"), "{html}");
+            assert!(html.contains("Not executed"), "{html}");
+            assert!(html.contains(wording), "{html}");
+            assert!(
+                !html.contains("href="),
+                "a refused envelope links to nothing: {html}"
+            );
+        }
+    }
+
+    /// An executed envelope whose per-signer facts have not landed yet —
+    /// the wiring seam still to come — renders the mark from the
+    /// envelope-level stamp rather than inventing names.
+    #[test]
+    fn an_executed_seal_without_signers_uses_the_envelope_stamp() {
+        let mut seal = fixture_seal();
+        seal.signers = Vec::new();
+        let html = render_seal(seal);
+        assert!(html.contains(r#"data-state="executed""#), "{html}");
+        assert!(html.contains("2026-06-30T00:00:00Z"), "{html}");
+        assert!(!html.contains("Avery Client"), "{html}");
+    }
+
+    #[test]
+    fn stamps_and_providers_read_as_their_display_forms() {
+        assert_eq!(signed_on("2026-06-30T00:00:00Z"), "2026-06-30");
+        assert_eq!(signed_on("bare"), "bare");
+        assert_eq!(provider_label("docusign"), "DocuSign");
+        assert_eq!(provider_label("wet-ink"), "wet-ink");
+        assert_eq!(SealState::Signed.as_str(), "executed");
+        assert!(SealState::Signed.is_sealed());
+        assert!(!SealState::Awaiting.is_sealed());
+        assert!(!SealState::Declined.is_sealed());
+        assert_eq!(SealRole::ThirdParty.label(), "third party");
+    }
+}
