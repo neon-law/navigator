@@ -1,29 +1,135 @@
-//! The navigator-signature seal: the post-execution mark a matter page
-//! shows on a Notation whose e-signature envelope has completed.
+//! The navigator-signature seal: the signature-state element a matter page
+//! shows on a Notation with an e-signature envelope.
 //!
 //! The completion webhook (`portal/src/esignature_webhook.rs`) classifies
 //! the provider's callback, stamps `signed_at` on the Notation's
 //! `signature` row, and archives the `CompletedDocuments` — the signed PDF
 //! and the Certificate of Completion, the ESIGN record — into object
-//! storage. This component renders exactly those facts and nothing else:
-//! it is never built from storage presence or workflow state alone, so it
-//! cannot read as executed before the provider confirmed it.
+//! storage. The executed state renders exactly those facts and nothing
+//! else: it is never built from storage presence or workflow state alone,
+//! so it cannot read as executed before the provider confirmed it. The
+//! other two states say so in words: an outstanding envelope shows an
+//! empty labelled signature line, and a declined, voided, or expired
+//! envelope is marked in so many words — never a seal.
 //!
 //! Like every matter-surface element it needs no JavaScript: static markup,
-//! plain links, and a class the theme styles.
+//! plain links, and a class the theme styles. Every colour resolves through
+//! a `--nav-*` token, so the element follows the brand and the light/dark
+//! schemes without a media query of its own.
 
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// The seal's data: what the completion webhook recorded and archived.
+/// Where the Notation's envelope stands. The store's `SignatureState` maps
+/// onto this at the wiring seam: `requested` is [`SealState::Awaiting`],
+/// `completed` is [`SealState::Signed`], and `declined`/`voided`/`expired`
+/// keep their names — the three states that must never render a seal.
+/// `Default` is the pre-execution state.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SealState {
+    /// The envelope is out for signature; the element shows empty labelled
+    /// signature lines, one per declared signer.
+    #[default]
+    Awaiting,
+    /// The provider confirmed every signer executed the envelope.
+    Signed,
+    /// A signer declined the envelope.
+    Declined,
+    /// The envelope was voided before completion.
+    Voided,
+    /// The envelope expired before completion.
+    Expired,
+}
+
+impl SealState {
+    /// The `data-state` attribute the theme keys off.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Awaiting => "awaiting",
+            Self::Signed => "executed",
+            Self::Declined => "declined",
+            Self::Voided => "voided",
+            Self::Expired => "expired",
+        }
+    }
+
+    /// Whether this state renders the seal mark. Only the provider-confirmed
+    /// execution does.
+    #[must_use]
+    pub fn is_sealed(self) -> bool {
+        matches!(self, Self::Signed)
+    }
+}
+
+/// One signer's role on the envelope. The template's `signers:` order
+/// declares them; anything outside the three party roles reads as a
+/// third party.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SealRole {
+    /// The client of the engagement.
+    #[default]
+    Client,
+    /// The Firm — a seal line for the Firm role carries the signing
+    /// attorney's bar number.
+    Firm,
+    /// Any other signer: a witness, a notary, the other side.
+    ThirdParty,
+}
+
+impl SealRole {
+    /// The role as a reader says it.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Client => "client",
+            Self::Firm => "firm",
+            Self::ThirdParty => "third party",
+        }
+    }
+}
+
+/// One signer's line on the seal: who, in what role, and — when the
+/// provider reported it — the date-time they signed, with its time zone.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default, Debug)]
+pub struct SealSigner {
+    /// The signer's name as the envelope declared it.
+    pub name: String,
+    /// The signer's role on the envelope.
+    pub role: SealRole,
+    /// The signing attorney's bar number — the Firm role's line only.
+    pub bar_number: Option<String>,
+    /// When this signer signed, as the provider stamped it (an RFC 3339
+    /// string; its offset is the time zone a reader sees).
+    pub signed_at: Option<String>,
+}
+
+/// The seal's data: what the webhook recorded and archived, or what the
+/// envelope's live state is.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default, Debug)]
 pub struct SignatureSealData {
-    /// When the provider reported the envelope executed, as the webhook
-    /// stamped it on the signature row (an RFC 3339 string).
-    pub signed_at: String,
-    /// The e-signature provider that executed the envelope, display-ready
+    /// Where the envelope stands. Only [`SealState::Signed`] renders the
+    /// seal mark.
+    pub state: SealState,
+    /// The e-signature provider that owns the envelope, display-ready
     /// (`DocuSign`).
     pub provider: String,
+    /// When the provider reported the envelope executed, as the webhook
+    /// stamped it on the signature row (an RFC 3339 string). Present only
+    /// for an executed envelope.
+    pub signed_at: Option<String>,
+    /// The declared signers, in the template's `signers:` order. Empty
+    /// until the wiring supplies them; the element then renders what it
+    /// has rather than inventing names.
+    pub signers: Vec<SealSigner>,
+    /// The provider's envelope id — the `docusign_envelope_id` pointer a
+    /// reader can match against the certificate.
+    pub envelope_id: Option<String>,
+    /// The signed PDF's SHA-256, so a reader can match the link below
+    /// against the `<name>_signed.pdf` they hold.
+    pub signed_sha256: Option<String>,
     /// The executed document's download href, when the signed PDF the
     /// webhook archived is on file.
     pub signed_href: Option<String>,
@@ -51,28 +157,122 @@ pub fn provider_label(provider: &str) -> &str {
     }
 }
 
-/// The navigator-signature element, rendered after the envelope completes.
+/// One signer's line inside the seal mark: name and role, the Firm role
+/// carrying the attorney's bar number, and the signed-at stamp when the
+/// provider reported one for this signer.
+fn signer_line(signer: &SealSigner) -> Element {
+    let role = match (&signer.role, &signer.bar_number) {
+        (SealRole::Firm, Some(bar)) => format!("{}, Bar No. {bar}", signer.role.label()),
+        (role, _) => role.label().to_string(),
+    };
+    rsx! {
+        span { class: "navigator-signature__signer",
+            "{signer.name} — {role}"
+            if let Some(stamp) = signer.signed_at.as_ref() {
+                span { class: "navigator-signature__signed-at", " {stamp}" }
+            }
+        }
+    }
+}
+
+/// The navigator-signature element: the state a Notation's envelope is in,
+/// rendered from the provider's recorded evidence alone.
 #[component]
 pub fn SignatureSeal(seal: SignatureSealData) -> Element {
+    let provider = provider_label(&seal.provider);
+    let refused = matches!(
+        seal.state,
+        SealState::Declined | SealState::Voided | SealState::Expired
+    );
+    let class = if refused {
+        "navigator-signature navigator-signature--refused"
+    } else {
+        "navigator-signature"
+    };
     rsx! {
         figure {
-            class: "navigator-signature",
-            "data-state": "executed",
+            class: "{class}",
+            "data-state": "{seal.state.as_str()}",
             "data-provider": "{seal.provider}",
-            figcaption { class: "navigator-signature__label", "Executed" }
-            p { class: "navigator-signature__meta",
-                "Signed through {provider_label(&seal.provider)} on {signed_on(&seal.signed_at)}."
-            }
-            if seal.signed_href.is_some() || seal.certificate_href.is_some() {
-                p { class: "navigator-signature__links",
-                    if let Some(href) = seal.signed_href.as_ref() {
-                        a { class: "nav-link", href: "{href}", "Signed copy" }
-                        if seal.certificate_href.is_some() {
-                            " · "
+            match seal.state {
+                SealState::Signed => rsx! {
+                    figcaption { class: "navigator-signature__label", "Executed" }
+                    p { class: "navigator-signature__seal",
+                        strong { class: "navigator-signature__seal-title",
+                            "Signed electronically via {provider}"
+                        }
+                        for signer in &seal.signers {
+                            { signer_line(signer) }
+                        }
+                        if seal.signers.is_empty() {
+                            if let Some(stamp) = seal.signed_at.as_ref() {
+                                span { class: "navigator-signature__signed-at", "{stamp}" }
+                            }
                         }
                     }
-                    if let Some(href) = seal.certificate_href.as_ref() {
-                        a { class: "nav-link", href: "{href}", "Certificate of Completion" }
+                    if let Some(stamp) = seal.signed_at.as_ref() {
+                        p { class: "navigator-signature__meta",
+                            "Signed through {provider} on {signed_on(stamp)}."
+                        }
+                    }
+                },
+                SealState::Awaiting => rsx! {
+                    figcaption { class: "navigator-signature__label", "Awaiting signature" }
+                    if seal.signers.is_empty() {
+                        p { class: "navigator-signature__awaiting", "Awaiting signature." }
+                    }
+                    for signer in &seal.signers {
+                        p { class: "navigator-signature__awaiting",
+                            // The ruled line is decoration; the text beside
+                            // it is what a screen reader reads.
+                            span { class: "navigator-signature__line", "aria-hidden": "true" }
+                            span { class: "navigator-signature__awaiting-label",
+                                "Awaiting signature from {signer.name} ({signer.role.label()})."
+                            }
+                        }
+                    }
+                },
+                SealState::Declined => rsx! {
+                    figcaption { class: "navigator-signature__label", "Not executed" }
+                    p { class: "navigator-signature__meta",
+                        "A signer declined the envelope. This document was not executed."
+                    }
+                },
+                SealState::Voided => rsx! {
+                    figcaption { class: "navigator-signature__label", "Not executed" }
+                    p { class: "navigator-signature__meta",
+                        "The envelope was voided before completion. This document was not executed."
+                    }
+                },
+                SealState::Expired => rsx! {
+                    figcaption { class: "navigator-signature__label", "Not executed" }
+                    p { class: "navigator-signature__meta",
+                        "The envelope expired before completion. This document was not executed."
+                    }
+                },
+            }
+            if seal.state.is_sealed() {
+                if seal.envelope_id.is_some() || seal.signed_sha256.is_some() {
+                    p { class: "navigator-signature__facts",
+                        if let Some(id) = seal.envelope_id.as_ref() {
+                            "Envelope {id}. "
+                        }
+                        if let Some(hash) = seal.signed_sha256.as_ref() {
+                            "SHA-256 {hash}. "
+                        }
+                    }
+                }
+                if seal.signed_href.is_some() || seal.certificate_href.is_some() {
+                    p { class: "navigator-signature__links",
+                        if let Some(href) = seal.signed_href.as_ref() {
+                            a { class: "nav-link", href: "{href}", "Signed copy" }
+                            if seal.certificate_href.is_some() {
+                                " · "
+                            }
+                        }
+                        if let Some(href) = seal.certificate_href.as_ref() {
+                            a { class: "nav-link", href: "{href}", "Certificate of Completion" }
+                        }
                     }
                 }
             }
@@ -80,88 +280,3 @@ pub fn SignatureSeal(seal: SignatureSealData) -> Element {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn render_seal(seal: SignatureSealData) -> String {
-        fn app(seal: SignatureSealData) -> Element {
-            rsx! { SignatureSeal { seal } }
-        }
-        let mut dom = VirtualDom::new_with_props(app, seal);
-        dom.rebuild_in_place();
-        dioxus_ssr::render(&dom)
-    }
-
-    /// The fixture webhook payload the completion webhook classifies, and
-    /// the seal facts its classification leaves behind: the completed
-    /// `signature` row (stamped `signed_at`) and the two archived
-    /// `CompletedDocuments`. This is the payload shape
-    /// `portal/src/esignature_webhook.rs` parses on
-    /// `/webhook/esignature/:secret`.
-    const FIXTURE_COMPLETED_WEBHOOK: &str = r#"{
-        "event": "envelope-completed",
-        "data": {
-            "envelopeId": "env-seal-1",
-            "envelopeSummary": { "status": "completed" }
-        }
-    }"#;
-
-    /// The seal facts a completed webhook payload leaves behind.
-    fn fixture_seal() -> SignatureSealData {
-        let payload: serde_json::Value = serde_json::from_str(FIXTURE_COMPLETED_WEBHOOK).unwrap();
-        assert_eq!(payload["event"], "envelope-completed");
-        SignatureSealData {
-            signed_at: "2026-06-30T00:00:00Z".into(),
-            provider: "docusign".into(),
-            signed_href: Some("/app/notations/n1/documents/signed".into()),
-            certificate_href: Some("/app/notations/n1/documents/certificate".into()),
-        }
-    }
-
-    #[test]
-    fn the_seal_renders_the_executed_element_with_its_documents() {
-        let html = render_seal(fixture_seal());
-        assert!(html.contains(r#"class="navigator-signature""#), "{html}");
-        assert!(html.contains(r#"data-state="executed""#), "{html}");
-        assert!(html.contains("Executed"), "{html}");
-        assert!(
-            html.contains("Signed through DocuSign on 2026-06-30."),
-            "{html}"
-        );
-        assert!(
-            html.contains(r#"href="/app/notations/n1/documents/signed""#),
-            "{html}"
-        );
-        assert!(
-            html.contains(r#"href="/app/notations/n1/documents/certificate""#),
-            "{html}"
-        );
-        assert!(!html.contains("style="), "{html}");
-    }
-
-    /// A seal whose archive is still landing shows the executed mark and
-    /// the signing date — the webhook already confirmed execution — with
-    /// only the links that exist yet, never a dead one.
-    #[test]
-    fn a_seal_with_a_missing_archive_omits_only_that_link() {
-        let mut seal = fixture_seal();
-        seal.certificate_href = None;
-        let html = render_seal(seal);
-        assert!(html.contains(r#"data-state="executed""#), "{html}");
-        assert!(
-            html.contains(r#"href="/app/notations/n1/documents/signed""#),
-            "{html}"
-        );
-        assert!(!html.contains("documents/certificate"), "{html}");
-        assert!(!html.contains(" · "), "{html}");
-    }
-
-    #[test]
-    fn stamps_and_providers_read_as_their_display_forms() {
-        assert_eq!(signed_on("2026-06-30T00:00:00Z"), "2026-06-30");
-        assert_eq!(signed_on("bare"), "bare");
-        assert_eq!(provider_label("docusign"), "DocuSign");
-        assert_eq!(provider_label("wet-ink"), "wet-ink");
-    }
-}

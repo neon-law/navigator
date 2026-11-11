@@ -28,6 +28,10 @@ use crate::components::{
     Badge, BadgeTone, Callout, CalloutTone, Empty, NotationDocument, NotationDocumentData, Panel,
     SignatureSeal, SignatureSealData,
 };
+// The seal's state enum is read only by the server-side wiring; the default
+// wasm-safe build never names it.
+#[cfg(feature = "server")]
+use crate::components::SealState;
 
 /// What `notation_document` has to show.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -342,8 +346,15 @@ async fn seal_view(
         .await
         .unwrap_or(false);
     Some(SignatureSealData {
-        signed_at,
+        state: SealState::Signed,
+        signed_at: Some(signed_at),
         provider: signature.provider,
+        // Per-signer lines, the envelope pointer, and the signed PDF's
+        // SHA-256 arrive with the wiring slice — the element renders what
+        // is recorded, and nothing is recorded for them here yet.
+        signers: Vec::new(),
+        envelope_id: None,
+        signed_sha256: None,
         signed_href: signed_archived.then(|| format!("{base}/{}/documents/signed", notation.id)),
         certificate_href: certificate_archived
             .then(|| format!("{base}/{}/documents/certificate", notation.id)),
@@ -796,6 +807,7 @@ fn parse_argument_exchanges(body: &str) -> Result<Vec<super::ArgumentExchange>, 
 #[cfg(test)]
 mod tests {
     use super::{draft_code, DocumentState, NotationDocumentView};
+    use crate::components::SealState;
     use crate::sections::tests::render;
     use crate::sections::SectionView;
 
@@ -1282,8 +1294,9 @@ Later prose is outside the table.",
             .seal
             .as_ref()
             .expect("a completed envelope carries its seal");
-        assert_eq!(seal.signed_at, "2026-06-30T00:00:00Z");
+        assert_eq!(seal.signed_at.as_deref(), Some("2026-06-30T00:00:00Z"));
         assert_eq!(seal.provider, "docusign");
+        assert_eq!(seal.state, SealState::Signed);
         assert_eq!(
             seal.signed_href.as_deref(),
             Some(format!("/app/notations/{}/documents/signed", notation.id).as_str())

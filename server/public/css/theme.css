@@ -6209,6 +6209,53 @@ a.nav-steps__step:focus-visible {
 .navigator-signature__meta { color: var(--nav-color-text-muted); margin: var(--nav-space-1) 0 0; }
 .navigator-signature__links { margin: var(--nav-space-1) 0 0; overflow-wrap: anywhere; }
 .navigator-signature a { text-decoration: underline; }
+/* The seal mark: a rosette — the double ring a stamp carries — holding the
+ * execution facts as real text. Tokens flip with the scheme, so the mark
+ * follows light and dark without a media query of its own. */
+.navigator-signature__seal {
+  border: 6px double var(--nav-color-primary);
+  border-radius: 50%;
+  display: inline-block;
+  /* The 50% radius curves in hard at the corners: generous padding keeps the
+   * last signer line clear of the ring. */
+  margin: var(--nav-space-2) 0 0;
+  max-width: 26rem;
+  padding: calc(var(--nav-space-4) + var(--nav-space-3)) calc(var(--nav-space-4) * 2);
+  text-align: center;
+}
+.navigator-signature__seal-title { display: block; font-weight: 600; }
+.navigator-signature__signer { display: block; margin-top: var(--nav-space-1); }
+.navigator-signature__signed-at {
+  color: var(--nav-color-text-muted);
+  display: block;
+  font-size: .8rem;
+}
+.navigator-signature__facts {
+  color: var(--nav-color-text-muted);
+  font-family: var(--nav-font-mono);
+  font-size: .8rem;
+  margin: var(--nav-space-1) 0 0;
+  overflow-wrap: anywhere;
+}
+/* The awaiting state: an empty ruled line per signer, the ruled line itself
+ * aria-hidden decoration and the label beside it the real text. */
+.navigator-signature__awaiting {
+  align-items: baseline;
+  display: flex;
+  gap: var(--nav-space-2);
+  margin: var(--nav-space-2) 0 0;
+}
+.navigator-signature__line {
+  border-bottom: 1.5px solid var(--nav-color-border);
+  display: inline-block;
+  flex: 0 0 10rem;
+  height: 1.25rem;
+}
+.navigator-signature__awaiting-label { color: var(--nav-color-text-muted); }
+/* A declined, voided, or expired envelope reads in the danger accent —
+ * marked in words, never a seal. */
+.navigator-signature--refused { border-top-color: var(--nav-color-danger); }
+.navigator-signature--refused .navigator-signature__label { color: var(--nav-color-danger); }
 
 /* `discovery_pairs` (`webapp/src/sections/discovery.rs`): one card per
  * numbered request, the objection and the answer boxed and attributed, and
