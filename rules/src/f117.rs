@@ -61,8 +61,8 @@ pub const ALLOWED_CUSTOM_TEXT_ROLES: &[&str] = &[
     // number, charge, and prior record are as printed or as the driver says.
     "traffic_citation_number", // The citation number, verbatim.
     "traffic_court",           // The court printed on the citation, verbatim.
-    "traffic_prior_record",    // The driver's own account of recent tickets, deferrals, or traffic school.
-    "traffic_violation",       // The charge as printed, with speed and posted limit.
+    "traffic_prior_record", // The driver's own account of recent tickets, deferrals, or traffic school.
+    "traffic_violation",    // The charge as printed, with speed and posted limit.
     // Business instruments: lawyer-authored schedules and negotiated provisions.
     // Parties, dates, notice addresses, and governing law use typed states.
     "business_acceptance", // Describe the actual notice and assent mechanism, including how changes are accepted.
