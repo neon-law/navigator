@@ -317,3 +317,267 @@ async fn persist_signature_request_id(
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A bound Person carrying a distinct name/email, so a fixture can tell
+    /// the answered value apart from the Person-row fallback.
+    fn person_named(name: &str, email: &str) -> store::persons::Person {
+        store::persons::Person {
+            id: Uuid::now_v7(),
+            name: name.to_string(),
+            given_name: None,
+            family_name: None,
+            middle_name: None,
+            email: email.to_string(),
+            oidc_subject: None,
+            microsoft_subject: None,
+            apple_subject: None,
+            role: store::persons::Role::Client,
+            title: None,
+            phone: None,
+            xero_contact_id: None,
+            profile_image_url: None,
+            linkedin_url: None,
+            email_confirmed: false,
+            inserted_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    fn client_signature_field() -> crate::signature::SignatureField {
+        crate::signature::SignatureField {
+            recipient_role: "client".into(),
+            kind: crate::signature::SignatureFieldKind::Signature,
+            anchor: "{{client.signature}}".into(),
+        }
+    }
+
+    fn assignor_signature_field() -> crate::signature::SignatureField {
+        crate::signature::SignatureField {
+            recipient_role: "confirming_assignor".into(),
+            kind: crate::signature::SignatureFieldKind::Signature,
+            anchor: "{{confirming_assignor.signature}}".into(),
+        }
+    }
+
+    fn firm_signature_field() -> crate::signature::SignatureField {
+        crate::signature::SignatureField {
+            recipient_role: "firm".into(),
+            kind: crate::signature::SignatureFieldKind::Signature,
+            anchor: "{{firm.signature}}".into(),
+        }
+    }
+
+    fn three_party_template() -> &'static str {
+        "---\nsigners:\n  - client\n  - firm\n  - confirming_assignor\n---\n"
+    }
+
+    #[test]
+    fn signature_manifest_prefers_answered_client_name_over_person_row() {
+        // The migration renamed the client-identity state to
+        // `person__client`, whose `.name`/`.email` fields land in the render
+        // context. The manifest must read those — not the removed
+        // `custom_text__client_*` keys — so the questionnaire-confirmed
+        // legal name reaches the DocuSign recipient. In production the bound
+        // Person is created with `name = <email>` until the questionnaire
+        // fills it, so a fallback silently signs the client under their
+        // email address. The fixture name differs from the answer to prove
+        // the answered value wins.
+        let ctx = BTreeMap::from([
+            ("person__client.name".to_string(), "Libra Prime".to_string()),
+            (
+                "person__client.email".to_string(),
+                "libra@example.com".to_string(),
+            ),
+        ]);
+        let client = person_named("libra@example.com", "libra@example.com");
+        let fields = [client_signature_field()];
+
+        let manifest =
+            build_signature_manifest(Uuid::now_v7(), &fields, &ctx, Some(&client), true, "")
+                .expect("client identity resolves from answers");
+
+        let recipient = manifest
+            .recipients
+            .iter()
+            .find(|r| r.role == "client")
+            .expect("client recipient present");
+        assert_eq!(recipient.name, "Libra Prime");
+        assert_eq!(recipient.email, "libra@example.com");
+    }
+
+    #[test]
+    fn signature_manifest_falls_back_to_person_row_when_unanswered() {
+        // The trust questionnaire never captures an email and other flows
+        // capture it out-of-band, so with no `person__client.*` in context
+        // the recipient resolves from the bound Person row.
+        let ctx = BTreeMap::new();
+        let client = person_named("Libra Prime", "libra@example.com");
+        let fields = [client_signature_field()];
+
+        let manifest =
+            build_signature_manifest(Uuid::now_v7(), &fields, &ctx, Some(&client), true, "")
+                .expect("client identity resolves from the Person row");
+
+        let recipient = manifest
+            .recipients
+            .iter()
+            .find(|r| r.role == "client")
+            .expect("client recipient present");
+        assert_eq!(recipient.name, "Libra Prime");
+        assert_eq!(recipient.email, "libra@example.com");
+    }
+
+    #[test]
+    fn signature_manifest_fans_out_declared_roles_in_declaration_order() {
+        let ctx = BTreeMap::from([
+            ("person__client.name".to_string(), "Libra Prime".to_string()),
+            (
+                "person__client.email".to_string(),
+                "libra@example.com".to_string(),
+            ),
+            (
+                "person__confirming_assignor.name".to_string(),
+                "Pat Assignor".to_string(),
+            ),
+            (
+                "person__confirming_assignor.email".to_string(),
+                "assignor@example.com".to_string(),
+            ),
+        ]);
+        let client = person_named("Libra Prime", "libra@example.com");
+        let fields = [
+            client_signature_field(),
+            firm_signature_field(),
+            assignor_signature_field(),
+        ];
+
+        let manifest = build_signature_manifest(
+            Uuid::now_v7(),
+            &fields,
+            &ctx,
+            Some(&client),
+            true,
+            three_party_template(),
+        )
+        .expect("every declared role is resolved");
+
+        let roles: Vec<&str> = manifest
+            .recipients
+            .iter()
+            .map(|r| r.role.as_str())
+            .collect();
+        assert_eq!(roles, ["client", "firm", "confirming_assignor"]);
+        assert_eq!(manifest.recipients[0].routing_order, 1);
+        assert_eq!(manifest.recipients[1].routing_order, 2);
+        assert_eq!(manifest.recipients[2].routing_order, 3);
+        assert_eq!(manifest.recipients[2].email, "assignor@example.com");
+        assert_eq!(manifest.recipients[2].name, "Pat Assignor");
+    }
+
+    /// A provider recipient event names its recipient by the id the
+    /// manifest sent, so reading it back must land on the same declared
+    /// role the manifest assigned that routing order.
+    #[test]
+    fn a_recipient_id_reads_back_as_the_role_the_manifest_sent_it_to() {
+        let ctx = BTreeMap::from([
+            (
+                "person__confirming_assignor.name".to_string(),
+                "Pat Assignor".to_string(),
+            ),
+            (
+                "person__confirming_assignor.email".to_string(),
+                "assignor@example.com".to_string(),
+            ),
+        ]);
+        let client = person_named("Libra Prime", "libra@example.com");
+        let fields = [
+            client_signature_field(),
+            firm_signature_field(),
+            assignor_signature_field(),
+        ];
+        let manifest = build_signature_manifest(
+            Uuid::now_v7(),
+            &fields,
+            &ctx,
+            Some(&client),
+            true,
+            three_party_template(),
+        )
+        .expect("every declared role is resolved");
+        for recipient in &manifest.recipients {
+            assert_eq!(
+                crate::retainer_walk::signer_role_for_recipient(
+                    three_party_template(),
+                    &recipient.routing_order.to_string()
+                )
+                .as_deref(),
+                Some(recipient.role.as_str()),
+            );
+        }
+
+        // No `signers:` key: the implicit client-then-firm default.
+        assert_eq!(
+            crate::retainer_walk::signer_role_for_recipient("no front matter", "1").as_deref(),
+            Some("client")
+        );
+        assert_eq!(
+            crate::retainer_walk::signer_role_for_recipient("no front matter", "2").as_deref(),
+            Some("firm")
+        );
+        for unknown in ["0", "3", "", "client"] {
+            assert_eq!(
+                crate::retainer_walk::signer_role_for_recipient("no front matter", unknown),
+                None,
+                "{unknown:?} names no declared signer"
+            );
+        }
+    }
+
+    #[test]
+    fn signature_manifest_refuses_an_unresolved_declared_role() {
+        let ctx = BTreeMap::from([
+            ("person__client.name".to_string(), "Libra Prime".to_string()),
+            (
+                "person__client.email".to_string(),
+                "libra@example.com".to_string(),
+            ),
+        ]);
+        let client = person_named("Libra Prime", "libra@example.com");
+        let fields = [
+            client_signature_field(),
+            firm_signature_field(),
+            assignor_signature_field(),
+        ];
+
+        let err = build_signature_manifest(
+            Uuid::now_v7(),
+            &fields,
+            &ctx,
+            Some(&client),
+            true,
+            three_party_template(),
+        )
+        .expect_err("confirming_assignor has no name or email");
+        let message = err.to_string();
+        assert!(
+            message.contains("confirming_assignor"),
+            "refusal must name the unresolved role: {message}"
+        );
+    }
+
+    #[test]
+    fn prepare_mode_refuses_before_anything_is_sent() {
+        // LAW-270 lands draft envelopes; until the provider seam carries
+        // that capability, prepare mode is a typed refusal — never a
+        // silent send.
+        assert_ne!(SendMode::Prepare, SendMode::Send);
+        let refusal = WorkflowDriveError::PrepareUnsupported.to_string();
+        assert!(
+            refusal.contains("prepare"),
+            "the refusal must name the unsupported mode: {refusal}"
+        );
+    }
+}
