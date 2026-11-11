@@ -79,7 +79,7 @@ application stay shared; the host selects the brand's copy, mark, font, and colo
 The Navigator CLI owns the complete local lifecycle. From a New Worktree, run:
 
 ```bash
-cargo run -p cli -- dev worktree-env up --path "$PWD"
+cargo run -p deploy -- dev worktree-env up --path "$PWD"
 set -a; source .devx/env; set +a
 cargo run -p neon
 ```
@@ -92,7 +92,7 @@ The explicit refresh command uses the same clone and staging path when a sample 
 refreshes only that matter, which is the fast loop while iterating on a single repository:
 
 ```bash
-cargo run -p cli -- dev sample-project --project sample-litigation
+cargo run -p deploy -- dev sample-project --project sample-litigation
 ```
 
 Restart `web` after refreshing so it reads the new staged source. The generated `.devx/env` contains
@@ -166,10 +166,10 @@ The CLI seeds both letters. This workshop still binds the retainer through Navig
 the matter with the offboarding letter. Do not bind two onboardings on one Project:
 
 ```bash
-navigator site notation create onboarding__letter \
+navigator-deploy site notation create onboarding__letter \
   --project sample-litigation \
   --client-email client@neonlaw.com
-navigator site notation create offboarding__letter \
+navigator-deploy site notation create offboarding__letter \
   --project sample-litigation \
   --client-email client@neonlaw.com
 ```
@@ -418,7 +418,7 @@ starting `templates/<code>.md`. Then reconcile the two generated workflows — `
 caller) and `.github/workflows/cd.yml` (the main-push caller):
 
 ```bash
-navigator ops github setup <owner>/<code> --action-version <YY.M.D>
+navigator-deploy ops github setup <owner>/<code> --action-version <YY.M.D>
 ```
 
 This writes no application; the matter's pages are declared in `navigator.yaml`. Pass `--action-version` explicitly
@@ -571,7 +571,7 @@ over. Do not open a real matter in the shared room database — this is a narrat
 Run the browser and accessibility gate against the sourced environment:
 
 ```bash
-cargo run -p cli -- dev browser-e2e
+cargo run -p deploy -- dev browser-e2e
 ```
 
 The gate signs in the local personas, checks the matter surfaces, and exercises the real local browser path. The Rust

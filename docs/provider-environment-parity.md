@@ -143,7 +143,7 @@ Provider parity is complete only when every row has:
 - a named human owner and recovery owner;
 - a vendor account, tenant, project, organization, or environment identifier;
 - every required key present in that deployment's `deployments/<name>/` tree, with unique values where the value is a
-  credential (the parity gate in `cli/src/devx/deployments.rs` checks the names in CI);
+  credential (the parity gate in `deploy/src/devx/deployments.rs` checks the names in CI);
 - a dated rotation or revocation test;
 - a real provider smoke test and a link to non-secret evidence.
 

@@ -117,7 +117,7 @@ match = '''navigator-(?:assets|documents|exports|logs|applications|lfs|web|drive
 paths = [
   ".env.example",
   ".github/workflows/deploy.yml",
-  "cli/src/devx/mod.rs",
+  "deploy/src/devx/mod.rs",
   "docs/oss-install.md",
 ]
 reason = "The product's default resource names, which a self-hosted deployment creates in its own project; they name no firm resource."
@@ -128,7 +128,7 @@ match = "exports|bucket|project|a-deployment-applications"
 paths = [
   "archives/src/iceberg.rs",
   "workflows/src/notify.rs",
-  "cli/src/devx/ship.rs",
+  "deploy/src/devx/ship.rs",
 ]
 reason = "One-word or role-named placeholder buckets in unit tests."
 

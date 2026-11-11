@@ -58,11 +58,11 @@ jobs:
           shared-key: gate-cli
           save-if: false
       - name: build navigator CLI
-        run: cargo build -p cli --quiet
-      - name: navigator dev forgejo up
-        run: target/debug/navigator dev forgejo up
-      - name: navigator dev forgejo smoke
-        run: target/debug/navigator dev forgejo smoke
+        run: cargo build -p deploy --quiet
+      - name: navigator-deploy dev forgejo up
+        run: target/debug/navigator-deploy dev forgejo up
+      - name: navigator-deploy dev forgejo smoke
+        run: target/debug/navigator-deploy dev forgejo smoke
       - name: Diagnose
         if: failure()
         run: |
@@ -86,7 +86,7 @@ jobs:
       - k8s/overlays/kind-postgres-persistence/**
       - k8s/kind-forgejo-config.yaml
       - examples/deploy/k8s/gke/forgejo/**
-      - cli/src/devx/forgejo/**
+      - deploy/src/devx/forgejo/**
       - .github/workflows/forgejo-postgres.yml
   push:
     branches: [main]
@@ -98,6 +98,6 @@ jobs:
       - k8s/overlays/kind-postgres-persistence/**
       - k8s/kind-forgejo-config.yaml
       - examples/deploy/k8s/gke/forgejo/**
-      - cli/src/devx/forgejo/**
+      - deploy/src/devx/forgejo/**
       - .github/workflows/forgejo-postgres.yml
   workflow_dispatch: null

@@ -32,24 +32,24 @@ use crate::{
 
 /// What an EFSP status email says about one transaction.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct EfspEmail {
-    pub(crate) transaction_id: String,
+pub struct EfspEmail {
+    pub transaction_id: String,
     /// `submitted`, `accepted`, `rejected`, or `unknown`.
-    pub(crate) status: &'static str,
-    pub(crate) efsp: Option<String>,
-    pub(crate) court: Option<String>,
-    pub(crate) case_number: Option<String>,
-    pub(crate) filed_on: Option<String>,
-    pub(crate) accepted_on: Option<String>,
-    pub(crate) note: Option<String>,
+    pub status: &'static str,
+    pub efsp: Option<String>,
+    pub court: Option<String>,
+    pub case_number: Option<String>,
+    pub filed_on: Option<String>,
+    pub accepted_on: Option<String>,
+    pub note: Option<String>,
     /// The first PDF attachment: the conformed copy on an acceptance email.
-    pub(crate) attachment: Option<Attachment>,
+    pub attachment: Option<Attachment>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
-pub(crate) struct Attachment {
-    pub(crate) filename: String,
-    pub(crate) bytes: Vec<u8>,
+pub struct Attachment {
+    pub filename: String,
+    pub bytes: Vec<u8>,
 }
 
 impl std::fmt::Debug for Attachment {
@@ -65,7 +65,7 @@ impl std::fmt::Debug for Attachment {
 ///
 /// # Errors
 /// The bytes are not a MIME message, or the message names no transaction id.
-pub(crate) fn parse_email(raw: &[u8]) -> Result<EfspEmail> {
+pub fn parse_email(raw: &[u8]) -> Result<EfspEmail> {
     let message = MessageParser::default()
         .parse(raw)
         .ok_or_else(|| anyhow!("not a MIME email message"))?;
@@ -245,7 +245,8 @@ fn parse_date(value: &str) -> Option<String> {
 }
 
 /// The slug a transaction's conformed copy is filed under, and its filename.
-pub(crate) fn conformed_slug(transaction_id: &str) -> (String, String) {
+#[must_use]
+pub fn conformed_slug(transaction_id: &str) -> (String, String) {
     let safe: String = transaction_id
         .chars()
         .map(|ch| {
@@ -348,12 +349,12 @@ async fn post_row(at: &Coordinates, body: &Value) -> Result<Value> {
 }
 
 /// What a conformed-copy upload is filed with.
-pub(crate) struct ConformedUpload<'a> {
-    pub(crate) transaction_id: &'a str,
-    pub(crate) bytes: &'a [u8],
-    pub(crate) filed_on: &'a str,
-    pub(crate) submitted: Option<&'a str>,
-    pub(crate) judge_signed: bool,
+pub struct ConformedUpload<'a> {
+    pub transaction_id: &'a str,
+    pub bytes: &'a [u8],
+    pub filed_on: &'a str,
+    pub submitted: Option<&'a str>,
+    pub judge_signed: bool,
 }
 
 /// File a conformed copy as `--kind filing` through the document upload seam

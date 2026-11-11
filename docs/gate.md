@@ -3,7 +3,7 @@
 `navigator project gate` is the command every editor, CI gate, and this repository's `AGENTS.md` point at for a
 recognised repository. This page is the canonical reference for the rule set both that command and `navigator validate`
 share: what it runs, the error/warning split, and one row per rule code. `cli/tests/gate_docs_coverage.rs` fails the
-build when a code exists in `rules/src/` or `cli/src/main.rs` with no entry here, so this table cannot go stale.
+build when a code exists in `rules/src/` or `cli/src/commands.rs` with no entry here, so this table cannot go stale.
 
 ## Usage
 
@@ -34,13 +34,13 @@ error before checking or fixing content. Remove the cached executable and retry 
 `--check` compares committed document pointers with the live record. The host and Project code come from
 `navigator.yaml`. It moves a legacy layout's pointers from `documents/` to `blobs/` (rule `Y014`), rewrites a drifted
 pointer, and writes a missing pointer under `blobs/`. It never writes to the live site. A missing or corrupt object
-needs a person: `navigator site document repair` restores a missing object from a same-hash sibling in the matter. A
-live row with no slug needs a person: `navigator site document slug` sets the slug and, when passed, the kind. A kind
-the asset lane rejects needs a person: `navigator site document kind` replaces it. `--deep` re-hashes each object, and
-offline hashes the Git-ignored bytes each pointer names under `documents/` against its `sha256` and `size_bytes`: each
-pointer is reported `match`, `modified locally` (fails the run), or `missing locally` (passes, since a checkout need not
-hold the bytes). Under `--ci` any fix this would make fails the job and the output names the fix. Without `--check`,
-`project gate` makes no document request.
+needs a person: `navigator-deploy site document repair` restores a missing object from a same-hash sibling in the
+matter. A live row with no slug needs a person: `navigator-deploy site document slug` sets the slug and, when passed,
+the kind. A kind the asset lane rejects needs a person: `navigator-deploy site document kind` replaces it. `--deep`
+re-hashes each object, and offline hashes the Git-ignored bytes each pointer names under `documents/` against its
+`sha256` and `size_bytes`: each pointer is reported `match`, `modified locally` (fails the run), or `missing locally`
+(passes, since a checkout need not hold the bytes). Under `--ci` any fix this would make fails the job and the output
+names the fix. Without `--check`, `project gate` makes no document request.
 
 A directory that is neither of those shapes — no `Cargo.toml`, no `navigator.yaml`, no assumption about the surrounding
 repository — still has the same rule set through `navigator validate [DIR]`. The directory defaults to `.`. `--fix`
@@ -513,13 +513,13 @@ the removal of the old tracked pointers.
 | Code | Severity | Rule | Autofix |
 | --- | --- | --- | --- |
 | `P001` | Error | A tracked file carries material a public source baseline may not contain. | No |
-| `P002` | Error | `navigator pii` detected personal data in tracked text. | No |
+| `P002` | Error | `navigator-deploy pii` detected personal data in tracked text. | No |
 
 `P001` names its class (`credential`, `email`, `phone`, `gcp`, `env`, `build`, `binary-metadata`, or `binary`) and the
 finding description. Detected values are never printed. See [`public-snapshot-audit.md`](public-snapshot-audit.md).
 
-`P002` runs separately through `navigator pii` in the required CI gate. It needs the pinned loopback Presidio service;
-local `navigator validate` does not start that service. Diagnostics contain only file, line and category.
+`P002` runs separately through `navigator-deploy pii` in the required CI gate. It needs the pinned loopback Presidio
+service; local `navigator validate` does not start that service. Diagnostics contain only file, line and category.
 
 ### F-family — files the gate had to fix
 

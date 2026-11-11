@@ -28,7 +28,7 @@ use store::project_surfaces::{ProjectSurfaces, SurfaceStatus};
 
 /// What one Project's reconcile pass produced.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub(crate) struct ReconcileOutcome {
+pub struct ReconcileOutcome {
     project_code: String,
     /// `created`, `adopted`, `present`, `skipped`, or `failed` — the
     /// repository surface's outcome this pass saw.

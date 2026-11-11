@@ -3330,7 +3330,7 @@ async fn deploy_workshop_md_twin_and_llms_index_the_real_content() {
         body.contains("# Operating Neon Law Navigator"),
         "raw markdown title"
     );
-    assert!(body.contains("cargo run -p cli -- ops gcp setup --project-id"));
+    assert!(body.contains("cargo run -p deploy -- ops gcp setup --project-id"));
 
     // The firm's llms.txt withholds the class twin this test just fetched
     // with a session — advertising a gated document is advertising a login

@@ -10,7 +10,7 @@ batch in `mirror_backfill_checkpoint`. A run resumes by its id without writing a
 is recorded in `mirror_backfill_failure` by table and UUID with a sanitized reason, never by value. Rows that differ, or
 that only PostgreSQL holds, are left to the mirror's reconciliation and keep the run's parity report unclean. Each
 invocation reports per-table drift counts and up to 50 divergent UUID keys; other key forms are counted only. Run
-`navigator ops postgres backfill`; see [`docs/postgres-tooling.md`](../postgres-tooling.md#mirror-backfill) and
+`navigator-deploy ops postgres backfill`; see [`docs/postgres-tooling.md`](../postgres-tooling.md#mirror-backfill) and
 [`store::postgres_backfill`](../../store/src/postgres_backfill.rs).
 
 The table is `mirror_backfill_run`.

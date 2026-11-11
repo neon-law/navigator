@@ -39,13 +39,13 @@ struct Participant {
 /// response body — so naming the matter leaks nothing the caller cannot
 /// already see.
 #[derive(Debug)]
-pub(crate) struct ProjectOutcome {
-    pub(crate) code: String,
-    pub(crate) read: ProjectRead,
+pub struct ProjectOutcome {
+    pub code: String,
+    pub read: ProjectRead,
 }
 
 #[derive(Debug)]
-pub(crate) enum ProjectRead {
+pub enum ProjectRead {
     Resolved(Vec<String>),
     Refused { reason: String },
 }
@@ -56,7 +56,7 @@ pub(crate) enum ProjectRead {
 /// a refused per-Project read is a [`ProjectRead::Refused`] outcome —
 /// collected and continued past in `--all-projects` mode, fatal for a
 /// single named Project, which has nothing to continue past.
-pub(crate) async fn private_terms(
+pub async fn private_terms(
     base: &str,
     token: &str,
     codes: &[String],
@@ -223,8 +223,8 @@ pub async fn run(
             }
         }
     };
-    let terms = cli::pii_audit::merge_terms(&resolved, terms);
-    let findings = cli::feedback_scan::scan(&text, &terms);
+    let terms = crate::pii_audit::merge_terms(&resolved, terms);
+    let findings = crate::feedback_scan::scan(&text, &terms);
     let (lines, code) = report(&findings, &failures);
     for (stream, line) in &lines {
         match stream {
@@ -250,7 +250,7 @@ enum Stream {
 /// dominates both other codes — unresolved coverage is neither clean nor a
 /// mere findings list.
 fn report(
-    findings: &[cli::feedback_scan::Finding],
+    findings: &[crate::feedback_scan::Finding],
     failures: &[(String, String)],
 ) -> (Vec<(Stream, String)>, ExitCode) {
     let mut lines = Vec::new();
@@ -377,7 +377,7 @@ mod tests {
         let outcomes = private_terms(&server.uri(), "a-token", &["cruller-estate".to_string()])
             .await
             .expect("resolve the private terms");
-        let terms = cli::pii_audit::merge_terms(&resolved_terms(&outcomes), &[]);
+        let terms = crate::pii_audit::merge_terms(&resolved_terms(&outcomes), &[]);
 
         for draft in [
             "Harper Cruller asked where the filing stands",
@@ -386,11 +386,11 @@ mod tests {
             "the cruller-estate matter",
         ] {
             assert!(
-                !cli::feedback_scan::scan(draft, &terms).is_empty(),
+                !crate::feedback_scan::scan(draft, &terms).is_empty(),
                 "{draft:?} scanned clean"
             );
         }
-        assert!(cli::feedback_scan::scan(
+        assert!(crate::feedback_scan::scan(
             "the status command exits 0 when the folder is empty",
             &terms
         )
@@ -418,10 +418,11 @@ mod tests {
             "Synthetic Widget Company had a failure",
             "Harper Cruller",
         ] {
-            assert!(!cli::feedback_scan::scan(draft, &terms).is_empty());
+            assert!(!crate::feedback_scan::scan(draft, &terms).is_empty());
         }
         assert!(
-            cli::feedback_scan::scan("the command fails on an empty directory", &terms).is_empty()
+            crate::feedback_scan::scan("the command fails on an empty directory", &terms)
+                .is_empty()
         );
     }
 
@@ -502,7 +503,7 @@ mod tests {
         assert_eq!(refusals[0].0, "beta");
         assert!(refusals[0].1.contains("a linked Project record is missing"));
         let terms = resolved_terms(&outcomes);
-        assert!(!cli::feedback_scan::scan("Harper Cruller", &terms).is_empty());
+        assert!(!crate::feedback_scan::scan("Harper Cruller", &terms).is_empty());
     }
 
     #[tokio::test]
@@ -586,8 +587,8 @@ mod tests {
                 }))).with_priority(1).mount(&server).await;
         }
         let terms = resolved_terms(&private_terms(&server.uri(), "a-token", &[]).await.unwrap());
-        assert!(!cli::feedback_scan::scan("First Synthetic Entity", &terms).is_empty());
-        assert!(!cli::feedback_scan::scan("Second Synthetic Entity", &terms).is_empty());
+        assert!(!crate::feedback_scan::scan("First Synthetic Entity", &terms).is_empty());
+        assert!(!crate::feedback_scan::scan("Second Synthetic Entity", &terms).is_empty());
         assert!(private_terms(&server.uri(), "a-token", &["shared".into()])
             .await
             .is_err());
@@ -649,7 +650,8 @@ mod tests {
                     .to_string(),
             ),
         ];
-        let findings = cli::feedback_scan::scan("Harper Cruller", &["Harper Cruller".to_string()]);
+        let findings =
+            crate::feedback_scan::scan("Harper Cruller", &["Harper Cruller".to_string()]);
         assert!(!findings.is_empty(), "the scan must produce a finding");
 
         let (lines, code) = report(&findings, &failures);

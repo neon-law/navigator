@@ -85,6 +85,8 @@ fn every_cli_release_upload_uses_a_tag_exact_archive_name() {
                 && line.contains("gh release upload")
                 && !line.contains("-lsp-")
                 && !line.contains("navigator-${TAG}-")
+                && !line.contains("navigator-deploy-${TAG}-")
+                && !line.contains("scorpio-${TAG}-")
                 // ENG-931: LICENSE, LICENSE-MIT, LICENSE-APACHE-2, and NOTICE travel
                 // on the Release standalone, under their own plain names —
                 // they are supporting files, not tag-named CLI archives, and
@@ -471,17 +473,29 @@ fn releases_build_and_attach_a_linux_cli_archive() {
     .expect("release-cli-build-linux must prove the CLI in the pinned runner image");
     for required in [
         "file \"${bin}\" | grep -q 'static-pie linked\\|statically linked'",
-        "cli/src/devx/forgejo/runner.rs",
+        "deploy/src/devx/forgejo/runner.rs",
         "docker run --rm --entrypoint /b/navigator",
         "test \"${got}\" = \"navigator ${TAG}\"",
-        // `--version` falls back to the Cargo version, so only the published
-        // release proves build.rs saw NAVIGATOR_RELEASE_TAG.
-        "ops github setup --help",
-        "grep -qF \"[default: ${TAG}]\"",
     ] {
         assert!(
             proof.contains(required),
             "the runner-image proof must retain `{required}`"
+        );
+    }
+
+    // `--version` falls back to the Cargo version, so only the published
+    // release proves build.rs saw NAVIGATOR_RELEASE_TAG. `ops github setup`
+    // is a `navigator-deploy` verb; that binary links the same `cli` library,
+    // built with the same variable, so its job carries the proof.
+    let deploy = deploy_job("release-deploy-cli-build-linux");
+    let baked = job_step(&deploy, "prove the release tag was baked in")
+        .and_then(|step| step.get("run"))
+        .and_then(|run| run.as_str())
+        .expect("release-deploy-cli-build-linux must prove the release tag was baked in");
+    for required in ["ops github setup --help", "grep -qF \"[default: ${TAG}]\""] {
+        assert!(
+            baked.contains(required),
+            "the baked-tag proof must retain `{required}`"
         );
     }
 }

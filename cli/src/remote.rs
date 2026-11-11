@@ -41,7 +41,7 @@ struct UploadSessionExpired(String);
 
 /// Resolve `(base_url, bearer_token)` for `host`, erroring clearly when
 /// there's no login or the stored token has expired.
-pub(crate) fn resolve(host: Option<&str>) -> Result<(String, String)> {
+pub fn resolve(host: Option<&str>) -> Result<(String, String)> {
     let creds = credentials::load(&default_credentials_path())?;
     let base = resolve_base(host, &creds)?;
     let cred: &HostCredential = creds
@@ -55,13 +55,13 @@ pub(crate) fn resolve(host: Option<&str>) -> Result<(String, String)> {
 
 /// Return only a current login keyed to this manifest host. Validation must
 /// never fall back to the sole session for some other deployment.
-pub(crate) enum MatchingSession {
+pub enum MatchingSession {
     Valid(String, String),
     Absent,
     Expired,
 }
 
-pub(crate) fn matching_stored_session(host: &str) -> Result<MatchingSession> {
+pub fn matching_stored_session(host: &str) -> Result<MatchingSession> {
     let creds = credentials::load(&default_credentials_path())?;
     let base = credentials::base_url(host);
     Ok(match creds.get(&base) {
@@ -132,7 +132,7 @@ pub async fn seed(
 
 /// One whole seed document through `POST /app/api/seed` under a stored
 /// session, never overwriting: what `navigator project reference add` sends.
-pub(crate) async fn send_seed_document(
+pub async fn send_seed_document(
     session: &(String, String),
     model: &str,
     yaml: &str,
@@ -220,17 +220,17 @@ fn seed_documents_in(dir: &Path) -> Result<Vec<(store::seed::SeedModel, std::pat
 /// deployment can answer `502` while the server goes on to finish a large
 /// write; small chunks keep each request well inside its timeout, and a
 /// failed one small enough to re-check.
-pub(crate) const SEED_CHUNK_RECORDS: usize = 50;
+pub const SEED_CHUNK_RECORDS: usize = 50;
 
 /// The counts a seed reconcile reports, summed over every chunk.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
-pub(crate) struct SeedCounts {
+pub struct SeedCounts {
     #[serde(default)]
-    pub(crate) created: usize,
+    pub created: usize,
     #[serde(default)]
-    pub(crate) updated: usize,
+    pub updated: usize,
     #[serde(default)]
-    pub(crate) unchanged: usize,
+    pub unchanged: usize,
 }
 
 impl SeedCounts {
@@ -244,8 +244,8 @@ impl SeedCounts {
 /// A seed import that stopped part-way: `committed` records are in place, the
 /// rest are not. The `run` wrapper exits `4` for it — see [`exit_code_for`].
 #[derive(Debug)]
-pub(crate) struct PartialImport {
-    pub(crate) committed: usize,
+pub struct PartialImport {
+    pub committed: usize,
 }
 
 impl std::fmt::Display for PartialImport {
@@ -261,7 +261,7 @@ impl std::fmt::Display for PartialImport {
 impl std::error::Error for PartialImport {}
 
 /// Why a chunked import stopped, and how much of it had committed.
-pub(crate) struct SeedFailure {
+pub struct SeedFailure {
     committed: usize,
     error: anyhow::Error,
 }
@@ -269,7 +269,8 @@ pub(crate) struct SeedFailure {
 impl SeedFailure {
     /// The error a caller reports, marked [`PartialImport`] when anything —
     /// including `earlier` records from documents before this one — committed.
-    pub(crate) fn into_error(self, earlier: usize) -> anyhow::Error {
+    #[must_use]
+    pub fn into_error(self, earlier: usize) -> anyhow::Error {
         let committed = earlier + self.committed;
         if committed == 0 {
             self.error
@@ -305,7 +306,7 @@ impl std::error::Error for SeedRefused {}
 
 /// Import `records` of one seed `model` through the logged-in deployment, in
 /// chunks of [`SEED_CHUNK_RECORDS`]. Never overwrites an existing record.
-pub(crate) async fn import_records(
+pub async fn import_records(
     host: Option<&str>,
     model: &str,
     lookup_fields: &[&str],
@@ -435,7 +436,7 @@ fn parse_seed_counts(body: &str) -> SeedCounts {
     serde_json::from_str(body).unwrap_or_default()
 }
 
-/// `navigator site person merge <keep> <drop>`: one `POST
+/// `navigator-deploy site person merge <keep> <drop>`: one `POST
 /// /app/api/people/merge`, printing how many addresses the kept Person answers to (never the
 /// parsed `keep`/`drop` arguments, which `CodeQL` treats as secrets).
 pub async fn merge_people(host: Option<String>, keep: &str, drop: &str) -> ExitCode {
@@ -516,14 +517,15 @@ async fn resolve_seed_credential(credential: &SeedCredential) -> Result<(String,
 /// exports the `GITHUB_*` compatibility variables, so `FORGEJO_ACTIONS` is the
 /// one signal that tells the two apart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CiForge {
+pub enum CiForge {
     GitHub,
     Forgejo,
 }
 
 impl CiForge {
     /// The forge this runner reports.
-    pub(crate) fn detect() -> Self {
+    #[must_use]
+    pub fn detect() -> Self {
         Self::from_lookup(|name| std::env::var(name).ok())
     }
 
@@ -537,7 +539,8 @@ impl CiForge {
 
     /// The `/auth/ci/*` door that mints a document-scoped session for this
     /// forge's OIDC token.
-    pub(crate) fn document_mint_path(self) -> &'static str {
+    #[must_use]
+    pub fn document_mint_path(self) -> &'static str {
         match self {
             Self::GitHub => "/auth/ci/document-token",
             Self::Forgejo => "/auth/ci/forgejo/document-token",
@@ -546,7 +549,8 @@ impl CiForge {
 
     /// The `/auth/ci/*` door that mints a seed session for this forge's OIDC
     /// token. The deployment decides write versus dry-run from the run.
-    pub(crate) fn seed_mint_path(self) -> &'static str {
+    #[must_use]
+    pub fn seed_mint_path(self) -> &'static str {
         match self {
             Self::GitHub => "/auth/ci/seed-token",
             Self::Forgejo => "/auth/ci/forgejo/seed-token",
@@ -571,7 +575,8 @@ impl CiForge {
 
 /// Whether this runner can request an OIDC ID token. Forgejo's runner exports
 /// both variables empty when the job did not opt in, so empty is unset.
-pub(crate) fn ci_oidc_available() -> bool {
+#[must_use]
+pub fn ci_oidc_available() -> bool {
     [
         "ACTIONS_ID_TOKEN_REQUEST_URL",
         "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
@@ -612,12 +617,12 @@ async fn resolve_ci_on(host: &str, forge: CiForge) -> Result<(String, String)> {
 /// gives this token only the Project lookup, revision metadata, and
 /// document-integrity reads; lawyer-tier attribution never widens that
 /// capability.
-pub(crate) async fn resolve_ci_document(host: &str) -> Result<(String, String)> {
+pub async fn resolve_ci_document(host: &str) -> Result<(String, String)> {
     resolve_ci_document_on(host, CiForge::detect()).await
 }
 
 /// [`resolve_ci_document`] on a named forge.
-pub(crate) async fn resolve_ci_document_on(host: &str, forge: CiForge) -> Result<(String, String)> {
+pub async fn resolve_ci_document_on(host: &str, forge: CiForge) -> Result<(String, String)> {
     let base = credentials::base_url(host);
     let mint_path = forge.document_mint_path();
     preflight_dns(&base, mint_path)?;
@@ -638,7 +643,7 @@ pub(crate) async fn resolve_ci_document_on(host: &str, forge: CiForge) -> Result
 /// transient outcome (a connect error, a request timeout, or a 500/502-504
 /// status) is retried while attempts remain; a terminal one gives up on the
 /// first attempt — every 4xx is a deterministic refusal and is never retried.
-pub(crate) enum AttemptOutcome<T> {
+pub enum AttemptOutcome<T> {
     /// The call succeeded.
     Done(T),
     /// Recoverable — retry while attempts remain, then return this error.
@@ -654,7 +659,7 @@ pub(crate) enum AttemptOutcome<T> {
 /// an attempt shape its own final error, so an exhausted call reports the
 /// same status, annotation, and exit code it would have carried without the
 /// retry.
-pub(crate) async fn retry_gate_call<T, F, Fut>(
+pub async fn retry_gate_call<T, F, Fut>(
     attempts: u32,
     delay: std::time::Duration,
     mut attempt: F,
@@ -686,13 +691,15 @@ const GATE_MINT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30
 
 /// Whether a response status is safe to repeat — a plain `500` and the
 /// gateway errors. Every 4xx is a deterministic refusal and never retried.
-pub(crate) fn transient_status(status: reqwest::StatusCode) -> bool {
+#[must_use]
+pub fn transient_status(status: reqwest::StatusCode) -> bool {
     matches!(status.as_u16(), 500 | 502..=504)
 }
 
 /// Whether a transport error is recoverable — the request never left
 /// (connect failure) or gave up on its timeout.
-pub(crate) fn transient_transport(error: &reqwest::Error) -> bool {
+#[must_use]
+pub fn transient_transport(error: &reqwest::Error) -> bool {
     error.is_timeout() || error.is_connect()
 }
 
@@ -872,11 +879,8 @@ fn dns_target(base: &str) -> Option<(String, u16)> {
 /// Brand host not yet published, say) is named as such, so the run says which
 /// `project.host` to fix rather than surfacing a raw resolver error; any
 /// other transport failure still names the host.
-pub(crate) fn unreachable_host_error(
-    base: &str,
-    request: &str,
-    error: reqwest::Error,
-) -> anyhow::Error {
+#[must_use]
+pub fn unreachable_host_error(base: &str, request: &str, error: reqwest::Error) -> anyhow::Error {
     let message = if is_dns_failure(&error) {
         unreachable_host_message(base, request)
     } else {
@@ -949,7 +953,7 @@ fn mint_refusal_annotation(mint_path: &str, reason: &str) -> String {
 /// annotation; this marker only carries which exit code the caller's `run`
 /// wrapper should choose — see [`exit_code_for`].
 #[derive(Debug)]
-pub(crate) struct MintRefusal;
+pub struct MintRefusal;
 
 impl std::fmt::Display for MintRefusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -964,7 +968,7 @@ impl std::error::Error for MintRefusal {}
 /// `4` when a seed import stopped after committing part of its records
 /// ([`PartialImport`]), and `2` for every other failure — the ordinary
 /// gate-failure code. Documented in cli/README.md.
-pub(crate) fn exit_code_for(error: &anyhow::Error) -> ExitCode {
+pub fn exit_code_for(error: &anyhow::Error) -> ExitCode {
     if error
         .chain()
         .any(<dyn std::error::Error>::is::<MintRefusal>)
@@ -1011,26 +1015,26 @@ struct VisibleProject {
 /// /app/api/projects/{id}/documents/revisions?slug=` — what `navigator
 /// document log`/`get`/`diff` (#485) read.
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct RevisionSummary {
-    pub(crate) version: usize,
-    pub(crate) asset_id: Uuid,
-    pub(crate) created_at: String,
-    pub(crate) sha256: String,
-    pub(crate) size_bytes: i64,
-    pub(crate) filename: String,
+pub struct RevisionSummary {
+    pub version: usize,
+    pub asset_id: Uuid,
+    pub created_at: String,
+    pub sha256: String,
+    pub size_bytes: i64,
+    pub filename: String,
     #[serde(default)]
-    pub(crate) visibility: String,
-    pub(crate) operative: bool,
+    pub visibility: String,
+    pub operative: bool,
     /// When this revision was soft-deleted. Only a lawyer-lens caller reads
     /// a soft-deleted chain at all, and the door omits the field on every
     /// live row; the gate uses it to keep a soft-deleted revision out of
     /// the chain-extension tolerance (LAW-284).
     #[serde(default)]
-    pub(crate) deleted_at: Option<String>,
+    pub deleted_at: Option<String>,
     #[serde(default)]
-    pub(crate) signing: Option<store::documents::Signing>,
+    pub signing: Option<store::documents::Signing>,
     #[serde(default)]
-    pub(crate) notarization: Vec<store::documents::Notarization>,
+    pub notarization: Vec<store::documents::Notarization>,
 }
 
 /// Rows one integrity request asks for. Each row costs the server a storage
@@ -1040,7 +1044,8 @@ const INTEGRITY_PAGE: usize = 50;
 const INTEGRITY_DEEP_PAGE: usize = 10;
 
 /// The page size for an integrity fetch, deep or shallow.
-pub(crate) fn integrity_page_limit(deep: bool) -> usize {
+#[must_use]
+pub fn integrity_page_limit(deep: bool) -> usize {
     if deep {
         INTEGRITY_DEEP_PAGE
     } else {
@@ -1060,7 +1065,7 @@ fn empty_integrity_response() -> IntegrityResponse {
 
 /// Fold one fetched integrity page into `merged`, reporting the offset of
 /// the next page — `None` when the fetch is complete.
-pub(crate) fn integrity_advance(
+pub fn integrity_advance(
     merged: &mut IntegrityResponse,
     page: IntegrityResponse,
     offset: usize,
@@ -1086,92 +1091,92 @@ const INTEGRITY_RETRY_DELAY: std::time::Duration = std::time::Duration::from_mil
 
 /// One asset row from `GET /app/api/projects/{id}/documents/integrity`.
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct IntegrityAsset {
-    pub(crate) asset_id: Uuid,
-    pub(crate) slug: Option<String>,
-    pub(crate) filename: Option<String>,
-    pub(crate) revision: Option<RevisionSummary>,
+pub struct IntegrityAsset {
+    pub asset_id: Uuid,
+    pub slug: Option<String>,
+    pub filename: Option<String>,
+    pub revision: Option<RevisionSummary>,
     #[serde(default)]
-    pub(crate) sha256: String,
+    pub sha256: String,
     #[serde(default)]
-    pub(crate) kind: Option<String>,
+    pub kind: Option<String>,
     #[serde(default)]
-    pub(crate) derived_from: Option<serde_json::Value>,
+    pub derived_from: Option<serde_json::Value>,
     #[serde(default)]
-    pub(crate) operative: bool,
+    pub operative: bool,
     #[serde(default)]
-    pub(crate) version: Option<usize>,
-    pub(crate) exists: bool,
+    pub version: Option<usize>,
+    pub exists: bool,
     #[serde(default)]
-    pub(crate) size_bytes: Option<i64>,
-    pub(crate) recorded_size: i64,
+    pub size_bytes: Option<i64>,
+    pub recorded_size: i64,
     #[serde(default)]
-    pub(crate) sha256_matches: Option<bool>,
+    pub sha256_matches: Option<bool>,
     #[serde(default)]
-    pub(crate) docket_name_matches: Option<bool>,
+    pub docket_name_matches: Option<bool>,
 }
 
 /// One server-side external-id finding. Empty until a pointer carries an
 /// external id.
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct IntegrationFinding {
-    pub(crate) asset_id: Uuid,
-    pub(crate) integration: String,
-    pub(crate) outcome: String,
-    pub(crate) detail: String,
+pub struct IntegrationFinding {
+    pub asset_id: Uuid,
+    pub integration: String,
+    pub outcome: String,
+    pub detail: String,
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct IntegrityResponse {
-    pub(crate) assets: Vec<IntegrityAsset>,
+pub struct IntegrityResponse {
+    pub assets: Vec<IntegrityAsset>,
     /// Rows across every page. Absent from a server that does not page.
     #[serde(default)]
-    pub(crate) total: Option<usize>,
+    pub total: Option<usize>,
     /// Where the next page starts. Absent on the last page.
     #[serde(default)]
-    pub(crate) next_offset: Option<usize>,
+    pub next_offset: Option<usize>,
     #[serde(default)]
-    pub(crate) integrations: Vec<IntegrationFinding>,
+    pub integrations: Vec<IntegrationFinding>,
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct RevisionsResponse {
-    pub(crate) kind: String,
+pub struct RevisionsResponse {
+    pub kind: String,
     /// Newest first, matching `store::assets::revisions`.
-    pub(crate) revisions: Vec<RevisionSummary>,
+    pub revisions: Vec<RevisionSummary>,
 }
 
 /// One filed document revision returned by the Project inventory door. The
 /// server applies the caller's matter lens before this shape reaches the CLI.
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct LiveDocumentSummary {
+pub struct LiveDocumentSummary {
     #[serde(default)]
-    pub(crate) metadata: Option<serde_json::Value>,
-    pub(crate) id: Uuid,
-    pub(crate) byte_size: i64,
-    pub(crate) sha256_hex: String,
-    pub(crate) filename: Option<String>,
-    pub(crate) kind: Option<String>,
-    pub(crate) visibility: String,
-    pub(crate) slug: Option<String>,
-    pub(crate) inserted_at: String,
+    pub metadata: Option<serde_json::Value>,
+    pub id: Uuid,
+    pub byte_size: i64,
+    pub sha256_hex: String,
+    pub filename: Option<String>,
+    pub kind: Option<String>,
+    pub visibility: String,
+    pub slug: Option<String>,
+    pub inserted_at: String,
     #[serde(default)]
-    pub(crate) signing: Option<store::documents::Signing>,
+    pub signing: Option<store::documents::Signing>,
     #[serde(default)]
-    pub(crate) notarization: Vec<store::documents::Notarization>,
+    pub notarization: Vec<store::documents::Notarization>,
     /// The folder the live row sits in (LAW-241); `None` is the kind's
     /// default placement, not a folder the API refuses to say.
     #[serde(default)]
-    pub(crate) folder: Option<String>,
+    pub folder: Option<String>,
 }
 
 /// How an executed document was executed, as an upload records it. Empty for
 /// every upload that is not an executed document.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct DocumentExecution {
-    pub(crate) signing: Option<store::documents::Signing>,
-    pub(crate) notarization: Vec<store::documents::Notarization>,
-    pub(crate) evidence: Option<store::documents::Evidence>,
+pub struct DocumentExecution {
+    pub signing: Option<store::documents::Signing>,
+    pub notarization: Vec<store::documents::Notarization>,
+    pub evidence: Option<store::documents::Evidence>,
 }
 
 impl DocumentExecution {
@@ -1193,7 +1198,7 @@ impl DocumentExecution {
 /// Which upload door carries a document: the buffered door for everything
 /// that fits its per-kind cap, the streaming lane above it (LAW-172).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum UploadLane {
+pub enum UploadLane {
     Buffered,
     Streaming,
 }
@@ -1201,7 +1206,8 @@ pub(crate) enum UploadLane {
 /// The lane for a document of `size` bytes and `kind`. Inclusive at the
 /// per-kind cap, so every upload that works today stays on the buffered
 /// door and only the previously rejected sizes take the streaming lane.
-pub(crate) fn upload_lane_for(size: usize, kind: &str) -> UploadLane {
+#[must_use]
+pub fn upload_lane_for(size: usize, kind: &str) -> UploadLane {
     if size <= store::documents::max_document_upload_bytes(kind) {
         UploadLane::Buffered
     } else {
@@ -1223,8 +1229,8 @@ struct StreamingSessionStatus {
 /// authenticated. It says nothing about whether a document exists, so a
 /// caller reports it as a session failure, never as a missing document.
 #[derive(Debug)]
-pub(crate) struct SessionRefused {
-    pub(crate) detail: String,
+pub struct SessionRefused {
+    pub detail: String,
 }
 
 impl std::fmt::Display for SessionRefused {
@@ -1240,13 +1246,14 @@ impl std::fmt::Display for SessionRefused {
 impl std::error::Error for SessionRefused {}
 
 /// Whether `error` is a [`SessionRefused`].
-pub(crate) fn is_session_refused(error: &anyhow::Error) -> bool {
+#[must_use]
+pub fn is_session_refused(error: &anyhow::Error) -> bool {
     error.downcast_ref::<SessionRefused>().is_some()
 }
 
 /// Authenticated client for the one Project's document-sync operations.
 #[derive(Debug)]
-pub(crate) struct DocumentClient {
+pub struct DocumentClient {
     base: String,
     token: String,
     client: reqwest::Client,
@@ -1261,7 +1268,7 @@ pub(crate) struct DocumentClient {
 /// # Errors
 ///
 /// Rejects invalid URLs and non-loopback plaintext origins.
-pub(crate) fn authenticated_client_builder(base: &str) -> Result<reqwest::ClientBuilder> {
+pub fn authenticated_client_builder(base: &str) -> Result<reqwest::ClientBuilder> {
     let origin = url::Url::parse(base).context("parse authenticated deployment URL")?;
     let loopback = match origin.host() {
         Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
@@ -1283,10 +1290,10 @@ pub(crate) fn authenticated_client_builder(base: &str) -> Result<reqwest::Client
 /// before uploading. The doors answer a stale triple with
 /// `409 head_conflict` naming the live one.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct ExpectedHead {
-    pub(crate) asset_id: Uuid,
-    pub(crate) version: u32,
-    pub(crate) sha256: String,
+pub struct ExpectedHead {
+    pub asset_id: Uuid,
+    pub version: u32,
+    pub sha256: String,
 }
 
 /// The body of a `409 head_conflict` answer.
@@ -1340,23 +1347,26 @@ fn head_triple_display(head: Option<&ExpectedHead>) -> String {
 
 impl DocumentClient {
     /// The deployment this client is logged in to.
-    pub(crate) fn base(&self) -> &str {
+    #[must_use]
+    pub fn base(&self) -> &str {
         &self.base
     }
 
     /// The bearer token the login resolved, for a sibling door on the same
     /// deployment and Project.
-    pub(crate) fn token(&self) -> &str {
+    #[must_use]
+    pub fn token(&self) -> &str {
         &self.token
     }
 
     /// The Project the client files into.
-    pub(crate) fn project_id(&self) -> Uuid {
+    #[must_use]
+    pub fn project_id(&self) -> Uuid {
         self.project_id
     }
 
     /// Resolve a logged-in host and one visible Project code.
-    pub(crate) async fn connect(host: Option<&str>, project_code: &str) -> Result<Self> {
+    pub async fn connect(host: Option<&str>, project_code: &str) -> Result<Self> {
         let (base, token) = resolve(host)?;
         Self::with_credential(base, token, project_code).await
     }
@@ -1366,21 +1376,13 @@ impl DocumentClient {
     /// GitHub Actions OIDC rather than a stored `~/.navigator.json` login.
     /// Its requests carry the integrity client's 100 s bound, so a hung
     /// gateway burns an attempt instead of the job's six-hour budget.
-    pub(crate) async fn with_credential(
-        base: String,
-        token: String,
-        project_code: &str,
-    ) -> Result<Self> {
+    pub async fn with_credential(base: String, token: String, project_code: &str) -> Result<Self> {
         Self::with_timeout(base, token, project_code, Some(INTEGRITY_REQUEST_TIMEOUT)).await
     }
 
     /// Bounded, read-only validation requests. The normal client keeps its
     /// existing transfer policy for document uploads and downloads.
-    pub(crate) async fn for_validation(
-        base: String,
-        token: String,
-        project_code: &str,
-    ) -> Result<Self> {
+    pub async fn for_validation(base: String, token: String, project_code: &str) -> Result<Self> {
         Self::with_timeout(
             base,
             token,
@@ -1426,7 +1428,7 @@ impl DocumentClient {
     /// slug's read becomes a `CheckFailure`. A 401 is never retried here:
     /// it means the session lapsed, and renewal above this layer (`LiveSession`)
     /// stays the one path that answers it.
-    pub(crate) async fn list_revisions(&self, slug: &str) -> Result<RevisionsResponse> {
+    pub async fn list_revisions(&self, slug: &str) -> Result<RevisionsResponse> {
         let url = format!(
             "{}/app/api/projects/{}/documents/revisions",
             self.base, self.project_id
@@ -1484,7 +1486,8 @@ impl DocumentClient {
 
     /// The same deployment, Project, and transport with a freshly minted
     /// bearer — the gate's renewal after a CI session lapses mid-run.
-    pub(crate) fn with_token(&self, token: String) -> Self {
+    #[must_use]
+    pub fn with_token(&self, token: String) -> Self {
         Self {
             base: self.base.clone(),
             token,
@@ -1503,7 +1506,7 @@ impl DocumentClient {
     /// never skipped, so every row is still checked. A `401` on any page is
     /// a [`SessionRefused`] — renewal above this layer (`LiveSession`)
     /// answers it; here it is never retried.
-    pub(crate) async fn integrity(&self, deep: bool) -> Result<IntegrityResponse> {
+    pub async fn integrity(&self, deep: bool) -> Result<IntegrityResponse> {
         let limit = integrity_page_limit(deep);
         let mut merged = empty_integrity_response();
         let mut offset = 0;
@@ -1520,7 +1523,7 @@ impl DocumentClient {
     /// gateway or times out is retried; a `401` is a [`SessionRefused`] —
     /// it says nothing about the documents, only the session, and renewal
     /// above this layer (`LiveSession`) stays the one path that answers it.
-    pub(crate) async fn integrity_page(
+    pub async fn integrity_page(
         &self,
         deep: bool,
         offset: usize,
@@ -1579,7 +1582,7 @@ impl DocumentClient {
     }
 
     /// Every document revision visible through the caller's Project lens.
-    pub(crate) async fn list_documents(&self) -> Result<Vec<LiveDocumentSummary>> {
+    pub async fn list_documents(&self) -> Result<Vec<LiveDocumentSummary>> {
         let url = format!(
             "{}/app/api/projects/{}/documents",
             self.base, self.project_id
@@ -1603,7 +1606,7 @@ impl DocumentClient {
     }
 
     /// `GET /app/api/projects/{id}/service` — every Service on the Project.
-    pub(crate) async fn list_service(&self) -> Result<Vec<store::project_service::ProjectService>> {
+    pub async fn list_service(&self) -> Result<Vec<store::project_service::ProjectService>> {
         let url = format!("{}/app/api/projects/{}/service", self.base, self.project_id);
         let response = self
             .client
@@ -1625,7 +1628,7 @@ impl DocumentClient {
 
     /// `PUT /app/api/projects/{id}/pages` — replace the Project's stored
     /// Matter Pages with `pages`. Returns how many the server stored.
-    pub(crate) async fn put_pages(&self, pages: &[rules::pages::PageEntry]) -> Result<usize> {
+    pub async fn put_pages(&self, pages: &[rules::pages::PageEntry]) -> Result<usize> {
         let url = format!("{}/app/api/projects/{}/pages", self.base, self.project_id);
         let response = self
             .client
@@ -1651,7 +1654,7 @@ impl DocumentClient {
     /// `PUT /app/api/projects/{id}/matter` — replace the Project's stored
     /// Matter Caption with `matter`; `None` removes it. Returns whether the
     /// server now holds one.
-    pub(crate) async fn put_matter(&self, matter: Option<&word::matter::Matter>) -> Result<bool> {
+    pub async fn put_matter(&self, matter: Option<&word::matter::Matter>) -> Result<bool> {
         let url = format!("{}/app/api/projects/{}/matter", self.base, self.project_id);
         let response = self
             .client
@@ -1676,7 +1679,7 @@ impl DocumentClient {
 
     /// A client aimed at a test server, with no login lookup.
     #[cfg(test)]
-    pub(crate) fn for_check_tests(base: impl Into<String>, project_id: Uuid) -> Self {
+    pub fn for_check_tests(base: impl Into<String>, project_id: Uuid) -> Self {
         Self {
             base: base.into(),
             token: "test-token".into(),
@@ -1691,7 +1694,7 @@ impl DocumentClient {
     /// download link applies. `reqwest`'s default client follows the redirect
     /// to a signed storage URL (production) transparently; `FsStorage`
     /// (local dev) streams bytes directly from the same route.
-    pub(crate) async fn download_revision(&self, asset_id: Uuid) -> Result<Vec<u8>> {
+    pub async fn download_revision(&self, asset_id: Uuid) -> Result<Vec<u8>> {
         let url = format!(
             "{}/app/projects/{}/documents/{asset_id}/download",
             self.base, self.project_code
@@ -1720,7 +1723,7 @@ impl DocumentClient {
 
     /// Fetch an Authority's archived bytes through its read door
     /// (`GET /app/api/authorities/{id}/archive`), gated like the write.
-    pub(crate) async fn download_authority_archive(&self, authority_id: Uuid) -> Result<Vec<u8>> {
+    pub async fn download_authority_archive(&self, authority_id: Uuid) -> Result<Vec<u8>> {
         let url = format!("{}/app/api/authorities/{authority_id}/archive", self.base);
         let response = self
             .client
@@ -1751,7 +1754,7 @@ impl DocumentClient {
     /// instance); the content hash needs no separate field, since the
     /// server derives it from the bytes themselves.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn upload_bytes(
+    pub async fn upload_bytes(
         &self,
         filename: &str,
         bytes: &[u8],
@@ -1783,7 +1786,7 @@ impl DocumentClient {
     /// the streaming lane above it (LAW-172) — one lane choice, made here,
     /// so no upload command needs to know the difference.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn upload_bytes_with_details(
+    pub async fn upload_bytes_with_details(
         &self,
         filename: &str,
         bytes: &[u8],
@@ -2261,7 +2264,7 @@ impl DocumentClient {
     }
 
     /// Reconcile the desired pointer visibility through Navigator's API.
-    pub(crate) async fn set_visibility(&self, asset_id: Uuid, visibility: &str) -> Result<()> {
+    pub async fn set_visibility(&self, asset_id: Uuid, visibility: &str) -> Result<()> {
         let url = format!(
             "{}/app/api/projects/{}/documents/{asset_id}",
             self.base, self.project_id
@@ -2289,7 +2292,7 @@ impl DocumentClient {
     /// back to the kind's default placement. `null` on the wire carries the
     /// clear — the PATCH door's tri-state folder field needs the field
     /// present, not absent.
-    pub(crate) async fn set_folder(&self, asset_id: Uuid, folder: Option<&str>) -> Result<()> {
+    pub async fn set_folder(&self, asset_id: Uuid, folder: Option<&str>) -> Result<()> {
         let url = format!(
             "{}/app/api/projects/{}/documents/{asset_id}",
             self.base, self.project_id
@@ -2315,7 +2318,7 @@ impl DocumentClient {
 
     /// Set `slug` on a row that has none. `kind`, when set, is written in the
     /// same request. `dry_run` asks the server to validate and change nothing.
-    pub(crate) async fn assign_slug(
+    pub async fn assign_slug(
         &self,
         asset_id: Uuid,
         slug: &str,
@@ -2351,7 +2354,7 @@ impl DocumentClient {
 
     /// Replace a legacy kind the asset lane rejects on a row and its chain.
     /// `dry_run` asks the server to validate and change nothing.
-    pub(crate) async fn reclassify_kind(
+    pub async fn reclassify_kind(
         &self,
         asset_id: Uuid,
         kind: &str,
@@ -2382,7 +2385,7 @@ impl DocumentClient {
 
     /// Change a chain from one accepted kind to another.
     /// `dry_run` asks the server to validate and change nothing.
-    pub(crate) async fn reclassify_accepted_kind(
+    pub async fn reclassify_accepted_kind(
         &self,
         asset_id: Uuid,
         kind: &str,
@@ -2413,7 +2416,7 @@ impl DocumentClient {
 
     /// Move the row's document identity to `new_slug`, across its whole chain.
     /// `dry_run` asks the server to validate and change nothing.
-    pub(crate) async fn reslug(
+    pub async fn reslug(
         &self,
         asset_id: Uuid,
         new_slug: &str,
@@ -2443,11 +2446,7 @@ impl DocumentClient {
     }
 
     /// Restore a missing storage object from a same-hash sibling.
-    pub(crate) async fn repair_storage(
-        &self,
-        asset_id: Uuid,
-        dry_run: bool,
-    ) -> Result<serde_json::Value> {
+    pub async fn repair_storage(&self, asset_id: Uuid, dry_run: bool) -> Result<serde_json::Value> {
         let url = format!(
             "{}/app/api/projects/{}/documents/{asset_id}/storage",
             self.base, self.project_id
@@ -2505,11 +2504,7 @@ impl DocumentClient {
 
     /// Soft-delete the document `asset_id` belongs to for 180 days, recording
     /// the source commit that removed its pointer.
-    pub(crate) async fn soft_delete(
-        &self,
-        asset_id: Uuid,
-        commit_sha: &str,
-    ) -> Result<serde_json::Value> {
+    pub async fn soft_delete(&self, asset_id: Uuid, commit_sha: &str) -> Result<serde_json::Value> {
         self.retention_command(
             asset_id,
             "delete",
@@ -2519,7 +2514,7 @@ impl DocumentClient {
     }
 
     /// Soft-delete a mistaken document chain that has no pointer-removal commit.
-    pub(crate) async fn retire(&self, asset_id: Uuid) -> Result<serde_json::Value> {
+    pub async fn retire(&self, asset_id: Uuid) -> Result<serde_json::Value> {
         self.retention_command(
             asset_id,
             "delete",
@@ -2529,16 +2524,12 @@ impl DocumentClient {
     }
 
     /// Restore a soft-deleted document with its revision history.
-    pub(crate) async fn restore(&self, asset_id: Uuid) -> Result<serde_json::Value> {
+    pub async fn restore(&self, asset_id: Uuid) -> Result<serde_json::Value> {
         self.retention_command(asset_id, "restore", None).await
     }
 
     /// Place (`held`) or release a Legal Hold on the document's chain.
-    pub(crate) async fn set_legal_hold(
-        &self,
-        asset_id: Uuid,
-        held: bool,
-    ) -> Result<serde_json::Value> {
+    pub async fn set_legal_hold(&self, asset_id: Uuid, held: bool) -> Result<serde_json::Value> {
         self.retention_command(asset_id, "hold", Some(serde_json::json!({ "held": held })))
             .await
     }
@@ -2547,7 +2538,7 @@ impl DocumentClient {
     /// (`POST /app/api/projects/{id}/mail/file`, #517). Entirely
     /// server-side: only this JSON response travels back, never the
     /// attachment bytes.
-    pub(crate) async fn file_mail(
+    pub async fn file_mail(
         &self,
         message_id: Uuid,
         kind: &str,
@@ -2586,18 +2577,18 @@ impl DocumentClient {
 /// One attachment as `POST /app/api/projects/{id}/mail/file` reports it,
 /// filed or not.
 #[derive(Debug, Deserialize)]
-pub(crate) struct MailFileAttachment {
-    pub(crate) filename: String,
-    pub(crate) content_type: String,
-    pub(crate) size_bytes: usize,
+pub struct MailFileAttachment {
+    pub filename: String,
+    pub content_type: String,
+    pub size_bytes: usize,
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct MailFileResponse {
-    pub(crate) attachments: Vec<MailFileAttachment>,
+pub struct MailFileResponse {
+    pub attachments: Vec<MailFileAttachment>,
     /// One pointer per filed attachment, in message-part order. Empty on a
     /// dry run, or when the message carried no attachments.
-    pub(crate) filed: Vec<store::document_pointers::DocumentPointer>,
+    pub filed: Vec<store::document_pointers::DocumentPointer>,
 }
 
 /// Refuse a document over the shared maximum before it is encoded or sent.
@@ -2631,7 +2622,7 @@ fn validate_document_upload_size(kind: &str, file: &Path) -> Result<()> {
     validate_document_upload_size_in_bytes(kind, actual)
 }
 
-/// `navigator site document upload --project <code> --file … --kind …`
+/// `navigator-deploy site document upload --project <code> --file … --kind …`
 /// — file a local document into a matter through the REST door
 /// (`POST /app/api/projects/{id}/documents`). `--kind` is required and must
 /// be an asset-lane classification; the CLI does not default it.
@@ -2977,7 +2968,7 @@ where
     .await
 }
 
-/// `navigator site document transcribe <pointer>` — locally OCR the current
+/// `navigator-deploy site document transcribe <pointer>` — locally OCR the current
 /// source revision and file its linked transcript under a stable Project slug.
 pub async fn document_transcribe(pointer_path: &Path) -> ExitCode {
     document_transcribe_from(Path::new("."), pointer_path).await
@@ -3072,7 +3063,7 @@ fn source_revision<'a>(
     Ok(source)
 }
 
-/// `navigator site document slug <asset_id> --project <code> --slug …`
+/// `navigator-deploy site document slug <asset_id> --project <code> --slug …`
 /// — set a slug on a live row that has none.
 pub async fn document_slug(
     host: Option<&str>,
@@ -3089,7 +3080,7 @@ pub async fn document_slug(
         if let Some(stored) = body["kind"].as_str().filter(|stored| !is_asset_kind(stored)) {
             eprintln!(
                 "warning: kind `{stored}` is not an accepted document kind, and the gate will reject \
-                 this row's pointer; replace it with `navigator site document kind {asset_id} \
+                 this row's pointer; replace it with `navigator-deploy site document kind {asset_id} \
                  --project {project_code} --kind <kind>`"
             );
         }
@@ -3102,7 +3093,7 @@ fn is_asset_kind(kind: &str) -> bool {
     rules::kind::Kind::parse(kind).is_some_and(|parsed| parsed.valid_for(rules::kind::Lane::Asset))
 }
 
-/// `navigator site document kind <asset_id> --project <code> --kind …`
+/// `navigator-deploy site document kind <asset_id> --project <code> --kind …`
 /// — replace a legacy kind the asset lane rejects on a live row.
 pub async fn document_kind(
     host: Option<&str>,
@@ -3120,7 +3111,7 @@ pub async fn document_kind(
     .await
 }
 
-/// `navigator site document reclassify <asset_id> --project <code> --kind …`
+/// `navigator-deploy site document reclassify <asset_id> --project <code> --kind …`
 /// — change a live chain from one accepted kind to another.
 pub async fn document_reclassify(
     host: Option<&str>,
@@ -3161,7 +3152,7 @@ fn visibility_mismatch_notice(
         _ => "unrecognized",
     };
     Some(format!(
-        "warning: the document is filed as `{filed}`, not `{requested}`: identical bytes under          this slug file no new revision, so the existing visibility stays; change it with          `navigator site document visibility {asset_id} --visibility {requested}`"
+        "warning: the document is filed as `{filed}`, not `{requested}`: identical bytes under          this slug file no new revision, so the existing visibility stays; change it with          `navigator-deploy site document visibility {asset_id} --visibility {requested}`"
     ))
 }
 
@@ -3170,7 +3161,8 @@ fn visibility_mismatch_notice(
 /// `documents/onboarding/letter.pdf` is `onboarding/letter.pdf` and its
 /// pointer lands at the mirrored `blobs/onboarding/letter.pdf.yaml` (LAW-102). `None` for a file at the
 /// `documents/` root or outside it, which keep the filename as the slug.
-pub(crate) fn slug_from_documents_folder(root: &Path, file: &Path) -> Option<String> {
+#[must_use]
+pub fn slug_from_documents_folder(root: &Path, file: &Path) -> Option<String> {
     // Canonical first, so the on-disk case and any `..` agree; the typed path
     // is the fallback for a file that does not exist yet.
     let relative = (|| {
@@ -3221,7 +3213,7 @@ fn documents_folder_prefix_len(parts: &[&str]) -> Option<usize> {
         .max()
 }
 
-/// `navigator site document visibility <asset_id> --project <code> --visibility …`
+/// `navigator-deploy site document visibility <asset_id> --project <code> --visibility …`
 /// — change who can see a filed revision, without filing a new one.
 pub async fn document_visibility(
     host: Option<&str>,
@@ -3238,7 +3230,7 @@ pub async fn document_visibility(
     .await
 }
 
-/// `navigator site document reslug <asset_id> --project <code> --slug …`
+/// `navigator-deploy site document reslug <asset_id> --project <code> --slug …`
 /// — move a document identity to another valid slug across the row's whole
 /// chain, then move the checkout's committed pointer to follow it.
 pub async fn document_reslug(
@@ -3258,7 +3250,7 @@ pub async fn document_reslug(
     .await
 }
 
-/// `navigator site document retire <asset_id> --project <code> --yes-retire`
+/// `navigator-deploy site document retire <asset_id> --project <code> --yes-retire`
 /// — soft-delete a mistaken chain that has no pointer-removal commit.
 pub async fn document_retire(
     host: Option<&str>,
@@ -3324,7 +3316,7 @@ async fn retire_document(
 /// change the live identity and move its local pair. A rejected server write
 /// leaves the checkout untouched; a local failure attempts to restore the
 /// live identity to its prior slug.
-pub(crate) async fn reslug_with_local(
+pub async fn reslug_with_local(
     client: &DocumentClient,
     asset_id: Uuid,
     new_slug: &str,
@@ -3558,7 +3550,7 @@ fn move_local_pointer(dir: &Path, previous: &str, new_slug: &str) -> Result<Opti
     }))
 }
 
-/// `navigator site document repair <asset_id> --project <code>`
+/// `navigator-deploy site document repair <asset_id> --project <code>`
 /// — restore a missing storage object from a same-hash sibling. Admin only.
 pub async fn document_repair(
     host: Option<&str>,
@@ -3575,7 +3567,7 @@ pub async fn document_repair(
     .await
 }
 
-/// `navigator site document restore <asset_id> --project <code>` — bring a
+/// `navigator-deploy site document restore <asset_id> --project <code>` — bring a
 /// soft-deleted document back with its revision history. The next
 /// `navigator project sync` writes its pointer again.
 pub async fn document_restore(host: Option<&str>, project_code: &str, asset_id: Uuid) -> ExitCode {
@@ -3594,7 +3586,7 @@ pub async fn document_restore(host: Option<&str>, project_code: &str, asset_id: 
     .await
 }
 
-/// `navigator site document hold <asset_id> --project <code> [--release]` —
+/// `navigator-deploy site document hold <asset_id> --project <code> [--release]` —
 /// place or release a Legal Hold, which keeps a soft-deleted document out of
 /// the retention purge.
 pub async fn document_hold(
@@ -3665,7 +3657,7 @@ pub async fn archive_repository(host: Option<&str>, project_code: &str, dir: &Pa
     .await
 }
 
-/// `navigator site mail file --message <id> --project <code> --kind …`
+/// `navigator-deploy site mail file --message <id> --project <code> --kind …`
 /// — file one inbound message's attachments into a matter, entirely
 /// server-side (`POST /app/api/projects/{id}/mail/file`, #517). The
 /// attachment bytes never reach this process; only the Pointer this
@@ -3781,22 +3773,22 @@ fn no_redirect_client() -> Result<reqwest::Client> {
 /// One Project's result from an `/app/api/integrations/*` door — mirrors
 /// `portal::integrations_api::ProjectOutcome`.
 #[derive(Debug, Deserialize, Serialize, Clone)]
-pub(crate) struct IntegrationOutcome {
-    pub(crate) project_code: Option<String>,
-    pub(crate) outcome: String,
+pub struct IntegrationOutcome {
+    pub project_code: Option<String>,
+    pub outcome: String,
     #[serde(default)]
-    pub(crate) detail: Option<String>,
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub(crate) struct IntegrationReportBody {
-    pub(crate) results: Vec<IntegrationOutcome>,
+pub struct IntegrationReportBody {
+    pub results: Vec<IntegrationOutcome>,
 }
 
 /// Post one of the authenticated Firm-integration doors and parse its
 /// per-Project report. Setup composes these existing doors; it does not carry
 /// provider credentials or bypass the server's AdminSession/Firm checks.
-pub(crate) async fn post_integration_door(
+pub async fn post_integration_door(
     base: &str,
     token: &str,
     path: &str,
@@ -4395,7 +4387,7 @@ pub async fn projects_create_named(
         println!(
             "{}",
             palette::dim(format!(
-                "open a notation with: navigator site notation create <template_code> --project {}",
+                "open a notation with: navigator-deploy site notation create <template_code> --project {}",
                 created.code
             )),
         );
@@ -4461,7 +4453,7 @@ pub async fn set_project_firm_brand(
 }
 
 /// Resolve a Firm name only within the caller's authorized directory.
-pub(crate) async fn resolve_firm(
+pub async fn resolve_firm(
     base: &str,
     token: &str,
     needle: &str,
@@ -4557,7 +4549,7 @@ pub async fn patch_project_fields(
     Ok(drive_folder_check)
 }
 
-/// `navigator site notation create <template-code> --project <code> --client-email …`
+/// `navigator-deploy site notation create <template-code> --project <code> --client-email …`
 /// — open a notation on an **already-existing** matter and surface the
 /// notation id. Every notation hangs on a pre-existing Project (the matter
 /// is a deliberate prior step, `navigator project create`), so
@@ -4726,7 +4718,7 @@ struct NotationDraftCreated {
     notation_id: Option<Uuid>,
 }
 
-/// `navigator notation preview <file>` (LAW-29) — push a template as a
+/// `navigator-deploy notation preview <file>` (LAW-29) — push a template as a
 /// **draft** to the Project it belongs to: `POST
 /// /app/projects/{project_code}/notations/draft`. The push persists and
 /// validates the pushed source, enforces the engagement-first rule, and
@@ -4735,7 +4727,7 @@ struct NotationDraftCreated {
 /// stem, which the server stores and lints it under. Returns the draft's
 /// id, the run's id when one opened, and the draft's full URL on the
 /// deployment.
-pub(crate) async fn create_notation_draft(
+pub async fn create_notation_draft(
     host: Option<&str>,
     project_code: &str,
     slug: &str,
@@ -4787,7 +4779,7 @@ fn draft_push_refusal(status: reqwest::StatusCode, body: &str) -> String {
     format!("could not push a draft (status {status}). The server reported: {reported}")
 }
 
-/// `navigator site notation list --project <code>` — inspect the private
+/// `navigator-deploy site notation list --project <code>` — inspect the private
 /// notation inventory for one matter without opening its browser workbench.
 pub async fn notation_list(host: Option<&str>, project_code: &str, json: bool) -> ExitCode {
     run(async {
@@ -4843,10 +4835,42 @@ pub async fn project_notations(
     .await
 }
 
+/// One row of `GET /app/api/projects/{code}/notation-inventory`: a run or a
+/// never-started template on the Project's notation board. The deployment's
+/// `webapp::lawyer_project_notations::ProjectNotationRow` serializes it; the
+/// CLI keeps its own read side so the lean binary never links the web client.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+pub struct ProjectNotationRow {
+    pub template_code: String,
+    pub notation_id: Option<String>,
+    pub current_state: Option<String>,
+    pub workflow_states: Vec<String>,
+    pub state_entered_at: std::collections::BTreeMap<String, String>,
+    pub respondent_email: Option<String>,
+    pub signature_request_id: Option<String>,
+    pub last_transition_at: Option<String>,
+    /// Whether the run's pinned template digest has been overtaken by the
+    /// template's current definition on the repository's main (LAW-201).
+    #[serde(default)]
+    pub template_stale: bool,
+}
+
+impl ProjectNotationRow {
+    /// Display the reason this row has no Notation UUID.
+    #[must_use]
+    pub fn unopened_label(&self) -> &'static str {
+        if self.current_state.as_deref() == Some("creation_failed") {
+            "creation failed"
+        } else {
+            "never started"
+        }
+    }
+}
+
 async fn fetch_notation_board(
     host: Option<&str>,
     project_code: &str,
-) -> Result<Vec<webapp::lawyer_project_notations::ProjectNotationRow>> {
+) -> Result<Vec<ProjectNotationRow>> {
     let client = DocumentClient::connect(host, project_code).await?;
     let url = format!(
         "{}/app/api/projects/{}/notation-inventory",
@@ -4871,7 +4895,7 @@ async fn fetch_notation_board(
 }
 
 /// Resolve store defaults and optional saved Notation Answers for a PDF.
-pub(crate) async fn pdf_project_answers(
+pub async fn pdf_project_answers(
     file: &Path,
     from: Option<&str>,
     overrides: Vec<(String, String)>,
@@ -5031,7 +5055,7 @@ impl DocumentClient {
             .file_stem()
             .and_then(|stem| stem.to_str())
             .context("Draft has no template code")?;
-        let board: Vec<webapp::lawyer_project_notations::ProjectNotationRow> = self
+        let board: Vec<ProjectNotationRow> = self
             .pdf_answer_json(&format!("{project_path}/notation-inventory"))
             .await?;
         let runs: Vec<serde_json::Value> = self
@@ -5085,11 +5109,11 @@ impl DocumentClient {
 pub async fn notation_rows(
     host: Option<&str>,
     project_code: &str,
-) -> Result<Vec<webapp::lawyer_project_notations::ProjectNotationRow>> {
+) -> Result<Vec<ProjectNotationRow>> {
     fetch_notation_board(host, project_code).await
 }
 
-fn print_notation_board(rows: &[webapp::lawyer_project_notations::ProjectNotationRow]) {
+fn print_notation_board(rows: &[ProjectNotationRow]) {
     let mut states = Vec::new();
     for row in rows {
         for state in &row.workflow_states {
@@ -5170,7 +5194,7 @@ struct NotationAnswer {
     authored_by_person_id: Option<Uuid>,
 }
 
-/// `navigator site notation answers <id>` — read filed answers and their
+/// `navigator-deploy site notation answers <id>` — read filed answers and their
 /// provenance through the same lawyer-tier, matter-scoped API door as the
 /// browser workbench. The door requires a firm-side participation row of every
 /// tier, so an operator holding Owner or Admin and no row on the matter is
@@ -5238,7 +5262,7 @@ pub async fn notation_answers(
     .await
 }
 
-/// `navigator site notation approve <id>` — render + park the notation's
+/// `navigator-deploy site notation approve <id>` — render + park the notation's
 /// document (`POST …/approve-send`): fill the bound packet (a formation's
 /// official Secretary-of-State form, or a retainer PDF) for attorney review.
 /// Idempotent server-side — a re-approve once the PDF exists is a success,
@@ -5276,7 +5300,7 @@ pub async fn notation_approve(host: Option<&str>, notation_id: Uuid) -> ExitCode
     .await
 }
 
-/// `navigator site notation request-changes <id> --question <code> [--note …]`
+/// `navigator-deploy site notation request-changes <id> --question <code> [--note …]`
 /// — send a notation parked at `lawyer_review` back for changes. Records the
 /// flagged question codes + note and routes `lawyer_review -> reask__client`
 /// so a rejected review re-collects the wrong answers instead of dead-ending
@@ -5332,7 +5356,7 @@ pub async fn notation_request_changes(
     .await
 }
 
-/// `navigator site notation update <id> --answer <code=value>` — re-collect the
+/// `navigator-deploy site notation update <id> --answer <code=value>` — re-collect the
 /// flagged answers on a notation parked at `reask__client` (lawyer on the
 /// client's behalf) and resubmit for review (`POST …/reask`). The write is
 /// gated server-side to the flagged set, and the corrected answers are what
@@ -5381,7 +5405,7 @@ pub async fn notation_update(
     .await
 }
 
-/// `navigator site notation document <id> --out <path>` — download the
+/// `navigator-deploy site notation document <id> --out <path>` — download the
 /// notation's rendered document (the filled packet) to a local file via
 /// the participation-gated `…/documents/document` route, the same per-
 /// notation PDF the review surface shows.
@@ -5402,7 +5426,7 @@ pub async fn notation_document(host: Option<&str>, notation_id: Uuid, out: &Path
         if status.as_u16() == 404 {
             return Err(anyhow!(
                 "no rendered document for notation {notation_id} — answer the questionnaire \
-                 (or `navigator site notation approve {notation_id}`) first"
+                 (or `navigator-deploy site notation approve {notation_id}`) first"
             ));
         }
         if !status.is_success() {
@@ -5421,7 +5445,7 @@ pub async fn notation_document(host: Option<&str>, notation_id: Uuid, out: &Path
     .await
 }
 
-/// `navigator site notation status <id>` — print the workflow state + the
+/// `navigator-deploy site notation status <id>` — print the workflow state + the
 /// signature request id from the review handler's JSON branch.
 pub async fn notation_status(host: Option<&str>, notation_id: Uuid, json: bool) -> ExitCode {
     run(async {
@@ -5647,7 +5671,7 @@ const PROJECT_LOOKUP_RETRY_DELAY: std::time::Duration = std::time::Duration::fro
 /// The read is idempotent, so a 502, 503, 504, connect failure, or timeout is
 /// retried with a growing delay; any other status (401, 404, ...) returns at
 /// once. A 401 is a [`UploadSessionExpired`]. Returns the response body.
-pub(crate) async fn fetch_project_list(
+pub async fn fetch_project_list(
     client: &reqwest::Client,
     base: &str,
     token: &str,
@@ -5663,16 +5687,16 @@ pub(crate) async fn fetch_project_list(
 }
 
 /// Every Project the stored login can see, as `(id, code)` pairs — the
-/// intake verbs' matter enumeration (`navigator downloads propose` and
+/// intake verbs' matter enumeration (`navigator-deploy downloads propose` and
 /// `clean`).
-pub(crate) async fn visible_projects(host: Option<&str>) -> Result<Vec<(Uuid, String)>> {
+pub async fn visible_projects(host: Option<&str>) -> Result<Vec<(Uuid, String)>> {
     let (base, token) = resolve(host)?;
     visible_projects_on(&base, &token).await
 }
 
 /// The same enumeration for a caller that already holds a login — `clean`
 /// walks every matter with one login instead of re-resolving per project.
-pub(crate) async fn visible_projects_on(base: &str, token: &str) -> Result<Vec<(Uuid, String)>> {
+pub async fn visible_projects_on(base: &str, token: &str) -> Result<Vec<(Uuid, String)>> {
     let client = authenticated_client_builder(base)?
         .build()
         .context("build document transfer client")?;
@@ -8971,7 +8995,7 @@ mod tests {
             (format!("{prefix}/participants"), serde_json::json!([])),
             (
                 format!("{prefix}/notation-inventory"),
-                serde_json::json!([webapp::lawyer_project_notations::ProjectNotationRow {
+                serde_json::json!([crate::remote::ProjectNotationRow {
                     template_code: "retainer".into(),
                     notation_id: Some(latest.to_string()),
                     ..Default::default()

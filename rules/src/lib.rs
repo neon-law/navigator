@@ -115,6 +115,7 @@ pub mod s105;
 pub mod s106;
 pub mod source_archive;
 pub mod tables;
+pub mod template_catalog;
 pub mod workflow_steps;
 
 pub use assumption_keys::{

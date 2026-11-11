@@ -3,7 +3,7 @@ title: "Output Format"
 description: "An Output Format is the frame a notation renders in, set by its output key or its Notation Kind."
 ---
 
-The frame wrapped around a rendered notation. `navigator notation pdf` resolves it in one order and there is no
+The frame wrapped around a rendered notation. `navigator-deploy notation pdf` resolves it in one order and there is no
 `--format` flag: the template's own `output:` value, else the default its [Notation Kind](notation-kind.md) derives,
 else plain. Rule `N109` accepts exactly the values below, so a misspelling fails validation instead of quietly falling
 back to plain.
@@ -27,7 +27,8 @@ back to plain.
 A letter always carries the firm letterhead unless it declares `output: client_letter`; the other kinds render without
 one.
 
-Run `navigator notation kinds` for both tables, and see `navigator notation pdf --help` for the frame each kind gets.
+Run `navigator-deploy notation kinds` for both tables, and see `navigator-deploy notation pdf --help` for the frame each
+kind gets.
 
 - Source: [`pdf::OutputFormat`](../../pdf/src/format.rs) · Validator:
   [`N109`](../../rules/src/f109.rs)

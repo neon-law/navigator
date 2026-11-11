@@ -50,53 +50,54 @@ own persistence logic.
 - **Record adversity.** `navigator project adverse add (--person-email <email> | --entity-name <name>) [--subject
   entity|client_dri]` calls `POST /app/api/projects/{id}/relationships/adverse`, which lands a `manual`, full-confidence
   `adverse_to` edge from the client to a party the Project already references.
-- **Document upload.** `navigator site document upload --project <code> --file <path> --kind <kind>` reads the file
-  locally and sends it with the same bearer to `POST /app/api/projects/{id}/documents`. `--kind` is required and must be
-  an asset-lane value — the same enum OpenAPI publishes on that operation. Run inside the matching Project checkout, it
-  writes the document's Pointer at `blobs/<slug>.yaml`; elsewhere it writes no local pointer. Either way it prints the
-  Pointer. When `documents/<slug>` already has a Pointer at `blobs/<slug>.yaml`, the upload files under that pointer's
-  slug and refuses a `--slug` that names another (LAW-102, see [Project repositories](project-repositories.md)). From
-  inside a Project checkout, `navigator project gate --check` writes the missing `blobs/<slug>.yaml` for every row this
-  login can see. `navigator project sync` uses this same upload door for each staged file, then writes the pointer
-  itself; it never calls object storage or writes the store directly. `navigator site document slug` uses the scoped
-  document `PATCH` door to set `slug` (and optionally `kind`) on a row whose slug is null, `navigator site document
-  kind` sends `kind` alone to replace a legacy kind the asset lane rejects, `navigator site document reclassify` posts
-  to `POST /app/api/projects/{id}/documents/{asset_id}/reclassify` to change a chain from one accepted kind to another,
-  and `navigator site document reslug` sends `slug` with `reslug: true` to move a document identity to another slug
+- **Document upload.** `navigator-deploy site document upload --project <code> --file <path> --kind <kind>` reads the
+  file locally and sends it with the same bearer to `POST /app/api/projects/{id}/documents`. `--kind` is required and
+  must be an asset-lane value — the same enum OpenAPI publishes on that operation. Run inside the matching Project
+  checkout, it writes the document's Pointer at `blobs/<slug>.yaml`; elsewhere it writes no local pointer. Either way it
+  prints the Pointer. When `documents/<slug>` already has a Pointer at `blobs/<slug>.yaml`, the upload files under that
+  pointer's slug and refuses a `--slug` that names another (LAW-102, see [Project
+  repositories](project-repositories.md)). From inside a Project checkout, `navigator project gate --check` writes the
+  missing `blobs/<slug>.yaml` for every row this login can see. `navigator project sync` uses this same upload door for
+  each staged file, then writes the pointer itself; it never calls object storage or writes the store directly.
+  `navigator-deploy site document slug` uses the scoped document `PATCH` door to set `slug` (and optionally `kind`) on a
+  row whose slug is null, `navigator-deploy site document kind` sends `kind` alone to replace a legacy kind the asset
+  lane rejects, `navigator-deploy site document reclassify` posts to `POST
+  /app/api/projects/{id}/documents/{asset_id}/reclassify` to change a chain from one accepted kind to another, and
+  `navigator-deploy site document reslug` sends `slug` with `reslug: true` to move a document identity to another slug
   valid for its filename, across the row's whole chain, then moves the checkout's `blobs/` pointer and `documents/`
   bytes under `--dir` to follow it; a target equal to the current slug, or one that already names a chain, is refused.
   It checks local destinations before the live update, resolves an interrupted response from the live inventory, and
-  attempts to restore the old slug if the local move fails. `navigator site document retire` posts `manual: true` to
-  `.../delete` after `--yes-retire` for a mistaken chain with no pointer-removal commit; `--dry-run` reports its slug
+  attempts to restore the old slug if the local move fails. `navigator-deploy site document retire` posts `manual: true`
+  to `.../delete` after `--yes-retire` for a mistaken chain with no pointer-removal commit; `--dry-run` reports its slug
   and revision count. It preserves the chain for 180 days and leaves local files for the caller to remove. `navigator
   site document repair` posts to `POST /app/api/projects/{id}/documents/{asset_id}/storage`, an admin door that restores
-  a missing object from a same-hash sibling in the matter. `navigator site document restore` posts to `POST
+  a missing object from a same-hash sibling in the matter. `navigator-deploy site document restore` posts to `POST
   /app/api/projects/{id}/documents/{asset_id}/restore` to bring back a soft-deleted document with its revision history,
-  and `navigator site document hold` posts to `.../hold` to place or release a Legal Hold. `navigator project sync`
-  posts to `.../delete` only after a per-document confirmation. `project sync --only <path>`, below `documents/` or
-  `blobs/`, limits uploads, downloads, pointer reconciliation, and deletion detection to that file or directory. A
+  and `navigator-deploy site document hold` posts to `.../hold` to place or release a Legal Hold. `navigator project
+  sync` posts to `.../delete` only after a per-document confirmation. `project sync --only <path>`, below `documents/`
+  or `blobs/`, limits uploads, downloads, pointer reconciliation, and deletion detection to that file or directory. A
   staged Authority sidecar is consumed after its pointer is written; only the pointer belongs in Git. `navigator
   validate` always checks pointer shape offline. In a Project checkout with pointers and a current stored session for
   the exact `navigator.yaml` host, it also reads each live revision chain and fails on missing or drifted pointers. An
   absent or expired session prints an explicit live-check skip; a rejected session or failed read is an error.
   Validation never uploads or rewrites a document.
-- **Brand social publication.** `navigator site blog publish <file.yaml>` sends approved source and explicit providers
-  to `POST /app/api/blog` using the stored site bearer. Required `account_ids` pin each approved destination. The server
-  checks Brand authority, connected accounts, and MP4 dimensions, then submits the existing durable Social Publisher.
-  Optional `publish_at` in the source schedules a future send. Retries preserve its workflow identity; an already-public
-  Post cannot be sent again. `blog status` reads the Post and provider receipts from `GET /app/api/blog/{brand}/{slug}`.
-  `blog handle` and `blog link` use the corresponding authenticated `PUT` routes for handles and existing post
-  permalinks; neither sends. Every command accepts only `--host` for site selection. See
+- **Brand social publication.** `navigator-deploy site blog publish <file.yaml>` sends approved source and explicit
+  providers to `POST /app/api/blog` using the stored site bearer. Required `account_ids` pin each approved destination.
+  The server checks Brand authority, connected accounts, and MP4 dimensions, then submits the existing durable Social
+  Publisher. Optional `publish_at` in the source schedules a future send. Retries preserve its workflow identity; an
+  already-public Post cannot be sent again. `blog status` reads the Post and provider receipts from `GET
+  /app/api/blog/{brand}/{slug}`. `blog handle` and `blog link` use the corresponding authenticated `PUT` routes for
+  handles and existing post permalinks; neither sends. Every command accepts only `--host` for site selection. See
   [publish-social-post](../.agents/skills/publish-social-post/SKILL.md).
-- **Public asset upload (ENG-909).** `navigator site asset upload --host <h1> [--host <h2> ...] ASSET_NAME` reads one
-  local public-safe asset and sends it with the stored bearer to `POST /app/api/assets` (`portal::assets_api`), once per
-  named host. Unlike document upload there is no `--project`: a public asset (a brand mark, a hero image, a font file)
-  is deployment-wide. The CLI reads no GCP environment and takes no bucket name — the server resolves the bearer, checks
-  the Owner/Admin tier (the same gate `PATCH /app/api/brands/{key}` uses), validates the key against `brand/`, `img/`,
-  and `fonts/`, cross-checks the declared content type and `sha256` against the decoded bytes, and writes through
-  `cloud::StorageService` to the deployment's own public assets bucket, never the documents bucket. This is the
-  OAuth-backed sibling of the ADC-backed `navigator ops assets upload` batch command (see [`assets`](assets.md)), which
-  still targets real GCS directly with an operator's own bucket credentials for bulk gallery publication.
+- **Public asset upload (ENG-909).** `navigator-deploy site asset upload --host <h1> [--host <h2> ...] ASSET_NAME` reads
+  one local public-safe asset and sends it with the stored bearer to `POST /app/api/assets` (`portal::assets_api`), once
+  per named host. Unlike document upload there is no `--project`: a public asset (a brand mark, a hero image, a font
+  file) is deployment-wide. The CLI reads no GCP environment and takes no bucket name — the server resolves the bearer,
+  checks the Owner/Admin tier (the same gate `PATCH /app/api/brands/{key}` uses), validates the key against `brand/`,
+  `img/`, and `fonts/`, cross-checks the declared content type and `sha256` against the decoded bytes, and writes
+  through `cloud::StorageService` to the deployment's own public assets bucket, never the documents bucket. This is the
+  OAuth-backed sibling of the ADC-backed `navigator-deploy ops assets upload` batch command (see [`assets`](assets.md)),
+  which still targets real GCS directly with an operator's own bucket credentials for bulk gallery publication.
 - **MCP.** A tool in `mcp/src/tools/` translates its arguments into a shared command. The `mcp` crate cannot depend on
   `portal`, so it converges at the `store` / `workflows` layer — e.g. `link_person_project` calls
   `store::participation::add_participant` / `update_participant`, the same commands the participation `/app/api` door

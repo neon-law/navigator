@@ -105,6 +105,7 @@ async fn login_inner(host: &str, no_browser: bool) -> Result<String> {
 /// `navigator site logout [--host <h>]` — drop the stored token for a host (or
 /// the sole logged-in host). Local only; the stateless server token can't
 /// be revoked, so this just forgets it.
+#[must_use]
 pub fn run_logout(host: Option<&str>) -> ExitCode {
     let path = default_credentials_path();
     let mut creds = match credentials::load(&path) {
@@ -135,6 +136,7 @@ pub fn run_logout(host: Option<&str>) -> ExitCode {
 
 /// `navigator site whoami [--host <h>]` — print the stored identity + how long
 /// the token has left, computed locally from the recorded expiry.
+#[must_use]
 pub fn run_whoami(host: Option<&str>) -> ExitCode {
     let path = default_credentials_path();
     let creds = match credentials::load(&path) {
@@ -364,7 +366,7 @@ async fn send_response(
 
 /// Best-effort browser open. The URL is always printed too, so a
 /// headless or SSH session can copy it manually.
-pub(crate) fn open_in_browser(url: &str) {
+pub fn open_in_browser(url: &str) {
     #[cfg(target_os = "macos")]
     let opener = ("open", vec![url.to_string()]);
     #[cfg(not(target_os = "macos"))]

@@ -10,7 +10,7 @@ which is one piece of physical mail; `kind: letter` is a template.
 
 Only the twelve **notation** kinds render to a document, and each has a default [Output Format](output-format.md) that
 applies when the template declares no `output:`. The rest are content pages and an engineering intake, which are never
-rendered through `navigator notation pdf`.
+rendered through `navigator-deploy notation pdf`.
 
 - `letter` — A letter the firm sends on the client's behalf (demand, notice, settlement, closing). Default output:
   `letter`, firm letterhead, even with no `output:`.
@@ -49,7 +49,7 @@ Seven further values classify a filed [Asset](asset.md) row only (`transcript`, 
 `certificate_of_naturalization`, `exhibit`, `closed_repository`, `invoice`, `unclassified`); a template that declares
 one fails `S103`.
 
-Run `navigator notation kinds` for this table straight from the checker.
+Run `navigator-deploy notation kinds` for this table straight from the checker.
 
 - Source: [`rules::kind::Kind`](../../rules/src/kind.rs) · Frame
   derivation: [`Kind::default_output`](../../rules/src/kind.rs)

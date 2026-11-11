@@ -35,7 +35,7 @@ Codex one. It creates a sibling `.worktrees/<topic>` checkout only when started 
 or Claude.
 
 ```bash
-cargo run -p cli -- dev worktree-env up --branch <topic>
+cargo run -p deploy -- dev worktree-env up --branch <topic>
 ```
 
 ## The default worktree loop
@@ -43,7 +43,7 @@ cargo run -p cli -- dev worktree-env up --branch <topic>
 Once the task branch exists, use its isolated dependency tier when editing `web`:
 
 ```bash
-cargo run -p cli -- dev worktree-env up --path "$PWD"
+cargo run -p deploy -- dev worktree-env up --path "$PWD"
 set -a; source .devx/env; set +a
 cargo run -p neon
 ```
@@ -60,8 +60,8 @@ Host `web` and its worker share one store and one Restate journal per worktree; 
 a gitignored `.env` holds only optional live third-party sandbox credentials.
 
 ```bash
-cargo run -p cli -- dev worktree-env status --path "$PWD"
-cargo run -p cli -- dev worktree-env down --path "$PWD"
+cargo run -p deploy -- dev worktree-env status --path "$PWD"
+cargo run -p deploy -- dev worktree-env down --path "$PWD"
 ```
 
 `worktree-env down` removes this checkout's port-forwards, cluster or native tenants, and `.devx` state, and never
@@ -73,7 +73,7 @@ claim keeps its tenant alive until `sweep` finds it orphaned.
 `dev up` owns the dependency tier directly and binds `web` to the default port:
 
 ```bash
-cargo run --release -p cli -- dev up
+cargo run --release -p deploy -- dev up
 set -a; source .devx/env; set +a
 cargo run -p neon
 ```
@@ -105,7 +105,7 @@ the worktree on the Postgres overlay and port-forward to an ephemeral loopback p
 
 ```bash
 NAVIGATOR_KIND_DEPS_OVERLAY=k8s/overlays/kind-postgres-spike \
-  cargo run -p cli -- dev worktree-env up --runtime kind --path "$PWD"
+  cargo run -p deploy -- dev worktree-env up --runtime kind --path "$PWD"
 set -a; source .devx/env; set +a
 kubectl --kubeconfig .devx/kubeconfig --context "kind-$NAVIGATOR_KIND_CLUSTER" \
   -n navigator rollout status statefulset/postgres-spike --timeout=180s
@@ -115,8 +115,8 @@ kubectl --kubeconfig .devx/kubeconfig --context "kind-$NAVIGATOR_KIND_CLUSTER" \
 
 The image and its pin are in the [`postgres`](../postgres/SKILL.md) skill.
 
-Forgejo is opt-in the same way: `cargo run -p cli -- dev forgejo up` adds the retained PostgreSQL server, Forgejo, and
-an Actions runner to the sourced tier, signing in through its Rauthy; `dev forgejo smoke` proves it. See
+Forgejo is opt-in the same way: `cargo run -p deploy -- dev forgejo up` adds the retained PostgreSQL server, Forgejo,
+and an Actions runner to the sourced tier, signing in through its Rauthy; `dev forgejo smoke` proves it. See
 [`docs/forgejo-kind.md`](../../../docs/forgejo-kind.md).
 
 ## Verification
@@ -127,12 +127,12 @@ pinned Chrome for Testing build, starts ChromeDriver on a free port, grants Lawy
 generate.
 
 ```bash
-cargo run -p cli -- dev browser-e2e
-cargo run -p cli -- dev browser-e2e --base-url http://localhost:3001
+cargo run -p deploy -- dev browser-e2e
+cargo run -p deploy -- dev browser-e2e --base-url http://localhost:3001
 ```
 
-For a full in-cluster demo from published images, run `cargo run -p cli -- dev worktree-env up --demo`, optionally with
-`--tag YY.M.D`; the ingress is at `http://localhost:8080`.
+For a full in-cluster demo from published images, run `cargo run -p deploy -- dev worktree-env up --demo`, optionally
+with `--tag YY.M.D`; the ingress is at `http://localhost:8080`.
 
 ## Troubleshooting and cleanup
 
@@ -142,9 +142,9 @@ kubectl --namespace navigator describe pod <name>
 kubectl logs --namespace navigator <name> --all-containers --tail=100
 ```
 
-Leave the ordinary `dev up` tier running between sessions. Run `navigator dev worktree-env down` at handoff to remove a
-worktree's task-owned cluster and port-forwards. Never prune Docker volumes without explicit approval. Use `cargo run
---release -p cli -- dev down` only for a deliberate clean rebuild; it deletes the ordinary cluster. See
+Leave the ordinary `dev up` tier running between sessions. Run `navigator-deploy dev worktree-env down` at handoff to
+remove a worktree's task-owned cluster and port-forwards. Never prune Docker volumes without explicit approval. Use
+`cargo run --release -p cli -- dev down` only for a deliberate clean rebuild; it deletes the ordinary cluster. See
 [`docs/agent-workflows.md`](../../../docs/agent-workflows.md#resource-cleanup) for cleanup details.
 
 On Codex-provisioned macOS worktrees, Gatekeeper may open repeated `Verifying "<binary>"…` windows the first time each
@@ -155,9 +155,9 @@ wrap Cargo in a shell script. Tracked in [navigator#570](https://github.com/neon
 ## The load-bearing rules
 
 - **Use the CLI's watching server for interactive previews.** Reuse the configured worktree environment, source
-  `.devx/env`, then run `cargo run -p cli -- dev serve`. Rust and catalog saves rebuild and restart the server; static
-  assets refresh the browser without compilation. Keep it running through the edit-and-check loop on the brand port from
-  `.devx/env`. Follow [web-preview](../web-preview/SKILL.md) to verify automatic refresh and the page.
+  `.devx/env`, then run `cargo run -p deploy -- dev serve`. Rust and catalog saves rebuild and restart the server;
+  static assets refresh the browser without compilation. Keep it running through the edit-and-check loop on the brand
+  port from `.devx/env`. Follow [web-preview](../web-preview/SKILL.md) to verify automatic refresh and the page.
 - **We standardize on KIND.** Do not install another local-Kubernetes flavor (minikube, k3d, Docker Desktop k8s); the
   manifests, port mappings, and `cli::devx` orchestration all assume KIND.
 - **The in-cluster store is ephemeral.** SurrealDB runs memory-backed, so restarting its pod wipes the database, and

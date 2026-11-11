@@ -19,9 +19,9 @@ Read, in order:
 
 Rules:
 
-- Start every change in a Codex or Claude **New Worktree**, then run `navigator dev worktree-env up --branch <topic>`
-  once. The CLI names the linked worktree's PR branch in place; it creates a sibling only when started from the primary
-  checkout outside the app workflow.
+- Start every change in a Codex or Claude **New Worktree**, then run `navigator-deploy dev worktree-env up --branch
+  <topic>` once. The CLI names the linked worktree's PR branch in place; it creates a sibling only when started from the
+  primary checkout outside the app workflow.
 - Run the content gate, then open the PR. Do not re-run the workspace tests, the `features` harness, or coverage here;
   CI runs them. Use the CLI crate when `navigator` is not on `PATH`:
 

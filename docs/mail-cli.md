@@ -1,29 +1,29 @@
 # Mail CLI
 
-`navigator mail setup|login|search|read|draft|file|parse|save|attachments` is a local Gmail workflow. Search and read
-use Gmail's read endpoints; draft creates or updates an unsent Gmail draft. The CLI has no message-send, reply-send, or
-forward operation. Filing records each message as a Project-scoped Communication. `file` refuses a thread that carries
-attachments before it writes anything; `read` prints their names and marks them as not downloaded. `parse` files one
-message the same way — a Gmail web-URL message, a local .eml, or a local file through the document-upload lane — and
-`save` writes a message's .eml copy under the checkout's git-ignored `mail/` folder. `attachments` writes a message's
-attachments into a directory. None of them touches Gmail beyond reads.
+`navigator-deploy mail setup|login|search|read|draft|file|parse|save|attachments` is a local Gmail workflow. Search and
+read use Gmail's read endpoints; draft creates or updates an unsent Gmail draft. The CLI has no message-send,
+reply-send, or forward operation. Filing records each message as a Project-scoped Communication. `file` refuses a thread
+that carries attachments before it writes anything; `read` prints their names and marks them as not downloaded. `parse`
+files one message the same way — a Gmail web-URL message, a local .eml, or a local file through the document-upload lane
+— and `save` writes a message's .eml copy under the checkout's git-ignored `mail/` folder. `attachments` writes a
+message's attachments into a directory. None of them touches Gmail beyond reads.
 
 The CLI reads the refresh token from the macOS Keychain item whose service is
 `com.neonlaw.navigator.gmail.refresh-token` and whose account is the configured Gmail address. It exchanges that token
 at Google's token endpoint using the configured OAuth client id, plus the client secret when one is stored. The macOS
-Security framework reads and writes both items. `navigator mail login` mints the token. Deployment requires a
+Security framework reads and writes both items. `navigator-deploy mail login` mints the token. Deployment requires a
 signed-app/Keychain ACL threat model and a managed-host test.
 
-## Provision Gmail for navigator mail
+## Provision Gmail for navigator-deploy mail
 
-Standing up a Firm includes one Google OAuth client for `navigator mail`. The deployment operator creates it once; each
-lawyer machine then signs in with it. `navigator mail setup`, `navigator mail login`, and a missing refresh token name
-this section when the client or the sign-in is missing.
+Standing up a Firm includes one Google OAuth client for `navigator-deploy mail`. The deployment operator creates it
+once; each lawyer machine then signs in with it. `navigator-deploy mail setup`, `navigator-deploy mail login`, and a
+missing refresh token name this section when the client or the sign-in is missing.
 
 | Piece | Where it lives |
 | --- | --- |
-| GCP project | The Firm's runtime project, the one `navigator ops gcp setup --project-id` provisions. |
-| Gmail API | `gmail.googleapis.com`, enabled in that project by `navigator ops gcp setup`. |
+| GCP project | The Firm's runtime project, the one `navigator-deploy ops gcp setup --project-id` provisions. |
+| Gmail API | `gmail.googleapis.com`, enabled in that project by `navigator-deploy ops gcp setup`. |
 | Consent screen | Google Auth Platform, Audience: **Internal**. |
 | OAuth client | Google Auth Platform, Clients: application type **Desktop app**. |
 | Scopes | `gmail.readonly` and `gmail.compose`, nothing else. |
@@ -33,13 +33,13 @@ this section when the client or the sign-in is missing.
 The project sits in the Firm's Google Workspace organization, which is what lets the consent screen be Internal: only
 the Firm's Workspace accounts can authorize, and Google requires no app verification. The full scope URLs are
 `https://www.googleapis.com/auth/gmail.readonly` and `https://www.googleapis.com/auth/gmail.compose`. The secret's
-payload is the bare client secret string, which `navigator mail login` trims and stores.
+payload is the bare client secret string, which `navigator-deploy mail login` trims and stores.
 
 ### Operator: create the client
 
-1. Check that the project has the Gmail API. `navigator ops gcp setup` enables it with every other required API, and
-   `navigator ops gcp services --project-id <project>` reports drift: one `ok` or `MISSING` line per required API and a
-   nonzero exit when any is disabled. Re-run `navigator ops gcp setup` to enable a missing one.
+1. Check that the project has the Gmail API. `navigator-deploy ops gcp setup` enables it with every other required API,
+   and `navigator-deploy ops gcp services --project-id <project>` reports drift: one `ok` or `MISSING` line per required
+   API and a nonzero exit when any is disabled. Re-run `navigator-deploy ops gcp setup` to enable a missing one.
 2. In the Google Cloud console for that project, open **Google Auth Platform**. Under **Branding**, name the app; under
    **Audience**, choose **Internal**; under **Data Access**, add the two Gmail scopes above.
 3. Under **Clients**, create an OAuth client of type **Desktop app**. Google offers no public API that creates a Desktop
@@ -60,23 +60,23 @@ A different secret name works when every lawyer passes it as `--secret`; the CLI
 
 ```bash
 gcloud auth login
-navigator mail setup --account <lawyer>@<firm-domain> --client-id <oauth-client-id> --project <project>
-navigator mail login
-navigator mail setup
+navigator-deploy mail setup --account <lawyer>@<firm-domain> --client-id <oauth-client-id> --project <project>
+navigator-deploy mail login
+navigator-deploy mail setup
 ```
 
-`navigator mail login` runs `gcloud secrets versions access latest --project <project> --secret
+`navigator-deploy mail login` runs `gcloud secrets versions access latest --project <project> --secret
 navigator-mail-oauth-client-secret` with the current `gcloud` account, stores the result in the Keychain, and opens
-Google sign-in. The final `navigator mail setup` reports `ok` for the account, client id, and refresh token. A machine
-without Secret Manager access can pass the console's downloaded client JSON with `--client-secret-file` instead.
+Google sign-in. The final `navigator-deploy mail setup` reports `ok` for the account, client id, and refresh token. A
+machine without Secret Manager access can pass the console's downloaded client JSON with `--client-secret-file` instead.
 
 ## Draft-only setup
 
 Save the Gmail address and OAuth client id once:
 
 ```bash
-navigator mail setup --account lawyer@example.test --client-id <oauth-client-id>
-navigator mail setup --project <mail-project> --secret <secret-name>
+navigator-deploy mail setup --account lawyer@example.test --client-id <oauth-client-id>
+navigator-deploy mail setup --project <mail-project> --secret <secret-name>
 ```
 
 The account and client-id flags are required together. The command saves these settings, then checks the draft-only
@@ -85,30 +85,31 @@ refresh token. The location follows the credential-path overrides: `NAVIGATOR_CR
 `NAVIGATOR_CONFIG_DIR`, with the credential file's extension replaced by `.mail.json`. Nonblank
 `NAVIGATOR_GMAIL_ACCOUNT` and `NAVIGATOR_GMAIL_CLIENT_ID` override the saved values independently.
 
-`navigator mail setup` checks the saved settings and environment overrides and prints the fix for each gap. It reports
-`ok` or `MISSING` for the account, client id, and Keychain refresh token, and fails until all three are present. It
-reports the client secret as `ok` or `optional`; the secret never blocks readiness. Saved settings remain available even
-when the token check fails. Output contains fixed text only, never the account, client id, secret, or token. When the
-token is missing, it points to `navigator mail login`.
+`navigator-deploy mail setup` checks the saved settings and environment overrides and prints the fix for each gap. It
+reports `ok` or `MISSING` for the account, client id, and Keychain refresh token, and fails until all three are present.
+It reports the client secret as `ok` or `optional`; the secret never blocks readiness. Saved settings remain available
+even when the token check fails. Output contains fixed text only, never the account, client id, secret, or token. When
+the token is missing, it points to `navigator-deploy mail login`.
 
 For a shared OAuth client in Secret Manager, save `--project` and optionally `--secret`. The default secret name is
 `navigator-mail-oauth-client-secret`. These settings contain only resource identifiers. Saving account/client settings
-preserves the GCP source. With a saved GCP project, `navigator mail login` fetches the latest secret version using the
-current `gcloud` account and writes it directly to Keychain before opening Google sign-in. Install `gcloud` and run
-`gcloud auth login` first. A permission denial directs the lawyer to check the lawyers group and its Secret Manager
-permissions; a missing secret/version gets a separate error. Provider output and secret bytes are never printed.
+preserves the GCP source. With a saved GCP project, `navigator-deploy mail login` fetches the latest secret version
+using the current `gcloud` account and writes it directly to Keychain before opening Google sign-in. Install `gcloud`
+and run `gcloud auth login` first. A permission denial directs the lawyer to check the lawyers group and its Secret
+Manager permissions; a missing secret/version gets a separate error. Provider output and secret bytes are never printed.
 
 ## Authorize Gmail
 
-`navigator mail login` runs Google's installed-app OAuth flow and stores the refresh token:
+`navigator-deploy mail login` runs Google's installed-app OAuth flow and stores the refresh token:
 
 ```bash
-navigator mail login
-navigator mail login --client-secret-file ~/Downloads/client_secret_<id>.json
-navigator mail login --client-secret-from-gcp --project <mail-project> --secret <secret-name>
+navigator-deploy mail login
+navigator-deploy mail login --client-secret-file ~/Downloads/client_secret_<id>.json
+navigator-deploy mail login --client-secret-from-gcp --project <mail-project> --secret <secret-name>
 ```
 
-- **Settings.** It uses the account and client id saved by `navigator mail setup`, or their environment overrides.
+- **Settings.** It uses the account and client id saved by `navigator-deploy mail setup`, or their environment
+  overrides.
 - **Client secret.** Google's Desktop-app clients require a client secret at the token endpoint. The CLI reads it from
   the Keychain item whose service is `com.neonlaw.navigator.gmail.client-secret` and whose account is the client id.
   `--client-secret-file` reads `installed.client_secret` from Google's downloaded client JSON, refuses a file for a
@@ -127,12 +128,12 @@ navigator mail login --client-secret-from-gcp --project <mail-project> --secret 
 - **Storage.** The refresh token goes into the existing Keychain item, replacing any earlier token.
 
 Every later refresh checks the granted scopes again. A stored token carrying any other scope is deleted from the
-Keychain, and the command fails until `navigator mail login` runs again.
+Keychain, and the command fails until `navigator-deploy mail login` runs again.
 
 Gmail offers no narrower scope that creates drafts, and `gmail.compose` can send at Google's level; the guard is that
 this CLI has no send verb and calls no send endpoint (a test pins the endpoint list). `inbox process --apply` archives
-through Gmail's modify endpoint. That endpoint needs `gmail.modify`, so a token from `navigator mail login` cannot
-archive.
+through Gmail's modify endpoint. That endpoint needs `gmail.modify`, so a token from `navigator-deploy mail login`
+cannot archive.
 
 Search adds the current Project client's email to the Gmail query when `navigator.yaml` provides `client_dri`. This is a
 search convenience, not an authorization boundary. Filing compares the message participants with that contact and warns
@@ -164,12 +165,12 @@ again. When Gmail is not set up, the error lists every missing setting at once.
 
 ## Attachments
 
-`navigator mail draft --attach <path>` adds a file to the draft; repeat the flag for more files. It works with `--to`,
-`--subject`, `--body-file`, `--thread`, and `--draft-id`. The CLI reads each file's bytes from disk, so they never pass
-through an agent's context.
+`navigator-deploy mail draft --attach <path>` adds a file to the draft; repeat the flag for more files. It works with
+`--to`, `--subject`, `--body-file`, `--thread`, and `--draft-id`. The CLI reads each file's bytes from disk, so they
+never pass through an agent's context.
 
 ```bash
-navigator mail draft --to client@example.test --subject "Engagement letter" --body-file body.txt \
+navigator-deploy mail draft --to client@example.test --subject "Engagement letter" --body-file body.txt \
   --attach letter.pdf --attach exhibit-a.png
 ```
 
@@ -186,8 +187,8 @@ The draft stays unsent; there is still no send operation.
 
 ## Parse one message into the log
 
-`navigator mail parse <reference>` files one message as a Project-scoped Communication — the same record write `file`
-makes for a whole thread, but for a single message the lawyer points at:
+`navigator-deploy mail parse <reference>` files one message as a Project-scoped Communication — the same record write
+`file` makes for a whole thread, but for a single message the lawyer points at:
 
 - **Gmail web URL.** Copy the message's URL from the browser (`https://mail.google.com/mail/u/0/#inbox/<id>`; the legacy
   `?th=<id>` form works too). The CLI extracts the message id, reads it with `format=full`, and files it. A bare Gmail
@@ -207,11 +208,11 @@ response values; other refusals show only their HTTP status.
 
 ## Save a message's .eml copy
 
-`navigator mail save <gmail-web-url-or-id>` fetches the message with `format=raw` — the complete RFC 822 copy — and
-writes it into the Project checkout's git-ignored `mail/` folder:
+`navigator-deploy mail save <gmail-web-url-or-id>` fetches the message with `format=raw` — the complete RFC 822 copy —
+and writes it into the Project checkout's git-ignored `mail/` folder:
 
 ```bash
-navigator mail save "https://mail.google.com/mail/u/0/#inbox/18fa3bc2d4e5f6a7"
+navigator-deploy mail save "https://mail.google.com/mail/u/0/#inbox/18fa3bc2d4e5f6a7"
 # Saved mail/2026.10.30_Retainer_questions.eml (message 18fa3bc2d4e5f6a7)
 ```
 
@@ -227,11 +228,11 @@ Gmail and a write to disk; it never sends, and it does not archive or label the 
 
 ## Save a message's attachments
 
-`navigator mail attachments <gmail-web-url-or-id> --dir <dir>` fetches the message with `format=raw` and writes each
-attachment's decoded bytes into `<dir>`, one file per attachment:
+`navigator-deploy mail attachments <gmail-web-url-or-id> --dir <dir>` fetches the message with `format=raw` and writes
+each attachment's decoded bytes into `<dir>`, one file per attachment:
 
 ```bash
-navigator mail attachments "https://mail.google.com/mail/u/0/#inbox/18fa3bc2d4e5f6a7" --dir mail/18fa3bc2d4e5f6a7
+navigator-deploy mail attachments "https://mail.google.com/mail/u/0/#inbox/18fa3bc2d4e5f6a7" --dir mail/18fa3bc2d4e5f6a7
 # Engagement Letter.pdf  48213 bytes  sha256:<64 hex>  written
 ```
 
@@ -251,16 +252,16 @@ navigator mail attachments "https://mail.google.com/mail/u/0/#inbox/18fa3bc2d4e5
   is written as one `.eml` file.
 
 Point `--dir` at a git-ignored folder such as `mail/`. Legal files never belong in Git. This verb uploads nothing. To
-file an attachment, use `navigator site document upload`.
+file an attachment, use `navigator-deploy site document upload`.
 
 ## Save a Navigator inbox message's attachments
 
-A message Navigator already received has no Gmail read to make. `navigator inbox attachments <message> --dir <dir>`
-takes the message id from `navigator inbox list` and writes the attachments the message's plan lists:
+A message Navigator already received has no Gmail read to make. `navigator-deploy inbox attachments` takes the message
+id from `navigator-deploy inbox list` and a `--dir`, and writes the attachments the message's plan lists:
 
 ```bash
-navigator inbox attachments 0198f3a2-6c1e-7b3a-9d2f-4e5a6b7c8d9e --dir mail/0198f3a2
-navigator inbox process 0198f3a2-6c1e-7b3a-9d2f-4e5a6b7c8d9e --dir mail/0198f3a2
+navigator-deploy inbox attachments 0198f3a2-6c1e-7b3a-9d2f-4e5a6b7c8d9e --dir mail/0198f3a2
+navigator-deploy inbox process 0198f3a2-6c1e-7b3a-9d2f-4e5a6b7c8d9e --dir mail/0198f3a2
 ```
 
 The second form prints the plan, writes the same files, and ends with the commands a lawyer chooses from next. Both

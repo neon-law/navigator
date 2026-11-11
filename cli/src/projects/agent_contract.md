@@ -19,15 +19,16 @@ states a fact about a named entity, such as a conversion, a shareholding, or a s
 
 ## Find the term first
 
-Before naming a table, field, state, or UI concept, run `navigator glossary list` to find a term and its plain-language
-description, then `navigator glossary show "<Term>"` for its full definition. Use the glossary's term when one fits; if
-none fits, add a term under `docs/glossary/` in the same Navigator change rather than inventing a synonym.
+Before naming a table, field, state, or UI concept, run `navigator-deploy glossary list` to find a term and its
+plain-language description, then `navigator-deploy glossary show "<Term>"` for its full definition. Use the glossary's
+term when one fits; if none fits, add a term under `docs/glossary/` in the same Navigator change rather than inventing a
+synonym.
 
 ## The loop
 
 1. `navigator project sync` downloads the Project documents visible to you.
 2. Edit `navigator.yaml`, `drafts/`, or `blobs/` pointers.
-3. `navigator project preview` renders the Matter Pages from the working tree.
+3. `navigator-deploy preview` renders the Matter Pages from the working tree.
 4. `navigator project gate` before every commit; it is the required check.
 5. Open a pull request. Merging it publishes.
 
@@ -119,9 +120,9 @@ the gap in the private matter handoff.
   Navigator. A Notation is a database record, never a file here.
 * `seeds/` holds seed data that `navigator site import` creates or updates.
 * `notes/` is git-ignored. Write call notes there for `navigator project communication create --body-file`.
-* `mail/` is git-ignored. Saved mail lives there: `navigator mail save <message-url>` writes a message's
-  `YYYY.MM.DD_<subject>.eml` copy, and email bodies kept on disk for `navigator mail draft --body-file` belong there
-  too. Saved mail is a matter fact, never Git; the gate refuses anything under `mail/`.
+* `mail/` is git-ignored. Saved mail lives there: `navigator-deploy mail save <message-url>` writes a message's
+  `YYYY.MM.DD_<subject>.eml` copy, and email bodies kept on disk for `navigator-deploy mail draft --body-file` belong
+  there too. Saved mail is a matter fact, never Git; the gate refuses anything under `mail/`.
 * Handoff note: work that may outlast the session keeps its state in `notes/HANDOFF-<topic>.md.local`. The gate does
   not read it, and no matter fact leaves the repository. Follow `.agents/skills/working-notes/SKILL.md`.
   * Write it before a session ends with work in flight, near compaction, or when the lawyer asks. Rewrite it when the
@@ -151,7 +152,7 @@ substitute browser or native-app automation for a server that is available.
 
 * **Navigator CLI** — the system of record.
   Document bytes, archived authorities, and answers go through Navigator and never into Git. Preview a memo with
-  `navigator notation preview drafts/<code>.md`. A direct upload from this checkout writes only its pointer under
+  `navigator-deploy notation preview drafts/<code>.md`. A direct upload from this checkout writes only its pointer under
   `blobs/`; review and commit that `.yaml` file.
 * **Notion** — writing: handbooks, guides, and intake notes.
 * **Gmail** — client instructions and correspondence. Read messages and create drafts only; never send, reply to, or
@@ -174,8 +175,8 @@ The last four leave the firm. Keep client identities and matter facts out of tho
 
 For a client email:
 
-* Run `navigator mail draft --body-file` to create an unsent draft of the substantive message body. Do not paste a
-  signature from another message: the CLI adds the attorney's stored signature — the deployment's row for the sending
+* Run `navigator-deploy mail draft --body-file` to create an unsent draft of the substantive message body. Do not paste
+  a signature from another message: the CLI adds the attorney's stored signature — the deployment's row for the sending
   Gmail account when reachable, else the `NAVIGATOR_GMAIL_SIGNATURE` fallback it announces — including its
   confidentiality notice, exactly once. Missing configuration in both sources is an error; do not invent signature text.
 * If the CLI reports an embedded signature, stop for attorney review. Preserve quoted history rather than stripping it
@@ -184,10 +185,11 @@ For a client email:
   another signature during review.
 * A `--draft-id` update replaces the complete draft. Supply every recipient, the thread and every attachment that must
   remain; signature handling preserves those supplied headers and attachment bytes.
-* To file a received message into the matter's Communication log, run `navigator mail parse <gmail-web-url>` (the URL
-  copied from the browser), `navigator mail parse <message.eml>`, or `navigator mail parse <document.pdf>` — the last
-  uploads through the document lane. Filing is a record write only; it never sends or archives in Gmail.
-* To keep a Gmail message's .eml copy in this checkout, run `navigator mail save <gmail-web-url>`; it writes
+* To file a received message into the matter's Communication log, run `navigator-deploy mail parse <gmail-web-url>` (the
+  URL copied from the browser), `navigator-deploy mail parse <message.eml>`, or `navigator-deploy mail parse
+  <document.pdf>` — the last uploads through the document lane. Filing is a record write only; it never sends or
+  archives in Gmail.
+* To keep a Gmail message's .eml copy in this checkout, run `navigator-deploy mail save <gmail-web-url>`; it writes
   `mail/YYYY.MM.DD_<subject>.eml` and refuses a filename that drops the send-date prefix.
 
 ## Feedback

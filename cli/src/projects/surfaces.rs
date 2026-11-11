@@ -24,13 +24,13 @@ use store::project_surfaces::{ProjectHandles, ProjectSurfaces};
 /// One entry from `GET /app/api/projects` — only the two fields this command
 /// needs to turn a human-typed code into the id the reconcile door takes.
 #[derive(Debug, serde::Deserialize)]
-pub(crate) struct VisibleProject {
-    pub(crate) id: Uuid,
-    pub(crate) code: String,
+pub struct VisibleProject {
+    pub id: Uuid,
+    pub code: String,
     #[serde(default)]
-    pub(crate) firm_id: Option<Uuid>,
+    pub firm_id: Option<Uuid>,
     #[serde(default)]
-    pub(crate) brand: Option<String>,
+    pub brand: Option<String>,
 }
 
 /// The first line of a response body, for a one-line error.
@@ -42,16 +42,12 @@ fn first_line(body: &str) -> &str {
 /// door `navigator project close` reads. The reconcile door itself
 /// takes an id, not a code, because a Project code is not guaranteed unique
 /// across the id space at the route layer the way it is at the store layer.
-pub(crate) async fn list_visible_projects(base: &str, token: &str) -> Result<Vec<VisibleProject>> {
+pub async fn list_visible_projects(base: &str, token: &str) -> Result<Vec<VisibleProject>> {
     let body = crate::remote::fetch_project_list(&reqwest::Client::new(), base, token).await?;
     serde_json::from_str(&body).context("parse GET /app/api/projects")
 }
 
-pub(crate) async fn resolve_project_id(
-    base: &str,
-    token: &str,
-    project_code: &str,
-) -> Result<Uuid> {
+pub async fn resolve_project_id(base: &str, token: &str, project_code: &str) -> Result<Uuid> {
     let projects = list_visible_projects(base, token).await?;
     // Never interpolate the CLI's own project-code argument into a message:
     // it is read out of the same clap `Commands` enum a `Secrets` variant
@@ -66,11 +62,7 @@ pub(crate) async fn resolve_project_id(
 
 /// Create or adopt the Project's three handles through the admin-tier
 /// reconcile door, `POST /app/api/project-surfaces/{id}`.
-pub(crate) async fn post_reconcile(
-    base: &str,
-    token: &str,
-    project_id: Uuid,
-) -> Result<ProjectSurfaces> {
+pub async fn post_reconcile(base: &str, token: &str, project_id: Uuid) -> Result<ProjectSurfaces> {
     post_reconcile_classified(base, token, project_id)
         .await
         .map_err(|failure| match failure {
@@ -86,7 +78,7 @@ pub(crate) async fn post_reconcile(
 /// message text — so a fleet-wide sweep can report an unconfigured Firm as
 /// its own expected outcome instead of a fault.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ReconcileDoorError {
+pub enum ReconcileDoorError {
     /// The deployment's Forgejo is missing a coordinate for the Project's
     /// Firm; the message names every missing piece (the Forgejo root URL,
     /// the Firm's `forgejo_access_token` integration secret).
@@ -98,7 +90,7 @@ pub(crate) enum ReconcileDoorError {
 /// [`post_reconcile`] with the door's errors left classified: a `422
 /// forgejo_unavailable` becomes [`ReconcileDoorError::Unavailable`] with the
 /// door's own sentence, everything else [`ReconcileDoorError::Failed`].
-pub(crate) async fn post_reconcile_classified(
+pub async fn post_reconcile_classified(
     base: &str,
     token: &str,
     project_id: Uuid,
@@ -138,11 +130,7 @@ pub(crate) async fn post_reconcile_classified(
 
 /// Read one Project's nonsecret manifest coordinates through the authenticated
 /// Project surface door. The CLI never reads provider credentials.
-pub(crate) async fn get_handles(
-    base: &str,
-    token: &str,
-    project_id: Uuid,
-) -> Result<ProjectHandles> {
+pub async fn get_handles(base: &str, token: &str, project_id: Uuid) -> Result<ProjectHandles> {
     let url = format!("{base}/app/api/project-surfaces/{project_id}");
     let response = reqwest::Client::new()
         .get(&url)

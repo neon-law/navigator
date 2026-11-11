@@ -7,7 +7,7 @@
 //! ## Prerequisites
 //!
 //! 1. KIND cluster up and seeded:
-//!    `cargo run --release -p cli -- dev deploy` (see `AGENTS.md`, Local KIND development).
+//!    `cargo run --release -p deploy -- dev deploy` (see `AGENTS.md`, Local KIND development).
 //! 2. Lawyer has the `lawyer` role granted in the store (see `AGENTS.md`, Authentication and lawyer access).
 //! 3. `chromedriver` (or `geckodriver`) running on
 //!    `http://localhost:9515`:

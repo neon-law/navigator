@@ -17,13 +17,13 @@ production component, so the page cannot drift from what ships.
   reach off-origin.
 
 ```bash
-cargo run -p cli -- dev worktree-env up --path "$PWD"
+cargo run -p deploy -- dev worktree-env up --path "$PWD"
 set -a; source .devx/env; set +a
 cargo run -p neon   # then open /design after signing in
 ```
 
-For automatic rebuilds and browser refresh, run `cargo run -p cli -- dev serve` after the worktree environment is up. It
-loads `.devx/env`, requires a development environment and a loopback URL, and starts the real `neon` server. Rust and
+For automatic rebuilds and browser refresh, run `cargo run -p deploy -- dev serve` after the worktree environment is up.
+It loads `.devx/env`, requires a development environment and a loopback URL, and starts the real `neon` server. Rust and
 catalog edits rebuild the application; static-asset edits refresh the browser directly. A failed build leaves the
 previous server running until the next edit. Ctrl-C stops the watcher and its server. The dependency tier remains owned
 by `dev worktree-env`.

@@ -81,12 +81,56 @@ fn inline_commands(line: &str, line_no: usize) -> Vec<(usize, String)> {
     out
 }
 
+/// Top-level verbs that moved from `navigator` to `navigator-deploy` (and
+/// `ephemeris`, to `scorpio`).
+pub const NAVIGATOR_DEPLOY_VERBS: &[&str] = &[
+    "assumptions",
+    "clause",
+    "dev",
+    "downloads",
+    "drafts",
+    "ephemeris",
+    "forms",
+    "glossary",
+    "inbox",
+    "journal",
+    "legal-plans",
+    "lsp",
+    "mail",
+    "nautilus",
+    "notation",
+    "ops",
+    "person",
+    "pii",
+    "quickstart",
+    "scraper",
+    "templates",
+];
+
 /// The first argv word after `navigator` that clap does not recognize as a
 /// subcommand, when the current command still has subcommands.
 #[must_use]
 pub fn unresolved_verb(command: &str, tree: &Command) -> Option<String> {
     let words: Vec<&str> = command.split_whitespace().collect();
     if words.first().copied() != Some("navigator") {
+        return None;
+    }
+    // A Project repository synced before the split still documents these
+    // verbs under `navigator`; they now resolve in `navigator-deploy`, so
+    // they are not a dangling command. `site` stayed, but only its session
+    // and seed-import verbs did.
+    let moved_site_verb = words.get(1) == Some(&"site")
+        && words.get(2).is_some_and(|verb| {
+            !is_operand(verb)
+                && tree
+                    .find_subcommand("site")
+                    .is_some_and(|site| site.find_subcommand(verb).is_none())
+        });
+    if moved_site_verb
+        || words.get(1).is_some_and(|verb| {
+            NAVIGATOR_DEPLOY_VERBS.contains(verb) && tree.find_subcommand(verb).is_none()
+        })
+    {
         return None;
     }
     let mut current = tree;
@@ -224,6 +268,29 @@ mod tests {
         assert_eq!(
             unresolved_verb("navigator drafts scaffold file.md", &tree).as_deref(),
             Some("scaffold")
+        );
+    }
+
+    #[test]
+    fn a_verb_that_moved_to_navigator_deploy_is_not_dangling() {
+        let lean = Command::new("navigator")
+            .subcommand(Command::new("project").subcommand(Command::new("gate")))
+            .subcommand(Command::new("site").subcommand(Command::new("login")));
+        assert_eq!(
+            unresolved_verb("navigator mail draft --body-file x", &lean),
+            None
+        );
+        assert_eq!(
+            unresolved_verb("navigator site document upload", &lean),
+            None
+        );
+        assert_eq!(
+            unresolved_verb("navigator site login --host h", &lean),
+            None
+        );
+        assert_eq!(
+            unresolved_verb("navigator mails draft", &lean).as_deref(),
+            Some("mails")
         );
     }
 

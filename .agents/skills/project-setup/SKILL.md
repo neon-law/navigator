@@ -5,9 +5,9 @@ description: Open a Project, generate its canonical repository shell, and set up
 
 # Set up a Project
 
-Find the term first with `navigator glossary list` and `navigator glossary show "<Term>"` before adding vocabulary. Use
-the current `navigator` release. The scaffold embeds canonical files and skills from that release; do not copy them from
-another checkout.
+Find the term first with `navigator-deploy glossary list` and `navigator-deploy glossary show "<Term>"` before adding
+vocabulary. Use the current `navigator` release. The scaffold embeds canonical files and skills from that release; do
+not copy them from another checkout.
 
 ## Open and scaffold a new Project
 
@@ -79,8 +79,8 @@ Product)/` (`transcript`), `Correspondence (Work Product)/` (letters drafted, no
 (Work Product)/` (`memo`), and `Stipulations (Work Product)/`.
 
 Git tracks only the pointers under `blobs/`. To file a document, drop it into its matter folder and run `navigator
-project sync`, or run `navigator site document upload --folder "<Folder>"`. A `Work Product` subfolder's name is its
-whole path below `documents/`, such as `"Work Product/Research (Work Product)"`. `onboarding/`, `offboarding/`,
+project sync`, or run `navigator-deploy site document upload --folder "<Folder>"`. A `Work Product` subfolder's name is
+its whole path below `documents/`, such as `"Work Product/Research (Work Product)"`. `onboarding/`, `offboarding/`,
 `invoices/`, `cases/`, and `rules/` stay beside the matter folders.
 
 A checkout without the matter folders moves into them on the next `navigator project sync`, or with `navigator project

@@ -5,9 +5,9 @@
 //! web app: it is registered on the Catalog surface, renders under
 //! the site brand, opens with an Agenda, splits into stepped
 //! content, and shows the reader the real
-//! `cargo run -p cli -- ops gcp setup` command. The pipeline-grounding half
+//! `cargo run -p deploy -- ops gcp setup` command. The pipeline-grounding half
 //! — that the services, buckets, and command the prose names match what
-//! `navigator ops gcp setup` actually calls — lives in `cli/src/devx/gcp/mod.rs`,
+//! `navigator ops gcp setup` actually calls — lives in `deploy/src/devx/gcp/mod.rs`,
 //! the only place `cli`'s `devx::gcp::run` is reachable.
 
 #![allow(clippy::unused_async)]

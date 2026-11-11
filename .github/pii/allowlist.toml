@@ -1,4 +1,4 @@
-# What `navigator pii` may find without failing the build.
+# What `navigator-deploy pii` may find without failing the build.
 #
 # Each table is a group of `values` that share one `reason`. A synthetic
 # fixture name, a public firm fact, a published case caption, or a copyright

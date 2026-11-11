@@ -1,5 +1,5 @@
 name: Quickstart on KIND
-# The same `navigator quickstart` a newcomer runs after `brew install`, on a
+# The same `navigator-deploy quickstart` a newcomer runs after `brew install`, on a
 # clean runner: preflight, the worktree KIND tier, PostgreSQL and Forgejo,
 # then `web` serving the seeded firm. `CI` keeps it from opening a browser.
 permissions:
@@ -36,15 +36,15 @@ jobs:
           shared-key: gate-cli
           save-if: false
       - name: build navigator CLI
-        run: cargo build -p cli --quiet
-      - name: navigator quickstart
+        run: cargo build -p deploy --quiet
+      - name: navigator-deploy quickstart
         run: |
-          target/debug/navigator quickstart > /tmp/quickstart.log 2>&1 &
+          target/debug/navigator-deploy quickstart > /tmp/quickstart.log 2>&1 &
           echo $! > /tmp/quickstart.pid
           for _ in $(seq 1 5400); do
             if ! kill -0 "$(cat /tmp/quickstart.pid)" 2>/dev/null; then
               tail -100 /tmp/quickstart.log
-              echo "::error::navigator quickstart exited before the website was ready"
+              echo "::error::navigator-deploy quickstart exited before the website was ready"
               exit 1
             fi
             if grep -q '^Preview: ' /tmp/quickstart.log; then
@@ -78,13 +78,13 @@ jobs:
         if: always()
         run: |
           kill "$(cat /tmp/quickstart.pid)" 2>/dev/null || true
-          target/debug/navigator dev worktree-env down --path "$PWD" || true
+          target/debug/navigator-deploy dev worktree-env down --path "$PWD" || true
 'on':
   pull_request:
     paths:
-      - cli/src/devx/quickstart.rs
-      - cli/src/devx/serve.rs
-      - cli/src/devx/worktree_env.rs
-      - cli/src/devx/forgejo/**
+      - deploy/src/devx/quickstart.rs
+      - deploy/src/devx/serve.rs
+      - deploy/src/devx/worktree_env.rs
+      - deploy/src/devx/forgejo/**
       - .github/workflows/quickstart.yml
   workflow_dispatch: null

@@ -14,14 +14,10 @@
 //! with no `confidential` key is treated as confidential, mirroring the
 //! curated gallery's allow-list stance (`template_gallery`).
 
-use include_dir::{include_dir, Dir};
+pub use rules::template_catalog::bundled_files;
+use rules::template_catalog::TEMPLATES;
 
 use crate::template_paths::kebab_path_eq;
-
-/// The repository `templates/` tree, embedded at build time. The path is
-/// resolved against `web`'s manifest dir, so it tracks the dir in place
-/// at the workspace root.
-static TEMPLATES: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../templates");
 
 const LEGACY_ALIASES: &[(&str, &str)] = &[
     (
@@ -183,34 +179,6 @@ pub fn find_raw_path(path: &str) -> Option<&'static str> {
 #[must_use]
 pub fn find_raw(category: &str, name: &str) -> Option<&'static str> {
     find_raw_path(&format!("{category}/{name}"))
-}
-
-/// Every file in the embedded `templates/` tree as `(repository-relative
-/// path, bytes)`, in a stable depth-first order.
-///
-/// This is the whole shipped catalog, *including* the templates
-/// [`find_raw_path`] refuses. That is deliberate and the two doors are not
-/// interchangeable: `find_raw_path` answers the public web, where
-/// `confidential: true` must fail closed, while this one answers the CLI
-/// running on a firm machine, where the operator is entitled to the same
-/// catalog a checkout would give them. A caller that serves bytes over the
-/// network wants `find_raw_path`, never this.
-#[must_use]
-pub fn bundled_files() -> Vec<(&'static str, &'static [u8])> {
-    fn walk(dir: &'static Dir<'static>, out: &mut Vec<(&'static str, &'static [u8])>) {
-        for file in dir.files() {
-            if let Some(path) = file.path().to_str() {
-                out.push((path, file.contents()));
-            }
-        }
-        for child in dir.dirs() {
-            walk(child, out);
-        }
-    }
-    let mut out = Vec::new();
-    walk(&TEMPLATES, &mut out);
-    out.sort_unstable_by_key(|(path, _)| *path);
-    out
 }
 
 fn safe_parts(parts: &[&str]) -> bool {

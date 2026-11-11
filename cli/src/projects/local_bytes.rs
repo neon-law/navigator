@@ -21,7 +21,7 @@ use crate::document_sync::{read_pointer, slash_path};
 
 /// What the local bytes say about one pointer.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Status {
+pub enum Status {
     /// The bytes hash and measure exactly as the pointer records.
     Match,
     /// The bytes exist and differ from the pointer; `reason` names how.
@@ -32,17 +32,17 @@ pub(crate) enum Status {
 
 /// One pointer and what its local bytes say.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Finding {
+pub struct Finding {
     /// The pointer path relative to the checkout root, with `/` separators.
-    pub(crate) pointer: String,
-    pub(crate) status: Status,
+    pub pointer: String,
+    pub status: Status,
 }
 
 /// Every Blob under `dir/blobs`, each compared with its bytes under `dir/documents`.
 ///
 /// A pointer that cannot be parsed is an error of the run, not a finding: the
 /// content gate owns pointer syntax.
-pub(crate) fn verify(dir: &Path) -> Result<Vec<Finding>> {
+pub fn verify(dir: &Path) -> Result<Vec<Finding>> {
     verify_with(dir, &dir.join(crate::document_sync::DOCUMENT_DIRECTORY))
 }
 
@@ -50,7 +50,7 @@ pub(crate) fn verify(dir: &Path) -> Result<Vec<Finding>> {
 /// in `documents` — the checkout's own `documents/` by default, or any other
 /// tree laid out like it (LAW-217), a Drive-for-desktop matter folder
 /// included.
-pub(crate) fn verify_with(dir: &Path, documents: &Path) -> Result<Vec<Finding>> {
+pub fn verify_with(dir: &Path, documents: &Path) -> Result<Vec<Finding>> {
     let mut findings = Vec::new();
     for relative in discover_pointers(dir)? {
         let absolute = dir.join(&relative);
@@ -109,14 +109,14 @@ fn compare(bytes: &[u8], sha256: &str, size_bytes: i64) -> Status {
 
 /// Counts for the one-line summary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) struct Tally {
-    pub(crate) matched: usize,
-    pub(crate) modified: usize,
-    pub(crate) missing: usize,
+pub struct Tally {
+    pub matched: usize,
+    pub modified: usize,
+    pub missing: usize,
 }
 
 #[must_use]
-pub(crate) fn tally(findings: &[Finding]) -> Tally {
+pub fn tally(findings: &[Finding]) -> Tally {
     findings
         .iter()
         .fold(Tally::default(), |mut tally, finding| {

@@ -11,8 +11,8 @@ Before naming a table, field, state, or UI concept, follow the **Find the term f
 the terms themselves:
 
 ```bash
-navigator glossary show "Docket Entry"
-navigator glossary show "Deadline"
+navigator-deploy glossary show "Docket Entry"
+navigator-deploy glossary show "Deadline"
 ```
 
 A litigation case record is its docket: a numbered list of typed entries, each naming what was filed or served, by whom,

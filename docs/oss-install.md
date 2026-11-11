@@ -59,9 +59,9 @@ compile without it.
   Kustomize built into `kubectl`. Nothing here shells out to a standalone `kustomize` binary.
 - **A domain you control**, with the ability to set A records.
 
-**To run the local KIND cluster** (`navigator dev up`, and the per-worktree `dev worktree-env up`):
+**To run the local KIND cluster** (`navigator-deploy dev up`, and the per-worktree `dev worktree-env up`):
 
-The cluster lane refuses to start unless all four of these are on `PATH` — `cli/src/devx/orchestrate.rs:43` opens it
+The cluster lane refuses to start unless all four of these are on `PATH` — `deploy/src/devx/orchestrate.rs:43` opens it
 with `require_tools(&["kind", "kubectl", "docker", "helm"])`. Docker and `kubectl` are already above and both arrive
 with Docker Desktop, which is exactly why the remaining two are easy to miss:
 
@@ -70,7 +70,7 @@ with Docker Desktop, which is exactly why the remaining two are easy to miss:
   than the latest release: the workflow records that v0.32.0's `kind load` is what understands the containerd config v4
   the v1.36.1 node writes, and that the two are meant to be bumped together.
 - **`helm`, any release with OCI registry support** — the lane uses it for one thing, `helm upgrade --install` of the
-  Restate Operator chart from `oci://ghcr.io/restatedev/restate-operator-helm` at `cli/src/devx/orchestrate.rs:687`.
+  Restate Operator chart from `oci://ghcr.io/restatedev/restate-operator-helm` at `deploy/src/devx/orchestrate.rs:687`.
   Nothing in this repository pins it and CI takes whatever its runner image ships, so there is no version to cite here
   the way there is for the tools above; v4.2.4 is known to pull the pinned chart.
 
@@ -107,14 +107,14 @@ The deployment operator, not a Navigator application admin, owns a brand bundle.
 and logos into one directory:
 
 ```bash
-cp cli/tests/fixtures/navigator.example.yaml navigator.yaml   # then edit: names, emails, domain, logos
-cargo run -p cli -- ops rebrand build --file navigator.yaml --out /tmp/brand-bundle
-cargo run -p cli -- ops rebrand verify --dir /tmp/brand-bundle
+cp deploy/tests/fixtures/navigator.example.yaml navigator.yaml   # then edit: names, emails, domain, logos
+cargo run -p deploy -- ops rebrand build --file navigator.yaml --out /tmp/brand-bundle
+cargo run -p deploy -- ops rebrand verify --dir /tmp/brand-bundle
 ```
 
-`cli/tests/fixtures/navigator.example.yaml` is the worked manifest, and it lives under `tests/` because that is where it
-is proven: `cli/tests/brand_example_manifest.rs` builds and verifies a bundle from it on every run, so the example you
-copy is one the CLI accepts.
+`deploy/tests/fixtures/navigator.example.yaml` is the worked manifest, and it lives under `tests/` because that is where
+it is proven: `cli/tests/brand_example_manifest.rs` builds and verifies a bundle from it on every run, so the example
+you copy is one the CLI accepts.
 
 Branding is Neon Law by default. To ship under your own identity, set `NAVIGATOR_CUSTOM_BRANDING` to the bundle
 directory — `/etc/navigator/brand` for the Kubernetes mount, or any path for a non-Kubernetes install or test. When it
@@ -202,7 +202,7 @@ own instance.
 
 ```bash
 gcloud auth application-default login
-cargo run -p cli -- ops gcp setup \
+cargo run -p deploy -- ops gcp setup \
   --project-id YOUR_PROJECT_ID \
   --public-base-url https://www.your-domain.example \
   --region us-west2 \
@@ -211,8 +211,8 @@ cargo run -p cli -- ops gcp setup \
   --gateway-ip-name navigator-gateway-ip
 ```
 
-Each flag has a sensible default (see `cargo run -p cli -- ops gcp setup --help`) and falls back to a `NAVIGATOR_*` env
-var if unset. Pass `--dry-run` first to print the exact REST calls / `gcloud` invocations the run will emit.
+Each flag has a sensible default (see `cargo run -p deploy -- ops gcp setup --help`) and falls back to a `NAVIGATOR_*`
+env var if unset. Pass `--dry-run` first to print the exact REST calls / `gcloud` invocations the run will emit.
 
 The subcommand generates no credential and prints no secret. Your store credentials come from your SurrealDB provider
 instead.
@@ -278,8 +278,9 @@ docker build -f images/Containerfile.neon -t my-registry/neon-server:$TAG .
 docker push my-registry/neon-server:$TAG
 ```
 
-Then roll your cluster onto the new tag — `navigator ops ship --tag <TAG>` renders the embedded manifest tree from your
-`NAVIGATOR_*` env and applies it, or set the tag via kustomize `images:` if you reconcile with your own controller.
+Then roll your cluster onto the new tag — `navigator-deploy ops ship --tag <TAG>` renders the embedded manifest tree
+from your `NAVIGATOR_*` env and applies it, or set the tag via kustomize `images:` if you reconcile with your own
+controller.
 
 ## 6. Verify
 
