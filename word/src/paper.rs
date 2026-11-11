@@ -14,7 +14,8 @@
 //!
 //! ~~~text
 //! ```caption
-//! counsel: Pat Counsel (SBN 000000)
+//! counsel: Pat Counsel, Esq.
+//! counsel: SBN 000000
 //! court: SUPERIOR COURT OF CALIFORNIA
 //! parties: SAMPLE PLAINTIFF, Plaintiff,
 //! case: Case No. 00CV000000

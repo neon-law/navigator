@@ -275,26 +275,30 @@ fn bar_label(jurisdiction: &str) -> String {
 
 fn counsel_lines(counsel: &Counsel) -> Vec<String> {
     let mut lines = Vec::new();
-    lines.push(if counsel.pro_per && blank(&counsel.bar_number) {
-        counsel.name.clone()
+    // The Nevada convention puts the name and the bar number on their own
+    // lines, not parenthesized into one (LAW-242). A self-represented party
+    // with no bar number is not Esq. and carries no bar line.
+    if counsel.pro_per && blank(&counsel.bar_number) {
+        lines.push(counsel.name.clone());
     } else {
-        format!(
-            "{} ({} {})",
-            counsel.name,
+        lines.push(format!("{}, Esq.", counsel.name));
+        lines.push(format!(
+            "{} {}",
             bar_label(&counsel.bar_jurisdiction),
             counsel.bar_number
-        )
-    });
+        ));
+    }
     if !blank(&counsel.firm) {
         lines.push(counsel.firm.clone());
     }
     lines.extend(counsel.address.iter().cloned());
     lines.push(format!("Telephone: {}", counsel.telephone));
     lines.push(format!("Email: {}", counsel.email));
+    // One lawyer signs; the singular is always right here.
     lines.push(if counsel.pro_per {
         format!("{}, in pro per", counsel.appears_for)
     } else {
-        format!("Attorneys for {}", counsel.appears_for)
+        format!("Attorney for {}", counsel.appears_for)
     });
     lines
 }
@@ -474,17 +478,15 @@ mod tests {
     }
 
     #[test]
-    fn the_counsel_block_is_seven_lines_with_the_bar_label_of_its_jurisdiction() {
+    fn the_counsel_block_prints_the_bar_on_its_own_line_for_its_jurisdiction() {
         let caption = compose(&matter(), &filing());
-        assert_eq!(caption.counsel.len(), 7);
-        assert_eq!(caption.counsel[0], "Pat Sample (SBN 000000)");
-        assert_eq!(caption.counsel[6], "Attorneys for Plaintiff A CORP");
+        assert_eq!(caption.counsel.len(), 8);
+        assert_eq!(caption.counsel[0], "Pat Sample, Esq.");
+        assert_eq!(caption.counsel[1], "SBN 000000");
+        assert_eq!(caption.counsel[7], "Attorney for Plaintiff A CORP");
         let mut nv = matter();
         nv.counsel.bar_jurisdiction = "Nevada".into();
-        assert_eq!(
-            compose(&nv, &filing()).counsel[0],
-            "Pat Sample (Nevada Bar No. 000000)"
-        );
+        assert_eq!(compose(&nv, &filing()).counsel[1], "Nevada Bar No. 000000");
     }
 
     #[test]
