@@ -2701,7 +2701,18 @@ jobs:
     # release compile on the slowest runner class and is deliberately not
     # bought here. State it rather than let someone infer "macOS" means
     # universal.
-    timeout-minutes: 90
+    #
+    # A cold release build of `cli` + `lsp` overran 90 minutes here (run
+    # 42957229465) while Linux finished in 47. The workspace release profile's
+    # thin LTO and single codegen unit serialize the final codegen of a
+    # 1,000-crate graph on the runner's few cores, so this job builds with LTO
+    # off and 16 codegen units — a slightly larger, equally correct binary —
+    # and restores a Rust dependency cache from the previous release.
+    timeout-minutes: 150
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_RELEASE_LTO: "false"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
     permissions:
       contents: read
     steps:
@@ -2715,6 +2726,11 @@ jobs:
         timeout-minutes: 90
         with:
           toolchain: 1.98.0
+      - name: cache the Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        timeout-minutes: 90
+        with:
+          shared-key: release-cli-macos
       - uses: ./.github/actions/slack-progress
         timeout-minutes: 90
         with:
@@ -2723,7 +2739,7 @@ jobs:
           stage: "release-cli-build-macos"
           step: "build the tagged Navigator CLI and LSP"
       - name: build the tagged Navigator CLI and LSP
-        timeout-minutes: 90
+        timeout-minutes: 140
         env:
           NAVIGATOR_RELEASE_TAG: ${{ needs.release-version.outputs.tag }}
         run: cargo build --locked --release -p cli -p lsp
