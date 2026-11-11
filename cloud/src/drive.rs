@@ -55,16 +55,17 @@ impl DriveWorkspace {
 
 /// Credentials and root shared-drive coordinates for one entity Workspace.
 ///
-/// `service_account_json` is kept out of `Debug` so accidental diagnostics do
-/// not expose a private key. The service account must be granted domain-wide
-/// delegation by the owning Workspace; `delegated_user` is the Workspace user
-/// it impersonates for Drive API calls.
+/// `service_account` is the Workspace service account's email; the runtime
+/// identity signs delegation tokens as it ([`crate::delegation`]), so no key
+/// exists. The account must be granted domain-wide delegation by the owning
+/// Workspace; `delegated_user` is the Workspace user it impersonates for Drive
+/// API calls.
 #[derive(Clone)]
 pub struct DriveWorkspaceConfig {
     pub workspace: DriveWorkspace,
     pub projects_drive_id: String,
     pub delegated_user: String,
-    pub service_account_json: String,
+    pub service_account: String,
 }
 
 impl DriveWorkspaceConfig {
@@ -84,22 +85,20 @@ impl DriveWorkspaceConfig {
         };
         let (drive_key, drive) = value("PROJECTS_DRIVE_ID");
         let (user_key, user) = value("DELEGATED_USER");
-        let (json_key, json) = value("SERVICE_ACCOUNT_JSON");
-        match (drive, user, json) {
-            (Some(projects_drive_id), Some(delegated_user), Some(service_account_json)) => {
-                Ok(Self {
-                    workspace,
-                    projects_drive_id,
-                    delegated_user,
-                    service_account_json,
-                })
-            }
-            (drive, user, json) => {
+        let (account_key, account) = value("SERVICE_ACCOUNT");
+        match (drive, user, account) {
+            (Some(projects_drive_id), Some(delegated_user), Some(service_account)) => Ok(Self {
+                workspace,
+                projects_drive_id,
+                delegated_user,
+                service_account,
+            }),
+            (drive, user, account) => {
                 // Name every missing key at once, so one run shows the whole fix.
                 let missing: Vec<String> = [
                     (drive_key, drive.is_none()),
                     (user_key, user.is_none()),
-                    (json_key, json.is_none()),
+                    (account_key, account.is_none()),
                 ]
                 .into_iter()
                 .filter_map(|(key, absent)| absent.then_some(key))
@@ -117,7 +116,7 @@ impl std::fmt::Debug for DriveWorkspaceConfig {
             .field("workspace", &self.workspace)
             .field("projects_drive_id", &self.projects_drive_id)
             .field("delegated_user", &"[redacted]")
-            .field("service_account_json", &"[redacted]")
+            .field("service_account", &self.service_account)
             .finish()
     }
 }
@@ -357,24 +356,17 @@ pub struct GoogleDrive {
 
 impl GoogleDrive {
     pub async fn new(config: DriveWorkspaceConfig) -> Result<Self, DriveError> {
-        let credentials = google_cloud_auth::credentials::CredentialsFile::new_from_str(
-            &config.service_account_json,
-        )
-        .await
-        .map_err(|_| DriveError::Authentication)?;
-        let scopes = [DRIVE_SCOPE];
-        let auth_config = google_cloud_auth::project::Config::default()
-            .with_scopes(&scopes)
-            .with_sub(&config.delegated_user);
-        let provider = google_cloud_auth::token::DefaultTokenSourceProvider::new_with_credentials(
-            auth_config,
-            Box::new(credentials),
-        )
-        .await
-        .map_err(|_| DriveError::Authentication)?;
+        let delegation = crate::delegation::WorkspaceDelegation {
+            service_account: config.service_account,
+            delegated_user: config.delegated_user,
+        };
+        let token_source = delegation
+            .token_source(&[DRIVE_SCOPE])
+            .await
+            .map_err(|_| DriveError::Authentication)?;
         Ok(Self::from_parts(
             config.projects_drive_id,
-            google_cloud_token::TokenSourceProvider::token_source(&provider),
+            token_source,
             DRIVE_BASE_URL,
         ))
     }
@@ -1927,7 +1919,7 @@ mod tests {
         for key in [
             "NAVIGATOR_DRIVE_NEON_LAW_PROJECTS_DRIVE_ID",
             "NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER",
-            "NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT_JSON",
+            "NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT",
         ] {
             assert!(error.to_string().contains(key), "{error}");
         }
@@ -1938,21 +1930,22 @@ mod tests {
         .to_string();
         assert!(!partial.contains("PROJECTS_DRIVE_ID"), "{partial}");
         assert!(partial.contains("DELEGATED_USER"), "{partial}");
-        assert!(partial.contains("SERVICE_ACCOUNT_JSON"), "{partial}");
+        assert!(partial.contains("SERVICE_ACCOUNT"), "{partial}");
     }
 
     #[test]
-    fn configuration_redacts_workspace_credentials() {
+    fn configuration_redacts_the_delegated_user() {
         let config = DriveWorkspaceConfig::from_lookup(DriveWorkspace::NeonLaw, |key| match key {
             "NAVIGATOR_DRIVE_NEON_LAW_PROJECTS_DRIVE_ID" => Some("drive-id".into()),
             "NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER" => Some("operator@example.com".into()),
-            "NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT_JSON" => Some("private-key".into()),
+            "NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT" => {
+                Some("drive@example.iam.gserviceaccount.com".into())
+            }
             _ => None,
         })
         .unwrap();
         let debug = format!("{config:?}");
         assert!(!debug.contains("operator@example.com"));
-        assert!(!debug.contains("private-key"));
     }
 
     #[tokio::test]
@@ -2186,21 +2179,7 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(blank.contains("DELEGATED_USER"), "{blank}");
-        assert!(!blank.contains("SERVICE_ACCOUNT_JSON"), "{blank}");
-    }
-
-    #[tokio::test]
-    async fn a_malformed_service_account_is_an_authentication_failure() {
-        let config = DriveWorkspaceConfig {
-            workspace: DriveWorkspace::NeonLaw,
-            projects_drive_id: "projects-drive".into(),
-            delegated_user: "operator@example.com".into(),
-            service_account_json: "not json".into(),
-        };
-        assert!(matches!(
-            GoogleDrive::new(config).await,
-            Err(DriveError::Authentication)
-        ));
+        assert!(!blank.contains("SERVICE_ACCOUNT"), "{blank}");
     }
 
     #[tokio::test]

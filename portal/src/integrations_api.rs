@@ -702,6 +702,45 @@ pub(crate) async fn calendar_ensure_door(
     Ok((StatusCode::OK, Json(IntegrationReport { results })).into_response())
 }
 
+/// `POST /app/api/integrations/contacts/sync` — put the people on each firm
+/// member's open matters into that member's own Google Contacts, for every
+/// firm-side participant on the selected Projects. See
+/// [`store::contact_sync`].
+pub(crate) async fn contacts_sync_door(
+    State(state): State<ApiState>,
+    authed: AdminSession,
+    Json(selector): Json<ProjectSelector>,
+) -> Result<Response, ApiError> {
+    let mut results = Vec::new();
+    for project in targets(&state, &authed, &selector).await? {
+        results.push(sync_one_contacts(&state, &project).await);
+    }
+    Ok((StatusCode::OK, Json(IntegrationReport { results })).into_response())
+}
+
+async fn sync_one_contacts(state: &ApiState, project: &store::projects::Project) -> ProjectOutcome {
+    let books = match state.integration_providers.contacts().await {
+        Ok(books) => books,
+        Err(error) => return unavailable(project, &error),
+    };
+    match store::contact_sync::sync_project_members(&state.surreal, project.id, books.as_ref())
+        .await
+    {
+        Ok(report) => ProjectOutcome::with_detail(
+            project.code.clone(),
+            "synced",
+            format!(
+                "{} members: {} created, {} updated, {} removed",
+                report.members, report.created, report.updated, report.removed
+            ),
+        ),
+        Err(store::contact_sync::ContactSyncError::Contacts(_)) => {
+            ProjectOutcome::plain(project.code.clone(), "provider_unavailable")
+        }
+        Err(_) => ProjectOutcome::plain(project.code.clone(), "address_not_recorded"),
+    }
+}
+
 async fn ensure_one_calendar(
     state: &ApiState,
     project: &store::projects::Project,
