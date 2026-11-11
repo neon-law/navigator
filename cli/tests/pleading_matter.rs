@@ -285,13 +285,18 @@ fn a_washington_fixture_renders_end_to_end_with_pattern_form_primitives() {
     use rules::Rule as _;
     const CASE: &str = "26-2-00000-SAMPLE";
     let work = tree_of(WASHINGTON_FIXTURE);
-    let template = work.path().join("templates/washington_residential_schedule.md");
+    let template = work
+        .path()
+        .join("templates/washington_residential_schedule.md");
 
     let lint = rules::f133::F133PleadingDocketUndeclared.lint(&rules::SourceFile {
         contents: fs::read_to_string(&template).unwrap(),
         path: template.clone(),
     });
-    assert!(lint.is_empty(), "a Washington `docket:` clears N133: {lint:?}");
+    assert!(
+        lint.is_empty(),
+        "a Washington `docket:` clears N133: {lint:?}"
+    );
 
     let bytes = pdf_of(&work, "washington_residential_schedule.md");
     for shared in [
@@ -315,7 +320,10 @@ fn a_washington_fixture_renders_end_to_end_with_pattern_form_primitives() {
     let result = render("word", &template, &docx);
     assert!(result.status.success(), "stderr: {}", stderr(&result));
     let document = docx_part(&fs::read(&docx).unwrap(), "word/document.xml");
-    assert!(document.contains(&format!("Case No. {CASE}")), "word caption");
+    assert!(
+        document.contains(&format!("Case No. {CASE}")),
+        "word caption"
+    );
     assert_eq!(
         document.matches('\u{2610}').count(),
         2,
