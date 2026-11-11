@@ -714,9 +714,12 @@ fn font_head_fragment(family: &str, regular_url: &str, bold_url: &str) -> String
     )
 }
 
-/// Cap on the buffered render size — the demo page is a few KB; this is a
-/// generous ceiling that still refuses a pathological body.
-const MAX_RENDER_BYTES: usize = 4 * 1024 * 1024;
+/// Cap on the buffered render size — a generous ceiling that still refuses a
+/// pathological body. The public glossary renders every term on one page
+/// (including the per-term schema SQL) and its SSR body sits just above
+/// 4 MiB, so the former 4 MiB cap turned any new glossary term into an
+/// empty 500 from the overrun path below.
+const MAX_RENDER_BYTES: usize = 8 * 1024 * 1024;
 
 /// A fresh 128-bit base64 nonce for one response.
 fn generate_nonce() -> String {

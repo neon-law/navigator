@@ -684,6 +684,13 @@
         "reason": "Plain view over person_firm_role, person_project_role and project, all exported; rebuilt by migration 20261104000000_create_person_directory_views.sql."
       },
       {
+        "action": "export",
+        "schema": "public",
+        "name": "forgejo_push_webhook_journal",
+        "kind": "table",
+        "accessible": true
+      },
+      {
         "action": "derived",
         "relation": {
           "schema": "public",

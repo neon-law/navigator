@@ -110,6 +110,8 @@ cannot decay the way the old seven-line stub did.
 
 - [`mcp-a2a-interaction.md`](mcp-a2a-interaction.md) — Navigator MCP over A2A: confirmations and errors.
 - [`navigator-how-to.md`](navigator-how-to.md) — connect over MCP and work in a Project repository with Jujutsu.
+- [`examples/jujutsu-project/AGENTS.md`](examples/jujutsu-project/AGENTS.md) — the generated Project shell's agent
+  instructions: stay in the checkout, keep client data out of commits, and draft for lawyer review.
 - [`claude-mcp-client.md`](claude-mcp-client.md) — Claude as a Navigator MCP client over MCP.
 - [`mail-cli.md`](mail-cli.md) — the draft-only Gmail CLI, its token contract, and its limits.
 - [`inbox-import-cli.md`](inbox-import-cli.md) — historical email and LinkedIn imports, replay, and attachment filing.
