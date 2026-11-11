@@ -202,6 +202,31 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
         ("GET", "/app/api/entities", get(list_entities)),
         ("GET", "/app/api/firms", get(list_firms)),
         (
+            "PATCH",
+            "/app/api/firms/{id}",
+            patch(crate::firm_admin_api::rename),
+        ),
+        (
+            "DELETE",
+            "/app/api/firms/{id}",
+            delete(crate::firm_admin_api::delete),
+        ),
+        (
+            "DELETE",
+            "/app/api/firms/{id}/brands/{key}",
+            delete(crate::firm_admin_api::detach_brand),
+        ),
+        (
+            "PUT",
+            "/app/api/brands/{key}/firm",
+            put(crate::firm_admin_api::move_brand),
+        ),
+        (
+            "DELETE",
+            "/app/api/brands/{key}",
+            delete(crate::firm_admin_api::delete_brand),
+        ),
+        (
             "POST",
             "/app/api/firms/{id}/forgejo-organization",
             post(crate::firm_forgejo_api::provision),
