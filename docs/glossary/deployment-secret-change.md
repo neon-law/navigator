@@ -10,8 +10,9 @@ An Owner-authored encrypted replacement for a preset production application key.
 the browser. Blank inputs preserve deployed values and earlier pending changes.
 
 The Owner downloads encrypted changes from `/app/owner/keys`. A Deployment Operator imports them into production SOPS
-through `navigator ops secrets import-social-changes`, reviews the encrypted diff, and applies and restarts the selected
-deployment separately. Saving a change does not deploy it, verify provider credentials, or authorize a Brand account.
+through `navigator-deploy ops secrets import-social-changes`, reviews the encrypted diff, and applies and restarts the
+selected deployment separately. Saving a change does not deploy it, verify provider credentials, or authorize a Brand
+account.
 
 Firm integration secrets and Brand account OAuth tokens remain separate stores with their existing authorization.
 

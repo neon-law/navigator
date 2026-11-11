@@ -42,6 +42,7 @@ const WORKSPACE_DEPENDENCIES: &[&str] = &[
     "bs58",
     "bytes",
     "chrono",
+    "cli",
     "chrono-tz",
     "clap",
     "cloud",

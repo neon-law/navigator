@@ -253,11 +253,9 @@ pub async fn record_kit_version(dir: &Path, jurisdiction: &str, practice_area: &
 /// re-running `use` never overwrites an attorney's edits to a scaffolded
 /// template. An unedited lifecycle stub is a placeholder, not an edit, so the
 /// bundled Notation replaces it. Reads the
-/// bundled Notation catalog through [`portal::template_api::bundled_files`],
-/// the same compiled-in reader `navigator notation preview`
-/// (`crate::notations_preview::bundled_template`) already resolves a
-/// template's body from, so the catalog is read in exactly one place rather
-/// than embedded a second time.
+/// bundled Notation catalog through [`rules::template_catalog::bundled_files`],
+/// the same compiled-in reader `navigator-deploy notation preview` resolves a
+/// template's body from, so the catalog is embedded exactly once.
 fn scaffold_notation(dir: &Path, code: &str) -> Result<(), String> {
     let target = dir
         .join(super::repository::draft_directory(dir))
@@ -271,7 +269,7 @@ fn scaffold_notation(dir: &Path, code: &str) -> Result<(), String> {
     // The filename stem is the canonical template code. This works for both
     // government forms and firm notation templates, so no frontmatter parse
     // is needed to resolve a catalog entry.
-    let body = portal::template_api::bundled_files()
+    let body = rules::template_catalog::bundled_files()
         .into_iter()
         .find(|(path, _)| Path::new(path).file_stem().and_then(|stem| stem.to_str()) == Some(code))
         .map(|(_, bytes)| bytes)
@@ -386,7 +384,7 @@ mod tests {
             !kit.notations.is_empty(),
             "the kit bundles its deliverables: {kit:?}"
         );
-        let bundled = portal::template_api::bundled_files();
+        let bundled = rules::template_catalog::bundled_files();
         for code in &kit.notations {
             let found = bundled.iter().any(|(path, _)| {
                 std::path::Path::new(path)
@@ -406,7 +404,7 @@ mod tests {
             !kit.notations.is_empty(),
             "the kit bundles its deliverables: {kit:?}"
         );
-        let bundled = portal::template_api::bundled_files();
+        let bundled = rules::template_catalog::bundled_files();
         for code in &kit.notations {
             let found = bundled.iter().any(|(path, _)| {
                 std::path::Path::new(path)
@@ -647,7 +645,7 @@ mod tests {
     fn status_and_gate_check_agree_on_the_same_fixture() {
         // `navigator project skill status` (`run_status`, this test) and
         // `navigator project gate --check` (`crate::append_skill_pin_findings`
-        // in `cli/src/main.rs`) both read their verdict from
+        // in `cli/src/commands.rs`) both read their verdict from
         // `resolve_pins` — this is the shared-fixture proof ENG-880 asks for:
         // a two-pin fixture reports both resolvable, and a stale pin reports
         // unresolved, the same way on both surfaces because there is only one

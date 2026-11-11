@@ -16,7 +16,7 @@ creates an Owner. A local Lawyer needs a role grant before signing in; seed it i
 `navigator` database:
 
 ```bash
-cargo run -p cli -- dev grant-lawyer
+cargo run -p deploy -- dev grant-lawyer
 ```
 
 Open `NAV_BASE_URL` from `.devx/env`, follow `/auth/login`, and sign in through Rauthy. A firm tier lands on

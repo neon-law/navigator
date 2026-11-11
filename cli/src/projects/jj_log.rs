@@ -26,20 +26,20 @@ const CONFLICT_WARNING: &str = "⚠ conflicted — resolve before sending";
 
 /// One change as a lawyer reads it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ChangeEntry {
-    pub(crate) change_id: String,
-    pub(crate) description: String,
-    pub(crate) author: String,
-    pub(crate) timestamp: String,
-    pub(crate) empty: bool,
-    pub(crate) conflicted: bool,
+pub struct ChangeEntry {
+    pub change_id: String,
+    pub description: String,
+    pub author: String,
+    pub timestamp: String,
+    pub empty: bool,
+    pub conflicted: bool,
 }
 
 /// Print the checkout's history in lawyer terms.
 ///
 /// The checkout must already be tracked by jj (`navigator project
 /// repository jj`); this command installs nothing and runs on any host.
-pub(crate) fn run(dir: &Path) -> Result<()> {
+pub fn run(dir: &Path) -> Result<()> {
     if !dir.join(".jj").is_dir() {
         anyhow::bail!(
             "{} is not tracked by Jujutsu yet; run `navigator project repository jj` first",
@@ -79,7 +79,7 @@ pub(crate) fn run(dir: &Path) -> Result<()> {
 /// signal for a lawyer and are dropped — but a conflicted change is always
 /// kept, whatever its other fields say.
 #[must_use]
-pub(crate) fn parse_log_records(raw: &str) -> Vec<ChangeEntry> {
+pub fn parse_log_records(raw: &str) -> Vec<ChangeEntry> {
     raw.lines()
         .filter_map(|line| {
             let fields: Vec<&str> = line.split('\u{1f}').collect();
@@ -102,7 +102,7 @@ pub(crate) fn parse_log_records(raw: &str) -> Vec<ChangeEntry> {
 /// Render change entries as the lawyer-facing view: a headline per change,
 /// its author and time beneath, and the conflict warning when present.
 #[must_use]
-pub(crate) fn render_log(entries: &[ChangeEntry]) -> String {
+pub fn render_log(entries: &[ChangeEntry]) -> String {
     let mut out = String::new();
     for entry in entries {
         let headline = if entry.description.is_empty() {

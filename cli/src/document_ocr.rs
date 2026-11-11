@@ -21,7 +21,7 @@ struct OcrText {
 }
 
 /// OCR a PDF one rendered page at a time, correcting each page's orientation.
-pub(crate) fn transcribe_pdf(bytes: &[u8]) -> Result<String> {
+pub fn transcribe_pdf(bytes: &[u8]) -> Result<String> {
     transcribe_pdf_with(bytes, OsStr::new("pdftoppm"), OsStr::new("tesseract"))
 }
 

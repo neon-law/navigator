@@ -74,7 +74,7 @@ Run the published image in this worktree's KIND tier, beside the existing Surrea
 
 ```bash
 NAVIGATOR_KIND_DEPS_OVERLAY=k8s/overlays/kind-postgres-spike \
-  cargo run -p cli -- dev worktree-env up --runtime kind --path "$PWD"
+  cargo run -p deploy -- dev worktree-env up --runtime kind --path "$PWD"
 set -a; source .devx/env; set +a
 kubectl --kubeconfig .devx/kubeconfig --context "kind-$NAVIGATOR_KIND_CLUSTER" \
   -n navigator rollout status statefulset/postgres-spike --timeout=180s
@@ -83,8 +83,8 @@ kubectl --kubeconfig .devx/kubeconfig --context "kind-$NAVIGATOR_KIND_CLUSTER" \
 ```
 
 Read the loopback port from the port-forward output. The database is `smoke`, user `postgres`. Tear down only your own
-tier with `cargo run -p cli -- dev worktree-env down --path "$PWD"`. [kind-local-dev](../kind-local-dev/SKILL.md) covers
-the rest of the tier.
+tier with `cargo run -p deploy -- dev worktree-env down --path "$PWD"`. [kind-local-dev](../kind-local-dev/SKILL.md)
+covers the rest of the tier.
 
 For the TLS and SCRAM shape of the retained StatefulSet, use `k8s/overlays/kind-postgres-persistence`.
 `postgres-persistence.yml` shows the synthetic Secrets it needs.

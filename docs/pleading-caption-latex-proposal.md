@@ -10,7 +10,7 @@ change the production renderer.
 The implementation task is [LAW-106](https://linear.app/neon-law/issue/LAW-106). The native PDF renderer is Typst:
 `pdf/src/pleading.rs` supplies the rail, `pdf/src/format.rs` the page preamble, and `pdf/src/markdown.rs` the body.
 Review page numbering and document-title footers in that native path before choosing another backend. The Word path in
-`cli/src/main.rs` and `word/src/render.rs` must preserve the selected pleading profile instead of producing ordinary
+`deploy/src/main.rs` and `word/src/render.rs` must preserve the selected pleading profile instead of producing ordinary
 letter layout.
 
 Compare measured geometry with the official California Courts [pleading-paper

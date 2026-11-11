@@ -41,6 +41,7 @@ fn extension(slug: &str) -> &str {
 }
 
 /// The complete listing, in slug order, one row per filing.
+#[must_use]
 pub fn manifest(filings: &[Filing], entries: &[Value]) -> Vec<Row> {
     let by_asset: BTreeMap<String, &Value> = entries
         .iter()
@@ -90,7 +91,7 @@ pub fn manifest(filings: &[Filing], entries: &[Value]) -> Vec<Row> {
 }
 
 /// Refuse a filing whose linked court entry does not supply its exact name.
-pub(crate) fn validate_filing(slug: &str, asset_id: &str, entries: &[Value]) -> Result<()> {
+pub fn validate_filing(slug: &str, asset_id: &str, entries: &[Value]) -> Result<()> {
     let matches: Vec<_> = entries
         .iter()
         .filter(|row| {
@@ -110,7 +111,7 @@ pub(crate) fn validate_filing(slug: &str, asset_id: &str, entries: &[Value]) -> 
 }
 
 /// Whether this checkout has court filings requiring live verification.
-pub(crate) fn has_filings(root: &Path) -> Result<bool> {
+pub fn has_filings(root: &Path) -> Result<bool> {
     crate::document_sync::ensure_documents_tree_is_safe(&root.join("documents"))?;
     for file in walkdir::WalkDir::new(root.join("documents/Docket Filings")).follow_links(false) {
         match file {
@@ -141,7 +142,7 @@ pub(crate) fn has_filings(root: &Path) -> Result<bool> {
 }
 
 /// Check only pointers selecting Docket Filings. No document bytes are read.
-pub(crate) fn validate_checkout(root: &Path, entries: &[Value]) -> Result<()> {
+pub fn validate_checkout(root: &Path, entries: &[Value]) -> Result<()> {
     let folder = root.join("documents/Docket Filings");
     crate::document_sync::ensure_documents_tree_is_safe(&root.join("documents"))?;
     if folder.exists() {
@@ -183,7 +184,7 @@ pub(crate) fn validate_checkout(root: &Path, entries: &[Value]) -> Result<()> {
 }
 
 /// Name a linked document from its court entry using the existing collision-safe reslug operation.
-pub(crate) async fn name_linked_document(
+pub async fn name_linked_document(
     c: &entries::Coordinates,
     row: &Value,
     root: &Path,
@@ -293,6 +294,7 @@ pub fn filings(root: &Path) -> Result<Vec<Filing>> {
 }
 
 /// The printable listing, ending with its totals.
+#[must_use]
 pub fn render(rows: &[Row]) -> String {
     use std::fmt::Write as _;
     let mut out = String::new();

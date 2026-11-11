@@ -142,7 +142,7 @@ const REAL_DEPLOYMENT_IDENTIFIERS: &[(&str, &str)] = &[
 
 fn deployment_identifying_values() -> Vec<(String, String)> {
     let deployments = workspace_root()
-        .join("cli/tests/fixtures/deployment-tree")
+        .join("deploy/tests/fixtures/deployment-tree")
         .join("deployments");
     let mut values: Vec<(String, String)> = REAL_DEPLOYMENT_IDENTIFIERS
         .iter()

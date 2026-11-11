@@ -2,20 +2,20 @@
 title: "`devx`"
 description: >-
   The developer-environment orchestration for this workspace, part of the navigator CLI (the cli crate), implemented in
-  the cli/src/devx/ module — there is no separate devx crate or binary.
+  the deploy/src/devx/ module — there is no separate devx crate or binary.
 ---
 
 The **developer-environment orchestration** for this workspace, part of the `navigator` CLI (the `cli` crate),
-implemented in the [`cli/src/devx/`](../../cli/src/devx/) module — there is no separate `devx` crate or binary. Brings a
-complete dependency stack up inside a local KIND cluster — SurrealDB, SeaweedFS, Rauthy, Restate (operator-managed),
-embedded Rego, plus the `workflows-service` Restate worker — opens host port-forwards and writes `.devx/env`. That file
-has the connection details the host-side `cargo run -p neon` needs.
+implemented in the [`deploy/src/devx/`](../../deploy/src/devx/) module — there is no separate `devx` crate or binary.
+Brings a complete dependency stack up inside a local KIND cluster — SurrealDB, SeaweedFS, Rauthy, Restate
+(operator-managed), embedded Rego, plus the `workflows-service` Restate worker — opens host port-forwards and writes
+`.devx/env`. That file has the connection details the host-side `cargo run -p neon` needs.
 
 ```bash
-cargo run --release -p cli -- dev up      # bring it all up
+cargo run --release -p deploy -- dev up      # bring it all up
 set -a; source .devx/env; set +a       # connection env vars
 cargo run -p neon                       # host-side web on :3001
-cargo run --release -p cli -- dev down    # tear it all down
+cargo run --release -p deploy -- dev down    # tear it all down
 ```
 
 Subcommands:

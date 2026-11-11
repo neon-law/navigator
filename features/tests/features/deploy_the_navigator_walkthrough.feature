@@ -11,7 +11,7 @@ Feature: Workshop "Operating Neon Law Navigator"
   stepped content, and shows the reader the real provisioning command. The other half —
   that the services, buckets, and command the prose names match what
   `navigator ops gcp setup` actually calls — is asserted next to the code in
-  `cli/src/devx/gcp/mod.rs::deploy_workshop_prose_matches_the_dry_run_pipeline`,
+  `deploy/src/devx/gcp/mod.rs::deploy_workshop_prose_matches_the_dry_run_pipeline`,
   the only place `cli`'s `devx::gcp::run` is reachable. The two halves together
   are the cross-reference.
 
@@ -43,7 +43,7 @@ Feature: Workshop "Operating Neon Law Navigator"
     And the rendered body carries no duplicate top-level heading
 
   Scenario: Apply — the workshop shows the reader the real provisioning command
-    Then the rendered workshop shows the command "cargo run -p cli -- ops gcp setup --project-id"
+    Then the rendered workshop shows the command "cargo run -p deploy -- ops gcp setup --project-id"
     And the rendered workshop shows the "--dry-run" flag
 
   Scenario: Verify — the markdown twin serves raw markdown

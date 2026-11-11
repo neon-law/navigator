@@ -22,10 +22,11 @@ use super::case_timeline::{self, Record};
 use crate::document_sync;
 
 /// The folder below `documents/` the records render into.
-pub(crate) const FOLDER: &str = "Case Timeline";
+pub const FOLDER: &str = "Case Timeline";
 
 /// The checkout-relative path of one record file.
-pub(crate) fn record_relative(file_name: &str) -> String {
+#[must_use]
+pub fn record_relative(file_name: &str) -> String {
     format!("{}/{FOLDER}/{file_name}", document_sync::DOCUMENT_DIRECTORY)
 }
 
@@ -34,7 +35,7 @@ pub(crate) fn record_relative(file_name: &str) -> String {
 /// same identity `name_linked_document` files the document and its Pointer
 /// under. An entry with no linked document enriches nothing; its record's
 /// `document:` stays null.
-pub(crate) fn enrich(row: &Value) -> Value {
+pub fn enrich(row: &Value) -> Value {
     let mut enriched = row.clone();
     let linked = row
         .get("document_asset_id")
@@ -60,7 +61,7 @@ pub(crate) fn enrich(row: &Value) -> Value {
 
 /// Render one row the way the writers do: the row, plus the `document_slug`
 /// its linked document carries once it has been filed under its DKT name.
-pub(crate) fn render(row: &Value) -> Result<Record, String> {
+pub fn render(row: &Value) -> Result<Record, String> {
     case_timeline::render(&enrich(row))
 }
 
@@ -68,7 +69,7 @@ pub(crate) fn render(row: &Value) -> Result<Record, String> {
 /// ran from. A checkout whose manifest names a different Project is left
 /// alone — the same rule `name_linked_document` applies — and the write is
 /// atomic, so a reader never sees half a record.
-pub(crate) fn write_after(root: &Path, project_code: &str, row: &Value) -> Result<()> {
+pub fn write_after(root: &Path, project_code: &str, row: &Value) -> Result<()> {
     let matching = crate::projects::manifest::read(root)
         .and_then(|manifest| manifest.project)
         .is_some_and(|project| project == project_code);
@@ -94,24 +95,24 @@ pub(crate) fn write_after(root: &Path, project_code: &str, row: &Value) -> Resul
 
 /// One record write the reconcile plans.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Write {
+pub struct Write {
     /// The checkout-relative path of the record file.
-    pub(crate) relative: String,
+    pub relative: String,
     /// The record's rendered bytes.
-    pub(crate) yaml: String,
+    pub yaml: String,
     /// Whether a file was already there under a different rendering —
     /// hand-written drift, which the gate refuses.
-    pub(crate) stale: bool,
+    pub stale: bool,
 }
 
 /// What reconciling the records with the live rows does.
 #[derive(Debug, Default, PartialEq, Eq)]
-pub(crate) struct Plan {
+pub struct Plan {
     /// Records to write: a row's record that is missing, or a file that is
     /// there under different bytes.
-    pub(crate) writes: Vec<Write>,
+    pub writes: Vec<Write>,
     /// Records no row names any more, relative to the checkout.
-    pub(crate) removals: Vec<String>,
+    pub removals: Vec<String>,
 }
 
 /// Compare the records on disk with the rendered rows. Pure: reads the
@@ -120,7 +121,7 @@ pub(crate) struct Plan {
 /// hand-written record, or one whose entry the store no longer carries — is
 /// planned as a removal. Files that are not records (a lawyer's own note)
 /// are left where they are.
-pub(crate) fn plan(root: &Path, rows: &[Value]) -> Result<Plan> {
+pub fn plan(root: &Path, rows: &[Value]) -> Result<Plan> {
     let mut desired: BTreeMap<String, String> = BTreeMap::new();
     for row in rows {
         let record = render(row).map_err(anyhow::Error::msg)?;
@@ -171,7 +172,7 @@ pub(crate) fn plan(root: &Path, rows: &[Value]) -> Result<Plan> {
 /// Whether this checkout carries any Case Timeline record at all. A checkout
 /// with none gives the gate nothing to validate and spares it the docket
 /// read.
-pub(crate) fn has_records(root: &Path) -> Result<bool> {
+pub fn has_records(root: &Path) -> Result<bool> {
     let documents = root.join(document_sync::DOCUMENT_DIRECTORY);
     let folder = documents.join(FOLDER);
     if !folder.is_dir() {

@@ -17,12 +17,12 @@ use std::process::Command;
 use crate::document_sync::{DOCUMENT_DIRECTORY, POINTER_DIRECTORY, POINTER_READ_EXTENSIONS};
 
 /// Days the live Project keeps a soft-deleted document, shown in the prompt.
-pub(crate) const RETENTION_DAYS: i64 = 180;
+pub const RETENTION_DAYS: i64 = 180;
 
 /// Every pointer the repository carried that is now gone, and the commit that
 /// carried it last.
 #[derive(Debug, Default)]
-pub(crate) struct RemovedPointers {
+pub struct RemovedPointers {
     /// Pointer paths below the checkout root (`documents/a.pdf.yaml`) that
     /// `HEAD` still carries.
     in_head: BTreeSet<String>,
@@ -50,7 +50,7 @@ fn actioned_path(root: &Path) -> Option<std::path::PathBuf> {
 
 /// Remember that the soft deletion of `slug` for the removal in `commit` was
 /// carried out.
-pub(crate) fn record_actioned(root: &Path, slug: &str, commit: &str) -> std::io::Result<()> {
+pub fn record_actioned(root: &Path, slug: &str, commit: &str) -> std::io::Result<()> {
     use std::io::Write as _;
     let Some(path) = actioned_path(root) else {
         return Ok(());
@@ -79,7 +79,8 @@ impl RemovedPointers {
     /// Read the pointer history under `root`: `blobs/`, and the legacy
     /// `documents/` pointers committed before it. A checkout that is not a
     /// Git repository, or has no commits, has no removed pointers.
-    pub(crate) fn scan(root: &Path) -> Self {
+    #[must_use]
+    pub fn scan(root: &Path) -> Self {
         let Some(head) = git(root, &["rev-parse", "--verify", "HEAD"]) else {
             return Self::default();
         };
@@ -144,7 +145,8 @@ impl RemovedPointers {
     /// the commit that removed it, unless the person already confirmed that
     /// deletion. The caller has already established that no pointer file
     /// exists for the slug now.
-    pub(crate) fn pending_removal(&self, slug: &str) -> Option<&str> {
+    #[must_use]
+    pub fn pending_removal(&self, slug: &str) -> Option<&str> {
         self.last_removal(slug).filter(|commit| {
             !self
                 .actioned
@@ -156,7 +158,8 @@ impl RemovedPointers {
     /// spelling, whether or not a deletion followed. A pointer `HEAD` still
     /// carries but the working tree lost is removed as of `HEAD`. The Blob
     /// under `blobs/` is read before the legacy pointer under `documents/`.
-    pub(crate) fn last_removal(&self, slug: &str) -> Option<&str> {
+    #[must_use]
+    pub fn last_removal(&self, slug: &str) -> Option<&str> {
         let paths = [POINTER_DIRECTORY, DOCUMENT_DIRECTORY]
             .into_iter()
             .flat_map(|root| {
@@ -177,13 +180,15 @@ impl RemovedPointers {
 }
 
 /// The first seven characters of a commit id.
-pub(crate) fn short_commit(commit: &str) -> &str {
+#[must_use]
+pub fn short_commit(commit: &str) -> &str {
     &commit[..commit.len().min(7)]
 }
 
 /// The question for one deletion: the slug, kind, visibility, revision count,
 /// and the purge date, with a second line when a client stops seeing it.
-pub(crate) fn deletion_prompt(
+#[must_use]
+pub fn deletion_prompt(
     label: &str,
     slug: &str,
     kind: &str,

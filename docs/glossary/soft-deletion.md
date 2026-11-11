@@ -13,7 +13,7 @@ commit that removed the pointer. A mistaken chain with no pointer-removal commit
 document retire`; its `deleted_commit_sha` remains empty.
 
 A soft-deleted document drops out of the client's matter page, the downloads a client can reach, and the default
-document lists. A lawyer can still read it (`?include_deleted=true`) and restore it with `navigator site document
+document lists. A lawyer can still read it (`?include_deleted=true`) and restore it with `navigator-deploy site document
 restore`, which clears the stamps and returns the whole revision history; the next `project sync` writes the pointer
 again. A `closed_repository` archive is never soft-deleted.
 

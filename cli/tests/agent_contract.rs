@@ -8,8 +8,8 @@ fn canonical_contract_preserves_project_boundaries_and_current_tool_guidance() {
         "navigator project sync",
         "navigator project gate",
         "`client:` lens",
-        "navigator glossary list",
-        "navigator glossary show \"<Term>\"",
+        "navigator-deploy glossary list",
+        "navigator-deploy glossary show \"<Term>\"",
         "Use available MCP servers and the `navigator` CLI",
         "Document bytes, archived authorities, and answers go through Navigator and never into Git.",
         "Use placeholders for client data and matter facts",
@@ -122,7 +122,7 @@ fn both_surfaces_state_the_branch_contract() {
         "visibility: client",
         "Claude Code Gmail send, reply and forward tools while preserving draft creation",
         "Deadline",
-        "`navigator ops github setup` is deprecated",
+        "`navigator-deploy ops github setup` is deprecated",
         "Forgejo",
     ] {
         assert!(

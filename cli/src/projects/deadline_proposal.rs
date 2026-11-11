@@ -258,18 +258,20 @@ mod tests {
             "--replay-key",
             "synthetic-rule-1",
         ];
-        assert!(crate::Cli::try_parse_from(base).is_ok());
-        assert!(crate::Cli::try_parse_from(
+        assert!(crate::commands::Cli::try_parse_from(base).is_ok());
+        assert!(crate::commands::Cli::try_parse_from(
             base.into_iter()
                 .chain(["--due-at", "2028-03-01T17:00:00-08:00"])
         )
         .is_err());
-        assert!(crate::Cli::try_parse_from(base.into_iter().chain([
-            "--confirm",
-            "--due-at",
-            "2028-03-01T17:00:00-08:00"
-        ]))
-        .is_ok());
+        assert!(
+            crate::commands::Cli::try_parse_from(base.into_iter().chain([
+                "--confirm",
+                "--due-at",
+                "2028-03-01T17:00:00-08:00"
+            ]))
+            .is_ok()
+        );
     }
 
     fn args() -> ProposalArgs {

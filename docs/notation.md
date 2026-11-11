@@ -62,11 +62,11 @@ Nesting them under a real `metadata:` key would be a breaking parser change touc
   [`notation-authoring.md`](notation-authoring.md).
 
 > **Storage.** The markdown body lives in [`cloud::StorageService`](../cloud/) like every other artifact: the
-  `templates.body` TEXT column is gone; `templates.asset_id` references an [Asset](glossary/asset.md) holding the bytes.
-  Read via [`store::templates::body`](../store/src/templates.rs); the seed and `navigator site seed` paths ingest it
-  (sha-dedup). `site seed` creates only workspace-shared rows (`project_id IS NULL`) and question catalog rows; it never
-  creates a Project or a client-facing Notation. Templates are workspace-scoped code-like assets governed by git, not by
-  the per-Project archive.
+`templates.body` TEXT column is gone; `templates.asset_id` references an [Asset](glossary/asset.md) holding the bytes.
+Read via [`store::templates::body`](../store/src/templates.rs); the seed and `navigator-deploy site seed` paths ingest
+it (sha-dedup). `site seed` creates only workspace-shared rows (`project_id IS NULL`) and question catalog rows; it
+never creates a Project or a client-facing Notation. Templates are workspace-scoped code-like assets governed by git,
+not by the per-Project archive.
 
 > **Workspace-shared vs project-scoped.** A Template is workspace-shared (`templates.project_id IS NULL`, the public
   catalog default) or scoped to a single Project. Project-scoped rows are hidden from the public Template list (cli
@@ -207,7 +207,7 @@ Creating or answering a Notation is a supervised act, so that walk runs over A2A
 and refuse one named anyway: neither can collect an approval, and simulating one is worse than declining. See
 [`docs/mcp-a2a-interaction.md`](mcp-a2a-interaction.md) for the authorization round trip.
 
-`navigator notation preview` is intentionally a local reading surface: it binds only to `127.0.0.1`, always on an
+`navigator-deploy notation preview` is intentionally a local reading surface: it binds only to `127.0.0.1`, always on an
 OS-assigned ephemeral port chosen at random, opens no store, and holds no session or persistent state.
 
 ## Question

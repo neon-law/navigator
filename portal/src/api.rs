@@ -4794,7 +4794,7 @@ async fn approve_notation(
     // notation's PDF, re-firing `approved` from a state with no such edge
     // would error — so treat a repeat approve as a no-op success. The lawyer
     // form applies the same guard.
-    if crate::retainer_walk::document_pdf_ready(state.storage.as_ref(), id)
+    if crate::signature_flow::document_pdf_ready(state.storage.as_ref(), id)
         .await
         .unwrap_or(false)
     {
@@ -4843,7 +4843,7 @@ struct NotationSignatureResponse {
 /// Idempotent: a notation that already has an envelope out reuses its request
 /// id and sends nothing. When the worker has not rendered the PDF yet, returns
 /// `409 document_not_ready` (retry) rather than dispatching a missing document.
-/// This drives the same command core (`dispatch_signature`) as the lawyer form.
+/// This drives the same command core (`send_notation_for_signature`) as the lawyer form.
 async fn send_notation_signature(
     State(state): State<ApiState>,
     lawyer: LawyerSession,
@@ -4867,14 +4867,19 @@ async fn send_notation_signature(
         return Err(ApiError::NotFound);
     }
 
-    let deps = crate::retainer_walk::SendDeps {
+    let ctx = crate::signature_flow::SendFlowContext {
         surreal: &state.surreal,
         runtime: state.workflow_runtime.as_ref(),
         storage: &state.storage,
-        signature_provider: state.signature_provider.as_ref(),
+        acting: lawyer.0.person_id,
     };
-    let (final_state, signature_request_id) =
-        crate::retainer_walk::dispatch_signature(&deps, id, lawyer.0.person_id).await?;
+    let (final_state, signature_request_id) = crate::signature_flow::send_notation_for_signature(
+        &ctx,
+        id,
+        state.signature_provider.as_ref(),
+        crate::signature_flow::SendMode::Send,
+    )
+    .await?;
     Ok((
         StatusCode::OK,
         Json(NotationSignatureResponse {

@@ -20,7 +20,7 @@ any overlay with `kubectl kustomize <overlay>`.
 ## Manual commands
 
 The public overlays carry the placeholder namespace `navigator`, in each object's `namespace:` and in the Service host
-`navigator-postgres.navigator.svc.cluster.local`. `navigator ops ship` replaces both with the row's
+`navigator-postgres.navigator.svc.cluster.local`. `navigator-deploy ops ship` replaces both with the row's
 `NAVIGATOR_K8S_NAMESPACE`. A manual command makes the same replacement before it applies; otherwise kubectl refuses the
 objects with `the namespace from the provided object "navigator" does not match`. Set the row's namespace and define
 `place` once per shell; every command below uses both:
@@ -41,8 +41,8 @@ rollout. Shrinking is unsupported.
 Every hosted row runs a 100 GiB data claim. The size has one definition, the base `volumeClaimTemplates` in
 `k8s/postgres/postgres.yaml`; the GKE overlays add only the StorageClass, and the KIND overlays patch it down to 1 GiB.
 
-A StatefulSet's claim template is immutable, so `kubectl apply` cannot grow it on a live row. `navigator ops ship`
-handles that in its PostgreSQL step, before the apply. It derives each claim name from the rendered template
+A StatefulSet's claim template is immutable, so `kubectl apply` cannot grow it on a live row. `navigator-deploy ops
+ship` handles that in its PostgreSQL step, before the apply. It derives each claim name from the rendered template
 (`data-navigator-postgres-0`), compares the live template and claim sizes with the rendered one, and prints each action:
 
 1. `kubectl patch pvc data-navigator-postgres-0` raises a smaller claim's request to 100 GiB. The CSI driver grows the
@@ -90,7 +90,7 @@ exists only once its Secret does. Forgejo's database and login are separate
 logging off, so a failure never prints a password. It is deleted an hour after it finishes; re-applying the overlay
 re-runs it.
 
-Each environment provisions its own material through `navigator ops secrets apply --service postgres`
+Each environment provisions its own material through `navigator-deploy ops secrets apply --service postgres`
 ([`deployment-secrets.md`](deployment-secrets.md)). The PostgreSQL service file always carries the bootstrap password
 and server certificate. It adds the four client keys as a set. Each projects to mounted-file Secrets only:
 
@@ -135,7 +135,7 @@ Set `NAVIGATOR_DBOS_ARCHIVES_ENABLED = "true"` to run the Archives schedule on t
 opt-ins above. `ops ship` adds `examples/deploy/k8s/gke/postgres/web/web-archives.yaml` and the reviewed
 `navigator-archive-coverage` ConfigMap, then deletes the Restate `archives-trigger` CronJob. Each 05:55 and 17:55 UTC
 run exports the whole `navigator` and `forgejo` databases to Iceberg as `navigator_archive`. Add
-`NAVIGATOR_POSTGRES_ARCHIVE_PASSWORD` to the PostgreSQL service file, apply it with `navigator ops secrets apply
+`NAVIGATOR_POSTGRES_ARCHIVE_PASSWORD` to the PostgreSQL service file, apply it with `navigator-deploy ops secrets apply
 --service postgres`, and re-run the roles Job before the first ship with the switch on. See [Iceberg
 archive](iceberg-archive.md#where-it-runs).
 
@@ -155,9 +155,9 @@ guide](postgres-tooling.md#postgresql-mirror-tables-and-reconciliation) describe
 write, or a row written before the mirror was on, leaves drift. The operator command measures and repairs that drift:
 
 ```bash
-navigator ops postgres mirror parity [--json]              # read only
-navigator ops postgres mirror reconcile --dry-run [--json] # read only
-navigator ops postgres mirror reconcile [--json]           # re-mirror from SurrealDB
+navigator-deploy ops postgres mirror parity [--json]              # read only
+navigator-deploy ops postgres mirror reconcile --dry-run [--json] # read only
+navigator-deploy ops postgres mirror reconcile [--json]           # re-mirror from SurrealDB
 ```
 
 It reads the same `NAVIGATOR_SURREAL_*` and `NAVIGATOR_POSTGRES_*` variables `web` reads. Each table reports its
@@ -189,7 +189,7 @@ that PostgreSQL does not hold yet), delete the Job, and create it again.
 Changing a Secret does not change a role's password. Rotate one environment at a time:
 
 1. Update the value in that environment's encrypted PostgreSQL service file and run
-   `navigator ops secrets apply --deployment <name> --service postgres`.
+   `navigator-deploy ops secrets apply --deployment <name> --service postgres`.
 2. Re-apply the environment's PostgreSQL overlay; the roles Job sets every password from its Secret.
 3. Restart the clients of the rotated login (`web` through `ops ship --restart-only`, or the WAL archive pod).
 
@@ -199,7 +199,7 @@ one environment never touches the other: each has its own encrypted file, Secret
 ## Backups and point-in-time recovery
 
 Backups go to the deployment's own bucket under `<namespace>/navigator-postgres/`. The bucket name is a deployment
-coordinate: `navigator ops gcp setup` creates `<project>-postgres-backups`, and the operator records it as the
+coordinate: `navigator-deploy ops gcp setup` creates `<project>-postgres-backups`, and the operator records it as the
 `navigator-postgres-backup-target` ConfigMap (`bucket` key). The `navigator-postgres-backup` Kubernetes service account
 is the only reader and writer. It has no Workload Identity annotation; setup grants the KSA principal object admin on
 that bucket directly.
@@ -292,16 +292,17 @@ Staging first. Production starts only after staging passes every step and its re
 its environment's context, namespace, and deployment row.
 
 1. **Secrets.** Add the four client keys to the environment's encrypted `postgres-secrets.enc.yaml`: the server CA
-   certificate and three new random passwords. Dry-run, then apply: `navigator ops secrets apply --deployment <name>
-   --service postgres [--dry-run]`. The self-signed server certificate doubles as the CA bundle, and both clients must
-   accept it: issue it from a config whose `x509_extensions` section holds only the four `navigator-postgres` SANs.
+   certificate and three new random passwords. Dry-run, then apply: `navigator-deploy ops secrets apply --deployment
+   <name> --service postgres [--dry-run]`. The self-signed server certificate doubles as the CA bundle, and both clients
+   must accept it: issue it from a config whose `x509_extensions` section holds only the four `navigator-postgres` SANs.
    OpenSSL 3's `req -x509` default adds `CA:TRUE`, which rustls (`navigator-migrate`) refuses as `certificate unknown`;
    a `keyUsage` without `keyCertSign` makes libpq (`psql`) refuse it. Copy the same certificate into the row's
    `NAVIGATOR_FORGEJO_POSTGRES_CA_CERT`.
-2. **Backup target.** `navigator ops gcp setup` creates `<project>-postgres-backups` with its 30-day lifecycle rule and
-   grants `serviceAccount:<project>.svc.id.goog[<namespace>/navigator-postgres-backup]` object admin on it; replacing
-   the in-progress `.partial` segment needs delete. It also server-side applies the `navigator-postgres-backup-target`
-   ConfigMap, whose `bucket` key names that bucket, into the row namespace for the backup workloads.
+2. **Backup target.** `navigator-deploy ops gcp setup` creates `<project>-postgres-backups` with its 30-day lifecycle
+   rule and grants `serviceAccount:<project>.svc.id.goog[<namespace>/navigator-postgres-backup]` object admin on it;
+   replacing the in-progress `.partial` segment needs delete. It also server-side applies the
+   `navigator-postgres-backup-target` ConfigMap, whose `bucket` key names that bucket, into the row namespace for the
+   backup workloads.
 
 3. **Server and backups.** Render with `kubectl kustomize examples/deploy/k8s/gke/postgres/<env> | place`, review,
    pipe the same render to `kubectl --context <context> -n "$NS" apply --dry-run=server -f -`, then apply. The server
@@ -334,12 +335,12 @@ its environment's context, namespace, and deployment row.
    A Job's pod template is immutable, so the first line removes the completed Jobs a release leaves behind, as `ops
    ship` does.
 6. **`web` env.** Set `NAVIGATOR_POSTGRES_ENABLED = "true"` in `deployments/<name>/config.toml` through a pull
-   request. Then ship that release: `navigator ops ship --deployment <name> --tag <release>`.
+   request. Then ship that release: `navigator-deploy ops ship --deployment <name> --tag <release>`.
 7. **Verify.** The `web` log shows the import and triage counts; then smoke the journal through the deployment's API:
 
    ```bash
    kubectl --context <context> -n "$NS" logs deploy/navigator-web | grep 'legacy journal import completed'
-   navigator journal --firm <firm-id> --host <deployment-host> list
+   navigator-deploy journal --firm <firm-id> --host <deployment-host> list
    ```
 
 To back out, set `NAVIGATOR_POSTGRES_ENABLED = "false"` and ship. `web` stops connecting to PostgreSQL. Journal entries
@@ -350,10 +351,11 @@ already written there stay there, and the journal routes need PostgreSQL ([`firm
 The PostgreSQL pod is the shared server boundary for Navigator and opt-in Forgejo. Navigator uses `navigator`; Forgejo
 uses its separately provisioned `forgejo` database and dedicated non-superuser login, which the
 `navigator-forgejo-database` Job converges, as described in [`forgejo-deployment.md`](forgejo-deployment.md). The local
-KIND tier runs the same arrangement, proven by `navigator dev forgejo smoke`; see [Forgejo on KIND](forgejo-kind.md).
-Never grant either application's role access to the other database. Both databases share the same pod, PVC, resource
-limits, maintenance window, instance failure domain, and physical backups: a restore recovers both to the same point.
-Forgejo's Git, LFS, and attachment files remain on its own retained volume and must be backed up with its database.
+KIND tier runs the same arrangement, proven by `navigator-deploy dev forgejo smoke`; see [Forgejo on
+KIND](forgejo-kind.md). Never grant either application's role access to the other database. Both databases share the
+same pod, PVC, resource limits, maintenance window, instance failure domain, and physical backups: a restore recovers
+both to the same point. Forgejo's Git, LFS, and attachment files remain on its own retained volume and must be backed up
+with its database.
 
 The twice-daily Iceberg export must treat each database as an independent source: record its database identity, schema
 version, source cutoff, table inventory, and generation manifest; publish separate Navigator and Forgejo namespaces; and
@@ -368,7 +370,7 @@ Focused CI checks a new pod UID, unchanged PVC UID, and retained SQL and AGE dat
 zero, deletes/recreates the StatefulSet, verifies retention, accepts TLS, and rejects unencrypted access. KIND proves
 claim lifecycle; GKE CSI provisioning and cross-zone recovery require separate environment drills. Manifest tests in
 `cli/tests/staging_manifests.rs` hold the roles, migration, mirror, backup, and drill contracts, and the
-staging/production equivalence; `cli/src/devx/ship.rs` tests hold the `web` opt-in.
+staging/production equivalence; `deploy/src/devx/ship.rs` tests hold the `web` opt-in.
 
 See [GKE disks](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/persistent-volumes/regional-pd),
 [StatefulSet retention contract](https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/), and

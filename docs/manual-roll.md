@@ -6,8 +6,8 @@ The CLI embeds the shared Kubernetes setup. Installation coordinates and secret 
 Manager, so an operator needs only the CLI, an explicit project and deployment name, and cloud access:
 
 ```bash
-navigator ops ship --deployment <name> --project-id <project> --tag <tag> --dry-run
-navigator ops ship --deployment <name> --project-id <project> --tag <tag> --image-digests <signed-image-map>
+navigator-deploy ops ship --deployment <name> --project-id <project> --tag <tag> --dry-run
+navigator-deploy ops ship --deployment <name> --project-id <project> --tag <tag> --image-digests <signed-image-map>
 ```
 
 The cloud record is `navigator-deployment-config-<name>` in the selected project. `--project-id` bypasses local trees
@@ -43,7 +43,7 @@ Create a new row from flags. Both capability flags are required, so no row inher
 `init` refuses a row that already has a record, and refuses one `ops ship` could not resolve:
 
 ```bash
-navigator ops deployments init <name> --project-id <project> --location <location> \
+navigator-deploy ops deployments init <name> --project-id <project> --location <location> \
   --github-automation-home false --sms-test-recipients false \
   --set NAVIGATOR_ENVIRONMENT=production --set NAVIGATOR_IMAGE_REGISTRY=<registry> --set ...
 ```
@@ -51,9 +51,9 @@ navigator ops deployments init <name> --project-id <project> --location <locatio
 Edit it in place. Each edit reads the latest version, applies the same checks as `init`, and adds a version:
 
 ```bash
-navigator ops deployments set <name> --project-id <project> KEY=VALUE ... \
+navigator-deploy ops deployments set <name> --project-id <project> KEY=VALUE ... \
   [--secret-key NAME] [--postgres-key NAME] [--forgejo-key NAME]
-navigator ops deployments unset <name> --project-id <project> KEY ... \
+navigator-deploy ops deployments unset <name> --project-id <project> KEY ... \
   [--secret-key NAME] [--postgres-key NAME] [--forgejo-key NAME]
 ```
 
@@ -64,7 +64,7 @@ flags edit the secret key-name inventories, never a value. Values go straight to
 An operator with an existing private tree imports each row once:
 
 ```bash
-navigator ops deployments import <name> --deployments-dir <private-root>
+navigator-deploy ops deployments import <name> --deployments-dir <private-root>
 ```
 
 `import` (alias `--publish <name>`) uploads coordinates and key names only. It refuses a row missing the PostgreSQL or

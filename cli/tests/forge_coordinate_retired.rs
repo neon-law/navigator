@@ -82,7 +82,7 @@ const COORDINATE_SOURCES: &[&str] = &[
     "portal/src/project_portal.rs",
     "cli/src/projects/doctor.rs",
     "cli/src/projects/repository.rs",
-    "cli/src/devx/github_setup.rs",
+    "deploy/src/devx/github_setup.rs",
     ".github/actions/gate/action.yml",
 ];
 

@@ -15,7 +15,7 @@
 # Reproduced third-party licence text, verbatim. 1752 of its line endings are
 # CRLF because the upstream licence files they came from are CRLF, and
 # `navigator ops notices --check` compares the committed file to freshly
-# rendered upstream text byte-for-byte (`cli/src/notices.rs:376`, `current ==
+# rendered upstream text byte-for-byte (`deploy/src/notices.rs:376`, `current ==
 # rendered`). Normalising it would both break that required check and alter
 # licence text we reproduce rather than author.
 THIRD-PARTY-NOTICES.txt -text

@@ -108,13 +108,14 @@ document generation, lawyer review, client review, and signing.
 
 ## Library-level coverage
 
-There is no CLI probe for this slice anymore — `navigator notation` was simplified down to `preview`, `pdf`, and `word`,
-and the local `notations transcribe` demo went with the rest. The shared `live-inquiry` crate underneath it is still
-what a future live implementation would build on: it reads a Template markdown file, normalizes its `questionnaire:`
-into an Inquiry Set, segments transcript text, and emits Coverage Findings with `evidence_segment_ids` and follow-up
-prompts, and its own crate-level unit tests (`live-inquiry/src/lib.rs`) exercise that contract without a CLI in front of
-it. The Google Speech-to-Text v2 provider (`cloud::GoogleSpeechTranscriptProvider`) is unchanged and reachable the same
-way, via Application Default Credentials and `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT` / `NAVIGATOR_GCP_PROJECT_ID`.
+There is no CLI probe for this slice anymore — `navigator-deploy notation` was simplified down to `preview`, `pdf`, and
+`word`, and the local `notations transcribe` demo went with the rest. The shared `live-inquiry` crate underneath it is
+still what a future live implementation would build on: it reads a Template markdown file, normalizes its
+`questionnaire:` into an Inquiry Set, segments transcript text, and emits Coverage Findings with `evidence_segment_ids`
+and follow-up prompts, and its own crate-level unit tests (`live-inquiry/src/lib.rs`) exercise that contract without a
+CLI in front of it. The Google Speech-to-Text v2 provider (`cloud::GoogleSpeechTranscriptProvider`) is unchanged and
+reachable the same way, via Application Default Credentials and `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT` /
+`NAVIGATOR_GCP_PROJECT_ID`.
 
 Proving audio/transcript input can become a transcript, proving Template Questions can become Inquiries, and proving the
 output shape is useful is now the job of `live-inquiry`'s own tests, until the feature-gated `web`/`cloud`

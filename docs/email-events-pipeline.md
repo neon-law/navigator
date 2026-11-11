@@ -35,7 +35,7 @@ threads a person id (a follow-up).
 
 PostgreSQL is the system of record for `sent_email` whenever `NAVIGATOR_POSTGRES_HOST` is set (`store::sent_emails`); a
 configured but unreachable server fails the audit insert, never falls back. Without a host (a bare dev run, the
-in-memory tests) the same calls use SurrealDB. Historical SurrealDB rows reach PostgreSQL through `navigator ops
+in-memory tests) the same calls use SurrealDB. Historical SurrealDB rows reach PostgreSQL through `navigator-deploy ops
 postgres mirror reconcile`, which inserts only what PostgreSQL lacks.
 
 The table is **append-only in the database**. A trigger refuses every `UPDATE` and `TRUNCATE`, and refuses a `DELETE`
@@ -78,8 +78,8 @@ the `navigator_app` PostgreSQL login and the DBOS login, and it keeps the export
 boot without PostgreSQL or the bucket. Until the flag is on, nothing is exported, so nothing is ever purged.
 
 A `workflows-service` worker with no PostgreSQL login, as the GKE example ships it, journals its sends to SurrealDB.
-They reach PostgreSQL, and then the export, only when `navigator ops postgres mirror reconcile` or its recurring Job
-runs. Giving the worker the `navigator_app` login writes them to PostgreSQL directly.
+They reach PostgreSQL, and then the export, only when `navigator-deploy ops postgres mirror reconcile` or its recurring
+Job runs. Giving the worker the `navigator_app` login writes them to PostgreSQL directly.
 
 Register the table in BigQuery once, as a BigLake Iceberg table over the current metadata file:
 
@@ -166,14 +166,14 @@ The vendored SendGrid contract and its adapter template are pinned together with
 intentionally updating either vendor input, run the regeneration command from a source checkout:
 
 ```text
-cargo run -p cli -- dev sendgrid-openapi --regenerate
+cargo run -p deploy -- dev sendgrid-openapi --regenerate
 ```
 
 The first run calculates the specification and deterministic rendered-adapter hashes before it writes anything. If
 either pin is stale, it leaves `workflows/src/email/sendgrid_openapi.rs` unchanged and prints the exact
-`EXPECTED_SHA256` and `EXPECTED_ADAPTER_SHA256` replacements for `cli/src/sendgrid_openapi.rs`. Apply both replacements,
-then rerun the same command; it writes the adapter and verifies the complete pinned set. Commit the updated vendor
-input, both pin constants, and generated adapter together.
+`EXPECTED_SHA256` and `EXPECTED_ADAPTER_SHA256` replacements for `deploy/src/sendgrid_openapi.rs`. Apply both
+replacements, then rerun the same command; it writes the adapter and verifies the complete pinned set. Commit the
+updated vendor input, both pin constants, and generated adapter together.
 
 ## Analytics
 

@@ -38,7 +38,7 @@ use store::document_pointers::{DocumentPointer, MatterFolder};
 
 use crate::document_sync::{DOCUMENT_DIRECTORY, POINTER_DIRECTORY};
 
-pub(crate) use store::document_pointers::SIBLING_FOLDERS;
+pub use store::document_pointers::SIBLING_FOLDERS;
 
 fn first_component(relative: &Path) -> Option<&str> {
     relative
@@ -48,7 +48,8 @@ fn first_component(relative: &Path) -> Option<&str> {
 }
 
 /// Whether the slug (or path below `documents/`) sits in a sibling folder.
-pub(crate) fn is_sibling(relative: &Path) -> bool {
+#[must_use]
+pub fn is_sibling(relative: &Path) -> bool {
     first_component(relative).is_some_and(|first| SIBLING_FOLDERS.contains(&first))
 }
 
@@ -66,7 +67,7 @@ fn begins_with_nested_subfolder(relative: &Path) -> bool {
 /// subfolder wins over its bare parent, so bytes under `Work
 /// Product/Research (Work Product)/` or `Client Production/Agreements/`
 /// name the subfolder (LAW-215).
-pub(crate) fn matter_folder_of(relative: &Path) -> Option<MatterFolder> {
+pub fn matter_folder_of(relative: &Path) -> Option<MatterFolder> {
     if begins_with_nested_subfolder(relative) {
         return MatterFolder::ALL
             .iter()
@@ -77,7 +78,8 @@ pub(crate) fn matter_folder_of(relative: &Path) -> Option<MatterFolder> {
 }
 
 /// The bytes path, below `documents/`, for `slug` kept in `folder`.
-pub(crate) fn bytes_relative(slug: &Path, folder: MatterFolder) -> PathBuf {
+#[must_use]
+pub fn bytes_relative(slug: &Path, folder: MatterFolder) -> PathBuf {
     if is_sibling(slug) {
         slug.to_path_buf()
     } else {
@@ -86,7 +88,8 @@ pub(crate) fn bytes_relative(slug: &Path, folder: MatterFolder) -> PathBuf {
 }
 
 /// The bytes path for the document `pointer` describes, below the checkout.
-pub(crate) fn document_path(root: &Path, slug: &Path, pointer: &DocumentPointer) -> PathBuf {
+#[must_use]
+pub fn document_path(root: &Path, slug: &Path, pointer: &DocumentPointer) -> PathBuf {
     if let Some(path) = pointer.checkout_path.as_deref() {
         root.join(DOCUMENT_DIRECTORY).join(path)
     } else {
@@ -97,7 +100,8 @@ pub(crate) fn document_path(root: &Path, slug: &Path, pointer: &DocumentPointer)
 
 /// The slug a bytes path (below `documents/`) names, and the matter folder it
 /// was found in. A file outside every matter folder is its own slug.
-pub(crate) fn slug_of_bytes(relative: &Path) -> (PathBuf, Option<MatterFolder>) {
+#[must_use]
+pub fn slug_of_bytes(relative: &Path) -> (PathBuf, Option<MatterFolder>) {
     match matter_folder_of(relative) {
         Some(folder) => (
             relative
@@ -113,7 +117,8 @@ pub(crate) fn slug_of_bytes(relative: &Path) -> (PathBuf, Option<MatterFolder>) 
 /// The `folder:` a pointer of `kind` records for bytes kept in `folder`:
 /// `None` when `kind` already maps there, so a pointer names a folder only
 /// when it has to.
-pub(crate) fn recorded_folder(kind: &str, folder: MatterFolder) -> Option<MatterFolder> {
+#[must_use]
+pub fn recorded_folder(kind: &str, folder: MatterFolder) -> Option<MatterFolder> {
     (MatterFolder::for_kind(kind) != folder).then_some(folder)
 }
 
@@ -121,7 +126,7 @@ pub(crate) fn recorded_folder(kind: &str, folder: MatterFolder) -> Option<Matter
 /// and `blobs/`, so incoming documents always have a home. The bare
 /// `Discovery` folder a pre-LAW-215 checkout holds is created by no fresh
 /// checkout (LAW-215). Git tracks none of them while empty.
-pub(crate) fn ensure_tree(root: &Path) -> Result<()> {
+pub fn ensure_tree(root: &Path) -> Result<()> {
     let documents = root.join(DOCUMENT_DIRECTORY);
     let folders = MatterFolder::TREE
         .iter()
@@ -149,22 +154,22 @@ pub(crate) fn ensure_tree(root: &Path) -> Result<()> {
 /// One file a relocation moved, or would move under a dry run, as paths
 /// relative to the checkout root.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Move {
-    pub(crate) from: String,
-    pub(crate) to: String,
+pub struct Move {
+    pub from: String,
+    pub to: String,
 }
 
 /// What [`relocate_bytes`] did: the moves, and the files it left alone
 /// because the destination already exists.
 #[derive(Debug, Default)]
-pub(crate) struct Relocation {
-    pub(crate) moves: Vec<Move>,
-    pub(crate) skipped: Vec<String>,
+pub struct Relocation {
+    pub moves: Vec<Move>,
+    pub skipped: Vec<String>,
 }
 
 impl Relocation {
     /// Print every move and every skip, one per line.
-    pub(crate) fn report(&self, dry_run: bool) {
+    pub fn report(&self, dry_run: bool) {
         let verb = if dry_run { "would move" } else { "moved" };
         for movement in &self.moves {
             println!("{verb} {} -> {}", movement.from, movement.to);
@@ -180,7 +185,7 @@ impl Relocation {
 /// names. Pointers are not read for anything else and never written, so a
 /// checksum or asset id cannot change. Idempotent; a destination that
 /// already exists is left alone and reported. `dry_run` touches nothing.
-pub(crate) fn relocate_bytes(root: &Path, dry_run: bool) -> Result<Relocation> {
+pub fn relocate_bytes(root: &Path, dry_run: bool) -> Result<Relocation> {
     let documents = root.join(DOCUMENT_DIRECTORY);
     let mut relocation = Relocation::default();
     if !documents.is_dir() {
@@ -225,7 +230,7 @@ pub(crate) fn relocate_bytes(root: &Path, dry_run: bool) -> Result<Relocation> {
 /// `navigator project repository migrate-documents`: move a checkout to the
 /// `blobs/` layout and its bytes into their matter folders, reporting every
 /// move. Offline and idempotent.
-pub(crate) fn migrate_checkout(root: &Path, dry_run: bool) -> Result<()> {
+pub fn migrate_checkout(root: &Path, dry_run: bool) -> Result<()> {
     let root = root
         .canonicalize()
         .with_context(|| format!("resolve {}", root.display()))?;
@@ -279,7 +284,7 @@ pub(crate) fn migrate_checkout(root: &Path, dry_run: bool) -> Result<()> {
 /// # Errors
 /// A checkout that is not one, an unsafe documents tree, or a move the
 /// filesystem refuses.
-pub(crate) fn migrate_folder_tree(root: &Path, dry_run: bool) -> Result<()> {
+pub fn migrate_folder_tree(root: &Path, dry_run: bool) -> Result<()> {
     let root = root
         .canonicalize()
         .with_context(|| format!("resolve {}", root.display()))?;
@@ -417,7 +422,7 @@ fn move_file(root: &Path, from: &Path, to: &Path, dry_run: bool) -> Result<()> {
 /// yet into the matter folder its live `kind` names, so `project sync`
 /// compares them with the live copy instead of downloading a second one.
 /// `removed` slugs are a pending deletion's leftovers and stay where they are.
-pub(crate) fn relocate_unpointed(
+pub fn relocate_unpointed(
     root: &Path,
     live: &[(PathBuf, String)],
     removed: impl Fn(&str) -> bool,

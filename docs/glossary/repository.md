@@ -7,9 +7,9 @@ A provenance record for an external Git repository that notation content came fr
 hash of the remote URL and the last imported commit SHA. One row per external source, shared across Projects. Rows are
 written by the canonical seed in [`store::seed`](../../store/src/seed.rs); no command fetches these remotes today.
 
-`navigator site seed` walks a local directory given on the command line without recording an external source here. The
-provenance row tracks outside sources from which Navigator imports notation content. A [Project](project.md) records its
-own source repository separately through `project.repository_url`.
+`navigator-deploy site seed` walks a local directory given on the command line without recording an external source
+here. The provenance row tracks outside sources from which Navigator imports notation content. A [Project](project.md)
+records its own source repository separately through `project.repository_url`.
 
 - Schema and queries: [`store::git_repositories`](../../store/src/git_repositories.rs) —
   [`store/postgres/schema.sql`](../../store/postgres/schema.sql)

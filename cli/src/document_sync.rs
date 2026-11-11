@@ -23,22 +23,23 @@ use crate::remote::DocumentClient;
 /// `blobs/<slug>.yaml` is the [Blob](../../docs/glossary/blob.md): YAML only,
 /// tracked in Git, naming the live revision of the document at
 /// `documents/<slug>`. The two roots mirror each other path for path.
-pub(crate) const POINTER_DIRECTORY: &str = "blobs";
+pub const POINTER_DIRECTORY: &str = "blobs";
 
 /// The wholly Git-ignored root a Project repository's document bytes are
 /// staged into and pulled down to. The root `.gitignore` ignores all of it,
 /// so no byte below it can be committed and no pointer is ever written here.
-pub(crate) const DOCUMENT_DIRECTORY: &str = "documents";
+pub const DOCUMENT_DIRECTORY: &str = "documents";
 
 /// The pointer `blobs/<slug>.yaml` for the bytes at `documents/<slug>`.
-pub(crate) fn pointer_path_for_slug(root: &Path, slug: &Path) -> PathBuf {
+#[must_use]
+pub fn pointer_path_for_slug(root: &Path, slug: &Path) -> PathBuf {
     let mut path = root.join(POINTER_DIRECTORY).join(slug).into_os_string();
     path.push(format!(".{POINTER_EXTENSION}"));
     PathBuf::from(path)
 }
 
 /// Resolve a provider placement to its committed identity; placement is never a slug.
-pub(crate) fn slug_of_document_bytes(
+pub fn slug_of_document_bytes(
     root: &Path,
     relative: &Path,
 ) -> Result<(PathBuf, Option<store::document_pointers::MatterFolder>)> {
@@ -68,13 +69,14 @@ pub(crate) fn slug_of_document_bytes(
 }
 
 /// The bytes `documents/<slug>` a pointer `blobs/<slug>.yaml` names.
-pub(crate) fn document_path_for_slug(root: &Path, slug: &Path) -> PathBuf {
+#[must_use]
+pub fn document_path_for_slug(root: &Path, slug: &Path) -> PathBuf {
     root.join(DOCUMENT_DIRECTORY).join(slug)
 }
 
 /// The slug a pointer path below `blobs/` names, its pointer extension
 /// stripped, or `None` when `relative` (root-relative) is not a pointer there.
-pub(crate) fn slug_for_pointer(relative: &Path) -> Option<PathBuf> {
+pub fn slug_for_pointer(relative: &Path) -> Option<PathBuf> {
     let below = relative.strip_prefix(POINTER_DIRECTORY).ok()?;
     below
         .to_str()
@@ -91,7 +93,7 @@ pub(crate) fn slug_for_pointer(relative: &Path) -> Option<PathBuf> {
 ///
 /// `.github/workflows/*.yml` is GitHub's own convention and is not ours to
 /// change.
-pub(crate) const POINTER_EXTENSION: &str = "yaml";
+pub const POINTER_EXTENSION: &str = "yaml";
 
 /// Every extension a document pointer may be *read* at.
 ///
@@ -104,7 +106,7 @@ pub(crate) const POINTER_EXTENSION: &str = "yaml";
 /// `0 pointer(s)` and passes — indistinguishable from having no documents at
 /// all. That silent-pass failure is why the contract is central and not
 /// per-command.
-pub(crate) const POINTER_READ_EXTENSIONS: &[&str] = &[POINTER_EXTENSION, "yml"];
+pub const POINTER_READ_EXTENSIONS: &[&str] = &[POINTER_EXTENSION, "yml"];
 
 /// Whether `path` names a committed document pointer, in either spelling.
 ///
@@ -112,7 +114,8 @@ pub(crate) const POINTER_READ_EXTENSIONS: &[&str] = &[POINTER_EXTENSION, "yml"];
 /// last extension is also `yaml`: a sidecar is pre-upload input a lawyer
 /// wrote by hand, not a pointer `project sync` committed, and the two must never be
 /// confused — `discover` sweeps the wrong one into the wrong list otherwise.
-pub(crate) fn is_pointer_path(path: &Path) -> bool {
+#[must_use]
+pub fn is_pointer_path(path: &Path) -> bool {
     if is_authority_sidecar_path(path) {
         return false;
     }
@@ -127,10 +130,11 @@ pub(crate) fn is_pointer_path(path: &Path) -> bool {
 /// naming [`is_pointer_path`] already reads pointers under, rather than
 /// inventing a second scheme — the trailing `.yaml` is why [`is_pointer_path`]
 /// must exclude it by name.
-pub(crate) const AUTHORITY_SIDECAR_EXTENSION: &str = "authority.yaml";
+pub const AUTHORITY_SIDECAR_EXTENSION: &str = "authority.yaml";
 
 /// Whether `path` names an Authority capture's sidecar.
-pub(crate) fn is_authority_sidecar_path(path: &Path) -> bool {
+#[must_use]
+pub fn is_authority_sidecar_path(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
         .is_some_and(|name| name.ends_with(&format!(".{AUTHORITY_SIDECAR_EXTENSION}")))
@@ -182,7 +186,8 @@ fn authority_class_belongs_in_folder(class: &str, folder: &str) -> bool {
 }
 
 /// Whether `relative` is a `documents/invoices/**` staged file.
-pub(crate) fn is_invoice_capture(relative: &Path) -> bool {
+#[must_use]
+pub fn is_invoice_capture(relative: &Path) -> bool {
     relative
         .components()
         .next()
@@ -196,7 +201,8 @@ pub(crate) fn is_invoice_capture(relative: &Path) -> bool {
 /// is firm-confidential and not modeled here — this is a simple, documented
 /// placeholder a synthetic fixture can satisfy, not an attempt to reproduce
 /// a real numbering scheme.
-pub(crate) fn is_invoice_filename(filename: &str) -> bool {
+#[must_use]
+pub fn is_invoice_filename(filename: &str) -> bool {
     let Some((stem, _extension)) = filename.rsplit_once('.') else {
         return false;
     };
@@ -208,7 +214,7 @@ pub(crate) fn is_invoice_filename(filename: &str) -> bool {
 /// Refuse a `documents/invoices/**` file whose name does not match
 /// [`is_invoice_filename`], per the issue's optional (but in-scope) folder
 /// rule.
-pub(crate) fn validate_invoice_filename(path: &Path) -> Result<()> {
+pub fn validate_invoice_filename(path: &Path) -> Result<()> {
     let filename = path
         .file_name()
         .and_then(|name| name.to_str())
@@ -261,7 +267,7 @@ fn is_signed_pdf_filename(filename: &str) -> bool {
 /// `Uuid` field type via `from_yaml`); resolving the id against a live
 /// `DocuSign` envelope or Xero invoice is `project gate --check`'s separate
 /// live-check pass (ENG-863), not this offline rule.
-pub(crate) fn validate_folder_pointer_keys(
+pub fn validate_folder_pointer_keys(
     relative: &Path,
     pointer: &store::document_pointers::DocumentPointer,
 ) -> Result<()> {
@@ -296,21 +302,22 @@ pub(crate) fn validate_folder_pointer_keys(
 
 /// `slug` without its pointer extension, in either spelling, or `None` when
 /// it names no pointer at all.
-pub(crate) fn strip_pointer_extension(slug: &str) -> Option<&str> {
+#[must_use]
+pub fn strip_pointer_extension(slug: &str) -> Option<&str> {
     POINTER_READ_EXTENSIONS
         .iter()
         .find_map(|extension| slug.strip_suffix(&format!(".{extension}")))
 }
 
 /// Read and validate `<root>/navigator.yaml` — the one manifest every
-/// document command (`project sync`, and the read verbs under `navigator site document`)
+/// document command (`project sync`, and the read verbs under `navigator-deploy site document`)
 /// resolves its Project and login host from. Returns `(project, host)`.
 ///
 /// Routes through [`crate::projects::manifest::parse`], the one reader that
 /// accepts both the current `project: {host, name}` shape and the deprecated
 /// flat `project:`/`host:` shape, so a v2 manifest never fails with a
 /// `serde_yaml` type-mismatch instead of this command's own error.
-pub(crate) fn read_manifest(root: &Path) -> Result<(String, Option<String>)> {
+pub fn read_manifest(root: &Path) -> Result<(String, Option<String>)> {
     let manifest_path = root.join("navigator.yaml");
     let contents = std::fs::read_to_string(&manifest_path)
         .with_context(|| format!("read {}", manifest_path.display()))?;
@@ -459,7 +466,7 @@ fn read_authority_sidecar(path: &Path, folder: &str) -> Result<AuthoritySidecar>
 /// Project document is the misclassification this routing exists to avoid.
 ///
 /// Reads the capture's sidecar, archives the bytes through the same
-/// authenticated door `navigator site authorities create` uses, and returns
+/// authenticated door `navigator-deploy site authorities create` uses, and returns
 /// a [`store::document_pointers::DocumentPointer`] carrying the resulting
 /// `authority_id` alongside `sha256`/`canonical_url`/`checked_on`/`created_at`
 /// — reusing the existing pointer struct rather than a parallel shape.
@@ -533,7 +540,7 @@ async fn sync_authority_capture(
 /// Reconcile the complete caller-visible live document inventory into the
 /// current Project checkout, including documents whose pointer has never
 /// existed locally.
-pub(crate) async fn run_project_sync(
+pub async fn run_project_sync(
     root: &Path,
     dry_run: bool,
     yes: bool,
@@ -553,11 +560,12 @@ pub(crate) async fn run_project_sync(
 /// `blobs/`). Component matching keeps
 /// `cases` distinct from `cases-old` and never widens an explicit scope.
 #[derive(Debug, Clone)]
-pub(crate) struct DocumentScope(Option<PathBuf>);
+pub struct DocumentScope(Option<PathBuf>);
 
 impl DocumentScope {
     #[cfg(test)]
-    pub(crate) fn all() -> Self {
+    #[must_use]
+    pub fn all() -> Self {
         Self(None)
     }
     fn parse(root: &Path, only: Option<&Path>) -> Result<Self> {
@@ -826,7 +834,8 @@ fn pointer_target_for_document(root: &Path, relative: &Path) -> Result<PathBuf> 
 /// proposes `Work Product/2026.10.14_complaint.pdf`. `None` keeps the name
 /// as given: no readable manifest or `filed_on` (a manifest's own problems
 /// are the gate's to report), or a name already conventional.
-pub(crate) fn propose_conventional_slug(root: &Path, slug: &str) -> Option<String> {
+#[must_use]
+pub fn propose_conventional_slug(root: &Path, slug: &str) -> Option<String> {
     let path = Path::new(slug);
     let name = path.file_name()?.to_str()?;
     if rules::c004::is_conventional_filename(name) {
@@ -849,7 +858,7 @@ pub(crate) fn propose_conventional_slug(root: &Path, slug: &str) -> Option<Strin
     })
 }
 
-pub(crate) fn write_uploaded_pointer(
+pub fn write_uploaded_pointer(
     root: &Path,
     slug: &str,
     pointer: &store::document_pointers::DocumentPointer,
@@ -876,7 +885,7 @@ pub(crate) fn write_uploaded_pointer(
     Ok(path)
 }
 
-pub(crate) fn raw_document_is_git_ignored(root: &Path, target: &Path) -> Result<()> {
+pub fn raw_document_is_git_ignored(root: &Path, target: &Path) -> Result<()> {
     let relative = target
         .strip_prefix(root)
         .map_err(|_| anyhow!("{} is outside {}", target.display(), root.display()))?;
@@ -898,7 +907,7 @@ pub(crate) fn raw_document_is_git_ignored(root: &Path, target: &Path) -> Result<
 
 /// A raw copy `target` below `root/documents` may be (re)written only when no
 /// component is a symlink and Git ignores it.
-pub(crate) fn ensure_managed_copy_target(root: &Path, target: &Path) -> Result<()> {
+pub fn ensure_managed_copy_target(root: &Path, target: &Path) -> Result<()> {
     ensure_document_path_is_safe(root, target, true, false)?;
     raw_document_is_git_ignored(root, target)
 }
@@ -931,7 +940,7 @@ fn local_pointer_assets(root: &Path) -> Result<BTreeMap<Uuid, String>> {
 }
 
 /// The live Service records of a Project, by the served asset id.
-pub(crate) type LiveService = BTreeMap<Uuid, Vec<store::project_service::ServiceRecord>>;
+pub type LiveService = BTreeMap<Uuid, Vec<store::project_service::ServiceRecord>>;
 
 #[allow(clippy::too_many_lines)]
 fn project_sync_plans_scoped(
@@ -1114,7 +1123,7 @@ fn project_sync_plans_scoped(
         }
         if moved_to.is_some() {
             decision = Decision::CouldNotReconcile(
-                "its pointer moved to another path; use `navigator site document reslug` to move the live document too",
+                "its pointer moved to another path; use `navigator-deploy site document reslug` to move the live document too",
             );
         }
         // A live row with no slug has no identity a new revision could join.
@@ -1617,12 +1626,12 @@ async fn upload_local_revision(
 }
 
 /// How `project sync` is run: `--dry-run`, and who may say yes.
-pub(crate) struct SyncMode {
-    pub(crate) dry_run: bool,
-    pub(crate) approval: Approval,
+pub struct SyncMode {
+    pub dry_run: bool,
+    pub approval: Approval,
     /// `--yes-delete`: the only flag that answers a deletion. `--yes` does not.
-    pub(crate) yes_delete: bool,
-    pub(crate) scope: DocumentScope,
+    pub yes_delete: bool,
+    pub scope: DocumentScope,
 }
 
 async fn project_sync(
@@ -1839,7 +1848,7 @@ fn declared_matter(contents: &str) -> Result<MatterBlock> {
 /// Create `documents/` and make sure Git ignores it. A checkout with no root
 /// `.gitignore` gets the canonical one; one that does not ignore `documents/`
 /// is refused rather than rewritten, and `project gate` names the fix.
-pub(crate) fn ensure_documents_ignored(root: &Path) -> Result<()> {
+pub fn ensure_documents_ignored(root: &Path) -> Result<()> {
     let documents = root.join(DOCUMENT_DIRECTORY);
     std::fs::create_dir_all(&documents)
         .with_context(|| format!("create {}", documents.display()))?;
@@ -1860,16 +1869,16 @@ pub(crate) fn ensure_documents_ignored(root: &Path) -> Result<()> {
 /// A pointer the pre-`blobs/` layout committed beside its bytes, and the
 /// [Blob](../../docs/glossary/blob.md) path it moves to.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct LegacyPointer {
-    pub(crate) from: PathBuf,
-    pub(crate) to: PathBuf,
+pub struct LegacyPointer {
+    pub from: PathBuf,
+    pub to: PathBuf,
 }
 
 /// The legacy layout a checkout still carries: every
 /// `documents/<slug>.{yaml,yml}` that parses as a pointer, and the retired
 /// `documents/.gitignore` guard. A YAML document that is not a pointer is a
 /// client's own file and stays where it is.
-pub(crate) fn legacy_layout(root: &Path) -> Result<(Vec<LegacyPointer>, Option<PathBuf>)> {
+pub fn legacy_layout(root: &Path) -> Result<(Vec<LegacyPointer>, Option<PathBuf>)> {
     let documents = root.join(DOCUMENT_DIRECTORY);
     let guard = documents.join(".gitignore");
     let guard = guard.is_file().then_some(guard);
@@ -1906,7 +1915,7 @@ pub(crate) fn legacy_layout(root: &Path) -> Result<(Vec<LegacyPointer>, Option<P
 /// `documents/.gitignore`. Returns how many pointers moved. A Blob already at
 /// the target with different bytes is a conflict and stops the move before
 /// anything is touched; the same bytes mean the legacy copy is a leftover.
-pub(crate) fn migrate_legacy_layout(root: &Path) -> Result<usize> {
+pub fn migrate_legacy_layout(root: &Path) -> Result<usize> {
     let (pointers, guard) = legacy_layout(root)?;
     for pointer in &pointers {
         if let Ok(existing) = std::fs::read(&pointer.to) {
@@ -1969,7 +1978,8 @@ pub(crate) fn migrate_legacy_layout(root: &Path) -> Result<usize> {
 
 /// Whether the root `.gitignore` names `documents/` itself, the line that
 /// keeps every byte below it out of Git once the retired guard is gone.
-pub(crate) fn root_ignores_documents(root: &Path) -> bool {
+#[must_use]
+pub fn root_ignores_documents(root: &Path) -> bool {
     std::fs::read_to_string(root.join(".gitignore")).is_ok_and(|contents| {
         contents.lines().map(str::trim).any(|line| {
             matches!(
@@ -1982,7 +1992,7 @@ pub(crate) fn root_ignores_documents(root: &Path) -> bool {
 
 /// Refuse a checkout still on the legacy layout, for a command that reads
 /// the committed pointers but does not own moving them.
-pub(crate) fn refuse_legacy_layout(root: &Path) -> Result<()> {
+pub fn refuse_legacy_layout(root: &Path) -> Result<()> {
     let (legacy, guard) = legacy_layout(root)?;
     if legacy.is_empty() && guard.is_none() {
         return Ok(());
@@ -1992,7 +2002,8 @@ pub(crate) fn refuse_legacy_layout(root: &Path) -> Result<()> {
 
 /// What a legacy layout still carries, in one phrase: `3 pointer(s) and the
 /// retired documents/.gitignore`.
-pub(crate) fn describe_legacy_layout(pointers: usize, guard: bool) -> String {
+#[must_use]
+pub fn describe_legacy_layout(pointers: usize, guard: bool) -> String {
     match (pointers, guard) {
         (0, _) => format!("the retired {DOCUMENT_DIRECTORY}/.gitignore"),
         (count, false) => format!("{count} pointer(s)"),
@@ -2073,11 +2084,7 @@ struct Tally {
 }
 
 #[allow(clippy::too_many_lines)]
-pub(crate) async fn reconcile_project(
-    root: &Path,
-    client: &DocumentClient,
-    mode: SyncMode,
-) -> Result<()> {
+pub async fn reconcile_project(root: &Path, client: &DocumentClient, mode: SyncMode) -> Result<()> {
     // A refused inventory is never an empty one: nothing is uploaded over what
     // could not be read.
     let inventory = client
@@ -2342,7 +2349,7 @@ pub(crate) async fn reconcile_project(
     }
     if tally.deleted > 0 {
         println!(
-            "{} soft-deleted; restore with `navigator site document restore` within {RETENTION_DAYS} days",
+            "{} soft-deleted; restore with `navigator-deploy site document restore` within {RETENTION_DAYS} days",
             tally.deleted
         );
     }
@@ -2385,7 +2392,7 @@ fn refusal(plan: &ProjectSyncPlan, decision: Decision) -> String {
 /// `documents/<slug>`. Refuses to resolve outside `<root>/documents/`, the
 /// same lexical guard `document get` uses in the other direction
 /// (`document_read::refuse_destination_in_documents`).
-pub(crate) fn pull_target(root: &Path, pointer_relative: &Path) -> Result<PathBuf> {
+pub fn pull_target(root: &Path, pointer_relative: &Path) -> Result<PathBuf> {
     let slug = slug_for_pointer(pointer_relative).ok_or_else(|| {
         anyhow!(
             "{} does not name a pointer under {POINTER_DIRECTORY}/ (expected one of: {})",
@@ -2529,7 +2536,7 @@ fn ensure_pull_target_parent_is_safe(root: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn ensure_pull_target_is_safe(root: &Path, target: &Path) -> Result<()> {
+pub fn ensure_pull_target_is_safe(root: &Path, target: &Path) -> Result<()> {
     ensure_pull_target_parent_is_safe(root, target)?;
     match std::fs::symlink_metadata(target) {
         Ok(metadata) if metadata_is_symlink(&metadata) => Err(anyhow!(
@@ -2885,7 +2892,7 @@ fn metadata_is_symlink(metadata: &std::fs::Metadata) -> bool {
     metadata.file_type().is_symlink()
 }
 
-pub(crate) fn ensure_documents_tree_is_safe(documents: &Path) -> Result<()> {
+pub fn ensure_documents_tree_is_safe(documents: &Path) -> Result<()> {
     match std::fs::symlink_metadata(documents) {
         Ok(metadata) if metadata_is_symlink(&metadata) => {
             return Err(anyhow!(
@@ -2922,7 +2929,7 @@ pub(crate) fn ensure_documents_tree_is_safe(documents: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn ensure_document_path_is_safe(
+pub fn ensure_document_path_is_safe(
     root: &Path,
     path: &Path,
     leaf_may_be_missing: bool,
@@ -3008,7 +3015,7 @@ fn pointer_path_for_source(root: &Path, path: &Path) -> Result<(PathBuf, bool)> 
     Ok((pointer_path_for_slug(root, slug), false))
 }
 
-pub(crate) fn validate_upload_receipt(
+pub fn validate_upload_receipt(
     pointer: &store::document_pointers::DocumentPointer,
     bytes: &[u8],
 ) -> Result<()> {
@@ -3155,7 +3162,7 @@ fn content_type(path: &Path) -> &'static str {
     }
 }
 
-pub(crate) fn slash_path(path: &Path) -> Result<String> {
+pub fn slash_path(path: &Path) -> Result<String> {
     let parts = path
         .components()
         .map(|part| {
@@ -3173,7 +3180,8 @@ pub(crate) fn slash_path(path: &Path) -> Result<String> {
 /// alternate a pointer between the two on every run. A timestamp that fails
 /// to parse is returned unchanged; `DocumentPointer::validate` is the seam
 /// that rejects a genuinely malformed one.
-pub(crate) fn normalize_created_at(raw: &str) -> String {
+#[must_use]
+pub fn normalize_created_at(raw: &str) -> String {
     chrono::DateTime::parse_from_rfc3339(raw).map_or_else(
         |_| raw.to_string(),
         |parsed| parsed.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -3187,7 +3195,7 @@ fn display_relative(root: &Path, path: &Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 
-pub(crate) fn write_pointer_atomically(path: &Path, yaml: &str) -> Result<()> {
+pub fn write_pointer_atomically(path: &Path, yaml: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
@@ -3196,9 +3204,7 @@ pub(crate) fn write_pointer_atomically(path: &Path, yaml: &str) -> Result<()> {
     std::fs::rename(&temp, path).with_context(|| format!("publish {}", path.display()))
 }
 
-pub(crate) fn read_pointer(
-    path: &Path,
-) -> Result<Option<store::document_pointers::DocumentPointer>> {
+pub fn read_pointer(path: &Path) -> Result<Option<store::document_pointers::DocumentPointer>> {
     match std::fs::read_to_string(path) {
         Ok(raw) => store::document_pointers::DocumentPointer::from_yaml(&raw)
             .with_context(|| format!("validate {}", path.display()))

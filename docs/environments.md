@@ -121,10 +121,10 @@ present blank value fails boot. There is no compiled default.
 have Vertex AI enabled and the runtime service account must have `roles/aiplatform.user`. Model, location, and
 input/output limits have shared defaults and can be overridden per row. `NAVIGATOR_SUMMARY_FIRM_ID` is an optional
 override; unset, web files each receipt under the Firm wearing the `neon` brand. `NAVIGATOR_SUMMARY_PROVIDER_ACCOUNT`
-defaults to `sendgrid`. `navigator ops deployments` refuses a row that enables the lane without every key it boots with.
-Gemini is the only summary provider. Claude was removed on 2026-09-24 because Vertex Model Garden granted the deployment
-projects no request quota for `anthropic-claude-haiku-4-5` and refused the self-serve increase for lack of usage
-history; restoring it means a quota grant first, then the adapter from git history.
+defaults to `sendgrid`. `navigator-deploy ops deployments` refuses a row that enables the lane without every key it
+boots with. Gemini is the only summary provider. Claude was removed on 2026-09-24 because Vertex Model Garden granted
+the deployment projects no request quota for `anthropic-claude-haiku-4-5` and refused the self-serve increase for lack
+of usage history; restoring it means a quota grant first, then the adapter from git history.
 
 The `EmailSummary` workflow gates the model on the sender: its `check-sender` step looks up the `From:` address, or a
 text's phone number, in `person` (a phone matches ignoring punctuation and a leading US `1`). A known person gets the
@@ -145,7 +145,7 @@ why the value is the selected login domain rather than the site's public hostnam
 
 ## Replicas
 
-Every hosted row gets the same GKE setup; only the pod count differs, and `navigator ops ship` reads it from
+Every hosted row gets the same GKE setup; only the pod count differs, and `navigator-deploy ops ship` reads it from
 `NAVIGATOR_SIMULATED_MATTERS` in the row's `config.toml`:
 
 | `NAVIGATOR_SIMULATED_MATTERS` | `navigator-web` | `workflows-service` | PodDisruptionBudget |
@@ -166,9 +166,9 @@ See [DBOS durability](dbos-durability.md#several-replicas).
 ## Why the brand is the image
 
 `<deployment>` is built from the `neon` brand crate, and the crate is what composes the public routes for every house
-brand this repository registers — the deployment config selects one allow-listed image name, and `navigator ops ship`
-pins all runtime images to one immutable release tag. There is no runtime *image* switch, but there is a runtime *host*
-switch: which house brand a request renders is resolved per request from its `Host:` header against the compiled
+brand this repository registers — the deployment config selects one allow-listed image name, and `navigator-deploy ops
+ship` pins all runtime images to one immutable release tag. There is no runtime *image* switch, but there is a runtime
+*host* switch: which house brand a request renders is resolved per request from its `Host:` header against the compiled
 registry (`views::brand::BrandKey`, see [House Brand](glossary/house-brand.md)), not from a deployment-level flag. A
 misconfigured deployment cannot serve one entity's pages under another entity's tag, because the served-host list for
 each key is compiled in rather than read from config.
@@ -242,13 +242,13 @@ once its contents are verified elsewhere.
 | `<deployment>-archives-offsite` | Offsite Iceberg archive, create-only | Locked, 25 years | `--offsite-archives-*` |
 
 The two locked buckets live in the archive project, never the deployment's; each `--*-project-id` flag names it beside
-the `--*-bucket` flag. Bundles come from `navigator ops forgejo bundle archive` and the nightly repository backup.
-Bundles and Iceberg tables cannot share a bucket: the Iceberg writer replaces `metadata/version-hint.text` on every run,
-which a retention policy refuses, while a bundle must be undeletable by the identity that wrote it. A locked policy can
-be lengthened later and never shortened, so the bundle lane locks the shorter defensible window first. The deployment
-identity holds create, read, and the retention-policy probe (`storage.buckets.get`) on each locked bucket and nothing
-else; an object hold is not a substitute, because an object admin can release it. The runtime reads the bundle bucket as
-`NAVIGATOR_FORGEJO_ARCHIVES_BUCKET` and the Iceberg bucket as `NAVIGATOR_ARCHIVES_BUCKET` ([Iceberg
+the `--*-bucket` flag. Bundles come from `navigator-deploy ops forgejo bundle archive` and the nightly repository
+backup. Bundles and Iceberg tables cannot share a bucket: the Iceberg writer replaces `metadata/version-hint.text` on
+every run, which a retention policy refuses, while a bundle must be undeletable by the identity that wrote it. A locked
+policy can be lengthened later and never shortened, so the bundle lane locks the shorter defensible window first. The
+deployment identity holds create, read, and the retention-policy probe (`storage.buckets.get`) on each locked bucket and
+nothing else; an object hold is not a substitute, because an object admin can release it. The runtime reads the bundle
+bucket as `NAVIGATOR_FORGEJO_ARCHIVES_BUCKET` and the Iceberg bucket as `NAVIGATOR_ARCHIVES_BUCKET` ([Iceberg
 archive](iceberg-archive.md)).
 
 ## See also

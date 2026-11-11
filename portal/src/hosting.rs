@@ -75,6 +75,9 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
     views::brand::install_process_branding(branding)
         .map_err(anyhow::Error::msg)
         .context("installing process branding")?;
+    let voice_numbers = std::env::var(views::brand::NAVIGATOR_VOICE_NUMBERS).unwrap_or_default();
+    views::brand::install_deployment_voice_numbers(&voice_numbers_by_brand(&voice_numbers)?)
+        .map_err(anyhow::Error::msg)?;
     tracing::info!(custom = brand_bundle.is_some(), "brand bundle configured");
     tracing::info!(
         environment = cfg.environment.as_str(),
@@ -575,6 +578,23 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
         }
     };
 
+    // The pipeline's tail: analysis through the Firm's Forgejo, then
+    // Block Kit delivery to the Project's Slack channel. Computed before
+    // the state literal, which consumes the store and the Surreal lane.
+    // Without a journal store the receiver refuses verified pushes before
+    // reaching the consumer, so the unwired stand-in never runs.
+    let forgejo_push_consumer: std::sync::Arc<dyn crate::forgejo_webhook::PushConsumer> =
+        match forgejo_push_store.as_ref() {
+            Some(journal) => std::sync::Arc::new(
+                crate::forgejo_push_pipeline::JjPushPipeline::for_deployment(
+                    journal.clone(),
+                    surreal.clone(),
+                    runtime_kms.clone(),
+                ),
+            ),
+            None => std::sync::Arc::new(crate::forgejo_webhook::UnwiredPushConsumer),
+        };
+
     let state = crate::AppState {
         brand_bundle,
         surreal,
@@ -624,7 +644,7 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
         forgejo_webhook_secret,
         forgejo_webhook_hmac_key,
         forgejo_push_store,
-        forgejo_push_consumer: std::sync::Arc::new(crate::forgejo_webhook::UnwiredPushConsumer),
+        forgejo_push_consumer,
         email_events_secret,
         sendgrid_events_public_key,
         bootstrap_owner_email: crate::oauth::bootstrap_owner_email_from_env(),
@@ -647,6 +667,39 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
         state,
         public_dir,
     })
+}
+
+/// Parse [`views::brand::NAVIGATOR_VOICE_NUMBERS`]: comma-separated
+/// `brand_key=+E164` pairs. Blank is no override; an unknown Brand, a repeated
+/// Brand, or a number that is not E.164 stops the boot rather than publishing
+/// a line no caller can dial.
+fn voice_numbers_by_brand(value: &str) -> anyhow::Result<Vec<(views::brand::BrandKey, String)>> {
+    let var = views::brand::NAVIGATOR_VOICE_NUMBERS;
+    let mut numbers: Vec<(views::brand::BrandKey, String)> = Vec::new();
+    for pair in value
+        .split(',')
+        .map(str::trim)
+        .filter(|pair| !pair.is_empty())
+    {
+        let (key, number) = pair
+            .split_once('=')
+            .map(|(key, number)| (key.trim(), number.trim()))
+            .with_context(|| format!("{var} entry `{pair}` is not brand_key=+E164"))?;
+        let key = views::brand::BrandKey::parse(key)
+            .with_context(|| format!("{var} names no Brand `{key}`"))?;
+        anyhow::ensure!(
+            store::brand_phone_numbers::is_e164(number),
+            "{var} number for `{}` must be E.164, e.g. +15108002090",
+            key.as_str()
+        );
+        anyhow::ensure!(
+            numbers.iter().all(|(seen, _)| *seen != key),
+            "{var} names `{}` twice",
+            key.as_str()
+        );
+        numbers.push((key, number.to_string()));
+    }
+    Ok(numbers)
 }
 
 /// Resolve when the process receives `SIGINT` (Ctrl-C) or `SIGTERM`.
@@ -1562,8 +1615,32 @@ mod tests {
         should_host_billing_digest, should_host_deadline_mirror, should_host_dri_digest,
         should_host_general_nag, should_host_notation_reset, should_host_profit_digest,
         should_host_project_recovery, should_host_purchase_activation, should_host_retention_purge,
-        should_host_source_imports,
+        should_host_source_imports, voice_numbers_by_brand,
     };
+
+    /// Voice numbers are optional and per Brand, and every listed one must
+    /// name a real Brand once with a dialable number.
+    #[test]
+    fn deployment_voice_numbers_are_per_brand_and_e164() {
+        use views::brand::BrandKey;
+        assert!(voice_numbers_by_brand(" ").unwrap().is_empty());
+        assert_eq!(
+            voice_numbers_by_brand(" summons = +15550100100 ,neon=+15550100101").unwrap(),
+            vec![
+                (BrandKey::Summons, "+15550100100".to_string()),
+                (BrandKey::Neon, "+15550100101".to_string()),
+            ]
+        );
+        for refused in [
+            "summons",
+            "nobody=+15550100100",
+            "summons=555-010-0100",
+            "summons=+15550100100,summons=+15550100101",
+        ] {
+            let error = voice_numbers_by_brand(refused).unwrap_err().to_string();
+            assert!(error.contains("NAVIGATOR_VOICE_NUMBERS"), "{error}");
+        }
+    }
 
     /// The export opens PostgreSQL and the archive bucket only when the
     /// executor and its own switch are both on, and a malformed switch fails

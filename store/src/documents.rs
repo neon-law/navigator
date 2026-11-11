@@ -205,7 +205,7 @@ pub fn upload_limits_markdown_table() -> String {
         "| Path | Per file | Per batch | Per matter |\n\
          | --- | --- | --- | --- |\n\
          | Upload form on the matter's Documents tab | {form_bytes} | {form_files} files, {form_bytes} in total | no limit |\n\
-         | `navigator site document upload` | {streaming} | one file per run | no limit |\n\
+         | `navigator-deploy site document upload` | {streaming} | one file per run | no limit |\n\
          | `navigator project sync` | {streaming} | no limit; each staged file is its own upload | no limit |\n\
          | `POST /app/api/projects/{{id}}/documents` | {buffered}; {transcript} for kind `transcript` | one file per request | no limit |\n\
          | Upload session (`.../documents/upload-session`) | {streaming} | one file per session | no limit |\n\

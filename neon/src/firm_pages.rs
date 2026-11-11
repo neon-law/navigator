@@ -196,6 +196,14 @@ const WA_DOCUMENT_REVIEW_MEMO: &str =
     include_str!("../../templates/notations/neon_law/document_review_memo__washington.md");
 const WA_PLAN_LETTER: &str =
     include_str!("../../templates/notations/neon_law/plan_letter__washington.md");
+const NV_TRAFFIC_CITATION_INTAKE: &str =
+    include_str!("../../templates/notations/neon_law/traffic_citation_intake__nevada.md");
+const WA_TRAFFIC_CITATION_INTAKE: &str =
+    include_str!("../../templates/notations/neon_law/traffic_citation_intake__washington.md");
+const CA_TRAFFIC_CITATION_INTAKE: &str =
+    include_str!("../../templates/notations/neon_law/traffic_citation_intake__california.md");
+const NY_TRAFFIC_CITATION_INTAKE: &str =
+    include_str!("../../templates/notations/neon_law/traffic_citation_intake__new_york.md");
 const FORM_990: &str =
     include_str!("../../templates/notations/forms/united_states/federal/irs/us__form_990.md");
 const NATURALIZATION: &str = include_str!(
@@ -518,6 +526,26 @@ fn notation_preview_docs() -> Vec<webapp::notation_preview::PreviewDoc> {
             "washington-plan-letter",
             "notations/neon_law/plan_letter__washington.md",
             WA_PLAN_LETTER,
+        ),
+        preview_doc(
+            "nevada-traffic-citation-intake",
+            "notations/neon_law/traffic_citation_intake__nevada.md",
+            NV_TRAFFIC_CITATION_INTAKE,
+        ),
+        preview_doc(
+            "washington-traffic-citation-intake",
+            "notations/neon_law/traffic_citation_intake__washington.md",
+            WA_TRAFFIC_CITATION_INTAKE,
+        ),
+        preview_doc(
+            "california-traffic-citation-intake",
+            "notations/neon_law/traffic_citation_intake__california.md",
+            CA_TRAFFIC_CITATION_INTAKE,
+        ),
+        preview_doc(
+            "new-york-traffic-citation-intake",
+            "notations/neon_law/traffic_citation_intake__new_york.md",
+            NY_TRAFFIC_CITATION_INTAKE,
         ),
         preview_doc(
             "irs-form-990",
@@ -872,6 +900,34 @@ fn notations_index_content() -> webapp::catalog_index::CatalogIndexContent {
                 "washington-plan-letter",
                 "The letter the Firm drafts at a member's direction under a Washington plan (`plan_letter__washington`).",
                 WA_PLAN_LETTER,
+            ),
+            notation_card(
+                "Nevada",
+                "Traffic Citation Intake",
+                "nevada-traffic-citation-intake",
+                "The intake questionnaire for a Nevada traffic citation, by county (`traffic_citation_intake__nevada`).",
+                NV_TRAFFIC_CITATION_INTAKE,
+            ),
+            notation_card(
+                "Washington",
+                "Traffic Citation Intake",
+                "washington-traffic-citation-intake",
+                "The intake questionnaire for a Washington traffic citation, by county (`traffic_citation_intake__washington`).",
+                WA_TRAFFIC_CITATION_INTAKE,
+            ),
+            notation_card(
+                "California",
+                "Traffic Citation Intake",
+                "california-traffic-citation-intake",
+                "The intake questionnaire for a California traffic citation, by county (`traffic_citation_intake__california`).",
+                CA_TRAFFIC_CITATION_INTAKE,
+            ),
+            notation_card(
+                "New York",
+                "Traffic Citation Intake",
+                "new-york-traffic-citation-intake",
+                "The intake questionnaire for a New York traffic citation, by county (`traffic_citation_intake__new_york`).",
+                NY_TRAFFIC_CITATION_INTAKE,
             ),
             notation_card(
                 "Federal",
@@ -1758,7 +1814,7 @@ fn resolve_firm_contact_content(
             "Book Consultation"
         }
         .to_string(),
-        firm_phone: branding.firm_phone.to_string(),
+        firm_phone: branding.published_phone().to_string(),
         lead_capture: locales::lead_capture(branding),
     }
 }

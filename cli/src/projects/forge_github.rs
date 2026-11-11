@@ -31,7 +31,7 @@ const FAILURE_CONCLUSIONS: &[&str] = &[
     "startup_failure",
 ];
 
-pub(crate) struct GitHubForge {
+pub struct GitHubForge {
     http: reqwest::Client,
     api_base: String,
     owner: String,
@@ -40,7 +40,7 @@ pub(crate) struct GitHubForge {
 
 impl GitHubForge {
     /// A client against an explicit API base.
-    pub(crate) fn new(api_base: &str, owner: &str, name: &str, token: &str) -> Result<Self> {
+    pub fn new(api_base: &str, owner: &str, name: &str, token: &str) -> Result<Self> {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
             ACCEPT,
@@ -79,7 +79,7 @@ impl GitHubForge {
     /// the checkout's `origin` remote, the token from the environment or
     /// `gh auth token` — the same resolution every other GitHub-speaking
     /// verb uses.
-    pub(crate) fn from_checkout(dir: &std::path::Path) -> Result<Self> {
+    pub fn from_checkout(dir: &std::path::Path) -> Result<Self> {
         let remote = git_text(dir, &["remote", "get-url", "origin"])
             .context("read the checkout's origin remote; run from a Project repository")?;
         let (owner, name) = github_owner_name(&remote)?;

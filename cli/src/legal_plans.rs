@@ -1,4 +1,4 @@
-//! `navigator legal-plans` — a Firm's Legal Plans (where each is logged into,
+//! `navigator-deploy legal-plans` — a Firm's Legal Plans (where each is logged into,
 //! who to call, its service levels) — and `navigator project legal-plan`,
 //! which links one matter to its plan by Plan Case Number. The plans are Firm
 //! data held by the deployment, never by this repository
@@ -18,7 +18,7 @@ use crate::{
 };
 
 #[derive(Subcommand)]
-pub(crate) enum LegalPlansCmd {
+pub enum LegalPlansCmd {
     /// The Firm's plans: portal, contact, and service levels.
     List,
     /// Add a plan to the Firm's vocabulary.
@@ -47,7 +47,7 @@ pub(crate) enum LegalPlansCmd {
 /// The plan fields `navigator project legal-plan set` may change. An absent
 /// flag keeps the value; an empty one (`--case-number ""`) clears it.
 #[derive(Args, Debug, Default)]
-pub(crate) struct PlanFields {
+pub struct PlanFields {
     /// One of the Firm's plan names, for example `ARAG`.
     #[arg(long)]
     pub plan: Option<String>,
@@ -128,7 +128,7 @@ fn finish(command: &str, result: Result<Value>) -> ExitCode {
     }
 }
 
-pub(crate) async fn run(firm: String, host: Option<String>, action: LegalPlansCmd) -> ExitCode {
+pub async fn run(firm: String, host: Option<String>, action: LegalPlansCmd) -> ExitCode {
     let result = async {
         let (base, token) = remote::resolve(host.as_deref())?;
         firm_command(&base, &token, &firm, action).await
@@ -184,7 +184,7 @@ async fn project_route(host: Option<&str>, project: Option<&str>) -> Result<(Str
 
 /// `navigator project legal-plan show`: the matter's plan, Plan Case
 /// Number, and plan dates.
-pub(crate) async fn show(host: Option<&str>, project: Option<&str>) -> ExitCode {
+pub async fn show(host: Option<&str>, project: Option<&str>) -> ExitCode {
     let result = async {
         let (route, token) = project_route(host, project).await?;
         call(reqwest::Client::new().get(route).bearer_auth(token), "show").await
@@ -194,11 +194,7 @@ pub(crate) async fn show(host: Option<&str>, project: Option<&str>) -> ExitCode 
 }
 
 /// `navigator project legal-plan set`: change only the fields given.
-pub(crate) async fn set(
-    host: Option<&str>,
-    project: Option<&str>,
-    fields: &PlanFields,
-) -> ExitCode {
+pub async fn set(host: Option<&str>, project: Option<&str>, fields: &PlanFields) -> ExitCode {
     let result = async {
         let patch = fields.patch();
         if patch.is_empty() {
@@ -223,7 +219,6 @@ pub(crate) async fn set(
 #[cfg(test)]
 mod tests {
     use super::{finish, firm_command, LegalPlansCmd, PlanFields};
-    use crate::{Cli, Command};
     use clap::Parser;
     use std::process::ExitCode;
     use wiremock::matchers::{body_json, header, method, path};
@@ -231,6 +226,14 @@ mod tests {
 
     #[tokio::test]
     async fn list_resolves_a_display_name_through_the_authorized_firm_directory() {
+        /// `navigator-deploy legal-plans`'s own shape: `--firm` and the action.
+        #[derive(Parser)]
+        struct LegalPlans {
+            #[arg(long)]
+            firm: String,
+            #[command(subcommand)]
+            action: LegalPlansCmd,
+        }
         let server = MockServer::start().await;
         let firm_id = uuid::Uuid::nil();
         Mock::given(method("GET"))
@@ -250,17 +253,9 @@ mod tests {
             .mount(&server)
             .await;
 
-        let cli = Cli::try_parse_from([
-            "navigator",
-            "legal-plans",
-            "--firm",
-            "example practice pc",
-            "list",
-        ])
-        .unwrap();
-        let Some(Command::LegalPlans { firm, action, .. }) = cli.command else {
-            panic!("expected legal-plans command");
-        };
+        let LegalPlans { firm, action } =
+            LegalPlans::try_parse_from(["legal-plans", "--firm", "example practice pc", "list"])
+                .unwrap();
         let plans = firm_command(&server.uri(), "token", &firm, action)
             .await
             .unwrap();

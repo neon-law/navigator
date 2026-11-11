@@ -1705,7 +1705,7 @@ mod tests {
 
         // The worker's render, durably persisted: the PDF carries every
         // anchor the letter's signature block expands to — the same
-        // expansion `dispatch_signature` runs to build the manifest.
+        // expansion `send_notation_for_signature` runs to build the manifest.
         let template_body = store::templates::body(&surreal, &state.storage, &template)
             .await
             .expect("read the onboarding letter body");

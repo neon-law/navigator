@@ -1,4 +1,4 @@
-//! `navigator site authorities create` — file a global Authority (the citation
+//! `navigator-deploy site authorities create` — file a global Authority (the citation
 //! apparatus' shared reference data, #890) with an archived artifact,
 //! through the logged-in deployment's `POST /app/api/authorities` door
 //! (`portal::authorities_api`).
@@ -54,23 +54,23 @@ fn first_line(body: &str) -> String {
 /// carries no `Deserialize`, so this is the CLI's own read-side mirror of the
 /// same wire shape `portal::authorities_api::create_authority_door` returns.
 ///
-/// `pub(crate)` (and every field with it): `crate::document_sync`'s Authority
+/// `pub` (and every field with it): `crate::document_sync`'s Authority
 /// capture route reads `id`/`archived_asset_id` off this same response to
 /// write the document pointer back at the capture's own path.
 #[derive(Debug, Deserialize, serde::Serialize)]
-pub(crate) struct AuthorityResponse {
-    pub(crate) id: Uuid,
-    pub(crate) class: String,
-    pub(crate) citation: String,
-    pub(crate) short_cite: Option<String>,
-    pub(crate) title: String,
-    pub(crate) publisher: Option<String>,
-    pub(crate) issued_on: Option<String>,
-    pub(crate) canonical_url: Option<String>,
-    pub(crate) checked_on: Option<String>,
-    pub(crate) archived_asset_id: Option<Uuid>,
-    pub(crate) inserted_at: chrono::DateTime<chrono::Utc>,
-    pub(crate) updated_at: chrono::DateTime<chrono::Utc>,
+pub struct AuthorityResponse {
+    pub id: Uuid,
+    pub class: String,
+    pub citation: String,
+    pub short_cite: Option<String>,
+    pub title: String,
+    pub publisher: Option<String>,
+    pub issued_on: Option<String>,
+    pub canonical_url: Option<String>,
+    pub checked_on: Option<String>,
+    pub archived_asset_id: Option<Uuid>,
+    pub inserted_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
 fn client() -> reqwest::Client {
@@ -85,24 +85,24 @@ fn client() -> reqwest::Client {
 /// datastore write (forbidden by the `legal-authority` skill) could carry
 /// authenticated.
 ///
-/// `pub(crate)`: `crate::document_sync`'s Authority capture route builds one
+/// `pub`: `crate::document_sync`'s Authority capture route builds one
 /// of these from a staged capture's sidecar to reach the same authenticated
 /// door.
 #[allow(clippy::too_many_arguments)]
-pub(crate) struct NewAuthorityArgs<'a> {
-    pub(crate) class: &'a str,
-    pub(crate) citation: &'a str,
-    pub(crate) title: &'a str,
-    pub(crate) short_cite: Option<&'a str>,
-    pub(crate) publisher: Option<&'a str>,
-    pub(crate) issued_on: Option<&'a str>,
-    pub(crate) canonical_url: Option<&'a str>,
-    pub(crate) checked_on: Option<&'a str>,
-    pub(crate) file: &'a Path,
-    pub(crate) content_type: Option<&'a str>,
+pub struct NewAuthorityArgs<'a> {
+    pub class: &'a str,
+    pub citation: &'a str,
+    pub title: &'a str,
+    pub short_cite: Option<&'a str>,
+    pub publisher: Option<&'a str>,
+    pub issued_on: Option<&'a str>,
+    pub canonical_url: Option<&'a str>,
+    pub checked_on: Option<&'a str>,
+    pub file: &'a Path,
+    pub content_type: Option<&'a str>,
 }
 
-pub(crate) async fn create_authority(
+pub async fn create_authority(
     host: Option<&str>,
     args: &NewAuthorityArgs<'_>,
 ) -> Result<AuthorityResponse> {
@@ -140,7 +140,7 @@ pub(crate) async fn create_authority(
     serde_json::from_str(&text).context("parse authority response")
 }
 
-/// `navigator site authorities create --class … --citation … --title … --file …`
+/// `navigator-deploy site authorities create --class … --citation … --title … --file …`
 /// — file one Authority with its archived artifact through the live site's
 /// `POST /app/api/authorities` door, using the stored login credential.
 #[allow(clippy::too_many_arguments)]
@@ -183,24 +183,24 @@ pub async fn create(
     .await
 }
 
-/// What `navigator site authorities update` needs. Exactly one of `id` or
+/// What `navigator-deploy site authorities update` needs. Exactly one of `id` or
 /// `citation` must be given to locate the existing Authority; every other
 /// field is optional and left unchanged when absent.
 #[allow(clippy::too_many_arguments)]
-pub(crate) struct UpdateAuthorityArgs<'a> {
-    pub(crate) id: Option<Uuid>,
-    pub(crate) citation: Option<&'a str>,
-    pub(crate) title: Option<&'a str>,
-    pub(crate) short_cite: Option<&'a str>,
-    pub(crate) publisher: Option<&'a str>,
-    pub(crate) issued_on: Option<&'a str>,
-    pub(crate) canonical_url: Option<&'a str>,
-    pub(crate) checked_on: Option<&'a str>,
-    pub(crate) file: Option<&'a Path>,
-    pub(crate) content_type: Option<&'a str>,
+pub struct UpdateAuthorityArgs<'a> {
+    pub id: Option<Uuid>,
+    pub citation: Option<&'a str>,
+    pub title: Option<&'a str>,
+    pub short_cite: Option<&'a str>,
+    pub publisher: Option<&'a str>,
+    pub issued_on: Option<&'a str>,
+    pub canonical_url: Option<&'a str>,
+    pub checked_on: Option<&'a str>,
+    pub file: Option<&'a Path>,
+    pub content_type: Option<&'a str>,
 }
 
-pub(crate) async fn update_authority(
+pub async fn update_authority(
     host: Option<&str>,
     args: &UpdateAuthorityArgs<'_>,
 ) -> Result<AuthorityResponse> {
@@ -251,7 +251,7 @@ pub(crate) async fn update_authority(
     serde_json::from_str(&text).context("parse authority response")
 }
 
-/// `navigator site authorities update <ID> | --citation …` — correct a
+/// `navigator-deploy site authorities update <ID> | --citation …` — correct a
 /// field on an existing Authority, leaving every field left out unchanged.
 #[allow(clippy::too_many_arguments)]
 pub async fn update(
@@ -304,7 +304,7 @@ mod tests {
 
     // `NAVIGATOR_CREDENTIALS_FILE` is process-global env, so tests that set
     // it must not run concurrently with each other — the same discipline
-    // `cli::remote`'s own tests use.
+    // `crate::remote`'s own tests use.
     static CREDENTIALS_ENV_LOCK: LazyLock<tokio::sync::Mutex<()>> =
         LazyLock::new(|| tokio::sync::Mutex::new(()));
 

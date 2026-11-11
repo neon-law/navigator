@@ -39,7 +39,7 @@ Before changing files:
 2. Name the PR branch and prepare this task's environment once:
 
    ```bash
-   cargo run -p cli -- dev worktree-env up --branch <topic-branch>
+   cargo run -p deploy -- dev worktree-env up --branch <topic-branch>
    ```
 
    The CLI fetches `origin/main` and attaches or creates the topic branch in the current linked worktree — including
@@ -191,7 +191,7 @@ gh auth login --git-protocol ssh --web
 
 Relay the printed one-time code verbatim, keep the process alive through browser login, then recheck auth.
 
-GitHub policy reconciliation runs one repository at a time: `navigator ops github setup [repository]` takes an
+GitHub policy reconciliation runs one repository at a time: `navigator-deploy ops github setup [repository]` takes an
 `owner/name` slug, falling back to `GITHUB_REPOSITORY` and then this checkout's `origin`. There is no `--all` mode —
 reconcile deliberately, one at a time. Start with `--dry-run`, and rerun it after applying: a second dry run reporting
 no drift is the only proof the reconcile converged. See [`gitops.md`](gitops.md#codified-merge-gate) for the policy each
@@ -239,7 +239,7 @@ Fetch the PR ref and prepare its dedicated worktree:
 
 ```bash
 git fetch origin pull/<N>/head:pr-<N>
-cargo run -p cli -- dev worktree-env up --branch pr-<N>
+cargo run -p deploy -- dev worktree-env up --branch pr-<N>
 ```
 
 Continue in the printed checkout. Source its `.devx/env`, boot `web` as in
@@ -437,14 +437,14 @@ For Cargo builds:
 
 For Docker, KIND, and browser e2e:
 
-- At handoff, run `navigator dev worktree-env down`, then stop task-owned `web` and browser processes. Do not use `dev
-  down` for routine cleanup; it deletes the reusable shared cluster. See
+- At handoff, run `navigator-deploy dev worktree-env down`, then stop task-owned `web` and browser processes. Do not use
+  `dev down` for routine cleanup; it deletes the reusable shared cluster. See
   [`kind-local-dev`](../.agents/skills/kind-local-dev/SKILL.md).
 - A deleted worktree can leave its KIND cluster, ports, and Docker memory behind. Find and reclaim only such orphans:
 
   ```bash
-  cargo run -p cli -- dev worktree-env sweep
-  cargo run -p cli -- dev worktree-env sweep --apply
+  cargo run -p deploy -- dev worktree-env sweep
+  cargo run -p deploy -- dev worktree-env sweep --apply
   ```
 
   `sweep` is dry-run; `--apply` deletes only clusters without a live checkout, never the shared cluster, live worktree

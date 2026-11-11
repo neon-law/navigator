@@ -12,7 +12,7 @@ does not hold. The handle is also what lets the link be completed after the fact
 the X permalink is `https://x.com/{handle}/status/{id}`.
 
 Neon Law's handles are seed data in [`store/seeds/neon/SocialHandle.yaml`](../../store/seeds/neon/SocialHandle.yaml).
-`navigator site blog handle <brand> <provider> <handle>` records another.
+`navigator-deploy site blog handle <brand> <provider> <handle>` records another.
 
 - Schema and derivation: [`store::social_handles`](../../store/src/social_handles.rs)
 

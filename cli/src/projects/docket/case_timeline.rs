@@ -43,11 +43,12 @@ fn text(row: &Value, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-pub(crate) use store::cases::filing_name;
+pub use store::cases::filing_name;
 
 /// The `(entry number, attachment)` a `DKT NNNN[-att] - …` file name names,
 /// with the entry number's leading zeros dropped (`0029` reads `29`).
-pub(crate) fn parse_filing_name(file_name: &str) -> Option<(String, Option<u32>)> {
+#[must_use]
+pub fn parse_filing_name(file_name: &str) -> Option<(String, Option<u32>)> {
     let rest = file_name.strip_prefix("DKT ")?;
     let (number, _) = rest.split_once(" - ")?;
     let (lead, attachment) = match number.split_once('-') {

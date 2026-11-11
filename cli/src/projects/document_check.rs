@@ -6,8 +6,8 @@
 //! written. A live document whose pointer the repository removed is a pending
 //! deletion: it is reported, never rewritten, and `navigator project sync` asks
 //! whether to soft-delete it. A missing storage object is
-//! `navigator site document repair`. A live row with no slug is
-//! `navigator site document slug`. Under `--ci` the same fixes are reported and
+//! `navigator-deploy site document repair`. A live row with no slug is
+//! `navigator-deploy site document slug`. Under `--ci` the same fixes are reported and
 //! nothing is written.
 //!
 //! External-id checks (an invoice, a completed envelope) are the server's
@@ -36,7 +36,7 @@ const MOVE_LEGACY_POINTERS: &str = "move the legacy pointers from documents/ to 
 /// `case-timeline` skill keeps the docket in Navigator, never a hand-edited
 /// memo — so a hand-edited record, and a record whose entry the store no
 /// longer carries, are drift; `navigator project sync` repairs the checkout.
-pub(crate) fn check_timeline_records(dir: &Path, rows: &[serde_json::Value]) -> Result<()> {
+pub fn check_timeline_records(dir: &Path, rows: &[serde_json::Value]) -> Result<()> {
     let timeline = crate::projects::docket::timeline_write::plan(dir, rows)?;
     let mut drift: Vec<String> = timeline
         .writes
@@ -60,27 +60,27 @@ pub(crate) fn check_timeline_records(dir: &Path, rows: &[serde_json::Value]) -> 
 /// One live-record failure. `location` is the pointer path, or the asset id
 /// when the row has no slug.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CheckFailure {
-    pub(crate) location: String,
-    pub(crate) message: String,
+pub struct CheckFailure {
+    pub location: String,
+    pub message: String,
 }
 
 /// One checkout edit the check made, or would make when it is not allowed to
 /// write.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CheckFix {
-    pub(crate) path: String,
-    pub(crate) action: String,
+pub struct CheckFix {
+    pub path: String,
+    pub action: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Outcome {
-    pub(crate) errors: Vec<CheckFailure>,
-    pub(crate) fixes: Vec<CheckFix>,
+pub struct Outcome {
+    pub errors: Vec<CheckFailure>,
+    pub fixes: Vec<CheckFix>,
     /// Findings reported in the output that never fail the run — a chain a
     /// later writer extended while the pointer's own revision is intact
     /// (LAW-284). Real drift never lands here.
-    pub(crate) warnings: Vec<CheckFailure>,
+    pub warnings: Vec<CheckFailure>,
 }
 
 impl Outcome {
@@ -116,7 +116,7 @@ impl Local {
 ///
 /// `write` is false under `--ci`: the outcome lists the fixes and the
 /// checkout is left alone. `deep` asks the server to re-hash each object.
-pub(crate) async fn run(dir: &Path, ci: bool, deep: bool) -> Result<Outcome> {
+pub async fn run(dir: &Path, ci: bool, deep: bool) -> Result<Outcome> {
     let (project, host) = read_manifest(dir)?;
     let host = host
         .filter(|host| !host.trim().is_empty())
@@ -141,7 +141,7 @@ pub(crate) async fn run(dir: &Path, ci: bool, deep: bool) -> Result<Outcome> {
 }
 
 /// Mint a fresh bearer for the same deployment and Project.
-pub(crate) type Remint =
+pub type Remint =
     Box<dyn Fn() -> futures::future::BoxFuture<'static, Result<String>> + Send + Sync>;
 
 /// How many revision reads the check keeps in flight at once.
@@ -380,7 +380,7 @@ impl<'a> LiveSession<'a> {
 /// Compare `dir` with the live records `client` can see, never renewing the
 /// session.
 #[cfg(test)]
-pub(crate) async fn check(
+pub async fn check(
     dir: &Path,
     client: &DocumentClient,
     write: bool,
@@ -391,7 +391,7 @@ pub(crate) async fn check(
 
 /// Compare `dir` with the live records `client` can see, renewing the session
 /// through `remint` when the deployment refuses it mid-run.
-pub(crate) async fn check_with(
+pub async fn check_with(
     dir: &Path,
     client: &DocumentClient,
     remint: Option<&Remint>,
@@ -1114,7 +1114,8 @@ const CLOUD_STORAGE: &str = "Library/CloudStorage";
 /// (LAW-217): macOS privacy controls block that folder for processes
 /// without the permission, and `Operation not permitted` alone says nothing
 /// about why or what would fix it. `None` for every other error.
-pub(crate) fn cloud_storage_permission_note(error: &std::io::Error, path: &Path) -> Option<String> {
+#[must_use]
+pub fn cloud_storage_permission_note(error: &std::io::Error, path: &Path) -> Option<String> {
     if error.kind() != std::io::ErrorKind::PermissionDenied {
         return None;
     }
@@ -1141,10 +1142,7 @@ fn note_for_block(error: &std::io::Error, path: &Path, cloud_storage: &Path) -> 
 /// An `anyhow` error for `path` carrying the [`cloud_storage_permission_note`]
 /// when macOS blocked it, the plain context otherwise. Shared by every read
 /// the standalone check makes, so one blocked folder explains itself once.
-pub(crate) fn with_permission_note<T>(
-    result: std::io::Result<T>,
-    path: &Path,
-) -> anyhow::Result<T> {
+pub fn with_permission_note<T>(result: std::io::Result<T>, path: &Path) -> anyhow::Result<T> {
     result.map_err(|error| match cloud_storage_permission_note(&error, path) {
         Some(note) => anyhow!("{}: {note}", path.display()),
         None => io_error_with(error, path, "read"),
@@ -1170,7 +1168,7 @@ fn io_error_with(error: std::io::Error, path: &Path, action: &str) -> anyhow::Er
 ///
 /// Each failure's `location` is the path below the tree root, so the same
 /// tree reports identically wherever it lives.
-pub(crate) fn check_documents_root(documents: &Path) -> Result<Vec<CheckFailure>> {
+pub fn check_documents_root(documents: &Path) -> Result<Vec<CheckFailure>> {
     match std::fs::symlink_metadata(documents) {
         Ok(metadata) if metadata.is_dir() => {}
         Ok(_) => return Err(anyhow!("{} is not a directory", documents.display())),
@@ -1306,11 +1304,7 @@ pub(crate) fn check_documents_root(documents: &Path) -> Result<Vec<CheckFailure>
 /// `YYYY.MM.DD_name.ext` convention (C004); the message naming the
 /// convention otherwise. Shared by the document walk and the gate's
 /// name-only pass.
-pub(crate) fn document_filename_finding(
-    relative: &Path,
-    path: &Path,
-    file_name: &str,
-) -> Option<String> {
+pub fn document_filename_finding(relative: &Path, path: &Path, file_name: &str) -> Option<String> {
     let is_docket_filing = crate::document_layout::matter_folder_of(relative)
         == Some(store::document_pointers::MatterFolder::DocketFilings);
     let is_in_date_named_folder = relative
@@ -1363,7 +1357,7 @@ fn walk_error(error: &walkdir::Error, documents: &Path) -> anyhow::Error {
 /// types the `CloudStorage` path. A folder the Project records by id (LAW-213)
 /// is not resolved here yet: offline, the name is the only handle this
 /// machine has.
-pub(crate) fn resolve_drive_local(project: &str) -> Result<PathBuf> {
+pub fn resolve_drive_local(project: &str) -> Result<PathBuf> {
     let home = std::env::var("HOME")
         .map_err(|_| anyhow!("HOME is not set; cannot look for the Drive for desktop mount"))?;
     resolve_drive_local_in(project, &Path::new(&home).join(CLOUD_STORAGE))

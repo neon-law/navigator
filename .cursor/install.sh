@@ -4,7 +4,7 @@
 # Default loop: the zero-infrastructure Rust build / test / lint / CLI path
 # (each test opens its own embedded, memory-backed SurrealDB). This script
 # also installs Docker CE, kind v0.32.0, and helm so a task that needs the
-# KIND dependency tier can run `navigator dev up` after `.cursor/start.sh`
+# KIND dependency tier can run `navigator-deploy dev up` after `.cursor/start.sh`
 # has started dockerd. Cluster creation stays opt-in — do not start KIND here.
 set -euo pipefail
 
@@ -30,7 +30,7 @@ cd "$repo_root"
 #        a Cloud Agent (Cursor's "complex Docker" recipe). Pin matches
 #        https://cursor.com/docs/cloud-agent/setup#running-docker.
 #      * kind v0.32.0 + helm — the `dev up` tool gate in
-#        `cli/src/devx/orchestrate.rs`; kind version is the pin in
+#        `deploy/src/devx/orchestrate.rs`; kind version is the pin in
 #        `.github/workflows/deploy.yml`.
 #    Idempotent: apt is a no-op when the packages are current, binaries install
 #    only when absent, and the whole step is skipped without passwordless sudo

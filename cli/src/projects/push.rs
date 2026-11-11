@@ -24,23 +24,23 @@ use super::lifecycle::{git, git_text};
 use super::manifest;
 
 /// How often the lane re-reads the required check while it runs.
-pub(crate) const CHECK_POLL: Duration = Duration::from_secs(15);
+pub const CHECK_POLL: Duration = Duration::from_secs(15);
 /// How long the lane waits for the required check and the merge to happen.
-pub(crate) const CHECK_TIMEOUT: Duration = Duration::from_mins(30);
+pub const CHECK_TIMEOUT: Duration = Duration::from_mins(30);
 
 /// What the lane did, as the structured report renders it.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-pub(crate) struct LaneReport {
-    pub(crate) review_url: String,
-    pub(crate) merge_commit: String,
-    pub(crate) deployment: Option<DeploymentRun>,
-    pub(crate) ci: Option<DeploymentRun>,
-    pub(crate) unverified: Vec<String>,
+pub struct LaneReport {
+    pub review_url: String,
+    pub merge_commit: String,
+    pub deployment: Option<DeploymentRun>,
+    pub ci: Option<DeploymentRun>,
+    pub unverified: Vec<String>,
 }
 
 /// Build the real backend and run the lane. The dispatch half is the only
 /// untested seam here: it resolves live credentials, which no test can hold.
-pub(crate) async fn dispatch(
+pub async fn dispatch(
     dir: &Path,
     base: &str,
     branch: Option<&str>,
@@ -76,7 +76,7 @@ pub(crate) async fn dispatch(
 /// verb's CLI surface plus the two test injections (the forge and the
 /// sleep), so the count is intentional.
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn run<S, Fut>(
+pub async fn run<S, Fut>(
     dir: &Path,
     base: &str,
     branch: Option<&str>,
@@ -311,7 +311,7 @@ fn require_manifest(dir: &Path) -> Option<String> {
 
 /// Commit signing is a preflight question, not a hope: the lane's commits
 /// are signed because the gate requires it.
-pub(crate) fn check_signing(dir: &Path) -> Result<()> {
+pub fn check_signing(dir: &Path) -> Result<()> {
     let setting = git(dir, &["config", "--get", "commit.gpgsign"])?;
     let value = String::from_utf8_lossy(&setting.stdout).trim().to_string();
     if setting.status.success() && value.eq_ignore_ascii_case("true") {
@@ -327,7 +327,7 @@ pub(crate) fn check_signing(dir: &Path) -> Result<()> {
 /// Compare this binary's release with the manifest's pin. A pin newer than
 /// the running CLI is a refusal: a lane run by yesterday's binary cannot be
 /// trusted with today's gate.
-pub(crate) fn check_version_pin(pin: Option<&str>, binary: &str) -> Result<String> {
+pub fn check_version_pin(pin: Option<&str>, binary: &str) -> Result<String> {
     let Some(pin) = pin.map(str::trim).filter(|pin| !pin.is_empty()) else {
         return Ok("no CLI version pin in the manifest".to_string());
     };
@@ -346,7 +346,7 @@ pub(crate) fn check_version_pin(pin: Option<&str>, binary: &str) -> Result<Strin
 /// The branch name the verb derives from a title when `--branch` is omitted:
 /// `push/<date>-<slug>`, at most five slug words long, so two runs of the
 /// verb on the same change on the same day share one branch.
-pub(crate) fn branch_slug(title: &str, today: chrono::NaiveDate) -> String {
+pub fn branch_slug(title: &str, today: chrono::NaiveDate) -> String {
     let words: Vec<String> = title
         .split_whitespace()
         .take(5)
@@ -377,11 +377,7 @@ fn slug_word(word: &str) -> String {
 /// separately — failed check, held review, branch behind — then capture the
 /// merge commit (step 5). Green without a merge yet is the ordinary path:
 /// the arm takes a moment to squash.
-pub(crate) async fn watch_check<S, Fut>(
-    forge: &dyn Forge,
-    review: &ReviewRef,
-    sleep: S,
-) -> Result<String>
+pub async fn watch_check<S, Fut>(forge: &dyn Forge, review: &ReviewRef, sleep: S) -> Result<String>
 where
     S: Fn(Duration) -> Fut,
     Fut: Future<Output = ()>,
@@ -473,7 +469,8 @@ where
 
 /// The structured report (LAW-220 step 7): review URL, merge commit, and
 /// where the required check landed.
-pub(crate) fn render_report(report: &LaneReport) -> String {
+#[must_use]
+pub fn render_report(report: &LaneReport) -> String {
     format!(
         "Merged. Portal publishing is retired; publish is a no-op.\n{}",
         serde_json::to_string_pretty(report)

@@ -15,7 +15,7 @@ For signed-in tools in local Codex, run these commands on the same computer as t
 ```sh
 navigator site login --host www.neonlaw.com
 navigator site whoami --host www.neonlaw.com
-codex mcp add navigator -- navigator site mcp --host www.neonlaw.com
+codex mcp add navigator -- navigator-deploy site mcp --host www.neonlaw.com
 ```
 
 Restart the desktop app and type `/mcp` to check the connection. The local bridge reads the saved session from
@@ -54,7 +54,7 @@ Edit `navigator.yaml`, reusable Drafts under `drafts/`, or document Pointers und
 Pages and run the Project gate before publishing.
 
 ```sh
-navigator project preview
+navigator-deploy preview
 ```
 
 Stop the preview when done, then run:

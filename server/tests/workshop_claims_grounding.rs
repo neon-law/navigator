@@ -237,7 +237,7 @@ fn source_str_const(source: &str, name: &str) -> Option<String> {
 #[test]
 fn the_gitops_deck_states_the_host_and_organization_boundary_the_cli_enforces() {
     let section = prose(&gitops_section());
-    let github_setup = repo_file("cli/src/devx/github_setup.rs");
+    let github_setup = repo_file("deploy/src/devx/github_setup.rs");
 
     // Both halves of the coordinate, by their real key names. A rename of
     // either fails here before it can go stale in print.
@@ -290,7 +290,7 @@ fn the_gitops_deck_states_the_host_and_organization_boundary_the_cli_enforces() 
 /// Either way this deck needs rewriting, and this is where that gets said.
 #[test]
 fn the_governance_boundary_is_still_a_host_and_organization_pair() {
-    let github_setup = repo_file("cli/src/devx/github_setup.rs");
+    let github_setup = repo_file("deploy/src/devx/github_setup.rs");
 
     for shape in [
         // The pair itself, and the organization half that makes it tighter

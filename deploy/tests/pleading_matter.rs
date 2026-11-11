@@ -1,0 +1,650 @@
+//! A pleading's caption, counsel block, and footer come from the Project's
+//! `matter:` block and the notation's own frontmatter, never from its body
+//! (LAW-112). Every name, date, and case number here is synthetic.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+
+use assert_cmd::cargo::cargo_bin;
+use rules::frontmatter;
+use tempfile::TempDir;
+
+const FIXTURE: &str = "../cli/tests/fixtures/synthetic_matter";
+
+/// A Nevada district-court matter whose case number has the
+/// `<L>-<YY>-<NNNNNN>-<L>` shape rather than the California one (LAW-246).
+const NEVADA_FIXTURE: &str = "../cli/tests/fixtures/synthetic_nevada_matter";
+
+/// A Washington superior-court matter (LAW-327): GR 14 paper, no rail,
+/// and a pattern-form body of numbered items and check boxes.
+const WASHINGTON_FIXTURE: &str = "tests/fixtures/synthetic_washington_matter";
+
+/// The synthetic matter tree copied into a tempdir, so a test can edit its
+/// manifest or notations without touching the checked-in fixture.
+fn matter_tree() -> TempDir {
+    tree_of(FIXTURE)
+}
+
+fn tree_of(fixture: &str) -> TempDir {
+    let work = TempDir::new().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join(fixture);
+    copy_tree(&source, work.path());
+    work
+}
+
+fn copy_tree(from: &Path, to: &Path) {
+    fs::create_dir_all(to).unwrap();
+    for entry in fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.path().is_dir() {
+            copy_tree(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), target).unwrap();
+        }
+    }
+}
+
+fn render(subcommand: &str, notation: &Path, out: &Path) -> Output {
+    Command::new(cargo_bin("navigator-deploy"))
+        .args(["notation", subcommand])
+        .arg(notation)
+        .arg("--out")
+        .arg(out)
+        .args([
+            "--answer",
+            "person__client=SAMPLE SYNTHETIC HOLDINGS OF NORTHERN CALIFORNIA",
+            "--answer",
+            "custom_datetime__verification_date=1 July 2026",
+        ])
+        .output()
+        .expect("run navigator-deploy notation")
+}
+
+fn stderr(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+fn pdf_of(work: &TempDir, template: &str) -> Vec<u8> {
+    let out = work.path().join("out.pdf");
+    let result = render("pdf", &work.path().join("templates").join(template), &out);
+    assert!(result.status.success(), "stderr: {}", stderr(&result));
+    fs::read(out).unwrap()
+}
+
+fn edit(path: PathBuf, from: &str, to: &str) {
+    let text = fs::read_to_string(&path).unwrap();
+    assert!(text.contains(from), "{from} is in {}", path.display());
+    fs::write(path, text.replacen(from, to, 1)).unwrap();
+}
+
+#[test]
+fn two_pleadings_share_one_matter_with_no_caption_text_in_either_body() {
+    let work = matter_tree();
+    for template in ["rfa_responses.md", "notice_of_compliance.md"] {
+        let text = fs::read_to_string(work.path().join("templates").join(template)).unwrap();
+        // The frontmatter legitimately carries the docket: key now, so the
+        // assertion is body-only — the body never says the case number.
+        let body = match frontmatter::split(&text) {
+            Some((_, body)) => body,
+            None => text.as_str(),
+        };
+        assert!(!body.contains("caption\n") && !body.contains("00CV000000"));
+        let bytes = pdf_of(&work, template);
+        for shared in [
+            "Case No. 00CV000000",
+            "Dept. 12",
+            "Pat Sample (SBN 000000)",
+            "COUNTY OF SAMPLE",
+        ] {
+            assert_eq!(
+                pdf::occurrence_count(&bytes, shared).unwrap(),
+                1,
+                "{template}: {shared}"
+            );
+        }
+    }
+}
+
+#[test]
+fn hearing_fields_print_when_declared_and_a_notation_without_them_prints_none() {
+    let work = matter_tree();
+    let with = pdf_of(&work, "rfa_responses.md");
+    assert_eq!(pdf::occurrence_count(&with, "August 14, 2026").unwrap(), 1);
+    assert_eq!(pdf::occurrence_count(&with, "8:30 a.m.").unwrap(), 1);
+    assert_eq!(pdf::occurrence_count(&with, "R-0000-SAMPLE").unwrap(), 1);
+
+    let without = pdf_of(&work, "notice_of_compliance.md");
+    assert_eq!(pdf::occurrence_count(&without, "Hearing").unwrap(), 0);
+    assert_eq!(pdf::occurrence_count(&without, "[").unwrap(), 0);
+}
+
+#[test]
+fn a_partial_hearing_leaves_a_blank_fill_line_not_a_bracketed_placeholder() {
+    let work = matter_tree();
+    let template = work.path().join("templates/rfa_responses.md");
+    edit(template.clone(), "hearing_time: 8:30 a.m.\n", "");
+    edit(template, "reservation_id: R-0000-SAMPLE\n", "");
+    let bytes = pdf_of(&work, "rfa_responses.md");
+    assert_eq!(pdf::occurrence_count(&bytes, "Time: ____").unwrap(), 1);
+    assert_eq!(
+        pdf::occurrence_count(&bytes, "Reservation ID: ____").unwrap(),
+        1
+    );
+    assert_eq!(pdf::occurrence_count(&bytes, "[").unwrap(), 0);
+}
+
+#[test]
+fn the_footer_prints_the_short_title_from_frontmatter() {
+    let work = matter_tree();
+    let template = work.path().join("templates/rfa_responses.md");
+    edit(
+        template,
+        "footer_title: PLAINTIFF'S RESPONSES TO DEFENDANT'S REQUESTS FOR ADMISSION, SET ONE",
+        "footer_title: PL RFA RESPONSES, SET ONE",
+    );
+    let bytes = pdf_of(&work, "rfa_responses.md");
+    let pages = pdf::page_count(&bytes).unwrap();
+    let mut footers = std::collections::BTreeSet::new();
+    for ordinal in 1..=pdf::occurrence_count(&bytes, "PL RFA RESPONSES").unwrap() {
+        let hit = pdf::locate(&bytes, "PL RFA RESPONSES", ordinal).unwrap();
+        footers.insert(hit.rects[0].page_index);
+    }
+    assert_eq!(footers, (0..pages).collect());
+}
+
+#[test]
+fn changing_the_manifest_changes_every_rendered_pleading_with_no_template_edit() {
+    let work = matter_tree();
+    let manifest = work.path().join("navigator.yaml");
+    edit(
+        manifest.clone(),
+        "case_number: 00CV000000",
+        "case_number: 11CV111111",
+    );
+    // Keep the declarations aligned with the matter block: the list and
+    // both pleadings' docket keys move to the new case number together.
+    edit(
+        manifest.clone(),
+        "dockets:\n  - 00CV000000",
+        "dockets:\n  - 11CV111111",
+    );
+    for template in ["rfa_responses.md", "notice_of_compliance.md"] {
+        edit(
+            work.path().join("templates").join(template),
+            "docket: 00CV000000",
+            "docket: 11CV111111",
+        );
+    }
+    edit(
+        manifest,
+        "100 Example Boulevard, Suite 200",
+        "900 Relocated Avenue",
+    );
+    for template in ["rfa_responses.md", "notice_of_compliance.md"] {
+        let bytes = pdf_of(&work, template);
+        assert_eq!(
+            pdf::occurrence_count(&bytes, "Case No. 11CV111111").unwrap(),
+            1
+        );
+        assert_eq!(
+            pdf::occurrence_count(&bytes, "900 Relocated Avenue").unwrap(),
+            1
+        );
+        assert_eq!(pdf::occurrence_count(&bytes, "00CV000000").unwrap(), 0);
+    }
+}
+
+#[test]
+fn a_declared_docket_serves_the_caption_its_case_number() {
+    let work = matter_tree();
+    edit(
+        work.path().join("templates/rfa_responses.md"),
+        "docket: 00CV000000",
+        "docket: B327654",
+    );
+    let bytes = pdf_of(&work, "rfa_responses.md");
+    assert_eq!(
+        pdf::occurrence_count(&bytes, "Case No. B327654").unwrap(),
+        1
+    );
+    assert_eq!(pdf::occurrence_count(&bytes, "00CV000000").unwrap(), 0);
+}
+
+#[test]
+fn a_nevada_case_number_clears_n133_and_captions_preview_and_export() {
+    use rules::Rule as _;
+    const CASE: &str = "D-26-000000-D";
+    let work = tree_of(NEVADA_FIXTURE);
+    let template = work.path().join("templates/nevada_notice_of_compliance.md");
+    let lint = rules::f133::F133PleadingDocketUndeclared.lint(&rules::SourceFile {
+        contents: fs::read_to_string(&template).unwrap(),
+        path: template.clone(),
+    });
+    assert!(lint.is_empty(), "a Nevada `docket:` clears N133: {lint:?}");
+
+    let preview = work.path().join("preview.pdf");
+    let result = Command::new(cargo_bin("navigator-deploy"))
+        .args(["notation", "pdf"])
+        .arg(&template)
+        .args(["--preview", "--out"])
+        .arg(&preview)
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{}", stderr(&result));
+    let exported = pdf_of(&work, "nevada_notice_of_compliance.md");
+    for (label, bytes) in [
+        ("preview", fs::read(preview).unwrap()),
+        ("export", exported),
+    ] {
+        assert_eq!(
+            pdf::occurrence_count(&bytes, &format!("Case No. {CASE}")).unwrap(),
+            1,
+            "{label} captions the Nevada case number"
+        );
+        assert_eq!(
+            pdf::occurrence_count(&bytes, "Nevada Bar No. 000000").unwrap(),
+            1,
+            "{label}"
+        );
+    }
+
+    let docx = work.path().join("out.docx");
+    let result = render("word", &template, &docx);
+    assert!(result.status.success(), "stderr: {}", stderr(&result));
+    let document = docx_part(&fs::read(&docx).unwrap(), "word/document.xml");
+    assert!(
+        document.contains(&format!("Case No. {CASE}")),
+        "word caption"
+    );
+}
+
+#[test]
+fn a_nevada_docket_matches_case_insensitively_into_the_declared_spelling() {
+    let work = tree_of(NEVADA_FIXTURE);
+    edit(
+        work.path().join("templates/nevada_notice_of_compliance.md"),
+        "docket: D-26-000000-D",
+        "docket: d-26-000000-d",
+    );
+    let bytes = pdf_of(&work, "nevada_notice_of_compliance.md");
+    assert_eq!(
+        pdf::occurrence_count(&bytes, "Case No. D-26-000000-D").unwrap(),
+        1
+    );
+}
+
+/// LAW-327: the Washington fixture renders end-to-end through `notation
+/// pdf` and `notation word` — the caption names the superior court, the
+/// counsel block carries the Washington bar label, and the pattern-form
+/// body prints its numbered items and its check boxes (drawn squares in
+/// the PDF's content stream, the character itself in Word).
+#[test]
+fn a_washington_fixture_renders_end_to_end_with_pattern_form_primitives() {
+    use rules::Rule as _;
+    const CASE: &str = "26-2-00000-SAMPLE";
+    let work = tree_of(WASHINGTON_FIXTURE);
+    let template = work
+        .path()
+        .join("templates/washington_residential_schedule.md");
+
+    let lint = rules::f133::F133PleadingDocketUndeclared.lint(&rules::SourceFile {
+        contents: fs::read_to_string(&template).unwrap(),
+        path: template.clone(),
+    });
+    assert!(
+        lint.is_empty(),
+        "a Washington `docket:` clears N133: {lint:?}"
+    );
+
+    let bytes = pdf_of(&work, "washington_residential_schedule.md");
+    for shared in [
+        format!("Case No. {CASE}"),
+        "SUPERIOR COURT OF THE STATE OF WASHINGTON".to_string(),
+        "Washington Bar No. 000000".to_string(),
+        "The child resides with the custodial parent.".to_string(),
+        "Proposed by mother".to_string(),
+    ] {
+        assert_eq!(
+            pdf::occurrence_count(&bytes, &shared).unwrap(),
+            1,
+            "{shared}"
+        );
+    }
+    // The check boxes are drawn squares, not text: the renderer consumes
+    // the character, so no ballot-box glyph reaches the PDF.
+    assert_eq!(pdf::occurrence_count(&bytes, "\u{2610}").unwrap(), 0);
+
+    let docx = work.path().join("out.docx");
+    let result = render("word", &template, &docx);
+    assert!(result.status.success(), "stderr: {}", stderr(&result));
+    let document = docx_part(&fs::read(&docx).unwrap(), "word/document.xml");
+    assert!(
+        document.contains(&format!("Case No. {CASE}")),
+        "word caption"
+    );
+    assert_eq!(
+        document.matches('\u{2610}').count(),
+        2,
+        "word keeps the check-box characters for its own font fallback"
+    );
+}
+
+#[test]
+fn an_undeclared_docket_is_refused_and_nothing_is_written() {
+    let work = matter_tree();
+    edit(
+        work.path().join("templates/rfa_responses.md"),
+        "docket: 00CV000000",
+        "docket: 99CV999999",
+    );
+    let out = work.path().join("out.pdf");
+    let result = render("pdf", &work.path().join("templates/rfa_responses.md"), &out);
+    assert!(!result.status.success());
+    let message = stderr(&result);
+    assert!(
+        message.contains("99CV999999") && message.contains("dockets:"),
+        "{message}"
+    );
+    assert!(!out.exists());
+}
+
+#[test]
+fn word_carries_the_same_composed_caption_and_footer() {
+    let work = matter_tree();
+    let out = work.path().join("out.docx");
+    let template = work.path().join("templates/rfa_responses.md");
+    let result = render("word", &template, &out);
+    assert!(result.status.success(), "stderr: {}", stderr(&result));
+    let document = docx_part(&fs::read(&out).unwrap(), "word/document.xml");
+    for text in [
+        "Case No. 00CV000000",
+        "Pat Sample (SBN 000000)",
+        "August 14, 2026",
+    ] {
+        assert!(document.contains(text), "{text}");
+    }
+    assert!(!document.contains("Parties</w:t>"), "no generic header row");
+}
+
+#[test]
+fn a_missing_matter_field_is_named_and_nothing_is_written() {
+    let work = matter_tree();
+    edit(
+        work.path().join("navigator.yaml"),
+        "  case_number: 00CV000000\n",
+        "",
+    );
+    let out = work.path().join("out.pdf");
+    let result = render("pdf", &work.path().join("templates/rfa_responses.md"), &out);
+    assert!(!result.status.success());
+    assert!(
+        stderr(&result).contains("matter.case_number"),
+        "{}",
+        stderr(&result)
+    );
+    assert!(!out.exists());
+}
+
+#[test]
+fn pending_assignments_are_refused_by_final_pdf_and_word_without_writing() {
+    for (field, original) in [
+        ("department", "  department: \"12\""),
+        (
+            "judicial_officer",
+            "  judicial_officer: Hon. Sample Q. Jurist",
+        ),
+    ] {
+        let work = matter_tree();
+        edit(
+            work.path().join("navigator.yaml"),
+            original,
+            &format!("  {field}: PeNdInG"),
+        );
+        for format in ["pdf", "word"] {
+            let out = work.path().join(if format == "pdf" {
+                "final.pdf"
+            } else {
+                "final.docx"
+            });
+            let result = render(
+                format,
+                &work.path().join("templates/rfa_responses.md"),
+                &out,
+            );
+            assert!(
+                !result.status.success(),
+                "pending {field}: {format} must refuse"
+            );
+            assert!(
+                stderr(&result).contains(&format!("matter.{field}")),
+                "{}",
+                stderr(&result)
+            );
+            assert!(!out.exists(), "refusal must not write an artifact");
+        }
+    }
+}
+
+/// LAW-239: a draft's counsel signature is `/s/ DRAFT` with `DRAFT` and the
+/// open date highlighted; the final render signs `/s/ <matter.counsel.name>`
+/// on the same rule.
+#[test]
+fn a_counsel_signature_is_draft_in_a_preview_and_signed_in_a_final_render() {
+    let work = matter_tree();
+    let template = work.path().join("templates/notice_of_compliance.md");
+    let text = fs::read_to_string(&template).unwrap();
+    fs::write(
+        &template,
+        format!("{text}\nRespectfully submitted,\n\n<!-- counsel-signature -->\n\nPat Sample\n"),
+    )
+    .unwrap();
+
+    let preview = work.path().join("preview.docx");
+    let result = Command::new(cargo_bin("navigator-deploy"))
+        .args(["notation", "word"])
+        .arg(&template)
+        .args(["--preview", "--out"])
+        .arg(&preview)
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{}", stderr(&result));
+    let document = docx_part(&fs::read(&preview).unwrap(), "word/document.xml");
+    assert!(
+        document.contains(
+            "<w:i/><w:highlight w:val=\"yellow\"/></w:rPr><w:t xml:space=\"preserve\">DRAFT</w:t>"
+        ),
+        "{document}"
+    );
+    assert!(
+        document.contains(
+            "<w:highlight w:val=\"yellow\"/></w:rPr><w:t xml:space=\"preserve\">{{custom_datetime__verification_date}}</w:t>"
+        ),
+        "{document}"
+    );
+    assert_eq!(document.matches("<w:pBdr>").count(), 1, "{document}");
+
+    let out = work.path().join("final.docx");
+    let result = render("word", &template, &out);
+    assert!(result.status.success(), "{}", stderr(&result));
+    let document = docx_part(&fs::read(&out).unwrap(), "word/document.xml");
+    assert!(
+        document.contains("<w:i/></w:rPr><w:t xml:space=\"preserve\">/s/ Pat Sample</w:t>"),
+        "{document}"
+    );
+    assert_eq!(document.matches("<w:pBdr>").count(), 1, "{document}");
+    assert!(!document.contains("DRAFT"), "{document}");
+    assert!(!document.contains("w:highlight"), "{document}");
+
+    let bytes = pdf_of(&work, "notice_of_compliance.md");
+    assert_eq!(pdf::occurrence_count(&bytes, "/s/ Pat Sample").unwrap(), 1);
+    assert_eq!(pdf::occurrence_count(&bytes, "DRAFT").unwrap(), 0);
+}
+
+#[test]
+fn explicit_pending_assignments_still_preview() {
+    let work = matter_tree();
+    edit(
+        work.path().join("navigator.yaml"),
+        "  department: \"12\"",
+        "  department: pending",
+    );
+    edit(
+        work.path().join("navigator.yaml"),
+        "  judicial_officer: Hon. Sample Q. Jurist",
+        "  judicial_officer: pending",
+    );
+    let out = work.path().join("preview.pdf");
+    let result = Command::new(cargo_bin("navigator-deploy"))
+        .args(["notation", "pdf"])
+        .arg(work.path().join("templates/rfa_responses.md"))
+        .args(["--preview", "--out"])
+        .arg(&out)
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{}", stderr(&result));
+    let bytes = fs::read(out).unwrap();
+    assert_eq!(
+        pdf::occurrence_count(&bytes, "Dept. To be assigned").unwrap(),
+        1
+    );
+    assert_eq!(
+        pdf::occurrence_count(&bytes, "Judge: To be assigned").unwrap(),
+        1
+    );
+}
+
+#[test]
+fn a_missing_document_field_is_named() {
+    let work = matter_tree();
+    edit(
+        work.path().join("templates/rfa_responses.md"),
+        "footer_title: PLAINTIFF'S RESPONSES TO DEFENDANT'S REQUESTS FOR ADMISSION, SET ONE\n",
+        "",
+    );
+    let out = work.path().join("out.pdf");
+    let result = render("pdf", &work.path().join("templates/rfa_responses.md"), &out);
+    assert!(!result.status.success());
+    assert!(
+        stderr(&result).contains("footer_title"),
+        "{}",
+        stderr(&result)
+    );
+}
+
+#[test]
+fn a_pleading_without_a_matter_block_is_refused_by_name() {
+    let work = matter_tree();
+    let manifest = work.path().join("navigator.yaml");
+    let text = fs::read_to_string(&manifest).unwrap();
+    fs::write(&manifest, &text[..text.find("matter:").unwrap()]).unwrap();
+    let out = work.path().join("out.pdf");
+    let result = render("pdf", &work.path().join("templates/rfa_responses.md"), &out);
+    assert!(!result.status.success());
+    assert!(stderr(&result).contains("matter"), "{}", stderr(&result));
+}
+
+#[test]
+fn caption_markup_left_in_a_pleading_body_is_refused_with_the_migration() {
+    let work = matter_tree();
+    let template = work.path().join("templates/rfa_responses.md");
+    edit(
+        template,
+        "# PLAINTIFF'S RESPONSES",
+        "```caption\ncourt: SUPERIOR COURT\n```\n\n# PLAINTIFF'S RESPONSES",
+    );
+    let out = work.path().join("out.pdf");
+    let result = render("pdf", &work.path().join("templates/rfa_responses.md"), &out);
+    assert!(!result.status.success());
+    let message = String::from_utf8_lossy(&result.stdout).to_string() + &stderr(&result);
+    assert!(
+        message.contains("N130") && message.contains("matter:"),
+        "{message}"
+    );
+}
+
+#[test]
+fn the_retired_scaffold_placeholders_and_party_table_are_refused() {
+    let work = matter_tree();
+    let template = work.path().join("templates/rfa_responses.md");
+    edit(
+        template,
+        "# PLAINTIFF'S RESPONSES",
+        "{{attorney_block}}\n\n| Parties | Case information |\n| --- | --- |\n| A | B |\n\n# PLAINTIFF'S RESPONSES",
+    );
+    let out = work.path().join("out.pdf");
+    let result = render("pdf", &work.path().join("templates/rfa_responses.md"), &out);
+    assert!(!result.status.success());
+    let message = String::from_utf8_lossy(&result.stdout).to_string() + &stderr(&result);
+    assert!(message.contains("N130"), "{message}");
+}
+
+/// Every `kind: pleading` template the catalog ships, so a field the renderer
+/// starts requiring cannot ship without the templates that carry it (ENG-975).
+fn shipped_pleadings() -> Vec<PathBuf> {
+    let catalog = Path::new(env!("CARGO_MANIFEST_DIR")).join("../templates/notations/neon_law");
+    let mut found: Vec<PathBuf> = fs::read_dir(&catalog)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "md"))
+        .filter(|path| {
+            fs::read_to_string(path)
+                .unwrap()
+                .lines()
+                .any(|line| line.trim_end() == "kind: pleading")
+        })
+        .collect();
+    found.sort();
+    found
+}
+
+#[test]
+fn every_shipped_pleading_renders_against_a_fixture_matter() {
+    let shipped = shipped_pleadings();
+    assert!(!shipped.is_empty(), "the catalog ships pleadings");
+    let work = matter_tree();
+    let mut failures = Vec::new();
+    for source in shipped {
+        let name = source.file_name().unwrap().to_owned();
+        let template = work.path().join("templates").join(&name);
+        fs::copy(&source, &template).unwrap();
+        let text = fs::read_to_string(&source).unwrap();
+        let mut args = vec![
+            "--answer".to_string(),
+            "person__client=SAMPLE SYNTHETIC HOLDINGS".to_string(),
+        ];
+        for key in text
+            .lines()
+            .filter_map(|line| line.trim().strip_suffix(':'))
+            .filter(|key| key.starts_with("custom_datetime__"))
+        {
+            args.extend(["--answer".to_string(), format!("{key}=1 July 2026")]);
+        }
+        let out = work.path().join("out.pdf");
+        let result = Command::new(cargo_bin("navigator-deploy"))
+            .args(["notation", "pdf"])
+            .arg(&template)
+            .arg("--out")
+            .arg(&out)
+            .args(&args)
+            .output()
+            .expect("run navigator-deploy notation pdf");
+        if !result.status.success() {
+            failures.push(format!("{}: {}", name.to_string_lossy(), stderr(&result)));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+fn docx_part(bytes: &[u8], name: &str) -> String {
+    use std::io::Read as _;
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("docx is a zip");
+    let mut xml = String::new();
+    archive
+        .by_name(name)
+        .unwrap()
+        .read_to_string(&mut xml)
+        .unwrap();
+    xml
+}
