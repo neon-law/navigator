@@ -4541,6 +4541,42 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/inbox/attachment": {
+          "post": {
+            "summary": "Download one of a message's attachments",
+            "description":
+              "One constant-path door for `inbox attachments` — the message and asset ids are body \\
+               data, never URL material. The response is the attachment's bytes under its original \\
+               filename, `Content-Disposition: attachment`, never cached. The asset must be one the \\
+               message's plan lists in `attachments`; quarantined parts are never linked and so are \\
+               never served. Authorization follows the process door — the Owner sees every firm; \\
+               lawyers, clerks, and admins their firms — and a message attributed to a matter also \\
+               requires the caller to see that matter firm-side. A missing message, an asset the \\
+               message does not link, and an out-of-scope caller are all 404. Nothing is recorded.",
+            "requestBody": {
+              "required": true,
+              "content": { "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["message", "asset"],
+                  "properties": {
+                    "message": { "type": "string", "format": "uuid",
+                                 "description": "The inbox message that carries the attachment" },
+                    "asset": { "type": "string", "format": "uuid",
+                               "description": "The attachment's asset id, from the plan's `attachments`" }
+                  }
+                }
+              } }
+            },
+            "responses": {
+              "200": { "description": "The attachment's bytes", "content": { "application/octet-stream": { "schema": { "type": "string", "format": "binary" } } } },
+              "401": { "description": "No authenticated session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "403": { "description": "Authenticated caller is not lawyer tier", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "404": { "description": "No such message or linked attachment, or out of scope", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "500": { "description": "A database or storage fault, never a rejected field", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }
+            }
+          }
+        },
         "/app/api/projects/{id}/inbox-ingest": {
           "post": {
             "summary": "File a provider email message into the Firm Inbox",

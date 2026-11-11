@@ -368,19 +368,6 @@ async fn read_raw_source(state: &crate::api::ApiState, key: &str) -> Result<Vec<
 
 /// Every attachment asset the message links, with their bytes read back
 /// from storage in message-part order.
-/// How many attachment assets an inbox message carries.
-pub(crate) async fn attachment_count(
-    state: &crate::api::ApiState,
-    row: &store::inbox::UnprocessedRow,
-) -> Result<usize, ApiError> {
-    Ok(
-        store::inbox::message_assets(&state.surreal, row.firm_id, row.id)
-            .await
-            .map_err(map_inbox)?
-            .len(),
-    )
-}
-
 /// File an attributed inbox message's attachment assets onto its matter as
 /// internal documents of `kind` — any route, not only a court notice. Slugs
 /// follow the NEF lane (`mail/<message id>/<index>`) and each part files

@@ -14,7 +14,7 @@ use serde_json::json;
 use url::Url;
 use uuid::Uuid;
 
-mod attachments;
+pub(crate) mod attachments;
 mod login;
 mod signature;
 

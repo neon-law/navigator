@@ -6,7 +6,12 @@
 //! the Gmail copy after confirmed filing, removing its INBOX label. The
 //! classification itself lives behind the Navigator doors, so the CLI
 //! cannot out-vote it, and nothing here sends anything.
+//!
+//! `inbox attachments` and `inbox process --dir` write a message's linked
+//! attachments to a local directory through the same writer as
+//! `mail attachments`; each file's digest must match the plan's.
 
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{anyhow, Context, Result};
@@ -59,6 +64,23 @@ pub enum InboxAction {
         /// documents of this kind. Without it, none file and the count shows.
         #[arg(long, value_parser = crate::parse_asset_kind)]
         kind: Option<String>,
+        /// Also write the message's attachments into this directory.
+        #[arg(long)]
+        dir: Option<PathBuf>,
+        /// Navigator host. Defaults to host in navigator.yaml.
+        #[arg(long)]
+        host: Option<String>,
+    },
+    /// Write one message's attachments into a directory; records nothing.
+    Attachments {
+        /// Inbox message id from `navigator inbox list`.
+        message: Uuid,
+        /// Directory to write into, one file per attachment.
+        #[arg(long)]
+        dir: PathBuf,
+        /// Only attachments whose filename matches this glob (`*`, `?`).
+        #[arg(long)]
+        only: Option<String>,
         /// Navigator host. Defaults to host in navigator.yaml.
         #[arg(long)]
         host: Option<String>,
@@ -128,6 +150,7 @@ async fn run_inner(action: InboxAction) -> Result<()> {
             apply,
             gmail,
             kind,
+            dir,
             host,
         } => {
             process(
@@ -135,9 +158,20 @@ async fn run_inner(action: InboxAction) -> Result<()> {
                 apply,
                 gmail.as_deref(),
                 kind.as_deref(),
+                dir.as_deref(),
                 host.as_deref(),
             )
             .await
+        }
+        InboxAction::Attachments {
+            message,
+            dir,
+            only,
+            host,
+        } => {
+            let (base, token) = crate::remote::resolve(host.as_deref())?;
+            let view = plan(&base, &token, message).await?;
+            download(&base, &token, &view, &dir, only.as_deref()).await
         }
     }
 }
@@ -152,6 +186,12 @@ fn list_request(base: &str) -> (Method, String) {
 /// message id is body data, never URL material.
 fn process_request(base: &str) -> (Method, String) {
     (Method::POST, format!("{base}/app/api/inbox/process"))
+}
+
+/// The attachment door: one constant-path POST whose body names the
+/// message and the asset.
+fn attachment_request(base: &str) -> (Method, String) {
+    (Method::POST, format!("{base}/app/api/inbox/attachment"))
 }
 
 /// The body the process door reads: which message, and whether to record.
@@ -179,6 +219,16 @@ struct ProcessView {
     #[serde(default)]
     recorded_nef_outcome: Option<String>,
     project_id: Option<Uuid>,
+    #[serde(default)]
+    attachments: Vec<AttachmentView>,
+}
+
+/// One linked attachment, as the plan lists it.
+#[derive(Debug, Deserialize)]
+struct AttachmentView {
+    asset_id: Uuid,
+    filename: String,
+    sha256: String,
 }
 
 /// An apply's response: the recorded verdict plus the notice outcome.
@@ -285,6 +335,12 @@ fn print_plan(view: &ProcessView, apply: Option<&ProcessApplyView>) {
         view.computed_label, view.computed_route
     );
     println!("Because      {}", view.reason);
+    for attachment in &view.attachments {
+        println!(
+            "Attachment   {}\tsha256:{}",
+            attachment.filename, attachment.sha256
+        );
+    }
     if let Some(apply) = apply {
         let note = if apply.already_recorded {
             " (already recorded — overwritten with the same truth)"
@@ -322,19 +378,18 @@ fn print_plan(view: &ProcessView, apply: Option<&ProcessApplyView>) {
     }
 }
 
-async fn process(
-    message: Uuid,
-    apply: bool,
-    gmail: Option<&str>,
-    kind: Option<&str>,
-    host: Option<&str>,
-) -> Result<()> {
-    let (base, token) = crate::remote::resolve(host)?;
-    let (method, url) = process_request(&base);
+/// Read one message's plan from the process door; records nothing.
+async fn plan(base: &str, token: &str, message: Uuid) -> Result<ProcessView> {
+    let text = call_process(base, token, &process_body(message, false, None)).await?;
+    serde_json::from_str(&text).context("parse the process plan")
+}
+
+async fn call_process(base: &str, token: &str, body: &serde_json::Value) -> Result<String> {
+    let (method, url) = process_request(base);
     let response = reqwest::Client::new()
         .request(method, url)
         .bearer_auth(token)
-        .json(&process_body(message, apply, kind))
+        .json(body)
         .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
@@ -344,15 +399,116 @@ async fn process(
     if !status.is_success() {
         return Err(anyhow!("inbox process refused: {status} {text}"));
     }
-    if !apply {
-        let view: ProcessView = serde_json::from_str(&text).context("parse the process plan")?;
-        print_plan(&view, None);
-        println!("Dry run — nothing recorded. Re-run with --apply to record and archive.");
+    Ok(text)
+}
+
+/// Fetch the plan's attachments and write them into `dir`. Every name and
+/// digest is checked before a byte is written: bytes that do not hash to
+/// the digest the plan lists refuse the whole run.
+async fn download(
+    base: &str,
+    token: &str,
+    view: &ProcessView,
+    dir: &Path,
+    only: Option<&str>,
+) -> Result<()> {
+    use crate::mail::attachments::{
+        checked_filename, disambiguate, format_report, glob_matches, write_reports,
+        ExtractedAttachment,
+    };
+    let client = reqwest::Client::new();
+    let mut fetched = Vec::new();
+    for attachment in &view.attachments {
+        let name = checked_filename(&attachment.filename)?;
+        if only.is_some_and(|pattern| !glob_matches(pattern, &name)) {
+            continue;
+        }
+        let (method, url) = attachment_request(base);
+        let response = client
+            .request(method, url)
+            .bearer_auth(token)
+            .json(&serde_json::json!({ "message": view.id, "asset": attachment.asset_id }))
+            .timeout(std::time::Duration::from_secs(120))
+            .send()
+            .await
+            .context("call the attachment door")?;
+        let status = response.status();
+        if !status.is_success() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(anyhow!("inbox attachments refused: {status} {text}"));
+        }
+        let bytes = response.bytes().await.context("read the attachment")?;
+        if store::assets::sha256_hex(&bytes) != attachment.sha256 {
+            return Err(anyhow!(
+                "{name} does not match the digest its message records; nothing was written"
+            ));
+        }
+        fetched.push(ExtractedAttachment {
+            name,
+            bytes: bytes.to_vec(),
+        });
+    }
+    if fetched.is_empty() {
+        println!("No attachments matched; nothing was written");
         return Ok(());
     }
+    for report in write_reports(dir, &disambiguate(fetched))? {
+        println!("{}", format_report(&report));
+    }
+    Ok(())
+}
+
+/// The commands a dry run leaves the lawyer to choose from.
+fn next_actions(view: &ProcessView, downloaded: bool) -> Vec<String> {
+    let id = view.id;
+    let mut actions = Vec::new();
+    if view.attachments.is_empty() {
+        actions.push(format!("navigator inbox process {id} --apply"));
+        return actions;
+    }
+    if !downloaded {
+        actions.push(format!("navigator inbox attachments {id} --dir <dir>"));
+    }
+    if view.project_id.is_some() {
+        actions.push(format!(
+            "navigator inbox process {id} --apply --kind <kind>"
+        ));
+    } else {
+        actions.push(format!(
+            "navigator inbox process {id} --apply  (attachments file once the conversation has a matter)"
+        ));
+    }
+    actions
+}
+
+async fn process(
+    message: Uuid,
+    apply: bool,
+    gmail: Option<&str>,
+    kind: Option<&str>,
+    dir: Option<&Path>,
+    host: Option<&str>,
+) -> Result<()> {
+    let (base, token) = crate::remote::resolve(host)?;
+    if !apply {
+        let view = plan(&base, &token, message).await?;
+        print_plan(&view, None);
+        if let Some(dir) = dir {
+            download(&base, &token, &view, dir, None).await?;
+        }
+        println!("Dry run — nothing recorded. Next:");
+        for action in next_actions(&view, dir.is_some()) {
+            println!("  {action}");
+        }
+        return Ok(());
+    }
+    let text = call_process(&base, &token, &process_body(message, true, kind)).await?;
     let apply_view: ProcessApplyView =
         serde_json::from_str(&text).context("parse the process response")?;
     print_plan(&apply_view.result, Some(&apply_view));
+    if let Some(dir) = dir {
+        download(&base, &token, &apply_view.result, dir, None).await?;
+    }
     apply_view.require_completed_filing()?;
     match gmail {
         Some(reference) => match crate::mail::archive(reference).await {
@@ -483,23 +639,150 @@ mod tests {
     /// URL the verb should be pointed at. The verb opens exactly one request
     /// against it, so a single accept is the whole server.
     async fn serve_once(status_line: &str, body: String) -> String {
+        serve_each(vec![(status_line.to_owned(), body.into_bytes())]).await
+    }
+
+    /// Serve the canned responses in order, one connection each.
+    async fn serve_each(responses: Vec<(String, Vec<u8>)>) -> String {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let status_line = status_line.to_owned();
         tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut buf = [0u8; 4096];
-            let _ = socket.read(&mut buf).await;
-            let http = format!(
-                "HTTP/1.1 {status_line}\r\ncontent-type: application/json\r\ncontent-length: \
-                 {}\r\nconnection: close\r\n\r\n{body}",
-                body.len(),
-            );
-            socket.write_all(http.as_bytes()).await.unwrap();
-            socket.shutdown().await.unwrap();
+            for (status_line, body) in responses {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut buf = [0u8; 4096];
+                let _ = socket.read(&mut buf).await;
+                let head = format!(
+                    "HTTP/1.1 {status_line}\r\ncontent-type: application/json\r\ncontent-length: \
+                     {}\r\nconnection: close\r\n\r\n",
+                    body.len(),
+                );
+                socket.write_all(head.as_bytes()).await.unwrap();
+                socket.write_all(&body).await.unwrap();
+                socket.shutdown().await.unwrap();
+            }
         });
         format!("http://{addr}")
+    }
+
+    const ATTACHMENT_BYTES: &[u8] = b"%PDF-1.4 synthetic engagement letter";
+
+    /// A triage plan listing one attachment whose digest is `sha256`.
+    fn plan_with_attachment(sha256: &str) -> String {
+        let mut plan: serde_json::Value = serde_json::from_str(PLAN_JSON).unwrap();
+        plan["attachments"] = serde_json::json!([{
+            "asset_id": "00000000-0000-0000-0000-000000000009",
+            "filename": "engagement letter.pdf",
+            "position": 0,
+            "sha256": sha256,
+        }]);
+        plan.to_string()
+    }
+
+    #[tokio::test]
+    async fn attachments_writes_each_listed_file_and_a_rerun_leaves_it_alone() {
+        let _lock = CREDENTIALS_LOCK.lock().await;
+        let previous = credentials_previous();
+        let out = tempfile::tempdir().unwrap();
+        let plan = plan_with_attachment(&store::assets::sha256_hex(ATTACHMENT_BYTES));
+        for _ in 0..2 {
+            let base = serve_each(vec![
+                ("200 OK".into(), plan.clone().into_bytes()),
+                ("200 OK".into(), ATTACHMENT_BYTES.to_vec()),
+            ])
+            .await;
+            stored_login(&base);
+            let exit = run(InboxAction::Attachments {
+                message: Uuid::from_u128(7),
+                dir: out.path().to_path_buf(),
+                only: None,
+                host: Some(base),
+            })
+            .await;
+            assert_eq!(exit, std::process::ExitCode::SUCCESS);
+        }
+        assert_eq!(
+            std::fs::read(out.path().join("engagement letter.pdf")).unwrap(),
+            ATTACHMENT_BYTES
+        );
+        restore_credentials(previous);
+    }
+
+    #[tokio::test]
+    async fn bytes_that_miss_the_listed_digest_write_nothing() {
+        let _lock = CREDENTIALS_LOCK.lock().await;
+        let previous = credentials_previous();
+        let out = tempfile::tempdir().unwrap();
+        let base = serve_each(vec![
+            (
+                "200 OK".into(),
+                plan_with_attachment(&store::assets::sha256_hex(b"other bytes")).into_bytes(),
+            ),
+            ("200 OK".into(), ATTACHMENT_BYTES.to_vec()),
+        ])
+        .await;
+        stored_login(&base);
+
+        let error = super::process(
+            Uuid::from_u128(7),
+            false,
+            None,
+            None,
+            Some(out.path()),
+            Some(&base),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("does not match the digest"), "{error}");
+        assert_eq!(std::fs::read_dir(out.path()).unwrap().count(), 0);
+        restore_credentials(previous);
+    }
+
+    #[tokio::test]
+    async fn only_skips_unmatched_attachments_without_fetching_them() {
+        let _lock = CREDENTIALS_LOCK.lock().await;
+        let previous = credentials_previous();
+        let out = tempfile::tempdir().unwrap();
+        // One response only: a fetch of the unmatched attachment would hang.
+        let base = serve_once(
+            "200 OK",
+            plan_with_attachment(&store::assets::sha256_hex(ATTACHMENT_BYTES)),
+        )
+        .await;
+        stored_login(&base);
+
+        let exit = run(InboxAction::Attachments {
+            message: Uuid::from_u128(7),
+            dir: out.path().to_path_buf(),
+            only: Some("*.docx".into()),
+            host: Some(base),
+        })
+        .await;
+
+        assert_eq!(exit, std::process::ExitCode::SUCCESS);
+        assert_eq!(std::fs::read_dir(out.path()).unwrap().count(), 0);
+        restore_credentials(previous);
+    }
+
+    #[test]
+    fn a_dry_run_names_the_next_commands() {
+        let mut view: super::ProcessView = serde_json::from_str(PLAN_JSON).unwrap();
+        assert_eq!(
+            super::next_actions(&view, false),
+            ["navigator inbox process 00000000-0000-0000-0000-000000000007 --apply"]
+        );
+
+        view = serde_json::from_str(&plan_with_attachment("00")).unwrap();
+        let triage = super::next_actions(&view, false);
+        assert!(triage[0].contains("inbox attachments"), "{triage:?}");
+        assert!(triage[1].contains("once the conversation has a matter"));
+
+        view.project_id = Some(Uuid::from_u128(3));
+        let attributed = super::next_actions(&view, true);
+        assert_eq!(attributed.len(), 1, "already downloaded: {attributed:?}");
+        assert!(attributed[0].ends_with("--apply --kind <kind>"));
     }
 
     /// Store a current login for the base and point the credentials path at
@@ -591,6 +874,7 @@ mod tests {
             apply: false,
             gmail: None,
             kind: None,
+            dir: None,
             host: Some(base),
         })
         .await;
@@ -612,6 +896,7 @@ mod tests {
             apply: true,
             gmail: None,
             kind: None,
+            dir: None,
             host: Some(base),
         })
         .await;
@@ -643,6 +928,7 @@ mod tests {
                 true,
                 Some("invalid-gmail-reference"),
                 None,
+                None,
                 Some(&base),
             )
             .await
@@ -669,6 +955,7 @@ mod tests {
             apply: false,
             gmail: None,
             kind: None,
+            dir: None,
             host: Some(base),
         })
         .await;

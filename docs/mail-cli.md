@@ -252,3 +252,19 @@ navigator mail attachments "https://mail.google.com/mail/u/0/#inbox/18fa3bc2d4e5
 
 Point `--dir` at a git-ignored folder such as `mail/`. Legal files never belong in Git. This verb uploads nothing. To
 file an attachment, use `navigator site document upload`.
+
+## Save a Navigator inbox message's attachments
+
+A message Navigator already received has no Gmail read to make. `navigator inbox attachments <message> --dir <dir>`
+takes the message id from `navigator inbox list` and writes the attachments the message's plan lists:
+
+```bash
+navigator inbox attachments 0198f3a2-6c1e-7b3a-9d2f-4e5a6b7c8d9e --dir mail/0198f3a2
+navigator inbox process 0198f3a2-6c1e-7b3a-9d2f-4e5a6b7c8d9e --dir mail/0198f3a2
+```
+
+The second form prints the plan, writes the same files, and ends with the commands a lawyer chooses from next. Both
+record nothing without `--apply`. The output lines, the filename refusals, `--only`, and the never-clobber rule are the
+ones above. Each file must hash to the sha256 the plan lists, or the run writes nothing. It works for a message still in
+triage; once the conversation has a matter, the caller must see that matter firm-side. Quarantined attachments are never
+linked to a message, so they are never listed or served.

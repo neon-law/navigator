@@ -21,6 +21,7 @@ struct Fixture {
     app: Router,
     lawyer_session: portal::SessionData,
     surreal: SurrealDb,
+    storage: std::sync::Arc<dyn cloud::StorageService>,
     firm_id: Uuid,
 }
 
@@ -82,6 +83,7 @@ async fn fixture_with_integrations(
         app: portal::api::routes().with_state(api_state),
         lawyer_session: session,
         surreal: state.surreal,
+        storage: state.storage,
         firm_id,
     }
 }
@@ -95,6 +97,27 @@ async fn seed_message(
     external_address: &str,
     subject: &str,
     body: &str,
+) -> Uuid {
+    seed_message_with(
+        db,
+        firm_id,
+        provider_message_id,
+        external_address,
+        subject,
+        body,
+        Vec::new(),
+    )
+    .await
+}
+
+async fn seed_message_with(
+    db: &SurrealDb,
+    firm_id: Uuid,
+    provider_message_id: &str,
+    external_address: &str,
+    subject: &str,
+    body: &str,
+    attachments: Vec<store::inbox::IngestAttachment>,
 ) -> Uuid {
     let ingested = store::inbox::ingest_inbound(
         db,
@@ -120,7 +143,7 @@ async fn seed_message(
             matter_consent: false,
             promotional_opt_in: false,
             email_conversation_id: None,
-            attachments: Vec::new(),
+            attachments,
             occurred_at: &chrono::Utc::now().to_rfc3339(),
         },
     )
@@ -438,4 +461,143 @@ async fn processing_records_even_when_the_project_notice_is_unavailable() {
     let messages = providers.slack.messages();
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].1, "Navigator integration event: inbox_routed.");
+}
+
+const ATTACHMENT_BYTES: &[u8] = b"%PDF-1.4 synthetic engagement letter";
+
+/// One unattributed message carrying one linked attachment asset.
+async fn seed_message_with_attachment(fixture: &Fixture) -> (Uuid, Uuid) {
+    let asset = store::assets::ingest_content(
+        &fixture.surreal,
+        &fixture.storage,
+        ATTACHMENT_BYTES,
+        "application/pdf",
+    )
+    .await
+    .expect("seed the synthetic attachment asset");
+    let message = seed_message_with(
+        &fixture.surreal,
+        fixture.firm_id,
+        "attachment-1",
+        OTHER_ADDRESS,
+        "Signed engagement letter",
+        "Attached.",
+        vec![store::inbox::IngestAttachment {
+            asset_id: asset,
+            filename: "engagement letter.pdf".into(),
+            sha256: store::assets::sha256_hex(ATTACHMENT_BYTES),
+        }],
+    )
+    .await;
+    (message, asset)
+}
+
+async fn download(
+    fixture: &Fixture,
+    session: &portal::SessionData,
+    message: Uuid,
+    asset: Uuid,
+) -> (u16, Option<String>, Vec<u8>) {
+    let response = fixture
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/app/api/inbox/attachment")
+                .header(header::CONTENT_TYPE, "application/json")
+                .extension(session.clone())
+                .body(Body::from(
+                    json!({ "message": message, "asset": asset }).to_string(),
+                ))
+                .expect("build request"),
+        )
+        .await
+        .expect("run request");
+    let status = response.status().as_u16();
+    let disposition = response
+        .headers()
+        .get(header::CONTENT_DISPOSITION)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read response body");
+    (status, disposition, bytes.to_vec())
+}
+
+#[tokio::test]
+async fn a_triage_message_lists_its_attachments_and_serves_their_bytes() {
+    let fixture = fixture().await;
+    let (message, asset) = seed_message_with_attachment(&fixture).await;
+
+    let (status, plan) = request(
+        &fixture.app,
+        "POST",
+        "/app/api/inbox/process",
+        Some(&fixture.lawyer_session),
+        Some(json!({ "message": message })),
+    )
+    .await;
+    assert_eq!(status, 200, "the plan answers 200: {plan}");
+    assert_eq!(plan["project_id"], Value::Null, "the message is in triage");
+    assert_eq!(
+        plan["attachments"],
+        json!([{
+            "asset_id": asset,
+            "filename": "engagement letter.pdf",
+            "position": 0,
+            "sha256": store::assets::sha256_hex(ATTACHMENT_BYTES),
+        }])
+    );
+
+    let (status, disposition, bytes) =
+        download(&fixture, &fixture.lawyer_session, message, asset).await;
+    assert_eq!(status, 200);
+    assert_eq!(bytes, ATTACHMENT_BYTES);
+    let disposition = disposition.expect("the bytes download as an attachment");
+    assert!(disposition.starts_with("attachment"), "{disposition}");
+    assert!(
+        disposition.contains("engagement letter.pdf"),
+        "{disposition}"
+    );
+}
+
+#[tokio::test]
+async fn the_attachment_door_serves_only_a_linked_asset_to_the_messages_firm() {
+    let fixture = fixture().await;
+    let (message, asset) = seed_message_with_attachment(&fixture).await;
+
+    // An asset the message does not link is not found, even though it exists.
+    let unlinked = store::assets::ingest_content(
+        &fixture.surreal,
+        &fixture.storage,
+        b"synthetic unrelated bytes",
+        "text/plain",
+    )
+    .await
+    .expect("seed an unlinked asset");
+    let (status, _, _) = download(&fixture, &fixture.lawyer_session, message, unlinked).await;
+    assert_eq!(status, 404);
+
+    // A lawyer outside the message's Firm cannot tell the message exists.
+    let outsider = ensure_person(
+        &fixture.surreal,
+        &NewPerson {
+            name: "Synthetic Outsider".into(),
+            email: "synthetic-outsider@example.com".into(),
+            role: Role::Lawyer,
+            ..Default::default()
+        },
+    )
+    .await;
+    let outsider_session = portal::SessionData {
+        person_id: Some(outsider.id),
+        ..portal::SessionData::fresh("synthetic-outsider-sub", Role::Lawyer)
+    };
+    let (status, _, bytes) = download(&fixture, &outsider_session, message, asset).await;
+    assert_eq!(status, 404);
+    assert!(!bytes
+        .windows(ATTACHMENT_BYTES.len())
+        .any(|window| window == ATTACHMENT_BYTES));
 }
