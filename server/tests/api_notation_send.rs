@@ -2,7 +2,7 @@
 //! Integration tests for `POST /app/api/notations/{id}/signature` — the REST door
 //! that dispatches a notation's rendered document for signature.
 //!
-//! The command core (`dispatch_signature`) is shared with the lawyer review
+//! The command core (`send_notation_for_signature`) is shared with the lawyer review
 //! screen. These tests cover what the REST adapter adds: the tier gate
 //! (LawyerSession → 401/403), the matter-scope gate (a non-participant lawyer
 //! gets a bare 404, admin bypasses), the readiness gate (send before the PDF
