@@ -258,34 +258,32 @@ fn the_status_vocabulary_matches_the_check_constraint() {
     assert!(ReceiptStatus::Skipped.is_terminal());
 }
 
-/// The store rejects a status outside the closed set at the read boundary —
-/// a row written around this module cannot masquerade as a receipt.
+/// The status closed set is enforced by the schema itself — a row written
+/// around this module cannot carry a status outside the vocabulary, so no
+/// read ever sees one masquerading as a receipt.
 #[tokio::test]
 async fn a_row_outside_the_closed_set_is_an_error_not_a_receipt() {
     let Some(pg) = postgres().await else { return };
     let receipt = journal::journal_verified_push(&pg, &delivery())
         .await
         .expect("journal the push");
-    sqlx::query("UPDATE forgejo_push_webhook_journal SET status = 'withdrawn' WHERE id = $1")
-        .bind(receipt.id)
-        .execute(pg.pool())
-        .await
-        .expect("corrupt the row");
+    let error =
+        sqlx::query("UPDATE forgejo_push_webhook_journal SET status = 'withdrawn' WHERE id = $1")
+            .bind(receipt.id)
+            .execute(pg.pool())
+            .await
+            .expect_err("the closed set is schema-enforced, not just module-enforced");
 
-    let error = journal::by_event_key(&pg, &receipt.event_key)
-        .await
-        .expect_err("the corrupted row is named, not masqueraded");
-    // The status names itself somewhere in the error chain — top level or
-    // decode source.
-    let mut reported = error.to_string();
-    let mut source = std::error::Error::source(&error);
-    while let Some(cause) = source {
-        reported.push_str("; ");
-        reported.push_str(&cause.to_string());
-        source = cause.source();
-    }
+    // The refusal names the constraint that owns the vocabulary.
     assert!(
-        reported.contains("withdrawn"),
-        "the error names the status violation: {reported}"
+        error
+            .to_string()
+            .contains("forgejo_push_webhook_journal_status_check"),
+        "the error names the status violation: {error}"
     );
+    let persisted = journal::by_event_key(&pg, &receipt.event_key)
+        .await
+        .expect("the journaled receipt survives the refused write")
+        .expect("the receipt is present");
+    assert_eq!(persisted.status, ReceiptStatus::Pending);
 }
