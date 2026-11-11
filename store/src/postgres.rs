@@ -8,6 +8,12 @@ use sqlx::{AssertSqlSafe, PgPool, SqlSafeStr};
 pub mod notation_creation_attempts;
 pub mod people;
 
+/// Consuming a journaled Forgejo push receipt: analysis on the row, the
+/// forge API only once.
+pub mod forgejo_push_analysis;
+
+#[cfg(test)]
+mod forgejo_push_analysis_tests;
 /// PostgreSQL journal of verified Forgejo push webhook receipts: journal
 /// first, consume second, with the guarded status machine the replay sweep
 /// drains by.

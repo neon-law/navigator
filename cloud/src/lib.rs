@@ -29,6 +29,7 @@ pub mod forge;
 pub mod forgejo_forge;
 pub mod forgejo_governance;
 pub mod forgejo_organization;
+pub mod forgejo_push_analysis;
 pub mod forgejo_user_keys;
 pub mod fs;
 pub mod gcloud;
