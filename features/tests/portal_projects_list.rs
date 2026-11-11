@@ -145,6 +145,8 @@ async fn seed_project_with_onboarding(world: &mut ListWorld, project_name: Strin
 async fn close_project(world: &mut ListWorld, project_name: String) {
     let project_id = ensure_project(world, &project_name).await;
     let surreal = features::shared_surreal().await;
+    let signer = store::test_support::dri_person(&surreal).await;
+    store::test_support::seed_signed_onboarding(&surreal, project_id, signer).await;
     store::projects::transition_project_with_reason(
         &surreal,
         project_id,

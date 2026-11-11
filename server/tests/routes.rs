@@ -6175,11 +6175,19 @@ async fn transition(
 }
 
 async fn file_offboarding(surreal: &store::surreal::SurrealDb, project_id: uuid::Uuid) {
+    file_lifecycle_artifact(surreal, project_id, "offboarding").await;
+}
+
+async fn file_lifecycle_artifact(
+    surreal: &store::surreal::SurrealDb,
+    project_id: uuid::Uuid,
+    kind: &str,
+) {
     let mut response = surreal
         .query(
             "CREATE $asset SET project_id = $project_id, storage_key = 'test', \
              content_type = 'application/pdf', byte_size = 1, sha256_hex = $sha, \
-             kind = 'offboarding', visibility = 'internal', metadata = NONE",
+             kind = $kind, visibility = 'internal', metadata = NONE",
         )
         .bind((
             "asset",
@@ -6189,7 +6197,8 @@ async fn file_offboarding(surreal: &store::surreal::SurrealDb, project_id: uuid:
             "project_id",
             store::surreal::record_id("project", project_id),
         ))
-        .bind(("sha", format!("sha-{project_id}")))
+        .bind(("sha", format!("sha-{project_id}-{kind}")))
+        .bind(("kind", kind.to_owned()))
         .await
         .unwrap();
     let _: Option<serde_json::Value> = response.take(0).unwrap();
@@ -6408,6 +6417,7 @@ async fn closing_a_pitch_generates_and_reuses_an_internal_offboarding_letter() {
     let filename = "pitch-offboarding-letter.pdf";
     for reason in ["pitch_declined", "pitch_lapsed", "pitch_withdrawn"] {
         let matter = seeded_matter(&surreal).await;
+        file_lifecycle_artifact(&surreal, matter, "onboarding").await;
         let project = store::projects::find_by_id(&surreal, matter)
             .await
             .unwrap()

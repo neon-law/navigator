@@ -12,7 +12,9 @@ use store::persons::{self, NewPerson, Role};
 use store::postgres::PostgresDb;
 use store::project_closeout::{self as closeout, AcknowledgmentError, Closeout};
 use store::projects::{self, ClosureReason, NewProject, Transition};
-use store::test_support::{mem_surreal, seed_entity, seed_firm_with_brand, MemoryStorage};
+use store::test_support::{
+    mem_surreal, seed_entity, seed_firm_with_brand, seed_signed_onboarding, MemoryStorage,
+};
 use uuid::Uuid;
 
 async fn database() -> Option<PostgresDb> {
@@ -158,6 +160,7 @@ async fn closeout_waits_on_recovery_acknowledgment_holds_and_the_live_head() {
     )
     .await
     .unwrap();
+    seed_signed_onboarding(&surreal, project.id, client).await;
     projects::transition_project_with_reason(
         &surreal,
         project.id,

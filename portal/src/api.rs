@@ -3593,23 +3593,7 @@ async fn transition_matter(
             )
         })
     {
-        if let Some(project) = store::projects::find_by_id(&state.surreal, id)
-            .await
-            .map_err(|error| ApiError::Db(error.to_string()))?
-        {
-            if project.status == "open" {
-                let (has_engagement, has_offboarding) = store::projects::matter_lifecycle_sets(
-                    &state.surreal,
-                    std::slice::from_ref(&project),
-                )
-                .await
-                .map_err(ApiError::Db)?;
-                if !has_engagement.contains(&project.id) && !has_offboarding.contains(&project.id) {
-                    generate_pitch_offboarding_if_needed(&state, &project, input.effective_at)
-                        .await?;
-                }
-            }
-        }
+        prepare_pitch_close(&state, id, input.effective_at).await?;
     }
     let updated = store::projects::transition_project_attested(
         &state.surreal,
@@ -3627,6 +3611,34 @@ async fn transition_matter(
         close_project_calendar(&state, updated).await
     };
     Ok(Json(updated).into_response())
+}
+
+async fn prepare_pitch_close(
+    state: &ApiState,
+    id: Uuid,
+    effective_at: Option<chrono::DateTime<chrono::Utc>>,
+) -> Result<(), ApiError> {
+    let Some(project) = store::projects::find_by_id(&state.surreal, id)
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))?
+        .filter(|project| project.status == "open")
+    else {
+        return Ok(());
+    };
+    let projects = std::slice::from_ref(&project);
+    let official = store::projects::onboarding_official_sets(&state.surreal, projects)
+        .await
+        .map_err(ApiError::Db)?;
+    if official.contains(&id) {
+        return Ok(());
+    }
+    let (_, offboarding) = store::projects::matter_lifecycle_sets(&state.surreal, projects)
+        .await
+        .map_err(ApiError::Db)?;
+    if offboarding.contains(&id) {
+        return Ok(());
+    }
+    generate_pitch_offboarding_if_needed(state, &project, effective_at).await
 }
 
 /// Make a closed or archived matter's calendar read-only and clear its

@@ -1080,6 +1080,15 @@ async fn plan_lifecycle_scenario(
     )
     .await?;
 
+    if mode.is_apply()
+        && !project_already_existed
+        && scenario
+            .close_reason
+            .is_some_and(crate::projects::ClosureReason::is_active)
+    {
+        file_synthetic_onboarding_signature(surreal, project_id, client_id).await?;
+    }
+
     plan_lifecycle_transitions(
         surreal,
         storage,
@@ -1090,6 +1099,32 @@ async fn plan_lifecycle_scenario(
         scenario,
     )
     .await
+}
+
+async fn file_synthetic_onboarding_signature(
+    surreal: &SurrealDb,
+    project_id: Uuid,
+    client_id: Uuid,
+) -> anyhow::Result<()> {
+    let template = crate::templates::resolve_exact(surreal, None, ONBOARDING_TEMPLATE_CODE)
+        .await?
+        .ok_or_else(|| anyhow!("synthetic portfolio: missing onboarding template"))?;
+    let notation = crate::notations::create(
+        surreal,
+        &crate::notations::NewNotation::new(template.id, client_id, project_id, NOTATION_STATE),
+    )
+    .await?;
+    let provider = crate::signatures::SignatureProvider::DocuSign;
+    let envelope_id = Uuid::now_v7().to_string();
+    crate::signatures::record_request(surreal, notation.id, provider, &envelope_id).await?;
+    crate::signatures::stamp_signed(
+        surreal,
+        provider,
+        &envelope_id,
+        &chrono::Utc::now().to_rfc3339(),
+    )
+    .await?;
+    Ok(())
 }
 
 /// The artifact-filing, close/archive/reopen, and Clerk-assignment half of

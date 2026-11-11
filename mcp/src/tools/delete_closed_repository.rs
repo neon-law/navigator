@@ -193,7 +193,7 @@ mod tests {
     use store::projects::{
         create, transition_project_with_reason, ClosureReason, NewProject, Transition,
     };
-    use store::test_support::{mem_surreal, seed_entity};
+    use store::test_support::{dri_person, mem_surreal, seed_entity, seed_signed_onboarding};
     use uuid::Uuid;
 
     async fn storage() -> Arc<dyn StorageService> {
@@ -218,21 +218,7 @@ mod tests {
         )
         .await
         .expect("create project");
-        let mut response = surreal
-            .query(
-                "CREATE $asset SET project_id = $project_id, storage_key = 'test', \
-                 content_type = 'application/pdf', byte_size = 1, sha256_hex = $sha, \
-                 kind = 'onboarding', visibility = 'internal', metadata = NONE",
-            )
-            .bind(("asset", store::surreal::record_id("asset", Uuid::now_v7())))
-            .bind((
-                "project_id",
-                store::surreal::record_id("project", created.id),
-            ))
-            .bind(("sha", format!("sha-{}", created.id)))
-            .await
-            .expect("onboarding asset");
-        let _: Option<serde_json::Value> = response.take(0).expect("asset result");
+        seed_signed_onboarding(surreal, created.id, dri_person(surreal).await).await;
         transition_project_with_reason(
             surreal,
             created.id,
@@ -341,21 +327,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let mut response = surreal
-            .query(
-                "CREATE $asset SET project_id = $project_id, storage_key = 'test', \
-                 content_type = 'application/pdf', byte_size = 1, sha256_hex = $sha, \
-                 kind = 'onboarding', visibility = 'internal', metadata = NONE",
-            )
-            .bind(("asset", store::surreal::record_id("asset", Uuid::now_v7())))
-            .bind((
-                "project_id",
-                store::surreal::record_id("project", created.id),
-            ))
-            .bind(("sha", format!("sha-{}", created.id)))
-            .await
-            .expect("onboarding asset");
-        let _: Option<serde_json::Value> = response.take(0).expect("asset result");
+        seed_signed_onboarding(surreal, created.id, dri_person(surreal).await).await;
         transition_project_with_reason(
             surreal,
             created.id,
