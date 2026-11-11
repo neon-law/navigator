@@ -1477,32 +1477,14 @@ fn a_plain_document_in_a_project_needs_no_brand() {
     );
 }
 
-#[test]
-fn notation_pdf_refuses_form_output_before_writing_a_plain_pdf() {
-    let dir = TempDir::new().unwrap();
-    let source = include_str!(
-        "../../templates/notations/forms/united_states/nevada/state/nv__llc_formation.md"
-    );
-    for (template, expected) in [
-        (source.to_string(), "server-side notation workflow"),
-        (
-            source.replace("form: nv__llc_formation", "form: unknown_form_fixture"),
-            "not in the form registry",
-        ),
-    ] {
-        let input = dir.path().join("nv__llc_formation.md");
-        let output = dir.path().join("filled.pdf");
-        fs::write(&input, template).unwrap();
-        let result = Command::new(cargo_bin("navigator"))
-            .args(["notation", "pdf", "--preview"])
-            .arg(&input)
-            .arg("--out")
-            .arg(&output)
-            .output()
-            .unwrap();
-        assert!(!result.status.success());
-        let stderr = String::from_utf8_lossy(&result.stderr);
-        assert!(stderr.contains(expected), "{stderr}");
-        assert!(!output.exists());
-    }
-}
+// `output: form` used to be refused here as a server-side-only workflow
+// (origin/main #653). This build's approved LAW-306 contract supersedes that:
+// the CLI fills the pinned, SHA-256-verified AcroForm blank itself and refuses
+// loudly only when the blank is unregistered or unverifiable. The full
+// contract is pinned in `form_render.rs`:
+// `a_registered_vendored_blank_fills_unflattened` (fill, unflattened),
+// `a_form_template_never_falls_back_to_a_plain_render` (unregistered refusal,
+// exit 2, no document), `a_cache_miss_under_ci_refuses_the_download`,
+// `a_cached_blank_serves_a_ci_render_keyed_on_origin_and_hash`,
+// `a_working_copy_that_contradicts_its_pin_refuses`, and
+// `a_form_template_refuses_the_word_render`.

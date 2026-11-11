@@ -91,6 +91,10 @@ cannot decay the way the old seven-line stub did.
 - [`gov-forms.md`](gov-forms.md) — government forms: vendor, map, fill, file.
 - [`pleading-caption-latex-proposal.md`](pleading-caption-latex-proposal.md) — proposed shared court captions
   for the PDF and Word projections of a pleading Template.
+- [`soffice-engine-recommendation.md`](soffice-engine-recommendation.md) — the DOCX→PDF engine decision (LAW-313):
+  Typst stays the only PDF backend; LibreOffice remains an on-demand evaluation tool, with the reversal condition.
+- [`soffice-fidelity-drift-report.md`](soffice-fidelity-drift-report.md) — the drift report `scripts/fidelity_harness.py`
+  generated, comparing Typst PDFs with LibreOffice-converted DOCX PDFs across the pleading and letter fixtures.
 
 ## Project repositories and Matter Pages
 
