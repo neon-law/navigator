@@ -52,6 +52,9 @@ form: nv__llc_formation
 be obtained. The bucket holds the vendored bytes; the `.sha256` pin records exactly which bytes; the URL records
 provenance.
 
+`navigator-deploy notation pdf` refuses `output: form`. Open the server-side notation workflow to fill the pinned
+AcroForm after Lawyer Review.
+
 ## Vendoring
 
 `navigator-deploy forms sync` closes the loop in both directions, per registry form:

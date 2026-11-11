@@ -4554,6 +4554,69 @@ fn render_validation_gate(
     None
 }
 
+fn resolve_render_format(
+    field: impl Fn(&str) -> Option<String>,
+    output_extension: &str,
+) -> Result<(String, pdf::OutputFormat), ExitCode> {
+    let profile = field("output")
+        .or_else(|| {
+            field("kind")
+                .and_then(|k| rules::Kind::parse(&k))
+                .map(|k| k.default_output().to_string())
+        })
+        .unwrap_or_else(|| PLAIN_PROFILE.to_string());
+    if output_extension == "pdf" && profile == "form" {
+        let message = match field("form") {
+            Some(code) => match forms::get(&code) {
+                Ok(Some(_)) => {
+                    "AcroForm PDFs are filled by the server-side notation workflow after Lawyer Review"
+                }
+                Ok(None) => "the declared form is not in the form registry",
+                Err(_) => "could not read the form registry",
+            },
+            None => "form output requires a form registry binding",
+        };
+        eprintln!("navigator: {message}");
+        return Err(ExitCode::from(2));
+    }
+    // `pleading` is the one profile a bare name cannot construct: court
+    // geometry is calibrated by the template's `jurisdiction:`, a second
+    // field `OutputFormat::parse` never sees, so it returns `None` for the
+    // name by design. Feeding it through that parser and taking
+    // `unwrap_or_default()` put a validation-passing motion on the plain
+    // frame — no numbered rail, wrong margins, wrong typeface — and said
+    // nothing. Court paper rendered to the wrong geometry is a filing a
+    // clerk can reject, so resolve the calibration here and refuse when
+    // the table has not been extended to that jurisdiction:
+    // `variant_for_jurisdiction` returning `None` means a template that
+    // cannot render as a pleading yet, never a reason to guess.
+    let format = if profile == PLEADING_PROFILE {
+        let jurisdiction = field("jurisdiction").unwrap_or_default();
+        if let Some(variant) = pdf::pleading::variant_for_jurisdiction(&jurisdiction) {
+            pdf::OutputFormat::Pleading(variant)
+        } else {
+            // Neither the template's `jurisdiction:` nor its path is echoed
+            // back. Both reach this line from caller-supplied input — the
+            // one from a parsed document, the other from the command line —
+            // and `rust/cleartext-logging` flags a new log of either. There
+            // is nothing to lose by leaving them out: `notation pdf`/`notation
+            // word` take exactly one file, named on the command line a moment
+            // earlier, and what the author cannot already see is which
+            // calibrations exist.
+            eprintln!(
+                "navigator: this template declares `kind: pleading`, but its `jurisdiction:` \
+                 has no court-paper calibration; the calibrated jurisdictions are {}. Add one \
+                 to `pdf::pleading::variant_for_jurisdiction` before rendering it",
+                pdf::pleading::CALIBRATED_JURISDICTIONS.join(", ")
+            );
+            return Err(ExitCode::from(2));
+        }
+    } else {
+        pdf::OutputFormat::parse(&profile).unwrap_or_default()
+    };
+    Ok((profile, format))
+}
+
 fn run_render(
     file: &std::path::Path,
     out: &std::path::Path,
@@ -4588,56 +4651,16 @@ fn run_render(
     // author (LAW-15). `output:` is now the only override, and it lives
     // in the document it frames.
     //
-    // An `output:` value with no Typst counterpart (`form`, the AcroForm
-    // mode this preview never renders) falls back to plain, as does a
-    // template that declares no `kind:` at all. A *misspelled* `output:`
-    // never reaches here: N109 refuses it at the validation gate above.
+    // A template without a declared `kind:` or `output:` uses the plain frame.
+    // N109 refuses an unknown output profile before rendering.
     let field = |key: &str| {
         rules::frontmatter::extract(&contents)
             .and_then(|fm| rules::frontmatter::field(fm, key))
             .filter(|value| !value.is_empty())
     };
-    let profile = field("output")
-        .or_else(|| {
-            field("kind")
-                .and_then(|k| rules::Kind::parse(&k))
-                .map(|k| k.default_output().to_string())
-        })
-        .unwrap_or_else(|| PLAIN_PROFILE.to_string());
-    // `pleading` is the one profile a bare name cannot construct: court
-    // geometry is calibrated by the template's `jurisdiction:`, a second
-    // field `OutputFormat::parse` never sees, so it returns `None` for the
-    // name by design. Feeding it through that parser and taking
-    // `unwrap_or_default()` put a validation-passing motion on the plain
-    // frame — no numbered rail, wrong margins, wrong typeface — and said
-    // nothing. Court paper rendered to the wrong geometry is a filing a
-    // clerk can reject, so resolve the calibration here and refuse when
-    // the table has not been extended to that jurisdiction:
-    // `variant_for_jurisdiction` returning `None` means a template that
-    // cannot render as a pleading yet, never a reason to guess.
-    let format = if profile == PLEADING_PROFILE {
-        let jurisdiction = field("jurisdiction").unwrap_or_default();
-        if let Some(variant) = pdf::pleading::variant_for_jurisdiction(&jurisdiction) {
-            pdf::OutputFormat::Pleading(variant)
-        } else {
-            // Neither the template's `jurisdiction:` nor its path is echoed
-            // back. Both reach this line from caller-supplied input — the
-            // one from a parsed document, the other from the command line —
-            // and `rust/cleartext-logging` flags a new log of either. There
-            // is nothing to lose by leaving them out: `notation pdf`/`notation
-            // word` take exactly one file, named on the command line a moment
-            // earlier, and what the author cannot already see is which
-            // calibrations exist.
-            eprintln!(
-                "navigator: this template declares `kind: pleading`, but its `jurisdiction:` \
-                 has no court-paper calibration; the calibrated jurisdictions are {}. Add one \
-                 to `pdf::pleading::variant_for_jurisdiction` before rendering it",
-                pdf::pleading::CALIBRATED_JURISDICTIONS.join(", ")
-            );
-            return ExitCode::from(2);
-        }
-    } else {
-        pdf::OutputFormat::parse(&profile).unwrap_or_default()
+    let (profile, format) = match resolve_render_format(field, output_extension) {
+        Ok(resolved) => resolved,
+        Err(code) => return code,
     };
 
     // Body is everything after the frontmatter block; fill placeholders

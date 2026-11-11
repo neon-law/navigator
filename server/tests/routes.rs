@@ -9417,6 +9417,154 @@ async fn lawyer_projects_list_renders_the_resolved_brand_name() {
     );
 }
 
+async fn seed_project_brand_scope(
+    surreal: &store::surreal::SurrealDb,
+) -> (Uuid, store::persons::Person) {
+    use store::persons::{NewPerson, Role};
+
+    let mut firms = Vec::new();
+    for name in ["first", "second"] {
+        let admin = store::persons::create(
+            surreal,
+            &NewPerson::with_role(name, format!("{name}@example.com"), Role::Admin),
+        )
+        .await
+        .unwrap();
+        let firm = store::firms::create(
+            surreal,
+            &store::firms::NewFirm {
+                name: format!("{name} practice"),
+                status: "active".into(),
+                entity_id: store::test_support::seed_entity(surreal).await,
+                admin_dri_person_id: admin.id,
+            },
+        )
+        .await
+        .unwrap();
+        firms.push((firm, admin));
+    }
+
+    let (firm, admin) = &firms[0];
+    store::firms::ensure_brand(surreal, firm.id, "neon")
+        .await
+        .unwrap();
+    for (key, (firm, admin)) in ["sibling-brand", "outside-brand"].into_iter().zip(&firms) {
+        store::brands::create(
+            surreal,
+            Role::Admin,
+            Some(admin.id),
+            &store::brands::NewBrand {
+                name: key.to_string(),
+                key: key.to_string(),
+                firm_id: Some(firm.id),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        store::firms::ensure_brand(surreal, firm.id, key)
+            .await
+            .unwrap();
+    }
+
+    for (code, brand, firm_id) in [
+        ("primary-matter", "neon", Some(firm.id)),
+        ("sibling-matter", "sibling-brand", None),
+        ("outside-matter", "outside-brand", Some(firms[1].0.id)),
+    ] {
+        let project = store::projects::create(
+            surreal,
+            &store::projects::NewProject {
+                code: code.into(),
+                name: code.into(),
+                status: "open".into(),
+                brand: brand.into(),
+                firm_id,
+                entity_id: store::test_support::seed_entity(surreal).await,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        store::projects::add_participation(surreal, project.id, admin.id, "admin")
+            .await
+            .unwrap();
+    }
+
+    let (firm, admin) = firms.remove(0);
+    (firm.id, admin)
+}
+
+#[tokio::test]
+async fn project_brand_scope_and_reassignment_stay_inside_the_firm() {
+    let (state, surreal) = state_with_engines().await;
+    let (firm_id, admin) = seed_project_brand_scope(&surreal).await;
+    let (cookie, csrf) = session_cookie_and_csrf_for_person(&admin);
+    let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
+    let get = |uri: &str| {
+        app.clone().oneshot(
+            Request::builder()
+                .uri(uri)
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+    };
+    for (uri, primary, sibling) in [
+        ("/app/projects", true, false),
+        ("/app/projects?firm=true", true, true),
+        ("/app/projects?brand=sibling-brand", false, true),
+        ("/app/projects?brand=outside-brand", true, false),
+        ("/app/lawyer?brand=sibling-brand", true, true),
+    ] {
+        let response = get(uri).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{uri}");
+        let body = body_string(response).await;
+        assert_eq!(body.contains("primary-matter"), primary, "{uri}");
+        assert_eq!(body.contains("sibling-matter"), sibling, "{uri}");
+        assert!(!body.contains("outside-matter"), "{uri}");
+    }
+
+    let edit = get("/app/projects/primary-matter/edit").await.unwrap();
+    assert_eq!(edit.status(), StatusCode::OK);
+    let body = body_string(edit).await;
+    assert!(body.contains("/app/projects/primary-matter/brand"));
+    assert!(body.contains("sibling-brand"));
+    assert!(!body.contains("outside-brand"));
+
+    let post = |brand: &str| {
+        app.clone().oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/app/projects/primary-matter/brand")
+                .header(header::COOKIE, &cookie)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!("brand={brand}&_csrf={csrf}")))
+                .unwrap(),
+        )
+    };
+    assert_eq!(
+        post("outside-brand").await.unwrap().status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        post("sibling-brand").await.unwrap().status(),
+        StatusCode::SEE_OTHER
+    );
+    let project = store::projects::find_by_code(&surreal, "primary-matter")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(project.brand, "sibling-brand");
+    assert_eq!(project.firm_id, Some(firm_id));
+    assert!(!body_string(get("/app/projects").await.unwrap())
+        .await
+        .contains("primary-matter"));
+    assert!(body_string(get("/app/projects?firm=true").await.unwrap())
+        .await
+        .contains("primary-matter"));
+}
+
 #[tokio::test]
 async fn client_portal_lists_single_project_with_kpi_cards() {
     let (state, _surreal) = state_with_engines().await;

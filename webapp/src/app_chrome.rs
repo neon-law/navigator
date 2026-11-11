@@ -351,6 +351,14 @@ pub async fn firm_name_from_context() -> String {
     views::brand::FIRM_BRAND.site_name.to_string()
 }
 
+#[cfg(feature = "server")]
+pub(crate) async fn request_brand() -> views::brand::BrandKey {
+    dioxus_fullstack_core::FullstackContext::extract::<axum::Extension<views::brand::BrandKey>, _>()
+        .await
+        .map(|axum::Extension(key)| key)
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
