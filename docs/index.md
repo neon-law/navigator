@@ -109,6 +109,7 @@ cannot decay the way the old seven-line stub did.
 ## Navigator MCP, A2A, and MCP clients
 
 - [`mcp-a2a-interaction.md`](mcp-a2a-interaction.md) — Navigator MCP over A2A: confirmations and errors.
+- [`navigator-how-to.md`](navigator-how-to.md) — connect over MCP and work in a Project repository with Jujutsu.
 - [`claude-mcp-client.md`](claude-mcp-client.md) — Claude as a Navigator MCP client over MCP.
 - [`mail-cli.md`](mail-cli.md) — the draft-only Gmail CLI, its token contract, and its limits.
 - [`inbox-import-cli.md`](inbox-import-cli.md) — historical email and LinkedIn imports, replay, and attachment filing.
