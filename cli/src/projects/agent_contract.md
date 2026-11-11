@@ -40,6 +40,17 @@ each answer terse.
 `navigator.yaml`. `navigator project repository sync-skills` restores missing or drifted canonical Agent Skills and this
 `AGENTS.md`; keep custom skills beside them.
 
+## People and Entities in matter work
+
+When a message, Docket Entry, order, or Notation Answer identifies a Person or Entity that Navigator does not already
+record, ask the lawyer whether to record them and whether the record belongs to the Project, the lawyer, or the Firm.
+Ask when the name surfaces, including for opposing counsel, witnesses, guardians, and related parties.
+
+For approved Project records, use `navigator project reference add` for a verified party and `navigator project adverse
+add` when the lawyer confirms adversity. Record the lawyer's decision and authorship. If the approved scope has no
+available CLI path, or a Person cannot be recorded because required information is missing, tell the lawyer and record
+the gap in the private matter handoff.
+
 ## Branches
 
 * `main` is the only long-lived branch. Change it only through a pull request; never push to it directly.

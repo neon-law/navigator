@@ -99,3 +99,6 @@ navigator project gate
 `doctor` checks the local machine and Project coordinates. `gate` validates repository structure and generated files.
 The Project code is immutable. Correct a mistaken code through the lifecycle and data-governance process. Do not rename
 the repository or manifest independently.
+
+Follow the [Project agent contract](../../../cli/src/projects/agent_contract.md#people-and-entities-in-matter-work) when
+matter work identifies a new Person or Entity.
