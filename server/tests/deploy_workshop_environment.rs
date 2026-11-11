@@ -76,6 +76,8 @@ fn environment_read_sources() -> Vec<(PathBuf, String)> {
         "billing-workflows",
         "cli",
         "cloud",
+        "deploy",
+        "scorpio",
         "features",
         "images",
         "k8s",
