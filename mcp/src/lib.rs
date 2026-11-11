@@ -26,4 +26,4 @@ pub mod tools;
 
 pub use principal::Principal;
 pub use search::SearchBackends;
-pub use server::{build_router, McpState};
+pub use server::{build_router, public_discovery, McpState};

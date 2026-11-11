@@ -85,14 +85,37 @@ navigator site mcp --host http://localhost:3001
 The server speaks protocol on stdout and diagnostics on stderr, because the client parses every stdout line. Run it from
 a client configuration, not by hand: started in a terminal it waits on stdin and looks hung.
 
+## Public remote connector
+
+Use `https://neonlaw.com/app/mcp` as the Streamable HTTP URL. Calls without credentials can use `list_templates`. Calls
+with a bearer token go through the existing authentication and authorization checks.
+
+## Sign in for account-scoped tools
+
+Run `navigator site login --host www.neonlaw.com` and configure your local agent to run the signed-in stdio bridge
+above. The bridge reads the credential from `~/.navigator.json` on each call, so signing in again refreshes the
+credential without restarting the agent. Keep the file local and let the bridge send the bearer token over HTTPS.
+
+A remote client that securely stores custom headers can send `Authorization: Bearer <token>` to `/app/mcp`. Hosted
+connectors cannot read a file on your computer. Browser-based account linking requires a separate OAuth flow.
+
+## Find a Template in chat
+
+Ask Claude to list Navigator Templates or describe the document you want. The read-only `list_templates` tool returns
+the codes and titles of public Templates in the bundled shared catalog, with descriptions where supplied. Claude can use
+that metadata to suggest a Template.
+
+When the request is “create a work in progress,” pass the wording as `intent`. The tool returns a clarification asking
+whether the user wants a Work In Progress summary for a matter or wants to record time or a cost. Ask the question
+before suggesting a Template or taking action.
+
 ## What Claude can and cannot do
 
-The catalog Claude sees is deliberately narrower than the deployment's — fourteen tools of the seventeen. Every read,
-plus the writes that touch only the firm's own records:
+The catalog Claude sees offers reads and writes that touch only the firm's own records.
 
 | Offered | Why |
 | --- | --- |
-| all 9 reads | a lookup changes nothing, and answers through the caller's own lens |
+| Read-only tools | lookups answer through the caller's own lens |
 | `create_person` | a contact row, visible and correctable in `/app/admin` |
 | `create_project` | opens a Project on the attorney's two-limb conflict attestation |
 | `close_project` | moves a matter to `closed`, on the closing attorney's own attestation |

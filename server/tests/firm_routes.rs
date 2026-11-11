@@ -591,14 +591,14 @@ async fn the_navigator_page_prices_saas_and_invites_pro_bono_co_counsel() {
     }
 }
 
-/// The platform page describes the agent and lawyer roles, shows the local quickstart,
-/// and invites a firm to have Navigator skinned for it.
+/// The Navigator page offers MCP setup and the local quickstart alongside firm hosting.
 #[tokio::test]
 async fn the_navigator_page_explains_the_workflow_and_the_quickstart() {
     let app = site_app().await;
     let body = body_string(anon_get(&app, "/navigator").await).await;
     for expected in [
-        "agents prepare the work and lawyers review it and advise clients.",
+        r#"id="connect-mcp""#,
+        "https://neonlaw.com/app/mcp",
         "Token efficiency",
         "Spend tokens on the legal work, not on context.",
         "navigator glossary show",

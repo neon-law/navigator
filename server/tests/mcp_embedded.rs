@@ -1,8 +1,6 @@
 #![allow(clippy::doc_markdown)]
-//! Tests that the `mcp` library router is mounted at `POST /app/mcp` by
-//! the main composed router and that the `require_auth` /
-//! `require_policy` route_layers gate it. Drives the router via
-//! `tower::ServiceExt::oneshot` — no socket binding.
+//! Tests the public and authenticated MCP routes on the composed server.
+//! Drives the router via `tower::ServiceExt::oneshot` without binding a socket.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -69,24 +67,75 @@ async fn mcp_initialize_round_trips_when_auth_disabled() {
 }
 
 #[tokio::test]
-async fn mcp_rejects_request_without_bearer_when_auth_enforced() {
+async fn public_mcp_exposes_only_template_discovery_without_bearer() {
     let state = state_with(AuthConfig::new(false, Some("test-secret"))).await;
     let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
+    let mut browser_request = mcp_request_at(
+        "/app/mcp",
+        &json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize" }),
+        None,
+    );
+    browser_request.headers_mut().insert(
+        axum::http::header::ORIGIN,
+        axum::http::HeaderValue::from_static("https://example.com"),
+    );
+    let response = app.clone().oneshot(browser_request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
 
-    let resp = app
-        .oneshot(mcp_request(
-            &json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize" }),
-            None,
-        ))
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    for (method, params) in [
+        ("initialize", json!({ "protocolVersion": "2025-06-18" })),
+        ("notifications/initialized", json!({})),
+        ("tools/list", json!({})),
+        (
+            "tools/call",
+            json!({
+                "name": "list_templates",
+                "arguments": { "intent": "create a work in progress" }
+            }),
+        ),
+        ("tools/call", json!({ "name": "list_projects" })),
+        ("tools/call", json!({ "name": "create_notation" })),
+    ] {
+        let mut request = json!({ "jsonrpc": "2.0", "method": method, "params": params });
+        if method != "notifications/initialized" {
+            request["id"] = json!(1);
+        }
+        let response = app
+            .clone()
+            .oneshot(mcp_request_at("/app/mcp", &request, None))
+            .await
+            .unwrap();
+        if method == "notifications/initialized" {
+            assert_eq!(response.status(), StatusCode::ACCEPTED);
+            assert!(response
+                .into_body()
+                .collect()
+                .await
+                .unwrap()
+                .to_bytes()
+                .is_empty());
+            continue;
+        }
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        match method {
+            "initialize" => assert_eq!(body["result"]["protocolVersion"], "2025-06-18"),
+            "tools/list" => {
+                let tools = body["result"]["tools"].as_array().unwrap();
+                assert_eq!(tools.len(), 1);
+                assert_eq!(tools[0]["name"], "list_templates");
+            }
+            _ if params["name"] == "list_templates" => assert_eq!(
+                body["result"]["structuredContent"]["clarification"],
+                "Do you want a Work In Progress summary for a matter, or do you want to record time or a cost?"
+            ),
+            _ => assert_eq!(body["result"]["isError"], true),
+        }
+    }
 }
 
-/// `/app/mcp` carries a Bearer-only stack — no session cookie, so an
-/// anonymous caller gets a bare `401`, never a login redirect.
 #[tokio::test]
-async fn app_mcp_rejects_request_without_bearer_when_auth_enforced() {
+async fn app_mcp_rejects_invalid_bearer_instead_of_falling_back_to_discovery() {
     let state = state_with(AuthConfig::new(false, Some("test-secret"))).await;
     let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
 
@@ -94,7 +143,7 @@ async fn app_mcp_rejects_request_without_bearer_when_auth_enforced() {
         .oneshot(mcp_request_at(
             "/app/mcp",
             &json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize" }),
-            None,
+            Some("invalid"),
         ))
         .await
         .unwrap();
@@ -173,22 +222,26 @@ async fn mcp_accepts_valid_bearer_token_when_auth_enforced() {
     assert!(names.contains(&"list_jurisdictions"));
 }
 
-/// MCP answers under `/app` and nowhere else. It was mounted at the bare
-/// `/mcp` as well while the load balancer and the Gemini Enterprise data
-/// store still named that path; both now name `/app/mcp`, so the bare mount
-/// is gone rather than left as a second door onto the same handler.
 #[tokio::test]
-async fn post_mcp_is_not_served() {
-    let state = state_with(AuthConfig::new(true, None)).await;
+async fn app_mcp_is_the_only_mcp_transport_route() {
+    let state = state_with(AuthConfig::new(false, Some("test-secret"))).await;
     let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
-
-    let resp = app
+    let response = app
+        .clone()
         .oneshot(mcp_request_at(
             "/mcp",
-            &json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {} }),
+            &json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize" }),
             None,
         ))
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let request = Request::builder()
+        .uri("/app/mcp")
+        .header("accept", "text/event-stream")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
 }

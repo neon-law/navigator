@@ -110,20 +110,18 @@ async fn put_on_matter(
 }
 
 /// Call `list_projects` over `/app/mcp` and return `structuredContent`.
-async fn list_projects(app: &axum::Router, bearer: Option<&str>) -> Value {
+async fn list_projects(app: &axum::Router, bearer: &str) -> Value {
     let body = json!({
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
         "params": { "name": "list_projects", "arguments": {} }
     });
-    let mut builder = Request::builder()
+    let builder = Request::builder()
         .method("POST")
         .uri("/app/mcp")
-        .header("content-type", "application/json");
-    if let Some(b) = bearer {
-        builder = builder.header("authorization", b);
-    }
+        .header("content-type", "application/json")
+        .header("authorization", bearer);
     let resp = app
         .clone()
         .oneshot(
@@ -170,7 +168,7 @@ async fn a_lawyer_lists_the_matter_they_are_on_and_not_the_one_they_are_not() {
     )
     .await;
 
-    let content = list_projects(&app, Some(&bearer)).await;
+    let content = list_projects(&app, &bearer).await;
     assert_eq!(content["lens"], "membership");
     assert_eq!(names(&content), vec!["Matter A"], "got: {content}");
 }
@@ -194,7 +192,7 @@ async fn owner_and_admin_list_every_matter_through_the_directory_lens() {
         // The oversight caller holds no participation row at all.
         let (bearer, _) = cli_bearer(&surreal, "overseer@neonlaw.com", role).await;
 
-        let content = list_projects(&app, Some(&bearer)).await;
+        let content = list_projects(&app, &bearer).await;
         assert_eq!(content["lens"], "directory", "{role:?}: {content}");
         let mut listed = names(&content);
         listed.sort();
@@ -234,25 +232,8 @@ async fn a_client_lists_only_their_own_matter() {
     )
     .await;
 
-    let content = list_projects(&app, Some(&bearer)).await;
+    let content = list_projects(&app, &bearer).await;
     assert_eq!(names(&content), vec!["Their Matter"], "got: {content}");
-}
-
-#[tokio::test]
-async fn an_anonymous_caller_keeps_the_unscoped_local_behavior() {
-    // The KIND path and the existing browser harness: no credential, so
-    // no principal, so the deployment-wide list this tool has always
-    // returned. In production a principal is always injected, so this is
-    // not a hole an authenticated caller can fall into.
-    let (app, surreal) = build_app().await;
-    seed_matter(&surreal, "Matter A").await;
-    seed_matter(&surreal, "Matter B").await;
-
-    let content = list_projects(&app, None).await;
-    assert_eq!(content["lens"], "membership");
-    let mut listed = names(&content);
-    listed.sort();
-    assert_eq!(listed, vec!["Matter A", "Matter B"], "got: {content}");
 }
 
 #[tokio::test]
@@ -267,6 +248,6 @@ async fn an_authenticated_stranger_with_no_persons_row_lists_nothing() {
     session.source = portal::SessionSource::Cli;
     let bearer = format!("Bearer {}", SessionStore::new(KEY).encode(&session));
 
-    let content = list_projects(&app, Some(&bearer)).await;
+    let content = list_projects(&app, &bearer).await;
     assert_eq!(content["count"], 0, "got: {content}");
 }

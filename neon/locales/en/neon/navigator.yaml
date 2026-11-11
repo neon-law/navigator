@@ -1,15 +1,47 @@
 head_title: "{site_name} | Navigator"
 meta_description: >-
-  Neon Law Navigator is an open-source, MIT OR Apache-2.0 agentic lawyering engine
-  built for token efficiency. Run it locally with Homebrew, or contact us to
-  set it up for your firm.
+  Connect Neon Law Navigator to your AI assistant through MCP to browse public
+  legal Templates, or install the Navigator CLI to work from your terminal.
 title: Neon Law Navigator
 hero_mark: helm
 tagline: >-
-  An agentic lawyering engine with a Git repository for each Project, where
-  agents prepare the work and lawyers review it and advise clients.
+  Use Navigator in your AI assistant through MCP, or from your terminal with
+  the Navigator CLI.
 skin: marketing
 bands:
+  - kind: steps
+    anchor: connect-mcp
+    overline: Remote MCP
+    heading: Connect Navigator to your AI assistant
+    description: >-
+      Browse public legal Templates from a chat app that supports remote MCP.
+      You can use Template discovery without a Navigator account.
+    items:
+      - title: Add a custom connector
+        body:
+          - - text: >-
+                Open your assistant's connector settings and choose the option to add a custom MCP server.
+                In Grok, open Connectors, choose New Connector, then select Custom.
+      - title: Enter the Navigator URL
+        body:
+          - - text: https://neonlaw.com/app/mcp
+              code: true
+            - text: " is the server URL. If asked for a transport, choose Streamable HTTP."
+      - title: Try a request in chat
+        body:
+          - - text: >-
+                Ask “List Navigator’s public Templates.” If you ask “Create a work in progress,”
+                Navigator asks whether you want a matter summary or want to record time or a cost.
+  - kind: statement
+    heading: Notations and Nautilus
+    lead: Notations are filled-in Templates with a workflow.
+    body:
+      - - text: >-
+            Use Navigator to browse public Templates in chat. A Notation is
+            what you get when you fill in a Template for a Person in a Project.
+      - - text: Nautilus
+          href: /nautilus
+        - text: " is Neon Law’s subscription for privacy and paperwork."
   - kind: project_network
     anchor: connected-project
     overline: One connected Project
