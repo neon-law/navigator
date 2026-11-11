@@ -369,9 +369,9 @@ or `navigator-deploy site document log`. `navigator-deploy site document restore
 stamps and returns the document with its whole revision history; the next `project sync` writes the pointer again
 without asking about the deletion a second time. The retention purge, `POST /app/api/documents/purge` (admin), runs the
 governed expunge with the `retention` category on every chain past `purge_after`. It skips a chain under a Legal Hold
-(`navigator-deploy site document hold <asset_id> --project <code>`, `--release` to lift it) and a Project that is closed but
-has no `closed_repository` archive yet, and a purged document cannot be restored. `navigator project gate --check` never
-deletes.
+(`navigator-deploy site document hold <asset_id> --project <code>`, `--release` to lift it) and a Project that is closed
+but has no `closed_repository` archive yet, and a purged document cannot be restored. `navigator project gate --check`
+never deletes.
 
 Authority captures hydrate the same way. `project sync` also reads every committed pointer under `blobs/cases/` and
 `blobs/rules/` that carries an `authority_id` and fetches its bytes from the Authority archive door, `GET
