@@ -16,6 +16,10 @@ const FIXTURE: &str = "tests/fixtures/synthetic_matter";
 /// `<L>-<YY>-<NNNNNN>-<L>` shape rather than the California one (LAW-246).
 const NEVADA_FIXTURE: &str = "tests/fixtures/synthetic_nevada_matter";
 
+/// A Washington superior-court matter (LAW-327): GR 14 paper, no rail,
+/// and a pattern-form body of numbered items and check boxes.
+const WASHINGTON_FIXTURE: &str = "tests/fixtures/synthetic_washington_matter";
+
 /// The synthetic matter tree copied into a tempdir, so a test can edit its
 /// manifest or notations without touching the checked-in fixture.
 fn matter_tree() -> TempDir {
@@ -268,6 +272,54 @@ fn a_nevada_docket_matches_case_insensitively_into_the_declared_spelling() {
     assert_eq!(
         pdf::occurrence_count(&bytes, "Case No. D-26-000000-D").unwrap(),
         1
+    );
+}
+
+/// LAW-327: the Washington fixture renders end-to-end through `notation
+/// pdf` and `notation word` — the caption names the superior court, the
+/// counsel block carries the Washington bar label, and the pattern-form
+/// body prints its numbered items and its check boxes (drawn squares in
+/// the PDF's content stream, the character itself in Word).
+#[test]
+fn a_washington_fixture_renders_end_to_end_with_pattern_form_primitives() {
+    use rules::Rule as _;
+    const CASE: &str = "26-2-00000-SAMPLE";
+    let work = tree_of(WASHINGTON_FIXTURE);
+    let template = work.path().join("templates/washington_residential_schedule.md");
+
+    let lint = rules::f133::F133PleadingDocketUndeclared.lint(&rules::SourceFile {
+        contents: fs::read_to_string(&template).unwrap(),
+        path: template.clone(),
+    });
+    assert!(lint.is_empty(), "a Washington `docket:` clears N133: {lint:?}");
+
+    let bytes = pdf_of(&work, "washington_residential_schedule.md");
+    for shared in [
+        format!("Case No. {CASE}"),
+        "SUPERIOR COURT OF THE STATE OF WASHINGTON".to_string(),
+        "Washington Bar No. 000000".to_string(),
+        "The child resides with the custodial parent.".to_string(),
+        "Proposed by mother".to_string(),
+    ] {
+        assert_eq!(
+            pdf::occurrence_count(&bytes, &shared).unwrap(),
+            1,
+            "{shared}"
+        );
+    }
+    // The check boxes are drawn squares, not text: the renderer consumes
+    // the character, so no ballot-box glyph reaches the PDF.
+    assert_eq!(pdf::occurrence_count(&bytes, "\u{2610}").unwrap(), 0);
+
+    let docx = work.path().join("out.docx");
+    let result = render("word", &template, &docx);
+    assert!(result.status.success(), "stderr: {}", stderr(&result));
+    let document = docx_part(&fs::read(&docx).unwrap(), "word/document.xml");
+    assert!(document.contains(&format!("Case No. {CASE}")), "word caption");
+    assert_eq!(
+        document.matches('\u{2610}').count(),
+        2,
+        "word keeps the check-box characters for its own font fallback"
     );
 }
 

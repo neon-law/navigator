@@ -1366,6 +1366,67 @@ mod tests {
         assert!(!styles.contains(r#"w:lineRule="exact""#));
     }
 
+    /// The Washington frame `pdf::pleading` hands the CLI: GR 14(a) —
+    /// three-inch top margin kept clear for the clerk's file stamp,
+    /// one-inch margins elsewhere, no rail.
+    const WASHINGTON: PleadingFrame = PleadingFrame {
+        top_margin_twips: 4320,
+        bottom_margin_twips: 1440,
+        left_margin_twips: 1440,
+        right_margin_twips: 1440,
+        rail_lines: None,
+        ..RAILED
+    };
+
+    #[test]
+    fn a_washington_pleading_uses_the_gr_14_frame() {
+        let bytes = render_pleading(WASHINGTON);
+        let header = part(&bytes, "word/header1.xml");
+        assert!(rail_numbers(&header).is_empty(), "GR 14 requires no rail");
+        let document = part(&bytes, "word/document.xml");
+        assert!(document
+            .contains(r#"<w:pgMar w:top="4320" w:right="1440" w:bottom="1440" w:left="1440""#));
+        assert!(!document.contains("w:pgBorders"));
+    }
+
+    /// LAW-327: the WA pattern-form primitives reach the Word engine —
+    /// numbered paragraphs keep their literal numbers, and the check box
+    /// character passes through for Word's own font fallback (Word
+    /// substitutes a symbol font for an uncovered glyph; the drawn square
+    /// primitive is the PDF engine's answer to the same gap).
+    #[test]
+    fn a_washington_pattern_form_numbers_its_items_and_prints_its_check_boxes() {
+        let bytes = render_notation(
+            "# PARENTING PLAN\n\n## 1. Residential Schedule\n\n1. The child resides with the \
+             custodial parent.\n2. The other parent has visitation.\n3. Holidays alternate.\n\n\
+             \u{2610} Proposed by mother    \u{2610} Proposed by father\n",
+            None,
+            &RenderOptions {
+                provenance: None,
+                source_revision: None,
+                pleading: Some(WASHINGTON),
+                preview: false,
+            },
+        )
+        .unwrap();
+        let document = part(&bytes, "word/document.xml");
+        for item in [
+            "1. The child resides with the custodial parent.",
+            "2. The other parent has visitation.",
+            "3. Holidays alternate.",
+        ] {
+            assert!(
+                document.contains(&format!(r#"<w:t xml:space="preserve">{item}</w:t>"#)),
+                "the numbered item was lost: {document}"
+            );
+        }
+        assert_eq!(
+            document.matches('\u{2610}').count(),
+            2,
+            "both check boxes must print"
+        );
+    }
+
     #[test]
     fn repeated_pleading_renders_are_byte_identical() {
         assert_eq!(render_pleading(RAILED), render_pleading(RAILED));

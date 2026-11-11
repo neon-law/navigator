@@ -344,3 +344,97 @@ fn text_stays_inside_the_pleading_margins() {
         }
     }
 }
+
+// --- LAW-327: Washington ---
+
+fn washington() -> Variant {
+    variant_for_jurisdiction("WA").expect("WA is calibrated")
+}
+
+fn washington_render(body: &str) -> Vec<u8> {
+    pdf::render_document(
+        body,
+        OutputFormat::Pleading(washington()),
+        &Letterhead::default(),
+    )
+    .expect("the Washington pleading renders")
+}
+
+/// GR 14(a) (courts.wa.gov, the statewide format rule): the first page's
+/// top margin is a minimum of three inches — kept clear for the clerk's
+/// file stamp — and the side margins a minimum of one inch. The railed
+/// California frame starts its counsel block at 1in and the federal frame
+/// at 1.5in; Washington paper starts no text above 3in, and no line
+/// numbers share the margins.
+#[test]
+fn washington_paper_starts_three_inches_down_with_one_inch_side_margins() {
+    let bytes = washington_render("# MOTION FOR DEFAULT\n\nBody paragraph.\n");
+
+    let title_top = top(&bytes, "MOTION FOR DEFAULT", 1);
+    assert!(
+        (215.0..=240.0).contains(&title_top),
+        "the title starts {title_top}pt down, expected at GR 14(a)'s 3in (216pt) minimum"
+    );
+
+    let hit = pdf::locate(&bytes, "Body paragraph.", 1).expect("locate body");
+    let rect = hit.rects[0].rect;
+    assert!(
+        (rect.x * PAGE_W - 72.0).abs() < 2.0,
+        "text starts {}pt from the left edge, expected GR 14(a)'s 1in",
+        rect.x * PAGE_W
+    );
+    assert!(
+        (rect.x + rect.width) * PAGE_W <= PAGE_W - 72.0 + 1.0,
+        "text ends {}pt, inside GR 14(a)'s 1in right margin",
+        (rect.x + rect.width) * PAGE_W
+    );
+}
+
+/// LAW-327: the WA mandatory pattern-form primitives — numbered
+/// paragraphs (1. 2. 3.) and check boxes — render on Washington paper in
+/// the PDF engine. A check box is a stroked square **drawn** by the
+/// engine, not a glyph: the embedded font set covers no ballot-box
+/// codepoint, so the character itself would print as tofu on court paper.
+#[test]
+fn a_washington_pattern_form_numbers_its_items_and_draws_its_check_boxes() {
+    let bytes = washington_render(
+        "# PARENTING PLAN\n\n## 1. Residential Schedule\n\n1. The child resides with the \
+         custodial parent.\n2. The other parent has visitation.\n3. Holidays alternate.\n\n\
+         \u{2610} Proposed by mother    \u{2610} Proposed by father\n",
+    );
+
+    for item in [
+        "The child resides with the custodial parent.",
+        "The other parent has visitation.",
+        "Holidays alternate.",
+        "Proposed by mother",
+        "Proposed by father",
+    ] {
+        assert_eq!(
+            pdf::occurrence_count(&bytes, item).expect("count"),
+            1,
+            "{item} reached the page"
+        );
+    }
+    // The pattern form's paragraph numbers print before their items.
+    for marker in ["1.", "2.", "3."] {
+        assert!(
+            pdf::occurrence_count(&bytes, marker).expect("count") >= 1,
+            "the numbered item {marker} did not print"
+        );
+    }
+
+    // Each check box is a stroked square path in the first page's
+    // content stream, drawn at this primitive's 0.6pt stroke width — a
+    // weight nothing else on an unrailed, caption-free page uses (the
+    // footer rule strokes at 0.5pt). Two boxes, two stroke settings.
+    let doc = Document::load_mem(&bytes).expect("load");
+    let page = doc.get_pages().into_iter().next().expect("page").1;
+    let raw = doc.get_page_content(page);
+    let content = String::from_utf8_lossy(&raw);
+    assert_eq!(
+        content.matches("0.6 w").count(),
+        2,
+        "expected two drawn check boxes: {content}"
+    );
+}
