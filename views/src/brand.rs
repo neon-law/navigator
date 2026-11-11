@@ -394,8 +394,8 @@ pub struct Branding {
     /// inbound call resolves to its Brand (a voice-lane Brand Phone Number in
     /// `brand_phone_number`) and so to that brand's call script. A brand without a line of its own publishes
     /// the firm's shared number. A deployment that mounts its own manifest
-    /// publishes its own number, and [`NAVIGATOR_VOICE_NUMBER`] replaces it on
-    /// every Brand — read it through [`Branding::published_phone`].
+    /// publishes its own number, and a [`NAVIGATOR_VOICE_NUMBERS`] entry
+    /// replaces it per deployment — read it through [`Branding::published_phone`].
     pub firm_phone: &'static str,
     /// Every office the firm publishes, rendered in the public footer. See
     /// [`FIRM_OFFICES`] for why this is not [`SiteBrand::postal_address`].
@@ -1693,21 +1693,29 @@ pub fn carry_request_scope<R>(future: impl Future<Output = R>) -> impl Future<Ou
 
 static PROCESS_BRANDING: OnceLock<&'static Branding> = OnceLock::new();
 
-/// The deployment's own Twilio voice line, in E.164. Set, every Brand this
-/// deployment serves publishes it — header call button, home hero, footer,
-/// `/contact` — in place of the compiled per-Brand number, so a staging
-/// deployment's callers dial staging's Twilio number rather than production's.
-/// Unset, each Brand publishes its compiled [`Branding::firm_phone`].
-pub const NAVIGATOR_VOICE_NUMBER: &str = "NAVIGATOR_VOICE_NUMBER";
+/// Per-Brand Twilio voice lines for this deployment, as comma-separated
+/// `brand_key=+E164` pairs (`summons=+15550100100,neon=+15550100101`). A
+/// listed Brand publishes its pair's number — header call button, home hero,
+/// footer, `/contact` — so a staging deployment's callers dial staging's
+/// Twilio numbers rather than production's. A Brand the list omits, or every
+/// Brand when it is unset, publishes its compiled [`Branding::firm_phone`].
+pub const NAVIGATOR_VOICE_NUMBERS: &str = "NAVIGATOR_VOICE_NUMBERS";
 
-static DEPLOYMENT_VOICE_NUMBER: OnceLock<&'static str> = OnceLock::new();
+static DEPLOYMENT_VOICE_NUMBERS: OnceLock<Vec<(BrandKey, &'static str)>> = OnceLock::new();
 
-/// Install [`NAVIGATOR_VOICE_NUMBER`] for this process. The caller validates
-/// E.164; this only formats it for display.
-pub fn install_deployment_voice_number(e164: &str) -> Result<(), &'static str> {
-    DEPLOYMENT_VOICE_NUMBER
-        .set(Box::leak(display_phone(e164).into_boxed_str()))
-        .map_err(|_| "deployment voice number is already installed")
+/// Install [`NAVIGATOR_VOICE_NUMBERS`] for this process. The caller validates
+/// each E.164 number; this only formats them for display.
+pub fn install_deployment_voice_numbers(
+    numbers: &[(BrandKey, String)],
+) -> Result<(), &'static str> {
+    DEPLOYMENT_VOICE_NUMBERS
+        .set(
+            numbers
+                .iter()
+                .map(|(key, e164)| (*key, &*Box::leak(display_phone(e164).into_boxed_str())))
+                .collect(),
+        )
+        .map_err(|_| "deployment voice numbers are already installed")
 }
 
 /// Space a North American E.164 number the way the compiled Brands publish
@@ -1725,22 +1733,23 @@ pub fn display_phone(e164: &str) -> String {
 }
 
 impl Branding {
-    /// The voice line this Brand publishes on this deployment:
-    /// [`NAVIGATOR_VOICE_NUMBER`] when installed, else the compiled number.
+    /// The voice line this Brand publishes on this deployment: its
+    /// [`NAVIGATOR_VOICE_NUMBERS`] entry when installed, else its compiled
+    /// number.
     #[must_use]
     pub fn published_phone(&self) -> &'static str {
-        published_phone(DEPLOYMENT_VOICE_NUMBER.get().copied(), self.firm_phone)
+        published_phone(
+            DEPLOYMENT_VOICE_NUMBERS.get().map_or(&[], Vec::as_slice),
+            self,
+        )
     }
 }
 
-const fn published_phone(
-    deployment: Option<&'static str>,
-    compiled: &'static str,
-) -> &'static str {
-    match deployment {
-        Some(number) => number,
-        None => compiled,
-    }
+fn published_phone(numbers: &[(BrandKey, &'static str)], branding: &Branding) -> &'static str {
+    numbers
+        .iter()
+        .find(|(key, _)| *key == branding.brand_key)
+        .map_or(branding.firm_phone, |(_, number)| number)
 }
 
 /// Install the immutable branding used by spawned work in a production
@@ -2696,18 +2705,25 @@ mod tests {
     /// deliberately different values here so that swap cannot pass, and the
     /// pair is asserted distinct so a future edit collapsing them fails loudly
     /// rather than making this test vacuous.
-    /// A deployment's Twilio voice line replaces every Brand's compiled
-    /// number; without one each Brand keeps its own.
+    /// A deployment's Twilio voice line replaces only the listed Brand's
+    /// compiled number; every other Brand keeps its own.
     #[test]
-    fn the_deployment_voice_number_replaces_the_compiled_one() {
-        let compiled = super::MISERICORDIA_BRANDING.firm_phone;
-        assert_eq!(super::published_phone(None, compiled), compiled);
+    fn a_deployment_voice_number_replaces_only_its_brands() {
+        let numbers = [(BrandKey::Summons, "+1 555 010 0100")];
         assert_eq!(
-            super::published_phone(Some("+1 555 010 0100"), compiled),
+            super::published_phone(&numbers, &super::SUMMONS_BRANDING),
             "+1 555 010 0100"
         );
+        assert_eq!(
+            super::published_phone(&numbers, &super::MISERICORDIA_BRANDING),
+            super::MISERICORDIA_BRANDING.firm_phone
+        );
+        assert_eq!(
+            super::published_phone(&[], &super::SUMMONS_BRANDING),
+            super::SUMMONS_BRANDING.firm_phone
+        );
         assert_eq!(super::display_phone(" +15550100100 "), "+1 555 010 0100");
-        assert_eq!(super::display_phone("+442071234567"), "+442071234567");
+        assert_eq!(super::display_phone("+155501001"), "+155501001");
     }
 
     #[test]

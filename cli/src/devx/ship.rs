@@ -303,9 +303,9 @@ where
             value: non_empty_env(NAVIGATOR_SMS_NUMBER, get).unwrap_or_default(),
         },
         Substitution {
-            token: "YOUR_VOICE_NUMBER",
-            env: views::brand::NAVIGATOR_VOICE_NUMBER,
-            value: non_empty_env(views::brand::NAVIGATOR_VOICE_NUMBER, get).unwrap_or_default(),
+            token: "YOUR_VOICE_NUMBERS",
+            env: views::brand::NAVIGATOR_VOICE_NUMBERS,
+            value: non_empty_env(views::brand::NAVIGATOR_VOICE_NUMBERS, get).unwrap_or_default(),
         },
         Substitution {
             token: "YOUR_VPC_NAME",
@@ -7185,8 +7185,8 @@ mod tests {
             "the Twilio SMS number reaches the pod"
         );
         assert!(
-            web_env.contains(&format!("name: {}", views::brand::NAVIGATOR_VOICE_NUMBER)),
-            "the deployment's Twilio voice number reaches the pod"
+            web_env.contains(&format!("name: {}", views::brand::NAVIGATOR_VOICE_NUMBERS)),
+            "the deployment's per-Brand Twilio voice numbers reach the pod"
         );
         // The break-glass Owner must reach the pod for the same reason the
         // asset origin must: `$patch: replace` drops the base env list, so an

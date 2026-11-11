@@ -75,7 +75,9 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
     views::brand::install_process_branding(branding)
         .map_err(anyhow::Error::msg)
         .context("installing process branding")?;
-    install_voice_number(std::env::var(views::brand::NAVIGATOR_VOICE_NUMBER).ok().as_deref())?;
+    let voice_numbers = std::env::var(views::brand::NAVIGATOR_VOICE_NUMBERS).unwrap_or_default();
+    views::brand::install_deployment_voice_numbers(&voice_numbers_by_brand(&voice_numbers)?)
+        .map_err(anyhow::Error::msg)?;
     tracing::info!(custom = brand_bundle.is_some(), "brand bundle configured");
     tracing::info!(
         environment = cfg.environment.as_str(),
@@ -650,27 +652,37 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
     })
 }
 
-/// Install the deployment's Twilio voice line ([`views::brand::NAVIGATOR_VOICE_NUMBER`]),
-/// which every Brand header then publishes. Unset or blank leaves each Brand's
-/// compiled number; anything but E.164 stops the boot rather than publishing a
-/// number no caller can dial.
-fn install_voice_number(value: Option<&str>) -> anyhow::Result<()> {
-    if let Some(number) = voice_number(value)? {
-        views::brand::install_deployment_voice_number(number).map_err(anyhow::Error::msg)?;
+/// Parse [`views::brand::NAVIGATOR_VOICE_NUMBERS`]: comma-separated
+/// `brand_key=+E164` pairs. Blank is no override; an unknown Brand, a repeated
+/// Brand, or a number that is not E.164 stops the boot rather than publishing
+/// a line no caller can dial.
+fn voice_numbers_by_brand(value: &str) -> anyhow::Result<Vec<(views::brand::BrandKey, String)>> {
+    let var = views::brand::NAVIGATOR_VOICE_NUMBERS;
+    let mut numbers: Vec<(views::brand::BrandKey, String)> = Vec::new();
+    for pair in value
+        .split(',')
+        .map(str::trim)
+        .filter(|pair| !pair.is_empty())
+    {
+        let (key, number) = pair
+            .split_once('=')
+            .map(|(key, number)| (key.trim(), number.trim()))
+            .with_context(|| format!("{var} entry `{pair}` is not brand_key=+E164"))?;
+        let key = views::brand::BrandKey::parse(key)
+            .with_context(|| format!("{var} names no Brand `{key}`"))?;
+        anyhow::ensure!(
+            store::brand_phone_numbers::is_e164(number),
+            "{var} number for `{}` must be E.164, e.g. +15108002090",
+            key.as_str()
+        );
+        anyhow::ensure!(
+            numbers.iter().all(|(seen, _)| *seen != key),
+            "{var} names `{}` twice",
+            key.as_str()
+        );
+        numbers.push((key, number.to_string()));
     }
-    Ok(())
-}
-
-fn voice_number(value: Option<&str>) -> anyhow::Result<Option<&str>> {
-    let Some(number) = value.map(str::trim).filter(|number| !number.is_empty()) else {
-        return Ok(None);
-    };
-    anyhow::ensure!(
-        store::brand_phone_numbers::is_e164(number),
-        "{} must be E.164, e.g. +15108002090",
-        views::brand::NAVIGATOR_VOICE_NUMBER
-    );
-    Ok(Some(number))
+    Ok(numbers)
 }
 
 /// Resolve when the process receives `SIGINT` (Ctrl-C) or `SIGTERM`.
@@ -1586,17 +1598,31 @@ mod tests {
         should_host_billing_digest, should_host_deadline_mirror, should_host_dri_digest,
         should_host_general_nag, should_host_notation_reset, should_host_profit_digest,
         should_host_project_recovery, should_host_purchase_activation, should_host_retention_purge,
-        should_host_source_imports, voice_number,
+        should_host_source_imports, voice_numbers_by_brand,
     };
 
-    /// A deployment's voice line is optional, but a set one must be dialable.
+    /// Voice numbers are optional and per Brand, and every listed one must
+    /// name a real Brand once with a dialable number.
     #[test]
-    fn the_deployment_voice_number_is_optional_and_e164() {
-        assert_eq!(voice_number(None).unwrap(), None);
-        assert_eq!(voice_number(Some("  ")).unwrap(), None);
-        assert_eq!(voice_number(Some(" +15550100100 ")).unwrap(), Some("+15550100100"));
-        let refused = voice_number(Some("555-010-0100")).unwrap_err().to_string();
-        assert!(refused.contains("NAVIGATOR_VOICE_NUMBER"), "{refused}");
+    fn deployment_voice_numbers_are_per_brand_and_e164() {
+        use views::brand::BrandKey;
+        assert!(voice_numbers_by_brand(" ").unwrap().is_empty());
+        assert_eq!(
+            voice_numbers_by_brand(" summons = +15550100100 ,neon=+15550100101").unwrap(),
+            vec![
+                (BrandKey::Summons, "+15550100100".to_string()),
+                (BrandKey::Neon, "+15550100101".to_string()),
+            ]
+        );
+        for refused in [
+            "summons",
+            "nobody=+15550100100",
+            "summons=555-010-0100",
+            "summons=+15550100100,summons=+15550100101",
+        ] {
+            let error = voice_numbers_by_brand(refused).unwrap_err().to_string();
+            assert!(error.contains("NAVIGATOR_VOICE_NUMBERS"), "{error}");
+        }
     }
 
     /// The export opens PostgreSQL and the archive bucket only when the

@@ -1293,7 +1293,7 @@ protected alongside it.
 | Summary account | `NAVIGATOR_SUMMARY_PROVIDER_ACCOUNT` | Optional; defaults to `sendgrid` |
 | Summary envelope | `NAVIGATOR_SUMMARY_ENVELOPE_RECIPIENTS` | Unset/off by default; blank values fail |
 | SMS | `NAVIGATOR_SMS_NUMBER`, `TWILIO_AUTH_TOKEN`, `TWILIO_ACCOUNT_SID` | Off by default; a number needs both |
-| Voice line | `NAVIGATOR_VOICE_NUMBER` | Optional E.164; every Brand publishes it in place of its own |
+| Voice lines | `NAVIGATOR_VOICE_NUMBERS` | Optional `brand_key=+E164` pairs; omitted Brands keep their own |
 | SMS test numbers | `NAVIGATOR_SMS_TEST_RECIPIENTS` | Staging secret: the only numbers simulated matters may text |
 | SMS reply account | `TWILIO_ACCOUNT_SID` | Replies need live production egress and sender registration |
 | Summary Gemini model | `NAVIGATOR_SUMMARY_GEMINI_MODEL` | Optional Vertex model override |

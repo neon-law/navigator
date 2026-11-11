@@ -1194,14 +1194,23 @@ mod tests {
         assert!(chrome.offices.is_empty() && chrome.attorneys.is_empty());
         assert!(chrome.memberships.is_empty() && chrome.social.is_empty());
         assert!(chrome.firm_logo_href.is_empty() && chrome.firm_email.is_empty());
-        assert_eq!(chrome.firm_phone, phone, "a moved Brand keeps its voice line");
+        assert_eq!(
+            chrome.firm_phone, phone,
+            "a moved Brand keeps its voice line"
+        );
         let mut header = VirtualDom::new_with_props(
             PublicHeader,
-            PublicHeaderProps { chrome: chrome.clone(), menu_id: "site-menu".into() },
+            PublicHeaderProps {
+                chrome: chrome.clone(),
+                menu_id: "site-menu".into(),
+            },
         );
         header.rebuild_in_place();
         let header = dioxus_ssr::render(&header);
-        assert!(header.contains(&crate::components::site_footer::tel_href(&phone)), "{header}");
+        assert!(
+            header.contains(&crate::components::site_footer::tel_href(&phone)),
+            "{header}"
+        );
         assert_eq!(chrome.disclaimer, "Attorney advertisement. Synthetic New Entity LLC. Non-legal services do not create an attorney-client relationship.");
         let html = render_chrome(chrome);
         assert!(
