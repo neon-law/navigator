@@ -1,10 +1,11 @@
 //! Inbox-process doors.
 //!
-//! The process backlog read and the body-carried process door behind
-//! `inbox process`. The route itself is classified server-side at apply
-//! time from the same transport facts the SendGrid webhook sees — a client
-//! never posts a route. The message body never leaves the server: plans
-//! carry classification metadata only.
+//! The process backlog read, the body-carried process door behind
+//! `inbox process`, and the attachment door behind `inbox attachments`. The
+//! route itself is classified server-side at apply time from the same
+//! transport facts the SendGrid webhook sees — a client never posts a
+//! route. The message body never leaves the server: plans carry
+//! classification metadata and the attachment list only.
 
 use axum::extract::State;
 use axum::response::{IntoResponse, Response};
@@ -76,9 +77,26 @@ pub(crate) struct ProcessView {
     pub project_id: Option<Uuid>,
     pub occurred_at: String,
     pub inserted_at: chrono::DateTime<chrono::Utc>,
+    /// The message's linked attachments, in provider order: what the
+    /// attachment door serves and what an apply with a kind files.
+    pub attachments: Vec<store::inbox::MessageAttachment>,
 }
 
-fn view(row: store::inbox::UnprocessedRow, state: store::inbox::ProcessState) -> ProcessView {
+/// The attachments linked to one message, in provider order.
+async fn linked_attachments(
+    state: &ApiState,
+    row: &store::inbox::UnprocessedRow,
+) -> Result<Vec<store::inbox::MessageAttachment>, ApiError> {
+    store::inbox::message_assets(&state.surreal, row.firm_id, row.id)
+        .await
+        .map_err(map_inbox)
+}
+
+fn view(
+    row: store::inbox::UnprocessedRow,
+    state: store::inbox::ProcessState,
+    attachments: Vec<store::inbox::MessageAttachment>,
+) -> ProcessView {
     let decision = classify_inbound_facts(
         &row.external_address,
         row.subject.as_deref().unwrap_or_default(),
@@ -100,6 +118,7 @@ fn view(row: store::inbox::UnprocessedRow, state: store::inbox::ProcessState) ->
         project_id: row.project_id,
         occurred_at: row.occurred_at,
         inserted_at: row.inserted_at,
+        attachments,
     }
 }
 
@@ -123,7 +142,8 @@ pub(crate) async fn unprocessed(
             .await
             .map_err(map_inbox)?
             .ok_or(ApiError::NotFound)?;
-        views.push(view(row, saved));
+        let attachments = linked_attachments(&state, &row).await?;
+        views.push(view(row, saved, attachments));
     }
     Ok(Json(views).into_response())
 }
@@ -161,7 +181,8 @@ pub(crate) async fn process(
         .await
         .map_err(map_inbox)?;
     if !request.apply {
-        return Ok(Json(view(context.row, context.state)).into_response());
+        let attachments = linked_attachments(&state, &context.row).await?;
+        return Ok(Json(view(context.row, context.state, attachments)).into_response());
     }
     let kind = request
         .kind
@@ -209,8 +230,16 @@ pub(crate) async fn process(
     };
     // Every other route on an attributed matter files the message's
     // attachments when the lawyer named their kind, and counts them when not.
-    let attachments =
-        apply_attachments(&state, &session, &context.row, decision.route, kind).await?;
+    let linked = linked_attachments(&state, &context.row).await?;
+    let attachments = apply_attachments(
+        &state,
+        &session,
+        &context.row,
+        decision.route,
+        kind,
+        linked.len(),
+    )
+    .await?;
     // LAW-166: apply always records the route and the processing time, so
     // a re-run reports idempotency instead of duplicating work.
     store::inbox::mark_processed(
@@ -236,6 +265,7 @@ pub(crate) async fn process(
                     .as_ref()
                     .map(|(_, spelling)| (*spelling).to_owned()),
             },
+            linked,
         ),
         route: decision.route.as_str(),
         route_label: decision.route.label(),
@@ -287,6 +317,7 @@ async fn apply_attachments(
     row: &store::inbox::UnprocessedRow,
     route: crate::inbound_email::InboxRoute,
     kind: Option<&str>,
+    linked: usize,
 ) -> Result<AttachmentFiling, ApiError> {
     let Some(project_id) = row.project_id else {
         return Ok(AttachmentFiling::default());
@@ -303,9 +334,64 @@ async fn apply_attachments(
         },
         None => AttachmentFiling {
             filed: 0,
-            unfiled: crate::nef_pipeline::attachment_count(state, row).await?,
+            unfiled: linked,
         },
     })
+}
+
+/// The body the attachment door reads: which message, and which of its
+/// linked attachments.
+#[derive(Debug, Deserialize)]
+pub(crate) struct AttachmentRequest {
+    /// The inbox message that carries the attachment.
+    pub message: Uuid,
+    /// The attachment's asset id, as the message's plan lists it.
+    pub asset: Uuid,
+}
+
+/// `POST /app/api/inbox/attachment` — one linked attachment's bytes, behind
+/// `inbox attachments`. A message in triage has no matter, so authority
+/// comes from the message itself: the process door's Firm scope, plus the
+/// firm-side matter gate once the conversation is attributed. An asset the
+/// message does not link is 404, the same as a missing message.
+pub(crate) async fn attachment(
+    State(state): State<ApiState>,
+    LawyerSession(session): LawyerSession,
+    Json(request): Json<AttachmentRequest>,
+) -> Result<Response, ApiError> {
+    let actor_id = actor_id(&session)?;
+    let row = store::inbox::process_context(&state.surreal, actor_id, request.message)
+        .await
+        .map_err(map_inbox)?
+        .row;
+    if let Some(project_id) = row.project_id {
+        require_firm_side(&state, &session, project_id).await?;
+    }
+    let link = linked_attachments(&state, &row)
+        .await?
+        .into_iter()
+        .find(|link| link.asset_id == request.asset)
+        .ok_or(ApiError::NotFound)?;
+    let asset = store::assets::find_by_id(&state.surreal, link.asset_id)
+        .await
+        .map_err(ApiError::Asset)?
+        .ok_or(ApiError::NotFound)?;
+    if asset
+        .project_id
+        .is_some_and(|id| Some(id) != row.project_id)
+    {
+        return Err(ApiError::NotFound);
+    }
+    let bytes = match state.storage.get(&asset.storage_key).await {
+        Ok(object) => object.bytes,
+        Err(cloud::StorageError::NotFound(_)) => return Err(ApiError::NotFound),
+        Err(error) => return Err(ApiError::Db(error.to_string())),
+    };
+    Ok(crate::project_documents::attachment_bytes_response(
+        bytes,
+        &asset.content_type,
+        &link.filename,
+    ))
 }
 
 /// Out-of-scope for a matter that the caller cannot see firm-side: 404,
