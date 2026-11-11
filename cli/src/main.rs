@@ -29,6 +29,7 @@ mod ephemeris_duckdb;
 mod ephemeris_iceberg;
 mod ephemeris_release;
 mod ephemeris_tables;
+mod firm_admin;
 mod firm_forgejo;
 mod firms_doctor;
 mod forms_render;
@@ -2849,6 +2850,62 @@ enum SiteFirmCmd {
         #[command(flatten)]
         host: HostOpt,
     },
+    /// List the Firms this login may administer: slug, name, and the Brands
+    /// each wears, one Firm per tab-separated line.
+    List {
+        #[command(flatten)]
+        host: HostOpt,
+    },
+    /// Rename a Firm. Its slug, and the Forgejo organization the slug names,
+    /// is unchanged. Owner, or an Admin of the Firm.
+    Rename {
+        /// The Firm's slug, as `navigator site firm list` prints it.
+        slug: String,
+        /// The Firm's new display name.
+        name: String,
+        #[command(flatten)]
+        host: HostOpt,
+    },
+    /// Delete a Firm and its memberships. Refused while the Firm owns any
+    /// Project or Brand: move each Brand with `navigator site brand move`
+    /// first. Owner, or an Admin of the Firm.
+    Delete {
+        /// The Firm's slug, as `navigator site firm list` prints it.
+        slug: String,
+        #[command(flatten)]
+        host: HostOpt,
+    },
+}
+
+#[derive(Subcommand)]
+enum SiteBrandCmd {
+    /// Move a Brand to another Firm, so its public pages name that Firm's
+    /// legal entity. Owner only.
+    Move {
+        /// The Brand's key, as `navigator site firm list` prints it.
+        key: String,
+        /// The slug of the Firm the Brand moves to.
+        #[arg(long)]
+        to: String,
+        #[command(flatten)]
+        host: HostOpt,
+    },
+    /// Stop the Firm that wears a Brand from wearing it. The Brand row
+    /// remains. Owner, or an Admin of that Firm.
+    Detach {
+        /// The Brand's key, as `navigator site firm list` prints it.
+        key: String,
+        #[command(flatten)]
+        host: HostOpt,
+    },
+    /// Delete a Brand. Refused while any Firm wears it (`detach` it first)
+    /// or any Project names it. Owner, or the owning Firm's Admin DRI.
+    Delete {
+        /// The Brand's key.
+        key: String,
+        #[command(flatten)]
+        host: HostOpt,
+    },
 }
 
 #[derive(Subcommand)]
@@ -2909,6 +2966,11 @@ enum SiteCmd {
     Firm {
         #[command(subcommand)]
         action: SiteFirmCmd,
+    },
+    /// Move, detach, or delete a Brand through the logged-in deployment.
+    Brand {
+        #[command(subcommand)]
+        action: SiteBrandCmd,
     },
     /// File, read, and verify a Project's documents — every document is
     /// scoped to one Project, and every Project to one brand deployment
@@ -5442,9 +5504,40 @@ fn run() -> ExitCode {
                 }
                 SshKeyCmd::Sync { host } => runtime().block_on(ssh_keys::sync(host.host)),
             },
-            SiteCmd::Firm {
-                action: SiteFirmCmd::ProvisionForgejo { slug, host },
-            } => runtime().block_on(firm_forgejo::provision(host.host.as_deref(), &slug)),
+            SiteCmd::Firm { action } => match action {
+                SiteFirmCmd::ProvisionForgejo { slug, host } => {
+                    runtime().block_on(firm_forgejo::provision(host.host.as_deref(), &slug))
+                }
+                SiteFirmCmd::List { host } => runtime().block_on(firm_admin::run(
+                    host.host.as_deref(),
+                    firm_admin::Action::List,
+                )),
+                SiteFirmCmd::Rename { slug, name, host } => runtime().block_on(firm_admin::run(
+                    host.host.as_deref(),
+                    firm_admin::Action::Rename {
+                        slug: &slug,
+                        name: &name,
+                    },
+                )),
+                SiteFirmCmd::Delete { slug, host } => runtime().block_on(firm_admin::run(
+                    host.host.as_deref(),
+                    firm_admin::Action::Delete { slug: &slug },
+                )),
+            },
+            SiteCmd::Brand { action } => match action {
+                SiteBrandCmd::Move { key, to, host } => runtime().block_on(firm_admin::run(
+                    host.host.as_deref(),
+                    firm_admin::Action::MoveBrand { key: &key, to: &to },
+                )),
+                SiteBrandCmd::Detach { key, host } => runtime().block_on(firm_admin::run(
+                    host.host.as_deref(),
+                    firm_admin::Action::DetachBrand { key: &key },
+                )),
+                SiteBrandCmd::Delete { key, host } => runtime().block_on(firm_admin::run(
+                    host.host.as_deref(),
+                    firm_admin::Action::DeleteBrand { key: &key },
+                )),
+            },
             SiteCmd::Import {
                 model_name,
                 seed_file,
@@ -8866,12 +8959,7 @@ fn run_render(
     // author (LAW-15). `output:` is now the only override, and it lives
     // in the document it frames.
     //
-    // An `output:` value with no Typst counterpart never reaches the
-    // frame selection below: `form` — the AcroForm fill mode, the one
-    // profile that is not a Typst format at all — branched away above,
-    // and a template that declares no `kind:` at all renders plain. A
-    // *misspelled* `output:` never reaches here either: N109 refuses it
-    // at the validation gate above.
+
     let field = |key: &str| {
         rules::frontmatter::extract(&contents)
             .and_then(|fm| rules::frontmatter::field(fm, key))

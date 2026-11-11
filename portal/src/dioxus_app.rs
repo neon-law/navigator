@@ -869,6 +869,9 @@ async fn inject_viewer_role(mut req: Request, next: Next) -> Response {
 /// [`inject_public_utility`] resolves the public chrome here rather than
 /// there.
 async fn inject_app_brand_mark(mut req: Request, next: Next) -> Response {
+    if req.extensions().get::<views::brand::BrandKey>().is_none() {
+        req.extensions_mut().insert(views::brand::brand_key());
+    }
     if req
         .extensions()
         .get::<webapp::app_chrome::AppBrandMark>()

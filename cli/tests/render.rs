@@ -1476,3 +1476,33 @@ fn a_plain_document_in_a_project_needs_no_brand() {
         String::from_utf8_lossy(&result.stderr)
     );
 }
+
+#[test]
+fn notation_pdf_refuses_form_output_before_writing_a_plain_pdf() {
+    let dir = TempDir::new().unwrap();
+    let source = include_str!(
+        "../../templates/notations/forms/united_states/nevada/state/nv__llc_formation.md"
+    );
+    for (template, expected) in [
+        (source.to_string(), "server-side notation workflow"),
+        (
+            source.replace("form: nv__llc_formation", "form: unknown_form_fixture"),
+            "not in the form registry",
+        ),
+    ] {
+        let input = dir.path().join("nv__llc_formation.md");
+        let output = dir.path().join("filled.pdf");
+        fs::write(&input, template).unwrap();
+        let result = Command::new(cargo_bin("navigator"))
+            .args(["notation", "pdf", "--preview"])
+            .arg(&input)
+            .arg("--out")
+            .arg(&output)
+            .output()
+            .unwrap();
+        assert!(!result.status.success());
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(stderr.contains(expected), "{stderr}");
+        assert!(!output.exists());
+    }
+}

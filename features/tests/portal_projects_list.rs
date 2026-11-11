@@ -1,11 +1,7 @@
 //! Cucumber runner for `features/portal_projects_list.feature`.
 //!
-//! Exercises `GET /app/projects` — the matter list — proving Owner/Admin
-//! read every matter (`store::projects::all`) while an ordinary Lawyer stays
-//! scoped to their own participation ledger
-//! (`store::access::visible_projects_as_lawyer`). The runner shape mirrors
-//! `portal_projects_detail.rs`: forge a session cookie, send the request,
-//! assert on the response.
+//! Exercises the Projects list. Owners and Admins can see unassigned matters
+//! in the current scope. Lawyers see matters on their participation ledger.
 
 // Cucumber's step-attribute macros want `async fn` everywhere.
 #![allow(clippy::unused_async)]

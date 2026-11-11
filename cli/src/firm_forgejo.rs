@@ -26,7 +26,7 @@ struct Provisioned {
     owner_added: bool,
 }
 
-fn refusal(status: reqwest::StatusCode, body: &str) -> String {
+pub(crate) fn refusal(status: reqwest::StatusCode, body: &str) -> String {
     let value = serde_json::from_str::<serde_json::Value>(body).ok();
     let message = value
         .as_ref()

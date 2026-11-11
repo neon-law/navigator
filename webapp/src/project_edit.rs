@@ -2,8 +2,8 @@
 //! `/app/projects/{project_code}/edit`.
 //!
 //! The successor to the `views::pages::admin::projects::edit_form`. A
-//! descriptive edit only: name, the entity the matter is opened against, and the
-//! scope narrative. It renders no status control — a matter's lifecycle
+//! descriptive edit for name, entity, and scope, with a separate Brand
+//! form for administrators of the Project’s Firm. It renders no status control — a matter's lifecycle
 //! transition (open/closed/archived) and its coupled retention date are their own
 //! commands (navigator#770), so a picker here would silently discard the edit.
 //! Neither does it re-choose the matter's parties: the client-side DRI and the
@@ -78,6 +78,8 @@ pub struct ProjectEditView {
     pub description: String,
     pub entity_id: Option<String>,
     pub entities: Vec<EntityOption>,
+    pub brand: String,
+    pub brands: Vec<(String, String)>,
     pub internal_slack_channel_url: String,
     pub external_slack_channel_url: String,
     /// The firm-only Notion page. Blank when unset, and a blank submission
@@ -129,6 +131,40 @@ async fn hidden(role: ViewerRole) -> ProjectEditView {
         tokens_href: crate::app_chrome::app_tokens_href_from_context().await,
         ..ProjectEditView::default()
     }
+}
+
+#[cfg(feature = "server")]
+async fn project_brand_options(
+    surreal: &store::surreal::SurrealDb,
+    store_role: store::persons::Role,
+    person_id: Option<uuid::Uuid>,
+    firm_id: uuid::Uuid,
+) -> Result<Vec<(String, String)>, ServerFnError> {
+    let decision = store::firm_capability::resolve(
+        surreal,
+        store_role,
+        person_id,
+        firm_id,
+        store::firm_capability::FirmCapability::ManageMembership,
+    )
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+    if !decision.is_allowed() {
+        return Ok(Vec::new());
+    }
+    let keys = store::firms::brand_keys_for_firm(surreal, firm_id)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    Ok(futures::future::try_join_all(
+        keys.iter()
+            .map(|key| store::brands::find_by_key(surreal, key)),
+    )
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?
+    .into_iter()
+    .flatten()
+    .map(|brand| (brand.key, brand.name))
+    .collect())
 }
 
 /// Load the "edit project" form for the `{id}` in the request path.
@@ -188,12 +224,12 @@ pub async fn get_project_edit_form() -> Result<ProjectEditView, ServerFnError> {
         ViewerRole::Clerk => store::persons::Role::Clerk,
         ViewerRole::Client => store::persons::Role::Client,
     };
-    if !store::access::can_see_project(&surreal, person_id, store_role, project_id)
+    let Some(viewer) = store::access::matter_viewer(&surreal, person_id, store_role, project_id)
         .await
-        .map_err(|e| ServerFnError::new(e.clone()))?
-    {
+        .map_err(ServerFnError::new)?
+    else {
         return Ok(hidden(role).await);
-    }
+    };
 
     let Some(project) = store::projects::find_by_id(&surreal, project_id)
         .await
@@ -211,6 +247,15 @@ pub async fn get_project_edit_form() -> Result<ProjectEditView, ServerFnError> {
         })
         .collect();
 
+    let brands = if let Some(firm_id) = project
+        .firm_id
+        .filter(|_| role.is_admin_tier() && viewer.is_firm_side())
+    {
+        project_brand_options(&surreal, store_role, person_id, firm_id).await?
+    } else {
+        Vec::new()
+    };
+
     Ok(ProjectEditView {
         firm_name: crate::app_chrome::firm_name_from_context().await,
         found: true,
@@ -219,6 +264,8 @@ pub async fn get_project_edit_form() -> Result<ProjectEditView, ServerFnError> {
         description: project.description.unwrap_or_default(),
         entity_id: Some(project.entity_id.to_string()),
         entities,
+        brand: project.brand,
+        brands,
         internal_slack_channel_url: project.internal_slack_channel_url.unwrap_or_default(),
         external_slack_channel_url: project.external_slack_channel_url.unwrap_or_default(),
         private_notion_page_url: project.private_notion_page_url.unwrap_or_default(),
@@ -494,8 +541,33 @@ fn edit_body(view: &ProjectEditView) -> Element {
                 {repository_field.render()}
             }),
         }
+        {brand_change_form(view)}
         p { class: "project-form-cancel",
             a { class: "nav-btn nav-btn--secondary", href: "/app/projects", "Cancel" }
+        }
+    }
+}
+
+fn brand_change_form(view: &ProjectEditView) -> Element {
+    let brand_choices = view
+        .brands
+        .iter()
+        .map(|(key, name)| Choice::new(key.clone(), name.clone()))
+        .collect();
+    rsx! {
+        if view.brands.iter().any(|(key, _)| key != &view.brand) {
+            FormCard {
+                title: "Change Brand".to_string(),
+                action: format!("/app/projects/{}/brand", view.project_code),
+                submit_label: "Change Brand".to_string(),
+                heading: Heading::H2,
+                csrf_token: Some(view.csrf_token.clone()),
+                fields: vec![
+                    Field::select("Brand", "brand", brand_choices, Some(view.brand.clone()))
+                        .required()
+                        .help("For a Project with a repository, update its navigator.yaml to match before generating new drafts.")
+                ],
+            }
         }
     }
 }
@@ -548,6 +620,8 @@ mod tests {
             project_code: "acme-formation".to_string(),
             name: "Acme Formation".to_string(),
             description: "Form the LLC.".to_string(),
+            brand: "neon".to_string(),
+            brands: Vec::new(),
             entity_id: Some("00000000-0000-0000-0000-000000000001".to_string()),
             entities: vec![EntityOption {
                 id: "00000000-0000-0000-0000-000000000001".to_string(),

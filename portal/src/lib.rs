@@ -99,6 +99,7 @@ mod dev_reload;
 pub(crate) mod docket_api;
 pub(crate) mod efilings_api;
 mod ephemeris_reference;
+pub(crate) mod firm_admin_api;
 pub(crate) mod firm_forgejo_api;
 pub(crate) mod handoffs_api;
 pub(crate) mod inbox_import_api;

@@ -32,7 +32,8 @@ own persistence logic.
   session, without reading `~/.navigator.json`. Supported models are `person`, `entity`, `person_project_role`,
   `person_entity_role`, `address`, `relationship_log`, and `project_reference`. Join-table documents use nested natural
   keys (`person.email` with `project.code`, or `person.email` with `entity.name`) rather than UUIDs. See
-  [Address](glossary/address.md) for both address seed shapes. A `relationship_log` record names its subject Person as
+  [Address](glossary/address.md) for both address seed shapes. A new `person_project_role` import reports a warning when
+  it infers client participation from the Person's role. A `relationship_log` record names its subject Person as
   `subject.email` and is keyed by `(subject.email, action, detail)`. The Relationship Log stays append-only, and
   re-importing an identical row appends nothing. The session's Person is recorded as its actor. An optional
   `project.code` records the Project the row belongs to; a project-scoped session always records its own Project and

@@ -1567,9 +1567,15 @@ async fn reconcile_person_project_roles(
                     .await?;
             }
             report.created += 1;
+            let warnings = if participation == "client" {
+                vec!["Participation defaults to client because the Person has the client role. If this Person is counsel, set their role before importing the participation.".into()]
+            } else {
+                Vec::new()
+            };
             report.records.push(ReconcileRecord {
                 key,
                 action: ReconcileAction::New,
+                warnings,
                 ..ReconcileRecord::default()
             });
         }
@@ -6759,6 +6765,7 @@ records:
         .await
         .expect("nested lookups resolve");
         assert_eq!((report.created, report.unchanged), (1, 0));
+        assert!(report.records[0].warnings[0].contains("defaults to client"));
         let person = persons::find_by_email_ci(&surreal, "jane@example.com")
             .await
             .unwrap()
@@ -6780,6 +6787,7 @@ records:
         .await
         .expect("re-seed is a no-op");
         assert_eq!((again.created, again.unchanged), (0, 1));
+        assert!(again.records[0].warnings.is_empty());
     }
 
     #[tokio::test]

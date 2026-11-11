@@ -150,7 +150,11 @@ impl Column {
 /// Build the `?sort=`-toggling href for a header, preserving `extra_query`
 /// (filters, page) in alphabetized, url-encoded order so a sort click never
 /// drops the rest of the table state.
-fn sort_href(base_path: &str, encoded_sort: &str, extra_query: &[(String, String)]) -> String {
+pub(crate) fn sort_href(
+    base_path: &str,
+    encoded_sort: &str,
+    extra_query: &[(String, String)],
+) -> String {
     let mut pairs: Vec<(&str, &str)> = extra_query
         .iter()
         .filter(|(_, v)| !v.is_empty())

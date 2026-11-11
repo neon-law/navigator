@@ -694,6 +694,7 @@ fn site_help_lists_the_live_deployment_members() {
             "asset",
             "authorities",
             "blog",
+            "brand",
             "document",
             "firm",
             "import",

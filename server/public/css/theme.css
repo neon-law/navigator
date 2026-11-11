@@ -4684,6 +4684,10 @@ a.lawyer-detail__fact-value:focus-visible {
   margin-bottom: 1rem;
 }
 
+#projects .nav-tabs[aria-label="Project scope"] {
+  flex-wrap: wrap;
+}
+
 .nav-tab {
   padding: 0.35rem 0.85rem;
   border-radius: 0.35rem;
