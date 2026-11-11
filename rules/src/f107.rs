@@ -378,7 +378,8 @@ fn order_by_routing(signers: &mut [SignerRole]) -> Result<(), String> {
                 "declared signer routing orders must form a permutation of 1..={}; \
                  `{}` sits at position {expected} but declares {}",
                 signers.len(),
-                signer.role, signer.routing_order
+                signer.role,
+                signer.routing_order
             ));
         }
     }
