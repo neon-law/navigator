@@ -82,15 +82,13 @@ pub async fn consume_receipt(
     if let Some(persisted) = persisted_analysis(receipt) {
         return Ok(Some(persisted));
     }
-    match analysis::analyze_push(forge, &receipt.repo_full_name, &receipt.ref_updates).await? {
-        Some(analyzed) => {
-            let persisted = persist(&analyzed);
-            journal::record_analysis(db, receipt.id, &persisted).await?;
-            Ok(Some(persisted))
-        }
-        None => {
-            journal::mark_skipped(db, receipt.id).await?;
-            Ok(None)
-        }
-    }
+    let Some(analyzed) =
+        analysis::analyze_push(forge, &receipt.repo_full_name, &receipt.ref_updates).await?
+    else {
+        journal::mark_skipped(db, receipt.id).await?;
+        return Ok(None);
+    };
+    let persisted = persist(&analyzed);
+    journal::record_analysis(db, receipt.id, &persisted).await?;
+    Ok(Some(persisted))
 }
