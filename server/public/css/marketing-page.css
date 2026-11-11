@@ -1280,6 +1280,34 @@
   .fm-page--nautilus .fm-hero__title { font-size: clamp(2.75rem, 13vw, 4rem); }
 }
 
+/* Neon's home keeps the shared practice layout and controls on the same light
+   surface as the Notations index. The hero is short on purpose: it asks the
+   question and the needs cards answer it inside the first screen. */
+.public-shell:has(.fm-page--home) > .site-footer { margin-top: 0; }
+.fm-page--home .fm-hero { padding-block: clamp(2rem, 5vw, 3.5rem) 0; }
+.fm-page--home .fm-hero__inner { margin-inline: 0; max-width: 48rem; text-align: left; }
+.fm-page--home .fm-hero__title {
+  font-size: clamp(2.5rem, 5.5vw, 4.25rem);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -.02em;
+}
+.fm-page--home .fm-hero__lead { max-width: 40rem; font-size: clamp(1.0625rem, 1.4vw, 1.25rem); }
+.fm-page--home .fm-hero__mark { display: none; }
+.fm-page--home #needs { padding-top: clamp(1.25rem, 2.5vw, 2rem); }
+.fm-page--home #needs .fm-band__title { font-size: 1.125rem; letter-spacing: 0; }
+.fm-page--home .fm-band--enrollment {
+  background: var(--nav-color-surface-subtle);
+  border-radius: var(--nav-radius-lg, 1rem);
+  padding-inline: clamp(1.25rem, 4vw, 3rem);
+}
+.fm-page--home [data-nautilus-intake] { max-width: 42rem; margin: 2rem auto 0; }
+.fm-page--home [data-nautilus-intake] form > button + button { margin-left: .5rem; }
+.fm-page--home progress { width: 100%; accent-color: var(--nav-color-primary); }
+.fm-page--home [hidden] { display: none !important; }
+.fm-page--home dt { font-weight: 700; margin-top: 1rem; }
+.fm-page--home dd { margin: .4rem 0 1rem; overflow-wrap: anywhere; }
+
 /* The app band: an iPhone listing the subscription's checks and, when a second
    screen is authored, a Pixel showing it, beside the two store badges. */
 .fm-app {

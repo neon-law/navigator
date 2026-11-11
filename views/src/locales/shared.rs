@@ -57,6 +57,7 @@ pub const REQUIRED_KEYS: &[&str] = &[
     "home.mission_north_star",
     "home.mission_promise",
     "home.need_prompt",
+    "lead.call_label",
     "lead.consent",
     "lead.phone_helper",
     "lead.sms_label",

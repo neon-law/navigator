@@ -1018,6 +1018,7 @@ fn ops_help_lists_operator_members() {
         vec![
             "assets",
             "brand-readiness",
+            "call-script",
             "certificates",
             "cut-release",
             "deployments",

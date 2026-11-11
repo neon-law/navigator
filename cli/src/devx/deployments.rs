@@ -1676,7 +1676,11 @@ fn kubectl_apply_service_secrets(ship_config: &ship::ShipConfig, manifest: &str)
 
 /// Read one secret value from Secret Manager `versions/latest`. The error
 /// names the key and the command that supplies it, never a value.
-async fn record_value(client: &gcp::client::GcpClient, project: &str, key: &str) -> Result<String> {
+pub(super) async fn record_value(
+    client: &gcp::client::GcpClient,
+    project: &str,
+    key: &str,
+) -> Result<String> {
     let bytes = gcp::secret_manager::access_version(client, project, key, "latest")
         .await?
         .with_context(|| {

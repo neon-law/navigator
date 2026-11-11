@@ -593,7 +593,9 @@ DEFINE FIELD OVERWRITE inserted_at ON lead TYPE datetime DEFAULT time::now();
 DEFINE FIELD OVERWRITE updated_at ON lead TYPE datetime DEFAULT time::now();
 DEFINE INDEX OVERWRITE lead_email_lower ON lead FIELDS email_lower;
 
--- `lead_consent` is the evidence ledger for every public SMS-consent choice.
+-- `lead_consent` is the evidence ledger for every public SMS and callback
+-- consent choice. The callback fields are optional because rows written before
+-- that choice existed carry neither.
 -- The tuple is append-only: each field is READONLY so a later contact-data
 -- update cannot rewrite the time, page, phone, wording, policy, or opt-in
 -- state that belonged to an earlier submission. `store::leads` exposes only
@@ -606,6 +608,8 @@ DEFINE FIELD OVERWRITE source_path ON lead_consent TYPE string READONLY;
 DEFINE FIELD OVERWRITE sms_consent_version ON lead_consent TYPE string READONLY;
 DEFINE FIELD OVERWRITE sms_policy_version ON lead_consent TYPE string READONLY;
 DEFINE FIELD OVERWRITE sms_opt_in ON lead_consent TYPE bool READONLY;
+DEFINE FIELD OVERWRITE call_consent_version ON lead_consent TYPE option<string> READONLY;
+DEFINE FIELD OVERWRITE call_opt_in ON lead_consent TYPE option<bool> READONLY;
 DEFINE INDEX OVERWRITE lead_consent_lead ON lead_consent FIELDS lead_id;
 
 -- `persons`: the directory of human contacts. Record ids are UUIDs, so

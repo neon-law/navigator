@@ -131,7 +131,7 @@ async fn the_index_lists_nautilus_without_business_counsel() {
     );
     assert!(!body.contains("/disputes)") && !body.contains("/business)"));
     assert!(!body.contains("/services)"));
-    assert!(body.contains("Nautilus is one subscription"));
+    assert!(body.contains("Legal paperwork, handled for $29/mo"));
     assert!(!body.contains("from $50/day"));
     assert!(!body.contains("starts at $100/day"));
     assert!(!body.contains("express review"));

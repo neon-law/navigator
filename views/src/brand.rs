@@ -146,10 +146,10 @@ const FIRM_NAV: &[NavLink] = &[
 ];
 
 /// Neon's header names its three products: Nautilus, the subscription at
-/// `/`; Navigator, the engine; and Notations, the document format. The shared
+/// `/nautilus`; Navigator, the engine; and Notations, the document format. The shared
 /// footer row still links Navigator and Notations for every brand.
 const NEON_NAV: &[NavLink] = &[
-    NavLink::leaf("Nautilus", "/"),
+    NavLink::leaf("Nautilus", "/nautilus"),
     NavLink::leaf("Navigator", "/navigator"),
     NavLink::leaf("Notations", "/notations"),
 ];
@@ -1683,6 +1683,13 @@ pub fn request_sender_email() -> Option<String> {
     REQUEST_SENDER.try_with(Clone::clone).ok().flatten()
 }
 
+/// Carry the calling request's branding and mail sender into `future`, for
+/// work spawned off the request path: a new task starts outside both scopes
+/// and would speak for the deployment's default Brand.
+pub fn carry_request_scope<R>(future: impl Future<Output = R>) -> impl Future<Output = R> {
+    scope(current(), scope_sender(request_sender_email(), future))
+}
+
 static PROCESS_BRANDING: OnceLock<&'static Branding> = OnceLock::new();
 
 /// Install the immutable branding used by spawned work in a production
@@ -2778,13 +2785,36 @@ mod tests {
         }
     }
 
+    /// Every Brand Guieb & Shook PC stands behind publishes the firm's own Reno
+    /// box as its Nevada footer office, not just the default Brand.
+    #[test]
+    fn every_guieb_shook_brand_publishes_the_firm_nevada_box() {
+        for key in BrandKey::ALL {
+            let branding = key.resolve_branding(&DEFAULT_BRANDING);
+            if branding.firm.legal_entity != "Guieb & Shook PC" {
+                continue;
+            }
+            let nevada: Vec<&str> = branding
+                .firm_offices
+                .iter()
+                .filter(|office| office.state == "Nevada")
+                .map(|office| office.address)
+                .collect();
+            assert_eq!(
+                nevada,
+                ["5150 Mae Anne Ave, Ste 405-9002, Reno, NV 89523"],
+                "{key:?} footer Nevada office"
+            );
+        }
+    }
+
     #[test]
     fn the_neon_nav_links_its_three_products() {
         let nav: Vec<(&str, &str)> = FIRM_BRAND.nav.iter().map(|n| (n.label, n.href)).collect();
         assert_eq!(
             nav,
             [
-                ("Nautilus", "/"),
+                ("Nautilus", "/nautilus"),
                 ("Navigator", "/navigator"),
                 ("Notations", "/notations"),
             ]

@@ -173,6 +173,24 @@ before enabling replies. A text whose number matches a Person's recorded phone (
 shows that Person and their role in the Inbox; the Owner or a Brand-content Admin links an unknown number from the
 thread by entering the Person's email. A phone is an address, not proof of identity, and grants nothing.
 
+A receiving number answers calls with its [Call Script](glossary/call-script.md), run by the number's Twilio Studio
+Flow. Reconcile it with `TWILIO_ACCOUNT_SID` and `TWILIO_AUTH_TOKEN` in the environment, or pass `--project-id
+<gcp-project>` to read both from that deployment's Secret Manager for the one run, in memory, with nothing written to
+disk:
+
+```bash
+navigator ops call-script \
+  --number +15555550100 \
+  --greeting "Hello, you have reached Example Law." \
+  --extension "702=Aries Example=+15555550142" \
+  --fallback "Please email support at example dot com. Goodbye."
+```
+
+The command prints `UNCHANGED` when the published Flow already runs the script and `UPDATE` when it differs; add
+`--apply` to publish a new revision. Repeat `--extension` for each person. A caller keys the digits and the pound key to
+be forwarded; silence or any other entry hears the fallback. The number must already point at a Studio Flow: the command
+edits that Flow and never repoints a number.
+
 Inbound Slack notices retain their state and receipt on Message. The configured messages channel belongs to
 `SLACK_MESSAGES_FIRM_ID`, or the Firm wearing Neon when unset. The scheduled reconciler recovers pending notices and
 checks ambiguous sends against a bounded `conversations.history` read. This requires the channel's history scope; an

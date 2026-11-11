@@ -37,6 +37,8 @@ struct LeadForm {
     #[serde(default)]
     sms_consent: Option<String>,
     #[serde(default)]
+    call_consent: Option<String>,
+    #[serde(default)]
     website: String,
     #[serde(default, alias = "_csrf")]
     csrf_token: String,
@@ -138,6 +140,7 @@ async fn submit(
 
     let phone = (!phone.is_empty()).then(|| phone.to_string());
     let sms_opt_in = sms_requested && phone.is_some();
+    let call_opt_in = form.call_consent.as_deref() == Some("on") && phone.is_some();
     let event_time = Utc::now();
     let new_lead = store::leads::NewLead {
         email: email.to_string(),
@@ -156,6 +159,10 @@ async fn submit(
         ),
         sms_policy_version: webapp::lead_capture::SMS_POLICY_VERSION.to_string(),
         sms_opt_in,
+        call_consent_version: webapp::lead_capture::server_call_consent_version(
+            views::brand::FIRM_BRAND.site_name,
+        ),
+        call_opt_in,
     };
     match store::leads::record_consent_event(&state.surreal, &new_lead, &consent_event).await {
         Ok(lead) => {
@@ -519,6 +526,40 @@ mod tests {
         assert_eq!(events[0].phone.as_deref(), Some("+ ()"));
     }
 
+    /// A callback needs a number to call, and its wording is the server's own
+    /// rendering of the label, never a submitted field.
+    #[tokio::test]
+    async fn records_callback_consent_only_when_a_phone_is_present() {
+        let token = "call-csrf";
+        for (email, phone, expected) in [
+            ("call@example.com", "+1 555 010 0100", true),
+            ("no-number@example.com", "", false),
+        ] {
+            let db = store::test_support::mem_surreal().await;
+            let (app, sessions) = test_app(db.clone(), RateLimit::disabled()).await;
+            let form = format!(
+                "{}&call_consent=on&call_consent_version=attacker-wording",
+                body(token, email, phone, false)
+            );
+            let response = app
+                .oneshot(request(form, Some(csrf_cookie(&sessions, token))))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::SEE_OTHER);
+            let lead = store::leads::list(&db).await.unwrap().remove(0);
+            let event = store::leads::consent_history(&db, lead.id)
+                .await
+                .unwrap()
+                .remove(0);
+            assert_eq!(event.call_opt_in, expected, "{email}");
+            assert!(!event.sms_opt_in, "a callback is not a texting consent");
+            assert_eq!(
+                event.call_consent_version.as_deref(),
+                Some("Yes, Neon Law may call me at this number about this inquiry."),
+            );
+        }
+    }
+
     #[tokio::test]
     async fn derives_sms_evidence_server_side_and_ignores_tampered_fields() {
         let db = store::test_support::mem_surreal().await;
@@ -542,6 +583,7 @@ mod tests {
             consent_sentence: CONSENT.to_string(),
             phone_helper: "Optional. Message frequency varies. Message and data rates may apply. Reply STOP to opt out or HELP for help. Our Privacy Policy and texting terms explain how we text and what we keep.".to_string(),
             sms_label: "Yes, Neon Law may send me text messages about this inquiry at this number, including automated texts. Texting is not a condition of hiring the firm.".to_string(),
+            call_label: "Yes, Neon Law may call me at this number about this inquiry.".to_string(),
         };
         assert_eq!(event.sms_consent_version, rendered.sms_consent_version());
         assert_eq!(event.sms_policy_version, "2026-09-18");

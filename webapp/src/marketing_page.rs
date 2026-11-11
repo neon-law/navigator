@@ -435,6 +435,9 @@ pub enum PageSkin {
     Practice,
     /// Aquatic product presentation using the shared practice components.
     Nautilus,
+    /// Neon's home: the practice components on the light surface, with a short
+    /// hero so the first band sits under the question it asks.
+    Home,
 }
 
 impl PageSkin {
@@ -445,6 +448,7 @@ impl PageSkin {
             Self::Marketing => "",
             Self::Practice => " fm-page--practice",
             Self::Nautilus => " fm-page--practice fm-page--nautilus",
+            Self::Home => " fm-page--practice fm-page--home",
         }
     }
 }
@@ -651,8 +655,8 @@ pub fn MarketingPage(
             description: content.meta_description.clone(),
             og_description: content.og_description.clone(),
             path: path.clone(),
-            firm_components: matches!(content.skin, PageSkin::Practice | PageSkin::Nautilus) || content.hero_mark.is_some(),
-            commitment_components: matches!(content.skin, PageSkin::Practice | PageSkin::Nautilus),
+            firm_components: !matches!(content.skin, PageSkin::Marketing) || content.hero_mark.is_some(),
+            commitment_components: !matches!(content.skin, PageSkin::Marketing),
             home_components: content.bands.iter().any(Band::is_downloads),
             div { class: "fm-page{content.skin.modifier()}",
                 section { class: "fm-hero fm-hero--page commitment-hero",
@@ -661,7 +665,7 @@ pub fn MarketingPage(
                     // practice page the statement is the headline and the
                     // practice name is the label above it. The marketing skin
                     // keeps the title as the headline.
-                    if matches!(content.skin, PageSkin::Practice | PageSkin::Nautilus) {
+                    if !matches!(content.skin, PageSkin::Marketing) {
                         div { class: "firm-glow fm-hero__glow", "aria-hidden": "true" }
                         div { class: "fm-hero__inner commitment-hero__statement",
                             if let Some(mark) = content.hero_mark {
@@ -1681,6 +1685,7 @@ mod tests {
                 consent_sentence: "By sending this, you agree that Neon Law may email you about this inquiry. Sending it does not make you a client, and nothing on this page is legal advice. See our Privacy Policy.".to_string(),
                 phone_helper: "Optional. Message frequency varies. Message and data rates may apply. Reply STOP to opt out or HELP for help. Our Privacy Policy and texting terms explain how we text and what we keep.".to_string(),
                 sms_label: "Yes, Neon Law may send me text messages about this inquiry at this number, including automated texts. Texting is not a condition of hiring the firm.".to_string(),
+                call_label: "Yes, Neon Law may call me at this number about this inquiry.".to_string(),
             },
             bands: vec![
                 Band::Statement {

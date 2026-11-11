@@ -20,7 +20,8 @@ const PERSON_TABLE: &str = "person";
 const SELECT: &str = "id, email, email_lower, phone, brand_key, source_path, consent_version, \
                      consented_at, status, unsubscribed_at, person_id, submissions, inserted_at, updated_at";
 const CONSENT_SELECT: &str = "id, lead_id, consented_at, phone, source_path, \
-                              sms_consent_version, sms_policy_version, sms_opt_in";
+                              sms_consent_version, sms_policy_version, sms_opt_in, \
+                              call_consent_version, call_opt_in";
 
 /// Closed status set stored on `lead.status`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,7 +90,8 @@ pub struct NewLead {
     pub consented_at: DateTime<Utc>,
 }
 
-/// The immutable SMS-consent tuple captured with a public lead submission.
+/// The immutable SMS and callback consent tuple captured with a public lead
+/// submission.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewConsentEvent {
     pub consented_at: DateTime<Utc>,
@@ -98,9 +100,13 @@ pub struct NewConsentEvent {
     pub sms_consent_version: String,
     pub sms_policy_version: String,
     pub sms_opt_in: bool,
+    pub call_consent_version: String,
+    pub call_opt_in: bool,
 }
 
-/// One immutable SMS-consent event, oldest first in [`consent_history`].
+/// One immutable consent event, oldest first in [`consent_history`]. An event
+/// captured before the callback choice existed carries no callback wording
+/// and no consent to a call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConsentEvent {
     pub id: Uuid,
@@ -111,6 +117,8 @@ pub struct ConsentEvent {
     pub sms_consent_version: String,
     pub sms_policy_version: String,
     pub sms_opt_in: bool,
+    pub call_consent_version: Option<String>,
+    pub call_opt_in: bool,
 }
 
 #[derive(SurrealValue)]
@@ -162,6 +170,8 @@ struct ConsentEventRow {
     sms_consent_version: String,
     sms_policy_version: String,
     sms_opt_in: bool,
+    call_consent_version: Option<String>,
+    call_opt_in: Option<bool>,
 }
 
 impl ConsentEventRow {
@@ -175,6 +185,8 @@ impl ConsentEventRow {
             sms_consent_version: self.sms_consent_version,
             sms_policy_version: self.sms_policy_version,
             sms_opt_in: self.sms_opt_in,
+            call_consent_version: self.call_consent_version,
+            call_opt_in: self.call_opt_in.unwrap_or_default(),
         })
     }
 }
@@ -303,7 +315,8 @@ pub async fn record_consent_event(
              CREATE $event_id SET lead_id = $lead_id, consented_at = $event_consented_at, \
                  phone = $event_phone, source_path = $event_source_path, \
                  sms_consent_version = $sms_consent_version, sms_policy_version = $sms_policy_version, \
-                 sms_opt_in = $sms_opt_in; \
+                 sms_opt_in = $sms_opt_in, call_consent_version = $call_consent_version, \
+                 call_opt_in = $call_opt_in; \
              {lead_statement}; \
              SELECT {SELECT} FROM ONLY $lead_id; \
              COMMIT;"
@@ -322,6 +335,8 @@ pub async fn record_consent_event(
         ))
         .bind(("sms_policy_version", event.sms_policy_version.clone()))
         .bind(("sms_opt_in", event.sms_opt_in))
+        .bind(("call_consent_version", event.call_consent_version.clone()))
+        .bind(("call_opt_in", event.call_opt_in))
         .bind(("email", email))
         .bind(("email_lower", email_lower))
         .bind(("phone", new.phone.clone()))
@@ -585,6 +600,8 @@ mod tests {
             sms_consent_version: "synthetic-disclosure".into(),
             sms_policy_version: "synthetic-policy".into(),
             sms_opt_in: true,
+            call_consent_version: "call disclosure".into(),
+            call_opt_in: true,
         };
         let first = record_consent_event(&db, &input, &event).await.unwrap();
         let repeated = record_consent_event(&db, &input, &event).await.unwrap();
@@ -630,6 +647,12 @@ mod tests {
         );
         assert_eq!(history[0].consented_at, newer_at);
         assert_eq!(history[1].consented_at, older_at);
+        assert!(
+            history
+                .iter()
+                .all(|entry| entry.call_consent_version.is_none() && !entry.call_opt_in),
+            "an event from before the callback choice reads as no consent to a call"
+        );
         assert_eq!(
             latest_consent_event(&db, parent.id)
                 .await
@@ -674,6 +697,8 @@ mod tests {
                 sms_consent_version: "phone disclosure v0".to_string(),
                 sms_policy_version: "2026-01-01".to_string(),
                 sms_opt_in: true,
+                call_consent_version: "call disclosure".into(),
+                call_opt_in: true,
             },
         )
         .await
@@ -693,6 +718,8 @@ mod tests {
                 sms_consent_version: "phone disclosure v1".to_string(),
                 sms_policy_version: "2026-09-18".to_string(),
                 sms_opt_in: true,
+                call_consent_version: "call disclosure".into(),
+                call_opt_in: true,
             },
         )
         .await
@@ -711,6 +738,8 @@ mod tests {
                 sms_consent_version: "phone disclosure v2".to_string(),
                 sms_policy_version: "2026-09-18".to_string(),
                 sms_opt_in: false,
+                call_consent_version: "call disclosure".into(),
+                call_opt_in: false,
             },
         )
         .await
@@ -723,6 +752,8 @@ mod tests {
         assert_eq!(history.len(), 3);
         assert_eq!(history[0].consented_at, first_at);
         assert_eq!(history[0].phone.as_deref(), Some("+1 (555) 010-1111"));
+        assert!(history[0].call_opt_in);
+        assert!(!history[2].call_opt_in);
         assert_eq!(history[0].source_path, "/services");
         assert_eq!(history[0].sms_consent_version, "phone disclosure v0");
         assert!(history[0].sms_opt_in);
