@@ -1814,7 +1814,7 @@ fn resolve_firm_contact_content(
             "Book Consultation"
         }
         .to_string(),
-        firm_phone: branding.firm_phone.to_string(),
+        firm_phone: branding.published_phone().to_string(),
         lead_capture: locales::lead_capture(branding),
     }
 }

@@ -394,7 +394,8 @@ pub struct Branding {
     /// inbound call resolves to its Brand (a voice-lane Brand Phone Number in
     /// `brand_phone_number`) and so to that brand's call script. A brand without a line of its own publishes
     /// the firm's shared number. A deployment that mounts its own manifest
-    /// publishes its own number.
+    /// publishes its own number, and a [`NAVIGATOR_VOICE_NUMBERS`] entry
+    /// replaces it per deployment — read it through [`Branding::published_phone`].
     pub firm_phone: &'static str,
     /// Every office the firm publishes, rendered in the public footer. See
     /// [`FIRM_OFFICES`] for why this is not [`SiteBrand::postal_address`].
@@ -1692,6 +1693,65 @@ pub fn carry_request_scope<R>(future: impl Future<Output = R>) -> impl Future<Ou
 
 static PROCESS_BRANDING: OnceLock<&'static Branding> = OnceLock::new();
 
+/// Per-Brand Twilio voice lines for this deployment, as comma-separated
+/// `brand_key=+E164` pairs (`summons=+15550100100,neon=+15550100101`). A
+/// listed Brand publishes its pair's number — header call button, home hero,
+/// footer, `/contact` — so a staging deployment's callers dial staging's
+/// Twilio numbers rather than production's. A Brand the list omits, or every
+/// Brand when it is unset, publishes its compiled [`Branding::firm_phone`].
+pub const NAVIGATOR_VOICE_NUMBERS: &str = "NAVIGATOR_VOICE_NUMBERS";
+
+static DEPLOYMENT_VOICE_NUMBERS: OnceLock<Vec<(BrandKey, &'static str)>> = OnceLock::new();
+
+/// Install [`NAVIGATOR_VOICE_NUMBERS`] for this process. The caller validates
+/// each E.164 number; this only formats them for display.
+pub fn install_deployment_voice_numbers(
+    numbers: &[(BrandKey, String)],
+) -> Result<(), &'static str> {
+    DEPLOYMENT_VOICE_NUMBERS
+        .set(
+            numbers
+                .iter()
+                .map(|(key, e164)| (*key, &*Box::leak(display_phone(e164).into_boxed_str())))
+                .collect(),
+        )
+        .map_err(|_| "deployment voice numbers are already installed")
+}
+
+/// Space a North American E.164 number the way the compiled Brands publish
+/// theirs (`+15108002090` → `+1 510 800 2090`); any other number is returned
+/// as given.
+#[must_use]
+pub fn display_phone(e164: &str) -> String {
+    let e164 = e164.trim();
+    match e164.strip_prefix("+1") {
+        Some(rest) if rest.len() == 10 && rest.bytes().all(|b| b.is_ascii_digit()) => {
+            format!("+1 {} {} {}", &rest[..3], &rest[3..6], &rest[6..])
+        }
+        _ => e164.to_string(),
+    }
+}
+
+impl Branding {
+    /// The voice line this Brand publishes on this deployment: its
+    /// [`NAVIGATOR_VOICE_NUMBERS`] entry when installed, else its compiled
+    /// number.
+    #[must_use]
+    pub fn published_phone(&self) -> &'static str {
+        published_phone(
+            DEPLOYMENT_VOICE_NUMBERS.get().map_or(&[], Vec::as_slice),
+            self,
+        )
+    }
+}
+
+fn published_phone(numbers: &[(BrandKey, &'static str)], branding: &Branding) -> &'static str {
+    numbers
+        .iter()
+        .find(|(key, _)| *key == branding.brand_key)
+        .map_or(branding.firm_phone, |(_, number)| number)
+}
+
 /// Install the immutable branding used by spawned work in a production
 /// binary. Request-scoped branding takes precedence, which keeps library tests
 /// and independently constructed routers isolated from one another.
@@ -1988,10 +2048,10 @@ pub fn brand_key() -> BrandKey {
     current().brand_key
 }
 
-/// The firm's published voice line from request-scoped branding.
+/// The voice line request-scoped branding publishes on this deployment.
 #[must_use]
 pub fn firm_phone() -> &'static str {
-    current().firm_phone
+    current().published_phone()
 }
 
 /// The firm's published offices from request-scoped branding.
@@ -2645,6 +2705,27 @@ mod tests {
     /// deliberately different values here so that swap cannot pass, and the
     /// pair is asserted distinct so a future edit collapsing them fails loudly
     /// rather than making this test vacuous.
+    /// A deployment's Twilio voice line replaces only the listed Brand's
+    /// compiled number; every other Brand keeps its own.
+    #[test]
+    fn a_deployment_voice_number_replaces_only_its_brands() {
+        let numbers = [(BrandKey::Summons, "+1 555 010 0100")];
+        assert_eq!(
+            super::published_phone(&numbers, &super::SUMMONS_BRANDING),
+            "+1 555 010 0100"
+        );
+        assert_eq!(
+            super::published_phone(&numbers, &super::MISERICORDIA_BRANDING),
+            super::MISERICORDIA_BRANDING.firm_phone
+        );
+        assert_eq!(
+            super::published_phone(&[], &super::SUMMONS_BRANDING),
+            super::SUMMONS_BRANDING.firm_phone
+        );
+        assert_eq!(super::display_phone(" +15550100100 "), "+1 555 010 0100");
+        assert_eq!(super::display_phone("+155501001"), "+155501001");
+    }
+
     #[test]
     fn each_brand_accessor_reads_its_own_field() {
         assert_eq!(super::base_url(), DEFAULT_BRANDING.base_url);
