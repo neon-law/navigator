@@ -129,10 +129,20 @@ async fn slack_mock() -> MockServer {
         .await;
     Mock::given(method("POST"))
         .and(path("/conversations.create"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "ok": true,
-            "channel": { "id": "C04PUSH", "name": "sample-project", "is_private": true }
-        })))
+        .respond_with(|request: &wiremock::Request| {
+            // Slack answers a create with the channel carrying the name
+            // the caller asked for, and `ensure_private_channel` holds
+            // that invariant strictly. Echoing the request's name keeps
+            // the fixture independent of the channel-naming prefix.
+            let name = serde_json::from_slice::<serde_json::Value>(&request.body)
+                .ok()
+                .and_then(|body| body["name"].as_str().map(str::to_owned))
+                .unwrap_or_default();
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "channel": { "id": "C04PUSH", "name": name, "is_private": true }
+            }))
+        })
         .mount(&server)
         .await;
     server
