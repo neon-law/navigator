@@ -9889,6 +9889,7 @@ bon-macros 3.9.3
 codex 0.3.0
 comemo 0.5.1
 constant_time_eq 0.4.2
+constant_time_eq 0.6.1
 dissimilar 1.0.11
 dtoa 1.0.11
 dyn-clone 1.0.20
@@ -26935,6 +26936,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 base16 0.2.1
 blake3 1.8.5
 constant_time_eq 0.4.2
+constant_time_eq 0.6.1
 dunce 1.0.5
 fast-srgb8 1.0.0
 imgref 1.12.2
@@ -32887,6 +32889,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ----------------------------------------------------------------------------------------
 constant_time_eq 0.4.2
+constant_time_eq 0.6.1
 
 Permission is hereby granted, free of charge, to any person obtaining a
 copy of this software and associated documentation files (the
@@ -33589,7 +33592,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 spin 0.10.1
 spin 0.12.2
 spin 0.9.9
-zip 9.4.1
+zip 9.5.1
 
 The MIT License (MIT)
 
