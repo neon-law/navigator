@@ -164,6 +164,12 @@ pub async fn app_state_with_email(
         runtime_kms: Arc::new(cloud::NoRuntimeKms),
         esignature_webhook_secret: None,
         esignature_hmac_key: None,
+        // The BDD runner drives no Forgejo push scenarios yet: the receiver
+        // stays unconfigured, so its route acknowledges and skips.
+        forgejo_webhook_secret: None,
+        forgejo_webhook_hmac_key: None,
+        forgejo_push_store: None,
+        forgejo_push_consumer: Arc::new(portal::forgejo_webhook::UnwiredPushConsumer),
         fake_signature_dir: None,
         email,
         attachment_scanner: Arc::new(portal::attachment_scanner::FakeAttachmentScanner::clean()),

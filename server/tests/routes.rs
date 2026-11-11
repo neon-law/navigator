@@ -787,6 +787,10 @@ async fn state_with_workshops(materials: Vec<WorkshopMaterial>) -> AppState {
         a2a_router: None,
         plausible_conversions: portal::plausible::ConversionReporter::live(),
         hcaptcha: None,
+        forgejo_webhook_secret: None,
+        forgejo_webhook_hmac_key: None,
+        forgejo_push_store: None,
+        forgejo_push_consumer: std::sync::Arc::new(portal::forgejo_webhook::UnwiredPushConsumer),
     }
 }
 

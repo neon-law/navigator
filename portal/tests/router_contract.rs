@@ -455,6 +455,7 @@ async fn verified_webhook_ingress_stays_anonymous() {
         "/webhook/sendgrid/inbound/dev-secret",
         "/webhook/email-events/dev-secret",
         "/webhook/esignature/dev-secret",
+        "/webhook/forgejo/dev-secret",
         "/webhook/meta",
         "/webhook/tiktok",
     ] {

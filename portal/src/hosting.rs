@@ -548,6 +548,33 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
         }
     };
 
+    // The Forgejo push receiver's two gates (`FORGEJO_WEBHOOK_SECRET`
+    // coarse, `FORGEJO_WEBHOOK_HMAC_KEY` real) and its journal's
+    // PostgreSQL lane — the same shared pool the Twilio registry uses.
+    // Without the lane the receiver refuses verified deliveries (503)
+    // rather than consume without journaling; Forgejo redelivers.
+    let forgejo_webhook_secret = std::env::var("FORGEJO_WEBHOOK_SECRET")
+        .ok()
+        .filter(|s| !s.is_empty());
+    let forgejo_webhook_hmac_key = std::env::var("FORGEJO_WEBHOOK_HMAC_KEY")
+        .ok()
+        .filter(|s| !s.is_empty());
+    tracing::info!(
+        path_secret = forgejo_webhook_secret.is_some(),
+        hmac_key = forgejo_webhook_hmac_key.is_some(),
+        "forgejo push webhook auth configured"
+    );
+    let forgejo_push_store = match store::postgres::PostgresDb::from_env().await {
+        Ok(db) => Some(std::sync::Arc::new(db)),
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                "Forgejo push journal unavailable; verified pushes are refused until PostgreSQL is configured"
+            );
+            None
+        }
+    };
+
     let state = crate::AppState {
         brand_bundle,
         surreal,
@@ -594,6 +621,10 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
         summary_intake,
         sms_intake,
         twilio_registry,
+        forgejo_webhook_secret,
+        forgejo_webhook_hmac_key,
+        forgejo_push_store,
+        forgejo_push_consumer: std::sync::Arc::new(crate::forgejo_webhook::UnwiredPushConsumer),
         email_events_secret,
         sendgrid_events_public_key,
         bootstrap_owner_email: crate::oauth::bootstrap_owner_email_from_env(),
@@ -831,6 +862,14 @@ fn spawn_journal_replay(state: &crate::AppState) {
             crate::esignature_webhook::replay_pending_receipts(&replay_state, REPLAY_BUDGET).await
         {
             tracing::error!(%error, "esignature webhook journal replay failed");
+        }
+        // The Forgejo push journal drains the same way: a verified
+        // receipt whose consumption died mid-flight is recovered from
+        // the journal at boot, never dropped.
+        if let Err(error) =
+            crate::forgejo_webhook::replay_pending_receipts(&replay_state, REPLAY_BUDGET).await
+        {
+            tracing::error!(%error, "forgejo push webhook journal replay failed");
         }
     });
 }
