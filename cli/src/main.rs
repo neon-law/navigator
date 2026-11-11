@@ -2689,6 +2689,22 @@ enum NotationCmd {
         /// outside a signature block, or drafting note.
         #[arg(long)]
         preview: bool,
+        /// Write the render as a **redline** against this previous `.docx`:
+        /// every difference from it becomes a real Word tracked change
+        /// (`w:ins`/`w:del`) in the output, for the lawyer to accept or
+        /// reject in Word before the version is delivered. The previous
+        /// document must be a fresh `notation word` export carrying no
+        /// unresolved revisions or review comments of its own. Pairs with
+        /// `notation import`, which still refuses any document carrying the
+        /// revisions this writes — a redline is for review, never for
+        /// splicing.
+        #[arg(long, value_name = "PREVIOUS.docx")]
+        redline_against: Option<PathBuf>,
+        /// The name the tracked changes record as their author. Defaults to
+        /// `matter.counsel.name` in `navigator.yaml` — the same name the
+        /// `/s/` signature line signs with.
+        #[arg(long, value_name = "NAME")]
+        redline_author: Option<String>,
     },
     /// Apply an edited Word document back into the notation template it was
     /// rendered from — the second half of `notation word`.
@@ -5684,7 +5700,19 @@ fn run() -> ExitCode {
                 out,
                 answers,
                 preview,
-            } => run_render(&file, &out, &answers, "docx", preview, false),
+                redline_against,
+                redline_author,
+            } => match redline_against {
+                Some(previous) => run_word_redline(
+                    &file,
+                    &out,
+                    &answers,
+                    preview,
+                    &previous,
+                    redline_author.as_deref(),
+                ),
+                None => run_render(&file, &out, &answers, "docx", preview, false),
+            },
             NotationCmd::Import {
                 file,
                 edited,
@@ -9006,6 +9034,108 @@ fn run_render(
         ))
     );
     ExitCode::SUCCESS
+}
+
+/// `notation word --redline-against`: render exactly as `notation word`
+/// does, then turn the difference from the previous version into real Word
+/// tracked changes ([`word::redline::against`]). The render stages in a
+/// temporary file first, so a refusal never leaves an un-redlined document
+/// sitting at `--out` looking final.
+fn run_word_redline(
+    file: &std::path::Path,
+    out: &std::path::Path,
+    answers: &[(String, String)],
+    preview: bool,
+    previous: &std::path::Path,
+    author: Option<&str>,
+) -> ExitCode {
+    let staging = match tempfile::Builder::new()
+        .prefix("navigator-redline-")
+        .suffix(".docx")
+        .tempfile_in(out.parent().unwrap_or(std::path::Path::new(".")))
+    {
+        Ok(staging) => staging,
+        Err(error) => {
+            eprintln!("navigator: could not stage the render: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let code = run_render(file, staging.path(), answers, "docx", preview, false);
+    if code != ExitCode::SUCCESS {
+        return code;
+    }
+    let rendered = match std::fs::read(staging.path()) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            eprintln!("navigator: read the staged render: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let previous_bytes = match std::fs::read(previous) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            eprintln!("navigator: read {}: {error}", previous.display());
+            return ExitCode::from(2);
+        }
+    };
+    let author = match author {
+        Some(name) => name.to_string(),
+        None => match resolve_redline_author(file) {
+            Ok(name) => name,
+            Err(message) => {
+                eprintln!("navigator: {message}");
+                return ExitCode::from(2);
+            }
+        },
+    };
+    let redlined = match word::redline::against(&rendered, &previous_bytes, &author) {
+        Ok(redline) => redline,
+        Err(error) => {
+            eprintln!("navigator: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    if let Err(error) = std::fs::write(out, &redlined.bytes) {
+        eprintln!("navigator: write {}: {error}", out.display());
+        return ExitCode::from(2);
+    }
+    let counts = redlined.counts;
+    if counts.total() == 0 {
+        println!(
+            "{}",
+            palette::dim("No differences from the previous version; the render is unchanged.")
+        );
+    } else {
+        println!(
+            "{}",
+            palette::dim(format!(
+                "Redlined {} insertion(s), {} deletion(s), {} rewrite(s), authored by \
+                 {author} → {}",
+                counts.insertions,
+                counts.deletions,
+                counts.replacements,
+                out.display()
+            ))
+        );
+    }
+    ExitCode::SUCCESS
+}
+
+/// The signing lawyer's name, for the revision author of every tracked
+/// change a redline writes. The same source the pleading `/s/` line signs
+/// with: `matter.counsel.name` in the Project's manifest.
+///
+/// # Errors
+///
+/// When the manifest is missing or malformed, naming both outs — the flag
+/// and the manifest key.
+fn resolve_redline_author(file: &std::path::Path) -> Result<String, String> {
+    projects::matter::counsel_name(file).map_err(|error| {
+        format!(
+            "a redline records who made each change: pass --redline-author, or add \
+             `matter.counsel.name` to navigator.yaml ({error})"
+        )
+    })
 }
 
 /// Final documents only: the filled text carries nothing a person is still

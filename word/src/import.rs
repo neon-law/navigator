@@ -633,7 +633,7 @@ impl EditedDocument {
 }
 
 /// The `word/document.xml` part of a package.
-fn extract_body_xml(docx: &[u8]) -> Option<String> {
+pub(crate) fn extract_body_xml(docx: &[u8]) -> Option<String> {
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(docx)).ok()?;
     let mut xml = String::new();
     archive
@@ -681,7 +681,7 @@ fn parse_body(body: &str) -> Option<EditedDocument> {
 
 /// A paragraph's visible text: every run's `w:t` contents joined, `<w:br/>`
 /// as a newline, XML-escaped back to plain text.
-fn paragraph_text(paragraph: &str) -> String {
+pub(crate) fn paragraph_text(paragraph: &str) -> String {
     let mut text = String::new();
     let mut rest = paragraph;
     while let Some(position) = rest.find('<') {
