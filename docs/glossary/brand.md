@@ -88,6 +88,10 @@ The `/app` inventory surfaces name a compiled brand's production website as its 
 `brand` row has no public host. `project.brand` is written at matter-open from the request host unless an authorized
 caller selects a Firm/brand pair, and `navigator project set --firm <name> --brand <key>` changes the pair later.
 
+On the firm-side Projects list, the current Brand is selected by default. Select another Brand or **Firm** to change the
+list scope. The lawyer Overview spans the Firm's Brands within the viewer's Project access. On **Edit project**, an
+Owner or administering Firm Admin who participates on the firm side can change the Project's Brand within its Firm.
+
 - Routing and presentation: [House Brand](house-brand.md)
 
 The table is `brand`.

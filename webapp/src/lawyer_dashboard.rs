@@ -202,19 +202,7 @@ pub async fn get_lawyer_dashboard() -> Result<DashboardView, ServerFnError> {
     };
 
     let surreal = consume_context::<store::surreal::SurrealDb>();
-    // A failed access query is not an empty workload. Commit a real 500 rather
-    // than rendering an honest-looking zero-count dashboard over a database
-    // that never answered — the handler drew the same line.
-    let projects = store::access::visible_projects_as_lawyer(&surreal, person_id, store_role)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "dashboard: visible_projects_as_lawyer failed");
-            dioxus_fullstack_core::FullstackContext::commit_http_status(
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                None,
-            );
-            ServerFnError::new(e.clone())
-        })?;
+    let projects = firm_overview_projects(&surreal, person_id, store_role).await?;
 
     let status = if query.status.as_deref() == Some("closed") {
         "closed"
@@ -290,6 +278,50 @@ pub async fn get_lawyer_dashboard() -> Result<DashboardView, ServerFnError> {
         conflict_findings,
         pipeline,
     })
+}
+
+#[cfg(feature = "server")]
+async fn firm_overview_projects(
+    surreal: &store::surreal::SurrealDb,
+    person_id: Option<uuid::Uuid>,
+    store_role: store::persons::Role,
+) -> Result<Vec<store::projects::Project>, ServerFnError> {
+    // A failed access query is not an empty workload. Commit a real 500 rather
+    // than rendering an honest-looking zero-count dashboard over a database
+    // that never answered — the handler drew the same line.
+    let mut projects = store::access::visible_projects_as_lawyer(surreal, person_id, store_role)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "dashboard: visible_projects_as_lawyer failed");
+            dioxus_fullstack_core::FullstackContext::commit_http_status(
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                None,
+            );
+            ServerFnError::new(e.clone())
+        })?;
+
+    let host_brand = crate::app_chrome::request_brand().await;
+    let firm_id = store::firms::firm_id_for_brand_key(surreal, host_brand.as_str())
+        .await
+        .map_err(|error| {
+            dioxus_fullstack_core::FullstackContext::commit_http_status(
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                None,
+            );
+            ServerFnError::new(error.to_string())
+        })?;
+    let firm_brands = if let Some(id) = firm_id {
+        store::firms::brand_keys_for_firm(surreal, id)
+            .await
+            .map_err(|error| ServerFnError::new(error.to_string()))?
+    } else {
+        Vec::new()
+    };
+    projects.retain(|project| {
+        project.firm_id == firm_id
+            || (project.firm_id.is_none() && firm_brands.contains(&project.brand))
+    });
+    Ok(projects)
 }
 
 /// Ranked conflict findings anchored on the caller's visible matters

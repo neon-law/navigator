@@ -775,6 +775,10 @@ fn register_project_routes(r: Router<AdminState>) -> Router<AdminState> {
             &format!("{prefix}/{{project_code}}"),
             post(projects_update_lawyer_only),
         )
+        .route(
+            &format!("{prefix}/{{project_code}}/brand"),
+            post(projects_update_brand),
+        )
         // A firm participant can open the same matter through its client's
         // lens without first leaving the matter workbench. The handler resolves
         // both the participant and the accountable client server-side; neither
@@ -4427,6 +4431,40 @@ async fn edited_drive_folder(
     }
 }
 
+#[derive(Deserialize)]
+struct ProjectBrandInput {
+    brand: String,
+}
+
+async fn projects_update_brand(
+    State(surreal): State<store::surreal::SurrealDb>,
+    session: Option<Extension<SessionData>>,
+    Path(code): Path<String>,
+    Form(input): Form<ProjectBrandInput>,
+) -> Result<Redirect, crate::api::ApiError> {
+    use crate::api::ApiError;
+
+    let session = session.ok_or(ApiError::Unauthenticated)?;
+    if !session.role.is_admin_tier() || session.viewing_as_dri.is_some() {
+        return Err(ApiError::Forbidden);
+    }
+    let project = store::projects::find_by_code(&surreal, &code)
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))?
+        .ok_or(ApiError::NotFound)?;
+    let firm_id = project.firm_id.ok_or(ApiError::NotFound)?;
+    crate::api::require_project_firm_administration(&surreal, &session, firm_id).await?;
+    if !store::access::matter_viewer(&surreal, session.person_id, session.role, project.id)
+        .await
+        .map_err(ApiError::Db)?
+        .is_some_and(store::access::MatterViewer::is_firm_side)
+    {
+        return Err(ApiError::NotFound);
+    }
+    store::projects::change_brand(&surreal, project.id, firm_id, input.brand).await?;
+    Ok(Redirect::to(&format!("/app/projects/{code}/edit")))
+}
+
 async fn projects_update_lawyer_only(
     State(surreal): State<store::surreal::SurrealDb>,
     session: Option<Extension<SessionData>>,
@@ -4436,8 +4474,7 @@ async fn projects_update_lawyer_only(
     if !is_lawyer_tier(session.as_deref()) {
         return not_found_response();
     }
-    // This edit form owns descriptive fields and resource links. Firm/brand
-    // changes are available only through the JSON API. The form renders no
+    // This edit form owns descriptive fields and resource links. The form renders no
     // status control:
     // changing a matter's lifecycle (open/closed/archived) and its coupled
     // retention `closed_at` is a transition with firm-policy semantics, handled

@@ -3309,7 +3309,7 @@ async fn selected_project_brand(
 }
 
 /// Creation and reassignment share the same Firm authorization boundary.
-async fn require_project_firm_administration(
+pub(crate) async fn require_project_firm_administration(
     surreal: &store::surreal::SurrealDb,
     session: &SessionData,
     firm_id: Uuid,

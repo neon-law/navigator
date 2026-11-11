@@ -3598,6 +3598,36 @@ pub async fn update_project(
     id: Uuid,
     input: &UpdateProjectCommand,
 ) -> Result<Project, ProjectCommandError> {
+    update_project_inner(surreal, id, input, false).await
+}
+
+/// Change the Brand within the Project's current Firm, even if another
+/// administrator moves the Project between the caller's read and this write.
+pub async fn change_brand(
+    surreal: &SurrealDb,
+    id: Uuid,
+    firm_id: Uuid,
+    brand: String,
+) -> Result<Project, ProjectCommandError> {
+    update_project_inner(
+        surreal,
+        id,
+        &UpdateProjectCommand {
+            firm_id: Some(firm_id),
+            brand: Some(brand),
+            ..Default::default()
+        },
+        true,
+    )
+    .await
+}
+
+async fn update_project_inner(
+    surreal: &SurrealDb,
+    id: Uuid,
+    input: &UpdateProjectCommand,
+    keep_firm: bool,
+) -> Result<Project, ProjectCommandError> {
     validate_update_command(input)?;
     let firm_brand = validate_firm_brand_update(surreal, input).await?;
     validate_update_references(surreal, id, input).await?;
@@ -3613,7 +3643,9 @@ pub async fn update_project(
         assignments.push("entity_id = $entity_id".to_string());
     }
     if firm_brand.is_some() {
-        assignments.push("firm_id = $firm_id".to_string());
+        if !keep_firm {
+            assignments.push("firm_id = $firm_id".to_string());
+        }
         assignments.push("brand = $brand".to_string());
     }
     for (column, value) in text_columns {
@@ -3621,9 +3653,14 @@ pub async fn update_project(
             assignments.push(format!("{column} = ${column}"));
         }
     }
+    let condition = if keep_firm {
+        " WHERE firm_id = $firm_id AND (SELECT VALUE firm_id FROM firm_brand WHERE brand_key = $brand) = [$firm_id]"
+    } else {
+        ""
+    };
     let mut response = surreal
         .query(format!(
-            "UPDATE $id SET {} RETURN {PROJECT_SELECT}",
+            "UPDATE $id SET {}{condition} RETURN {PROJECT_SELECT}",
             assignments.join(", ")
         ))
         .bind(("id", record_id(PROJECT_TABLE, id)))

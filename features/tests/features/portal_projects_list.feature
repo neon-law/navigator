@@ -1,13 +1,8 @@
 Feature: /app/projects — the matter list, scoped per tier
 
-  Owner and Admin read every matter in the deployment here
-  (`store::projects::all`), the same administrative-listing shape the
-  repository-reconciliation report already uses for its own
-  deployment-wide question: privileged reach is a place you navigate
-  to, not a silent widening of the matter surface itself. A Lawyer
-  without that tier keeps the scoped read,
-  `store::access::visible_projects_as_lawyer`, which grants no such
-  bypass — a matter nobody put them on stays off their list.
+  The firm-side list opens on the current Brand and offers a Firm view.
+  Owners and Admins can see unassigned matters in that scope. Lawyers see
+  matters on their participation ledger.
 
   The status pill folds the "missing onboarding" signal in
   (`store::projects::matter_lifecycle`) rather than carrying a second,
