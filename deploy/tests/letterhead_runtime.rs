@@ -1,18 +1,21 @@
-//! Real-binary tests for the runtime letterhead source (LAW-266): a letter
-//! rendered inside a Project whose `navigator.yaml` host selects a
+//! Real-binary tests for the runtime letterhead source (LAW-266, LAW-341):
+//! a letter rendered inside a Project whose `navigator.yaml` host selects a
 //! non-default registered Brand wears the admin-editable `brand_letterhead`
-//! row the deployment stores hold, and the render says so on stderr.
-//! Offline, the compiled registry frames the letter and the fallback is
-//! announced, never silent.
+//! row the signed-in deployment serves — read over HTTPS from
+//! `GET /app/api/brands/{key}/letterhead` with the `site login` bearer, the
+//! same door `/app/admin/brands` saves through — and the render says so on
+//! stderr. Offline, the compiled registry frames the letter and the
+//! fallback is announced, never silent.
 //!
-//! The store-backed cases run the real `navigator` binary as a subprocess
-//! against the same dependency tier the store's own fixtures use: the
-//! server-mode `SurrealDB` lane (`store::test_support::server_surreal`,
-//! skipped on a laptop without `NAVIGATOR_SURREAL_*`) and a disposable
-//! PostgreSQL database holding the canonical schema
-//! (`NAVIGATOR_TEST_POSTGRES_PORT`, skipped without it, failed when
-//! `NAV_REQUIRE_POSTGRES=1` arms the tier). The offline-fallback case runs
-//! everywhere, because its premise is that no store answers.
+//! The deployment is stood in by a wiremock double: each test resolves the
+//! row the way the deployment would (`store::brand_letterheads::for_brand_key`
+//! against seeded stores, skipped on a laptop without the dependency tier)
+//! and serves the resulting JSON from the door's exact path, so the binary
+//! reads what a real deployment holds. The parity test renders the same
+//! resolved row in-process through the same `frame_from_row` the CLI
+//! applies, and requires byte-identical `.docx` output. The `--ci` cases
+//! prove the row read is a pinned render input (LAW-19): cached bytes or a
+//! refusal, never a silent fresh read.
 
 use std::fs;
 use std::io::Read as _;
@@ -20,9 +23,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use assert_cmd::cargo::cargo_bin;
+use store::postgres::PostgresDb;
 use store::postgres_schema::canonical_schema;
 use store::surreal::record_id;
-use store::surreal::DATABASE_ENV;
 use store::test_support::server_surreal;
 use tempfile::TempDir;
 use views::brand::{BrandKey, DEFAULT_BRANDING};
@@ -41,14 +44,16 @@ const FIXTURE_FIRM_NAME: &str = "Vesta Fixture Firm";
 
 /// The revision the fixture letterhead row carries — the `updated_at` the
 /// provenance line names. Seeded explicitly so the assertion is
-/// deterministic against `to_rfc3339`'s `+00:00` rendering.
+/// deterministic; the store serializes `DateTime<Utc>` with a `Z` offset,
+/// and the render prints the row's stamp verbatim.
 const FIXTURE_REVISION_SEEDED: &str = "2026-11-05T22:41:19Z";
 
 /// The provenance line the seeded row's render prints: the runtime source,
-/// the Brand, the row's `updated_at` revision (`DateTime::to_rfc3339` renders
-/// the whole-second UTC stamp with a `+00:00` offset), and the mark it drew.
+/// the Brand, the row's `updated_at` revision (`DateTime<Utc>`'s serde
+/// form, RFC 3339 with a `Z` offset — same stamp `FIXTURE_REVISION_SEEDED`
+/// serves), and the mark it drew.
 const RUNTIME_PROVENANCE: &str =
-    "letterhead: source=runtime brand=vesta revision=2026-11-05T22:41:19+00:00 mark=wordmark";
+    "letterhead: source=runtime brand=vesta revision=2026-11-05T22:41:19Z mark=wordmark";
 
 /// The default Brand's compiled wordmark as the PDF renders it — authored
 /// mixed-case. (The Word renderer sets its name run in caps; nothing here
@@ -56,48 +61,51 @@ const RUNTIME_PROVENANCE: &str =
 /// must NOT wear when the host selected Vesta.
 const DEFAULT_WORDMARK: &str = "Neon Law";
 
-const VALID: &str = "\
----
-kind: letter
-title: Test Demand
-respondent_type: entity
-confidential: true
-output: letter
-questionnaire:
-  BEGIN:
-    _: END
-  END: {}
-workflow:
-  BEGIN:
-    intake_submitted: lawyer_review
-  lawyer_review:
-    approved: END
-    rejected: END
-  END: {}
----
+/// The letterhead row is a pinned render input (LAW-19): under `--ci` a
+/// cache miss refuses the render instead of re-reading the deployment.
+const CI_REFUSAL: &str = "--ci refuses a letter whose letterhead row could not be read";
 
-# Demand
+const VALID_BODY: &str = "\n# Demand\n\nPay the sum of `{{amount}}` without delay.\n";
 
-Pay the sum of `{{amount}}` without delay.
-";
+/// The full template: the frontmatter the gate parses, then the body the
+/// renderer receives (`strip_frontmatter`'s output).
+const VALID: &str = concat!(
+    "---\nkind: letter\ntitle: Test Demand\nrespondent_type: entity\nconfidential: true\noutput: letter\nquestionnaire:\n  BEGIN:\n    _: END\n  END: {}\nworkflow:\n  BEGIN:\n    intake_submitted: lawyer_review\n  lawyer_review:\n    approved: END\n    rejected: END\n  END: {}\n---\n",
+    "\n# Demand\n\nPay the sum of `{{amount}}` without delay.\n"
+);
 
-/// The store-backed environment one test renders in: a server-mode `SurrealDB`
-/// database holding the seeded Brand row, and a disposable PostgreSQL
-/// database holding the canonical schema and the seeded letterhead row.
-/// `None` when the dependency tier is absent (skipped on a laptop).
+/// The binary's own `strip_frontmatter` rule, mirrored so the parity test's
+/// in-process body is exactly the body the binary renders. Pinned against
+/// `strip_frontmatter_returns_the_body_after_the_closing_marker` in main.rs.
+fn strip_frontmatter(contents: &str) -> &str {
+    let Some(after_open) = contents.strip_prefix("---\n") else {
+        return contents;
+    };
+    if let Some(end) = after_open.find("\n---\n") {
+        return after_open[end + "\n---\n".len()..].trim_start_matches('\n');
+    }
+    // Closer at EOF with no body, or no closer at all.
+    after_open.strip_suffix("\n---").map_or(contents, |_| "")
+}
+
+#[test]
+fn the_template_body_is_what_the_binary_renders() {
+    assert_eq!(
+        strip_frontmatter(VALID),
+        VALID_BODY.trim_start_matches('\n')
+    );
+}
+
+/// The store-backed environment one test seeds through: a server-mode
+/// `SurrealDB` database holding the Brand row (`store::test_support::
+/// server_surreal`, skipped on a laptop without `NAVIGATOR_SURREAL_*`) and
+/// a disposable PostgreSQL database holding the canonical schema and the
+/// seeded letterhead row. The binary never sees these coordinates — it
+/// reads the row through the door double like any other client.
 struct StoreEnv {
     surreal: store::test_support::ServerSurreal,
     postgres_database: String,
     postgres_port: String,
-}
-
-impl StoreEnv {
-    /// The `SurrealDB` connection environment for the subprocess: the same
-    /// coordinates this test process used, re-pointed at the test's own
-    /// database (`server_surreal` already made that substitution).
-    fn surreal_database_env(&self) -> (&'static str, &str) {
-        (DATABASE_ENV, &self.surreal.config.database)
-    }
 }
 
 /// The disposable PostgreSQL tier, in the shape `postgres_mirror`'s fixtures
@@ -115,34 +123,18 @@ async fn fresh_postgres() -> Option<(String, String)> {
     };
     let admin_database =
         std::env::var("NAVIGATOR_TEST_POSTGRES_DATABASE").unwrap_or_else(|_| "smoke".into());
-    let admin = sqlx::PgPool::connect_with(
-        sqlx::postgres::PgConnectOptions::new()
-            .host("127.0.0.1")
-            .port(port.parse().expect("test postgres port"))
-            .username("postgres")
-            .password("synthetic")
-            .ssl_mode(sqlx::postgres::PgSslMode::Disable)
-            .database(&admin_database),
-    )
-    .await
-    .expect("connect to the test PostgreSQL instance");
+    let admin = sqlx::PgPool::connect_with(pg_options(&admin_database, &port))
+        .await
+        .expect("connect to the test PostgreSQL instance");
     let database = format!("letterhead_runtime_{}", uuid::Uuid::now_v7().simple());
     sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {database}")))
         .execute(&admin)
         .await
         .expect("create the disposable letterhead database");
     admin.close().await;
-    let setup = sqlx::PgPool::connect_with(
-        sqlx::postgres::PgConnectOptions::new()
-            .host("127.0.0.1")
-            .port(port.parse().expect("test postgres port"))
-            .username("postgres")
-            .password("synthetic")
-            .ssl_mode(sqlx::postgres::PgSslMode::Disable)
-            .database(&database),
-    )
-    .await
-    .expect("connect to the disposable letterhead database");
+    let setup = sqlx::PgPool::connect_with(pg_options(&database, &port))
+        .await
+        .expect("connect to the disposable letterhead database");
     // The canonical schema's graph migration needs the AGE extension, which
     // only a superuser creates; these fixtures stand in for the production
     // superuser init path. `LOAD` puts the library in this session the way
@@ -157,6 +149,17 @@ async fn fresh_postgres() -> Option<(String, String)> {
         .expect("apply the canonical schema");
     setup.close().await;
     Some((database, port))
+}
+
+/// The loopback connection options the tier's fixtures use.
+fn pg_options(database: &str, port: &str) -> sqlx::postgres::PgConnectOptions {
+    sqlx::postgres::PgConnectOptions::new()
+        .host("127.0.0.1")
+        .port(port.parse().expect("test postgres port"))
+        .username("postgres")
+        .password("synthetic")
+        .ssl_mode(sqlx::postgres::PgSslMode::Disable)
+        .database(database)
 }
 
 /// The full store tier for one test, with the Brand row seeded so
@@ -247,19 +250,53 @@ async fn seed_letterhead_row(pg: &sqlx::PgPool, brand_id: uuid::Uuid, mark: &str
 /// row of `mark`. The store-backed tests call this before rendering.
 async fn seed_vesta_letterhead_row(stores: &StoreEnv, mark: &str, with_logo: bool) {
     let brand_id = seed_vesta_brand(&stores.surreal, with_logo).await;
-    let pg = sqlx::PgPool::connect_with(
-        sqlx::postgres::PgConnectOptions::new()
-            .host("127.0.0.1")
-            .port(stores.postgres_port.parse().expect("test postgres port"))
-            .username("postgres")
-            .password("synthetic")
-            .ssl_mode(sqlx::postgres::PgSslMode::Disable)
-            .database(&stores.postgres_database),
-    )
-    .await
-    .expect("connect to the disposable letterhead database");
+    let pg =
+        sqlx::PgPool::connect_with(pg_options(&stores.postgres_database, &stores.postgres_port))
+            .await
+            .expect("connect to the disposable letterhead database");
     seed_letterhead_row(&pg, brand_id, mark).await;
     pg.close().await;
+}
+
+/// The resolved letterhead row the store holds for the seeded Vesta Brand,
+/// serialized exactly as the deployment door serves it: `for_brand_key` is
+/// the resolve the admin save answers with, so the double serves what a
+/// real deployment holds.
+async fn door_row_from_stores(stores: &StoreEnv) -> String {
+    let pg = PostgresDb::connect(pg_options(&stores.postgres_database, &stores.postgres_port))
+        .await
+        .expect("connect to the disposable letterhead database");
+    let resolved = store::brand_letterheads::for_brand_key(&stores.surreal.db, &pg, "vesta")
+        .await
+        .expect("the letterhead resolve answers")
+        .expect("the seeded Brand resolves a row");
+    serde_json::to_string(&resolved).expect("the resolved row serializes")
+}
+
+/// A hand-built row in the exact shape the resolve answers — for the tests
+/// that need no store tier.
+fn served_row() -> String {
+    serde_json::json!({
+        "brand_key": "vesta",
+        "wordmark": VESTA_WORDMARK,
+        "mark": "wordmark",
+        "firm_legal_name": VESTA_ENTITY,
+        "phone": VESTA_PHONE,
+        "email": VESTA_EMAIL,
+        "web": VESTA_SITE,
+        "postal_address": VESTA_POSTAL,
+        "updated_at": FIXTURE_REVISION_SEEDED
+    })
+    .to_string()
+}
+
+/// The door double: `GET /app/api/brands/vesta/letterhead` answers `body`.
+async fn mount_row_double(server: &wiremock::MockServer, body: String) {
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path("/app/api/brands/vesta/letterhead"))
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(body))
+        .mount(server)
+        .await;
 }
 
 /// A letter template inside a Project whose `navigator.yaml` selects Vesta
@@ -275,59 +312,27 @@ fn letter_in_project(work: &TempDir) -> PathBuf {
     src
 }
 
-/// The store-backed environment handed to a subprocess render: the test
-/// process's own `SurrealDB` coordinates with the test's database, plus a
-/// disposable PostgreSQL the binary migrates nothing against.
-fn with_store_env(command: &mut Command, stores: &StoreEnv) {
-    let (key, value) = stores.surreal_database_env();
-    command.env(key, value);
-    command.env("NAVIGATOR_POSTGRES_HOST", "127.0.0.1");
-    command.env("NAVIGATOR_POSTGRES_PORT", &stores.postgres_port);
-    command.env("NAVIGATOR_POSTGRES_USER", "postgres");
-    command.env("NAVIGATOR_POSTGRES_PASSWORD", "synthetic");
-    command.env("NAVIGATOR_POSTGRES_DATABASE", &stores.postgres_database);
-    command.env("NAVIGATOR_POSTGRES_SSLMODE", "disable");
-}
-
-/// Every coordinate a runtime read could come from, removed — the offline
-/// case's premise.
-fn without_store_env(command: &mut Command) {
-    for key in [
-        "NAVIGATOR_SURREAL_ENDPOINT",
-        "NAVIGATOR_SURREAL_NAMESPACE",
-        "NAVIGATOR_SURREAL_DATABASE",
-        "NAVIGATOR_SURREAL_USER",
-        "NAVIGATOR_SURREAL_PASSWORD",
-        "NAVIGATOR_SURREAL_AUTH_SCOPE",
-        "NAVIGATOR_SURREAL_TOKEN",
-        "NAVIGATOR_POSTGRES_HOST",
-        "NAVIGATOR_POSTGRES_PORT",
-        "NAVIGATOR_POSTGRES_USER",
-        "NAVIGATOR_POSTGRES_PASSWORD",
-        "NAVIGATOR_POSTGRES_DATABASE",
-        "NAVIGATOR_POSTGRES_SSLMODE",
-        "NAVIGATOR_POSTGRES_ROOT_CERT",
-    ] {
-        command.env_remove(key);
-    }
-}
-
-fn render_notation(
-    subcommand: &str,
-    src: &Path,
-    out: &Path,
-    stores: Option<&StoreEnv>,
-) -> std::process::Output {
+/// A plain binary render. No session exists in the test environment, so the
+/// letterhead read falls back to the compiled registry unless the test
+/// points the door double at the binary.
+fn render_notation(subcommand: &str, src: &Path, out: &Path) -> std::process::Output {
     let mut command = Command::new(cargo_bin("navigator-deploy"));
     command
         .args(["notation", subcommand, "--preview"])
         .arg(src)
         .args(["--out", &out.to_string_lossy()]);
-    match stores {
-        Some(env) => with_store_env(&mut command, env),
-        None => without_store_env(&mut command),
-    }
     command.output().expect("run navigator-deploy notation")
+}
+
+/// Point the binary's letterhead row read at `base` — a door double or a
+/// deliberately dead port — with the row cache pinned to `cache`, so runs
+/// never touch the developer's own cache.
+fn with_door(command: &mut Command, base: &str, cache: &TempDir, ci: bool) {
+    command.env("NAVIGATOR_LETTERHEAD_API_BASE", base);
+    command.env("NAVIGATOR_LETTERHEAD_CACHE", cache.path());
+    if ci {
+        command.arg("--ci");
+    }
 }
 
 /// The letterhead text of a rendered PDF, through poppler. The house skips
@@ -366,7 +371,7 @@ fn docx_has_part(bytes: &[u8], name: &str) -> bool {
 }
 
 #[tokio::test]
-async fn a_runtime_row_frames_the_pdf_letter() {
+async fn the_deployment_row_frames_the_pdf_letter() {
     if !poppler() {
         eprintln!("skipped: pdftotext is not installed");
         return;
@@ -375,10 +380,19 @@ async fn a_runtime_row_frames_the_pdf_letter() {
         return;
     };
     seed_vesta_letterhead_row(&stores, "wordmark", false).await;
+    let row = door_row_from_stores(&stores).await;
+    let server = wiremock::MockServer::start().await;
+    mount_row_double(&server, row).await;
     let work = TempDir::new().expect("tempdir");
     let src = letter_in_project(&work);
     let out = work.path().join("demand.pdf");
-    let result = render_notation("pdf", &src, &out, Some(&stores));
+    let mut command = Command::new(cargo_bin("navigator-deploy"));
+    command
+        .args(["notation", "pdf", "--preview"])
+        .arg(&src)
+        .args(["--out", &out.to_string_lossy()]);
+    with_door(&mut command, &server.uri(), &work, false);
+    let result = command.output().expect("run navigator notation");
     let stderr = String::from_utf8_lossy(&result.stderr).into_owned();
     assert!(result.status.success(), "render failed: {stderr}");
     let text = pdf_text(&out);
@@ -410,15 +424,24 @@ async fn a_runtime_row_frames_the_pdf_letter() {
 }
 
 #[tokio::test]
-async fn a_runtime_row_frames_the_word_letter() {
+async fn the_deployment_row_frames_the_word_letter() {
     let Some(stores) = store_env("letterhead_runtime_word").await else {
         return;
     };
     seed_vesta_letterhead_row(&stores, "wordmark", false).await;
+    let row = door_row_from_stores(&stores).await;
+    let server = wiremock::MockServer::start().await;
+    mount_row_double(&server, row).await;
     let work = TempDir::new().expect("tempdir");
     let src = letter_in_project(&work);
     let out = work.path().join("demand.docx");
-    let result = render_notation("word", &src, &out, Some(&stores));
+    let mut command = Command::new(cargo_bin("navigator-deploy"));
+    command
+        .args(["notation", "word", "--preview"])
+        .arg(&src)
+        .args(["--out", &out.to_string_lossy()]);
+    with_door(&mut command, &server.uri(), &work, false);
+    let result = command.output().expect("run navigator notation");
     let stderr = String::from_utf8_lossy(&result.stderr).into_owned();
     assert!(result.status.success(), "render failed: {stderr}");
     let bytes = fs::read(&out).expect("docx written");
@@ -457,17 +480,95 @@ async fn a_runtime_row_frames_the_word_letter() {
     );
 }
 
+/// The LAW-341 parity acceptance: the door-served row — resolved by the
+/// real store resolve and served by the double — frames a `.docx`
+/// byte-identical to the same row framed in-process through the same
+/// `frame_from_row` the CLI applies. The HTTPS move changes where the row
+/// travels, never the render it produces.
+#[tokio::test]
+async fn the_word_render_matches_the_store_resolve_byte_for_byte() {
+    let Some(stores) = store_env("letterhead_runtime_parity").await else {
+        return;
+    };
+    seed_vesta_letterhead_row(&stores, "wordmark", false).await;
+    let door_row = door_row_from_stores(&stores).await;
+    let server = wiremock::MockServer::start().await;
+    mount_row_double(&server, door_row.clone()).await;
+
+    // Render A: the binary reads the row through the door double.
+    let work = TempDir::new().expect("tempdir");
+    let src = letter_in_project(&work);
+    let out = work.path().join("demand.docx");
+    let mut command = Command::new(cargo_bin("navigator-deploy"));
+    command
+        .args(["notation", "word", "--preview"])
+        .arg(&src)
+        .args(["--out", &out.to_string_lossy()]);
+    with_door(&mut command, &server.uri(), &work, false);
+    let result = command.output().expect("run navigator notation");
+    let stderr = String::from_utf8_lossy(&result.stderr).into_owned();
+    assert!(result.status.success(), "the door render failed: {stderr}");
+    let door_bytes = fs::read(&out).expect("the door render wrote a docx");
+
+    // Render B: the same resolved row, framed in-process through the same
+    // `frame_from_row` the CLI applies, rendered by the word renderer with
+    // the binary's provenance contract (template name and hash, no source
+    // revision in a tempdir).
+    let row: store::brand_letterheads::BrandLetterhead =
+        serde_json::from_str(&door_row).expect("the served row parses");
+    let frame = cli::letterhead::frame_from_row(&row, pdf::LetterheadMark::Wordmark);
+    let template_bytes = fs::read(&src).expect("the template bytes");
+    let template_hash = word::template_hash(&template_bytes);
+    let rendered = word::render_notation(
+        VALID_BODY.trim_start_matches('\n'),
+        Some(&word::RenderLetterhead {
+            name: &frame.name,
+            entity: &frame.entity,
+            phone: &frame.phone,
+            email: &frame.email,
+            web: &frame.web,
+            postal_address: &frame.postal_address,
+            font_family: &frame.font_family,
+            logo_png: &[],
+        }),
+        &word::RenderOptions {
+            source_revision: None,
+            pleading: None,
+            provenance: Some(word::Provenance {
+                template_path: "demand.md",
+                template_hash: &template_hash,
+            }),
+            preview: true,
+        },
+    )
+    .expect("the in-process render succeeds");
+    assert_eq!(
+        door_bytes, rendered,
+        "the door-served row must frame the exact bytes the store resolve frames"
+    );
+}
+
 #[tokio::test]
 async fn an_unfetchable_uploaded_mark_degrades_to_the_wordmark_loudly() {
     let Some(stores) = store_env("letterhead_runtime_logo").await else {
         return;
     };
     seed_vesta_letterhead_row(&stores, "logo", true).await;
-
+    let row = door_row_from_stores(&stores).await;
+    // The assets route is deliberately unmounted: the door answers the row,
+    // the mark's bytes are not there.
+    let server = wiremock::MockServer::start().await;
+    mount_row_double(&server, row).await;
     let work = TempDir::new().expect("tempdir");
     let src = letter_in_project(&work);
     let out = work.path().join("demand.docx");
-    let result = render_notation("word", &src, &out, Some(&stores));
+    let mut command = Command::new(cargo_bin("navigator-deploy"));
+    command
+        .args(["notation", "word", "--preview"])
+        .arg(&src)
+        .args(["--out", &out.to_string_lossy()]);
+    with_door(&mut command, &server.uri(), &work, false);
+    let result = command.output().expect("run navigator notation");
     let stderr = String::from_utf8_lossy(&result.stderr).into_owned();
     assert!(
         result.status.success(),
@@ -489,7 +590,7 @@ async fn an_unfetchable_uploaded_mark_degrades_to_the_wordmark_loudly() {
 }
 
 #[tokio::test]
-async fn stores_with_no_row_frame_the_letter_on_the_compiled_registry_without_a_warning() {
+async fn a_brand_with_no_admin_row_wears_its_own_fallback_frame() {
     if !poppler() {
         eprintln!("skipped: pdftotext is not installed");
         return;
@@ -497,13 +598,22 @@ async fn stores_with_no_row_frame_the_letter_on_the_compiled_registry_without_a_
     let Some(stores) = store_env("letterhead_runtime_norow").await else {
         return;
     };
-    // The Brand row exists but no admin has set a letterhead: the runtime
-    // source answers with the Brand's own fallback frame.
+    // The Brand row exists but no admin has set a letterhead: the door's
+    // resolve still answers, with the Brand's own fallback frame.
     seed_vesta_brand(&stores.surreal, false).await;
+    let row = door_row_from_stores(&stores).await;
+    let server = wiremock::MockServer::start().await;
+    mount_row_double(&server, row).await;
     let work = TempDir::new().expect("tempdir");
     let src = letter_in_project(&work);
     let out = work.path().join("demand.pdf");
-    let result = render_notation("pdf", &src, &out, Some(&stores));
+    let mut command = Command::new(cargo_bin("navigator-deploy"));
+    command
+        .args(["notation", "pdf", "--preview"])
+        .arg(&src)
+        .args(["--out", &out.to_string_lossy()]);
+    with_door(&mut command, &server.uri(), &work, false);
+    let result = command.output().expect("run navigator notation");
     let stderr = String::from_utf8_lossy(&result.stderr).into_owned();
     assert!(result.status.success(), "render failed: {stderr}");
     let text = pdf_text(&out);
@@ -519,12 +629,14 @@ async fn stores_with_no_row_frame_the_letter_on_the_compiled_registry_without_a_
 
 #[tokio::test]
 async fn an_unreachable_deployment_renders_on_the_compiled_registry_and_says_so() {
-    // No stores are needed: the premise is that none answer. Runs on every
-    // machine, CI and laptop alike.
+    // No session and no door double are needed: the premise is that the
+    // deployment cannot be asked. Runs on every machine, CI and laptop
+    // alike. The fallback is the Project's owning Firm brand — the compiled
+    // registry for the host-selected key — never the Neon House Brand.
     let work = TempDir::new().expect("tempdir");
     let src = letter_in_project(&work);
     let out = work.path().join("demand.pdf");
-    let result = render_notation("pdf", &src, &out, None);
+    let result = render_notation("pdf", &src, &out);
     let stderr = String::from_utf8_lossy(&result.stderr).into_owned();
     assert!(
         result.status.success(),
@@ -549,7 +661,7 @@ async fn an_unreachable_deployment_frames_the_word_letter_on_the_compiled_regist
     let work = TempDir::new().expect("tempdir");
     let src = letter_in_project(&work);
     let out = work.path().join("demand.docx");
-    let result = render_notation("word", &src, &out, None);
+    let result = render_notation("word", &src, &out);
     let stderr = String::from_utf8_lossy(&result.stderr).into_owned();
     assert!(result.status.success(), "render failed: {stderr}");
     let branding = BrandKey::Vesta.resolve_branding(&DEFAULT_BRANDING);
@@ -562,5 +674,108 @@ async fn an_unreachable_deployment_frames_the_word_letter_on_the_compiled_regist
         stderr.contains("letterhead: source=compiled brand=vesta")
             && stderr.contains("using compiled registry"),
         "the Word render announces the same fallback: {stderr}"
+    );
+}
+
+/// Under `--ci` a letterhead read that cannot answer refuses the render:
+/// a CI render's bytes must not depend on which answer a live read would
+/// have given (LAW-19). Here the door is a dead port and the cache is
+/// empty — the render gets pinned bytes or nothing.
+#[tokio::test]
+async fn ci_refuses_a_render_whose_letterhead_row_is_not_cached() {
+    let work = TempDir::new().expect("tempdir");
+    let src = letter_in_project(&work);
+    let out = work.path().join("demand.pdf");
+    let cache = TempDir::new().expect("temp cache");
+    let mut command = Command::new(cargo_bin("navigator-deploy"));
+    command
+        .args(["notation", "pdf", "--preview"])
+        .arg(&src)
+        .args(["--out", &out.to_string_lossy()]);
+    // A port nothing listens on: the door cannot answer, and the cache is
+    // empty, so --ci refuses rather than falling back.
+    with_door(&mut command, "http://127.0.0.1:1", &cache, true);
+    let result = command.output().expect("run navigator notation");
+    let stderr = String::from_utf8_lossy(&result.stderr).into_owned();
+    assert!(
+        !result.status.success(),
+        "--ci must refuse a letterhead read it cannot pin: {stderr}"
+    );
+    assert!(
+        stderr.contains(CI_REFUSAL),
+        "the refusal must name the pinned-bytes rule: {stderr}"
+    );
+    assert!(
+        !out.exists(),
+        "a refused render writes no artifact: {stderr}"
+    );
+}
+
+/// The cache is the pin: after one non-`--ci` render warms it from the door
+/// double, a `--ci` render reads the cached row and never asks the door
+/// again — proven by the double's `expect(1)` verification, which fails if
+/// a second request arrives.
+#[tokio::test]
+async fn ci_renders_from_a_warmed_cache_without_asking_the_door_again() {
+    let server = wiremock::MockServer::start().await;
+    mount_row_double(&server, served_row()).await;
+    let work = TempDir::new().expect("tempdir");
+    let src = letter_in_project(&work);
+    let cache = TempDir::new().expect("temp cache");
+
+    // Render 1, not under --ci: fetches the row from the door and warms
+    // the cache.
+    let out = work.path().join("warm.docx");
+    let mut command = Command::new(cargo_bin("navigator-deploy"));
+    command
+        .args(["notation", "word", "--preview"])
+        .arg(&src)
+        .args(["--out", &out.to_string_lossy()]);
+    with_door(&mut command, &server.uri(), &cache, false);
+    let result = command.output().expect("run navigator notation");
+    let stderr = String::from_utf8_lossy(&result.stderr).into_owned();
+    assert!(
+        result.status.success(),
+        "the warm-up render failed: {stderr}"
+    );
+    assert!(
+        stderr.contains(RUNTIME_PROVENANCE),
+        "the warm-up render reads the runtime row: {stderr}"
+    );
+
+    // Render 2, under --ci: pinned to the cache; the door is never asked.
+    // Rendered under pdf, the subcommand that threads `--ci` through
+    // run_render.
+    let out = work.path().join("pinned.pdf");
+    let mut command = Command::new(cargo_bin("navigator-deploy"));
+    // `with_door(.., true)` adds `--ci`; the pdf subcommand threads it
+    // through run_render.
+    command
+        .args(["notation", "pdf", "--preview"])
+        .arg(&src)
+        .args(["--out", &out.to_string_lossy()]);
+    with_door(&mut command, &server.uri(), &cache, true);
+    let result = command.output().expect("run navigator notation");
+    let stderr = String::from_utf8_lossy(&result.stderr).into_owned();
+    assert!(
+        result.status.success(),
+        "a --ci render on a warm cache succeeds: {stderr}"
+    );
+    assert!(
+        stderr.contains(RUNTIME_PROVENANCE),
+        "the cached row is still the runtime source, with the same revision: {stderr}"
+    );
+    let received = server
+        .received_requests()
+        .await
+        .expect("the double records requests");
+    assert_eq!(
+        received.len(),
+        1,
+        "the door was asked exactly once: the --ci render must read the cache, never the door"
+    );
+    assert!(
+        fs::read(&out).is_ok(),
+        "the pinned render wrote its artifact"
     );
 }

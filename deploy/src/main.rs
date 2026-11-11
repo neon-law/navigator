@@ -4820,7 +4820,7 @@ fn run_render(
     }
 
     let Ok(rendered) =
-        project_letterhead(file, &format).map_err(|message| eprintln!("navigator: {message}"))
+        project_letterhead(file, &format, ci).map_err(|message| eprintln!("navigator: {message}"))
     else {
         return ExitCode::from(2);
     };
@@ -5036,9 +5036,10 @@ fn project_firm_legal_name(file: &Path) -> Option<String> {
 /// The Project's Brand frames the letter (LAW-265, ENG-1148):
 /// `cli::letterhead` resolves `project.brand`, else `project.host`, from
 /// the nearest `navigator.yaml`. Which letterhead that Brand wears comes
-/// from one of two sources. When the deployment's stores are reachable,
-/// the Brand's runtime letterhead row — the same rows `/app/admin/brands`
-/// edits — frames the letter; when they are not, the compiled registry
+/// from one of two sources. When the deployment's letterhead door is
+/// reachable, the Brand's runtime letterhead row — the same rows
+/// `/app/admin/brands` edits, served over HTTPS with the `site login`
+/// bearer — frames the letter; when it is not, the compiled registry
 /// does, and the fallback is announced, never silent: a template
 /// re-render reflects the letterhead its Brand currently publishes, while
 /// executed and filed artifacts keep their stored bytes (ENG-1148), so a
@@ -5056,6 +5057,7 @@ struct ProjectLetterhead {
 fn project_letterhead(
     file: &Path,
     format: &pdf::OutputFormat,
+    ci: bool,
 ) -> Result<ProjectLetterhead, String> {
     if !matches!(format, pdf::OutputFormat::Letter(_)) {
         return Ok(ProjectLetterhead {
@@ -5076,49 +5078,101 @@ fn project_letterhead(
     let manifest = projects::manifest::parse(&contents)?;
     let key = cli::letterhead::resolve_brand(manifest.brand.as_deref(), manifest.host.as_deref())
         .map_err(|error| error.to_string())?;
-    attempt_runtime_letterhead(key)
+    attempt_runtime_letterhead(key, ci)
 }
 
-/// The runtime source, tried within a bounded budget so a hung store
-/// cannot hang the render; any failure — connect, read, or budget — falls
-/// back to the compiled registry, announced.
-fn attempt_runtime_letterhead(key: views::brand::BrandKey) -> Result<ProjectLetterhead, String> {
+/// The runtime source, tried within a bounded budget so a hung deployment
+/// cannot hang the render. Any failure — no session, connect, read, or
+/// budget — falls back to the compiled registry, announced; under `--ci`
+/// the same failure refuses, because a CI render's bytes must not depend
+/// on which answer a live read would have given (LAW-19).
+fn attempt_runtime_letterhead(
+    key: views::brand::BrandKey,
+    ci: bool,
+) -> Result<ProjectLetterhead, String> {
     let budget = std::time::Duration::from_secs(3);
     // The timeout's timer is built under the runtime, not as a `block_on`
     // argument — `tokio::time::timeout` constructs its `Sleep` eagerly, and
     // eager construction needs the time driver it is about to run under.
     let attempted = tokio::runtime::Runtime::new()
         .expect("tokio runtime")
-        .block_on(async move { tokio::time::timeout(budget, runtime_letterhead(key)).await });
+        .block_on(async move { tokio::time::timeout(budget, runtime_letterhead(key, ci)).await });
     match attempted {
         Ok(Ok(rendered)) => Ok(rendered),
-        Ok(Err(reason)) => compiled_fallback(key, &reason),
-        Err(elapsed) => compiled_fallback(
+        Ok(Err(reason)) => letterhead_failure(key, &reason, ci),
+        Err(elapsed) => letterhead_failure(
             key,
-            &format!("the letterhead store did not answer within {budget:?}: {elapsed:?}"),
+            &format!(
+                "the deployment's letterhead door did not answer within {budget:?}: {elapsed:?}"
+            ),
+            ci,
         ),
     }
 }
 
-/// The Brand's letterhead from the deployment's stores — the same rows
-/// `/app/admin/brands` edits. `Err` names why the stores could not answer;
-/// the caller falls back to the compiled registry and announces it.
-async fn runtime_letterhead(key: views::brand::BrandKey) -> Result<ProjectLetterhead, String> {
-    let surreal = store::surreal::connect_from_env()
-        .await
-        .map_err(|error| format!("the deployment's document store is unreachable: {error}"))?;
-    let pg = store::postgres::PostgresDb::from_env()
-        .await
-        .map_err(|error| format!("the deployment's relational store is unreachable: {error}"))?;
+/// A letterhead read that could not answer: under `--ci` it refuses — a CI
+/// render must render pinned bytes or not at all — and anywhere else it
+/// falls back to the compiled registry, announced on stderr.
+fn letterhead_failure(
+    key: views::brand::BrandKey,
+    reason: &str,
+    ci: bool,
+) -> Result<ProjectLetterhead, String> {
+    if ci {
+        return Err(format!(
+            "--ci refuses a letter whose letterhead row could not be read from the deployment \
+             ({reason}); warm the letterhead cache with a non---ci render, or repair the \
+             `site login` session, before rendering under --ci"
+        ));
+    }
+    compiled_fallback(key, reason)
+}
+
+/// Test-harness override for the letterhead door's base URL: points the
+/// row read at a double instead of the Brand's signed-in deployment. The
+/// double serves the row itself, so no `site login` session is resolved.
+const LETTERHEAD_API_BASE_ENV: &str = "NAVIGATOR_LETTERHEAD_API_BASE";
+
+/// The deployment base and bearer the letterhead row is read with: the
+/// Brand's own host, as `navigator site login` stored the lawyer's
+/// session. The `NAVIGATOR_LETTERHEAD_API_BASE` override points the read
+/// at a test double or harness endpoint instead, and skips the session —
+/// such an endpoint serves the row itself.
+fn letterhead_endpoint(key: views::brand::BrandKey) -> Result<(String, Option<String>), String> {
+    if let Some(base) = std::env::var_os(LETTERHEAD_API_BASE_ENV).filter(|v| !v.is_empty()) {
+        return Ok((base.to_string_lossy().into_owned(), None));
+    }
     let compiled = cli::letterhead::for_brand(key).map_err(|error| error.to_string())?;
-    let runtime = cli::letterhead::for_brand_runtime(
-        key,
-        &credentials::base_url(&compiled.web),
-        &surreal,
-        &pg,
-    )
-    .await
-    .map_err(|error| error.to_string())?;
+    match remote::matching_stored_session(&compiled.web)
+        .map_err(|error| format!("the `site login` session could not be read: {error}"))?
+    {
+        remote::MatchingSession::Valid(base, token) => Ok((base, Some(token))),
+        remote::MatchingSession::Absent => Err(format!(
+            "no `navigator site login` session for {} — run `navigator site login --host {}`",
+            compiled.web,
+            key.apex().unwrap_or_else(|| key.as_str())
+        )),
+        remote::MatchingSession::Expired => Err(format!(
+            "the `site login` session for {} has expired — run `navigator site login --host {}`",
+            compiled.web,
+            key.apex().unwrap_or_else(|| key.as_str())
+        )),
+    }
+}
+
+/// The Brand's letterhead from the signed-in deployment's letterhead door —
+/// the same rows `/app/admin/brands` edits, served by
+/// `GET /app/api/brands/{key}/letterhead` with the `site login` bearer
+/// (LAW-341). `Err` names why the door could not answer; the caller falls
+/// back to the compiled registry and announces it.
+async fn runtime_letterhead(
+    key: views::brand::BrandKey,
+    ci: bool,
+) -> Result<ProjectLetterhead, String> {
+    let (base, token) = letterhead_endpoint(key)?;
+    let runtime = cli::letterhead::for_brand_runtime(key, &base, token.as_deref(), ci)
+        .await
+        .map_err(|error| error.to_string())?;
     let Some(runtime) = runtime else {
         // A Brand with no runtime row wears its compiled frame — the
         // compiled mark included — but the render still names the source.
