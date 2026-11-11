@@ -1610,6 +1610,12 @@ enum ProjectsCmd {
         #[command(subcommand)]
         action: ProjectRepositoryCmd,
     },
+    /// The lawyer's view of a checkout tracked by Jujutsu (`jj`): history,
+    /// and one day conflicts and change details, in plain terms.
+    Jj {
+        #[command(subcommand)]
+        action: ProjectJjCmd,
+    },
     /// Search extracted text in this Project's documents and notes.
     Search {
         /// Regex pattern to match in extracted text.
@@ -1661,6 +1667,19 @@ enum SurfacesCmd {
         json: bool,
         #[command(flatten)]
         host: HostOpt,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProjectJjCmd {
+    /// Show the checkout's history in lawyer terms: each change's
+    /// description, author, and time, with an explicit warning on a
+    /// conflicted change. Requires `navigator project repository jj` on the
+    /// checkout first.
+    Log {
+        /// Project repository root. Defaults to the current directory.
+        #[arg(long, default_value = ".")]
+        dir: PathBuf,
     },
 }
 
@@ -6660,6 +6679,15 @@ async fn run_projects(action: ProjectsCmd) -> ExitCode {
             host,
         } => projects::setup::run(host.host.as_deref(), project_code.as_deref(), all, json).await,
         ProjectsCmd::Skill { action } => run_project_skill(action).await,
+        ProjectsCmd::Jj { action } => match action {
+            ProjectJjCmd::Log { dir } => match projects::jj_log::run(&dir) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => {
+                    eprintln!("navigator: {error:#}");
+                    ExitCode::from(2)
+                }
+            },
+        },
         ProjectsCmd::Repository { action } => match action {
             ProjectRepositoryCmd::SyncSkills { dir } => {
                 match projects::repository::repair_skills(&dir) {
