@@ -154,6 +154,7 @@ pub mod expunge;
 pub mod expunge_request_route;
 pub mod expunge_route;
 pub mod forgejo_oidc;
+pub mod forgejo_webhook;
 pub mod github_oidc;
 pub mod glossary;
 pub mod google_oauth;
@@ -462,6 +463,28 @@ pub struct AppState {
     /// dev/tests skips verification; required in production via
     /// `enforce_deployment_invariants`. Loaded from `DOCUSIGN_HMAC_KEY`.
     pub esignature_hmac_key: Option<String>,
+    /// Coarse path secret Forgejo must include in its push-webhook URL
+    /// (`/webhook/forgejo/{secret}`). Same `None`-accepts-any-token dev
+    /// posture as `esignature_webhook_secret`; loaded from
+    /// `FORGEJO_WEBHOOK_SECRET`. Defense-in-depth — the real gate is
+    /// `forgejo_webhook_hmac_key`. See [`forgejo_webhook`].
+    pub forgejo_webhook_secret: Option<String>,
+    /// Shared HMAC-SHA256 key the Forgejo push webhook verifies over the
+    /// raw request body (hex-encoded in `X-Forgejo-Signature`) before
+    /// journaling a push. `None` in dev/tests skips verification;
+    /// loaded from `FORGEJO_WEBHOOK_HMAC_KEY`. See [`forgejo_webhook`].
+    pub forgejo_webhook_hmac_key: Option<String>,
+    /// The PostgreSQL lane the push-webhook journal writes to — the
+    /// same shared pool the Twilio registry uses. `None` when the
+    /// deployment has no PostgreSQL environment: the receiver then
+    /// refuses verified deliveries (503) rather than consume without
+    /// journaling. See [`forgejo_webhook`].
+    pub forgejo_push_store: Option<Arc<store::postgres::PostgresDb>>,
+    /// The push pipeline's consumption tail behind the receiver's
+    /// journal-first durability — per-change analysis, then Slack
+    /// delivery, as they land. Defaults to
+    /// [`forgejo_webhook::UnwiredPushConsumer`]. See [`forgejo_webhook`].
+    pub forgejo_push_consumer: Arc<dyn forgejo_webhook::PushConsumer>,
     /// The fake signature provider's on-disk envelope directory when the
     /// fake is the running provider — the backing store the dev sign-page
     /// route serves. `None` under DocuSign and in tests that construct
@@ -785,6 +808,10 @@ fn public_ingress_routes() -> Router<AppState> {
         .route(
             "/webhook/esignature/{secret}",
             axum::routing::post(esignature_webhook::webhook),
+        )
+        .route(
+            "/webhook/forgejo/{secret}",
+            axum::routing::post(forgejo_webhook::webhook),
         )
         // The fake provider's sign pages, served by this portal in dev —
         // the signer's redirect target is a URL on this server, backed by
