@@ -180,7 +180,7 @@ fn client_letter_carries_no_letterhead_but_keeps_the_letter_blocks() {
 }
 
 /// A declaration goes out as the party's own document (LAW-340), so the
-/// rendered client_letter PDF carries zero letterhead: none of the
+/// rendered `client_letter` PDF carries zero letterhead: none of the
 /// Brand's identity — name, entity, web, phone, email, postal address —
 /// appears anywhere in the document's text layer. The branded `letter`
 /// frame is the parity half: it really does wear the identity, so the

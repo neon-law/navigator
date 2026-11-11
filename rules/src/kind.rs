@@ -781,13 +781,12 @@ impl Kind {
                 Category::Correspondence
             }
             // Instruments a client or counterparty executes: a will, a
-            // trust, a directive, and a private agreement.
-            Kind::Will | Kind::Trust | Kind::Directive | Kind::Agreement => Category::Instrument,
-            // A declaration is the declarant's own instrument — a signed
-            // statement the party executes in their own name — so it groups
-            // with the instruments a client executes rather than with the
-            // firm's letterhead correspondence.
-            Kind::Declaration => Category::Instrument,
+            // trust, a directive, a private agreement, and a declaration
+            // (the declarant's own signed statement, executed in their
+            // own name rather than on the firm's letterhead).
+            Kind::Will | Kind::Trust | Kind::Directive | Kind::Agreement | Kind::Declaration => {
+                Category::Instrument
+            }
             // A government filing pairs with `output: form` and the
             // `AcroForm` fill path — distinct from an instrument the firm
             // drafts for a party to sign.

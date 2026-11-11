@@ -362,7 +362,7 @@ fn a_letter_kind_renders_on_letterhead_with_no_output_declared() {
 
 /// A party's own declaration (LAW-340): `kind: declaration` and no
 /// `output:` — the frame must derive from the kind, and the kind's
-/// default is the letterhead-less client_letter frame.
+/// default is the letterhead-less `client_letter` frame.
 const VALID_DECLARATION_NO_OUTPUT: &str = "\
 ---
 kind: declaration
