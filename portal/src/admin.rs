@@ -314,6 +314,10 @@ pub fn routes(
             post(crate::inbox::link_contact_post),
         )
         .route(
+            "/app/inbox/{conversation_id}/trash",
+            post(crate::inbox::trash_post),
+        )
+        .route(
             "/app/projects/{project_code}/inbox/{conversation_id}/notes",
             post(crate::inbox::note_post),
         )

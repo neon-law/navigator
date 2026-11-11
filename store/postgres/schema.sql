@@ -4617,3 +4617,10 @@ CREATE INDEX IF NOT EXISTS forgejo_push_webhook_journal_reconsumable
 -- and no consent to a call.
 ALTER TABLE lead_consent ADD COLUMN call_consent_version TEXT;
 ALTER TABLE lead_consent ADD COLUMN call_opt_in BOOLEAN NOT NULL DEFAULT false;
+
+-- Migration: 20261110130000_inbox_conversation_trashed_at.sql
+-- When a Conversation was moved to the Inbox trash; NULL while it is in the
+-- Inbox. Trash hides the Conversation from the Inbox lists and nothing else:
+-- no row is removed, and a new inbound Message clears the stamp. See the
+-- `Inbox Trash` glossary term.
+ALTER TABLE inbox_conversation ADD COLUMN trashed_at TIMESTAMPTZ;

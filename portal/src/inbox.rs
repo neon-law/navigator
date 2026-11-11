@@ -396,6 +396,15 @@ pub struct AssignForm {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct TrashForm {
+    #[serde(rename = "_csrf")]
+    _csrf: Option<String>,
+    /// Present on the Trash folder's restore control; absent on trash.
+    #[serde(default)]
+    restore: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct NoteForm {
     #[serde(rename = "_csrf")]
     _csrf: Option<String>,
@@ -431,13 +440,20 @@ pub struct ReplyForm {
 }
 
 /// `POST /app/inbox/{conversation_id}/assign`
+///
+/// Lands on the Project thread only when the actor may open it. An Owner
+/// assigns across Projects without participating, and the Project thread
+/// refuses a non-participant, so that actor returns to the firm thread.
 pub async fn assign_post(
     State(db): State<store::surreal::SurrealDb>,
     session: Option<Extension<SessionData>>,
     Path(conversation_id): Path<Uuid>,
     axum::Form(form): axum::Form<AssignForm>,
 ) -> Response {
-    let Some(actor_id) = actor_id(session) else {
+    let Some(Extension(session)) = session else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let Some(actor_id) = session.person_id else {
         return StatusCode::NOT_FOUND.into_response();
     };
     let back = format!("/app/inbox/{conversation_id}");
@@ -445,10 +461,19 @@ pub async fn assign_post(
     {
         Ok(_) if form.next.as_deref() == Some("inbox") => Redirect::to(INBOX).into_response(),
         Ok(assignment) => {
-            let project = store::projects::find_by_id(&db, assignment.to_project_id)
-                .await
-                .ok()
-                .flatten();
+            let project_id = assignment.to_project_id;
+            let opens_project =
+                store::access::can_see_project(&db, Some(actor_id), session.role, project_id)
+                    .await
+                    .unwrap_or(false);
+            let project = if opens_project {
+                store::projects::find_by_id(&db, project_id)
+                    .await
+                    .ok()
+                    .flatten()
+            } else {
+                None
+            };
             match project {
                 Some(project) => Redirect::to(&format!(
                     "/app/projects/{}/inbox/{conversation_id}",
@@ -459,6 +484,25 @@ pub async fn assign_post(
             }
         }
         Err(error) => redirect_error(&back, &error.to_string()),
+    }
+}
+
+/// `POST /app/inbox/{conversation_id}/trash`
+///
+/// Moves the conversation to the Inbox trash, or restores it, and returns to
+/// the inbox.
+pub async fn trash_post(
+    State(db): State<store::surreal::SurrealDb>,
+    session: Option<Extension<SessionData>>,
+    Path(conversation_id): Path<Uuid>,
+    axum::Form(form): axum::Form<TrashForm>,
+) -> Response {
+    let Some(actor_id) = actor_id(session) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match store::inbox::set_trashed(&db, actor_id, conversation_id, form.restore.is_none()).await {
+        Ok(()) => Redirect::to(INBOX).into_response(),
+        Err(error) => redirect_error(&format!("/app/inbox/{conversation_id}"), &error.to_string()),
     }
 }
 
@@ -1109,6 +1153,17 @@ mod tests {
         )
         .await;
         assert_eq!(assign.status(), StatusCode::NOT_FOUND);
+        let trash = trash_post(
+            State(db.clone()),
+            None,
+            Path(Uuid::nil()),
+            axum::Form(TrashForm {
+                _csrf: None,
+                restore: None,
+            }),
+        )
+        .await;
+        assert_eq!(trash.status(), StatusCode::NOT_FOUND);
         let note = note_post(
             State(db),
             None,
@@ -1694,6 +1749,85 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn trash_and_restore_return_to_the_inbox_and_refuse_an_admin() {
+        let db = store::test_support::mem_surreal().await;
+        let (owner, admin, firm, _project) = inbox_matter(&db).await;
+        let id = store::inbox::ingest_inbound(
+            &db,
+            &inbound(
+                firm.id,
+                store::inbox::channel::EMAIL,
+                "support",
+                "email-1",
+                "reader@example.com",
+            ),
+        )
+        .await
+        .unwrap()
+        .conversation_id;
+        let post = |person: &store::persons::Person, restore: Option<&str>| {
+            trash_post(
+                State(db.clone()),
+                Some(axum::Extension(session(
+                    &person.email,
+                    person.role,
+                    person.id,
+                ))),
+                Path(id),
+                axum::Form(TrashForm {
+                    _csrf: None,
+                    restore: restore.map(str::to_string),
+                }),
+            )
+        };
+        let trashed = || async {
+            let rows = store::inbox::list_intake(&db, owner.id).await.unwrap();
+            rows.iter().any(|row| row.id == id && row.trashed)
+        };
+
+        let refused = post(&admin, None).await;
+        let location = refused.headers()[axum::http::header::LOCATION]
+            .to_str()
+            .unwrap();
+        assert!(
+            location.starts_with(&format!("/app/inbox/{id}?error=")),
+            "{location}"
+        );
+        assert!(!trashed().await);
+
+        let done = post(&owner, None).await;
+        assert_eq!(done.headers()[axum::http::header::LOCATION], INBOX);
+        assert!(trashed().await);
+
+        post(&owner, Some("true")).await;
+        assert!(!trashed().await);
+    }
+
+    /// Post the full thread's assign form as `person`.
+    async fn assign_as(
+        db: &store::surreal::SurrealDb,
+        person: &store::persons::Person,
+        conversation_id: Uuid,
+        project_id: Uuid,
+    ) -> Response {
+        assign_post(
+            State(db.clone()),
+            Some(axum::Extension(session(
+                &person.email,
+                person.role,
+                person.id,
+            ))),
+            Path(conversation_id),
+            axum::Form(AssignForm {
+                _csrf: None,
+                project_id,
+                next: None,
+            }),
+        )
+        .await
+    }
+
+    #[tokio::test]
     async fn signed_in_owner_assigns_and_a_lawyer_leaves_a_note() {
         let db = store::test_support::mem_surreal().await;
         let (owner, _admin, firm, project) = inbox_matter(&db).await;
@@ -1709,34 +1843,14 @@ mod tests {
         )
         .await
         .unwrap();
-        let assigned = assign_post(
-            State(db.clone()),
-            Some(axum::Extension(session(
-                &owner.email,
-                store::persons::Role::Owner,
-                owner.id,
-            ))),
-            Path(ingested.conversation_id),
-            axum::Form(AssignForm {
-                _csrf: None,
-                project_id: project.id,
-                next: None,
-            }),
-        )
-        .await;
+        let assigned = assign_as(&db, &owner, ingested.conversation_id, project.id).await;
         assert_eq!(assigned.status(), StatusCode::SEE_OTHER);
         let location = assigned
             .headers()
             .get(axum::http::header::LOCATION)
             .and_then(|value| value.to_str().ok())
             .unwrap_or_default();
-        assert!(
-            location.contains(&format!(
-                "/app/projects/{}/inbox/{}",
-                project.code, ingested.conversation_id
-            )),
-            "{location}"
-        );
+        assert_eq!(location, format!("/app/inbox/{}", ingested.conversation_id));
 
         let lawyer = store::persons::create(
             &db,
@@ -1767,6 +1881,14 @@ mod tests {
         )
         .await
         .unwrap();
+        let reassigned = assign_as(&db, &lawyer, ingested.conversation_id, project.id).await;
+        assert_eq!(
+            reassigned.headers()[axum::http::header::LOCATION],
+            format!(
+                "/app/projects/{}/inbox/{}",
+                project.code, ingested.conversation_id
+            )
+        );
         let noted = note_post(
             State(db),
             Some(axum::Extension(session(

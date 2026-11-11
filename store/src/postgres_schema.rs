@@ -1548,6 +1548,12 @@ mod tests {
                     "../postgres/migrations/20261110120000_add_lead_consent_call_opt_in.sql"
                 ),
             ),
+            (
+                "20261110130000_inbox_conversation_trashed_at.sql",
+                include_str!(
+                    "../postgres/migrations/20261110130000_inbox_conversation_trashed_at.sql"
+                ),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());
