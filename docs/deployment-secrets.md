@@ -340,6 +340,36 @@ versions. A real `ops ship` checks those metadata and key-set contracts before i
 credential payloads, and does not write secret material. Deploy and verify the selected deployment before proceeding to
 the next one.
 
+## Access, encryption, and audit
+
+Who may read a project's secrets, which key encrypts them, and what gets logged are declared in an `access.toml` beside
+the deployment row and converged by one command:
+
+```bash
+navigator-deploy ops gcp access --project-id <project> --file "$NAVIGATOR_DEPLOYMENTS_DIR/<name>/access.toml" --check
+navigator-deploy ops gcp access --project-id <project> --file "$NAVIGATOR_DEPLOYMENTS_DIR/<name>/access.toml"
+```
+
+`--check` reads everything, writes nothing, and exits nonzero on drift. The file has three parts:
+
+- `[audit] data_read` turns on Data Access logs for each listed service. With Secret Manager and Cloud KMS listed, every
+  secret read and every key use is logged with the principal that made it.
+- `[secret_encryption] rotation_days` creates `navigator-secrets/secret-manager` in `global` (automatic replication
+  accepts no other location), rotates it on that period, makes the Secret Manager service agent its only
+  encrypter/decrypter, and points every secret's replication at it. New versions are encrypted with the key; versions
+  written before it keep Google-managed encryption until replaced. Disabling the key makes every secret unreadable at
+  once. `gcloud secrets replication update <secret> --remove-cmek` undoes it for one secret.
+- Each `[[reader]]` is a [Deployment Reader](glossary/deployment-reader.md): a service account holding only the listed
+  read-only project roles and `secretAccessor` on each listed secret, one secret at a time. The file is the whole truth
+  for a declared reader, so a role or secret it stops naming is revoked on the next run.
+
+The reconciler refuses any reader project role outside `logging.viewer`, `monitoring.viewer`, and `container.viewer`.
+None of them reads Data Access audit logs, so a reader cannot read the record of its own reads. It creates no keys for a
+reader; the organization blocks service-account keys, and lifting that block is an operator decision made per key.
+
+The runtime service account still holds `secretAccessor` project-wide. Narrowing it waits on the Data Access logs
+showing which secrets the CSI driver actually mounts.
+
 ## Known gaps
 
 The production deployment's `SENDGRID_API_KEY` is a **stub**, not a credential. It satisfies the boot invariant so the

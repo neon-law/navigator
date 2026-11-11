@@ -812,6 +812,23 @@ pub enum GcpCmd {
     /// resources, and it refuses a project ID recorded as an environment.
     #[command(subcommand)]
     Hub(GcpHubCmd),
+    /// Converge the project's secret-access posture onto an `access.toml`:
+    /// Data Access audit logs, the CMEK key Secret Manager encrypts with,
+    /// and each Deployment Reader's read-only roles and per-secret access.
+    ///
+    /// The file lives beside the deployment row in the private deployments
+    /// tree. `--check` writes nothing and exits nonzero on drift.
+    Access {
+        /// Google Cloud project ID. Falls back to `NAVIGATOR_GCP_PROJECT_ID`.
+        #[arg(long, env = "NAVIGATOR_GCP_PROJECT_ID")]
+        project_id: String,
+        /// The `access.toml` to converge onto.
+        #[arg(long)]
+        file: std::path::PathBuf,
+        /// Report drift without writing; exit nonzero when any exists.
+        #[arg(long)]
+        check: bool,
+    },
     /// Report required APIs that are disabled on the project.
     ///
     /// Compares the APIs `ops gcp setup` enables with the APIs the project
@@ -1262,6 +1279,11 @@ fn dispatch_with_dns_provider(
         crate::Command::Ops(crate::OpsCmd::Gcp(GcpCmd::Services { project_id })) => {
             gcp_services(&project_id)
         }
+        crate::Command::Ops(crate::OpsCmd::Gcp(GcpCmd::Access {
+            project_id,
+            file,
+            check,
+        })) => gcp_access(&project_id, &file, check),
         crate::Command::Ops(crate::OpsCmd::Gcp(GcpCmd::Iap(IapCmd::Audience {
             project_id,
             service,
@@ -1834,6 +1856,40 @@ fn dns_zones(domains: Vec<String>) -> Result<Vec<String>> {
 /// overlay first); a 404 surfaces as a clear error.
 /// `ops gcp services`: report which APIs `ops gcp setup` enables are disabled
 /// in `project_id`. Read-only; the fix it names is a setup re-run.
+fn gcp_access(project_id: &str, file: &std::path::Path, check: bool) -> Result<()> {
+    use gcp::access::{reconcile, AccessFile, Mode};
+    use gcp::client::GcpClient;
+
+    let text = std::fs::read_to_string(file).with_context(|| format!("read {}", file.display()))?;
+    let declared = AccessFile::parse(&text)?;
+    let mode = if check { Mode::Check } else { Mode::Apply };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("build tokio runtime")?;
+    runtime.block_on(async move {
+        let client = GcpClient::new(gcp::auth::adc_token_provider().await?);
+        let drift = reconcile(&client, project_id, &declared, mode).await?;
+        for line in &drift {
+            println!("{line}");
+        }
+        match (mode, drift.is_empty()) {
+            (_, true) => {
+                println!("{project_id}: access converged");
+                Ok(())
+            }
+            (Mode::Apply, false) => {
+                println!("{project_id}: {} change(s) applied", drift.len());
+                Ok(())
+            }
+            (Mode::Check, false) => Err(anyhow::anyhow!(
+                "{project_id}: {} access change(s) pending",
+                drift.len()
+            )),
+        }
+    })
+}
+
 fn gcp_services(project_id: &str) -> Result<()> {
     use std::sync::Arc;
 
