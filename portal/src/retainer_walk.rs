@@ -3155,9 +3155,9 @@ pub fn signer_role_for_recipient(template_source: &str, recipient_id: &str) -> O
     let position = recipient_id.parse::<usize>().ok()?.checked_sub(1)?;
     rules::signer_set(template_source)
         .ok()?
-        .roles
-        .get(position)
-        .cloned()
+        .roles()
+        .nth(position)
+        .map(str::to_string)
 }
 
 /// Display labels for recipient resolution and review indicators. Body
