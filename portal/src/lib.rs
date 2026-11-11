@@ -154,6 +154,7 @@ pub mod expunge;
 pub mod expunge_request_route;
 pub mod expunge_route;
 pub mod forgejo_oidc;
+pub mod forgejo_push_pipeline;
 pub mod forgejo_webhook;
 pub mod github_oidc;
 pub mod glossary;

@@ -199,10 +199,11 @@ pub trait PushConsumer: Send + Sync {
     async fn consume(&self, receipt: &ForgejoPushReceipt) -> Result<(), String>;
 }
 
-/// The consumer standing in until the pipeline's tail lands. It succeeds
-/// immediately: a verified push is journaled, marked consumed, and a
-/// redelivery re-runs nothing. The analysis consumer replaces it — no
-/// receiver code changes then, only this construction.
+/// The consumer tests default to when they do not inject a tail: it
+/// succeeds immediately, so a verified push is journaled, marked
+/// consumed, and a redelivery re-runs nothing. Production mounts
+/// [`crate::forgejo_push_pipeline::JjPushPipeline`] — only that
+/// construction changes, no receiver code.
 pub struct UnwiredPushConsumer;
 
 #[async_trait]

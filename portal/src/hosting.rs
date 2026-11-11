@@ -575,6 +575,23 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
         }
     };
 
+    // The pipeline's tail: analysis through the Firm's Forgejo, then
+    // Block Kit delivery to the Project's Slack channel. Computed before
+    // the state literal, which consumes the store and the Surreal lane.
+    // Without a journal store the receiver refuses verified pushes before
+    // reaching the consumer, so the unwired stand-in never runs.
+    let forgejo_push_consumer: std::sync::Arc<dyn crate::forgejo_webhook::PushConsumer> =
+        match forgejo_push_store.as_ref() {
+            Some(journal) => std::sync::Arc::new(
+                crate::forgejo_push_pipeline::JjPushPipeline::for_deployment(
+                    journal.clone(),
+                    surreal.clone(),
+                    runtime_kms.clone(),
+                ),
+            ),
+            None => std::sync::Arc::new(crate::forgejo_webhook::UnwiredPushConsumer),
+        };
+
     let state = crate::AppState {
         brand_bundle,
         surreal,
@@ -624,7 +641,7 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
         forgejo_webhook_secret,
         forgejo_webhook_hmac_key,
         forgejo_push_store,
-        forgejo_push_consumer: std::sync::Arc::new(crate::forgejo_webhook::UnwiredPushConsumer),
+        forgejo_push_consumer,
         email_events_secret,
         sendgrid_events_public_key,
         bootstrap_owner_email: crate::oauth::bootstrap_owner_email_from_env(),
