@@ -52,14 +52,31 @@ const ENTITY_TABLE: &str = "entity";
 const TEMPLATE_TABLE: &str = "template";
 const NOTATION_PACKAGE_TABLE: &str = "notation_package";
 
-/// Captive client recipient: signs embedded inside Neon Law Navigator (no
-/// email). The historical retainer-walk default.
+/// Captive client recipient: reaches the signing link through Navigator.
 pub const DELIVERY_EMBEDDED: &str = "embedded";
 
 /// Non-captive client recipient: DocuSign emails a signing link the client
-/// opens from their own inbox. The matter-open default — a brand-new client
-/// opened from the admin page is not in the room.
+/// opens from their own inbox.
 pub const DELIVERY_EMAILED: &str = "emailed";
+
+/// How the client receives the signing link when a notation is sent.
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SigningDelivery {
+    #[default]
+    Embedded,
+    Emailed,
+}
+
+impl SigningDelivery {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Embedded => DELIVERY_EMBEDDED,
+            Self::Emailed => DELIVERY_EMAILED,
+        }
+    }
+}
 
 /// One filled-in template, owned by a person (and optionally an entity)
 /// inside exactly one Project.

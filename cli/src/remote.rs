@@ -4571,6 +4571,7 @@ pub async fn notation_create(
     client_email: &str,
     project_code: &str,
     answers_from: Option<&Path>,
+    delivery: Option<&str>,
 ) -> ExitCode {
     run(async {
         let (base, token) = resolve(host)?;
@@ -4581,8 +4582,8 @@ pub async fn notation_create(
             .build()
             .context("build http client")?;
         let url = format!("{base}/app/projects/{project_code}/notations/new");
-        let form: Vec<(&str, &str)> =
-            vec![("template_code", template), ("client_email", client_email)];
+        let mut form = vec![("template_code", template), ("client_email", client_email)];
+        form.extend(delivery.map(|delivery| ("delivery", delivery)));
         let resp = client
             .post(&url)
             .bearer_auth(&token)
@@ -5300,6 +5301,35 @@ pub async fn notation_approve(host: Option<&str>, notation_id: Uuid) -> ExitCode
     .await
 }
 
+/// Dispatch the approved notation through the same command as the lawyer's send button.
+pub async fn notation_send(host: Option<&str>, notation_id: Uuid) -> ExitCode {
+    run(async {
+        let (base, token) = resolve(host)?;
+        let response = reqwest::Client::new()
+            .post(format!("{base}/app/api/notations/{notation_id}/signature"))
+            .bearer_auth(&token)
+            .body(Vec::<u8>::new())
+            .send()
+            .await
+            .context("POST notation signature")?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow!("send failed: {}", server_error(status, &body)));
+        }
+        let result: NotationStatus = response.json().await.context("read signature response")?;
+        let request_id = result
+            .signature_request_id
+            .context("signature response has no request ID")?;
+        println!(
+            "notation {notation_id} — state {}, signature request {request_id}",
+            result.state
+        );
+        Ok(())
+    })
+    .await
+}
+
 /// `navigator-deploy site notation request-changes <id> --question <code> [--note …]`
 /// — send a notation parked at `lawyer_review` back for changes. Records the
 /// flagged question codes + note and routes `lawyer_review -> reask__client`
@@ -5809,10 +5839,10 @@ mod tests {
         document_slug, document_transcribe_from, document_upload, document_upload_from,
         document_visibility, fetch_status, mail_file, matter_close, notation_answers,
         notation_approve, notation_create, notation_document, notation_list,
-        notation_request_changes, notation_status, notation_update, picker_selection_fields,
-        project_code_exists, projects_create, projects_create_named, seed, seed_directory,
-        select_candidate, source_revision, DocumentClient, DocumentExecution, RevisionSummary,
-        SeedCredential, SeedOptions, StepResponse,
+        notation_request_changes, notation_send, notation_status, notation_update,
+        picker_selection_fields, project_code_exists, projects_create, projects_create_named, seed,
+        seed_directory, select_candidate, source_revision, DocumentClient, DocumentExecution,
+        RevisionSummary, SeedCredential, SeedOptions, StepResponse,
     };
     use super::{
         exit_code_for, fetch_step, first_line, integrity_failure, mint_refusal_annotation,
@@ -5821,7 +5851,7 @@ mod tests {
     use super::{fetch_project_list_with, trimmed_body, UploadSessionExpired};
     use crate::credentials::{self, Credentials, HostCredential};
     use uuid::Uuid;
-    use wiremock::matchers::{body_json, method, path, query_param};
+    use wiremock::matchers::{body_json, header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     static CREDENTIALS_ENV_LOCK: LazyLock<tokio::sync::Mutex<()>> =
@@ -9099,8 +9129,17 @@ mod tests {
             .mount(server)
             .await;
         Mock::given(method("POST"))
-            .and(path(format!("/app/lawyer/notations/{}/send", ids.notation)))
-            .respond_with(ResponseTemplate::new(200))
+            .and(path(format!(
+                "/app/api/notations/{}/signature",
+                ids.notation
+            )))
+            .and(header("authorization", "Bearer test-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "notation_id": ids.notation,
+                "state": "sent_for_signature__pending",
+                "signature_request_id": "00000000-0000-4000-8000-000000000001"
+            })))
+            .expect(1)
             .mount(server)
             .await;
         Mock::given(method("POST"))
@@ -9176,7 +9215,8 @@ mod tests {
                 "memo__contract_review",
                 "libra@example.com",
                 "acme",
-                None
+                None,
+                None,
             )
             .await,
             ExitCode::SUCCESS
@@ -9191,6 +9231,7 @@ mod tests {
             notation_approve(host, ids.notation).await,
             ExitCode::SUCCESS
         );
+        assert_eq!(notation_send(host, ids.notation).await, ExitCode::SUCCESS);
         assert_eq!(
             notation_answers(host, ids.notation, true, None).await,
             ExitCode::SUCCESS
@@ -9339,20 +9380,30 @@ mod tests {
                 "libra@example.com",
                 "acme",
                 Some(&answers_path),
+                Some("emailed"),
             )
             .await,
             ExitCode::SUCCESS
         );
 
-        // The walk POSTed exactly the saved value as the answer field.
-        let posted: Vec<String> = server
-            .received_requests()
-            .await
-            .unwrap()
+        assert_emailed_notation_prefill(&server, second).await;
+    }
+
+    async fn assert_emailed_notation_prefill(server: &MockServer, notation_id: Uuid) {
+        let requests = server.received_requests().await.unwrap();
+        let create = requests
+            .iter()
+            .find(|request| {
+                request.method == "POST" && request.url.path() == "/app/projects/acme/notations/new"
+            })
+            .expect("the notation was created");
+        assert!(url::form_urlencoded::parse(&create.body)
+            .any(|(key, value)| key == "delivery" && value == "emailed"));
+        let posted: Vec<String> = requests
             .iter()
             .filter(|request| {
                 request.method == "POST"
-                    && request.url.path() == format!("/app/lawyer/notations/{second}/step")
+                    && request.url.path() == format!("/app/lawyer/notations/{notation_id}/step")
             })
             .map(|request| String::from_utf8(request.body.clone()).unwrap())
             .collect();
@@ -9391,6 +9442,7 @@ mod tests {
                 "libra@example.com",
                 "acme",
                 Some(&malformed),
+                None,
             )
             .await,
             ExitCode::SUCCESS
