@@ -634,8 +634,8 @@ fn workflow_has_signing_state(workflow: &BTreeMap<String, BTreeMap<String, Strin
 }
 
 /// True when the template's workflow declares a `sent_for_signature` (or
-/// `sent_for_signature__*`) state. Shared with `N115`, whose backing check
-/// widens to the implicit signer set once a template collects signatures.
+/// `sent_for_signature__*`) state. Shared with `spec_coherence`, whose
+/// reverse anchor check requires a body anchor for every such template.
 #[must_use]
 pub fn declares_signing_state(contents: &str) -> bool {
     let Some(fm) = frontmatter::extract(contents) else {

@@ -409,10 +409,12 @@ fn check_declared_signer_backing(
     let Ok(set) = crate::f107::signer_set(contents) else {
         return;
     };
-    // An explicit `signers:` list always needs backing. An implicit one does
-    // too once the workflow collects a signature: the default set sends the
-    // client an envelope, so the questionnaire must know who the client is.
-    if !set.explicit && !crate::f107::declares_signing_state(contents) {
+    // Only an explicit `signers:` list needs questionnaire backing: a
+    // declared role has no other identity source. The implicit default set
+    // resolves the client from the notation's bound Person row and the firm
+    // from configuration — see `signature_flow`'s recipient resolution —
+    // so the questionnaire never has to know who they are.
+    if !set.explicit {
         return;
     }
     for signer in &set.signers {

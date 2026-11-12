@@ -142,14 +142,16 @@ fn yaml_signer_roles(yaml: &str) -> Vec<String> {
     }
 }
 
-/// The compile-time signer gate: a bundled template whose workflow
-/// collects a signature — or that declares its own `signers:` list —
-/// must pair that declaration with questionnaire backing and body
-/// anchors, and the standalone yaml must tell the same signer story as
-/// the template frontmatter. Drift in any direction (a signer with no
-/// questionnaire state, a binding naming no question, a role with no
-/// anchor, yaml and markdown disagreeing) fails here, at compile time,
-/// instead of at the provider.
+/// The compile-time signer gate: a bundled template that declares its own
+/// `signers:` list must pair that declaration with questionnaire backing
+/// and body anchors, and the standalone yaml must tell the same signer
+/// story as the template frontmatter. Drift in any direction (a signer
+/// with no questionnaire state, a binding naming no question, a role with
+/// no anchor, yaml and markdown disagreeing) fails here, at compile time,
+/// instead of at the provider. Implicit default sets carry no backing
+/// promise — the send flow resolves the client from the notation's bound
+/// Person row — so only a template that actually collects a signature
+/// needs one body anchor.
 #[test]
 fn every_signing_template_pairs_signers_questionnaire_and_anchors() {
     for (code, yaml) in BUNDLED_SPEC_YAML {
@@ -159,9 +161,6 @@ fn every_signing_template_pairs_signers_questionnaire_and_anchors() {
 
         let set = rules::f107::signer_set(&markdown)
             .unwrap_or_else(|e| panic!("signers for `{code}` failed to parse: {e}"));
-        if !set.explicit && !rules::f107::declares_signing_state(&markdown) {
-            continue;
-        }
 
         let questionnaire = questionnaire_spec_from_yaml(yaml).unwrap_or_else(|e| {
             panic!("standalone questionnaire yaml for `{code}` failed to parse: {e}")
@@ -169,9 +168,12 @@ fn every_signing_template_pairs_signers_questionnaire_and_anchors() {
 
         for signer in &set.signers {
             let role = signer.role.as_str();
-            // The firm countersigns from the configured signer, not a
-            // questionnaire state — the same carve-out N115 makes.
-            if role != "firm" {
+            // Only an explicit `signers:` list needs questionnaire backing:
+            // the implicit default set resolves the client from the
+            // notation's bound Person row and the firm from configuration —
+            // the same carve-out N115 makes — so there is no `{state}`
+            // question to pair.
+            if set.explicit && role != "firm" {
                 let state = format!("person__{role}");
                 assert!(
                     questionnaire
@@ -181,29 +183,34 @@ fn every_signing_template_pairs_signers_questionnaire_and_anchors() {
                         .any(|name| name.as_str() == state),
                     "`{code}`: signer role `{role}` has no `{state}` question in the bundled questionnaire"
                 );
-            }
-            // A declared identity binding must name a real question, or the
-            // send flow resolves nothing at signature time.
-            for binding in [signer.name.as_deref(), signer.email.as_deref()]
-                .into_iter()
-                .flatten()
-            {
-                assert!(
-                    questionnaire
-                        .0
-                        .states
-                        .keys()
-                        .any(|name| name.as_str() == binding),
-                    "`{code}`: signer role `{role}` binds `{binding}` but the bundled questionnaire has no such question"
-                );
+                // A declared identity binding must name a real question, or the
+                // send flow resolves nothing at signature time.
+                for binding in [signer.name.as_deref(), signer.email.as_deref()]
+                    .into_iter()
+                    .flatten()
+                {
+                    assert!(
+                        questionnaire
+                            .0
+                            .states
+                            .keys()
+                            .any(|name| name.as_str() == binding),
+                        "`{code}`: signer role `{role}` binds `{binding}` but the bundled questionnaire has no such question"
+                    );
+                }
             }
             // Anchor pairing (the N107 direction): a declared role must
-            // have somewhere in the body to sign.
-            assert!(
-                markdown.contains(&format!("{{{{{role}.signature}}}}"))
-                    || markdown.contains(&format!("{{{{{role}.initials}}}}")),
-                "`{code}`: signer role `{role}` has no `{{{role}.signature}}` or `{{{role}.initials}}` anchor in the body"
-            );
+            // have somewhere in the body to sign. Implicit default roles
+            // carry no anchor promise — a template that signs with the
+            // implicit set only needs one anchor (the reverse check
+            // below).
+            if set.explicit {
+                assert!(
+                    markdown.contains(&format!("{{{{{role}.signature}}}}"))
+                        || markdown.contains(&format!("{{{{{role}.initials}}}}")),
+                    "`{code}`: signer role `{role}` has no `{{{role}.signature}}` or `{{{role}.initials}}` anchor in the body"
+                );
+            }
         }
 
         // Reverse anchor pairing: a template whose workflow declares a
