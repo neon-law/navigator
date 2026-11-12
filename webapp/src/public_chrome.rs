@@ -517,7 +517,8 @@ pub fn apply_resolved_firm_footer(
         chrome.firm_name.clone_from(&model.legal_entity);
         chrome.firm_logo_href.clear();
         chrome.firm_email.clear();
-        chrome.firm_phone.clear();
+        // The voice line stays: a moved Brand keeps answering its number,
+        // so its header still carries the call button.
         chrome.offices.clear();
         chrome.attorneys.clear();
         chrome.memberships.clear();
@@ -1182,6 +1183,7 @@ mod tests {
     #[cfg(feature = "server")]
     fn changed_operator_keeps_the_advertising_warning() {
         let mut chrome = firm_chrome();
+        let phone = chrome.firm_phone.clone();
         chrome.is_practice = true;
         chrome.disclaimer = "Attorney advertisement. Guieb & Shook PC. Non-legal services do not create an attorney-client relationship.".into();
         chrome.disclosure.provider = "Independent Provider".into();
@@ -1191,10 +1193,23 @@ mod tests {
         );
         assert!(chrome.offices.is_empty() && chrome.attorneys.is_empty());
         assert!(chrome.memberships.is_empty() && chrome.social.is_empty());
+        assert!(chrome.firm_logo_href.is_empty() && chrome.firm_email.is_empty());
+        assert_eq!(
+            chrome.firm_phone, phone,
+            "a moved Brand keeps its voice line"
+        );
+        let mut header = VirtualDom::new_with_props(
+            PublicHeader,
+            PublicHeaderProps {
+                chrome: chrome.clone(),
+                menu_id: "site-menu".into(),
+            },
+        );
+        header.rebuild_in_place();
+        let header = dioxus_ssr::render(&header);
         assert!(
-            chrome.firm_logo_href.is_empty()
-                && chrome.firm_email.is_empty()
-                && chrome.firm_phone.is_empty()
+            header.contains(&crate::components::site_footer::tel_href(&phone)),
+            "{header}"
         );
         assert_eq!(chrome.disclaimer, "Attorney advertisement. Synthetic New Entity LLC. Non-legal services do not create an attorney-client relationship.");
         let html = render_chrome(chrome);

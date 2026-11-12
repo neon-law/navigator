@@ -3470,7 +3470,7 @@ fn canonical_document(base: &str) -> Value {
               "403": { "description": "Authenticated caller is not Lawyer/admin", "content": { "application/json": {
                 "schema": { "$ref": "#/components/schemas/ApiError" }
               } } },
-              "400": { "description": "Validation failed — the body is not exactly one of template_code or draft_code, or that code or client_email is blank", "content": { "application/json": {
+              "400": { "description": "Validation failed — the body is not exactly one of template_code or draft_code, that code or client_email is blank, or delivery is invalid", "content": { "application/json": {
                 "schema": { "$ref": "#/components/schemas/ApiError" }
               } } },
               "404": { "description": "No such matter (or it is outside the caller's scope), or no such template", "content": { "application/json": {
@@ -5893,7 +5893,9 @@ fn canonical_document(base: &str) -> Value {
               "draft_code":    { "type": "string",
                                  "description": "The same template code under the lawyer's name for a Template (a Draft). Provide this or template_code, not both. Trimmed; must not be blank." },
               "client_email":  { "type": "string", "format": "email",
-                                 "description": "The client the notation is bound to. Resolved by email; a `client`-role Person is created on first sight and attached to the matter. Trimmed; must not be blank." }
+                                 "description": "The client the notation is bound to. Resolved by email; a `client`-role Person is created on first sight and attached to the matter. Trimmed; must not be blank." },
+              "delivery":      { "type": "string", "enum": ["embedded", "emailed"], "default": "embedded",
+                                 "description": "How the client receives the signing link after a lawyer sends the rendered document. With emailed delivery, the signature provider emails the client directly." }
             },
             "oneOf": [
               { "required": ["template_code"] },

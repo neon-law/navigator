@@ -3601,6 +3601,13 @@ enum NotationAction {
         #[command(flatten)]
         host: HostOpt,
     },
+    /// Send the approved, rendered notation for signature using its configured delivery.
+    Send {
+        /// Notation UUID.
+        notation_id: uuid::Uuid,
+        #[command(flatten)]
+        host: HostOpt,
+    },
     /// Send a notation parked at `lawyer_review` back for changes: flag the
     /// wrong answers so they get re-collected, then return to review
     /// (`POST …/request-changes`). A rejected review re-collects the wrong
@@ -4349,6 +4356,7 @@ async fn run_notation(action: NotationAction) -> ExitCode {
                         host.host.as_deref(),
                         Path::new("."),
                         answers_from.as_deref(),
+                        None,
                     )
                     .await
                 }
@@ -4384,6 +4392,9 @@ async fn run_notation(action: NotationAction) -> ExitCode {
         }
         NotationAction::Approve { notation_id, host } => {
             remote::notation_approve(host.host.as_deref(), notation_id).await
+        }
+        NotationAction::Send { notation_id, host } => {
+            remote::notation_send(host.host.as_deref(), notation_id).await
         }
         NotationAction::RequestChanges {
             notation_id,

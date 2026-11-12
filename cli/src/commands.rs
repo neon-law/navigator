@@ -572,6 +572,9 @@ pub enum ProjectsCmd {
     Onboard {
         #[command(flatten)]
         host: HostOpt,
+        /// How the client receives the signing link after lawyer approval and send.
+        #[arg(long, value_parser = ["embedded", "emailed"])]
+        delivery: Option<String>,
         /// A saved answers file (as `site notation answers --save-answers`
         /// writes) to prefill the onboarding notation from: every question
         /// the template asks is answered from the file's `state: value` map,
@@ -2514,11 +2517,16 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 host,
             } => projects::finance::show(host.host.as_deref(), project_code.as_deref(), json).await,
         },
-        ProjectsCmd::Onboard { host, answers_from } => {
+        ProjectsCmd::Onboard {
+            host,
+            answers_from,
+            delivery,
+        } => {
             projects::lifecycle::onboard(
                 host.host.as_deref(),
                 Path::new("."),
                 answers_from.as_deref(),
+                delivery.as_deref(),
             )
             .await
         }

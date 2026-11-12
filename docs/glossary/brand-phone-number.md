@@ -21,7 +21,9 @@ ingests nothing.
 The number a Brand's public site publishes — the click-to-call action in its header and home hero — is
 `views::brand::Branding::firm_phone`. A voice call to it resolves through this registry to that Brand, which is what
 lets each Brand answer with its own [Call Script](call-script.md); a Brand without a number of its own publishes the
-firm's shared one.
+firm's shared one. A deployment's `NAVIGATOR_VOICE_NUMBERS` (comma-separated `brand_key=+E164` pairs) replaces a listed
+Brand's number on that deployment through `Branding::published_phone`, so a staging deployment's callers reach staging's
+Twilio lines; an omitted Brand keeps its own. A Brand moved to another Firm keeps publishing its number.
 
 - Schema: `brand_phone_number` in [`store/postgres/migrations/`](../../store/postgres/) ·
   [`store::brand_phone_numbers`](../../store/src/brand_phone_numbers.rs) ·

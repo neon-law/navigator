@@ -274,6 +274,7 @@ async fn participant_lawyer_opens_a_notation_and_returns_201_json() {
             .unwrap()
             .expect("the notation the response named exists");
     assert_eq!(notation.project_id, project_id);
+    assert_eq!(notation.delivery, store::notations::DELIVERY_EMBEDDED);
     let client = store::persons::find_by_email_ci(&surreal, "libra@example.com")
         .await
         .unwrap()
@@ -291,16 +292,37 @@ async fn admin_bypasses_scope_and_opens_a_notation() {
     // Admin does NOT participate in the matter; the scope check bypasses for admin.
     let admin = bearer_new_person(&surreal, "admin@example.com", Role::Admin, None).await;
 
-    let resp = post_notation(
+    let resp = post_json(
         &app,
         Some(&admin),
         project_id,
-        "amendment",
-        "libra@example.com",
+        &serde_json::json!({
+            "template_code": "amendment",
+            "client_email": "libra@example.com",
+            "delivery": "unknown",
+        }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(notation_count(&surreal, project_id).await, 0);
+
+    let resp = post_json(
+        &app,
+        Some(&admin),
+        project_id,
+        &serde_json::json!({
+            "template_code": "amendment",
+            "client_email": "libra@example.com",
+            "delivery": "emailed",
+        }),
     )
     .await;
     assert_eq!(resp.status(), StatusCode::CREATED);
-    assert_eq!(notation_count(&surreal, project_id).await, 1);
+    let rows = store::notations::list_by_project(&surreal, project_id)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].delivery, store::notations::DELIVERY_EMAILED);
 }
 
 /// The published `CreateNotationRequest` schema and `Json` decoding accept the

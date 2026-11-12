@@ -2084,7 +2084,7 @@ async fn acroform_payload(
 /// content). This now renders + parks only: it fires `approved` so the
 /// worker durably renders + persists the reviewed bytes and the workflow
 /// waits at `generate_pdf__retainer_pdf`. The binding send is a separate,
-/// deliberate command ([`send_post`] / `navigator retainer send`) that
+/// deliberate command ([`send_post`] / `navigator site notation send`) that
 /// first confirms the PDF landed — so a real Restate Cloud worker's
 /// render never races the send.
 pub async fn approve_send_post(
@@ -2155,7 +2155,7 @@ pub async fn approve_send_post(
 /// POST `/app/lawyer/notations/:id/send` — dispatch the rendered
 /// document for signature. The deliberate, authenticated "send" half of
 /// the pipeline, reached from the browser's "Send for signature" button
-/// and the `navigator retainer send` CLI command.
+/// and shared with the signature API used by `navigator site notation send`.
 ///
 /// Confirms the worker's PDF is present, then sends exactly one envelope
 /// (see [`crate::signature_flow::send_notation_for_signature`]). When the PDF isn't ready yet — the worker
