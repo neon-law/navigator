@@ -29,7 +29,11 @@ Feature: Mutable two-sided intake assembles and sends through DocuSign
       | nevada                               |
     Then the matter is awaiting attorney review
     And the matter has no signature request yet
-    When the attorney approves and sends the document
+    When the attorney approves the document
+    And the lawyer prepares the envelope
+    Then the envelope is a draft that has not been sent
+    When the lawyer sends the prepared envelope
     Then the matter has a signature request
+    And the sent envelope was promoted, not duplicated
     And the signature envelope routes the client before the firm
     And the sent document carries the custom clause

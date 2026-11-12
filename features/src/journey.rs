@@ -48,6 +48,10 @@ pub struct Journey {
     /// cookie session for a client Person and drive the client-facing
     /// portal surfaces (intake, review) as that human.
     pub sessions: SessionStore,
+    /// The firm lawyer's Person row, minted into every lawyer bearer so
+    /// matter-scoped doors resolve the caller's participation the way a
+    /// signed-in human's session does.
+    pub lawyer_person_id: uuid::Uuid,
 }
 
 /// One captured HTTP response: status, `Location` (the walker redirects
@@ -108,6 +112,19 @@ impl Journey {
                 .expect("admit configured lawyer");
             state.on_call_lawyer_email = Some("lawyer@neonlaw.com".to_string());
         }
+        // The firm lawyer every lawyer bearer binds to — the same
+        // `lawyer@neonlaw.com` account the start door configures, so both
+        // paths mint sessions for one identity.
+        let lawyer_person = store::persons::find_or_create(
+            &surreal,
+            &store::persons::NewPerson::with_role(
+                "Start Door Lawyer",
+                "lawyer@neonlaw.com",
+                store::persons::Role::Lawyer,
+            ),
+        )
+        .await
+        .expect("create the firm lawyer");
         // Blank government forms live only in the assets bucket, sha-
         // pinned; stage synthetic blanks (with matching pins) on the
         // journey's storage root so formation fills run against the same
@@ -132,6 +149,7 @@ impl Journey {
             billing,
             signature,
             sessions,
+            lawyer_person_id: lawyer_person.id,
         }
     }
 
@@ -219,10 +237,7 @@ impl Journey {
         self.send(
             Request::builder()
                 .uri(path)
-                .header(
-                    "authorization",
-                    portal::test_support::lawyer_bearer_header(),
-                )
+                .header("authorization", self.lawyer_bearer())
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -235,15 +250,37 @@ impl Journey {
             Request::builder()
                 .method("POST")
                 .uri(path)
-                .header(
-                    "authorization",
-                    portal::test_support::lawyer_bearer_header(),
-                )
+                .header("authorization", self.lawyer_bearer())
                 .header("content-type", "application/x-www-form-urlencoded")
                 .body(Body::from(body))
                 .unwrap(),
         )
         .await
+    }
+
+    /// `POST path` (JSON) as the firm — the REST doors, whose request
+    /// bodies are typed JSON rather than form fields.
+    pub async fn lawyer_post_json(&self, path: &str, body: serde_json::Value) -> Captured {
+        self.send(
+            Request::builder()
+                .method("POST")
+                .uri(path)
+                .header("authorization", self.lawyer_bearer())
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+    }
+
+    /// The lawyer authorization header: a real bearer credential bound to
+    /// the firm lawyer's Person row, the shape a signed-in lawyer's session
+    /// and the CLI credential both present.
+    fn lawyer_bearer(&self) -> String {
+        portal::test_support::bearer_header_with_person(
+            store::persons::Role::Lawyer,
+            self.lawyer_person_id,
+        )
     }
 
     async fn send(&self, req: Request<Body>) -> Captured {
