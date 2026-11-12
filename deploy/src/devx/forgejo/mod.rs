@@ -24,6 +24,7 @@ pub(in crate::devx) mod runner;
 mod smoke;
 
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, ensure, Context, Result};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -440,13 +441,13 @@ pub(super) fn assert_analyzed_push_receipt(
             return Err(format!(
                 "the push receipt failed at consumption: {}",
                 row.failure_detail
-            ))
+            ));
         }
         "skipped" => return Err("the push receipt was skipped, not analyzed".to_owned()),
         other => {
             return Err(format!(
                 "the push receipt never finished consumption: {other}"
-            ))
+            ));
         }
     }
     if row.change_id != change_id {
@@ -542,6 +543,23 @@ pub(super) fn receiver_start_script() -> String {
 /// fixed lanes).
 pub(super) fn port_forward_args(target: &str, remote_port: u16) -> [String; 2] {
     [target.to_owned(), format!(":{remote_port}")]
+}
+
+/// The receiver binary to stage into the pod: an explicit override when the
+/// caller points at one, else the workspace's prebuilt musl binary. A
+/// glibc-linked binary cannot serve from the Debian pod — the runner's
+/// libc is newer than the pod's — so the CI job stages a static musl build
+/// at `target/receiver/navigator-deploy` and drops the target directory
+/// behind it.
+pub(super) fn receiver_binary_source(
+    workspace_root: &Path,
+    override_path: Option<&str>,
+) -> Option<PathBuf> {
+    if let Some(path) = override_path {
+        return Some(PathBuf::from(path));
+    }
+    let prebuilt = workspace_root.join("target/receiver/navigator-deploy");
+    prebuilt.is_file().then_some(prebuilt)
 }
 
 /// The synthetic email-domain policy the smoke opens, and the identities it
@@ -852,6 +870,30 @@ mod tests {
         assert_eq!(
             local, ":5432",
             "an empty local port lets kubectl allocate one; the fixed lanes may already be held"
+        );
+    }
+
+    #[test]
+    fn the_receiver_binary_prefers_the_prebuilt_musl_build() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(
+            receiver_binary_source(dir.path(), None).is_none(),
+            "no prebuilt binary means the caller falls back to its own"
+        );
+        let prebuilt = dir.path().join("target/receiver");
+        std::fs::create_dir_all(&prebuilt).unwrap();
+        let binary = prebuilt.join("navigator-deploy");
+        std::fs::write(&binary, b"binary").unwrap();
+        assert_eq!(
+            receiver_binary_source(dir.path(), None).as_deref(),
+            Some(binary.as_path())
+        );
+        let override_target = dir.path().join("other");
+        std::fs::write(&override_target, b"binary").unwrap();
+        assert_eq!(
+            receiver_binary_source(dir.path(), Some(override_target.to_str().unwrap())).as_deref(),
+            Some(override_target.as_path()),
+            "the explicit override wins over the prebuilt path"
         );
     }
 
