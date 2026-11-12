@@ -1779,7 +1779,10 @@ async fn push_webhook_proof(
     kube.output(&["exec", POSTGRES_POD, "--", RECEIVER_BINARY, "--version"])
         .context(
             "the receiver binary does not execute in the Linux pod; \
-             the push-webhook phase needs a Linux-built smoke binary",
+             the push-webhook phase needs the staged musl receiver binary \
+             (build it with --target x86_64-unknown-linux-musl and copy it \
+             to target/receiver/navigator-deploy, or point \
+             NAVIGATOR_SMOKE_RECEIVER_BINARY at one)",
         )?;
     kube.output(&[
         "exec",
@@ -1872,11 +1875,25 @@ async fn push_webhook_proof(
     Ok(())
 }
 
-/// Copy the smoke's own binary into a staging directory, symbol-stripped
-/// and gzipped for the transfer into the hosting pod.
+/// Copy the receiver binary into a staging directory, symbol-stripped and
+/// gzipped for the transfer into the hosting pod: the workspace's prebuilt
+/// musl build when one is staged (the CI job's), else the smoke's own
+/// binary — which on a macOS host fails the pod's readiness gate by design.
 fn stage_receiver_binary() -> Result<ReceiverStaging> {
     let dir = tempfile::tempdir().context("create the receiver staging directory")?;
-    let exe = std::env::current_exe().context("locate the smoke binary")?;
+    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .context("locate the workspace root")?
+        .to_path_buf();
+    let exe = super::receiver_binary_source(
+        &workspace_root,
+        std::env::var("NAVIGATOR_SMOKE_RECEIVER_BINARY")
+            .ok()
+            .as_deref(),
+    )
+    .or_else(|| std::env::current_exe().ok())
+    .context("no receiver binary to stage")?;
     let staged = dir.path().join("navigator-deploy");
     std::fs::copy(&exe, &staged).with_context(|| format!("stage {}", exe.display()))?;
     match std::process::Command::new("strip").arg(&staged).status() {
