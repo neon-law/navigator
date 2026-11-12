@@ -85,6 +85,18 @@ enum Command {
         #[arg(long, hide = true)]
         ci: bool,
     },
+    /// Preview the Jujutsu checkouts needed for active Projects on a host.
+    Sync {
+        /// Target Navigator host.
+        #[arg(long)]
+        host: String,
+        /// Directory containing Project checkouts. Defaults to ~/Work.
+        #[arg(long)]
+        dir: Option<PathBuf>,
+        /// Report checkout state without changing files or contacting the forge.
+        #[arg(long, required = true)]
+        dry_run: bool,
+    },
     /// Interact with a project hosted on a navigator site.
     ///
     /// Singular because a checkout is one Project — the repository name *is* the Project code.
@@ -237,6 +249,11 @@ fn run() -> ExitCode {
             errors_only,
             ci: _,
         } => run_validate(&dir, fix, errors_only),
+        Command::Sync {
+            host,
+            dir,
+            dry_run: _,
+        } => runtime().block_on(projects::watch::run_preview(dir, &host)),
         Command::Projects { action } => runtime().block_on(run_projects(action)),
         Command::Site { action } => match action {
             SiteCmd::Login { host, no_browser } => {
