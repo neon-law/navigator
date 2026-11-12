@@ -984,6 +984,11 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             post(send_notation_signature),
         ),
         (
+            "GET",
+            "/app/api/notations/{id}/signature",
+            get(status_notation_signature),
+        ),
+        (
             "POST",
             "/app/api/review-documents/{id}/comments",
             post(add_review_comment),
@@ -4894,6 +4899,18 @@ struct NotationSignatureResponse {
     signature_request_id: String,
 }
 
+/// Success body for `GET /app/api/notations/{id}/signature` — the read-only
+/// envelope status ([`crate::signature_status`]): the provider, the
+/// envelope-wide lifecycle state, and each declared signer's own step. A
+/// notation that has never been prepared or sent reports nulls and an
+/// empty signer list — "no envelope yet" is an answer, not a 404.
+#[derive(Serialize)]
+struct NotationSignatureStatusResponse {
+    notation_id: Uuid,
+    #[serde(flatten)]
+    report: crate::signature_status::EnvelopeStatusReport,
+}
+
 /// Request body for `POST /app/api/notations/{id}/signature`. An empty body
 /// (or an omitted `prepare`) sends the envelope; `{"prepare": true}` holds
 /// it as a draft on the provider — the CLI's `notation envelope prepare`.
@@ -4901,6 +4918,31 @@ struct NotationSignatureResponse {
 struct NotationSignatureRequest {
     #[serde(default)]
     prepare: bool,
+}
+
+/// Resolve the notation and enforce matter scope on its project — the
+/// shared front door of both signature REST handlers. A miss collapses to
+/// 404 so the door never discloses a notation the caller cannot see.
+async fn lawyer_scoped_notation(
+    state: &ApiState,
+    lawyer: &LawyerSession,
+    id: Uuid,
+) -> Result<store::notations::Notation, ApiError> {
+    let notation = store::notations::find_by_id(&state.surreal, id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    let in_scope = store::access::can_see_project_as_lawyer(
+        &state.surreal,
+        lawyer.0.person_id,
+        lawyer.0.role,
+        notation.project_id,
+    )
+    .await
+    .unwrap_or(false);
+    if !in_scope {
+        return Err(ApiError::NotFound);
+    }
+    Ok(notation)
 }
 
 /// `POST /app/api/notations/{id}/signature` — dispatch the notation's rendered
@@ -4919,23 +4961,9 @@ async fn send_notation_signature(
     Path(id): Path<Uuid>,
     body: axum::body::Bytes,
 ) -> Result<Response, ApiError> {
-    // Resolve the notation and enforce matter scope on its project first. A
-    // miss collapses to 404 so the door never discloses a notation the caller
-    // cannot see.
-    let notation = store::notations::find_by_id(&state.surreal, id)
-        .await?
-        .ok_or(ApiError::NotFound)?;
-    let in_scope = store::access::can_see_project_as_lawyer(
-        &state.surreal,
-        lawyer.0.person_id,
-        lawyer.0.role,
-        notation.project_id,
-    )
-    .await
-    .unwrap_or(false);
-    if !in_scope {
-        return Err(ApiError::NotFound);
-    }
+    // Existence + matter scope; the dispatch itself reads nothing else off
+    // the notation.
+    lawyer_scoped_notation(&state, &lawyer, id).await?;
 
     let ctx = crate::signature_flow::SendFlowContext {
         surreal: &state.surreal,
@@ -4973,6 +5001,34 @@ async fn send_notation_signature(
             notation_id: id,
             state: final_state.as_str().to_string(),
             signature_request_id: signature_request_id.0,
+        }),
+    )
+        .into_response())
+}
+
+/// `GET /app/api/notations/{id}/signature` — read the notation's envelope
+/// status ([`crate::signature_status`]): the provider, the envelope-wide
+/// lifecycle state, and each declared signer's own step. Same gates as the
+/// dispatch `POST` (lawyer tier + matter scope, out-of-scope is 404), but
+/// read-only: a notation with no envelope answers 200 with nulls rather
+/// than a 404 — "nothing sent yet" is exactly what a lawyer preparing one
+/// needs to see. Composes the same durable record the webhook stamps
+/// (`store::signatures::latest_for_notation`), so per-signer progress here
+/// and on the matter page come from one source.
+async fn status_notation_signature(
+    State(state): State<ApiState>,
+    lawyer: LawyerSession,
+    Path(id): Path<Uuid>,
+) -> Result<Response, ApiError> {
+    let notation = lawyer_scoped_notation(&state, &lawyer, id).await?;
+    let report =
+        crate::signature_status::status_for_notation(&state.surreal, &state.storage, &notation)
+            .await;
+    Ok((
+        StatusCode::OK,
+        Json(NotationSignatureStatusResponse {
+            notation_id: id,
+            report,
         }),
     )
         .into_response())

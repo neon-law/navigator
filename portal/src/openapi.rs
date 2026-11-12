@@ -3978,6 +3978,33 @@ fn canonical_document(base: &str) -> Value {
                 "schema": { "$ref": "#/components/schemas/ApiError" }
               } } }
             }
+          },
+          "get": {
+            "summary": "Read a notation's envelope status",
+            "description":
+              "Read-only status of the notation's signature envelope: the provider, the envelope-wide \
+               lifecycle state (`requested`, `completed`, `declined`, `voided`, or `expired`), and each \
+               declared signer's own step. Composed from the same durable signature record the inbound \
+               completion webhook stamps, so this read and the notation page's status card agree. Same \
+               authorization as the dispatch `POST` (lawyer/admin + matter scope; out-of-scope or unknown \
+               is 404). A notation that has never been prepared or sent answers 200 with nulls and an empty \
+               signer list — no envelope yet is an answer, not an error.",
+            "parameters": [
+              { "name": "id", "in": "path", "required": true,
+                "schema": { "type": "string", "format": "uuid" } }
+            ],
+            "responses": {
+              "200": { "description": "The envelope's status (or its absence)", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/NotationSignatureStatusResponse" } } } },
+              "401": { "description": "No authenticated session", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "403": { "description": "Authenticated caller is not Lawyer/admin", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "404": { "description": "No such notation, or it is outside the caller's scope", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "500": { "description": "The status could not be read (database error)", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" } } } }
+            }
           }
         },
         "/app/api/review-documents/{id}/comments": {
@@ -6072,6 +6099,29 @@ fn canonical_document(base: &str) -> Value {
                                         "description": "The notation's workflow state after dispatch (e.g. `sent_for_signature__pending`)." },
               "signature_request_id": { "type": "string",
                                         "description": "The provider's request id; the inbound completion webhook correlates it back to this notation." }
+            }
+          },
+          "NotationSignatureStatusResponse": {
+            "type": "object",
+            "required": ["notation_id", "signers"],
+            "properties": {
+              "notation_id":          { "type": "string", "format": "uuid" },
+              "signature_request_id": { "type": "string", "nullable": true,
+                                        "description": "The provider's envelope id, or null before the first prepare or send." },
+              "provider":             { "type": "string", "nullable": true,
+                                        "description": "The provider that executed the request (e.g. `docusign`)." },
+              "state":                { "type": "string", "nullable": true,
+                                        "description": "Envelope-wide lifecycle state: `requested`, `completed`, `declined`, `voided`, or `expired`." },
+              "signers":              { "type": "array",
+                                        "description": "Every declared signer in routing order, with their own step.",
+                                        "items": { "type": "object",
+                                                   "required": ["role", "signed"],
+                                                   "properties": {
+                                                     "role":   { "type": "string", "description": "The declared role (e.g. `client`, `firm`)." },
+                                                     "signed": { "type": "boolean", "description": "The provider recorded this recipient's completion." }
+                                                   } } },
+              "updated_at":           { "type": "string", "nullable": true,
+                                        "description": "RFC 3339 timestamp of the durable record's last movement." }
             }
           },
           "AddReviewCommentRequest": {

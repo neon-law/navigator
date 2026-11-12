@@ -5035,6 +5035,104 @@ async fn stamp_envelope_on_pointer(
     }
 }
 
+/// One declared signer's step in the envelope status body.
+#[derive(Deserialize)]
+struct NotationSignerStatus {
+    role: String,
+    signed: bool,
+}
+
+/// The success body of `GET /app/api/notations/{id}/signature`. Every
+/// field beyond the notation id is absent for a notation that has not
+/// prepared or sent an envelope yet.
+#[derive(Deserialize)]
+struct NotationSignatureStatus {
+    notation_id: Uuid,
+    #[serde(default)]
+    signature_request_id: Option<String>,
+    #[serde(default)]
+    provider: Option<String>,
+    #[serde(default)]
+    state: Option<String>,
+    #[serde(default)]
+    signers: Vec<NotationSignerStatus>,
+    #[serde(default)]
+    sender_view_href: Option<String>,
+}
+
+/// Report one notation's envelope status (LAW-326). The Project — host and
+/// code — comes from the `navigator.yaml` in the current checkout. The
+/// read is the REST status door's composition: the durable signature
+/// record the prepare/send flow wrote, stamped by the completion webhook.
+pub async fn notation_envelope_status(notation_id: Uuid) -> ExitCode {
+    notation_envelope_status_in(Path::new("."), notation_id).await
+}
+
+/// [`notation_envelope_status`] against an explicit checkout root — the
+/// testable core; the command reads the checkout the process sits in.
+async fn notation_envelope_status_in(root: &Path, notation_id: Uuid) -> ExitCode {
+    let Some(manifest) = crate::projects::manifest::read(root) else {
+        eprintln!("navigator notation envelope: no navigator.yaml in the current directory");
+        return ExitCode::from(2);
+    };
+    let (Some(host), Some(project_code)) = (manifest.host.as_deref(), manifest.project.as_deref())
+    else {
+        eprintln!("navigator notation envelope: navigator.yaml must declare host and project.name");
+        return ExitCode::from(2);
+    };
+    run(async {
+        let client = DocumentClient::connect(Some(host), project_code).await?;
+        let url = format!("{}/app/api/notations/{notation_id}/signature", client.base);
+        let response = client
+            .client
+            .get(&url)
+            .bearer_auth(&client.token)
+            .send()
+            .await
+            .with_context(|| format!("GET {url}"))?;
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(anyhow!(
+                "notation envelope status failed: {}",
+                server_error(status, &body)
+            ));
+        }
+        let envelope: NotationSignatureStatus =
+            serde_json::from_str(&body).with_context(|| format!("parse {url} response"))?;
+        let (Some(request_id), Some(state)) = (&envelope.signature_request_id, &envelope.state)
+        else {
+            println!(
+                "no envelope yet for notation {} — prepare or send one first",
+                palette::highlight(envelope.notation_id.to_string())
+            );
+            return Ok(());
+        };
+        println!(
+            "envelope {} on {} via {} (state: {})",
+            palette::highlight(request_id),
+            palette::highlight(envelope.notation_id.to_string()),
+            envelope.provider.as_deref().unwrap_or("unknown"),
+            state
+        );
+        for signer in &envelope.signers {
+            let step = if signer.signed {
+                "signed"
+            } else if state == "requested" {
+                "waiting"
+            } else {
+                "not signed"
+            };
+            println!("  {}: {}", signer.role, step);
+        }
+        if let Some(href) = &envelope.sender_view_href {
+            println!("open in DocuSign: {href}");
+        }
+        Ok(())
+    })
+    .await
+}
+
 /// Resolve store defaults and optional saved Notation Answers for a PDF.
 pub async fn pdf_project_answers(
     file: &Path,
@@ -12620,5 +12718,94 @@ mod tests {
         )
         .unwrap();
         assert_eq!(unstamped.docusign_envelope_id, None);
+    }
+
+    /// LAW-326: `notation envelope status` reads the REST status door —
+    /// the durable signature record the prepare/send flow maintains and
+    /// the webhook stamps — and exits successfully both when an envelope
+    /// is out and when there is none yet. A status read never creates
+    /// anything, so only the GET is expected.
+    #[tokio::test(flavor = "current_thread")]
+    async fn notation_envelope_status_reads_the_rest_door() {
+        let _lock = CREDENTIALS_ENV_LOCK.lock().await;
+        let server = MockServer::start().await;
+        let server_uri = server.uri();
+        let _env = CredentialsEnv::new(&server_uri);
+        let project_id = Uuid::now_v7();
+        let notation_id = Uuid::now_v7();
+        let envelope_id = Uuid::now_v7();
+
+        Mock::given(method("GET"))
+            .and(path("/app/api/projects"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"id": project_id, "code": "acme"}
+            ])))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/app/api/notations/{notation_id}/signature")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "notation_id": notation_id,
+                "signature_request_id": envelope_id.to_string(),
+                "provider": "docusign",
+                "state": "requested",
+                "signers": [
+                    {"role": "client", "signed": true},
+                    {"role": "firm", "signed": false}
+                ],
+                "sender_view_href": format!("/app/lawyer/notations/{notation_id}/sender-view"),
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("navigator.yaml"),
+            format!("project:\n  host: {server_uri}\n  name: acme\n"),
+        )
+        .unwrap();
+
+        let exit = super::notation_envelope_status_in(dir.path(), notation_id).await;
+        assert_eq!(exit, ExitCode::SUCCESS);
+    }
+
+    /// LAW-326: a notation that has never prepared or sent reports its
+    /// emptiness and still succeeds — a status read is informational,
+    /// never an error and never a create.
+    #[tokio::test(flavor = "current_thread")]
+    async fn notation_envelope_status_says_so_when_no_envelope_exists() {
+        let _lock = CREDENTIALS_ENV_LOCK.lock().await;
+        let server = MockServer::start().await;
+        let server_uri = server.uri();
+        let _env = CredentialsEnv::new(&server_uri);
+        let project_id = Uuid::now_v7();
+        let notation_id = Uuid::now_v7();
+
+        Mock::given(method("GET"))
+            .and(path("/app/api/projects"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"id": project_id, "code": "acme"}
+            ])))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/app/api/notations/{notation_id}/signature")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "notation_id": notation_id
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("navigator.yaml"),
+            format!("project:\n  host: {server_uri}\n  name: acme\n"),
+        )
+        .unwrap();
+
+        let exit = super::notation_envelope_status_in(dir.path(), notation_id).await;
+        assert_eq!(exit, ExitCode::SUCCESS);
     }
 }

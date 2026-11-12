@@ -28,6 +28,39 @@ pub struct ReaskQuestion {
     pub label: String,
 }
 
+/// One declared signer's own step on the notation's envelope. The
+/// wasm-safe mirror of `portal::signature_status::EnvelopeSignerState`.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct EnvelopeSignerView {
+    /// The declared role (`client`, `firm`, …) in routing order.
+    pub role: String,
+    /// The provider recorded this recipient's completion.
+    pub signed: bool,
+}
+
+/// The notation's envelope status card (LAW-326) — read off the durable
+/// signature record the send path wrote and the webhook stamps. `None`
+/// until a prepare or send persisted an envelope; the page renders no
+/// card rather than an empty one. The wasm-safe mirror of
+/// `portal::signature_status::EnvelopeStatusReport`.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+pub struct EnvelopeCard {
+    /// The provider's envelope id.
+    pub request_id: String,
+    /// The provider that executed the request (e.g. `docusign`).
+    pub provider: String,
+    /// Envelope-wide lifecycle state: `requested`, `completed`,
+    /// `declined`, `voided`, or `expired`.
+    pub state: String,
+    /// Every declared signer in routing order, with their own step.
+    pub signers: Vec<EnvelopeSignerView>,
+    /// RFC 3339 timestamp of the record's last movement.
+    pub updated_at: Option<String>,
+    /// The lawyer's one-click window into the provider's own console for
+    /// this envelope — the sender-view route this page's host serves.
+    pub sender_view_href: String,
+}
+
 /// The review screen, resolved by the portal pre-layer.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
 pub struct IntakeReviewData {
@@ -42,6 +75,10 @@ pub struct IntakeReviewData {
     #[serde(default)]
     pub governing_law_defaulted: bool,
     pub reask_questions: Vec<ReaskQuestion>,
+    /// The envelope status card — `None` until a prepare or send
+    /// persisted an envelope.
+    #[serde(default)]
+    pub envelope: Option<EnvelopeCard>,
     /// The catalog string for the approve-and-send action, resolved server-side
     /// so the button and its accessible name cannot drift apart.
     pub approve_send_label: String,
@@ -213,6 +250,9 @@ fn review_body(view: &IntakeReviewView) -> Element {
                 dt { "Signature request" }
                 dd { code { "{signature}" } }
             }
+            if let Some(card) = &data.envelope {
+                { envelope_card(card) }
+            }
             if phase == Phase::SentBack {
                 p { class: "nav-muted",
                     "The flagged answers were sent back for changes. Re-collect them on the "
@@ -254,6 +294,63 @@ fn review_body(view: &IntakeReviewView) -> Element {
             div { dangerous_inner_html: "{data.rendered_html}" }
             p {
                 a { href: "/app/lawyer/retainers/new", "Start another intake" }
+            }
+        }
+    }
+}
+
+/// The envelope's lifecycle state as the lawyer reads it.
+fn state_label(state: &str) -> &'static str {
+    match state {
+        "requested" => "Sent — waiting for signatures.",
+        "completed" => "Completed — every signer has executed the envelope.",
+        "declined" => "Declined — a signer refused the envelope.",
+        "voided" => "Voided — the envelope was voided before completion.",
+        "expired" => "Expired — the envelope expired before completion.",
+        _ => "Unknown envelope state.",
+    }
+}
+
+/// One declared signer's own step, as the card renders it. A role the
+/// webhook never recorded stays waiting while the envelope is live; a
+/// terminal non-completed envelope names its outcome instead.
+fn signer_label(state: &str, signed: bool) -> &'static str {
+    if signed {
+        "signed"
+    } else if state == "requested" {
+        "waiting"
+    } else {
+        "not signed"
+    }
+}
+
+/// The status card: what went out, where it stands, and each declared
+/// signer's own step — with the one-click window into the provider's own
+/// console for this envelope.
+fn envelope_card(card: &EnvelopeCard) -> Element {
+    rsx! {
+        section { class: "envelope-status", "aria-label": "Signature envelope status",
+            h2 { "Signature envelope" }
+            p { class: "nav-muted", {state_label(&card.state)} }
+            dl { class: "detail-dl",
+                dt { "Provider" }
+                dd { code { "{card.provider}" } }
+                dt { "Envelope" }
+                dd { code { "{card.request_id}" } }
+                if let Some(updated) = &card.updated_at {
+                    dt { "Last update" }
+                    dd { "{updated}" }
+                }
+            }
+            ul { class: "signer-states",
+                for signer in &card.signers {
+                    li { "{signer.role}: {signer_label(&card.state, signer.signed)}" }
+                }
+            }
+            p {
+                a { class: "nav-btn nav-btn--secondary", href: "{card.sender_view_href}",
+                    "Open in DocuSign"
+                }
             }
         }
     }
@@ -328,6 +425,7 @@ mod tests {
                     label: "Client name".to_string(),
                 }],
                 approve_send_label: "Approve and send for signature".to_string(),
+                envelope: None,
             },
             csrf_token: "TOK".to_string(),
             role: ViewerRole::Lawyer,
@@ -336,6 +434,65 @@ mod tests {
 
     fn render(view: &IntakeReviewView) -> String {
         dioxus_ssr::render_element(review_body(view))
+    }
+
+    /// A resolved envelope card the way the portal pre-layer composes it:
+    /// declared roles in routing order, each with the webhook's receipt.
+    fn envelope_card_fixture(state: &str, signed_roles: &[&str]) -> EnvelopeCard {
+        EnvelopeCard {
+            request_id: "fake-42-1".to_string(),
+            provider: "docusign".to_string(),
+            state: state.to_string(),
+            signers: vec![
+                EnvelopeSignerView {
+                    role: "client".to_string(),
+                    signed: signed_roles.contains(&"client"),
+                },
+                EnvelopeSignerView {
+                    role: "firm".to_string(),
+                    signed: signed_roles.contains(&"firm"),
+                },
+            ],
+            updated_at: Some("2026-11-12T00:00:00+00:00".to_string()),
+            sender_view_href: format!("/app/lawyer/notations/{NOTATION}/sender-view"),
+        }
+    }
+
+    #[test]
+    fn the_envelope_card_reports_the_envelope_and_each_signer_s_own_step() {
+        let mut v = view("sent_for_signature__pending", Some("fake-42-1"));
+        v.data.envelope = Some(envelope_card_fixture("requested", &["client"]));
+        let html = render(&v);
+        assert!(html.contains("Signature envelope"), "{html}");
+        assert!(html.contains("Sent — waiting for signatures."), "{html}");
+        assert!(html.contains("client: signed"), "{html}");
+        assert!(html.contains("firm: waiting"), "{html}");
+        assert!(
+            html.contains(&format!(
+                "href=\"/app/lawyer/notations/{NOTATION}/sender-view\""
+            )),
+            "{html}"
+        );
+        assert!(html.contains("Open in DocuSign"), "{html}");
+    }
+
+    #[test]
+    fn the_envelope_card_names_the_outcome_on_a_terminal_envelope() {
+        let mut v = view("sent_for_signature__pending", Some("fake-42-1"));
+        v.data.envelope = Some(envelope_card_fixture("declined", &[]));
+        let html = render(&v);
+        assert!(
+            html.contains("Declined — a signer refused the envelope."),
+            "{html}"
+        );
+        assert!(html.contains("client: not signed"), "{html}");
+        assert!(html.contains("firm: not signed"), "{html}");
+    }
+
+    #[test]
+    fn a_notation_with_no_envelope_renders_no_status_card() {
+        let html = render(&view("lawyer_review", None));
+        assert!(!html.contains("Signature envelope"), "{html}");
     }
 
     #[test]
