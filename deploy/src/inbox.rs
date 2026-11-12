@@ -375,32 +375,56 @@ async fn list(host: Option<&str>) -> Result<()> {
 async fn assign_matches(dry_run: bool, host: Option<&str>) -> Result<()> {
     let (base, token) = crate::remote::resolve(host)?;
     let (method, url) = assign_matches_request(&base);
-    let response = reqwest::Client::new()
-        .request(method, url)
-        .bearer_auth(token)
-        .json(&assign_matches_body(!dry_run))
-        // The door resolves every candidate address of every backlog
-        // thread against the Person CRM — comfortably longer than a
-        // single-process plan.
-        .timeout(std::time::Duration::from_secs(300))
-        .send()
-        .await
-        .context("call the assign-matches door")?;
-    let status = response.status();
-    let text = response
-        .text()
-        .await
-        .context("read the assign-matches response")?;
-    if !status.is_success() {
-        return Err(anyhow!("inbox assign-matches refused: {status} {text}"));
+    let client = reqwest::Client::new();
+    let mut body = assign_matches_body(!dry_run);
+    let mut printed = false;
+    loop {
+        let response = client
+            .request(method.clone(), &url)
+            .bearer_auth(&token)
+            .json(&body)
+            .timeout(std::time::Duration::from_secs(300))
+            .send()
+            .await
+            .context("call the assign-matches door")?;
+        let status = response.status();
+        let next: Option<serde_json::Value> = response
+            .headers()
+            .get("x-navigator-next-cursor")
+            .map(|value| serde_json::from_slice(value.as_bytes()))
+            .transpose()
+            .context("parse the assign-matches continuation")?;
+        let text = response
+            .text()
+            .await
+            .context("read the assign-matches response")?;
+        if !status.is_success() {
+            return Err(anyhow!("inbox assign-matches refused: {status} {text}"));
+        }
+        let views: Vec<AssignMatchView> =
+            serde_json::from_str(&text).context("parse the assign-matches response")?;
+        printed |= !views.is_empty();
+        print_assignment_matches(&views);
+        let Some(next) = next else { break };
+        anyhow::ensure!(
+            body.get("after") != Some(&next),
+            "assign-matches continuation did not advance"
+        );
+        println!("Continuing with the next inbox batch.");
+        body["after"] = next;
     }
-    let views: Vec<AssignMatchView> =
-        serde_json::from_str(&text).context("parse the assign-matches response")?;
-    if views.is_empty() {
+    if !printed {
         println!("No unattributed inbox threads to assign.");
-        return Ok(());
+    } else if dry_run {
+        println!(
+            "Dry run — nothing assigned, filed, archived, or recorded. Re-run without --dry-run to make these assignments."
+        );
     }
-    for view in &views {
+    Ok(())
+}
+
+fn print_assignment_matches(views: &[AssignMatchView]) {
+    for view in views {
         println!("Message      {}", view.message);
         println!("From         {}", view.from);
         if let Some(subject) = &view.subject {
@@ -424,13 +448,6 @@ async fn assign_matches(dry_run: bool, host: Option<&str>) -> Result<()> {
         println!("Applied      {verb}");
         println!();
     }
-    if dry_run {
-        println!(
-            "Dry run — nothing assigned, filed, archived, or recorded. \
-             Re-run without --dry-run to make these assignments."
-        );
-    }
-    Ok(())
 }
 
 fn print_plan(view: &ProcessView, apply: Option<&ProcessApplyView>) {
@@ -1131,6 +1148,45 @@ mod tests {
         assert_eq!(views[1].decision.reason.as_deref(), Some("no_match"));
         assert!(views[1].decision.project_id.is_none());
         assert!(!views[1].applied);
+    }
+
+    #[tokio::test]
+    async fn assign_matches_follows_the_continuation_cursor() {
+        use wiremock::matchers::{body_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let _lock = CREDENTIALS_LOCK.lock().await;
+        let previous = credentials_previous();
+        let server = MockServer::start().await;
+        let cursor = serde_json::json!(["2026-01-01T00:00:00Z", Uuid::nil()]);
+        Mock::given(method("POST"))
+            .and(path("/app/api/inbox/assign-matches"))
+            .and(body_json(serde_json::json!({"apply": false})))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("x-navigator-next-cursor", cursor.to_string())
+                    .set_body_json(serde_json::json!([])),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/app/api/inbox/assign-matches"))
+            .and(body_json(
+                serde_json::json!({"apply": false, "after": cursor}),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let base = server.uri();
+        stored_login(&base);
+
+        let result = super::assign_matches(true, Some(&base)).await;
+
+        restore_credentials(previous);
+        result.unwrap();
+        server.verify().await;
     }
 
     #[tokio::test]

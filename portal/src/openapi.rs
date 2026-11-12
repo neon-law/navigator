@@ -567,13 +567,14 @@ fn add_assign_matches_operation(document: &mut Value) {
     document["paths"]["/app/api/inbox/assign-matches"] = json!({"post": {
         "operationId": "assignInboxMatches", "tags": ["Inbox"],
         "summary": "Propose or make LAW-347 address-match assignments",
-        "description": "Requires lawyer-tier access. Every unprocessed, unattributed email thread visible to the caller proposes an assignment by matching its From/To/Cc addresses against the Person CRM and same-Firm open Project participations. Shared inboxes are non-identifying. Exactly one open Project assigns the thread when apply is true, through the same door the triage surface uses; no match, several matches, or a sender with no Person row leaves the thread in the inbox. Filing and archiving are unaffected. The learned Jev method is unreachable until the zero-data-retention gate confirms.",
+        "description": "Requires lawyer-tier access. Each page considers up to 50 unprocessed, unattributed email messages visible to the caller in oldest-first order and proposes assignments by matching its From/To/Cc addresses against the Person CRM and same-Firm open Project participations. Shared inboxes are non-identifying. Exactly one open Project assigns the thread when apply is true, through the same door the triage surface uses; no match, several matches, or a sender with no Person row leaves the thread in the inbox. Filing and archiving are unaffected. The learned Jev method is unreachable until the zero-data-retention gate confirms.",
         "requestBody": {"required": true, "content": {"application/json": {"schema": {
             "type": "object", "additionalProperties": false,
-            "properties": {"apply": {"type": "boolean", "default": false, "description": "True assigns each uniquely matched thread; false only proposes."}}
+            "properties": {"apply": {"type": "boolean", "default": false, "description": "True assigns each uniquely matched thread; false only proposes."},
+                "after": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "string"}, "description": "Continuation cursor decoded from the preceding response header."}}
         }}}},
         "responses": {
-            "200": {"description": "One proposal or assignment per considered thread", "content": {"application/json": {"schema": {"type": "array", "items": thread}}}},
+            "200": {"description": "One proposal or assignment per considered message", "headers": {"x-navigator-next-cursor": {"description": "JSON continuation cursor when more eligible messages remain.", "schema": {"type": "string"}}}, "content": {"application/json": {"schema": {"type": "array", "items": thread}}}},
             "401": {"description": "No authenticated session"},
             "403": {"description": "The caller is not Lawyer tier"},
             "500": {"description": "Database, storage, or Inbox authority unavailable"}

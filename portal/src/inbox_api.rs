@@ -483,6 +483,7 @@ pub(crate) struct AssignMatchesRequest {
     /// uniquely matched thread.
     #[serde(default)]
     pub apply: bool,
+    pub after: Option<(chrono::DateTime<Utc>, Uuid)>,
 }
 
 /// One thread's address-match proposal: a plan lists every candidate
@@ -578,19 +579,17 @@ fn log_assign_decision(message: Uuid, outcome: &store::inbox::assign_match::Matc
 
 const MAX_ASSIGN_MATCH_THREADS: usize = 50;
 
-/// A large backlog must not turn one door call into unbounded serial
-/// round-trips against the client timeout; each run consumes a capped
-/// slice oldest-first and the next run resumes where this one left off.
-fn cap_run(mut rows: Vec<store::inbox::UnprocessedRow>) -> Vec<store::inbox::UnprocessedRow> {
-    if rows.len() <= MAX_ASSIGN_MATCH_THREADS {
-        return rows;
-    }
-    tracing::warn!(
-        deferred = rows.len() - MAX_ASSIGN_MATCH_THREADS,
-        cap = MAX_ASSIGN_MATCH_THREADS,
-        "inbox assign-matches run capped oldest-first; re-run to continue"
-    );
-    rows.truncate(MAX_ASSIGN_MATCH_THREADS);
+fn assignment_page(
+    mut rows: Vec<store::inbox::UnprocessedRow>,
+    after: Option<(chrono::DateTime<Utc>, Uuid)>,
+) -> Vec<store::inbox::UnprocessedRow> {
+    rows.retain(|row| {
+        row.project_id.is_none()
+            && row.channel == store::inbox::channel::EMAIL
+            && after.is_none_or(|cursor| (row.inserted_at, row.id) > cursor)
+    });
+    rows.sort_unstable_by_key(|row| (row.inserted_at, row.id));
+    rows.truncate(MAX_ASSIGN_MATCH_THREADS + 1);
     rows
 }
 
@@ -609,18 +608,20 @@ pub(crate) async fn assign_matches(
     Json(request): Json<AssignMatchesRequest>,
 ) -> Result<Response, ApiError> {
     let actor_id = actor_id(&session)?;
-    let rows = cap_run(
+    let mut rows = assignment_page(
         store::inbox::unprocessed_inbox(&state.surreal, actor_id)
             .await
             .map_err(map_inbox)?,
+        request.after,
     );
+    let next = if rows.len() > MAX_ASSIGN_MATCH_THREADS {
+        rows.pop();
+        rows.last().map(|row| (row.inserted_at, row.id))
+    } else {
+        None
+    };
     let mut views = Vec::new();
     for row in rows {
-        // An already-attributed thread needs no match; a non-email channel
-        // has no envelope addresses to read.
-        if row.project_id.is_some() || row.channel != store::inbox::channel::EMAIL {
-            continue;
-        }
         let outcome = decide_assign_match(&state, &row).await?;
         log_assign_decision(row.id, &outcome);
         let applied =
@@ -643,7 +644,17 @@ pub(crate) async fn assign_matches(
             applied,
         });
     }
-    Ok(Json(views).into_response())
+    let mut response = Json(views).into_response();
+    if let Some(cursor) = next {
+        let encoded =
+            serde_json::to_string(&cursor).map_err(|error| ApiError::Db(error.to_string()))?;
+        let value = axum::http::HeaderValue::from_str(&encoded)
+            .map_err(|error| ApiError::Db(error.to_string()))?;
+        response
+            .headers_mut()
+            .insert("x-navigator-next-cursor", value);
+    }
+    Ok(response)
 }
 
 #[cfg(test)]
@@ -652,6 +663,43 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     use uuid::Uuid;
+
+    #[test]
+    fn assignment_page_advances_past_unmatched_rows_at_the_same_time() {
+        let inserted_at = chrono::Utc::now();
+        let rows = || -> Vec<store::inbox::UnprocessedRow> {
+            (1..=51)
+                .rev()
+                .map(|id| store::inbox::UnprocessedRow {
+                    id: Uuid::from_u128(id),
+                    conversation_id: Uuid::from_u128(id),
+                    firm_id: Uuid::nil(),
+                    project_id: None,
+                    channel: store::inbox::channel::EMAIL.into(),
+                    provider_message_id: None,
+                    external_address: String::new(),
+                    external_name: None,
+                    subject: None,
+                    body: String::new(),
+                    occurred_at: String::new(),
+                    inserted_at,
+                })
+                .collect()
+        };
+        let mut candidates = rows();
+        candidates.push(store::inbox::UnprocessedRow {
+            project_id: Some(Uuid::nil()),
+            ..rows().pop().unwrap()
+        });
+        let first = super::assignment_page(candidates, None);
+        assert_eq!(first.len(), 51);
+        let boundary = &first[49];
+        assert_eq!(boundary.id, Uuid::from_u128(50));
+
+        let second = super::assignment_page(rows(), Some((boundary.inserted_at, boundary.id)));
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0].id, Uuid::from_u128(51));
+    }
 
     #[test]
     fn apply_registry_reuses_active_locks_and_prunes_completed_messages() {

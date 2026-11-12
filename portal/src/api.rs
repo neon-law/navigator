@@ -11399,7 +11399,10 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
         let response = crate::inbox_api::assign_matches(
             State(state),
             LawyerSession(session),
-            Json(crate::inbox_api::AssignMatchesRequest { apply: true }),
+            Json(crate::inbox_api::AssignMatchesRequest {
+                apply: true,
+                after: None,
+            }),
         )
         .await
         .unwrap();
