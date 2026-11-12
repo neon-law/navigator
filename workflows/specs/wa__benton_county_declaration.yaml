@@ -1,0 +1,29 @@
+kind: declaration
+title: Client Declaration — Benton County Superior Court
+code: wa__benton_county_declaration
+jurisdiction: WA
+respondent_type: person
+confidential: true
+signers:
+  - role: client
+    routing_order: 1
+questionnaire:
+  BEGIN:
+    _: person__client
+  person__client:
+    _: END
+  END: {}
+workflow:
+  BEGIN:
+    _: lawyer_review
+  lawyer_review:
+    approved: generate_pdf__declaration_pdf
+    changes_requested: reask__draft
+  reask__draft:
+    resubmitted: lawyer_review
+  generate_pdf__declaration_pdf:
+    pdf_persisted: sent_for_signature__pending
+  sent_for_signature__pending:
+    signature_received: END
+    signature_declined: END
+  END: {}

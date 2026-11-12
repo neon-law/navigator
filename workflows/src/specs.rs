@@ -197,6 +197,10 @@ pub const BUNDLED_SPEC_YAML: &[(&str, &str)] = &[
         "nv__dv_protection_order_application",
         include_str!("../specs/nv__dv_protection_order_application.yaml"),
     ),
+    (
+        "wa__benton_county_declaration",
+        include_str!("../specs/wa__benton_county_declaration.yaml"),
+    ),
 ];
 
 /// Look up the bundled standalone YAML for `code`. Returns `None`
