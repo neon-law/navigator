@@ -217,6 +217,24 @@ pub fn counsel_name(file: &Path) -> Result<String, String> {
     Ok(read(&path)?.counsel.name.trim().to_string())
 }
 
+/// The matter's signing date, `YYYY-MM-DD` — the only source the signature
+/// block's date line takes (LAW-242). `None` when the manifest declares no
+/// `signed_on:`, which a preview fills with a placeholder and a final
+/// export refuses.
+///
+/// # Errors
+///
+/// The message [`read`] gives for a missing or malformed `matter:`.
+pub fn signed_on(file: &Path) -> Result<Option<String>, String> {
+    let path = find_manifest(file).ok_or_else(|| {
+        format!(
+            "no {} found above this pleading; add one with a `{KEY}:` block",
+            manifest::FILE
+        )
+    })?;
+    Ok(read(&path)?.signed_on)
+}
+
 /// A final export requires the court's assignments, even when a draft
 /// explicitly declares them pending.
 ///

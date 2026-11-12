@@ -5128,12 +5128,75 @@ fn pleading_body(
         .unwrap_or_default();
     // A draft's counsel signature prints `/s/ DRAFT`; a final render signs
     // it `/s/ <counsel>` from `matter.counsel.name`.
+    let body = pleading_signature_dates(&body, file, preview)?;
     let body = if preview {
         body
     } else {
         word::paper::sign_counsel_signatures(&body, &projects::matter::counsel_name(file)?)
     };
     Ok(format!("{caption}{body}{certificate}"))
+}
+
+/// The token a preview's date line carries while `matter.signed_on` is
+/// unset: an unfilled placeholder, which both renders wash yellow. It is
+/// inserted at fill time, so it never sits in the template for `F115` to
+/// flag, and a final render — which never inserts it — never carries it.
+const UNSIGNED_DATE_PLACEHOLDER: &str = "{{matter.signed_on}}";
+
+/// Insert the signature block's date line (LAW-242): `Dated this …`,
+/// sourced only from `matter.signed_on`, above every counsel signature
+/// block. A preview with no `signed_on:` prints the highlighted
+/// [`UNSIGNED_DATE_PLACEHOLDER`]; a final render with none is refused — an
+/// undated signature page is not filable.
+///
+/// # Errors
+///
+/// No manifest above the pleading, a `signed_on:` that is not a real
+/// calendar date, or a final pleading whose signature block has no
+/// `signed_on:` to date it.
+fn pleading_signature_dates(body: &str, file: &Path, preview: bool) -> Result<String, String> {
+    if !word::paper::has_counsel_signature(body) {
+        return Ok(body.to_string());
+    }
+    let line = match projects::matter::signed_on(file)? {
+        Some(date) => word::matter::date_line(&date)
+            .ok_or_else(|| format!("`matter.signed_on` is not a calendar date: {date}"))?,
+        None if preview => UNSIGNED_DATE_PLACEHOLDER.to_string(),
+        // LAW-242: a final pleading never prints an undated signature page.
+        None => {
+            return Err(
+                "this final pleading has a signature block, but its `matter:` block declares \
+                 no `signed_on:` signing date; set it before final export"
+                    .to_string(),
+            )
+        }
+    };
+    Ok(insert_before_counsel_signatures(body, &line))
+}
+
+/// `body` with `line` inserted as its own paragraph above each counsel
+/// signature block. The marker is authored alone on its line, so the line
+/// start — not the comment itself — is where the date goes.
+fn insert_before_counsel_signatures(body: &str, line: &str) -> String {
+    let mut out = String::with_capacity(body.len() + line.len() + 2);
+    let mut rest = body;
+    while let Some(start) = rest.find("<!--") {
+        let Some(length) = rest[start..].find("-->").map(|end| end + "-->".len()) else {
+            break;
+        };
+        if word::paper::counsel_signature(&rest[start..start + length]).is_some() {
+            let line_start = rest[..start].rfind('\n').map_or(0, |at| at + 1);
+            out.push_str(&rest[..line_start]);
+            out.push_str(line);
+            out.push_str("\n\n");
+            out.push_str(&rest[line_start..start + length]);
+        } else {
+            out.push_str(&rest[..start + length]);
+        }
+        rest = &rest[start + length..];
+    }
+    out.push_str(rest);
+    out
 }
 
 fn has_extension(out: &Path, expected: &str) -> bool {

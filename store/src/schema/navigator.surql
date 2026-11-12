@@ -435,6 +435,7 @@ DEFINE FIELD OVERWRITE judicial_officer ON matter_caption TYPE string;
 DEFINE FIELD OVERWRITE department ON matter_caption TYPE string;
 DEFINE FIELD OVERWRITE filed_on ON matter_caption TYPE string;
 DEFINE FIELD OVERWRITE trial_on ON matter_caption TYPE option<string>;
+DEFINE FIELD OVERWRITE signed_on ON matter_caption TYPE option<string>;
 DEFINE FIELD OVERWRITE parties ON matter_caption TYPE array<object>;
 DEFINE FIELD OVERWRITE parties.*.name ON matter_caption TYPE string;
 DEFINE FIELD OVERWRITE parties.*.role ON matter_caption TYPE string;
