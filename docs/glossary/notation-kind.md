@@ -50,8 +50,8 @@ Further values name a matter page kind (`review_queue_workbench`, `verifier_spli
 that declares one fails `S103`.
 
 Seven further values classify a filed [Asset](asset.md) row only (`transcript`, `inbound_contract`,
-`certificate_of_naturalization`, `exhibit`, `closed_repository`, `invoice`, `unclassified`); a template that declares
-one fails `S103`.
+`certificate_of_naturalization`, `exhibit`, `closed_repository`, `invoice`, `receipt`, `unclassified`); a template that
+declares one fails `S103`.
 
 Run `navigator-deploy notation kinds` for this table straight from the checker.
 

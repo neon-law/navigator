@@ -4,12 +4,12 @@ description: "A Matter Folder is one of the lawyer-facing folders in a Project c
 ---
 
 One of the folders `navigator project sync` creates under a Project checkout's `documents/`: `Client Production`,
-`Correspondence (Served)`, `Discovery (Served)`, `Docket Filings`, `Court Rules`, `Engagement`, `Work Product`, the
-seven fixed subfolders below `Work Product`, each suffixed so it reads unambiguously out of context — `Client Calls
-(Work Product)`, `Correspondence (Work Product)`, `Discovery (Work Product)`, `Motions (Work Product)`, `Pleadings (Work
-Product)`, `Research (Work Product)`, and `Stipulations (Work Product)` — and the two fixed subfolders below `Client
-Production`: `Agreements` and `Screenshots` (LAW-215). A lawyer browses them in Finder the way a case-management system
-groups a matter's papers. Each holds [Document](document.md) [Blobs](blob.md) only, and Git ignores them.
+`Correspondence (Served)`, `Costs`, `Discovery (Served)`, `Docket Filings`, `Court Rules`, `Engagement`, `Work Product`,
+and its seven fixed subfolders, each suffixed so it reads unambiguously out of context — `Client Calls (Work Product)`,
+`Correspondence (Work Product)`, `Discovery (Work Product)`, `Motions (Work Product)`, `Pleadings (Work Product)`,
+`Research (Work Product)`, and `Stipulations (Work Product)` — and the two fixed subfolders below `Client Production`:
+`Agreements` and `Screenshots` (LAW-215). A lawyer browses them in Finder the way a case-management system groups a
+matter's papers. Each holds [Document](document.md) [Blobs](blob.md) only, and Git ignores them.
 
 The `(Work Product)` suffix separates the firm's drafts from what was actually served (`Correspondence (Work Product)`
 against `Correspondence (Served)`), and a downloaded or attached file reads unambiguously out of context. The bare
@@ -23,14 +23,13 @@ A document's [Pointer](pointer.md) lives at `blobs/<slug>.yaml`, never in a Matt
 names the Matter Folder — a `Work Product` subfolder's name is its whole path below `documents/`. Without one, the
 folder follows from `kind`: `exhibit` → Client Production, `letter` → Correspondence (Served), `pleading`, `filing`, and
 `order` → [Docket Filings](docket-filings.md), `memo` → Research (Work Product), `transcript` → Client Calls (Work
-Product), `onboarding` → Engagement, everything else → Work Product. The `Client Production/Agreements` and `Client
-Production/Screenshots` subfolders (LAW-215) hold their documents only where a pointer's `folder:` names them or a
-migration filed them there; no `kind` maps to them by default.
+Product), `onboarding` → Engagement, `receipt` → Costs, and all other kinds → Work Product. The `Client
+Production/Agreements` and `Client Production/Screenshots` subfolders (LAW-215) hold their documents only where a
+pointer's `folder:` names them or a migration filed them there; no `kind` maps to them by default.
 
 The Project page shows the same layout. A lawyer sees every Matter Folder, empty ones included, with each document at
 its path below `documents/`. A client sees only the documents shared with them, each once as its newest shared revision,
-under only the folders that hold one. The page reads the folder from `kind`, because a pointer's `folder:` lives in the
-repository.
+under only the folders that hold one. The page reads the live Document's folder and falls back to its kind's default.
 
 - Vocabulary: [`store::document_pointers::MatterFolder`](../../model/src/document_pointers.rs) · Layout:
   [`cli/src/document_layout.rs`](../../cli/src/document_layout.rs)

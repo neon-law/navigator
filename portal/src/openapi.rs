@@ -4444,7 +4444,7 @@ fn canonical_document(base: &str) -> Value {
                     "kind": {
                       "type": "string",
                       "description": "Required asset-lane document classification (`rules::kind::Kind` values valid for `Lane::Asset`). A missing or blank value is refused with `400 kind_required`; a value outside this set is refused with `400 invalid_kind`. Both messages name the accepted values; nothing is silently coerced to `unclassified`.",
-                      "enum": ["letter", "filing", "will", "trust", "directive", "agreement", "pleading", "declaration", "affidavit", "onboarding", "offboarding", "memo", "resume", "trial_prep", "transcript", "inbound_contract", "certificate_of_naturalization", "exhibit", "order", "closed_repository", "invoice", "unclassified"]
+                      "enum": ["letter", "filing", "will", "trust", "directive", "agreement", "pleading", "declaration", "affidavit", "onboarding", "offboarding", "memo", "resume", "trial_prep", "transcript", "inbound_contract", "certificate_of_naturalization", "exhibit", "order", "closed_repository", "invoice", "receipt", "unclassified"]
                     },
                     "visibility": { "type": "string", "enum": ["client", "internal"] },
                     "description": { "type": "string" },
@@ -4791,7 +4791,7 @@ fn canonical_document(base: &str) -> Value {
               "type": "object", "properties": {
                 "visibility": { "type": "string", "enum": ["client", "internal"] },
                 "slug": { "type": "string", "description": "Document identity. Must carry the stored filename's extension. Accepted while the row's slug is null, or (with `reslug: true`) as the target of moving the row's identity." },
-                "kind": { "type": "string", "description": "Asset-lane kind. Applied together with `slug` on a slugless row, or alone to replace a legacy kind the asset lane rejects.", "enum": ["letter", "filing", "will", "trust", "directive", "agreement", "pleading", "declaration", "affidavit", "onboarding", "offboarding", "memo", "resume", "trial_prep", "transcript", "inbound_contract", "certificate_of_naturalization", "exhibit", "order", "closed_repository", "invoice", "unclassified"] },
+                "kind": { "type": "string", "description": "Asset-lane kind. Applied together with `slug` on a slugless row, or alone to replace a legacy kind the asset lane rejects.", "enum": ["letter", "filing", "will", "trust", "directive", "agreement", "pleading", "declaration", "affidavit", "onboarding", "offboarding", "memo", "resume", "trial_prep", "transcript", "inbound_contract", "certificate_of_naturalization", "exhibit", "order", "closed_repository", "invoice", "receipt", "unclassified"] },
                 "reslug": { "type": "boolean", "description": "With `slug`, move the row's identity to the given `slug` instead of assigning a slugless row. Refused when the target equals the current slug or already names a chain." },
                 "dry_run": { "type": "boolean", "description": "When setting `slug`, `kind`, or moving a slug, validate and report without writing." }
               }
@@ -4844,7 +4844,7 @@ fn canonical_document(base: &str) -> Value {
             ],
             "requestBody": { "required": true, "content": { "application/json": { "schema": {
               "type": "object", "required": ["kind"], "properties": {
-                "kind": { "type": "string", "description": "The accepted asset-lane kind the chain moves to.", "enum": ["letter", "filing", "will", "trust", "directive", "agreement", "pleading", "declaration", "affidavit", "onboarding", "offboarding", "memo", "resume", "trial_prep", "transcript", "inbound_contract", "certificate_of_naturalization", "exhibit", "order", "closed_repository", "invoice", "unclassified"] },
+                "kind": { "type": "string", "description": "The accepted asset-lane kind the chain moves to.", "enum": ["letter", "filing", "will", "trust", "directive", "agreement", "pleading", "declaration", "affidavit", "onboarding", "offboarding", "memo", "resume", "trial_prep", "transcript", "inbound_contract", "certificate_of_naturalization", "exhibit", "order", "closed_repository", "invoice", "receipt", "unclassified"] },
                 "dry_run": { "type": "boolean", "description": "Validate and report without writing." }
               }
             } } } },

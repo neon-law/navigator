@@ -656,6 +656,7 @@ mod tests {
         let documents = root.path().join("documents");
         std::fs::create_dir_all(&documents).unwrap();
         let pointer = store::document_pointers::DocumentPointer {
+            receipt: None,
             checkout_path: None,
             kind: "memo".into(),
             visibility: "internal".into(),
@@ -792,6 +793,7 @@ mod tests {
     #[test]
     fn drift_names_the_missing_asset_when_the_pointer_is_stale() {
         let pointer = store::document_pointers::DocumentPointer {
+            receipt: None,
             checkout_path: None,
             kind: "agreement".to_string(),
             visibility: "internal".to_string(),
@@ -827,6 +829,7 @@ mod tests {
     fn drift_passes_when_the_pointers_asset_is_still_live() {
         let live_revision = revision(1, Uuid::max(), true);
         let pointer = store::document_pointers::DocumentPointer {
+            receipt: None,
             checkout_path: None,
             kind: "agreement".to_string(),
             visibility: "internal".to_string(),
@@ -857,6 +860,7 @@ mod tests {
     fn drift_names_both_hashes_on_a_sha256_mismatch() {
         let live_revision = revision(1, Uuid::max(), true);
         let pointer = store::document_pointers::DocumentPointer {
+            receipt: None,
             checkout_path: None,
             kind: "agreement".to_string(),
             visibility: "internal".to_string(),
@@ -890,6 +894,7 @@ mod tests {
     fn drift_flags_a_size_mismatch() {
         let live_revision = revision(1, Uuid::max(), true);
         let pointer = store::document_pointers::DocumentPointer {
+            receipt: None,
             checkout_path: None,
             kind: "agreement".to_string(),
             visibility: "internal".to_string(),
@@ -921,6 +926,7 @@ mod tests {
     fn drift_flags_a_pointer_that_is_no_longer_the_operative_revision() {
         let stale = revision(1, Uuid::max(), false);
         let pointer = store::document_pointers::DocumentPointer {
+            receipt: None,
             checkout_path: None,
             kind: "agreement".to_string(),
             visibility: "internal".to_string(),

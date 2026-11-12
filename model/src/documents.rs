@@ -2,6 +2,99 @@ use std::{fmt, path::Path};
 
 use sha2::{Digest, Sha256};
 
+/// Category of an expense supported by a receipt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExpenseCategory {
+    CourtFilingFee,
+    EFilingServiceFee,
+    DepositionAndCourtReporter,
+    Transcript,
+    CertifiedMailAndPostage,
+    ProcessService,
+    Other,
+}
+
+/// The amount, payee, category, and source the receipt supports.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReceiptMetadata {
+    pub amount_cents: i64,
+    pub currency: String,
+    pub payee: String,
+    pub category: ExpenseCategory,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub journal_entry_id: Option<uuid::Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transaction_id: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+pub enum ReceiptMetadataError {
+    #[error("receipt metadata requires kind receipt")]
+    Kind,
+    #[error(
+        "receipt metadata must contain a positive amount and a three-letter uppercase currency"
+    )]
+    Amount,
+    #[error("receipt metadata requires a nonempty payee")]
+    Payee,
+    #[error("receipt metadata requires exactly one journal entry ID or transaction ID")]
+    Reference,
+    #[error("receipt metadata has an invalid shape")]
+    Shape,
+}
+
+impl ReceiptMetadata {
+    /// # Errors
+    /// Returns the first invalid receipt field or kind.
+    pub fn validate(&self, kind: &str) -> Result<(), ReceiptMetadataError> {
+        if kind != "receipt" {
+            return Err(ReceiptMetadataError::Kind);
+        }
+        if self.amount_cents <= 0
+            || self.currency.len() != 3
+            || !self.currency.bytes().all(|byte| byte.is_ascii_uppercase())
+        {
+            return Err(ReceiptMetadataError::Amount);
+        }
+        if self.payee.trim().is_empty()
+            || self.payee.len() > 256
+            || self.payee.chars().any(char::is_control)
+        {
+            return Err(ReceiptMetadataError::Payee);
+        }
+        match (self.journal_entry_id, self.transaction_id.as_deref()) {
+            (Some(id), None) if !id.is_nil() => Ok(()),
+            (None, Some(id))
+                if !id.trim().is_empty()
+                    && id.len() <= 256
+                    && !id.chars().any(char::is_control) =>
+            {
+                Ok(())
+            }
+            _ => Err(ReceiptMetadataError::Reference),
+        }
+    }
+
+    /// Read and validate the receipt block from an Asset's metadata.
+    ///
+    /// # Errors
+    /// The block has an invalid shape, kind, or field.
+    pub fn from_asset_metadata(
+        kind: &str,
+        metadata: Option<&serde_json::Value>,
+    ) -> Result<Option<Self>, ReceiptMetadataError> {
+        let Some(value) = metadata.and_then(|metadata| metadata.get("receipt")) else {
+            return Ok(None);
+        };
+        let receipt: Self =
+            serde_json::from_value(value.clone()).map_err(|_| ReceiptMetadataError::Shape)?;
+        receipt.validate(kind)?;
+        Ok(Some(receipt))
+    }
+}
+
 /// Maximum size of one document accepted by the document upload lane.
 ///
 /// Twenty-five MiB matches the size mail systems accept for real instruments

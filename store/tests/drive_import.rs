@@ -994,7 +994,6 @@ async fn client_intake_is_production_even_when_kind_is_letter() {
         assets[0].documents_path(),
         "Client Production/client-notes/letter.pdf"
     );
-    assert_eq!(MatterFolder::TREE.len(), 16);
     assert!(!assets[0].documents_path().contains("Client Submissions"));
 }
 

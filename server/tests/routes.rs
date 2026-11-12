@@ -6,6 +6,9 @@
 //! test gets its own embedded, memory-backed store via
 //! `store::surreal::test_support::mem` so they don't share state.
 
+#[path = "common/intake_stack.rs"]
+mod intake_stack;
+
 use axum::body::Body;
 use axum::http::{header, HeaderMap, Request, StatusCode};
 use base64::Engine;
@@ -10024,8 +10027,12 @@ async fn client_project_detail_links_only_to_pending_intake() {
     );
 }
 
-#[tokio::test]
-async fn door_opened_client_matter_shows_continue_intake() {
+#[test]
+fn door_opened_client_matter_shows_continue_intake() {
+    intake_stack::run(door_opened_client_matter_shows_continue_intake_scenario);
+}
+
+async fn door_opened_client_matter_shows_continue_intake_scenario() {
     let (mut state, surreal) = state_with_engines().await;
     store::seed::seed_canonical(&surreal, &state.storage)
         .await

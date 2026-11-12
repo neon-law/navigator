@@ -453,6 +453,9 @@ async fn resolve_pointer_for_binary(
         .and_then(|name| name.to_str())
         .filter(|name| !name.is_empty())
         .ok_or_else(|| anyhow!("file path has no filename"))?;
+    let metadata = existing_pointer
+        .and_then(|pointer| pointer.receipt.as_ref())
+        .map(|receipt| serde_json::json!({ "receipt": receipt }));
     let uploaded_pointer = client
         .upload_bytes(
             filename,
@@ -462,7 +465,7 @@ async fn resolve_pointer_for_binary(
             None,
             Some(content_type(path)),
             Some(slug),
-            None,
+            metadata,
         )
         .await?;
     validate_upload_receipt(&uploaded_pointer, bytes)?;
@@ -592,6 +595,7 @@ async fn sync_authority_capture(
     let version = existing_pointer.map_or(1, |pointer| pointer.current_version.version + 1);
     let previous_version = existing_pointer.map(|pointer| pointer.current_version.asset_id);
     let pointer = model::document_pointers::DocumentPointer {
+        receipt: None,
         checkout_path: None,
         kind: String::new(),
         visibility: "internal".to_string(),
@@ -794,6 +798,9 @@ fn carry_recorded_keys(
     }
     if pointer.evidence.is_none() {
         pointer.evidence.clone_from(&from.evidence);
+    }
+    if pointer.receipt.is_none() && pointer.kind == "receipt" {
+        pointer.receipt.clone_from(&from.receipt);
     }
     if pointer.service.is_empty() {
         pointer.service.clone_from(&from.service);
@@ -1076,6 +1083,10 @@ fn project_sync_plans_scoped(
             _ => Vec::new(),
         };
         let pointer = model::document_pointers::DocumentPointer {
+            receipt: model::documents::ReceiptMetadata::from_asset_metadata(
+                &kind,
+                current.metadata.as_ref().filter(|_| kind == "receipt"),
+            )?,
             checkout_path: current
                 .metadata
                 .as_ref()
@@ -3329,6 +3340,7 @@ mod tests {
         docusign_envelope_id: Option<Uuid>,
     ) -> store::document_pointers::DocumentPointer {
         store::document_pointers::DocumentPointer {
+            receipt: None,
             checkout_path: None,
             kind: "onboarding".into(),
             visibility: "internal".into(),
@@ -3355,6 +3367,7 @@ mod tests {
 
     fn invoice_pointer(xero_invoice_id: Option<Uuid>) -> store::document_pointers::DocumentPointer {
         store::document_pointers::DocumentPointer {
+            receipt: None,
             checkout_path: None,
             kind: "invoice".into(),
             visibility: "internal".into(),
@@ -4654,6 +4667,7 @@ mod folder_pointer_rule_tests {
     #[test]
     fn folder_pointer_rules_tie_signed_names_to_envelope_ids() {
         let pointer = |envelope: Option<Uuid>| store::document_pointers::DocumentPointer {
+            receipt: None,
             checkout_path: None,
             kind: "engagement_letter".into(),
             visibility: "internal".into(),
@@ -4711,6 +4725,7 @@ mod folder_pointer_rule_tests {
     #[test]
     fn invoice_captures_demand_their_xero_invoice_id() {
         let pointer = store::document_pointers::DocumentPointer {
+            receipt: None,
             checkout_path: None,
             kind: "invoice".into(),
             visibility: "internal".into(),

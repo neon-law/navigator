@@ -746,6 +746,7 @@ pub fn skeleton(kind: Kind) -> Option<Skeleton> {
         | Kind::Order
         | Kind::ClosedRepository
         | Kind::Invoice
+        | Kind::Receipt
         | Kind::Unclassified => return None,
     };
     Some(s)

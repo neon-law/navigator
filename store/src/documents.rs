@@ -49,8 +49,8 @@ pub use model::documents::{
     document_upload_size_message_for_kind, human_bytes, max_document_upload_bytes, sha256_hex,
     streaming_upload_size_message, validate_document_slug, DocumentSlugError, Evidence,
     EvidenceConfidence, EvidenceError, Notarization, NotarizationError, NotarizationMethod,
-    Signing, SigningMethod, MAX_DOCUMENT_UPLOAD_BYTES, MAX_MEDIA_DOCUMENT_UPLOAD_BYTES,
-    MAX_STREAMING_UPLOAD_BYTES,
+    ReceiptMetadata, Signing, SigningMethod, MAX_DOCUMENT_UPLOAD_BYTES,
+    MAX_MEDIA_DOCUMENT_UPLOAD_BYTES, MAX_STREAMING_UPLOAD_BYTES,
 };
 
 /// Maximum REST request size needed to carry the document limit as base64 JSON.

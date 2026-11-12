@@ -5662,6 +5662,11 @@ async fn upload_document_door(
             ),
         ));
     };
+    if let Err(error) =
+        store::documents::ReceiptMetadata::from_asset_metadata(kind, input.metadata.as_ref())
+    {
+        return Ok(bad_request("invalid_receipt", &error.to_string()));
+    }
     if let Some(quality) = input.transcript_quality.as_deref() {
         if kind != "transcript" || !matches!(quality, "machine" | "proofread") {
             return Ok(bad_request(
@@ -6116,6 +6121,11 @@ fn validate_upload_session_metadata(
             ),
         ));
     };
+    if let Err(error) =
+        store::documents::ReceiptMetadata::from_asset_metadata(kind, input.metadata.as_ref())
+    {
+        return Err(bad_request("invalid_receipt", &error.to_string()));
+    }
     if let Some(quality) = input.transcript_quality.as_deref() {
         if kind != "transcript" || !matches!(quality, "machine" | "proofread") {
             return Err(bad_request(
@@ -6451,6 +6461,11 @@ async fn document_pointer(
         ApiError::Db("a filed document revision could not be read back".to_string())
     })?;
     Ok(store::document_pointers::DocumentPointer {
+        receipt: store::documents::ReceiptMetadata::from_asset_metadata(
+            kind,
+            current.metadata.as_ref().filter(|_| kind == "receipt"),
+        )
+        .map_err(|error| ApiError::Db(error.to_string()))?,
         checkout_path: current.drive_checkout_path().map(str::to_owned),
         kind: kind.to_string(),
         visibility: current.visibility.clone(),
@@ -15165,18 +15180,16 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
     }
 
     /// The matter folder an upload names is persisted, rendered back on the
-    /// returned pointer, and read back on the live row (LAW-241); a
-    /// folder-less upload keeps the old behavior — slug from the filename,
-    /// the kind's default placement.
+    /// returned pointer, and read back on the live row (LAW-241).
     #[tokio::test]
-    async fn an_upload_with_folder_files_the_document_there() {
+    async fn uploads_preserve_explicit_folders() {
         let db = store::surreal::test_support::mem().await;
         let project_id = store::test_support::seed_project_surreal(&db, "folder-upload").await;
         let (state, session) = eml_lawyer_state(&db, project_id, "aries@neonlaw.com").await;
 
         let response = upload_document_door(
-            State(state.clone()),
-            LawyerSession(session.clone()),
+            State(state),
+            LawyerSession(session),
             Path(project_id),
             JsonOrForm(UploadDocumentRequest {
                 filename: "agreement.pdf".to_string(),
@@ -15212,24 +15225,50 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
             "the pointer renders the persisted folder"
         );
 
-        // A folder-less upload keeps prior behavior: the slug comes from the
-        // filename and the row names no folder at all.
+        let rows = store::assets::for_project(&db, project_id)
+            .await
+            .expect("list the matter's documents");
+        assert_eq!(rows.len(), 1);
+        let discovery = rows
+            .iter()
+            .find(|row| row.filename.as_deref() == Some("agreement.pdf"))
+            .expect("the folder upload is filed");
+        assert_eq!(
+            discovery.folder.as_deref(),
+            Some(store::document_pointers::MatterFolder::Discovery.as_str()),
+            "the live row carries the requested folder"
+        );
+    }
+
+    #[tokio::test]
+    async fn uploads_file_receipt_evidence_in_costs() {
+        let db = store::surreal::test_support::mem().await;
+        let project_id = store::test_support::seed_project_surreal(&db, "receipt-upload").await;
+        let (state, session) = eml_lawyer_state(&db, project_id, "aries@neonlaw.com").await;
+
+        let receipt = serde_json::json!({
+            "amount_cents": 2750,
+            "currency": "USD",
+            "payee": "sample filing service",
+            "category": "e_filing_service_fee",
+            "transaction_id": "sample-transaction"
+        });
         let response = upload_document_door(
             State(state),
             LawyerSession(session),
             Path(project_id),
             JsonOrForm(UploadDocumentRequest {
-                filename: "letter.pdf".to_string(),
+                filename: "receipt.pdf".to_string(),
                 slug: None,
                 content_base64: base64::Engine::encode(
                     &base64::engine::general_purpose::STANDARD,
-                    b"letter bytes",
+                    b"expense receipt bytes",
                 ),
                 content_type: Some("application/pdf".to_string()),
-                kind: Some("agreement".to_string()),
+                kind: Some("receipt".to_string()),
                 visibility: None,
                 description: None,
-                metadata: None,
+                metadata: Some(serde_json::json!({ "receipt": receipt })),
                 derived_from: None,
                 transcript_quality: None,
                 signing: None,
@@ -15240,28 +15279,33 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
             }),
         )
         .await
-        .expect("a lawyer on the matter can upload without a folder");
+        .expect("a lawyer on the matter can upload a receipt");
         assert_eq!(response.status(), StatusCode::CREATED);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let pointer: store::document_pointers::DocumentPointer =
+            serde_json::from_slice(&body).unwrap();
+        assert_eq!(pointer.visibility, "internal");
+        assert_eq!(pointer.matter_folder().as_str(), "Costs");
+        assert_eq!(
+            serde_json::to_value(pointer.receipt.unwrap()).unwrap(),
+            receipt
+        );
 
         let rows = store::assets::for_project(&db, project_id)
             .await
             .expect("list the matter's documents");
-        assert_eq!(rows.len(), 2);
-        let discovery = rows
-            .iter()
-            .find(|row| row.filename.as_deref() == Some("agreement.pdf"))
-            .expect("the folder upload is filed");
-        assert_eq!(
-            discovery.folder.as_deref(),
-            Some(store::document_pointers::MatterFolder::Discovery.as_str()),
-            "the live row carries the requested folder"
-        );
+        assert_eq!(rows.len(), 1);
         let plain = rows
             .iter()
-            .find(|row| row.filename.as_deref() == Some("letter.pdf"))
-            .expect("the folder-less upload is filed");
-        assert_eq!(plain.slug.as_deref(), Some("letter.pdf"));
+            .find(|row| row.filename.as_deref() == Some("receipt.pdf"))
+            .expect("the receipt upload is filed");
+        assert_eq!(plain.slug.as_deref(), Some("receipt.pdf"));
         assert_eq!(plain.folder, None);
+        assert_eq!(plain.documents_path(), "Costs/receipt.pdf");
+        assert_eq!(plain.metadata.as_ref().unwrap()["receipt"], receipt);
     }
 
     /// A folder that is not one of the Firm's matter folders is `400
