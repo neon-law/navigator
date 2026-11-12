@@ -6166,6 +6166,7 @@ jobs:
     /// the fixture cannot drift from the pointer schema.
     fn signed_pointer_yaml(kind: &str) -> String {
         store::document_pointers::DocumentPointer {
+            receipt: None,
             checkout_path: None,
             kind: kind.into(),
             visibility: "internal".into(),

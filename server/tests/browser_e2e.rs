@@ -4030,6 +4030,14 @@ async fn lawyer_uploads_several_documents_at_once_from_the_project_page() {
         .send_keys(&paths.join("\n"))
         .await
         .expect("hand the batch of paths to the file input");
+    c.find(Locator::Css(
+        "section.project-documents select[name='kind'] option[value='receipt']",
+    ))
+    .await
+    .expect("the upload picker offers the receipt kind")
+    .click()
+    .await
+    .expect("choose receipt for the batch");
 
     scroll_and_js_click(
         &c,
@@ -4041,6 +4049,36 @@ async fn lawyer_uploads_several_documents_at_once_from_the_project_page() {
     // in the batch should now be its own row in the documents table.
     for name in names {
         wait_for_text(&c, name, Duration::from_secs(20)).await;
+    }
+    wait_for_text(&c, "documents/Costs/", Duration::from_secs(10)).await;
+    let costs = c
+        .find(Locator::XPath(
+            "//tbody[tr/th[normalize-space()='documents/Costs/']]",
+        ))
+        .await
+        .expect("the Costs group is rendered")
+        .text()
+        .await
+        .unwrap();
+    for name in names {
+        assert!(costs.contains(name), "{name} belongs under Costs");
+    }
+    if std::env::var("NAV_COSTS_FOLDER_CAPTURE").as_deref() == Ok("1") {
+        c.execute(
+            "Array.from(document.querySelectorAll('th[scope=colgroup]'))
+                .find(heading => heading.textContent.trim() === 'documents/Costs/')
+                .scrollIntoView({block: 'center'});",
+            vec![],
+        )
+        .await
+        .expect("scroll to the Costs heading");
+        let captures = std::path::Path::new("/tmp/navigator-screenshots");
+        std::fs::create_dir_all(captures).expect("create screenshot directory");
+        std::fs::write(
+            captures.join("costs-folder.png"),
+            c.screenshot().await.expect("capture document folders"),
+        )
+        .expect("write folder screenshot");
     }
 
     let source = c.source().await.unwrap();

@@ -1000,6 +1000,11 @@ fn desired_pointer(
             _ => (None, None, None, None, None, None),
         };
     let pointer = DocumentPointer {
+        receipt: local
+            .filter(|pointer| {
+                kind == "receipt" && pointer.current_version.asset_id == operative.asset_id
+            })
+            .and_then(|pointer| pointer.receipt.clone()),
         checkout_path: None,
         kind: kind.to_string(),
         visibility: operative.visibility.clone(),
