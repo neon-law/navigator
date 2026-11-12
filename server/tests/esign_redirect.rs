@@ -27,7 +27,7 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
 use portal::session::{SessionData, SESSION_COOKIE_NAME};
-use portal::signature::SignatureProvider;
+use portal::signature::{SendMode, SignatureProvider};
 use portal::{AppState, SessionStore};
 use store::persons::Role;
 use store::seed;
@@ -154,7 +154,12 @@ async fn build() -> Fixture {
     // send the rendered anchor PDF through the fake first, then record the
     // provider-issued id against the notation.
     let request_id = provider
-        .send_for_signature(notation_id, &anchor_pdf(), &signing_manifest())
+        .send_for_signature(
+            notation_id,
+            &anchor_pdf(),
+            &signing_manifest(),
+            SendMode::Send,
+        )
         .await
         .unwrap();
     let envelope_id = request_id.0;

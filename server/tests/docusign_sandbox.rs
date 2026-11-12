@@ -45,8 +45,8 @@ use uuid::Uuid;
 
 use portal::docusign_auth::DocuSignJwtAuth;
 use portal::signature::{
-    RecipientView, SignatureField, SignatureFieldKind, SignatureManifest, SignatureProvider,
-    SignatureRecipient,
+    RecipientView, SendMode, SignatureField, SignatureFieldKind, SignatureManifest,
+    SignatureProvider, SignatureRecipient,
 };
 use portal::signature_render::expand_signatures;
 
@@ -132,7 +132,7 @@ async fn sandbox_accepts_a_retainer_envelope_with_anchor_tabs() {
         "Neon Law",
     );
     let id = provider
-        .send_for_signature(Uuid::new_v4(), &pdf, &manifest)
+        .send_for_signature(Uuid::new_v4(), &pdf, &manifest, SendMode::Send)
         .await
         .expect("DocuSign demo must accept our envelope + anchored tabs");
     assert!(!id.0.is_empty(), "a real envelope id comes back");

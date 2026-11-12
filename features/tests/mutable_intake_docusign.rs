@@ -173,12 +173,10 @@ async fn no_signature_yet(world: &mut MutableWorld) {
     );
 }
 
-#[when("the attorney approves and sends the document")]
-async fn attorney_approves(world: &mut MutableWorld) {
-    // Approve renders + parks the PDF at generate_pdf__retainer_pdf; the
-    // separate send dispatches the envelope once the PDF is present. Under
-    // the in-process runtime the render is synchronous, so the send that
-    // follows finds the PDF ready.
+#[when("the attorney approves the document")]
+async fn attorney_approves_only(world: &mut MutableWorld) {
+    // Approve renders + parks the PDF at generate_pdf__retainer_pdf;
+    // what happens next — a draft or a send — is a separate decision.
     let id = world.notation_id();
     let approve = world
         .journey()
@@ -193,16 +191,6 @@ async fn attorney_approves(world: &mut MutableWorld) {
         approve.status,
         approve.body,
     );
-    let send = world
-        .journey()
-        .lawyer_post(&format!("/app/lawyer/notations/{id}/send"), String::new())
-        .await;
-    assert!(
-        send.status.is_success() || send.status.is_redirection(),
-        "send returned {} — body:\n{}",
-        send.status,
-        send.body,
-    );
     // Both actions are post/redirect/get onto the review screen, which is where
     // the assembled document is rendered. Follow it so the assertions below read
     // the document rather than an empty redirect body.
@@ -211,6 +199,107 @@ async fn attorney_approves(world: &mut MutableWorld) {
         .lawyer_get(&format!("/app/lawyer/notations/{id}/review"))
         .await
         .body;
+}
+
+#[when("the lawyer prepares the envelope")]
+async fn lawyer_prepares_envelope(world: &mut MutableWorld) {
+    // The REST door with `prepare: true` — a draft envelope exists on the
+    // provider, validation has run, and nothing is dispatched.
+    let resp = world
+        .journey()
+        .lawyer_post_json(
+            &format!("/app/api/notations/{}/signature", world.notation_id()),
+            serde_json::json!({ "prepare": true }),
+        )
+        .await;
+    assert!(
+        resp.status.is_success(),
+        "prepare returned {} — body:\n{}",
+        resp.status,
+        resp.body,
+    );
+}
+
+#[then("the envelope is a draft that has not been sent")]
+async fn envelope_is_draft(world: &mut MutableWorld) {
+    let envelopes = world
+        .journey()
+        .signature
+        .envelopes()
+        .expect("read the fake provider's envelopes");
+    assert_eq!(
+        envelopes.len(),
+        1,
+        "a prepare holds exactly one draft envelope, got {envelopes:?}"
+    );
+    assert_eq!(
+        envelopes[0].status,
+        portal::signature::EnvelopeStatus::Prepared,
+        "the prepared envelope must not have been dispatched"
+    );
+    // Preparing never advances the workflow: the document stays parked at
+    // its rendered state, reachable again for the real send.
+    let state = StateMachineRuntime::current_state(
+        world.journey().runtime.as_ref(),
+        MachineKind::Workflow,
+        world.notation_id(),
+    )
+    .await;
+    let state = state.map(|name| name.0).unwrap_or_default();
+    assert!(
+        !state.starts_with("sent_for_signature"),
+        "a draft must not advance the workflow, got {state}"
+    );
+}
+
+#[when("the lawyer sends the prepared envelope")]
+async fn lawyer_sends_envelope(world: &mut MutableWorld) {
+    // The door with no body dispatches — promoting the draft rather than
+    // creating a second envelope.
+    let resp = world
+        .journey()
+        .lawyer_post_json(
+            &format!("/app/api/notations/{}/signature", world.notation_id()),
+            serde_json::json!({}),
+        )
+        .await;
+    assert!(
+        resp.status.is_success(),
+        "send returned {} — body:\n{}",
+        resp.status,
+        resp.body,
+    );
+}
+
+#[then("the sent envelope was promoted, not duplicated")]
+async fn envelope_promoted(world: &mut MutableWorld) {
+    let calls = world.journey().signature.calls();
+    assert_eq!(
+        calls.len(),
+        2,
+        "expected one prepare then one send, got {calls:?}"
+    );
+    assert_eq!(
+        calls[0].mode,
+        portal::signature::SendMode::Prepare,
+        "the first call is the draft"
+    );
+    assert_eq!(
+        calls[1].mode,
+        portal::signature::SendMode::Send,
+        "the second call is the dispatch"
+    );
+    let envelopes = world
+        .journey()
+        .signature
+        .envelopes()
+        .expect("read the fake provider's envelopes");
+    assert_eq!(envelopes.len(), 1, "the send promotes the draft in place");
+    assert_eq!(
+        envelopes[0].status,
+        portal::signature::EnvelopeStatus::Sent,
+        "the promoted envelope is dispatched"
+    );
 }
 
 #[then("the matter has a signature request")]
@@ -227,11 +316,7 @@ async fn has_signature(world: &mut MutableWorld) {
 #[then("the signature envelope routes the client before the firm")]
 async fn envelope_routing(world: &mut MutableWorld) {
     let calls = world.journey().signature.calls();
-    assert_eq!(
-        calls.len(),
-        1,
-        "expected exactly one envelope, got {calls:?}"
-    );
+    assert!(!calls.is_empty(), "an envelope was dispatched");
     let recipients = &calls[0].manifest.recipients;
     let client = recipients
         .iter()

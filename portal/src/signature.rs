@@ -148,6 +148,23 @@ pub struct SignatureCall {
     /// The manifest the step asked us to place — so tests can assert
     /// the right anchors/recipients threaded through.
     pub manifest: SignatureManifest,
+    /// The mode the call arrived with — a draft prepare and a send are
+    /// distinguishable after the fact.
+    pub mode: SendMode,
+}
+
+/// How the envelope is created: dispatched to the signers now, or held
+/// as a draft the provider promotes on a later send.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SendMode {
+    /// Create and dispatch the envelope — the signers are notified.
+    Send,
+    /// Create the envelope as a draft without dispatching it. Validation
+    /// runs identically on both modes — a draft with a missing anchor is
+    /// refused before anything is written — and a later
+    /// [`SendMode::Send`] promotes the prepared envelope instead of
+    /// creating a second one.
+    Prepare,
 }
 
 /// The kind of signature field an anchor expands into — each maps to a
@@ -265,12 +282,17 @@ pub enum SignatureError {
 pub trait SignatureProvider: Send + Sync {
     /// Submit the rendered retainer PDF for the given notation, placing
     /// the fields described by `manifest`. Returns a provider-issued id
-    /// correlating future events.
+    /// correlating future events. `mode` decides what the provider does
+    /// with the accepted envelope: [`SendMode::Send`] dispatches it to the
+    /// signers; [`SendMode::Prepare`] holds it as a draft the provider can
+    /// promote later — a re-send with [`SendMode::Send`] dispatches the
+    /// prepared envelope instead of creating a second one.
     async fn send_for_signature(
         &self,
         notation_id: Uuid,
         pdf: &[u8],
         manifest: &SignatureManifest,
+        mode: SendMode,
     ) -> Result<SignatureRequestId, SignatureError>;
 
     /// Request a short-lived, single-use **recipient-view URL** for a captive
@@ -312,7 +334,10 @@ pub trait SignatureProvider: Send + Sync {
 /// kills the loop mid-way can assert on exactly what happened.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EnvelopeStatus {
-    /// `send_for_signature` accepted it. Anchors validated, PDF stored.
+    /// Held as a draft: accepted and persisted, never shown to a signer.
+    /// A later send with [`SendMode::Send`] promotes it.
+    Prepared,
+    /// `send_for_signature` dispatched it. Anchors validated, PDF stored.
     Sent,
     /// Every recipient signed; completed documents exist on disk.
     Completed,
@@ -323,6 +348,7 @@ impl std::fmt::Display for EnvelopeStatus {
     /// identical to the serde kebab-case representation.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
+            Self::Prepared => "prepared",
             Self::Sent => "sent",
             Self::Completed => "completed",
         })
@@ -1164,10 +1190,13 @@ impl SignatureProvider for FakeSignatureProvider {
         notation_id: Uuid,
         pdf: &[u8],
         manifest: &SignatureManifest,
+        mode: SendMode,
     ) -> Result<SignatureRequestId, SignatureError> {
         // Nothing is sent unsigned: validate every anchor against the
         // prepared PDF's text first, and refuse the whole envelope on a
-        // miss — before anything is persisted or recorded.
+        // miss — before anything is persisted or recorded. Prepare runs
+        // the same validation: a draft with a missing anchor is refused
+        // before it exists, not at dispatch time.
         if self.faults.armed(Fault::Send) {
             // The injected failure fires before validation, before any
             // write, before any call record: the disk's state — no
@@ -1185,28 +1214,71 @@ impl SignatureProvider for FakeSignatureProvider {
 
         let mut calls = self.calls.lock().expect("fake provider lock");
         let seq = calls.len() + 1;
-        let id = format!("fake-{notation_id}-{seq}");
-        let envelope = FakeEnvelope {
-            id: id.clone(),
-            notation_id,
-            status: EnvelopeStatus::Sent,
-            recipients: manifest.recipients.clone(),
-            fields: manifest.fields.clone(),
-            pdf_base64: Engine::encode(&base64::engine::general_purpose::STANDARD, pdf),
-            created_at: chrono::Utc::now().to_rfc3339(),
-            signed: Vec::new(),
-            webhook_status: None,
+
+        // One envelope per notation, whatever the mode: a send promotes an
+        // existing prepared envelope instead of creating a second one, a
+        // re-prepare reuses the draft, and a re-send of a dispatched
+        // envelope is a no-op. A mode with no envelope on disk creates one
+        // in that mode's state — a draft is persisted `Prepared`, with no
+        // sign pages and no webhook traffic until a send promotes it.
+        let existing = self
+            .envelopes()?
+            .into_iter()
+            .find(|envelope| envelope.notation_id == notation_id);
+        let id = match (mode, existing) {
+            (SendMode::Prepare, Some(envelope)) if envelope.status == EnvelopeStatus::Prepared => {
+                envelope.id
+            }
+            (SendMode::Send, Some(mut envelope)) => {
+                if envelope.status == EnvelopeStatus::Prepared {
+                    // The deliberate dispatch: the draft leaves `Prepared`,
+                    // and only now do the signers' pages exist to open.
+                    envelope.status = EnvelopeStatus::Sent;
+                    self.persist(&envelope)?;
+                    for recipient in &envelope.recipients {
+                        self.write_signing_page(&envelope, &recipient.email)?;
+                    }
+                }
+                envelope.id
+            }
+            (mode, None) => {
+                let id = format!("fake-{notation_id}-{seq}");
+                let envelope = FakeEnvelope {
+                    id: id.clone(),
+                    notation_id,
+                    status: match mode {
+                        SendMode::Prepare => EnvelopeStatus::Prepared,
+                        SendMode::Send => EnvelopeStatus::Sent,
+                    },
+                    recipients: manifest.recipients.clone(),
+                    fields: manifest.fields.clone(),
+                    pdf_base64: Engine::encode(&base64::engine::general_purpose::STANDARD, pdf),
+                    created_at: chrono::Utc::now().to_rfc3339(),
+                    signed: Vec::new(),
+                    webhook_status: None,
+                };
+                self.persist(&envelope)?;
+                if envelope.status == EnvelopeStatus::Sent {
+                    // Every recipient's sign page exists the moment the
+                    // envelope is dispatched — the signer opens a URL that
+                    // resolves, not a stub string. A draft writes none:
+                    // nobody signs an envelope that has not been sent.
+                    for recipient in &envelope.recipients {
+                        self.write_signing_page(&envelope, &recipient.email)?;
+                    }
+                }
+                id
+            }
+            // A re-prepare of a dispatched envelope, or a re-send of one
+            // already dispatched (or completed): the envelope keeps its
+            // last true state and its id.
+            (_, Some(envelope)) => envelope.id,
         };
-        self.persist(&envelope)?;
-        // Every recipient's sign page exists the moment the envelope
-        // does — the signer opens a URL that resolves, not a stub string.
-        for recipient in &envelope.recipients {
-            self.write_signing_page(&envelope, &recipient.email)?;
-        }
         calls.push(SignatureCall {
             notation_id,
             pdf_bytes_len: pdf.len(),
             manifest: manifest.clone(),
+            mode,
         });
         Ok(SignatureRequestId(id))
     }
@@ -1512,11 +1584,16 @@ impl DocuSignSignatureProvider {
     /// behavior) — a deliberate transitional state until the caller
     /// supplies a real manifest.
     #[must_use]
+    /// The envelope JSON body. `status` is DocuSign's envelope lifecycle
+    /// verb: `"sent"` dispatches the envelope to its signers, `"created"`
+    /// holds it as a draft ([`SendMode::Prepare`]) that a later PUT with
+    /// `"sent"` dispatches.
     pub fn build_envelope_body(
         &self,
         notation_id: Uuid,
         pdf: &[u8],
         prepared: &PreparedTabs,
+        status: &str,
     ) -> serde_json::Value {
         let document_b64 = base64::engine::general_purpose::STANDARD.encode(pdf);
         let signers: Vec<serde_json::Value> = if prepared.is_empty() {
@@ -1553,7 +1630,7 @@ impl DocuSignSignatureProvider {
         };
         serde_json::json!({
             "emailSubject": format!("Document for signature ({notation_id})"),
-            "status": "sent",
+            "status": status,
             "documents": [{
                 "documentBase64": document_b64,
                 "name": "Document",
@@ -1603,12 +1680,44 @@ impl DocuSignSignatureProvider {
 struct EnvelopeSummary {
     #[serde(rename = "envelopeId")]
     envelope_id: String,
+    /// The envelope's status as DocuSign created it. A send that dedupes
+    /// onto a previously prepared draft comes back `created` — the signal
+    /// to dispatch it with the PUT below.
+    #[serde(default)]
+    status: Option<String>,
 }
 
 /// DocuSign's `views/recipient` response. We need only the signing URL.
 #[derive(Deserialize)]
 struct RecipientViewResponse {
     url: String,
+}
+
+impl DocuSignSignatureProvider {
+    /// PUT an existing envelope's status to `sent` — the dispatch of a
+    /// draft a previous prepare created.
+    async fn dispatch_envelope(&self, envelope_id: &str) -> Result<(), SignatureError> {
+        let url = self.request_url(&format!(
+            "v2.1/accounts/{}/envelopes/{}",
+            self.account_id, envelope_id
+        ))?;
+        let resp = self
+            .http
+            .put(url)
+            .bearer_auth(self.bearer_token().await?)
+            .json(&serde_json::json!({ "status": "sent" }))
+            .send()
+            .await
+            .map_err(|e| SignatureError::Provider(e.to_string()))?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(SignatureError::Provider(format!(
+                "docusign envelope dispatch responded {status}: {body}"
+            )));
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -1618,8 +1727,17 @@ impl SignatureProvider for DocuSignSignatureProvider {
         notation_id: Uuid,
         pdf: &[u8],
         manifest: &SignatureManifest,
+        mode: SendMode,
     ) -> Result<SignatureRequestId, SignatureError> {
         let url = self.request_url(&format!("v2.1/accounts/{}/envelopes", self.account_id))?;
+        // `sent` dispatches; `created` holds the envelope as a draft. The
+        // idempotency key is the same either way: a send that arrives after
+        // a prepare dedupes onto the prepared envelope rather than creating
+        // a second one.
+        let status = match mode {
+            SendMode::Send => "sent",
+            SendMode::Prepare => "created",
+        };
         let resp = self
             .http
             .post(url)
@@ -1630,22 +1748,35 @@ impl SignatureProvider for DocuSignSignatureProvider {
             .bearer_auth(self.bearer_token().await?)
             // Prepare fails closed before the POST: a missing anchor or
             // an unbound field refuses the send — DocuSign never sees an
-            // envelope Navigator could have refused itself.
-            .json(&self.build_envelope_body(notation_id, pdf, &prepare_envelope(pdf, manifest)?))
+            // envelope Navigator could have refused itself. The same
+            // validation gates a draft: nothing unvalidated is ever
+            // created, sent or not.
+            .json(&self.build_envelope_body(
+                notation_id,
+                pdf,
+                &prepare_envelope(pdf, manifest)?,
+                status,
+            ))
             .send()
             .await
             .map_err(|e| SignatureError::Provider(e.to_string()))?;
-        let status = resp.status();
-        if !status.is_success() {
+        let response_status = resp.status();
+        if !response_status.is_success() {
             let body = resp.text().await.unwrap_or_default();
             return Err(SignatureError::Provider(format!(
-                "docusign responded {status}: {body}"
+                "docusign responded {response_status}: {body}"
             )));
         }
         let summary: EnvelopeSummary = resp
             .json()
             .await
             .map_err(|e| SignatureError::Provider(e.to_string()))?;
+        // A send whose POST deduped onto a prepared draft — DocuSign
+        // answered `created` — dispatches it now with the status PUT. A
+        // POST that answered `sent` (fresh or already dispatched) is done.
+        if mode == SendMode::Send && summary.status.as_deref() == Some("created") {
+            self.dispatch_envelope(&summary.envelope_id).await?;
+        }
         Ok(SignatureRequestId(summary.envelope_id))
     }
 
@@ -1749,8 +1880,8 @@ impl SignatureProvider for DocuSignSignatureProvider {
 mod tests {
     use super::{
         prepare_envelope, prepare_tabs, validate_anchors, CachedToken, DocuSignSignatureProvider,
-        EnvelopeStatus, FakeSignatureProvider, Fault, Faults, RecipientView, SignatureError,
-        SignatureField, SignatureFieldKind, SignatureManifest, SignatureProvider,
+        EnvelopeStatus, FakeSignatureProvider, Fault, Faults, RecipientView, SendMode,
+        SignatureError, SignatureField, SignatureFieldKind, SignatureManifest, SignatureProvider,
         SignatureProviderKind, SignatureProviderSelectionError, SignatureRecipient,
         SignatureRequestId, WebhookTarget, SIGNATURE_PROVIDER_ENV,
     };
@@ -1933,11 +2064,16 @@ mod tests {
         let fake = FakeSignatureProvider::new();
         let pdf = rendered_anchor_pdf();
         let id1 = fake
-            .send_for_signature(ID42, &pdf, &retainer_manifest())
+            .send_for_signature(ID42, &pdf, &retainer_manifest(), SendMode::Send)
             .await
             .expect("validated anchors pass");
         let id2 = fake
-            .send_for_signature(ID43, b"<longer pdf bytes here>", &no_manifest())
+            .send_for_signature(
+                ID43,
+                b"<longer pdf bytes here>",
+                &no_manifest(),
+                SendMode::Send,
+            )
             .await
             .unwrap();
 
@@ -1962,7 +2098,7 @@ mod tests {
         let fake = FakeSignatureProvider::new_in(temp.path());
         let pdf = rendered_anchor_pdf();
         let id = fake
-            .send_for_signature(ID42, &pdf, &retainer_manifest())
+            .send_for_signature(ID42, &pdf, &retainer_manifest(), SendMode::Send)
             .await
             .expect("send succeeds");
 
@@ -2001,7 +2137,7 @@ mod tests {
         let pdf = pdf::render("= No anchors here\n").expect("renders");
 
         let err = fake
-            .send_for_signature(ID42, &pdf, &retainer_manifest())
+            .send_for_signature(ID42, &pdf, &retainer_manifest(), SendMode::Send)
             .await
             .expect_err("missing anchors are a hard error");
         let missing = match err {
@@ -2035,15 +2171,124 @@ mod tests {
     #[tokio::test]
     async fn fake_calls_snapshot_is_shareable_after_more_calls() {
         let stub = FakeSignatureProvider::new();
-        stub.send_for_signature(ID1, b"a", &no_manifest())
+        stub.send_for_signature(ID1, b"a", &no_manifest(), SendMode::Send)
             .await
             .unwrap();
         let snap = stub.calls();
-        stub.send_for_signature(ID2, b"b", &no_manifest())
+        stub.send_for_signature(ID2, b"b", &no_manifest(), SendMode::Send)
             .await
             .unwrap();
         assert_eq!(snap.len(), 1, "snapshot doesn't see later calls");
         assert_eq!(stub.calls().len(), 2);
+    }
+
+    // --- LAW-270: prepare holds a draft; send dispatches it ---------------
+
+    #[tokio::test]
+    async fn fake_prepare_persists_a_draft_that_has_never_been_dispatched() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let fake = FakeSignatureProvider::new_in(temp.path());
+        let pdf = rendered_anchor_pdf();
+
+        let id = fake
+            .send_for_signature(ID42, &pdf, &retainer_manifest(), SendMode::Prepare)
+            .await
+            .expect("validated draft prepares");
+
+        // The envelope exists — durable JSON, same shape as a sent one —
+        // but its status says it was never dispatched.
+        let envelope = fake
+            .envelope(&id)
+            .expect("envelope parses")
+            .expect("prepared envelope exists on disk");
+        assert_eq!(envelope.status, EnvelopeStatus::Prepared);
+        assert!(envelope.webhook_status.is_none());
+
+        // Nothing was sent: no sign page exists for any recipient to open.
+        for recipient in &retainer_manifest().recipients {
+            assert!(
+                !fake.signing_page_path(&id.0, &recipient.email).exists(),
+                "a draft must not mint signer pages"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn fake_reprepare_reuses_the_draft_and_creates_no_second_envelope() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let fake = FakeSignatureProvider::new_in(temp.path());
+        let pdf = rendered_anchor_pdf();
+
+        let first = fake
+            .send_for_signature(ID42, &pdf, &retainer_manifest(), SendMode::Prepare)
+            .await
+            .unwrap();
+        let second = fake
+            .send_for_signature(ID42, &pdf, &retainer_manifest(), SendMode::Prepare)
+            .await
+            .unwrap();
+
+        assert_eq!(first, second, "a re-prepare reuses the draft");
+        assert_eq!(fake.envelopes().expect("listing reads").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn fake_send_promotes_the_prepared_draft_instead_of_creating_a_second_envelope() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let fake = FakeSignatureProvider::new_in(temp.path());
+        let pdf = rendered_anchor_pdf();
+
+        let prepared = fake
+            .send_for_signature(ID42, &pdf, &retainer_manifest(), SendMode::Prepare)
+            .await
+            .unwrap();
+        let sent = fake
+            .send_for_signature(ID42, &pdf, &retainer_manifest(), SendMode::Send)
+            .await
+            .unwrap();
+
+        // Same envelope, promoted — not a second one with a new id.
+        assert_eq!(prepared, sent);
+        let all = fake.envelopes().expect("listing reads");
+        assert_eq!(
+            all.len(),
+            1,
+            "one envelope per notation across prepare→send"
+        );
+        assert_eq!(all[0].status, EnvelopeStatus::Sent);
+
+        // The dispatch is what mints the signers' pages.
+        for recipient in &retainer_manifest().recipients {
+            assert!(fake.signing_page_path(&sent.0, &recipient.email).exists());
+        }
+
+        // Both calls are recorded with the mode that arrived.
+        let calls = fake.calls();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].mode, SendMode::Prepare);
+        assert_eq!(calls[1].mode, SendMode::Send);
+    }
+
+    #[tokio::test]
+    async fn fake_prepare_runs_the_same_anchor_validation_and_persists_nothing() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let fake = FakeSignatureProvider::new_in(temp.path());
+        // A real PDF whose text layer does NOT carry the manifest's
+        // anchors — a draft is refused exactly like a send.
+        let pdf = pdf::render("= No anchors here\n").expect("renders");
+
+        let err = fake
+            .send_for_signature(ID42, &pdf, &retainer_manifest(), SendMode::Prepare)
+            .await
+            .expect_err("missing anchors refuse the draft");
+        assert!(
+            matches!(err, SignatureError::AnchorValidation(_)),
+            "expected AnchorValidation, got {err:?}"
+        );
+
+        // Nothing was written: no envelope, no call record.
+        assert!(fake.envelopes().expect("listing reads").is_empty());
+        assert!(fake.calls().is_empty());
     }
 
     fn docusign(base_url: String) -> DocuSignSignatureProvider {
@@ -2118,11 +2363,11 @@ mod tests {
         );
 
         let id1 = provider
-            .send_for_signature(ID1, b"%PDF-1.7 fake", &no_manifest())
+            .send_for_signature(ID1, b"%PDF-1.7 fake", &no_manifest(), SendMode::Send)
             .await
             .expect("first send mints a token and creates the envelope");
         let id2 = provider
-            .send_for_signature(ID2, b"%PDF-1.7 fake", &no_manifest())
+            .send_for_signature(ID2, b"%PDF-1.7 fake", &no_manifest(), SendMode::Send)
             .await
             .expect("second send reuses the cached token");
         assert_eq!(id1, SignatureRequestId("env-1".into()));
@@ -2137,7 +2382,7 @@ mod tests {
         // signer, no tabs.
         let ds = docusign("https://demo.docusign.net/restapi".into());
         let prepared = prepare_tabs(&no_manifest()).expect("an empty manifest prepares");
-        let body = ds.build_envelope_body(ID42, b"%PDF-1.7 fake", &prepared);
+        let body = ds.build_envelope_body(ID42, b"%PDF-1.7 fake", &prepared, "sent");
         assert_eq!(body["status"], "sent");
         let signers = body["recipients"]["signers"].as_array().unwrap();
         assert_eq!(signers.len(), 1);
@@ -2154,7 +2399,7 @@ mod tests {
     fn docusign_envelope_body_emits_anchored_tabs_and_routing_from_manifest() {
         let ds = docusign("https://demo.docusign.net/restapi".into());
         let prepared = prepare_tabs(&retainer_manifest()).expect("a bound manifest prepares");
-        let body = ds.build_envelope_body(ID42, b"%PDF", &prepared);
+        let body = ds.build_envelope_body(ID42, b"%PDF", &prepared, "sent");
         let signers = body["recipients"]["signers"].as_array().unwrap();
         assert_eq!(signers.len(), 2, "one signer per manifest recipient");
 
@@ -2199,7 +2444,7 @@ mod tests {
         let mut manifest = retainer_manifest();
         manifest.recipients[0].client_user_id = None;
         let prepared = prepare_tabs(&manifest).expect("a bound manifest prepares");
-        let body = ds.build_envelope_body(ID42, b"%PDF", &prepared);
+        let body = ds.build_envelope_body(ID42, b"%PDF", &prepared, "sent");
         let client = &body["recipients"]["signers"][0];
 
         assert_eq!(body["status"], "sent");
@@ -2241,6 +2486,114 @@ mod tests {
             .await
             .expect("recipient view succeeds");
         assert_eq!(url, "https://demo.docusign.net/signing/abc123");
+    }
+
+    #[tokio::test]
+    async fn docusign_prepare_posts_created_and_dispatches_nothing() {
+        // A draft envelope is the same POST with `status: "created"` in
+        // place of "sent" — held on DocuSign, never shown to a signer.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v2.1/accounts/acct-guid/envelopes"))
+            .and(header("authorization", "Bearer TOKEN"))
+            .and(body_string_contains("\"status\":\"created\""))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "envelopeId": "env-prepare-1",
+                "status": "created",
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let ds = docusign(server.uri());
+        let id = ds
+            .send_for_signature(
+                ID42,
+                &rendered_anchor_pdf(),
+                &retainer_manifest(),
+                SendMode::Prepare,
+            )
+            .await
+            .expect("validated draft prepares");
+        assert_eq!(id.0, "env-prepare-1");
+
+        // Exactly one request hit the provider: the envelope POST. No
+        // dispatch PUT, no second call — a draft is created, never sent.
+        assert_eq!(
+            server
+                .received_requests()
+                .await
+                .expect("requests are recorded")
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn docusign_send_of_a_prepared_draft_dispatches_the_same_envelope() {
+        // The idempotency key dedupes a send onto an earlier prepare:
+        // DocuSign answers `created`, and the provider dispatches the
+        // existing envelope with the status PUT instead of creating a
+        // second one.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v2.1/accounts/acct-guid/envelopes"))
+            .and(body_string_contains("\"status\":\"sent\""))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "envelopeId": "env-1",
+                "status": "created",
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/v2.1/accounts/acct-guid/envelopes/env-1"))
+            .and(header("authorization", "Bearer TOKEN"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "sent",
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let ds = docusign(server.uri());
+        let id = ds
+            .send_for_signature(
+                ID42,
+                &rendered_anchor_pdf(),
+                &retainer_manifest(),
+                SendMode::Send,
+            )
+            .await
+            .expect("the send dispatches the draft");
+        assert_eq!(id.0, "env-1");
+    }
+
+    #[tokio::test]
+    async fn docusign_prepare_validates_anchors_before_anything_is_created() {
+        // A draft with a missing anchor is refused client-side — the same
+        // fail-closed validation a send runs — so DocuSign never sees an
+        // envelope Navigator could have refused itself.
+        let server = MockServer::start().await;
+        let ds = docusign(server.uri());
+        let pdf = pdf::render("= No anchors here\n").expect("renders");
+
+        let err = ds
+            .send_for_signature(ID42, &pdf, &retainer_manifest(), SendMode::Prepare)
+            .await
+            .expect_err("missing anchors refuse the draft");
+        assert!(
+            matches!(err, SignatureError::AnchorValidation(_)),
+            "expected AnchorValidation, got {err:?}"
+        );
+        assert!(
+            server
+                .received_requests()
+                .await
+                .expect("requests are recorded")
+                .is_empty(),
+            "nothing may be created at the provider for a refused draft"
+        );
     }
 
     // --- Per-signer, per-role tabs at prepare time ------------------------
@@ -2383,7 +2736,7 @@ mod tests {
         manifest.recipients.pop();
 
         let err = fake
-            .send_for_signature(ID42, &pdf, &manifest)
+            .send_for_signature(ID42, &pdf, &manifest, SendMode::Send)
             .await
             .expect_err("an unbound field refuses the send");
         assert!(
@@ -2410,7 +2763,7 @@ mod tests {
         let fake = FakeSignatureProvider::new_in(temp.path());
         let (pdf, manifest) = three_party();
         let id = fake
-            .send_for_signature(ID42, &pdf, &manifest)
+            .send_for_signature(ID42, &pdf, &manifest, SendMode::Send)
             .await
             .expect("a prepared three-party manifest sends");
 
@@ -2478,7 +2831,7 @@ mod tests {
             let provider = docusign(server.uri());
 
             let err = provider
-                .send_for_signature(ID42, &pdf, &manifest)
+                .send_for_signature(ID42, &pdf, &manifest, SendMode::Send)
                 .await
                 .unwrap_err();
             assert!(
@@ -2527,7 +2880,12 @@ mod tests {
     async fn a_recipient_view_is_a_local_page_that_exists() {
         let fake = FakeSignatureProvider::new();
         let id = fake
-            .send_for_signature(ID42, &rendered_anchor_pdf(), &retainer_manifest())
+            .send_for_signature(
+                ID42,
+                &rendered_anchor_pdf(),
+                &retainer_manifest(),
+                SendMode::Send,
+            )
             .await
             .expect("send succeeds");
         let url = fake
@@ -2570,7 +2928,7 @@ mod tests {
 
         let ds = docusign(server.uri());
         let id = ds
-            .send_for_signature(ID42, b"<pdf>", &no_manifest())
+            .send_for_signature(ID42, b"<pdf>", &no_manifest(), SendMode::Send)
             .await
             .expect("send succeeds");
         assert_eq!(id, SignatureRequestId("env-789".into()));
@@ -2596,7 +2954,7 @@ mod tests {
         let ds = docusign(server.uri());
         let pdf = rendered_anchor_pdf();
         let id = ds
-            .send_for_signature(ID42, &pdf, &retainer_manifest())
+            .send_for_signature(ID42, &pdf, &retainer_manifest(), SendMode::Send)
             .await
             .expect("send succeeds");
         assert_eq!(id, SignatureRequestId("env-anchored".into()));
@@ -2622,7 +2980,7 @@ mod tests {
 
         let ds = docusign(server.uri());
         let id = ds
-            .send_for_signature(ID42, b"<pdf>", &no_manifest())
+            .send_for_signature(ID42, b"<pdf>", &no_manifest(), SendMode::Send)
             .await
             .expect("send succeeds");
         assert_eq!(id, SignatureRequestId("env-idem".into()));
@@ -2639,7 +2997,7 @@ mod tests {
 
         let ds = docusign(server.uri());
         let err = ds
-            .send_for_signature(ID42, b"<pdf>", &no_manifest())
+            .send_for_signature(ID42, b"<pdf>", &no_manifest(), SendMode::Send)
             .await
             .unwrap_err();
         match err {
@@ -2713,7 +3071,7 @@ mod tests {
         let fake = FakeSignatureProvider::new();
         let pdf = rendered_anchor_pdf();
         let id = fake
-            .send_for_signature(ID42, &pdf, &retainer_manifest())
+            .send_for_signature(ID42, &pdf, &retainer_manifest(), SendMode::Send)
             .await
             .expect("send succeeds");
 
@@ -2764,7 +3122,7 @@ mod tests {
         });
         let pdf = rendered_anchor_pdf();
         let id = fake
-            .send_for_signature(ID42, &pdf, &retainer_manifest())
+            .send_for_signature(ID42, &pdf, &retainer_manifest(), SendMode::Send)
             .await
             .expect("send succeeds");
         fake.sign(&id, "libra@example.com").await.expect("signs");
@@ -2830,7 +3188,7 @@ mod tests {
         });
         let pdf = rendered_anchor_pdf();
         let id = fake
-            .send_for_signature(ID42, &pdf, &retainer_manifest())
+            .send_for_signature(ID42, &pdf, &retainer_manifest(), SendMode::Send)
             .await
             .expect("send succeeds");
 
@@ -2879,7 +3237,7 @@ mod tests {
         // Send: the envelope exists on disk, and every recipient's sign
         // page resolves.
         let id = fake
-            .send_for_signature(ID42, &pdf, &retainer_manifest())
+            .send_for_signature(ID42, &pdf, &retainer_manifest(), SendMode::Send)
             .await
             .expect("the loop sends");
         let client_view = fake
@@ -2958,7 +3316,12 @@ mod tests {
         let root = std::env::temp_dir().join(format!("navigator-fault-{}", Uuid::new_v4()));
         let fake = FakeSignatureProvider::new_in(&root).with_faults(Faults::inject(&[Fault::Send]));
         let err = fake
-            .send_for_signature(ID42, &rendered_anchor_pdf(), &retainer_manifest())
+            .send_for_signature(
+                ID42,
+                &rendered_anchor_pdf(),
+                &retainer_manifest(),
+                SendMode::Send,
+            )
             .await
             .expect_err("the injected send failure fires");
         assert!(err.to_string().contains("injected send failure"));
@@ -2970,7 +3333,12 @@ mod tests {
         // envelope, not a duplicate.
         let resumed = FakeSignatureProvider::new_in(&root);
         let id = resumed
-            .send_for_signature(ID42, &rendered_anchor_pdf(), &retainer_manifest())
+            .send_for_signature(
+                ID42,
+                &rendered_anchor_pdf(),
+                &retainer_manifest(),
+                SendMode::Send,
+            )
             .await
             .expect("send succeeds once the fault is gone");
         assert_eq!(
@@ -2985,7 +3353,12 @@ mod tests {
     async fn an_injected_view_fault_leaves_the_envelope_untouched() {
         let fake = FakeSignatureProvider::new().with_faults(Faults::inject(&[Fault::View]));
         let id = fake
-            .send_for_signature(ID42, &rendered_anchor_pdf(), &retainer_manifest())
+            .send_for_signature(
+                ID42,
+                &rendered_anchor_pdf(),
+                &retainer_manifest(),
+                SendMode::Send,
+            )
             .await
             .expect("send succeeds");
         let err = fake
@@ -3022,7 +3395,12 @@ mod tests {
             })
             .with_faults(Faults::inject(&[Fault::Webhook]));
         let id = fake
-            .send_for_signature(ID42, &rendered_anchor_pdf(), &retainer_manifest())
+            .send_for_signature(
+                ID42,
+                &rendered_anchor_pdf(),
+                &retainer_manifest(),
+                SendMode::Send,
+            )
             .await
             .expect("send succeeds");
 
