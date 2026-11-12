@@ -11311,6 +11311,44 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
         (state, session)
     }
 
+    async fn ingest_address_match_fixture(
+        db: &store::surreal::SurrealDb,
+        firm: Uuid,
+        email: &str,
+    ) -> Uuid {
+        let message = store::inbox::ingest_inbound(
+            db,
+            &store::inbox::IngestInbound {
+                firm_id: firm,
+                project_id: None,
+                brand_key: None,
+                interaction_type: None,
+                provider_post_id: None,
+                parent_provider_message_id: None,
+                visibility: None,
+                channel: store::inbox::channel::EMAIL,
+                provider_account: "test-inbox",
+                provider_message_id: email,
+                provider_thread_ref: None,
+                external_address: email,
+                external_name: None,
+                subject: None,
+                body: "Test message",
+                source_page: None,
+                source_channel: None,
+                matter_consent: true,
+                promotional_opt_in: false,
+                email_conversation_id: None,
+                attachments: Vec::new(),
+                occurred_at: "2026-01-01T12:00:00Z",
+                raw_storage_key: None,
+            },
+        )
+        .await
+        .unwrap();
+        message.conversation_id
+    }
+
     #[tokio::test]
     async fn inbox_address_matches_are_confined_to_the_conversations_firm() {
         let db = store::surreal::test_support::mem().await;
@@ -11355,37 +11393,7 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
                     .await
                     .unwrap();
             }
-            let message = store::inbox::ingest_inbound(
-                &db,
-                &store::inbox::IngestInbound {
-                    firm_id: firm,
-                    project_id: None,
-                    brand_key: None,
-                    interaction_type: None,
-                    provider_post_id: None,
-                    parent_provider_message_id: None,
-                    visibility: None,
-                    channel: store::inbox::channel::EMAIL,
-                    provider_account: "test-inbox",
-                    provider_message_id: email,
-                    provider_thread_ref: None,
-                    external_address: email,
-                    external_name: None,
-                    subject: None,
-                    body: "Test message",
-                    source_page: None,
-                    source_channel: None,
-                    matter_consent: true,
-                    promotional_opt_in: false,
-                    email_conversation_id: None,
-                    attachments: Vec::new(),
-                    occurred_at: "2026-01-01T12:00:00Z",
-                    raw_storage_key: None,
-                },
-            )
-            .await
-            .unwrap();
-            conversations.push(message.conversation_id);
+            conversations.push(ingest_address_match_fixture(&db, firm, email).await);
         }
 
         let response = crate::inbox_api::assign_matches(
