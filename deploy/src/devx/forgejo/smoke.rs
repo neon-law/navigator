@@ -45,7 +45,7 @@ use super::super::KindConfig;
 use super::cluster::Kube;
 use super::oidc::{self, Outcome};
 use super::{
-    actions_context, assert_analyzed_push_receipt, forwarded_port, host_gateway,
+    actions_context, assert_analyzed_push_receipt, forwarded_port, host_gateway, http_probe_script,
     parse_push_receipt_row, port_forward_args, random_hex, receipt_is_terminal, CookieJar,
     PushReceiptRow, Seed, ADMISSION_CONFIG_MAP, ALLOWED_IDENTITY, ALLOWLIST_KEY, BOT_PUSH_WORKFLOW,
     DATA_CLAIM, DENIED_IDENTITIES, GATE_WORKFLOW, POD, POSTGRES_POD, PUBLISH_WORKFLOW, SEED_SECRET,
@@ -140,6 +140,14 @@ impl Drop for Forward {
 #[allow(clippy::too_many_lines)] // One linear proof reads best as one function.
 pub(in crate::devx) fn smoke(cfg: &KindConfig) -> Result<()> {
     super::super::require_tools(&["kubectl", "git"])?;
+    // The receiver's branches trace, and a stuck handler is otherwise
+    // undiagnosable from CI's log alone — a subscriber makes every
+    // verification and consumption branch visible in the run output.
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
+        .init();
     let kube = Kube::new(cfg);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -1850,6 +1858,39 @@ async fn push_webhook_proof(
     )?;
     let gateway =
         host_gateway(&node_ip(kube)?).context("the KIND node exposes no Docker bridge gateway")?;
+
+    // Prove the delivery path before trusting it with the push: the
+    // receiver answers a wrong-secret request on the host's loopback, and
+    // a pod reaches it through the Docker bridge gateway. A later timeout
+    // then names the network, not the handler.
+    let answered = http
+        .get(format!(
+            "http://127.0.0.1:{port}/webhook/forgejo/host-probe"
+        ))
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await
+        .context("the receiver answers no request even on the host's loopback")?;
+    eprintln!(
+        "    the receiver answers on the host ({})",
+        answered.status()
+    );
+    let reached = kube
+        .output(&[
+            "exec",
+            POSTGRES_POD,
+            "--",
+            "timeout",
+            "6",
+            "bash",
+            "-c",
+            &http_probe_script(&gateway, port, "/webhook/forgejo/pod-probe"),
+        ])
+        .context("a pod cannot reach the receiver through the Docker bridge gateway")?;
+    eprintln!(
+        "    the receiver answers from inside the cluster: {}",
+        reached.trim()
+    );
 
     register_push_hook(
         http,

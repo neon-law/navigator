@@ -488,6 +488,17 @@ pub(super) fn host_gateway(node_ip: &str) -> Option<String> {
     Some(format!("{}.{}.{}.1", octets[0], octets[1], octets[2]))
 }
 
+/// The receiver probe a pod runs over the host gateway: one raw HTTP
+/// request through bash's `/dev/tcp` (the image carries no curl), answered
+/// by any status line — a wrong-secret refusal is reachability proven.
+pub(super) fn http_probe_script(host: &str, port: u16, path: &str) -> String {
+    format!(
+        "exec 3<>/dev/tcp/{host}/{port} && \
+         printf 'GET {path} HTTP/1.1\\r\\nHost: {host}\\r\\nConnection: close\\r\\n\\r\\n' >&3 && \
+         head -n1 <&3"
+    )
+}
+
 /// The kubectl port-forward arguments for an in-cluster target: the target
 /// reference and remote port as separate arguments, with an empty local port
 /// so kubectl allocates a free one (the `up` phase may already hold the
@@ -548,6 +559,22 @@ mod tests {
             32
         );
         assert_ne!(Seed::generate(), generated, "each tier gets its own seed");
+    }
+
+    #[test]
+    fn the_receiver_probe_script_requests_one_url_over_dev_tcp() {
+        let script = http_probe_script("172.18.0.1", 42903, "/webhook/forgejo/probe");
+        assert!(
+            script.contains("exec 3<>/dev/tcp/172.18.0.1/42903"),
+            "{script}"
+        );
+        assert!(
+            script.contains("GET /webhook/forgejo/probe HTTP/1.1"),
+            "{script}"
+        );
+        assert!(script.contains("Host: 172.18.0.1"), "{script}");
+        assert!(script.contains(r"\r\n"), "{script}");
+        assert!(script.ends_with("head -n1 <&3"), "{script}");
     }
 
     #[test]
