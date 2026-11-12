@@ -25,6 +25,7 @@ mod smoke;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{bail, ensure, Context, Result};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -494,13 +495,16 @@ pub(super) const RECEIVER_SERVICE: &str = "forgejo-receiver";
 /// the receiver's Service, lives there.
 pub(super) const RECEIVER_NAMESPACE: &str = "navigator";
 
-/// The receiver's in-cluster Service and manual Endpoints: Forgejo dials
-/// the Service name, and kube-proxy NATs the delivery to the address the
-/// receiver listens on — the postgres pod hosting the smoke's receiver,
-/// whose reachability from other pods the tier already proves.
-pub(super) fn receiver_endpoints_manifest(endpoint_ip: &str, port: u16) -> String {
+/// The receiver's in-cluster Service and manual `EndpointSlice`: Forgejo
+/// dials the Service name, and kube-proxy delivers to the address the
+/// receiver listens on — the postgres pod hosting the smoke's receiver.
+/// The backend is a manual `EndpointSlice` because modern Kubernetes
+/// programs kube-proxy from `EndpointSlice` objects; a manual `Endpoints`
+/// object is deprecated and gets no backends, leaving the Service VIP
+/// blackholed.
+pub(super) fn receiver_service_manifest(endpoint_ip: &str, port: u16) -> String {
     format!(
-        "apiVersion: v1\nkind: Service\nmetadata:\n  name: {RECEIVER_SERVICE}\n  namespace: {RECEIVER_NAMESPACE}\nspec:\n  type: ClusterIP\n  ports:\n    - port: 80\n      targetPort: {port}\n---\napiVersion: v1\nkind: Endpoints\nmetadata:\n  name: {RECEIVER_SERVICE}\n  namespace: {RECEIVER_NAMESPACE}\nsubsets:\n  - addresses:\n      - ip: {endpoint_ip}\n    ports:\n      - port: {port}\n"
+        "apiVersion: v1\nkind: Service\nmetadata:\n  name: {RECEIVER_SERVICE}\n  namespace: {RECEIVER_NAMESPACE}\nspec:\n  type: ClusterIP\n  ports:\n    - port: 80\n      targetPort: {port}\n---\napiVersion: discovery.k8s.io/v1\nkind: EndpointSlice\nmetadata:\n  name: {RECEIVER_SERVICE}\n  namespace: {RECEIVER_NAMESPACE}\n  labels:\n    kubernetes.io/service-name: {RECEIVER_SERVICE}\naddressType: IPv4\nendpoints:\n  - addresses:\n      - {endpoint_ip}\nports:\n  - port: {port}\n    protocol: TCP\n"
     )
 }
 
@@ -510,9 +514,47 @@ pub(super) fn receiver_service_url() -> String {
     format!("http://{RECEIVER_SERVICE}.{RECEIVER_NAMESPACE}.svc.cluster.local")
 }
 
+/// The receiver rides the postgres pod, whose tier `NetworkPolicy` admits
+/// only port 5432 from labeled clients and denies all egress — so every
+/// dial to the receiver's port, probe and webhook delivery alike, would
+/// be dropped as non-5432 ingress, and the receiver could not reach the
+/// Forgejo API its analysis reads. Policies are additive: this smoke-owned
+/// supplement unions onto the tier's and opens exactly the receiver's
+/// paths — ingress to its port from the namespace's pods (the Forgejo
+/// delivery and the Service probe), egress to Forgejo's API and DNS —
+/// without touching the tier manifest.
+pub(super) fn receiver_network_policy_manifest() -> String {
+    format!(
+        "apiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata:\n  name: {RECEIVER_SERVICE}\n  namespace: {RECEIVER_NAMESPACE}\nspec:\n  podSelector:\n    matchLabels:\n      app: navigator-postgres\n  policyTypes:\n  - Ingress\n  - Egress\n  ingress:\n  - from:\n    - podSelector: {{}}\n    ports:\n    - protocol: TCP\n      port: {RECEIVER_PORT}\n  egress:\n  - to:\n    - podSelector:\n        matchLabels:\n          app: navigator-forgejo\n    ports:\n    - protocol: TCP\n      port: 3000\n  - to:\n    - namespaceSelector: {{}}\n    ports:\n    - protocol: UDP\n      port: 53\n    - protocol: TCP\n      port: 53\n"
+    )
+}
+
 /// The fixed port the in-pod receiver serves on: the pod's network
 /// namespace is private, so a fixed port never collides.
 pub(super) const RECEIVER_PORT: u16 = 41080;
+
+/// How long the Service probe waits for the Service to deliver before
+/// giving up: Endpoint programming after the Endpoints apply is normally
+/// sub-second, but a single six-second bet loses the whole CI cycle to a
+/// slow controller.
+pub(super) const SERVICE_PROBE_DEADLINE: Duration = Duration::from_secs(90);
+
+/// The Service probe's timeout message: a direct dial to the receiver on
+/// loopback splits a dead receiver from a broken route — a loopback answer
+/// indicts the probe's pod-to-self route (which the real delivery never
+/// rides), a silence indicts the receiver process.
+pub(super) fn service_probe_failure_message(direct_answer: Option<&str>) -> String {
+    match direct_answer {
+        Some(answer) => format!(
+            "the receiver still answers directly ({answer}) — the probe's \
+             pod-to-self Service route is the suspect; the real push \
+             delivery rides a peer pod's route and is the verdict"
+        ),
+        None => "the receiver no longer answers directly either — the \
+                 receiver process died, not the route"
+            .to_owned(),
+    }
+}
 
 /// Where the receiver's binary, config, log, and pid live inside the
 /// hosting pod's filesystem.
@@ -522,8 +564,11 @@ pub(super) const RECEIVER_LOG: &str = "/tmp/forgejo-receiver/receiver.log";
 pub(super) const RECEIVER_PID: &str = "/tmp/forgejo-receiver/receiver.pid";
 
 /// The receiver pod's in-cluster Forgejo API base: the analysis reads
-/// pushed changes over the cluster's own Service, in plain HTTP.
-pub(super) const RECEIVER_FORGE_URL: &str = "http://navigator-forgejo:3000";
+/// pushed changes over the cluster's own Service, in plain HTTP. The
+/// Service exposes port 3000 only — a portless URL would dial 80 and
+/// hang against the tier's egress policy instead of failing fast.
+pub(super) const RECEIVER_FORGE_URL: &str =
+    "http://navigator-forgejo.navigator.svc.cluster.local:3000";
 
 /// The pod command that (re)starts the receiver: any previous receiver dies
 /// first so re-runs are idempotent, the new one detaches with nohup so the
@@ -535,6 +580,14 @@ pub(super) fn receiver_start_script() -> String {
          nohup {RECEIVER_BINARY} dev forgejo smoke --receiver-config {RECEIVER_CONFIG} \
          >>{RECEIVER_LOG} 2>&1 & echo $! > {RECEIVER_PID}; echo started"
     )
+}
+
+/// The workspace root for a crate's manifest directory: the deploy crate
+/// sits directly under the workspace root, so one ancestor up holds the
+/// `target/` tree. Landing on a higher ancestor silently misses the
+/// prebuilt musl receiver and falls back to a binary the pod cannot run.
+pub(super) fn workspace_root_from(manifest_dir: &Path) -> Option<&Path> {
+    manifest_dir.ancestors().nth(1)
 }
 
 /// The kubectl port-forward arguments for an in-cluster target: the target
@@ -634,15 +687,40 @@ mod tests {
 
     #[test]
     fn the_receiver_manifest_publishes_the_gateway_endpoint() {
-        let manifest = receiver_endpoints_manifest("172.18.0.1", 42903);
+        let manifest = receiver_service_manifest("172.18.0.1", 42903);
         assert!(manifest.contains("name: forgejo-receiver"), "{manifest}");
         assert!(manifest.contains("namespace: navigator"), "{manifest}");
-        assert!(manifest.contains("ip: 172.18.0.1"), "{manifest}");
+        assert!(manifest.contains("discovery.k8s.io/v1"), "{manifest}");
+        assert!(manifest.contains("kind: EndpointSlice"), "{manifest}");
+        assert!(
+            manifest.contains("kubernetes.io/service-name: forgejo-receiver"),
+            "{manifest}"
+        );
+        assert!(manifest.contains("- 172.18.0.1"), "{manifest}");
         assert!(manifest.contains("port: 42903"), "{manifest}");
+        assert!(
+            !manifest.contains("kind: Endpoints\n"),
+            "a manual Endpoints object is deprecated and gets no backends: {manifest}"
+        );
         assert_eq!(
             receiver_service_url(),
             "http://forgejo-receiver.navigator.svc.cluster.local"
         );
+    }
+
+    #[test]
+    fn the_receiver_policy_opens_exactly_the_receiver_paths() {
+        let manifest = receiver_network_policy_manifest();
+        assert!(manifest.contains("name: forgejo-receiver"), "{manifest}");
+        assert!(manifest.contains("namespace: navigator"), "{manifest}");
+        // Ingress only to the receiver's port, from the namespace's pods.
+        assert!(manifest.contains("port: 41080"), "{manifest}");
+        assert!(manifest.contains("- podSelector: {}"), "{manifest}");
+        // Egress only to Forgejo's API and DNS.
+        assert!(manifest.contains("app: navigator-forgejo"), "{manifest}");
+        assert!(manifest.contains("port: 3000"), "{manifest}");
+        assert!(manifest.contains("namespaceSelector: {}"), "{manifest}");
+        assert!(manifest.contains("port: 53"), "{manifest}");
     }
 
     #[test]
@@ -843,6 +921,18 @@ mod tests {
     }
 
     #[test]
+    fn the_service_probe_failure_message_splits_dead_receiver_from_broken_path() {
+        let with_answer = service_probe_failure_message(Some("HTTP/1.1 405 Method Not Allowed"));
+        assert!(
+            with_answer.contains("still answers directly"),
+            "{with_answer}"
+        );
+        assert!(with_answer.contains("pod-to-self"), "{with_answer}");
+        let without = service_probe_failure_message(None);
+        assert!(without.contains("receiver process died"), "{without}");
+    }
+
+    #[test]
     fn the_receiver_start_script_detaches_and_records_its_pid() {
         let script = receiver_start_script();
         assert!(
@@ -870,6 +960,19 @@ mod tests {
         assert_eq!(
             local, ":5432",
             "an empty local port lets kubectl allocate one; the fixed lanes may already be held"
+        );
+    }
+
+    #[test]
+    fn the_workspace_root_is_one_ancestor_above_the_manifest_dir() {
+        let root = tempfile::tempdir().unwrap();
+        let manifest_dir = root.path().join("deploy");
+        std::fs::create_dir_all(&manifest_dir).unwrap();
+        assert_eq!(
+            workspace_root_from(&manifest_dir),
+            Some(root.path()),
+            "the prebuilt musl receiver lives under the root's target/; \
+             a higher ancestor misses it and stages an unrunnable binary"
         );
     }
 

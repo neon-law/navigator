@@ -47,11 +47,13 @@ use super::oidc::{self, Outcome};
 use super::{
     actions_context, assert_analyzed_push_receipt, forwarded_port, http_probe_script,
     parse_push_receipt_row, port_forward_args, random_hex, receipt_is_terminal,
-    receiver_endpoints_manifest, receiver_service_url, receiver_start_script, CookieJar,
-    PushReceiptRow, Seed, ADMISSION_CONFIG_MAP, ALLOWED_IDENTITY, ALLOWLIST_KEY, BOT_PUSH_WORKFLOW,
-    DATA_CLAIM, DENIED_IDENTITIES, GATE_WORKFLOW, POD, POSTGRES_POD, PUBLISH_WORKFLOW,
-    RECEIVER_BINARY, RECEIVER_CONFIG, RECEIVER_FORGE_URL, RECEIVER_LOG, RECEIVER_NAMESPACE,
-    RECEIVER_PID, RECEIVER_PORT, RECEIVER_SERVICE, SEED_SECRET, SMOKE_ALLOWLIST, STATEFULSET,
+    receiver_network_policy_manifest, receiver_service_manifest, receiver_service_url,
+    receiver_start_script, service_probe_failure_message, CookieJar, PushReceiptRow, Seed,
+    ADMISSION_CONFIG_MAP, ALLOWED_IDENTITY, ALLOWLIST_KEY, BOT_PUSH_WORKFLOW, DATA_CLAIM,
+    DENIED_IDENTITIES, GATE_WORKFLOW, POD, POSTGRES_POD, PUBLISH_WORKFLOW, RECEIVER_BINARY,
+    RECEIVER_CONFIG, RECEIVER_FORGE_URL, RECEIVER_LOG, RECEIVER_NAMESPACE, RECEIVER_PID,
+    RECEIVER_PORT, RECEIVER_SERVICE, SEED_SECRET, SERVICE_PROBE_DEADLINE, SMOKE_ALLOWLIST,
+    STATEFULSET,
 };
 
 /// The allowed identity's Forgejo user name (`USERNAME = email` keeps the
@@ -135,13 +137,14 @@ pub(in crate::devx) fn smoke(
     cfg: &KindConfig,
     receiver_config: Option<&std::path::Path>,
 ) -> Result<()> {
-    super::super::require_tools(&["kubectl", "git", "gzip"])?;
     // The in-pod receiver mode: the hosting pod runs this same binary with
     // a config file, serving the push webhook where Forgejo can reach it.
-    // It runs until the smoke kills it.
+    // It runs until the smoke kills it. It serves HTTP only — no kubectl,
+    // git, or gzip on its PATH — so it must branch before the tool check.
     if let Some(config_path) = receiver_config {
         return serve_receiver_mode(config_path);
     }
+    super::super::require_tools(&["kubectl", "git", "gzip"])?;
     // The receiver's branches trace, and a stuck handler is otherwise
     // undiagnosable from CI's log alone — a subscriber makes every
     // verification and consumption branch visible in the run output.
@@ -1816,18 +1819,28 @@ async fn push_webhook_proof(
         }
     }
 
-    // The Endpoints pin the hosting pod's address — the same pod-to-pod
-    // path Forgejo's own database traffic rides. The ClusterIP is private,
-    // which the KIND app.ini's ALLOWED_HOST_LIST already permits.
+    // The EndpointSlice pins the hosting pod's address behind a stable
+    // ClusterIP — the same pod-to-pod path Forgejo's own database traffic
+    // rides. The ClusterIP is private, which the KIND app.ini's
+    // ALLOWED_HOST_LIST already permits.
     let pod_ip = kube
         .output(&["get", "pod", POSTGRES_POD, "-o", "jsonpath={.status.podIP}"])?
         .trim()
         .to_owned();
-    let manifest = receiver_endpoints_manifest(&pod_ip, RECEIVER_PORT);
+    kube.apply(&receiver_network_policy_manifest())
+        .context("open the receiver's port through the tier NetworkPolicy")?;
+    let manifest = receiver_service_manifest(&pod_ip, RECEIVER_PORT);
     kube.apply(&manifest)
         .context("publish the receiver as an in-cluster Service")?;
-    let relayed = kube
-        .output(&[
+    // The Service path is what Forgejo's webhook delivery rides. Give the
+    // Endpoints programming a deadline instead of a single six-second bet,
+    // and on a timeout dial the receiver directly: a loopback answer
+    // indicts the Service path, a silence indicts the receiver process.
+    let service_host = format!("{RECEIVER_SERVICE}.{RECEIVER_NAMESPACE}.svc.cluster.local");
+    let service_probe = http_probe_script(&service_host, 80, "/webhook/forgejo/pod-probe");
+    let deadline = Instant::now() + SERVICE_PROBE_DEADLINE;
+    loop {
+        match kube.output(&[
             "exec",
             POSTGRES_POD,
             "--",
@@ -1835,17 +1848,29 @@ async fn push_webhook_proof(
             "6",
             "bash",
             "-c",
-            &http_probe_script(
-                &format!("{RECEIVER_SERVICE}.{RECEIVER_NAMESPACE}.svc.cluster.local"),
-                80,
-                "/webhook/forgejo/pod-probe",
-            ),
-        ])
-        .context("the receiver Service does not deliver to the in-pod receiver")?;
-    eprintln!(
-        "    the receiver answers through the Service: {}",
-        relayed.trim()
-    );
+            &service_probe,
+        ]) {
+            Ok(answered) => {
+                eprintln!(
+                    "    the receiver answers through the Service: {}",
+                    answered.trim()
+                );
+                break;
+            }
+            Err(_) if Instant::now() < deadline => {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+            Err(_) => {
+                let direct = kube.output(&["exec", POSTGRES_POD, "--", "bash", "-c", &probe]);
+                let direct = direct.ok().map(|s| s.trim().to_owned());
+                eprintln!(
+                    "    the receiver Service probe timed out ({})",
+                    service_probe_failure_message(direct.as_deref())
+                );
+                break;
+            }
+        }
+    }
 
     register_push_hook(
         http,
@@ -1881,9 +1906,11 @@ async fn push_webhook_proof(
 /// binary — which on a macOS host fails the pod's readiness gate by design.
 fn stage_receiver_binary() -> Result<ReceiverStaging> {
     let dir = tempfile::tempdir().context("create the receiver staging directory")?;
-    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
+    // The manifest dir is <workspace-root>/deploy: one ancestor up is the
+    // root that holds target/receiver/. Landing on the parent would miss
+    // the prebuilt musl binary and silently stage the smoke's own
+    // glibc-linked binary, which the Debian pod cannot execute.
+    let workspace_root = super::workspace_root_from(Path::new(env!("CARGO_MANIFEST_DIR")))
         .context("locate the workspace root")?
         .to_path_buf();
     let exe = super::receiver_binary_source(
