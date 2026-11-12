@@ -37,7 +37,7 @@ use std::sync::Arc;
 
 use cloud::StorageService;
 
-use crate::palette;
+use cli::palette;
 
 /// The render profile that selects this mode: `output: form`, or the
 /// `kind: filing` default (`Kind::Filing`'s `default_output`).

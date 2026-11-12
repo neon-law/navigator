@@ -93,8 +93,9 @@ cannot decay the way the old seven-line stub did.
   for the PDF and Word projections of a pleading Template.
 - [`soffice-engine-recommendation.md`](soffice-engine-recommendation.md) — the DOCX→PDF engine decision (LAW-313):
   Typst stays the only PDF backend; LibreOffice remains an on-demand evaluation tool, with the reversal condition.
-- [`soffice-fidelity-drift-report.md`](soffice-fidelity-drift-report.md) — the drift report `scripts/fidelity_harness.py`
-  generated, comparing Typst PDFs with LibreOffice-converted DOCX PDFs across the pleading and letter fixtures.
+- [`soffice-fidelity-drift-report.md`](soffice-fidelity-drift-report.md) — the drift
+  report `scripts/fidelity_harness.py` generated, comparing Typst PDFs with LibreOffice-converted DOCX PDFs across the
+  pleading and letter fixtures.
 
 ## Project repositories and Matter Pages
 

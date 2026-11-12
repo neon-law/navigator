@@ -151,7 +151,7 @@ fn stage_workspace(template: &str) -> (TempDir, PathBuf) {
 /// flag — the version's `--answer` and, on the redline run, the previous
 /// document and author.
 fn render(template: &Path, out: &Path, extra: &[&str]) -> assert_cmd::assert::Assert {
-    Command::cargo_bin("navigator")
+    Command::cargo_bin("navigator-deploy")
         .expect("navigator binary")
         .current_dir(template.parent().expect("template parent"))
         .args([
@@ -279,7 +279,7 @@ fn the_import_verb_refuses_a_redlined_document() {
     )
     .success();
 
-    Command::cargo_bin("navigator")
+    Command::cargo_bin("navigator-deploy")
         .expect("navigator binary")
         .current_dir(template.parent().expect("template parent"))
         .args([
@@ -306,7 +306,7 @@ fn an_unattributable_redline_is_refused() {
     let v1 = root.path().join("v1.docx");
     let redlined = root.path().join("redline.docx");
 
-    Command::cargo_bin("navigator")
+    Command::cargo_bin("navigator-deploy")
         .expect("navigator binary")
         .current_dir(template.parent().expect("template parent"))
         .args([
@@ -322,7 +322,7 @@ fn an_unattributable_redline_is_refused() {
         .assert()
         .success();
 
-    Command::cargo_bin("navigator")
+    Command::cargo_bin("navigator-deploy")
         .expect("navigator binary")
         .current_dir(template.parent().expect("template parent"))
         .args([
