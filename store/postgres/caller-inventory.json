@@ -12236,6 +12236,7 @@
       "deploy/src/devx/firm_certificate_roll.rs",
       "deploy/src/devx/forgejo/logs.rs",
       "deploy/src/devx/forgejo/smoke.rs",
+      "deploy/src/devx/gcp/access.rs",
       "deploy/src/devx/gcp/artifact_registry.rs",
       "deploy/src/devx/gcp/auth.rs",
       "deploy/src/devx/gcp/buckets.rs",
