@@ -62,6 +62,29 @@ impl F109OutputFormat {
         "resume",
     ];
 
+    /// The kinds that speak in a **party's own voice** (LAW-340): a
+    /// declaration or affidavit is testimony the client gives, not
+    /// correspondence the firm sends, so the firm's letterhead must never
+    /// frame it. [`Self::PARTY_VOICE_OUTPUTS`] is the per-kind slice of
+    /// [`Self::VALID`] these kinds may declare.
+    pub const PARTY_VOICE_KINDS: &[&str] = &["declaration", "affidavit"];
+
+    /// The render profiles a party-voice kind may declare: [`Self::VALID`]
+    /// minus `letter`. Everything else the closed set admits still is —
+    /// a declaration may fill a government form (`form`), render as court
+    /// paper (`pleading`), or take an unbranded letter geometry
+    /// (`client_letter`) — but the firm letterhead never frames a party's
+    /// testimony, and a refusal (an error, not a warning) is what an
+    /// attempt produces.
+    pub const PARTY_VOICE_OUTPUTS: &[&str] = &[
+        "client_letter",
+        "contract",
+        "agreement",
+        "pleading",
+        "form",
+        "resume",
+    ];
+
     /// Every render profile with a one-sentence description of its frame,
     /// `plain` (the implicit default, never declarable) included. The
     /// `navigator notation kinds` listing and `notation pdf --help` read
@@ -152,6 +175,20 @@ impl Rule for F109OutputFormat {
             return vec![violation(message)];
         }
 
+        // The per-kind slice of the closed set: a party-voice kind is the
+        // party's testimony, so `output: letter` — the firm's own
+        // letterhead over the party's words — is a refusal naming what the
+        // kind may declare, never a warning (LAW-340).
+        if let Some(kind) = frontmatter::field(fm, "kind") {
+            if Self::PARTY_VOICE_KINDS.contains(&kind.as_str()) && value == "letter" {
+                return vec![violation(format!(
+                    "A `kind: {kind}` speaks in the party's own voice and never renders on the \
+                     firm's letterhead — with this kind, `output:` accepts one of: {}{PLAIN_HINT}",
+                    Self::PARTY_VOICE_OUTPUTS.join(", ")
+                ))];
+            }
+        }
+
         // Require a companion key, distinguishing a missing key from a
         // present-but-empty one so the author sees the accurate message
         // (mirroring the empty/missing split on `output:` above).
@@ -202,6 +239,63 @@ mod tests {
         let f = file("---\ntitle: T\nkind: letter\noutput: client_letter\n---\n");
         let v = F109OutputFormat.lint(&f);
         assert!(v.is_empty(), "{v:?}");
+    }
+
+    #[test]
+    fn refuses_letter_output_on_a_party_voice_kind() {
+        // LAW-340: the firm's letterhead must never frame a party's
+        // testimony. The refusal is an error naming what the kind may
+        // declare, never a warning.
+        for kind in F109OutputFormat::PARTY_VOICE_KINDS {
+            let f = file(&format!(
+                "---\ntitle: T\nkind: {kind}\noutput: letter\n---\n"
+            ));
+            let v = F109OutputFormat.lint(&f);
+            assert_eq!(v.len(), 1, "`{kind}` + letter: {v:?}");
+            assert_eq!(v[0].code, "N109");
+            assert!(v[0].message.contains(kind), "{v:?}");
+            assert!(v[0].message.contains("letterhead"), "{v:?}");
+            // The message names the outputs this kind may declare instead.
+            for valid in F109OutputFormat::PARTY_VOICE_OUTPUTS {
+                assert!(
+                    v[0].message.contains(valid),
+                    "{:?} misses {valid}",
+                    v[0].message
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_party_voice_kind_may_declare_any_other_profile() {
+        // The letterhead refusal is the only per-kind cut: everything else
+        // the closed set admits stays open, and omitting `output:` (the
+        // plain default) is untouched. `form` rides with its companion
+        // keys, as it does for any kind.
+        for output in F109OutputFormat::PARTY_VOICE_OUTPUTS {
+            let companions = if *output == "form" {
+                "\nform: nv__llc_formation\norigin_url: https://www.nvsos.gov/forms"
+            } else {
+                ""
+            };
+            let f = file(&format!(
+                "---\ntitle: T\nkind: declaration\noutput: {output}{companions}\n---\n"
+            ));
+            assert!(
+                F109OutputFormat.lint(&f).is_empty(),
+                "`{output}` must stay valid on a declaration"
+            );
+        }
+        let plain = file("---\ntitle: T\nkind: affidavit\n---\n");
+        assert!(F109OutputFormat.lint(&plain).is_empty());
+    }
+
+    #[test]
+    fn letter_output_still_validates_on_a_firm_voice_kind() {
+        // The restriction is per-kind, not global: the firm's own letters
+        // keep the letterhead.
+        let f = file("---\ntitle: T\nkind: letter\noutput: letter\n---\n");
+        assert!(F109OutputFormat.lint(&f).is_empty());
     }
 
     fn file(body: &str) -> SourceFile {
