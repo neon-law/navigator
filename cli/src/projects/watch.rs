@@ -73,7 +73,7 @@ fn checkout_preview(dir: &Path, projects: Vec<Project>) -> Result<Vec<CheckoutPr
         .into_iter()
         .filter(|p| matches!(p.status.as_str(), "open" | "pitch"))
     {
-        let checkout = if !cloud::workspace::is_valid_slug(&project.code) {
+        let checkout = if !model::workspace::is_valid_slug(&project.code) {
             CheckoutState::NeedsAttention
         } else if project.repository_url.as_deref().is_none_or(str::is_empty) {
             CheckoutState::RepositoryUnavailable
