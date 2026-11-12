@@ -1694,7 +1694,6 @@
       "store/src/firms.rs",
       "store/src/inbox.rs",
       "store/src/leads.rs",
-      "store/src/notations.rs",
       "store/src/plan_intake.rs",
       "store/src/postgres/inbox.rs",
       "store/src/postgres/inbox_tests.rs",
