@@ -716,9 +716,9 @@ gate **every** Project repository runs, downloads `navigator-<version>-<platform
 (see below). If the archive jobs stop running, Project CI breaks everywhere with a download 404 and nothing in this
 repository goes red — which is exactly the kind of failure worth stating in prose, because no test here will catch it.
 
-**The Linux archive job runs on `ubuntu-24.04`; the macOS job runs on `macos-latest`.** The `navigator-deploy` archives
-run on larger runners, `blacksmith-8vcpu-ubuntu-2404` and `macos-latest-xlarge`, because compiling `portal` runs out of
-memory on the standard ones. ENG-1333 tracks their cost.
+**The Linux archive job runs on `ubuntu-24.04`; the macOS job runs on `macos-latest`.** The `hudson` archives run on
+larger runners, `blacksmith-8vcpu-ubuntu-2404` and `macos-latest-xlarge`, because compiling `portal` runs out of memory
+on the standard ones. ENG-1333 tracks their cost.
 
 ### The Homebrew tap
 

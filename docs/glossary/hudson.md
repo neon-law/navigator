@@ -1,6 +1,6 @@
 ---
 title: "Hudson"
-description: "Hudson is Navigator's command-line tool for operating deployments and running the local development stack."
+description: "Hudson is Navigator's command-line tool for managing deployments and running the local development stack."
 ---
 
 Navigator's **operator CLI**: the `hudson` binary, built from the `hudson` package under `deploy/`. It holds the verbs a
