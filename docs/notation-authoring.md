@@ -463,15 +463,17 @@ matter:
 ```
 
 Dates are `YYYY-MM-DD` and print as a court writes them (`February 2, 2026`); `trial_on` is optional and prints "None
-set". The counsel block prints as name and bar number (`SBN` for California, `<jurisdiction> Bar No.` elsewhere), firm,
-address lines, telephone, email, and "Attorneys for …", from line 1 (one inch down) in the left 58% of the page. When no
-lawyer has appeared, set `pro_per: true`: the bar fields are not required and the last line reads "…, in pro per". The
-court prints centred from line 8 (at or below 3⅓ inches), per CRC 2.111; the right of the counsel block stays clear for
-the clerk through line 7. Parties print in the caption's left cell, each role once with `v.` between sides; the right
-cell runs case number, department, judge, the filing's title, any hearing, then the action-filed and trial dates.
-Counsel and caption lines are single-spaced, then padded to whole grid lines so the body after them starts on a numbered
-line. `navigator project gate` refuses an incomplete `matter:` (`Y019`), naming each missing field as `matter.<path>`,
-and `notation pdf` and `notation word` refuse the same way.
+set". `judicial_officer`, `department`, and `filed_on` are optional: a court that assigns no judge or department prints
+no line for it, and a blank `filed_on` drops the action-filed and trial lines. The counsel block prints as name and bar
+number (`SBN` for California, `<jurisdiction> Bar No.` elsewhere), firm, address lines, telephone, email, and "Attorneys
+for …", from line 1 (one inch down) in the left 58% of the page. When no lawyer has appeared, set `pro_per: true`: the
+bar fields are not required and the last line reads "…, in pro per". The court prints centred from line 8 (at or below
+3⅓ inches), per CRC 2.111; the right of the counsel block stays clear for the clerk through line 7. Parties print in the
+caption's left cell, each role once with `v.` between sides; the right cell runs case number, department, judge, the
+filing's title, any hearing, then the action-filed and trial dates. Counsel and caption lines are single-spaced, then
+padded to whole grid lines so the body after them starts on a numbered line. `navigator project gate` warns on an
+incomplete `matter:` (`Y019`), naming each missing field as `matter.<path>`, and `notation pdf` and `notation word`
+refuse the same way.
 
 **The filing** is what differs per notation, in its frontmatter: `caption_title` (the full title in the right cell) and
 `footer_title` (the short title the footer prints) are required; `hearing_date` (`YYYY-MM-DD`), `hearing_time`, and

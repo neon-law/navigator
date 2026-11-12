@@ -66,14 +66,16 @@ pub struct Matter {
     pub court: Vec<String>,
     #[serde(default)]
     pub case_number: String,
+    /// Blank when the court assigns none: the caption leaves the line out.
     #[serde(default)]
     pub judicial_officer: String,
+    /// Blank when the court assigns none: the caption leaves the line out.
     #[serde(default)]
     pub department: String,
-    /// `YYYY-MM-DD`.
+    /// `YYYY-MM-DD`; blank leaves the action-filed and trial lines out.
     #[serde(default)]
     pub filed_on: String,
-    /// `YYYY-MM-DD`; absent prints "None set".
+    /// `YYYY-MM-DD`; absent prints "None set" under a filed date.
     #[serde(default)]
     pub trial_on: Option<String>,
     #[serde(default)]
@@ -208,9 +210,10 @@ impl Matter {
             "court",
         );
         need(!blank(&self.case_number), "case_number");
-        need(!blank(&self.judicial_officer), "judicial_officer");
-        need(!blank(&self.department), "department");
-        need(display_date(&self.filed_on).is_some(), "filed_on");
+        need(
+            blank(&self.filed_on) || display_date(&self.filed_on).is_some(),
+            "filed_on",
+        );
         if let Some(trial) = &self.trial_on {
             need(display_date(trial).is_some(), "trial_on");
         }
@@ -325,17 +328,21 @@ fn party_lines(parties: &[Party]) -> Vec<String> {
 ///
 /// The caption's `footer` is the filing's short title. The right cell runs
 /// case number, department, judicial officer, the filing's title, any
-/// hearing, then the action-filed and trial dates. A hearing prints when
-/// any of its three fields is declared, with each unset one a blank fill
-/// line; a filing declaring none prints no hearing lines.
+/// hearing, then the action-filed and trial dates. A department or judicial
+/// officer the matter leaves blank prints no line, and a blank filed date
+/// prints neither date line: many courts never assign the first two. A
+/// hearing prints when any of its three fields is declared, with each unset
+/// one a blank fill line; a filing declaring none prints no hearing lines.
 #[must_use]
 pub fn compose(matter: &Matter, filing: &Filing) -> Caption {
-    let mut case = vec![
-        format!("Case No. {}", matter.case_number),
-        format!("Dept. {}", assignment(&matter.department)),
-        format!("Judge: {}", assignment(&matter.judicial_officer)),
-        filing.caption_title.clone(),
-    ];
+    let mut case = vec![format!("Case No. {}", matter.case_number)];
+    if !blank(&matter.department) {
+        case.push(format!("Dept. {}", assignment(&matter.department)));
+    }
+    if !blank(&matter.judicial_officer) {
+        case.push(format!("Judge: {}", assignment(&matter.judicial_officer)));
+    }
+    case.push(filing.caption_title.clone());
     if filing.has_hearing() {
         let shown = |value: &Option<String>| value.clone().unwrap_or_else(|| FILL.to_string());
         let date = filing
@@ -347,18 +354,17 @@ pub fn compose(matter: &Matter, filing: &Filing) -> Caption {
         case.push(format!("Time: {}", shown(&filing.hearing_time)));
         case.push(format!("Reservation ID: {}", shown(&filing.reservation_id)));
     }
-    case.push(format!(
-        "Action Filed: {}",
-        display_date(&matter.filed_on).unwrap_or_default()
-    ));
-    case.push(format!(
-        "Trial Date: {}",
-        matter
-            .trial_on
-            .as_deref()
-            .and_then(display_date)
-            .unwrap_or_else(|| "None set".to_string())
-    ));
+    if let Some(filed) = display_date(&matter.filed_on) {
+        case.push(format!("Action Filed: {filed}"));
+        case.push(format!(
+            "Trial Date: {}",
+            matter
+                .trial_on
+                .as_deref()
+                .and_then(display_date)
+                .unwrap_or_else(|| "None set".to_string())
+        ));
+    }
     Caption {
         counsel: counsel_lines(&matter.counsel),
         court: matter.court.clone(),
@@ -431,8 +437,30 @@ mod tests {
         let caption = compose(&m, &filing());
         assert!(caption.case.contains(&"Dept. To be assigned".to_string()));
         assert!(caption.case.contains(&"Judge: To be assigned".to_string()));
+    }
+
+    /// LAW-361: a Washington family case may never get a judicial officer or
+    /// department, and counsel appearing in an existing case may not yet know
+    /// the filed date. Blank, they gate clean and the caption leaves them out.
+    #[test]
+    fn an_unassigned_court_leaves_department_judge_and_dates_out_of_the_caption() {
+        let mut m = matter();
         m.department.clear();
-        assert_eq!(m.missing(), vec!["matter.department"]);
+        m.judicial_officer = " ".into();
+        m.filed_on.clear();
+        assert!(m.missing().is_empty(), "{:?}", m.missing());
+        let caption = compose(&m, &filing());
+        assert_eq!(caption.case, ["Case No. 00CV000000", "NOTICE"]);
+        m.filed_on = "2026-02-02".into();
+        assert_eq!(
+            compose(&m, &filing()).case,
+            [
+                "Case No. 00CV000000",
+                "NOTICE",
+                "Action Filed: February 2, 2026",
+                "Trial Date: None set",
+            ]
+        );
     }
 
     #[test]

@@ -431,7 +431,7 @@ literally and the columns disappear.
 | `Y017` | Error | Onboarding/offboarding templates cannot name Neon Law as the Firm's trade name or party. | No |
 | `Y018` | Error | California onboarding/offboarding templates cannot name an LLC as the law firm. | No |
 | `Y027` | Warning | A local gate rewrites a compiled legal name; a letter-family draft keeps its prose. | Locally |
-| `Y019` | Error | A `matter:` block and each pleading's `caption_title` and `footer_title` must be complete. | No |
+| `Y019` | Error | A `matter:` block must parse; an incomplete one, or a pleading's missing titles, warns. | No |
 | `Y020` | Error | A Project manifest `dockets:` must be a list of non-empty case numbers. | No |
 | `Y021` | Error | A Project manifest `pages:` must be a list of entries with unique, URL-safe slugs. | No |
 | `Y023` | Warning | A section in `pages:` reads a data source the live matter has no rows of. | No |
@@ -467,15 +467,17 @@ Box](notation-authoring.md#signer-boxes): a state declared `completed_by: signer
 the render draws as an empty rule. The render's own `<!-- signer-box -->` marker typed into a template is refused the
 same way as a `____`.
 
-`Y019` reads the `matter:` block of `navigator.yaml` (court, case number, judicial officer, department, filing date,
-parties, and counsel) and, for each `kind: pleading` template, its `caption_title` and `footer_title`. A refusal names
-each missing field as `matter.<path>` or by its frontmatter key; `notation pdf` and `notation word` refuse the same way.
-See [Pleading paper](notation-authoring.md#pleading-paper). `navigator project sync` also stores the block with the
-Project as its [Matter Caption](glossary/matter-caption.md), which the `case_caption` and `party_roster` sections prefer
-over the stored case row. Until the court assigns a department or judicial officer, declare `department: pending` and
-`judicial_officer: pending`: `Y019` accepts it and the caption prints "To be assigned", so a draft gates and previews
-without a guessed name. Final `notation pdf` and `notation word` exports refuse either pending assignment; use
-`--preview` to inspect a draft. Record the court's assignments before final export and filing. A manifest with no
+`Y019` reads the `matter:` block of `navigator.yaml` (court, case number, parties, counsel, and, once the court assigns
+them, the judicial officer, department, and filing date) and, for each `kind: pleading` template, its `caption_title`
+and `footer_title`. A block that does not parse is an error. A missing field is a warning that names it as
+`matter.<path>` or by its frontmatter key, because a pleading in the repository is a draft; `notation pdf` and `notation
+word` refuse the same gap at the final render. See [Pleading paper](notation-authoring.md#pleading-paper). `navigator
+project sync` also stores the block with the Project as its [Matter Caption](glossary/matter-caption.md), which the
+`case_caption` and `party_roster` sections prefer over the stored case row. Many courts never assign a department or
+judicial officer: leave either out and the caption prints no line for it, and leave out `filed_on` until counsel has it,
+which drops the action-filed and trial lines. When an assignment is expected but not yet made, declare `department:
+pending` or `judicial_officer: pending`: the caption prints "To be assigned", and final `notation pdf` and `notation
+word` exports refuse it until the court's assignment is recorded; use `--preview` to inspect a draft. A manifest with no
 `matter:` key leaves the stored caption alone; `matter: {}` clears it.
 
 `Y017` applies only to `kind: onboarding` and `kind: offboarding` templates. It rejects wording that identifies Neon Law
