@@ -26,9 +26,9 @@ mod smoke;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail, ensure};
-use base64::Engine;
+use anyhow::{bail, ensure, Context, Result};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
 use sha2::{Digest, Sha256};
 
 pub(super) use cluster::up;
@@ -718,8 +718,8 @@ mod tests {
     /// the context `main`'s branch protection requires.
     #[test]
     fn the_scaffolded_project_gate_posts_the_required_context() {
-        use project_scaffold::FORGEJO_REQUIRED_CHECK;
         use project_scaffold::forgejo_gate_workflow;
+        use project_scaffold::FORGEJO_REQUIRED_CHECK;
         let workflow = forgejo_gate_workflow();
         assert_eq!(
             actions_context(&workflow, "pull_request").unwrap(),
@@ -768,7 +768,8 @@ mod tests {
 
     #[test]
     fn align_issuer_moves_every_fixture_issuer_to_the_tier_port() {
-        let rendered = "discovery_url: http://localhost:30080/auth/v1/.well-known/openid-configuration\n\
+        let rendered =
+            "discovery_url: http://localhost:30080/auth/v1/.well-known/openid-configuration\n\
                         listen 127.0.0.1:30080;\nnodePort: 30080\n";
         let aligned = align_issuer(rendered, 20_445);
         assert!(aligned.contains("http://localhost:20445/auth/v1/"));
@@ -921,19 +922,15 @@ mod tests {
 
         let skipped = parse_push_receipt_row("skipped|||||").unwrap();
         assert!(receipt_is_terminal(&skipped.status));
-        assert!(
-            assert_analyzed_push_receipt(&skipped, "qsmoke", "x")
-                .unwrap_err()
-                .contains("skipped")
-        );
+        assert!(assert_analyzed_push_receipt(&skipped, "qsmoke", "x")
+            .unwrap_err()
+            .contains("skipped"));
 
         let pending = parse_push_receipt_row("pending|||||").unwrap();
         assert!(!receipt_is_terminal(&pending.status));
-        assert!(
-            assert_analyzed_push_receipt(&pending, "qsmoke", "x")
-                .unwrap_err()
-                .contains("never finished consumption")
-        );
+        assert!(assert_analyzed_push_receipt(&pending, "qsmoke", "x")
+            .unwrap_err()
+            .contains("never finished consumption"));
     }
 
     #[test]
@@ -946,11 +943,13 @@ mod tests {
         );
         let wrong_description =
             parse_push_receipt_row("delivered|qsmoke|Forgejo Smoke|Amend nothing|false|").unwrap();
-        assert!(
-            assert_analyzed_push_receipt(&wrong_description, "qsmoke", "Amend the fee schedule")
-                .unwrap_err()
-                .contains("analyzed description")
-        );
+        assert!(assert_analyzed_push_receipt(
+            &wrong_description,
+            "qsmoke",
+            "Amend the fee schedule"
+        )
+        .unwrap_err()
+        .contains("analyzed description"));
         let conflicted =
             parse_push_receipt_row("delivered|qsmoke|Forgejo Smoke|Amend the fee schedule|true|")
                 .unwrap();
@@ -963,11 +962,9 @@ mod tests {
 
     #[test]
     fn a_row_that_is_not_six_fields_is_refused() {
-        assert!(
-            parse_push_receipt_row("delivered|qsmoke")
-                .unwrap_err()
-                .contains("not six pipe-separated fields")
-        );
+        assert!(parse_push_receipt_row("delivered|qsmoke")
+            .unwrap_err()
+            .contains("not six pipe-separated fields"));
         // The failure detail is last and may itself carry pipes.
         let detailed = parse_push_receipt_row("failed|qsmoke|||false|one|two").unwrap();
         assert_eq!(detailed.failure_detail, "one|two");
@@ -982,11 +979,9 @@ mod tests {
             .nth(1)
             .and_then(|rest| rest.split("\n[").next())
             .unwrap();
-        assert!(
-            security
-                .lines()
-                .any(|line| line == "GLOBAL_TWO_FACTOR_REQUIREMENT = none")
-        );
+        assert!(security
+            .lines()
+            .any(|line| line == "GLOBAL_TWO_FACTOR_REQUIREMENT = none"));
         let identity =
             std::fs::read_to_string(workspace().join("k8s/forgejo/identity.sh")).unwrap();
         assert!(

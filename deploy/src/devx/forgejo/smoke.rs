@@ -38,20 +38,20 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{bail, ensure, Context, Result};
 use sqlx::postgres::{PgConnectOptions, PgSslMode};
 
 use super::super::KindConfig;
 use super::cluster::Kube;
 use super::oidc::{self, Outcome};
 use super::{
-    ADMISSION_CONFIG_MAP, ALLOWED_IDENTITY, ALLOWLIST_KEY, BOT_PUSH_WORKFLOW, CookieJar,
+    actions_context, assert_analyzed_push_receipt, forwarded_port, http_probe_script,
+    parse_push_receipt_row, port_forward_args, random_hex, receipt_is_terminal,
+    receiver_endpoints_manifest, receiver_service_url, receiver_start_script, CookieJar,
+    PushReceiptRow, Seed, ADMISSION_CONFIG_MAP, ALLOWED_IDENTITY, ALLOWLIST_KEY, BOT_PUSH_WORKFLOW,
     DATA_CLAIM, DENIED_IDENTITIES, GATE_WORKFLOW, POD, POSTGRES_POD, PUBLISH_WORKFLOW,
-    PushReceiptRow, RECEIVER_BINARY, RECEIVER_CONFIG, RECEIVER_FORGE_URL, RECEIVER_LOG,
-    RECEIVER_NAMESPACE, RECEIVER_PID, RECEIVER_PORT, RECEIVER_SERVICE, SEED_SECRET,
-    SMOKE_ALLOWLIST, STATEFULSET, Seed, actions_context, assert_analyzed_push_receipt,
-    forwarded_port, http_probe_script, parse_push_receipt_row, port_forward_args, random_hex,
-    receipt_is_terminal, receiver_endpoints_manifest, receiver_service_url, receiver_start_script,
+    RECEIVER_BINARY, RECEIVER_CONFIG, RECEIVER_FORGE_URL, RECEIVER_LOG, RECEIVER_NAMESPACE,
+    RECEIVER_PID, RECEIVER_PORT, RECEIVER_SERVICE, SEED_SECRET, SMOKE_ALLOWLIST, STATEFULSET,
 };
 
 /// The allowed identity's Forgejo user name (`USERNAME = email` keeps the
@@ -881,8 +881,8 @@ async fn squash_merge_proofs(
     forge: &str,
     token: &str,
 ) -> Result<()> {
+    use super::policy::scheduler::{schedule_open, PullRequestOutcome};
     use super::policy::Forgejo;
-    use super::policy::scheduler::{PullRequestOutcome, schedule_open};
 
     let repository = format!("{OWNER}/{MERGE_REPOSITORY}");
     let repo_api = format!("{forge}/api/v1/repos/{repository}");
