@@ -227,7 +227,7 @@ store = { path = "store" }
 # compiler-maintained, so a variant added without a matching token is a
 # build failure rather than a silently narrowed questionnaire vocabulary.
 strum = { version = "0.28", features = ["derive"] }
-surrealdb = { version = "3.2.3", default-features = false, features = ["protocol-http", "protocol-ws", "rustls"] }
+surrealdb = { version = "4.0.1", default-features = false, features = ["protocol-http", "protocol-ws", "rustls"] }
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "net", "process"] }
 tower = { version = "0.5", features = ["util"] }
