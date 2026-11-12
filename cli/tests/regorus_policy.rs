@@ -507,9 +507,16 @@ fn regorus_matches_every_checked_in_policy_decision() {
     //   /app/api/project-private-terms-reconciliation: Admin and Owner
     //   admitted; Lawyer, Clerk, Client, and anonymous denied.
     // 676 + 6 = 682.
+    //
+    // + 3 for the CLI's letterhead-row door (LAW-341), GET
+    //   /app/api/brands/{key}/letterhead: Lawyer and above admitted via the
+    //   tier rule and the Owner/Admin bypass; Clerk, client, and anonymous
+    //   denied; and the read-only, exact-shape boundary — a POST on the
+    //   path, a bare key read, and a deeper path denied even to Lawyer.
+    // 682 + 3 = 685.
     assert_eq!(
         test_names.len(),
-        682,
+        685,
         "the policy decision inventory changed; review every new or removed rule"
     );
 

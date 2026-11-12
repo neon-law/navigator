@@ -906,6 +906,22 @@ route_allow if {
     is_admin(input.session)
 }
 
+# The CLI's `notation` render reads a Brand's letterhead row through this
+# door with the lawyer's `site login` bearer (LAW-341): presentation data
+# the public site already displays, so the tier is Lawyer and above — the
+# handler owns no tenant question, because a Brand's letterhead is
+# deployment-wide. Named explicitly rather than resting on the Owner/Admin
+# bypass, the same convention every other `/app/api` read follows.
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "api"
+    input.path[2] == "brands"
+    input.path[4] == "letterhead"
+    count(input.path) == 5
+    input.method == "GET"
+    is_lawyer(input.session)
+}
+
 # The native create-brand form and the logo/font upload doors it links to
 # (ENG-586) already pass through the general Owner/Admin bypass under
 # `/app/admin`. Naming them here keeps every brand-write path in one place
