@@ -49,6 +49,9 @@ const KEY_ROLE: &str = "roles/cloudkms.cryptoKeyEncrypterDecrypter";
 const KEY_LOCATION: &str = "global";
 const KEY_RING: &str = super::kms::KEY_RING;
 pub const SECRET_KEY: &str = "secret-manager";
+/// The declaration's file name beside a row's `config.toml`. Names only:
+/// it carries no key material.
+pub const ACCESS_FILE: &str = "access.toml";
 /// Up to a minute for a new Secret Manager service agent to reach IAM.
 const AGENT_ATTEMPTS: u32 = 7;
 #[cfg(not(test))]
@@ -1036,6 +1039,17 @@ secrets = ["DECLARED"]
             !drift.iter().any(|line| line.contains("UNDECLARED with")),
             "{drift:?}"
         );
+    }
+
+    /// The fixture row's access file parses, so the tree's own gate and the
+    /// reconciler agree on the format.
+    #[test]
+    fn the_fixture_access_file_parses() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/deployment-tree/deployments/example-deployment")
+            .join(ACCESS_FILE);
+        let file = AccessFile::parse(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(file.readers[0].account_id, "example-reader");
     }
 
     #[test]

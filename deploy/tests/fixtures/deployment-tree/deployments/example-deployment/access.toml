@@ -1,0 +1,13 @@
+# Synthetic: the access declaration `navigator-deploy ops gcp access` converges.
+# Names only — an access file never carries key material.
+[audit]
+data_read = ["secretmanager.googleapis.com", "cloudkms.googleapis.com"]
+
+[secret_encryption]
+rotation_days = 90
+
+[[reader]]
+account_id = "example-reader"
+display_name = "Example Deployment Reader"
+project_roles = ["roles/logging.viewer", "roles/secretmanager.viewer"]
+secrets = ["SESSION_SECRET"]
