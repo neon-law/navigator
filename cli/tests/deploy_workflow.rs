@@ -1481,6 +1481,40 @@ fn the_checker_probes_for_every_release_output() {
     );
 }
 
+/// The decision step runs the published checker by name once `checker` reports
+/// it ready, so the checker must install the binary under that same name. Main's
+/// first run after the CLI split installed `navigator` and then called
+/// `navigator-deploy`, and failed with "command not found" before deciding.
+#[test]
+fn the_checker_installs_the_binary_the_release_decision_runs() {
+    let workflow: serde_yaml::Value =
+        serde_yaml::from_str(&deploy_workflow()).expect("deploy.yml parses as YAML");
+    let steps = workflow["jobs"]["release-version"]["steps"]
+        .as_sequence()
+        .expect("`release-version` has steps");
+    let run_of = |id: &str| {
+        steps
+            .iter()
+            .find(|step| step["id"].as_str() == Some(id))
+            .and_then(|step| step["run"].as_str())
+            .unwrap_or_else(|| panic!("`release-version` has a `{id}` step with a script"))
+            .to_owned()
+    };
+    let decision = run_of("version");
+    let command = decision
+        .lines()
+        .map(str::trim)
+        .find(|line| line.ends_with("ops release check --github-output"))
+        .and_then(|line| line.split_whitespace().next())
+        .expect("the decision step runs `<binary> ops release check --github-output`");
+    let checker = run_of("checker");
+    assert!(
+        checker.contains(&format!("\"${{RUNNER_TEMP}}/navigator-bin/{command}\"")),
+        "the `checker` step must install the published binary as `{command}`, the name \
+         the decision step calls"
+    );
+}
+
 /// Navigator is built for Macs and containers in the cloud. No release job
 /// runs on a Windows runner, and nothing gates the tag on one.
 #[test]
