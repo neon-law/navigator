@@ -2299,9 +2299,22 @@ mod notation_catalog_tests {
                 );
             }
             let filled = views::notation::fill(body, &answers);
+            // Signature anchors (`{{client.signature}}`) survive the fill by
+            // design: the signing provider owns them, exactly as
+            // `rules::final_document` exempts signing fields from a final
+            // document. Anything else left unfilled is a questionnaire gap.
+            let unbound: Vec<&str> = filled
+                .split("{{")
+                .skip(1)
+                .filter_map(|rest| rest.split_once("}}").map(|(token, _)| token))
+                .filter(|token| {
+                    let (_, field) = token.split_once('.').unwrap_or((token, ""));
+                    !matches!(field, "signature" | "initials" | "date")
+                })
+                .collect();
             assert!(
-                !filled.contains("{{"),
-                "{slug} leaves an unbound entry: {filled}"
+                unbound.is_empty(),
+                "{slug} leaves an unbound entry {unbound:?}: {filled}"
             );
         }
     }

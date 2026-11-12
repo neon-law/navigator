@@ -45,6 +45,9 @@ neon.workspace = true
 wiremock.workspace = true
 workflows.workspace = true
 
+[dev-dependencies]
+tracing-subscriber.workspace = true
+
 [[test]]
 name = "retainer_intake"
 harness = false
@@ -83,6 +86,9 @@ harness = false
 
 [[test]]
 name = "template_validate"
+harness = false
+[[test]]
+name = "offer_letter_signing"
 harness = false
 
 [[test]]

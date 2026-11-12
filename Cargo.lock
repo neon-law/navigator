@@ -4481,6 +4481,7 @@ dependencies = [
  "store",
  "tokio",
  "tower",
+ "tracing-subscriber",
  "url",
  "uuid",
  "wiremock",

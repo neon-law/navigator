@@ -183,6 +183,7 @@ pub(crate) async fn send_notation_for_signature(
         &answer_ctx,
         client.as_ref(),
         captive,
+        &template_row.code,
         &raw_template_body,
     )?;
     let id = provider
@@ -221,25 +222,59 @@ pub(crate) async fn document_pdf_ready(
 
 /// Assemble the signature manifest from the placed fields and the
 /// template's declared signer set. Recipients fan out one per declared
-/// role, in declaration order, using the same routing-order mechanism
-/// two-party envelopes use. `client` resolves from questionnaire answers
-/// or the bound Person; `firm` from `DOCUSIGN_SIGNER_*`; any other role
-/// from `person__<role>.name` / `.email`. Empty fields → empty manifest
-/// (the provider's single-signer fallback). A declared role that lacks a
-/// resolved name and email refuses the send.
+/// role, in the set's routing order — declaration order unless the
+/// template spells `routing_order` out. `client` resolves from
+/// questionnaire answers or the bound Person; `firm` from
+/// `DOCUSIGN_SIGNER_*`; any other role from its declared `name`/`email`
+/// answer-key bindings, falling back to `person__<role>.name` /
+/// `.email`. Empty fields → empty manifest (the provider's
+/// single-signer fallback). A declared role that lacks a resolved name
+/// and email refuses the send.
+///
+/// Resolve the signer set for a template from the bytes the send path
+/// loads.
+///
+/// A template stored with its frontmatter — a Project-scoped Draft's
+/// persisted composition — parses directly. A **seeded** template's stored
+/// body carries no frontmatter (`seed_templates` splits it off), so the
+/// declarations recover from the bundled source the seed canonically
+/// mirrors — the same recovery shape
+/// `workflows::notation_session::questionnaire_definition_for` applies to
+/// a seeded questionnaire. Without the recovery, an explicit signer set
+/// would silently collapse into the implicit client/firm default at send
+/// time for every seeded template that declares one.
+///
+/// `code` is the template's catalog code (`template_row.code`); only
+/// frontmatter-less sources consult the bundled seed, so a Project-scoped
+/// body that deliberately drops a `signers:` block keeps its (implicit)
+/// choice.
+pub(crate) fn signer_set_for_template(
+    code: &str,
+    stored_source: &str,
+) -> Result<rules::SignerSet, String> {
+    if rules::frontmatter::extract(stored_source).is_some() {
+        return rules::signer_set(stored_source);
+    }
+    match store::seed::seeded_template_markdown(code) {
+        Some(bundled) => rules::signer_set(bundled),
+        None => rules::signer_set(stored_source),
+    }
+}
+
 pub(crate) fn build_signature_manifest(
     notation_id: Uuid,
     fields: &[crate::signature::SignatureField],
     ctx: &BTreeMap<String, String>,
     client: Option<&store::persons::Person>,
     captive: bool,
+    template_code: &str,
     template_source: &str,
 ) -> Result<crate::signature::SignatureManifest, WorkflowDriveError> {
     use crate::signature::{SignatureManifest, SignatureRecipient};
     if fields.is_empty() {
         return Ok(SignatureManifest::default());
     }
-    let set = rules::signer_set(template_source)
+    let set = signer_set_for_template(template_code, template_source)
         .map_err(|message| WorkflowDriveError::UnresolvedSigner { role: message })?;
     let role_present = |role: &str| fields.iter().any(|f| f.recipient_role == role);
     let env = |k: &str, default: &str| {
@@ -251,14 +286,17 @@ pub(crate) fn build_signature_manifest(
     let answered = |key: &str| ctx.get(key).filter(|s| !s.is_empty()).cloned();
 
     let mut recipients = Vec::new();
-    for (role, routing_order) in set.roles.iter().zip(1u32..) {
+    for signer in &set.signers {
+        let role = signer.role.as_str();
         if !role_present(role) {
             if set.explicit {
-                return Err(WorkflowDriveError::UnresolvedSigner { role: role.clone() });
+                return Err(WorkflowDriveError::UnresolvedSigner {
+                    role: role.to_string(),
+                });
             }
             continue;
         }
-        let (name, email, client_user_id) = match role.as_str() {
+        let (name, email, client_user_id) = match role {
             // Shared with the view path so the triple sent and the triple
             // replayed cannot drift — see
             // [`crate::retainer_walk::resolve_client_recipient`].
@@ -276,20 +314,32 @@ pub(crate) fn build_signature_manifest(
                 env("DOCUSIGN_SIGNER_EMAIL", "support@neonlaw.com"),
                 None,
             ),
-            other => (
-                answered(&format!("person__{other}.name")).unwrap_or_default(),
-                answered(&format!("person__{other}.email")).unwrap_or_default(),
-                None,
-            ),
+            other => {
+                // The template's declared bindings win; the person-state
+                // defaults back them up. Non-client roles are always
+                // emailed (validation refuses anything else), so there is
+                // no embedded view to mint for them.
+                let default_name = format!("person__{other}.name");
+                let default_email = format!("person__{other}.email");
+                let name_key = signer.name.as_deref().unwrap_or(&default_name);
+                let email_key = signer.email.as_deref().unwrap_or(&default_email);
+                (
+                    answered(name_key).unwrap_or_default(),
+                    answered(email_key).unwrap_or_default(),
+                    None,
+                )
+            }
         };
         if name.is_empty() || email.is_empty() {
-            return Err(WorkflowDriveError::UnresolvedSigner { role: role.clone() });
+            return Err(WorkflowDriveError::UnresolvedSigner {
+                role: role.to_string(),
+            });
         }
         recipients.push(SignatureRecipient {
-            role: role.clone(),
+            role: role.to_string(),
             email,
             name,
-            routing_order,
+            routing_order: signer.routing_order,
             client_user_id,
         });
     }
@@ -371,7 +421,16 @@ mod tests {
     }
 
     fn three_party_template() -> &'static str {
-        "---\nsigners:\n  - client\n  - firm\n  - confirming_assignor\n---\n"
+        "---\nsigners:\n  - client\n  - role: firm\n    delivery: emailed\n  - role: \
+         confirming_assignor\n    delivery: emailed\n---\n"
+    }
+
+    fn employee_signature_field() -> crate::signature::SignatureField {
+        crate::signature::SignatureField {
+            recipient_role: "employee".into(),
+            kind: crate::signature::SignatureFieldKind::Signature,
+            anchor: "{{employee.signature}}".into(),
+        }
     }
 
     #[test]
@@ -396,7 +455,7 @@ mod tests {
         let fields = [client_signature_field()];
 
         let manifest =
-            build_signature_manifest(Uuid::now_v7(), &fields, &ctx, Some(&client), true, "")
+            build_signature_manifest(Uuid::now_v7(), &fields, &ctx, Some(&client), true, "", "")
                 .expect("client identity resolves from answers");
 
         let recipient = manifest
@@ -418,7 +477,7 @@ mod tests {
         let fields = [client_signature_field()];
 
         let manifest =
-            build_signature_manifest(Uuid::now_v7(), &fields, &ctx, Some(&client), true, "")
+            build_signature_manifest(Uuid::now_v7(), &fields, &ctx, Some(&client), true, "", "")
                 .expect("client identity resolves from the Person row");
 
         let recipient = manifest
@@ -460,6 +519,7 @@ mod tests {
             &ctx,
             Some(&client),
             true,
+            "",
             three_party_template(),
         )
         .expect("every declared role is resolved");
@@ -504,6 +564,7 @@ mod tests {
             &ctx,
             Some(&client),
             true,
+            "",
             three_party_template(),
         )
         .expect("every declared role is resolved");
@@ -558,6 +619,7 @@ mod tests {
             &ctx,
             Some(&client),
             true,
+            "",
             three_party_template(),
         )
         .expect_err("confirming_assignor has no name or email");
@@ -566,6 +628,100 @@ mod tests {
             message.contains("confirming_assignor"),
             "refusal must name the unresolved role: {message}"
         );
+    }
+
+    /// The template owns the envelope's shape: declared routing orders
+    /// reorder recipients (the employee signs before the client
+    /// countersigns, whatever the list order), a declared `email:` binding
+    /// resolves from its questionnaire answer key, and the delivery default
+    /// holds — the client signs embedded only on an embedded notation,
+    /// every other declared role is emailed (no embedded view exists to
+    /// serve them).
+    #[test]
+    fn signature_manifest_builds_from_the_declarations() {
+        let template = "---\nquestionnaire:\n  BEGIN:\n    _: person__client\n  \
+             person__client:\n    _: END\n  END: {{}}\n  custom_text__employee_email: {{}}\nsigners:\n  - \
+             role: client\n    routing_order: 2\n  - role: employee\n    delivery: emailed\n    \
+             routing_order: 1\n    email: custom_text__employee_email\n---\n";
+        let ctx = BTreeMap::from([
+            ("person__client.name".to_string(), "Libra Prime".to_string()),
+            (
+                "person__client.email".to_string(),
+                "libra@example.com".to_string(),
+            ),
+            (
+                "person__employee.name".to_string(),
+                "Pat Employee".to_string(),
+            ),
+            (
+                "custom_text__employee_email".to_string(),
+                "pat@example.com".to_string(),
+            ),
+        ]);
+        let client = person_named("Libra Prime", "libra@example.com");
+        let fields = [employee_signature_field(), client_signature_field()];
+
+        let manifest = build_signature_manifest(
+            Uuid::now_v7(),
+            &fields,
+            &ctx,
+            Some(&client),
+            true,
+            "",
+            template,
+        )
+        .expect("every declared role resolves");
+
+        let roles: Vec<&str> = manifest
+            .recipients
+            .iter()
+            .map(|r| r.role.as_str())
+            .collect();
+        assert_eq!(roles, ["employee", "client"], "declared routing order wins");
+        assert_eq!(manifest.recipients[0].routing_order, 1);
+        assert_eq!(manifest.recipients[1].routing_order, 2);
+        // The employee's email came from the declared binding, not a
+        // `person__employee.email` default the questionnaire never answers.
+        assert_eq!(manifest.recipients[0].email, "pat@example.com");
+        assert_eq!(manifest.recipients[0].client_user_id, None);
+        // Embedded notation: the client keeps the captive ceremony.
+        assert!(manifest.recipients[1].client_user_id.is_some());
+    }
+
+    /// The client's embedded posture is the notation's, not the manifest
+    /// builder's: on an emailed notation the same template sends the client
+    /// a link instead, so the view path and the envelope cannot disagree.
+    #[test]
+    fn signature_manifest_keeps_the_client_delivery_on_the_notation_row() {
+        let ctx = BTreeMap::from([
+            ("person__client.name".to_string(), "Libra Prime".to_string()),
+            (
+                "person__client.email".to_string(),
+                "libra@example.com".to_string(),
+            ),
+        ]);
+        let client = person_named("Libra Prime", "libra@example.com");
+        let fields = [client_signature_field(), firm_signature_field()];
+
+        let manifest =
+            build_signature_manifest(Uuid::now_v7(), &fields, &ctx, Some(&client), false, "", "")
+                .expect("the default set resolves");
+
+        let client_recipient = manifest
+            .recipients
+            .iter()
+            .find(|r| r.role == "client")
+            .expect("client recipient present");
+        assert_eq!(
+            client_recipient.client_user_id, None,
+            "emailed notation, emailed client"
+        );
+        let firm_recipient = manifest
+            .recipients
+            .iter()
+            .find(|r| r.role == "firm")
+            .expect("firm recipient present");
+        assert_eq!(firm_recipient.client_user_id, None);
     }
 
     #[test]

@@ -157,11 +157,28 @@ Each key, in plain English:
 - **`jurisdiction`** — the state whose law governs: `NV`, `CA`, or `US`.
 - **`confidential`** — `true` or `false`. There is no default; you state it on purpose, every time, because the system
   will not guess how to treat a client's document for you.
-- **`signers`** — optional list of lowercase snake_case role names who sign the document, in routing order. When omitted
-  the set is `[client, firm]`. `client` is the respondent and `firm` is the attorney of record; any other role is a
-  third party backed by `person__<role>`. Omit `client` or `firm` from an explicit list only when that party does not
-  sign. N107 matches body placeholders to this set; N115 requires each listed role other than `firm` to have a person
-  state with a name and an email.
+- **`signers`** — optional list of who signs the document, in routing order. When omitted the set is `[client, firm]`:
+  the client signs embedded (captive, per the notation's delivery) and the firm countersigns from an emailed link.
+  `client` is the respondent and `firm` is the attorney of record; any other role is a third party backed by
+  `person__<role>`. Omit `client` or `firm` from an explicit list only when that party does not sign.
+
+  An entry is either a bare role name (only `client` may be bare) or a declaration with four optional keys:
+
+  ```yaml
+  signers:
+    - role: employee
+      routing_order: 2            # 1-based envelope order; declare all or none
+      delivery: emailed           # required for every role except `client`
+    - client
+  ```
+
+  Navigator serves the embedded ceremony only to the notation's bound client, so every other declared role must spell
+  `delivery: emailed`; the parser refuses the rest. The client may not declare `delivery:` at all — the client's
+  delivery is the notation's, chosen when the matter opens (default embedded). A `name`/`email` binding must name a
+  declared questionnaire state; without a binding the send path reads `person__<role>.name` and `.email` — the identity
+  of the Person row the questionnaire picked for that role. N107 matches body placeholders to this set (and refuses a
+  declared role with no anchor); N115 requires each declared role other than `firm` to have a person state with a name
+  and an email — for the implicit set too once the workflow collects a signature.
 - **`questionnaire`** — the questions the client answers, written as a simple step-by-step ladder from `BEGIN` to `END`.
 - **`workflow`** — the path the document walks from intake to signature. It **must** include a `lawyer_review` step.
   That is not a formality: a licensed attorney reviews the draft before anything is sent — the supervision you owe any
