@@ -55,7 +55,8 @@ use uuid::Uuid;
 
 use portal::docusign_auth::DocuSignJwtAuth;
 use portal::signature::{
-    SignatureField, SignatureFieldKind, SignatureManifest, SignatureProvider, SignatureRecipient,
+    SendMode, SignatureField, SignatureFieldKind, SignatureManifest, SignatureProvider,
+    SignatureRecipient,
 };
 use portal::signature_render::expand_signatures;
 
@@ -195,7 +196,7 @@ async fn emailed_envelope_to_a_real_signer() {
     };
 
     let id = provider
-        .send_for_signature(Uuid::new_v4(), &pdf, &manifest)
+        .send_for_signature(Uuid::new_v4(), &pdf, &manifest, SendMode::Send)
         .await
         .expect("DocuSign must accept the envelope + email the signer");
     assert!(!id.0.is_empty(), "a real envelope id comes back");
