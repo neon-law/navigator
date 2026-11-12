@@ -420,14 +420,13 @@ clerk assigns a case number; see the [synthetic Washington
 declaration](../cli/tests/fixtures/synthetic_washington_matter/templates/declaration.md).
 
 **Redlining a revision — `--redline-against`.** When a notation has been delivered before and the template (or its
-answers) have since changed, `hudson notation word <template.md> --out <new.docx> --redline-against
-<previous.docx>` renders the current template exactly as `notation word` does, then writes the difference from the
-previous document as real Word tracked changes (`w:ins`/`w:del`) instead of clean prose. The revisions are attributed to
-the signing lawyer — `--redline-author` if given, else `matter.counsel.name` from the Project's `navigator.yaml`, the
-same name the `/s/` signature line signs with — and a run with no author available from either source is refused. The
-revisions open in Microsoft Word's review pane for the counterparty to accept or reject; a redlined document is for
-review, never for splicing back, so `notation import` continues to refuse it. Rendering without `--redline-against` is
-unchanged.
+answers) have since changed, `hudson notation word <template.md> --out <new.docx> --redline-against <previous.docx>`
+renders the current template exactly as `notation word` does, then writes the difference from the previous document as
+real Word tracked changes (`w:ins`/`w:del`) instead of clean prose. The revisions are attributed to the signing lawyer —
+`--redline-author` if given, else `matter.counsel.name` from the Project's `navigator.yaml`, the same name the `/s/`
+signature line signs with — and a run with no author available from either source is refused. The revisions open in
+Microsoft Word's review pane for the counterparty to accept or reject; a redlined document is for review, never for
+splicing back, so `notation import` continues to refuse it. Rendering without `--redline-against` is unchanged.
 
 ### Final documents only
 

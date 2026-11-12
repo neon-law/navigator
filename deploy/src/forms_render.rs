@@ -303,9 +303,7 @@ fn fetch_from_assets(object_path: &str) -> Result<Vec<u8>, String> {
                     )
                 })?;
         let blank = storage.get(object_path).await.map_err(|e| {
-            format!(
-                "pull `{object_path}`: {e} — vendor the blank with `hudson forms sync`"
-            )
+            format!("pull `{object_path}`: {e} — vendor the blank with `hudson forms sync`")
         })?;
         Ok(blank.bytes)
     })
