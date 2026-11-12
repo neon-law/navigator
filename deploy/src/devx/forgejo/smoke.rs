@@ -135,13 +135,14 @@ pub(in crate::devx) fn smoke(
     cfg: &KindConfig,
     receiver_config: Option<&std::path::Path>,
 ) -> Result<()> {
-    super::super::require_tools(&["kubectl", "git", "gzip"])?;
     // The in-pod receiver mode: the hosting pod runs this same binary with
     // a config file, serving the push webhook where Forgejo can reach it.
-    // It runs until the smoke kills it.
+    // It runs until the smoke kills it. It serves HTTP only — no kubectl,
+    // git, or gzip on its PATH — so it must branch before the tool check.
     if let Some(config_path) = receiver_config {
         return serve_receiver_mode(config_path);
     }
+    super::super::require_tools(&["kubectl", "git", "gzip"])?;
     // The receiver's branches trace, and a stuck handler is otherwise
     // undiagnosable from CI's log alone — a subscriber makes every
     // verification and consumption branch visible in the run output.
