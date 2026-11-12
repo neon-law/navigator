@@ -3076,11 +3076,13 @@ jobs:
     name: build Linux navigator-deploy release archive
     needs: [integration, release-version, release-tag]
     if: needs.release-version.outputs.publishable == 'true'
-    runs-on: ubuntu-24.04
     # `navigator-deploy`: the operator CLI (`dev`, `ops`, site, mail,
     # notation, firm). It links the web client, the cloud SDKs, and the KIND
     # tooling, which is why it builds apart from the lean `navigator` and is
-    # never in the Homebrew tap.
+    # never in the Homebrew tap. Compiling `portal` is the release's memory
+    # peak: a 16 GB hosted `ubuntu-24.04` runner shut down mid-`portal`, so
+    # this job runs on a 32 GB Blacksmith runner.
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 120
     env:
       CARGO_INCREMENTAL: "0"
@@ -3185,11 +3187,12 @@ jobs:
     name: build macOS navigator-deploy release archive
     needs: [integration, release-version, release-tag]
     if: needs.release-version.outputs.publishable == 'true'
-    runs-on: macos-latest
     # `navigator-deploy`: the operator CLI (`dev`, `ops`, site, mail,
     # notation, firm). It links the web client, the cloud SDKs, and the KIND
     # tooling, which is why it builds apart from the lean `navigator` and is
-    # never in the Homebrew tap.
+    # never in the Homebrew tap. The 7 GB `macos-latest` runner SIGKILLed
+    # rustc compiling `portal`, so this job runs on the larger xlarge runner.
+    runs-on: macos-latest-xlarge
     timeout-minutes: 150
     env:
       CARGO_INCREMENTAL: "0"

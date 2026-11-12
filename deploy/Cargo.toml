@@ -43,11 +43,9 @@ k8s-openapi.workspace = true
 # `project efiling` and `project docket ingest` read saved `.eml` notices.
 mail-parser.workspace = true
 mcp.workspace = true
-owo-colors.workspace = true
 # `dev email-summary-e2e` signs its synthetic inbound webhook requests.
 p256.workspace = true
 pdf.workspace = true
-pdf-extract.workspace = true
 portal.workspace = true
 project-scaffold.workspace = true
 rand.workspace = true
