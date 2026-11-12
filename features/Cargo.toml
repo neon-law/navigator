@@ -45,6 +45,9 @@ neon.workspace = true
 wiremock.workspace = true
 workflows.workspace = true
 
+[dev-dependencies]
+tracing-subscriber.workspace = true
+
 [[test]]
 name = "retainer_intake"
 harness = false

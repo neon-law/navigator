@@ -10,14 +10,11 @@ Feature: Declared signers drive a non-retainer envelope
     Given an offer-letter matter opened for "Libra" <libra@example.com>
 
   Scenario: The template's declared signers route the envelope
-    When the client answers the company question:
+    When the lawyer walks the offer questionnaire:
       | value |
       | Aurora Market LLC |
-    And the lawyer walks the rest of the offer questionnaire:
-      | value |
-      | Rex Vice; President; 1 Main St; Las Vegas; NV; 89101; USA |
-      | Libra Prime; Barista; 2 Worker Way; Reno; NV; 89501; USA |
-      | libra.prime@example.com |
+      | pick:client |
+      | pick:employee |
       | Nevada |
       | 2026-12-01 |
       | Store manager; manages the Reno store; Aurora Market LLC; starting 2026-12-15. |
@@ -33,4 +30,4 @@ Feature: Declared signers drive a non-retainer envelope
     And the attorney approves and sends the document
     Then the matter has a signature request
     And the envelope routes the company before the employee
-    And the employee recipient is emailed at the bound address
+    And the employee recipient is emailed at the address of the person the questionnaire picked
