@@ -1860,7 +1860,7 @@ async fn push_webhook_proof(
                 surreal,
                 Arc::new(portal::forgejo_push_pipeline::FixedPushCredentials {
                     forgejo_token: token.to_owned(),
-                    slack_bot_token: Some("xoxb-smoke-stub".to_owned()),
+                    slack_bot_token: Some("smoke-stub-token".to_owned()),
                 }),
                 Some(forge.to_owned()),
                 Some(format!("http://127.0.0.1:{}", slack.port)),
