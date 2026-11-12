@@ -253,13 +253,9 @@ pub fn surrealdb_only_tables() -> Vec<&'static str> {
 /// An operational `SurrealQL` export with every derived table's definition
 /// and rows removed.
 ///
-/// Why: `export` lists tables alphabetically, so a view appears *before* the
-/// table it selects from, and importing that file defines the view first,
-/// fails ("the table does not exist"), and then writes the view's rows into
-/// a plain, writable table of the same name. A derived table is computed, so
-/// the export leaves it out and [`apply`] rebuilds it from the restored
-/// source. Dropping an export's sections is safe to repeat: an export
-/// already stripped passes through unchanged.
+/// Export order can place a view before its source table. Restore imports
+/// only the canonical records, and [`apply`] rebuilds each derived table
+/// from those records. An export already stripped passes through unchanged.
 #[must_use]
 pub fn strip_derived_tables(export: &str) -> String {
     let derived: Vec<String> = derived_tables().into_iter().map(|view| view.name).collect();

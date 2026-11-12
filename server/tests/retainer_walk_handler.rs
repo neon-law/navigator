@@ -13,6 +13,9 @@
 //!   4. The final POST hits END, drives the workflow, and renders
 //!      the result page with the rendered retainer.
 
+#[path = "common/intake_stack.rs"]
+mod intake_stack;
+
 use std::sync::Arc;
 
 use axum::body::Body;
@@ -764,9 +767,13 @@ async fn start_post_creates_person_project_role_notation_and_redirects_to_step()
     assert_eq!(notations.len(), 1);
 }
 
-#[tokio::test]
+#[test]
+fn start_post_refuses_a_self_serve_intake_adverse_to_a_current_client() {
+    intake_stack::run(start_post_refuses_a_self_serve_intake_adverse_to_a_current_client_scenario);
+}
+
 #[allow(clippy::too_many_lines)]
-async fn start_post_refuses_a_self_serve_intake_adverse_to_a_current_client() {
+async fn start_post_refuses_a_self_serve_intake_adverse_to_a_current_client_scenario() {
     // A self-serve intake whose email matches a person already adverse to a
     // current client of the firm is refused: the matter, the client role, and
     // the retainer notation all roll back, and the form re-renders with a
