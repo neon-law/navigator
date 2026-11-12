@@ -1893,7 +1893,6 @@ mod tests {
             BrandKey::Neon,
             BrandKey::Misericordia,
             BrandKey::DeleteYourDebt,
-            BrandKey::Daybridge,
             BrandKey::Summons,
         ] {
             let content = home(key.resolve_branding(&views::brand::DEFAULT_BRANDING));

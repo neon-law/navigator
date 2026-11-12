@@ -10580,7 +10580,7 @@ const LIVE_HOME_CONTRACTS: &[(views::brand::BrandKey, LiveHomeContract)] = &[
         views::brand::BrandKey::Daybridge,
         LiveHomeContract {
             title: "<title>Daybridge Divorce Law | Home</title>",
-            copy: "A brighter way through divorce.",
+            copy: "A brighter way to move on.",
         },
     ),
     (

@@ -3519,7 +3519,7 @@ const COMPILED_BRANDS: &[CompiledBrand] = &[
         website_url: "https://www.daybridgedivorce.com",
         name: "Daybridge Divorce Law",
         typeface: "source-serif-4",
-        primary_hex: "#255C67",
+        primary_hex: "#A84C08",
     },
     CompiledBrand {
         key: "cyber-injury-law",
