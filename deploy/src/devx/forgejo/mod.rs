@@ -488,6 +488,14 @@ pub(super) fn host_gateway(node_ip: &str) -> Option<String> {
     Some(format!("{}.{}.{}.1", octets[0], octets[1], octets[2]))
 }
 
+/// The kubectl port-forward arguments for an in-cluster target: the target
+/// reference and remote port as separate arguments, with an empty local port
+/// so kubectl allocates a free one (the `up` phase may already hold the
+/// fixed lanes).
+pub(super) fn port_forward_args(target: &str, remote_port: u16) -> [String; 2] {
+    [target.to_owned(), format!(":{remote_port}")]
+}
+
 /// The synthetic email-domain policy the smoke opens, and the identities it
 /// signs in with. Each pairs with a user in the Rauthy KIND fixture.
 const SMOKE_ALLOWLIST: &str = "example.test";
@@ -754,6 +762,16 @@ mod tests {
         );
         assert_eq!(host_gateway("kind-control-plane"), None);
         assert_eq!(host_gateway("1.2.3.999"), None);
+    }
+
+    #[test]
+    fn the_port_forward_asks_for_a_free_local_port() {
+        let [target, local] = port_forward_args("pod/navigator-postgres-0", 5432);
+        assert_eq!(target, "pod/navigator-postgres-0");
+        assert_eq!(
+            local, ":5432",
+            "an empty local port lets kubectl allocate one; the fixed lanes may already be held"
+        );
     }
 
     #[test]

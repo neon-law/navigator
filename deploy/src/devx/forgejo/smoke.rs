@@ -46,9 +46,9 @@ use super::cluster::Kube;
 use super::oidc::{self, Outcome};
 use super::{
     actions_context, assert_analyzed_push_receipt, forwarded_port, host_gateway,
-    parse_push_receipt_row, random_hex, receipt_is_terminal, CookieJar, PushReceiptRow, Seed,
-    ADMISSION_CONFIG_MAP, ALLOWED_IDENTITY, ALLOWLIST_KEY, BOT_PUSH_WORKFLOW, DATA_CLAIM,
-    DENIED_IDENTITIES, GATE_WORKFLOW, POD, POSTGRES_POD, PUBLISH_WORKFLOW, SEED_SECRET,
+    parse_push_receipt_row, port_forward_args, random_hex, receipt_is_terminal, CookieJar,
+    PushReceiptRow, Seed, ADMISSION_CONFIG_MAP, ALLOWED_IDENTITY, ALLOWLIST_KEY, BOT_PUSH_WORKFLOW,
+    DATA_CLAIM, DENIED_IDENTITIES, GATE_WORKFLOW, POD, POSTGRES_POD, PUBLISH_WORKFLOW, SEED_SECRET,
     SMOKE_ALLOWLIST, STATEFULSET,
 };
 
@@ -93,7 +93,8 @@ impl Forward {
     fn open_target(kube: &Kube, target: &str, port: u16) -> Result<Self> {
         let mut child = kube
             .command()
-            .args(["port-forward", &format!("{target}:{port}")])
+            .args(["port-forward"])
+            .args(port_forward_args(target, port))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
