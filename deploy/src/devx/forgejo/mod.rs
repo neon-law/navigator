@@ -537,6 +537,14 @@ pub(super) fn receiver_start_script() -> String {
     )
 }
 
+/// The workspace root for a crate's manifest directory: the deploy crate
+/// sits directly under the workspace root, so one ancestor up holds the
+/// `target/` tree. Landing on a higher ancestor silently misses the
+/// prebuilt musl receiver and falls back to a binary the pod cannot run.
+pub(super) fn workspace_root_from(manifest_dir: &Path) -> Option<&Path> {
+    manifest_dir.ancestors().nth(1)
+}
+
 /// The kubectl port-forward arguments for an in-cluster target: the target
 /// reference and remote port as separate arguments, with an empty local port
 /// so kubectl allocates a free one (the `up` phase may already hold the
@@ -870,6 +878,19 @@ mod tests {
         assert_eq!(
             local, ":5432",
             "an empty local port lets kubectl allocate one; the fixed lanes may already be held"
+        );
+    }
+
+    #[test]
+    fn the_workspace_root_is_one_ancestor_above_the_manifest_dir() {
+        let root = tempfile::tempdir().unwrap();
+        let manifest_dir = root.path().join("deploy");
+        std::fs::create_dir_all(&manifest_dir).unwrap();
+        assert_eq!(
+            workspace_root_from(&manifest_dir),
+            Some(root.path()),
+            "the prebuilt musl receiver lives under the root's target/; \
+             a higher ancestor misses it and stages an unrunnable binary"
         );
     }
 

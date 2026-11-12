@@ -1881,9 +1881,11 @@ async fn push_webhook_proof(
 /// binary — which on a macOS host fails the pod's readiness gate by design.
 fn stage_receiver_binary() -> Result<ReceiverStaging> {
     let dir = tempfile::tempdir().context("create the receiver staging directory")?;
-    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
+    // The manifest dir is <workspace-root>/deploy: one ancestor up is the
+    // root that holds target/receiver/. Landing on the parent would miss
+    // the prebuilt musl binary and silently stage the smoke's own
+    // glibc-linked binary, which the Debian pod cannot execute.
+    let workspace_root = super::workspace_root_from(Path::new(env!("CARGO_MANIFEST_DIR")))
         .context("locate the workspace root")?
         .to_path_buf();
     let exe = super::receiver_binary_source(
