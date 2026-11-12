@@ -175,10 +175,10 @@ downloading the executed documents, and capturing a real Connect completion/decl
 
 ## Client delivery: captive vs emailed
 
-Each notation carries a `delivery` column (`store/src/schema/navigator.surql`) that selects, per matter, how the client
-recipient is addressed when the single send path builds the signature manifest. Recipients follow the template's
-`signers:` list in declaration order. When `firm` is in that set it is a non-captive recipient — it receives the usual
-emailed link — regardless of `delivery`.
+Each notation carries a `delivery` column (`store/src/schema/navigator.surql`) that selects how the client recipient is
+addressed when the single send path builds the signature manifest. Recipients follow the template's `signers:` list in
+declaration order. When `firm` is in that set it is a non-captive recipient — it receives the usual emailed link —
+regardless of `delivery`.
 
 - **`embedded`** (the default; the standalone retainer walk) — the client is a **captive** recipient: the manifest sets
   `client_user_id` (derived from the notation), so DocuSign suppresses the signing email. Because no email goes out, a
@@ -219,11 +219,10 @@ emailed link — regardless of `delivery`.
   A notation whose delivery is `emailed` has a **non-captive** recipient and therefore no `clientUserId`. A recipient
   view is only valid for a captive one, so these routes answer `409` rather than minting a URL DocuSign would refuse;
   that signer opens the link from their own inbox instead.
-- **`emailed`** (the matter-open form) — the client is **non-captive**: the manifest omits `client_user_id`, so DocuSign
-  emails the client a signing link they open from their own inbox. This is the right experience for a client whose
-  matter an admin opens from the "new project" page (`POST /app/projects` with "Send retainer for signature"): that
-  client is not in the room and has no portal session yet, so a captive embedded recipient would leave them with nothing
-  to sign. Same send path, same `send_for_signature` call — only the recipient's captive flag differs.
+- **`emailed`** — DocuSign emails the client a signing link. From the Project checkout, start the notation with
+  `navigator project onboard --delivery emailed`. Complete intake, render the letter, and review the PDF. Dispatch the
+  reviewed letter with `navigator-deploy site notation send <notation-id>`. The command prints the workflow state and
+  provider request ID. Retrying a notation with an existing envelope returns its existing request ID.
 
 ## Completion webhook + HMAC
 
