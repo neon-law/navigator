@@ -8,7 +8,7 @@ description: Run and verify a Navigator page with automatic rebuilds and browser
 Read [`kind-local-dev`](../kind-local-dev/SKILL.md), [`docs/agent-workflows.md`](../../../docs/agent-workflows.md), and
 [`docs/public-contributor-safety.md`](../../../docs/public-contributor-safety.md).
 
-- Reuse the task's worktree runtime and source its generated `.devx/env`. Start the preview with `cargo run -p deploy --
+- Reuse the task's worktree runtime and source its generated `.devx/env`. Start the preview with `cargo run -p hudson --
   dev serve`. It builds and runs `neon`, watches Rust and catalog changes, and restarts the server after each successful
   build. Static-asset changes refresh the browser without recompiling. Keep the watcher running while editing, and use
   the worktree's brand port from `.devx/env`.
@@ -26,7 +26,7 @@ In a Project checkout, preview the pages `navigator.yaml` declares under `pages:
 
 ```bash
 navigator site login --host <project.host>
-navigator-deploy preview
+hudson preview
 ```
 
 - It serves `localhost` (pass `--port` to pick one) with the same `webapp::sections` components the deployment's

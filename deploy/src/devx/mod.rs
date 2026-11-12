@@ -47,7 +47,7 @@ mod host_setup;
 mod lifecycle;
 mod native;
 // `navigator project repository jj` installs jj with the same Homebrew seam.
-// `navigator-deploy nautilus preview` serves the bundle this module stages, so
+// `hudson nautilus preview` serves the bundle this module stages, so
 // its staging helper is crate-reachable.
 pub(crate) mod nautilus;
 mod observability;
@@ -430,7 +430,7 @@ fn env_port(key: &str, default: u16) -> u16 {
 pub const DEFAULT_CERTIFICATE_TIMEOUT_MINUTES: u32 =
     firm_certificate_roll::DEFAULT_ISSUANCE_TIMEOUT_MINUTES;
 
-/// `navigator-deploy ops certificates`: shared-certificate maintenance.
+/// `hudson ops certificates`: shared-certificate maintenance.
 #[derive(Debug, Clone, clap::Subcommand)]
 pub enum CertificatesCmd {
     /// Roll the shared Firm certificate onto this build's brand hosts ahead
@@ -462,7 +462,7 @@ pub enum CertificatesCmd {
     },
 }
 
-/// `navigator-deploy ops host`: bring one registered brand host online.
+/// `hudson ops host`: bring one registered brand host online.
 #[derive(Debug, Clone, clap::Subcommand)]
 pub enum HostCmd {
     /// Point a registered brand host at a deployment and check it end to end:
@@ -747,7 +747,7 @@ pub enum GcpCmd {
         forgejo_archives_project_id: Option<String>,
         /// Git bundle archive bucket name (`<deployment>-bundles`), created in
         /// the project `--forgejo-archives-project-id` names with a locked
-        /// 7-year retention policy and no lifecycle rule; `navigator-deploy ops
+        /// 7-year retention policy and no lifecycle rule; `hudson ops
         /// forgejo bundle archive` and the nightly repository backup write
         /// here, and the deployment identity gets create and read roles only.
         /// Requires `--forgejo-archives-project-id`. Falls back to
@@ -1668,7 +1668,7 @@ fn key_set(service: Option<&str>) -> deployment_config::KeySet {
     }
 }
 
-/// `echo value | navigator-deploy ops secrets set` appends a newline the operator
+/// `echo value | hudson ops secrets set` appends a newline the operator
 /// did not mean to store. Strip exactly one (`\n` or `\r\n`).
 fn strip_one_trailing_newline(value: &mut Vec<u8>) {
     if value.last() == Some(&b'\n') {
@@ -2726,7 +2726,7 @@ fn navigator_web_rauthy_patch(rauthy_port: u16) -> String {
 /// `dotenvy` parse read it literally. Worktree roots can contain spaces (and
 /// other shell-significant characters); an unquoted `KUBECONFIG=/my path/…`
 /// truncates at the first space when the file is sourced, so a destructive
-/// `navigator-deploy dev staging reset` would silently fall back to the ambient
+/// `hudson dev staging reset` would silently fall back to the ambient
 /// kubeconfig instead of the task-owned cluster. Single quotes are literal in
 /// both consumers (unlike double quotes, which still expand `$`); a directory
 /// containing a literal single quote is the one unsupported shape and is never
@@ -2771,7 +2771,7 @@ fn render_env_for(cfg: &KindConfig, db_name: &str, web_port: u16, root: &Path) -
     // locally while `repos::RepoStore` lives (ENG-108).
     // `.devx/env` is the complete task-local application environment. Keep
     // the orchestration coordinates alongside the host application's values:
-    // a command such as `navigator-deploy dev deploy` must target the same isolated
+    // a command such as `hudson dev deploy` must target the same isolated
     // worktree cluster that `dev worktree-env up` prepared, rather than
     // silently falling back to the shared `navigator` cluster.
     let lines = [

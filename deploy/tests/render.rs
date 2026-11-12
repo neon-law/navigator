@@ -1,5 +1,5 @@
-//! End-to-end tests for `navigator-deploy notation pdf <file> --out <pdf>` and
-//! `navigator-deploy notation word <file> --out <docx>`. Each test writes a
+//! End-to-end tests for `hudson notation pdf <file> --out <pdf>` and
+//! `hudson notation word <file> --out <docx>`. Each test writes a
 //! notation fixture to a tempdir, invokes the real binary, and checks the
 //! produced document (or the refusal).
 
@@ -140,11 +140,11 @@ fn write(dir: &TempDir, name: &str, body: &str) -> std::path::PathBuf {
 }
 
 fn render(subcommand: &str, args: &[&std::ffi::OsStr]) -> std::process::Output {
-    Command::new(cargo_bin("navigator-deploy"))
+    Command::new(cargo_bin("hudson"))
         .args(["notation", subcommand])
         .args(args)
         .output()
-        .expect("run navigator-deploy notation pdf/word")
+        .expect("run hudson notation pdf/word")
 }
 
 fn render_pdf(args: &[&std::ffi::OsStr]) -> std::process::Output {
@@ -1566,7 +1566,7 @@ fn notation_pdf_refuses_form_output_before_writing_a_plain_pdf() {
         let input = dir.path().join("nv__llc_formation.md");
         let output = dir.path().join("filled.pdf");
         fs::write(&input, template).unwrap();
-        let result = Command::new(cargo_bin("navigator-deploy"))
+        let result = Command::new(cargo_bin("hudson"))
             .args(["notation", "pdf", "--preview"])
             .arg(&input)
             .arg("--out")

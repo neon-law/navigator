@@ -1,5 +1,5 @@
-//! `navigator-deploy mail login`: the installed-app OAuth flow that mints the Gmail
-//! refresh token `navigator-deploy mail` redeems.
+//! `hudson mail login`: the installed-app OAuth flow that mints the Gmail
+//! refresh token `hudson mail` redeems.
 //!
 //! The flow is Google's loopback redirect for desktop clients: a one-shot
 //! listener on `127.0.0.1` at a random port, PKCE (S256), and a `state`
@@ -28,7 +28,7 @@ use super::{
 const GOOGLE_AUTHORIZATION_API: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_REVOKE_API: &str = "https://oauth2.googleapis.com/revoke";
 
-/// The only scopes `navigator-deploy mail` requests or accepts: read mail, and
+/// The only scopes `hudson mail` requests or accepts: read mail, and
 /// create or update drafts. `gmail.compose` can send at Google's level; the
 /// guard against that is the endpoint allow-list, which has no send path.
 pub(super) const GMAIL_SCOPES: [&str; 2] = [
@@ -408,7 +408,9 @@ fn prompt_hidden(prompt: &str) -> Result<String> {
         .read(true)
         .write(true)
         .open("/dev/tty")
-        .context("no terminal to prompt for the client secret on; run navigator-deploy mail login interactively")?;
+        .context(
+            "no terminal to prompt for the client secret on; run hudson mail login interactively",
+        )?;
     let original = tcgetattr(&tty).context("read the terminal settings")?;
     let mut hidden = original.clone();
     hidden.local_modes.remove(LocalModes::ECHO);
@@ -454,7 +456,7 @@ pub(super) fn gcp_source(
     }
     let project = project.ok_or_else(|| {
         anyhow!(
-            "GCP client secret needs a project; run navigator-deploy mail setup --project <project> (see {})",
+            "GCP client secret needs a project; run hudson mail setup --project <project> (see {})",
             super::PROVISIONING_DOC
         )
     })?;
@@ -546,7 +548,7 @@ async fn store_gcp_client_secret(
     Ok(secret)
 }
 
-/// `navigator-deploy mail login`.
+/// `hudson mail login`.
 pub(super) async fn login_command(
     secret_file: Option<&Path>,
     gcp: Option<&GcpSecret>,
@@ -578,7 +580,7 @@ pub(super) async fn login_command(
     .await?;
     keychain_write(REFRESH_TOKEN_SERVICE, &account, &refresh_token)?;
     println!(
-        "Stored the Gmail refresh token in the macOS Keychain, service {REFRESH_TOKEN_SERVICE}. Run navigator-deploy mail setup to check."
+        "Stored the Gmail refresh token in the macOS Keychain, service {REFRESH_TOKEN_SERVICE}. Run hudson mail setup to check."
     );
     Ok(())
 }
@@ -647,7 +649,7 @@ async fn authorize(
     .await?;
     let refresh_token = grant.refresh_token.clone().ok_or_else(|| {
         anyhow!(
-            "Google returned no refresh token; remove the app's access in your Google Account settings and rerun navigator-deploy mail login"
+            "Google returned no refresh token; remove the app's access in your Google Account settings and rerun hudson mail login"
         )
     })?;
     if let Err(error) = check_granted_scopes(grant.scope.as_deref()) {
@@ -664,7 +666,7 @@ async fn authorize(
     {
         revoke(&http, &endpoints.revoke, &refresh_token).await;
         return Err(anyhow!(
-            "Google signed in a different account than the configured Gmail address; the token was revoked and not stored. Rerun navigator-deploy mail login and choose the configured account"
+            "Google signed in a different account than the configured Gmail address; the token was revoked and not stored. Rerun hudson mail login and choose the configured account"
         ));
     }
     Ok(refresh_token)
@@ -675,7 +677,7 @@ async fn authorize(
 pub(super) fn refuse_stored_token(account: &str, error: anyhow::Error) -> anyhow::Error {
     match keychain_delete(REFRESH_TOKEN_SERVICE, account) {
         Ok(()) => error.context(
-            "the stored refresh token was deleted from the Keychain; run navigator-deploy mail login",
+            "the stored refresh token was deleted from the Keychain; run hudson mail login",
         ),
         Err(delete) => error.context(format!(
             "deleting the stored refresh token also failed ({delete:#})"
@@ -808,7 +810,7 @@ mod tests {
         send_to(addr, "/?state=nonce&error=access_denied%3Cscript%3E").await;
         let error = format!("{}", waiter.await.unwrap().unwrap_err());
         assert!(error.contains("access_denied"));
-        assert!(error.contains("docs/mail-cli.md#provision-gmail-for-navigator-deploy-mail"));
+        assert!(error.contains("docs/mail-cli.md#provision-gmail-for-hudson-mail"));
         assert!(!error.contains('<'));
     }
 
@@ -1169,7 +1171,7 @@ mod gcp_tests {
                 .to_string();
             assert!(error.contains(expected), "{error}");
             assert!(
-                error.contains("docs/mail-cli.md#provision-gmail-for-navigator-deploy-mail"),
+                error.contains("docs/mail-cli.md#provision-gmail-for-hudson-mail"),
                 "{error}"
             );
             assert!(!error.contains("private-marker"));

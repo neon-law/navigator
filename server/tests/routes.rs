@@ -3333,7 +3333,7 @@ async fn deploy_workshop_md_twin_and_llms_index_the_real_content() {
         body.contains("# Operating Neon Law Navigator"),
         "raw markdown title"
     );
-    assert!(body.contains("cargo run -p deploy -- ops gcp setup --project-id"));
+    assert!(body.contains("cargo run -p hudson -- ops gcp setup --project-id"));
 
     // The firm's llms.txt withholds the class twin this test just fetched
     // with a session — advertising a gated document is advertising a login
@@ -17282,7 +17282,7 @@ async fn project_documents_upload_rejects_a_batch_over_the_file_ceiling() {
         "{} files",
         store::documents::MAX_UPLOAD_FORM_FILES
     )));
-    assert!(refusal.contains("navigator site document upload"));
+    assert!(refusal.contains("hudson site document upload"));
     assert!(
         store::assets::list_all(&state.surreal)
             .await

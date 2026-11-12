@@ -13,7 +13,7 @@ Before naming a table, field, state, or UI concept, follow the **Find the term f
 the term itself:
 
 ```bash
-navigator-deploy glossary show "Deadline"
+hudson glossary show "Deadline"
 ```
 
 A Deadline is the firm's docket. A missed one is a malpractice event, so it is recorded once, in Navigator, and every

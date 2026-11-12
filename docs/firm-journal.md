@@ -38,15 +38,15 @@ remain a separate category.
 Authenticate to Navigator, then use the Firm UUID:
 
 ```bash
-navigator-deploy journal --firm "$FIRM_ID" list
-navigator-deploy journal --firm "$FIRM_ID" migration-triage
-navigator-deploy journal --firm "$FIRM_ID" preview entry.json
-navigator-deploy journal --firm "$FIRM_ID" post entry.json
-navigator-deploy journal --firm "$FIRM_ID" statement --project "$PROJECT_ID"
-navigator-deploy journal --firm "$FIRM_ID" mercury \
+hudson journal --firm "$FIRM_ID" list
+hudson journal --firm "$FIRM_ID" migration-triage
+hudson journal --firm "$FIRM_ID" preview entry.json
+hudson journal --firm "$FIRM_ID" post entry.json
+hudson journal --firm "$FIRM_ID" statement --project "$PROJECT_ID"
+hudson journal --firm "$FIRM_ID" mercury \
   --project "$PROJECT_ID" --account "$ACCOUNT_ID" --transaction "$TRANSACTION_ID"
-navigator-deploy journal --firm "$FIRM_ID" reconcile reconciliation.json
-navigator-deploy journal --firm "$FIRM_ID" audits --job "$JOB_ID"
+hudson journal --firm "$FIRM_ID" reconcile reconciliation.json
+hudson journal --firm "$FIRM_ID" audits --job "$JOB_ID"
 ```
 
 `preview` runs the same posting, tenancy, evidence, and database constraints in a transaction that rolls back. `post`
@@ -91,10 +91,9 @@ requests return success. Unsupported event categories do not expand the job's sc
 
 Polling resumes from the latest PostgreSQL audit cursor and checks signals every five seconds between scheduled runs.
 Missed events and objects without a supported webhook are covered by the regular polling interval. Use `--summary` for
-scheduled logs that expose counts and health without source IDs, amounts, or memos. Monitor a specific job with
-`navigator-deploy journal --firm "$FIRM_ID" status --job "$JOB_ID" --stale-after-seconds 600`; missing, stale, or
-unresolved reconciliation exits with failure. Credentials and reconciliation command files belong in private mounted
-storage.
+scheduled logs that expose counts and health without source IDs, amounts, or memos. Monitor a specific job with `hudson
+journal --firm "$FIRM_ID" status --job "$JOB_ID" --stale-after-seconds 600`; missing, stale, or unresolved
+reconciliation exits with failure. Credentials and reconciliation command files belong in private mounted storage.
 
 The Solana adapter reads one explicitly selected signature at finalized commitment. Transfer locators identify a parsed
 top-level or inner instruction. Native SOL and classic SPL Token quantities retain their original precision; unsupported

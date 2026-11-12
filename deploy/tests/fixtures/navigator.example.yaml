@@ -5,7 +5,7 @@
 # Copy it to `navigator.yaml` at the root of your deployment checkout, fill in
 # your organization's identity, drop your logos next to it, and run:
 #
-#     cargo run -p deploy -- ops rebrand build --out .devx/brand-bundle
+#     cargo run -p hudson -- ops rebrand build --out .devx/brand-bundle
 #     NAVIGATOR_CUSTOM_BRANDING=.devx/brand-bundle cargo run -p neon
 #
 # `rebrand build` makes this manifest and its static files a self-contained,

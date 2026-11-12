@@ -17,7 +17,7 @@ next daily release.
 2. **Name it.** Unless the operator names a version, take the default:
 
    ```bash
-   cargo run -p deploy --quiet -- ops release-default-tag
+   cargo run -p hudson --quiet -- ops release-default-tag
    ```
 
    It prints today's UTC `D` while `D` is unpublished; a published `D-rc.*` does not take today's name. Once `D` is
@@ -27,13 +27,13 @@ next daily release.
    ahead of the calendar: stop and report it.
 
 3. **Run the browser and axe-core suite.** Start the KIND fixture per [`kind-local-dev`](../kind-local-dev/SKILL.md),
-   source `.devx/env`, and run `cargo run -p deploy -- dev browser-e2e`. A harness skip fails this gate.
+   source `.devx/env`, and run `cargo run -p hudson -- dev browser-e2e`. A harness skip fails this gate.
 4. **Write and verify.**
 
    ```bash
-   cargo run -p deploy --quiet -- ops release version --tag <version>
-   cargo run -p deploy --quiet -- ops release pins
-   cargo run -p deploy --quiet -- ops release check
+   cargo run -p hudson --quiet -- ops release version --tag <version>
+   cargo run -p hudson --quiet -- ops release pins
+   cargo run -p hudson --quiet -- ops release check
    cargo metadata --locked --format-version 1 > /dev/null
    ```
 
@@ -49,8 +49,8 @@ next daily release.
 Only when asked, after a tag is published, with the CLI from that exact release. For each authorized Project repository:
 
 ```bash
-navigator-deploy ops github setup <owner>/<repo> --action-version <version> --dry-run
-navigator-deploy ops github setup <owner>/<repo> --action-version <version>
+hudson ops github setup <owner>/<repo> --action-version <version> --dry-run
+hudson ops github setup <owner>/<repo> --action-version <version>
 ```
 
 That PR writes `ci.yml`, `cd.yml`, the `navigator.yaml` version pin, and missing or drifted canonical Agent Skills; a

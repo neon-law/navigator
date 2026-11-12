@@ -26,7 +26,7 @@
 //!   Enforced-private, no lifecycle rule: the locked policy is the retention
 //!   decision, and nothing in the archive path may ever delete a backup.
 //! - the **Git bundle** archive (`<deployment>-bundles`) — where
-//!   `navigator-deploy ops forgejo bundle archive` and the nightly repository backup
+//!   `hudson ops forgejo bundle archive` and the nightly repository backup
 //!   land, carrying a locked [`GIT_BUNDLES_RETENTION_SECONDS`] policy
 //!   (7 years). Bundles live apart from the Iceberg tables because the
 //!   unlocked Iceberg lane rewrites `metadata/version-hint.text` on every

@@ -44,9 +44,9 @@ cargo run -p store --bin navigator-migrate -- --through <version>   # pending mi
 cargo run -p store --bin navigator-migrate -- --dir <path>          # a directory instead of the compiled set
 ```
 
-Run it as a Job, with a migration role's credentials, and start services only after it succeeds. `navigator-deploy
-journal migrate` calls the same runner. Every migration lets SQLx own its transaction, lock and `_sqlx_migrations` row:
-no file contains `BEGIN`/`COMMIT` or writes a ledger of its own.
+Run it as a Job, with a migration role's credentials, and start services only after it succeeds. `hudson journal
+migrate` calls the same runner. Every migration lets SQLx own its transaction, lock and `_sqlx_migrations` row: no file
+contains `BEGIN`/`COMMIT` or writes a ledger of its own.
 
 ## Adopting a database installed from `schema.sql`
 
@@ -99,7 +99,7 @@ Migration `20261016130000` validates the exact Template versions pinned by Notat
 an existing PostgreSQL mirror:
 
 1. Run `navigator-migrate --through 20261016123000` to create the Template and email audit tables.
-2. Run `navigator-deploy ops postgres mirror reconcile` against the saved source versions and resolve remaining drift.
+2. Run `hudson ops postgres mirror reconcile` against the saved source versions and resolve remaining drift.
 3. Run the complete migration command.
 
 A missing Template version stops the constraint migration transactionally: it leaves every row and all three constraints
@@ -308,11 +308,11 @@ written. It never overwrites a differing row or deletes a PostgreSQL-only row; t
 reconcile`.
 
 ```bash
-navigator-deploy ops postgres backfill --dry-run --json          # the plan; writes nothing
-navigator-deploy ops postgres backfill --dry-run --verify-assets --json  # include referenced objects
-navigator-deploy ops postgres backfill --batch-size 500 --json   # start a run
-navigator-deploy ops postgres backfill --max-batches 20 --json   # start a run, stop after 20 batches
-navigator-deploy ops postgres backfill --resume <run-id> --json  # continue a run from its checkpoints
+hudson ops postgres backfill --dry-run --json          # the plan; writes nothing
+hudson ops postgres backfill --dry-run --verify-assets --json  # include referenced objects
+hudson ops postgres backfill --batch-size 500 --json   # start a run
+hudson ops postgres backfill --max-batches 20 --json   # start a run, stop after 20 batches
+hudson ops postgres backfill --resume <run-id> --json  # continue a run from its checkpoints
 ```
 
 - **Plan.** `--dry-run` compares every mirror in registry order and lists, per table, the rows a run would write (by

@@ -1,10 +1,9 @@
 # DNS — pointing your instance at a real domain
 
 DNS is **not required** to run Neon Law Navigator. `web` boots, serves the portal, and self-tests against nothing but
-the store and storage — the KIND loop and every worked example use `your-domain.example`, and `navigator-deploy ops gcp
-setup` provisions compute, data, and a static IP but **never touches DNS**. DNS is the last-mile of a public deploy: it
-makes the instance reachable at a real hostname and wires mail. This page is the recipe, and the tools you use to apply
-it.
+the store and storage — the KIND loop and every worked example use `your-domain.example`, and `hudson ops gcp setup`
+provisions compute, data, and a static IP but **never touches DNS**. DNS is the last-mile of a public deploy: it makes
+the instance reachable at a real hostname and wires mail. This page is the recipe, and the tools you use to apply it.
 
 DNS is also **provider-agnostic**. The record model lives behind the `DnsProvider` trait in `deploy/src/devx/dns.rs`;
 DNSimple is the shipped implementation and the provider Neon Law runs, but the app never dials it at runtime, and a fork
@@ -21,11 +20,11 @@ env-var interface — see [`third-party-integrations.md`](third-party-integratio
 
 ## Provision it with one command
 
-`navigator-deploy ops dns setup` reconciles the whole record set through DNSimple. Every group is opt-in via a flag, so
-the same command serves a greenfield fork and Neon Law's live topology. By default it prints a read-only preview of the
-exact record and apex-certificate changes. It applies nothing without `--apply`; `--dry-run` remains an explicit preview
-alias and cannot be combined with `--apply`. It reads four environment variables — three deployment/provider coordinates
-and the DNSimple-specific token:
+`hudson ops dns setup` reconciles the whole record set through DNSimple. Every group is opt-in via a flag, so the same
+command serves a greenfield fork and Neon Law's live topology. By default it prints a read-only preview of the exact
+record and apex-certificate changes. It applies nothing without `--apply`; `--dry-run` remains an explicit preview alias
+and cannot be combined with `--apply`. It reads four environment variables — three deployment/provider coordinates and
+the DNSimple-specific token:
 
 ```bash
 export DNS_ZONE=your-domain.example        # the domain to configure (or pass --domain)
@@ -33,7 +32,7 @@ export DNS_ACCT=<your-account-id>          # DNSimple account id — see `dnsimp
 export DNS_SIMPLE=<token>                  # secret; `DNSIMPLE_API_TOKEN` is a legacy alias
 export NAVIGATOR_GATEWAY_IP=<gateway-ip>   # resolved address, not the GCP resource name
 
-navigator-deploy ops dns setup \
+hudson ops dns setup \
   --redirect-apex-to-www \
   --google-workspace \
   --google-site-verification <token> \
@@ -74,7 +73,7 @@ Lex Tecnica's two brands, Lex Tecnica and IEP Defenders, are served on `neonlaw.
 their own: `lex-tecnica` and `iep` in production, `staging-lex-tecnica` and `staging-iep` on staging. They have no apex
 to redirect. Their records sit in the `neonlaw.com` zone, and their `ManagedCertificate` entries render from the
 registry's release inventory (`views::brand::release_brand_hosts()`) like every other brand host. Bring each one online
-with `navigator-deploy ops host setup` (below).
+with `hudson ops host setup` (below).
 
 `DNS_ACCT` is the DNSimple account that holds the zone. Read it from `dnsimple accounts list` — a user token can span
 several accounts, and a command run against the wrong one fails with `Zone not found` rather than a permission error,
@@ -120,13 +119,13 @@ DNSIMPLE_TOKEN="$DNS_SIMPLE" dnsimple records delete "$DNS_ZONE" \
   "$RECORD_ID" --account "$DNS_ACCT"
 ```
 
-### Bringing a registered brand host online — `navigator-deploy ops host setup`
+### Bringing a registered brand host online — `hudson ops host setup`
 
 Once a host is registered in `views::brand::BrandKey::hosts` and that release has shipped, one command does the rest:
 
 ```bash
-navigator-deploy ops host setup --host iep.neonlaw.com --deployment <name>
-navigator-deploy ops host setup --host iep.neonlaw.com --deployment <name> --apply
+hudson ops host setup --host iep.neonlaw.com --deployment <name>
+hudson ops host setup --host iep.neonlaw.com --deployment <name> --apply
 ```
 
 1. **DNS:** an `A` record for the host's label in its zone, pointed at the gateway the deployment's own public host
@@ -161,7 +160,7 @@ a release.
 
 The per-domain SendGrid and Google secrets — the DKIM/link-branding `CNAME` targets and the site-verification token —
 come from SendGrid's Domain Authentication wizard and Google's Admin console. The command takes them as flags and
-**never invents them**. (`cargo run -p deploy -- ops dns setup …` is the same command from a source checkout.)
+**never invents them**. (`cargo run -p hudson -- ops dns setup …` is the same command from a source checkout.)
 
 ## By hand, or on another DNS provider
 
@@ -238,7 +237,7 @@ dnsimple certificates issue-letsencrypt   "$ZONE" -a "$ACCT" <certificate-id>
 near-identical ones:
 
 ```bash
-navigator-deploy ops dns setup \
+hudson ops dns setup \
   --domain first-domain.example --domain second-domain.example \
   --gateway-ip "$NAVIGATOR_GATEWAY_IP" --host www --host staging \
   --redirect-apex-to-www
@@ -269,8 +268,8 @@ Two things must both be true before the apex is actually reachable, and neither 
    80 only, and no certificate changes that.
 2. A **certificate exists for that domain and is active**. Teams does not issue one for a `URL` record on its own;
    `--redirect-apex-to-www` orders and requests issuance for you, but issuance is asynchronous and can still be pending
-   the first time you check — read its printed report (or rerun `navigator-deploy ops brand-readiness`, below) rather
-   than assuming the flag alone finished the job.
+   the first time you check — read its printed report (or rerun `hudson ops brand-readiness`, below) rather than
+   assuming the flag alone finished the job.
 
 Check the tier once per account and the certificate once per domain, since a single account holding several domains will
 have certificates for some and not others:
@@ -419,9 +418,9 @@ the serving one on the live Ingress, waits, then detaches and deletes the old on
 serving and waits for nothing:
 
 ```bash
-navigator-deploy ops certificates pre-roll --deployment neon-law-stg --project-id <staging-project> --dry-run
-navigator-deploy ops certificates pre-roll --deployment neon-law-stg --project-id <staging-project>
-navigator-deploy ops certificates pre-roll --deployment neon-production --project-id <production-project>
+hudson ops certificates pre-roll --deployment neon-law-stg --project-id <staging-project> --dry-run
+hudson ops certificates pre-roll --deployment neon-law-stg --project-id <staging-project>
+hudson ops certificates pre-roll --deployment neon-production --project-id <production-project>
 ```
 
 The target set is compiled into the CLI, so run the build of the release you are about to ship, such as `cargo run -p
@@ -432,15 +431,15 @@ issue.
 
 Keep issuance and per-host verification receipts in the deployment's approved private records.
 
-### Verifying it — `navigator-deploy ops brand-readiness`
+### Verifying it — `hudson ops brand-readiness`
 
 A rendered manifest and a successful `kubectl apply` are a request, not proof: a `ManagedCertificate` can sit in
 `Provisioning` indefinitely, and the old primary-host smoke check only ever looked at one of sixteen production/staging
-hosts. `navigator-deploy ops brand-readiness --deployment <name>` is the receipt:
+hosts. `hudson ops brand-readiness --deployment <name>` is the receipt:
 
 ```bash
-cargo run -p deploy -- ops brand-readiness --deployment neon-law-stg
-cargo run -p deploy -- ops brand-readiness --deployment neon-production
+cargo run -p hudson -- ops brand-readiness --deployment neon-law-stg
+cargo run -p hudson -- ops brand-readiness --deployment neon-production
 ```
 
 For every host the release inventory names on that deployment's environment, it performs a real TLS handshake through
@@ -460,10 +459,10 @@ any one of them is not ready; it never reports success from the certificate mani
 
 ### Staging-first release handoff
 
-1. Render and ship staging (`navigator-deploy ops ship --deployment neon-law-stg --tag <tag>`), then run
-   `navigator-deploy ops brand-readiness --deployment neon-law-stg` and confirm every host is `Ready`.
-2. Only once staging is fully green, ship the same immutable tag to production (`navigator-deploy ops ship --deployment
-   neon-production --tag <tag>`) and run `navigator-deploy ops brand-readiness --deployment neon-production`.
+1. Render and ship staging (`hudson ops ship --deployment neon-law-stg --tag <tag>`), then run
+   `hudson ops brand-readiness --deployment neon-law-stg` and confirm every host is `Ready`.
+2. Only once staging is fully green, ship the same immutable tag to production (`hudson ops ship --deployment
+   neon-production --tag <tag>`) and run `hudson ops brand-readiness --deployment neon-production`.
 3. **Production apply remains operator-run.** Neither `ops ship` nor `ops brand-readiness` runs unattended against
    production; an operator holding the release tag and cluster credentials runs both commands themselves, in that order,
    and reads the readiness receipt before calling the release done.
@@ -477,12 +476,12 @@ any one of them is not ready; it never reports success from the certificate mani
 ## Verify
 
 ```bash
-navigator-deploy ops dns setup                    # every line UNCHANGED → the zone matches
+hudson ops dns setup                    # every line UNCHANGED → the zone matches
 dig +short www.your-domain.example          # → the gateway IP
 curl -sI https://your-domain.example        # → 301 to https://www.your-domain.example (redirector + cert)
 dig +short your-domain.example MX           # → smtp.google.com (Workspace)
 dig +short parse.your-domain.example MX     # → mx.sendgrid.net (Inbound Parse)
-navigator-deploy ops brand-readiness --deployment <name>   # the full per-brand TLS/content receipt, see above
+hudson ops brand-readiness --deployment <name>   # the full per-brand TLS/content receipt, see above
 ```
 
 ## Related

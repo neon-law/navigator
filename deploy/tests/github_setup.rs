@@ -1,4 +1,4 @@
-//! Binary wiring for `navigator-deploy ops github setup <repository> --dry-run`.
+//! Binary wiring for `hudson ops github setup <repository> --dry-run`.
 
 use assert_cmd::Command;
 use predicates::prelude::PredicateBooleanExt;
@@ -10,7 +10,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 async fn dry_run_prints_plan_without_writes() {
     let server = MockServer::start().await;
     mount_reads(&server).await;
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .args(["ops", "github", "setup", "neon-law/navigator", "--dry-run"])
         .env("GITHUB_TOKEN", "test-token")
@@ -38,7 +38,7 @@ async fn dry_run_lists_the_actions_access_a_none_home_would_get() {
     let server = MockServer::start().await;
     mount_reads(&server).await;
     mount_actions_access(&server, "none").await;
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .args([
             "ops",
@@ -72,7 +72,7 @@ async fn dry_run_leaves_an_organization_access_home_alone() {
     let server = MockServer::start().await;
     mount_reads(&server).await;
     mount_actions_access(&server, "organization").await;
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .args([
             "ops",

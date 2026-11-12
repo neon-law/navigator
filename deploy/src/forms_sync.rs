@@ -1,4 +1,4 @@
-//! `navigator-deploy forms sync` / `navigator-deploy forms fields` — vendor, pin,
+//! `hudson forms sync` / `hudson forms fields` — vendor, pin,
 //! and inspect the blank government forms in the public assets bucket.
 //!
 //! The bucket is the only home of the blank bytes; the repo keeps the
@@ -91,7 +91,7 @@ fn workspace_root() -> anyhow::Result<PathBuf> {
         })
 }
 
-/// Entry point for `navigator-deploy forms sync`. `bucket` defaults to the
+/// Entry point for `hudson forms sync`. `bucket` defaults to the
 /// `NAVIGATOR_ASSETS_BUCKET` env var — the public `<project>-assets`
 /// bucket, deliberately distinct from the documents bucket so blanks
 /// never land in the confidential lane (and vice versa).
@@ -101,7 +101,7 @@ pub fn run_sync(bucket: Option<&str>) -> ExitCode {
     })
 }
 
-/// The body of `navigator-deploy forms sync`: sync every registry form resolved
+/// The body of `hudson forms sync`: sync every registry form resolved
 /// onto `root`, printing one line per form and a closing tally.
 async fn sync_all(storage: &dyn StorageService, root: &Path) -> anyhow::Result<()> {
     let items = items_from_registry(root)?;
@@ -141,13 +141,13 @@ pub fn run_fields(code: &str, bucket: Option<&str>) -> ExitCode {
     })
 }
 
-/// The body of `navigator-deploy forms fields`: pull, pin-verify, and print.
+/// The body of `hudson forms fields`: pull, pin-verify, and print.
 async fn print_fields(storage: &dyn StorageService, code: &str) -> anyhow::Result<()> {
     let form = forms::get(code)?
         .ok_or_else(|| anyhow::anyhow!("`{code}` is not in the vendored forms registry"))?;
     let blank = storage.get(form.object_path).await.map_err(|e| {
         anyhow::anyhow!(
-            "pull `{}`: {e} — vendor the blank with `navigator-deploy forms sync`",
+            "pull `{}`: {e} — vendor the blank with `hudson forms sync`",
             form.object_path
         )
     })?;
@@ -166,7 +166,7 @@ async fn print_fields(storage: &dyn StorageService, code: &str) -> anyhow::Resul
 /// `unmapped__` namespace. Writes the re-authored working copy to
 /// `templates/notations/<object_path>` plus its diffable `.fields` manifest, then
 /// prints the human steps that remain: visual QA of the filled blank,
-/// `navigator-deploy forms sync` to vendor + re-pin, and deleting the
+/// `hudson forms sync` to vendor + re-pin, and deleting the
 /// `.fields.toml` the transform just consumed.
 pub fn run_reauthor(code: &str, bucket: Option<&str>) -> ExitCode {
     let code = code.to_string();
@@ -175,7 +175,7 @@ pub fn run_reauthor(code: &str, bucket: Option<&str>) -> ExitCode {
     })
 }
 
-/// The body of `navigator-deploy forms re-author`, against the checkout at `root`.
+/// The body of `hudson forms re-author`, against the checkout at `root`.
 async fn reauthor(storage: &dyn StorageService, root: &Path, code: &str) -> anyhow::Result<()> {
     let form = forms::get(code)?
         .ok_or_else(|| anyhow::anyhow!("`{code}` is not in the vendored forms registry"))?;
@@ -183,7 +183,7 @@ async fn reauthor(storage: &dyn StorageService, root: &Path, code: &str) -> anyh
 
     let blank = storage.get(form.object_path).await.map_err(|e| {
         anyhow::anyhow!(
-            "pull `{}`: {e} — vendor the blank with `navigator-deploy forms sync`",
+            "pull `{}`: {e} — vendor the blank with `hudson forms sync`",
             form.object_path
         )
     })?;
@@ -220,7 +220,7 @@ async fn reauthor(storage: &dyn StorageService, root: &Path, code: &str) -> anyh
     println!("  working copy: {}", local_blank.display());
     println!("  manifest:     {}", manifest_path.display());
     println!("  next: fill the working copy with sample answers and visually QA it,");
-    println!("        then `navigator-deploy forms sync` to vendor + re-pin, and delete the");
+    println!("        then `hudson forms sync` to vendor + re-pin, and delete the");
     println!("        `.fields.toml` this transform consumed.");
     Ok(())
 }
@@ -442,7 +442,7 @@ fn verify_manifest(item: &SyncItem, bytes: &[u8]) -> anyhow::Result<()> {
         anyhow::bail!(
             "{}: the blank's own `/T` names diverge from the tracked `.fields` manifest \
              ({} in the bytes vs {} tracked; first missing from the bytes: {:?}; first \
-             absent from the manifest: {:?}) — re-run `navigator-deploy forms re-author {}` so \
+             absent from the manifest: {:?}) — re-run `hudson forms re-author {}` so \
              the manifest mirrors the exact bytes",
             item.code,
             derived.len(),
@@ -1109,7 +1109,7 @@ mod tests {
         let form = forms::registry().unwrap().remove(0);
         let missing = print_fields(&storage, form.code).await.unwrap_err();
         assert!(
-            missing.to_string().contains("navigator-deploy forms sync"),
+            missing.to_string().contains("hudson forms sync"),
             "{missing:#}"
         );
 
@@ -1196,7 +1196,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            no_blank.to_string().contains("navigator-deploy forms sync"),
+            no_blank.to_string().contains("hudson forms sync"),
             "{no_blank:#}"
         );
 

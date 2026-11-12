@@ -1,4 +1,4 @@
-//! `navigator-deploy inbox import` (LAW-238 D2): the CLI verb is a thin client over
+//! `hudson inbox import` (LAW-238 D2): the CLI verb is a thin client over
 //! the server door `POST /app/api/inbox/import`, so the contract lives at
 //! three seams — the prose (`docs/inbox-import-cli.md` must not drift from
 //! the shipped behavior), the dry run (`--dry-run` prints the request JSON
@@ -23,7 +23,7 @@ const DOC: &str = include_str!("../../docs/inbox-import-cli.md");
 #[test]
 fn inbox_import_prose_names_the_shipped_behavior() {
     for expected in [
-        "navigator-deploy inbox import",
+        "hudson inbox import",
         "--source=email",
         "--source=linkedin",
         "--file",
@@ -33,7 +33,7 @@ fn inbox_import_prose_names_the_shipped_behavior() {
         "--dry-run",
         "dedup",
         "exits 0",
-        "no `navigator-deploy inbox send`",
+        "no `hudson inbox send`",
         "ingest-only",
         "navigator site login",
         "reconcile step",
@@ -46,7 +46,7 @@ fn inbox_import_prose_names_the_shipped_behavior() {
 }
 
 fn navigator() -> Command {
-    let mut command = Command::cargo_bin("navigator-deploy").unwrap();
+    let mut command = Command::cargo_bin("hudson").unwrap();
     command.env_remove("GITHUB_REPOSITORY");
     command.env("NAVIGATOR_RELEASE_TAG", env!("CARGO_PKG_VERSION"));
     command.env_remove("GITHUB_REF");

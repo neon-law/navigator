@@ -11,9 +11,8 @@ repository, [neon-law/navigator](https://github.com/neon-law/navigator): the peo
 runtime configuration, and release verification. It stands up your **own** instance — the same Rust stack our attorneys
 use, on your own Google Cloud project, for your own community.
 
-One command does most of the work: `navigator-deploy ops gcp setup`, a provisioner written in Rust that talks to
-Google's REST APIs directly and ships with a dry-run so you can read the whole plan before a single packet leaves your
-laptop.
+One command does most of the work: `hudson ops gcp setup`, a provisioner written in Rust that talks to Google's REST
+APIs directly and ships with a dry-run so you can read the whole plan before a single packet leaves your laptop.
 
 Two things to hold up front. This provisions **billable** Google Cloud resources — a GKE Autopilot cluster and six core
 storage buckets, with optional archive and telemetry lanes — so it is not free, and you should set a budget alert before
@@ -28,7 +27,7 @@ stack we run. Let's stand it up.
 > Otherwise, replace GORP with a typeface you are licensed to serve before launch.
 >
 > **Start locally with an authorized checkout.** You do not need a cloud account to see Neon Law Navigator run.
-> `cargo run -p deploy -- dev up` brings the whole stack up locally in
+> `cargo run -p hudson -- dev up` brings the whole stack up locally in
 > [KIND](https://kind.sigs.k8s.io/) (the store, OIDC, storage, the workflow broker, embedded Rego), then
 > `source .devx/env` and
 > `cargo run -p neon` serves it on `localhost`. Boot it locally, inspect the canonical seed, and only
@@ -50,8 +49,8 @@ watch the first invoice, and size the cluster down if it is more than you need.
 
 ### Deploy your own
 
-Follow this workshop to stand up your own Neon Law Navigator. `navigator-deploy ops gcp setup` stands the same Rust
-stack our attorneys run up on your Google Cloud project. Free, open, and yours to keep.
+Follow this workshop to stand up your own Neon Law Navigator. `hudson ops gcp setup` stands the same Rust stack our
+attorneys run up on your Google Cloud project. Free, open, and yours to keep.
 
 ---
 
@@ -75,19 +74,19 @@ Six steps, each tagged with its Bloom verb. You are the admin operator; the `nav
 Each step is tagged with the Bloom verb it exercises (the [Anderson & Krathwohl 2001
 revision](https://en.wikipedia.org/wiki/Bloom%27s_taxonomy)). You are the admin operator; the `navigator` CLI is the
 instrument. **Create** — stand up a billed Google Cloud project and authenticate so `navigator` can act on your behalf.
-**Predict** — run `navigator-deploy ops gcp setup --dry-run` and read every API call the provisioner _would_ make before
-sending one. **Identify** — name the twenty-four Google Cloud APIs the provisioner enables, and why each is needed.
-**Explain** — describe the VPC, the six core storage buckets and optional archive/telemetry lanes, the private image
-registry, the configured service deployments, and why re-running setup is always safe. **Execute** — bring up the GKE
-Autopilot cluster, the static IP, and Fleet membership with one command. **Verify** — ship the images and confirm the
-running service answers `/readyz` with a 200.
+**Predict** — run `hudson ops gcp setup --dry-run` and read every API call the provisioner _would_ make before sending
+one. **Identify** — name the twenty-four Google Cloud APIs the provisioner enables, and why each is needed. **Explain**
+— describe the VPC, the six core storage buckets and optional archive/telemetry lanes, the private image registry, the
+configured service deployments, and why re-running setup is always safe. **Execute** — bring up the GKE Autopilot
+cluster, the static IP, and Fleet membership with one command. **Verify** — ship the images and confirm the running
+service answers `/readyz` with a 200.
 
 ## Prepare Google Cloud
 
 ### Bring your own project
 
-`navigator-deploy ops gcp setup` provisions _into_ a project; it does not create one. Start by creating a project and
-attaching a billing account, then authenticate so the CLI can act as you:
+`hudson ops gcp setup` provisions _into_ a project; it does not create one. Start by creating a project and attaching a
+billing account, then authenticate so the CLI can act as you:
 
 ```bash
 gcloud projects create your-project-id --name "Neon Law Navigator"
@@ -135,7 +134,7 @@ Before you change anything, read the plan. The `--dry-run` flag records every RE
 prints them without sending traffic:
 
 ```bash
-cargo run -p deploy -- ops gcp setup --project-id your-project-id --dry-run
+cargo run -p hudson -- ops gcp setup --project-id your-project-id --dry-run
 ```
 
 ---
@@ -195,7 +194,7 @@ gcp operation [Compute] operation-123: compute.googleapis.com activation is stil
 
 ### Private assets and domain restricted sharing
 
-Every deployment bucket remains private. `navigator-deploy ops gcp setup` grants the deployment Google service account
+Every deployment bucket remains private. `hudson ops gcp setup` grants the deployment Google service account
 `roles/storage.objectAdmin` on its assets, documents, exports, logs, and applications buckets, then maps both Kubernetes
 service accounts (`navigator-web` and `workflows-service`) to that Google identity through Workload Identity. The
 PostgreSQL backups bucket is the exception: only the `navigator-postgres-backup` Kubernetes service account gets object
@@ -222,10 +221,10 @@ images embedded in the CLI plus those same gallery variants, brand media keys, a
 checks.
 
 ```bash
-navigator-deploy ops assets build --src /path/to/source-jpegs
-navigator-deploy ops assets upload
-navigator-deploy ops assets fonts upload --family eb-garamond --dir /path/to/woff2
-navigator-deploy site asset upload --host "$NAVIGATOR_PUBLIC_HOST" "$ASSET_PATH"
+hudson ops assets build --src /path/to/source-jpegs
+hudson ops assets upload
+hudson ops assets fonts upload --family eb-garamond --dir /path/to/woff2
+hudson site asset upload --host "$NAVIGATOR_PUBLIC_HOST" "$ASSET_PATH"
 ```
 
 `assets build` then `assets upload` publishes the gallery variants. `assets fonts upload` publishes one licensed family.
@@ -415,16 +414,16 @@ archive and telemetry lanes are additional:
 ROW="${ROW:?set this to the selected row name}"
 CONFIG="$NAVIGATOR_DEPLOYMENTS_DIR/deployments/$ROW/config.toml"
 set -a; eval "$(grep ' = "' "$CONFIG" | sed 's/ = /=/')"; set +a
-navigator-deploy ops gcp setup --dry-run
+hudson ops gcp setup --dry-run
 ```
 
 Check every printed project, region, resource prefix, and the two API batches. Provision the registry hub once before
 the runtime stacks; it runs no workloads:
 
 ```bash
-navigator-deploy ops gcp hub setup \
+hudson ops gcp hub setup \
   --project-id "$NAVIGATOR_IMAGE_REGISTRY_PROJECT" --region "$NAVIGATOR_GCP_LOCATION" --dry-run
-navigator-deploy ops gcp hub setup \
+hudson ops gcp hub setup \
   --project-id "$NAVIGATOR_IMAGE_REGISTRY_PROJECT" --region "$NAVIGATOR_GCP_LOCATION"
 ```
 
@@ -433,7 +432,7 @@ its command finishes:
 
 ```bash
 set -a; eval "$(grep ' = "' "$CONFIG" | sed 's/ = /=/')"; set +a
-navigator-deploy ops gcp setup
+hudson ops gcp setup
 ```
 
 That is the live resource boundary, per deployment: six core buckets, plus any named archive/telemetry lanes, one
@@ -443,9 +442,8 @@ deployed website; `ops ship`, DNS, and the browser checks later in this workshop
 
 Setup provisions no database and generates no credential, so there is nothing printed to record. The store's own
 credentials go into `$NAVIGATOR_DEPLOYMENTS_DIR/deployments/<row>/secrets.enc.yaml` (`sops set` — the plaintext never
-touches disk), then `navigator-deploy ops secrets apply --deployment "$ROW" --deployments-dir
-"$NAVIGATOR_DEPLOYMENTS_DIR"`; rotation happens at the provider first, per
-[`docs/deployment-secrets.md`](/docs/deployment-secrets).
+touches disk), then `hudson ops secrets apply --deployment "$ROW" --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR"`;
+rotation happens at the provider first, per [`docs/deployment-secrets.md`](/docs/deployment-secrets).
 
 Resolve every reserved address and record the public value as `NAVIGATOR_GATEWAY_IP` in the matching private
 `config.toml`. Keep this public infrastructure coordinate in the operator-managed deployment root:
@@ -496,9 +494,9 @@ and live preflight described in [`docs/manual-roll.md`](/docs/manual-roll).
 CONFIG="$NAVIGATOR_DEPLOYMENTS_DIR/deployments/$ROW/config.toml"
 set -a; eval "$(grep ' = "' "$CONFIG" | sed 's/ = /=/')"; set +a
 host="$NAVIGATOR_PUBLIC_HOST"
-navigator-deploy ops ship --deployment "$ROW" --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --tag "$TAG" --dry-run
+hudson ops ship --deployment "$ROW" --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --tag "$TAG" --dry-run
 # For a real roll, first prepare the signed map as described in docs/manual-roll.md.
-navigator-deploy ops ship --deployment "$ROW" --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --tag "$TAG" \
+hudson ops ship --deployment "$ROW" --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --tag "$TAG" \
   --image-digests "$IMAGE_DIGESTS"
 curl --fail --show-error "https://${host}/version"
 ```
@@ -509,7 +507,7 @@ passes. The release workflow obtains the rows from the configured external root 
 ```bash
 : "${NAVIGATOR_DEPLOYMENTS_DIR:?set this to the operator-managed private deployment root}"
 : "${ROW:?set this to the selected row name}"
-navigator-deploy ops ship --deployment "$ROW" --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --tag "$TAG" \
+hudson ops ship --deployment "$ROW" --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --tag "$TAG" \
   --image-digests "$IMAGE_DIGESTS"
 ```
 
@@ -701,7 +699,7 @@ creates the [GKE Autopilot](https://cloud.google.com/kubernetes-engine/docs/conc
 registers it as a Fleet member:
 
 ```bash
-cargo run -p deploy -- ops gcp setup --project-id your-project-id --region "$NAVIGATOR_GCP_LOCATION"
+cargo run -p hudson -- ops gcp setup --project-id your-project-id --region "$NAVIGATOR_GCP_LOCATION"
 ```
 
 ---
@@ -711,8 +709,8 @@ defaults. The provisioner reserves a global static IP for the Gateway (so your D
 re-create), creates the Autopilot cluster on the `rapid` release channel with the Secret Manager add-on, then registers
 the cluster as a Fleet member. If you point `--config-sync-repo` at your fork, it also applies a [Config
 Sync](https://cloud.google.com/kubernetes-engine/enterprise/config-sync/docs/overview) `RootSync` so the cluster pulls
-its manifests from Git. Hosted rows omit that flag: deployment-rendered `navigator-deploy ops ship` is the sole manifest
-owner, so a `RootSync` cannot revert one site's environment-specific render.
+its manifests from Git. Hosted rows omit that flag: deployment-rendered `hudson ops ship` is the sole manifest owner, so
+a `RootSync` cannot revert one site's environment-specific render.
 
 ### What setup owns — and what follows it
 
@@ -722,10 +720,10 @@ the cloud/cluster boundary. Finish the deployment through these adjacent owners:
 
 | Need | Adjacent operation |
 | --- | --- |
-| DNS | Run `navigator-deploy ops dns setup`; DNS may be outside GCP, while setup owns only the stable Gateway IP. |
-| TLS and Gateway manifests | `navigator-deploy ops ship` renders and applies Gateway, certificate, and routes. |
+| DNS | Run `hudson ops dns setup`; DNS may be outside GCP, while setup owns only the stable Gateway IP. |
+| TLS and Gateway manifests | `hudson ops ship` renders and applies Gateway, certificate, and routes. |
 | Restate | Apply the Restate operator and manifests, then let `ops ship` re-register the worker. |
-| Secret values | `navigator-deploy ops secrets apply` decrypts and writes Secret Manager and the Kubernetes Secret. |
+| Secret values | `hudson ops secrets apply` decrypts and writes Secret Manager and the Kubernetes Secret. |
 
 ---
 
@@ -746,7 +744,7 @@ Configure the installation's HTTPS root URL, DNS and TLS, its own OIDC client an
 allowlist, and PostgreSQL certificate trust. Keep Forgejo credentials in its encrypted service file:
 
 ```bash
-navigator-deploy ops secrets apply --deployment "$DEPLOYMENT" --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" \
+hudson ops secrets apply --deployment "$DEPLOYMENT" --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" \
   --service forgejo --dry-run
 ```
 
@@ -785,7 +783,7 @@ Test both. Keep private signing keys and decrypted service configuration out of 
 Read the actual gate's check context from a run on the installation. Review policy drift without writing:
 
 ```bash
-navigator-deploy ops forgejo setup example-firm/sample-litigation \
+hudson ops forgejo setup example-firm/sample-litigation \
   --url https://forge.example.test/ --check-context ci --dry-run
 ```
 
@@ -847,7 +845,7 @@ For Git history, prepare a stable local mirror and verify a portable bundle:
 
 ```bash
 git clone --mirror https://forge.example.test/example-firm/sample-litigation.git /path/to/mirror.git
-navigator-deploy ops forgejo bundle /path/to/mirror.git /path/to/repository.bundle
+hudson ops forgejo bundle /path/to/mirror.git /path/to/repository.bundle
 ```
 
 The command restores into a scratch mirror and checks object integrity, ref hashes and the default branch before
@@ -874,7 +872,7 @@ Only then switch the selected Project and prove gate, merge, publication and not
 ---
 
 Navigator uses three operating modes and two parsed deployment profiles. “Dev” is the local KIND lane, including its
-disposable `navigator-deploy dev staging` integration surface; the wire value is `dev`. All persistent hosted rows use
+disposable `hudson dev staging` integration surface; the wire value is `dev`. All persistent hosted rows use
 `production`, even when a config, namespace, or hostname ends in `-staging`. “Test” is the `dev` profile with
 `NAVIGATOR_CI_HARNESS=1`, not a third parsed value. Exact means exact: `staging`, `test`, `Dev`, `Production`, or any
 value with surrounding whitespace is an error. Production is selected by exact `production`, empty, or unset, so an
@@ -1032,7 +1030,7 @@ sandbox overrides, but it is also why copying `.env.example` wholesale is not th
 `NAVIGATOR_ENVIRONMENT=` in `.env` wins over the generated `dev` value and selects production checks. Start local
 development with no `.env`; add only the sandbox values you actually intend to override.
 
-### Local dev controls: inputs read by `navigator-deploy dev`
+### Local dev controls: inputs read by `hudson dev`
 
 | Concern | Environment variables | Defaults / effect |
 | --- | --- | --- |
@@ -1107,10 +1105,10 @@ overrides. Keep generated credentials out of source control.
 
 ---
 
-Do not edit `.devx/env`; the next `navigator-deploy dev up` overwrites it. The file is a connection descriptor for the
-host-side `web`, not a secret store. In the default loop the host `web` and in-cluster worker share the `navigator`
-database. A worktree environment can use another database and port, but Restate-backed flows require the worker and web
-database coordinates to agree; `navigator-deploy dev worktree-env status` reports a mismatch.
+Do not edit `.devx/env`; the next `hudson dev up` overwrites it. The file is a connection descriptor for the host-side
+`web`, not a secret store. In the default loop the host `web` and in-cluster worker share the `navigator` database. A
+worktree environment can use another database and port, but Restate-backed flows require the worker and web database
+coordinates to agree; `hudson dev worktree-env status` reports a mismatch.
 
 ### The store: SurrealDB
 
@@ -1236,8 +1234,8 @@ attachment once:
    `https://www.googleapis.com/auth/contacts`. Do not grant a broader Admin SDK scope merely because the API is enabled.
 3. Create that deployment's otherwise-empty Projects shared drive and record its ID. Staging creates its own drive,
    separate from production's.
-4. Set the row's `*_DELEGATED_USER` with `navigator-deploy ops deployments set`, and its `*_PROJECTS_DRIVE_ID` when
-   Drive ingest is wanted, then roll with `navigator-deploy ops ship`. Create no key for the account.
+4. Set the row's `*_DELEGATED_USER` with `hudson ops deployments set`, and its `*_PROJECTS_DRIVE_ID` when
+   Drive ingest is wanted, then roll with `hudson ops ship`. Create no key for the account.
 
 ### Deployed runtime: identity and access
 
@@ -1461,12 +1459,12 @@ The DNSimple CLI transaction uses operator-shell variables `DNS_SIMPLE` (or lega
 
 ---
 
-`navigator-deploy ops gcp setup` consumes the target and resource names; `navigator-deploy ops ship` consumes the
-target, public identity, immutable brand image, OAuth client IDs, Secret name, and Restate coordinates. `ops gcp setup`
-flags override their clap-bound environment variables; `ops ship` reads nothing from the environment — its required
-`--deployment` flag selects one site's private config before it renders, diffs, and applies the GKE manifests. `ops
-ship` accepts exact `production` (or empty/unset) for every persistent hosted deployment. Exact `dev` belongs to the
-disposable `navigator dev staging` lane, not a persistent hosted row.
+`hudson ops gcp setup` consumes the target and resource names; `hudson ops ship` consumes the target, public identity,
+immutable brand image, OAuth client IDs, Secret name, and Restate coordinates. `ops gcp setup` flags override their
+clap-bound environment variables; `ops ship` reads nothing from the environment — its required `--deployment` flag
+selects one site's private config before it renders, diffs, and applies the GKE manifests. `ops ship` accepts exact
+`production` (or empty/unset) for every persistent hosted deployment. Exact `dev` belongs to the disposable `navigator
+dev staging` lane, not a persistent hosted row.
 
 ### When sample data appears
 
@@ -1518,10 +1516,10 @@ and provider-specific notes. See [`docs/oss-install.md`](/docs/oss-install) §4 
 
 Two rules keep client data safe, and the deploy will not let you skip them. First, **plaintext secrets never live in the
 manifest tree** — key material is SOPS-encrypted per value in the private row's `secrets.enc.yaml`, decrypted only by
-`navigator-deploy ops secrets apply` into that deployment's own Secret Manager, so no readable credential enters Git.
-Second, **one interface, your choice of source** — the Secret Manager CSI driver projects each deployment's Secret into
-the pod. See [`docs/deployment-secrets.md`](/docs/deployment-secrets). Local KIND uses its generated `.devx/env`, and
-optional sandbox integrations use a gitignored `.env`. The env-var interface is identical across them.
+`hudson ops secrets apply` into that deployment's own Secret Manager, so no readable credential enters Git. Second,
+**one interface, your choice of source** — the Secret Manager CSI driver projects each deployment's Secret into the pod.
+See [`docs/deployment-secrets.md`](/docs/deployment-secrets). Local KIND uses its generated `.devx/env`, and optional
+sandbox integrations use a gitignored `.env`. The env-var interface is identical across them.
 
 ### Secret access, encryption, and audit
 
@@ -1529,7 +1527,7 @@ Who may read a deployment's secrets, which key encrypts them, and what gets logg
 `access.toml` and converged by one command. Run it with `--check` first; it reads only and exits nonzero on drift.
 
 ```bash
-navigator-deploy ops gcp access --project-id "$PROJECT" --file "$NAVIGATOR_DEPLOYMENTS_DIR/<row>/access.toml" --check
+hudson ops gcp access --project-id "$PROJECT" --file "$NAVIGATOR_DEPLOYMENTS_DIR/<row>/access.toml" --check
 ```
 
 ---
@@ -1702,7 +1700,7 @@ stack runs on) and **feature vendors** (each lights up one capability and stubs 
 
 | Service | What it gives you | Kind | At boot |
 | --- | --- | --- | --- |
-| Google Cloud | Storage, OIDC, archive | platform | required — provisioned by `navigator-deploy ops gcp setup` |
+| Google Cloud | Storage, OIDC, archive | platform | required — provisioned by `hudson ops gcp setup` |
 | Restate Cloud | Durable workflow execution (`workflows-service`) | platform | required — the workflow broker |
 | Vertex AI | Inbound contract review | feature | optional — the stub reviewer until configured |
 | GitHub | Private per-Project repositories | platform | required in the requested cloud topology |
@@ -1822,23 +1820,23 @@ cargo install --path cli --force
 ```
 
 An operator wrapper must make the same guarantee before it changes Kubernetes or GCP: build the selected checkout's
-`cli` package, then prove that `navigator-deploy ops secrets apply --help` exists. Do not fall back to an arbitrary
-pre-existing `target/release/navigator`; a stale binary can lack a subcommand the current runbook requires and stop only
-after it has already refreshed cluster credentials. Browser OAuth values belong in the deployment's tree before the
-wrapper starts, so preparation is non-interactive. Keep explicit confirmations only for irreversible resource retirement
-and the live release roll.
+`cli` package, then prove that `hudson ops secrets apply --help` exists. Do not fall back to an arbitrary pre-existing
+`target/release/navigator`; a stale binary can lack a subcommand the current runbook requires and stop only after it has
+already refreshed cluster credentials. Browser OAuth values belong in the deployment's tree before the wrapper starts,
+so preparation is non-interactive. Keep explicit confirmations only for irreversible resource retirement and the live
+release roll.
 
 The failed guard runs before manifest rendering or cluster mutation. Install the matching CLI, set both environment and
 credential profiles to `production` in the deployment's `config.toml`, then run the complete sequence:
 
 ```bash
-navigator-deploy ops secrets apply --deployment "$ROW" --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR"
+hudson ops secrets apply --deployment "$ROW" --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR"
 
-navigator-deploy ops observability --deployment "$ROW" --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR"
+hudson ops observability --deployment "$ROW" --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR"
 
-navigator-deploy ops ship --deployment "$ROW" --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --tag YY.M.D --dry-run
+hudson ops ship --deployment "$ROW" --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --tag YY.M.D --dry-run
 
-navigator-deploy ops ship --deployment "$ROW" --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --tag YY.M.D \
+hudson ops ship --deployment "$ROW" --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --tag YY.M.D \
   --image-digests "$IMAGE_DIGESTS"
 ```
 
@@ -1857,9 +1855,9 @@ kubectl --context "$NAVIGATOR_GKE_CONTEXT" -n gke-gmp-system \
   get deployment,pods,endpoints gmp-operator
 ```
 
-When the managed operator becomes ready, rerun the exact same `navigator-deploy ops observability` or three-deployment
-operator command. Namespace creation, Secret reconciliation, Google service-account creation, IAM bindings, and
-collector manifests are all idempotent; a partially completed first run is a resume point, not a cleanup instruction.
+When the managed operator becomes ready, rerun the exact same `hudson ops observability` or three-deployment operator
+command. Namespace creation, Secret reconciliation, Google service-account creation, IAM bindings, and collector
+manifests are all idempotent; a partially completed first run is a resume point, not a cleanup instruction.
 
 The staging dogfood run also proved two quota-independent defaults. Autopilot clusters are created with
 `--enable-private-nodes`, so a new region does not need one public in-use address per node. The link-out compatibility
@@ -1925,10 +1923,10 @@ gcloud container clusters get-credentials "$NAVIGATOR_GKE_CLUSTER_NAME" \
   --region "$NAVIGATOR_GCP_LOCATION" \
   --project "$NAVIGATOR_GCP_PROJECT_ID"
 
-navigator-deploy ops secrets apply --deployment "$ROW" --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR"
-navigator-deploy ops observability --deployment "$ROW" --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR"
-navigator-deploy ops ship --deployment "$ROW" --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --tag "$TAG" --dry-run
-navigator-deploy ops ship --deployment "$ROW" --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --tag "$TAG" \
+hudson ops secrets apply --deployment "$ROW" --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR"
+hudson ops observability --deployment "$ROW" --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR"
+hudson ops ship --deployment "$ROW" --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --tag "$TAG" --dry-run
+hudson ops ship --deployment "$ROW" --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --tag "$TAG" \
   --image-digests "$IMAGE_DIGESTS"
 
 curl --fail --show-error --silent "https://${host}/readyz" >/dev/null
@@ -1953,12 +1951,12 @@ wrong site.
 
 ### Point your domain at the instance (optional)
 
-`navigator-deploy ops gcp setup` reserves a gateway IP but does not change DNS. Keep DNS provider credentials in the
-operator's secret store and use the provider's reviewed change workflow. For each selected row, load its private
-configuration from `$NAVIGATOR_DEPLOYMENTS_DIR/deployments/$ROW/config.toml`, inspect the planned record changes, and
-verify the hostname, gateway address, certificate, and OAuth redirect URI together before applying them. Do not use
-copied record IDs or addresses from workshop material; those values belong to the operator's current DNS account and
-private row configuration.
+`hudson ops gcp setup` reserves a gateway IP but does not change DNS. Keep DNS provider credentials in the operator's
+secret store and use the provider's reviewed change workflow. For each selected row, load its private configuration from
+`$NAVIGATOR_DEPLOYMENTS_DIR/deployments/$ROW/config.toml`, inspect the planned record changes, and verify the hostname,
+gateway address, certificate, and OAuth redirect URI together before applying them. Do not use copied record IDs or
+addresses from workshop material; those values belong to the operator's current DNS account and private row
+configuration.
 
 After the change, verify provider state and public resolution, then check `/readyz`, `/version`, and the browser surface
 for the selected host. See [`docs/dns.md`](/docs/dns) for the supported provider workflow.
@@ -1994,10 +1992,10 @@ from the CLI using the matter code:
 ```bash
 navigator site login --host www.your-domain.example    # opens the browser → ~8h token, stored 0600 (~/.navigator.json)
 navigator site whoami                                  # "you@example.com (admin) — expires in 7h52m"
-navigator-deploy site notation create onboarding__letter \
+hudson site notation create onboarding__letter \
   --project estate-of-doe --client-email jane@example.com
-navigator-deploy site notation approve 00000000-0000-4000-8000-000000000001  # renders + parks the retainer PDF
-navigator-deploy site notation status 00000000-0000-4000-8000-000000000001   # state + signature request id + document_ready
+hudson site notation approve 00000000-0000-4000-8000-000000000001  # renders + parks the retainer PDF
+hudson site notation status 00000000-0000-4000-8000-000000000001   # state + signature request id + document_ready
 navigator site logout
 ```
 
@@ -2032,8 +2030,8 @@ identity without forking source by describing the organization once in a private
 
 ```bash
 cp deploy/tests/fixtures/navigator.example.yaml navigator.yaml   # then edit: names, emails, domain, logos
-cargo run -p deploy -- ops rebrand build --out .devx/brand-bundle   # deprecated compatibility command
-cargo run -p deploy -- ops rebrand verify --dir .devx/brand-bundle   # deprecated compatibility command
+cargo run -p hudson -- ops rebrand build --out .devx/brand-bundle   # deprecated compatibility command
+cargo run -p hudson -- ops rebrand verify --dir .devx/brand-bundle   # deprecated compatibility command
 set -a; source .devx/env; set +a                # object storage and the rest of the runtime env
 NAVIGATOR_CUSTOM_BRANDING=.devx/brand-bundle cargo run -p neon
 ```
@@ -2057,9 +2055,9 @@ never ship another organization's bundled legal terms under your own name.
 ### First-ship lessons
 
 A first ship to a cold cluster can expose ordering assumptions. Secret preflight, namespace creation, CSI projection,
-cluster add-ons, and Restate registration each have distinct readiness requirements. Follow the current
-`navigator-deploy ops` command sequence and stop when a preflight fails; do not seed plaintext Secrets or bypass CLI
-checks with manual cluster commands.
+cluster add-ons, and Restate registration each have distinct readiness requirements. Follow the current `hudson ops`
+command sequence and stop when a preflight fails; do not seed plaintext Secrets or bypass CLI checks with manual cluster
+commands.
 
 Before a live ship, confirm that the selected row's approved external configuration contains the required encrypted
 secret objects and capability settings, that its image exists, and that cluster add-ons needed by admission are ready.

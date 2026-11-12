@@ -488,7 +488,7 @@ pub(crate) fn pre_roll_with<C: Cluster>(
     Ok(roll)
 }
 
-/// `navigator-deploy ops certificates pre-roll`: resolve the deployment, fetch its
+/// `hudson ops certificates pre-roll`: resolve the deployment, fetch its
 /// cluster credentials, and roll the Firm certificate ahead of the release.
 pub fn pre_roll_for_deployment(
     deployment: &str,

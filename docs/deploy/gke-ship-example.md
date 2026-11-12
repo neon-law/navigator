@@ -29,17 +29,17 @@ rendered.
 ```bash
 # Roll one deployment onto a named published YY.M.D image (service deployments, together).
 # --deployment and --tag are required; ship never guesses either.
-navigator-deploy ops ship --deployment <row> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --tag 26.6.23
+hudson ops ship --deployment <row> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --tag 26.6.23
 
 # Validate the local row and render a concrete offline operation plan.
-navigator-deploy ops ship --deployment <row> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --tag 26.6.23 --dry-run
+hudson ops ship --deployment <row> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --tag 26.6.23 --dry-run
 
 # No-rebuild push: restart service deployments so they re-read a rotated Secret value (no --tag needed).
-navigator-deploy ops ship --deployment <row> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --restart-only
+hudson ops ship --deployment <row> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --restart-only
 
 # Under a no-IAM-changes rule: assert the web GSA's self-signing binding rather than granting it. An
 # absent binding stops the roll and prints the `gcloud` command for whoever holds `setIamPolicy`.
-navigator-deploy ops ship --deployment <row> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --tag 26.6.23 --assert-signing-iam
+hudson ops ship --deployment <row> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --tag 26.6.23 --assert-signing-iam
 ```
 
 The dry-run validates local coordinates and parses the rendered manifest source, then lists planned operations. It does

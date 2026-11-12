@@ -3,7 +3,7 @@
 //! `project.host` in `navigator.yaml` selects the Brand from the compiled
 //! registry ([`views::brand::registered_brand_key`], or the Brand's apex).
 //! An optional `project.brand` must agree with that host-selected Brand.
-//! `navigator-deploy` renders the letterhead frame for the Brand this resolves.
+//! `hudson` renders the letterhead frame for the Brand this resolves.
 //!
 //! A Brand the registry does not know is a refusal naming the key or host,
 //! never the default letterhead: a letter on the wrong Brand's letterhead

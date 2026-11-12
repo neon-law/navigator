@@ -114,7 +114,7 @@ pub(super) fn require_macos(os: &str) -> Result<()> {
     bail!(
         "the native dependency tier is macOS-only (this host reports `{os}`).\n\
          Use the cluster lane instead: \
-         `navigator-deploy dev worktree-env up --path \"$PWD\" --runtime kind`"
+         `hudson dev worktree-env up --path \"$PWD\" --runtime kind`"
     )
 }
 
@@ -163,7 +163,7 @@ pub(super) fn binary(formula: &str, name: &str) -> Result<PathBuf> {
     let path = binary_path(prefix.trim(), name);
     if !path.is_file() {
         bail!(
-            "{} is not installed at {} — run `navigator-deploy dev install`",
+            "{} is not installed at {} — run `hudson dev install`",
             formula,
             path.display()
         );

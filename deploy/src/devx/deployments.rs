@@ -839,7 +839,7 @@ pub fn skipped_projected_objects(deployment: &Deployment) -> Result<BTreeSet<Str
     Ok(skipped.into_keys().collect())
 }
 
-/// `navigator-deploy ops deployments --deployments-dir <dir>` — run every
+/// `hudson ops deployments --deployments-dir <dir>` — run every
 /// tree-level gate against whatever tree it is pointed at.
 ///
 /// The workspace suite asserts these against the synthetic tree in
@@ -1019,7 +1019,7 @@ fn plan(
     Ok((plan, skipped))
 }
 
-/// `navigator-deploy ops secrets apply --deployment <name>` — decrypt this
+/// `hudson ops secrets apply --deployment <name>` — decrypt this
 /// deployment's key material and write `versions/latest` for every object the
 /// `SecretProviderClass` projects, in that deployment's own project.
 ///
@@ -2009,7 +2009,7 @@ fn parse_k8s_secret_values<'a>(
     Ok(values)
 }
 
-/// `navigator-deploy ops secrets apply --check` — decrypt in-process, the same
+/// `hudson ops secrets apply --check` — decrypt in-process, the same
 /// trust boundary [`apply`] uses, and report by name only whether each
 /// projected object's SOPS value matches what is live in Secret Manager and
 /// in the deployment's Kubernetes Secret.
@@ -2428,14 +2428,14 @@ mod tests {
     #[test]
     fn the_public_example_deployment_tree_passes_every_gate() {
         check(&fixture_tree())
-            .expect("the synthetic deployment tree passes `navigator-deploy ops deployments`");
+            .expect("the synthetic deployment tree passes `hudson ops deployments`");
     }
 
     #[test]
     fn instructed_deployments_reads_literals_and_skips_placeholders() {
-        let text = "run `navigator-deploy ops ship --deployment neon-law-test --tag 26.1.1`, then \
-                    `navigator-deploy ops ship --deployment=acme-stg --dry-run`; the general \
-                    form is `navigator-deploy ops ship --deployment <name>` or --deployment $NAME";
+        let text = "run `hudson ops ship --deployment neon-law-test --tag 26.1.1`, then \
+                    `hudson ops ship --deployment=acme-stg --dry-run`; the general \
+                    form is `hudson ops ship --deployment <name>` or --deployment $NAME";
         assert_eq!(
             instructed_deployments(text),
             vec!["neon-law-test".to_string(), "acme-stg".to_string()]

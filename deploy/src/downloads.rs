@@ -1,7 +1,7 @@
-//! `navigator-deploy downloads` — the legal files sitting in the lawyer's Downloads
+//! `hudson downloads` — the legal files sitting in the lawyer's Downloads
 //! folder.
 //!
-//! Mail that came through `navigator-deploy mail` is already filed; the files that
+//! Mail that came through `hudson mail` is already filed; the files that
 //! never came through mail sit in Downloads, unclassified and unfiled. This
 //! verb family scans that folder, proposes a matter, kind, and conventional
 //! `YYYY.MM.DD_name` slug for each candidate (LAW-196), files one candidate
@@ -516,7 +516,7 @@ pub(crate) async fn run(action: DownloadsCmd) -> ExitCode {
     match run_inner(action).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("navigator-deploy downloads: {error:#}");
+            eprintln!("hudson downloads: {error:#}");
             ExitCode::FAILURE
         }
     }

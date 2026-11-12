@@ -1,4 +1,4 @@
-//! `navigator-deploy ops release-default-tag` — the version the `cut-release` skill
+//! `hudson ops release-default-tag` — the version the `cut-release` skill
 //! should hand to `ops release version --tag` when the operator names none:
 //! today's UTC `YY.M.D` until that is published, then the next unpublished
 //! date's `YY.M.D-rc.N`. [`crate::release::default_tag`] holds the rule.
@@ -12,7 +12,7 @@
 //! `deploy.yml` calls this, and it writes nothing.
 //!
 //! Prints the bare tag on stdout and nothing else, so a caller can capture it
-//! directly: `tag=$(navigator-deploy ops release-default-tag)`. Prints nothing to
+//! directly: `tag=$(hudson ops release-default-tag)`. Prints nothing to
 //! stdout — only a human-readable reason on stderr — when a tag far ahead of
 //! the calendar leaves nothing to cut, so an empty capture means "nothing to
 //! cut" rather than a value to go parse.

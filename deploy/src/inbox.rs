@@ -1,4 +1,4 @@
-//! `navigator-deploy inbox` — the lawyer-mailbox processing backlog.
+//! `hudson inbox` — the lawyer-mailbox processing backlog.
 //!
 //! Plan by default: listing and showing a message classify server-side and
 //! record nothing. `--apply` records the classified route (idempotent),
@@ -65,7 +65,7 @@ pub enum InboxAction {
     },
     /// Show one message's process plan, or with --apply, record it.
     Process {
-        /// Inbox message id from `navigator-deploy inbox list`.
+        /// Inbox message id from `hudson inbox list`.
         message: Uuid,
         /// Record the classified route, notify the matter channel, and
         /// archive --gmail only after a NEF filing finishes; refusals fail in triage.
@@ -109,7 +109,7 @@ fn finish(result: Result<()>) -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("navigator-deploy inbox: {error:#}");
+            eprintln!("hudson inbox: {error:#}");
             ExitCode::FAILURE
         }
     }

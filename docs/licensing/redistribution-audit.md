@@ -33,8 +33,8 @@ Per-deployment rows now live outside the repository. `deployments/` tracks only 
 manifest](../../.public-snapshot-exclude) has no entries. On the current review basis, P001 reports no image-metadata
 findings for the brand PNGs at B1, B12, B21, and B26. Their provenance remains unverified.
 
-Snapshot: [`navigator-deploy ops public-snapshot`](../public-snapshot.md) builds a deterministic, parentless root commit
-from a merged `main` commit. Record the candidate's commit SHA and tree hash with the release, not in this document.
+Snapshot: [`hudson ops public-snapshot`](../public-snapshot.md) builds a deterministic, parentless root commit from a
+merged `main` commit. Record the candidate's commit SHA and tree hash with the release, not in this document.
 
 ### Unresolved clearance blockers
 
@@ -63,11 +63,11 @@ private instruments and clearance references outside this repository.
 | Asset | GORP Serif: proprietary; no binary tracked, operator licence required | Operator/counsel |
 | Artifact | Each publication output compared with the snapshot tree and notices | Release |
 
-The current `navigator-deploy ops notices --check` reports 1,369 registry packages and 595 distinct licence texts, and
-confirms that `THIRD-PARTY-NOTICES.txt` matches the generator. This checks the generated source inventory; it does not
-show which packages ship in an artifact or clear their licenses, native components, or notices. Publication outputs to
-compare are the snapshot root commit, the CLI and LSP release archives, the editor extension package, and the `neon`,
-`trigger`, `workflows-service`, and PostgreSQL images. A deployed operator asset needs its own check.
+The current `hudson ops notices --check` reports 1,369 registry packages and 595 distinct licence texts, and confirms
+that `THIRD-PARTY-NOTICES.txt` matches the generator. This checks the generated source inventory; it does not show which
+packages ship in an artifact or clear their licenses, native components, or notices. Publication outputs to compare are
+the snapshot root commit, the CLI and LSP release archives, the editor extension package, and the `neon`, `trigger`,
+`workflows-service`, and PostgreSQL images. A deployed operator asset needs its own check.
 
 The [CI workflow](../../.github/workflows/ci.yml) pins Gitleaks and runs the PII scan against a digest-pinned Presidio
 analyzer. These checks do not decide rights, verify signed agreements, prove every asset's source, or ensure every
@@ -1818,7 +1818,7 @@ E33: server/public/fonts/gorp-serif/LICENSE.txt
 
 The historical matrix was compared with R, every workspace member manifest, extension metadata, SendGrid's LICENSE,
 every tracked font license record, V, I, Cargo.lock, retained N entries, and both NuGet lockfiles. On the current review
-basis, `navigator-deploy ops notices --check` confirms generated notice text matches the current lockfile inventory. The
+basis, `hudson ops notices --check` confirms generated notice text matches the current lockfile inventory. The
 license-of-record test protects current declarations; it does not verify signed grants, font purchases, external agency
 terms, or legal clearance. The PII, secret, and public-snapshot scans cover tracked source only under their configured
 detectors. The content gate and whitespace check validate this document's repository form. Run the following checks on
@@ -1828,7 +1828,7 @@ the publication candidate:
 cargo test -p cli --test license_of_record
 cargo test -p cli --test public_distribution --test release_cli_archive --test release_lsp_archive
 cargo test -p cli --bin navigator public_snapshot
-cargo run -p deploy --quiet -- ops notices --check
+cargo run -p hudson --quiet -- ops notices --check
 cargo run -p cli --quiet -- validate
 cargo run -p cli --quiet -- project gate
 git diff --check

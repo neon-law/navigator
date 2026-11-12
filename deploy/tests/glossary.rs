@@ -1,4 +1,4 @@
-//! End-to-end tests for `navigator-deploy glossary ...`.
+//! End-to-end tests for `hudson glossary ...`.
 
 use std::process::Command;
 
@@ -51,7 +51,7 @@ fn glossary_text() -> String {
 }
 
 fn navigator(args: &[&str]) -> std::process::Output {
-    Command::new(cargo_bin("navigator-deploy"))
+    Command::new(cargo_bin("hudson"))
         .args(args)
         .output()
         .unwrap_or_else(|error| panic!("run navigator {args:?}: {error}"))
@@ -63,7 +63,7 @@ fn glossary_requires_a_subcommand() {
     assert!(!out.status.success(), "expected non-zero exit");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("Usage: navigator-deploy glossary <COMMAND>"),
+        stderr.contains("Usage: hudson glossary <COMMAND>"),
         "expected glossary subcommand usage, got: {stderr}",
     );
 }
@@ -356,11 +356,11 @@ fn glossary_show_unknown_term_exits_non_zero_with_helpful_stderr() {
         "expected `unknown term` in stderr, got: {stderr}",
     );
     assert!(
-        stderr.contains("Run `navigator-deploy glossary list`"),
+        stderr.contains("Run `hudson glossary list`"),
         "expected hint in stderr, got: {stderr}",
     );
     assert!(
-        stderr.contains("navigator-deploy glossary show \"<Term>\""),
+        stderr.contains("hudson glossary show \"<Term>\""),
         "expected quoted title lookup hint, got: {stderr}"
     );
 }

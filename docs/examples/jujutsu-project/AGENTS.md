@@ -18,13 +18,13 @@ Read `navigator.yaml` and stay in this Project checkout. Preserve the Project's 
 Sign in with `navigator site login` to use the local MCP bridge. It reads the saved session from `~/.navigator.json`.
 Keep credentials out of tool arguments, chat, and repository files.
 
-Use `navigator-deploy glossary list` and `navigator-deploy glossary show "<Term>"` for terminology.
+Use `hudson glossary list` and `hudson glossary show "<Term>"` for terminology.
 
 ## Jujutsu workflow
 
 1. Inspect `jj status` and `jj diff`. Preserve unrelated work.
 2. From a clean checkout, run `jj git fetch --remote origin` and `jj new main@origin` to begin one change.
-3. Edit Project source. For a Matter Page change, run `navigator-deploy preview` and check the affected lenses.
+3. Edit Project source. For a Matter Page change, run `hudson preview` and check the affected lenses.
 4. Run `jj status` to snapshot the edits, then run `navigator project gate`. Review the full diff and describe the
    change with `jj describe -m "<summary>"`.
 5. When authorized to publish, fetch and rebase onto current `main@origin`. Resolve conflicts and rerun the gate,

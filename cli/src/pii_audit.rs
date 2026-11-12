@@ -13,7 +13,7 @@ use futures::{StreamExt, TryStreamExt};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-/// Diagnostic code emitted by `navigator-deploy pii`.
+/// Diagnostic code emitted by `hudson pii`.
 pub const CODE: &str = "P002";
 const ALLOWLIST: &str = ".github/pii/allowlist.toml";
 const ENTITIES: [&str; 7] = [

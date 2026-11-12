@@ -14,7 +14,7 @@ operator a deliberate rollout. This flow supports the actions in [`agent-workflo
 ## The branch → PR → auto-merge flow
 
 1. **Task worktree + branch.** Start with **New Worktree** in Codex or Claude and verify the current path is a
-   non-primary `git worktree` entry. Then run `cargo run -p deploy -- dev worktree-env up --branch <kebab-topic>` once.
+   non-primary `git worktree` entry. Then run `cargo run -p hudson -- dev worktree-env up --branch <kebab-topic>` once.
    The CLI names that worktree's PR branch; it does not create another checkout. See
    [`agent-workflows.md`](agent-workflows.md#create-a-pr) for the stop condition when a task did not start in New
    Worktree.
@@ -43,9 +43,9 @@ gh api repos/neon-law/navigator/commits/<sha>/check-runs \
     --jq '.check_runs[] | "\(.name) \(.app.id) \(.app.slug)"'
 ```
 
-`navigator-deploy ops github setup [repository]` reconciles one repository at a time, and it governs **every**
-repository the Firm administers rather than a checked-in pair. The target resolves in precedence order — the explicit
-`owner/name` argument, then `GITHUB_REPOSITORY`, then the checkout's `origin` remote.
+`hudson ops github setup [repository]` reconciles one repository at a time, and it governs **every** repository the Firm
+administers rather than a checked-in pair. The target resolves in precedence order — the explicit `owner/name` argument,
+then `GITHUB_REPOSITORY`, then the checkout's `origin` remote.
 
 The authorization boundary is a **`(host, organization)` pair**: the source organizations — `neon-law` and
 `neon-law-source-code` — and this deployment's own `NAVIGATOR_GITHUB_ORG`, on the host `NAVIGATOR_GIT_HOST` names. A
@@ -187,8 +187,8 @@ makes any writes. A dry run can still show the plan.
 Run a dry run before applying drift, then rerun without it:
 
 ```bash
-navigator-deploy ops github setup neon-law/navigator --dry-run
-navigator-deploy ops github setup neon-law/ui --dry-run
+hudson ops github setup neon-law/navigator --dry-run
+hudson ops github setup neon-law/ui --dry-run
 ```
 
 A second dry run after applying must report *no drift*. That is the only proof the reconcile actually converged, and it
@@ -456,8 +456,8 @@ Reading the version out of the merged manifest answers all four by construction:
 | PROVENANCE — the tag's commit is reachable from `main` | a push to `main` **is** the provenance |
 
 What survives is the one question none of them asked, and it is now the whole gate: **is this version newer than every
-version already published?** `navigator-deploy ops release check` reads the manifest, lists every release tag, and
-compares them with semver's own ordering. Three answers:
+version already published?** `hudson ops release check` reads the manifest, lists every release tag, and compares them
+with semver's own ordering. Three answers:
 
 | Answer | What happens |
 | --- | --- |
@@ -551,7 +551,7 @@ the rest of `accessibility_e2e`) appear only in `dev browser-e2e`. Bring up the 
 not running, source `.devx/env`, and run:
 
 ```bash
-cargo run -p deploy -- dev browser-e2e
+cargo run -p hudson -- dev browser-e2e
 ```
 
 A harness skip is not a pass. Do not treat `vendor_assets` as a substitute. See
@@ -609,7 +609,7 @@ identifier, so `hotfix.08` is not a version. Nothing derives `N`; `ops release v
 Write the version the same way as any other release, then land it:
 
 ```bash
-cargo run -p deploy -- ops release version --tag 26.8.23-hotfix.1
+cargo run -p hudson -- ops release version --tag 26.8.23-hotfix.1
 ```
 
 **A prerelease does not become the default download.** Exactly one thing behaves differently from an ordinary release,
@@ -646,11 +646,11 @@ sort strictly above. Every bump is an upgrade, whatever the shape of either tag.
 A prerelease is still a full release up to staging: it proves the workspace in KIND, publishes every image, and rolls to
 staging. `release-deploy.yml` holds it there and never rolls it to production.
 
-**The bump carries `Cargo.lock` too.** `navigator-deploy ops release version --tag <version>` writes
-`[workspace.package].version` — the value every crate inherits through `version.workspace = true` and `cli/build.rs`
-bakes into `navigator --version` — and refreshes `Cargo.lock` in the same commit. Every workspace crate is pinned there
-as well, and the archive jobs build with `--locked`, which refuses a lock the manifest has moved past. `ci.yml` runs
-`cargo metadata --locked` on every pull request for exactly that reason: it is the last place that failure is free.
+**The bump carries `Cargo.lock` too.** `hudson ops release version --tag <version>` writes `[workspace.package].version`
+— the value every crate inherits through `version.workspace = true` and `cli/build.rs` bakes into `navigator --version`
+— and refreshes `Cargo.lock` in the same commit. Every workspace crate is pinned there as well, and the archive jobs
+build with `--locked`, which refuses a lock the manifest has moved past. `ci.yml` runs `cargo metadata --locked` on
+every pull request for exactly that reason: it is the last place that failure is free.
 
 `--tag` is required, because naming a release is the operator's decision and a derived name is only ever a fact about
 when the command ran. That commit lands through an ordinary PR — `main` takes no direct commits.
@@ -695,7 +695,7 @@ The same two build jobs also compile and attach `navigator-lsp-<tag>-<platform>`
 platform, from the same `cargo build` invocation as the CLI. It is a distinct filename prefix (`navigator-lsp-<tag>-`
 versus `navigator-<tag>-`) on the same tag, so an editor extension — a Zed marketplace listing, first — can resolve a
 specific released version of the language server the way a `gh release`-based extension expects, rather than the
-"latest" key `navigator-deploy ops lsp publish` writes to the public assets bucket for the site's own use. The prefix
+"latest" key `hudson ops lsp publish` writes to the public assets bucket for the site's own use. The prefix
 distinguishes the assets for a consumer, not for the upload: a `navigator-*` shell glob also matches
 `navigator-lsp-<tag>-*`, so every archive path in `deploy.yml` names its file tag-exactly and
 [`cli/tests/release_lsp_archive.rs`](../cli/tests/release_lsp_archive.rs) refuses a wildcard there. See [editor
@@ -716,9 +716,9 @@ gate **every** Project repository runs, downloads `navigator-<version>-<platform
 (see below). If the archive jobs stop running, Project CI breaks everywhere with a download 404 and nothing in this
 repository goes red — which is exactly the kind of failure worth stating in prose, because no test here will catch it.
 
-**The Linux archive job runs on `ubuntu-24.04`; the macOS job runs on `macos-latest`.** The `navigator-deploy` archives
-run on larger runners, `blacksmith-8vcpu-ubuntu-2404` and `macos-latest-xlarge`, because compiling `portal` runs out of
-memory on the standard ones. ENG-1333 tracks their cost.
+**The Linux archive job runs on `ubuntu-24.04`; the macOS job runs on `macos-latest`.** The `hudson` archives run on
+larger runners, `blacksmith-8vcpu-ubuntu-2404` and `macos-latest-xlarge`, because compiling `portal` runs out of memory
+on the standard ones. ENG-1333 tracks their cost.
 
 ### The Homebrew tap
 
@@ -863,7 +863,7 @@ Three lanes, cheapest first.
 
    ```bash
    gh release download YY.M.D --pattern navigator-image-digests.json --dir /tmp
-   navigator-deploy ops ship --deployment <row> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --tag YY.M.D \
+   hudson ops ship --deployment <row> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --tag YY.M.D \
      --image-digests /tmp/navigator-image-digests.json
    ```
 
@@ -1002,8 +1002,8 @@ the two publish jobs exchange a credential.
 
 Every roll target is a directory in this repository's `deployments/` tree: `<deployment>` and `<deployment>`, each a
 `config.toml` of plaintext coordinates and a `secrets.enc.yaml` of SOPS ciphertext. `ci.yml`'s `gate` job runs Run
-`scripts/validate-sops-inventory.sh` and `navigator-deploy ops deployments` against the external tree before each pull
-request; both read key names only.
+`scripts/validate-sops-inventory.sh` and `hudson ops deployments` against the external tree before each pull request;
+both read key names only.
 
 Staging is the gate on the way to production. It runs the same `<deployment>` image over a sample data plane, so a
 failure there is evidence about the version rather than about real people's matters.
@@ -1032,7 +1032,7 @@ own short-lived credentials, staging first:
 ```bash
 gcloud auth application-default login
 gh release download YY.M.D --pattern navigator-image-digests.json --dir /tmp
-navigator-deploy ops ship --deployment <row> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --tag YY.M.D \
+hudson ops ship --deployment <row> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --tag YY.M.D \
   --image-digests /tmp/navigator-image-digests.json
 ```
 

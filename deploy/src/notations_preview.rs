@@ -1,4 +1,4 @@
-//! `navigator-deploy notation preview <FILE>` (LAW-29) — push one template as a
+//! `hudson notation preview <FILE>` (LAW-29) — push one template as a
 //! **draft** to the Project repository it sits in, and open that Project's
 //! real portal at it.
 //!
@@ -52,7 +52,7 @@ static PUBLIC_JS: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../server/pub
 /// `ServeConfig::new` resolves the index template once, at construction.
 const PUBLIC_PATH_ENV: &str = "DIOXUS_PUBLIC_PATH";
 
-/// `navigator-deploy notation preview <file>` (LAW-29).
+/// `hudson notation preview <file>` (LAW-29).
 ///
 /// Resolves `file` to a template, then either pushes it as a draft to the
 /// Project repository it sits in and opens the real portal at it, or — with
@@ -122,7 +122,7 @@ pub async fn run(file: &Path, offline: bool, port: u16, host_override: Option<&s
 fn read_project_manifest(root: &Path) -> Result<(String, String)> {
     let (project, host) = crate::document_sync::read_manifest(root).map_err(|error| {
         anyhow!(
-            "`navigator-deploy notation preview` pushes a draft to the Project repository it runs \
+            "`hudson notation preview` pushes a draft to the Project repository it runs \
              in, and this does not look like one: {error:#}. Run it from a Project repository \
              root, or pass `--offline` to lint the template locally instead."
         )
@@ -209,7 +209,7 @@ async fn run_offline_lint(found: &Resolved, slug: &str, port: u16) -> Result<()>
         Some(dir) => eprintln!("    client bundle: {}", dir.display()),
         None => eprintln!(
             "    client bundle: none — the page renders but the questionnaire will not step. \
-             Build one with `navigator-deploy dev build-webapp`."
+             Build one with `hudson dev build-webapp`."
         ),
     }
     eprintln!("==> http://{bound}/notations/{slug}");
@@ -294,7 +294,7 @@ fn embedded(dir: &Dir<'static>, path: &str, content_type: &str) -> Response {
 /// The built Dioxus client bundle, or `None` when there is none to serve.
 ///
 /// An explicit `DIOXUS_PUBLIC_PATH` wins, so a caller can point at a bundle
-/// built anywhere. Otherwise this looks where `navigator-deploy dev build-webapp`
+/// built anywhere. Otherwise this looks where `hudson dev build-webapp`
 /// stages it, which only exists in a Navigator checkout — a Project
 /// repository has no bundle and takes the SSR-only path.
 fn client_bundle_dir() -> Option<PathBuf> {
@@ -336,7 +336,7 @@ struct Resolved {
 /// The bundled tier is last so a checkout always wins: an author editing a
 /// template previews the file under their cursor, never the copy frozen into
 /// the binary they happen to be running. It exists so the other direction
-/// works too — `navigator-deploy notation preview onboarding` from any directory at
+/// works too — `hudson notation preview onboarding` from any directory at
 /// all, which is what makes the binary worth handing to someone.
 fn resolve_template(base: &Path, file: &Path) -> Result<Resolved> {
     if file.is_file() {

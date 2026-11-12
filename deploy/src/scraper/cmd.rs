@@ -1,4 +1,4 @@
-//! The `navigator-deploy scraper` surface: list the configured site adapters and
+//! The `hudson scraper` surface: list the configured site adapters and
 //! run one over one docket. The `scrapers:` section of `navigator.yaml`
 //! owns the site registry — which adapter scrapes which portal — and the
 //! commands resolve every run through it, so a site the listing shows is a
@@ -44,7 +44,7 @@ pub(crate) enum ScraperCmd {
     /// Run one site adapter over one docket. Every document it fetches is
     /// enqueued into the omnichannel inbox for triage.
     Run {
-        /// The portal to scrape — `navigator-deploy scraper sites` lists them.
+        /// The portal to scrape — `hudson scraper sites` lists them.
         #[arg(long)]
         site: String,
         /// The docket entry number to pull; `4` and `0004` both normalize
@@ -97,13 +97,13 @@ pub(crate) async fn run(action: ScraperCmd) -> ExitCode {
 /// they typed.
 fn unregistered_site_message(registered_sites: impl Iterator<Item = String>) -> String {
     format!(
-        "navigator-deploy scraper: no adapter registered for the requested site; registered sites: {}",
+        "hudson scraper: no adapter registered for the requested site; registered sites: {}",
         registered_sites.collect::<Vec<_>>().join(", ")
     )
 }
 
 fn exit_failure(step: &str, error: impl std::fmt::Display) -> ExitCode {
-    eprintln!("navigator-deploy scraper: {step}: {error}");
+    eprintln!("hudson scraper: {step}: {error}");
     ExitCode::from(2)
 }
 
@@ -177,7 +177,7 @@ fn render_sites(config: &ScraperConfig, logins: Option<&PortalLogins>) -> String
     rendered
 }
 
-/// `navigator-deploy scraper sites`: the configured registry with the Firm's
+/// `hudson scraper sites`: the configured registry with the Firm's
 /// credential status resolved live. A listing that cannot reach the store
 /// fails honestly; a Firm with no credential row lists every site
 /// disabled, with the provisioning guidance on stderr.
@@ -203,7 +203,7 @@ async fn sites_listing(firm_id: Uuid) -> ExitCode {
     }
     print!("{}", render_sites(&config, resolved.as_ref().ok()));
     if let Err(error) = &resolved {
-        eprintln!("navigator-deploy scraper: {error}");
+        eprintln!("hudson scraper: {error}");
     }
     ExitCode::SUCCESS
 }
@@ -631,7 +631,7 @@ mod tests {
         // parsed `Command` enum).
         assert_eq!(
             message,
-            "navigator-deploy scraper: no adapter registered for the requested site; \
+            "hudson scraper: no adapter registered for the requested site; \
              registered sites: la-superior"
         );
     }

@@ -1,4 +1,4 @@
-//! Integration coverage for `navigator-deploy ops assets verify` — drives the real
+//! Integration coverage for `hudson ops assets verify` — drives the real
 //! binary (clap parsing + dispatch + the tokio-runtime glue in
 //! `run_verify`) on the two branches that need no live origin: an empty
 //! content tree, which still probes the licensed faces (→ exit 2 against
@@ -20,7 +20,7 @@ fn verify_probes_the_licensed_fonts_on_a_content_tree_with_no_image_references()
     let content = TempDir::new().unwrap();
     fs::create_dir_all(content.path().join("blog")).unwrap();
 
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .args(["ops", "assets", "verify"])
         .arg("--content")
@@ -49,7 +49,7 @@ fn verify_fails_when_an_image_is_referenced_but_no_origin_is_set() {
     fs::create_dir_all(&blog).unwrap();
     fs::write(blog.join("post.md"), "![hero](img/demo/hero.png)\n").unwrap();
 
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .args(["ops", "assets", "verify"])
         .arg("--content")

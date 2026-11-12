@@ -1,4 +1,4 @@
-//! Gmail access for `navigator-deploy mail`.
+//! Gmail access for `hudson mail`.
 
 use std::fmt::Write as _;
 use std::future::Future;
@@ -30,7 +30,7 @@ const REFRESH_TOKEN_SERVICE: &str = "com.neonlaw.navigator.gmail.refresh-token";
 const CLIENT_SECRET_SERVICE: &str = "com.neonlaw.navigator.gmail.client-secret";
 /// The operating doc for the Firm's Gmail OAuth client and a lawyer machine's
 /// sign-in. Errors about a missing client or sign-in name it.
-const PROVISIONING_DOC: &str = "docs/mail-cli.md#provision-gmail-for-navigator-deploy-mail";
+const PROVISIONING_DOC: &str = "docs/mail-cli.md#provision-gmail-for-hudson-mail";
 /// Gmail's 25 MB message limit, measured on the encoded MIME message.
 const MAX_MESSAGE_BYTES: u64 = 25_000_000;
 /// Where `mail save` writes by default: the Project checkout's git-ignored
@@ -1114,7 +1114,7 @@ fn unresolved_reference_or(reference: &str, fallback: &str) -> anyhow::Error {
         return anyhow!(
             "the reference carries a Gmail web id that names no API message id (Gmail uses \
              this form for drafts and some sent mail): {reference}. Find its Gmail message id \
-             with `navigator-deploy mail search` and pass that, or copy the URL from a conversation \
+             with `hudson mail search` and pass that, or copy the URL from a conversation \
              view"
         );
     }
@@ -1329,7 +1329,7 @@ fn setup_path() -> PathBuf {
 
 fn load_setup(path: &Path) -> Result<StoredSetup> {
     match std::fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes).context("parse saved Gmail setup; run navigator-deploy mail setup --account <gmail-address> --client-id <oauth-client-id> to replace it"),
+        Ok(bytes) => serde_json::from_slice(&bytes).context("parse saved Gmail setup; run hudson mail setup --account <gmail-address> --client-id <oauth-client-id> to replace it"),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(StoredSetup::default()),
         Err(error) => Err(error).context("read saved Gmail setup"),
     }
@@ -1405,7 +1405,7 @@ fn setup_from(account: Option<String>, client_id: Option<String>) -> Result<(Str
     match (account, client_id) {
         (Some(account), Some(client_id)) => Ok((account, client_id)),
         _ => Err(anyhow!(
-            "Gmail is not set up. Run navigator-deploy mail setup --account <gmail-address> --client-id <oauth-client-id> to save settings, or set environment overrides. The Firm's OAuth client and this machine's sign-in are in {PROVISIONING_DOC}: {}",
+            "Gmail is not set up. Run hudson mail setup --account <gmail-address> --client-id <oauth-client-id> to save settings, or set environment overrides. The Firm's OAuth client and this machine's sign-in are in {PROVISIONING_DOC}: {}",
             steps.join("; ")
         )),
     }
@@ -1425,7 +1425,7 @@ struct SetupReport {
 
 /// Checklist for the draft-only Gmail path. Built from booleans only, so it never carries a secret
 /// or a value read from the environment. The client secret is optional: a token minted by
-/// `navigator-deploy mail login` with a Desktop client needs it to refresh, and the refresh exchange
+/// `hudson mail login` with a Desktop client needs it to refresh, and the refresh exchange
 /// sends it whenever one is stored.
 fn setup_report(
     account_set: bool,
@@ -1435,7 +1435,7 @@ fn setup_report(
 ) -> SetupReport {
     let mark = |ok: bool| if ok { "ok      " } else { "MISSING " };
     let keychain_ok = keychain == KeychainState::Present;
-    let mut text = String::from("Gmail draft-only setup for navigator-deploy mail\n");
+    let mut text = String::from("Gmail draft-only setup for hudson mail\n");
     let _ = writeln!(
         text,
         "  [{}] Gmail account (saved or NAVIGATOR_GMAIL_ACCOUNT)",
@@ -1448,7 +1448,7 @@ fn setup_report(
     );
     let _ = writeln!(
         text,
-        "  [{}] OAuth client secret in the macOS Keychain, service {CLIENT_SECRET_SERVICE} (navigator-deploy mail login stores it)",
+        "  [{}] OAuth client secret in the macOS Keychain, service {CLIENT_SECRET_SERVICE} (hudson mail login stores it)",
         if client_secret_stored { "ok      " } else { "optional" }
     );
     let _ = writeln!(
@@ -1470,18 +1470,18 @@ fn setup_report(
     if keychain == KeychainState::Missing {
         let _ = writeln!(
             text,
-            "\nAuthorize Gmail in the browser and store the refresh token (uses the selected client secret source):\n  navigator-deploy mail login\nSign-in steps for a new machine: {PROVISIONING_DOC}."
+            "\nAuthorize Gmail in the browser and store the refresh token (uses the selected client secret source):\n  hudson mail login\nSign-in steps for a new machine: {PROVISIONING_DOC}."
         );
     }
     text.push_str(
-        "\nScopes: navigator-deploy mail login requests gmail.readonly and gmail.compose only, and refuses a token \
-carrying any other scope. Gmail has no narrower scope that creates drafts. navigator-deploy mail never sends, replies, or \
+        "\nScopes: hudson mail login requests gmail.readonly and gmail.compose only, and refuses a token \
+carrying any other scope. Gmail has no narrower scope that creates drafts. hudson mail never sends, replies, or \
 forwards: it has no send verb and calls no send endpoint. Never print, paste, or log the token or client secret. See \
 docs/mail-cli.md.\n",
     );
     let ready = account_set && client_id_set && keychain_ok;
     if ready {
-        text.push_str("\nReady: navigator-deploy mail draft can create unsent drafts.\n");
+        text.push_str("\nReady: hudson mail draft can create unsent drafts.\n");
     }
     SetupReport { text, ready }
 }
@@ -1561,9 +1561,7 @@ fn refresh_form<'a>(
 async fn client() -> Result<GmailClient> {
     let (account, client_id) = configured_setup()?;
     let refresh_token = keychain_refresh_token(&account).with_context(|| {
-        format!(
-            "Gmail refresh token unavailable; run navigator-deploy mail login (see {PROVISIONING_DOC})"
-        )
+        format!("Gmail refresh token unavailable; run hudson mail login (see {PROVISIONING_DOC})")
     })?;
     let client_secret = keychain_read(CLIENT_SECRET_SERVICE, &client_id)?;
     let response = reqwest::Client::new()
@@ -1645,7 +1643,7 @@ fn finish(result: Result<()>) -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("navigator-deploy mail: {error:#}");
+            eprintln!("hudson mail: {error:#}");
             ExitCode::FAILURE
         }
     }
@@ -1690,7 +1688,7 @@ async fn run_inner(action: MailAction) -> Result<()> {
             let threads = client().await?.search(&scoped).await?;
             if threads.is_empty() && scoped != query {
                 eprintln!(
-                    "navigator-deploy mail: no threads matched within this Project's scope (its client \
+                    "hudson mail: no threads matched within this Project's scope (its client \
                      contact and dockets: case numbers); pass --unscoped to search the whole mailbox"
                 );
             }
@@ -2017,8 +2015,7 @@ async fn resolve_draft_signature(
 async fn runtime_signature(
     sending_account: Option<&str>,
 ) -> Result<store::mail_signatures::MailSignature, String> {
-    let account =
-        sending_account.ok_or("no configured Gmail account; run navigator-deploy mail setup")?;
+    let account = sending_account.ok_or("no configured Gmail account; run hudson mail setup")?;
     let surreal = store::surreal::connect_from_env()
         .await
         .map_err(|error| format!("the deployment's document store is unreachable: {error}"))?;
@@ -2040,7 +2037,7 @@ async fn runtime_signature(
 /// it, so it leaves `Neither` and the refusal names the env var itself.
 fn env_fallback(env_signature: Option<&str>, reason: &str) -> ResolvedSignature {
     let announcement = format!(
-        "navigator-deploy mail: the deployment's stored signature is unavailable ({reason}); \
+        "hudson mail: the deployment's stored signature is unavailable ({reason}); \
          signing from the NAVIGATOR_GMAIL_SIGNATURE fallback"
     );
     match env_signature.filter(|value| !value.trim().is_empty()) {
@@ -2894,10 +2891,7 @@ MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n\
         assert_eq!(gmail_message_id(url), None);
         let message = unresolved_reference(url).to_string();
         assert!(message.contains("Gmail web id"), "{message}");
-        assert!(
-            message.contains("navigator-deploy mail search"),
-            "{message}"
-        );
+        assert!(message.contains("hudson mail search"), "{message}");
         let plain = unresolved_reference("notes/draft-body.txt").to_string();
         assert!(plain.contains("neither"), "{plain}");
     }
@@ -3104,8 +3098,8 @@ MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n\
     #[test]
     fn agent_contract_documents_mail_parse_and_save() {
         let contract = include_str!("../../cli/src/projects/agent_contract.md");
-        assert!(contract.contains("navigator-deploy mail parse"));
-        assert!(contract.contains("navigator-deploy mail save"));
+        assert!(contract.contains("hudson mail parse"));
+        assert!(contract.contains("hudson mail save"));
         assert!(contract.contains("`mail/` is git-ignored"));
     }
 
@@ -3587,8 +3581,8 @@ MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n\
         let doc = include_str!("../../docs/mail-cli.md");
         let (path, anchor) = PROVISIONING_DOC.split_once('#').unwrap();
         assert_eq!(path, "docs/mail-cli.md");
-        assert_eq!(anchor, "provision-gmail-for-navigator-deploy-mail");
-        assert!(doc.contains("\n## Provision Gmail for navigator-deploy mail\n"));
+        assert_eq!(anchor, "provision-gmail-for-hudson-mail");
+        assert!(doc.contains("\n## Provision Gmail for hudson mail\n"));
     }
 
     #[test]
@@ -3599,7 +3593,7 @@ MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n\
                 && error.contains("NAVIGATOR_GMAIL_CLIENT_ID")
         );
         assert!(
-            error.contains("docs/mail-cli.md#provision-gmail-for-navigator-deploy-mail"),
+            error.contains("docs/mail-cli.md#provision-gmail-for-hudson-mail"),
             "the error must name the provisioning doc: {error}"
         );
         assert_eq!(
@@ -4126,14 +4120,14 @@ MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n\
         assert!(!report.text.contains("security add-generic-password"));
         assert!(report.text.contains(
             "No OAuth client id yet? The Firm's operator creates one Desktop-app client per Firm; \
-see docs/mail-cli.md#provision-gmail-for-navigator-deploy-mail."
+see docs/mail-cli.md#provision-gmail-for-hudson-mail."
         ));
 
         let missing = setup_report(true, true, false, KeychainState::Missing);
         assert!(!missing.ready);
-        assert!(missing.text.contains("navigator-deploy mail login"));
+        assert!(missing.text.contains("hudson mail login"));
         assert!(missing.text.contains(
-            "Sign-in steps for a new machine: docs/mail-cli.md#provision-gmail-for-navigator-deploy-mail."
+            "Sign-in steps for a new machine: docs/mail-cli.md#provision-gmail-for-hudson-mail."
         ));
         assert!(!missing.text.contains("No OAuth client id yet"));
         assert!(missing.text.contains("[optional] OAuth client secret"));
@@ -4142,7 +4136,7 @@ see docs/mail-cli.md#provision-gmail-for-navigator-deploy-mail."
         // The client secret is optional: its absence never blocks readiness.
         let ready = setup_report(true, true, false, KeychainState::Present);
         assert!(ready.ready);
-        assert!(!ready.text.contains("  navigator-deploy mail login\n"));
+        assert!(!ready.text.contains("  hudson mail login\n"));
 
         let with_secret = setup_report(true, true, true, KeychainState::Present);
         assert!(with_secret.ready);

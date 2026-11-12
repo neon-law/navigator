@@ -162,7 +162,7 @@ pub(in crate::devx) fn smoke(
     let seed = Seed::from_map(
         &kube
             .secret(SEED_SECRET)?
-            .context("no KIND Forgejo here; run `navigator-deploy dev forgejo up` first")?,
+            .context("no KIND Forgejo here; run `hudson dev forgejo up` first")?,
     )?;
 
     if !current_allowlist(&kube)?.is_empty() {
@@ -1784,7 +1784,7 @@ async fn push_webhook_proof(
             "the receiver binary does not execute in the Linux pod; \
              the push-webhook phase needs the staged musl receiver binary \
              (build it with --target x86_64-unknown-linux-musl and copy it \
-             to target/receiver/navigator-deploy, or point \
+             to target/receiver/hudson, or point \
              NAVIGATOR_SMOKE_RECEIVER_BINARY at one)",
         )?;
     kube.output(&[
@@ -1921,7 +1921,7 @@ fn stage_receiver_binary() -> Result<ReceiverStaging> {
     )
     .or_else(|| std::env::current_exe().ok())
     .context("no receiver binary to stage")?;
-    let staged = dir.path().join("navigator-deploy");
+    let staged = dir.path().join("hudson");
     std::fs::copy(&exe, &staged).with_context(|| format!("stage {}", exe.display()))?;
     match std::process::Command::new("strip").arg(&staged).status() {
         Ok(status) if status.success() => {}
@@ -1941,7 +1941,7 @@ fn stage_receiver_binary() -> Result<ReceiverStaging> {
         packed.status.success(),
         "gzip over the receiver binary failed"
     );
-    let gz = dir.path().join("navigator-deploy.gz");
+    let gz = dir.path().join("hudson.gz");
     std::fs::write(&gz, &packed.stdout).context("write the gzipped receiver binary")?;
     Ok(ReceiverStaging { dir, gz })
 }

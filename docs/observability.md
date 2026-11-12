@@ -175,9 +175,9 @@ row declares `DASH0_ENDPOINT`.
 
 ## Forgejo Actions
 
-The runner controller (`navigator-deploy ops forgejo runner-controller`, see [Forgejo
-deployment](forgejo-deployment.md)) is Forgejo's telemetry source. It exports through the collector, so it reaches Dash0
-and Google Cloud like every other service.
+The runner controller (`hudson ops forgejo runner-controller`, see [Forgejo deployment](forgejo-deployment.md)) is
+Forgejo's telemetry source. It exports through the collector, so it reaches Dash0 and Google Cloud like every other
+service.
 
 - **Metrics.** `navigator.forgejo.controller.tick` counts each tick by `outcome`. `navigator.forgejo.run.finished`
   counts finished runs, and `navigator.forgejo.run.queue_seconds` and `navigator.forgejo.run.duration_seconds` time
@@ -192,8 +192,8 @@ and Google Cloud like every other service.
 
 The repository is `<firm>/<project code>`, opaque by construction. No PR title, branch name or commit message is
 emitted. Job output passes the same source-side content screen as every record, so a line that looks like client content
-is dropped from telemetry. `navigator-deploy ops forgejo logs <owner>/<repository> --run <n>` still prints the whole log
-from Forgejo.
+is dropped from telemetry. `hudson ops forgejo logs <owner>/<repository> --run <n>` still prints the whole log from
+Forgejo.
 
 The collector also scrapes Forgejo's `/metrics` (`prometheus/forgejo`) with the bearer token in
 `navigator-forgejo-metrics`. These are installation-wide gauges only: per-repository and per-label series are off in
@@ -268,8 +268,8 @@ deployment rather than implied by the exporter.
 
 ## Seeing telemetry locally: OpenObserve
 
-`navigator-deploy dev up` creates an OpenObserve Deployment and Service in KIND, waits for its rollout, and
-port-forwards the UI and direct OTLP/gRPC endpoints. It writes this complete development-only contract to `.devx/env`:
+`hudson dev up` creates an OpenObserve Deployment and Service in KIND, waits for its rollout, and port-forwards the UI
+and direct OTLP/gRPC endpoints. It writes this complete development-only contract to `.devx/env`:
 
 ```text
 NAVIGATOR_OPENOBSERVE_URL=http://localhost:5080
@@ -295,7 +295,7 @@ span is enabled. Set an empty `OTEL_EXPORTER_OTLP_ENDPOINT` to intentionally run
 
 Work down the chain (full version in the [durable-workflows guide](durable-workflows.md)); each rung now has telemetry:
 
-1. **Did the trigger fire — and is a job wedged?** Run **`navigator-deploy ops doctor`**. It reads the cluster and
+1. **Did the trigger fire — and is a job wedged?** Run **`hudson ops doctor`**. It reads the cluster and
    names, in plain language, any trigger Job stuck in `ImagePullBackOff` / `CrashLoopBackOff` or Active too long (which,
    under `Forbid`, skips every subsequent run) and any unready workload. It prints the exact `kubectl` command that
    fixes each finding. First stop for a missing nightly/periodic job.
@@ -331,7 +331,7 @@ handler span — no other code changes.
   **`activeDeadlineSeconds: 120` + `startingDeadlineSeconds`** on the trigger `CronJob`s, so a stuck trigger
   self-terminates instead of holding the `Forbid` lock and skipping every run — the precise failure mode that stopped
   the nightly archives email for days.
-- **`navigator-deploy ops doctor`** so the next operator sees the wedge in one command instead of `kubectl` archaeology.
+- **`hudson ops doctor`** so the next operator sees the wedge in one command instead of `kubectl` archaeology.
 
 ## See also
 
@@ -358,7 +358,7 @@ reporting a provider failure; it does not prove Gemini succeeded or the courtesy
 Run the read-only check against the target deployment's database environment:
 
 ```bash
-navigator-deploy ops email-summary health
+hudson ops email-summary health
 ```
 
 It exits nonzero for receipts older than five minutes without confirmed delivery, or any failed/unknown delivery. It

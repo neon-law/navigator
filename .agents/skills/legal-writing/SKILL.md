@@ -31,7 +31,7 @@ output: letter
 
 The filename supplies the code. A body-only memo needs neither `questionnaire:` nor `workflow:`.
 
-Run `navigator project gate`, review and commit the source, then push a preview with `navigator-deploy notation preview
+Run `navigator project gate`, review and commit the source, then push a preview with `hudson notation preview
 templates/<code>.md`. Preview stores a draft for review; it does not run a notation or produce a filed document. Do not
 substitute a document upload for authoring the notation's source.
 
@@ -64,7 +64,7 @@ unlikely if it is not"), never as a bare point estimate, so the reader sees whic
 Save every cited source in its original bytes, not just a link, so the supervising lawyer can verify it. A citation with
 no saved original is flagged as unverifiable and goes no further until it is saved.
 
-- **Law** (a case, statute, regulation, or rule) is saved as an Authority: `navigator-deploy site authorities create
+- **Law** (a case, statute, regulation, or rule) is saved as an Authority: `hudson site authorities create
   --class <class> --citation <citation> --title <title> --file <archived-copy>`. Set `--checked-on` to the date the
   source was opened and checked, not the drafting date. An Authority is global reference data shared by every matter
   that cites it, never a bare git-committed file.
@@ -82,7 +82,7 @@ Verify the Project, document kind, visibility, and revision before filing.
   Project's show page in the portal, which renders the stored URL verbatim (or nothing). No CLI command prints it
   (`navigator project doctor --project <code>` is an offline diagnosis). If no URL is recorded, do not guess an
   organization.
-- **Direct upload versus staged sync.** `navigator-deploy site document upload --project <code> --file <path> --kind
+- **Direct upload versus staged sync.** `hudson site document upload --project <code> --file <path> --kind
   <kind>` files one document immediately through the API; use it for a single filing during a session. `navigator
   project sync` is the batch path: it uploads files staged under a checkout's `documents/` folder, which the root
   `.gitignore` keeps out of Git, and writes each document's pointer under `blobs/`.
@@ -94,9 +94,9 @@ Verify the Project, document kind, visibility, and revision before filing.
   or subject, compressed), since `--slug` defaults to it.
 - **Kind.** One of `letter`, `filing`, `will`, `trust`, `directive`, `agreement`, `pleading`, `onboarding`,
   `offboarding`, `memo`, `transcript`, `inbound_contract`, `certificate_of_naturalization`, `exhibit`, `order`,
-  `closed_repository`, `invoice`, `unclassified` (`navigator-deploy site document upload --help` prints the same list).
-  `filing` is a document filed with a government body; `pleading` is a court paper (a complaint, motion, or brief) filed
-  with a court. A scanned motion is `filing` only before it is filed with the court. A court's own order is `order`.
+  `closed_repository`, `invoice`, `unclassified` (`hudson site document upload --help` prints the same list). `filing`
+  is a document filed with a government body; `pleading` is a court paper (a complaint, motion, or brief) filed with a
+  court. A scanned motion is `filing` only before it is filed with the court. A court's own order is `order`.
 - **Visibility.** `--visibility internal` (default) or `--visibility client`, the client-visible lane.
 - **Metadata.** `document upload` has no `--metadata` flag. The committed pointer carries only `kind`, `visibility`,
   and the current revision's `version`, `asset_id`, `created_at`, `sha256`, and `size_bytes`. `--description` lands on
@@ -110,8 +110,8 @@ Verify the Project, document kind, visibility, and revision before filing.
   ```
 
 - **Pointer path and revision verification.** The pointer lives at `blobs/<slug>.yaml` once written. Confirm a revision
-  landed with `navigator-deploy site document log blobs/<slug>.yaml`. It prints the revision chain, newest first,
-  marking the operative row with `*`. That table is the verification step, not the exit code.
+  landed with `hudson site document log blobs/<slug>.yaml`. It prints the revision chain, newest first, marking the
+  operative row with `*`. That table is the verification step, not the exit code.
 - **Login.** `navigator site login --host <host>` opens a browser-loopback flow. Where the browser will not launch,
   pass `--no-browser` to print the URL and open it by hand. The token is stored at `~/.navigator.json`.
 
@@ -121,7 +121,7 @@ A pleading carries only the text meant for the court. Keep drafting guidance, re
 in the review record or an HTML comment (`<!-- … -->`), which never renders; never in the notation's prose. Before
 presenting a pleading as ready to file:
 
-1. Render it final, without `--preview`: `navigator-deploy notation pdf <template.md> --out <file.pdf>`. The render
+1. Render it final, without `--preview`: `hudson notation pdf <template.md> --out <file.pdf>`. The render
    refuses an unanswered placeholder, a bracket, a stray blank, a drafting note, an instruction such as `Note to
    drafter:`, and an incomplete certificate of service, naming each line. Answer the questionnaire state it names; never
    fill a missing fact with an invented one.

@@ -127,7 +127,7 @@ pub(super) const EXEMPT: &[(&str, &str)] = &[
 
 /// Converge this host's toolchain on the pinned native dependencies.
 ///
-/// The entry point behind `navigator-deploy dev install`. The platform string
+/// The entry point behind `hudson dev install`. The platform string
 /// is injected into [`preflight::ensure`] rather than read inside it, so
 /// the non-macOS refusal stays testable without a non-macOS machine.
 ///

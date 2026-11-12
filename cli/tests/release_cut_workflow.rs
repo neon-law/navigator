@@ -135,7 +135,7 @@ fn a_covered_date_writes_nothing() {
          UTC date is reported rather than acted on"
     );
     assert!(
-        cut_text.contains("if cargo run --locked -p deploy --quiet -- ops cut-release --dry-run"),
+        cut_text.contains("if cargo run --locked -p hudson --quiet -- ops cut-release --dry-run"),
         "the probe's exit code, not its stdout alone, must gate whether the job proceeds to write"
     );
     assert!(

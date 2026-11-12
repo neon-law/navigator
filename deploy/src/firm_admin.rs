@@ -1,4 +1,4 @@
-//! `navigator-deploy site firm list|rename|delete` and `navigator-deploy site brand
+//! `hudson site firm list|rename|delete` and `hudson site brand
 //! move|detach|delete`: administer Firms and the Brands they wear on a
 //! deployment.
 //!
@@ -173,7 +173,7 @@ async fn run_at(base: &str, token: &str, action: Action<'_>) -> Result<String> {
     }
 }
 
-/// Run one `navigator-deploy site firm` or `navigator-deploy site brand` administrative verb.
+/// Run one `hudson site firm` or `hudson site brand` administrative verb.
 pub async fn run(host: Option<&str>, action: Action<'_>) -> ExitCode {
     let result = async {
         let (base, token) = crate::remote::resolve(host)?;

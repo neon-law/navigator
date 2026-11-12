@@ -1,4 +1,4 @@
-# Synthetic publication for `navigator-deploy dev forgejo smoke`: runs on every
+# Synthetic publication for `hudson dev forgejo smoke`: runs on every
 # commit that reaches main, including a squash merge Forgejo makes itself.
 name: publish
 on:

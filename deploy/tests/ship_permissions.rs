@@ -32,7 +32,7 @@ exit 0
             log.display()
         ),
     );
-    let output = Command::new(env!("CARGO_BIN_EXE_navigator-deploy"))
+    let output = Command::new(env!("CARGO_BIN_EXE_hudson"))
         .args([
             "ops",
             "ship",

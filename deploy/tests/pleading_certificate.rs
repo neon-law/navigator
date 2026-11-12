@@ -67,7 +67,7 @@ served_on: 2026-03-05\n  address: 200 Sample Street, Sampleton, California 90000
 address: other@example.invalid\n  declarant: Pat Sample\n";
 
 fn render(subcommand: &str, work: &TempDir, out: &Path, preview: bool) -> Output {
-    let mut command = Command::new(cargo_bin("navigator-deploy"));
+    let mut command = Command::new(cargo_bin("hudson"));
     command
         .args(["notation", subcommand])
         .arg(work.path().join("templates/notice_of_compliance.md"))
@@ -82,7 +82,7 @@ fn render(subcommand: &str, work: &TempDir, out: &Path, preview: bool) -> Output
     if preview {
         command.arg("--preview");
     }
-    command.output().expect("run navigator-deploy notation")
+    command.output().expect("run hudson notation")
 }
 
 fn stderr(output: &Output) -> String {

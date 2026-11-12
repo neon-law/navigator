@@ -1,4 +1,4 @@
-# Synthetic bot push for `navigator-deploy dev forgejo smoke`: the job's own Actions
+# Synthetic bot push for `hudson dev forgejo smoke`: the job's own Actions
 # token clones the repository, then must fail to push to protected main.
 name: bot-push
 on: [workflow_dispatch]

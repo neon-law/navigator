@@ -1,4 +1,4 @@
-//! `navigator-deploy ops cut-release` end-to-end: it names today's UTC `YY.M.D`
+//! `hudson ops cut-release` end-to-end: it names today's UTC `YY.M.D`
 //! (or, once that is published, the next date's `-rc.N`) and writes it, or
 //! fails when a tag far ahead of the calendar leaves nothing to cut. `--dry-run` is the rehearsal — stdout is the tag, nothing
 //! is written.
@@ -50,7 +50,7 @@ fn today_tag() -> String {
 }
 
 fn navigator() -> Command {
-    Command::cargo_bin("navigator-deploy").unwrap()
+    Command::cargo_bin("hudson").unwrap()
 }
 
 #[test]

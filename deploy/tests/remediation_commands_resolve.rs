@@ -47,7 +47,7 @@
 //! `navigator site import person` is correct — `person` is `import`'s
 //! `<MODEL_NAME>` value. A leaf that takes no positional has nothing an
 //! operator could type after it, so a trailing token there is the same defect
-//! as an unknown subcommand: `navigator-deploy ops doctor check` names a `check`
+//! as an unknown subcommand: `hudson ops doctor check` names a `check`
 //! that does not exist, and `ops doctor` accepts only `--namespace`.
 //! Both facts are read off the command's own `--help` rather than listed here.
 //!
@@ -61,12 +61,12 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 /// The prefixes the codebase writes an invocation with. `navigator` and
-/// `navigator-deploy` are the installed binaries; `cli` and `deploy` are the
+/// `hudson` are the installed binaries; `cli` and `deploy` are the
 /// crate spellings from `cargo run -p <crate> --`, which take the same path
-/// after the `--`. `navigator-deploy` carries every `navigator` command, so
+/// after the `--`. `hudson` carries every `navigator` command, so
 /// all four resolve against its tree, and a plain `navigator` invocation must
 /// additionally name a verb the lean binary kept.
-const PREFIXES: &[&str] = &["navigator", "navigator-deploy", "cli", "deploy"];
+const PREFIXES: &[&str] = &["navigator", "hudson", "cli", "deploy"];
 
 /// The prefixes that name the lean `navigator`.
 const LEAN_PREFIXES: &[&str] = &["navigator", "cli"];
@@ -185,8 +185,8 @@ fn backticked(text: &str) -> Vec<&str> {
 }
 
 /// Shell and prose characters that wrap a command word without being part of
-/// it: `` `tag=$(navigator-deploy ops release-default-tag)` `` names a real command,
-/// and so does a sentence ending "…run `navigator-deploy ops assets build`."
+/// it: `` `tag=$(hudson ops release-default-tag)` `` names a real command,
+/// and so does a sentence ending "…run `hudson ops assets build`."
 ///
 /// `<`, `>`, `[`, `]`, and `-` are deliberately *not* here. They are what make
 /// `<SEED_FILE>` and `--dry-run` stop the run instead of being mistaken for
@@ -223,7 +223,7 @@ fn subcommand_path(literal: &str) -> Option<Vec<String>> {
     let prefix = tokens.iter().position(|token| names_the_binary(token))?;
 
     let mut rest = &tokens[prefix + 1..];
-    // `cargo run -p deploy -- ops gcp setup` is the spelling the docs teach, and
+    // `cargo run -p hudson -- ops gcp setup` is the spelling the docs teach, and
     // cargo's separator is not a subcommand.
     if rest.first() == Some(&"--") {
         rest = &rest[1..];
@@ -255,14 +255,14 @@ fn lean_verb(literal: &str, path: &[String]) -> Result<(), String> {
         return Ok(());
     }
     let first = path.first().map(String::as_str).unwrap_or_default();
-    let moved = cli::projects::cli_docs::NAVIGATOR_DEPLOY_VERBS.contains(&first)
+    let moved = cli::projects::cli_docs::HUDSON_VERBS.contains(&first)
         || (first == "site"
             && path
                 .get(1)
                 .is_some_and(|verb| !LEAN_SITE_VERBS.contains(&verb.as_str())));
     if moved {
         Err(format!(
-            "`{}` is a `navigator-deploy` command; the lean `navigator` does not carry it",
+            "`{}` is a `hudson` command; the lean `navigator` does not carry it",
             spelled(path)
         ))
     } else {
@@ -365,7 +365,7 @@ fn node_at(cache: &mut BTreeMap<Vec<String>, Node>, path: &[String]) -> Node {
 
     let mut args: Vec<&str> = path.iter().map(String::as_str).collect();
     args.push("--help");
-    let output = Command::cargo_bin("navigator-deploy")
+    let output = Command::cargo_bin("hudson")
         .expect("build the navigator binary")
         .args(&args)
         .output()
@@ -389,9 +389,9 @@ fn node_at(cache: &mut BTreeMap<Vec<String>, Node>, path: &[String]) -> Node {
 /// Where the walk currently is, spelled the way an operator would type it.
 fn spelled(path: &[String]) -> String {
     if path.is_empty() {
-        "navigator-deploy".to_string()
+        "hudson".to_string()
     } else {
-        format!("navigator-deploy {}", path.join(" "))
+        format!("hudson {}", path.join(" "))
     }
 }
 
@@ -588,7 +588,7 @@ fn the_guard_rejects_a_command_that_does_not_exist() {
     let stale = subcommand_path("cli coupon create").expect("an invocation");
     let why = resolve(&mut cache, &stale).expect_err("`coupon` is not a subcommand");
     assert!(
-        why.contains("`coupon` is not a subcommand of `navigator-deploy`"),
+        why.contains("`coupon` is not a subcommand of `hudson`"),
         "the failure must name the token and where it was looked up: {why}"
     );
 
@@ -597,10 +597,10 @@ fn the_guard_rejects_a_command_that_does_not_exist() {
     let shallow = subcommand_path("cli notation create").expect("an invocation");
     resolve(&mut cache, &shallow).expect_err("`notation` is nested under `site`");
 
-    let retired = subcommand_path("navigator-deploy site notation create").expect("an invocation");
+    let retired = subcommand_path("hudson site notation create").expect("an invocation");
     let why = resolve(&mut cache, &retired).expect_err("the retired command is hidden");
     assert!(
-        why.contains("`create` is not a subcommand of `navigator-deploy site notation`"),
+        why.contains("`create` is not a subcommand of `hudson site notation`"),
         "the retired command must not appear as a visible CLI verb: {why}"
     );
 }
@@ -653,7 +653,7 @@ fn an_argument_after_a_leaf_command_is_not_a_missing_subcommand() {
 #[test]
 fn a_trailing_word_on_a_leaf_that_takes_no_argument_does_not_resolve() {
     let mut cache = BTreeMap::new();
-    let path = subcommand_path("navigator-deploy ops doctor check").expect("an invocation");
+    let path = subcommand_path("hudson ops doctor check").expect("an invocation");
     let why = resolve(&mut cache, &path).expect_err("`ops doctor` takes no positional");
     assert!(
         why.contains("takes no argument"),
@@ -664,7 +664,7 @@ fn a_trailing_word_on_a_leaf_that_takes_no_argument_does_not_resolve() {
 #[test]
 fn a_retired_verb_in_a_cfg_test_module_is_not_scanned() {
     let source = concat!(
-        "fn prod() { let _ = \"run `navigator-deploy ops doctor`\"; }\n",
+        "fn prod() { let _ = \"run `hudson ops doctor`\"; }\n",
         "#[cfg(test)]\n",
         "mod tests {\n",
         "    fn example() { let _ = \"run `navigator template render x`\"; }\n",
@@ -676,7 +676,7 @@ fn a_retired_verb_in_a_cfg_test_module_is_not_scanned() {
             .iter()
             .map(|invocation| invocation.literal.as_str())
             .collect::<Vec<_>>(),
-        vec!["navigator-deploy ops doctor"],
+        vec!["hudson ops doctor"],
         "{found:?}"
     );
 }
@@ -700,7 +700,7 @@ fn refuse() -> String {
 #[test]
 fn the_scan_reads_an_invocation_split_across_a_doc_comment_block() {
     let source = "\
-    /// Prints the tag so a caller can capture it: `tag=$(navigator-deploy ops
+    /// Prints the tag so a caller can capture it: `tag=$(hudson ops
     /// release-default-tag)`.
     Thing,
 ";
@@ -713,7 +713,7 @@ fn the_scan_reads_an_invocation_split_across_a_doc_comment_block() {
 /// string that prints it must be read as the invocation it is.
 #[test]
 fn the_scan_reads_the_cargo_run_spelling() {
-    let source = "    assert!(prose.contains(\"x\"), \"must print `cargo run -p deploy -- ops gcp setup --project-id`\");\n";
+    let source = "    assert!(prose.contains(\"x\"), \"must print `cargo run -p hudson -- ops gcp setup --project-id`\");\n";
 
     let found = invocations_in("cli/src/example.rs", source, false);
     assert_eq!(found.len(), 1, "{found:?}");
@@ -743,9 +743,9 @@ fn plain_comments_outside_the_clap_surface_are_not_scanned() {
     assert_eq!(invocations_in("cli/src/main.rs", source, true).len(), 1);
 }
 
-/// A plain `navigator` invocation of a verb that moved to `navigator-deploy`
+/// A plain `navigator` invocation of a verb that moved to `hudson`
 /// is the error a Homebrew user would hit; the same path under
-/// `navigator-deploy`, or a verb the lean binary kept, is fine.
+/// `hudson`, or a verb the lean binary kept, is fine.
 #[test]
 fn a_moved_verb_under_the_lean_navigator_is_refused() {
     let path = |literal| subcommand_path(literal).expect("an invocation");
@@ -755,11 +755,7 @@ fn a_moved_verb_under_the_lean_navigator_is_refused() {
         &path("navigator site document log")
     )
     .is_err());
-    assert!(lean_verb(
-        "navigator-deploy ops ship",
-        &path("navigator-deploy ops ship")
-    )
-    .is_ok());
+    assert!(lean_verb("hudson ops ship", &path("hudson ops ship")).is_ok());
     assert!(lean_verb("navigator project gate", &path("navigator project gate")).is_ok());
     assert!(lean_verb("navigator site login", &path("navigator site login")).is_ok());
 }

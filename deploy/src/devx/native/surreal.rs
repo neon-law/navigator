@@ -16,7 +16,7 @@ use anyhow::{Context, Result};
 
 use super::supervisor::Service;
 
-/// The formula and executable `navigator-deploy dev install` acquires.
+/// The formula and executable `hudson dev install` acquires.
 const FORMULA: &str = "surreal";
 const BINARY: &str = "surreal";
 

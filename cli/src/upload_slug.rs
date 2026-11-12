@@ -111,7 +111,7 @@ pub fn resolve(
         return Err(anyhow!(
             "`--slug {explicit}` would file a new document beside {}, which already names `{slug}`; \
              drop `--slug` to file a revision of `{slug}`, or move that document with \
-             `navigator-deploy site document reslug`",
+             `hudson site document reslug`",
             sibling.display()
         ));
     }

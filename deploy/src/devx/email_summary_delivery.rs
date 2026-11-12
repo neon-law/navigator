@@ -40,7 +40,7 @@ pub fn health() -> Result<()> {
     })
 }
 
-/// `navigator-deploy ops email-summary quarantined` — list every delivery
+/// `hudson ops email-summary quarantined` — list every delivery
 /// currently sitting in `UNKNOWN`, most-recently-updated first.
 /// Also included in the health check for monitoring.
 pub fn quarantined() -> Result<()> {
@@ -75,7 +75,7 @@ async fn quarantined_async() -> Result<()> {
     Ok(())
 }
 
-/// `navigator-deploy ops email-summary reconcile-confirmed --receipt <uuid> --actor
+/// `hudson ops email-summary reconcile-confirmed --receipt <uuid> --actor
 /// <actor> --channel <id> --timestamp <ts>` — record that a quarantined
 /// send actually reached Slack, so replay stops treating it as in doubt.
 pub fn reconcile_confirmed(
@@ -115,7 +115,7 @@ async fn reconcile_confirmed_async(
     Ok(())
 }
 
-/// `navigator-deploy ops email-summary authorize-resend --receipt <uuid> --actor
+/// `hudson ops email-summary authorize-resend --receipt <uuid> --actor
 /// <actor>` — record operator authorization to resend a quarantined
 /// delivery. Only unblocks the next `admit_attempt`; it does not itself
 /// resend anything.

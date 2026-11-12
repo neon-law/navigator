@@ -1,4 +1,4 @@
-//! `navigator-deploy dev worktree-env` — a dev environment per git worktree.
+//! `hudson dev worktree-env` — a dev environment per git worktree.
 //!
 //! Agent harnesses may pre-provision a fresh git worktree per task and export
 //! `NAVIGATOR_WORKTREE_PATH`. The same command also supports a normal primary
@@ -6,8 +6,8 @@
 //! branches a supplied checkout in place.
 //!
 //! ```text
-//! cargo run -p deploy -- dev worktree-env up --branch <topic-branch>
-//! cargo run -p deploy -- dev worktree-env down
+//! cargo run -p hudson -- dev worktree-env up --branch <topic-branch>
+//! cargo run -p hudson -- dev worktree-env down
 //! ```
 //!
 //! Two modes, both reached through the same front door:
@@ -44,7 +44,7 @@ use super::KindConfig;
 
 /// Independent local topology slots. Each slot reserves one port in every
 /// worktree-only range below, so its components cannot collide with another
-/// worktree or the ordinary `navigator-deploy dev up` defaults.
+/// worktree or the ordinary `hudson dev up` defaults.
 const WORKTREE_PORT_SPAN: u16 = 100;
 /// The floor of the worktree window. No tier member binds this band, and
 /// the window keeps its start regardless so every other base, and every
@@ -70,7 +70,7 @@ const WORKTREE_CLAMAV_PORT_BASE: u16 = 21_100;
 /// the worktree's own cluster, so two checkouts hold two engines.
 const WORKTREE_SURREAL_PORT_BASE: u16 = 21_200;
 /// The opt-in Forgejo and its PostgreSQL server, forwarded by `dev forgejo
-/// up` (and `navigator-deploy quickstart`) on the slot's own ports.
+/// up` (and `hudson quickstart`) on the slot's own ports.
 const WORKTREE_FORGEJO_PORT_BASE: u16 = 21_400;
 const WORKTREE_POSTGRES_PORT_BASE: u16 = 21_500;
 /// Longest slug we keep — enough to stay readable in a database name and
@@ -674,7 +674,7 @@ fn up_demo(root: &Path, tag: Option<&str>, base_cfg: &KindConfig) -> Result<()> 
     eprintln!();
     eprintln!("==> demo stack up. Reach navigator-web through the KIND ingress:");
     eprintln!("    http://localhost:8080");
-    eprintln!("    (pre-seed a lawyer role with `navigator-deploy dev grant-lawyer`)");
+    eprintln!("    (pre-seed a lawyer role with `hudson dev grant-lawyer`)");
     Ok(())
 }
 
@@ -1796,12 +1796,12 @@ fn dev_summary(slug: &str, db_name: &str, runtime: Runtime, cfg: &KindConfig) ->
         Runtime::Native => "  tier         : native host processes\n".to_string(),
     };
     format!(
-        "\n{rule}\n navigator-deploy dev worktree-env up — dev environment for `{slug}`\n{rule}\n\n\
+        "\n{rule}\n hudson dev worktree-env up — dev environment for `{slug}`\n{rule}\n\n\
          {tier}  database     : {db_name}\n  Restate port : {}\n  Surreal port : {}\n  web port     : {}\n\
          \x20 delete-your-data web port : {}\n\n\
          Start this worktree's web server:\n\n{}\n\n\
          Tear down this worktree's tier:\n    \
-         navigator-deploy dev worktree-env down\n",
+         hudson dev worktree-env down\n",
         cfg.restate_ingress_port,
         cfg.surreal_port,
         cfg.web_port,
@@ -1882,7 +1882,7 @@ mod tests {
             cfg.web_port,
             cfg.delete_your_data_web_port
         )));
-        assert!(summary.contains("navigator-deploy dev worktree-env down"));
+        assert!(summary.contains("hudson dev worktree-env down"));
     }
 
     #[test]

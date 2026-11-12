@@ -24,7 +24,7 @@ on the archives bucket; that IAM binding is an operator action.
 ## Restore drill
 
 ```bash
-cargo run -p deploy -- ops surreal-archive restore-drill \
+cargo run -p hudson -- ops surreal-archive restore-drill \
     --key surreal-backups/navigator/navigator/<timestamp>-<uuid>.surql
 ```
 
@@ -49,8 +49,8 @@ SeaweedFS exports bucket:
 
 ```bash
 set -a; source .devx/env; set +a
-cargo run -p deploy -- ops surreal-archive export
-cargo run -p deploy -- ops surreal-archive restore-drill --key <printed-key>
+cargo run -p hudson -- ops surreal-archive export
+cargo run -p hudson -- ops surreal-archive restore-drill --key <printed-key>
 ```
 
 ## Derived tables

@@ -1,4 +1,4 @@
-//! `navigator-deploy site authorities create` — file a global Authority (the citation
+//! `hudson site authorities create` — file a global Authority (the citation
 //! apparatus' shared reference data, #890) with an archived artifact,
 //! through the logged-in deployment's `POST /app/api/authorities` door
 //! (`portal::authorities_api`).
@@ -140,7 +140,7 @@ pub async fn create_authority(
     serde_json::from_str(&text).context("parse authority response")
 }
 
-/// `navigator-deploy site authorities create --class … --citation … --title … --file …`
+/// `hudson site authorities create --class … --citation … --title … --file …`
 /// — file one Authority with its archived artifact through the live site's
 /// `POST /app/api/authorities` door, using the stored login credential.
 #[allow(clippy::too_many_arguments)]
@@ -183,7 +183,7 @@ pub async fn create(
     .await
 }
 
-/// What `navigator-deploy site authorities update` needs. Exactly one of `id` or
+/// What `hudson site authorities update` needs. Exactly one of `id` or
 /// `citation` must be given to locate the existing Authority; every other
 /// field is optional and left unchanged when absent.
 #[allow(clippy::too_many_arguments)]
@@ -251,7 +251,7 @@ pub async fn update_authority(
     serde_json::from_str(&text).context("parse authority response")
 }
 
-/// `navigator-deploy site authorities update <ID> | --citation …` — correct a
+/// `hudson site authorities update <ID> | --citation …` — correct a
 /// field on an existing Authority, leaving every field left out unchanged.
 #[allow(clippy::too_many_arguments)]
 pub async fn update(
