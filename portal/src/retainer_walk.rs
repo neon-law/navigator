@@ -1629,11 +1629,6 @@ pub enum WorkflowDriveError {
     /// envelope is not sent.
     #[error("declared signer role `{role}` is unresolved: missing name or email")]
     UnresolvedSigner { role: String },
-    /// The send was requested in prepare (draft) mode, which the provider
-    /// seam does not support yet — LAW-270 lands draft envelopes. Nothing
-    /// was written or sent.
-    #[error("prepare (draft) mode is not supported yet: the signature provider seam cannot create a draft envelope")]
-    PrepareUnsupported,
     /// The template's `form:` binding or its field map failed to
     /// resolve — a vendoring or mapping defect, never silently skipped.
     #[error("government form `{form_code}`: {reason}")]

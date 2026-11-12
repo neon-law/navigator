@@ -4844,18 +4844,30 @@ struct NotationSignatureResponse {
     signature_request_id: String,
 }
 
+/// Request body for `POST /app/api/notations/{id}/signature`. An empty body
+/// (or an omitted `prepare`) sends the envelope; `{"prepare": true}` holds
+/// it as a draft on the provider — the CLI's `notation envelope prepare`.
+#[derive(Deserialize, Default)]
+struct NotationSignatureRequest {
+    #[serde(default)]
+    prepare: bool,
+}
+
 /// `POST /app/api/notations/{id}/signature` — dispatch the notation's rendered
-/// document for signature: fires `pdf_persisted` and sends exactly one
-/// envelope through the signature provider. Lawyer-tier only (embedded Rego policy) *and*
-/// matter-scoped (admin bypasses); an out-of-scope or unknown notation is 404.
-/// Idempotent: a notation that already has an envelope out reuses its request
-/// id and sends nothing. When the worker has not rendered the PDF yet, returns
-/// `409 document_not_ready` (retry) rather than dispatching a missing document.
+/// document for signature: with `{"prepare": true}` the envelope is created as
+/// a draft (the workflow does not advance); otherwise it fires `pdf_persisted`
+/// and sends exactly one envelope through the signature provider. Lawyer-tier
+/// only (embedded Rego policy) *and* matter-scoped (admin bypasses); an
+/// out-of-scope or unknown notation is 404. Idempotent: a notation that
+/// already has a dispatched envelope reuses its request id and sends nothing.
+/// When the worker has not rendered the PDF yet, returns `409
+/// document_not_ready` (retry) rather than dispatching a missing document.
 /// This drives the same command core (`send_notation_for_signature`) as the lawyer form.
 async fn send_notation_signature(
     State(state): State<ApiState>,
     lawyer: LawyerSession,
     Path(id): Path<Uuid>,
+    body: Option<Json<NotationSignatureRequest>>,
 ) -> Result<Response, ApiError> {
     // Resolve the notation and enforce matter scope on its project first. A
     // miss collapses to 404 so the door never discloses a notation the caller
@@ -4881,11 +4893,16 @@ async fn send_notation_signature(
         storage: &state.storage,
         acting: lawyer.0.person_id,
     };
+    let mode = match body {
+        // No body (or no `prepare` flag) dispatches — today's behavior.
+        Some(Json(request)) if request.prepare => crate::signature_flow::SendMode::Prepare,
+        _ => crate::signature_flow::SendMode::Send,
+    };
     let (final_state, signature_request_id) = crate::signature_flow::send_notation_for_signature(
         &ctx,
         id,
         state.signature_provider.as_ref(),
-        crate::signature_flow::SendMode::Send,
+        mode,
     )
     .await?;
     Ok((
