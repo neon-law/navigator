@@ -565,7 +565,7 @@ pub(super) const RECEIVER_PID: &str = "/tmp/forgejo-receiver/receiver.pid";
 
 /// The receiver pod's in-cluster Forgejo API base: the analysis reads
 /// pushed changes over the cluster's own Service, in plain HTTP.
-pub(super) const RECEIVER_FORGE_URL: &str = "http://navigator-forgejo:3000";
+pub(super) const RECEIVER_FORGE_URL: &str = "http://navigator-forgejo.navigator.svc.cluster.local";
 
 /// The pod command that (re)starts the receiver: any previous receiver dies
 /// first so re-runs are idempotent, the new one detaches with nohup so the

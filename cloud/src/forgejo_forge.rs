@@ -174,12 +174,17 @@ impl ForgejoForge {
     ///
     /// # Errors
     /// [`ForgeError::InvalidConfig`] when the root URL is not `https` (or
-    /// `http` on a loopback test host), the namespace is not a valid slug, or
-    /// the token is blank.
+    /// `http` on a loopback or cluster-internal test host), the namespace
+    /// is not a valid slug, or the token is blank.
     pub fn new(root_url: &str, firm_slug: &str, token: &str) -> Result<Self, ForgeError> {
         let root = root_url.trim().trim_end_matches('/');
         let loopback = root.starts_with("http://127.0.0.1") || root.starts_with("http://localhost");
-        if !(root.starts_with("https://") || loopback) {
+        // A cluster-internal service name (the KIND smoke tier's in-pod
+        // receiver) is the loopback test host's analogue: the name resolves
+        // only inside the cluster network, so the token never crosses the
+        // boundary in plaintext.
+        let cluster_internal = root.starts_with("http://") && root.ends_with(".svc.cluster.local");
+        if !(root.starts_with("https://") || loopback || cluster_internal) {
             return Err(ForgeError::InvalidConfig(NAVIGATOR_FORGEJO_ROOT_URL_ENV));
         }
         if !crate::workspace::is_valid_slug(firm_slug) {
@@ -867,6 +872,26 @@ mod tests {
         assert!(ForgejoForge::new("https://forge.example.test", "firm", " ").is_err());
         let forge = ForgejoForge::new("https://forge.example.test/", "firm-a", "secret").unwrap();
         assert!(!format!("{forge:?}").contains("secret"));
+    }
+
+    #[test]
+    fn a_client_admits_loopback_and_cluster_internal_http_but_not_the_public_web() {
+        let loopback = ForgejoForge::new("http://127.0.0.1:8080/", "firm-a", "t").unwrap();
+        assert_eq!(loopback.api_base, "http://127.0.0.1:8080/api/v1");
+        let in_cluster = ForgejoForge::new(
+            "http://navigator-forgejo.navigator.svc.cluster.local",
+            "firm-a",
+            "t",
+        )
+        .unwrap();
+        assert_eq!(
+            in_cluster.api_base,
+            "http://navigator-forgejo.navigator.svc.cluster.local/api/v1"
+        );
+        // A bare in-cluster short name would ride the pod's DNS search
+        // path — fine for a dial, but the root URL must name the boundary
+        // it trusts explicitly.
+        assert!(ForgejoForge::new("http://navigator-forgejo", "firm-a", "t").is_err());
     }
 
     #[tokio::test]
