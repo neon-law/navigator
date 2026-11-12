@@ -39,7 +39,7 @@ const FIELD_FAMILY: &str = "person__client.family";
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .expect("cli crate sits one level under the workspace root")
+        .expect("deploy crate sits one level under the workspace root")
         .to_path_buf()
 }
 
@@ -85,7 +85,7 @@ fn repro_template() -> String {
 }
 
 fn render(template: &Path, out: &Path, cache: &Path, ci: bool) -> assert_cmd::assert::Assert {
-    let mut command = Command::cargo_bin("navigator").expect("navigator binary");
+    let mut command = Command::cargo_bin("navigator-deploy").expect("navigator binary");
     command
         .current_dir(template.parent().expect("template parent"))
         .env("NAVIGATOR_FORM_CACHE", cache)
@@ -260,7 +260,7 @@ fn a_form_template_refuses_the_word_render() {
     let cache = TempDir::new().expect("temp cache");
     let out = root.path().join("out.docx");
 
-    Command::cargo_bin("navigator")
+    Command::cargo_bin("navigator-deploy")
         .expect("navigator binary")
         .current_dir(template.parent().expect("template parent"))
         .env("NAVIGATOR_FORM_CACHE", cache.path())
