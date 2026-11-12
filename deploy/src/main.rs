@@ -23,9 +23,9 @@ mod firms_doctor;
 mod forms_render;
 mod forms_sync;
 mod glossary;
+mod import;
 mod inbox;
 mod inbox_import;
-mod import;
 mod journal;
 mod letterhead;
 mod lsp_download;
@@ -5027,8 +5027,7 @@ fn project_firm_legal_name(file: &Path) -> Option<String> {
         Some(path) => {
             let contents = std::fs::read_to_string(&path).ok()?;
             let manifest = projects::manifest::parse(&contents).ok()?;
-            letterhead::for_project(manifest.brand.as_deref(), manifest.host.as_deref())
-                .ok()?
+            letterhead::for_project(manifest.brand.as_deref(), manifest.host.as_deref()).ok()?
         }
         None => letterhead::for_brand(views::brand::BrandKey::Neon).ok()?,
     };

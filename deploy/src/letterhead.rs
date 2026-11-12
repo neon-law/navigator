@@ -276,7 +276,6 @@ async fn fetch_png(base: &str, object_key: Option<&str>) -> Result<Vec<u8>, Stri
         .map_err(|error| format!("GET {url}: {error}"))
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::{for_brand, for_project, LetterheadError};
