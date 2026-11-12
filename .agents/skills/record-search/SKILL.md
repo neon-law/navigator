@@ -12,8 +12,8 @@ and line or page, and quote its text exactly. Limit every absence claim to the f
 
 ## Find the term first
 
-Before naming a new record class, run `navigator-deploy glossary list` and then `navigator-deploy glossary show
-"<Term>"` for the closest existing term.
+Before naming a new record class, run `hudson glossary list` and then `hudson glossary show "<Term>"` for the closest
+existing term.
 
 ## Name the record
 

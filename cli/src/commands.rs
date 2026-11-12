@@ -3,7 +3,7 @@
 //!
 //! The tree, its dispatch, and every helper it calls live in this library so
 //! a host other than the `navigator` binary (the menu-bar app) can link the
-//! same rules. `navigator-deploy` and `scorpio` reuse the shared helpers.
+//! same rules. `hudson` and `scorpio` reuse the shared helpers.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -157,7 +157,7 @@ pub enum EnvelopeCmd {
 }
 
 /// The site verbs a Project checkout and its CI need: the stored session and
-/// the `seeds/` import. `navigator-deploy site` carries the rest of the site
+/// the `seeds/` import. `hudson site` carries the rest of the site
 /// client.
 #[derive(Subcommand)]
 pub enum SiteCmd {
@@ -435,7 +435,7 @@ pub const NOTICE: &str = include_str!("../../NOTICE");
 /// The third-party licence notices, compiled into the binary for the same
 /// reason as [`LICENSE`]: a single downloaded executable has to be able to
 /// show the attributions it is obliged to carry. Regenerate with
-/// `navigator-deploy ops notices`.
+/// `hudson ops notices`.
 pub const THIRD_PARTY_NOTICES: &str = include_str!("../../THIRD-PARTY-NOTICES.txt");
 
 /// Return the first sentence of `text`, capped at ten words.
@@ -1008,8 +1008,8 @@ pub enum ProjectsCmd {
         /// pointer, and moves pointers left under `documents/` to `blobs/`. A missing or
         /// corrupt object, or a live row with no slug, needs a person. Under
         /// `--ci` any of those fixes fails the job and names the fix.
-        /// A live row with no slug is `navigator-deploy site document slug`. A missing
-        /// storage object is `navigator-deploy site document repair`. Uploading a
+        /// A live row with no slug is `hudson site document slug`. A missing
+        /// storage object is `hudson site document repair`. Uploading a
         /// staged file is `navigator project sync`.
         #[arg(long)]
         check: bool,

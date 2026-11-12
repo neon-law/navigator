@@ -6,8 +6,8 @@
 //! written. A live document whose pointer the repository removed is a pending
 //! deletion: it is reported, never rewritten, and `navigator project sync` asks
 //! whether to soft-delete it. A missing storage object is
-//! `navigator-deploy site document repair`. A live row with no slug is
-//! `navigator-deploy site document slug`. Under `--ci` the same fixes are reported and
+//! `hudson site document repair`. A live row with no slug is
+//! `hudson site document slug`. Under `--ci` the same fixes are reported and
 //! nothing is written.
 //!
 //! External-id checks (an invoice, a completed envelope) are the server's

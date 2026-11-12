@@ -21,10 +21,9 @@ infrastructure access.
 
 `navigator` owns orchestration in `deploy/src/devx/mod.rs`; one environment surface serves:
 
-1. **Local dev:** `navigator-deploy dev up` against KIND; defaults need no `.env`.
-2. **Every cloud deployment:** `navigator-deploy ops gcp setup` against that deployment's own project, then
-   `navigator-deploy ops ship`. All six are provisioned and shipped by the same pipeline; there is no reduced staging
-   substrate.
+1. **Local dev:** `hudson dev up` against KIND; defaults need no `.env`.
+2. **Every cloud deployment:** `hudson ops gcp setup` against that deployment's own project, then
+   `hudson ops ship`. All six are provisioned and shipped by the same pipeline; there is no reduced staging substrate.
 3. **OSS/multi-cloud:** supply cluster, namespace, overlays, and ports through `.env`, without Rust edits.
 
 ## The seam: one `KindConfig`, resolved once
@@ -60,13 +59,13 @@ SeaweedFS, require no cluster recreation.
 
 ## Native shared runtime
 
-`navigator-deploy dev worktree-env up --runtime native` is opt-in; KIND remains the default runtime. The native lane
-uses the same host lock and descriptor-based slot reservation as KIND. Host `web`, one Restate server, and one
-`workflows-service` keep their worktree slot; SurrealDB, Rauthy, and SeaweedFS are one shared host process set. Each
-Restate server uses TCP listeners and its own `.devx/restate/data` journal; its fabric, ingress, and admin listeners are
-derived from the worktree slot. Each worker uses its own listen and health ports, is built from the checkout, and is
-registered against that worktree's private Restate admin listener through the same registration machinery used by cloud
-deployments. `dev worker-reload` stops and replaces only the recorded worker, then re-registers it.
+`hudson dev worktree-env up --runtime native` is opt-in; KIND remains the default runtime. The native lane uses the same
+host lock and descriptor-based slot reservation as KIND. Host `web`, one Restate server, and one `workflows-service`
+keep their worktree slot; SurrealDB, Rauthy, and SeaweedFS are one shared host process set. Each Restate server uses TCP
+listeners and its own `.devx/restate/data` journal; its fabric, ingress, and admin listeners are derived from the
+worktree slot. Each worker uses its own listen and health ports, is built from the checkout, and is registered against
+that worktree's private Restate admin listener through the same registration machinery used by cloud deployments. `dev
+worker-reload` stops and replaces only the recorded worker, then re-registers it.
 
 The native registry records each process's PID, complete command, and process-start identity together with each
 worktree's private SurrealDB database and SeaweedFS bucket/key set. A process record is host-wide, so each claim also

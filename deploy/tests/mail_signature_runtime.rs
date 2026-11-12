@@ -235,7 +235,7 @@ fn draft_command(
     signature_env: Option<&str>,
     stores: Option<&StoreEnv>,
 ) -> std::process::Output {
-    let mut command = Command::new(cargo_bin("navigator-deploy"));
+    let mut command = Command::new(cargo_bin("hudson"));
     command
         .args(["mail", "draft", "--body-file"])
         .arg(body_file)
@@ -251,7 +251,7 @@ fn draft_command(
         Some(env) => with_store_env(&mut command, env),
         None => without_store_env(&mut command),
     }
-    command.output().expect("run navigator-deploy mail draft")
+    command.output().expect("run hudson mail draft")
 }
 
 fn draft_body(work: &TempDir) -> PathBuf {

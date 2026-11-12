@@ -24,11 +24,11 @@ the old address, and `store::persons::find_by_any_email` finds the row by either
 more `person_mailbox` rows, so they are exactly as unique as a primary email and are mirrored to PostgreSQL by the same
 `person_mailbox` mirror. `site import person` reads `previous_email:` and `emails:` on a record: a Person who answers to
 any of them is updated to the record's `email` instead of duplicated, and the rest are kept as aliases. When a duplicate
-already exists, `navigator-deploy site person merge <keep> <drop>`
-([`store::person_merge`](../../store/src/person_merge.rs)) moves the dropped client Person's relationships —
-Conflict-Check Graph edges, Project participation, Relationship Log rows — to the kept Person in one transaction, hands
-over both addresses, and deletes the duplicate last. Alias writes and Person merges require the compatibility path;
-PostgreSQL People authority refuses them. See [SurrealDB compatibility](../surreal-compatibility.md#people).
+already exists, `hudson site person merge <keep> <drop>` ([`store::person_merge`](../../store/src/person_merge.rs))
+moves the dropped client Person's relationships — Conflict-Check Graph edges, Project participation, Relationship Log
+rows — to the kept Person in one transaction, hands over both addresses, and deletes the duplicate last. Alias writes
+and Person merges require the compatibility path; PostgreSQL People authority refuses them. See [SurrealDB
+compatibility](../surreal-compatibility.md#people).
 
 - Schema: [`person` in the PostgreSQL schema](../../store/postgres/schema.sql) Queries:
   [`store::persons`](../../store/src/persons.rs)

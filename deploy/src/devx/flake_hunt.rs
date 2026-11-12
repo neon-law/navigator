@@ -1,4 +1,4 @@
-//! `navigator-deploy dev flake-hunt` — loop one package's tests and print the
+//! `hudson dev flake-hunt` — loop one package's tests and print the
 //! pass/fail wall-time distribution.
 //!
 //! Classification keys on the printed summary (nextest's `Summary` line, or

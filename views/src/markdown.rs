@@ -331,9 +331,9 @@ mod tests {
         // The default prose path does not highlight — a fenced block keeps its
         // inert `language-…` class and its verbatim text (README/doc commands
         // stay matchable), no syntect spans.
-        let html = render("```bash\ncargo run -p deploy -- dev up\n```\n");
+        let html = render("```bash\ncargo run -p hudson -- dev up\n```\n");
         assert!(
-            html.contains("cargo run -p deploy -- dev up"),
+            html.contains("cargo run -p hudson -- dev up"),
             "verbatim command: {html}"
         );
         assert!(

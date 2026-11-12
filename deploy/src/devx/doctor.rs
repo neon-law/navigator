@@ -190,7 +190,7 @@ pub fn run(namespace: &str) -> Result<()> {
         .filter(|f| f.severity == Severity::Critical)
         .count();
 
-    println!("navigator-deploy ops doctor — namespace {namespace}");
+    println!("hudson ops doctor — namespace {namespace}");
     println!(
         "  {} job(s), {} workload(s) inspected\n",
         jobs.len(),

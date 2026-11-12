@@ -1,4 +1,4 @@
-//! `navigator-deploy site document log`, `get`, and `diff` — the offline-checkout read
+//! `hudson site document log`, `get`, and `diff` — the offline-checkout read
 //! verbs for a matter document's revision chain (#485).
 //!
 //! All three take a pointer path below `documents/` (the committed `.yaml`,
@@ -184,7 +184,7 @@ async fn revisions_for(
     Ok((slug, live, local))
 }
 
-/// `navigator-deploy site document log <pointer>`.
+/// `hudson site document log <pointer>`.
 pub async fn log(pointer: &Path) -> ExitCode {
     run(async {
         let root = Path::new(".");
@@ -309,7 +309,7 @@ fn refuse_destination_in_documents(root: &Path, pointer: &Path, out: &Path) -> R
     crate::document_sync::ensure_managed_copy_target(root, &target)
 }
 
-/// `navigator-deploy site document get <pointer> [--version N] --out <path>`.
+/// `hudson site document get <pointer> [--version N] --out <path>`.
 pub async fn get(pointer: &Path, version: Option<usize>, out: &Path) -> ExitCode {
     run(async {
         let root = Path::new(".");
@@ -467,7 +467,7 @@ fn line_diff(left: &str, right: &str) -> Result<String> {
     Ok(out)
 }
 
-/// `navigator-deploy site document diff <pointer> <a> <b>` — a redline between two
+/// `hudson site document diff <pointer> <a> <b>` — a redline between two
 /// revision numbers.
 pub async fn diff(pointer: &Path, a: usize, b: usize) -> ExitCode {
     run(async {

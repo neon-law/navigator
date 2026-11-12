@@ -179,7 +179,7 @@ pub struct Manifest {
     pub pages: Vec<rules::pages::PageEntry>,
     /// The raw `scrapers:` section, carried untyped: its shape is owned by
     /// `crate::scraper_config`, the one reader the lint (`Y024`) and the
-    /// `navigator-deploy scraper` commands share.
+    /// `hudson scraper` commands share.
     pub scrapers: Option<serde_yaml::Value>,
 }
 

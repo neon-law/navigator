@@ -103,7 +103,7 @@ image or PDF metadata unless `.github/public-snapshot/allowlist.toml` lists the 
 
 ### The PII scan
 
-The always-required `gate` job in `.github/workflows/ci.yml` runs `navigator-deploy pii` against a digest-pinned
+The always-required `gate` job in `.github/workflows/ci.yml` runs `hudson pii` against a digest-pinned
 [Presidio](https://github.com/data-privacy-stack/presidio) analyzer on loopback. Rust scans tracked prose and source
 strings and comments. Presidio supplies name recognition through spaCy, plus email, phone, Social Security, ITIN,
 credit-card and IBAN recognizers. Its Python runtime stays inside the upstream container; this repository needs no
@@ -117,7 +117,7 @@ client or contact information.
 To run locally, start the pinned analyzer image from the CI workflow with its port bound to `127.0.0.1:3000`, then run:
 
 ```bash
-cargo run -p deploy -- pii --analyzer-url http://127.0.0.1:3000
+cargo run -p hudson -- pii --analyzer-url http://127.0.0.1:3000
 ```
 
 This checks the tracked working tree, not Git history, deployed databases, CI artifacts, or text inside images and PDFs.

@@ -1,4 +1,4 @@
-//! `navigator-deploy site mcp` — a stdio MCP server that speaks A2A upstream.
+//! `hudson site mcp` — a stdio MCP server that speaks A2A upstream.
 //!
 //! Claude speaks MCP: local stdio servers and remote HTTP connectors. It
 //! has no A2A client, so pointing it at `/app/api/mcp/rpc` does nothing
@@ -9,7 +9,7 @@
 //! Claude Desktop / Claude Code
 //!   │  MCP JSON-RPC over stdio (newline-delimited)
 //!   ▼
-//! navigator-deploy site mcp
+//! hudson site mcp
 //!   │  POST /app/api/mcp/rpc, metadata.skill, Bearer <site login token>
 //!   ▼
 //! web → portal::a2a::dispatch_single → mcp::tools::call_tool
@@ -415,7 +415,7 @@ where
     Ok(())
 }
 
-/// `navigator-deploy site mcp` — resolve the stored credential, then serve MCP
+/// `hudson site mcp` — resolve the stored credential, then serve MCP
 /// on stdio until the client closes it.
 pub async fn run(host: Option<&str>) -> ExitCode {
     let upstream = HttpUpstream::new(host);
@@ -423,17 +423,17 @@ pub async fn run(host: Option<&str>) -> ExitCode {
     // Report a missing login here as a warning rather than an exit — the
     // catalog still lists, and the first call explains itself.
     match crate::remote::resolve(host) {
-        Ok((base, _)) => eprintln!("navigator-deploy site mcp: {base}"),
-        Err(e) => eprintln!("navigator-deploy site mcp: not ready — {e:#}"),
+        Ok((base, _)) => eprintln!("hudson site mcp: {base}"),
+        Err(e) => eprintln!("hudson site mcp: not ready — {e:#}"),
     }
     eprintln!(
-        "navigator-deploy site mcp: serving {} tool(s) over stdio",
+        "hudson site mcp: serving {} tool(s) over stdio",
         advertised_catalog().len()
     );
     match serve(tokio::io::stdin(), tokio::io::stdout(), &upstream).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("navigator-deploy site mcp: {e:#}");
+            eprintln!("hudson site mcp: {e:#}");
             ExitCode::from(2)
         }
     }

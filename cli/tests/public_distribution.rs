@@ -2,7 +2,7 @@
 //!
 //! `neon-law/navigator` is public, and `release-cli-publish` attaches every
 //! CLI and LSP archive, checksum, `install.sh`, `LICENSE`, and `NOTICE` to its
-//! own Release. `brew install`, `navigator-deploy lsp`, `/navigator`'s download links,
+//! own Release. `brew install`, `hudson lsp`, `/navigator`'s download links,
 //! a Project repository's gate, and the standalone install script all read
 //! that Release directly, so `deploy.yml` mirrors nothing onto the Homebrew
 //! tap any more.

@@ -64,8 +64,7 @@ To limit a filing run to one folder, pass `--only documents/cases` or `--only do
 `blobs/rules/<file>.yaml` carrying its `authority_id`, removes the staging sidecar, and keeps the bytes in `documents/`,
 ignored by Git. An exact citation with the same archived bytes reuses its global Authority; different bytes under that
 citation require review, and equal bytes alone do not establish identity. To correct a field on an Authority already
-filed, use `navigator-deploy site authorities update`. To file one without a checkout, use `navigator-deploy site
-authorities create`.
+filed, use `hudson site authorities update`. To file one without a checkout, use `hudson site authorities create`.
 
 ## 4. Commit the pointer only
 

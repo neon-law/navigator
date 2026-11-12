@@ -1,4 +1,4 @@
-//! `navigator-deploy notation kinds` — every `kind:` value and every `output:`
+//! `hudson notation kinds` — every `kind:` value and every `output:`
 //! value a notation template may declare, with the frame each gets.
 //!
 //! Both tables are read from `rules` ([`rules::Kind`] and
@@ -11,11 +11,11 @@ use std::process::ExitCode;
 use rules::kind::Lane;
 use rules::{F109OutputFormat, Kind};
 
-/// Shown under `navigator-deploy notation pdf --help` and `word --help`. Kept
+/// Shown under `hudson notation pdf --help` and `word --help`. Kept
 /// static for clap; `help_names_every_notation_kind_under_its_default_frame`
 /// pins it to [`Kind::default_output`].
 pub const RENDER_FRAME_HELP: &str = "\
-Default frame by `kind:` (override with `output:`; run `navigator-deploy notation kinds` for the full list):
+Default frame by `kind:` (override with `output:`; run `hudson notation kinds` for the full list):
   letter         letter, onboarding, offboarding, memo   (firm letterhead, even with no `output:`)
   client_letter  declaration                             (no letterhead; the party's own document)
   form           filing                                  (AcroForm fill; needs `form:` and `origin_url:`)
@@ -28,7 +28,7 @@ Default frame by `kind:` (override with `output:`; run `navigator-deploy notatio
 For a letter sent in a client's own name, declare `kind: letter` with `output: client_letter` (no letterhead).
 A declaration derives that same letterhead-less frame from `kind: declaration` — no `output:` needed.";
 
-/// The listing `navigator-deploy notation kinds` prints.
+/// The listing `hudson notation kinds` prints.
 #[must_use]
 pub fn render() -> String {
     let mut out = String::from("kind: values (default frame when `output:` is omitted)\n\n");

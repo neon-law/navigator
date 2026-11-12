@@ -308,7 +308,7 @@ fn relative(root: &Path, path: &Path) -> String {
         .join("/")
 }
 
-/// `navigator-deploy ops release pins`.
+/// `hudson ops release pins`.
 pub fn run(root: &Path) -> ExitCode {
     let report = match scan(root) {
         Ok(report) => report,

@@ -1,4 +1,4 @@
-//! Integration coverage for `navigator-deploy ops assets stub-referenced` - the
+//! Integration coverage for `hudson ops assets stub-referenced` - the
 //! CI-only path that writes tiny local placeholders after the public
 //! origin has already been verified.
 
@@ -49,7 +49,7 @@ fn stub_referenced_writes_the_gallery_and_licensed_fonts_without_content_images(
     fs::create_dir_all(content.path().join("blog")).unwrap();
     let out = TempDir::new().unwrap();
 
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .args(["ops", "assets", "stub-referenced"])
         .arg("--content")
@@ -151,7 +151,7 @@ fn stub_referenced_writes_valid_placeholder_files_at_content_paths() {
     .unwrap();
     let out = TempDir::new().unwrap();
 
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .args(["ops", "assets", "stub-referenced"])
         .arg("--content")
@@ -194,7 +194,7 @@ fn stub_referenced_errors_when_the_content_root_is_missing() {
     let missing = parent.path().join("no-such-content");
     let out = TempDir::new().unwrap();
 
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .args(["ops", "assets", "stub-referenced"])
         .arg("--content")
@@ -220,7 +220,7 @@ fn stub_referenced_reports_a_write_failure_without_aborting_the_run() {
     // fails.
     fs::write(out.path().join("img"), b"not a directory").unwrap();
 
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .args(["ops", "assets", "stub-referenced"])
         .arg("--content")
@@ -246,7 +246,7 @@ fn stub_referenced_fails_loudly_on_an_unsupported_extension() {
     fs::write(blog.join("post.md"), "![logo](img/demo/logo.gif)\n").unwrap();
     let out = TempDir::new().unwrap();
 
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .args(["ops", "assets", "stub-referenced"])
         .arg("--content")
@@ -267,7 +267,7 @@ fn stub_referenced_rejects_unsafe_content_paths() {
     fs::write(blog.join("post.md"), "![hero](img/../escape.jpg)\n").unwrap();
     let out = TempDir::new().unwrap();
 
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .args(["ops", "assets", "stub-referenced"])
         .arg("--content")

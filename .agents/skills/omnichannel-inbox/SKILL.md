@@ -27,8 +27,7 @@ deliberately repo-local and not part of `SYNCED_SKILLS`.
 ## Governing terms
 
 Name these from the glossary before introducing a synonym: Inbox, Inbox Ingress, Inbox Triage, Inbox Assignment,
-Message, Conversation, Person, Relationship Edge, Relationship Log. Run `navigator-deploy glossary show "<Term>"` for
-definitions.
+Message, Conversation, Person, Relationship Edge, Relationship Log. Run `hudson glossary show "<Term>"` for definitions.
 
 ## Invariants
 
@@ -42,8 +41,8 @@ definitions.
 
 - [`docs/email-events-pipeline.md`](../../../docs/email-events-pipeline.md) — outbound event webhook and `sent_emails`.
 - [`docs/email-summary.md`](../../../docs/email-summary.md) — the opt-in EmailSummary durable workflow.
-- [`docs/inbox-import-cli.md`](../../../docs/inbox-import-cli.md) — `navigator-deploy inbox import` semantics.
-- [`docs/mail-cli.md`](../../../docs/mail-cli.md) — `navigator-deploy mail` Gmail read/draft workflow.
+- [`docs/inbox-import-cli.md`](../../../docs/inbox-import-cli.md) — `hudson inbox import` semantics.
+- [`docs/mail-cli.md`](../../../docs/mail-cli.md) — `hudson mail` Gmail read/draft workflow.
 
 Follow the [Project agent contract](../../../cli/src/projects/agent_contract.md#people-and-entities-in-matter-work) when
 matter work identifies a new Person or Entity.

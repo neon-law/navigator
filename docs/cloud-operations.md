@@ -40,16 +40,16 @@ cluster authority.
 
 ## Local development
 
-`navigator-deploy dev staging` requires exact `NAVIGATOR_ENVIRONMENT=dev`, an explicit non-production context,
-Navigator-managed labels, and an immutable environment ID before reset or deletion.
+`hudson dev staging` requires exact `NAVIGATOR_ENVIRONMENT=dev`, an explicit non-production context, Navigator-managed
+labels, and an immutable environment ID before reset or deletion.
 
 The standard local loop is KIND through the `navigator` CLI:
 
 ```bash
-cargo run --release -p deploy -- dev up   # once; reuses an existing cluster on re-run
+cargo run --release -p hudson -- dev up   # once; reuses an existing cluster on re-run
 set -a; source .devx/env; set +a
 cargo run -p neon                                  # Ctrl-C and re-run to iterate
-cargo run --release -p deploy -- dev down                # full teardown — only for a clean rebuild, not routine cleanup
+cargo run --release -p hudson -- dev down                # full teardown — only for a clean rebuild, not routine cleanup
 ```
 
 `dev up` brings up SurrealDB, Rauthy, SeaweedFS, Restate, `workflows-service`, and OpenObserve in KIND. It writes
@@ -68,45 +68,44 @@ volumes unless the user approves the data loss. Full teardown is for a deliberat
 
 ## GCP setup
 
-`navigator-deploy ops gcp setup` is the persistent, production-shaped environment provisioner. It runs once per runtime
-project and creates the cloud substrate a hostable deployment needs: APIs, a custom VPC and subnet, a Cloud Router and
-Cloud NAT in its region, five private GCS lanes, runtime identities and IAM, registry access, an Autopilot cluster, the
-Gateway static IP, workload-identity and Fleet integrations, and the deployment KMS key. Every deployment's
-`config.toml` selects the `production` runtime and credential profile. Navigator's rows omit
-`NAVIGATOR_CONFIG_SYNC_REPO`; `navigator-deploy ops ship` is their sole manifest owner. Supply `--kms-operator
-<IAM-member>` to reconcile the deployment operator's SOPS encrypt/decrypt grant on that key alone. Setup never infers
-the operator. Keep application runtime identities off this key. See [Provision a deployment's
-key](deployment-secrets.md#provision-a-deployments-key).
+`hudson ops gcp setup` is the persistent, production-shaped environment provisioner. It runs once per runtime project
+and creates the cloud substrate a hostable deployment needs: APIs, a custom VPC and subnet, a Cloud Router and Cloud NAT
+in its region, five private GCS lanes, runtime identities and IAM, registry access, an Autopilot cluster, the Gateway
+static IP, workload-identity and Fleet integrations, and the deployment KMS key. Every deployment's `config.toml`
+selects the `production` runtime and credential profile. Navigator's rows omit `NAVIGATOR_CONFIG_SYNC_REPO`; `hudson ops
+ship` is their sole manifest owner. Supply `--kms-operator <IAM-member>` to reconcile the deployment operator's SOPS
+encrypt/decrypt grant on that key alone. Setup never infers the operator. Keep application runtime identities off this
+key. See [Provision a deployment's key](deployment-secrets.md#provision-a-deployments-key).
 
 The remaining hosting work is deliberately adjacent, not a missing setup stage:
 
 | Need | Owner and boundary |
 | --- | --- |
-| DNS | `navigator-deploy ops dns setup`; the provider may sit outside GCP, so setup only reserves the Gateway IP. |
-| TLS and Gateway manifests | `navigator-deploy ops ship` renders and applies the Gateway, certificate, and routes. |
+| DNS | `hudson ops dns setup`; the provider may sit outside GCP, so setup only reserves the Gateway IP. |
+| TLS and Gateway manifests | `hudson ops ship` renders and applies the Gateway, certificate, and routes. |
 | Restate | The Restate operator and its manifests provision the broker; `ops ship` re-registers the worker. |
-| Secret values | `navigator-deploy ops secrets apply`; decrypts and writes Secret Manager plus the Kubernetes Secret. |
-| Gmail OAuth client | A console step; see [Gmail for mail](mail-cli.md#provision-gmail-for-navigator-deploy-mail). |
+| Secret values | `hudson ops secrets apply`; decrypts and writes Secret Manager plus the Kubernetes Secret. |
+| Gmail OAuth client | A console step; see [Gmail for mail](mail-cli.md#provision-gmail-for-hudson-mail). |
 
-`navigator-deploy ops gcp services --project-id <project>` is the read-only check on the API stage: it prints `ok` or
-`MISSING` for each API setup enables and exits nonzero on drift. Re-running setup enables a missing API.
+`hudson ops gcp services --project-id <project>` is the read-only check on the API stage: it prints `ok` or `MISSING`
+for each API setup enables and exits nonzero on drift. Re-running setup enables a missing API.
 
 ### The image hub
 
-`navigator-deploy ops gcp hub setup --project-id <hub>` and `navigator-deploy ops gcp setup --images-project-id <hub>`
-still exist and still run: the hub provisions a GAR repository, the `navigator-ci-pusher` service account, and a GitHub
-Workload Identity pool, and an environment can still take cross-project `roles/artifactregistry.reader` on it. None of
-that governs what this repository actually publishes or pulls. CI pushes every image to
+`hudson ops gcp hub setup --project-id <hub>` and `hudson ops gcp setup --images-project-id <hub>` still exist and still
+run: the hub provisions a GAR repository, the `navigator-ci-pusher` service account, and a GitHub Workload Identity
+pool, and an environment can still take cross-project `roles/artifactregistry.reader` on it. None of that governs what
+this repository actually publishes or pulls. CI pushes every image to
 `us-west4-docker.pkg.dev/example-project/navigator` through Workload Identity as `navigator-publisher`, and `navigator
 ops ship` renders that path into every `image:` line — the `ghcr` hub project sits unused on that path. Treat the hub
 machinery as live-but-unused legacy tooling rather than a second lane to reconcile: it survives because
 `artifact_registry.rs` also hosts WIF helpers that `kms.rs` and `secret_manager.rs` genuinely use, not because a release
 depends on it. See [`gitops.md`](gitops.md#keyless-pushes-to-artifact-registry) for the full accounting.
 
-`NAVIGATOR_IMAGE_REGISTRY` overrides the `us-west4-docker.pkg.dev/example-project/navigator` default that
-`navigator-deploy ops ship` resolves image references against, and `NAVIGATOR_GCP_PROJECT_ID` keeps naming the project
-that holds the GKE cluster and buckets. The images live in the example registry project, not the deployment's, so the
-two are independent and neither can be mistaken for the other.
+`NAVIGATOR_IMAGE_REGISTRY` overrides the `us-west4-docker.pkg.dev/example-project/navigator` default that `hudson ops
+ship` resolves image references against, and `NAVIGATOR_GCP_PROJECT_ID` keeps naming the project that holds the GKE
+cluster and buckets. The images live in the example registry project, not the deployment's, so the two are independent
+and neither can be mistaken for the other.
 
 A tenant guard refuses either command aimed at the other's project before the first GCP call: the hub never receives
 buckets or GKE, and an environment never hosts the shared registry. An unrecorded project ID is always allowed, so a
@@ -162,9 +161,9 @@ Code reaches production through PRs and dated images:
 3. The deploy workflow builds and publishes the service images to Artifact Registry: the brand server image,
    `navigator-workflows-service`.
 4. Before running `ops ship` on a row, confirm that row's public asset inventory — gallery variants, brand media keys,
-   and licensed fonts — is already published (`navigator-deploy ops assets verify --base-url <row's origin>`). `ops
-   ship`'s preflight reads the same inventory from the bucket and refuses the roll when an object is missing, so this is
-   a check, not a one-time publish: run `ops assets build`/`ops assets upload`/`ops assets fonts upload`/`site asset
+   and licensed fonts — is already published (`hudson ops assets verify --base-url <row's origin>`). `ops ship`'s
+   preflight reads the same inventory from the bucket and refuses the roll when an object is missing, so this is a
+   check, not a one-time publish: run `ops assets build`/`ops assets upload`/`ops assets fonts upload`/`site asset
    upload` first if the check names anything missing. See [`assets.md`](assets.md#the-four-commands) for the commands
    and [`assets.md#verify-after-shipping`](assets.md#verify-after-shipping) for the inventory itself.
 5. The same run proves those images in KIND and pushes them to Artifact Registry. Once every image and CLI archive is
@@ -172,13 +171,13 @@ Code reaches production through PRs and dated images:
    tag stays on staging. See [`release-automation.md`](release-automation.md). A hand roll follows
    [`manual-roll.md`](manual-roll.md).
 
-`navigator-deploy ops ship --deployment <name> --tag YY.M.D` is the self-contained reconcile: every coordinate comes
-from `deployments/<name>/config.toml`, so a stale shell cannot select the wrong deployment. `--dry-run` builds an
-offline plan: it checks required local settings, validates the supplied tag, parses the rendered manifests, and lists
-intended operations. It does not authenticate or contact cloud services, the cluster, image registries, Secret Manager,
-Restate, or public endpoints; live drift and readiness remain unverified. A real ship performs authenticated context,
-IAM, image, asset, Secret, and service-object preflights before writing, then reconciles the CLI-embedded GKE manifest
-tree unconditionally. Merged manifest changes reach the cluster, and both Navigator Deployments use one release tag. For
+`hudson ops ship --deployment <name> --tag YY.M.D` is the self-contained reconcile: every coordinate comes from
+`deployments/<name>/config.toml`, so a stale shell cannot select the wrong deployment. `--dry-run` builds an offline
+plan: it checks required local settings, validates the supplied tag, parses the rendered manifests, and lists intended
+operations. It does not authenticate or contact cloud services, the cluster, image registries, Secret Manager, Restate,
+or public endpoints; live drift and readiness remain unverified. A real ship performs authenticated context, IAM, image,
+asset, Secret, and service-object preflights before writing, then reconciles the CLI-embedded GKE manifest tree
+unconditionally. Merged manifest changes reach the cluster, and both Navigator Deployments use one release tag. For
 rendering, see [`gke-prod.md`](gke-prod.md#manifest-delivery); [`manual-roll.md`](manual-roll.md) lists live checks
 before a hand roll.
 
@@ -199,8 +198,8 @@ manifests are the state about to be applied (the live env is what the apply over
 Deployment exists to read.
 
 `ship` never patches the Secret for you — it prints the exact `kubectl patch` naming every missing key, and stops. Fill
-in the values with `navigator-deploy ops secrets apply --deployment <name>` (or the printed patch) and re-run. Keys that
-the manifests supply as Deployment env belong in the manifest tree, not the Secret; the preflight counts either as
+in the values with `hudson ops secrets apply --deployment <name>` (or the printed patch) and re-run. Keys that the
+manifests supply as Deployment env belong in the manifest tree, not the Secret; the preflight counts either as
 satisfying a requirement.
 
 If the image tag is unchanged and only a Secret changed, `--restart-only` rollout-restarts the service deployments so
@@ -264,9 +263,9 @@ Safe telemetry fields include ids, service names, outcomes, durations, status co
 client names, email addresses, answer bodies, document bodies, privileged facts, and full request or tool arguments.
 This rule applies in local and Cloud OpenObserve, Cloud Logging, BigQuery, and any future sink.
 
-Use `navigator-deploy ops doctor`, OpenObserve, the Restate console, and the six-hourly Heartbeat Slack line to debug
-missing periodic jobs or durable workflow failures. The architecture details live in
-[`observability.md`](observability.md) and [`durable-workflows.md`](durable-workflows.md).
+Use `hudson ops doctor`, OpenObserve, the Restate console, and the six-hourly Heartbeat Slack line to debug missing
+periodic jobs or durable workflow failures. The architecture details live in [`observability.md`](observability.md) and
+[`durable-workflows.md`](durable-workflows.md).
 
 ## Retention: logs and backups
 

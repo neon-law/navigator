@@ -11,14 +11,14 @@ Read the relevant content source, [`docs/assets.md`](../../../docs/assets.md), a
 - Use only rights-cleared, public-safe images with accurate alt text. Keep local assets and captures out of Git where
   the asset workflow requires it.
 - Verify the image reference locally. Do not deploy or mutate cloud storage without explicit authorization.
-- Publish a single asset to staging and production together with `navigator-deploy site asset upload`. The path is
+- Publish a single asset to staging and production together with `hudson site asset upload`. The path is
   relative to `server/public/` and is also the bucket key. Each host needs a current `navigator site login` (one-hour
   token):
 
   ```bash
   navigator site whoami --host staging.neonlaw.com
   navigator site whoami --host www.neonlaw.com
-  navigator-deploy site asset upload --host staging.neonlaw.com --host www.neonlaw.com img/<slug>/<file>
+  hudson site asset upload --host staging.neonlaw.com --host www.neonlaw.com img/<slug>/<file>
   ```
 
   `uploaded` or `unchanged` means the CLI already read `<host>/assets/<key>` back byte for byte. Rerun only a failed

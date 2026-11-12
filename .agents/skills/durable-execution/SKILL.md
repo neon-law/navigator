@@ -20,7 +20,7 @@ model, and the evidence-and-guardrails playbook.
 ## Rules
 
 - **Diagnose by evidence, not memory.** When a workflow didn't fire, read commit history, the GitHub Actions run, the
-  logs, and Google Cloud. `navigator-deploy ops doctor` triages the cluster slice fast; confirm against the evidence.
+  logs, and Google Cloud. `hudson ops doctor` triages the cluster slice fast; confirm against the evidence.
 - **Fix the root cause, then guard it.** Pin every fix with a test or manifest field in the same PR.
 - **Adding a workspace crate?** Add it to every workspace-building Containerfile's COPY list, or the next trigger build
   takes every trigger image down (the `cli::devx` test guards this). Image builds belong to `deploy.yml`'s daily tag

@@ -3,7 +3,7 @@
 //!
 //! The `navigator` binary is a thin `main` over [`commands::main`], so a host
 //! other than the terminal (the menu-bar app) links the same rules.
-//! `navigator-deploy` and `scorpio` reuse the shared modules from here rather
+//! `hudson` and `scorpio` reuse the shared modules from here rather
 //! than keep second copies.
 
 pub mod answers_file;

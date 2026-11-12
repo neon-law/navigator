@@ -23,7 +23,7 @@ fn command(root: &Path, host: &str) -> Command {
     .unwrap();
     std::fs::write(&map, serde_json::to_vec(&mapping()).unwrap()).unwrap();
     std::fs::write(&credentials,serde_json::to_vec(&json!({"hosts":{host:{"token":"synthetic-token","person_email":"lawyer@example.test","role":"lawyer","expires_at":i64::MAX}}})).unwrap()).unwrap();
-    let mut command = Command::cargo_bin("navigator-deploy").unwrap();
+    let mut command = Command::cargo_bin("hudson").unwrap();
     command
         .env_remove("GITHUB_REPOSITORY")
         .env_remove("GITHUB_REF")

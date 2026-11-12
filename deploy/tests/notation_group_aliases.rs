@@ -1,5 +1,5 @@
-//! `navigator-deploy drafts …` and `navigator-deploy templates …` are visible clap aliases
-//! of `navigator-deploy notation …` (ENG-699): the same command variants, dispatched
+//! `hudson drafts …` and `hudson templates …` are visible clap aliases
+//! of `hudson notation …` (ENG-699): the same command variants, dispatched
 //! through the same match arms, just reachable under two more names an
 //! operator reaching for "draft" or "template" vocabulary would type first.
 //!
@@ -47,7 +47,7 @@ Pay the sum of `{{amount}}` to **NEON LAW** without delay.
 const GROUP_SPELLINGS: [&str; 3] = ["notation", "drafts", "templates"];
 
 fn navigator(args: &[&str]) -> std::process::Output {
-    Command::new(cargo_bin("navigator-deploy"))
+    Command::new(cargo_bin("hudson"))
         .args(args)
         .output()
         .expect("run navigator")

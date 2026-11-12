@@ -56,8 +56,7 @@ restoration, deployment checks, and orphan protection.
 The main meadow photograph uses `img/vesta-home/cemetery-meadow.jpg`: gravestones across a green meadow beneath a cloudy
 sky. The user-supplied replacement is a 1024×768 JPEG with orientation applied and embedded metadata removed. Keep this
 key when replacing the main photograph so existing home-page references continue to resolve. Publish the replacement to
-both staging and production through `navigator-deploy site asset upload`; its byte-for-byte readback verifies each
-published copy.
+both staging and production through `hudson site asset upload`; its byte-for-byte readback verifies each published copy.
 
 ## Aster artwork
 
@@ -65,7 +64,7 @@ The user-approved Aster design board lives at `img/vesta-aster/aster-canon-7d379
 pinned in `server/public/brand/aster/CANON.toml`. Every character placement frames the original PNG through an inline
 SVG viewport; the painted eyes, limbs and texture remain unchanged. `views::assets::ASTER_BOARD_KEY` joins the public
 asset inventory for restoration, publication verification and orphan protection. Publish the original PNG through
-`navigator-deploy site asset upload`, and run the explicit byte check in the [character guide](aster-character.md).
+`hudson site asset upload`, and run the explicit byte check in the [character guide](aster-character.md).
 
 ## Architectural photographs
 
@@ -91,7 +90,7 @@ The user-supplied Greater Vancouver Chamber membership badge lives at `img/guieb
 `views::assets::GUIEB_SHOOK_GVC_BADGE_KEY` includes it in restoration, publication checks, and orphan protection. The
 shared public footer renders it beneath the platform credit for Guieb & Shook PC, with alt text "Proud member of Greater
 Vancouver Chamber". Other Firms do not inherit this membership when a Brand moves. The PNG stays outside Git and is
-published through `navigator-deploy site asset upload`.
+published through `hudson site asset upload`.
 
 ## Brand uploads
 
@@ -111,9 +110,9 @@ Vesta's mark is the [public-domain Vesta symbol](https://commons.wikimedia.org/w
 Carnby after Urhixidur. `server/public/brand/vesta.svg` adds a scalable view box and the brand's bronze fill. This small
 SVG ships with the other tracked brand marks and needs no bucket upload. `server/public/brand/vesta.png` is the same
 mark rendered at ten times the view box (980×1370, transparent) for social previews, which do not rasterize SVG. It is
-tracked too, and published to each deployment bucket as `brand/vesta.png` with `navigator-deploy site asset upload`.
+tracked too, and published to each deployment bucket as `brand/vesta.png` with `hudson site asset upload`.
 
-The `navigator-deploy ops assets` subcommands form a build → publish → restore → verify loop. For responsive photos, the
+The `hudson ops assets` subcommands form a build → publish → restore → verify loop. For responsive photos, the
 `views::assets::GALLERY` manifest and the width set (`WIDTHS = [400, 800, 1200]`) are the single source of truth shared
 with the view layer, so adding a photo is a manifest edit plus a JPEG — never a code change. Standalone blog,
 illustration, presentation, or workshop slide assets do not go through `assets build`; put the finished PNG or JPEG at
@@ -130,11 +129,11 @@ its final `server/public/img/<slug>/<name>` path, then use `assets upload` to pu
 | `assets verify` | published refs → chosen origin | Fetch every published image and font; fail if any are missing. |
 
 `build` and `upload` are the batch publish path for responsive photos, run by whoever curates the gallery. A single
-finished PNG or JPEG — a hero, a campaign portrait, a slide image — goes through `navigator-deploy site asset upload`
-instead (see [Publishing one asset to staging and production](#publishing-one-asset-to-staging-and-production)). `pull`
-is the restore path every developer runs. `verify` is the post-roll guardrail. Run `assets build` and `assets upload`
-for the gallery, and `assets fonts upload` for licensed faces, before `ops ship`: the preflight refuses the roll when a
-required gallery variant, brand image, or font is missing or the bucket cannot be read.
+finished PNG or JPEG — a hero, a campaign portrait, a slide image — goes through `hudson site asset upload` instead (see
+[Publishing one asset to staging and production](#publishing-one-asset-to-staging-and-production)). `pull` is the
+restore path every developer runs. `verify` is the post-roll guardrail. Run `assets build` and `assets upload` for the
+gallery, and `assets fonts upload` for licensed faces, before `ops ship`: the preflight refuses the roll when a required
+gallery variant, brand image, or font is missing or the bucket cannot be read.
 
 When restoring a public photo from a local library, copy it to the ignored final path only after confirming it is
 firm-owned or rights-cleared and removing EXIF metadata such as GPS coordinates, device identifiers, and capture times.
@@ -145,7 +144,7 @@ adding one photo. `--only <slug>` (repeatable) narrows the run to the slugs you 
 the manifest rather than reporting a successful build of nothing.
 
 ```bash
-cargo run -p deploy -- ops assets build --src ~/photos --only lake-tahoe
+cargo run -p hudson -- ops assets build --src ~/photos --only lake-tahoe
 ```
 
 ## Publishing one asset to staging and production
@@ -154,10 +153,10 @@ This is the default lane for any single public asset, and the one every agent sk
 
 `assets upload` above needs GCS access on the operator's own machine through ADC — the right shape for the operator
 batch-publishing the whole gallery, wrong for a one-off asset from a machine that has never run `gcloud auth
-application-default login`. `navigator-deploy site asset upload` is the OAuth-backed sibling: it reads no GCP
-environment, needs no bucket name, and writes nothing except through the deployment's own authenticated site API (`POST
-/app/api/assets`, `portal::assets_api`), following the same `navigator site login` seam `site document upload` and `site
-authorities create` already use (see [`command-boundary`](command-boundary.md)).
+application-default login`. `hudson site asset upload` is the OAuth-backed sibling: it reads no GCP environment, needs
+no bucket name, and writes nothing except through the deployment's own authenticated site API (`POST /app/api/assets`,
+`portal::assets_api`), following the same `navigator site login` seam `site document upload` and `site authorities
+create` already use (see [`command-boundary`](command-boundary.md)).
 
 Without `--key`, `ASSET_NAME` is read relative to `server/public/`, and that relative path is also the exact bucket key
 the object is stored — and served back — under. Pass `img/<slug>/<file>`, not `server/public/img/<slug>/<file>`: the
@@ -171,7 +170,7 @@ requested host fails; rerun only the failed `--host`:
 ```bash
 navigator site login --host staging.neonlaw.com
 navigator site login --host www.neonlaw.com
-navigator-deploy site asset upload \
+hudson site asset upload \
   --host staging.neonlaw.com --host www.neonlaw.com \
   img/<slug>/<file>
 ```
@@ -196,8 +195,8 @@ For an original MP4 larger than the 64 MiB site-upload limit, create a separate 
 FFmpeg with `ffmpeg` and `ffprobe` on `PATH`, then run:
 
 ```bash
-navigator-deploy site asset prepare-video /path/original.mp4 /path/ready.mp4
-navigator-deploy site asset upload --host www.neonlaw.com --key img/example/video.mp4 /path/ready.mp4
+hudson site asset prepare-video /path/original.mp4 /path/ready.mp4
+hudson site asset upload --host www.neonlaw.com --key img/example/video.mp4 /path/ready.mp4
 ```
 
 Preparation accepts a local MP4 up to 2 GiB and 3–600 seconds. It preserves the original, refuses to replace an existing
@@ -235,8 +234,8 @@ Then preview locally and publish to staging and production. The upload itself co
 `<host>/assets/<key>` byte-for-byte:
 
 ```bash
-cargo run -p deploy -- ops assets verify --base-url http://localhost:<web-port>/public
-navigator-deploy site asset upload --host staging.neonlaw.com --host www.neonlaw.com img/<deck-slug>/<filename>
+cargo run -p hudson -- ops assets verify --base-url http://localhost:<web-port>/public
+hudson site asset upload --host staging.neonlaw.com --host www.neonlaw.com img/<deck-slug>/<filename>
 ```
 
 An agent that cannot perform a write (no valid login for a host) must report that host as pending and provide the exact
@@ -267,7 +266,7 @@ Every brand host a deployment serves (`www.cyberinjurylaw.com`, `www.daybridgedi
 one bucket, so uploading through the `neonlaw.com` host publishes for every brand. Publish to both:
 
 ```bash
-navigator-deploy site asset upload --host staging.neonlaw.com --host www.neonlaw.com img/<slug>/<file>
+hudson site asset upload --host staging.neonlaw.com --host www.neonlaw.com img/<slug>/<file>
 ```
 
 ## Licensed webfonts
@@ -278,15 +277,15 @@ operator supplies the fonts from its own TrashType delivery and uploads the init
 development falls back to `/public/fonts/gorp-serif/` for a licensed operator's ignored local copies.
 
 ```bash
-cargo run -p deploy -- ops assets fonts upload \
+cargo run -p hudson -- ops assets fonts upload \
   --dir '/path/to/GORP Serif/WOFF'
 ```
 
 The command targets `NAVIGATOR_ASSETS_BUCKET` (or `--bucket`) and refuses a partial delivery. Navigator code is
 copyright Neon Law IP LLC; [GORP Serif](https://trashtype.com/fonts/gorp) is font software licensed separately from
 TrashType. Follow the [TrashType terms](https://trashtype.com/legal) and keep the local notice in
-`server/public/fonts/gorp-serif/LICENSE.txt` with the source files. Before the first upload, rerun `navigator-deploy ops
-gcp setup` so the public assets bucket receives the font-fetch CORS policy.
+`server/public/fonts/gorp-serif/LICENSE.txt` with the source files. Before the first upload, rerun `hudson ops gcp
+setup` so the public assets bucket receives the font-fetch CORS policy.
 
 The desktop `.otf` family from the same delivery is a _restricted_ download for firm workers who need the installable
 faces. It is published separately, as one ZIP — and, crucially, to the **private documents bucket**
@@ -297,7 +296,7 @@ licensed family — every one of the six weights, refusing a partial delivery �
 fixed-timestamp) and uploads it to `fonts/gorp-serif/gorp-serif-otf.zip`:
 
 ```bash
-NAVIGATOR_DOCUMENTS_BUCKET=<project>-documents cargo run -p deploy -- ops assets fonts upload-desktop \
+NAVIGATOR_DOCUMENTS_BUCKET=<project>-documents cargo run -p hudson -- ops assets fonts upload-desktop \
   --dir '/path/to/GORP Serif'
 ```
 
@@ -314,7 +313,7 @@ carries no `operator_licence_required` flag, but its faces are bucket-served on 
 rather than committed to this repository.
 
 ```bash
-cargo run -p deploy -- ops assets fonts upload --family plus-jakarta-sans \
+cargo run -p hudson -- ops assets fonts upload --family plus-jakarta-sans \
   --dir '/path/to/plus-jakarta-sans/woff2'
 ```
 
@@ -349,7 +348,7 @@ Each value is spelled as the bucket directory it publishes to, and the directory
 lane and the browser surface derive the object key identically:
 
 ```bash
-cargo run -p deploy -- ops assets fonts upload --family eb-garamond \
+cargo run -p hudson -- ops assets fonts upload --family eb-garamond \
   --dir '/path/to/eb-garamond/woff2'
 ```
 
@@ -370,7 +369,7 @@ because it changes no image or content version. The post-roll probe is the check
 actually receive:
 
 ```bash
-cargo run -p deploy -- ops assets verify --base-url https://staging.neonlaw.com/assets
+cargo run -p hudson -- ops assets verify --base-url https://staging.neonlaw.com/assets
 ```
 
 `verify` probes every markdown `](img/…)` reference, every `views::assets::GALLERY` variant, the brand media the views
@@ -401,9 +400,9 @@ a recessed Ferris outline on the chest and one steel Cancer outline on each slee
 page and ad advertise no fee percentage; fees are set by the signed engagement agreement. Publish each image with:
 
 ```bash
-navigator-deploy site asset upload --host staging.neonlaw.com --host www.neonlaw.com \
+hudson site asset upload --host staging.neonlaw.com --host www.neonlaw.com \
   img/cyber-injury-law/cyber-warrior-ferris.png
-navigator-deploy site asset upload --host staging.neonlaw.com --host www.neonlaw.com img/cyber-injury-law/canal-street-ad-f9faa356.png
+hudson site asset upload --host staging.neonlaw.com --host www.neonlaw.com img/cyber-injury-law/canal-street-ad-f9faa356.png
 ```
 
 The Canal Street ad uses the website's longer-hair portrait, composited with fixed crops and masks rather than
@@ -426,9 +425,9 @@ beside the ignored binaries. Sources:
 - [DM Sans](https://github.com/google/fonts/tree/main/ofl/dmsans)
 
 ```bash
-cargo run -p deploy -- ops assets fonts upload --family barlow-condensed \
+cargo run -p hudson -- ops assets fonts upload --family barlow-condensed \
   --dir ~/Downloads/CyberInjuryLaw/fonts/barlow-condensed
-cargo run -p deploy -- ops assets fonts upload --family dm-sans \
+cargo run -p hudson -- ops assets fonts upload --family dm-sans \
   --dir ~/Downloads/CyberInjuryLaw/fonts/dm-sans
 ```
 
@@ -444,9 +443,9 @@ stored brand seed both select `eb-garamond`, and the page head preloads those fa
 
 The handwritten G, centered ampersand, and S logo uses a 1050 × 600 canvas and appears above the holding-page heading.
 The registry selects `/assets/brand/guieb-shook/logo.svg` for the logo and `/assets/brand/guieb-shook/logo.png` for
-social previews. Publish both files through `navigator-deploy site asset upload` before deploying a changed registry
-reference. The `guieb-shook` palette sets ivory surfaces with navy text in light mode and navy surfaces with ivory text
-in dark mode.
+social previews. Publish both files through `hudson site asset upload` before deploying a changed registry reference.
+The `guieb-shook` palette sets ivory surfaces with navy text in light mode and navy surfaces with ivory text in dark
+mode.
 
 ### Tinos
 
@@ -473,7 +472,7 @@ blog references.
 Run `assets verify` from a source checkout to cover them.
 
 ```bash
-NAVIGATOR_ASSET_BASE_URL=https://staging.neonlaw.com/assets cargo run -p deploy -- ops assets verify
+NAVIGATOR_ASSET_BASE_URL=https://staging.neonlaw.com/assets cargo run -p hudson -- ops assets verify
 ```
 
 Run it after `assets upload`, or let `ops ship` run it after the rollout. The `deploy` workflow's `build` job runs
@@ -483,7 +482,7 @@ Run it after `assets upload`, or let `ops ship` run it after the rollout. The `d
 KIND image serves every referenced path:
 
 ```bash
-navigator-deploy ops assets verify --base-url http://localhost:8080/public
+hudson ops assets verify --base-url http://localhost:8080/public
 ```
 
 CI does not probe a public origin: publication of the real bytes is the operator upload lane described above. The live
@@ -491,7 +490,7 @@ site's `/assets` proxy is checked after a roll, and `ops ship` blocks completion
 same gate against a host-side server:
 
 ```bash
-navigator-deploy ops assets verify --base-url http://localhost:<web-port>/public
+hudson ops assets verify --base-url http://localhost:<web-port>/public
 ```
 
 ### The deployed origin
@@ -501,9 +500,9 @@ origin, normally its same-origin `/assets` route (for example, `https://staging.
 private; `web` proxies the request, so the browser never needs a raw storage URL. Successful public asset responses
 include `Access-Control-Allow-Origin: *`, allowing every house brand to load webfonts from that shared asset origin
 without credentials. The header belongs only to the public-assets response; private document routes keep their own
-access rules. `navigator-deploy ops ship` requires this coordinate before any rollout. It also requires every applicable
-public asset to be readable in `NAVIGATOR_ASSETS_BUCKET` before the roll, and it verifies the same keys at this origin
-after a full or image-only roll, so a deployment cannot start or report success while its public assets are missing.
+access rules. `hudson ops ship` requires this coordinate before any rollout. It also requires every applicable public
+asset to be readable in `NAVIGATOR_ASSETS_BUCKET` before the roll, and it verifies the same keys at this origin after a
+full or image-only roll, so a deployment cannot start or report success while its public assets are missing.
 
 ## Why the images aren't in git
 
@@ -527,7 +526,7 @@ Because the slots are empty on a fresh clone, the dev `/public` mount 404s every
 re-encode, and no generated-image source needed:
 
 ```bash
-NAVIGATOR_STORAGE_ENDPOINT= cargo run -p deploy -- ops assets pull --bucket neon-law-stg-assets
+NAVIGATOR_STORAGE_ENDPOINT= cargo run -p hudson -- ops assets pull --bucket neon-law-stg-assets
 ```
 
 This downloads every supported image file (`.avif`, `.webp`, `.jpg`, `.jpeg`, `.png`) under the bucket's `img/` prefix
@@ -548,7 +547,7 @@ The published bytes are world-readable at the deployment's own origin, so a deve
 them with no auth at all:
 
 ```bash
-cargo run -p deploy -- ops assets fetch-referenced --base-url https://staging.neonlaw.com/assets
+cargo run -p hudson -- ops assets fetch-referenced --base-url https://staging.neonlaw.com/assets
 ```
 
 **This covers content images only, and that difference bites.** `fetch-referenced` scans `server/content` Markdown for
@@ -596,7 +595,7 @@ a missing video blocks a new release instead of leaving a broken player.
 Publish the finished clip to staging and production before the next rollout:
 
 ```bash
-navigator-deploy site asset upload --host staging.neonlaw.com --host www.neonlaw.com img/vesta-home/vesta-explainer.mp4
+hudson site asset upload --host staging.neonlaw.com --host www.neonlaw.com img/vesta-home/vesta-explainer.mp4
 ```
 
 ## Vesta video updates

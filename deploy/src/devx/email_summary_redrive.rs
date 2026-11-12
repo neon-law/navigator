@@ -1,4 +1,4 @@
-//! `navigator-deploy ops email-summary redrive --receipt <uuid> [--after-failed-result <actor>]` — re-run a
+//! `hudson ops email-summary redrive --receipt <uuid> [--after-failed-result <actor>]` — re-run a
 //! completed `EmailSummary` Restate workflow for one receipt (ENG-888).
 //!
 //! A workflow key admits at most one invocation. A run that completed with a
@@ -26,7 +26,7 @@ use uuid::Uuid;
 const SERVICE: &str = "EmailSummary";
 const HANDLER: &str = "run";
 
-/// `navigator-deploy ops email-summary redrive --receipt <uuid>`.
+/// `hudson ops email-summary redrive --receipt <uuid>`.
 pub fn run(receipt: Uuid, after_failed_result: Option<&str>) -> Result<()> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()

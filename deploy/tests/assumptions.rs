@@ -1,4 +1,4 @@
-//! Integration coverage for `navigator-deploy assumptions` — drives the real binary
+//! Integration coverage for `hudson assumptions` — drives the real binary
 //! against a mock Firm API, with fake rows standing in for Firm data. The
 //! store's own tests cover isolation and the append-only trigger; these pin
 //! the command wire the operator sees: routes, bearer auth, JSON bodies, and
@@ -52,7 +52,7 @@ async fn assumptions_list_reads_the_firm_rows_over_the_authenticated_door() {
         .expect(1)
         .mount(&server)
         .await;
-    let output = Command::cargo_bin("navigator-deploy")
+    let output = Command::cargo_bin("hudson")
         .unwrap()
         .current_dir(root.path())
         .env("NAVIGATOR_CREDENTIALS_FILE", credentials(&root, &host))
@@ -91,7 +91,7 @@ async fn assumptions_set_posts_the_value_and_reason_and_prints_the_row() {
         .expect(1)
         .mount(&server)
         .await;
-    let output = Command::cargo_bin("navigator-deploy")
+    let output = Command::cargo_bin("hudson")
         .unwrap()
         .current_dir(root.path())
         .env("NAVIGATOR_CREDENTIALS_FILE", credentials(&root, &host))
@@ -141,7 +141,7 @@ async fn assumptions_show_and_history_read_one_key() {
             .await;
     }
     for action in ["show", "history"] {
-        Command::cargo_bin("navigator-deploy")
+        Command::cargo_bin("hudson")
             .unwrap()
             .current_dir(root.path())
             .env("NAVIGATOR_CREDENTIALS_FILE", credentials(&root, &host))
@@ -175,7 +175,7 @@ async fn assumptions_commands_refuse_when_the_capability_denies() {
         .expect(1)
         .mount(&server)
         .await;
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .current_dir(root.path())
         .env("NAVIGATOR_CREDENTIALS_FILE", credentials(&root, &host))
@@ -202,7 +202,7 @@ async fn assumptions_set_rejects_a_malformed_value_before_any_request() {
     // The unreachable host plus valid credentials isolate the value check:
     // a request would fail to connect, so the asserted error proves the
     // command rejected the value locally before dialing the API.
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .current_dir(root.path())
         .env(

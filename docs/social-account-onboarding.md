@@ -33,7 +33,7 @@ authorization collection](https://www.postman.com/meta/threads/documentation/dht
 Inspect the target deployment before publishing:
 
 ```bash
-navigator-deploy site blog preflight <brand> <slug> --providers facebook,instagram,tiktok --host <host>
+hudson site blog preflight <brand> <slug> --providers facebook,instagram,tiktok --host <host>
 ```
 
 The command reads authenticated status without uploading, storing a Post, or sending to providers. It exits nonzero with
@@ -51,8 +51,8 @@ operator completes the checklist for it. Committing this table does not mean a p
 | `cyber-injury-law` | pending | pending | pending | pending | pending | pending | pending |
 | `neon` | pending | pending | pending | pending | pending | pending | pending |
 
-Provider app configuration is deployment state. Check the preflight's `connection_setup` status fields through
-`navigator-deploy site blog status <brand> <slug> --host <host>` and configure the app ids and secrets in
+Provider app configuration is deployment state. Check the preflight's `connection_setup` status fields through `hudson
+site blog status <brand> <slug> --host <host>` and configure the app ids and secrets in
 [`deployment-secrets.md`](deployment-secrets.md#brand-social-accounts-and-runtime-kms) when absent. Creating the
 provider accounts is an operator step. It needs the authorized, signed-in account of the person who will own them.
 Navigator, an agent, or a test never creates a profile, picks a handle, or sends a test post.
@@ -62,7 +62,7 @@ Navigator, an agent, or a test never creates a profile, picks a handle, or sends
 After publishing through a provider website, create the Brand's website Post without sending to providers:
 
 ```bash
-navigator-deploy site blog record /absolute/path/post.yaml --host <host>
+hudson site blog record /absolute/path/post.yaml --host <host>
 ```
 
 The YAML supplies `brand`, `slug`, `title`, `description`, `body_markdown`, and the actual RFC 3339 `publish_at`. An

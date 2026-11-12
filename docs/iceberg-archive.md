@@ -329,7 +329,7 @@ the manual proof CI cannot run. It uses synthetic names (`example-archive-projec
 real identifiers never enter Git ([public contributor safety](public-contributor-safety.md)); substitute your
 deployment's real coordinates only at the CLI, never in a committed file.
 
-1. **Provision — create → verify policy → lock.** Run `navigator-deploy ops gcp setup` with
+1. **Provision — create → verify policy → lock.** Run `hudson ops gcp setup` with
    `--offsite-archives-project-id example-archive-project --offsite-archives-bucket example-archives-offsite`. The
    provisioner creates the bucket with its retention policy already in place, verifies the policy against the live
    bucket, and only then locks it — the lock is irreversible, so a wrong policy is converged by deleting the bucket

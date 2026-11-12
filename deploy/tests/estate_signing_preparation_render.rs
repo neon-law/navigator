@@ -4,7 +4,7 @@
 //! synthetic answers for every questionnaire state it declares, and every
 //! answer must actually reach the rendered page.
 //!
-//! `navigator-deploy notation pdf` validates a template against the same rule set as
+//! `hudson notation pdf` validates a template against the same rule set as
 //! `navigator validate` before rendering (see `cli::run_render`), so a
 //! successful render here is also proof the checked-in template passes the
 //! gate. This test points at the real repository file rather than an inline
@@ -43,7 +43,7 @@ fn estate_signing_preparation_validates_and_renders_with_synthetic_answers() {
 
     // Synthetic per docs/public-contributor-safety.md: no real client, matter,
     // or address. One answer per questionnaire state the template declares.
-    let result = Command::new(cargo_bin("navigator-deploy"))
+    let result = Command::new(cargo_bin("hudson"))
         .args(["notation", "pdf"])
         .arg(&template)
         .arg("--out")
@@ -61,7 +61,7 @@ fn estate_signing_preparation_validates_and_renders_with_synthetic_answers() {
             "custom_datetime__signing_end=2026-11-10 11:30 AM",
         ])
         .output()
-        .expect("run navigator-deploy notation pdf");
+        .expect("run hudson notation pdf");
 
     assert!(
         result.status.success(),

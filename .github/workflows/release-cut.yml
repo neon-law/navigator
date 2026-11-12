@@ -82,7 +82,7 @@ jobs:
         if: steps.existing.outputs.count == '0'
         run: |
           set -euo pipefail
-          if cargo run --locked -p deploy --quiet -- ops cut-release --dry-run > /tmp/candidate; then
+          if cargo run --locked -p hudson --quiet -- ops cut-release --dry-run > /tmp/candidate; then
               tag="$(cat /tmp/candidate)"
               # Once today is published, cut-release names tomorrow's -rc.N.
               # The train opens daily bumps only; candidates are cut by hand.
@@ -114,8 +114,8 @@ jobs:
           git config user.name "navigator-release-train"
           git config user.email "release-train@users.noreply.github.com"
           git switch -c "release-train/cut-${TAG}"
-          cargo run --locked -p deploy --quiet -- ops cut-release
-          cargo run --locked -p deploy --quiet -- ops release pins
+          cargo run --locked -p hudson --quiet -- ops cut-release
+          cargo run --locked -p hudson --quiet -- ops release pins
           git push -u origin "release-train/cut-${TAG}"
           url="$(gh pr create --base main --head "release-train/cut-${TAG}" \
               --title "chore(release): cut ${TAG}" \

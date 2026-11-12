@@ -1,4 +1,4 @@
-//! `navigator-deploy ops forgejo release mirror`: copy one published `navigator`
+//! `hudson ops forgejo release mirror`: copy one published `navigator`
 //! release into the Forgejo installation's own package registry.
 //!
 //! Generated Forgejo workflows install the release `navigator.yaml` pins from
@@ -254,7 +254,7 @@ impl Registry {
     }
 }
 
-/// `navigator-deploy ops forgejo release mirror --url <forgejo> --version <tag>`.
+/// `hudson ops forgejo release mirror --url <forgejo> --version <tag>`.
 pub(in crate::devx) fn run(url: &str, version: &str) -> Result<()> {
     let token = std::env::var("FORGEJO_TOKEN")
         .context("FORGEJO_TOKEN must be configured on the trusted operator host")?;

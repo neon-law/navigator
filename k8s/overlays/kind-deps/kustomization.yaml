@@ -8,7 +8,7 @@ kind: Kustomization
 #
 # Apply: kubectl apply -k k8s/overlays/kind-deps
 #
-# Wrapped by `cargo run -p deploy -- dev up`.
+# Wrapped by `cargo run -p hudson -- dev up`.
 
 namespace: navigator
 

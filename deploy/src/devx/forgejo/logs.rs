@@ -1,4 +1,4 @@
-//! `navigator-deploy ops forgejo logs <owner>/<repository> --run <n>`: print every
+//! `hudson ops forgejo logs <owner>/<repository> --run <n>`: print every
 //! job log of one Actions run (ENG-1238).
 //!
 //! Forgejo 15.0.9 serves job logs only through a web route that refuses token

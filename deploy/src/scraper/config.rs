@@ -1,6 +1,6 @@
 //! The `scrapers:` section reader lives in `cli::scraper_config`, shared
 //! with the `navigator.yaml` lint; this module binds a parsed site to the
-//! adapter registry that only `navigator-deploy` carries.
+//! adapter registry that only `hudson` carries.
 
 pub(crate) use cli::scraper_config::*;
 

@@ -1,4 +1,4 @@
-//! `navigator-deploy ops forgejo setup|auto-merge|schedule-open`: the operator's
+//! `hudson ops forgejo setup|auto-merge|schedule-open`: the operator's
 //! door onto the shared Forgejo governance in [`cloud::forgejo_governance`].
 
 use anyhow::{Context, Result};

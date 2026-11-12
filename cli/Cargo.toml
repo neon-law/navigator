@@ -19,7 +19,7 @@ chrono.workspace = true
 clap.workspace = true
 comfy-table.workspace = true
 dotenvy.workspace = true
-# `navigator-deploy lsp` unpacks the `.tar.gz` release archives it downloads for
+# `hudson lsp` unpacks the `.tar.gz` release archives it downloads for
 # Linux/macOS, paired with `tar` below.
 flate2.workspace = true
 futures.workspace = true

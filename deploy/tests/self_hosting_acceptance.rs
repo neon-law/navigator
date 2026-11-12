@@ -31,7 +31,7 @@ fn documented_upgrade_plan_renders_without_credentials_or_external_tools() {
         .replace("\\\n", " ");
     let arguments = command
         .trim()
-        .strip_prefix("cargo run -p deploy -- ")
+        .strip_prefix("cargo run -p hudson -- ")
         .expect("example uses the source CLI");
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -48,7 +48,7 @@ fn documented_upgrade_plan_renders_without_credentials_or_external_tools() {
         })
         .collect();
     assert!(args.iter().any(|arg| arg == "--dry-run"));
-    let output = Command::new(env!("CARGO_BIN_EXE_navigator-deploy"))
+    let output = Command::new(env!("CARGO_BIN_EXE_hudson"))
         .current_dir(empty.path())
         .env_clear()
         .env("HOME", empty.path())

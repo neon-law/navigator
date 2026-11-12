@@ -14,7 +14,7 @@ is where the edit lands. Never commit a `.docx`.
 ## Open it in Word
 
 ```bash
-navigator-deploy notation word --preview drafts/<code>.md --out "documents/Work Product/drafts/<code>.docx"
+hudson notation word --preview drafts/<code>.md --out "documents/Work Product/drafts/<code>.docx"
 cp "documents/Work Product/drafts/<code>.docx" "documents/Work Product/drafts/<code>.baseline.docx"
 open -a "Microsoft Word" "documents/Work Product/drafts/<code>.docx"
 ```
@@ -43,7 +43,7 @@ When the lawyer says the file is saved:
 5. **Guard the placeholders.** If a hunk edits, splits, or deletes a `{{placeholder}}` or a `{{> clause}}` include,
    or replaces a placeholder with a filled value, do not apply it. Show it to the lawyer and ask.
 6. **Gate and re-render.** Refill changed prose to 120 columns, run `navigator project gate`, and render the PDF with
-   `navigator-deploy notation pdf --preview` for the lawyer to check.
+   `hudson notation pdf --preview` for the lawyer to check.
 7. **Report.** List every hunk applied, every hunk held, and every comment, with its answer.
 8. **Reset the baseline.** Export again and copy a new baseline, so the next round diffs against what the template now
    says.

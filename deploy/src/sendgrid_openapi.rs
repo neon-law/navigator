@@ -108,7 +108,7 @@ fn pin_update_instructions(actual_spec_sha: &str, actual_adapter_sha: &str) -> S
            const EXPECTED_SHA256: &str = \"{actual_spec_sha}\";\n\
            const EXPECTED_ADAPTER_SHA256: &str = \"{actual_adapter_sha}\";\n\
          Then rerun:\n\
-           cargo run -p deploy -- dev sendgrid-openapi --regenerate"
+           cargo run -p hudson -- dev sendgrid-openapi --regenerate"
     )
 }
 
@@ -252,6 +252,6 @@ mod tests {
         assert!(message.contains(&format!(
             "const EXPECTED_ADAPTER_SHA256: &str = \"{expected_adapter_sha}\";"
         )));
-        assert!(message.contains("cargo run -p deploy -- dev sendgrid-openapi --regenerate"));
+        assert!(message.contains("cargo run -p hudson -- dev sendgrid-openapi --regenerate"));
     }
 }

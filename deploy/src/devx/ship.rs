@@ -1398,10 +1398,10 @@ where
 {
     let value = non_empty_env(env, get).ok_or_else(|| {
         anyhow::anyhow!(
-            "{env} must be set in deployments/{deployment}/config.toml for `navigator-deploy ops ship` \
+            "{env} must be set in deployments/{deployment}/config.toml for `hudson ops ship` \
              — it renders the `{token}` placeholder in the embedded GKE manifests. \
              Set it, then re-run \
-             `navigator-deploy ops ship --deployment {deployment} --tag <YY.M.D>`."
+             `hudson ops ship --deployment {deployment} --tag <YY.M.D>`."
         )
     })?;
     if token.starts_with("YOUR_OAUTH_CLIENT_ID") {
@@ -2428,7 +2428,7 @@ fn require_asset_base_url_value(deployment: &str, value: Option<&str>) -> Result
              through the deployment's GKE workload identity. Without it \
              the rolled site resolves images against an empty `/public` and every hero 404s. Set \
              it there, then run \
-             `navigator-deploy ops ship --deployment {deployment} --tag <YY.M.D>`."
+             `hudson ops ship --deployment {deployment} --tag <YY.M.D>`."
         );
     }
     Ok(())
@@ -3523,7 +3523,7 @@ fn lane_requires_post_roll_asset_verification(lane: ShipLane) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PostRollAssetRefs {
     /// A source checkout: walk `server/content` under the root, the complete
-    /// set `navigator-deploy ops assets verify` reads.
+    /// set `hudson ops assets verify` reads.
     ContentTree(PathBuf),
     /// A deploy-only tree (`--deployments-dir` pointing at a checkout that
     /// carries `deployments/` and nothing else) has no `server/content`. The
@@ -3612,7 +3612,7 @@ where
                          the gallery variants, the brand media, and the licensed fonts — and \
                          the post-roll check probes {} for that inventory. References held \
                          only by the blog markdown are not in this inventory. Run \
-                         `navigator-deploy ops assets verify` from a source checkout for the complete set.",
+                         `hudson ops assets verify` from a source checkout for the complete set.",
                         missing.display(),
                         cfg.asset_base_url
                     );
@@ -4919,7 +4919,7 @@ fn check_projected_objects_resolve(states: &[(ProjectedObject, Option<String>)])
          resolve to an ENABLED version in {}: {}.\n\
          `ops secrets apply` cannot write the deployment Secret from a catalog entry that lacks \
          an enabled version. Write the missing values with \
-         `navigator-deploy ops secrets apply --deployment <name>`, or trim the objects this deployment \
+         `hudson ops secrets apply --deployment <name>`, or trim the objects this deployment \
          does not carry from examples/deploy/k8s/gke/secrets/secret-provider-class.yaml. \
          Nothing was applied.",
         states.len(),
@@ -9836,7 +9836,7 @@ mod tests {
     /// a new `deployments/<name>/` pair into the tree is the whole activation.
     ///
     /// The tree it reads is the synthetic one; the real rows are held to the
-    /// same assertion by `navigator-deploy ops deployments`.
+    /// same assertion by `hudson ops deployments`.
     #[test]
     fn every_checked_in_deployment_resolves_a_complete_ship_config() {
         let root = fixture_tree();

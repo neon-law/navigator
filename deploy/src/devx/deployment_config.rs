@@ -187,8 +187,8 @@ fn explain_denied(error: SetupError, project: &str, name: &str) -> anyhow::Error
     anyhow::Error::from(error).context(format!(
         "deployment configuration for `{name}` is unreadable (403): either it was never \
          published, or this identity lacks roles/secretmanager.secretAccessor on it. Fix with:\n  \
-         navigator-deploy ops deployments import --deployments-dir <private-root> {name}\n  \
-         navigator-deploy ops gcp setup --project-id {project} --ship-deployment {name} \
+         hudson ops deployments import --deployments-dir <private-root> {name}\n  \
+         hudson ops gcp setup --project-id {project} --ship-deployment {name} \
          --ship-repository <owner/repo> --ship-environment <github-environment>"
     ))
 }

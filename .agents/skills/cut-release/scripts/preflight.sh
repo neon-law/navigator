@@ -40,7 +40,7 @@ echo "    ok"
 # (nothing to publish — you have not bumped yet), or it is BEHIND one already
 # published, which fails.
 echo "==> is the workspace version a release?"
-cargo run -p deploy --quiet -- ops release check --no-fetch
+cargo run -p hudson --quiet -- ops release check --no-fetch
 
 echo "==> notices must travel with the distributed binary"
 # `cargo fetch` first, and it is load-bearing. `ops notices` reads licence text
@@ -52,7 +52,7 @@ echo "==> notices must travel with the distributed binary"
 # it the command refuses, because rendering a partial registry would publish
 # this desk's gap as the crates' own.
 cargo fetch --locked
-cargo run -p deploy --quiet -- ops notices --check
+cargo run -p hudson --quiet -- ops notices --check
 
 # `deploy.yml` builds the release with `--locked` in three places, and `--locked`
 # refuses a lock the manifest has moved past. `ops release version` refreshes
@@ -60,7 +60,7 @@ cargo run -p deploy --quiet -- ops notices --check
 echo "==> Cargo.lock must agree with the manifest"
 if ! cargo metadata --locked --format-version 1 >/dev/null 2>&1; then
     echo "FAIL: Cargo.lock does not match Cargo.toml." >&2
-    echo "      Re-run: cargo run -p deploy -- ops release version --tag <version>" >&2
+    echo "      Re-run: cargo run -p hudson -- ops release version --tag <version>" >&2
     exit 1
 fi
 echo "    ok"
@@ -79,7 +79,7 @@ echo "    ok"
 # before a release cut would have been the first to see it, and neither path can
 # hold its own idea of what a stale pin is.
 echo "==> the self-referencing action pins must name this version"
-cargo run -p deploy --quiet -- ops release pins
+cargo run -p hudson --quiet -- ops release pins
 
 echo "==> the workspace gate"
 cargo nextest run --workspace
@@ -94,4 +94,4 @@ echo "browser and accessibility suites — they self-skip with no harness, so th
 echo "only thing that runs them is deploy.yml's integration job, on the merge"
 echo "that publishes. Prove it here instead:"
 echo
-echo "    cargo run -p deploy -- dev browser-e2e"
+echo "    cargo run -p hudson -- dev browser-e2e"

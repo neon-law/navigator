@@ -1,4 +1,4 @@
-//! `navigator-deploy preview` — the matter's declared pages, rendered on
+//! `hudson preview` — the matter's declared pages, rendered on
 //! `localhost` from the working tree, under a draft banner.
 //!
 //! An author edits `navigator.yaml`, `drafts/` (or `templates/`),
@@ -54,13 +54,13 @@ const WATCHED: &[&str] = &[manifest::FILE, "drafts", "templates", "blobs", "note
 /// The cookie that keeps the chosen lens across tab clicks.
 const LENS_COOKIE: &str = "navigator_preview_lens";
 
-/// `navigator-deploy preview`: serve the checkout's pages on `port` (`0`
+/// `hudson preview`: serve the checkout's pages on `port` (`0`
 /// picks a free one) until interrupted.
 pub async fn run(port: u16) -> ExitCode {
     match serve(port).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("navigator-deploy preview: {error:#}");
+            eprintln!("hudson preview: {error:#}");
             ExitCode::from(2)
         }
     }
@@ -70,7 +70,7 @@ async fn serve(port: u16) -> Result<()> {
     let root = std::env::current_dir().context("reading the current directory")?;
     let parsed = manifest::read(&root).ok_or_else(|| {
         anyhow!(
-            "no readable {} here; run `navigator-deploy preview` from a Project checkout root",
+            "no readable {} here; run `hudson preview` from a Project checkout root",
             manifest::FILE
         )
     })?;
@@ -552,7 +552,7 @@ async fn local_page_draft(root: &Path, draft: Option<&str>) -> webapp::sections:
     if let Ok(body) = read {
         webapp::sections::engagement::page_draft(&body)
     } else {
-        eprintln!("navigator-deploy preview: a declared draft could not be read from the checkout");
+        eprintln!("hudson preview: a declared draft could not be read from the checkout");
         PageDraft::Unreadable
     }
 }

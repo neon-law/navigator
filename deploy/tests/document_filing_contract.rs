@@ -11,7 +11,7 @@ use wiremock::matchers::{body_string_contains, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn navigator() -> Command {
-    let mut command = Command::cargo_bin("navigator-deploy").unwrap();
+    let mut command = Command::cargo_bin("hudson").unwrap();
     command.env_remove("GITHUB_REPOSITORY");
     // Exercise this build's rules; mismatched-release dispatch has its own suite.
     command.env("NAVIGATOR_RELEASE_TAG", env!("CARGO_PKG_VERSION"));

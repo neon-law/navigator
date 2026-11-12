@@ -1,4 +1,4 @@
-//! `navigator-deploy legal-plans` — a Firm's Legal Plans (where each is logged into,
+//! `hudson legal-plans` — a Firm's Legal Plans (where each is logged into,
 //! who to call, its service levels) — and `navigator project legal-plan`,
 //! which links one matter to its plan by Plan Case Number. The plans are Firm
 //! data held by the deployment, never by this repository
@@ -226,7 +226,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_resolves_a_display_name_through_the_authorized_firm_directory() {
-        /// `navigator-deploy legal-plans`'s own shape: `--firm` and the action.
+        /// `hudson legal-plans`'s own shape: `--firm` and the action.
         #[derive(Parser)]
         struct LegalPlans {
             #[arg(long)]

@@ -436,7 +436,7 @@ fn parse_seed_counts(body: &str) -> SeedCounts {
     serde_json::from_str(body).unwrap_or_default()
 }
 
-/// `navigator-deploy site person merge <keep> <drop>`: one `POST
+/// `hudson site person merge <keep> <drop>`: one `POST
 /// /app/api/people/merge`, printing how many addresses the kept Person answers to (never the
 /// parsed `keep`/`drop` arguments, which `CodeQL` treats as secrets).
 pub async fn merge_people(host: Option<String>, keep: &str, drop: &str) -> ExitCode {
@@ -2633,7 +2633,7 @@ fn validate_document_upload_size(kind: &str, file: &Path) -> Result<()> {
     validate_document_upload_size_in_bytes(kind, actual)
 }
 
-/// `navigator-deploy site document upload --project <code> --file … --kind …`
+/// `hudson site document upload --project <code> --file … --kind …`
 /// — file a local document into a matter through the REST door
 /// (`POST /app/api/projects/{id}/documents`). `--kind` is required and must
 /// be an asset-lane classification; the CLI does not default it.
@@ -2979,7 +2979,7 @@ where
     .await
 }
 
-/// `navigator-deploy site document transcribe <pointer>` — locally OCR the current
+/// `hudson site document transcribe <pointer>` — locally OCR the current
 /// source revision and file its linked transcript under a stable Project slug.
 pub async fn document_transcribe(pointer_path: &Path) -> ExitCode {
     document_transcribe_from(Path::new("."), pointer_path).await
@@ -3074,7 +3074,7 @@ fn source_revision<'a>(
     Ok(source)
 }
 
-/// `navigator-deploy site document slug <asset_id> --project <code> --slug …`
+/// `hudson site document slug <asset_id> --project <code> --slug …`
 /// — set a slug on a live row that has none.
 pub async fn document_slug(
     host: Option<&str>,
@@ -3091,7 +3091,7 @@ pub async fn document_slug(
         if let Some(stored) = body["kind"].as_str().filter(|stored| !is_asset_kind(stored)) {
             eprintln!(
                 "warning: kind `{stored}` is not an accepted document kind, and the gate will reject \
-                 this row's pointer; replace it with `navigator-deploy site document kind {asset_id} \
+                 this row's pointer; replace it with `hudson site document kind {asset_id} \
                  --project {project_code} --kind <kind>`"
             );
         }
@@ -3104,7 +3104,7 @@ fn is_asset_kind(kind: &str) -> bool {
     rules::kind::Kind::parse(kind).is_some_and(|parsed| parsed.valid_for(rules::kind::Lane::Asset))
 }
 
-/// `navigator-deploy site document kind <asset_id> --project <code> --kind …`
+/// `hudson site document kind <asset_id> --project <code> --kind …`
 /// — replace a legacy kind the asset lane rejects on a live row.
 pub async fn document_kind(
     host: Option<&str>,
@@ -3122,7 +3122,7 @@ pub async fn document_kind(
     .await
 }
 
-/// `navigator-deploy site document reclassify <asset_id> --project <code> --kind …`
+/// `hudson site document reclassify <asset_id> --project <code> --kind …`
 /// — change a live chain from one accepted kind to another.
 pub async fn document_reclassify(
     host: Option<&str>,
@@ -3163,7 +3163,7 @@ fn visibility_mismatch_notice(
         _ => "unrecognized",
     };
     Some(format!(
-        "warning: the document is filed as `{filed}`, not `{requested}`: identical bytes under          this slug file no new revision, so the existing visibility stays; change it with          `navigator-deploy site document visibility {asset_id} --visibility {requested}`"
+        "warning: the document is filed as `{filed}`, not `{requested}`: identical bytes under          this slug file no new revision, so the existing visibility stays; change it with          `hudson site document visibility {asset_id} --visibility {requested}`"
     ))
 }
 
@@ -3224,7 +3224,7 @@ fn documents_folder_prefix_len(parts: &[&str]) -> Option<usize> {
         .max()
 }
 
-/// `navigator-deploy site document visibility <asset_id> --project <code> --visibility …`
+/// `hudson site document visibility <asset_id> --project <code> --visibility …`
 /// — change who can see a filed revision, without filing a new one.
 pub async fn document_visibility(
     host: Option<&str>,
@@ -3241,7 +3241,7 @@ pub async fn document_visibility(
     .await
 }
 
-/// `navigator-deploy site document reslug <asset_id> --project <code> --slug …`
+/// `hudson site document reslug <asset_id> --project <code> --slug …`
 /// — move a document identity to another valid slug across the row's whole
 /// chain, then move the checkout's committed pointer to follow it.
 pub async fn document_reslug(
@@ -3261,7 +3261,7 @@ pub async fn document_reslug(
     .await
 }
 
-/// `navigator-deploy site document retire <asset_id> --project <code> --yes-retire`
+/// `hudson site document retire <asset_id> --project <code> --yes-retire`
 /// — soft-delete a mistaken chain that has no pointer-removal commit.
 pub async fn document_retire(
     host: Option<&str>,
@@ -3561,7 +3561,7 @@ fn move_local_pointer(dir: &Path, previous: &str, new_slug: &str) -> Result<Opti
     }))
 }
 
-/// `navigator-deploy site document repair <asset_id> --project <code>`
+/// `hudson site document repair <asset_id> --project <code>`
 /// — restore a missing storage object from a same-hash sibling. Admin only.
 pub async fn document_repair(
     host: Option<&str>,
@@ -3578,7 +3578,7 @@ pub async fn document_repair(
     .await
 }
 
-/// `navigator-deploy site document restore <asset_id> --project <code>` — bring a
+/// `hudson site document restore <asset_id> --project <code>` — bring a
 /// soft-deleted document back with its revision history. The next
 /// `navigator project sync` writes its pointer again.
 pub async fn document_restore(host: Option<&str>, project_code: &str, asset_id: Uuid) -> ExitCode {
@@ -3597,7 +3597,7 @@ pub async fn document_restore(host: Option<&str>, project_code: &str, asset_id: 
     .await
 }
 
-/// `navigator-deploy site document hold <asset_id> --project <code> [--release]` —
+/// `hudson site document hold <asset_id> --project <code> [--release]` —
 /// place or release a Legal Hold, which keeps a soft-deleted document out of
 /// the retention purge.
 pub async fn document_hold(
@@ -3668,7 +3668,7 @@ pub async fn archive_repository(host: Option<&str>, project_code: &str, dir: &Pa
     .await
 }
 
-/// `navigator-deploy site mail file --message <id> --project <code> --kind …`
+/// `hudson site mail file --message <id> --project <code> --kind …`
 /// — file one inbound message's attachments into a matter, entirely
 /// server-side (`POST /app/api/projects/{id}/mail/file`, #517). The
 /// attachment bytes never reach this process; only the Pointer this
@@ -4398,7 +4398,7 @@ pub async fn projects_create_named(
         println!(
             "{}",
             palette::dim(format!(
-                "open a notation with: navigator-deploy site notation create <template_code> --project {}",
+                "open a notation with: hudson site notation create <template_code> --project {}",
                 created.code
             )),
         );
@@ -4560,7 +4560,7 @@ pub async fn patch_project_fields(
     Ok(drive_folder_check)
 }
 
-/// `navigator-deploy site notation create <template-code> --project <code> --client-email …`
+/// `hudson site notation create <template-code> --project <code> --client-email …`
 /// — open a notation on an **already-existing** matter and surface the
 /// notation id. Every notation hangs on a pre-existing Project (the matter
 /// is a deliberate prior step, `navigator project create`), so
@@ -4730,7 +4730,7 @@ struct NotationDraftCreated {
     notation_id: Option<Uuid>,
 }
 
-/// `navigator-deploy notation preview <file>` (LAW-29) — push a template as a
+/// `hudson notation preview <file>` (LAW-29) — push a template as a
 /// **draft** to the Project it belongs to: `POST
 /// /app/projects/{project_code}/notations/draft`. The push persists and
 /// validates the pushed source, enforces the engagement-first rule, and
@@ -4791,7 +4791,7 @@ fn draft_push_refusal(status: reqwest::StatusCode, body: &str) -> String {
     format!("could not push a draft (status {status}). The server reported: {reported}")
 }
 
-/// `navigator-deploy site notation list --project <code>` — inspect the private
+/// `hudson site notation list --project <code>` — inspect the private
 /// notation inventory for one matter without opening its browser workbench.
 pub async fn notation_list(host: Option<&str>, project_code: &str, json: bool) -> ExitCode {
     run(async {
@@ -5335,7 +5335,7 @@ struct NotationAnswer {
     authored_by_person_id: Option<Uuid>,
 }
 
-/// `navigator-deploy site notation answers <id>` — read filed answers and their
+/// `hudson site notation answers <id>` — read filed answers and their
 /// provenance through the same lawyer-tier, matter-scoped API door as the
 /// browser workbench. The door requires a firm-side participation row of every
 /// tier, so an operator holding Owner or Admin and no row on the matter is
@@ -5403,7 +5403,7 @@ pub async fn notation_answers(
     .await
 }
 
-/// `navigator-deploy site notation approve <id>` — render + park the notation's
+/// `hudson site notation approve <id>` — render + park the notation's
 /// document (`POST …/approve-send`): fill the bound packet (a formation's
 /// official Secretary-of-State form, or a retainer PDF) for attorney review.
 /// Idempotent server-side — a re-approve once the PDF exists is a success,
@@ -5470,7 +5470,7 @@ pub async fn notation_send(host: Option<&str>, notation_id: Uuid) -> ExitCode {
     .await
 }
 
-/// `navigator-deploy site notation request-changes <id> --question <code> [--note …]`
+/// `hudson site notation request-changes <id> --question <code> [--note …]`
 /// — send a notation parked at `lawyer_review` back for changes. Records the
 /// flagged question codes + note and routes `lawyer_review -> reask__client`
 /// so a rejected review re-collects the wrong answers instead of dead-ending
@@ -5526,7 +5526,7 @@ pub async fn notation_request_changes(
     .await
 }
 
-/// `navigator-deploy site notation update <id> --answer <code=value>` — re-collect the
+/// `hudson site notation update <id> --answer <code=value>` — re-collect the
 /// flagged answers on a notation parked at `reask__client` (lawyer on the
 /// client's behalf) and resubmit for review (`POST …/reask`). The write is
 /// gated server-side to the flagged set, and the corrected answers are what
@@ -5575,7 +5575,7 @@ pub async fn notation_update(
     .await
 }
 
-/// `navigator-deploy site notation document <id> --out <path>` — download the
+/// `hudson site notation document <id> --out <path>` — download the
 /// notation's rendered document (the filled packet) to a local file via
 /// the participation-gated `…/documents/document` route, the same per-
 /// notation PDF the review surface shows.
@@ -5596,7 +5596,7 @@ pub async fn notation_document(host: Option<&str>, notation_id: Uuid, out: &Path
         if status.as_u16() == 404 {
             return Err(anyhow!(
                 "no rendered document for notation {notation_id} — answer the questionnaire \
-                 (or `navigator-deploy site notation approve {notation_id}`) first"
+                 (or `hudson site notation approve {notation_id}`) first"
             ));
         }
         if !status.is_success() {
@@ -5615,7 +5615,7 @@ pub async fn notation_document(host: Option<&str>, notation_id: Uuid, out: &Path
     .await
 }
 
-/// `navigator-deploy site notation status <id>` — print the workflow state + the
+/// `hudson site notation status <id>` — print the workflow state + the
 /// signature request id from the review handler's JSON branch.
 pub async fn notation_status(host: Option<&str>, notation_id: Uuid, json: bool) -> ExitCode {
     run(async {
@@ -5857,7 +5857,7 @@ pub async fn fetch_project_list(
 }
 
 /// Every Project the stored login can see, as `(id, code)` pairs — the
-/// intake verbs' matter enumeration (`navigator-deploy downloads propose` and
+/// intake verbs' matter enumeration (`hudson downloads propose` and
 /// `clean`).
 pub async fn visible_projects(host: Option<&str>) -> Result<Vec<(Uuid, String)>> {
     let (base, token) = resolve(host)?;

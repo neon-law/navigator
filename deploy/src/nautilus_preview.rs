@@ -1,4 +1,4 @@
-//! `navigator-deploy nautilus preview` — the Nautilus mobile shell, served locally
+//! `hudson nautilus preview` — the Nautilus mobile shell, served locally
 //! and hydrated.
 //!
 //! The shell itself ([`webapp::mobile::MobileApp`]) is content-local and
@@ -6,7 +6,7 @@
 //! without a Mac, Xcode, or `dx`: one Axum listener that server-renders the
 //! shell and layers the staged `nautilus-preview` web bundle on top — the
 //! exact composition the portal's hydration mechanics exist for. Shaped like
-//! the `navigator-deploy notation preview` offline lint: a provenance banner that
+//! the `hudson notation preview` offline lint: a provenance banner that
 //! never lets the render masquerade as the Project's portal, an honest
 //! degraded mode when no bundle is staged, and Ctrl-C or SIGTERM to stop.
 
@@ -19,7 +19,7 @@ use clap::Subcommand;
 
 use crate::devx::nautilus::{staged_bundle_dir, STAGED_BUNDLE_ENV};
 
-/// `navigator-deploy nautilus …` — the Nautilus mobile shell, served locally for a
+/// `hudson nautilus …` — the Nautilus mobile shell, served locally for a
 /// browser.
 #[derive(Subcommand)]
 pub enum NautilusCmd {
@@ -32,7 +32,7 @@ pub enum NautilusCmd {
     },
 }
 
-/// `navigator-deploy nautilus preview`: serve the mobile shell on one localhost
+/// `hudson nautilus preview`: serve the mobile shell on one localhost
 /// listener until the process is interrupted. `port` `0` asks the OS for a
 /// free one, so several previews can run at once.
 pub async fn run(port: u16) -> Result<()> {
@@ -84,7 +84,7 @@ fn provenance_banner(bundle: Option<&Path>) -> Vec<String> {
         Some(dir) => lines.push(format!("    preview bundle: {}", dir.display())),
         None => lines.push(
             "    preview bundle: none — the home renders but navigation is inert. \
-             Build one with `navigator-deploy dev build-nautilus`."
+             Build one with `hudson dev build-nautilus`."
                 .to_string(),
         ),
     }
@@ -112,7 +112,7 @@ mod tests {
         );
         assert!(banner.contains("navigation is inert"), "{banner}");
         assert!(
-            banner.contains("navigator-deploy dev build-nautilus"),
+            banner.contains("hudson dev build-nautilus"),
             "names the build step: {banner}"
         );
     }

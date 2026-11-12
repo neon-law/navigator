@@ -1,4 +1,4 @@
-//! `navigator-deploy ops release check` — decide whether the version in
+//! `hudson ops release check` — decide whether the version in
 //! `[workspace.package].version` is a release that has not happened yet.
 //!
 //! This is the whole release trigger. A release is cut by bumping the workspace

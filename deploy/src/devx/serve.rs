@@ -162,7 +162,7 @@ pub(super) fn run() -> Result<()> {
 pub(super) fn run_opening(open_browser: bool) -> Result<()> {
     let root = super::orchestrate::workspace_root()?;
     if !root.join(".devx/env").is_file() {
-        bail!("Start this worktree with navigator-deploy dev worktree-env up first.");
+        bail!("Start this worktree with hudson dev worktree-env up first.");
     }
     dotenvy::from_path(root.join(".devx/env")).context("loading the worktree environment")?;
     if std::env::var("NAVIGATOR_ENVIRONMENT").as_deref() != Ok("dev") {

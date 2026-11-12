@@ -1,7 +1,7 @@
 //! Restate-backed [`crate::StateMachineRuntime`].
 //!
 //! Talks to a running Restate broker over HTTP. In local dev the
-//! broker runs in-cluster (`cargo run -p deploy -- dev up` brings up the
+//! broker runs in-cluster (`cargo run -p hudson -- dev up` brings up the
 //! Restate Operator + `RestateCluster`). In production the same
 //! code talks to **Restate Cloud** — set `RESTATE_BROKER_URL` to
 //! the Restate Cloud ingress and `RESTATE_AUTH_TOKEN` to the

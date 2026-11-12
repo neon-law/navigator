@@ -17,7 +17,7 @@ Read the relevant workshop source, [`docs/agent-workflows.md`](../../../docs/age
   staging and production in one call, as the `public-images` skill shows:
 
   ```bash
-  navigator-deploy site asset upload --host staging.neonlaw.com --host www.neonlaw.com img/<deck-slug>/<filename>
+  hudson site asset upload --host staging.neonlaw.com --host www.neonlaw.com img/<deck-slug>/<filename>
   ```
 
 - If a host remains pending, say so; do not describe a staging-only image as published everywhere.

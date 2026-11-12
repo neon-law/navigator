@@ -689,7 +689,7 @@ fn no_job_can_write_repository_contents() {
     // THREE JOBS, AND THE LIST IS THE POINT. `release-tag` creates the release
     // ref once integration has proved the tree; `release-cli-publish` creates
     // the GitHub Release that hangs off it and uploads the CLI archives;
-    // `release-operator-cli-publish` uploads the `navigator-deploy` and
+    // `release-operator-cli-publish` uploads the `hudson` and
     // `scorpio` archives to that same Release.
     // Neither can MOVE a ref — see
     // `creating_the_release_tag_is_idempotent_but_never_forced` — and
@@ -1160,7 +1160,7 @@ fn the_release_decision_runs_a_published_binary_rather_than_a_compile() {
          compiling the CLI to answer a yes/no question is ~8 minutes of latency on every merge"
     );
     assert!(
-        job.contains("navigator-deploy ops release check --github-output"),
+        job.contains("hudson ops release check --github-output"),
         "the downloaded binary must answer the question through the same `ops release check` \
          command, so the release rule lives in one place"
     );
@@ -1200,7 +1200,7 @@ fn an_unavailable_checker_falls_back_to_building_from_source() {
     let job = release_version_job(&workflow);
 
     assert!(
-        job.contains("cargo run --locked -p deploy --quiet -- ops release check --github-output"),
+        job.contains("cargo run --locked -p hudson --quiet -- ops release check --github-output"),
         "`release-version` must keep the in-tree fallback: a download that failed must compile \
          the checker, never answer the release question by default"
     );
@@ -1482,9 +1482,7 @@ fn the_checker_probes_for_every_release_output() {
 }
 
 /// The decision step runs the published checker by name once `checker` reports
-/// it ready, so the checker must install the binary under that same name. Main's
-/// first run after the CLI split installed `navigator` and then called
-/// `navigator-deploy`, and failed with "command not found" before deciding.
+/// it ready, so the checker must install the binary under that same name.
 #[test]
 fn the_checker_installs_the_binary_the_release_decision_runs() {
     let workflow: serde_yaml::Value =

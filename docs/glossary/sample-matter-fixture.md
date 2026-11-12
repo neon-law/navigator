@@ -16,9 +16,9 @@ The three are deliberately different shapes of legal work, because one matter ca
 | `sample-estate` | *Estate of Cornelius Montgomery* | an estate plan | an individual testator |
 
 Each Project names its own repository, and the seed reads its `pages:` and `drafts/` from it. Local development clones a
-public, read-only snapshot at `neon-law/<code>` on GitHub, so `navigator-deploy quickstart` clones it without
-credentials; the snapshots run no Actions. Staging's source of truth is the Project's repository on that deployment's
-own Forgejo (`<firm-slug>/<code>`), where changes land by pull request.
+public, read-only snapshot at `neon-law/<code>` on GitHub, so `hudson quickstart` clones it without credentials; the
+snapshots run no Actions. Staging's source of truth is the Project's repository on that deployment's own Forgejo
+(`<firm-slug>/<code>`), where changes land by pull request.
 
 The project code is the URL slug: lowercase letters and numbers joined by single hyphens, with no UUID in the project
 show URL.

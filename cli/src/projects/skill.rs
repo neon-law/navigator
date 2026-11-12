@@ -254,7 +254,7 @@ pub async fn record_kit_version(dir: &Path, jurisdiction: &str, practice_area: &
 /// template. An unedited lifecycle stub is a placeholder, not an edit, so the
 /// bundled Notation replaces it. Reads the
 /// bundled Notation catalog through [`rules::template_catalog::bundled_files`],
-/// the same compiled-in reader `navigator-deploy notation preview` resolves a
+/// the same compiled-in reader `hudson notation preview` resolves a
 /// template's body from, so the catalog is embedded exactly once.
 fn scaffold_notation(dir: &Path, code: &str) -> Result<(), String> {
     let target = dir

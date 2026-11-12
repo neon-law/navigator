@@ -19,14 +19,14 @@ Windows build, release archive, or CI job.
 
 ```bash
 brew install neon-law/navigator/navigator
-navigator-deploy quickstart
+hudson quickstart
 ```
 
 `quickstart` takes no flags. It checks the host tools, including a running Docker runtime, and prints one `brew install`
 line for anything missing. It then clones this repository into `~/.navigator/quickstart`, brings up a KIND cluster with
 PostgreSQL and Forgejo, and seeds the Guieb & Shook PC firm with three sample matters. Finally it builds the website and
 opens it. Every service gets its own port, and the closing summary lists them all with the sample sign-ins. Inside a
-checkout, run `cargo run -p deploy -- quickstart` instead. The first run builds from source and takes a while.
+checkout, run `cargo run -p hudson -- quickstart` instead. The first run builds from source and takes a while.
 
 You can see the omnichannel inbox, social scheduling, case management, notations, and several example websites. Copy
 `.env.example` to `.env` to add your own Meta, TikTok, or other provider keys, and use your own brand. To have Navigator
@@ -49,7 +49,7 @@ You can also start an agentic session and prompt "spin up the server".
 To build and run from source without any Neon Law credentials, follow [self-hosting](docs/self-hosting.md):
 
 ```bash
-cargo run -p deploy -- dev up --path "$PWD"
+cargo run -p hudson -- dev up --path "$PWD"
 set -a; source .devx/env; set +a
 cargo run -p neon
 ```

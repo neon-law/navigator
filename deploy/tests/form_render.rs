@@ -85,7 +85,7 @@ fn repro_template() -> String {
 }
 
 fn render(template: &Path, out: &Path, cache: &Path, ci: bool) -> assert_cmd::assert::Assert {
-    let mut command = Command::cargo_bin("navigator-deploy").expect("navigator binary");
+    let mut command = Command::cargo_bin("hudson").expect("navigator binary");
     command
         .current_dir(template.parent().expect("template parent"))
         .env("NAVIGATOR_FORM_CACHE", cache)
@@ -260,7 +260,7 @@ fn a_form_template_refuses_the_word_render() {
     let cache = TempDir::new().expect("temp cache");
     let out = root.path().join("out.docx");
 
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .expect("navigator binary")
         .current_dir(template.parent().expect("template parent"))
         .env("NAVIGATOR_FORM_CACHE", cache.path())

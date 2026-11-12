@@ -1795,7 +1795,7 @@ async fn open_workflow_update_pull_request(
                 "Reconciles this repository's generated workflow(s) against Navigator's \
                  `ci.yml`/`cd.yml` templates, `navigator.yaml` version, and canonical Agent Skills \
                  available from a matching release CLI, pinned to `{action_version}` — the exact \
-                 change `navigator-deploy ops github setup` computed. This is a normal pull request: \
+                 change `hudson ops github setup` computed. This is a normal pull request: \
                  required checks and resolved review threads gate the squash merge.\n\n\
                  Updated: {}",
                 updates
@@ -2062,7 +2062,7 @@ async fn plan_actions_access(
             "{workflow_home}'s Actions access is `none`, so {} cannot call its reusable \
              workflows. Fix it with an admin token, then re-run: `gh api -X PUT \
              repos/{workflow_home}/actions/permissions/access -f \
-             access_level={ACTIONS_ACCESS_ORGANIZATION}` (or `navigator-deploy ops github setup \
+             access_level={ACTIONS_ACCESS_ORGANIZATION}` (or `hudson ops github setup \
              {workflow_home}`)",
             client.repository
         );

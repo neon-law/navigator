@@ -4325,7 +4325,7 @@ jobs:
             "navigator project deadline update",
             "navigator project deadline complete",
             "navigator project deadline cancel",
-            "navigator-deploy glossary show \"Deadline\"",
+            "hudson glossary show \"Deadline\"",
             "private_slack_channel",
             "--client-lead-days",
             "Never compute court days",
@@ -4354,7 +4354,7 @@ jobs:
             "navigator project docket link-document",
             "navigator project docket supersede",
             "navigator project docket ingest",
-            "navigator-deploy glossary show \"Docket Entry\"",
+            "hudson glossary show \"Docket Entry\"",
             "--scheduled-on",
             "--dry-run",
             "A hearing is a Docket Entry",
@@ -4392,7 +4392,7 @@ jobs:
         ] {
             assert!(canonical.contains(expected), "skill must name `{expected}`");
         }
-        for retired in ["navigator-deploy site sync", "navigator-deploy site pull"] {
+        for retired in ["hudson site sync", "hudson site pull"] {
             assert!(
                 !canonical.contains(retired),
                 "skill still names `{retired}`"
@@ -4469,7 +4469,7 @@ jobs:
     }
 
     /// ENG-870 named this doc specifically: it still documented the
-    /// retired `navigator-deploy site document verify` after that verb moved onto
+    /// retired `hudson site document verify` after that verb moved onto
     /// `navigator project gate --check`.
     #[test]
     fn project_repositories_doc_documents_only_commands_that_resolve() {
@@ -5584,7 +5584,7 @@ jobs:
         scaffold_minimal(root.path());
         std::fs::write(
             root.path().join("AGENTS.md"),
-            "# contract\n\nRun `navigator template render file.md` then `navigator-deploy notation preview`.\n",
+            "# contract\n\nRun `navigator template render file.md` then `hudson notation preview`.\n",
         )
         .unwrap();
         let mut errors: Vec<Finding> = Vec::new();

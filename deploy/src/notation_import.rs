@@ -1,4 +1,4 @@
-//! `navigator-deploy notation import` — apply the lawyer's edited Word document
+//! `hudson notation import` — apply the lawyer's edited Word document
 //! back into the notation template it was rendered from.
 //!
 //! The edited `.docx` carries the export's provenance record (template path

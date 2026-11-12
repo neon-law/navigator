@@ -1,4 +1,4 @@
-//! `navigator-deploy ops postgres mirror` — measure and repair drift between
+//! `hudson ops postgres mirror` — measure and repair drift between
 //! `SurrealDB` and its PostgreSQL mirrors.
 //!
 //! Every mirror in [`store::postgres_mirror::MIRRORS`] is covered in registry
@@ -25,7 +25,7 @@ use serde_json::json;
 use store::postgres::PostgresDb;
 use store::postgres_mirror::{Drift, MirrorKey, MirrorParity};
 
-/// `navigator-deploy ops postgres`.
+/// `hudson ops postgres`.
 #[derive(Debug, Subcommand)]
 pub enum PostgresCmd {
     /// Compare or reconcile the `SurrealDB` mirrors in PostgreSQL.
@@ -35,7 +35,7 @@ pub enum PostgresCmd {
     Backfill(crate::postgres_backfill::BackfillArgs),
 }
 
-/// `navigator-deploy ops postgres mirror`.
+/// `hudson ops postgres mirror`.
 #[derive(Debug, Subcommand)]
 pub enum MirrorCmd {
     /// Report drift per mirrored table; writes nothing.

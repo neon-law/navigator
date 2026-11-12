@@ -1,4 +1,4 @@
-//! `navigator-deploy ops assets build` — transcode curated source photos into the
+//! `hudson ops assets build` — transcode curated source photos into the
 //! responsive web variants consumed by the browser surface.
 //!
 //! The manifest ([`views::assets::GALLERY`]) and the width set
@@ -237,7 +237,7 @@ const AVIF_QUALITY: f32 = 70.0;
 /// the small-file end of the curve.
 const AVIF_SPEED: u8 = 6;
 
-/// Entry point for `navigator-deploy ops assets build`. `only` narrows the run to the
+/// Entry point for `hudson ops assets build`. `only` narrows the run to the
 /// named manifest slugs.
 pub fn run_build(src: &Path, out: &Path, only: &[String]) -> ExitCode {
     let selected = match select(only) {
@@ -360,7 +360,7 @@ fn build(
     Ok(variants)
 }
 
-/// Entry point for `navigator-deploy ops assets upload`. `bucket` defaults to the
+/// Entry point for `hudson ops assets upload`. `bucket` defaults to the
 /// `NAVIGATOR_ASSETS_BUCKET` env var (the public `<project>-assets`
 /// bucket, distinct from the app's documents bucket
 /// `NAVIGATOR_DOCUMENTS_BUCKET`) so an upload can never accidentally
@@ -408,7 +408,7 @@ pub fn run_upload(dir: &Path, bucket: Option<String>) -> ExitCode {
     })
 }
 
-/// Entry point for `navigator-deploy ops assets fonts upload`. Font files use the
+/// Entry point for `hudson ops assets fonts upload`. Font files use the
 /// same public assets bucket as images, under a `fonts/<dir>/` prefix per
 /// family, so the tree never carries WOFF2 bytes — proprietary in GORP's case
 /// and merely redundant in the rest.
@@ -459,7 +459,7 @@ pub fn run_upload_fonts(dir: &Path, bucket: Option<String>, family: &FontFamily)
     })
 }
 
-/// Entry point for `navigator-deploy ops assets fonts upload-desktop`. Packages the licensed
+/// Entry point for `hudson ops assets fonts upload-desktop`. Packages the licensed
 /// GORP Serif `.otf` desktop family in `dir` into a single ZIP and uploads it
 /// to `fonts/gorp-serif/gorp-serif-otf.zip`.
 ///
@@ -513,7 +513,7 @@ pub fn run_upload_desktop_fonts(dir: &Path, bucket: Option<String>) -> ExitCode 
     })
 }
 
-/// Entry point for `navigator-deploy ops assets pull` — the inverse of `upload`, for
+/// Entry point for `hudson ops assets pull` — the inverse of `upload`, for
 /// local development. `server/public/img/` is gitignored (photos live only
 /// in the public assets bucket, never in git, never baked into the
 /// image), so a fresh clone serves empty photo slots. This downloads
@@ -1136,7 +1136,7 @@ fn report_exit(report: &VerifyReport, base_url: &str) -> u8 {
     if !report.missing.is_empty() {
         eprintln!(
             "navigator: assets verify: {} public asset(s) are NOT published at {base_url} \
-             (run `navigator-deploy ops assets upload` for an image, `navigator-deploy ops assets fonts upload` for a font):",
+             (run `hudson ops assets upload` for an image, `hudson ops assets fonts upload` for a font):",
             report.missing.len()
         );
         for rel in &report.missing {
@@ -1321,7 +1321,7 @@ async fn verify_public_origin_refs(base_url: &str, refs: &BTreeSet<String>) -> a
     )
 }
 
-/// Entry point for `navigator-deploy ops assets verify` — reconcile everything the site
+/// Entry point for `hudson ops assets verify` — reconcile everything the site
 /// loads from the public origin against what is actually published there.
 /// That is every `![](img/…)` reference under `content_dir`, every
 /// `views::assets::GALLERY` variant the Rust views render, and the
@@ -1365,7 +1365,7 @@ fn fetch_report_exit(report: &FetchReport, base_url: &str, out: &Path) -> u8 {
     if !report.missing.is_empty() {
         eprintln!(
             "navigator: assets fetch-referenced: {} content image(s) are NOT published at \
-             {base_url} (run `navigator-deploy ops assets upload`):",
+             {base_url} (run `hudson ops assets upload`):",
             report.missing.len()
         );
         for rel in &report.missing {
@@ -1480,7 +1480,7 @@ async fn fetch_referenced_content(content_dir: &Path, base_url: Option<String>, 
     fetch_report_exit(&report, &base_url, out)
 }
 
-/// Entry point for `navigator-deploy ops assets fetch-referenced` — hydrate the gitignored
+/// Entry point for `hudson ops assets fetch-referenced` — hydrate the gitignored
 /// `server/public/img/` tree from a public HTTP origin so the `navigator-web`
 /// Docker image can serve content heroes in KIND. No GCP ADC: the origin
 /// is whatever `verify` would probe (`NAVIGATOR_ASSET_BASE_URL` or
@@ -1733,13 +1733,13 @@ fn stub_referenced_content(content_dir: &Path, out: &Path) -> u8 {
     }
 }
 
-/// Entry point for `navigator-deploy ops assets stub-referenced`.
+/// Entry point for `hudson ops assets stub-referenced`.
 pub fn run_stub_referenced(content_dir: &Path, out: &Path) -> ExitCode {
     ExitCode::from(stub_referenced_content(content_dir, out))
 }
 
 /// The content type for an asset under `server/public/img/`, keyed off its
-/// extension. The three formats `navigator-deploy ops assets build` emits (AVIF/WebP/JPEG)
+/// extension. The three formats `hudson ops assets build` emits (AVIF/WebP/JPEG)
 /// plus `png` for hand-authored blog/illustration heroes are carried;
 /// anything else under `dir` (a stray `.DS_Store`, an editor temp file)
 /// is skipped rather than pushed with a wrong type.
@@ -1773,7 +1773,7 @@ fn content_type_for(ext: &str) -> Option<&'static str> {
 async fn upload(storage: &dyn StorageService, dir: &Path) -> anyhow::Result<usize> {
     anyhow::ensure!(
         dir.is_dir(),
-        "asset directory `{}` does not exist — run `navigator-deploy ops assets build` first",
+        "asset directory `{}` does not exist — run `hudson ops assets build` first",
         dir.display()
     );
     let mut uploaded = 0usize;
@@ -1816,7 +1816,7 @@ async fn upload(storage: &dyn StorageService, dir: &Path) -> anyhow::Result<usiz
     // "the photos are live" while the bucket stays empty.
     anyhow::ensure!(
         uploaded > 0,
-        "no image variants under `{}` — run `navigator-deploy ops assets build` first",
+        "no image variants under `{}` — run `hudson ops assets build` first",
         dir.display()
     );
     Ok(uploaded)
@@ -2005,7 +2005,7 @@ async fn download(storage: &dyn StorageService, out: &Path) -> anyhow::Result<us
         "{}",
         if listed_under_img == 0 {
             "no objects under `img/` in the bucket — populate it first with \
-             `navigator-deploy ops assets build` + `navigator-deploy ops assets upload`"
+             `hudson ops assets build` + `hudson ops assets upload`"
         } else {
             "objects exist under `img/`, but none are supported image variants \
              (.avif, .webp, .jpg, .jpeg, .png)"
@@ -3775,7 +3775,7 @@ Inline raw-HTML tile: <div>![Team](img/thanks-apple/team-lunch.jpg)</div>\n";
 
     #[tokio::test]
     async fn upload_keys_each_variant_under_img_and_skips_non_images() {
-        // Lay out a slug directory the way `navigator-deploy ops assets build` does,
+        // Lay out a slug directory the way `hudson ops assets build` does,
         // plus a stray non-image file that must not be uploaded.
         let dir = TempDir::new().unwrap();
         let slug = dir.path().join("lake-tahoe");

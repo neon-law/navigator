@@ -1531,7 +1531,7 @@ mod tests {
     #[track_caller]
     fn assert_live_run_sheet(prose: &str) {
         assert!(
-            prose.matches("navigator-deploy ops gcp hub setup").count() >= 2,
+            prose.matches("hudson ops gcp hub setup").count() >= 2,
             "DEPLOY.md must show both dry-run and live image-hub setup commands",
         );
         // One live setup per deployments/ directory: the coordinates are
@@ -1543,11 +1543,11 @@ mod tests {
             "DEPLOY.md must load setup coordinates from the operator-managed deployment root",
         );
         assert!(
-            prose.contains("navigator-deploy ops gcp setup --dry-run"),
+            prose.contains("hudson ops gcp setup --dry-run"),
             "DEPLOY.md must show the per-deployment dry-run setup command",
         );
         assert!(
-            prose.contains("navigator-deploy ops gcp setup\n"),
+            prose.contains("hudson ops gcp setup\n"),
             "DEPLOY.md must show the per-deployment live setup command",
         );
         assert!(
@@ -1578,11 +1578,11 @@ mod tests {
             for expected in [
                 "Cloud Router",
                 "Cloud NAT",
-                "`navigator-deploy ops dns setup`",
+                "`hudson ops dns setup`",
                 "TLS and Gateway",
-                "`navigator-deploy ops ship`",
+                "`hudson ops ship`",
                 "Restate operator",
-                "`navigator-deploy ops secrets apply`",
+                "`hudson ops secrets apply`",
             ] {
                 assert!(prose.contains(expected), "{surface} must name {expected}");
             }
@@ -1631,12 +1631,12 @@ mod tests {
         let calls = client.recorded_calls();
 
         // 1. The command the workshop prints is the real invocation —
-        //    `cargo run -p deploy -- ops gcp setup`, with cargo's `--`
+        //    `cargo run -p hudson -- ops gcp setup`, with cargo's `--`
         //    separator (the orchestration commands live in the `navigator`
         //    CLI; there is no separate `devx` binary).
         assert!(
-            prose.contains("cargo run -p deploy -- ops gcp setup --project-id"),
-            "DEPLOY.md must print the real `cargo run -p deploy -- ops gcp setup --project-id` command",
+            prose.contains("cargo run -p hudson -- ops gcp setup --project-id"),
+            "DEPLOY.md must print the real `cargo run -p hudson -- ops gcp setup --project-id` command",
         );
         assert!(
             prose.contains("--dry-run"),

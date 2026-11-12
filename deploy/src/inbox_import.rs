@@ -1,10 +1,10 @@
-//! `navigator-deploy inbox import` — import a lawyer's own correspondence into the
+//! `hudson inbox import` — import a lawyer's own correspondence into the
 //! Firm Inbox through the server door `POST /app/api/inbox/import`: an RFC
 //! 5322 `.eml` (or a directory of them) with `--source=email`, or a `LinkedIn`
 //! data export's `messages.csv` with `--source=linkedin`.
 //!
 //! Ingest-only: the verb has no send counterpart, matching the documented
-//! `navigator-deploy mail` posture. Idempotency is the door's own — the door's
+//! `hudson mail` posture. Idempotency is the door's own — the door's
 //! dedup is the store's — so replaying the same payload prints the existing
 //! conversation and message ids as deduped and exits 0 (AC3). An interrupted
 //! run never silently retries a possibly-committed write: the error names the
@@ -26,7 +26,7 @@ use crate::{remote, HostOpt};
 /// authority on unknown values.
 const SOURCES: [&str; 2] = ["email", "linkedin"];
 
-/// What `navigator-deploy inbox import` imports.
+/// What `hudson inbox import` imports.
 #[derive(Debug, Clone, Default)]
 pub struct NewInboxImport {
     pub source: String,
@@ -159,7 +159,7 @@ fn first_line(text: &str) -> String {
 
 /// The reconcile text every interrupted import names: a replayed payload is
 /// deduped to the existing rows, so re-running the same command is safe.
-const RECONCILE: &str = "import outcome unknown; re-run `navigator-deploy inbox import` — a replayed payload is deduped to the existing rows";
+const RECONCILE: &str = "import outcome unknown; re-run `hudson inbox import` — a replayed payload is deduped to the existing rows";
 
 fn print_imported(payload: &Path, imported: &InboxImportResponse) {
     println!(

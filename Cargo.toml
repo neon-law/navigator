@@ -204,7 +204,7 @@ live-inquiry = { path = "live-inquiry" }
 gateway = { path = "gateway" }
 mcp = { path = "mcp" }
 pdf = { path = "pdf" }
-# The lean `navigator` library `navigator-deploy` and `scorpio` reuse.
+# The lean `navigator` library `hudson` and `scorpio` reuse.
 cli = { path = "cli" }
 portal = { path = "portal" }
 neon = { path = "neon" }

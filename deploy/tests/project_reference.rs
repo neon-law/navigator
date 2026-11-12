@@ -50,7 +50,7 @@ async fn reference_add_sends_one_project_reference_seed_record() {
         .mount(&server)
         .await;
 
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .current_dir(root.path())
         .env("NAVIGATOR_CREDENTIALS_FILE", &credentials)
@@ -124,7 +124,7 @@ async fn adverse_add_posts_to_the_matters_adverse_door() {
         .mount(&server)
         .await;
 
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .current_dir(root.path())
         .env("NAVIGATOR_CREDENTIALS_FILE", &credentials)
@@ -192,7 +192,7 @@ async fn site_import_dry_run_as_ci_reports_the_scope_violation_ci_would_hit() {
         .mount(&server)
         .await;
 
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .current_dir(root.path())
         .env("NAVIGATOR_CREDENTIALS_FILE", &credentials)
@@ -215,7 +215,7 @@ async fn site_import_dry_run_as_ci_reports_the_scope_violation_ci_would_hit() {
 #[test]
 fn as_ci_requires_a_dry_run_and_a_project_checkout() {
     let root = TempDir::new().unwrap();
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .current_dir(root.path())
         .args(["site", "import", "--as-ci"])
@@ -223,7 +223,7 @@ fn as_ci_requires_a_dry_run_and_a_project_checkout() {
         .failure()
         .stderr(predicates::str::contains("--dry-run"));
     std::fs::create_dir_all(root.path().join("seeds")).unwrap();
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .current_dir(root.path())
         .args(["site", "import", "--dry-run", "--as-ci"])

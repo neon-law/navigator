@@ -4,7 +4,7 @@ use assert_cmd::Command;
 
 #[test]
 fn list_reports_pinned_sources_and_their_document_contexts() {
-    let output = Command::cargo_bin("navigator-deploy")
+    let output = Command::cargo_bin("hudson")
         .unwrap()
         .env_remove("NAVIGATOR_POSTGRES_HOST")
         .args(["clause", "list"])
@@ -23,7 +23,7 @@ fn list_reports_pinned_sources_and_their_document_contexts() {
 
 #[test]
 fn bundled_list_reports_version_kind_and_current_status() {
-    let output = Command::cargo_bin("navigator-deploy")
+    let output = Command::cargo_bin("hudson")
         .unwrap()
         .env_remove("NAVIGATOR_POSTGRES_HOST")
         .args(["clause", "list"])
@@ -59,7 +59,7 @@ fn bundled_list_reports_version_kind_and_current_status() {
 #[test]
 fn retired_versions_are_labelled_and_remain_readable() {
     for source in ["governing_law@1", "nevada_engagement_arbitration@1"] {
-        let output = Command::cargo_bin("navigator-deploy")
+        let output = Command::cargo_bin("hudson")
             .unwrap()
             .env_remove("NAVIGATOR_POSTGRES_HOST")
             .args(["clause", "show", source])
@@ -74,7 +74,7 @@ fn retired_versions_are_labelled_and_remain_readable() {
 
 #[test]
 fn unavailable_postgres_falls_back_to_the_bundled_catalog() {
-    let list = Command::cargo_bin("navigator-deploy")
+    let list = Command::cargo_bin("hudson")
         .unwrap()
         .env("NAVIGATOR_POSTGRES_HOST", "127.0.0.1")
         .env("NAVIGATOR_POSTGRES_PORT", "1")
@@ -89,7 +89,7 @@ fn unavailable_postgres_falls_back_to_the_bundled_catalog() {
     let listed = String::from_utf8(list.stdout).unwrap();
     assert!(listed.contains("california_employment@1 — letter — current"));
 
-    let show = Command::cargo_bin("navigator-deploy")
+    let show = Command::cargo_bin("hudson")
         .unwrap()
         .env("NAVIGATOR_POSTGRES_HOST", "127.0.0.1")
         .env("NAVIGATOR_POSTGRES_PORT", "1")
@@ -107,7 +107,7 @@ fn unavailable_postgres_falls_back_to_the_bundled_catalog() {
 
 #[test]
 fn show_exposes_complete_wording_and_independent_arbitration_inputs() {
-    let output = Command::cargo_bin("navigator-deploy")
+    let output = Command::cargo_bin("hudson")
         .unwrap()
         .env_remove("NAVIGATOR_POSTGRES_HOST")
         .args(["clause", "show", "engagement_arbitration@1"])
@@ -127,7 +127,7 @@ fn show_exposes_complete_wording_and_independent_arbitration_inputs() {
 
 #[test]
 fn unknown_version_fails_with_an_actionable_error_and_no_prose() {
-    let output = Command::cargo_bin("navigator-deploy")
+    let output = Command::cargo_bin("hudson")
         .unwrap()
         .env_remove("NAVIGATOR_POSTGRES_HOST")
         .args(["clause", "show", "engagement_arbitration@999"])

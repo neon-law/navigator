@@ -398,7 +398,7 @@ pub fn strip_pointer_extension(slug: &str) -> Option<&str> {
 }
 
 /// Read and validate `<root>/navigator.yaml` — the one manifest every
-/// document command (`project sync`, and the read verbs under `navigator-deploy site document`)
+/// document command (`project sync`, and the read verbs under `hudson site document`)
 /// resolves its Project and login host from. Returns `(project, host)`.
 ///
 /// Routes through [`crate::projects::manifest::parse`], the one reader that
@@ -557,7 +557,7 @@ fn read_authority_sidecar(path: &Path, folder: &str) -> Result<AuthoritySidecar>
 /// Project document is the misclassification this routing exists to avoid.
 ///
 /// Reads the capture's sidecar, archives the bytes through the same
-/// authenticated door `navigator-deploy site authorities create` uses, and returns
+/// authenticated door `hudson site authorities create` uses, and returns
 /// a [`model::document_pointers::DocumentPointer`] carrying the resulting
 /// `authority_id` alongside `sha256`/`canonical_url`/`checked_on`/`created_at`
 /// — reusing the existing pointer struct rather than a parallel shape.
@@ -1222,7 +1222,7 @@ fn project_sync_plans_scoped(
         }
         if moved_to.is_some() {
             decision = Decision::CouldNotReconcile(
-                "its pointer moved to another path; use `navigator-deploy site document reslug` to move the live document too",
+                "its pointer moved to another path; use `hudson site document reslug` to move the live document too",
             );
         }
         // A live row with no slug has no identity a new revision could join.
@@ -2448,7 +2448,7 @@ pub async fn reconcile_project(root: &Path, client: &DocumentClient, mode: SyncM
     }
     if tally.deleted > 0 {
         println!(
-            "{} soft-deleted; restore with `navigator-deploy site document restore` within {RETENTION_DAYS} days",
+            "{} soft-deleted; restore with `hudson site document restore` within {RETENTION_DAYS} days",
             tally.deleted
         );
     }

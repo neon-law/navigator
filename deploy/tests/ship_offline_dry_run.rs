@@ -52,7 +52,7 @@ fn write_encrypted_keys(path: &Path, keys: &[&str]) {
 
 fn run_ship(deployments_dir: &Path, lane: &[&str]) -> Output {
     let no_tools = tempfile::tempdir().expect("temporary empty PATH");
-    Command::new(env!("CARGO_BIN_EXE_navigator-deploy"))
+    Command::new(env!("CARGO_BIN_EXE_hudson"))
         .env_clear()
         .env("PATH", no_tools.path())
         .arg("ops")
@@ -69,7 +69,7 @@ fn run_ship(deployments_dir: &Path, lane: &[&str]) -> Output {
 
 fn run_quiet_ship(deployments_dir: &Path, sink: &Path, lane: &[&str]) -> Output {
     let no_tools = tempfile::tempdir().expect("temporary empty PATH");
-    Command::new(env!("CARGO_BIN_EXE_navigator-deploy"))
+    Command::new(env!("CARGO_BIN_EXE_hudson"))
         .env_clear()
         .env("PATH", no_tools.path())
         .arg("ops")
@@ -95,7 +95,7 @@ fn committed_example_row_produces_a_local_plan_without_external_tools() {
         .expect("CLI crate has a repository parent")
         .canonicalize()
         .expect("canonical repository root");
-    let output = Command::new(env!("CARGO_BIN_EXE_navigator-deploy"))
+    let output = Command::new(env!("CARGO_BIN_EXE_hudson"))
         .env_clear()
         .env("PATH", no_tools.path())
         .arg("ops")

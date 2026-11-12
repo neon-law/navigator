@@ -75,7 +75,7 @@ pub fn split_remote(url: &str) -> Option<(&str, &str)> {
 /// is checked rather than assumed.
 ///
 /// Shared here because [`crate::projects::repository`]'s generated gate must
-/// terminate in a job spelled the same way `navigator-deploy ops github setup`
+/// terminate in a job spelled the same way `hudson ops github setup`
 /// binds the ruleset to — two constants for one convention is a rename waiting
 /// to leave one of them stale.
 pub const REQUIRED_CHECK: &str = "ci";

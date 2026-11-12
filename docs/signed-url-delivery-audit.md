@@ -129,8 +129,8 @@ Checked on 2026-09-12 with `gcloud` pinned to `neon-law-stg`:
 The public asset lane is the app's own `/assets` proxy ([`docs/assets.md`](assets.md)), so even the marketing bucket
 stays private at the bucket.
 
-**Recommendation.** Set `publicAccessPrevention: enforced` on every bucket `navigator-deploy ops gcp setup` creates, so
-a future hand-added `allUsers` binding is refused rather than honoured. Have `ops gcp verify` assert it.
+**Recommendation.** Set `publicAccessPrevention: enforced` on every bucket `hudson ops gcp setup` creates, so a future
+hand-added `allUsers` binding is refused rather than honoured. Have `ops gcp verify` assert it.
 
 **Follow-up.** Enforce public-access prevention in the bucket provisioning stage and verify it.
 
@@ -237,7 +237,7 @@ tools; full-disk encryption on the laptop is the control that applies, and it is
 
 **Recommendation.** Three changes, in order of value.
 
-1. Add `navigator-deploy site clean`: remove every file below `documents/`, the same set the repository gate refuses to
+1. Add `hudson site clean`: remove every file below `documents/`, the same set the repository gate refuses to
    see tracked, and print the count. A `--dry-run` lists them.
 2. Print a closing line from `project sync` naming the count of privileged files now on disk and the `clean` command.
 3. Do not make downloading opt-in behind a flag. Its only purpose is to write these bytes, so a flag would be confirmed

@@ -1,4 +1,4 @@
-//! Integration coverage for `navigator-deploy ops assets fetch-referenced` — drives
+//! Integration coverage for `hudson ops assets fetch-referenced` — drives
 //! the real binary on the no-origin guard and a wiremock-backed happy
 //! path. The live HTTP download logic is unit-tested in `assets.rs`.
 
@@ -17,7 +17,7 @@ fn fetch_referenced_fails_when_no_origin_is_set() {
     fs::write(blog.join("post.md"), "![hero](img/demo/hero.png)\n").unwrap();
     let out = TempDir::new().unwrap();
 
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .args(["ops", "assets", "fetch-referenced"])
         .arg("--content")
@@ -38,7 +38,7 @@ fn fetch_referenced_succeeds_when_the_content_tree_has_no_image_references() {
     fs::create_dir_all(content.path().join("blog")).unwrap();
     let out = TempDir::new().unwrap();
 
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .args(["ops", "assets", "fetch-referenced"])
         .arg("--content")
@@ -68,7 +68,7 @@ async fn fetch_referenced_writes_bytes_from_the_public_origin() {
     fs::write(blog.join("post.md"), "![hero](img/demo/hero.png)\n").unwrap();
     let out = TempDir::new().unwrap();
 
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .args(["ops", "assets", "fetch-referenced"])
         .arg("--content")

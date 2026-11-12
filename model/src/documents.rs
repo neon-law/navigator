@@ -152,7 +152,7 @@ pub fn document_upload_size_message_for_kind(kind: &str, actual: usize) -> Strin
     format!(
         "Document upload exceeds the maximum of {max} bytes; received {actual} bytes. Files over \
          this limit, up to {streaming}, upload through the resumable streaming lane, which \
-         `navigator site document upload` and `navigator project sync` route automatically."
+         `hudson site document upload` and `navigator project sync` route automatically."
     )
 }
 

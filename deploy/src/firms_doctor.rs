@@ -1,4 +1,4 @@
-//! `navigator-deploy ops firms doctor` — the deployment-wide Admin-DRI invariant
+//! `hudson ops firms doctor` — the deployment-wide Admin-DRI invariant
 //! report (ENG-499).
 //!
 //! Read-only: it connects to the `SurrealDB` the sourced `.devx/env` names —
@@ -14,7 +14,7 @@ use anyhow::{Context, Result};
 
 use crate::palette;
 
-/// `navigator-deploy ops firms doctor`.
+/// `hudson ops firms doctor`.
 pub fn run() -> ExitCode {
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()

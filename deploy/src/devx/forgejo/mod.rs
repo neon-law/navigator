@@ -1,4 +1,4 @@
-//! `navigator-deploy dev forgejo` — the opt-in Forgejo in the local KIND tier.
+//! `hudson dev forgejo` — the opt-in Forgejo in the local KIND tier.
 //!
 //! `up` adds Forgejo to a KIND tier: the retained PostgreSQL server with its
 //! least-privilege roles, Forgejo's own login and database, Forgejo itself,
@@ -558,7 +558,7 @@ pub(super) fn service_probe_failure_message(direct_answer: Option<&str>) -> Stri
 
 /// Where the receiver's binary, config, log, and pid live inside the
 /// hosting pod's filesystem.
-pub(super) const RECEIVER_BINARY: &str = "/tmp/forgejo-receiver/navigator-deploy";
+pub(super) const RECEIVER_BINARY: &str = "/tmp/forgejo-receiver/hudson";
 pub(super) const RECEIVER_CONFIG: &str = "/tmp/forgejo-receiver/receiver.json";
 pub(super) const RECEIVER_LOG: &str = "/tmp/forgejo-receiver/receiver.log";
 pub(super) const RECEIVER_PID: &str = "/tmp/forgejo-receiver/receiver.pid";
@@ -602,7 +602,7 @@ pub(super) fn port_forward_args(target: &str, remote_port: u16) -> [String; 2] {
 /// caller points at one, else the workspace's prebuilt musl binary. A
 /// glibc-linked binary cannot serve from the Debian pod — the runner's
 /// libc is newer than the pod's — so the CI job stages a static musl build
-/// at `target/receiver/navigator-deploy` and drops the target directory
+/// at `target/receiver/hudson` and drops the target directory
 /// behind it.
 pub(super) fn receiver_binary_source(
     workspace_root: &Path,
@@ -611,7 +611,7 @@ pub(super) fn receiver_binary_source(
     if let Some(path) = override_path {
         return Some(PathBuf::from(path));
     }
-    let prebuilt = workspace_root.join("target/receiver/navigator-deploy");
+    let prebuilt = workspace_root.join("target/receiver/hudson");
     prebuilt.is_file().then_some(prebuilt)
 }
 
@@ -940,7 +940,7 @@ mod tests {
             "{script}"
         );
         assert!(
-            script.contains("nohup /tmp/forgejo-receiver/navigator-deploy dev forgejo smoke"),
+            script.contains("nohup /tmp/forgejo-receiver/hudson dev forgejo smoke"),
             "{script}"
         );
         assert!(
@@ -985,7 +985,7 @@ mod tests {
         );
         let prebuilt = dir.path().join("target/receiver");
         std::fs::create_dir_all(&prebuilt).unwrap();
-        let binary = prebuilt.join("navigator-deploy");
+        let binary = prebuilt.join("hudson");
         std::fs::write(&binary, b"binary").unwrap();
         assert_eq!(
             receiver_binary_source(dir.path(), None).as_deref(),

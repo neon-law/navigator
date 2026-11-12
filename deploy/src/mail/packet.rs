@@ -1,4 +1,4 @@
-//! `navigator-deploy mail packet`: hand a rendered, signed packet to the
+//! `hudson mail packet`: hand a rendered, signed packet to the
 //! Firm's mail-center vendor for printing and physical mail (LAW-311).
 //!
 //! Phase 1 of the mailroom: the job goes to the vendor as an **unsent**

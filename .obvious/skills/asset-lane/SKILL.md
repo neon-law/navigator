@@ -1,13 +1,13 @@
 ---
 name: asset-lane
-description: Runbook for publishing public images and fonts to a deployment's public assets bucket — the primary path is `navigator-deploy site asset upload` with a `site login` bearer (no GCS credentials); `navigator-deploy ops assets upload` with ADC/GCS credentials remains the bulk/variants fallback.
+description: Runbook for publishing public images and fonts to a deployment's public assets bucket — the primary path is `hudson site asset upload` with a `site login` bearer (no GCS credentials); `hudson ops assets upload` with ADC/GCS credentials remains the bulk/variants fallback.
 version: 1.1.0
 triggers:
   - upload a photo to the asset lane
   - upload image to assets bucket
   - upload fonts to the bucket
-  - navigator-deploy ops assets upload
-  - navigator-deploy site asset upload
+  - hudson ops assets upload
+  - hudson site asset upload
   - navigator site login
   - asset lane upload
   - GCS credentials for assets
@@ -33,14 +33,14 @@ and served to brand sites from there.
 
 Two upload paths exist:
 
-1. **`navigator-deploy site asset upload` — the default.** Publishes one asset through a
+1. **`hudson site asset upload` — the default.** Publishes one asset through a
    live deployment's own HTTP API (`POST /app/api/assets`). It needs **no bucket
    name and no GCP credential** — only a `navigator site login` bearer token —
    and it verifies itself: after the server accepts the write, the CLI reads the
    object back through the deployment's public `/assets/{key}` origin (the same
    route a browser uses) and fails unless the served bytes are identical.
    Prefer this path for any single-asset publish.
-2. **`navigator-deploy ops assets upload` — the bulk fallback.** Uploads a whole
+2. **`hudson ops assets upload` — the bulk fallback.** Uploads a whole
    directory of variants (e.g. hero + thumbnail sizes) or a font family directly
    to GCS through Application Default Credentials. Use it when one bearer-token
    request per file is wrong — multi-file variant sets and font directories.
@@ -69,7 +69,7 @@ Both paths write to the same bucket, so the two are interchangeable per object.
 `navigator site login <host>` runs a browser-loopback authentication flow
 against a live deployment and stores a **short-lived (1 hour)** bearer token at
 `~/.navigator.json` (mode `0600`). Publishing an asset through
-`navigator-deploy site asset upload` requires the stored identity to hold the
+`hudson site asset upload` requires the stored identity to hold the
 **Owner or Admin** tier on that deployment — a lawyer-tier login is refused.
 
 - The token expires quickly by design; log in again when a run reports `401`.
@@ -81,7 +81,7 @@ against a live deployment and stores a **short-lived (1 hour)** bearer token at
 
 ### Path 2 (fallback): ADC / GCS service account
 
-`navigator-deploy ops assets upload` targets **real GCS through ADC**
+`hudson ops assets upload` targets **real GCS through ADC**
 (`cloud/src/gcs.rs`, `GcsStorage::new_from_config`). There is no API-key
 path: authentication is Application Default Credentials, picking up
 `GOOGLE_APPLICATION_CREDENTIALS` (the GCP convention) first and the
@@ -126,12 +126,12 @@ Local dev against the emulator needs no credentials.
    login — production and staging deployments of the platform share one
    assets origin, so logging in to any one of them is sufficient):
    ```bash
-   cargo run -p deploy -- site login www.neonlaw.com
+   cargo run -p hudson -- site login www.neonlaw.com
    ```
 3. Place the file under `server/public/<key>` in the repo root and upload it by
    its key-relative path — the object publishes under exactly that key:
    ```bash
-   cargo run -p deploy -- site asset upload --host=https://www.neonlaw.com \
+   cargo run -p hudson -- site asset upload --host=https://www.neonlaw.com \
      img/<brand>/courthouse-columns.jpg
    ```
    - The key is the asset's path relative to `server/public/`; an asset that
@@ -151,7 +151,7 @@ Local dev against the emulator needs no credentials.
 ```bash
 export NAVIGATOR_ASSETS_BUCKET="$SECRET_NAVIGATOR_ASSETS_BUCKET"
 export GOOGLE_APPLICATION_CREDENTIALS="$KEYFILE"
-cargo run -p deploy -- ops assets upload --dir ./variants
+cargo run -p hudson -- ops assets upload --dir ./variants
 ```
 The bucket defaults to `NAVIGATOR_ASSETS_BUCKET`; `--bucket` overrides it.
 Objects publish under `img/` in the bucket.
@@ -161,7 +161,7 @@ Objects publish under `img/` in the bucket.
 ```bash
 export NAVIGATOR_ASSETS_BUCKET="$SECRET_NAVIGATOR_ASSETS_BUCKET"
 export GOOGLE_APPLICATION_CREDENTIALS="$KEYFILE"
-cargo run -p deploy -- ops assets fonts upload --dir ./woff2
+cargo run -p hudson -- ops assets fonts upload --dir ./woff2
 ```
 
 Font files use the same public assets bucket, under a `fonts/<dir>/` prefix

@@ -1,7 +1,7 @@
 //! The lean `navigator` carries Projects, their Jujutsu repositories, the
 //! offline `validate` gate, the notation envelope verbs, and the site session
 //! plus `seeds/` import a Project repository's CI runs. Every other verb lives
-//! in `navigator-deploy` or `scorpio`.
+//! in `hudson` or `scorpio`.
 
 use assert_cmd::Command;
 

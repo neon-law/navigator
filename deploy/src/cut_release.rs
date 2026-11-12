@@ -1,4 +1,4 @@
-//! `navigator-deploy ops cut-release` names the next release, compares it with
+//! `hudson ops cut-release` names the next release, compares it with
 //! published tags, and writes the workspace version. The name is today's UTC
 //! `YY.M.D` until that is published, then the next unpublished date's
 //! `YY.M.D-rc.N`; [`crate::release::default_tag`] holds the rule.

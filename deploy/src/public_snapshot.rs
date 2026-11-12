@@ -1,4 +1,4 @@
-//! `navigator-deploy ops public-snapshot` writes a new local Git repository holding
+//! `hudson ops public-snapshot` writes a new local Git repository holding
 //! exactly one root commit: the source ref's tree minus the paths listed in
 //! that ref's `.public-snapshot-exclude`. No history travels with it.
 //!

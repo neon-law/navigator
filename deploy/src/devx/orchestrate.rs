@@ -1171,7 +1171,7 @@ fn print_chrome_summary(cfg: &KindConfig) {
         "Open OpenObserve and select the default organization and stream to inspect service.name."
     );
     eprintln!();
-    eprintln!("Tear down with: cargo run --release -p deploy -- dev down");
+    eprintln!("Tear down with: cargo run --release -p hudson -- dev down");
     eprintln!();
 }
 

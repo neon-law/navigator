@@ -1,4 +1,4 @@
-//! `navigator-deploy ops host setup`: bring one registered brand host online.
+//! `hudson ops host setup`: bring one registered brand host online.
 //!
 //! A host is registered in code first (`views::brand::BrandKey::hosts`). This
 //! command then does the rest for one deployment:
@@ -141,7 +141,7 @@ fn gateway_ip(explicit: Option<String>, public_host: &str) -> Result<String> {
         .with_context(|| format!("{public_host} has no IPv4 address; pass --gateway-ip"))
 }
 
-/// `navigator-deploy ops host setup`.
+/// `hudson ops host setup`.
 pub(crate) fn run(
     cfg: &ShipConfig,
     host: &str,
@@ -213,7 +213,7 @@ fn run_with<R: CommandRunner>(
     } else {
         eprintln!(
             "NOT READY certificate ({:?}): {}\n  The Firm ManagedCertificate and Ingress carry every \
-             registered host. Run `navigator-deploy ops ship --deployment {}` if this host's release has \
+             registered host. Run `hudson ops ship --deployment {}` if this host's release has \
              not shipped, then allow about 15 minutes after DNS resolves for issuance.",
             tls.verdict, tls.detail, cfg.name
         );

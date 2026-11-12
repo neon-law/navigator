@@ -1,8 +1,8 @@
 # Import Google Fi history
 
-`navigator-deploy inbox import-fi` imports call and SMS metadata into the Firm Inbox. It preserves historical inbound
-and outbound directions. A CSV direction does not establish who made a call or wrote a text, so historical human authors
-stay unset. It sends nothing, imports no message content or recordings, creates no billing, and archives no raw CSV. Fi
+`hudson inbox import-fi` imports call and SMS metadata into the Firm Inbox. It preserves historical inbound and outbound
+directions. A CSV direction does not establish who made a call or wrote a text, so historical human authors stay unset.
+It sends nothing, imports no message content or recordings, creates no billing, and archives no raw CSV. Fi
 conversations remain read-only for external replies; authorized people can leave internal notes and link them to a
 Project.
 
@@ -11,7 +11,7 @@ explicit mapping rather than assuming Google's export headers. Choose the column
 your file. Preview is the default and checks authorization, parsing and existing source identities without writes.
 
 ```bash
-navigator-deploy inbox import-fi --file history.csv --mapping mapping.json \
+hudson inbox import-fi --file history.csv --mapping mapping.json \
   --account "$FI_ACCOUNT" --brand example
 ```
 

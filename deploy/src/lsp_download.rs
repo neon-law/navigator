@@ -1,8 +1,8 @@
-//! `navigator-deploy lsp` — download the platform-matching `navigator-lsp` release
+//! `hudson lsp` — download the platform-matching `navigator-lsp` release
 //! archive for this binary's own version and write a working
 //! `navigator-lsp` executable into the caller's Downloads directory.
 //!
-//! Distinct from `navigator-deploy ops lsp publish` (`deploy/src/lsp_publish.rs`),
+//! Distinct from `hudson ops lsp publish` (`deploy/src/lsp_publish.rs`),
 //! which is the operator upload side that mirrors a "latest" key to the
 //! public assets bucket for the site's own use — not a resolvable target
 //! for a human who just wants the binary. This command instead resolves the
@@ -24,14 +24,14 @@ use views::lsp::{lsp_release_archive_for_host, lsp_release_asset_name, LspReleas
 /// The repository release archives are attached to.
 ///
 /// The public Navigator repository: `deploy.yml` attaches every CLI and LSP
-/// archive to its Release, so an anonymous `navigator-deploy lsp` resolves there.
+/// archive to its Release, so an anonymous `hudson lsp` resolves there.
 const RELEASES_REPO: &str = "neon-law/navigator";
 
 /// `api.github.com`'s own base. A test overrides this with a `wiremock`
 /// server's address so no test makes a live network call.
 const GITHUB_API_BASE: &str = "https://api.github.com";
 
-/// Entry point for the top-level `navigator-deploy lsp` command. `tag` is the
+/// Entry point for the top-level `hudson lsp` command. `tag` is the
 /// running binary's own version (`crate::cli_version()`); `dir` overrides
 /// the resolved Downloads directory.
 pub fn run_download(tag: &str, dir: Option<PathBuf>) -> ExitCode {
@@ -220,7 +220,7 @@ mod tests {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    /// ENG-931: `navigator-deploy lsp` must resolve archives from the public
+    /// ENG-931: `hudson lsp` must resolve archives from the public
     /// distribution host, never the source tree that is going private.
     #[test]
     fn releases_repo_names_the_tap_not_the_source_tree() {

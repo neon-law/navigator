@@ -58,7 +58,7 @@ jobs:
           shared-key: gate-cli
           save-if: false
       - name: build navigator CLI
-        run: cargo build -p deploy --quiet
+        run: cargo build -p hudson --quiet
       # The receiver serves from the Debian bookworm PostgreSQL pod, whose
       # glibc is older than the runner's; a glibc-linked binary fails its
       # readiness gate with `GLIBC_2.38 not found`. Stage a static musl
@@ -71,16 +71,16 @@ jobs:
           sudo apt-get install -y --no-install-recommends musl-tools
           rustup target add x86_64-unknown-linux-musl
           CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_DEV_INCREMENTAL=false \
-            cargo build -p deploy --bin navigator-deploy \
+            cargo build -p hudson --bin hudson \
             --target x86_64-unknown-linux-musl --quiet
           mkdir -p target/receiver
-          cp target/x86_64-unknown-linux-musl/debug/navigator-deploy \
-            target/receiver/navigator-deploy
+          cp target/x86_64-unknown-linux-musl/debug/hudson \
+            target/receiver/hudson
           rm -rf target/x86_64-unknown-linux-musl
-      - name: navigator-deploy dev forgejo up
-        run: target/debug/navigator-deploy dev forgejo up
-      - name: navigator-deploy dev forgejo smoke
-        run: target/debug/navigator-deploy dev forgejo smoke
+      - name: hudson dev forgejo up
+        run: target/debug/hudson dev forgejo up
+      - name: hudson dev forgejo smoke
+        run: target/debug/hudson dev forgejo smoke
       - name: Diagnose
         if: failure()
         run: |

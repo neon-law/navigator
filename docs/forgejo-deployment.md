@@ -6,9 +6,9 @@ image documented in [PostgreSQL Kubernetes](postgres-kubernetes.md). Forgejo own
 login. It never uses Navigator's database or bootstrap superuser. Limit its connection pool to ten. Forgejo manages its
 own schema migrations; Navigator's future Rails-style migrations must not own those tables.
 
-The local KIND tier runs the same manifests, plus an Actions runner, through `navigator-deploy dev forgejo up`; see
-[Forgejo on KIND](forgejo-kind.md). GKE release workflows deploy PostgreSQL, converge its client roles and Navigator
-migrations, prepare Forgejo's separate database, and wait for Forgejo readiness before applying Navigator workloads.
+The local KIND tier runs the same manifests, plus an Actions runner, through `hudson dev forgejo up`; see [Forgejo on
+KIND](forgejo-kind.md). GKE release workflows deploy PostgreSQL, converge its client roles and Navigator migrations,
+prepare Forgejo's separate database, and wait for Forgejo readiness before applying Navigator workloads.
 
 ## Prerequisites and application
 
@@ -21,7 +21,7 @@ For each installation, the Deployment Operator must:
 3. Provision `navigator-forgejo-postgres-ca` with `ca.crt`, the root CA that signs PostgreSQL's server certificate.
    Its certificate must cover the database host used by Forgejo. `verify-full` and `PGSSLROOTCERT` verify that identity.
 4. Set `NAVIGATOR_FORGEJO_ROOT_URL` in the deployment's `config.toml`, then use the service-only
-   `navigator-deploy ops secrets apply --deployment <name> --service forgejo --deployments-dir .` path documented in
+   `hudson ops secrets apply --deployment <name> --service forgejo --deployments-dir .` path documented in
    [`deployment-secrets.md`](deployment-secrets.md). It renders `app.ini` from `k8s/forgejo/app.ini.example` and applies
    only Forgejo's mounted-file Secrets; it does not expose these values through web/workflow env vars or deploy Forgejo.
    Do not commit the rendered configuration. The OAuth2 JWT signing secret is included because Forgejo cannot generate
@@ -44,13 +44,13 @@ For each installation, the Deployment Operator must:
 ### Commit signing and Actions opt-in
 
 Use the deployment's published cloud record; no private deployment checkout is required. Store
-`NAVIGATOR_FORGEJO_SIGNING_NAME` and `NAVIGATOR_FORGEJO_SIGNING_EMAIL` as deployment coordinates with `navigator-deploy
-ops deployments set <row> --project-id <project>`. Supply the SSH signing key pair through `navigator-deploy ops secrets
-set <row> --project-id <project> --service forgejo`, using the key names `NAVIGATOR_FORGEJO_SIGNING_PRIVATE_KEY` and
+`NAVIGATOR_FORGEJO_SIGNING_NAME` and `NAVIGATOR_FORGEJO_SIGNING_EMAIL` as deployment coordinates with `hudson ops
+deployments set <row> --project-id <project>`. Supply the SSH signing key pair through `hudson ops secrets set <row>
+--project-id <project> --service forgejo`, using the key names `NAVIGATOR_FORGEJO_SIGNING_PRIVATE_KEY` and
 `NAVIGATOR_FORGEJO_SIGNING_PUBLIC_KEY` and reading their values from stdin. Both keys are required together. Keep
 earlier keys recoverable when rotating the pair.
 
-`navigator-deploy ops secrets apply --deployment <row> --project-id <project> --service forgejo` projects the pair into
+`hudson ops secrets apply --deployment <row> --project-id <project> --service forgejo` projects the pair into
 `navigator-forgejo-signing`. The server and identity initializer mount it read-only at `/etc/forgejo-signing`. The
 generated configuration names the public key file; private key bytes never enter `app.ini` or the application
 environment. A normal release applies the mount, and a Forgejo rollout loads the projected configuration.
@@ -184,19 +184,17 @@ Forgejo Actions run or fleet-wide replay test.
 ## SSH public keys
 
 A Firm user registers an [SSH Public Key](glossary/ssh-public-key.md) once in Navigator: on `/app/profile`, or with
-`navigator-deploy site person ssh-key add ~/.ssh/id_ed25519.pub`. Navigator then makes it a key on their Forgejo
-account. The same verb's `list`, `remove <id-or-fingerprint>`, and `sync` subcommands read, revoke, and re-reconcile.
-Navigator reconciles a Person's account after each registration or revocation and after a Firm membership is removed.
-The operator sweep `navigator-deploy ops forgejo ssh-keys sync [--person <id-or-email>] [--dry-run]` reconciles every
-Person holding a key row. Only ed25519 and NIST ECDSA public keys are accepted, and a private key is refused, by the CLI
-before it is sent.
+`hudson site person ssh-key add ~/.ssh/id_ed25519.pub`. Navigator then makes it a key on their Forgejo account. The same
+verb's `list`, `remove <id-or-fingerprint>`, and `sync` subcommands read, revoke, and re-reconcile. Navigator reconciles
+a Person's account after each registration or revocation and after a Firm membership is removed. The operator sweep
+`hudson ops forgejo ssh-keys sync [--person <id-or-email>] [--dry-run]` reconciles every Person holding a key row. Only
+ed25519 and NIST ECDSA public keys are accepted, and a private key is refused, by the CLI before it is sent.
 
 Reconciliation finds the Forgejo account whose email exactly matches the Person's. It adds every live key the account
 lacks, titled `navigator:<label>`. It removes every `navigator:`-titled key Navigator no longer holds. A Person without
 a Firm membership wants no keys, so leaving a Firm removes them. A key Navigator neither holds nor manages is drift: the
 sweep prints its fingerprint, leaves it in place, and exits nonzero. A Person who has not yet signed in to Forgejo has
-no account. Their keys arrive on the first reconciliation after that sign-in (`navigator-deploy site person ssh-key
-sync`).
+no account. Their keys arrive on the first reconciliation after that sign-in (`hudson site person ssh-key sync`).
 
 The sync runs as a dedicated service identity, never the reserved `navigator-admin` seat or an operator's account.
 Forgejo 15.0.9 serves `POST`/`DELETE /api/v1/admin/users/{username}/keys` and the admin user list only to a site
@@ -224,33 +222,33 @@ access. The `ssh_public_key` rows then remain the registry of which public keys 
 
 ## Repository policy and Actions migration
 
-The current exact reconciliation command is `navigator-deploy ops github setup [repository]`, implemented in
+The current exact reconciliation command is `hudson ops github setup [repository]`, implemented in
 `deploy/src/devx/github_setup.rs`. It distinguishes public source from private Project repositories and checks
 CODEOWNERS, required `ci` checks, signed commits, deletion/force-push protection, pull requests, resolved review
 conversations, and squash-only merging. Port and independently test those outcomes against Forgejo before deprecating
 the GitHub command. Where Forgejo cannot express a rule directly, fail closed with an explicit tested equivalent rather
 than silently weakening policy. Preserve private Project defaults separately from open-source Navigator governance.
 
-`navigator-deploy ops forgejo setup <owner/repository> --url <origin> --check-context <context> --dry-run` reads the
-repository and its `main` protection and lists drift without writing. Governance reads require the repository's
-`private` field to be `true`; a public repository or missing privacy metadata stops setup, verification, and merge
-scheduling for human inspection. These commands never change repository visibility. Remove `--dry-run` to protect
-`main`, apply squash-only settings, and verify the readable controls. A second run reports that those controls already
-match. Additional branch-protection rules require review before reconciliation or scheduling, so a wildcard rule cannot
-silently override the checked `main` rule. `FORGEJO_TOKEN` supplies the credential; it travels in an authorization
-header. Select the exact required check context from a real gate run on that installation. The reconciler requires
-checks, signed commits and pull requests, applies protection to repository administrators (not to an instance
-administrator's forced merge), requires zero approving reviews, and blocks merges while a review requests changes.
-Forgejo enforces that review state at merge time, including after auto-merge has been scheduled.
+`hudson ops forgejo setup <owner/repository> --url <origin> --check-context <context> --dry-run` reads the repository
+and its `main` protection and lists drift without writing. Governance reads require the repository's `private` field to
+be `true`; a public repository or missing privacy metadata stops setup, verification, and merge scheduling for human
+inspection. These commands never change repository visibility. Remove `--dry-run` to protect `main`, apply squash-only
+settings, and verify the readable controls. A second run reports that those controls already match. Additional
+branch-protection rules require review before reconciliation or scheduling, so a wildcard rule cannot silently override
+the checked `main` rule. `FORGEJO_TOKEN` supplies the credential; it travels in an authorization header. Select the
+exact required check context from a real gate run on that installation. The reconciler requires checks, signed commits
+and pull requests, applies protection to repository administrators (not to an instance administrator's forced merge),
+requires zero approving reviews, and blocks merges while a review requests changes. Forgejo enforces that review state
+at merge time, including after auto-merge has been scheduled.
 
-`navigator-deploy ops forgejo auto-merge <owner/repository> --url <origin> --check-context <context> --pull-request
-<number>` re-reads the protection and refuses drafts, closed pull requests, a base other than `main`, or policy drift.
-It requests a squash merge when checks succeed, supplies the pull request's title and body, and requests head-branch
-deletion. When the required context has already succeeded on the pinned head, it requests that merge immediately
-instead: Forgejo 15.0.9 re-evaluates a scheduled merge only on a later status, review, or base push, so a schedule
-placed after the gate passed would wait indefinitely. Forgejo still enforces protection on the immediate merge. A
-successful response confirms request acceptance; the public API has no scheduled-merge read-back field. Forgejo must
-have its signing key provisioned before it can merge into a branch requiring signed commits.
+`hudson ops forgejo auto-merge <owner/repository> --url <origin> --check-context <context> --pull-request <number>`
+re-reads the protection and refuses drafts, closed pull requests, a base other than `main`, or policy drift. It requests
+a squash merge when checks succeed, supplies the pull request's title and body, and requests head-branch deletion. When
+the required context has already succeeded on the pinned head, it requests that merge immediately instead: Forgejo
+15.0.9 re-evaluates a scheduled merge only on a later status, review, or base push, so a schedule placed after the gate
+passed would wait indefinitely. Forgejo still enforces protection on the immediate merge. A successful response confirms
+request acceptance; the public API has no scheduled-merge read-back field. Forgejo must have its signing key provisioned
+before it can merge into a branch requiring signed commits.
 
 Before scheduling, the command pages through the pull request's reviews and checks every reported code-review comment.
 It proceeds only when Forgejo returns each comment's resolution state and every comment is resolved; missing counts,
@@ -261,14 +259,14 @@ the migration gate until the installation has a tested mechanism that enforces t
 separate rejected-review rule does not resolve this gap: it blocks a review that requests changes, but does not require
 inline conversations to be resolved.
 
-`navigator-deploy ops forgejo schedule-open <owner/repository> --url <origin> --check-context <context>` is a run-once
-operator command for one explicitly selected repository. It discovers every open pull request before writing, rejects
-incomplete pagination, changed reported totals, duplicate numbers, and malformed entries, then re-reads each eligible
-pull request. It schedules only when the head is unchanged, the PR is open and targets `main`, the review conversations
-pass, and the required-check and repository-policy guards pass. Forgejo receives the same merge request as `auto-merge`:
-scheduled while checks are pending, immediate once the required check has passed. Drafts and non-`main` bases are
-reported as skips; conflicts and per-pull-request failures are reported as structured JSON outcomes and return a nonzero
-exit status. `FORGEJO_TOKEN` must come from the trusted operator host environment. Never pass it into a
+`hudson ops forgejo schedule-open <owner/repository> --url <origin> --check-context <context>` is a run-once operator
+command for one explicitly selected repository. It discovers every open pull request before writing, rejects incomplete
+pagination, changed reported totals, duplicate numbers, and malformed entries, then re-reads each eligible pull request.
+It schedules only when the head is unchanged, the PR is open and targets `main`, the review conversations pass, and the
+required-check and repository-policy guards pass. Forgejo receives the same merge request as `auto-merge`: scheduled
+while checks are pending, immediate once the required check has passed. Drafts and non-`main` bases are reported as
+skips; conflicts and per-pull-request failures are reported as structured JSON outcomes and return a nonzero exit
+status. `FORGEJO_TOKEN` must come from the trusted operator host environment. Never pass it into a
 pull-request-controlled workflow.
 
 These commands prepare source support for the merge-policy portion of the migration. Installing a trusted PR-open event
@@ -298,9 +296,9 @@ trigger, a dedicated scheduling bot account, or branch deletion on closure witho
 Each Firm is one Forgejo organization, named by its immutable `firm.slug`, and each Project it owns is one repository
 beneath it, named by its immutable `code`: `<firm-slug>/<project-code>` (`store::firms::forgejo::repository_path`). See
 [Firm](glossary/firm.md) for how the slug is derived, reserved, and kept unique. Brands are storefronts, not namespaces.
-`navigator-deploy dev forgejo smoke` creates a seeded synthetic Firm's organization and Project repository and checks
-the API returns exactly that path. Concurrent creation, moves, and tenant isolation still need tests. Forgejo is one
-parallel service per installation, not a single central organization shared between installations.
+`hudson dev forgejo smoke` creates a seeded synthetic Firm's organization and Project repository and checks the API
+returns exactly that path. Concurrent creation, moves, and tenant isolation still need tests. Forgejo is one parallel
+service per installation, not a single central organization shared between installations.
 
 ### Firm organizations
 
@@ -308,7 +306,7 @@ The installation sets `DISABLE_REGULAR_ORG_CREATION`, so a Firm user's `POST /ap
 existing Firm's organization is provisioned through Navigator instead:
 
 ```bash
-navigator-deploy site firm provision-forgejo <firm-slug> --host <deployment host>
+hudson site firm provision-forgejo <firm-slug> --host <deployment host>
 ```
 
 The verb resolves the Firm from the Firm directory, which lists each visible Firm's `slug`, and posts to
@@ -342,12 +340,12 @@ and existing Project publisher behavior during migration.
 
 ## Disposable repository runners
 
-`navigator-deploy ops forgejo runner-once <owner/repository>` registers a repository-scoped ephemeral runner through the
-Forgejo 15 API, then starts the pinned runner image in a fresh Kubernetes Job. The trusted operator supplies
-`FORGEJO_TOKEN`, `--url <https-origin>`, `--context <context>`, `--runner-namespace <namespace>`, and the job's egress:
-repeated `--egress-host <name>` (resolved to its current public IPv4 addresses at launch) or `--egress-ip
-<public-ipv4>`. Pass the Forgejo and Navigator hosts; nothing else is needed. The operator credential stays on that
-host; the pod receives only its own single-job runner credential. Organization and global runner scopes are refused.
+`hudson ops forgejo runner-once <owner/repository>` registers a repository-scoped ephemeral runner through the Forgejo
+15 API, then starts the pinned runner image in a fresh Kubernetes Job. The trusted operator supplies `FORGEJO_TOKEN`,
+`--url <https-origin>`, `--context <context>`, `--runner-namespace <namespace>`, and the job's egress: repeated
+`--egress-host <name>` (resolved to its current public IPv4 addresses at launch) or `--egress-ip <public-ipv4>`. Pass
+the Forgejo and Navigator hosts; nothing else is needed. The operator credential stays on that host; the pod receives
+only its own single-job runner credential. Organization and global runner scopes are refused.
 
 Use a dedicated namespace with restricted Pod Security admission and a NetworkPolicy-enforcing cluster. Verify actual
 denial of metadata, Kubernetes API, database, object-store and other internal endpoints before declaring the namespace
@@ -388,15 +386,15 @@ guide](https://forgejo.org/docs/v15.0/admin/actions/registration/#runner-modes).
 Generated workflows install the release `navigator.yaml` pins from Forgejo's generic package
 `<forgejo>/api/packages/navigator/generic/navigator/<version>/navigator-<version>-linux.tar.gz`, and verify it against
 the `.sha256` beside it. A runner therefore never reaches GitHub, whose front-end and release-asset addresses rotate.
-`navigator-deploy ops forgejo release mirror --url <forgejo> --version <tag>` downloads the GitHub Release once on a
-trusted host, checks the digest, creates the public `navigator` organization when it is missing, and uploads both files.
-It is idempotent. The runner controller below mirrors every version a waiting job pins before it starts the job, so an
+`hudson ops forgejo release mirror --url <forgejo> --version <tag>` downloads the GitHub Release once on a trusted host,
+checks the digest, creates the public `navigator` organization when it is missing, and uploads both files. It is
+idempotent. The runner controller below mirrors every version a waiting job pins before it starts the job, so an
 operator runs the verb only to pre-stage a release. A job whose release is missing fails with that exact command.
 
 ### Runner controller
 
-`navigator-deploy ops forgejo runner-controller` starts a disposable runner for every queued job, so no Forgejo pull
-request waits for a person. It runs as one Deployment in the application namespace
+`hudson ops forgejo runner-controller` starts a disposable runner for every queued job, so no Forgejo pull request waits
+for a person. It runs as one Deployment in the application namespace
 ([`runner-controller.yaml`](../examples/deploy/k8s/gke/forgejo/runner-controller/runner-controller.yaml)), with
 `FORGEJO_TOKEN` set to the environment's Forgejo operator token. Every 20 seconds it:
 
@@ -424,38 +422,37 @@ controller picks it up within one tick.
 
 ### Reading a run's log
 
-`navigator-deploy ops forgejo logs <owner>/<repository> --run <n> --url <forgejo> --context <context>` prints every job
-log of run `<n>`, the number on the run's page. Forgejo 15.0.9 serves job logs only through a web route that refuses
-tokens. So the verb lists the run's tasks through the API with `FORGEJO_TOKEN`, then reads each finished log through
-`kubectl exec` into `navigator-forgejo-0`. A job that is still running has no file yet. The same output also reaches
-Cloud Logging from the runner pod, and Dash0 through the controller; see
-[observability](observability.md#forgejo-actions).
+`hudson ops forgejo logs <owner>/<repository> --run <n> --url <forgejo> --context <context>` prints every job log of run
+`<n>`, the number on the run's page. Forgejo 15.0.9 serves job logs only through a web route that refuses tokens. So the
+verb lists the run's tasks through the API with `FORGEJO_TOKEN`, then reads each finished log through `kubectl exec`
+into `navigator-forgejo-0`. A job that is still running has no file yet. The same output also reaches Cloud Logging from
+the runner pod, and Dash0 through the controller; see [observability](observability.md#forgejo-actions).
 
 ## Git bundle archive and restore
 
-`navigator-deploy ops forgejo archive <local-mirror> <object-key> <receipt-path>` creates a bundle from a stable bare
-mirror, uploads it with GCS's create-only generation precondition, downloads that exact generation, checks its byte
-count and SHA-256, and restores every ref and the default branch into a fresh mirror before writing the receipt. Set
-`NAVIGATOR_FORGEJO_ARCHIVES_BUCKET` to the locked bundle bucket `navigator-deploy ops gcp setup` provisions from
+`hudson ops forgejo archive <local-mirror> <object-key> <receipt-path>` creates a bundle from a stable bare mirror,
+uploads it with GCS's create-only generation precondition, downloads that exact generation, checks its byte count and
+SHA-256, and restores every ref and the default branch into a fresh mirror before writing the receipt. Set
+`NAVIGATOR_FORGEJO_ARCHIVES_BUCKET` to the locked bundle bucket `hudson ops gcp setup` provisions from
 `--forgejo-archives-project-id` and `--forgejo-archives-bucket` ([archive buckets](environments.md#archive-buckets)) and
 provide the operator's GCS credentials through the standard GCS credential chain. The object key is an opaque
 caller-selected name. The receipt contains the key, generation, digest, size, default branch, and ref hashes; keep it
 with the archive under the same access controls.
 
-`navigator-deploy ops forgejo restore <receipt-path> <new-mirror-path>` downloads the receipt's exact generation,
-verifies the digest and bundle integrity, and publishes a fresh bare mirror only after all ref hashes and the default
-branch match. The object key and receipt data may disclose repository information; command status prints only whether
-verification passed. Existing objects, receipts, and restore destinations are never replaced. The CLI operator command
-uses its configured credential for both upload and read-back; the storage API accepts separate writer and reader
-capabilities for a future split-identity caller. This path proves one invoked Git-bundle round trip and does not
-configure a schedule, encryption key, fleet coverage, or Forgejo metadata/LFS recovery; the bucket's locked retention
-comes from setup. Restore currently uses atomic no-replace directory rename on Linux and macOS; other targets fail
-explicitly rather than risk replacing an existing path.
+`hudson ops forgejo restore <receipt-path> <new-mirror-path>` downloads the receipt's exact generation, verifies the
+digest and bundle integrity, and publishes a fresh bare mirror only after all ref hashes and the default branch match.
+The object key and receipt data may disclose repository information; command status prints only whether verification
+passed. Existing objects, receipts, and restore destinations are never replaced. The CLI operator command uses its
+configured credential for both upload and read-back; the storage API accepts separate writer and reader capabilities for
+a future split-identity caller. This path proves one invoked Git-bundle round trip and does not configure a schedule,
+encryption key, fleet coverage, or Forgejo metadata/LFS recovery; the bucket's locked retention comes from setup.
+Restore currently uses atomic no-replace directory rename on Linux and macOS; other targets fail explicitly rather than
+risk replacing an existing path.
 
 ## Evidence
 
-[`forgejo-postgres.yml`](../.github/workflows/forgejo-postgres.yml) renders both GKE overlays and runs `navigator-deploy
-dev forgejo up` and `smoke` on a task-owned KIND cluster: TLS and database isolation, closed registration, email-domain
+[`forgejo-postgres.yml`](../.github/workflows/forgejo-postgres.yml) renders both GKE overlays and runs `hudson dev
+forgejo up` and `smoke` on a task-owned KIND cluster: TLS and database isolation, closed registration, email-domain
 admission, OIDC-only sign-in, git clone and push, an Actions run, and retention across pod deletion and scale-to-zero.
 [Forgejo on KIND](forgejo-kind.md) lists every check. GKE storage provisioning, a deployment's identity-provider
 registration, and Actions isolation require separate evidence.

@@ -326,12 +326,12 @@ fn letter_in_project(work: &TempDir) -> PathBuf {
 /// letterhead read falls back to the compiled registry unless the test
 /// points the door double at the binary.
 fn render_notation(subcommand: &str, src: &Path, out: &Path) -> std::process::Output {
-    let mut command = Command::new(cargo_bin("navigator-deploy"));
+    let mut command = Command::new(cargo_bin("hudson"));
     command
         .args(["notation", subcommand, "--preview"])
         .arg(src)
         .args(["--out", &out.to_string_lossy()]);
-    command.output().expect("run navigator-deploy notation")
+    command.output().expect("run hudson notation")
 }
 
 /// Point the binary's letterhead row read at `base` — a door double or a
@@ -409,7 +409,7 @@ async fn the_deployment_row_frames_the_pdf_letter() {
     let work = TempDir::new().expect("tempdir");
     let src = letter_in_project(&work);
     let out = work.path().join("demand.pdf");
-    let mut command = Command::new(cargo_bin("navigator-deploy"));
+    let mut command = Command::new(cargo_bin("hudson"));
     command
         .args(["notation", "pdf", "--preview"])
         .arg(&src)
@@ -459,7 +459,7 @@ async fn the_deployment_row_frames_the_word_letter() {
     let work = TempDir::new().expect("tempdir");
     let src = letter_in_project(&work);
     let out = work.path().join("demand.docx");
-    let mut command = Command::new(cargo_bin("navigator-deploy"));
+    let mut command = Command::new(cargo_bin("hudson"));
     command
         .args(["notation", "word", "--preview"])
         .arg(&src)
@@ -523,7 +523,7 @@ async fn the_word_render_matches_the_store_resolve_byte_for_byte() {
     let work = TempDir::new().expect("tempdir");
     let src = letter_in_project(&work);
     let out = work.path().join("demand.docx");
-    let mut command = Command::new(cargo_bin("navigator-deploy"));
+    let mut command = Command::new(cargo_bin("hudson"));
     command
         .args(["notation", "word", "--preview"])
         .arg(&src)
@@ -599,7 +599,7 @@ async fn an_unfetchable_uploaded_mark_degrades_to_the_wordmark_loudly() {
     let work = TempDir::new().expect("tempdir");
     let src = letter_in_project(&work);
     let out = work.path().join("demand.docx");
-    let mut command = Command::new(cargo_bin("navigator-deploy"));
+    let mut command = Command::new(cargo_bin("hudson"));
     command
         .args(["notation", "word", "--preview"])
         .arg(&src)
@@ -644,7 +644,7 @@ async fn a_brand_with_no_admin_row_wears_its_own_fallback_frame() {
     let work = TempDir::new().expect("tempdir");
     let src = letter_in_project(&work);
     let out = work.path().join("demand.pdf");
-    let mut command = Command::new(cargo_bin("navigator-deploy"));
+    let mut command = Command::new(cargo_bin("hudson"));
     command
         .args(["notation", "pdf", "--preview"])
         .arg(&src)
@@ -724,7 +724,7 @@ async fn ci_refuses_a_render_whose_letterhead_row_is_not_cached() {
     let src = letter_in_project(&work);
     let out = work.path().join("demand.pdf");
     let cache = TempDir::new().expect("temp cache");
-    let mut command = Command::new(cargo_bin("navigator-deploy"));
+    let mut command = Command::new(cargo_bin("hudson"));
     command
         .args(["notation", "pdf", "--preview"])
         .arg(&src)
@@ -763,7 +763,7 @@ async fn ci_renders_from_a_warmed_cache_without_asking_the_door_again() {
     // Render 1, not under --ci: fetches the row from the door and warms
     // the cache.
     let out = work.path().join("warm.docx");
-    let mut command = Command::new(cargo_bin("navigator-deploy"));
+    let mut command = Command::new(cargo_bin("hudson"));
     command
         .args(["notation", "word", "--preview"])
         .arg(&src)
@@ -784,7 +784,7 @@ async fn ci_renders_from_a_warmed_cache_without_asking_the_door_again() {
     // Rendered under pdf, the subcommand that threads `--ci` through
     // run_render.
     let out = work.path().join("pinned.pdf");
-    let mut command = Command::new(cargo_bin("navigator-deploy"));
+    let mut command = Command::new(cargo_bin("hudson"));
     // `with_door(.., true)` adds `--ci`; the pdf subcommand threads it
     // through run_render.
     command
