@@ -1085,6 +1085,19 @@ fn forgejo_runner_help_names_explicit_isolation_and_recovery_controls() {
 }
 
 #[test]
+fn forgejo_smoke_receiver_reads_its_config_without_host_tools() {
+    let config = tempfile::NamedTempFile::new().unwrap();
+    Command::cargo_bin("hudson")
+        .unwrap()
+        .args(["dev", "forgejo", "smoke", "--receiver-config"])
+        .arg(config.path())
+        .env("PATH", "")
+        .assert()
+        .failure()
+        .stderr(str::contains("parse the receiver config"));
+}
+
+#[test]
 fn ops_gcp_help_lists_the_cloud_operations() {
     let output = help(&["ops", "gcp", "--help"]);
 
