@@ -516,7 +516,19 @@ async fn the_word_render_matches_the_store_resolve_byte_for_byte() {
     // revision in a tempdir).
     let row: store::brand_letterheads::BrandLetterhead =
         serde_json::from_str(&door_row).expect("the served row parses");
-    let frame = cli::letterhead::frame_from_row(&row, pdf::LetterheadMark::Wordmark);
+    // The same mapping `deploy`'s letterhead module applies to a resolved
+    // row, spelled out here because the binary's modules are not importable
+    // from this integration test.
+    let frame = pdf::Letterhead {
+        name: row.wordmark.clone(),
+        entity: row.firm_legal_name.clone().unwrap_or_default(),
+        phone: row.phone.clone().unwrap_or_default(),
+        email: row.email.clone().unwrap_or_default(),
+        web: row.web.clone().unwrap_or_default(),
+        postal_address: row.postal_address.clone().unwrap_or_default(),
+        font_family: row.font_family.clone().unwrap_or_default(),
+        mark: pdf::LetterheadMark::Wordmark,
+    };
     let template_bytes = fs::read(&src).expect("the template bytes");
     let template_hash = word::template_hash(&template_bytes);
     let rendered = word::render_notation(
