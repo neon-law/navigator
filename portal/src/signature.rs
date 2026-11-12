@@ -1226,9 +1226,7 @@ impl SignatureProvider for FakeSignatureProvider {
             .into_iter()
             .find(|envelope| envelope.notation_id == notation_id);
         let id = match (mode, existing) {
-            (SendMode::Prepare, Some(envelope))
-                if envelope.status == EnvelopeStatus::Prepared =>
-            {
+            (SendMode::Prepare, Some(envelope)) if envelope.status == EnvelopeStatus::Prepared => {
                 envelope.id
             }
             (SendMode::Send, Some(mut envelope)) => {
@@ -1753,7 +1751,12 @@ impl SignatureProvider for DocuSignSignatureProvider {
             // envelope Navigator could have refused itself. The same
             // validation gates a draft: nothing unvalidated is ever
             // created, sent or not.
-            .json(&self.build_envelope_body(notation_id, pdf, &prepare_envelope(pdf, manifest)?, status))
+            .json(&self.build_envelope_body(
+                notation_id,
+                pdf,
+                &prepare_envelope(pdf, manifest)?,
+                status,
+            ))
             .send()
             .await
             .map_err(|e| SignatureError::Provider(e.to_string()))?;
@@ -2065,7 +2068,12 @@ mod tests {
             .await
             .expect("validated anchors pass");
         let id2 = fake
-            .send_for_signature(ID43, b"<longer pdf bytes here>", &no_manifest(), SendMode::Send)
+            .send_for_signature(
+                ID43,
+                b"<longer pdf bytes here>",
+                &no_manifest(),
+                SendMode::Send,
+            )
             .await
             .unwrap();
 
@@ -2242,7 +2250,11 @@ mod tests {
         // Same envelope, promoted — not a second one with a new id.
         assert_eq!(prepared, sent);
         let all = fake.envelopes().expect("listing reads");
-        assert_eq!(all.len(), 1, "one envelope per notation across prepare→send");
+        assert_eq!(
+            all.len(),
+            1,
+            "one envelope per notation across prepare→send"
+        );
         assert_eq!(all[0].status, EnvelopeStatus::Sent);
 
         // The dispatch is what mints the signers' pages.
@@ -2868,7 +2880,12 @@ mod tests {
     async fn a_recipient_view_is_a_local_page_that_exists() {
         let fake = FakeSignatureProvider::new();
         let id = fake
-            .send_for_signature(ID42, &rendered_anchor_pdf(), &retainer_manifest(), SendMode::Send)
+            .send_for_signature(
+                ID42,
+                &rendered_anchor_pdf(),
+                &retainer_manifest(),
+                SendMode::Send,
+            )
             .await
             .expect("send succeeds");
         let url = fake
@@ -3299,7 +3316,12 @@ mod tests {
         let root = std::env::temp_dir().join(format!("navigator-fault-{}", Uuid::new_v4()));
         let fake = FakeSignatureProvider::new_in(&root).with_faults(Faults::inject(&[Fault::Send]));
         let err = fake
-            .send_for_signature(ID42, &rendered_anchor_pdf(), &retainer_manifest(), SendMode::Send)
+            .send_for_signature(
+                ID42,
+                &rendered_anchor_pdf(),
+                &retainer_manifest(),
+                SendMode::Send,
+            )
             .await
             .expect_err("the injected send failure fires");
         assert!(err.to_string().contains("injected send failure"));
@@ -3311,7 +3333,12 @@ mod tests {
         // envelope, not a duplicate.
         let resumed = FakeSignatureProvider::new_in(&root);
         let id = resumed
-            .send_for_signature(ID42, &rendered_anchor_pdf(), &retainer_manifest(), SendMode::Send)
+            .send_for_signature(
+                ID42,
+                &rendered_anchor_pdf(),
+                &retainer_manifest(),
+                SendMode::Send,
+            )
             .await
             .expect("send succeeds once the fault is gone");
         assert_eq!(
@@ -3326,7 +3353,12 @@ mod tests {
     async fn an_injected_view_fault_leaves_the_envelope_untouched() {
         let fake = FakeSignatureProvider::new().with_faults(Faults::inject(&[Fault::View]));
         let id = fake
-            .send_for_signature(ID42, &rendered_anchor_pdf(), &retainer_manifest(), SendMode::Send)
+            .send_for_signature(
+                ID42,
+                &rendered_anchor_pdf(),
+                &retainer_manifest(),
+                SendMode::Send,
+            )
             .await
             .expect("send succeeds");
         let err = fake
@@ -3363,7 +3395,12 @@ mod tests {
             })
             .with_faults(Faults::inject(&[Fault::Webhook]));
         let id = fake
-            .send_for_signature(ID42, &rendered_anchor_pdf(), &retainer_manifest(), SendMode::Send)
+            .send_for_signature(
+                ID42,
+                &rendered_anchor_pdf(),
+                &retainer_manifest(),
+                SendMode::Send,
+            )
             .await
             .expect("send succeeds");
 

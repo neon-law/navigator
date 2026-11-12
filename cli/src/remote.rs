@@ -4955,9 +4955,7 @@ async fn notation_envelope_in(root: &Path, notation_id: Uuid, prepare: bool) -> 
                 palette::highlight(envelope.notation_id.to_string()),
                 envelope.state
             );
-            println!(
-                "dispatch it with: navigator notation envelope send {notation_id}"
-            );
+            println!("dispatch it with: navigator notation envelope send {notation_id}");
             return Ok(());
         }
         println!(
@@ -4994,7 +4992,9 @@ async fn stamp_envelope_on_pointer(
     let template_code = match fetch_notation_board(Some(host), project_code).await {
         Ok(rows) => rows
             .into_iter()
-            .find(|row| row.notation_id.as_deref() == Some(envelope.notation_id.to_string().as_str()))
+            .find(|row| {
+                row.notation_id.as_deref() == Some(envelope.notation_id.to_string().as_str())
+            })
             .map(|row| row.template_code),
         Err(error) => {
             eprintln!("note: could not list the notation board ({error:#}); the document pointer was not stamped");
@@ -12492,11 +12492,10 @@ mod tests {
 
         // The envelope id landed on the pointer the signed copy files
         // under, and the YAML re-parses with the UUID the schema wants.
-        let stamped =
-            model::document_pointers::DocumentPointer::from_yaml(
-                &std::fs::read_to_string(&pointer_path).unwrap(),
-            )
-            .unwrap();
+        let stamped = model::document_pointers::DocumentPointer::from_yaml(
+            &std::fs::read_to_string(&pointer_path).unwrap(),
+        )
+        .unwrap();
         assert_eq!(stamped.docusign_envelope_id, Some(envelope_id));
     }
 
@@ -12550,11 +12549,10 @@ mod tests {
         let exit = super::notation_envelope_in(dir.path(), notation_id, true).await;
         assert_eq!(exit, ExitCode::SUCCESS);
 
-        let unstamped =
-            model::document_pointers::DocumentPointer::from_yaml(
-                &std::fs::read_to_string(&pointer_path).unwrap(),
-            )
-            .unwrap();
+        let unstamped = model::document_pointers::DocumentPointer::from_yaml(
+            &std::fs::read_to_string(&pointer_path).unwrap(),
+        )
+        .unwrap();
         assert_eq!(unstamped.docusign_envelope_id, None);
     }
 }

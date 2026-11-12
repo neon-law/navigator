@@ -296,7 +296,8 @@ pub fn link_envelope_to_pointer(
             .strip_suffix(".yaml")
             .or_else(|| filename.strip_suffix(".yml"))
             .unwrap_or(filename);
-        if SIGNED_ENGAGEMENT_FOLDERS.contains(&template_kind) && !is_signed_pdf_filename(source_name)
+        if SIGNED_ENGAGEMENT_FOLDERS.contains(&template_kind)
+            && !is_signed_pdf_filename(source_name)
         {
             continue;
         }

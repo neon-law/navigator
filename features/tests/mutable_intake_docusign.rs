@@ -208,10 +208,7 @@ async fn lawyer_prepares_envelope(world: &mut MutableWorld) {
     let resp = world
         .journey()
         .lawyer_post_json(
-            &format!(
-                "/app/api/notations/{}/signature",
-                world.notation_id()
-            ),
+            &format!("/app/api/notations/{}/signature", world.notation_id()),
             serde_json::json!({ "prepare": true }),
         )
         .await;
@@ -262,10 +259,7 @@ async fn lawyer_sends_envelope(world: &mut MutableWorld) {
     let resp = world
         .journey()
         .lawyer_post_json(
-            &format!(
-                "/app/api/notations/{}/signature",
-                world.notation_id()
-            ),
+            &format!("/app/api/notations/{}/signature", world.notation_id()),
             serde_json::json!({}),
         )
         .await;

@@ -84,7 +84,10 @@ pub(crate) async fn send_notation_for_signature(
     {
         let dispatched = notation_row.state.starts_with("sent_for_signature");
         if mode == SendMode::Prepare || dispatched {
-            return Ok((current_state, crate::signature::SignatureRequestId(existing)));
+            return Ok((
+                current_state,
+                crate::signature::SignatureRequestId(existing),
+            ));
         }
     }
 
