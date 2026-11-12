@@ -2096,6 +2096,7 @@ dependencies = [
  "include_dir",
  "lopdf 0.47.0",
  "mail-parser",
+ "model",
  "neon",
  "nix",
  "owo-colors",
@@ -2155,6 +2156,7 @@ dependencies = [
  "jsonwebtoken 11.1.0",
  "live-inquiry",
  "md-5 0.11.0",
+ "model",
  "rand 0.10.3",
  "reqwest 0.13.5",
  "serde",
@@ -7411,6 +7413,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "model"
+version = "26.11.12-rc.1"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "base64 0.23.1",
+ "chrono",
+ "mail-parser",
+ "reqwest 0.13.5",
+ "rules",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2 0.11.1",
+ "strum 0.28.0",
+ "thiserror 2.0.21",
+ "tokio",
+ "url",
+ "uuid",
+ "wiremock",
+]
+
+[[package]]
 name = "moka"
 version = "0.12.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11194,6 +11220,7 @@ dependencies = [
  "csv",
  "include_dir",
  "mail-parser",
+ "model",
  "pdf",
  "proc-macro2",
  "project-scaffold",

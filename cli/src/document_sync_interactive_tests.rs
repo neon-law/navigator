@@ -62,7 +62,7 @@ struct World {
 }
 
 fn sha(bytes: &[u8]) -> String {
-    store::documents::sha256_hex(bytes)
+    model::documents::sha256_hex(bytes)
 }
 
 fn live(id: Uuid, bytes: &[u8], slug: &str) -> serde_json::Value {
@@ -152,7 +152,7 @@ impl World {
     /// put them, else at the slug itself (LAW-189).
     fn read(&self, slug: &str) -> Vec<u8> {
         let documents = self.root.path().join("documents");
-        let path = store::document_pointers::MatterFolder::ALL
+        let path = model::document_pointers::MatterFolder::ALL
             .iter()
             .map(|folder| documents.join(folder.as_str()).join(slug))
             .find(|path| path.is_file())
@@ -327,7 +327,7 @@ async fn a_conflict_takes_the_side_the_person_picks() {
         assert!(asked[0].contains("revision 2"), "{}", asked[0]);
         assert_eq!(w.uploads().await, uploads, "{answer}");
         assert_eq!(w.read("e/conflict.pdf"), local, "{answer}");
-        let written = store::document_pointers::DocumentPointer::from_yaml(
+        let written = model::document_pointers::DocumentPointer::from_yaml(
             &std::fs::read_to_string(w.root.path().join("blobs/e/conflict.pdf.yaml")).unwrap(),
         )
         .unwrap();

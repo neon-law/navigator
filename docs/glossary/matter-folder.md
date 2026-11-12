@@ -32,7 +32,7 @@ its path below `documents/`. A client sees only the documents shared with them, 
 under only the folders that hold one. The page reads the folder from `kind`, because a pointer's `folder:` lives in the
 repository.
 
-- Vocabulary: [`store::document_pointers::MatterFolder`](../../store/src/document_pointers.rs) · Layout:
+- Vocabulary: [`store::document_pointers::MatterFolder`](../../model/src/document_pointers.rs) · Layout:
   [`cli/src/document_layout.rs`](../../cli/src/document_layout.rs)
 
 Recursive Drive imports keep placement separate from Document Identity. A Pointer's optional `checkout_path:` names the

@@ -89,8 +89,8 @@ pub fn parse_email(raw: &[u8]) -> Result<EfspEmail> {
     let status = field(&["status", "filing status", "transaction status"])
         .and_then(|value| status_word(&value))
         .or_else(|| status_phrase(&text))
-        .unwrap_or(store::efiling_transactions::STATUS_UNKNOWN);
-    let decided = status == store::efiling_transactions::STATUS_ACCEPTED;
+        .unwrap_or(model::efiling_transactions::STATUS_UNKNOWN);
+    let decided = status == model::efiling_transactions::STATUS_ACCEPTED;
     let filed_on = decided
         .then(|| field(&["date filed", "filed date", "filing date", "filed on"]))
         .flatten()
@@ -111,7 +111,7 @@ pub fn parse_email(raw: &[u8]) -> Result<EfspEmail> {
                 })
         })
         .flatten();
-    let note = (status == store::efiling_transactions::STATUS_REJECTED)
+    let note = (status == model::efiling_transactions::STATUS_REJECTED)
         .then(|| {
             field(&[
                 "rejection reason",
@@ -213,10 +213,10 @@ fn status_word(value: &str) -> Option<&'static str> {
         .split(|ch: char| !ch.is_ascii_alphabetic())
         .find(|word| !word.is_empty())?;
     match first {
-        "accepted" | "filed" => Some(store::efiling_transactions::STATUS_ACCEPTED),
-        "rejected" | "returned" => Some(store::efiling_transactions::STATUS_REJECTED),
+        "accepted" | "filed" => Some(model::efiling_transactions::STATUS_ACCEPTED),
+        "rejected" | "returned" => Some(model::efiling_transactions::STATUS_REJECTED),
         "submitted" | "pending" | "received" | "processing" => {
-            Some(store::efiling_transactions::STATUS_SUBMITTED)
+            Some(model::efiling_transactions::STATUS_SUBMITTED)
         }
         _ => None,
     }
@@ -225,9 +225,9 @@ fn status_word(value: &str) -> Option<&'static str> {
 fn status_phrase(text: &str) -> Option<&'static str> {
     let lower = text.to_ascii_lowercase();
     if lower.contains("has been accepted") {
-        Some(store::efiling_transactions::STATUS_ACCEPTED)
+        Some(model::efiling_transactions::STATUS_ACCEPTED)
     } else if lower.contains("has been rejected") {
-        Some(store::efiling_transactions::STATUS_REJECTED)
+        Some(model::efiling_transactions::STATUS_REJECTED)
     } else {
         None
     }
@@ -403,7 +403,7 @@ fn require_linkable(
     transaction: &str,
 ) -> Result<()> {
     if existing.and_then(|row| row["status"].as_str())
-        == Some(store::efiling_transactions::STATUS_REJECTED)
+        == Some(model::efiling_transactions::STATUS_REJECTED)
     {
         return Err(anyhow!(
             "transaction {transaction} is recorded as rejected; a stamped copy cannot be filed against it"
@@ -472,7 +472,7 @@ async fn record_email(
 ) -> Result<Value> {
     let raw = std::fs::read(email).with_context(|| format!("read {}", email.display()))?;
     let parsed = parse_email(&raw)?;
-    let accepted = parsed.status == store::efiling_transactions::STATUS_ACCEPTED;
+    let accepted = parsed.status == model::efiling_transactions::STATUS_ACCEPTED;
     let filed_on = overrides.filed_on.clone().or(parsed.filed_on.clone());
     if !accepted && overrides.filed_on.is_some() {
         return Err(anyhow!(
@@ -594,7 +594,7 @@ async fn pair_file(
     accepted_on: Option<String>,
     overrides: Overrides,
 ) -> Result<Value> {
-    let transaction = store::efiling_transactions::normalize_transaction_id(transaction)
+    let transaction = model::efiling_transactions::normalize_transaction_id(transaction)
         .map_err(|error| anyhow!("{error}"))?;
     let filed_on = overrides
         .filed_on
@@ -628,7 +628,7 @@ async fn pair_file(
 
     let mut body = json!({
         "transaction_id": transaction,
-        "status": store::efiling_transactions::STATUS_ACCEPTED,
+        "status": model::efiling_transactions::STATUS_ACCEPTED,
         "filed_on": filed_on,
         "conformed_document_id": conformed.to_string(),
     });

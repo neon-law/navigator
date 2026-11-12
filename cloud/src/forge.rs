@@ -18,10 +18,10 @@ use async_trait::async_trait;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 use tokio::sync::Mutex as AsyncMutex;
 
-use crate::workspace::{WorkspaceConfig, WorkspaceConfigError, NAVIGATOR_GITHUB_ORG};
+use crate::workspace::{WorkspaceConfig, NAVIGATOR_GITHUB_ORG};
+pub use model::forge::ForgeError;
 
 /// Env var holding the GitHub token used to create Project repositories.
 /// Checked before [`GITHUB_TOKEN_ENV`] so a workspace-specific token can
@@ -61,56 +61,6 @@ pub struct ForgeRepository {
     pub url: String,
     /// The repository name, which is the Project code.
     pub name: String,
-}
-
-#[derive(Debug, Error)]
-pub enum ForgeError {
-    #[error("missing required forge configuration: {0}")]
-    MissingConfig(&'static str),
-    #[error("invalid forge configuration: {0}")]
-    InvalidConfig(&'static str),
-    #[error("resolve the deployment forge pair: {0}")]
-    Workspace(#[from] WorkspaceConfigError),
-    #[error("forge authentication failed")]
-    Authentication,
-    #[error("could not authenticate with the configured GitHub App")]
-    GitHubAppAuthentication,
-    #[error("GitHub did not return a usable installation access token")]
-    MissingInstallationToken,
-    #[error("forge request failed while {action}")]
-    Request {
-        action: &'static str,
-        #[source]
-        source: reqwest::Error,
-    },
-    #[error("forge API returned {status} while {action}")]
-    Api { action: &'static str, status: u16 },
-    #[error("forge API returned an invalid response while {action}")]
-    Response {
-        action: &'static str,
-        #[source]
-        source: reqwest::Error,
-    },
-    #[error("forge API response while {action} did not include a repository URL")]
-    MissingUrl { action: &'static str },
-    #[error(
-        "repository {name} is not private after provisioning; a policy regression or a \
-         deliberate visibility change happened underneath, and both need a human, not a retry"
-    )]
-    NotPrivate { name: String },
-    #[error("Project repository {name} does not exist in the configured GitHub organization")]
-    ProjectRepositoryMissing { name: String },
-    #[error(
-        "repository {name} is not this Firm's repository for the Project; it is never adopted"
-    )]
-    ForeignRepository { name: String },
-    #[error(
-        "repository {name} already holds source that is not this import; it is never replaced \
-         implicitly"
-    )]
-    RepositoryNotEmpty { name: String },
-    #[error("this forge cannot {0}")]
-    Unsupported(&'static str),
 }
 
 /// The commit-message trailer that binds a first commit to the canonical tree

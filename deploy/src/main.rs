@@ -22,9 +22,11 @@ mod firm_forgejo;
 mod firms_doctor;
 mod forms_sync;
 mod glossary;
+mod import;
 mod inbox;
 mod inbox_import;
 mod journal;
+mod letterhead;
 mod lsp_download;
 mod lsp_publish;
 mod mail;
@@ -61,7 +63,7 @@ use cli::commands::{
     strip_frontmatter, HostOpt, ProjectGateMarkdownFilter, ProjectsCmd, CLI_STACK_BYTES,
     DOCUMENT_TRANSCRIBE_HELP, DOCUMENT_UPLOAD_KIND_HELP,
 };
-use cli::import;
+
 use cli::{
     answers_file, atomic_directory, authorities, credentials, document_layout, document_read,
     document_sync, legal_plans, login, palette, projects, release, remote,
@@ -4893,10 +4895,9 @@ fn project_firm_legal_name(file: &Path) -> Option<String> {
         Some(path) => {
             let contents = std::fs::read_to_string(&path).ok()?;
             let manifest = projects::manifest::parse(&contents).ok()?;
-            cli::letterhead::for_project(manifest.brand.as_deref(), manifest.host.as_deref())
-                .ok()?
+            letterhead::for_project(manifest.brand.as_deref(), manifest.host.as_deref()).ok()?
         }
-        None => cli::letterhead::for_brand(views::brand::BrandKey::Neon).ok()?,
+        None => letterhead::for_brand(views::brand::BrandKey::Neon).ok()?,
     };
     let name = letterhead.entity.trim();
     if name.is_empty() {
@@ -4910,7 +4911,7 @@ fn project_firm_legal_name(file: &Path) -> Option<String> {
 /// provenance the render reports on stderr.
 ///
 /// The Project's Brand frames the letter (LAW-265, ENG-1148):
-/// `cli::letterhead` resolves `project.brand`, else `project.host`, from
+/// `letterhead` resolves `project.brand`, else `project.host`, from
 /// the nearest `navigator.yaml`. Which letterhead that Brand wears comes
 /// from one of two sources. When the deployment's stores are reachable,
 /// the Brand's runtime letterhead row — the same rows `/app/admin/brands`
@@ -4950,7 +4951,7 @@ fn project_letterhead(
     let contents = std::fs::read_to_string(&path)
         .map_err(|error| format!("read {}: {error}", projects::manifest::FILE))?;
     let manifest = projects::manifest::parse(&contents)?;
-    let key = cli::letterhead::resolve_brand(manifest.brand.as_deref(), manifest.host.as_deref())
+    let key = letterhead::resolve_brand(manifest.brand.as_deref(), manifest.host.as_deref())
         .map_err(|error| error.to_string())?;
     attempt_runtime_letterhead(key)
 }
@@ -4986,15 +4987,11 @@ async fn runtime_letterhead(key: views::brand::BrandKey) -> Result<ProjectLetter
     let pg = store::postgres::PostgresDb::from_env()
         .await
         .map_err(|error| format!("the deployment's relational store is unreachable: {error}"))?;
-    let compiled = cli::letterhead::for_brand(key).map_err(|error| error.to_string())?;
-    let runtime = cli::letterhead::for_brand_runtime(
-        key,
-        &credentials::base_url(&compiled.web),
-        &surreal,
-        &pg,
-    )
-    .await
-    .map_err(|error| error.to_string())?;
+    let compiled = letterhead::for_brand(key).map_err(|error| error.to_string())?;
+    let runtime =
+        letterhead::for_brand_runtime(key, &credentials::base_url(&compiled.web), &surreal, &pg)
+            .await
+            .map_err(|error| error.to_string())?;
     let Some(runtime) = runtime else {
         // A Brand with no runtime row wears its compiled frame — the
         // compiled mark included — but the render still names the source.
@@ -5026,7 +5023,7 @@ async fn runtime_letterhead(key: views::brand::BrandKey) -> Result<ProjectLetter
 
 /// The compiled frame for `key`, with its provenance line.
 fn compiled_letterhead(key: views::brand::BrandKey) -> Result<ProjectLetterhead, String> {
-    let compiled = cli::letterhead::for_brand(key).map_err(|error| error.to_string())?;
+    let compiled = letterhead::for_brand(key).map_err(|error| error.to_string())?;
     let mark = match compiled.mark {
         pdf::LetterheadMark::Compiled => "compiled",
         _ => "wordmark",

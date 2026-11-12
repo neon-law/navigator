@@ -99,7 +99,7 @@ class = "email"
 match = '''[^@]+@(?:[a-z0-9-]+\.)*(?:stretto\.com|kroll\.com|epiq11\.com|epiq\.com|notkroll\.com)'''
 paths = [
   "cli/src/projects/docket/claims_agent.rs",
-  "store/tests/fixtures/nef/claims-agent-notice.eml",
+  "model/tests/fixtures/nef/claims-agent-notice.eml",
 ]
 reason = "Claims-agent vendors' public notice-sender domains are the behaviour under test in the docket ingest sender matcher; the mailboxes are invented. notkroll.com is the near-miss negative."
 

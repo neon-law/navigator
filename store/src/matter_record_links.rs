@@ -10,10 +10,8 @@ use uuid::Uuid;
 
 use crate::project_references::Party;
 use crate::relationships::Endpoint;
-
-/// Why a link check refused a write. Each module folds this into its own
-/// `Invalid` error so the caller reads one plain sentence.
-pub(crate) type LinkRefusal = String;
+pub use model::matter_record_links::one_of;
+pub use model::matter_record_links::LinkRefusal;
 
 /// The Project exists.
 pub(crate) async fn require_project(
@@ -99,14 +97,4 @@ pub(crate) fn optional_text(value: Option<&str>) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
-}
-
-/// `value` is one of `allowed`, or the refusal naming the field.
-pub(crate) fn one_of(name: &str, value: &str, allowed: &[&str]) -> Result<String, LinkRefusal> {
-    let value = value.trim();
-    if allowed.contains(&value) {
-        Ok(value.to_string())
-    } else {
-        Err(format!("{name} must be one of {}", allowed.join(", ")))
-    }
 }

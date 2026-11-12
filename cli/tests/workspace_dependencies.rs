@@ -111,6 +111,7 @@ const WORKSPACE_DEPENDENCIES: &[&str] = &[
     "restate-jwt",
     "restate-sdk",
     "rgb",
+    "model",
     "rules",
     "rustix",
     "sandbox-skills",

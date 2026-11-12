@@ -85,7 +85,7 @@ fn collect(prompter: &mut impl Prompter) -> Result<Option<ScaffoldPlan>> {
 }
 
 fn validate(plan: &ScaffoldPlan) -> Result<()> {
-    if !store::projects::is_valid_code(&plan.code) {
+    if !model::projects::is_valid_code(&plan.code) {
         bail!("invalid immutable Project code `{}`", plan.code);
     }
     if plan.name.trim().is_empty() || plan.client_name.trim().is_empty() {
@@ -163,7 +163,7 @@ fn validate_scaffold_start(
 ) -> Result<bool> {
     let empty = is_empty_dir(directory)?;
     if let Some(code) = resume {
-        if !store::projects::is_valid_code(code) {
+        if !model::projects::is_valid_code(code) {
             bail!("invalid immutable Project code `{code}`");
         }
         if empty

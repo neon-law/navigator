@@ -11,5 +11,5 @@ This folder holds Git-ignored bytes. Each document's tracked [Pointer](pointer.m
 the slug is the path below the Matter Folder. A [Docket Entry](docket-entry.md) links a court record to its Document;
 the [Case Timeline](case-timeline.md) presents those records with the Project's open Deadlines.
 
-- Folder vocabulary: [`store::document_pointers::MatterFolder`](../../store/src/document_pointers.rs) · Layout:
+- Folder vocabulary: [`store::document_pointers::MatterFolder`](../../model/src/document_pointers.rs) · Layout:
   [`cli/src/document_layout.rs`](../../cli/src/document_layout.rs)

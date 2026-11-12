@@ -21,19 +21,6 @@ use rules::{navigator_default_rules_with_codes, DefaultFileFilter, FileFilter, V
 use serde::Deserialize;
 use walkdir::WalkDir;
 
-/// Load every known question code from the `questions` table and
-/// return them as a strict registry suitable for passing to
-/// `F104FlowQuestionCodes::new`. Used by `navigator project gate` after a
-/// directory has been imported so N104 can flag unknown codes.
-pub async fn load_question_codes(
-    surreal: &store::surreal::SurrealDb,
-) -> anyhow::Result<Vec<String>> {
-    let rows = store::questions::list_all(surreal).await?;
-    let mut codes: BTreeSet<String> = rules::canonical_question_codes().into_iter().collect();
-    codes.extend(rows.into_iter().map(|q| q.code));
-    Ok(codes.into_iter().collect())
-}
-
 /// Outcome of a single site-seed run: how many templates and questions
 /// were created, plus any rule violations keyed by path.
 #[derive(Debug, Default)]
@@ -313,3 +300,7 @@ kind: onboarding\n\
         assert!(!codes.contains("person__client"));
     }
 }
+
+#[cfg(test)]
+#[path = "import_tests.rs"]
+mod seed_tests;

@@ -216,10 +216,10 @@ fn apply_visibility(
 /// so a typo never reaches the store.
 fn category_field(category: Option<&str>) -> Result<Option<String>> {
     let category = category.map(str::trim).filter(|value| !value.is_empty());
-    if category.is_some_and(|value| !store::project_deadlines::CATEGORIES.contains(&value)) {
+    if category.is_some_and(|value| !model::project_deadlines::CATEGORIES.contains(&value)) {
         return Err(anyhow!(
             "--category must be one of {}",
-            store::project_deadlines::CATEGORIES.join(", ")
+            model::project_deadlines::CATEGORIES.join(", ")
         ));
     }
     Ok(category.map(str::to_string))

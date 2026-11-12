@@ -37,11 +37,11 @@ use chrono::{DateTime, Utc};
 use cloud::StorageService;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
-use sha2::{Digest, Sha256};
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
+pub use model::documents::sha256_hex;
 
 /// The table these rows live in.
 pub(crate) const TABLE: &str = "asset";
@@ -399,18 +399,6 @@ pub async fn object_sha256(
         Err(cloud::StorageError::NotFound(_)) => Ok(None),
         Err(error) => Err(AssetError::Storage(error)),
     }
-}
-
-/// The content hash every asset is stored and deduped under.
-#[must_use]
-pub fn sha256_hex(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    let mut out = String::with_capacity(64);
-    for b in digest {
-        use std::fmt::Write as _;
-        let _ = write!(&mut out, "{b:02x}");
-    }
-    out
 }
 
 /// Resolve an asset by id.

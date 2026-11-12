@@ -42,7 +42,7 @@
 //!
 //! One filename, one key: the earlier `.yml` spelling and its `name:` key are
 //! retired.
-//! `store::sample_project::MANIFEST_FILE` names the same file for the same
+//! `model::sample_project::MANIFEST_FILE` names the same file for the same
 //! reason a locally staged sample reads it — a Project repository's manifest
 //! and a staged sample's manifest are the same file, not two schemas that
 //! happen to overlap.
@@ -147,7 +147,7 @@ const FINAL_RETIRED_WORKFLOW_RELEASE: &str = "26.9.23";
 /// to leave one of them stale, and the gate that *admits* the file, the
 /// command that *reads* it locally, and the command that *reads* it live over
 /// the API are exactly the trio that must agree. The same filename
-/// `store::sample_project::MANIFEST_FILE` names, a Project repository's
+/// `model::sample_project::MANIFEST_FILE` names, a Project repository's
 /// manifest and a staged sample bundle's manifest are the same file, read by
 /// different tools, not two schemas that happen to overlap.
 /// The Project manifest's canonical bytes live in `project-scaffold` so this
@@ -194,7 +194,7 @@ const ALLOWED_ROOTS: &[&str] = &[
     DOCUMENT_DIRECTORY,
     // The manifest a Project repository declares its Project code in.
     //
-    // One entry, not two: `PROJECT_MANIFEST` and `store::sample_project::MANIFEST_FILE`
+    // One entry, not two: `PROJECT_MANIFEST` and `model::sample_project::MANIFEST_FILE`
     // name the same file. The retired `.yml` spelling is not admitted; see
     // `cli/tests/navigator_manifest_retired.rs`.
     PROJECT_MANIFEST,
@@ -367,7 +367,7 @@ pub struct LayoutOutcome {
 /// Templates are intentionally passed to the rule engine under bare filenames:
 /// they are Project blueprints, not members of Navigator's shared
 /// `templates/notations/neon_law` / `templates/notations/forms` catalog. This mirrors
-/// `store::template_source::persist_from_repo` exactly.
+/// `model::template_source::persist_from_repo` exactly.
 ///
 /// Templates and applications are independently optional, and a repository
 /// carrying neither is reported distinctly rather than failed. A Project may
@@ -402,7 +402,7 @@ pub fn validate_gate(root: &Path, repository: Option<&str>, write_fixes: bool) -
     // repository is corrected; a gate that picked a winner without seeing the
     // row would be guessing, and would fail a repository mid-correction.
     let code = repository_name(root, repository);
-    if !store::projects::is_valid_code(&code) {
+    if !model::projects::is_valid_code(&code) {
         errors.push(Finding::at(
             root,
             format!(
@@ -2479,7 +2479,7 @@ fn validate_client_visibility(root: &Path, warnings: &mut Vec<Finding>) {
         let Ok(contents) = fs::read_to_string(&path) else {
             continue;
         };
-        let Ok(pointer) = store::document_pointers::DocumentPointer::from_yaml(&contents) else {
+        let Ok(pointer) = model::document_pointers::DocumentPointer::from_yaml(&contents) else {
             continue;
         };
         if pointer.visibility != "client" {
@@ -2505,7 +2505,7 @@ fn validate_client_visibility(root: &Path, warnings: &mut Vec<Finding>) {
 /// mark followed by `, Inc.`, `LLC`, `PLLC`, or another corporate suffix is a
 /// claim about which legal person the client is engaging, and on an
 /// engagement letter that claim sits above a signature block. The one legal
-/// person is [`store::seed::FIRM_ENTITY_NAME`]; this compares against that
+/// person is [`model::seed::FIRM_ENTITY_NAME`]; this compares against that
 /// constant and never against a literal of its own, so the gate cannot become
 /// a further spelling. `Neon Law IP LLC`, the Licensor, is a different name
 /// with a different word after the mark, not a suffix case.
@@ -2620,7 +2620,7 @@ fn california_law_firm_entity_claims(contents: &str) -> Vec<usize> {
 
     // The firm's name without its entity suffix, so a bare signature heading
     // naming the firm as an LLC (`**Guieb & Shook PLLC**`) is a party claim.
-    let firm = store::seed::FIRM_ENTITY_NAME.to_ascii_lowercase();
+    let firm = model::seed::FIRM_ENTITY_NAME.to_ascii_lowercase();
     let firm_stem = firm
         .rsplit_once(' ')
         .map_or(firm.as_str(), |(stem, _)| stem);
@@ -3020,14 +3020,14 @@ fn lint_project_template(
             ));
         }
     }
-    for (line, spelling) in misnamed_firm_entities(&contents, store::seed::FIRM_ENTITY_NAME) {
+    for (line, spelling) in misnamed_firm_entities(&contents, model::seed::FIRM_ENTITY_NAME) {
         errors.push(Finding::at(
             path,
             format!(
                 "{ENTITY_CODE}: line {line} names `{spelling}` as the firm, but the entity of \
                  record is `{}`; a template that gives the mark a corporate suffix must name \
                  the contracting entity exactly",
-                store::seed::FIRM_ENTITY_NAME
+                model::seed::FIRM_ENTITY_NAME
             ),
         ));
     }
@@ -3036,7 +3036,7 @@ fn lint_project_template(
             path,
             format!(
                 "{FIRM_TRADE_NAME_CODE}: line {line} names `{spelling}` as the Firm's trade name; use the Firm's legal entity, `{}`, as the contracting party",
-                store::seed::FIRM_ENTITY_NAME
+                model::seed::FIRM_ENTITY_NAME
             ),
         ));
     }
@@ -3045,7 +3045,7 @@ fn lint_project_template(
             path,
             format!(
                 "{CALIFORNIA_LAW_FIRM_ENTITY_CODE}: line {line} names an LLC as the law firm in a California template; name the firm of record, `{}`, or the individual California lawyer",
-                store::seed::FIRM_ENTITY_NAME
+                model::seed::FIRM_ENTITY_NAME
             ),
         ));
     }
@@ -3085,7 +3085,7 @@ pub fn emit_scaffold(
         host,
         lawyer_dri,
         client_dri,
-        cloud::ForgeBackend::GitHub,
+        model::forge::ForgeBackend::GitHub,
     )
 }
 
@@ -3099,9 +3099,9 @@ pub fn emit_scaffold_for(
     host: &str,
     lawyer_dri: &str,
     client_dri: &str,
-    forge: cloud::ForgeBackend,
+    forge: model::forge::ForgeBackend,
 ) -> anyhow::Result<()> {
-    if !store::projects::is_valid_code(code) {
+    if !model::projects::is_valid_code(code) {
         anyhow::bail!("invalid immutable Project code `{code}`");
     }
     fs::create_dir_all(root)?;
@@ -3143,7 +3143,7 @@ pub fn emit_scaffold_for(
             include_str!("../../../LICENSE-APACHE-2").to_string(),
         ),
     ];
-    let forgejo = forge == cloud::ForgeBackend::Forgejo;
+    let forgejo = forge == model::forge::ForgeBackend::Forgejo;
     let forgejo_workflows = if forgejo {
         project_scaffold::forgejo_workflow_files()
     } else {
@@ -3215,7 +3215,10 @@ pub fn repair_skills(root: &Path) -> anyhow::Result<Vec<String>> {
 }
 
 /// [`repair_skills`] for a named forge.
-pub fn repair_skills_for(root: &Path, forge: cloud::ForgeBackend) -> anyhow::Result<Vec<String>> {
+pub fn repair_skills_for(
+    root: &Path,
+    forge: model::forge::ForgeBackend,
+) -> anyhow::Result<Vec<String>> {
     let root = root.canonicalize()?;
     let navigator_root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -3242,7 +3245,7 @@ pub fn repair_skills_for(root: &Path, forge: cloud::ForgeBackend) -> anyhow::Res
     })?;
     let project_code = manifest.project.as_deref();
     anyhow::ensure!(
-        project_code.is_some_and(store::projects::is_valid_code),
+        project_code.is_some_and(model::projects::is_valid_code),
         "not an existing Project repository: missing project.name in {PROJECT_MANIFEST}"
     );
     let mut repaired = Vec::new();
@@ -3258,7 +3261,7 @@ pub fn repair_skills_for(root: &Path, forge: cloud::ForgeBackend) -> anyhow::Res
         let relative = format!(".agents/skills/{name}/SKILL.md");
         restore_canonical(&root, &relative, contents, &mut repaired)?;
     }
-    if forge == cloud::ForgeBackend::Forgejo || root.join(".forgejo").exists() {
+    if forge == model::forge::ForgeBackend::Forgejo || root.join(".forgejo").exists() {
         for (relative, contents) in project_scaffold::forgejo_workflow_files() {
             restore_canonical(&root, &relative, &contents, &mut repaired)?;
         }
@@ -3411,8 +3414,8 @@ pub use project_scaffold::{FORGEJO_CD_WORKFLOW, FORGEJO_GATE_WORKFLOW};
 
 /// The forge this process scaffolds for, from `NAVIGATOR_FORGE_BACKEND`
 /// (unset is GitHub).
-pub fn forge_backend_from_env() -> anyhow::Result<cloud::ForgeBackend> {
-    cloud::ForgeBackend::from_lookup(|name| std::env::var(name).ok())
+pub fn forge_backend_from_env() -> anyhow::Result<model::forge::ForgeBackend> {
+    model::forge::ForgeBackend::from_lookup(|name| std::env::var(name).ok())
         .map_err(|error| anyhow::anyhow!("{error}"))
 }
 

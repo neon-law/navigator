@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
-use store::document_pointers::{DocumentPointer, PointerVersion};
+use model::document_pointers::{DocumentPointer, PointerVersion};
 use uuid::Uuid;
 
 use crate::document_deletion::{short_commit, RemovedPointers};
@@ -1306,7 +1306,7 @@ pub fn check_documents_root(documents: &Path) -> Result<Vec<CheckFailure>> {
 /// name-only pass.
 pub fn document_filename_finding(relative: &Path, path: &Path, file_name: &str) -> Option<String> {
     let is_docket_filing = crate::document_layout::matter_folder_of(relative)
-        == Some(store::document_pointers::MatterFolder::DocketFilings);
+        == Some(model::document_pointers::MatterFolder::DocketFilings);
     let is_in_date_named_folder = relative
         .parent()
         .and_then(std::path::Path::file_name)
@@ -1325,11 +1325,11 @@ pub fn document_filename_finding(relative: &Path, path: &Path, file_name: &str) 
 }
 
 fn known_folders() -> String {
-    let mut names: Vec<&str> = store::document_pointers::MatterFolder::ALL
+    let mut names: Vec<&str> = model::document_pointers::MatterFolder::ALL
         .iter()
         .map(|folder| folder.as_str())
         .collect();
-    names.extend_from_slice(store::document_pointers::SIBLING_FOLDERS);
+    names.extend_from_slice(model::document_pointers::SIBLING_FOLDERS);
     names.join(", ")
 }
 

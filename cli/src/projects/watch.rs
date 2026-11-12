@@ -73,7 +73,7 @@ fn checkout_preview(dir: &Path, projects: Vec<Project>) -> Result<Vec<CheckoutPr
         .into_iter()
         .filter(|p| matches!(p.status.as_str(), "open" | "pitch"))
     {
-        let checkout = if !cloud::workspace::is_valid_slug(&project.code) {
+        let checkout = if !model::workspace::is_valid_slug(&project.code) {
             CheckoutState::NeedsAttention
         } else if project.repository_url.as_deref().is_none_or(str::is_empty) {
             CheckoutState::RepositoryUnavailable
@@ -167,7 +167,7 @@ async fn update(
     copies: &mut HashMap<PathBuf, String>,
 ) -> Result<()> {
     ensure!(
-        cloud::workspace::is_valid_slug(&project.code),
+        model::workspace::is_valid_slug(&project.code),
         "invalid Project code"
     );
     let url = project
@@ -274,7 +274,7 @@ async fn command(dir: &Path, program: &str, args: &[&str]) -> Result<String> {
 
 fn digest(path: &Path) -> Result<Option<String>> {
     match std::fs::read(path) {
-        Ok(bytes) => Ok(Some(store::documents::sha256_hex(&bytes))),
+        Ok(bytes) => Ok(Some(model::documents::sha256_hex(&bytes))),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error.into()),
     }
@@ -312,7 +312,7 @@ async fn hydrate(
             .await?
     };
     ensure!(
-        store::documents::sha256_hex(&bytes) == *expected
+        model::documents::sha256_hex(&bytes) == *expected
             && i64::try_from(bytes.len())? == pointer.current_version.size_bytes,
         "download does not match the document pointer"
     );

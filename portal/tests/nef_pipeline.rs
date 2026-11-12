@@ -256,7 +256,7 @@ const NEF_SUBJECT: &str = "Notice of Electronic Filing";
 /// `9:26-cv-00042-XYZ`, document number 12, one main document plus two
 /// notice-listed exhibits.
 fn district_notice() -> Vec<u8> {
-    std::fs::read("../store/tests/fixtures/nef/district-motion.eml")
+    std::fs::read("../model/tests/fixtures/nef/district-motion.eml")
         .expect("read the synthetic NEF fixture")
 }
 

@@ -2000,7 +2000,7 @@ pub struct HostOpt {
 /// address space until touched.
 pub const CLI_STACK_BYTES: usize = 64 * 1024 * 1024;
 
-/// CLI spelling of [`store::projects::ClosureReason`]. The store type stays
+/// CLI spelling of [`model::projects::ClosureReason`]. The store type stays
 /// free of clap; `--help` lists these `snake_case` values because the field is
 /// a [`clap::ValueEnum`].
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
@@ -2022,15 +2022,15 @@ pub enum ClosureReasonArg {
 }
 
 impl ClosureReasonArg {
-    const fn into_reason(self) -> store::projects::ClosureReason {
+    const fn into_reason(self) -> model::projects::ClosureReason {
         match self {
-            Self::PitchDeclined => store::projects::ClosureReason::PitchDeclined,
-            Self::PitchLapsed => store::projects::ClosureReason::PitchLapsed,
-            Self::PitchWithdrawn => store::projects::ClosureReason::PitchWithdrawn,
-            Self::PitchSuperseded => store::projects::ClosureReason::PitchSuperseded,
-            Self::EngagementCompleted => store::projects::ClosureReason::EngagementCompleted,
-            Self::ClientTerminated => store::projects::ClosureReason::ClientTerminated,
-            Self::FirmWithdrew => store::projects::ClosureReason::FirmWithdrew,
+            Self::PitchDeclined => model::projects::ClosureReason::PitchDeclined,
+            Self::PitchLapsed => model::projects::ClosureReason::PitchLapsed,
+            Self::PitchWithdrawn => model::projects::ClosureReason::PitchWithdrawn,
+            Self::PitchSuperseded => model::projects::ClosureReason::PitchSuperseded,
+            Self::EngagementCompleted => model::projects::ClosureReason::EngagementCompleted,
+            Self::ClientTerminated => model::projects::ClosureReason::ClientTerminated,
+            Self::FirmWithdrew => model::projects::ClosureReason::FirmWithdrew,
         }
     }
 }
@@ -2714,7 +2714,7 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
             remote::matter_reopen(
                 host.host.as_deref(),
                 &project_code,
-                store::projects::ReopenReason::NewMatterEvent,
+                model::projects::ReopenReason::NewMatterEvent,
                 effective_at,
             )
             .await
@@ -3069,7 +3069,7 @@ pub fn document_pointer_pass(dir: &std::path::Path) -> std::io::Result<Vec<GateE
             files_scanned += 1;
             let raw = std::fs::read_to_string(path)?;
             let validation =
-                store::document_pointers::DocumentPointer::from_yaml(&raw).and_then(|pointer| {
+                model::document_pointers::DocumentPointer::from_yaml(&raw).and_then(|pointer| {
                     let without_yml = path.with_extension("");
                     let has_document_extension = without_yml
                         .extension()
@@ -3118,13 +3118,13 @@ pub fn document_pointer_pass(dir: &std::path::Path) -> std::io::Result<Vec<GateE
 
 pub fn seed_model_for_path(
     path: &std::path::Path,
-) -> Option<anyhow::Result<store::seed::SeedModel>> {
+) -> Option<anyhow::Result<model::seed::SeedModel>> {
     let parent = path.parent()?;
     if parent.file_name()? != "seeds" {
         return None;
     }
     let model = path.file_stem()?.to_str()?;
-    let parsed = store::seed::SeedModel::parse(model);
+    let parsed = model::seed::SeedModel::parse(model);
     let is_canonical_catalog = parent
         .parent()
         .and_then(std::path::Path::file_name)
@@ -3152,7 +3152,7 @@ pub fn seed_document_pass(dir: &std::path::Path) -> std::io::Result<Vec<GateErro
         };
         files_scanned += 1;
         let raw = std::fs::read_to_string(path)?;
-        let validation = model.and_then(|model| store::seed::validate_yaml(model, &raw));
+        let validation = model.and_then(|model| model::seed::validate_yaml(model, &raw));
         if let Err(error) = validation {
             print_violation(
                 &path.display().to_string(),
@@ -4491,11 +4491,11 @@ pub fn parse_asset_kind(value: &str) -> Result<String, String> {
     }
 }
 
-pub fn parse_matter_folder(value: &str) -> Result<store::document_pointers::MatterFolder, String> {
-    store::document_pointers::MatterFolder::parse(value).ok_or_else(|| {
+pub fn parse_matter_folder(value: &str) -> Result<model::document_pointers::MatterFolder, String> {
+    model::document_pointers::MatterFolder::parse(value).ok_or_else(|| {
         format!(
             "`{value}` is not a matter folder. Accepted values are: {}.",
-            store::document_pointers::MatterFolder::ALL
+            model::document_pointers::MatterFolder::ALL
                 .iter()
                 .map(|folder| folder.as_str())
                 .collect::<Vec<_>>()
@@ -4511,9 +4511,9 @@ pub fn parse_document_visibility(value: &str) -> Result<String, String> {
     }
 }
 
-pub fn parse_signing_method(value: &str) -> Result<store::documents::SigningMethod, String> {
-    store::documents::SigningMethod::parse(value).ok_or_else(|| {
-        let accepted = store::documents::SigningMethod::ALL
+pub fn parse_signing_method(value: &str) -> Result<model::documents::SigningMethod, String> {
+    model::documents::SigningMethod::parse(value).ok_or_else(|| {
+        let accepted = model::documents::SigningMethod::ALL
             .iter()
             .map(|method| format!("`{}`", method.as_str()))
             .collect::<Vec<_>>()
@@ -4525,9 +4525,9 @@ pub fn parse_signing_method(value: &str) -> Result<store::documents::SigningMeth
 /// Parse one `--evidence-confidence` value.
 pub fn parse_evidence_confidence(
     value: &str,
-) -> Result<store::documents::EvidenceConfidence, String> {
-    store::documents::EvidenceConfidence::parse(value).ok_or_else(|| {
-        let accepted = store::documents::EvidenceConfidence::ALL
+) -> Result<model::documents::EvidenceConfidence, String> {
+    model::documents::EvidenceConfidence::parse(value).ok_or_else(|| {
+        let accepted = model::documents::EvidenceConfidence::ALL
             .iter()
             .map(|confidence| format!("`{}`", confidence.as_str()))
             .collect::<Vec<_>>()
@@ -4538,7 +4538,7 @@ pub fn parse_evidence_confidence(
 
 /// Parse one `--notarization` value: five comma-separated `key=value` pairs,
 /// each key exactly once, validated as the server validates it.
-pub fn parse_notarization(value: &str) -> Result<store::documents::Notarization, String> {
+pub fn parse_notarization(value: &str) -> Result<model::documents::Notarization, String> {
     const KEYS: [&str; 5] = [
         "method",
         "acknowledged_on",
@@ -4569,8 +4569,8 @@ pub fn parse_notarization(value: &str) -> Result<store::documents::Notarization,
             .ok_or_else(|| format!("notarization needs `{key}=`; expected {}", KEYS.join(", ")))
     };
     let method = field("method")?;
-    let notarization = store::documents::Notarization {
-        method: store::documents::NotarizationMethod::parse(method).ok_or_else(|| {
+    let notarization = model::documents::Notarization {
+        method: model::documents::NotarizationMethod::parse(method).ok_or_else(|| {
             format!("notarization method must be `in_person` or `remote_online`, not `{method}`")
         })?,
         acknowledged_on: parse_calendar_date(field("acknowledged_on")?)?,

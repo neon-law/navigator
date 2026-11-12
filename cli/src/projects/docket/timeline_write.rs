@@ -46,11 +46,11 @@ pub fn enrich(row: &Value) -> Value {
             .and_then(Value::as_str)
             .unwrap_or_default();
         let title = row.get("title").and_then(Value::as_str).unwrap_or_default();
-        if let Ok(file_name) = store::cases::filing_name(number, title, "yaml") {
+        if let Ok(file_name) = model::cases::filing_name(number, title, "yaml") {
             if let Some(stem) = file_name.strip_suffix(".yaml") {
                 enriched["document_slug"] = Value::String(format!(
                     "{}/{}",
-                    store::document_pointers::MatterFolder::DocketFilings.as_str(),
+                    model::document_pointers::MatterFolder::DocketFilings.as_str(),
                     stem
                 ));
             }

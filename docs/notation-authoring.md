@@ -102,7 +102,7 @@ full history of a matter is replayable for audit.
 
 A questionnaire state name is `<type>__<role>` — a **question type** and the **role** it plays in this matter, e.g.
 `person__trustor`, `entity__company`, `address__for_company`. The `<type>` half is a closed set (the
-[`store::question_registry`](../store/src/question_registry.rs) registry); `N113` rejects a typed state whose `<type>`
+[`store::question_registry`](../model/src/question_registry.rs) registry); `N113` rejects a typed state whose `<type>`
 is not registered. The `<role>` suffix is free naming that keeps two answers of one type distinct — `entity__company`
 and `entity__subsidiary` are two separate entities, not one.
 

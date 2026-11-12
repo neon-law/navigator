@@ -20,7 +20,7 @@
 //! rules, and the permissive one was the one serving users.
 //!
 //! A host default is legitimate now, and exactly one exists:
-//! `cloud::workspace::DEFAULT_GIT_HOST`. What made the old fallback a defect was
+//! `model::workspace::DEFAULT_GIT_HOST`. What made the old fallback a defect was
 //! never that a host had a default — it was that the default was anonymous,
 //! undocumented, and reached by a variable nobody had set. So the rule is that
 //! the default is *named*: [`is_named_constant`] admits the named constants and
@@ -77,7 +77,7 @@ const FORGE_HOSTS: &[&str] = &["github.com"];
 /// claim: *these* are the coordinate-composing surfaces, and adding one is a
 /// deliberate act.
 const COORDINATE_SOURCES: &[&str] = &[
-    "cloud/src/workspace.rs",
+    "model/src/workspace.rs",
     "portal/src/config.rs",
     "portal/src/project_portal.rs",
     "cli/src/projects/doctor.rs",
@@ -226,7 +226,7 @@ fn is_comment(line: &str) -> bool {
 ///   configurable at all: one host, one organization, one repository, the same
 ///   on every deployment forever. It is admitted precisely *because* it is
 ///   never a Project's — a Project's repository is a stored URL, and this one
-///   is the fixed value a Project's may never be. `cloud::workspace` holds the
+///   is the fixed value a Project's may never be. `model::workspace` holds the
 ///   tests that keep those two apart.
 fn is_named_constant(line: &str) -> bool {
     line.contains("DEFAULT_GIT_HOST") || line.contains("NAVIGATOR_REPOSITORY_URL")
@@ -296,8 +296,8 @@ fn the_host_default_is_declared_exactly_once() {
     }
     assert_eq!(
         declarations,
-        vec!["cloud/src/workspace.rs".to_string()],
-        "the host default is one named constant in cloud::workspace and nowhere else",
+        vec!["model/src/workspace.rs".to_string()],
+        "the host default is one named constant in model::workspace and nowhere else",
     );
 }
 
@@ -337,12 +337,12 @@ fn every_coordinate_source_still_exists_and_is_tracked() {
 /// see [`no_project_repository_url_is_composed_from_a_project_code`].
 #[test]
 fn both_halves_of_the_forge_coordinate_are_read_from_configuration() {
-    let workspace = std::fs::read_to_string(repo_root().join("cloud/src/workspace.rs"))
-        .expect("read cloud/src/workspace.rs");
+    let workspace = std::fs::read_to_string(repo_root().join("model/src/workspace.rs"))
+        .expect("read model/src/workspace.rs");
     for key in ["NAVIGATOR_GITHUB_ORG", "NAVIGATOR_GIT_HOST"] {
         assert!(
             workspace.contains(key),
-            "cloud::workspace must read {key} rather than naming a forge coordinate",
+            "model::workspace must read {key} rather than naming a forge coordinate",
         );
     }
 
@@ -372,7 +372,7 @@ fn both_halves_of_the_forge_coordinate_are_read_from_configuration() {
             .host,
         cloud::workspace::DEFAULT_GIT_HOST,
     );
-    // The one place the default's *value* is spelled. `cloud::workspace` may not
+    // The one place the default's *value* is spelled. `model::workspace` may not
     // spell it twice — the constant is the declaration and a fixture repeating
     // it would be a second spelling to keep true — and this file is the one
     // exempt by provenance, because its own refusal lists are written in the
@@ -401,8 +401,8 @@ fn both_halves_of_the_forge_coordinate_are_read_from_configuration() {
 /// silently override one that names somewhere else.
 #[test]
 fn no_project_repository_url_is_composed_from_a_project_code() {
-    let workspace = std::fs::read_to_string(repo_root().join("cloud/src/workspace.rs"))
-        .expect("read cloud/src/workspace.rs");
+    let workspace = std::fs::read_to_string(repo_root().join("model/src/workspace.rs"))
+        .expect("read model/src/workspace.rs");
     for banned in ["project_repository", "RepositoryCoordinate"] {
         assert!(
             !workspace.contains(banned),

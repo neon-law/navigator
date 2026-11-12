@@ -16,7 +16,7 @@ A Pointer is reviewed in a pull request like any other source: changing its `vis
 decision. Rule `Y003` validates every Pointer, and `Y014` refuses one left under `documents/`. The folder is named
 `blobs/` after what its files point to; its files are Pointers, not Blobs.
 
-- Shape: [`store::document_pointers::DocumentPointer`](../../store/src/document_pointers.rs) · Contract:
+- Shape: [`store::document_pointers::DocumentPointer`](../../model/src/document_pointers.rs) · Contract:
   [Document staging and pointers](../project-repositories.md#document-staging-and-pointers)
 
 An imported document may carry `checkout_path:`, a validated path below the Git-ignored `documents/` directory. It

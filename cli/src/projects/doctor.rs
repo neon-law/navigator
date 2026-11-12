@@ -22,7 +22,7 @@
 
 use std::process::ExitCode;
 
-use cloud::workspace::{
+use model::workspace::{
     DriveSetup, WorkspaceConfig, WorkspaceConfigError, NAVIGATOR_GITHUB_ORG, NAVIGATOR_GIT_HOST,
 };
 
@@ -137,7 +137,7 @@ pub fn diagnose(probe: &Probe<'_>) -> Diagnosis {
                     "{:?} serving {:?} Projects ({} from environment; {} from environment)",
                     workspace.deployment,
                     workspace.customer,
-                    cloud::workspace::NAVIGATOR_GCP_PROJECT_ID,
+                    model::workspace::NAVIGATOR_GCP_PROJECT_ID,
                     NAVIGATOR_GITHUB_ORG,
                 ),
             ));
@@ -217,7 +217,7 @@ fn deployment_error_detail(error: &WorkspaceConfigError) -> String {
     match error {
         WorkspaceConfigError::MissingDeployment => format!(
             "{} is unset — set it to the GCP project of the deployment you are operating",
-            cloud::workspace::NAVIGATOR_GCP_PROJECT_ID
+            model::workspace::NAVIGATOR_GCP_PROJECT_ID
         ),
         WorkspaceConfigError::UnknownDeployment { project_id } => format!(
             "{project_id:?} is not a Project workspace deployment; expected one of \

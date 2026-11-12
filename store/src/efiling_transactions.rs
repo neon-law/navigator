@@ -17,13 +17,11 @@ use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
 use crate::surreal::{record_id, record_uuid, SurrealDb};
+pub use model::efiling_transactions::{
+    normalize_transaction_id, STATUS_ACCEPTED, STATUS_REJECTED, STATUS_SUBMITTED, STATUS_UNKNOWN,
+};
 
 const TABLE: &str = "efiling_transactions";
-
-pub const STATUS_SUBMITTED: &str = "submitted";
-pub const STATUS_ACCEPTED: &str = "accepted";
-pub const STATUS_REJECTED: &str = "rejected";
-pub const STATUS_UNKNOWN: &str = "unknown";
 
 /// Every status a transaction can carry.
 pub const STATUSES: &[&str] = &[
@@ -36,8 +34,6 @@ pub const STATUSES: &[&str] = &[
 /// The note an `unknown` row carries when the caller names none: the EFSP
 /// said something changed but not what, so a person has to look.
 pub const UNKNOWN_NOTE: &str = "status unknown — log in to the EFSP to read it";
-
-const MAX_TRANSACTION_ID: usize = 128;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct EfilingTransaction {
@@ -141,23 +137,6 @@ fn is_decision(status: &str) -> bool {
     matches!(status, STATUS_ACCEPTED | STATUS_REJECTED)
 }
 
-/// Trim and check a transaction id: non-empty, no whitespace, bounded.
-///
-/// # Errors
-/// [`EfilingError::Invalid`] naming the rule the id broke.
-pub fn normalize_transaction_id(raw: &str) -> Result<String, EfilingError> {
-    let id = raw.trim();
-    if id.is_empty() {
-        return Err(EfilingError::Invalid("transaction_id is required".into()));
-    }
-    if id.len() > MAX_TRANSACTION_ID || id.chars().any(char::is_whitespace) {
-        return Err(EfilingError::Invalid(format!(
-            "transaction_id must be at most {MAX_TRANSACTION_ID} characters with no spaces"
-        )));
-    }
-    Ok(id.to_string())
-}
-
 fn normalize_date(name: &str, value: Option<String>) -> Result<Option<String>, EfilingError> {
     value
         .map(|raw| {
@@ -239,7 +218,8 @@ pub async fn record(
     surreal: &SurrealDb,
     report: &EfilingReport,
 ) -> Result<EfilingTransaction, EfilingError> {
-    let transaction_id = normalize_transaction_id(&report.transaction_id)?;
+    let transaction_id =
+        normalize_transaction_id(&report.transaction_id).map_err(EfilingError::Invalid)?;
     if crate::projects::find_by_id(surreal, report.project_id)
         .await
         .map_err(|error| EfilingError::Invalid(error.to_string()))?
