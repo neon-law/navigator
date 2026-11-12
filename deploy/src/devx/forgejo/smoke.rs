@@ -1685,7 +1685,7 @@ async fn journal_lane(
     seed: &Seed,
 ) -> Result<Arc<store::postgres::PostgresDb>> {
     let ca = kube
-        .secret("navigator-postgres-postgres-ca")?
+        .secret("navigator-forgejo-postgres-ca")?
         .and_then(|data| data.get("ca.crt").cloned())
         .context("the KIND PostgreSQL published no CA certificate")?;
     let root = std::env::temp_dir().join(format!(
