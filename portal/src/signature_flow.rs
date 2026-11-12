@@ -230,7 +230,7 @@ pub(crate) async fn document_pdf_ready(
 /// `.email`. Empty fields → empty manifest (the provider's
 /// single-signer fallback). A declared role that lacks a resolved name
 /// and email refuses the send.
-
+///
 /// Resolve the signer set for a template from the bytes the send path
 /// loads.
 ///
@@ -248,7 +248,6 @@ pub(crate) async fn document_pdf_ready(
 /// frontmatter-less sources consult the bundled seed, so a Project-scoped
 /// body that deliberately drops a `signers:` block keeps its (implicit)
 /// choice.
-#[must_use]
 pub(crate) fn signer_set_for_template(
     code: &str,
     stored_source: &str,
