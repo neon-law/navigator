@@ -576,6 +576,24 @@ fn log_assign_decision(message: Uuid, outcome: &store::inbox::assign_match::Matc
     );
 }
 
+const MAX_ASSIGN_MATCH_THREADS: usize = 50;
+
+/// A large backlog must not turn one door call into unbounded serial
+/// round-trips against the client timeout; each run consumes a capped
+/// slice oldest-first and the next run resumes where this one left off.
+fn cap_run(mut rows: Vec<store::inbox::UnprocessedRow>) -> Vec<store::inbox::UnprocessedRow> {
+    if rows.len() <= MAX_ASSIGN_MATCH_THREADS {
+        return rows;
+    }
+    tracing::warn!(
+        deferred = rows.len() - MAX_ASSIGN_MATCH_THREADS,
+        cap = MAX_ASSIGN_MATCH_THREADS,
+        "inbox assign-matches run capped oldest-first; re-run to continue"
+    );
+    rows.truncate(MAX_ASSIGN_MATCH_THREADS);
+    rows
+}
+
 /// `POST /app/api/inbox/assign-matches` — the LAW-347 address-match door
 /// behind `navigator inbox assign-matches`. Every unprocessed, unattributed
 /// email thread proposes an assignment from its From/To/Cc addresses
@@ -591,9 +609,11 @@ pub(crate) async fn assign_matches(
     Json(request): Json<AssignMatchesRequest>,
 ) -> Result<Response, ApiError> {
     let actor_id = actor_id(&session)?;
-    let rows = store::inbox::unprocessed_inbox(&state.surreal, actor_id)
-        .await
-        .map_err(map_inbox)?;
+    let rows = cap_run(
+        store::inbox::unprocessed_inbox(&state.surreal, actor_id)
+            .await
+            .map_err(map_inbox)?,
+    );
     let mut views = Vec::new();
     for row in rows {
         // An already-attributed thread needs no match; a non-email channel
