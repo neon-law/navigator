@@ -36,27 +36,30 @@ struct HealthCheckClaims {
 /// down (ENG-551).
 #[must_use]
 pub fn crypto_provider_is_healthy() -> bool {
-    std::panic::catch_unwind(|| {
-        const SECRET: &[u8] = b"workflows-service-health-check";
-        let exp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock is after the Unix epoch")
-            .as_secs()
-            + 60;
-        let token = restate_jwt::encode(
-            &restate_jwt::Header::new(restate_jwt::Algorithm::HS256),
-            &HealthCheckClaims { exp },
-            &restate_jwt::EncodingKey::from_secret(SECRET),
-        )
-        .expect("health-check token signs");
-        restate_jwt::decode::<HealthCheckClaims>(
-            &token,
-            &restate_jwt::DecodingKey::from_secret(SECRET),
-            &restate_jwt::Validation::new(restate_jwt::Algorithm::HS256),
-        )
-        .is_ok()
-    })
-    .unwrap_or(false)
+    std::panic::catch_unwind(sign_and_verify_health_token).unwrap_or(false)
+}
+
+fn sign_and_verify_health_token() -> bool {
+    const SECRET: &[u8] = b"workflows-service-health-check";
+    let Ok(elapsed) = SystemTime::now().duration_since(UNIX_EPOCH) else {
+        return false;
+    };
+    let Some(exp) = elapsed.as_secs().checked_add(60) else {
+        return false;
+    };
+    let Ok(token) = restate_jwt::encode(
+        &restate_jwt::Header::new(restate_jwt::Algorithm::HS256),
+        &HealthCheckClaims { exp },
+        &restate_jwt::EncodingKey::from_secret(SECRET),
+    ) else {
+        return false;
+    };
+    restate_jwt::decode::<HealthCheckClaims>(
+        &token,
+        &restate_jwt::DecodingKey::from_secret(SECRET),
+        &restate_jwt::Validation::new(restate_jwt::Algorithm::HS256),
+    )
+    .is_ok()
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
