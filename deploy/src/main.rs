@@ -1595,8 +1595,16 @@ enum ForgejoCmd {
     /// Prove the tier's Forgejo end to end with synthetic data: TLS and
     /// database isolation, closed registration, git clone/push, an Actions
     /// run, retention across pod replacement and scale-to-zero, and
-    /// email-domain admission through Rauthy.
-    Smoke,
+    /// email-domain admission through Rauthy — and, on a Linux host, a real
+    /// push landing as a journaled, analyzed receipt through an in-cluster
+    /// receiver.
+    Smoke {
+        /// Internal: serve the push receiver instead of running the proof.
+        /// The smoke stages this same binary and a JSON config inside the
+        /// cluster, where Forgejo's delivery can reach it.
+        #[arg(hide = true, long)]
+        receiver_config: Option<std::path::PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]

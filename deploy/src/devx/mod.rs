@@ -990,9 +990,9 @@ fn dispatch_with_dns_provider(
         crate::Command::Dev(crate::DevCmd::Kind(crate::KindCmd::Up)) => kind_up_only(&cfg),
         crate::Command::Dev(crate::DevCmd::Kind(crate::KindCmd::Down)) => kind_down_only(&cfg),
         crate::Command::Dev(crate::DevCmd::Forgejo(crate::ForgejoCmd::Up)) => forgejo::up(&cfg),
-        crate::Command::Dev(crate::DevCmd::Forgejo(crate::ForgejoCmd::Smoke)) => {
-            forgejo::smoke(&cfg)
-        }
+        crate::Command::Dev(crate::DevCmd::Forgejo(crate::ForgejoCmd::Smoke {
+            receiver_config,
+        })) => forgejo::smoke(&cfg, receiver_config.as_deref()),
         crate::Command::Dev(crate::DevCmd::WorktreeEnv(cmd)) => worktree_env::dispatch(cmd, &cfg),
         crate::Command::Dev(crate::DevCmd::Deploy) => deploy(&cfg, None),
         crate::Command::Dev(crate::DevCmd::Undeploy) => undeploy(&cfg),

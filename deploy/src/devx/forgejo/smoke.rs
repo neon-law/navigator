@@ -35,7 +35,7 @@
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, ensure, Context, Result};
@@ -45,12 +45,13 @@ use super::super::KindConfig;
 use super::cluster::Kube;
 use super::oidc::{self, Outcome};
 use super::{
-    actions_context, assert_analyzed_push_receipt, forwarded_port, host_gateway, http_probe_script,
+    actions_context, assert_analyzed_push_receipt, forwarded_port, http_probe_script,
     parse_push_receipt_row, port_forward_args, random_hex, receipt_is_terminal,
-    receiver_endpoints_manifest, receiver_service_url, CookieJar, PushReceiptRow, Seed,
-    ADMISSION_CONFIG_MAP, ALLOWED_IDENTITY, ALLOWLIST_KEY, BOT_PUSH_WORKFLOW, DATA_CLAIM,
-    DENIED_IDENTITIES, GATE_WORKFLOW, POD, POSTGRES_POD, PUBLISH_WORKFLOW, RECEIVER_NAMESPACE,
-    RECEIVER_SERVICE, SEED_SECRET, SMOKE_ALLOWLIST, STATEFULSET,
+    receiver_endpoints_manifest, receiver_service_url, receiver_start_script, CookieJar,
+    PushReceiptRow, Seed, ADMISSION_CONFIG_MAP, ALLOWED_IDENTITY, ALLOWLIST_KEY, BOT_PUSH_WORKFLOW,
+    DATA_CLAIM, DENIED_IDENTITIES, GATE_WORKFLOW, POD, POSTGRES_POD, PUBLISH_WORKFLOW,
+    RECEIVER_BINARY, RECEIVER_CONFIG, RECEIVER_FORGE_URL, RECEIVER_LOG, RECEIVER_NAMESPACE,
+    RECEIVER_PID, RECEIVER_PORT, RECEIVER_SERVICE, SEED_SECRET, SMOKE_ALLOWLIST, STATEFULSET,
 };
 
 /// The allowed identity's Forgejo user name (`USERNAME = email` keeps the
@@ -119,15 +120,6 @@ impl Forward {
             origin: format!("http://127.0.0.1:{port}"),
         })
     }
-
-    /// The forwarded loopback port.
-    fn port(&self) -> u16 {
-        self.origin
-            .rsplit(':')
-            .next()
-            .and_then(|port| port.parse().ok())
-            .unwrap_or_default()
-    }
 }
 
 impl Drop for Forward {
@@ -139,8 +131,17 @@ impl Drop for Forward {
 
 /// `dev forgejo smoke`: the phases in the module documentation, in order.
 #[allow(clippy::too_many_lines)] // One linear proof reads best as one function.
-pub(in crate::devx) fn smoke(cfg: &KindConfig) -> Result<()> {
-    super::super::require_tools(&["kubectl", "git"])?;
+pub(in crate::devx) fn smoke(
+    cfg: &KindConfig,
+    receiver_config: Option<&std::path::Path>,
+) -> Result<()> {
+    super::super::require_tools(&["kubectl", "git", "gzip"])?;
+    // The in-pod receiver mode: the hosting pod runs this same binary with
+    // a config file, serving the push webhook where Forgejo can reach it.
+    // It runs until the smoke kills it.
+    if let Some(config_path) = receiver_config {
+        return serve_receiver_mode(config_path);
+    }
     // The receiver's branches trace, and a stuck handler is otherwise
     // undiagnosable from CI's log alone — a subscriber makes every
     // verification and consumption branch visible in the run output.
@@ -1591,129 +1592,18 @@ async fn create_firm_repository(
     Ok(())
 }
 
-/// A local stand-in for Slack's Web API: every call answers `ok` with a
-/// channel and a timestamp, and the paths that reached it are recorded so
-/// the smoke can assert the delivery tail actually posted.
-struct SlackStub {
-    port: u16,
-    calls: Arc<Mutex<Vec<String>>>,
-}
-
-impl SlackStub {
-    fn serve() -> Result<Self> {
-        let calls = Arc::new(Mutex::new(Vec::new()));
-        let logged = calls.clone();
-        let router = axum::Router::new().fallback(move |uri: axum::http::Uri| {
-            let logged = logged.clone();
-            async move {
-                logged
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .push(uri.path().to_owned());
-                axum::Json(serde_json::json!({
-                    "ok": true,
-                    "channel": SLACK_CHANNEL,
-                    "ts": "1",
-                }))
-            }
-        });
-        Ok(Self {
-            port: serve_ingress(router)?,
-            calls,
-        })
-    }
-
-    /// True when the delivery tail posted a `chat.postMessage` call — the
-    /// stub's only trace of the Block Kit notice.
-    fn delivered_blocks(&self) -> bool {
-        self.calls
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .iter()
-            .any(|path| path.ends_with("chat.postMessage"))
-    }
-}
-
-/// Serve a router on an ephemeral `0.0.0.0` port in a background thread on a
-/// runtime of its own: the smoke's runtime stays inside `block_on`, while
-/// Forgejo's delivery and the push pipeline run outside it. Answers the
-/// bound port once the listener is up.
-fn serve_ingress(router: axum::Router) -> Result<u16> {
-    let (bound, receiver) = std::sync::mpsc::channel::<std::io::Result<u16>>();
-    std::thread::spawn(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("the smoke ingress's runtime builds");
-        runtime.block_on(async move {
-            match tokio::net::TcpListener::bind(("0.0.0.0", 0)).await {
-                Ok(listener) => {
-                    let port = listener
-                        .local_addr()
-                        .expect("invariant: a bound listener has a local address")
-                        .port();
-                    let _ = bound.send(Ok(port));
-                    if let Err(error) = axum::serve(listener, router).await {
-                        eprintln!("the smoke ingress stopped: {error}");
-                    }
-                }
-                Err(error) => {
-                    let _ = bound.send(Err(error));
-                }
-            }
-        });
-    });
-    receiver
-        .recv()
-        .context("the smoke ingress never answered its bind")?
-        .context("the smoke ingress cannot bind an ephemeral port")
-}
-
-/// The KIND node's address on its Docker network.
-fn node_ip(kube: &Kube) -> Result<String> {
-    let ip = kube.output(&[
-        "get",
-        "nodes",
-        "-o",
-        "jsonpath={.items[0].status.addresses[?(@.type==\"InternalIP\")].address}",
-    ])?;
-    let ip = ip.trim().to_owned();
-    ensure!(
-        !ip.is_empty(),
-        "the KIND node reports no InternalIP address"
-    );
-    Ok(ip)
-}
-
-/// The push journal's lane: the `navigator` database on the KIND PostgreSQL,
-/// reached over a port-forward. The connection is encrypted but its identity
-/// is not verified: the tier's self-signed certificate carries CA basic
-/// constraints, which rustls rejects as an end-entity cert (libpq accepts it
-/// through explicit trust), and the loopback forward pins the target anyway.
-/// `dev forgejo up` provisions the database empty; the smoke migrates it.
-async fn journal_lane(database: &Forward, seed: &Seed) -> Result<Arc<store::postgres::PostgresDb>> {
-    let options = PgConnectOptions::new()
-        .host("127.0.0.1")
-        .port(database.port())
-        .username("postgres")
-        .password(&seed.postgres_password)
-        .database("navigator")
-        .ssl_mode(PgSslMode::Require);
-    // PostgresDb::connect maps every failure to "PostgreSQL is
-    // unavailable"; probe once with the raw connection so a refused
-    // handshake reports its real cause.
-    let probe = <sqlx::postgres::PgConnection as sqlx::Connection>::connect_with(&options)
-        .await
-        .context("probe the push journal's PostgreSQL lane")?;
-    drop(probe);
-    let journal = store::postgres::PostgresDb::connect(options)
-        .await
-        .context("connect the push journal's PostgreSQL lane")?;
-    journal
-        .migrate_embedded(None)
-        .await
-        .context("migrate the push journal's PostgreSQL lane")?;
-    Ok(Arc::new(journal))
+/// The Slack stub's router: every call answers `ok` with a channel and a
+/// timestamp, so the delivery tail runs to its receipt without a
+/// provisioned workspace. The stub lives inside the receiver's process in
+/// the hosting pod; the journal's `delivered` status is its only trace.
+fn slack_stub_router() -> axum::Router {
+    axum::Router::new().fallback(|| async {
+        axum::Json(serde_json::json!({
+            "ok": true,
+            "channel": SLACK_CHANNEL,
+            "ts": "1",
+        }))
+    })
 }
 
 /// Register the push webhook on the Firm's Project repository: deliveries to
@@ -1816,11 +1706,14 @@ async fn wait_for_push_receipt(
     }
 }
 
-/// The push-webhook proof: Forgejo delivers a real, signed push event to the
-/// portal's receiver — mounted here, over the ingress the deployment would
-/// serve — the receiver journals it in the KIND PostgreSQL, and the push
-/// pipeline analyzes the pushed change through the Forgejo API and delivers
-/// the Block Kit notice to a Slack stub. The journal row is the evidence.
+/// The push-webhook proof: Forgejo delivers a real, signed push event to
+/// the portal's receiver, the receiver journals it in the KIND PostgreSQL,
+/// and the push pipeline analyzes the pushed change through the Forgejo API
+/// and delivers the Block Kit notice to a Slack stub. The receiver runs
+/// where the delivery can actually land — inside the cluster, hosted by the
+/// PostgreSQL pod and published through a Service with manual Endpoints —
+/// because CI runners blackhole pod-to-host traffic across the Docker
+/// bridge gateway. The journal row is the evidence.
 #[allow(clippy::too_many_lines)]
 async fn push_webhook_proof(
     kube: &Kube,
@@ -1832,82 +1725,103 @@ async fn push_webhook_proof(
 ) -> Result<()> {
     let path_secret = random_hex();
     let hmac_key = random_hex();
-    let database = Forward::open_target(kube, &format!("pod/{POSTGRES_POD}"), 5432)
-        .context("port-forward the KIND PostgreSQL")?;
 
-    // The Slack lane: a local stub answering the Web API, so the delivery
-    // tail runs to its receipt without a provisioned workspace.
-    let slack = SlackStub::serve()?;
-
-    // The receiver, mounted as the portal serves it, on `0.0.0.0` so the
-    // Forgejo pod reaches it through the Docker bridge gateway. The pipeline
-    // reads pushes through the real Forgejo API with the smoke's token, and
-    // delivers to the stub. Every async handle the receiver touches — the
-    // journal pool and the in-memory graph — is built on the receiver's own
-    // runtime: Tokio I/O is runtime-affine, and a handle polled from a
-    // foreign runtime hangs the handler (the delivery then times out with
-    // no journaled receipt).
-    let port = serve_receiver(
-        database,
-        seed.clone(),
-        path,
-        path_secret.clone(),
-        hmac_key.clone(),
-        token,
-        forge,
-        format!("http://127.0.0.1:{}", slack.port),
-    )?;
-    let gateway =
-        host_gateway(&node_ip(kube)?).context("the KIND node exposes no Docker bridge gateway")?;
-
-    // Prove the delivery path before trusting it with the push: the
-    // receiver answers a wrong-secret request on the host's loopback, and
-    // a pod reaches it through the Docker bridge gateway. A later timeout
-    // then names the network, not the handler.
-    let answered = http
-        .get(format!(
-            "http://127.0.0.1:{port}/webhook/forgejo/host-probe"
-        ))
-        .timeout(Duration::from_secs(5))
-        .send()
-        .await
-        .context("the receiver answers no request even on the host's loopback")?;
-    eprintln!(
-        "    the receiver answers on the host ({})",
-        answered.status()
-    );
-    // Diagnostic, not fatal: the direct gateway path is what CI runners
-    // blackhole, and the Service relay below is the delivery route. A
-    // timeout here is recorded and the relayed probe decides.
-    match kube.output(&[
+    // Stage the smoke's own binary and its config inside the hosting pod:
+    // the receiver is the real portal router, and the pod's filesystem is
+    // the only place the cluster can execute it from.
+    let staged = stage_receiver_binary()?;
+    let config = ReceiverConfig {
+        postgres_password: seed.postgres_password.clone(),
+        path_secret: path_secret.clone(),
+        hmac_key: hmac_key.clone(),
+        forge_token: token.to_owned(),
+    };
+    let config_path = staged.path().join("receiver.json");
+    std::fs::write(
+        &config_path,
+        serde_json::to_string(&config).context("serialize the receiver config")?,
+    )
+    .context("write the receiver config")?;
+    kube.output(&[
         "exec",
         POSTGRES_POD,
         "--",
-        "timeout",
-        "6",
+        "mkdir",
+        "-p",
+        "/tmp/forgejo-receiver",
+    ])
+    .context("create the receiver's staging directory in the pod")?;
+    kube.run(&[
+        "cp",
+        staged.binary_gz(),
+        &format!("{POSTGRES_POD}:{RECEIVER_BINARY}.gz"),
+    ])
+    .context("copy the receiver binary into the pod")?;
+    kube.run(&[
+        "cp",
+        config_path
+            .to_str()
+            .context("the config path is not UTF-8")?,
+        &format!("{POSTGRES_POD}:{RECEIVER_CONFIG}"),
+    ])
+    .context("copy the receiver config into the pod")?;
+    kube.output(&[
+        "exec",
+        POSTGRES_POD,
+        "--",
         "bash",
         "-c",
-        &http_probe_script(&gateway, port, "/webhook/forgejo/pod-probe"),
-    ]) {
-        Ok(reached) => {
-            eprintln!(
-                "    the receiver answers over the gateway path: {}",
-                reached.trim()
-            );
-        }
-        Err(_) => {
-            eprintln!("    the gateway path is blackholed; the Service relay carries the delivery");
+        &format!("gunzip -f {RECEIVER_BINARY}.gz && chmod +x {RECEIVER_BINARY}"),
+    ])
+    .context("unpack the receiver binary in the pod")?;
+    // A Mach-O binary (a macOS host) cannot execute in the Linux pod; fail
+    // here, with the reason, instead of after a readiness timeout.
+    kube.output(&["exec", POSTGRES_POD, "--", RECEIVER_BINARY, "--version"])
+        .context(
+            "the receiver binary does not execute in the Linux pod; \
+             the push-webhook phase needs a Linux-built smoke binary",
+        )?;
+    kube.output(&[
+        "exec",
+        POSTGRES_POD,
+        "--",
+        "bash",
+        "-c",
+        &receiver_start_script(),
+    ])
+    .context("start the receiver in the pod")?;
+
+    // Prove the delivery path before trusting it with the push: the
+    // receiver answers in its own pod, then over the Service that
+    // publishes it. A later timeout then names the network, not the
+    // handler.
+    let probe = http_probe_script("127.0.0.1", RECEIVER_PORT, "/webhook/forgejo/pod-probe");
+    let deadline = Instant::now() + Duration::from_secs(90);
+    loop {
+        match kube.output(&["exec", POSTGRES_POD, "--", "bash", "-c", &probe]) {
+            Ok(answered) => {
+                eprintln!("    the receiver answers in its pod ({})", answered.trim());
+                break;
+            }
+            Err(_) if Instant::now() < deadline => {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+            Err(_) => bail!(
+                "the receiver never came up in the pod; its log tail: {}",
+                receiver_log_tail(kube)
+            ),
         }
     }
 
-    // The pod overlay blackholes the bridge gateway on CI runners, so the
-    // receiver is published as an in-cluster Service with manual Endpoints
-    // at the gateway: kube-proxy NATs the delivery from the node's own
-    // network namespace, and Forgejo dials the Service name. The ClusterIP
-    // is private, which the KIND app.ini's ALLOWED_HOST_LIST already
-    // permits.
-    let manifest = receiver_endpoints_manifest(&gateway, port);
-    kube.output_with_stdin(&["apply", "-f", "-"], Some(manifest.as_bytes()))
+    // The Endpoints pin the hosting pod's address — the same pod-to-pod
+    // path Forgejo's own database traffic rides. The ClusterIP is private,
+    // which the KIND app.ini's ALLOWED_HOST_LIST already permits.
+    let pod_ip = kube
+        .output(&["get", "pod", POSTGRES_POD, "-o", "jsonpath={.status.podIP}"])?
+        .trim()
+        .to_owned();
+    let manifest = receiver_endpoints_manifest(&pod_ip, RECEIVER_PORT);
+    kube.apply(&manifest)
         .context("publish the receiver as an in-cluster Service")?;
     let relayed = kube
         .output(&[
@@ -1924,7 +1838,7 @@ async fn push_webhook_proof(
                 "/webhook/forgejo/pod-probe",
             ),
         ])
-        .context("the receiver Service does not deliver to the host receiver")?;
+        .context("the receiver Service does not deliver to the in-pod receiver")?;
     eprintln!(
         "    the receiver answers through the Service: {}",
         relayed.trim()
@@ -1944,92 +1858,183 @@ async fn push_webhook_proof(
     let row = wait_for_push_receipt(kube, path).await?;
     assert_analyzed_push_receipt(&row, SMOKE_CHANGE_ID, PUSH_DESCRIPTION)
         .map_err(anyhow::Error::msg)?;
-    ensure!(
-        slack.delivered_blocks(),
-        "the pipeline never posted the push's blocks to Slack"
-    );
+    // Best-effort teardown: the receiver is the proof's fixture.
+    let _ = kube.output(&[
+        "exec",
+        POSTGRES_POD,
+        "--",
+        "bash",
+        "-c",
+        &format!("kill $(cat {RECEIVER_PID} 2>/dev/null)"),
+    ]);
     runtime_block_on_delete_firm_repository(http, forge, token, path).await;
     eprintln!("    a real push landed as a journaled, analyzed receipt");
     Ok(())
 }
 
-/// Build and serve the push receiver on a runtime of its own: the journal
-/// pool, the in-memory graph, and the router all live on that runtime, since
-/// Tokio I/O is runtime-affine and a handle polled from a foreign runtime
-/// hangs the handler. Answers the bound port once the listener is up.
-#[allow(clippy::too_many_arguments)]
-fn serve_receiver(
-    database: Forward,
-    seed: Seed,
-    path: &store::firms::forgejo::RepositoryPath,
-    path_secret: String,
-    hmac_key: String,
-    token: &str,
-    forge: &str,
-    slack_base: String,
-) -> Result<u16> {
-    let path = path.to_string();
-    let token = token.to_owned();
-    let forge = forge.to_owned();
-    let (bound, receiver) = std::sync::mpsc::channel::<anyhow::Result<u16>>();
-    std::thread::spawn(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("the smoke receiver's runtime builds");
-        let outcome = runtime.block_on(async {
-            let journal = journal_lane(&database, &seed).await?;
-            let surreal = store::test_support::mem_surreal().await;
-            let seeded = seed_firm_project(&surreal).await?;
-            ensure!(
-                seeded.path.to_string() == path,
-                "the webhook phase seeded {}, not the repository {path}",
-                seeded.path
-            );
-            store::projects::set_internal_slack_channel_id(
-                &surreal,
-                seeded.project_id,
-                SLACK_CHANNEL,
-            )
+/// Copy the smoke's own binary into a staging directory, symbol-stripped
+/// and gzipped for the transfer into the hosting pod.
+fn stage_receiver_binary() -> Result<ReceiverStaging> {
+    let dir = tempfile::tempdir().context("create the receiver staging directory")?;
+    let exe = std::env::current_exe().context("locate the smoke binary")?;
+    let staged = dir.path().join("navigator-deploy");
+    std::fs::copy(&exe, &staged).with_context(|| format!("stage {}", exe.display()))?;
+    match std::process::Command::new("strip").arg(&staged).status() {
+        Ok(status) if status.success() => {}
+        Ok(status) => {
+            eprintln!("    strip finished with {status}; the copy stays unstripped");
+        }
+        Err(error) => {
+            eprintln!("    strip is unavailable ({error}); the copy stays unstripped");
+        }
+    }
+    let packed = std::process::Command::new("gzip")
+        .args(["-9", "-c"])
+        .arg(&staged)
+        .output()
+        .context("run gzip over the receiver binary")?;
+    ensure!(
+        packed.status.success(),
+        "gzip over the receiver binary failed"
+    );
+    let gz = dir.path().join("navigator-deploy.gz");
+    std::fs::write(&gz, &packed.stdout).context("write the gzipped receiver binary")?;
+    Ok(ReceiverStaging { dir, gz })
+}
+
+/// The staged receiver binary, and a guard for its temporary directory.
+struct ReceiverStaging {
+    dir: tempfile::TempDir,
+    gz: std::path::PathBuf,
+}
+
+impl ReceiverStaging {
+    fn path(&self) -> &std::path::Path {
+        self.dir.path()
+    }
+
+    fn binary_gz(&self) -> &str {
+        self.gz
+            .to_str()
+            .expect("invariant: the staged path is UTF-8")
+    }
+}
+
+/// The hosting pod's view of the receiver's log, for a readiness failure —
+/// best-effort, since the log is the failure's only record.
+fn receiver_log_tail(kube: &Kube) -> String {
+    kube.output(&[
+        "exec",
+        POSTGRES_POD,
+        "--",
+        "bash",
+        "-c",
+        &format!("tail -20 {RECEIVER_LOG} 2>/dev/null"),
+    ])
+    .unwrap_or_else(|error| format!("unreadable: {error:#}"))
+}
+
+/// Build and serve the push receiver inside the cluster: the hosting pod
+/// runs this mode (`--receiver-config`) so Forgejo reaches the receiver
+/// over the cluster's own Service — no host address pods can dial.
+/// Everything the webhook handler touches — journal, graph, pipeline,
+/// Slack stub — lives on the serving runtime, since Tokio I/O is
+/// runtime-affine and a handle polled from a foreign runtime hangs the
+/// handler.
+fn serve_receiver_mode(config_path: &std::path::Path) -> Result<()> {
+    let raw = std::fs::read_to_string(config_path)
+        .with_context(|| format!("read the receiver config at {}", config_path.display()))?;
+    let config: ReceiverConfig = serde_json::from_str(&raw).context("parse the receiver config")?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("build the receiver's runtime")?;
+    runtime.block_on(async move {
+        let journal = receiver_journal(&config).await?;
+        let surreal = store::test_support::mem_surreal().await;
+        let seeded = seed_firm_project(&surreal).await?;
+        store::projects::set_internal_slack_channel_id(&surreal, seeded.project_id, SLACK_CHANNEL)
             .await
             .map_err(|error| anyhow::anyhow!("record the Project's Slack channel: {error}"))?;
-            let state = portal::test_support::app_state(surreal.clone()).await;
-            let state = portal::AppState {
-                forgejo_webhook_secret: Some(path_secret),
-                forgejo_webhook_hmac_key: Some(hmac_key),
-                forgejo_push_store: Some(journal.clone()),
-                forgejo_push_consumer: Arc::new(
-                    portal::forgejo_push_pipeline::JjPushPipeline::with_credentials(
-                        journal,
-                        surreal,
-                        Arc::new(portal::forgejo_push_pipeline::FixedPushCredentials {
-                            forgejo_token: token.clone(),
-                            slack_bot_token: Some("smoke-stub-token".to_owned()),
-                        }),
-                        Some(forge.clone()),
-                        Some(slack_base),
-                    ),
+        let state = portal::test_support::app_state(surreal.clone()).await;
+        // The stub binds inside the pod's own namespace; only this
+        // process's pipeline dials it.
+        let stub_listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+        let stub_port = stub_listener
+            .local_addr()
+            .expect("invariant: a bound listener has a local address")
+            .port();
+        let state = portal::AppState {
+            forgejo_webhook_secret: Some(config.path_secret.clone()),
+            forgejo_webhook_hmac_key: Some(config.hmac_key.clone()),
+            forgejo_push_store: Some(journal.clone()),
+            forgejo_push_consumer: Arc::new(
+                portal::forgejo_push_pipeline::JjPushPipeline::with_credentials(
+                    journal,
+                    surreal,
+                    Arc::new(portal::forgejo_push_pipeline::FixedPushCredentials {
+                        forgejo_token: config.forge_token.clone(),
+                        slack_bot_token: Some("smoke-stub-token".to_owned()),
+                    }),
+                    Some(RECEIVER_FORGE_URL.to_owned()),
+                    Some(format!("http://127.0.0.1:{stub_port}")),
                 ),
-                ..state
-            };
-            let listener = tokio::net::TcpListener::bind(("0.0.0.0", 0)).await?;
-            let port = listener
-                .local_addr()
-                .expect("invariant: a bound listener has a local address")
-                .port();
-            let _ = bound.send(Ok(port));
-            axum::serve(listener, portal::router(state))
-                .await
-                .context("the smoke receiver stopped")
+            ),
+            ..state
+        };
+        let listener = tokio::net::TcpListener::bind(("0.0.0.0", RECEIVER_PORT)).await?;
+        eprintln!("    the push receiver serves on {RECEIVER_PORT}");
+        tokio::spawn(async move {
+            if let Err(error) = axum::serve(stub_listener, slack_stub_router()).await {
+                eprintln!("the Slack stub stopped: {error}");
+            }
         });
-        if let Err(error) = outcome {
-            let _ = bound.send(Err(error));
-        }
-    });
-    receiver
-        .recv()
-        .context("the smoke receiver never answered its bind")?
-        .context("the smoke receiver cannot bind an ephemeral port")
+        axum::serve(listener, portal::router(state))
+            .await
+            .context("the push receiver stopped")
+    })
+}
+
+/// The receiver's configuration, marshalled into the hosting pod as JSON:
+/// the journal's bootstrap password, the webhook's two secrets, and the
+/// Forgejo token the analysis reads pushed changes with.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ReceiverConfig {
+    postgres_password: String,
+    path_secret: String,
+    hmac_key: String,
+    forge_token: String,
+}
+
+/// The push journal's lane for the in-pod receiver: the `navigator`
+/// database on the pod's own PostgreSQL, over loopback. The connection is
+/// encrypted but its identity is not verified — the same self-signed
+/// certificate the loopback forward tolerated, pinned by the pod boundary
+/// itself. `dev forgejo up` provisions the database empty; the receiver
+/// migrates it.
+async fn receiver_journal(config: &ReceiverConfig) -> Result<Arc<store::postgres::PostgresDb>> {
+    let options = PgConnectOptions::new()
+        .host("127.0.0.1")
+        .port(5432)
+        .username("postgres")
+        .password(&config.postgres_password)
+        .database("navigator")
+        .ssl_mode(PgSslMode::Require);
+    // PostgresDb::connect maps every failure to "PostgreSQL is
+    // unavailable"; probe once with the raw connection so a refused
+    // handshake reports its real cause.
+    let probe = <sqlx::postgres::PgConnection as sqlx::Connection>::connect_with(&options)
+        .await
+        .context("probe the push journal's PostgreSQL lane")?;
+    drop(probe);
+    let journal = store::postgres::PostgresDb::connect(options)
+        .await
+        .context("connect the push journal's PostgreSQL lane")?;
+    journal
+        .migrate_embedded(None)
+        .await
+        .context("migrate the push journal's PostgreSQL lane")?;
+    Ok(Arc::new(journal))
 }
 
 /// Delete the Firm repository at the end of the push-webhook proof — the

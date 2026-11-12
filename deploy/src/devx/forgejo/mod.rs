@@ -473,21 +473,6 @@ pub(super) fn assert_analyzed_push_receipt(
     Ok(())
 }
 
-/// The Docker bridge gateway a KIND pod reaches the host through: the
-/// node's address on that network with the gateway's `.1`. Forgejo's
-/// webhook delivery to the smoke's ingress rides it.
-pub(super) fn host_gateway(node_ip: &str) -> Option<String> {
-    let octets: Vec<&str> = node_ip.trim().split('.').collect();
-    if octets.len() != 4
-        || octets
-            .iter()
-            .any(|o| o.is_empty() || o.parse::<u8>().is_err())
-    {
-        return None;
-    }
-    Some(format!("{}.{}.{}.1", octets[0], octets[1], octets[2]))
-}
-
 /// The receiver probe a pod runs over the host gateway: one raw HTTP
 /// request through bash's `/dev/tcp` (the image carries no curl), answered
 /// by any status line — a wrong-secret refusal is reachability proven.
@@ -508,12 +493,13 @@ pub(super) const RECEIVER_SERVICE: &str = "forgejo-receiver";
 /// the receiver's Service, lives there.
 pub(super) const RECEIVER_NAMESPACE: &str = "navigator";
 
-/// The in-cluster Service and manual Endpoints that publish the smoke's
-/// receiver to Forgejo: Forgejo dials the Service name, and kube-proxy
-/// NATs the delivery to the gateway IP the receiver listens on.
-pub(super) fn receiver_endpoints_manifest(gateway: &str, port: u16) -> String {
+/// The receiver's in-cluster Service and manual Endpoints: Forgejo dials
+/// the Service name, and kube-proxy NATs the delivery to the address the
+/// receiver listens on — the postgres pod hosting the smoke's receiver,
+/// whose reachability from other pods the tier already proves.
+pub(super) fn receiver_endpoints_manifest(endpoint_ip: &str, port: u16) -> String {
     format!(
-        "apiVersion: v1\nkind: Service\nmetadata:\n  name: {RECEIVER_SERVICE}\n  namespace: {RECEIVER_NAMESPACE}\nspec:\n  type: ClusterIP\n  ports:\n    - port: 80\n      targetPort: {port}\n---\napiVersion: v1\nkind: Endpoints\nmetadata:\n  name: {RECEIVER_SERVICE}\n  namespace: {RECEIVER_NAMESPACE}\nsubsets:\n  - addresses:\n      - ip: {gateway}\n    ports:\n      - port: {port}\n"
+        "apiVersion: v1\nkind: Service\nmetadata:\n  name: {RECEIVER_SERVICE}\n  namespace: {RECEIVER_NAMESPACE}\nspec:\n  type: ClusterIP\n  ports:\n    - port: 80\n      targetPort: {port}\n---\napiVersion: v1\nkind: Endpoints\nmetadata:\n  name: {RECEIVER_SERVICE}\n  namespace: {RECEIVER_NAMESPACE}\nsubsets:\n  - addresses:\n      - ip: {endpoint_ip}\n    ports:\n      - port: {port}\n"
     )
 }
 
@@ -521,6 +507,33 @@ pub(super) fn receiver_endpoints_manifest(gateway: &str, port: u16) -> String {
 /// Service, not to a host address pods cannot reach.
 pub(super) fn receiver_service_url() -> String {
     format!("http://{RECEIVER_SERVICE}.{RECEIVER_NAMESPACE}.svc.cluster.local")
+}
+
+/// The fixed port the in-pod receiver serves on: the pod's network
+/// namespace is private, so a fixed port never collides.
+pub(super) const RECEIVER_PORT: u16 = 41080;
+
+/// Where the receiver's binary, config, log, and pid live inside the
+/// hosting pod's filesystem.
+pub(super) const RECEIVER_BINARY: &str = "/tmp/forgejo-receiver/navigator-deploy";
+pub(super) const RECEIVER_CONFIG: &str = "/tmp/forgejo-receiver/receiver.json";
+pub(super) const RECEIVER_LOG: &str = "/tmp/forgejo-receiver/receiver.log";
+pub(super) const RECEIVER_PID: &str = "/tmp/forgejo-receiver/receiver.pid";
+
+/// The receiver pod's in-cluster Forgejo API base: the analysis reads
+/// pushed changes over the cluster's own Service, in plain HTTP.
+pub(super) const RECEIVER_FORGE_URL: &str = "http://navigator-forgejo:3000";
+
+/// The pod command that (re)starts the receiver: any previous receiver dies
+/// first so re-runs are idempotent, the new one detaches with nohup so the
+/// exec session can end, and its pid is recorded for a later stop.
+pub(super) fn receiver_start_script() -> String {
+    format!(
+        "mkdir -p $(dirname {RECEIVER_CONFIG}) && \
+         kill $(cat {RECEIVER_PID} 2>/dev/null) 2>/dev/null; \
+         nohup {RECEIVER_BINARY} dev forgejo smoke --receiver-config {RECEIVER_CONFIG} \
+         >>{RECEIVER_LOG} 2>&1 & echo $! > {RECEIVER_PID}; echo started"
+    )
 }
 
 /// The kubectl port-forward arguments for an in-cluster target: the target
@@ -812,20 +825,24 @@ mod tests {
     }
 
     #[test]
-    fn the_host_gateway_is_the_node_address_router() {
-        assert_eq!(
-            host_gateway("172.18.0.2").as_deref(),
-            Some("172.18.0.1"),
-            "the KIND node sits at .2 on the Docker bridge"
+    fn the_receiver_start_script_detaches_and_records_its_pid() {
+        let script = receiver_start_script();
+        assert!(
+            script.contains("kill $(cat /tmp/forgejo-receiver/receiver.pid"),
+            "{script}"
         );
-        assert_eq!(host_gateway(" 10.0.0.7 ").as_deref(), Some("10.0.0.1"));
-        assert_eq!(
-            host_gateway("::1"),
-            None,
-            "an IPv6 node has no bridge gateway"
+        assert!(
+            script.contains("nohup /tmp/forgejo-receiver/navigator-deploy dev forgejo smoke"),
+            "{script}"
         );
-        assert_eq!(host_gateway("kind-control-plane"), None);
-        assert_eq!(host_gateway("1.2.3.999"), None);
+        assert!(
+            script.contains("--receiver-config /tmp/forgejo-receiver/receiver.json"),
+            "{script}"
+        );
+        assert!(
+            script.contains("echo $! > /tmp/forgejo-receiver/receiver.pid"),
+            "{script}"
+        );
     }
 
     #[test]
