@@ -363,9 +363,11 @@ navigator-deploy ops gcp access --project-id <project> --file "$NAVIGATOR_DEPLOY
   read-only project roles and `secretAccessor` on each listed secret, one secret at a time. The file is the whole truth
   for a declared reader, so a role or secret it stops naming is revoked on the next run.
 
-The reconciler refuses any reader project role outside `logging.viewer`, `monitoring.viewer`, and `container.viewer`.
-None of them reads Data Access audit logs, so a reader cannot read the record of its own reads. It creates no keys for a
-reader; the organization blocks service-account keys, and lifting that block is an operator decision made per key.
+The reconciler refuses any reader project role outside `logging.viewer`, `monitoring.viewer`, `container.viewer`, and
+`secretmanager.viewer`. The last lists secret names, metadata, and access policies, but reads no value; values stay
+behind the per-secret grants. None of them reads Data Access audit logs, so a reader cannot read the record of its own
+reads. It creates no keys for a reader; the organization blocks service-account keys, and lifting that block is an
+operator decision made per key.
 
 The runtime service account still holds `secretAccessor` project-wide. Narrowing it waits on the Data Access logs
 showing which secrets the CSI driver actually mounts.

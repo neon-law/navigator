@@ -35,10 +35,13 @@ use super::error::{SetupError, SetupResult};
 /// Project roles a Deployment Reader may hold. Each is read-only, and none
 /// reads secret payloads, Kubernetes Secrets, or Data Access audit logs — the
 /// audit trail of a reader's own reads stays out of that reader's reach.
+/// `secretmanager.viewer` lists secret names and metadata; it has no
+/// `versions.access`, so values stay behind per-secret `secretAccessor`.
 pub const READER_PROJECT_ROLES: &[&str] = &[
     "roles/logging.viewer",
     "roles/monitoring.viewer",
     "roles/container.viewer",
+    "roles/secretmanager.viewer",
 ];
 const SECRET_ACCESSOR: &str = "roles/secretmanager.secretAccessor";
 const KEY_ROLE: &str = "roles/cloudkms.cryptoKeyEncrypterDecrypter";
