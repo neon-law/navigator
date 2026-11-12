@@ -233,6 +233,93 @@ pub fn validate_invoice_filename(path: &Path) -> Result<()> {
 /// carry `docusign_envelope_id` (ENG-859).
 const SIGNED_ENGAGEMENT_FOLDERS: &[&str] = &["onboarding", "offboarding"];
 
+/// Stamp `envelope_id` on the checkout pointer the notation's signed copy
+/// files under (LAW-270). The link between a notation and its document is
+/// the template code's leading segment — `onboarding__letter` files under
+/// `blobs/onboarding/` — so the candidates are the unstamped pointers under
+/// `blobs/<template_kind>/`, preferring a `_signed.pdf` name. Under a
+/// signed-engagement folder the `_signed.pdf` name is not a preference but
+/// the gate's requirement (ENG-859: the id and the name imply each other),
+/// so only those candidates qualify. Returns the pointer path that was
+/// stamped, or `None` when no candidate matches — never a fabricated
+/// pointer.
+///
+/// # Errors
+///
+/// Returns an error when the checkout tree cannot be walked or a pointer
+/// file cannot be read or re-serialized.
+pub fn link_envelope_to_pointer(
+    root: &Path,
+    template_kind: &str,
+    envelope_id: uuid::Uuid,
+) -> Result<Option<PathBuf>> {
+    let blobs = root.join(POINTER_DIRECTORY);
+    if !blobs.is_dir() {
+        return Ok(None);
+    }
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    for entry in walkdir::WalkDir::new(&blobs).follow_links(false) {
+        let entry = entry.with_context(|| format!("walk {}", blobs.display()))?;
+        if !entry.file_type().is_file() || !is_pointer_path(entry.path()) {
+            continue;
+        }
+        let relative = entry
+            .path()
+            .strip_prefix(&blobs)
+            .map_err(|_| anyhow!("{} is outside blobs/", entry.path().display()))?;
+        // A folder-scoped pointer has at least `blobs/<folder>/<name>.yaml`.
+        if relative.components().count() < 2 {
+            continue;
+        }
+        let folder = relative
+            .components()
+            .next()
+            .and_then(|part| part.as_os_str().to_str());
+        if folder != Some(template_kind) {
+            continue;
+        }
+        let Some(pointer) = read_pointer(entry.path())? else {
+            continue;
+        };
+        if pointer.docusign_envelope_id.is_some() {
+            continue;
+        }
+        let filename = entry
+            .path()
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        // The gate names the *source* document (`retainer_signed.pdf`), not
+        // the pointer (`retainer_signed.pdf.yaml`) — strip the pointer
+        // extension the way `validate_folder_pointer_keys` reads the slug.
+        let source_name = filename
+            .strip_suffix(".yaml")
+            .or_else(|| filename.strip_suffix(".yml"))
+            .unwrap_or(filename);
+        if SIGNED_ENGAGEMENT_FOLDERS.contains(&template_kind) && !is_signed_pdf_filename(source_name)
+        {
+            continue;
+        }
+        candidates.push(entry.into_path());
+    }
+    // Prefer the signed-copy name, then the lexicographically first — a
+    // stable, explainable choice a lawyer can reproduce.
+    candidates.sort_by_key(|path| !path.to_string_lossy().contains("_signed.pdf"));
+    let Some(path) = candidates.into_iter().next() else {
+        return Ok(None);
+    };
+    let Some(pointer) = read_pointer(&path)? else {
+        return Ok(None);
+    };
+    let stamped = model::document_pointers::DocumentPointer {
+        docusign_envelope_id: Some(envelope_id),
+        ..pointer
+    };
+    std::fs::write(&path, stamped.to_yaml()?)
+        .with_context(|| format!("write {}", path.display()))?;
+    Ok(Some(path))
+}
+
 /// Whether `relative` (a path relative to `documents/`) is staged under one
 /// of [`SIGNED_ENGAGEMENT_FOLDERS`].
 fn is_signed_engagement_folder(relative: &Path) -> bool {

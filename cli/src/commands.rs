@@ -111,6 +111,49 @@ enum Command {
         #[command(subcommand)]
         action: SiteCmd,
     },
+    /// Prepare or send a Notation's rendered document envelope on the
+    /// deployment. The Project — host and code — comes from the
+    /// `navigator.yaml` in the current checkout.
+    #[command(name = "notation")]
+    Notation {
+        #[command(subcommand)]
+        action: NotationCmd,
+    },
+}
+
+/// The Notation envelope verbs a lawyer runs from a Project checkout.
+#[derive(Subcommand)]
+pub enum NotationCmd {
+    /// Work with a Notation's signature envelope.
+    #[command(name = "envelope")]
+    Envelope {
+        #[command(subcommand)]
+        action: EnvelopeCmd,
+    },
+}
+
+/// Envelope lifecycle verbs. A prepare is the explicit, non-default step
+/// that creates anything — the `Sync --dry_run` idiom: the draft is held
+/// on the provider, validated but never shown to a signer, until an
+/// explicit send dispatches it.
+#[derive(Subcommand)]
+pub enum EnvelopeCmd {
+    /// Create the envelope as a draft on the provider — held, never shown
+    /// to a signer, and the workflow does not advance. Validation runs
+    /// identically to a send: an unfinished document or an unresolved
+    /// signer is refused before anything is written.
+    Prepare {
+        /// The notation whose rendered document the envelope holds.
+        notation_id: uuid::Uuid,
+    },
+    /// Dispatch the envelope to its declared signers. Promotes an
+    /// envelope a previous prepare created instead of creating a second
+    /// one, and stamps the returned envelope id on the notation's
+    /// document pointer in the checkout.
+    Send {
+        /// The notation whose rendered document is dispatched.
+        notation_id: uuid::Uuid,
+    },
 }
 
 /// The site verbs a Project checkout and its CI need: the stored session and
@@ -255,6 +298,16 @@ fn run() -> ExitCode {
             dry_run: _,
         } => runtime().block_on(projects::watch::run_preview(dir, &host)),
         Command::Projects { action } => runtime().block_on(run_projects(action)),
+        Command::Notation {
+            action: NotationCmd::Envelope { action },
+        } => match action {
+            EnvelopeCmd::Prepare { notation_id } => {
+                runtime().block_on(remote::notation_envelope(notation_id, true))
+            }
+            EnvelopeCmd::Send { notation_id } => {
+                runtime().block_on(remote::notation_envelope(notation_id, false))
+            }
+        },
         Command::Site { action } => match action {
             SiteCmd::Login { host, no_browser } => {
                 runtime().block_on(login::run_login(&host, no_browser))

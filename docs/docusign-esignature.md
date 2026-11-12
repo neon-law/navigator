@@ -77,14 +77,22 @@ user, RSA keypair, consent, and HMAC key. Treat the shared GUID as an identifier
 
 ## Which templates are signed (template-agnostic send path)
 
-The send path is keyed off the notation's **template code**, not the retainer. `drive_post_questionnaire_workflow`
-([`portal::retainer_walk`](../portal/src/retainer_walk.rs)) resolves the workflow spec via
-`workflows::bundled_spec_yaml(code)`, rendering to the generic per-notation storage keys (`notations/{id}/document.pdf`,
-`signed-document.pdf`, `certificate-of-completion.pdf`), and resolves the captive signer from the questionnaire answers
-when present and otherwise from the notation's bound Person row. Recipients follow the template's `signers:` list
-(default `[client, firm]`) in declaration order. Adding a signed template is a template + spec, not a new handler — the
-spec just needs the retainer's shape: an `intake_persisted__*` → `lawyer_review` → `generate_pdf__*_pdf` →
-`sent_for_signature__pending` chain.
+The send path is keyed off the notation's **template code**, not the retainer. `send_notation_for_signature`
+([`portal::signature_flow`](../portal/src/signature_flow.rs)) gates on the rendered PDF being present, resolves the
+workflow spec via `workflows::bundled_spec_yaml(code)`, builds the manifest from the template's `signers:` list
+(default `[client, firm]`) in declaration order — resolving each signer from the questionnaire answers when present
+and otherwise from the notation's bound Person row — and hands the envelope to the provider keyed on the notation id.
+Adding a signed template is a template + spec, not a new handler — the spec just needs the retainer's shape: an
+`intake_persisted__*` → `lawyer_review` → `generate_pdf__*_pdf` → `sent_for_signature__pending` chain.
+
+Two postures, one envelope: **prepare** holds the envelope as a draft on the provider (DocuSign `status: created`,
+fake provider `Prepared`) without advancing the workflow — the lawyer's screen keeps saying review; **send**
+dispatches and promotes any prepared draft rather than creating a second envelope. Validation (unfinished
+placeholders, anchor and tab refusals) runs identically on both, before anything is written. From the portal REST
+door, `POST /app/api/notations/:id/signature` with `{"prepare": true}` drafts and with no body (or `false`) sends.
+From a Project checkout, `navigator notation envelope prepare <notation-id>` drafts and
+`navigator notation envelope send <notation-id>` dispatches, stamping the returned envelope id on the notation's
+document pointer; `navigator notation envelope status <notation-id>` reads per-signer state.
 
 Signed templates today:
 
