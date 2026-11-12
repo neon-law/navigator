@@ -1701,6 +1701,13 @@ async fn journal_lane(
         .database("navigator")
         .ssl_mode(PgSslMode::VerifyCa)
         .ssl_root_cert(&root);
+    // PostgresDb::connect maps every failure to "PostgreSQL is
+    // unavailable"; probe once with the raw connection so a refused
+    // handshake reports its real cause.
+    let probe = sqlx::postgres::PgConnection::connect(&options)
+        .await
+        .context("probe the push journal's PostgreSQL lane")?;
+    drop(probe);
     let journal = store::postgres::PostgresDb::connect(options)
         .await
         .context("connect the push journal's PostgreSQL lane")?;
