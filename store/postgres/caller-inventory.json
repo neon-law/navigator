@@ -10144,6 +10144,7 @@
       "cli/src/projects/reference.rs",
       "cli/src/projects/repository.rs",
       "cli/src/projects/skill_feedback.rs",
+      "cli/src/projects/watch.rs",
       "cli/src/remote.rs",
       "cli/src/snapshot_audit.rs",
       "cloud/src/calendar.rs",

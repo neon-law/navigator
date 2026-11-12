@@ -7,7 +7,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use anyhow::{anyhow, ensure, Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::document_sync::{
     ensure_document_path_is_safe, ensure_pull_target_is_safe, pull_target,
@@ -22,6 +22,80 @@ struct Project {
     code: String,
     status: String,
     repository_url: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum CheckoutState {
+    Present,
+    Missing,
+    NeedsAttention,
+    RepositoryUnavailable,
+}
+
+#[derive(Serialize)]
+struct CheckoutPreview {
+    code: String,
+    checkout: CheckoutState,
+}
+
+/// Report the checkout state of the signed-in person's active Projects.
+pub async fn run_preview(dir: Option<PathBuf>, host: &str) -> ExitCode {
+    match preview(dir, host).await {
+        Ok(report) => {
+            println!("{report}");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("navigator: {error:#}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+async fn preview(dir: Option<PathBuf>, host: &str) -> Result<String> {
+    let dir = dir
+        .or_else(|| std::env::home_dir().map(|home| home.join("Work")))
+        .context("no home directory; pass --dir")?;
+    let (base, token) = remote::resolve(Some(host))?;
+    let projects = visible_projects(&base, &token).await?;
+    serde_json::to_string(&checkout_preview(&dir, projects)?).context("serialize Work sync preview")
+}
+
+fn checkout_preview(dir: &Path, projects: Vec<Project>) -> Result<Vec<CheckoutPreview>> {
+    match std::fs::symlink_metadata(dir) {
+        Ok(metadata) => ensure!(metadata.is_dir(), "Work path is not a directory"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error).context("inspect Work directory"),
+    }
+    let mut report = Vec::new();
+    for project in projects
+        .into_iter()
+        .filter(|p| matches!(p.status.as_str(), "open" | "pitch"))
+    {
+        let checkout = if !cloud::workspace::is_valid_slug(&project.code) {
+            CheckoutState::NeedsAttention
+        } else if project.repository_url.as_deref().is_none_or(str::is_empty) {
+            CheckoutState::RepositoryUnavailable
+        } else {
+            let root = dir.join(&project.code);
+            match std::fs::symlink_metadata(&root) {
+                Ok(metadata) if metadata.is_dir() && root.join(".jj").is_dir() => {
+                    CheckoutState::Present
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    CheckoutState::Missing
+                }
+                _ => CheckoutState::NeedsAttention,
+            }
+        };
+        report.push(CheckoutPreview {
+            code: project.code,
+            checkout,
+        });
+    }
+    report.sort_by(|a, b| a.code.cmp(&b.code));
+    Ok(report)
 }
 
 /// Keep polling until Ctrl-C. An unavailable Project does not stop the others.
@@ -65,11 +139,7 @@ async fn watch(dir: &Path, host: Option<&str>) -> Result<()> {
 
 async fn poll(dir: &Path, host: Option<&str>, copies: &mut HashMap<PathBuf, String>) -> Result<()> {
     let (base, token) = remote::resolve(host)?;
-    let client = remote::authenticated_client_builder(&base)?
-        .timeout(INTERVAL)
-        .build()?;
-    let body = remote::fetch_project_list(&client, &base, &token).await?;
-    let projects: Vec<Project> = serde_json::from_str(&body).context("read visible Projects")?;
+    let projects = visible_projects(&base, &token).await?;
     for project in projects
         .into_iter()
         .filter(|project| project.status == "open")
@@ -79,6 +149,14 @@ async fn poll(dir: &Path, host: Option<&str>, copies: &mut HashMap<PathBuf, Stri
         }
     }
     Ok(())
+}
+
+async fn visible_projects(base: &str, token: &str) -> Result<Vec<Project>> {
+    let client = remote::authenticated_client_builder(base)?
+        .timeout(INTERVAL)
+        .build()?;
+    let body = remote::fetch_project_list(&client, base, token).await?;
+    serde_json::from_str(&body).context("read visible Projects")
 }
 
 async fn update(
@@ -271,6 +349,37 @@ mod tests {
     use uuid::Uuid;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[test]
+    fn preview_reports_only_active_projects_and_preserves_local_files() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("existing/.jj"))?;
+        std::fs::write(root.join("occupied"), b"local work")?;
+        let projects = serde_json::from_value(serde_json::json!([
+            {"code": "missing", "status": "pitch", "repository_url": "https://forge.example.test/missing"},
+            {"code": "existing", "status": "open", "repository_url": "https://forge.example.test/existing"},
+            {"code": "occupied", "status": "open", "repository_url": "https://forge.example.test/occupied"},
+            {"code": "unprovisioned", "status": "open"},
+            {"code": "closed", "status": "closed", "repository_url": "https://forge.example.test/closed"}
+        ]))?;
+        let report = checkout_preview(root, projects)?;
+        assert_eq!(
+            report
+                .iter()
+                .map(|item| (item.code.as_str(), &item.checkout))
+                .collect::<Vec<_>>(),
+            vec![
+                ("existing", &CheckoutState::Present),
+                ("missing", &CheckoutState::Missing),
+                ("occupied", &CheckoutState::NeedsAttention),
+                ("unprovisioned", &CheckoutState::RepositoryUnavailable),
+            ]
+        );
+        assert!(!root.join("missing").exists());
+        assert_eq!(std::fs::read(root.join("occupied"))?, b"local work");
+        Ok(())
+    }
 
     #[tokio::test]
     async fn hydrates_nested_blobs_and_preserves_a_local_edit() -> Result<()> {

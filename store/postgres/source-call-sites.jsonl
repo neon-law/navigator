@@ -111,7 +111,7 @@
 {"file":"cli/src/answers_file.rs","line":100,"function":"pdf_answers","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/answers_file.rs","line":146,"function":"pdf_fields","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/answers_file.rs","line":152,"function":"pdf_fields","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cli/src/commands.rs","line":4544,"function":"parse_notarization","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/commands.rs","line":4561,"function":"parse_notarization","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/credentials.rs","line":74,"function":"set","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/credentials.rs","line":206,"function":"write_with_mode_0600","operation":"create","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/document_deletion.rs","line":58,"function":"record_actioned","operation":"create","sql_operations":[],"tables":[],"transaction":false}
@@ -197,8 +197,8 @@
 {"file":"cli/src/projects/skill.rs","line":240,"function":"record_kit_version","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/projects/source_import.rs","line":43,"function":"tree_from_checkout","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/projects/source_import.rs","line":98,"function":"import_tree","operation":"query","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cli/src/projects/watch.rs","line":222,"function":"hydrate","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"cli/src/projects/watch.rs","line":264,"function":"hydrate","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/projects/watch.rs","line":300,"function":"hydrate","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/projects/watch.rs","line":342,"function":"hydrate","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/remote.rs","line":732,"function":"actions_oidc_token","operation":"query","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/remote.rs","line":1438,"function":"list_revisions","operation":"query","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/remote.rs","line":1539,"function":"integrity_page","operation":"query","sql_operations":[],"tables":[],"transaction":false}
