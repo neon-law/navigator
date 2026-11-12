@@ -358,7 +358,8 @@ navigator-deploy ops gcp access --project-id <project> --file "$NAVIGATOR_DEPLOY
   accepts no other location), rotates it on that period, makes the Secret Manager service agent its only
   encrypter/decrypter, and points every secret's replication at it. New versions are encrypted with the key; versions
   written before it keep Google-managed encryption until replaced. Disabling the key makes every secret unreadable at
-  once. `gcloud secrets replication update <secret> --remove-cmek` undoes it for one secret.
+  once. An optional `secrets = [...]` list limits the key to the named secrets and leaves every other secret's
+  encryption untouched. `gcloud secrets replication update <secret> --remove-cmek` undoes it for one secret.
 - Each `[[reader]]` is a [Deployment Reader](glossary/deployment-reader.md): a service account holding only the listed
   read-only project roles and `secretAccessor` on each listed secret, one secret at a time. The file is the whole truth
   for a declared reader, so a role or secret it stops naming is revoked on the next run.

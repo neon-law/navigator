@@ -84,6 +84,17 @@ pub struct Audit {
 #[serde(deny_unknown_fields)]
 pub struct SecretEncryption {
     pub rotation_days: u32,
+    /// The secrets to encrypt with the key. Absent means every secret in the
+    /// project; a list leaves every other secret's encryption untouched.
+    pub secrets: Option<Vec<String>>,
+}
+
+impl SecretEncryption {
+    fn covers(&self, secret: &str) -> bool {
+        self.secrets
+            .as_ref()
+            .is_none_or(|names| names.iter().any(|name| name == secret))
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -173,6 +184,11 @@ pub async fn reconcile(
         .readers
         .iter()
         .flat_map(|reader| &reader.secrets)
+        .chain(
+            file.secret_encryption
+                .iter()
+                .flat_map(|e| e.secrets.iter().flatten()),
+        )
         .filter(|name| !secrets.iter().any(|secret| secret.id == **name))
         .map(String::as_str)
         .collect();
@@ -195,8 +211,10 @@ pub async fn reconcile(
     reconcile_project_policy(client, project_id, file, mode, &mut drift).await?;
 
     for secret in &secrets {
-        if let Some(key) = &key {
-            reconcile_secret_key(client, project_id, secret, key, mode, &mut drift).await?;
+        if let (Some(key), Some(encryption)) = (&key, &file.secret_encryption) {
+            if encryption.covers(&secret.id) {
+                reconcile_secret_key(client, project_id, secret, key, mode, &mut drift).await?;
+            }
         }
         if !file.readers.is_empty() {
             let resource = Resource::Secret(project_id, &secret.id);
@@ -890,9 +908,9 @@ secrets = ["DECLARED"]
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
     }
 
-    #[tokio::test]
-    async fn encryption_creates_a_rotating_global_key_owned_by_the_agent_and_points_secrets_at_it()
-    {
+    /// Run an apply that creates the key, with `patched` expected to move onto
+    /// it and `untouched` expected to keep its encryption.
+    async fn encryption_run(encryption: &str, patched: &[&str], untouched: &[&str]) -> Vec<String> {
         let (server, client) = server().await;
         mount_world(&server).await;
         let key = secret_key_name(PROJECT);
@@ -960,7 +978,15 @@ secrets = ["DECLARED"]
             .expect(1)
             .mount(&server)
             .await;
-        for secret in ["DECLARED", "UNDECLARED"] {
+        for secret in untouched {
+            Mock::given(method("PATCH"))
+                .and(path(format!("/v1/projects/{PROJECT}/secrets/{secret}")))
+                .respond_with(ResponseTemplate::new(500))
+                .expect(0)
+                .mount(&server)
+                .await;
+        }
+        for secret in patched {
             Mock::given(method("PATCH"))
                 .and(path(format!("/v1/projects/{PROJECT}/secrets/{secret}")))
                 .and(query_param("updateMask", "replication"))
@@ -978,16 +1004,36 @@ secrets = ["DECLARED"]
             .mount(&server)
             .await;
 
-        let drift = reconcile(
-            &client,
-            PROJECT,
-            &file("[secret_encryption]\nrotation_days = 90\n"),
-            Mode::Apply,
+        reconcile(&client, PROJECT, &file(encryption), Mode::Apply)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn encryption_creates_a_rotating_global_key_owned_by_the_agent_and_points_secrets_at_it()
+    {
+        let drift = encryption_run(
+            "[secret_encryption]\nrotation_days = 90\n",
+            &["DECLARED", "UNDECLARED"],
+            &[],
         )
-        .await
-        .unwrap();
+        .await;
         assert!(
             drift.contains(&"encrypt secret UNDECLARED with secret-manager".to_string()),
+            "{drift:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn scoped_encryption_moves_only_the_named_secrets_onto_the_key() {
+        let drift = encryption_run(
+            "[secret_encryption]\nrotation_days = 90\nsecrets = [\"DECLARED\"]\n",
+            &["DECLARED"],
+            &["UNDECLARED"],
+        )
+        .await;
+        assert!(
+            !drift.iter().any(|line| line.contains("UNDECLARED with")),
             "{drift:?}"
         );
     }
