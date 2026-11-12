@@ -334,7 +334,7 @@ async fn import_revalidation_is_read_only_and_known_client_file_drift_can_be_rep
     );
     assert_eq!(
         project_folders::list_verified(&pg, id).await.unwrap().len(),
-        18
+        MatterFolder::TREE.len() + 2
     );
     assert_eq!(
         Box::pin(reconcile(&db, &pg, &drive, id, &policy))
@@ -416,7 +416,7 @@ async fn import_revalidation_refuses_moved_parents_and_foreign_reserved_custom_f
     assert!(drive.members(&custom.id).is_empty());
     assert_eq!(
         project_folders::list_verified(&pg, id).await.unwrap().len(),
-        18
+        MatterFolder::TREE.len() + 2
     );
     let oversized = vec![id; 101];
     assert!(matches!(

@@ -80,6 +80,9 @@ pub struct DocumentPointer {
     /// Optional on every pointer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence: Option<crate::documents::Evidence>,
+    /// Expense details supported by a receipt Document.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt: Option<crate::documents::ReceiptMetadata>,
 }
 
 /// One of the lawyer-facing folders a Project checkout's `documents/`
@@ -108,6 +111,9 @@ pub enum MatterFolder {
     /// Letters served on, or received from, another party.
     #[serde(rename = "Correspondence (Served)")]
     CorrespondenceServed,
+    /// Receipts and other evidence of costs incurred on the Project.
+    #[serde(rename = "Costs")]
+    Costs,
     /// Discovery requests and responses. The folder a pre-LAW-215 checkout
     /// holds; a fresh one creates `Discovery (Served)` instead.
     #[serde(rename = "Discovery")]
@@ -155,11 +161,12 @@ pub enum MatterFolder {
 impl MatterFolder {
     /// Every matter folder, in the order a Finder window lists them,
     /// including the bare `Discovery` folder older checkouts hold.
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::ClientProduction,
         Self::ClientProductionAgreements,
         Self::ClientProductionScreenshots,
         Self::CorrespondenceServed,
+        Self::Costs,
         Self::Discovery,
         Self::DiscoveryServed,
         Self::DocketFilings,
@@ -177,11 +184,12 @@ impl MatterFolder {
 
     /// The tree a fresh checkout creates (LAW-215): [`Self::ALL`] without
     /// the bare `Discovery` folder, which only a migration refiles.
-    pub const TREE: [Self; 16] = [
+    pub const TREE: [Self; 17] = [
         Self::ClientProduction,
         Self::ClientProductionAgreements,
         Self::ClientProductionScreenshots,
         Self::CorrespondenceServed,
+        Self::Costs,
         Self::DiscoveryServed,
         Self::DocketFilings,
         Self::CourtRules,
@@ -204,6 +212,7 @@ impl MatterFolder {
             Self::ClientProductionAgreements => "Client Production/Agreements",
             Self::ClientProductionScreenshots => "Client Production/Screenshots",
             Self::CorrespondenceServed => "Correspondence (Served)",
+            Self::Costs => "Costs",
             Self::Discovery => "Discovery",
             Self::DiscoveryServed => "Discovery (Served)",
             Self::DocketFilings => "Docket Filings",
@@ -255,6 +264,7 @@ impl MatterFolder {
             | Self::StipulationsWorkProduct => Some(Self::WorkProduct),
             Self::ClientProduction
             | Self::CorrespondenceServed
+            | Self::Costs
             | Self::Discovery
             | Self::DiscoveryServed
             | Self::DocketFilings
@@ -295,6 +305,7 @@ impl MatterFolder {
         match kind {
             "exhibit" => Self::ClientProduction,
             "letter" => Self::CorrespondenceServed,
+            "receipt" => Self::Costs,
             // A court's order is neither a pleading nor a filing, but it is
             // docket paper all the same (LAW-189).
             "pleading" | "filing" | "order" => Self::DocketFilings,
@@ -313,6 +324,7 @@ impl MatterFolder {
         match self {
             Self::ClientProduction => "exhibit",
             Self::CorrespondenceServed => "letter",
+            Self::Costs => "receipt",
             Self::DocketFilings => "pleading",
             Self::ClientCallsWorkProduct => "transcript",
             Self::ResearchWorkProduct => "memo",
@@ -398,6 +410,8 @@ pub enum PointerError {
     Notarization(#[from] crate::documents::NotarizationError),
     #[error(transparent)]
     Evidence(#[from] crate::documents::EvidenceError),
+    #[error(transparent)]
+    Receipt(#[from] crate::documents::ReceiptMetadataError),
 }
 
 /// Why a persisted folder name was refused (LAW-241): it is not one of the
@@ -502,6 +516,9 @@ impl DocumentPointer {
         if let Some(evidence) = &self.evidence {
             evidence.validate()?;
         }
+        if let Some(receipt) = &self.receipt {
+            receipt.validate(&self.kind)?;
+        }
         Ok(())
     }
 }
@@ -512,6 +529,7 @@ mod tests {
 
     fn pointer() -> DocumentPointer {
         DocumentPointer {
+            receipt: None,
             checkout_path: None,
             kind: "agreement".into(),
             visibility: "internal".into(),
@@ -680,6 +698,46 @@ mod tests {
         }
         for folder in MatterFolder::ALL {
             assert_eq!(MatterFolder::parse(folder.as_str()), Some(folder));
+        }
+    }
+
+    #[test]
+    fn receipt_files_use_the_fixed_costs_folder() {
+        let folder = MatterFolder::parse_checked("Costs").unwrap();
+        assert!(MatterFolder::TREE.contains(&folder));
+        assert_eq!(folder.default_kind(), "receipt");
+        assert_eq!(MatterFolder::for_kind("receipt"), folder);
+        assert_eq!(folder.nested_parent(), None);
+    }
+
+    #[test]
+    fn receipt_pointer_round_trips_expense_evidence() {
+        let mut document = pointer();
+        document.kind = "receipt".to_string();
+        document.visibility = "internal".to_string();
+        let yaml = format!(
+            "{base}receipt:
+  amount_cents: 2750
+  currency: USD
+  payee: sample filing service
+  category: e_filing_service_fee
+  transaction_id: sample-transaction
+",
+            base = document.to_yaml().unwrap()
+        );
+        let parsed = DocumentPointer::from_yaml(&yaml).unwrap();
+        let written = parsed.to_yaml().unwrap();
+        assert!(written.contains("amount_cents: 2750"));
+        assert!(written.contains("transaction_id: sample-transaction"));
+        assert_eq!(DocumentPointer::from_yaml(&written).unwrap(), parsed);
+        for (valid, invalid) in [
+            ("kind: receipt", "kind: filing"),
+            ("amount_cents: 2750", "amount_cents: 0"),
+            ("currency: USD", "currency: usd"),
+            ("payee: sample filing service", "payee: ''"),
+            ("transaction_id: sample-transaction", "transaction_id: ''"),
+        ] {
+            assert!(DocumentPointer::from_yaml(&written.replace(valid, invalid)).is_err());
         }
     }
 
@@ -857,13 +915,10 @@ mod tests {
         );
     }
 
-    /// LAW-215: a fresh checkout creates the sixteen-folder tree, which
-    /// keeps the bare `Discovery` folder out (a migration refiles it), while
-    /// `parse` still reads every name ever written.
+    /// A fresh checkout omits the bare `Discovery` folder while pointers
+    /// can still name it.
     #[test]
-    fn the_fresh_checkout_tree_has_sixteen_folders_and_keeps_bare_discovery_out() {
-        assert_eq!(MatterFolder::ALL.len(), 17);
-        assert_eq!(MatterFolder::TREE.len(), 16);
+    fn the_fresh_checkout_tree_keeps_bare_discovery_out() {
         assert!(MatterFolder::ALL.contains(&MatterFolder::Discovery));
         assert!(!MatterFolder::TREE.contains(&MatterFolder::Discovery));
 
@@ -871,7 +926,7 @@ mod tests {
         let mut names: Vec<&str> = MatterFolder::TREE.iter().map(|f| f.as_str()).collect();
         names.sort_unstable();
         names.dedup();
-        assert_eq!(names.len(), 16);
+        assert_eq!(names.len(), MatterFolder::TREE.len());
         for folder in MatterFolder::TREE {
             assert_eq!(MatterFolder::parse(folder.as_str()), Some(folder));
         }

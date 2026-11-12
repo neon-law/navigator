@@ -154,6 +154,8 @@ pub enum Kind {
     /// every other asset-lane kind `navigator project sync` routes without an
     /// explicit override.
     Invoice,
+    /// Evidence of a cost incurred on a Project. Asset-lane only.
+    Receipt,
     /// A filed artifact nobody has classified yet — an inbound email
     /// attachment, a blank-kind lawyer upload, an expunge tombstone.
     ///
@@ -314,6 +316,7 @@ impl Kind {
         Kind::Order,
         Kind::ClosedRepository,
         Kind::Invoice,
+        Kind::Receipt,
         Kind::Unclassified,
         Kind::ReviewQueueWorkbench,
         Kind::VerifierSplitView,
@@ -360,6 +363,7 @@ impl Kind {
             Kind::Order => "order",
             Kind::ClosedRepository => "closed_repository",
             Kind::Invoice => "invoice",
+            Kind::Receipt => "receipt",
             Kind::Unclassified => "unclassified",
             Kind::ReviewQueueWorkbench => "review_queue_workbench",
             Kind::VerifierSplitView => "verifier_split_view",
@@ -417,6 +421,7 @@ impl Kind {
                 "The archive of a closed Project's repository at its final commit (asset-lane only)"
             }
             Kind::Invoice => "The Firm's invoice to the client (asset-lane only)",
+            Kind::Receipt => "Evidence of a Project expense (asset-lane only)",
             Kind::Unclassified => "A filed artifact nobody has classified yet (asset-lane only)",
             Kind::ReviewQueueWorkbench => {
                 "A matter dashboard: a filterable item rail, a detail pane, and a per-item status"
@@ -509,6 +514,7 @@ impl Kind {
             | Kind::Order
             | Kind::ClosedRepository
             | Kind::Invoice
+            | Kind::Receipt
             | Kind::Unclassified
             | Kind::ReviewQueueWorkbench
             | Kind::VerifierSplitView
@@ -568,6 +574,7 @@ impl Kind {
             | Kind::Order
             | Kind::ClosedRepository
             | Kind::Invoice
+            | Kind::Receipt
             | Kind::Unclassified
             | Kind::ReviewQueueWorkbench
             | Kind::VerifierSplitView
@@ -738,6 +745,7 @@ impl Kind {
             | Kind::Order
             | Kind::ClosedRepository
             | Kind::Invoice
+            | Kind::Receipt
             | Kind::Unclassified
             | Kind::ReviewQueueWorkbench
             | Kind::VerifierSplitView
@@ -825,6 +833,7 @@ impl Kind {
             | Kind::Order
             | Kind::ClosedRepository
             | Kind::Invoice
+            | Kind::Receipt
             | Kind::Unclassified => Category::FiledAsset,
         }
     }
@@ -927,6 +936,7 @@ impl Kind {
                 | Kind::Order
                 | Kind::ClosedRepository
                 | Kind::Invoice
+                | Kind::Receipt
                 | Kind::Unclassified => false,
             },
             // Everything that can be *filed on a matter*: the three
@@ -957,6 +967,7 @@ impl Kind {
                 | Kind::Order
                 | Kind::ClosedRepository
                 | Kind::Invoice
+                | Kind::Receipt
                 | Kind::Unclassified => true,
                 Kind::Event
                 | Kind::Post
@@ -1089,6 +1100,7 @@ mod tests {
             Kind::Order,
             Kind::ClosedRepository,
             Kind::Invoice,
+            Kind::Receipt,
             Kind::Unclassified,
         ] {
             assert!(!kind.valid_for(Lane::Template), "{}", kind.as_str());
@@ -1575,6 +1587,7 @@ mod tests {
             Kind::Order,
             Kind::ClosedRepository,
             Kind::Invoice,
+            Kind::Receipt,
             Kind::Unclassified,
         ] {
             assert_eq!(kind.category(), Category::FiledAsset, "{}", kind.as_str());

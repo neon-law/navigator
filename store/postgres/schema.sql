@@ -4624,3 +4624,9 @@ ALTER TABLE lead_consent ADD COLUMN call_opt_in BOOLEAN NOT NULL DEFAULT false;
 -- no row is removed, and a new inbound Message clears the stamp. See the
 -- `Inbox Trash` glossary term.
 ALTER TABLE inbox_conversation ADD COLUMN trashed_at TIMESTAMPTZ;
+
+-- Migration: 20261112000000_add_costs_project_folder_slot.sql
+-- The fixed Costs folder is provisioned beside the other top-level Matter Folders.
+ALTER TABLE project_folder DROP CONSTRAINT project_folder_slot_check;
+
+ALTER TABLE project_folder ADD CONSTRAINT project_folder_slot_check CHECK (slot IN ( 'root', 'client_submissions', 'Client Production', 'Client Production/Agreements', 'Client Production/Screenshots', 'Correspondence (Served)', 'Costs', 'Discovery (Served)', 'Docket Filings', 'Court Rules', 'Engagement', 'Work Product', 'Work Product/Client Calls (Work Product)', 'Work Product/Correspondence (Work Product)', 'Work Product/Discovery (Work Product)', 'Work Product/Motions (Work Product)', 'Work Product/Pleadings (Work Product)', 'Work Product/Research (Work Product)', 'Work Product/Stipulations (Work Product)' ));

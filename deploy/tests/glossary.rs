@@ -239,7 +239,8 @@ fn glossary_separates_the_pointer_from_the_blob() {
     );
     let pointer = String::from_utf8_lossy(&pointer.stdout);
     assert!(pointer.contains("## Pointer"));
-    assert!(pointer.contains("never contains bytes"), "{pointer}");
+    let normalized = pointer.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(normalized.contains("never contains bytes"), "{pointer}");
     assert!(pointer.contains("store::document_pointers::DocumentPointer"));
 
     let blob = navigator(&["glossary", "show", "Blob"]);

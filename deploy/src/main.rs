@@ -3130,6 +3130,9 @@ enum AssetAction {
 /// it. Every flag is optional.
 #[derive(clap::Args)]
 struct ExecutionArgs {
+    /// A YAML file with the expense amount, currency, payee, category, and source ID.
+    #[arg(long, value_parser = read_receipt_metadata, requires = "file")]
+    receipt: Option<store::documents::ReceiptMetadata>,
     /// How the executed document was signed: `wet_ink` or `docusign`.
     /// Optional; given together with `--signed-on`.
     #[arg(long, value_parser = parse_signing_method, requires = "signed_on")]
@@ -3186,9 +3189,20 @@ impl EvidenceArgs {
     }
 }
 
+fn read_receipt_metadata(path: &str) -> Result<store::documents::ReceiptMetadata, String> {
+    let bytes = std::fs::read(path).map_err(|error| format!("read receipt metadata: {error}"))?;
+    let receipt: store::documents::ReceiptMetadata =
+        serde_yaml::from_slice(&bytes).map_err(|_| "invalid receipt metadata YAML".to_string())?;
+    receipt
+        .validate("receipt")
+        .map_err(|error| error.to_string())?;
+    Ok(receipt)
+}
+
 impl ExecutionArgs {
     fn record(self) -> remote::DocumentExecution {
         remote::DocumentExecution {
+            receipt: self.receipt,
             signing: self
                 .signing_method
                 .zip(self.signed_on)

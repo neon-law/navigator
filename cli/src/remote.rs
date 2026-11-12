@@ -1174,6 +1174,7 @@ pub struct LiveDocumentSummary {
 /// every upload that is not an executed document.
 #[derive(Debug, Clone, Default)]
 pub struct DocumentExecution {
+    pub receipt: Option<model::documents::ReceiptMetadata>,
     pub signing: Option<model::documents::Signing>,
     pub notarization: Vec<model::documents::Notarization>,
     pub evidence: Option<model::documents::Evidence>,
@@ -1190,6 +1191,16 @@ impl DocumentExecution {
         }
         if let Some(evidence) = &self.evidence {
             body["evidence"] = serde_json::to_value(evidence).context("encode evidence")?;
+        }
+        if let Some(receipt) = &self.receipt {
+            receipt.validate(body["kind"].as_str().unwrap_or_default())?;
+            if body.get("metadata").is_none() {
+                body["metadata"] = serde_json::json!({});
+            }
+            let metadata = body["metadata"].as_object_mut().ok_or_else(|| {
+                anyhow!("document metadata must be an object when attaching a receipt")
+            })?;
+            metadata.insert("receipt".to_string(), serde_json::to_value(receipt)?);
         }
         Ok(())
     }
@@ -7390,6 +7401,7 @@ mod tests {
         .unwrap();
 
         let execution = DocumentExecution {
+            receipt: None,
             signing: Some(store::documents::Signing {
                 method: store::documents::SigningMethod::Docusign,
                 signed_on: chrono::NaiveDate::from_ymd_opt(2026, 9, 4).unwrap(),
@@ -8232,6 +8244,7 @@ mod tests {
         let pointer_path = root.path().join("blobs/cases/order.docx.yml");
         std::fs::create_dir_all(pointer_path.parent().unwrap()).unwrap();
         let pointer = store::document_pointers::DocumentPointer {
+            receipt: None,
             checkout_path: None,
             kind: "filing".into(),
             visibility: "internal".into(),
@@ -11606,6 +11619,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn receipt_upload_carries_expense_metadata_and_defaults_to_internal() {
+        let server = MockServer::start().await;
+        let project_id = Uuid::now_v7();
+        let client = DocumentClient::for_check_tests(server.uri(), project_id);
+        let door = format!("/app/api/projects/{project_id}/documents");
+        let receipt = serde_json::json!({
+            "amount_cents": 2750,
+            "currency": "USD",
+            "payee": "sample filing service",
+            "category": "e_filing_service_fee",
+            "transaction_id": "sample-transaction"
+        });
+        let mut response = pointer_json(b"receipt");
+        response["kind"] = "receipt".into();
+        response["receipt"] = receipt.clone();
+        Mock::given(method("POST"))
+            .and(path(&door))
+            .respond_with(ResponseTemplate::new(201).set_body_json(response))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let pointer = client
+            .upload_bytes_with_details(
+                "receipt.pdf",
+                b"receipt",
+                "receipt",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                &DocumentExecution {
+                    receipt: Some(serde_json::from_value(receipt.clone()).unwrap()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let body = only_body(&server, &door).await;
+        assert_eq!(body["metadata"]["receipt"], receipt);
+        assert_eq!(body["visibility"], "internal");
+        assert_eq!(pointer.matter_folder().as_str(), "Costs");
+        assert_eq!(
+            serde_json::to_value(pointer.receipt.unwrap()).unwrap(),
+            receipt
+        );
+    }
+
+    #[tokio::test]
     async fn a_buffered_upload_sends_every_optional_field_and_the_execution_record() {
         let server = MockServer::start().await;
         let project_id = Uuid::now_v7();
@@ -11629,6 +11694,7 @@ mod tests {
             commission_expires: chrono::NaiveDate::from_ymd_opt(2029, 1, 1).unwrap(),
         };
         let execution = DocumentExecution {
+            receipt: None,
             signing: Some(signing),
             notarization: vec![notarization.clone()],
             evidence: None,

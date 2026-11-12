@@ -338,6 +338,7 @@ fn pointer_for(
         detail: "byte count does not fit in a pointer's size_bytes".to_owned(),
     })?;
     Ok(store::document_pointers::DocumentPointer {
+        receipt: None,
         checkout_path: None,
         kind: store::document_pointers::MatterFolder::DocketFilings
             .default_kind()
