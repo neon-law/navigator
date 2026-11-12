@@ -15,7 +15,7 @@ use store::courts::{Court, CourtForm};
 /// of these directories is an agency form and never appears in the court
 /// registry; any other office directory is a court key and must be
 /// registered under `store::court_seeds::COURT_SEEDS`.
-const AGENCY_OFFICES: &[&str] = &["irs", "state", "uscis"];
+const AGENCY_OFFICES: &[&str] = &["irs", "state", "state_bar", "uscis"];
 
 /// One template on the forms shelf.
 #[derive(Debug)]

@@ -263,6 +263,9 @@ const OFFICIAL_COURT_DOMAINS: &[&str] = &[
     // Legal Aid Center of Southern Nevada; the Clark County Justice and
     // District Courts approve the forms it publishes.
     "civillawselfhelpcenter.org",
+    // The State Bar of Nevada, which regulates lawyers under the Supreme
+    // Court of Nevada, publishes its RPC 7.5A and SCR 78/217 forms here.
+    "nvbar.org",
 ];
 
 #[cfg(test)]
@@ -404,6 +407,15 @@ mod tests {
         let v = F110JurisdictionPath.lint(&at(
             "templates/notations/forms/united_states/nevada/second_judicial_district_court/nv__washoe_fee_waiver_application.md",
             "title: T\ncode: nv__washoe_fee_waiver_application\njurisdiction: NV\norigin_url: https://www.washoecourts.com/Forms/F-6.pdf",
+        ));
+        assert!(!v.iter().any(|v| v.message.contains("origin_url")));
+    }
+
+    #[test]
+    fn accepts_the_state_bar_of_nevada_forms_host() {
+        let v = F110JurisdictionPath.lint(&at(
+            "templates/notations/forms/united_states/nevada/state_bar/nv__iolta_enrollment.md",
+            "title: T\ncode: nv__iolta_enrollment\njurisdiction: NV\norigin_url: https://nvbar.org/wp-content/uploads/form.pdf",
         ));
         assert!(!v.iter().any(|v| v.message.contains("origin_url")));
     }

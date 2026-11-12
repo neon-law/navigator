@@ -137,6 +137,9 @@ pub const ALLOWED_CUSTOM_TEXT_ROLES: &[&str] = &[
     "claim_other_description", // the small-claims notice's Other-claim-type explanation, in the plaintiff's own words
     "birthplace_city", // the NV name petition's separate city-of-birth field; no city lookup exists
     "felony_details",  // NC-110/NV petition: narrative about a past felony conviction, if any
+    // State Bar of Nevada RPC 7.5A registration exhibits: firm-supplied narratives the Bar asks for as prose.
+    "attorney_licensure", // Exhibit A: each attorney's licensing jurisdictions and good standing
+    "pending_discipline", // Exhibit B: pending discipline or investigation, or a statement that there is none
     // Wave-two court blanks: composed caption and address lines, court and
     // collections-agency labels, and narrative detail boxes that the blanks
     // print as single lines but the intake keeps typed in the matter record.
