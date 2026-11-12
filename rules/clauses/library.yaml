@@ -314,3 +314,52 @@ client_dri_contact@1:
   body: |-
     Address all correspondence concerning this matter to {{client.name}}, the client's designated
     representative, at {{client.email}}.
+divorce_property_division@1:
+  kind: agreement
+  body: |-
+    Each spouse keeps the separate property that spouse holds. The marital property and marital debts divide as the
+    schedule in this agreement records, and each spouse executes any document needed to carry a division out, including
+    deeds, title changes, and account-designation changes, within thirty days of the judgment becoming final. A debt a
+    spouse incurs after the agreement is that spouse's alone. Neither division makes the other spouse a debtor on a
+    debt that remains in both names; the in personam obligation between the spouses does not bind a creditor.
+divorce_maintenance@1:
+  kind: agreement
+  inputs:
+    applies:
+      types:
+      - custom_yes_no
+      prompt: Will one spouse pay maintenance to the other?
+  body: |-
+    {{#if applies}}Maintenance runs as the schedule in this agreement records, in amount, frequency, and duration, and
+    stops on the first of the events that schedule names.{{else}}Each spouse waives maintenance. Neither may apply for
+    maintenance from the other after the judgment becomes final, and each states that the waiver is knowing, with
+    counsel available or consulted.{{/if}}
+divorce_parenting@1:
+  kind: agreement
+  inputs:
+    applies:
+      types:
+      - custom_yes_no
+      prompt: Are there minor children of the marriage?
+  body: |-
+    {{#if applies}}The spouses are jointly the custodial parents of the minor children of the marriage. Parenting time
+    runs as the parenting schedule in this agreement records, major decisions are made jointly, and child support is
+    the amount that agreement records, computed under the Child Support Standards Act and reviewed if either parent's
+    income changes materially.{{else}}No minor children are issue of the marriage, and no parenting or child-support
+    provision is needed.{{/if}}
+divorce_signatures@1:
+  kind: agreement
+  inputs:
+    spouse_one:
+      types:
+      - person
+      prompt: Who is the first spouse signing this agreement?
+    spouse_two:
+      types:
+      - person
+      prompt: Who is the second spouse signing this agreement?
+  body: |-
+    | Spouse | Signature | Date |
+    | --- | --- | --- |
+    | {{spouse_one.name}} | ____________________ | ____________________ |
+    | {{spouse_two.name}} | ____________________ | ____________________ |

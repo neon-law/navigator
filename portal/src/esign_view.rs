@@ -448,7 +448,7 @@ mod tests {
     use crate::admin::AdminState;
     use crate::session::SessionData;
     use crate::signature::{
-        SignatureManifest, SignatureProvider, SignatureRecipient, SignatureRequestId,
+        SendMode, SignatureManifest, SignatureProvider, SignatureRecipient, SignatureRequestId,
     };
     use crate::test_support::app_state;
     use axum::extract::{Path as AxumPath, State};
@@ -640,7 +640,12 @@ mod tests {
             fields: Vec::new(),
         };
         let request_id = provider
-            .send_for_signature(notation_id, b"%PDF-1.7 fake retainer", &manifest)
+            .send_for_signature(
+                notation_id,
+                b"%PDF-1.7 fake retainer",
+                &manifest,
+                SendMode::Send,
+            )
             .await
             .expect("the fake accepts an anchor-free manifest");
         store::signatures::record_request(
@@ -1069,7 +1074,12 @@ mod tests {
         };
         let request_id = state
             .signature_provider
-            .send_for_signature(notation_id, b"%PDF-1.7 fake retainer", &manifest)
+            .send_for_signature(
+                notation_id,
+                b"%PDF-1.7 fake retainer",
+                &manifest,
+                SendMode::Send,
+            )
             .await
             .expect("the fake accepts an emailed manifest");
         store::signatures::record_request(

@@ -4895,6 +4895,135 @@ async fn fetch_notation_board(
     serde_json::from_str(&body).context("parse notation inventory")
 }
 
+/// The success body of `POST /app/api/notations/{id}/signature`.
+#[derive(Deserialize)]
+struct NotationEnvelope {
+    notation_id: Uuid,
+    state: String,
+    signature_request_id: String,
+}
+
+/// Prepare or send one notation's signature envelope (LAW-270). The Project
+/// — host and code — comes from the `navigator.yaml` in the current
+/// checkout. A prepare holds a validated draft on the provider: the
+/// workflow does not advance and no signer is notified. A send dispatches
+/// the envelope — promoting one a previous prepare created instead of
+/// creating a second one — and stamps the returned envelope id on the
+/// notation's document pointer in the checkout, the committed `blobs/**`
+/// YAML the signed copy files under.
+pub async fn notation_envelope(notation_id: Uuid, prepare: bool) -> ExitCode {
+    notation_envelope_in(Path::new("."), notation_id, prepare).await
+}
+
+/// [`notation_envelope`] against an explicit checkout root — the testable
+/// core; the command reads the checkout the process sits in.
+async fn notation_envelope_in(root: &Path, notation_id: Uuid, prepare: bool) -> ExitCode {
+    let Some(manifest) = crate::projects::manifest::read(root) else {
+        eprintln!("navigator notation envelope: no navigator.yaml in the current directory");
+        return ExitCode::from(2);
+    };
+    let (Some(host), Some(project_code)) = (manifest.host.as_deref(), manifest.project.as_deref())
+    else {
+        eprintln!("navigator notation envelope: navigator.yaml must declare host and project.name");
+        return ExitCode::from(2);
+    };
+    run(async {
+        let client = DocumentClient::connect(Some(host), project_code).await?;
+        let url = format!("{}/app/api/notations/{notation_id}/signature", client.base);
+        let response = client
+            .client
+            .post(&url)
+            .bearer_auth(&client.token)
+            .json(&serde_json::json!({ "prepare": prepare }))
+            .send()
+            .await
+            .with_context(|| format!("POST {url}"))?;
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(anyhow!(
+                "notation envelope failed: {}",
+                server_error(status, &body)
+            ));
+        }
+        let envelope: NotationEnvelope =
+            serde_json::from_str(&body).with_context(|| format!("parse {url} response"))?;
+        if prepare {
+            println!(
+                "prepared envelope {} for notation {} (state: {})",
+                palette::highlight(&envelope.signature_request_id),
+                palette::highlight(envelope.notation_id.to_string()),
+                envelope.state
+            );
+            println!("dispatch it with: navigator notation envelope send {notation_id}");
+            return Ok(());
+        }
+        println!(
+            "sent envelope {} for notation {} (state: {})",
+            palette::highlight(&envelope.signature_request_id),
+            palette::highlight(envelope.notation_id.to_string()),
+            envelope.state
+        );
+        stamp_envelope_on_pointer(root, host, project_code, &envelope).await;
+        Ok(())
+    })
+    .await
+}
+
+/// Stamp the sent envelope's id on the checkout pointer the notation's
+/// signed copy files under. The provider id must be a well-formed UUID —
+/// the pointer field is a UUID by schema, and `DocuSign`'s ids are; a fake
+/// provider's `fake-…-1` id is reported but not stamped. A checkout with
+/// no matching pointer is a notice, not an error: the send itself
+/// succeeded, and the id stays on the printed line.
+async fn stamp_envelope_on_pointer(
+    root: &Path,
+    host: &str,
+    project_code: &str,
+    envelope: &NotationEnvelope,
+) {
+    let Ok(envelope_id) = Uuid::parse_str(&envelope.signature_request_id) else {
+        eprintln!(
+            "note: envelope id {} is not a UUID; the document pointer was not stamped",
+            envelope.signature_request_id
+        );
+        return;
+    };
+    let template_code = match fetch_notation_board(Some(host), project_code).await {
+        Ok(rows) => rows
+            .into_iter()
+            .find(|row| {
+                row.notation_id.as_deref() == Some(envelope.notation_id.to_string().as_str())
+            })
+            .map(|row| row.template_code),
+        Err(error) => {
+            eprintln!("note: could not list the notation board ({error:#}); the document pointer was not stamped");
+            return;
+        }
+    };
+    let Some(template_code) = template_code else {
+        eprintln!(
+            "note: no notation board row for {}; the document pointer was not stamped",
+            envelope.notation_id
+        );
+        return;
+    };
+    // The template's leading segment is the pointer folder the document
+    // files under: `onboarding__letter` lives under `blobs/onboarding/`.
+    let template_kind = template_code.split("__").next().unwrap_or(&template_code);
+    match crate::document_sync::link_envelope_to_pointer(root, template_kind, envelope_id) {
+        Ok(Some(path)) => println!(
+            "stamped envelope {} on {}",
+            envelope_id,
+            palette::highlight(path.display().to_string())
+        ),
+        Ok(None) => eprintln!(
+            "note: no unstamped pointer under blobs/{template_kind}/; the document pointer was not stamped"
+        ),
+        Err(error) => eprintln!("note: stamping the document pointer failed: {error:#}"),
+    }
+}
+
 /// Resolve store defaults and optional saved Notation Answers for a PDF.
 pub async fn pdf_project_answers(
     file: &Path,
@@ -12287,5 +12416,143 @@ mod tests {
         assert!(step.question.unwrap().has_candidates());
         let done: StepResponse = serde_json::from_value(serde_json::json!({})).unwrap();
         assert!(done.question.is_none());
+    }
+
+    /// LAW-270: `notation envelope send` stamps the returned envelope id
+    /// on the checkout pointer the notation's signed copy files under —
+    /// the template code's leading segment names the folder — and the
+    /// stamped pointer round-trips the UUID the schema requires.
+    #[tokio::test(flavor = "current_thread")]
+    async fn notation_envelope_send_stamps_the_envelope_id_on_the_pointer() {
+        let _lock = CREDENTIALS_ENV_LOCK.lock().await;
+        let server = MockServer::start().await;
+        let server_uri = server.uri();
+        let _env = CredentialsEnv::new(&server_uri);
+        let project_id = Uuid::now_v7();
+        let notation_id = Uuid::now_v7();
+        let envelope_id = Uuid::now_v7();
+
+        Mock::given(method("GET"))
+            .and(path("/app/api/projects"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"id": project_id, "code": "acme"}
+            ])))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(format!("/app/api/notations/{notation_id}/signature")))
+            .and(body_json(serde_json::json!({ "prepare": false })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "notation_id": notation_id,
+                "state": "sent_for_signature__pending",
+                "signature_request_id": envelope_id.to_string(),
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        // The stamp resolves the notation's template off the board.
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/app/api/projects/{project_id}/notation-inventory"
+            )))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "template_code": "onboarding__letter",
+                    "notation_id": notation_id.to_string(),
+                    "workflow_states": [],
+                    "state_entered_at": {}
+                }
+            ])))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        // A Project checkout with one unstamped onboarding pointer.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("blobs/onboarding")).unwrap();
+        std::fs::write(
+            dir.path().join("navigator.yaml"),
+            format!("project:\n  host: {server_uri}\n  name: acme\n"),
+        )
+        .unwrap();
+        // The pointer for `documents/onboarding/retainer_signed.pdf` is
+        // named `<slug>.yaml` in a real checkout.
+        let pointer_path = dir.path().join("blobs/onboarding/retainer_signed.pdf.yaml");
+        std::fs::write(
+            &pointer_path,
+            format!(
+                "kind: agreement\nvisibility: internal\ncurrent_version:\n  version: 1\n  asset_id: {}\n  created_at: \"2026-09-05T12:00:00Z\"\n  sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n  size_bytes: 42\n",
+                Uuid::now_v7()
+            ),
+        )
+        .unwrap();
+
+        let exit = super::notation_envelope_in(dir.path(), notation_id, false).await;
+        assert_eq!(exit, ExitCode::SUCCESS);
+
+        // The envelope id landed on the pointer the signed copy files
+        // under, and the YAML re-parses with the UUID the schema wants.
+        let stamped = model::document_pointers::DocumentPointer::from_yaml(
+            &std::fs::read_to_string(&pointer_path).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(stamped.docusign_envelope_id, Some(envelope_id));
+    }
+
+    /// LAW-270: a prepare holds a draft and never stamps a pointer — the
+    /// document has not been dispatched, so there is no envelope to file.
+    #[tokio::test(flavor = "current_thread")]
+    async fn notation_envelope_prepare_creates_no_pointer_stamp() {
+        let _lock = CREDENTIALS_ENV_LOCK.lock().await;
+        let server = MockServer::start().await;
+        let server_uri = server.uri();
+        let _env = CredentialsEnv::new(&server_uri);
+        let project_id = Uuid::now_v7();
+        let notation_id = Uuid::now_v7();
+
+        Mock::given(method("GET"))
+            .and(path("/app/api/projects"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"id": project_id, "code": "acme"}
+            ])))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(format!("/app/api/notations/{notation_id}/signature")))
+            .and(body_json(serde_json::json!({ "prepare": true })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "notation_id": notation_id,
+                "state": "lawyer_review__done",
+                "signature_request_id": Uuid::now_v7().to_string(),
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("blobs/onboarding")).unwrap();
+        std::fs::write(
+            dir.path().join("navigator.yaml"),
+            format!("project:\n  host: {server_uri}\n  name: acme\n"),
+        )
+        .unwrap();
+        let pointer_path = dir.path().join("blobs/onboarding/retainer_signed.pdf.yaml");
+        std::fs::write(
+            &pointer_path,
+            format!(
+                "kind: agreement\nvisibility: internal\ncurrent_version:\n  version: 1\n  asset_id: {}\n  created_at: \"2026-09-05T12:00:00Z\"\n  sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n  size_bytes: 42\n",
+                Uuid::now_v7()
+            ),
+        )
+        .unwrap();
+
+        let exit = super::notation_envelope_in(dir.path(), notation_id, true).await;
+        assert_eq!(exit, ExitCode::SUCCESS);
+
+        let unstamped = model::document_pointers::DocumentPointer::from_yaml(
+            &std::fs::read_to_string(&pointer_path).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(unstamped.docusign_envelope_id, None);
     }
 }

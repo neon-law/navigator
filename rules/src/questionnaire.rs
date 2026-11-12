@@ -41,7 +41,17 @@ pub fn normalize_value(doc: &mut Value) -> Result<(), String> {
         return Err("`prompts:` must be a map of role to wording".to_string());
     }
     let mut groups = Vec::new();
-    let mut columns = Mapping::new();
+    // A document compiled twice — a Clause snapshot's frontmatter
+    // re-normalized by a preview or validator — already carries the lifted
+    // `schedule_columns:` map and state maps with `columns:` stripped.
+    // Seeding from it keeps normalization idempotent: the schedule check
+    // below would otherwise refuse the states the first pass itself
+    // flattened.
+    let mut columns = doc
+        .get("schedule_columns")
+        .and_then(Value::as_mapping)
+        .cloned()
+        .unwrap_or_default();
     let mut boxes = Vec::new();
     let states = match questionnaire {
         Value::Sequence(items) => {
@@ -570,6 +580,24 @@ mod tests {
                 .expect("yaml");
         let error = normalize_value(&mut value).expect_err("duplicate");
         assert!(error.contains("duplicate"), "{error}");
+    }
+
+    /// Normalization is idempotent: a Clause snapshot's frontmatter is
+    /// re-normalized by previews and validators after the first compile
+    /// already lifted `columns:` out of the states — the second pass must
+    /// accept the document the first pass produced (ENG-1271d).
+    #[test]
+    fn normalizing_a_compiled_document_twice_is_a_no_op() {
+        let mut value: Value = serde_yaml::from_str(
+            "questionnaire:\n  BEGIN:\n    _: schedule__bequests\n  \
+             schedule__bequests:\n    _: END\n    columns:\n      - name: \
+             beneficiary\n        type: text\n      - name: gift\n        \
+             type: text\n  END: {}\n",
+        )
+        .expect("yaml");
+        normalize_value(&mut value).expect("first normalize");
+        normalize_value(&mut value).expect("second normalize");
+        assert!(value.get("schedule_columns").is_some());
     }
 
     /// LAW-209: a state-map questionnaire may branch on a choice answer —

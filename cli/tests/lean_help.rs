@@ -1,7 +1,7 @@
 //! The lean `navigator` carries Projects, their Jujutsu repositories, the
-//! offline `validate` gate, and the site session plus `seeds/` import a
-//! Project repository's CI runs. Every other verb lives in
-//! `navigator-deploy` or `scorpio`.
+//! offline `validate` gate, the notation envelope verbs, and the site session
+//! plus `seeds/` import a Project repository's CI runs. Every other verb lives
+//! in `navigator-deploy` or `scorpio`.
 
 use assert_cmd::Command;
 
@@ -31,7 +31,7 @@ fn help(args: &[&str]) -> String {
 fn the_lean_navigator_names_only_its_own_verbs() {
     assert_eq!(
         command_names(&help(&["--help"])),
-        ["project", "site", "sync", "validate", "help"].map(String::from)
+        ["notation", "project", "site", "sync", "validate", "help"].map(String::from)
     );
     assert_eq!(
         command_names(&help(&["site", "--help"])),

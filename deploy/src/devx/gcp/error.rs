@@ -110,6 +110,11 @@ pub enum SetupError {
     #[error("{operation} refused: {detail}")]
     AmbiguousLiveState { operation: String, detail: String },
 
+    /// An `access.toml` failed to parse, declared something the reconciler
+    /// refuses to grant, or named a secret the project does not have.
+    #[error("access file: {0}")]
+    InvalidAccessFile(String),
+
     /// A shell-out (gcloud, kubectl) returned non-zero AND the stderr
     /// did not match the "already exists" idempotency pattern. The
     /// numeric exit code stays in the message verbatim so log

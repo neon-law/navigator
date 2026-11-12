@@ -331,6 +331,10 @@ impl Variant {
 ///   most districts run no rail at all. `US` is deliberately the
 ///   lowest-common-denominator calibration rather than a rail every
 ///   federal filer would need to strip.
+/// - **`NY`** → [`Variant::NoRailTrial`]. New York trial courts accept
+///   plain Letter paper: the CPLR and the Uniform Rules set no numbered
+///   rail, so the same lowest-common-denominator reasoning as `US`
+///   applies — a rail a New York filer would have to strip.
 /// - **`WA`** → [`Variant::WashingtonSuperior`]. GR 14(a): letter paper,
 ///   a 3in top margin on the first page, and 1in at the bottom, at both
 ///   sides, and at the top of every later page.
@@ -344,7 +348,7 @@ impl Variant {
 pub fn variant_for_jurisdiction(jurisdiction: &str) -> Option<Variant> {
     match jurisdiction.trim() {
         "NV" | "CA" => Some(Variant::NumberedRailTrial),
-        "US" => Some(Variant::NoRailTrial),
+        "NY" | "US" => Some(Variant::NoRailTrial),
         "WA" => Some(Variant::WashingtonSuperior),
         _ => None,
     }
@@ -358,7 +362,7 @@ pub fn variant_for_jurisdiction(jurisdiction: &str) -> Option<Variant> {
 /// `every_listed_jurisdiction_resolves`, so extending the table without
 /// extending this list fails the build's own tests rather than leaving a
 /// diagnostic quietly out of date.
-pub const CALIBRATED_JURISDICTIONS: &[&str] = &["NV", "CA", "US", "WA"];
+pub const CALIBRATED_JURISDICTIONS: &[&str] = &["NV", "CA", "NY", "US", "WA"];
 
 /// Vertical space, expressible **only** in whole grid units of
 /// [`Calibration::DEFAULT`].
@@ -892,6 +896,7 @@ mod tests {
         let table = [
             ("NV", Some(Variant::NumberedRailTrial)),
             ("CA", Some(Variant::NumberedRailTrial)),
+            ("NY", Some(Variant::NoRailTrial)),
             ("US", Some(Variant::NoRailTrial)),
             ("WA", Some(Variant::WashingtonSuperior)),
         ];
@@ -910,7 +915,8 @@ mod tests {
     #[test]
     fn appellate_and_unmapped_jurisdictions_return_none() {
         assert_eq!(variant_for_jurisdiction("US"), Some(Variant::NoRailTrial));
-        for jurisdiction in ["NY", "TX", "GMBH", "ZZ", "", "  "] {
+        assert_eq!(variant_for_jurisdiction("NY"), Some(Variant::NoRailTrial));
+        for jurisdiction in ["TX", "GMBH", "ZZ", "", "  "] {
             assert_eq!(
                 variant_for_jurisdiction(jurisdiction),
                 None,
@@ -922,6 +928,7 @@ mod tests {
         // an appellate row.
         assert_ne!(variant_for_jurisdiction("NV"), Some(Variant::Appellate));
         assert_ne!(variant_for_jurisdiction("CA"), Some(Variant::Appellate));
+        assert_ne!(variant_for_jurisdiction("NY"), Some(Variant::Appellate));
         assert_ne!(variant_for_jurisdiction("US"), Some(Variant::Appellate));
     }
 

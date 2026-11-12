@@ -57,6 +57,19 @@ pub fn lawyer_bearer_header() -> String {
     bearer_header(store::persons::Role::Lawyer)
 }
 
+/// [`bearer_header`] bound to a firm Person row — what a signed-in lawyer's
+/// real session carries. Matter-scoped `/app/api` doors resolve the caller's
+/// Project participation from this id, so a test that exercises those doors
+/// mints a bearer the way the CLI credential does.
+#[doc(hidden)]
+#[must_use]
+pub fn bearer_header_with_person(role: store::persons::Role, person_id: uuid::Uuid) -> String {
+    let sessions = SessionStore::new(TEST_SESSION_KEY);
+    let mut session = crate::SessionData::fresh("test-bearer-subject", role);
+    session.person_id = Some(person_id);
+    format!("Bearer {}", sessions.encode(&session))
+}
+
 /// Build an [`AppState`] wired with dev/test defaults: in-memory runtimes,
 /// passthrough policy + google-oauth, stub signature + billing providers,
 /// a capturing email backend, filesystem storage in a temp dir, and empty

@@ -17,7 +17,7 @@ use axum::http::{Request, StatusCode};
 use cucumber::{given, then, when, World};
 use features::{app_state, body_string, fs_storage};
 use portal::signature::{
-    FakeSignatureProvider, SignatureManifest, SignatureProvider, SignatureRecipient,
+    FakeSignatureProvider, SendMode, SignatureManifest, SignatureProvider, SignatureRecipient,
 };
 use portal::webhook_auth::sign_hmac_sha256_b64;
 use portal::AppState;
@@ -237,7 +237,7 @@ async fn park_retainer(world: &mut WebhookWorld, envelope_id: String) {
     };
     let provider = world.provider();
     let request_id = provider
-        .send_for_signature(notation_id, PARKED_PDF, &manifest)
+        .send_for_signature(notation_id, PARKED_PDF, &manifest, SendMode::Send)
         .await
         .expect("fake provider sends the parked envelope");
     provider

@@ -1523,6 +1523,29 @@ Second, **one interface, your choice of source** — the Secret Manager CSI driv
 the pod. See [`docs/deployment-secrets.md`](/docs/deployment-secrets). Local KIND uses its generated `.devx/env`, and
 optional sandbox integrations use a gitignored `.env`. The env-var interface is identical across them.
 
+### Secret access, encryption, and audit
+
+Who may read a deployment's secrets, which key encrypts them, and what gets logged is declared beside the row in
+`access.toml` and converged by one command. Run it with `--check` first; it reads only and exits nonzero on drift.
+
+```bash
+navigator-deploy ops gcp access --project-id "$PROJECT" --file "$NAVIGATOR_DEPLOYMENTS_DIR/<row>/access.toml" --check
+```
+
+---
+
+The file turns on Data Access logs for Secret Manager and Cloud KMS, so every secret read and every key use names its
+principal. It encrypts every secret with the project's own rotating Cloud KMS key, which Secret Manager's service agent
+alone may use; disabling that key cuts every secret off at once. It declares each Deployment Reader — an outside agent
+that diagnoses the deployment — with read-only project roles and access granted one secret at a time. A reader cannot
+read the Data Access logs, so the record of its own reads stays with the operators. Hold back from any reader the
+secrets that act beyond the deployment: a Git App key, release or writer tokens, OAuth signing keys, and paid-message
+credentials.
+
+Name a provider credential the same in every project and give each environment its own key at the provider, so revoking
+one never breaks another. A model provider key, such as `TYPESAFE_API_KEY`, waits on that provider's zero data retention
+confirmation before any client mail is sent to it.
+
 ### Sign-in: bring an OIDC provider; passwords live there, not here
 
 Passwords matter — Neon Law Navigator's own database never stores a password. There is no password column and no hashing
