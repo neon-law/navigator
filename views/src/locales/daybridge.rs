@@ -22,4 +22,8 @@ pub struct DaybridgeCopy {
     pub steps: Vec<[String; 2]>,
     pub closing_heading: String,
     pub closing_body: String,
+    /// Sibling practices this home points a reader to, such as Vesta Estate
+    /// Planning.
+    #[serde(default)]
+    pub sibling_practices: Vec<super::SiblingPracticeCopy>,
 }

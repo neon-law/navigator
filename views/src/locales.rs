@@ -137,6 +137,12 @@ pub struct HomeCopy {
     pub tagline: String,
     pub lead: String,
     pub contact_label: String,
+    /// The heading over the home Lead form; empty keeps the shared default.
+    #[serde(default)]
+    pub lead_heading: String,
+    /// What the visitor can expect after sending the Lead form; empty renders none.
+    #[serde(default)]
+    pub lead_intro: String,
     #[serde(default)]
     pub photo: Option<HomePhotoCopy>,
     #[serde(default)]

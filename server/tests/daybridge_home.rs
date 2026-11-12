@@ -55,6 +55,10 @@ fn assert_own_brand_head(html: &str, host: &str) {
         "{host} must use its own favicon/logo: {head}"
     );
     assert!(
+        head.contains("/public/brand/daybridge/logo.png"),
+        "{host} must share its own logo image: {head}"
+    );
+    assert!(
         head.contains("/public/css/brand-daybridge-tokens.css"),
         "{host} must load its own scoped brand tokens: {head}"
     );
@@ -66,13 +70,19 @@ fn assert_own_brand_head(html: &str, host: &str) {
 }
 
 #[tokio::test]
-async fn daybridge_home_publishes_the_one_time_mutual_split_fee() {
+async fn daybridge_home_leads_with_pace_and_keeps_the_fee_and_limits() {
     for host in HOSTS {
         let html = page(host, "/").await;
         assert_own_brand_head(&html, host);
         for expected in [
             "Daybridge Divorce Law",
-            "A brighter way through divorce.",
+            "A brighter way to move on.",
+            "Prefer to write first?",
+            r#"href="https://calendar.notion.so/meet/nick-shook/or15n4yy7""#,
+            r#"href="tel:+15108002090""#,
+            "We keep our part moving",
+            "The court sets its own schedule.",
+            "/public/brand/daybridge/crossing.svg",
             "$333",
             "one-time fee",
             "mutual split",
@@ -86,6 +96,10 @@ async fn daybridge_home_publishes_the_one_time_mutual_split_fee() {
         ] {
             assert!(html.contains(expected), "{host} missing {expected:?}");
         }
+        assert!(
+            html.contains(r#"href="https://www.vestaestateplanning.com""#),
+            "{host} must link Vesta for the estate-plan review"
+        );
         // Every Guieb & Shook practice links the copyright to the Firm's
         // own site, and lists no brand family.
         let footer = html.split("<footer").nth(1).expect("shared footer");
@@ -101,7 +115,15 @@ async fn daybridge_home_publishes_the_one_time_mutual_split_fee() {
             !html.contains("A practice of Guieb &#38; Shook PC"),
             "{host} {html}"
         );
-        assert!(!html.to_lowercase().contains("guaranteed result"));
+        let lower = html.to_lowercase();
+        for forbidden in [
+            "guaranteed result",
+            "without delay",
+            "fast divorce",
+            "$1,111",
+        ] {
+            assert!(!lower.contains(forbidden), "{host} publishes {forbidden:?}");
+        }
         assert!(!html.contains("$10") && !html.contains("$500") && !html.contains("$50 each"));
     }
 }
@@ -114,6 +136,7 @@ async fn daybridge_services_explain_scope_timing_and_costs() {
         for expected in [
             "Divorce for couples who agree",
             "Your agreement in writing",
+            "The court sets its",
             "Papers and filing steps",
             "Joint representation starts with clarity",
             "separate counsel",
