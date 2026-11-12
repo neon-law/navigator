@@ -20,7 +20,7 @@
 //! that changes bytes between runs):
 //!
 //! 1. the checkout's working copy at `templates/notations/<object_path>`,
-//!    vendored by `navigator forms sync` — the pin file beside it wins
+//!    vendored by `navigator-deploy forms sync` — the pin file beside it wins
 //!    over the compiled-in pin, the same rule `forms sync` and
 //!    `forms re-author` follow so a re-vendor verifies without a rebuild;
 //! 2. the local blank cache, keyed on the template's `origin_url` plus
@@ -120,7 +120,7 @@ fn render(
         .ok_or_else(|| {
             format!(
                 "`{code}` is not in the vendored forms registry (`templates/notations/forms/`); \
-             vendor the blank with `navigator forms sync` — the canonical fill is the \
+             vendor the blank with `navigator-deploy forms sync` — the canonical fill is the \
              server-side `generate_pdf__*` walk (`workflows::document::dispatch_generate_pdf`)"
             )
         })?;
@@ -208,7 +208,7 @@ fn resolve_blank(
     if ci {
         return Err(format!(
             "--ci refuses to fetch the `{}` blank over the network: render only from \
-             pin-verified bytes vendored by `navigator forms sync` or already in the \
+             pin-verified bytes vendored by `navigator-deploy forms sync` or already in the \
              local blank cache",
             form.code
         ));
@@ -227,7 +227,7 @@ fn verify_pin(pin: &str, bytes: &[u8], form: &forms::FormMeta) -> Result<(), Str
     forms::verify_sha256(pin, bytes).map_err(|e| {
         format!(
             "the `{}` blank does not match its `.sha256` pin ({e}) — re-vendor it with \
-             `navigator forms sync`",
+             `navigator-deploy forms sync`",
             form.code
         )
     })
@@ -303,7 +303,9 @@ fn fetch_from_assets(object_path: &str) -> Result<Vec<u8>, String> {
                     )
                 })?;
         let blank = storage.get(object_path).await.map_err(|e| {
-            format!("pull `{object_path}`: {e} — vendor the blank with `navigator forms sync`")
+            format!(
+                "pull `{object_path}`: {e} — vendor the blank with `navigator-deploy forms sync`"
+            )
         })?;
         Ok(blank.bytes)
     })

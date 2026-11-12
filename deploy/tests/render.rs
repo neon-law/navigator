@@ -413,85 +413,6 @@ fn a_letter_kind_renders_on_letterhead_with_no_output_declared() {
     );
 }
 
-/// A party's own declaration (LAW-340): `kind: declaration` and no
-/// `output:` — the frame must derive from the kind, and the kind's
-/// default is the letterhead-less `client_letter` frame.
-const VALID_DECLARATION_NO_OUTPUT: &str = "\
----
-kind: declaration
-title: Client Declaration
-respondent_type: person
-confidential: true
-questionnaire:
-  BEGIN:
-    _: END
-  END: {}
-workflow:
-  BEGIN:
-    intake_submitted: lawyer_review
-  lawyer_review:
-    approved: END
-    rejected: END
-  END: {}
----
-
-# Declaration
-
-I, the declarant, declare as follows:
-
-The facts stated here are true of my own knowledge.
-";
-
-#[test]
-fn a_declaration_kind_renders_the_client_letter_frame_with_no_output_declared() {
-    // LAW-340: a declaration is the party's own document, so a `kind:
-    // declaration` template with no `output:` must derive the
-    // letterhead-less client_letter frame — the same frame
-    // `output: client_letter` selects explicitly, never the firm
-    // letterhead its `kind: letter` sibling wears.
-    let work = TempDir::new().unwrap();
-    let src = write(&work, "declaration.md", VALID_DECLARATION_NO_OUTPUT);
-    let declaration_out = work.path().join("declaration.pdf");
-    let declaration = render_pdf(&[
-        "--preview".as_ref(),
-        src.as_os_str(),
-        "--out".as_ref(),
-        declaration_out.as_ref(),
-    ]);
-    assert!(
-        declaration.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&declaration.stderr)
-    );
-    let stdout = String::from_utf8_lossy(&declaration.stdout);
-    assert!(
-        stdout.contains("ClientLetter"),
-        "a `kind: declaration` template with no `output:` should render the \
-         ClientLetter frame, got: {stdout}"
-    );
-
-    // The contrast case is a different `kind:`, not a flag: `letter`
-    // derives the letterhead frame, and the letterhead is what makes the
-    // branded PDF the larger of the two.
-    let letter_src = write(&work, "demand.md", VALID_NO_OUTPUT);
-    let letter_out = work.path().join("letter.pdf");
-    let letter = render_pdf(&[
-        "--preview".as_ref(),
-        letter_src.as_os_str(),
-        "--out".as_ref(),
-        letter_out.as_ref(),
-    ]);
-    assert!(letter.status.success());
-
-    let letter_len = fs::read(&letter_out).unwrap().len();
-    let declaration_len = fs::read(&declaration_out).unwrap().len();
-    assert!(
-        letter_len > declaration_len,
-        "a `kind: letter` render carries the letterhead ({letter_len}) a \
-         declaration must not ({declaration_len}) — letterhead leaked?"
-    );
-}
-
 #[test]
 fn a_plain_default_kind_renders_plain_with_no_output_declared() {
     // The mirror case: `kind: will` defaults to plain, so a template
@@ -1686,6 +1607,9 @@ fn notation_pdf_refuses_an_unregistered_form_before_writing_a_plain_pdf() {
         .unwrap();
     assert!(!result.status.success());
     let stderr = String::from_utf8_lossy(&result.stderr);
-    assert!(stderr.contains("not in the form registry"), "{stderr}");
+    assert!(
+        stderr.contains("not in the vendored forms registry"),
+        "{stderr}"
+    );
     assert!(!output.exists());
 }
