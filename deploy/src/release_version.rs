@@ -1,4 +1,4 @@
-//! `navigator-deploy ops release version` — write the release version the operator
+//! `hudson ops release version` — write the release version the operator
 //! names into `[workspace.package].version`, which is the act that cuts a
 //! release.
 //!

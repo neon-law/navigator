@@ -37,24 +37,24 @@ Browsing or expanding the calendar never schedules delivery.
 
 - Schema, seed, and links: [`store::posts`](../../store/src/posts.rs)
 - Rendering: [`portal::blog`](../../portal/src/blog.rs)
-- Commands: `navigator-deploy site blog preflight`, `publish`, `record`, `status`, `handle`, and `link` use the site
+- Commands: `hudson site blog preflight`, `publish`, `record`, `status`, `handle`, and `link` use the site
   login.
 
 `preflight` checks the requested destinations' stored Social Accounts and deployment configuration before an upload. It
 returns setup blockers and the Brand's connection page without sending. Provider delivery still needs a confirmed Social
 Publication receipt.
 
-`navigator-deploy site blog publish post.yaml` queues approved copy and explicitly selected providers through the
-durable Social Publisher. A future `publish_at` schedules delivery; omission requests immediate delivery. The server
-checks Brand authority, connected accounts, approved provider `account_ids`, and uploaded video dimensions. Repeating a
-scheduled request retains its publication identity; an already-public Post cannot be sent again. `status` reads
-receipts; `link` records a public provider permalink without sending. See
+`hudson site blog publish post.yaml` queues approved copy and explicitly selected providers through the durable Social
+Publisher. A future `publish_at` schedules delivery; omission requests immediate delivery. The server checks Brand
+authority, connected accounts, approved provider `account_ids`, and uploaded video dimensions. Repeating a scheduled
+request retains its publication identity; an already-public Post cannot be sent again. `status` reads receipts; `link`
+records a public provider permalink without sending. See
 [publish-social-post](../../.agents/skills/publish-social-post/SKILL.md).
 
-`navigator-deploy site blog record post.yaml` creates an already-published website Post without scheduling social
-delivery. It requires approved website copy and an actual publication time no later than now. An optional uploaded video
-is measured and checked against the owning Brand. Provider connections are unnecessary; verified public links can be
-recorded afterward. An existing Post is refused so a retry cannot replace content or change its delivery schedule.
+`hudson site blog record post.yaml` creates an already-published website Post without scheduling social delivery. It
+requires approved website copy and an actual publication time no later than now. An optional uploaded video is measured
+and checked against the owning Brand. Provider connections are unnecessary; verified public links can be recorded
+afterward. An existing Post is refused so a retry cannot replace content or change its delivery schedule.
 
 The table is `post`.
 

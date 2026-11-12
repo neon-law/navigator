@@ -1,7 +1,7 @@
-//! `navigator-deploy site asset upload` — file one local public-safe asset to one
+//! `hudson site asset upload` — file one local public-safe asset to one
 //! or more logged-in deployments' public assets buckets, through
 //! `POST /app/api/assets` (`portal::assets_api`). This is the OAuth-backed
-//! sibling of the ADC-backed `navigator-deploy ops assets upload` batch command
+//! sibling of the ADC-backed `hudson ops assets upload` batch command
 //! (`cli::assets::run_upload`): that command targets real GCS directly with
 //! an operator's own bucket credentials for bulk gallery publication; this
 //! one goes out with nothing but a `navigator site login` bearer, so the
@@ -175,7 +175,7 @@ async fn upload_to_host(
     Ok(uploaded)
 }
 
-/// `navigator-deploy site asset upload --host <h1> [--host <h2> ...] ASSET_NAME`
+/// `hudson site asset upload --host <h1> [--host <h2> ...] ASSET_NAME`
 /// — publish one local asset to every named host, reporting each
 /// separately. Exits non-zero if any requested host fails; hosts that
 /// succeeded before a later failure have still been published — there is no

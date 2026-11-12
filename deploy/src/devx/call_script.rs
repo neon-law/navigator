@@ -324,7 +324,7 @@ impl TwilioStudio {
             ("Status", "published".to_string()),
             (
                 "CommitMessage",
-                "navigator-deploy ops call-script".to_string(),
+                "hudson ops call-script".to_string(),
             ),
             ("Definition", definition.to_string()),
         ];

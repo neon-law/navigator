@@ -49,8 +49,8 @@ Everything is Rust and env-driven — no per-deployment value is baked into a co
    The repository is private and deletes images 7 days after push, so the node identity needs
    `roles/artifactregistry.reader` and a tag older than a week cannot be pulled; see
    [`gke-prod.md`](gke-prod.md#deploy-flow). CI owns image builds — there is no per-image `cargo run -p cli --
-   image-<name>` build command — and the local KIND loop **pulls** them (`navigator-deploy dev deploy` / `dev
-   worktree-env --demo`).
+   image-<name>` build command — and the local KIND loop **pulls** them (`hudson dev deploy` / `dev worktree-env
+   --demo`).
 3. **A manifest** under `examples/deploy/k8s/exports/` with placeholders (`YOUR_PROJECT_ID` for the environment,
    `YOUR_IMAGES_PROJECT_ID` for the registry the image comes from, the image tag, any ingress URL), namespace
    `navigator`. Render real values at apply time; keep the committed file generic.

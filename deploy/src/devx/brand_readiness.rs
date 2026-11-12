@@ -1,4 +1,4 @@
-//! `navigator-deploy ops brand-readiness` — the bounded, per-host release-readiness
+//! `hudson ops brand-readiness` — the bounded, per-host release-readiness
 //! check ENG-808 requires.
 //!
 //! `cli::devx::ship` provisions a `ManagedCertificate` and an Ingress rule
@@ -18,7 +18,7 @@
 //! Every check is bounded: one `curl` call per host with `--max-time`, no
 //! retry loop and no polling for a certificate to become `Active` — this is
 //! a point-in-time receipt, safe to rerun as often as the operator likes
-//! (`cargo run -p deploy -- ops brand-readiness --deployment <name>`), not a
+//! (`cargo run -p hudson -- ops brand-readiness --deployment <name>`), not a
 //! wait-until-ready gate.
 //!
 //! Every admitted host must show its own `og:site_name` — the same marker
@@ -406,7 +406,7 @@ fn conclude(cfg: &ShipConfig, reports: &[HostReport]) -> Result<()> {
     )
 }
 
-/// `navigator-deploy ops brand-readiness`: resolve the deployment, then run.
+/// `hudson ops brand-readiness`: resolve the deployment, then run.
 pub fn run_for_deployment(
     deployment: &str,
     deployments_dir: Option<&std::path::Path>,

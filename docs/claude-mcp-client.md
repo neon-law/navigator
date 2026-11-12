@@ -9,14 +9,14 @@ dials `/app/mcp` over HTTPS directly.
 
 ## What runs where
 
-Claude speaks MCP: local stdio servers and remote HTTP connectors. It has no A2A client. So `navigator-deploy site mcp`
-is the adapter — MCP on stdio facing Claude, A2A facing the deployment:
+Claude speaks MCP: local stdio servers and remote HTTP connectors. It has no A2A client. So `hudson site mcp` is the
+adapter — MCP on stdio facing Claude, A2A facing the deployment:
 
 ```text
 Claude Code / Claude Desktop
    │   MCP JSON-RPC 2.0, newline-delimited, over stdio
    ▼
-navigator-deploy site mcp            ← runs on the attorney's laptop
+hudson site mcp            ← runs on the attorney's laptop
    │   POST /app/api/mcp/rpc
    │   metadata.skill = the tool Claude chose
    │   Authorization: Bearer <the 1h token `site login` stored>
@@ -59,7 +59,7 @@ to a `persons` row carrying the `lawyer` or `admin` role — the tools that writ
 Claude Code:
 
 ```bash
-claude mcp add navigator -- navigator-deploy site mcp --host www.neonlaw.com
+claude mcp add navigator -- hudson site mcp --host www.neonlaw.com
 ```
 
 Claude Desktop, in `claude_desktop_config.json`:
@@ -79,7 +79,7 @@ Claude Desktop, in `claude_desktop_config.json`:
 worktree's `.devx/env`:
 
 ```bash
-navigator-deploy site mcp --host http://localhost:3001
+hudson site mcp --host http://localhost:3001
 ```
 
 The server speaks protocol on stdout and diagnostics on stderr, because the client parses every stdout line. Run it from

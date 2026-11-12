@@ -169,9 +169,9 @@ fn no_cli_archive_path_can_match_an_lsp_archive() {
             .expect("an archive path has a filename");
         let cli = format!("navigator-{tag}-");
         let lsp = format!("navigator-lsp-{tag}-");
-        // `navigator-deploy` archives share the prefix but never a match set:
-        // its tag follows `navigator-deploy-`, never `navigator-`.
-        if name.starts_with(&format!("navigator-deploy-{tag}-")) {
+        // `hudson` archives share the prefix but never a match set:
+        // its tag follows `hudson-`, never `navigator-`.
+        if name.starts_with(&format!("hudson-{tag}-")) {
             continue;
         }
         assert!(

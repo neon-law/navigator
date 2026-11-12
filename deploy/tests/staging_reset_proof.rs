@@ -5,7 +5,7 @@
 //! lifecycle has prepared that environment:
 //!
 //! ```text
-//! cargo run -p deploy -- dev worktree-env up --path "$PWD"
+//! cargo run -p hudson -- dev worktree-env up --path "$PWD"
 //! set -a; source .devx/env; set +a
 //! cargo test -p cli --test staging_reset_proof -- --ignored
 //! ```
@@ -76,7 +76,7 @@ fn kubectl_fails(namespace: Option<&str>, args: &[&str]) {
 }
 
 fn navigator(args: &[&str]) -> String {
-    let output = Command::new(env!("CARGO_BIN_EXE_navigator-deploy"))
+    let output = Command::new(env!("CARGO_BIN_EXE_hudson"))
         .current_dir(workspace())
         .args(args)
         .output()

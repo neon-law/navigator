@@ -28,8 +28,8 @@ dotnet test word/adapter/WordAdapter.Tests.csproj --no-restore --configuration R
 Dioxus renders every page:
 
 - `webapp` holds the Dioxus component tree. `portal` server-side renders it through `dioxus-server`, and
-  `navigator-deploy dev build-webapp` compiles the same crate to `wasm32-unknown-unknown` for the same-origin client
-  bundle that hydrates the server-rendered markup.
+  `hudson dev build-webapp` compiles the same crate to `wasm32-unknown-unknown` for the same-origin client bundle that
+  hydrates the server-rendered markup.
 - `views` keeps presentation-neutral data and helpers — branding, content loading, notation filling — shared by
   `portal`, the CLI, and the workers.
 - `server/public` holds the stylesheets and the few vendored scripts that pages load directly.

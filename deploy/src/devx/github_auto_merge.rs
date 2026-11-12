@@ -1,4 +1,4 @@
-//! `navigator-deploy ops github auto-merge --pull-request <n> [repository]`: put a
+//! `hudson ops github auto-merge --pull-request <n> [repository]`: put a
 //! pull request on the path to `main` under the `production` ruleset.
 //!
 //! GitHub's auto-merge only queues a merge that is still waiting on something.
@@ -376,7 +376,7 @@ async fn required_checks(client: &GitHubClient, base: &str) -> Result<Vec<String
     if contexts.is_empty() {
         bail!(
             "{}'s `{base}` requires no status check, so a direct merge would be ungated; \
-             run `navigator-deploy ops github setup {}` to put the `production` ruleset in place",
+             run `hudson ops github setup {}` to put the `production` ruleset in place",
             client.repository,
             client.repository
         );

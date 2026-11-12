@@ -5,7 +5,7 @@
 //! OPA `lawyer_tier` set, the `/app/lawyer/*` workbench, `person_project_role`'s
 //! `is_lawyer_dri`, the `lawyer_review` workflow state, the `question.audience`
 //! and `answer.source` vocabularies, the email `awaiting_lawyer` /
-//! `to_lawyer` / `from_lawyer` values, `navigator-deploy dev grant-lawyer`, and the
+//! `to_lawyer` / `from_lawyer` values, `hudson dev grant-lawyer`, and the
 //! Rauthy fixture. `staff` said less and had to be explained every time.
 //!
 //! A rename spanning 487 files is easy to half-finish and easy to reintroduce:

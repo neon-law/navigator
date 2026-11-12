@@ -28,8 +28,8 @@ questionnaire, as a `{{placeholder}}`. Write the judge's lines as plain text wit
 ______________`.
 
 ```bash
-navigator-deploy notation word --preview drafts/<code>.md --out "documents/Work Product/drafts/<code>.docx"
-navigator-deploy notation pdf --preview drafts/<code>.md --out "documents/Work Product/drafts/<code>.pdf"
+hudson notation word --preview drafts/<code>.md --out "documents/Work Product/drafts/<code>.docx"
+hudson notation pdf --preview drafts/<code>.md --out "documents/Work Product/drafts/<code>.pdf"
 ```
 
 A preview draws the counsel signature as italic `/s/ DRAFT` on its rule, with `DRAFT` highlighted, and highlights each

@@ -48,7 +48,7 @@ brief.
 5. **Review.** The PDO hires one fresh reviewer, never the author. The reviewer is read-only: it reproduces each issue's
    claim, checks the diff against the issue and the glossary, and files a verdict on the exact head SHA. Findings go
    back to the coder; the reviewer never pushes. Where a fix changes the design, the PDO re-convenes the council.
-6. **Ship.** The PDO runs the changed behaviour for real (`navigator-deploy dev browser-e2e` for UI changes), then opens
+6. **Ship.** The PDO runs the changed behaviour for real (`hudson dev browser-e2e` for UI changes), then opens
    one ready PR per [`create-pr`](../create-pr/SKILL.md) and arms nothing else. The user merges on green CI.
 7. **Close.** The PDO attests delivery and lists the issues done and left over. Main retires the PDO, coder, and
    reviewer; Main and the PO stay up for the next project.
@@ -58,7 +58,7 @@ brief.
 - Hand sessions issue text, not Linear access, unless the user has granted a session the Linear connector.
 - Public safety: bare `ENG-NN` only, no `linear.app` URLs or project names, no client data. Read
   [`docs/public-contributor-safety.md`](../../../docs/public-contributor-safety.md) first.
-- Find the glossary term before naming anything (`navigator-deploy glossary list`); add an entry in `docs/glossary/`
+- Find the glossary term before naming anything (`hudson glossary list`); add an entry in `docs/glossary/`
   when none fits.
 - Schema changes edit `navigator.surql` and bump `SCHEMA_VERSION` together; diff against `origin/main` first, since two
   PRs can collide silently.

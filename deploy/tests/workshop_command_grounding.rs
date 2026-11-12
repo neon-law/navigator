@@ -70,11 +70,11 @@ fn navigator_commands(md: &str) -> Vec<String> {
             pending.clear();
             joined
         };
-        // `navigator-deploy` carries every `navigator` command, so both
+        // `hudson` carries every `navigator` command, so both
         // spellings parse against this binary.
         let full = strip_comment(&full).trim().to_string();
         if let Some(rest) = full
-            .strip_prefix("navigator-deploy ")
+            .strip_prefix("hudson ")
             .or_else(|| full.strip_prefix("navigator "))
         {
             commands.push(rest.trim().to_string());
@@ -148,7 +148,7 @@ fn is_meta(tokens: &[String]) -> bool {
 /// short-circuits clap before any network or browser I/O, but clap still
 /// rejects an unknown flag or an unexpected positional first.
 fn parses(tokens: &[String]) -> (bool, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_navigator-deploy"))
+    let out = Command::new(env!("CARGO_BIN_EXE_hudson"))
         .args(tokens)
         .arg("--help")
         .output()
@@ -195,12 +195,12 @@ fn the_deploy_workshop_promises_no_phantom_bin_wrapper() {
     // DEPLOY.md once told readers to `export PATH="$PWD/bin:$PATH"` and call a
     // `bin/navigator` wrapper that never shipped — there is no `bin/` dir, and a
     // shell wrapper would violate the Rust-only invariant anyway. The
-    // skip-install path is `cargo run -p deploy -- <args>`.
+    // skip-install path is `cargo run -p hudson -- <args>`.
     let deploy = repo_file("server/content/workshops/navigator/DEPLOY.md");
     assert!(
         !deploy.contains("$PWD/bin"),
         "DEPLOY.md points readers at a `$PWD/bin` wrapper that does not ship — \
-         use `cargo run -p deploy -- <args>` for the skip-install path",
+         use `cargo run -p hudson -- <args>` for the skip-install path",
     );
 }
 
@@ -220,7 +220,7 @@ fn deployment_dns_uses_reviewed_operator_coordinates_outside_doppler() {
         "DNS must remain outside Doppler and the three-stack provisioning driver"
     );
     assert!(
-        !dns.contains("navigator-deploy ops dns setup"),
+        !dns.contains("hudson ops dns setup"),
         "the three-site cutover uses the reviewed DNSimple CLI transaction"
     );
     assert!(dns.contains("NAVIGATOR_DEPLOYMENTS_DIR"));
@@ -242,9 +242,9 @@ fn deployment_provider_attachments_stay_local_to_each_config() {
         .next()
         .expect("provider section must end before the external-surface slide");
 
-    assert!(!provider_boundary.contains("navigator-deploy ops secrets share"));
+    assert!(!provider_boundary.contains("hudson ops secrets share"));
     assert!(
-        deploy.contains("navigator-deploy ops secrets apply --deployment \"$ROW\" --deployments-dir \"$NAVIGATOR_DEPLOYMENTS_DIR\""),
+        deploy.contains("hudson ops secrets apply --deployment \"$ROW\" --deployments-dir \"$NAVIGATOR_DEPLOYMENTS_DIR\""),
         "Secret Manager bootstrap must select a row from the configured external root"
     );
     assert!(
@@ -283,7 +283,7 @@ fn deployment_workshop_runs_every_persistent_row_on_the_production_profile() {
     for observed in [
         "A completed setup provisions infrastructure but not a running application",
         "Ship an immutable release",
-        "disposable `navigator-deploy dev staging` integration surface",
+        "disposable `hudson dev staging` integration surface",
         "All persistent hosted rows use `production`",
         "“Test” is the `dev` profile with `NAVIGATOR_CI_HARNESS=1`",
         "The staging identity remains a deployment release ring",
@@ -344,7 +344,7 @@ fn deployment_workshop_describes_deployment_scoped_bucket_lanes() {
 //
 // The `--help` grounding above pins command *syntax*: clap short-circuits on
 // `--help` before it validates a positional, so
-// `navigator-deploy site notation create onboarding__retainer --help` parses happily
+// `hudson site notation create onboarding__retainer --help` parses happily
 // long after that code has left the catalog. It did — #229 folded
 // `onboarding__retainer` into `onboarding__engagement_letter` and three decks
 // went on teaching the dead code with every test green.
@@ -354,7 +354,7 @@ fn deployment_workshop_describes_deployment_scoped_bucket_lanes() {
 // seeder uses, so the decks cannot drift from the shipped catalog again.
 //
 // Scope is deliberate: a template code is checked where it must *resolve* —
-// inside a `navigator-deploy site notation create` invocation, and as the `code:` key
+// inside a `hudson site notation create` invocation, and as the `code:` key
 // of a notation-frontmatter sample. Prose that merely names a code in
 // backticks is not checked, because `AGENTS.md` ("Leave a slide's words
 // alone") makes a deck's wording the author's call, and a guard over prose
@@ -428,7 +428,7 @@ fn every_documented_notation_create_names_a_seeded_template_code() {
             checked += 1;
             if !codes.iter().any(|seeded| seeded == code) {
                 failures.push(format!(
-                    "{doc}: `navigator-deploy site notation create {code}` names a template code \
+                    "{doc}: `hudson site notation create {code}` names a template code \
                      that is not in the seeded catalog",
                 ));
             }

@@ -116,11 +116,11 @@ names the gap.
   on it through Workload Identity. Both providers share one resolver, so both need both variables even when a Firm uses
   only Slack. A pod with no application-default credential for the key reports that gap instead.
 - **Calendar** needs only the row's delegated user, `NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER`, stored with
-  `navigator-deploy ops deployments set`. `ops ship` renders it and `NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT`, the
-  email of the row's `NAVIGATOR_DRIVE_GCP_SERVICE_ACCOUNT_ID` account, into the web pod. No key exists: the pod's
-  runtime identity signs the delegation as that account, using the Token Creator grant `ops gcp setup` makes, because
-  the organization policy forbids service-account keys. Project calendars belong to the delegated user, and the calendar
-  is not a Firm credential. A Workspace administrator authorizes the Drive account's client id for
+  `hudson ops deployments set`. `ops ship` renders it and `NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT`, the email of the
+  row's `NAVIGATOR_DRIVE_GCP_SERVICE_ACCOUNT_ID` account, into the web pod. No key exists: the pod's runtime identity
+  signs the delegation as that account, using the Token Creator grant `ops gcp setup` makes, because the organization
+  policy forbids service-account keys. Project calendars belong to the delegated user, and the calendar is not a Firm
+  credential. A Workspace administrator authorizes the Drive account's client id for
   `https://www.googleapis.com/auth/calendar` under domain-wide delegation. Delegation grants each scope separately, so
   an account authorized only for Drive passes this check and then fails its calendar calls. A calendar with one of its
   two variables set reports the other.
@@ -131,9 +131,9 @@ names the gap.
 After setting the values, apply and restart the deployment:
 
 ```bash
-navigator-deploy ops secrets apply --deployment <row> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --dry-run
-navigator-deploy ops secrets apply --deployment <row> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR"
-navigator-deploy ops ship --deployment <row> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --restart-only
+hudson ops secrets apply --deployment <row> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --dry-run
+hudson ops secrets apply --deployment <row> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR"
+hudson ops ship --deployment <row> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --restart-only
 ```
 
 Then the Firm's Admin DRI stores its `notion_token` and `slack_bot_token` (see [Firm-owned integration
@@ -184,7 +184,7 @@ Flow. Reconcile it with `TWILIO_ACCOUNT_SID` and `TWILIO_AUTH_TOKEN` in the envi
 disk:
 
 ```bash
-navigator-deploy ops call-script \
+hudson ops call-script \
   --number +15555550100 \
   --greeting "Hello, you have reached Example Law." \
   --extension "702=Aries Example=+15555550142" \

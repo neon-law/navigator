@@ -1,4 +1,4 @@
-//! `navigator-deploy ops ship --quiet --log-sink <URI>`: run the ship with its whole
+//! `hudson ops ship --quiet --log-sink <URI>`: run the ship with its whole
 //! transcript sent to a private sink and only a one-line verdict on the console.
 //!
 //! The Actions log of a public repository is public, and masking only covers
@@ -112,7 +112,7 @@ async fn get_transcript(target: &SinkTarget, deployment: &str, id: &str) -> Resu
     Ok(object.bytes)
 }
 
-/// `navigator-deploy ops logs --deployment <row> --run <id>`.
+/// `hudson ops logs --deployment <row> --run <id>`.
 pub fn run_logs(
     deployment_name: &str,
     id: &str,

@@ -1,6 +1,6 @@
 //! Portable Git recovery proof. Document bytes, LFS and forge metadata have separate stores.
 //!
-//! `navigator-deploy ops forgejo bundle <local-mirror> <new-output>` restores every
+//! `hudson ops forgejo bundle <local-mirror> <new-output>` restores every
 //! bundled ref into a scratch mirror before publishing. The caller supplies a
 //! stable mirror; this command never fetches or changes a live forge. Only refs
 //! already present in that mirror are covered, including explicitly fetched PR refs.

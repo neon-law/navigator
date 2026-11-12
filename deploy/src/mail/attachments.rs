@@ -1,10 +1,10 @@
-//! `navigator-deploy mail attachments`: write a Gmail message's attachments to a
+//! `hudson mail attachments`: write a Gmail message's attachments to a
 //! local directory, one file per attachment, without clobbering.
 //!
 //! The message is read with `format=raw` — the same read `mail save` makes
 //! — and walked with the MIME parser, so the bytes written are exactly the
 //! transfer-decoded parts. Nothing is uploaded; filing stays with
-//! `navigator-deploy site document upload`.
+//! `hudson site document upload`.
 
 use std::fmt::Write as _;
 use std::io::Write as _;
@@ -271,7 +271,7 @@ pub(crate) fn format_report(report: &AttachmentReport) -> String {
     )
 }
 
-/// `navigator-deploy mail attachments`, from its parsed flags.
+/// `hudson mail attachments`, from its parsed flags.
 pub(super) async fn run(
     reference: &str,
     dir: &Path,

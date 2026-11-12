@@ -1,4 +1,4 @@
-//! `navigator-deploy quickstart` — one command from a fresh machine to a running,
+//! `hudson quickstart` — one command from a fresh machine to a running,
 //! seeded local Navigator.
 //!
 //! It composes what already exists rather than adding a second topology:
@@ -116,7 +116,7 @@ fn install_hint(missing: &[&Tool]) -> String {
     if missing.iter().any(|tool| tool.command == "cargo") {
         lines.push("  rustup-init -y   # then open a new shell".to_string());
     }
-    lines.push("Then run `navigator-deploy quickstart` again.".to_string());
+    lines.push("Then run `hudson quickstart` again.".to_string());
     lines.join("\n")
 }
 
@@ -145,7 +145,7 @@ fn preflight() -> Result<()> {
     if !docker_answers {
         bail!(
             "the Docker runtime is not running; start OrbStack or Docker Desktop, \
-             then run `navigator-deploy quickstart` again"
+             then run `hudson quickstart` again"
         );
     }
     Ok(())
@@ -219,11 +219,11 @@ with the password `password`. The seeded firm is Guieb & Shook PC with three sam
 matters: Cruller v. Prine, Widget Works, and the Estate of Cornelius Montgomery.
 
 Make it yours: copy .env.example to .env and add your own Meta, TikTok, or other
-provider keys, then re-run `navigator-deploy quickstart`. Use your own brand, not ours.
+provider keys, then re-run `hudson quickstart`. Use your own brand, not ours.
 Want Navigator skinned for your firm? Contact us any time at {CONTACT_URL};
 we help you write token-efficient prompts.
 
-Ctrl-C stops the website. `navigator-deploy dev worktree-env down --path {root}`
+Ctrl-C stops the website. `hudson dev worktree-env down --path {root}`
 removes the cluster.",
         dyd = cfg.delete_your_data_web_port,
         forgejo = cfg.forgejo_port,
@@ -282,7 +282,7 @@ mod tests {
         assert!(hint.starts_with("missing required tools: kind, helm, cargo"));
         assert!(hint.contains("  brew install kind helm rustup\n"));
         assert!(hint.contains("rustup-init -y"));
-        assert!(hint.ends_with("Then run `navigator-deploy quickstart` again."));
+        assert!(hint.ends_with("Then run `hudson quickstart` again."));
         assert!(!hint.contains("orbstack"));
     }
 
@@ -355,7 +355,7 @@ mod tests {
             "Meta, TikTok",
             CONTACT_URL,
             "token-efficient prompts",
-            "navigator-deploy dev worktree-env down --path '/Users/someone/.navigator/quickstart'",
+            "hudson dev worktree-env down --path '/Users/someone/.navigator/quickstart'",
         ] {
             assert!(text.contains(expected), "summary is missing {expected:?}");
         }

@@ -47,7 +47,7 @@ fn copy_tree(from: &Path, to: &Path) {
 }
 
 fn render(subcommand: &str, notation: &Path, out: &Path) -> Output {
-    Command::new(cargo_bin("navigator-deploy"))
+    Command::new(cargo_bin("hudson"))
         .args(["notation", subcommand])
         .arg(notation)
         .arg("--out")
@@ -59,7 +59,7 @@ fn render(subcommand: &str, notation: &Path, out: &Path) -> Output {
             "custom_datetime__verification_date=1 July 2026",
         ])
         .output()
-        .expect("run navigator-deploy notation")
+        .expect("run hudson notation")
 }
 
 fn stderr(output: &Output) -> String {
@@ -225,7 +225,7 @@ fn a_nevada_case_number_clears_n133_and_captions_preview_and_export() {
     assert!(lint.is_empty(), "a Nevada `docket:` clears N133: {lint:?}");
 
     let preview = work.path().join("preview.pdf");
-    let result = Command::new(cargo_bin("navigator-deploy"))
+    let result = Command::new(cargo_bin("hudson"))
         .args(["notation", "pdf"])
         .arg(&template)
         .args(["--preview", "--out"])
@@ -386,7 +386,7 @@ fn a_counsel_signature_is_draft_in_a_preview_and_signed_in_a_final_render() {
     .unwrap();
 
     let preview = work.path().join("preview.docx");
-    let result = Command::new(cargo_bin("navigator-deploy"))
+    let result = Command::new(cargo_bin("hudson"))
         .args(["notation", "word"])
         .arg(&template)
         .args(["--preview", "--out"])
@@ -440,7 +440,7 @@ fn explicit_pending_assignments_still_preview() {
         "  judicial_officer: pending",
     );
     let out = work.path().join("preview.pdf");
-    let result = Command::new(cargo_bin("navigator-deploy"))
+    let result = Command::new(cargo_bin("hudson"))
         .args(["notation", "pdf"])
         .arg(work.path().join("templates/rfa_responses.md"))
         .args(["--preview", "--out"])
@@ -596,14 +596,14 @@ fn every_shipped_pleading_renders_against_a_fixture_matter() {
             ]);
         }
         let out = work.path().join("out.pdf");
-        let result = Command::new(cargo_bin("navigator-deploy"))
+        let result = Command::new(cargo_bin("hudson"))
             .args(["notation", "pdf"])
             .arg(&template)
             .arg("--out")
             .arg(&out)
             .args(&args)
             .output()
-            .expect("run navigator-deploy notation pdf");
+            .expect("run hudson notation pdf");
         if !result.status.success() {
             failures.push(format!("{}: {}", name.to_string_lossy(), stderr(&result)));
         }

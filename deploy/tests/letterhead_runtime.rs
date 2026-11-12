@@ -318,7 +318,7 @@ fn render_notation(
     out: &Path,
     stores: Option<&StoreEnv>,
 ) -> std::process::Output {
-    let mut command = Command::new(cargo_bin("navigator-deploy"));
+    let mut command = Command::new(cargo_bin("hudson"));
     command
         .args(["notation", subcommand, "--preview"])
         .arg(src)
@@ -327,7 +327,7 @@ fn render_notation(
         Some(env) => with_store_env(&mut command, env),
         None => without_store_env(&mut command),
     }
-    command.output().expect("run navigator-deploy notation")
+    command.output().expect("run hudson notation")
 }
 
 /// The letterhead text of a rendered PDF, through poppler. The house skips

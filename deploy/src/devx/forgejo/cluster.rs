@@ -205,7 +205,7 @@ pub(in crate::devx) fn up(cfg: &KindConfig) -> Result<()> {
     if !kube.succeeds(&["get", "namespace", kube.namespace()]) {
         bail!(
             "namespace {} does not exist in context {}; create the KIND tier first \
-             (`navigator-deploy dev worktree-env up` or `navigator-deploy dev up`)",
+             (`hudson dev worktree-env up` or `hudson dev up`)",
             kube.namespace(),
             cfg.kind_context()
         );

@@ -1,13 +1,13 @@
 //! SSH public keys for a Firm user's Forgejo account (ENG-1219).
 //!
-//! `navigator-deploy site person ssh-key add|list|remove|sync` manage the logged-in
+//! `hudson site person ssh-key add|list|remove|sync` manage the logged-in
 //! user's own keys through the deployment's `/app/api/ssh-keys` doors; the
 //! server resolves the Person from the session and reconciles their Forgejo
 //! account after each change. A key is checked locally before it leaves this
 //! machine, so a private key pasted by mistake is refused here and never
 //! sent.
 //!
-//! `navigator-deploy ops forgejo ssh-keys sync` is the operator sweep: it reads the
+//! `hudson ops forgejo ssh-keys sync` is the operator sweep: it reads the
 //! stores directly and reconciles every Person holding a key row (live, or
 //! revoked and awaiting removal from the forge), reporting drift by Person id
 //! and fingerprint. Drift — a key on the account Navigator neither holds nor
@@ -74,7 +74,7 @@ fn describe_sync(sync: &Value) -> String {
         }
         Some("no_forgejo_account") => {
             "no Forgejo account yet; the key is added after your first Forgejo sign-in \
-             (then run `navigator-deploy site person ssh-key sync`)"
+             (then run `hudson site person ssh-key sync`)"
                 .to_string()
         }
         Some("not_configured") => "this deployment does not sync keys to Forgejo".to_string(),
@@ -190,7 +190,7 @@ fn finish(result: Result<()>) -> ExitCode {
     }
 }
 
-/// `navigator-deploy site person ssh-key add`.
+/// `hudson site person ssh-key add`.
 pub async fn add(host: Option<String>, source: &Path, label: Option<&str>) -> ExitCode {
     finish(
         async {
@@ -202,7 +202,7 @@ pub async fn add(host: Option<String>, source: &Path, label: Option<&str>) -> Ex
     )
 }
 
-/// `navigator-deploy site person ssh-key list`.
+/// `hudson site person ssh-key list`.
 pub async fn list(host: Option<String>, person: Option<uuid::Uuid>) -> ExitCode {
     finish(
         async {
@@ -213,7 +213,7 @@ pub async fn list(host: Option<String>, person: Option<uuid::Uuid>) -> ExitCode 
     )
 }
 
-/// `navigator-deploy site person ssh-key remove`.
+/// `hudson site person ssh-key remove`.
 pub async fn remove(host: Option<String>, key: &str, person: Option<uuid::Uuid>) -> ExitCode {
     finish(
         async {
@@ -224,7 +224,7 @@ pub async fn remove(host: Option<String>, key: &str, person: Option<uuid::Uuid>)
     )
 }
 
-/// `navigator-deploy site person ssh-key sync`.
+/// `hudson site person ssh-key sync`.
 pub async fn sync(host: Option<String>) -> ExitCode {
     finish(
         async {
@@ -235,7 +235,7 @@ pub async fn sync(host: Option<String>) -> ExitCode {
     )
 }
 
-/// `navigator-deploy ops forgejo ssh-keys sync`: reconcile every Person holding a
+/// `hudson ops forgejo ssh-keys sync`: reconcile every Person holding a
 /// key row, or just `person`.
 ///
 /// # Errors

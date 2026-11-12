@@ -49,7 +49,7 @@ fn copy_tree(from: &Path, to: &Path) {
 fn render(work: &TempDir, template: &str, format: &str) -> PathBuf {
     let extension = if format == "word" { "docx" } else { "pdf" };
     let out = work.path().join(format!("{template}.{extension}"));
-    let result = Command::new(cargo_bin("navigator-deploy"))
+    let result = Command::new(cargo_bin("hudson"))
         .args(["notation", format])
         .arg(work.path().join("templates").join(format!("{template}.md")))
         .arg("--out")

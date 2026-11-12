@@ -109,8 +109,8 @@ exists. Nested and separate conditionals each need their own coverage.
 ## Find the wording
 
 ```bash
-cargo run -p deploy --quiet -- clause list
-cargo run -p deploy --quiet -- clause show 'governing_law@1'
+cargo run -p hudson --quiet -- clause list
+cargo run -p hudson --quiet -- clause show 'governing_law@1'
 ```
 
 The versioned source of truth is [`rules/clauses/library.yaml`](../rules/clauses/library.yaml). When PostgreSQL is

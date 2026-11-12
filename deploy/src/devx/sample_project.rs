@@ -1,4 +1,4 @@
-//! `navigator-deploy dev sample-project` — clone and stage each sample matter's
+//! `hudson dev sample-project` — clone and stage each sample matter's
 //! Project repository for a local boot.
 //!
 //! A sample repository is headless: its `navigator.yaml` declares the
@@ -321,7 +321,7 @@ pub(super) fn run_for_root(keep: bool, workspace_root: &Path) -> Result<usize> {
     }
     if !skipped.is_empty() {
         eprintln!(
-            "navigator: {} matter(s) keep their previously staged source: {}. Run `navigator-deploy dev sample-project --project <code>` to see the failure \
+            "navigator: {} matter(s) keep their previously staged source: {}. Run `hudson dev sample-project --project <code>` to see the failure \
              on its own.",
             skipped.len(),
             skipped.join(", ")

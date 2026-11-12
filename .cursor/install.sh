@@ -4,7 +4,7 @@
 # Default loop: the zero-infrastructure Rust build / test / lint / CLI path
 # (each test opens its own embedded, memory-backed SurrealDB). This script
 # also installs Docker CE, kind v0.32.0, and helm so a task that needs the
-# KIND dependency tier can run `navigator-deploy dev up` after `.cursor/start.sh`
+# KIND dependency tier can run `hudson dev up` after `.cursor/start.sh`
 # has started dockerd. Cluster creation stays opt-in — do not start KIND here.
 set -euo pipefail
 

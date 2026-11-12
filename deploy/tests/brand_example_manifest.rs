@@ -46,7 +46,7 @@ fn source_tree() -> TempDir {
 }
 
 fn navigator() -> Command {
-    Command::cargo_bin("navigator-deploy").expect("build the `navigator` binary")
+    Command::cargo_bin("hudson").expect("build the `navigator` binary")
 }
 
 /// `build` turns the example into a mountable bundle, and `verify` accepts it.

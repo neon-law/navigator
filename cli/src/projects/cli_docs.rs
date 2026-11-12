@@ -81,9 +81,9 @@ fn inline_commands(line: &str, line_no: usize) -> Vec<(usize, String)> {
     out
 }
 
-/// Top-level verbs that moved from `navigator` to `navigator-deploy` (and
+/// Top-level verbs that moved from `navigator` to `hudson` (and
 /// `ephemeris`, to `scorpio`).
-pub const NAVIGATOR_DEPLOY_VERBS: &[&str] = &[
+pub const HUDSON_VERBS: &[&str] = &[
     "assumptions",
     "clause",
     "dev",
@@ -116,7 +116,7 @@ pub fn unresolved_verb(command: &str, tree: &Command) -> Option<String> {
         return None;
     }
     // A Project repository synced before the split still documents these
-    // verbs under `navigator`; they now resolve in `navigator-deploy`, so
+    // verbs under `navigator`; they now resolve in `hudson`, so
     // they are not a dangling command. `site` stayed, but only its session
     // and seed-import verbs did.
     let moved_site_verb = words.get(1) == Some(&"site")
@@ -128,7 +128,7 @@ pub fn unresolved_verb(command: &str, tree: &Command) -> Option<String> {
         });
     if moved_site_verb
         || words.get(1).is_some_and(|verb| {
-            NAVIGATOR_DEPLOY_VERBS.contains(verb) && tree.find_subcommand(verb).is_none()
+            HUDSON_VERBS.contains(verb) && tree.find_subcommand(verb).is_none()
         })
     {
         return None;

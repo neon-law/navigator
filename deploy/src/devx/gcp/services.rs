@@ -40,9 +40,9 @@ pub const REQUIRED_SERVICES: &[&str] = &[
     "drive.googleapis.com",
     "admin.googleapis.com",
     "aiplatform.googleapis.com",
-    // `navigator-deploy mail` calls Gmail with an OAuth client the Firm creates in
+    // `hudson mail` calls Gmail with an OAuth client the Firm creates in
     // this project; Google refuses the client's tokens until the project
-    // enables the API. See docs/mail-cli.md#provision-gmail-for-navigator-deploy-mail.
+    // enables the API. See docs/mail-cli.md#provision-gmail-for-hudson-mail.
     "gmail.googleapis.com",
 ];
 
@@ -149,7 +149,7 @@ pub async fn missing(
         .collect())
 }
 
-/// The secret-free drift report `navigator-deploy ops gcp services` prints: one line
+/// The secret-free drift report `hudson ops gcp services` prints: one line
 /// per required API, `ok` or `MISSING`, then the fix when any is missing.
 #[must_use]
 pub fn drift_report(project_id: &str, required: &[&str], missing: &[String]) -> String {
@@ -169,7 +169,7 @@ pub fn drift_report(project_id: &str, required: &[&str], missing: &[String]) -> 
     } else {
         let _ = write!(
             text,
-            "\n{} required API(s) disabled. Enable them with:\n  navigator-deploy ops gcp setup --project-id {project_id}\n",
+            "\n{} required API(s) disabled. Enable them with:\n  hudson ops gcp setup --project-id {project_id}\n",
             missing.len()
         );
     }
@@ -399,7 +399,7 @@ mod tests {
         let drift = drift_report("proj", &required, &["gmail.googleapis.com".to_owned()]);
         assert!(drift.contains("[ok      ] compute.googleapis.com"));
         assert!(drift.contains("[MISSING ] gmail.googleapis.com"));
-        assert!(drift.contains("navigator-deploy ops gcp setup --project-id proj"));
+        assert!(drift.contains("hudson ops gcp setup --project-id proj"));
 
         let clean = drift_report("proj", &required, &[]);
         assert!(!clean.contains("MISSING"));

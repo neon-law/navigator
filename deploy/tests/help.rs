@@ -1,11 +1,11 @@
-//! Integration tests for the top-level `navigator-deploy --help` output.
+//! Integration tests for the top-level `hudson --help` output.
 
 use assert_cmd::Command;
 use predicates::prelude::PredicateBooleanExt;
 use predicates::str;
 
 fn help(args: &[&str]) -> String {
-    let output = Command::cargo_bin("navigator-deploy")
+    let output = Command::cargo_bin("hudson")
         .unwrap()
         .args(args)
         .output()
@@ -58,12 +58,12 @@ fn command_names(output: &str) -> Vec<&str> {
 
 #[test]
 fn top_level_help_is_a_terse_legal_safe_headline() {
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .arg("--help")
         .assert()
         .success()
-        .stdout(str::contains("Navigator Deploy CLI, not legal advice."));
+        .stdout(str::contains("Hudson, the Navigator operator CLI, not legal advice."));
 }
 
 #[test]
@@ -197,7 +197,7 @@ fn forms_help_lists_the_vendoring_operations() {
 
 #[test]
 fn site_import_help_lists_the_seed_arguments() {
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .args(["site", "import", "--help"])
         .assert()
@@ -325,7 +325,7 @@ fn projects_help_lists_the_project_workspace_verbs() {
 #[test]
 fn the_retired_portal_commands_no_longer_parse() {
     for verb in ["portal", "build", "applications"] {
-        let output = Command::cargo_bin("navigator-deploy")
+        let output = Command::cargo_bin("hudson")
             .unwrap()
             .args(["project", verb])
             .output()
@@ -471,7 +471,7 @@ fn ops_ship_help_requires_an_explicit_deployment() {
     assert!(!output.to_lowercase().contains("doppler"));
 
     // Omitting --deployment is a parse error, not a silent environment read.
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .args(["ops", "ship", "--tag", "26.1.1"])
         .assert()
@@ -493,7 +493,7 @@ fn ops_deployments_help_promises_a_read_only_names_only_check() {
 
     // Pointed at a directory with no tree it fails at the flag, rather than
     // walking up out of it into some unrelated checkout.
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .args([
             "ops",
@@ -518,7 +518,7 @@ fn ops_ship_help_describes_the_narrow_automated_lane() {
 
     // Pointed at a directory with no tree, it fails at the flag rather than
     // walking up out of it into some unrelated checkout.
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .args([
             "ops",
@@ -555,36 +555,36 @@ fn worktree_env_sweep_help_exposes_its_explicit_apply_flag() {
 
 #[test]
 fn browser_e2e_help_lists_the_gate_overrides() {
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .args(["dev", "browser-e2e", "--help"])
         .assert()
         .success()
-        .stdout(str::contains("Usage: navigator-deploy dev browser-e2e"))
+        .stdout(str::contains("Usage: hudson dev browser-e2e"))
         .stdout(str::contains("--base-url"))
         .stdout(str::contains("NAV_BASE_URL"));
 }
 
 #[test]
 fn flake_hunt_help_lists_the_package_and_runs_flag() {
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .args(["dev", "flake-hunt", "--help"])
         .assert()
         .success()
-        .stdout(str::contains("Usage: navigator-deploy dev flake-hunt"))
+        .stdout(str::contains("Usage: hudson dev flake-hunt"))
         .stdout(str::contains("--runs"))
         .stdout(str::contains("[TEST_FILTER]"));
 }
 
 #[test]
 fn grant_lawyer_help_names_the_store_it_grants_in() {
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .args(["dev", "grant-lawyer", "--help"])
         .assert()
         .success()
-        .stdout(str::contains("Usage: navigator-deploy dev grant-lawyer"));
+        .stdout(str::contains("Usage: hudson dev grant-lawyer"));
 }
 
 /// `site` owns everything that authenticates to a running deployment with the
@@ -645,7 +645,7 @@ fn site_asset_prepare_video_is_explicit_and_local() {
     );
 }
 
-/// ENG-909: `navigator-deploy site asset upload` takes one or more `--host` values
+/// ENG-909: `hudson site asset upload` takes one or more `--host` values
 /// and a local `ASSET_NAME` path/key, with no bucket argument at all — the
 /// authenticated sibling of `ops assets upload`.
 #[test]
@@ -730,7 +730,7 @@ fn site_document_reclassify_requires_an_accepted_kind() {
 
 #[test]
 fn site_document_reclassify_refuses_a_template_lane_kind() {
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .args([
             "site",
@@ -778,7 +778,7 @@ fn site_document_upload_takes_an_optional_signing_record() {
             "onboarding",
         ];
         args.extend_from_slice(extra);
-        Command::cargo_bin("navigator-deploy")
+        Command::cargo_bin("hudson")
             .unwrap()
             .args(args)
             .output()
@@ -812,7 +812,7 @@ fn site_document_upload_takes_repeatable_notarizations() {
 
     let entry = "method=in_person,acknowledged_on=2026-09-04,state=NV,county=Clark,\
                  commission_expires=2029-01-31";
-    let output = Command::cargo_bin("navigator-deploy")
+    let output = Command::cargo_bin("hudson")
         .unwrap()
         .args([
             "site",
@@ -838,7 +838,7 @@ fn site_document_upload_takes_repeatable_notarizations() {
 
 #[test]
 fn site_document_upload_refuses_a_missing_kind() {
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .args([
             "site",
@@ -856,7 +856,7 @@ fn site_document_upload_refuses_a_missing_kind() {
 
 #[test]
 fn site_document_upload_refuses_a_template_lane_kind() {
-    let output = Command::cargo_bin("navigator-deploy")
+    let output = Command::cargo_bin("hudson")
         .unwrap()
         .args([
             "site",
@@ -887,7 +887,7 @@ fn site_document_upload_refuses_a_template_lane_kind() {
 
 #[test]
 fn site_login_help_exposes_headless_mode() {
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .args(["site", "login", "--help"])
         .assert()
@@ -897,7 +897,7 @@ fn site_login_help_exposes_headless_mode() {
 
 #[test]
 fn ops_cut_release_help_exposes_the_rehearsal_and_write_flags() {
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .args(["ops", "cut-release", "--help"])
         .assert()
@@ -1101,7 +1101,7 @@ fn ops_gcp_hub_help_uses_a_headline() {
 
 #[test]
 fn ops_gcp_hub_setup_help_lists_its_flags() {
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .args(["ops", "gcp", "hub", "setup", "--help"])
         .assert()
@@ -1118,7 +1118,7 @@ fn ops_gcp_hub_setup_help_lists_its_flags() {
 
 #[test]
 fn ops_gcp_setup_help_exposes_the_hub_registry_flag() {
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .args(["ops", "gcp", "setup", "--help"])
         .assert()
@@ -1132,14 +1132,14 @@ fn ops_gcp_setup_help_exposes_the_hub_registry_flag() {
 /// some people know about. `dev up` is the spelling.
 #[test]
 fn the_hidden_up_alias_no_longer_parses() {
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .args(["up", "--help"])
         .assert()
         .failure()
         .stderr(str::contains("unrecognized subcommand"));
 
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .args(["dev", "up", "--help"])
         .assert()
@@ -1148,13 +1148,13 @@ fn the_hidden_up_alias_no_longer_parses() {
 
 #[test]
 fn notation_create_help_lists_template_and_client_flags() {
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .args(["site", "notation", "create", "--help"])
         .assert()
         .success()
         .stdout(str::contains(
-            "Usage: navigator-deploy site notation create",
+            "Usage: hudson site notation create",
         ))
         .stdout(str::contains("<TEMPLATE_CODE>"))
         .stdout(str::contains("--client-email"))
@@ -1169,7 +1169,7 @@ fn notation_create_help_lists_template_and_client_flags() {
 /// loosening the prose has to narrow back down.
 #[test]
 fn projects_create_requires_a_jurisdiction_when_entity_name_is_omitted() {
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .args([
             "project",
@@ -1202,7 +1202,7 @@ fn notation_kinds_lists_every_kind_and_output_value() {
 /// no cloud project, SOPS key, registry login, or token, and a `PATH` that
 /// holds only the base system tools.
 fn fresh_clone_run(args: &[&str]) -> (bool, String) {
-    let output = Command::cargo_bin("navigator-deploy")
+    let output = Command::cargo_bin("hudson")
         .unwrap()
         .env_clear()
         .env("PATH", "/usr/bin:/bin")

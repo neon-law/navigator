@@ -31,7 +31,7 @@ authorization to inspect, use, or change that app or its data.
 When authorized to run the app, start or reuse this worktree's dependency environment:
 
 ```bash
-cargo run -p deploy -- dev worktree-env up --path "$PWD"
+cargo run -p hudson -- dev worktree-env up --path "$PWD"
 ```
 
 Export every generated setting before starting the host app. A plain `source .devx/env` leaves assignments unexported in
@@ -41,7 +41,7 @@ many shells, and `neon` then fails to reach the worktree database.
 set -a
 source .devx/env
 set +a
-cargo run -p deploy -- dev serve
+cargo run -p hudson -- dev serve
 ```
 
 Read the app URL from `.devx/env` (`PORT` or `NAV_BASE_URL`); do not assume a fixed port. Keep `dev serve` running while
@@ -51,7 +51,7 @@ environment was exported and the worktree's port-forward is alive before changin
 ## Exercise authenticated flows
 
 - Use only the local KIND fixture and its documented identities. Grant a Lawyer against the current environment with
-  `cargo run -p deploy -- dev grant-lawyer`; authenticate through the local OIDC provider. Never hand-write session
+  `cargo run -p hudson -- dev grant-lawyer`; authenticate through the local OIDC provider. Never hand-write session
   cookies.
 - Use synthetic brands, Projects, people, and messages. Keep client data, legal files, real contact details, and
   production identifiers out of fixtures, logs, captures, and PR material.
@@ -70,7 +70,7 @@ surface, run the pinned browser/accessibility gate against the environment's act
 environment and the web server and worktree services reachable:
 
 ```bash
-cargo run -p deploy -- dev browser-e2e
+cargo run -p hudson -- dev browser-e2e
 ```
 
 If needed, pass `--base-url http://localhost:<PORT>` from `.devx/env`. Treat test output as evidence: record the exact
@@ -93,8 +93,8 @@ mockup, or animation. Keep the recording under `/tmp/navigator-screenshots/`, in
   remove only this task's local resources:
 
   ```bash
-  cargo run -p deploy -- dev worktree-env status --path "$PWD"
-  cargo run -p deploy -- dev worktree-env down --path "$PWD"
+  cargo run -p hudson -- dev worktree-env status --path "$PWD"
+  cargo run -p hudson -- dev worktree-env down --path "$PWD"
   ```
 
 - Never prune Docker volumes or tear down the shared developer tier as a shortcut. Follow

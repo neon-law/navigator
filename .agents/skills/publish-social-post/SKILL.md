@@ -56,12 +56,12 @@ Sources: `portal/src/blog_api.rs` (`record`, `prepare`, `queue_publication`),
 2. Run the read-only preflight before uploading:
 
    ```bash
-   navigator-deploy site blog preflight <brand> <slug> --providers facebook,instagram,tiktok --host <host>
+   hudson site blog preflight <brand> <slug> --providers facebook,instagram,tiktok --host <host>
    ```
 
    Supply only the requested providers. A nonzero exit with `ready_to_prepare: false` reports setup blockers and a
    `setup_url` for the Brand's Navigator connection page. If the installed CLI lacks `preflight`, update it or use this
-   checkout's `cargo run -p deploy -- site blog preflight ...`. Inspect `blog status` when setup is blocked. Missing
+   checkout's `cargo run -p hudson -- site blog preflight ...`. Inspect `blog status` when setup is blocked. Missing
    `connection_setup` or `publisher_configured` fields mean the server needs the preflight-capable deploy first. An
    empty `accounts` list means this deployment has no stored OAuth connections for the Brand; it does not prove the
    provider profiles are absent or that publishing code is missing. Public handles and a signed-in provider website do
@@ -78,13 +78,13 @@ Sources: `portal/src/blog_api.rs` (`record`, `prepare`, `queue_publication`),
    fallback is optional; agree on that change of workflow before taking control of the user's browser. When the user
    takes over a provider, stop interacting with it and reconcile any submission already made before retrying.
 3. For video, inspect the MP4 with `ffprobe`, preserve the original resolution where practical, and keep the upload at
-   or below 64 MiB. `navigator-deploy site asset prepare-video <original.mp4> <new-output.mp4>` prepares it locally with
-   FFmpeg, preserving the original and verifying the derived MP4 without uploading or sending. Inspect its reported
-   dimensions and bitrate tradeoff, compare compressed frames with the original, and check decoding before uploading
-   under `img/<brand>/`:
+   or below 64 MiB. `hudson site asset prepare-video <original.mp4> <new-output.mp4>` prepares it locally with FFmpeg,
+   preserving the original and verifying the derived MP4 without uploading or sending. Inspect its reported dimensions
+   and bitrate tradeoff, compare compressed frames with the original, and check decoding before uploading under
+   `img/<brand>/`:
 
    ```bash
-   navigator-deploy site asset upload --host <host> --key img/<brand>/<video>.mp4 /absolute/path/video.mp4
+   hudson site asset upload --host <host> --key img/<brand>/<video>.mp4 /absolute/path/video.mp4
    ```
 
    When the operator explicitly authorizes direct GCS uploads and supplies the target buckets, `gcloud storage cp` is
@@ -119,8 +119,8 @@ Sources: `portal/src/blog_api.rs` (`record`, `prepare`, `queue_publication`),
 5. Publish and inspect the result:
 
    ```bash
-   navigator-deploy site blog publish /absolute/path/post.yaml --host <host>
-   navigator-deploy site blog status <brand> <slug> --host <host>
+   hudson site blog publish /absolute/path/post.yaml --host <host>
+   hudson site blog status <brand> <slug> --host <host>
    ```
 
 The composer on `/app/social/calendar` submits the same Post command: upload the video through `/app/admin/blog`, select
@@ -148,9 +148,9 @@ rows when publishing manually.
 Use the exact public permalink. Record the Brand's verified public handle first if absent:
 
 ```bash
-navigator-deploy site blog handle <brand> <provider> <handle> --host <host>
-navigator-deploy site blog link <brand> <slug> <provider> <public-post-url> --host <host>
-navigator-deploy site blog status <brand> <slug> --host <host>
+hudson site blog handle <brand> <provider> <handle> --host <host>
+hudson site blog link <brand> <slug> <provider> <public-post-url> --host <host>
+hudson site blog status <brand> <slug> --host <host>
 ```
 
 Linking records display data and never sends. Verify the returned link belongs to the intended Brand and Post. A server

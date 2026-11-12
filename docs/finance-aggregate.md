@@ -48,8 +48,8 @@ land in the totals and in no group. The percentages default to 28 overhead, 70 a
    first; it does not verify the live cluster or release availability:
 
    ```bash
-   navigator-deploy ops ship --deployment neon-law-stg --tag <release tag> --dry-run
-   navigator-deploy ops ship --deployment neon-law-stg --tag <release tag>
+   hudson ops ship --deployment neon-law-stg --tag <release tag> --dry-run
+   hudson ops ship --deployment neon-law-stg --tag <release tag>
    ```
 
    The schema applies on boot (version 63 adds the `finance_aggregate` table).

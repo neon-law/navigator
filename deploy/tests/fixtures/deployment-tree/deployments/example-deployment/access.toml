@@ -1,4 +1,4 @@
-# Synthetic: the access declaration `navigator-deploy ops gcp access` converges.
+# Synthetic: the access declaration `hudson ops gcp access` converges.
 # Names only — an access file never carries key material.
 [audit]
 data_read = ["secretmanager.googleapis.com", "cloudkms.googleapis.com"]

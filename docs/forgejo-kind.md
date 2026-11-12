@@ -5,8 +5,8 @@ Forgejo runs in the local KIND tier beside PostgreSQL and Rauthy, with one Actio
 
 ```bash
 set -a; source .devx/env; set +a          # select this worktree's KIND tier
-cargo run -p deploy -- dev forgejo up         # converge Forgejo into the tier
-cargo run -p deploy -- dev forgejo smoke      # prove it end to end
+cargo run -p hudson -- dev forgejo up         # converge Forgejo into the tier
+cargo run -p hudson -- dev forgejo smoke      # prove it end to end
 ```
 
 `up` leaves Forgejo at `http://localhost:3300/` (`NAVIGATOR_KIND_FORGEJO_PORT`) and PostgreSQL at `127.0.0.1:15432`
@@ -136,8 +136,8 @@ another host port and set `NAVIGATOR_KIND_RAUTHY_PORT` to it:
 kind create cluster --name forgejo-smoke --config k8s/kind-forgejo-config.yaml --kubeconfig /tmp/forgejo-kind.config
 export KUBECONFIG=/tmp/forgejo-kind.config NAVIGATOR_KIND_CLUSTER=forgejo-smoke
 kubectl --context kind-forgejo-smoke create namespace navigator
-cargo run -p deploy -- dev forgejo up
-cargo run -p deploy -- dev forgejo smoke
+cargo run -p hudson -- dev forgejo up
+cargo run -p hudson -- dev forgejo smoke
 kind delete cluster --name forgejo-smoke
 ```
 

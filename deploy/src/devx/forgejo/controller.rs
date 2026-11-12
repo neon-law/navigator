@@ -1,4 +1,4 @@
-//! `navigator-deploy ops forgejo runner-controller`: start one disposable,
+//! `hudson ops forgejo runner-controller`: start one disposable,
 //! repository-scoped runner for every queued Forgejo Actions job, with no
 //! operator (ENG-1236).
 //!
@@ -804,7 +804,7 @@ fn launch_one(
 /// reaches the collector (and from it Dash0 and Cloud Logging) with the
 /// repository and runner Job attached. Each line passes the telemetry
 /// crate's content screen like any other record; a line that looks like
-/// client content is dropped there, and `navigator-deploy ops forgejo logs` still
+/// client content is dropped there, and `hudson ops forgejo logs` still
 /// reads the whole log from Forgejo.
 fn forward_job_log(repository: &str, job: &str, log: &str) {
     for line in log.lines().filter(|line| !line.trim().is_empty()) {
@@ -812,7 +812,7 @@ fn forward_job_log(repository: &str, job: &str, log: &str) {
     }
 }
 
-/// `navigator-deploy ops forgejo runner-controller`.
+/// `hudson ops forgejo runner-controller`.
 pub(in crate::devx) fn run(options: &Options) -> Result<()> {
     let _telemetry = telemetry::init("navigator-forgejo-runner-controller");
     ensure!(

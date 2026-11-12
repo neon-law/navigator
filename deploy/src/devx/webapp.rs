@@ -1,4 +1,4 @@
-//! `navigator-deploy dev build-webapp` — build the Dioxus client bundle (issue #641).
+//! `hudson dev build-webapp` — build the Dioxus client bundle (issue #641).
 //!
 //! Drives `dx` (the Dioxus CLI, itself a Rust binary — consistent with the
 //! Rust-only invariant, exactly as this CLI already orchestrates `kubectl`,

@@ -85,7 +85,7 @@ fn every_cli_release_upload_uses_a_tag_exact_archive_name() {
                 && line.contains("gh release upload")
                 && !line.contains("-lsp-")
                 && !line.contains("navigator-${TAG}-")
-                && !line.contains("navigator-deploy-${TAG}-")
+                && !line.contains("hudson-${TAG}-")
                 && !line.contains("scorpio-${TAG}-")
                 // ENG-931: LICENSE, LICENSE-MIT, LICENSE-APACHE-2, and NOTICE travel
                 // on the Release standalone, under their own plain names —
@@ -485,7 +485,7 @@ fn releases_build_and_attach_a_linux_cli_archive() {
 
     // `--version` falls back to the Cargo version, so only the published
     // release proves build.rs saw NAVIGATOR_RELEASE_TAG. `ops github setup`
-    // is a `navigator-deploy` verb; that binary links the same `cli` library,
+    // is a `hudson` verb; that binary links the same `cli` library,
     // built with the same variable, so its job carries the proof.
     let deploy = deploy_job("release-deploy-cli-build-linux");
     let baked = job_step(&deploy, "prove the release tag was baked in")

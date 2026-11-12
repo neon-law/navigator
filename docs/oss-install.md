@@ -59,7 +59,7 @@ compile without it.
   Kustomize built into `kubectl`. Nothing here shells out to a standalone `kustomize` binary.
 - **A domain you control**, with the ability to set A records.
 
-**To run the local KIND cluster** (`navigator-deploy dev up`, and the per-worktree `dev worktree-env up`):
+**To run the local KIND cluster** (`hudson dev up`, and the per-worktree `dev worktree-env up`):
 
 The cluster lane refuses to start unless all four of these are on `PATH` — `deploy/src/devx/orchestrate.rs:43` opens it
 with `require_tools(&["kind", "kubectl", "docker", "helm"])`. Docker and `kubectl` are already above and both arrive
@@ -108,8 +108,8 @@ and logos into one directory:
 
 ```bash
 cp deploy/tests/fixtures/navigator.example.yaml navigator.yaml   # then edit: names, emails, domain, logos
-cargo run -p deploy -- ops rebrand build --file navigator.yaml --out /tmp/brand-bundle
-cargo run -p deploy -- ops rebrand verify --dir /tmp/brand-bundle
+cargo run -p hudson -- ops rebrand build --file navigator.yaml --out /tmp/brand-bundle
+cargo run -p hudson -- ops rebrand verify --dir /tmp/brand-bundle
 ```
 
 `deploy/tests/fixtures/navigator.example.yaml` is the worked manifest, and it lives under `tests/` because that is where
@@ -202,7 +202,7 @@ own instance.
 
 ```bash
 gcloud auth application-default login
-cargo run -p deploy -- ops gcp setup \
+cargo run -p hudson -- ops gcp setup \
   --project-id YOUR_PROJECT_ID \
   --public-base-url https://www.your-domain.example \
   --region us-west2 \
@@ -211,7 +211,7 @@ cargo run -p deploy -- ops gcp setup \
   --gateway-ip-name navigator-gateway-ip
 ```
 
-Each flag has a sensible default (see `cargo run -p deploy -- ops gcp setup --help`) and falls back to a `NAVIGATOR_*`
+Each flag has a sensible default (see `cargo run -p hudson -- ops gcp setup --help`) and falls back to a `NAVIGATOR_*`
 env var if unset. Pass `--dry-run` first to print the exact REST calls / `gcloud` invocations the run will emit.
 
 The subcommand generates no credential and prints no secret. Your store credentials come from your SurrealDB provider
@@ -278,9 +278,8 @@ docker build -f images/Containerfile.neon -t my-registry/neon-server:$TAG .
 docker push my-registry/neon-server:$TAG
 ```
 
-Then roll your cluster onto the new tag — `navigator-deploy ops ship --tag <TAG>` renders the embedded manifest tree
-from your `NAVIGATOR_*` env and applies it, or set the tag via kustomize `images:` if you reconcile with your own
-controller.
+Then roll your cluster onto the new tag — `hudson ops ship --tag <TAG>` renders the embedded manifest tree from your
+`NAVIGATOR_*` env and applies it, or set the tag via kustomize `images:` if you reconcile with your own controller.
 
 ## 6. Verify
 

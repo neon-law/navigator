@@ -16,10 +16,10 @@ backlog stays honest about what was reviewed. The route and processing time ride
 best-effort and metadata-only. Archiving the Gmail copy — removing the `INBOX` label, never trashing — is a separate CLI
 action taken after an apply.
 
-The plan lists the message's linked attachments by filename and sha256. `navigator-deploy inbox attachments` writes them
-to a local directory without recording anything, so a lawyer can read what arrived before choosing the kind an apply
-files them under.
+The plan lists the message's linked attachments by filename and sha256. `hudson inbox attachments` writes them to a
+local directory without recording anything, so a lawyer can read what arrived before choosing the kind an apply files
+them under.
 
 - Route vocabulary: [`store::inbox::route`](../../store/src/inbox.rs)
 - Classifier: [`portal::inbound_email`](../../portal/src/inbound_email.rs)
-- CLI verb: `navigator-deploy inbox process` ([`cli::inbox`](../../deploy/src/inbox.rs))
+- CLI verb: `hudson inbox process` ([`cli::inbox`](../../deploy/src/inbox.rs))

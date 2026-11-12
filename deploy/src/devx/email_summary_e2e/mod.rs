@@ -1,4 +1,4 @@
-//! `navigator-deploy dev email-summary-e2e` — drive the real inbound-email summary
+//! `hudson dev email-summary-e2e` — drive the real inbound-email summary
 //! pipeline end to end on this worktree's KIND cluster.
 //!
 //! Real: the host `web` listener (this branch's binary), the in-cluster
@@ -36,13 +36,13 @@ const WORKER_RESOURCE: &str = "restatedeployment/workflows-service";
 /// The hostname pods use to reach a process on the machine running Docker.
 const HOST_FROM_CLUSTER: &str = "host.docker.internal";
 
-/// `navigator-deploy dev email-summary-e2e`.
+/// `hudson dev email-summary-e2e`.
 pub(super) fn run_e2e(cfg: &KindConfig) -> Result<()> {
     require_tools(&["docker", "kind", "kubectl", "cargo", "git"])?;
     ensure_orbstack(&docker_operating_system()?)?;
     let root = workspace_root()?;
     configure_worktree_kubeconfig(&root, cfg).context(
-        "this worktree has no KIND cluster; run `navigator-deploy dev worktree-env up --runtime kind`",
+        "this worktree has no KIND cluster; run `hudson dev worktree-env up --runtime kind`",
     )?;
     ensure_worker_present(cfg)?;
 
@@ -104,7 +104,7 @@ fn ensure_worker_present(cfg: &KindConfig) -> Result<()> {
     ensure!(
         status.status.success(),
         "the {WORKER_RESOURCE} resource is missing from the cluster; run \
-         `navigator-deploy dev worktree-env up --runtime kind`"
+         `hudson dev worktree-env up --runtime kind`"
     );
     Ok(())
 }

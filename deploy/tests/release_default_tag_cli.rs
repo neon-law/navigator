@@ -1,4 +1,4 @@
-//! `navigator-deploy ops release-default-tag` end-to-end: it prints the bare
+//! `hudson ops release-default-tag` end-to-end: it prints the bare
 //! candidate tag on stdout when today is releasable, and nothing on stdout —
 //! only a reason on stderr — when a release already exists that makes
 //! today's date no improvement. Either way it exits 0: "nothing to cut
@@ -48,7 +48,7 @@ fn suggests_todays_date_when_nothing_is_released_yet() {
     let dir = tempfile::tempdir().expect("tempdir");
     init_repo(dir.path());
 
-    let output = Command::cargo_bin("navigator-deploy")
+    let output = Command::cargo_bin("hudson")
         .unwrap()
         .args([
             "ops",
@@ -76,7 +76,7 @@ fn suggests_nothing_and_still_exits_zero_when_a_later_version_is_released() {
     init_repo(dir.path());
     assert!(git(dir.path(), &["tag", "99.12.31"]).status.success());
 
-    let output = Command::cargo_bin("navigator-deploy")
+    let output = Command::cargo_bin("hudson")
         .unwrap()
         .args([
             "ops",
@@ -106,7 +106,7 @@ fn suggests_nothing_and_still_exits_zero_when_a_later_version_is_released() {
 fn a_directory_with_no_git_history_fails_rather_than_guessing() {
     let dir = tempfile::tempdir().expect("tempdir");
 
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .args([
             "ops",

@@ -1,4 +1,4 @@
-//! `navigator-deploy site firm provision-forgejo <slug>`: ask a deployment to create
+//! `hudson site firm provision-forgejo <slug>`: ask a deployment to create
 //! or reconcile a Firm's Forgejo organization.
 //!
 //! The deployment does the work with its own provisioning identity
@@ -104,7 +104,7 @@ async fn provision_at(base: &str, token: &str, slug: &str) -> Result<String> {
     ))
 }
 
-/// `navigator-deploy site firm provision-forgejo`.
+/// `hudson site firm provision-forgejo`.
 pub async fn provision(host: Option<&str>, slug: &str) -> ExitCode {
     let result = async {
         let (base, token) = crate::remote::resolve(host)?;

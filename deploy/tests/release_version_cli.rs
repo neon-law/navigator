@@ -1,4 +1,4 @@
-//! `navigator-deploy ops release version` end-to-end: the command rewrites the one
+//! `hudson ops release version` end-to-end: the command rewrites the one
 //! workspace-version line and leaves everything else — dependency pins
 //! especially — untouched. `--no-commit` keeps these hermetic: no git repo is
 //! required and nothing is committed, so the assertion is purely on the file the
@@ -20,7 +20,7 @@ serde = { version = \"1\" }
 ";
 
 fn run(args: &[&str]) -> assert_cmd::assert::Assert {
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .args(args)
         .assert()

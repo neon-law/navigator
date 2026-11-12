@@ -25,8 +25,8 @@ uses the released `navigator` binary at the exact tag being shipped, because the
 
 CI runs source-tree checks against synthetic rows only. Those checks validate parser and gate behavior; they do not
 prove that an operator's external rows are valid, that a KMS key is available, or that a deployment is ready. Re-run
-`navigator-deploy ops deployments --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR"` and the SOPS inventory checks against
-the approved external root before publication and after any row change. Keep output limited to aggregate results.
+`hudson ops deployments --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR"` and the SOPS inventory checks against the
+approved external root before publication and after any row change. Keep output limited to aggregate results.
 
 When migrating an existing row, explicitly preserve whether it owns the GitHub automation home and/or SMS test recipient
 requirements by setting the corresponding capability flags in that external row. The flags replace identity-by-project
@@ -55,9 +55,9 @@ never printed; one trailing newline is stripped unless `--raw` is passed. The ke
 inventory, or the PostgreSQL or Forgejo inventory with `--service`:
 
 ```bash
-printf '%s' "$VALUE" | navigator-deploy ops secrets set <row> --project-id <project> HCAPTCHA_SECRET
-navigator-deploy ops secrets set <row> --project-id <project> NAVIGATOR_POSTGRES_PASSWORD --service postgres < file
-navigator-deploy ops secrets unset <row> --project-id <project> HCAPTCHA_SECRET
+printf '%s' "$VALUE" | hudson ops secrets set <row> --project-id <project> HCAPTCHA_SECRET
+hudson ops secrets set <row> --project-id <project> NAVIGATOR_POSTGRES_PASSWORD --service postgres < file
+hudson ops secrets unset <row> --project-id <project> HCAPTCHA_SECRET
 ```
 
 `unset` removes the key name from the record. Secret Manager keeps the stored versions, and nothing projects them once
@@ -66,9 +66,9 @@ the name is gone; destroy a version in Secret Manager only after the provider cr
 Project the Kubernetes Secrets from the record and Secret Manager:
 
 ```bash
-navigator-deploy ops secrets apply --deployment <row> --project-id <project> --dry-run
-navigator-deploy ops secrets apply --deployment <row> --project-id <project>
-navigator-deploy ops secrets apply --deployment <row> --project-id <project> --service postgres
+hudson ops secrets apply --deployment <row> --project-id <project> --dry-run
+hudson ops secrets apply --deployment <row> --project-id <project>
+hudson ops secrets apply --deployment <row> --project-id <project> --service postgres
 ```
 
 The web apply writes each coordinate-sourced object to Secret Manager, reads every secret object's `versions/latest`,
@@ -94,8 +94,8 @@ Operationally, one rotation is one deployment at a time, never two in one sittin
 
 1. Rotate the value at the provider.
 2. Re-encrypt it here: the secure stdin command below.
-3. Apply the updated encrypted value with `navigator-deploy ops secrets apply`; it writes a new version.
-4. `navigator-deploy ops ship --deployment <name> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --restart-only`
+3. Apply the updated encrypted value with `hudson ops secrets apply`; it writes a new version.
+4. `hudson ops ship --deployment <name> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --restart-only`
    restarts pods: nothing re-reads the Secret until they are recreated.
 5. Verify that deployment's `/app/readyz`, `/version`, and the affected provider flow.
 
@@ -153,7 +153,7 @@ for that reason, not because any invariant demands it.
 Once per deployment, before its `secrets.enc.yaml` exists, supply the operator's explicit IAM member to setup:
 
 ```bash
-navigator-deploy ops gcp setup --project-id <project> --public-base-url https://www.example.test \
+hudson ops gcp setup --project-id <project> --public-base-url https://www.example.test \
     --region <region> --kms-operator user:operator@example.com
 ```
 
@@ -220,16 +220,16 @@ openssl rand -hex 32 | python3 -c 'import json,sys; print(json.dumps(sys.stdin.r
 ```
 
 Committing a decrypted file is the one unrecoverable mistake here, so two guards sit in front of it. `.gitignore`
-refuses the filenames a decrypted working copy usually takes, and `navigator-deploy ops deployments` fails if any value
-in the tree is not `ENC[…]` — including a file that was never encrypted at all. Neither guard can help after a push: at
-that point the value is disclosed and the only remedy is rotating it at the provider.
+refuses the filenames a decrypted working copy usually takes, and `hudson ops deployments` fails if any value in the
+tree is not `ENC[…]` — including a file that was never encrypted at all. Neither guard can help after a push: at that
+point the value is disclosed and the only remedy is rotating it at the provider.
 
 ## Apply secrets
 
 Dry run first. It reads names only — it does not shell out to `sops`, needs no KMS permission, and cannot print a value:
 
 ```bash
-navigator-deploy ops secrets apply --deployment <row> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --dry-run
+hudson ops secrets apply --deployment <row> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --dry-run
 ```
 
 The dry run names the target project and every object, grouped by which file supplies it, and fails closed listing any
@@ -244,7 +244,7 @@ against the synthetic tree, so no catalog entry is one that no row writes, and `
 reference against live Secret Manager before it reconciles anything. Correct the tree until the dry run is clean, then:
 
 ```bash
-navigator-deploy ops secrets apply --deployment <row> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR"
+hudson ops secrets apply --deployment <row> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR"
 ```
 
 Each object is created if absent and receives a new Secret Manager version, which becomes `versions/latest`. The same
@@ -253,7 +253,7 @@ context, namespace, and Secret name from the selected deployment row and sends t
 standard input. Values never enter `argv`, an error message, or a log line. Run it per deployment, staging first.
 
 Applying a value does not restart anything. `web` and `workflows-service` read the Kubernetes Secret through `envFrom`
-when they start, so `navigator-deploy ops ship --deployment <name> --restart-only` forces them to it immediately.
+when they start, so `hudson ops ship --deployment <name> --restart-only` forces them to it immediately.
 
 ### PostgreSQL and Forgejo service Secrets
 
@@ -293,17 +293,17 @@ service credentials in the web file, a key in the wrong service file, incomplete
 The dry run reads only those names and deployment coordinates:
 
 ```bash
-navigator-deploy ops secrets apply --deployment <name> --service postgres \
+hudson ops secrets apply --deployment <name> --service postgres \
   --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --dry-run
-navigator-deploy ops secrets apply --deployment <name> --service forgejo \
+hudson ops secrets apply --deployment <name> --service forgejo \
   --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --dry-run
 ```
 
 After review, apply only the service being provisioned:
 
 ```bash
-navigator-deploy ops secrets apply --deployment <name> --service postgres --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR"
-navigator-deploy ops secrets apply --deployment <name> --service forgejo --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR"
+hudson ops secrets apply --deployment <name> --service postgres --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR"
+hudson ops secrets apply --deployment <name> --service forgejo --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR"
 ```
 
 The selected command decrypts only its corresponding file in process, writes its listed values to Secret Manager, then
@@ -330,8 +330,8 @@ the rendered-manifest guard verifies the `web` container actually receives it th
 Before a first roll:
 
 ```bash
-navigator-deploy ops secrets apply --deployment <name> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR"
-navigator-deploy ops ship --deployment <name> --tag <YY.M.D> --dry-run
+hudson ops secrets apply --deployment <name> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR"
+hudson ops ship --deployment <name> --tag <YY.M.D> --dry-run
 ```
 
 `ops ship --dry-run` is an offline local plan: it validates the selected row and renders/parses manifest source without
@@ -346,8 +346,8 @@ Who may read a project's secrets, which key encrypts them, and what gets logged 
 the deployment row and converged by one command:
 
 ```bash
-navigator-deploy ops gcp access --project-id <project> --file "$NAVIGATOR_DEPLOYMENTS_DIR/<name>/access.toml" --check
-navigator-deploy ops gcp access --project-id <project> --file "$NAVIGATOR_DEPLOYMENTS_DIR/<name>/access.toml"
+hudson ops gcp access --project-id <project> --file "$NAVIGATOR_DEPLOYMENTS_DIR/<name>/access.toml" --check
+hudson ops gcp access --project-id <project> --file "$NAVIGATOR_DEPLOYMENTS_DIR/<name>/access.toml"
 ```
 
 `--check` reads everything, writes nothing, and exits nonzero on drift. The file has three parts:
@@ -447,7 +447,7 @@ Onboarding a provider is an operator step against the provider's own console, do
    row's runtime service account `roles/cloudkms.cryptoKeyEncrypterDecrypter` on that key alone.
 2. Register the provider app with the callback above, then record the app id in `config.toml`.
 3. Use `sops set --value-stdin` for each secret, never a value in shell arguments or an editor buffer that may persist.
-4. Run the inventory check against the external root, then run `navigator-deploy ops secrets apply` with `--dry-run`. It
+4. Run the inventory check against the external root, then run `hudson ops secrets apply` with `--dry-run`. It
    lists the social objects supplied by encrypted secrets and deployment coordinates.
 5. Apply, then `ops ship --restart-only`, and connect each Brand's accounts from its admin page.
 
@@ -483,9 +483,9 @@ The dry run reads names only. Apply and restart production once all entries are 
 
 ```bash
 ./scripts/validate-sops-inventory.sh
-navigator-deploy ops secrets apply --deployment <production> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --dry-run
-navigator-deploy ops secrets apply --deployment <production> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR"
-navigator-deploy ops ship --deployment <production> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --restart-only
+hudson ops secrets apply --deployment <production> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --dry-run
+hudson ops secrets apply --deployment <production> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR"
+hudson ops ship --deployment <production> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --restart-only
 ```
 
 Before activation, review due scheduled Posts with the operator. Restarting the production publisher with new
@@ -545,7 +545,7 @@ for the production runtime key and SOPS key. Export `NAVIGATOR_RUNTIME_KMS_KEY` 
 name. Only the encrypted request path enters the command line:
 
 ```bash
-navigator-deploy ops secrets import-social-changes --deployment <production> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" \
+hudson ops secrets import-social-changes --deployment <production> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" \
     --request <downloaded-encrypted-file>
 ```
 

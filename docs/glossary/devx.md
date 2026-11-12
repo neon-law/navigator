@@ -12,10 +12,10 @@ Brings a complete dependency stack up inside a local KIND cluster — SurrealDB,
 `.devx/env`. That file has the connection details the host-side `cargo run -p neon` needs.
 
 ```bash
-cargo run --release -p deploy -- dev up      # bring it all up
+cargo run --release -p hudson -- dev up      # bring it all up
 set -a; source .devx/env; set +a       # connection env vars
 cargo run -p neon                       # host-side web on :3001
-cargo run --release -p deploy -- dev down    # tear it all down
+cargo run --release -p hudson -- dev down    # tear it all down
 ```
 
 Subcommands:

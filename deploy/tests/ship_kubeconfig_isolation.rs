@@ -46,7 +46,7 @@ fn a_dotenv_kubeconfig_cannot_redirect_a_cloud_ship() {
     stub(bin.path(), "gcloud", &log);
     stub(bin.path(), "kubectl", &log);
 
-    let output = Command::new(env!("CARGO_BIN_EXE_navigator-deploy"))
+    let output = Command::new(env!("CARGO_BIN_EXE_hudson"))
         .args([
             "ops",
             "ship",
@@ -61,7 +61,7 @@ fn a_dotenv_kubeconfig_cannot_redirect_a_cloud_ship() {
         .env_remove("KUBECONFIG")
         .env_remove("NAVIGATOR_DEPLOYMENTS_DIR")
         .output()
-        .expect("run navigator-deploy ops ship");
+        .expect("run hudson ops ship");
 
     assert!(
         !output.status.success(),

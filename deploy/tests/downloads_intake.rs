@@ -1,4 +1,4 @@
-//! Integration coverage for `navigator-deploy downloads` — drives the real binary
+//! Integration coverage for `hudson downloads` — drives the real binary
 //! against a wiremock-backed deployment: the scan shape, the LAW-196 slug a
 //! proposal carries, filing through the document door with a verified sha256
 //! round-trip, the refusals (no login, no visible matter), the digest
@@ -17,7 +17,7 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn navigator() -> Command {
-    let mut command = Command::cargo_bin("navigator-deploy").unwrap();
+    let mut command = Command::cargo_bin("hudson").unwrap();
     command.env_remove("GITHUB_REPOSITORY");
     command
 }

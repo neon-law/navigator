@@ -32,7 +32,7 @@ internet
    │   ▼
    │ Secret Manager
    │
-   └── navigator-deploy ops ship renders + applies this deployment's manifests
+   └── hudson ops ship renders + applies this deployment's manifests
 ```
 
 Deployment decisions are summarized here and in [`cloud-operations.md`](cloud-operations.md).
@@ -62,15 +62,15 @@ deployment's coordinates from its `config.toml`, preview the exact deployment-sp
 
 ```bash
 set -a; eval "$(grep ' = "' deployments/<deployment>/config.toml | sed 's/ = /=/')"; set +a
-navigator-deploy ops gcp setup --dry-run
-navigator-deploy ops gcp setup
+hudson ops gcp setup --dry-run
+hudson ops gcp setup
 ```
 
-After the cluster is up, run `navigator-deploy ops ship --deployment <name>`. It renders every placeholder from that
-deployment's `config.toml`, diffs, and applies the embedded manifest tree. Do not edit the shared examples in place for
-one deployment. The four Navigator stacks deliberately leave `NAVIGATOR_CONFIG_SYNC_REPO` unset, so no `RootSync`
-competes with this rendered apply. A fork may use the optional Config Sync seam only with its own fully rendered source
-and with `ops ship` removed as a competing manifest owner.
+After the cluster is up, run `hudson ops ship --deployment <name>`. It renders every placeholder from that deployment's
+`config.toml`, diffs, and applies the embedded manifest tree. Do not edit the shared examples in place for one
+deployment. The four Navigator stacks deliberately leave `NAVIGATOR_CONFIG_SYNC_REPO` unset, so no `RootSync` competes
+with this rendered apply. A fork may use the optional Config Sync seam only with its own fully rendered source and with
+`ops ship` removed as a competing manifest owner.
 
 ## Pointing a hostname at a deployment
 
@@ -92,7 +92,7 @@ alone as proof.
 
 Plan the cutover as a short outage rather than a swap:
 
-1. Point the `A` records at `NAVIGATOR_GATEWAY_IP` (`navigator-deploy ops dns setup --domain <zone> --gateway-ip <ip>` —
+1. Point the `A` records at `NAVIGATOR_GATEWAY_IP` (`hudson ops dns setup --domain <zone> --gateway-ip <ip>` —
    with no `--host`, it covers `www` and `workflows`). Dry-run first; the command never deletes a record.
 2. Watch `gcloud compute ssl-certificates list --project <project>` until the domain reports `ACTIVE`. A status of
    `FAILED_NOT_VISIBLE` is normal beforehand — it records validation attempts made while DNS still pointed elsewhere,
@@ -140,7 +140,7 @@ PR merged to main
       (no images built — the PR flow is lean by design)
 
 A person bumps the version and lands it — the merge is the publish
-  └─→ navigator-deploy ops release version --tag <version>   (Cargo.toml + Cargo.lock, commits)
+  └─→ hudson ops release version --tag <version>   (Cargo.toml + Cargo.lock, commits)
   └─→ PR, merge. Nothing else is required: no tag is pushed by hand
   └─→ .github/workflows/deploy.yml runs, holding no cloud credential
                   ├─ ops release check: is this version newer than every release tag?
@@ -159,7 +159,7 @@ A person bumps the version and lands it — the merge is the publish
 
 A Deployment Operator rolls by hand (recovery, re-roll, rollback) — see manual-roll.md
   └─→ gcloud auth application-default login
-  └─→ navigator-deploy ops ship --deployment <name> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --tag YY.M.D
+  └─→ hudson ops ship --deployment <name> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --tag YY.M.D
         (use --dry-run for an offline local plan; authenticated preflights remain part of the live ship)
         (an older tag rolls back — ops ship does not care which way it moves)
 
@@ -168,14 +168,14 @@ Prove a change to deploy.yml itself, without releasing
         └─→ runs ONLY the KIND integration job: no images, no ship, no Slack
 
 Re-roll an already-published tag (no build, no publish)
-  └─→ navigator-deploy ops ship --deployment <name> --tag YY.M.D
+  └─→ hudson ops ship --deployment <name> --tag YY.M.D
         (use --dry-run for an offline local plan; authenticated preflights remain part of the live ship)
 ```
 
 `release-deploy.yml` performs the routine roll. Operator-driven `ship` performs every other one — a first release, a
 re-roll, a rehearsal, or a rollback — following [`manual-roll.md`](manual-roll.md).
 
-`navigator-deploy ops ship --deployment <row> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --tag <version>` pins the
+`hudson ops ship --deployment <row> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --tag <version>` pins the
 `workflows-service` to the published tag. It sets the pod count of `web` and `workflows-service` from the row's
 `NAVIGATOR_SIMULATED_MATTERS`: one pod each on a row with simulated matters, two each behind a PodDisruptionBudget on a
 production row (see [Replicas](environments.md#replicas)). `NAVIGATOR_GIT_REPO_ROOT` points the repository store at
@@ -216,14 +216,14 @@ per-deployment bucket/SQL/GSA names, public and workflow hosts (ManagedCertifica
 `OAUTH_REDIRECT_URI`, `NAV_BASE_URL`, `GOOGLE_OAUTH_REQUIRED_HD`), the required browser OAuth client ID, and the
 post-registration Gemini client ID — not structure.
 
-`navigator-deploy ops ship` supplies those values itself. The whole manifest tree (`examples/deploy/k8s/gke` + the
-shared `k8s/base` it references) is **embedded in the CLI** with `include_dir!`; every ship renders it — the
-placeholders substituted from the selected deployment's `deployments/<name>/config.toml` — into a **throwaway temp
-dir**, then `kubectl diff -k` (surface drift) and `kubectl apply -k` (reconcile). The apply is **unconditional**: any
-structural change on `main` (a renamed container, a new sidecar, a volume, an env-list edit) reaches the cluster on the
-next ship rather than silently rotting. There is no persistent overlay folder and no image-only fall-through — the CLI
-generates from the checked-in coordinates the manifests a deployer would otherwise hand-keep. The manifests are
-embedded; only the `deployments/` tree of the repository checkout is read at ship time.
+`hudson ops ship` supplies those values itself. The whole manifest tree (`examples/deploy/k8s/gke` + the shared
+`k8s/base` it references) is **embedded in the CLI** with `include_dir!`; every ship renders it — the placeholders
+substituted from the selected deployment's `deployments/<name>/config.toml` — into a **throwaway temp dir**, then
+`kubectl diff -k` (surface drift) and `kubectl apply -k` (reconcile). The apply is **unconditional**: any structural
+change on `main` (a renamed container, a new sidecar, a volume, an env-list edit) reaches the cluster on the next ship
+rather than silently rotting. There is no persistent overlay folder and no image-only fall-through — the CLI generates
+from the checked-in coordinates the manifests a deployer would otherwise hand-keep. The manifests are embedded; only the
+`deployments/` tree of the repository checkout is read at ship time.
 
 The substitution values live in the selected deployment's `config.toml` — plaintext, reviewable coordinates in this
 repo:
@@ -266,14 +266,14 @@ cloud services or the cluster. It provides an intended-operation summary, not a 
 
 ```bash
 # Review the local plan without cloud tools, credentials, or cluster access:
-navigator-deploy ops ship --deployment <row> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --tag <YY.M.D> --dry-run
+hudson ops ship --deployment <row> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --tag <YY.M.D> --dry-run
 ```
 
 The reconcile runs against the deployment `--deployment` names (production remains propose-only — run it yourself; never
 let an agent ship to prod, and beware the shared kubeconfig defaulting to the prod GKE context):
 
 ```bash
-navigator-deploy ops ship --deployment <row> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --tag <YY.M.D>
+hudson ops ship --deployment <row> --deployments-dir "$NAVIGATOR_DEPLOYMENTS_DIR" --tag <YY.M.D>
 ```
 
 ## What lives outside this repo
@@ -298,15 +298,14 @@ These are operator-managed resources you maintain via gcloud / console, not via 
 6. **Cloud Logging → GCS sink** — a log router sink that archives `web` container logs to `gs://YOUR_PROJECT_ID-logs`
    for long-horizon audit. Provisioned via `gcloud` (see "Long-term log archive" below), not Config Sync.
 
-Kubernetes manifests flow through the deployment-rendered `navigator-deploy ops ship` path. Managed services remain
-owned by the GCP provisioner or the named operator procedure above.
+Kubernetes manifests flow through the deployment-rendered `hudson ops ship` path. Managed services remain owned by the
+GCP provisioner or the named operator procedure above.
 
 ## Long-term log archive
 
 GKE forwards every container's stdout to Cloud Logging automatically, but that alone is not the deployment's durable
 archive. A **log router sink** copies Navigator service logs into the private NEARLINE bucket named by
-`NAVIGATOR_LOGS_BUCKET`, which `navigator-deploy ops gcp setup` already creates. The setup command does not create the
-sink.
+`NAVIGATOR_LOGS_BUCKET`, which `hudson ops gcp setup` already creates. The setup command does not create the sink.
 
 The original design routed these via a Config Connector `LoggingLogSink` CR. That path is shelved: Config Connector does
 not reliably reconcile on this cluster's GKE version, so the sink is **provisioned directly with `gcloud`** and lives
@@ -363,8 +362,8 @@ kubectl --namespace navigator get deployment/navigator-web \
 
 ## Trust boundary
 
-`deploy.yml` publishes immutable images and holds no cluster credential. `release-deploy.yml` runs `navigator-deploy ops
-ship` under a per-environment `navigator-release-ship` identity, reachable only from the `staging-deploy` and
+`deploy.yml` publishes immutable images and holds no cluster credential. `release-deploy.yml` runs `hudson ops ship`
+under a per-environment `navigator-release-ship` identity, reachable only from the `staging-deploy` and
 `production-deploy` GitHub Environments; an authorized operator runs the same command by hand. Either way, `ops ship`
 pins the expected kube context, diffs, applies, and waits. Workload Identity binds each Kubernetes ServiceAccount to a
 GCP service account, so pods talk to GCP without JSON keys. The stacks have no `RootSync`, preventing a second

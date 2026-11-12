@@ -1,4 +1,4 @@
-//! `navigator-deploy`: the operator CLI. The local KIND loop (`dev`),
+//! `hudson`: the operator CLI. The local KIND loop (`dev`),
 //! production operations (`ops`), and every site, mail, notation, and firm
 //! command outside the lean `navigator`. Built for Linux first; it never
 //! ships in the Homebrew archive. Projects and their repositories live in
@@ -73,10 +73,10 @@ use devx::{CertificatesCmd, DnsCmd, GcpCmd, HostCmd, RestateCmd, StagingAction, 
 
 #[derive(Parser)]
 #[command(
-    name = "navigator-deploy",
+    name = "hudson",
     version = cli_version(),
-    about = "Navigator Deploy CLI, not legal advice.",
-    long_about = "Navigator Deploy CLI, not legal advice."
+    about = "Hudson, the Navigator operator CLI, not legal advice.",
+    long_about = "Hudson, the Navigator operator CLI, not legal advice."
 )]
 struct Cli {
     /// Print the licence this binary is distributed under, then exit. Stands
@@ -88,7 +88,7 @@ struct Cli {
     #[arg(long, exclusive = true)]
     third_party_notices: bool,
     /// Optional only so `--license` can stand alone; every other invocation
-    /// still requires one, and a bare `navigator-deploy` prints help and exits 2.
+    /// still requires one, and a bare `hudson` prints help and exits 2.
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -681,7 +681,7 @@ mod help_tests {
     }
 }
 
-/// The live clap tree `navigator-deploy` dispatches, for tests that render a
+/// The live clap tree `hudson` dispatches, for tests that render a
 /// subcommand's help. Outside tests the `cli` library's `navigator_command`
 /// (the lean tree) is the one the gate reads.
 #[cfg(test)]
@@ -927,7 +927,7 @@ enum NotationCmd {
         /// template then renders locally until Ctrl-C; nothing is pushed
         /// and nothing is stored, and the
         /// questionnaire steps only with a Dioxus client bundle
-        /// (`navigator-deploy dev build-webapp`) — without one the page still
+        /// (`hudson dev build-webapp`) — without one the page still
         /// renders every question, it just does not advance. Works
         /// outside a Project repository, since nothing is pushed anywhere.
         /// Always binds an OS-assigned port chosen at random — the bound
@@ -1030,7 +1030,7 @@ enum NotationCmd {
         /// Path to the notation template (`.md`) the document was rendered
         /// from. Updated in place without `--dry-run`.
         file: PathBuf,
-        /// Path to the edited Word document (`navigator-deploy notation word`'s
+        /// Path to the edited Word document (`hudson notation word`'s
         /// output, edited in Word and re-saved). Must end in `.docx`.
         edited: PathBuf,
         /// Print the plan and the updated template without writing
@@ -1183,7 +1183,7 @@ enum SiteFirmCmd {
     /// Rename a Firm. Its slug, and the Forgejo organization the slug names,
     /// is unchanged. Owner, or an Admin of the Firm.
     Rename {
-        /// The Firm's slug, as `navigator-deploy site firm list` prints it.
+        /// The Firm's slug, as `hudson site firm list` prints it.
         slug: String,
         /// The Firm's new display name.
         name: String,
@@ -1191,10 +1191,10 @@ enum SiteFirmCmd {
         host: HostOpt,
     },
     /// Delete a Firm and its memberships. Refused while the Firm owns any
-    /// Project or Brand: move each Brand with `navigator-deploy site brand move`
+    /// Project or Brand: move each Brand with `hudson site brand move`
     /// first. Owner, or an Admin of the Firm.
     Delete {
-        /// The Firm's slug, as `navigator-deploy site firm list` prints it.
+        /// The Firm's slug, as `hudson site firm list` prints it.
         slug: String,
         #[command(flatten)]
         host: HostOpt,
@@ -1206,7 +1206,7 @@ enum SiteBrandCmd {
     /// Move a Brand to another Firm, so its public pages name that Firm's
     /// legal entity. Owner only.
     Move {
-        /// The Brand's key, as `navigator-deploy site firm list` prints it.
+        /// The Brand's key, as `hudson site firm list` prints it.
         key: String,
         /// The slug of the Firm the Brand moves to.
         #[arg(long)]
@@ -1217,7 +1217,7 @@ enum SiteBrandCmd {
     /// Stop the Firm that wears a Brand from wearing it. The Brand row
     /// remains. Owner, or an Admin of that Firm.
     Detach {
-        /// The Brand's key, as `navigator-deploy site firm list` prints it.
+        /// The Brand's key, as `hudson site firm list` prints it.
         key: String,
         #[command(flatten)]
         host: HostOpt,
@@ -2324,7 +2324,7 @@ enum EmailSummaryCmd {
     /// `NAVIGATOR_SURREAL_*` (the deployment's database), the
     /// `NAVIGATOR_SUMMARY_*` / `RESTATE_BROKER_URL` summary-lane
     /// configuration, and `RESTATE_ADMIN_URL` / `RESTATE_ADMIN_TOKEN` /
-    /// `RESTATE_AUTH_TOKEN` — the same environment `navigator-deploy dev up`/`ops
+    /// `RESTATE_AUTH_TOKEN` — the same environment `hudson dev up`/`ops
     /// ship` already source for the target deployment, so there is no
     /// separate `--deployment` flag to keep in sync with it.
     Redrive {
@@ -2685,7 +2685,7 @@ enum AssetsAction {
     /// `cloud` crate's `StorageService` (never the GCP SDK directly).
     /// Each file lands under key `img/<slug>/<slug>-<w>w.<ext>` with a
     /// bounded `Cache-Control` (~1 week, no `immutable`). Run after
-    /// `navigator-deploy ops assets build`. Auth is ADC; the emulator endpoint is honored
+    /// `hudson ops assets build`. Auth is ADC; the emulator endpoint is honored
     /// via `NAVIGATOR_STORAGE_ENDPOINT`.
     Upload {
         /// Directory holding the built variant tree.
@@ -3017,7 +3017,7 @@ enum LspAction {
     },
 }
 
-/// `navigator-deploy site authorities create` — the citation apparatus' write path
+/// `hudson site authorities create` — the citation apparatus' write path
 /// (ENG-712): file a global Authority (no `--project`; it carries no
 /// `project_id`) with its archived artifact, through
 /// `POST /app/api/authorities`.
@@ -3090,8 +3090,8 @@ enum AuthoritiesAction {
     },
 }
 
-/// `navigator-deploy site asset upload` — the OAuth-backed sibling of the
-/// ADC-backed `navigator-deploy ops assets upload` batch command (`ops assets`
+/// `hudson site asset upload` — the OAuth-backed sibling of the
+/// ADC-backed `hudson ops assets upload` batch command (`ops assets`
 /// above): one asset, one or more deployments, no bucket credential.
 #[derive(Subcommand)]
 enum AssetAction {
@@ -3307,7 +3307,7 @@ enum DocumentAction {
         slug: String,
         /// Asset-lane kind. Omit to leave the stored kind unchanged; pass it
         /// whenever the stored kind is not an accepted one, because a slugged
-        /// row's kind otherwise needs `navigator-deploy site document kind`.
+        /// row's kind otherwise needs `hudson site document kind`.
         #[arg(long, value_parser = parse_asset_kind)]
         kind: Option<String>,
         /// Validate and print the result. The row is left unchanged.
@@ -3343,7 +3343,7 @@ enum DocumentAction {
     /// The correction for a document filed under the wrong valid kind. Every
     /// revision of the slug chain moves together; `sha256`, the storage key,
     /// byte size, and the slug stay unchanged. Refuses a row whose kind is not
-    /// accepted (use `navigator-deploy site document kind`) and a target equal to the
+    /// accepted (use `hudson site document kind`) and a target equal to the
     /// current kind. After it succeeds, `navigator project gate --check` can
     /// rewrite the pointer.
     #[command(after_long_help = DOCUMENT_UPLOAD_KIND_HELP)]
@@ -3435,7 +3435,7 @@ enum DocumentAction {
     ///
     /// Deleting a document's pointer and running `navigator project sync`
     /// soft-deletes it for 180 days; this undoes that within the window. Find
-    /// the asset id with `navigator-deploy site document log <pointer>`. The next
+    /// the asset id with `hudson site document log <pointer>`. The next
     /// `project sync` writes the pointer again.
     Restore {
         #[command(flatten)]
@@ -3678,7 +3678,7 @@ enum NotationAction {
 
 fn main() -> ExitCode {
     std::thread::Builder::new()
-        .name("navigator-deploy".into())
+        .name("hudson".into())
         .stack_size(CLI_STACK_BYTES)
         .spawn(run)
         .expect("spawn the CLI thread")
@@ -3715,7 +3715,7 @@ fn run() -> ExitCode {
         return ExitCode::SUCCESS;
     }
     let Some(cli_command) = cli.command else {
-        // A bare `navigator-deploy` is a usage error, so the help goes to stderr and
+        // A bare `hudson` is a usage error, so the help goes to stderr and
         // the exit code matches what clap returns for a missing subcommand.
         eprint!("{}", concise_help(Cli::command()).render_help());
         return ExitCode::from(2);
@@ -4249,7 +4249,7 @@ async fn resolve_person_id(
     }
 }
 
-/// Run `navigator-deploy person` — direct store access for one Person's phones.
+/// Run `hudson person` — direct store access for one Person's phones.
 async fn run_person(action: PersonCmd) -> ExitCode {
     let PersonCmd::Phone { action } = action;
     let db = match open_surreal().await {
@@ -4368,7 +4368,7 @@ async fn run_notation(action: NotationAction) -> ExitCode {
         } => {
             if answers_from.is_some() && !template_code.starts_with("onboarding") {
                 eprintln!(
-                    "navigator-deploy site notation create: --answers-from prefills an onboarding; offboarding and other templates take no answers file"
+                    "hudson site notation create: --answers-from prefills an onboarding; offboarding and other templates take no answers file"
                 );
                 return ExitCode::FAILURE;
             }
@@ -4387,7 +4387,7 @@ async fn run_notation(action: NotationAction) -> ExitCode {
                 }
                 _ => {
                     eprintln!(
-                        "navigator-deploy site notation create: use `navigator project onboard` or `navigator project offboard`"
+                        "hudson site notation create: use `navigator project onboard` or `navigator project offboard`"
                     );
                     ExitCode::FAILURE
                 }

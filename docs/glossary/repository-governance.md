@@ -13,6 +13,6 @@ approving review is required, but a rejected review or an unresolved conversatio
 `cloud::forgejo_governance` holds the one copy, in [`forgejo_governance.rs`](../../cloud/src/forgejo_governance.rs).
 `reconcile` converges a repository and reads it back. `schedule` checks the governance again before it asks Forgejo to
 squash-merge a pull request once its checks pass. If the required check has already passed, it merges right away. The
-operator runs it through `navigator-deploy ops forgejo setup|auto-merge|schedule-open`. The [Nightly Project
+operator runs it through `hudson ops forgejo setup|auto-merge|schedule-open`. The [Nightly Project
 Update](nightly-project-update.md) reconciles every open Project's repository each night and counts the repositories it
 repaired.

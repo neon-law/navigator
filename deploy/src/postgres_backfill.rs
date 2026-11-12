@@ -1,4 +1,4 @@
-//! `navigator-deploy ops postgres backfill` — copy the `SurrealDB` rows the
+//! `hudson ops postgres backfill` — copy the `SurrealDB` rows the
 //! PostgreSQL mirror never saw, in bounded batches a later invocation can
 //! resume.
 //!
@@ -26,7 +26,7 @@ use store::postgres::PostgresDb;
 use store::postgres_backfill::{BackfillError, Plan, RunReport, RunStatus, DEFAULT_BATCH_SIZE};
 use uuid::Uuid;
 
-/// `navigator-deploy ops postgres backfill`.
+/// `hudson ops postgres backfill`.
 #[derive(Debug, Args)]
 pub struct BackfillArgs {
     /// Print what a run would write; write nothing.

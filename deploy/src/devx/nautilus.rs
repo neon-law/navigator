@@ -1,4 +1,4 @@
-//! `navigator-deploy dev build-nautilus` — build the Nautilus web preview bundle.
+//! `hudson dev build-nautilus` — build the Nautilus web preview bundle.
 //!
 //! Mirrors `devx::webapp` (`build-webapp`): drives `dx` to compile a Dioxus
 //! crate to `wasm32-unknown-unknown` and stages the resulting bundle —

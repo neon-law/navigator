@@ -43,7 +43,7 @@ Feature: Workshop "Operating Neon Law Navigator"
     And the rendered body carries no duplicate top-level heading
 
   Scenario: Apply — the workshop shows the reader the real provisioning command
-    Then the rendered workshop shows the command "cargo run -p deploy -- ops gcp setup --project-id"
+    Then the rendered workshop shows the command "cargo run -p hudson -- ops gcp setup --project-id"
     And the rendered workshop shows the "--dry-run" flag
 
   Scenario: Verify — the markdown twin serves raw markdown

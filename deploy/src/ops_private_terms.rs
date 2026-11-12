@@ -1,4 +1,4 @@
-//! `navigator-deploy ops private-terms` — the private-terms reconciliation report
+//! `hudson ops private-terms` — the private-terms reconciliation report
 //! (LAW-301).
 //!
 //! Read-only, and with no local database coordinates: it reads the
@@ -135,7 +135,7 @@ fn render(report: &Reconciliation) -> Vec<String> {
     lines
 }
 
-/// `navigator-deploy ops private-terms`.
+/// `hudson ops private-terms`.
 pub(crate) async fn run(host: Option<&str>) -> ExitCode {
     let (base, token) = match crate::remote::resolve(host) {
         Ok((base, token)) => (base, token),

@@ -13,11 +13,10 @@ engine-specific mechanics in [SurrealDB compatibility](../surreal-compatibility.
 
 One file per term. Each `<slug>.md` beside this README is one entry: its `title:` frontmatter is the term as a reader
 says it, the file name is the stable reference key, and the body is the definition. The web publishes every entry on one
-page at `/glossary`, anchored at `#<slug>`, and the CLI reads the same files through `navigator-deploy glossary list`
-and `navigator-deploy glossary show <term>`. The page links the full PostgreSQL diagram at
-`/public/glossary/postgres/ERD.svg`. Each stored term has a collapsed **Table definition** showing its canonical
-PostgreSQL declarations, alterations, and indexes in migration order. The page selects these from
-`store/postgres/schema.sql`; definitions do not copy SQL into Markdown.
+page at `/glossary`, anchored at `#<slug>`, and the CLI reads the same files through `hudson glossary list` and `hudson
+glossary show <term>`. The page links the full PostgreSQL diagram at `/public/glossary/postgres/ERD.svg`. Each stored
+term has a collapsed **Table definition** showing its canonical PostgreSQL declarations, alterations, and indexes in
+migration order. The page selects these from `store/postgres/schema.sql`; definitions do not copy SQL into Markdown.
 
 To add a term, create `<slug>.md` whose name is the slug of its `title:` (`Lawyer Review` → `lawyer-review.md`). Its
 frontmatter requires a `description:` with one plain-text sentence ending in a period and no Markdown links. The CLI

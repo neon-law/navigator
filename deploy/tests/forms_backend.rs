@@ -23,7 +23,7 @@ use predicates::str::contains;
 fn a_bucket_override_against_the_fs_backend_is_refused() {
     let cwd = tempfile::tempdir().unwrap();
     let root = tempfile::tempdir().unwrap();
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .current_dir(cwd.path())
         .env("NAVIGATOR_STORAGE_BACKEND", "fs")
@@ -43,7 +43,7 @@ fn a_bucket_override_against_the_fs_backend_is_refused() {
 #[test]
 fn an_unset_backend_fails_naming_the_storage_selector() {
     let cwd = tempfile::tempdir().unwrap();
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .current_dir(cwd.path())
         .env_remove("NAVIGATOR_STORAGE_BACKEND")
@@ -62,7 +62,7 @@ fn an_unset_backend_fails_naming_the_storage_selector() {
 fn the_fs_backend_reaches_storage_and_surfaces_a_read_miss() {
     let cwd = tempfile::tempdir().unwrap();
     let root = tempfile::tempdir().unwrap();
-    Command::cargo_bin("navigator-deploy")
+    Command::cargo_bin("hudson")
         .unwrap()
         .current_dir(cwd.path())
         .env("NAVIGATOR_STORAGE_BACKEND", "fs")

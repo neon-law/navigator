@@ -1,4 +1,4 @@
-//! `navigator-deploy glossary ...` — the ontology from the command line.
+//! `hudson glossary ...` — the ontology from the command line.
 //!
 //! The glossary is one Markdown file per term under `docs/glossary/`,
 //! embedded in the binary by [`store::glossary::GLOSSARY`]. The website
@@ -12,7 +12,7 @@ use store::glossary::{link_target, terms, LinkTarget, Term, GLOSSARY_LABEL};
 
 use crate::palette;
 
-/// `navigator-deploy glossary list`: one reader-facing title and summary per term.
+/// `hudson glossary list`: one reader-facing title and summary per term.
 #[must_use]
 pub fn list() -> ExitCode {
     let mut entries: Vec<_> = terms().iter().collect();
@@ -40,7 +40,7 @@ pub fn list() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// `navigator-deploy glossary show <term>`: the one term its title names.
+/// `hudson glossary show <term>`: the one term its title names.
 #[must_use]
 pub fn show(needle: &str) -> ExitCode {
     if let Some(term) = store::glossary::find(needle) {
@@ -52,8 +52,8 @@ pub fn show(needle: &str) -> ExitCode {
         // reader already has the term they typed on screen.
         eprintln!("navigator: glossary show: unknown term");
         eprintln!(
-            "Run `navigator-deploy glossary list` to list every term, then \
-                  `navigator-deploy glossary show \"<Term>\"` to read its definition."
+            "Run `hudson glossary list` to list every term, then \
+                  `hudson glossary show \"<Term>\"` to read its definition."
         );
         ExitCode::from(1)
     }
@@ -66,7 +66,7 @@ fn print_term(term: &Term) {
     println!();
 }
 
-/// `navigator-deploy glossary notion`: the glossary as one Markdown page a Notion
+/// `hudson glossary notion`: the glossary as one Markdown page a Notion
 /// page can hold.
 ///
 /// Notion has no notion of this repository's working directory, so the
@@ -87,7 +87,7 @@ pub fn notion() -> ExitCode {
 fn notion_preface() -> String {
     format!(
         "> Generated from [`{GLOSSARY_LABEL}/`]({url}) by \
-         `navigator-deploy glossary notion`. The repository is the source of truth: an edit made \
+         `hudson glossary notion`. The repository is the source of truth: an edit made \
          here reaches the product only once it lands in that directory through a pull request. \
          Links between terms are dropped because Notion cannot resolve them.\n\n",
         url = store::glossary::github_source_url(&format!("{GLOSSARY_LABEL}/"), None)

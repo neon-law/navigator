@@ -1,4 +1,4 @@
-//! `navigator-deploy ops rebrand` builds and verifies a mounted brand bundle.
+//! `hudson ops rebrand` builds and verifies a mounted brand bundle.
 
 use std::fs;
 use std::path::{Path, PathBuf};
