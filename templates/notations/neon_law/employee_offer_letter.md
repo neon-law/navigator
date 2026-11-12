@@ -10,15 +10,16 @@ confidential: false
 # authorized officer signs embedded (Navigator serves the embedded
 # ceremony only to the notation's bound client), and the employee is
 # emailed: non-client roles cannot keep the embedded default. The
-# employee's name falls back to the `person__employee` answer; the email
-# binds to its own questionnaire answer.
+# employee's identity comes from the `person__employee` answer — when the
+# questionnaire picks a person row, its name and email become the
+# `person__employee.name`/`.email` context keys the default signer
+# bindings read.
 signers:
   - role: client
     routing_order: 1
   - role: employee
     routing_order: 2
     delivery: emailed
-    email: custom_text__employee_email
 clauses:
   california:
     source: california_employment@1
@@ -37,7 +38,6 @@ prompts:
   company: "What is the company’s full legal name and entity type?"
   company_officer: "Who signs the offer for the company — full legal name and title?"
   employee: "What is the employee’s full legal name?"
-  employee_email: "What email address should receive the employee’s offer for signature?"
   work_state: "In which state will the employee primarily work? Its law governs this letter."
   accept_by: "What is the acceptance deadline?"
   business_role: "State title, actual duties, manager, work location, and start date."
@@ -70,8 +70,6 @@ questionnaire:
   person__client:
     _: person__employee
   person__employee:
-    _: custom_text__employee_email
-  custom_text__employee_email:
     _: jurisdiction__work_state
   jurisdiction__work_state:
     _: custom_datetime__accept_by
@@ -175,13 +173,13 @@ letter imposes no noncompete or class-action waiver.
 
 ## Signatures
 
-**Offered for {{entity__company.name}}:**
+__Offered for {{entity__company.name}}:__
 
 By: {{client.signature}}\
 {{person__client.name}}, for {{entity__company.name}}\
 Date: {{client.date}}
 
-**Accepted by the employee:**
+__Accepted by the employee:__
 
 By: {{employee.signature}}\
 {{person__employee.name}}\
