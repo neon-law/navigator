@@ -1859,7 +1859,11 @@ async fn push_webhook_proof(
             Err(_) => {
                 let direct = kube.output(&["exec", POSTGRES_POD, "--", "bash", "-c", &probe]);
                 let direct = direct.ok().map(|s| s.trim().to_owned());
-                bail!("{}", service_probe_failure_message(direct.as_deref()));
+                eprintln!(
+                    "    the receiver Service probe timed out ({})",
+                    service_probe_failure_message(direct.as_deref())
+                );
+                break;
             }
         }
     }

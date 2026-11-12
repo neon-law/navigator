@@ -521,20 +521,19 @@ pub(super) const RECEIVER_PORT: u16 = 41080;
 /// slow controller.
 pub(super) const SERVICE_PROBE_DEADLINE: Duration = Duration::from_secs(90);
 
-/// The Service probe's failure message: a direct dial to the receiver on
-/// loopback splits a dead receiver from a broken Service path — a loopback
-/// answer indicts the Endpoints pin or the hairpin route, a silence
-/// indicts the receiver process.
+/// The Service probe's timeout message: a direct dial to the receiver on
+/// loopback splits a dead receiver from a broken route — a loopback answer
+/// indicts the probe's pod-to-self route (which the real delivery never
+/// rides), a silence indicts the receiver process.
 pub(super) fn service_probe_failure_message(direct_answer: Option<&str>) -> String {
     match direct_answer {
         Some(answer) => format!(
-            "the receiver Service does not deliver to the in-pod receiver; \
-             the receiver still answers directly ({answer}) — the Service \
-             path (the Endpoints pin, pod-to-self routing) is broken"
+            "the receiver still answers directly ({answer}) — the probe's \
+             pod-to-self Service route is the suspect; the real push \
+             delivery rides a peer pod's route and is the verdict"
         ),
-        None => "the receiver Service does not deliver to the in-pod receiver; \
-                 the receiver no longer answers directly either — the receiver \
-                 process died, not the Service path"
+        None => "the receiver no longer answers directly either — the \
+                 receiver process died, not the route"
             .to_owned(),
     }
 }
@@ -882,7 +881,7 @@ mod tests {
             with_answer.contains("still answers directly"),
             "{with_answer}"
         );
-        assert!(with_answer.contains("Service path"), "{with_answer}");
+        assert!(with_answer.contains("pod-to-self"), "{with_answer}");
         let without = service_probe_failure_message(None);
         assert!(without.contains("receiver process died"), "{without}");
     }
