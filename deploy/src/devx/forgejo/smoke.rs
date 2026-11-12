@@ -47,7 +47,7 @@ use super::oidc::{self, Outcome};
 use super::{
     actions_context, assert_analyzed_push_receipt, forwarded_port, http_probe_script,
     parse_push_receipt_row, port_forward_args, random_hex, receipt_is_terminal,
-    receiver_endpoints_manifest, receiver_service_url, receiver_start_script,
+    receiver_service_manifest, receiver_service_url, receiver_start_script,
     service_probe_failure_message, CookieJar, PushReceiptRow, Seed, ADMISSION_CONFIG_MAP,
     ALLOWED_IDENTITY, ALLOWLIST_KEY, BOT_PUSH_WORKFLOW, DATA_CLAIM, DENIED_IDENTITIES,
     GATE_WORKFLOW, POD, POSTGRES_POD, PUBLISH_WORKFLOW, RECEIVER_BINARY, RECEIVER_CONFIG,
@@ -1825,7 +1825,7 @@ async fn push_webhook_proof(
         .output(&["get", "pod", POSTGRES_POD, "-o", "jsonpath={.status.podIP}"])?
         .trim()
         .to_owned();
-    let manifest = receiver_endpoints_manifest(&pod_ip, RECEIVER_PORT);
+    let manifest = receiver_service_manifest(&pod_ip, RECEIVER_PORT);
     kube.apply(&manifest)
         .context("publish the receiver as an in-cluster Service")?;
     // The Service path is what Forgejo's webhook delivery rides. Give the

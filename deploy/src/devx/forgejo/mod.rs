@@ -495,13 +495,16 @@ pub(super) const RECEIVER_SERVICE: &str = "forgejo-receiver";
 /// the receiver's Service, lives there.
 pub(super) const RECEIVER_NAMESPACE: &str = "navigator";
 
-/// The receiver's in-cluster Service and manual Endpoints: Forgejo dials
-/// the Service name, and kube-proxy NATs the delivery to the address the
-/// receiver listens on — the postgres pod hosting the smoke's receiver,
-/// whose reachability from other pods the tier already proves.
-pub(super) fn receiver_endpoints_manifest(endpoint_ip: &str, port: u16) -> String {
+/// The receiver's in-cluster Service and manual `EndpointSlice`: Forgejo
+/// dials the Service name, and kube-proxy delivers to the address the
+/// receiver listens on — the postgres pod hosting the smoke's receiver.
+/// The backend is a manual `EndpointSlice` because modern Kubernetes
+/// programs kube-proxy from `EndpointSlice` objects; a manual `Endpoints`
+/// object is deprecated and gets no backends, leaving the Service VIP
+/// blackholed.
+pub(super) fn receiver_service_manifest(endpoint_ip: &str, port: u16) -> String {
     format!(
-        "apiVersion: v1\nkind: Service\nmetadata:\n  name: {RECEIVER_SERVICE}\n  namespace: {RECEIVER_NAMESPACE}\nspec:\n  type: ClusterIP\n  ports:\n    - port: 80\n      targetPort: {port}\n---\napiVersion: v1\nkind: Endpoints\nmetadata:\n  name: {RECEIVER_SERVICE}\n  namespace: {RECEIVER_NAMESPACE}\nsubsets:\n  - addresses:\n      - ip: {endpoint_ip}\n    ports:\n      - port: {port}\n"
+        "apiVersion: v1\nkind: Service\nmetadata:\n  name: {RECEIVER_SERVICE}\n  namespace: {RECEIVER_NAMESPACE}\nspec:\n  type: ClusterIP\n  ports:\n    - port: 80\n      targetPort: {port}\n---\napiVersion: discovery.k8s.io/v1\nkind: EndpointSlice\nmetadata:\n  name: {RECEIVER_SERVICE}\n  namespace: {RECEIVER_NAMESPACE}\n  labels:\n    kubernetes.io/service-name: {RECEIVER_SERVICE}\naddressType: IPv4\nendpoints:\n  - addresses:\n      - {endpoint_ip}\nports:\n  - port: {port}\n    protocol: TCP\n"
     )
 }
 
@@ -666,11 +669,21 @@ mod tests {
 
     #[test]
     fn the_receiver_manifest_publishes_the_gateway_endpoint() {
-        let manifest = receiver_endpoints_manifest("172.18.0.1", 42903);
+        let manifest = receiver_service_manifest("172.18.0.1", 42903);
         assert!(manifest.contains("name: forgejo-receiver"), "{manifest}");
         assert!(manifest.contains("namespace: navigator"), "{manifest}");
-        assert!(manifest.contains("ip: 172.18.0.1"), "{manifest}");
+        assert!(manifest.contains("discovery.k8s.io/v1"), "{manifest}");
+        assert!(manifest.contains("kind: EndpointSlice"), "{manifest}");
+        assert!(
+            manifest.contains("kubernetes.io/service-name: forgejo-receiver"),
+            "{manifest}"
+        );
+        assert!(manifest.contains("- 172.18.0.1"), "{manifest}");
         assert!(manifest.contains("port: 42903"), "{manifest}");
+        assert!(
+            !manifest.contains("kind: Endpoints\n"),
+            "a manual Endpoints object is deprecated and gets no backends: {manifest}"
+        );
         assert_eq!(
             receiver_service_url(),
             "http://forgejo-receiver.navigator.svc.cluster.local"
