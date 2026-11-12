@@ -721,12 +721,12 @@ mod tests {
         let document = document_xml(&redline.bytes);
         let inserted = paragraph_containing(&document, "statutory rate");
         assert!(
-            inserted.contains(r#"<w:rPr><w:ins "#),
+            inserted.contains(r"<w:rPr><w:ins "),
             "inserted paragraph mark: {inserted}"
         );
         let deleted = paragraph_containing(&document, "Keep receipts");
         assert!(
-            deleted.contains(r#"<w:rPr><w:del "#),
+            deleted.contains(r"<w:rPr><w:del "),
             "deleted paragraph mark: {deleted}"
         );
     }
@@ -740,8 +740,8 @@ mod tests {
         let deleted = paragraph_containing(&document, "every");
         // The struck runs carry the italic run properties they had in the
         // previous version, not plain deleted text.
-        assert!(deleted.contains(r#"<w:delText"#), "{deleted}");
-        assert!(deleted.contains(r#"<w:rPr><w:i/></w:rPr>"#), "{deleted}");
+        assert!(deleted.contains(r"<w:delText"), "{deleted}");
+        assert!(deleted.contains(r"<w:rPr><w:i/></w:rPr>"), "{deleted}");
     }
 
     #[test]
