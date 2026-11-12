@@ -46,6 +46,12 @@ const KEY_ROLE: &str = "roles/cloudkms.cryptoKeyEncrypterDecrypter";
 const KEY_LOCATION: &str = "global";
 const KEY_RING: &str = super::kms::KEY_RING;
 pub const SECRET_KEY: &str = "secret-manager";
+/// Up to a minute for a new Secret Manager service agent to reach IAM.
+const AGENT_ATTEMPTS: u32 = 7;
+#[cfg(not(test))]
+const AGENT_RETRY: std::time::Duration = std::time::Duration::from_secs(10);
+#[cfg(test)]
+const AGENT_RETRY: std::time::Duration = std::time::Duration::ZERO;
 
 /// Whether [`reconcile`] writes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -322,7 +328,18 @@ async fn ensure_secret_key(
         }
         _ => return Err(bad(existing, format!("read key {key}"))),
     }
+    grant_key_to_agent(client, project_id, &key, mode, drift).await?;
+    Ok(key)
+}
 
+/// Make the Secret Manager service agent the key's only encrypter/decrypter.
+async fn grant_key_to_agent(
+    client: &GcpClient,
+    project_id: &str,
+    key: &str,
+    mode: Mode,
+    drift: &mut Vec<String>,
+) -> SetupResult<()> {
     // The agent exists only once something asks for it; asking is idempotent.
     if mode == Mode::Apply {
         let identity = client
@@ -335,23 +352,40 @@ async fn ensure_secret_key(
                 &json!({}),
             )
             .await?;
-        if !(200..=299).contains(&identity.status_u16()) {
-            return Err(bad(
-                identity,
-                "create the Secret Manager service agent".into(),
-            ));
-        }
+        let operation = ok_json(identity, || {
+            "create the Secret Manager service agent".into()
+        })?;
+        super::lro::wait(
+            client,
+            GcpService::ServiceUsage,
+            &operation,
+            "/v1beta1/{name}",
+        )
+        .await?;
     }
     let agent = secret_manager_agent(&project_number(client, project_id).await?);
-    let resource = Resource::Key(&key);
+    let resource = Resource::Key(key);
     let mut policy = read_policy(client, &resource).await?;
     if set_sole_member(&mut policy, KEY_ROLE, &agent) {
         drift.push(format!("make {agent} the only {KEY_ROLE} on {key}"));
         if mode == Mode::Apply {
-            write_policy(client, &resource, policy).await?;
+            // A freshly created agent takes a while to become visible to
+            // IAM, which refuses the grant as "does not exist" until then.
+            let mut attempt = 1;
+            loop {
+                match write_policy(client, &resource, policy.clone()).await {
+                    Err(SetupError::BadStatus {
+                        status: 400, body, ..
+                    }) if body.contains("does not exist") && attempt < AGENT_ATTEMPTS => {
+                        attempt += 1;
+                        tokio::time::sleep(AGENT_RETRY).await;
+                    }
+                    result => break result?,
+                }
+            }
         }
     }
-    Ok(key)
+    Ok(())
 }
 
 async fn reconcile_secret_key(
@@ -900,6 +934,16 @@ secrets = ["DECLARED"]
                     {"role": KEY_ROLE, "members": ["user:someone@example.com"]}
                 ]})),
             )
+            .mount(&server)
+            .await;
+        // A just-created agent is not yet visible to IAM; the grant retries.
+        Mock::given(method("POST"))
+            .and(path(format!("/v1/{key}:setIamPolicy")))
+            .respond_with(
+                ResponseTemplate::new(400).set_body_string("Service account x does not exist."),
+            )
+            .up_to_n_times(1)
+            .expect(1)
             .mount(&server)
             .await;
         Mock::given(method("POST"))
