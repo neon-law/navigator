@@ -133,7 +133,7 @@ fn top_level_help_keeps_orchestration_nested_under_groups() {
 }
 
 #[test]
-fn mail_help_exposes_only_read_draft_file_ingest_parse_save_login_and_attachments_actions() {
+fn mail_help_exposes_only_draft_only_actions() {
     let output = help(&["mail", "--help"]);
 
     assert_eq!(
@@ -144,6 +144,7 @@ fn mail_help_exposes_only_read_draft_file_ingest_parse_save_login_and_attachment
             "file",
             "ingest",
             "login",
+            "packet",
             "parse",
             "read",
             "save",
