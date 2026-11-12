@@ -495,22 +495,6 @@ async fn seed_notation_with_kind_surreal(
 
     let entity_id = seed_entity(surreal).await;
 
-    let tmpl = crate::templates::save_version(
-        surreal,
-        None,
-        &format!("sitting__transcript-{}", Uuid::now_v7()),
-        crate::templates::Version {
-            title: "Estate Plan".into(),
-            respondent_type: "person".into(),
-            asset_id: None,
-            form_code: None,
-            kind: kind.map(str::to_string),
-            source_commit_sha: None,
-        },
-    )
-    .await
-    .expect("seed template")
-    .into_model();
     // A fixed mailbox on an engine that outlives one test, so this seeds
     // the same way [`dri_person`] does — see [`ensure_person`].
     let person = persons::find_or_create(surreal, &NewPerson::new("Libra", "libra@example.com"))
@@ -535,13 +519,61 @@ async fn seed_notation_with_kind_surreal(
     designate_dri_in_surreal(surreal, proj.id, dri, DriSide::Client)
         .await
         .expect("designate client DRI");
+    seed_project_notation(surreal, proj.id, person.id, kind).await
+}
+
+async fn seed_project_notation(
+    surreal: &crate::surreal::SurrealDb,
+    project_id: Uuid,
+    person_id: Uuid,
+    kind: Option<&str>,
+) -> Uuid {
+    let tmpl = crate::templates::save_version(
+        surreal,
+        None,
+        &format!("sitting__transcript-{}", Uuid::now_v7()),
+        crate::templates::Version {
+            title: "Estate Plan".into(),
+            respondent_type: "person".into(),
+            asset_id: None,
+            form_code: None,
+            kind: kind.map(str::to_string),
+            source_commit_sha: None,
+        },
+    )
+    .await
+    .expect("seed template")
+    .into_model();
     crate::notations::create(
         surreal,
-        &crate::notations::NewNotation::new(tmpl.id, person.id, proj.id, "BEGIN"),
+        &crate::notations::NewNotation::new(tmpl.id, person_id, project_id, "BEGIN"),
     )
     .await
     .expect("seed notation")
     .id
+}
+
+/// File a completed onboarding signature for an existing synthetic Project.
+pub async fn seed_signed_onboarding(
+    surreal: &crate::surreal::SurrealDb,
+    project_id: Uuid,
+    person_id: Uuid,
+) {
+    let notation = seed_project_notation(surreal, project_id, person_id, Some("onboarding")).await;
+    let provider = crate::signatures::SignatureProvider::DocuSign;
+    let envelope_id = Uuid::now_v7().to_string();
+    crate::signatures::record_request(surreal, notation, provider, &envelope_id)
+        .await
+        .expect("seed onboarding envelope");
+    let stamped = crate::signatures::stamp_signed(
+        surreal,
+        provider,
+        &envelope_id,
+        &chrono::Utc::now().to_rfc3339(),
+    )
+    .await
+    .expect("complete onboarding envelope");
+    assert!(stamped, "fixture envelope must be stamped");
 }
 
 /// An in-memory object store whose writes can fail before storing, fail

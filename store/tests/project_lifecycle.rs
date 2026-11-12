@@ -11,7 +11,7 @@ use store::projects::{
     transition_project, transition_project_with_reason, ClosureReason, NewProject, Project,
     ProjectCommandError, Transition,
 };
-use store::test_support::{mem_surreal, seed_entity};
+use store::test_support::{dri_person, mem_surreal, seed_entity, seed_signed_onboarding};
 use uuid::Uuid;
 
 fn at(value: &str) -> chrono::DateTime<chrono::Utc> {
@@ -67,7 +67,7 @@ async fn file_asset(surreal: &store::surreal::SurrealDb, project_id: Uuid, kind:
             "storage_key",
             format!("projects/{project_id}/documents/test"),
         ))
-        .bind(("sha", format!("sha-{project_id}")))
+        .bind(("sha", format!("sha-{project_id}-{kind}")))
         .bind(("kind", kind.to_string()))
         .await
         .expect("asset write");
@@ -79,7 +79,7 @@ async fn close_active(
     id: Uuid,
     effective_at: Option<chrono::DateTime<chrono::Utc>>,
 ) -> Result<Project, ProjectCommandError> {
-    file_asset(surreal, id, "onboarding").await;
+    seed_signed_onboarding(surreal, id, dri_person(surreal).await).await;
     transition_project_with_reason(
         surreal,
         id,
@@ -99,6 +99,7 @@ async fn close_reasons_follow_the_pre_close_lifecycle_and_pitch_offboarding_gate
         transition_project_with_reason(&surreal, pitch, Transition::Close, None, None,).await,
         Err(ProjectCommandError::Invalid(_))
     ));
+    file_asset(&surreal, pitch, "onboarding").await;
     assert!(matches!(
         transition_project_with_reason(
             &surreal,
@@ -128,7 +129,7 @@ async fn close_reasons_follow_the_pre_close_lifecycle_and_pitch_offboarding_gate
 async fn close_reason_is_exposed_and_reopen_clears_it_without_touching_historical_rows() {
     let surreal = mem_surreal().await;
     let id = open_matter(&surreal, "reason-round-trip").await;
-    file_asset(&surreal, id, "onboarding").await;
+    seed_signed_onboarding(&surreal, id, dri_person(&surreal).await).await;
 
     let closed = transition_project_with_reason(
         &surreal,
@@ -243,7 +244,7 @@ async fn effective_dates_are_bounded_by_matter_open_and_now() {
     let surreal = mem_surreal().await;
     let id = open_matter(&surreal, "bounded-close").await;
     set_opened_at(&surreal, id, "2000-01-01T00:00:00Z").await;
-    file_asset(&surreal, id, "onboarding").await;
+    seed_signed_onboarding(&surreal, id, dri_person(&surreal).await).await;
 
     for (label, effective_at) in [
         ("before matter-open", "1999-12-31T23:59:59Z"),

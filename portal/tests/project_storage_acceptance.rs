@@ -27,7 +27,7 @@ use store::postgres::PostgresDb;
 use store::project_closeout::{self as closeout, Closeout};
 use store::projects::{self, ClosureReason, NewProject, Transition};
 use store::surreal::SurrealDb;
-use store::test_support::{mem_surreal, seed_entity, MemoryStorage};
+use store::test_support::{mem_surreal, seed_entity, seed_signed_onboarding, MemoryStorage};
 use uuid::Uuid;
 
 async fn database() -> Option<PostgresDb> {
@@ -430,6 +430,7 @@ async fn a_synthetic_project_survives_its_whole_storage_lifecycle() {
     .unwrap();
 
     // 7. Close, then archive a complete generation (one unknown outcome).
+    seed_signed_onboarding(&surreal, project.id, client).await;
     projects::transition_project_with_reason(
         &surreal,
         project.id,

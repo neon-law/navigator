@@ -20,10 +20,10 @@ the field outright rather than accepting and forwarding it, so `closed_at` — d
 RFC 3339 `effective_at` between matter-open and now; the command derives `closed_at` from that value so an existing
 retention start can be corrected. Without it, a new close starts at the server's current time and an existing stamp is
 preserved. A first close requires one of four pitch reasons or three active-matter reasons, matching the pre-close
-onboarding classification; a pitch also requires an offboarding document on file. For an unengaged pitch closed as
-declined, lapsed, or withdrawn, the REST lifecycle door used by CLI close generates and files an internal letter before
-transition; retries reuse it. Other pitch reasons and the `close_project` MCP tool still require the offboarding
-document to be filed first.
+onboarding classification. An active-matter close requires a completed e-signature envelope tied to the Project’s
+onboarding notation. A pitch requires an offboarding document on file. For a pitch closed as declined, lapsed, or
+withdrawn, the REST lifecycle endpoint used by CLI close files an internal letter before transition. Retries reuse that
+letter. Other pitch reasons and the `close_project` MCP tool require an offboarding document on file.
 
 With PostgreSQL lifecycle authority, `navigator project reopen <code> --reason new_matter_event` accepts an optional
 `--effective-at` and appends a [Project Status Transition](project-status-transition.md). It clears the current close

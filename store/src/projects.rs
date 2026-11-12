@@ -1895,9 +1895,7 @@ pub async fn close_for_notation(
     if p.status == "closed" || p.status == "archived" {
         return Ok(Some(project_id));
     }
-    let (has_engagement, _) = matter_lifecycle_sets(surreal, std::slice::from_ref(&p))
-        .await
-        .map_err(|error| error.clone())?;
+    let has_engagement = onboarding_official_sets(surreal, std::slice::from_ref(&p)).await?;
     let reason = if has_engagement.contains(&p.id) {
         ClosureReason::EngagementCompleted
     } else {
@@ -2104,10 +2102,9 @@ async fn lifecycle_projection(
     }
 
     if transition == Transition::Close && row.status == "open" {
-        let (has_engagement, has_offboarding) =
-            matter_lifecycle_sets(surreal, std::slice::from_ref(row))
-                .await
-                .map_err(ProjectCommandError::Db)?;
+        let has_engagement = onboarding_official_sets(surreal, std::slice::from_ref(row))
+            .await
+            .map_err(ProjectCommandError::Db)?;
         let reason = reason.ok_or(ProjectCommandError::Invalid("A close reason is required."))?;
         if has_engagement.contains(&row.id) {
             if !reason.is_active() {
@@ -2121,6 +2118,9 @@ async fn lifecycle_projection(
                     "That close reason applies only to an active matter.",
                 ));
             }
+            let (_, has_offboarding) = matter_lifecycle_sets(surreal, std::slice::from_ref(row))
+                .await
+                .map_err(ProjectCommandError::Db)?;
             if !has_offboarding.contains(&row.id) {
                 return Err(ProjectCommandError::Invalid(
                     "A pitch requires an offboarding document before it can be closed.",
