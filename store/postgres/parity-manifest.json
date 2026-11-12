@@ -1355,6 +1355,7 @@
         "parties.*.name": "string",
         "parties.*.role": "string",
         "project_id": "record<project>",
+        "signed_on": "option<string>",
         "synced_at": "string",
         "trial_on": "option<string>"
       },
@@ -3990,6 +3991,7 @@
           "judicial_officer": "TEXT",
           "parties": "JSONB",
           "project_id": "UUID",
+          "signed_on": "TEXT",
           "synced_at": "TIMESTAMPTZ",
           "trial_on": "TEXT"
         },

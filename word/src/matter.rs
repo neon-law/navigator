@@ -76,6 +76,11 @@ pub struct Matter {
     /// `YYYY-MM-DD`; absent prints "None set".
     #[serde(default)]
     pub trial_on: Option<String>,
+    /// `YYYY-MM-DD`; the date the signature block's "Dated this …" line
+    /// carries (LAW-242). A draft without one prints a highlighted
+    /// placeholder, and a final render without one is refused.
+    #[serde(default)]
+    pub signed_on: Option<String>,
     #[serde(default)]
     pub parties: Vec<Party>,
     #[serde(default)]
@@ -132,6 +137,33 @@ pub fn display_date(iso: &str) -> Option<String> {
     (1..=last)
         .contains(&day)
         .then(|| format!("{} {day}, {year}", MONTHS[month - 1]))
+}
+
+/// `Dated this 11th day of November, 2026.` — the line a pleading's
+/// signature block carries (LAW-242), sourced only from the matter's
+/// `signed_on`. `None` when that is not a real calendar date.
+#[must_use]
+pub fn date_line(signed_on: &str) -> Option<String> {
+    let date = display_date(signed_on)?;
+    let (month, rest) = date.split_once(' ')?;
+    let (day, year) = rest.split_once(',')?;
+    let day: u32 = day.parse().ok()?;
+    Some(format!(
+        "Dated this {} day of {month},{year}.",
+        ordinal(day)
+    ))
+}
+
+/// A day of the month as a court writes it: `11th`, `1st`, `23rd`. The
+/// teens (11th–13th) all end in `th`.
+fn ordinal(day: u32) -> String {
+    let teen = (11..=13).contains(&day);
+    match (day % 10, teen) {
+        (1, false) => format!("{day}st"),
+        (2, false) => format!("{day}nd"),
+        (3, false) => format!("{day}rd"),
+        _ => format!("{day}th"),
+    }
 }
 
 fn blank(text: &str) -> bool {
@@ -275,26 +307,30 @@ fn bar_label(jurisdiction: &str) -> String {
 
 fn counsel_lines(counsel: &Counsel) -> Vec<String> {
     let mut lines = Vec::new();
-    lines.push(if counsel.pro_per && blank(&counsel.bar_number) {
-        counsel.name.clone()
+    // The Nevada convention puts the name and the bar number on their own
+    // lines, not parenthesized into one (LAW-242). A self-represented party
+    // with no bar number is not Esq. and carries no bar line.
+    if counsel.pro_per && blank(&counsel.bar_number) {
+        lines.push(counsel.name.clone());
     } else {
-        format!(
-            "{} ({} {})",
-            counsel.name,
+        lines.push(format!("{}, Esq.", counsel.name));
+        lines.push(format!(
+            "{} {}",
             bar_label(&counsel.bar_jurisdiction),
             counsel.bar_number
-        )
-    });
+        ));
+    }
     if !blank(&counsel.firm) {
         lines.push(counsel.firm.clone());
     }
     lines.extend(counsel.address.iter().cloned());
     lines.push(format!("Telephone: {}", counsel.telephone));
     lines.push(format!("Email: {}", counsel.email));
+    // One lawyer signs; the singular is always right here.
     lines.push(if counsel.pro_per {
         format!("{}, in pro per", counsel.appears_for)
     } else {
-        format!("Attorneys for {}", counsel.appears_for)
+        format!("Attorney for {}", counsel.appears_for)
     });
     lines
 }
@@ -387,6 +423,7 @@ mod tests {
             department: "12".into(),
             filed_on: "2026-02-02".into(),
             trial_on: None,
+            signed_on: None,
             parties: vec![
                 party("A CORP", "Plaintiff"),
                 party("B CORP", "Defendant"),
@@ -474,17 +511,15 @@ mod tests {
     }
 
     #[test]
-    fn the_counsel_block_is_seven_lines_with_the_bar_label_of_its_jurisdiction() {
+    fn the_counsel_block_prints_the_bar_on_its_own_line_for_its_jurisdiction() {
         let caption = compose(&matter(), &filing());
-        assert_eq!(caption.counsel.len(), 7);
-        assert_eq!(caption.counsel[0], "Pat Sample (SBN 000000)");
-        assert_eq!(caption.counsel[6], "Attorneys for Plaintiff A CORP");
+        assert_eq!(caption.counsel.len(), 8);
+        assert_eq!(caption.counsel[0], "Pat Sample, Esq.");
+        assert_eq!(caption.counsel[1], "SBN 000000");
+        assert_eq!(caption.counsel[7], "Attorney for Plaintiff A CORP");
         let mut nv = matter();
         nv.counsel.bar_jurisdiction = "Nevada".into();
-        assert_eq!(
-            compose(&nv, &filing()).counsel[0],
-            "Pat Sample (Nevada Bar No. 000000)"
-        );
+        assert_eq!(compose(&nv, &filing()).counsel[1], "Nevada Bar No. 000000");
     }
 
     #[test]
@@ -515,6 +550,37 @@ mod tests {
         assert_eq!(display_date("2026-02-29"), None);
         assert_eq!(display_date("14 August 2026"), None);
         assert_eq!(display_date("2026-13-01"), None);
+    }
+
+    #[test]
+    fn the_date_line_writes_the_ordinal_the_court_prints() {
+        assert_eq!(
+            date_line("2026-11-11").as_deref(),
+            Some("Dated this 11th day of November, 2026.")
+        );
+        assert_eq!(
+            date_line("2026-08-01").as_deref(),
+            Some("Dated this 1st day of August, 2026.")
+        );
+        assert_eq!(
+            date_line("2027-01-22").as_deref(),
+            Some("Dated this 22nd day of January, 2027.")
+        );
+        assert_eq!(
+            date_line("2026-10-23").as_deref(),
+            Some("Dated this 23rd day of October, 2026.")
+        );
+        assert_eq!(
+            date_line("2026-12-13").as_deref(),
+            Some("Dated this 13th day of December, 2026.")
+        );
+        assert_eq!(
+            date_line("2026-10-31").as_deref(),
+            Some("Dated this 31st day of October, 2026.")
+        );
+        assert_eq!(date_line("2026-02-30"), None);
+        assert_eq!(date_line("14 August 2026"), None);
+        assert_eq!(date_line(""), None);
     }
 
     #[test]

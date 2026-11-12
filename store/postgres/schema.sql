@@ -4624,3 +4624,9 @@ ALTER TABLE lead_consent ADD COLUMN call_opt_in BOOLEAN NOT NULL DEFAULT false;
 -- no row is removed, and a new inbound Message clears the stamp. See the
 -- `Inbox Trash` glossary term.
 ALTER TABLE inbox_conversation ADD COLUMN trashed_at TIMESTAMPTZ;
+
+-- Migration: 20261111120000_add_matter_caption_signed_on.sql
+-- The signing date a pleading's date line prints, `Dated this <ordinal> day
+-- of <Month>, <year>` (LAW-242). Sourced only from the matter manifest's
+-- `signed_on:`; NULL while the lawyer has not set a signing date.
+ALTER TABLE matter_caption ADD COLUMN signed_on TEXT;

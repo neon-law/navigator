@@ -14,6 +14,7 @@ matter:
   judicial_officer: Hon. Sample Q. Jurist
   department: "12"
   filed_on: 2026-02-02
+  signed_on: 2026-11-11
   parties:
     - name: SAMPLE SYNTHETIC HOLDINGS OF NORTHERN CALIFORNIA, A LIMITED LIABILITY COMPANY, AND DOES 1 THROUGH 50, INCLUSIVE
       role: Plaintiff

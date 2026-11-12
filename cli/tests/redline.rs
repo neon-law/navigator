@@ -117,7 +117,7 @@ matter:
     address:
       - 100 Example Boulevard, Suite 200
       - Sampleton, Nevada 89000
-    email: pat@sample.legal
+    email: pat@example.com
     telephone: (702) 555-0100
     appears_for: Plaintiff
 ";

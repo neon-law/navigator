@@ -112,6 +112,7 @@ struct Row {
     department: String,
     filed_on: String,
     trial_on: Option<String>,
+    signed_on: Option<String>,
     parties: Vec<PartyRow>,
     counsel: CounselRow,
     synced_at: String,
@@ -129,6 +130,7 @@ impl Row {
                 department: self.department,
                 filed_on: self.filed_on,
                 trial_on: self.trial_on,
+                signed_on: self.signed_on,
                 parties: self.parties.into_iter().map(Party::from).collect(),
                 counsel: self.counsel.into(),
             },
@@ -138,7 +140,7 @@ impl Row {
 }
 
 const SELECT: &str = "id, project_id, court, case_number, judicial_officer, department, \
-     filed_on, trial_on, parties, counsel, synced_at";
+     filed_on, trial_on, signed_on, parties, counsel, synced_at";
 
 fn project(project_id: Uuid) -> surrealdb::types::RecordId {
     record_id(crate::projects::PROJECT_TABLE, project_id)
@@ -165,7 +167,8 @@ pub async fn replace_for_project(
              CREATE $id SET project_id = $project, court = $court, \
              case_number = $case_number, judicial_officer = $judicial_officer, \
              department = $department, filed_on = $filed_on, trial_on = $trial_on, \
-             parties = $parties, counsel = $counsel, synced_at = $now; \
+             signed_on = $signed_on, parties = $parties, counsel = $counsel, \
+             synced_at = $now; \
              COMMIT TRANSACTION;"
         ))
         .bind(("id", record_id(TABLE, Uuid::now_v7())))
@@ -185,6 +188,7 @@ pub async fn replace_for_project(
                 .collect::<Vec<_>>(),
         ))
         .bind(("counsel", CounselRow::from(&matter.counsel)))
+        .bind(("signed_on", matter.signed_on.clone()))
         .bind(("now", chrono::Utc::now().to_rfc3339()))
         .await
         .and_then(surrealdb::IndexedResults::check)?;
@@ -253,6 +257,7 @@ mod tests {
             department: "12".into(),
             filed_on: "2026-02-02".into(),
             trial_on: Some("2027-01-11".into()),
+            signed_on: None,
             parties: vec![
                 Party {
                     name: "A CORP".into(),
@@ -316,6 +321,31 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(stored.matter, partial);
+    }
+
+    /// LAW-242: the signing date survives a sync round trip, including the
+    /// decision to declare none.
+    #[tokio::test]
+    async fn the_signature_date_round_trips_through_the_store() {
+        let surreal = crate::surreal::test_support::mem().await;
+        let project_id = crate::test_support::seed_project_surreal(&surreal, "signed_on").await;
+        let mut dated = matter("00CV000005");
+        dated.signed_on = Some("2026-11-11".into());
+
+        let stored = replace_for_project(&surreal, project_id, Some(&dated))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.matter.signed_on.as_deref(), Some("2026-11-11"));
+
+        replace_for_project(&surreal, project_id, Some(&matter("00CV000005")))
+            .await
+            .unwrap();
+        let read = for_project(&surreal, project_id).await.unwrap().unwrap();
+        assert_eq!(
+            read.matter.signed_on, None,
+            "an unsigned matter stores no date"
+        );
     }
 
     #[tokio::test]

@@ -1554,6 +1554,12 @@ mod tests {
                     "../postgres/migrations/20261110130000_inbox_conversation_trashed_at.sql"
                 ),
             ),
+            (
+                "20261111120000_add_matter_caption_signed_on.sql",
+                include_str!(
+                    "../postgres/migrations/20261111120000_add_matter_caption_signed_on.sql"
+                ),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

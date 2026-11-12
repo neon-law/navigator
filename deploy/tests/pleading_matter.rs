@@ -18,7 +18,7 @@ const NEVADA_FIXTURE: &str = "../cli/tests/fixtures/synthetic_nevada_matter";
 
 /// A Washington superior-court matter (LAW-327): GR 14 paper, no rail,
 /// and a pattern-form body of numbered items and check boxes.
-const WASHINGTON_FIXTURE: &str = "tests/fixtures/synthetic_washington_matter";
+const WASHINGTON_FIXTURE: &str = "../cli/tests/fixtures/synthetic_washington_matter";
 
 /// The synthetic matter tree copied into a tempdir, so a test can edit its
 /// manifest or notations without touching the checked-in fixture.
@@ -95,7 +95,8 @@ fn two_pleadings_share_one_matter_with_no_caption_text_in_either_body() {
         for shared in [
             "Case No. 00CV000000",
             "Dept. 12",
-            "Pat Sample (SBN 000000)",
+            "Pat Sample, Esq.",
+            "SBN 000000",
             "COUNTY OF SAMPLE",
         ] {
             assert_eq!(
@@ -360,7 +361,9 @@ fn word_carries_the_same_composed_caption_and_footer() {
     let document = docx_part(&fs::read(&out).unwrap(), "word/document.xml");
     for text in [
         "Case No. 00CV000000",
-        "Pat Sample (SBN 000000)",
+        "Pat Sample, Esq.",
+        "SBN 000000",
+        "Attorney for Plaintiff SAMPLE HOLDINGS",
         "August 14, 2026",
     ] {
         assert!(document.contains(text), "{text}");
@@ -480,6 +483,79 @@ fn a_counsel_signature_is_draft_in_a_preview_and_signed_in_a_final_render() {
     let bytes = pdf_of(&work, "notice_of_compliance.md");
     assert_eq!(pdf::occurrence_count(&bytes, "/s/ Pat Sample").unwrap(), 1);
     assert_eq!(pdf::occurrence_count(&bytes, "DRAFT").unwrap(), 0);
+}
+
+/// LAW-242: the signature block's date line prints `Dated this …`, sourced
+/// only from `matter.signed_on`; a preview without one prints the
+/// highlighted placeholder, in both engines.
+#[test]
+fn a_signature_block_prints_its_date_from_signed_on_and_previews_a_placeholder() {
+    let work = matter_tree();
+    let template = work.path().join("templates/notice_of_compliance.md");
+    let text = fs::read_to_string(&template).unwrap();
+    fs::write(
+        &template,
+        format!("{text}\nRespectfully submitted,\n\n<!-- counsel-signature -->\n\nPat Sample\n"),
+    )
+    .unwrap();
+
+    let bytes = pdf_of(&work, "notice_of_compliance.md");
+    assert_eq!(
+        pdf::occurrence_count(&bytes, "Dated this 11th day of November, 2026.").unwrap(),
+        1
+    );
+
+    let out = work.path().join("out.docx");
+    let result = render("word", &template, &out);
+    assert!(result.status.success(), "stderr: {}", stderr(&result));
+    let document = docx_part(&fs::read(&out).unwrap(), "word/document.xml");
+    assert!(
+        document.contains("Dated this 11th day of November, 2026."),
+        "{document}"
+    );
+
+    // A preview with no `signed_on:` prints the placeholder, washed yellow
+    // by the same machinery that marks an unanswered questionnaire token.
+    edit(
+        work.path().join("navigator.yaml"),
+        "  signed_on: 2026-11-11\n",
+        "",
+    );
+    let preview = work.path().join("preview.docx");
+    let result = Command::new(cargo_bin("navigator-deploy"))
+        .args(["notation", "word"])
+        .arg(&template)
+        .args(["--preview", "--out"])
+        .arg(&preview)
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{}", stderr(&result));
+    let document = docx_part(&fs::read(&preview).unwrap(), "word/document.xml");
+    assert!(
+        document.contains(
+            "<w:highlight w:val=\"yellow\"/></w:rPr><w:t xml:space=\"preserve\">{{matter.signed_on}}</w:t>"
+        ),
+        "{document}"
+    );
+
+    // A final render without `signed_on:` is refused in both engines — an
+    // undated signature page is not filable.
+    let refused = work.path().join("final.docx");
+    let result = render("word", &template, &refused);
+    assert!(!result.status.success(), "stderr: {}", stderr(&result));
+    assert!(
+        stderr(&result).contains("signed_on"),
+        "stderr: {}",
+        stderr(&result)
+    );
+    let refused_pdf = work.path().join("final.pdf");
+    let result = render("pdf", &template, &refused_pdf);
+    assert!(!result.status.success(), "stderr: {}", stderr(&result));
+    assert!(
+        stderr(&result).contains("signed_on"),
+        "stderr: {}",
+        stderr(&result)
+    );
 }
 
 #[test]

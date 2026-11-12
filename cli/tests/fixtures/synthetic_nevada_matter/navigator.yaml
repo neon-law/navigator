@@ -15,6 +15,7 @@ matter:
   judicial_officer: Hon. Sample Q. Jurist
   department: "Z"
   filed_on: 2026-02-02
+  signed_on: 2026-11-11
   parties:
     - name: SAMPLE SYNTHETIC PETITIONER
       role: Plaintiff
