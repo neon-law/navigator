@@ -4867,7 +4867,7 @@ async fn send_notation_signature(
     State(state): State<ApiState>,
     lawyer: LawyerSession,
     Path(id): Path<Uuid>,
-    body: Option<Json<NotationSignatureRequest>>,
+    body: axum::body::Bytes,
 ) -> Result<Response, ApiError> {
     // Resolve the notation and enforce matter scope on its project first. A
     // miss collapses to 404 so the door never discloses a notation the caller
@@ -4893,10 +4893,22 @@ async fn send_notation_signature(
         storage: &state.storage,
         acting: lawyer.0.person_id,
     };
-    let mode = match body {
-        // No body (or no `prepare` flag) dispatches — today's behavior.
-        Some(Json(request)) if request.prepare => crate::signature_flow::SendMode::Prepare,
-        _ => crate::signature_flow::SendMode::Send,
+    let mode = {
+        // An empty body (or an omitted `prepare`) dispatches — today's
+        // behavior; `{"prepare": true}` holds a draft. A non-empty body that
+        // does not parse is the caller's mistake, never a silent send.
+        let prepare = if body.is_empty() {
+            false
+        } else {
+            serde_json::from_slice::<NotationSignatureRequest>(&body)
+                .map_err(|error| ApiError::MalformedBody(error.to_string()))?
+                .prepare
+        };
+        if prepare {
+            crate::signature_flow::SendMode::Prepare
+        } else {
+            crate::signature_flow::SendMode::Send
+        }
     };
     let (final_state, signature_request_id) = crate::signature_flow::send_notation_for_signature(
         &ctx,
