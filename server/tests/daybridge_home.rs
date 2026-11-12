@@ -55,6 +55,10 @@ fn assert_own_brand_head(html: &str, host: &str) {
         "{host} must use its own favicon/logo: {head}"
     );
     assert!(
+        head.contains("/public/brand/daybridge/logo.png"),
+        "{host} must share its own logo image: {head}"
+    );
+    assert!(
         head.contains("/public/css/brand-daybridge-tokens.css"),
         "{host} must load its own scoped brand tokens: {head}"
     );

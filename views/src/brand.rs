@@ -824,7 +824,7 @@ pub static DAYBRIDGE_BRANDING: Branding = Branding {
         tagline: "A brighter way through divorce for couples who agree.",
         postal_address: "5150 Mae Anne Ave Ste 405-9002, Reno, NV 89523",
         logo_href: "/public/brand/daybridge/logo.svg",
-        social_image: "",
+        social_image: "/public/brand/daybridge/logo.png",
         nav: &[],
         is_law_firm: true,
         legal_entity: "Guieb & Shook PC",
