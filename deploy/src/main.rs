@@ -5185,11 +5185,13 @@ fn pleading_body(
     let composed = rules::clauses::compile(contents)?;
     let contents = composed.as_str();
     let signer_boxes = declared_signer_boxes(contents);
-    let body = views::notation::fill_signer_boxes(
+    // Each `{{<signer>.signature|initials|date}}` becomes a signing line with
+    // the provider's anchor hidden on it, in every frame (LAW-344).
+    let body = word::paper::mark_signing_lines(&views::notation::fill_signer_boxes(
         strip_frontmatter(contents),
         answers,
         signer_boxes.iter().map(String::as_str),
-    );
+    ));
     if profile != PLEADING_PROFILE {
         return Ok(body);
     }

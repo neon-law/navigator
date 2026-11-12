@@ -190,6 +190,112 @@ pub fn is_signer_box(html: &str) -> bool {
         .is_some_and(|inner| inner.trim().eq_ignore_ascii_case("signer-box"))
 }
 
+/// The fields a signer's anchor can name: `{{client.signature}}`,
+/// `{{client.initials}}`, `{{client.date}}`.
+pub const SIGNING_FIELDS: [&str; 3] = ["signature", "initials", "date"];
+
+/// The text an e-signature provider keys a field off: unique per occurrence
+/// of a `(signer, field)` pair, so it places exactly one tab per anchor. The
+/// portal's retainer render and the offline render share it, so a manifest
+/// built from either finds its anchors in both.
+#[must_use]
+pub fn signature_anchor(signer: &str, field: &str, n: usize) -> String {
+    format!("nlsig-{signer}-{field}-{n}")
+}
+
+/// One place a signer signs, initials, or dates: a rule the renders draw
+/// with [`SigningLine::anchor`] printed invisibly on it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SigningLine {
+    pub signer: String,
+    pub field: String,
+    pub anchor: String,
+}
+
+impl SigningLine {
+    /// The caption printed under the rule.
+    #[must_use]
+    pub fn label(&self) -> &'static str {
+        match self.field.as_str() {
+            "initials" => "Initials",
+            "date" => "Date signed",
+            _ => "Signature",
+        }
+    }
+
+    /// How long the rule runs, in inches.
+    #[must_use]
+    pub fn width_inches(&self) -> f64 {
+        match self.field.as_str() {
+            "initials" => 1.0,
+            "date" => 2.0,
+            _ => 3.0,
+        }
+    }
+}
+
+/// `body` with each signature anchor — `{{<signer>.signature}}`,
+/// `{{<signer>.initials}}`, `{{<signer>.date}}` — replaced by a signing-line
+/// marker carrying its [`signature_anchor`], numbered per `(signer, field)`
+/// in document order, so a render never prints the braces (LAW-344). Any
+/// other `{{…}}` is left as it is.
+#[must_use]
+pub fn mark_signing_lines(body: &str) -> String {
+    let mut counts: std::collections::BTreeMap<(String, String), usize> =
+        std::collections::BTreeMap::new();
+    let mut out = String::with_capacity(body.len());
+    let mut rest = body;
+    while let Some(start) = rest.find("{{") {
+        let Some(length) = rest[start..].find("}}").map(|end| end + 2) else {
+            break;
+        };
+        let inner = rest[start + 2..start + length - 2].trim();
+        out.push_str(&rest[..start]);
+        match inner.split_once('.') {
+            Some((signer, field))
+                if SIGNING_FIELDS.contains(&field)
+                    && !signer.is_empty()
+                    && signer.chars().all(|c| c.is_ascii_lowercase() || c == '_') =>
+            {
+                let n = counts
+                    .entry((signer.to_string(), field.to_string()))
+                    .or_insert(0);
+                *n += 1;
+                let _ = write!(
+                    out,
+                    "<!-- signing-line: {} -->",
+                    signature_anchor(signer, field, *n)
+                );
+            }
+            _ => out.push_str(&rest[start..start + length]),
+        }
+        rest = &rest[start + length..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Read a raw HTML token as a [`mark_signing_lines`] marker.
+#[must_use]
+pub fn signing_line(html: &str) -> Option<SigningLine> {
+    let anchor = html
+        .trim()
+        .strip_prefix("<!--")?
+        .strip_suffix("-->")?
+        .trim()
+        .strip_prefix("signing-line:")?
+        .trim();
+    let mut parts = anchor.strip_prefix("nlsig-")?.rsplitn(3, '-');
+    let _n: usize = parts.next()?.parse().ok()?;
+    let field = parts.next()?;
+    let signer = parts.next()?;
+    SIGNING_FIELDS.contains(&field).then(|| SigningLine {
+        signer: signer.to_string(),
+        field: field.to_string(),
+        anchor: anchor.to_string(),
+    })
+}
+
 /// Where counsel signs a court filing: the author writes this marker in its
 /// own paragraph. Both renders draw it as italic `/s/ DRAFT` on a signature
 /// rule (the paragraph's bottom border), with `DRAFT` highlighted, until a
@@ -468,6 +574,38 @@ mod tests {
         assert_eq!(paper.title.as_deref(), Some("DEMAND, SET ONE"));
         assert!(!paper.body.contains("caption"));
         assert!(paper.body.contains("# DEMAND, SET ONE"));
+    }
+
+    /// LAW-344: each signature anchor becomes a marker carrying a unique
+    /// provider anchor, numbered per signer and field; data placeholders and
+    /// the Firm's render bindings are left for the fill.
+    #[test]
+    fn signature_anchors_become_signing_line_markers() {
+        let body = "{{client.signature}} {{client.date}} {{client.signature}} \
+                    {{firm.legal_name}} {{person__client}} {{client.fax}}";
+        let marked = mark_signing_lines(body);
+        assert_eq!(
+            marked,
+            "<!-- signing-line: nlsig-client-signature-1 --> \
+             <!-- signing-line: nlsig-client-date-1 --> \
+             <!-- signing-line: nlsig-client-signature-2 --> \
+             {{firm.legal_name}} {{person__client}} {{client.fax}}"
+        );
+        let line = signing_line("<!-- signing-line: nlsig-client_dri-date-3 -->").unwrap();
+        assert_eq!(
+            line,
+            SigningLine {
+                signer: "client_dri".into(),
+                field: "date".into(),
+                anchor: "nlsig-client_dri-date-3".into(),
+            }
+        );
+        assert_eq!(line.label(), "Date signed");
+        assert_eq!(
+            signing_line("<!-- signing-line: nlsig-client-fax-1 -->"),
+            None
+        );
+        assert_eq!(signing_line("<!-- signer-box -->"), None);
     }
 
     /// A composed caption reaches both renders through its fence, so every

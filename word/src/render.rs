@@ -102,6 +102,9 @@ struct Paragraph {
     italics: Vec<std::ops::Range<usize>>,
     /// Byte ranges highlighted yellow: an open item in a draft.
     highlights: Vec<std::ops::Range<usize>>,
+    /// Byte ranges set white at 4pt: an e-signature provider's anchor on a
+    /// signing line, there for the provider and invisible to a reader.
+    anchors: Vec<std::ops::Range<usize>>,
     /// The paragraph carries a counsel signature, so its bottom border is
     /// the signature rule the `/s/` line sits on.
     signature_rule: bool,
@@ -497,6 +500,38 @@ fn blocks_with_source(markdown: &str) -> Vec<SourcePair> {
                         .push(SIGNER_BOX_RUN);
                 }
             }
+            // A signer's signing line (LAW-344): on its own line, a ruled
+            // paragraph holding the provider's anchor invisibly, then its
+            // caption; inside a paragraph, a Signer Box rule and the anchor.
+            Event::Html(html) | Event::InlineHtml(html)
+                if crate::paper::signing_line(&html).is_some() =>
+            {
+                if let Some(line) = crate::paper::signing_line(&html) {
+                    if let Some(paragraph) = cell.as_mut().or(current.as_mut()) {
+                        paragraph.text.push(SIGNER_BOX_RUN);
+                        append_anchor(paragraph, &line.anchor);
+                    } else {
+                        let mut rule = Paragraph {
+                            group,
+                            signature_rule: true,
+                            ..Paragraph::default()
+                        };
+                        append_anchor(&mut rule, &line.anchor);
+                        let caption = Paragraph {
+                            group,
+                            text: line.label().to_string(),
+                            ..Paragraph::default()
+                        };
+                        for paragraph in [rule, caption] {
+                            result.push(SourcePair {
+                                kind: SourceBlockKind::Paragraph,
+                                source: range.clone(),
+                                block: Block::Paragraph(paragraph),
+                            });
+                        }
+                    }
+                }
+            }
             // A counsel signature: italic `/s/` and the name on a signature
             // rule, `DRAFT` highlighted until a final render names counsel.
             Event::Html(html) | Event::InlineHtml(html)
@@ -680,6 +715,13 @@ const SIGNATURE_RULE_BORDER: &str =
 /// How far the signature rule runs: three and a half inches.
 const SIGNATURE_RULE_TWIPS: u32 = 5040;
 
+/// Append a signing line's anchor to `paragraph`, set invisibly.
+fn append_anchor(paragraph: &mut Paragraph, anchor: &str) {
+    let start = paragraph.text.len();
+    paragraph.text.push_str(anchor);
+    paragraph.anchors.push(start..paragraph.text.len());
+}
+
 /// Append a counsel signature's `/s/` line to `paragraph` and draw its rule.
 fn append_counsel_signature(paragraph: &mut Paragraph, signature: &crate::paper::CounselSignature) {
     append_text(paragraph, "/s/ ", true);
@@ -725,7 +767,12 @@ fn mark_open_items(paragraph: &mut Paragraph) {
 fn paragraph_runs_xml(paragraph: &Paragraph, bold: bool) -> String {
     let length = paragraph.text.len();
     let mut cuts = vec![0, length];
-    for range in paragraph.italics.iter().chain(&paragraph.highlights) {
+    for range in paragraph
+        .italics
+        .iter()
+        .chain(&paragraph.highlights)
+        .chain(&paragraph.anchors)
+    {
         cuts.push(range.start.min(length));
         cuts.push(range.end.min(length));
     }
@@ -741,6 +788,7 @@ fn paragraph_runs_xml(paragraph: &Paragraph, bold: bool) -> String {
             bold,
             italic: covers(&paragraph.italics, start),
             highlight: covers(&paragraph.highlights, start),
+            anchor: covers(&paragraph.anchors, start),
         };
         out.push_str(&runs_xml(&paragraph.text[start..end], style));
     }
@@ -754,6 +802,7 @@ struct RunStyle {
     bold: bool,
     italic: bool,
     highlight: bool,
+    anchor: bool,
 }
 
 /// A paragraph's text as runs, a `<w:br/>` for each hard break and an
@@ -763,7 +812,7 @@ fn runs_xml(text: &str, style: RunStyle) -> String {
         return String::new();
     }
     let mut weight = String::new();
-    if style.bold || style.italic || style.highlight {
+    if style.bold || style.italic || style.highlight || style.anchor {
         weight.push_str("<w:rPr>");
         if style.bold {
             weight.push_str("<w:b/>");
@@ -773,6 +822,9 @@ fn runs_xml(text: &str, style: RunStyle) -> String {
         }
         if style.highlight {
             weight.push_str("<w:highlight w:val=\"yellow\"/>");
+        }
+        if style.anchor {
+            weight.push_str("<w:color w:val=\"FFFFFF\"/><w:sz w:val=\"8\"/>");
         }
         weight.push_str("</w:rPr>");
     }
@@ -1468,6 +1520,26 @@ mod tests {
             },
         )
         .unwrap()
+    }
+
+    /// LAW-344: a signing line is a ruled paragraph carrying the provider's
+    /// anchor in white 4pt text, captioned below; never literal braces.
+    #[test]
+    fn a_signing_line_is_a_ruled_paragraph_with_an_invisible_anchor() {
+        let markdown = crate::paper::mark_signing_lines(
+            "I declare the foregoing is true.\n\n{{client.signature}}\n\nDated: {{client.date}}\n",
+        );
+        let package = render_notation(&markdown, None, &RenderOptions::default()).unwrap();
+        let document = part(&package, "word/document.xml");
+        assert!(
+            document.contains(
+                "<w:rPr><w:color w:val=\"FFFFFF\"/><w:sz w:val=\"8\"/></w:rPr><w:t xml:space=\"preserve\">nlsig-client-signature-1</w:t>"
+            ),
+            "{document}"
+        );
+        assert!(document.contains(">Signature</w:t>"), "{document}");
+        assert!(document.contains("nlsig-client-date-1"), "{document}");
+        assert!(!document.contains("{{"), "{document}");
     }
 
     /// LAW-327: a Washington caption has no counsel block, so the railed

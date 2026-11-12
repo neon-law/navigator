@@ -687,3 +687,60 @@ fn a_washington_pleading_takes_the_firm_s_washington_office() {
     );
     assert_eq!(pdf::occurrence_count(&bytes, "Reno").unwrap(), 0);
 }
+
+/// LAW-344: a party's declaration for an opening filing — no case number,
+/// judge, or department yet — renders on Washington court paper with a blank
+/// `No.` line, its signature and date as signing lines whose provider anchors
+/// are invisible, never `{{client.signature}}` braces, with or without
+/// answers, and with no firm letterhead.
+#[test]
+fn a_declaration_before_filing_renders_signing_lines_on_court_paper() {
+    let work = tree_of(WASHINGTON_FIXTURE);
+    let template = work.path().join("templates/declaration.md");
+    for preview in [false, true] {
+        let out = work.path().join("declaration.pdf");
+        let mut command = Command::new(cargo_bin("navigator-deploy"));
+        command
+            .args(["notation", "pdf"])
+            .arg(&template)
+            .arg("--out")
+            .arg(&out);
+        if preview {
+            command.arg("--preview");
+        } else {
+            command.args(["--answer", "person__client=SAM SYNTHETIC TWO"]);
+        }
+        let result = command.output().unwrap();
+        assert!(result.status.success(), "{}", stderr(&result));
+        let bytes = fs::read(&out).unwrap();
+        for (text, count) in [
+            ("No. __________", 1),
+            ("nlsig-client-signature-1", 1),
+            ("nlsig-client-date-1", 1),
+            ("Date signed", 1),
+            ("{{client", 0),
+            ("Dept.", 0),
+            ("Judge:", 0),
+            ("Action Filed", 0),
+        ] {
+            assert_eq!(
+                pdf::occurrence_count(&bytes, text).unwrap(),
+                count,
+                "{text} (preview: {preview})"
+            );
+        }
+    }
+    let out = work.path().join("declaration.docx");
+    let result = Command::new(cargo_bin("navigator-deploy"))
+        .args(["notation", "word"])
+        .arg(&template)
+        .arg("--out")
+        .arg(&out)
+        .args(["--answer", "person__client=SAM SYNTHETIC TWO"])
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{}", stderr(&result));
+    let document = docx_part(&fs::read(&out).unwrap(), "word/document.xml");
+    assert!(document.contains("nlsig-client-signature-1"), "{document}");
+    assert!(!document.contains("{{client"), "{document}");
+}

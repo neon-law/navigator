@@ -411,6 +411,14 @@ same office's firm, address, telephone, and email for any of them it leaves out,
 lawyer: `name`, `bar_jurisdiction`, `bar_number`, and `appears_for`. A declared address in another state than the
 pleading's `jurisdiction:` is a `Y019` warning.
 
+**Signature anchors render as signing lines.** `notation pdf` and `notation word` draw each `{{<signer>.signature}}`,
+`{{<signer>.initials}}`, and `{{<signer>.date}}` as a rule with a caption ("Signature", "Initials", "Date signed") and
+the e-signature provider's anchor (`nlsig-client-signature-1`) printed invisibly on it, in a preview and a final render
+alike — the same anchors the portal's retainer render places, so a DocuSign envelope's tabs land on the rule. A party's
+declaration for an opening filing renders this way on court paper (`kind: declaration`, `output: pleading`) before the
+clerk assigns a case number; see the [synthetic Washington
+declaration](../cli/tests/fixtures/synthetic_washington_matter/templates/declaration.md).
+
 ### Final documents only
 
 Every document a Project produces for a client, a court, a counterparty, or a signer is final: each fact is filled in
