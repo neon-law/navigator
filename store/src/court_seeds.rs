@@ -2160,6 +2160,33 @@ form_number: None,
             },
         ],
     },
+    // Benton County Superior Court: the statewide pattern Declaration
+    // (Optional Use) is the blank the guided client declaration follows;
+    // it is filed in the pending Superior Court matter, so no separate
+    // filing fee or fee-waiver form applies to it.
+    Court {
+        key: "benton_county_superior_court".into(),
+        name: "Benton County Superior Court (Washington)".into(),
+        jurisdiction: "WA".into(),
+        county: Some("Benton".into()),
+        city: None,
+        level: CourtLevel::Superior,
+        forms: vec![
+            CourtForm {
+            code: "wa__benton_county_declaration".into(),
+            title: "Client Declaration — Benton County Superior Court".into(),
+            form_number: Some("WPF DR 09.0100".into()),
+            source_url: "https://www.courts.wa.gov/forms/documents/model.pdf".into(),
+            sha256: "734d2b038130a9c0116f604e3895716f07cfc3ec809368fa892c6e8f50f24a78".into(),
+            filing_office: "Benton County Superior Court clerk".into(),
+            filing_fee: None,
+            fee_note: None,
+            fee_waiver_code: None,
+
+            },
+        ],
+        surveyed_forms: Vec::new(),
+    },
     // Name changes and small claims ($50; clerk provides the Notice of Small
     // Claim — no static PDF on the page). GR 34 fee waiver on request.
     Court {
