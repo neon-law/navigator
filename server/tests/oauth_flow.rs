@@ -11,10 +11,11 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use portal::{oauth, AppState, OAuthConfig, SessionStore};
 use serde_json::json;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Once};
 use store::test_support::mem_surreal;
 use tower::ServiceExt;
 use tracing_subscriber::fmt::MakeWriter;
+use tracing_subscriber::prelude::*;
 use wiremock::matchers::{body_string_contains, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -63,10 +64,20 @@ fn event_fields(
         .unwrap_or_else(|| panic!("callback emits {event_name}"))
 }
 
+fn ensure_callsite_interest() {
+    static INSTALL: Once = Once::new();
+    INSTALL.call_once(|| {
+        let _ = tracing::subscriber::set_global_default(
+            tracing_subscriber::registry().with(tracing_subscriber::filter::LevelFilter::INFO),
+        );
+    });
+}
+
 async fn traced_response(
     app: axum::Router,
     request: Request<Body>,
 ) -> (axum::http::Response<Body>, Arc<Mutex<Vec<u8>>>) {
+    ensure_callsite_interest();
     let output = Arc::new(Mutex::new(Vec::new()));
     let subscriber = tracing_subscriber::fmt()
         .json()

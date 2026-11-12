@@ -55,6 +55,16 @@ async fn create_project(db: &store::surreal::SurrealDb, code: &str) -> store::pr
 #[allow(clippy::too_many_lines)]
 async fn a_legacy_project_keyed_row_is_rekeyed_to_its_xero_invoice_id_and_stays_readable() {
     let db = mem_surreal().await;
+    // The legacy project-keyed mirror row models a pre-4.0 datastore: only a
+    // database created by SurrealDB 3.x carries one, and those stay at
+    // compatibility level 3 through an upgrade. Only at level 3 does
+    // re-applying the schema over the populated `xero_invoice` table accept
+    // the field redefinitions the rekey migration performs (probed
+    // 2026-11-12; see `historical_orphan_brand` in `store::schema`).
+    db.query("ALTER DATABASE COMPATIBILITY 3;")
+        .await
+        .and_then(surrealdb::IndexedResults::check)
+        .expect("downgrade the test database to compatibility level 3");
     let entity_id = seed_entity(&db).await;
     let project = store::projects::create(
         &db,

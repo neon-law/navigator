@@ -15,11 +15,12 @@ use p256::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
 use portal::{AppState, OAuthConfig, SessionStore};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Once};
 use store::persons::Role;
 use store::test_support::mem_surreal;
 use tower::ServiceExt;
 use tracing_subscriber::fmt::MakeWriter;
+use tracing_subscriber::prelude::*;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -65,10 +66,20 @@ fn signed_in_fields(output: &Arc<Mutex<Vec<u8>>>) -> serde_json::Map<String, Val
         .expect("successful callback emits auth.signed_in")
 }
 
+fn ensure_callsite_interest() {
+    static INSTALL: Once = Once::new();
+    INSTALL.call_once(|| {
+        let _ = tracing::subscriber::set_global_default(
+            tracing_subscriber::registry().with(tracing_subscriber::filter::LevelFilter::INFO),
+        );
+    });
+}
+
 async fn traced_response(
     app: axum::Router,
     request: Request<Body>,
 ) -> (axum::http::Response<Body>, Arc<Mutex<Vec<u8>>>) {
+    ensure_callsite_interest();
     let output = Arc::new(Mutex::new(Vec::new()));
     let subscriber = tracing_subscriber::fmt()
         .json()

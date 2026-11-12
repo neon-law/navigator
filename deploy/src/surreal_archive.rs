@@ -224,8 +224,23 @@ async fn archive_inventory(db: &SurrealDb) -> Result<(BTreeMap<String, i64>, Str
             .await
             .with_context(|| format!("read schema for SurrealDB table {table}"))?;
         let rows: Vec<serde_json::Value> = response
-            .take(0)
-            .with_context(|| format!("decode schema for SurrealDB table {table}"))?;
+            .take::<Vec<serde_json::Value>>(0)
+            .with_context(|| format!("decode schema for SurrealDB table {table}"))?
+            .into_iter()
+            .map(|row| {
+                // SurrealDB 4 reports a per-table `migrations` block whose
+                // `generation` advances with every definition statement. A
+                // restored database replays the export's DDL and then
+                // re-applies the Navigator schema, so its generation
+                // legitimately differs from the source's; the fingerprint
+                // covers schema shape, not definition history.
+                let mut row = row;
+                if let Some(info) = row.as_object_mut() {
+                    info.remove("migrations");
+                }
+                row
+            })
+            .collect();
         complete_schema.insert(table.clone(), serde_json::Value::Array(rows));
     }
     let schema_sha256 = sha256(&serde_json::to_vec(&complete_schema)?);
@@ -572,9 +587,18 @@ mod tests {
             .is_err(),
             "a same-count row update must fail strict consistency"
         );
+        // A schema-only change must fail strict consistency. The probe field
+        // is `option<string>` because compatibility level 4 refuses a
+        // required-field addition on a populated SCHEMAFULL table (existing
+        // rows hold NONE and would need MIGRATE EXISTING ROWS); the optional
+        // field is accepted and changes the schema fingerprint all the same.
+        // The result is checked — SurrealDB 4 reports statement errors inside
+        // the response, and an unnoticed refusal here would leave the
+        // fingerprint unchanged and this assertion silently true.
         source
-            .query("DEFINE FIELD archive_probe ON TABLE template TYPE string")
+            .query("DEFINE FIELD archive_probe ON TABLE template TYPE option<string>")
             .await
+            .and_then(store::surreal::IndexedResults::check)
             .unwrap();
         let schema_changed = archive_inventory(&source).await.unwrap();
         assert_eq!(schema_changed.0, expected);

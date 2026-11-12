@@ -43,6 +43,10 @@ pub use config::{
     ENDPOINT_ENV, NAMESPACE_ENV, PASSWORD_ENV, TOKEN_ENV, USER_ENV,
 };
 pub use record::{record_id, record_uuid};
+// Re-exported so downstream crates (deploy) can surface per-statement
+// SurrealDB errors — SurrealDB 4 reports them inside the response rather
+// than failing the query future, so unchecked queries hide refusals.
+pub use surrealdb::IndexedResults;
 
 use std::ops::Deref;
 use std::sync::{Arc, Once};
