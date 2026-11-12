@@ -241,6 +241,15 @@ const NV_DISSOLUTION: &str =
 const NV_MODIFIED_BUSINESS_TAX: &str = include_str!(
     "../../templates/notations/forms/united_states/nevada/state/nv__modified_business_tax.md"
 );
+const NV_MJP_FIRM_REGISTRATION: &str = include_str!(
+    "../../templates/notations/forms/united_states/nevada/state_bar/nv__mjp_firm_registration.md"
+);
+const NV_TRUST_ACCOUNT_CERTIFICATION: &str = include_str!(
+    "../../templates/notations/forms/united_states/nevada/state_bar/nv__trust_account_certification.md"
+);
+const NV_IOLTA_ENROLLMENT: &str = include_str!(
+    "../../templates/notations/forms/united_states/nevada/state_bar/nv__iolta_enrollment.md"
+);
 const CA_NAME_CHANGE_PETITION: &str = include_str!(
     "../../templates/notations/forms/united_states/california/california_superior_court/ca__name_change_petition.md"
 );
@@ -648,6 +657,21 @@ fn notation_preview_docs() -> Vec<webapp::notation_preview::PreviewDoc> {
             "nevada-charitable-solicitation-registration",
             "notations/forms/united_states/nevada/state/nv__charitable_solicitation_registration.md",
             NV_CHARITABLE,
+        ),
+        preview_doc(
+            "nevada-mjp-firm-registration",
+            "notations/forms/united_states/nevada/state_bar/nv__mjp_firm_registration.md",
+            NV_MJP_FIRM_REGISTRATION,
+        ),
+        preview_doc(
+            "nevada-trust-account-certification",
+            "notations/forms/united_states/nevada/state_bar/nv__trust_account_certification.md",
+            NV_TRUST_ACCOUNT_CERTIFICATION,
+        ),
+        preview_doc(
+            "nevada-iolta-enrollment",
+            "notations/forms/united_states/nevada/state_bar/nv__iolta_enrollment.md",
+            NV_IOLTA_ENROLLMENT,
         ),
         preview_doc(
             "california-name-change-petition",
@@ -1104,6 +1128,27 @@ fn notations_index_content() -> webapp::catalog_index::CatalogIndexContent {
                 "nevada-charitable-solicitation-registration",
                 "Registration before soliciting donations in Nevada.",
                 NV_CHARITABLE,
+            ),
+            notation_card(
+                "Nevada",
+                "Nevada Multijurisdictional Law Firm Registration (RPC 7.5A)",
+                "nevada-mjp-firm-registration",
+                "State Bar of Nevada registration for a firm with offices in Nevada and elsewhere.",
+                NV_MJP_FIRM_REGISTRATION,
+            ),
+            notation_card(
+                "Nevada",
+                "Nevada Trust Account Certification (SCR 78 and 217)",
+                "nevada-trust-account-certification",
+                "A State Bar of Nevada member's trust-account certification of compliance and consent.",
+                NV_TRUST_ACCOUNT_CERTIFICATION,
+            ),
+            notation_card(
+                "Nevada",
+                "Nevada IOLTA Enrollment",
+                "nevada-iolta-enrollment",
+                "Tells a Nevada bank to open a trust account as an IOLTA.",
+                NV_IOLTA_ENROLLMENT,
             ),
             notation_card(
                 "California",
