@@ -2904,6 +2904,22 @@ pub fn public_seeded_templates() -> anyhow::Result<Vec<PublicTemplate>> {
     Ok(templates)
 }
 
+/// The bundled, full-fidelity source (frontmatter included) for a seeded
+/// template code, or `None` for a code the seed does not ship.
+///
+/// `seed_templates` stores a seeded Template's body *without* its
+/// frontmatter, so any reader that needs the stored bytes' frontmatter —
+/// e.g. the `signers:` declaration the send flow parses — must recover it
+/// from here, the same way the questionnaire resolves a seeded template's
+/// definition from the bundled spec rather than the stored body.
+#[must_use]
+pub fn seeded_template_markdown(code: &str) -> Option<&'static str> {
+    SEEDED_TEMPLATES.iter().find_map(|template| {
+        (template_code(template.label).is_ok_and(|seeded| seeded == code))
+            .then_some(template.markdown)
+    })
+}
+
 /// The `code@version` Clause sources the seeded shared Template `code` pins,
 /// when `stored_body` is exactly the body [`seed_canonical`] stores for it.
 ///

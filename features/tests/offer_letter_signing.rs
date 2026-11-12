@@ -127,14 +127,25 @@ async fn lawyer_walks(world: &mut OfferWorld, step: &Step) {
             };
             format!("id={}", features::form_encode(&id))
         } else if let Some(rest) = value.strip_prefix("contacts:") {
-            let mut parts = rest.split(';');
-            let name = parts.next().unwrap_or_default();
-            let email = parts.next().unwrap_or_default();
-            format!(
-                "p0_name={}&p0_email={}",
-                features::form_encode(name),
-                features::form_encode(email),
-            )
+            // The offer-terms clause renders every address part of the
+            // contact row, so the answer must carry all of them — any part
+            // the row omits survives as an unanswered `{{c.part}}` and the
+            // send's finality check refuses the document.
+            let parts: Vec<&str> = rest.split(';').collect();
+            let keys = [
+                "name", "email", "title", "street", "city", "state", "zip", "country",
+            ];
+            let pairs: Vec<String> = keys
+                .iter()
+                .enumerate()
+                .map(|(i, key)| {
+                    format!(
+                        "p0_{key}={}",
+                        features::form_encode(parts.get(i).copied().unwrap_or_default())
+                    )
+                })
+                .collect();
+            pairs.join("&")
         } else {
             format!("value={}", features::form_encode(value))
         };

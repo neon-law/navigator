@@ -183,6 +183,7 @@ pub(crate) async fn send_notation_for_signature(
         &answer_ctx,
         client.as_ref(),
         captive,
+        &template_row.code,
         &raw_template_body,
     )?;
     let id = provider
@@ -229,19 +230,52 @@ pub(crate) async fn document_pdf_ready(
 /// `.email`. Empty fields → empty manifest (the provider's
 /// single-signer fallback). A declared role that lacks a resolved name
 /// and email refuses the send.
+
+/// Resolve the signer set for a template from the bytes the send path
+/// loads.
+///
+/// A template stored with its frontmatter — a Project-scoped Draft's
+/// persisted composition — parses directly. A **seeded** template's stored
+/// body carries no frontmatter (`seed_templates` splits it off), so the
+/// declarations recover from the bundled source the seed canonically
+/// mirrors — the same recovery shape
+/// `workflows::notation_session::questionnaire_definition_for` applies to
+/// a seeded questionnaire. Without the recovery, an explicit signer set
+/// would silently collapse into the implicit client/firm default at send
+/// time for every seeded template that declares one.
+///
+/// `code` is the template's catalog code (`template_row.code`); only
+/// frontmatter-less sources consult the bundled seed, so a Project-scoped
+/// body that deliberately drops a `signers:` block keeps its (implicit)
+/// choice.
+#[must_use]
+pub(crate) fn signer_set_for_template(
+    code: &str,
+    stored_source: &str,
+) -> Result<rules::SignerSet, String> {
+    if rules::frontmatter::extract(stored_source).is_some() {
+        return rules::signer_set(stored_source);
+    }
+    match store::seed::seeded_template_markdown(code) {
+        Some(bundled) => rules::signer_set(bundled),
+        None => rules::signer_set(stored_source),
+    }
+}
+
 pub(crate) fn build_signature_manifest(
     notation_id: Uuid,
     fields: &[crate::signature::SignatureField],
     ctx: &BTreeMap<String, String>,
     client: Option<&store::persons::Person>,
     captive: bool,
+    template_code: &str,
     template_source: &str,
 ) -> Result<crate::signature::SignatureManifest, WorkflowDriveError> {
     use crate::signature::{SignatureManifest, SignatureRecipient};
     if fields.is_empty() {
         return Ok(SignatureManifest::default());
     }
-    let set = rules::signer_set(template_source)
+    let set = signer_set_for_template(template_code, template_source)
         .map_err(|message| WorkflowDriveError::UnresolvedSigner { role: message })?;
     let role_present = |role: &str| fields.iter().any(|f| f.recipient_role == role);
     let env = |k: &str, default: &str| {
@@ -422,7 +456,7 @@ mod tests {
         let fields = [client_signature_field()];
 
         let manifest =
-            build_signature_manifest(Uuid::now_v7(), &fields, &ctx, Some(&client), true, "")
+            build_signature_manifest(Uuid::now_v7(), &fields, &ctx, Some(&client), true, "", "")
                 .expect("client identity resolves from answers");
 
         let recipient = manifest
@@ -444,7 +478,7 @@ mod tests {
         let fields = [client_signature_field()];
 
         let manifest =
-            build_signature_manifest(Uuid::now_v7(), &fields, &ctx, Some(&client), true, "")
+            build_signature_manifest(Uuid::now_v7(), &fields, &ctx, Some(&client), true, "", "")
                 .expect("client identity resolves from the Person row");
 
         let recipient = manifest
@@ -486,6 +520,7 @@ mod tests {
             &ctx,
             Some(&client),
             true,
+            "",
             three_party_template(),
         )
         .expect("every declared role is resolved");
@@ -530,6 +565,7 @@ mod tests {
             &ctx,
             Some(&client),
             true,
+            "",
             three_party_template(),
         )
         .expect("every declared role is resolved");
@@ -584,6 +620,7 @@ mod tests {
             &ctx,
             Some(&client),
             true,
+            "",
             three_party_template(),
         )
         .expect_err("confirming_assignor has no name or email");
@@ -625,9 +662,16 @@ mod tests {
         let client = person_named("Libra Prime", "libra@example.com");
         let fields = [employee_signature_field(), client_signature_field()];
 
-        let manifest =
-            build_signature_manifest(Uuid::now_v7(), &fields, &ctx, Some(&client), true, template)
-                .expect("every declared role resolves");
+        let manifest = build_signature_manifest(
+            Uuid::now_v7(),
+            &fields,
+            &ctx,
+            Some(&client),
+            true,
+            "",
+            template,
+        )
+        .expect("every declared role resolves");
 
         let roles: Vec<&str> = manifest
             .recipients
@@ -661,7 +705,7 @@ mod tests {
         let fields = [client_signature_field(), firm_signature_field()];
 
         let manifest =
-            build_signature_manifest(Uuid::now_v7(), &fields, &ctx, Some(&client), false, "")
+            build_signature_manifest(Uuid::now_v7(), &fields, &ctx, Some(&client), false, "", "")
                 .expect("the default set resolves");
 
         let client_recipient = manifest

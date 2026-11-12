@@ -26,7 +26,7 @@ Feature: Declared signers drive a non-retainer envelope
       | None proposed. |
       | State statutory benefits and leave only. |
       | Contingent on work authorization and a lawful background check. |
-      | contacts:Rex Vice;rex@aurora.example |
+      | contacts:Rex Vice;rex@aurora.example;Vice President;1 Main Street;Reno;NV;89501;US |
     And the attorney approves and sends the document
     Then the matter has a signature request
     And the envelope routes the company before the employee
