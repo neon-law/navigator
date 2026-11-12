@@ -51,9 +51,9 @@ wrong, the editor underlines it — the same way a word processor underlines a m
 You say what a file is by **declaring it**: a `kind:` key names the file's kind outright, and that declaration is the
 *only* classifier — the system never guesses the kind from a file's structure or its path. Its value is one of a small,
 fixed vocabulary. Most values name notation-template kinds — `letter`, `filing`, `will`, `trust`, `directive`,
-`agreement`, `pleading`, `onboarding`, `offboarding`, `memo` — some name content pages — `post`, `workshop` — and one,
-`github`, names the engineering intake notations. Anything else is a blocking error (`S103`), including a matter page
-kind: a matter page is a `pages:` entry in a Project's `navigator.yaml` (see [the
+`agreement`, `pleading`, `declaration`, `onboarding`, `offboarding`, `memo` — some name content pages — `post`,
+`workshop` — and one, `github`, names the engineering intake notations. Anything else is a blocking error (`S103`),
+including a matter page kind: a matter page is a `pages:` entry in a Project's `navigator.yaml` (see [the
 gate](gate.md#declaring-a-matter-page)), never a Markdown file. The vocabulary grows as the firm's practice areas do.
 
 A file that declares no `kind:` is ordinary prose, held only to general writing rules. Because classification is
@@ -62,10 +62,10 @@ declaration-only, a file that carries notation *structure* — a `questionnaire:
 kind and the keys it must carry:
 
 - **Notation template** — one of the notation kinds (`letter`, `filing`, `will`, `trust`, `directive`, `agreement`,
-  `pleading`, `onboarding`, `offboarding`, `memo`). A complete one carries **both** the `questionnaire:` and `workflow:`
-  machines plus `title`, `code`, `respondent_type`, `jurisdiction`, and `confidential`, and the missing ones are
-  flagged. Lives under `templates/notations/forms/` or `templates/notations/neon_law/`; a `templates/` file with no
-  `kind:` is just prose until it declares one.
+  `pleading`, `declaration`, `onboarding`, `offboarding`, `memo`). A complete one carries **both** the `questionnaire:`
+  and `workflow:` machines plus `title`, `code`, `respondent_type`, `jurisdiction`, and `confidential`, and the missing
+  ones are flagged. Lives under `templates/notations/forms/` or `templates/notations/neon_law/`; a `templates/` file
+  with no `kind:` is just prose until it declares one.
 - **Blog post** — `kind: post`. Posts are no longer Markdown files in Git: they are rows in the `blog_post` table,
   seeded from `store/seeds/neon/Post.yaml`. The rules below still check any `kind: post` file you write.
 - **Workshop page** — `kind: workshop`. Lives under `server/content/workshops/`. Needs `title` and `description`.
@@ -223,9 +223,9 @@ full list of structural checks, is covered in <notation-authoring.md>.
 A notation template may carry an optional **`output`** key. It is the one place a template *overrides* its render
 profile — what comes out and how it is dressed. Left off, the profile is derived from the template's `kind:`
 (`Kind::default_output`): `letter`, `onboarding`, `offboarding`, and `memo` default to letterhead; `filing` defaults to
-`form`; `pleading` defaults to court paper; `agreement` defaults to `contract`; `will`, `trust`, and `directive` default
-to plain. `output:` exists for the templates whose default is wrong for them, such as a `letter` sent in the client's
-own name (`output: client_letter`).
+`form`; `pleading` defaults to court paper; `agreement` defaults to `contract`; `declaration` defaults to the
+letterhead-less `client_letter` frame; `will`, `trust`, and `directive` default to plain. `output:` exists for the
+templates whose default is wrong for them, such as a `letter` sent in the client's own name (`output: client_letter`).
 
 - **omit it** and the document renders on its kind's default profile — plain is our standard serif, one-inch margins,
   no letterhead. The body's `{{placeholders}}` fill from the questionnaire answers.
@@ -235,7 +235,10 @@ own name (`output: client_letter`).
   documents that go out under the firm's name, such as engagement letters and demand letters. It is typeset airily, for
   a document someone reads once before deciding to sign it.
 - **`output: client_letter`** is the `letter` frame with the letterhead left out, for a letter the client sends in their
-  own name. Declare it on a `kind: letter` template; without it a letter always gets the firm letterhead.
+  own name. Declare it on a `kind: letter` template; without it a letter always gets the firm letterhead. A `kind:
+  declaration` template needs no `output:` at all — a declaration is the party's own document (a signed statement they
+  give in their own name, LAW-340), so it derives this same letterhead-less frame by default and never carries the
+  firm's name, contact line, or any other brand mark.
 - **`output: contract`** (retired spelling `agreement`) frames an executed contract with **no letterhead**, typeset
   curtly: narrower margins, closer leading, headings at body size, and no table ever split across a page break so a
   signature block stays whole. Reach for it when the document is navigated by section number rather than read straight
@@ -306,7 +309,7 @@ what each code actually checks, its severity, and whether it autofixes, see the 
 
 | Key | Required | Values | Checked by |
 | --- | --- | --- | --- |
-| `kind` | yes | a notation kind (`letter` … `memo`, the ten listed above) | S103, S104 |
+| `kind` | yes | a notation kind (`letter` … `memo`, the eleven listed above) | S103, S104 |
 | `title` | yes | any non-empty text | N101 |
 | Filename stem | yes | unique `snake_case`; supplies the template code | N108 |
 | `respondent_type` | yes | `person`, `entity`, `person_and_entity` | N102 |
