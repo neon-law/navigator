@@ -1801,8 +1801,8 @@ async fn run_inner(action: MailAction) -> Result<()> {
             )
             .await?;
             println!(
-                "Mail job drafted unsent to {} with {} attachment(s); review and send it from Gmail Drafts (account {}). Gmail API draft ID: {}.",
-                job.vendor, saved.attachments, saved.account, saved.id
+                "Mail job drafted unsent to {} with {} attachment(s); review and send it from Gmail Drafts. Gmail API draft ID: {}.",
+                job.vendor, saved.attachments, saved.id
             );
             let logged = cli::projects::communication::create_row(
                 host.as_deref(),
