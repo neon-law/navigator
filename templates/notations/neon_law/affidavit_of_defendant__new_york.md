@@ -5,7 +5,8 @@ respondent_type: person
 jurisdiction: NY
 confidential: true
 signers:
-  - spouse
+  - role: spouse
+    delivery: emailed
 prompts:
   index_number: What index number has the clerk assigned?
   served_on: On what date was the defendant served?

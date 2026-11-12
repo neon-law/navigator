@@ -5,8 +5,9 @@ respondent_type: person
 jurisdiction: NY
 confidential: true
 signers:
-  - client
-  - spouse
+  - role: client
+  - role: spouse
+    delivery: emailed
 clauses:
   property:
     source: divorce_property_division@1

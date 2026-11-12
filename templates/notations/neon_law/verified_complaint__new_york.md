@@ -1,6 +1,8 @@
 ---
 kind: pleading
 title: Verified Complaint
+caption_title: VERIFIED COMPLAINT
+footer_title: VERIFIED COMPLAINT
 respondent_type: person
 jurisdiction: NY
 confidential: true

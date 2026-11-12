@@ -554,16 +554,46 @@ fn every_shipped_pleading_renders_against_a_fixture_matter() {
         let template = work.path().join("templates").join(&name);
         fs::copy(&source, &template).unwrap();
         let text = fs::read_to_string(&source).unwrap();
+        // A state may be declared as a bare key (`custom_x__y:`) or inline
+        // with its transition map (`custom_x__y: { _: END }`); collect the
+        // distinct codes either way. A code the harness cannot answer is a
+        // template that fails the final render loudly rather than silently.
+        let question_codes = |prefix: &str| -> Vec<String> {
+            let mut found = std::collections::HashSet::new();
+            for line in text.lines() {
+                let Some(rest) = line.trim().strip_prefix(prefix) else {
+                    continue;
+                };
+                let end = rest
+                    .find(|c: char| c == ':' || c == '{' || c.is_whitespace())
+                    .unwrap_or(rest.len());
+                found.insert(format!("{prefix}{}", &rest[..end]));
+            }
+            let mut codes: Vec<String> = found.into_iter().collect();
+            codes.sort();
+            codes
+        };
         let mut args = vec![
             "--answer".to_string(),
             "person__client=SAMPLE SYNTHETIC HOLDINGS".to_string(),
         ];
-        for key in text
-            .lines()
-            .filter_map(|line| line.trim().strip_suffix(':'))
-            .filter(|key| key.starts_with("custom_datetime__"))
-        {
+        for key in question_codes("custom_datetime__") {
             args.extend(["--answer".to_string(), format!("{key}=1 July 2026")]);
+        }
+        for key in question_codes("custom_text__") {
+            args.extend([
+                "--answer".to_string(),
+                format!("{key}=SAMPLE SYNTHETIC TEXT"),
+            ]);
+        }
+        for key in question_codes("custom_yes_no__") {
+            args.extend(["--answer".to_string(), format!("{key}=No")]);
+        }
+        for key in question_codes("person__") {
+            args.extend([
+                "--answer".to_string(),
+                format!("{key}.name=SAMPLE SYNTHETIC NAME"),
+            ]);
         }
         let out = work.path().join("out.pdf");
         let result = Command::new(cargo_bin("navigator-deploy"))
