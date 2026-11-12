@@ -84,7 +84,7 @@ jobs:
       - name: Diagnose
         if: failure()
         run: |
-          kubectl --context kind-forgejo-smoke -n navigator get pods,jobs,pvc -o wide || true
+          kubectl --context kind-forgejo-smoke -n navigator get pods,jobs,pvc,service,endpointslice,networkpolicy -o wide || true
           for pod in navigator-forgejo-0 navigator-postgres-0; do
             kubectl --context kind-forgejo-smoke -n navigator describe pod "$pod" | tail -30 || true
             kubectl --context kind-forgejo-smoke -n navigator logs "$pod" --all-containers --tail=80 || true

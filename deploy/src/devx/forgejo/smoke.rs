@@ -47,12 +47,13 @@ use super::oidc::{self, Outcome};
 use super::{
     actions_context, assert_analyzed_push_receipt, forwarded_port, http_probe_script,
     parse_push_receipt_row, port_forward_args, random_hex, receipt_is_terminal,
-    receiver_service_manifest, receiver_service_url, receiver_start_script,
-    service_probe_failure_message, CookieJar, PushReceiptRow, Seed, ADMISSION_CONFIG_MAP,
-    ALLOWED_IDENTITY, ALLOWLIST_KEY, BOT_PUSH_WORKFLOW, DATA_CLAIM, DENIED_IDENTITIES,
-    GATE_WORKFLOW, POD, POSTGRES_POD, PUBLISH_WORKFLOW, RECEIVER_BINARY, RECEIVER_CONFIG,
-    RECEIVER_FORGE_URL, RECEIVER_LOG, RECEIVER_NAMESPACE, RECEIVER_PID, RECEIVER_PORT,
-    RECEIVER_SERVICE, SEED_SECRET, SERVICE_PROBE_DEADLINE, SMOKE_ALLOWLIST, STATEFULSET,
+    receiver_network_policy_manifest, receiver_service_manifest, receiver_service_url,
+    receiver_start_script, service_probe_failure_message, CookieJar, PushReceiptRow, Seed,
+    ADMISSION_CONFIG_MAP, ALLOWED_IDENTITY, ALLOWLIST_KEY, BOT_PUSH_WORKFLOW, DATA_CLAIM,
+    DENIED_IDENTITIES, GATE_WORKFLOW, POD, POSTGRES_POD, PUBLISH_WORKFLOW, RECEIVER_BINARY,
+    RECEIVER_CONFIG, RECEIVER_FORGE_URL, RECEIVER_LOG, RECEIVER_NAMESPACE, RECEIVER_PID,
+    RECEIVER_PORT, RECEIVER_SERVICE, SEED_SECRET, SERVICE_PROBE_DEADLINE, SMOKE_ALLOWLIST,
+    STATEFULSET,
 };
 
 /// The allowed identity's Forgejo user name (`USERNAME = email` keeps the
@@ -1818,13 +1819,16 @@ async fn push_webhook_proof(
         }
     }
 
-    // The Endpoints pin the hosting pod's address — the same pod-to-pod
-    // path Forgejo's own database traffic rides. The ClusterIP is private,
-    // which the KIND app.ini's ALLOWED_HOST_LIST already permits.
+    // The EndpointSlice pins the hosting pod's address behind a stable
+    // ClusterIP — the same pod-to-pod path Forgejo's own database traffic
+    // rides. The ClusterIP is private, which the KIND app.ini's
+    // ALLOWED_HOST_LIST already permits.
     let pod_ip = kube
         .output(&["get", "pod", POSTGRES_POD, "-o", "jsonpath={.status.podIP}"])?
         .trim()
         .to_owned();
+    kube.apply(&receiver_network_policy_manifest())
+        .context("open the receiver's port through the tier NetworkPolicy")?;
     let manifest = receiver_service_manifest(&pod_ip, RECEIVER_PORT);
     kube.apply(&manifest)
         .context("publish the receiver as an in-cluster Service")?;

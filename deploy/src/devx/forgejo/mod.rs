@@ -514,6 +514,21 @@ pub(super) fn receiver_service_url() -> String {
     format!("http://{RECEIVER_SERVICE}.{RECEIVER_NAMESPACE}.svc.cluster.local")
 }
 
+/// The receiver rides the postgres pod, whose tier `NetworkPolicy` admits
+/// only port 5432 from labeled clients and denies all egress — so every
+/// dial to the receiver's port, probe and webhook delivery alike, would
+/// be dropped as non-5432 ingress, and the receiver could not reach the
+/// Forgejo API its analysis reads. Policies are additive: this smoke-owned
+/// supplement unions onto the tier's and opens exactly the receiver's
+/// paths — ingress to its port from the namespace's pods (the Forgejo
+/// delivery and the Service probe), egress to Forgejo's API and DNS —
+/// without touching the tier manifest.
+pub(super) fn receiver_network_policy_manifest() -> String {
+    format!(
+        "apiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata:\n  name: {RECEIVER_SERVICE}\n  namespace: {RECEIVER_NAMESPACE}\nspec:\n  podSelector:\n    matchLabels:\n      app: navigator-postgres\n  policyTypes:\n  - Ingress\n  - Egress\n  ingress:\n  - from:\n    - podSelector: {{}}\n    ports:\n    - protocol: TCP\n      port: {RECEIVER_PORT}\n  egress:\n  - to:\n    - podSelector:\n        matchLabels:\n          app: navigator-forgejo\n    ports:\n    - protocol: TCP\n      port: 3000\n  - to:\n    - namespaceSelector: {{}}\n    ports:\n    - protocol: UDP\n      port: 53\n    - protocol: TCP\n      port: 53\n"
+    )
+}
+
 /// The fixed port the in-pod receiver serves on: the pod's network
 /// namespace is private, so a fixed port never collides.
 pub(super) const RECEIVER_PORT: u16 = 41080;
@@ -688,6 +703,21 @@ mod tests {
             receiver_service_url(),
             "http://forgejo-receiver.navigator.svc.cluster.local"
         );
+    }
+
+    #[test]
+    fn the_receiver_policy_opens_exactly_the_receiver_paths() {
+        let manifest = receiver_network_policy_manifest();
+        assert!(manifest.contains("name: forgejo-receiver"), "{manifest}");
+        assert!(manifest.contains("namespace: navigator"), "{manifest}");
+        // Ingress only to the receiver's port, from the namespace's pods.
+        assert!(manifest.contains("port: 41080"), "{manifest}");
+        assert!(manifest.contains("- podSelector: {}"), "{manifest}");
+        // Egress only to Forgejo's API and DNS.
+        assert!(manifest.contains("app: navigator-forgejo"), "{manifest}");
+        assert!(manifest.contains("port: 3000"), "{manifest}");
+        assert!(manifest.contains("namespaceSelector: {}"), "{manifest}");
+        assert!(manifest.contains("port: 53"), "{manifest}");
     }
 
     #[test]
