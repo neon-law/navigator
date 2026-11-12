@@ -397,10 +397,27 @@ other extension is refused. PDF rendering converts the Markdown body to Typst. W
 native heading styles, US Letter geometry, and page fields; a notation whose frame is `letter` receives the same firm
 identity as its PDF plus separate first-page and running headers. A `pleading` gets the same court-paper calibration in
 both formats: under `jurisdiction: CA` or `NV`, a 28-line numbered rail on a 24pt line pitch with line 1 an inch down
-the page, the footer's page number and paper title, and the first-page caption described under [Pleading
-paper](#pleading-paper). Both commands validate the file against the same rule set as `navigator project gate`, fill
-placeholders through the same notation evaluator, and produce byte-identical output when the source revision and answers
-are unchanged.
+the page (under `WA`, a 23pt pitch; see [Pleading paper](#pleading-paper)), the footer's page number and paper title,
+and the first-page caption described under [Pleading paper](#pleading-paper). Both commands validate the file against
+the same rule set as `navigator project gate`, fill placeholders through the same notation evaluator, and produce
+byte-identical output when the source revision and answers are unchanged.
+
+**The Firm's legal name and office fill from the Brand.** `{{firm.legal_name}}` prints the legal name of the Firm behind
+the Project's Brand. `{{firm.office.address}}`, `{{firm.office.phone}}`, and `{{firm.office.email}}` print the office
+that Brand publishes in the template's `jurisdiction:` — the Washington office for `jurisdiction: WA`. A jurisdiction
+with no office takes the Firm's one default office (`default: true` on a published office; Nevada for this Firm), and
+the render says on stderr which office it used, so a fallback is never silent. A pleading's `matter.counsel` takes the
+same office's firm, address, telephone, and email for any of them it leaves out, so a counsel block names only the
+lawyer: `name`, `bar_jurisdiction`, `bar_number`, and `appears_for`. A declared address in another state than the
+pleading's `jurisdiction:` is a `Y019` warning.
+
+**Signature anchors render as signing lines.** `notation pdf` and `notation word` draw each `{{<signer>.signature}}`,
+`{{<signer>.initials}}`, and `{{<signer>.date}}` as a rule with a caption ("Signature", "Initials", "Date signed") and
+the e-signature provider's anchor (`nlsig-client-signature-1`) printed invisibly on it, in a preview and a final render
+alike — the same anchors the portal's retainer render places, so a DocuSign envelope's tabs land on the rule. A party's
+declaration for an opening filing renders this way on court paper (`kind: declaration`, `output: pleading`) before the
+clerk assigns a case number; see the [synthetic Washington
+declaration](../cli/tests/fixtures/synthetic_washington_matter/templates/declaration.md).
 
 **Redlining a revision — `--redline-against`.** When a notation has been delivered before and the template (or its
 answers) have since changed, `navigator-deploy notation word <template.md> --out <new.docx> --redline-against
@@ -473,16 +490,29 @@ matter:
 ```
 
 Dates are `YYYY-MM-DD` and print as a court writes them (`February 2, 2026`); `trial_on` is optional and prints "None
-set". The counsel block prints the name with an `Esq.` suffix, then the bar number on its own line (`SBN` for
-California, `<jurisdiction> Bar No.` elsewhere), firm, address lines, telephone, email, and "Attorney for …", from line
+set". `judicial_officer`, `department`, and `filed_on` are optional: a court that assigns no judge or department prints
+no line for it, and a blank `filed_on` drops the action-filed and trial lines. The counsel block prints the name with
+an `Esq.` suffix, then the bar number on its own line (`SBN` for California, `<jurisdiction> Bar No.` elsewhere),
+firm, address lines, telephone, email, and "Attorney for …", from line
 1 (one inch down) in the left 58% of the page. Names print as written; nothing is capitalized on their behalf. When no
 lawyer has appeared, set `pro_per: true`: the bar fields are not required, the block opens with the bare name, and the
 last line reads "…, in pro per". The court prints centred from line 8 (at or below 3⅓ inches), per CRC 2.111; the right
 of the counsel block stays clear for the clerk through line 7. Parties print in the caption's left cell, each role once
 with `v.` between sides; the right cell runs case number, department, judge, the filing's title, any hearing, then the
 action-filed and trial dates. Counsel and caption lines are single-spaced, then padded to whole grid lines so the body
-after them starts on a numbered line. `navigator project gate` refuses an incomplete `matter:` (`Y019`), naming each
+after them starts on a numbered line. `navigator project gate` warns on an incomplete `matter:` (`Y019`), naming each
 missing field as `matter.<path>`, and `notation pdf` and `notation word` refuse the same way.
+
+**Washington paper.** A template with `jurisdiction: WA` renders GR 14 court paper: letter size, 28 numbered lines on a
+23pt grid, 1in at the bottom and both sides of every page, and the first page's top seven lines left blank so the
+court's title sits below 3in. Counsel prints in the footer of every page — the title and "Page N of M" on the left, the
+firm, address, telephone, and email on the right — and the signature block in the body, rather than above the court's
+title. The right cell reads `No.` and the title; department and judge lines print only when the court assigned them, and
+no action-filed or trial dates print. Two `matter:` keys shape the caption: `in_re: the Marriage of` captions the case
+"In re the Marriage of:" with each side introduced by its role ("Petitioner:", "And Respondent:"), and `page_count:
+true` prints the total page count at the top left of page 1 for a Clerk whose local rule asks for it. Before the clerk
+assigns a case number, leave `case_number` out: every style prints a blank `No. __________` line. See the [synthetic
+Washington matter](../cli/tests/fixtures/synthetic_washington_matter/navigator.yaml).
 
 **The filing** is what differs per notation, in its frontmatter: `caption_title` (the full title in the right cell) and
 `footer_title` (the short title the footer prints) are required; `hearing_date` (`YYYY-MM-DD`), `hearing_time`, and

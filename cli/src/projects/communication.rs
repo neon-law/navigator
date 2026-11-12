@@ -170,25 +170,40 @@ pub async fn create(
 ) -> ExitCode {
     finish(
         async {
-            let body = create_body(&new)?;
             if dry_run {
+                let body = create_body(&new)?;
                 eprintln!(
                     "dry run: `navigator project communication create` would send this and write nothing"
                 );
                 return Ok(body);
             }
-            let (base, token, id) = coordinates(host, project).await?;
-            call(
-                reqwest::Client::new()
-                    .post(format!("{base}/app/api/projects/{id}/communications"))
-                    .bearer_auth(token)
-                    .json(&body),
-                "create",
-            )
-            .await
+            create_row(host, project, &new).await
         }
         .await,
     )
+}
+
+/// Log `new` on the Project and return the stored Communication.
+///
+/// # Errors
+///
+/// When the body file cannot be read, the Project cannot be resolved, or
+/// the server refuses the row.
+pub async fn create_row(
+    host: Option<&str>,
+    project: Option<&str>,
+    new: &NewCommunication,
+) -> Result<Value> {
+    let body = create_body(new)?;
+    let (base, token, id) = coordinates(host, project).await?;
+    call(
+        reqwest::Client::new()
+            .post(format!("{base}/app/api/projects/{id}/communications"))
+            .bearer_auth(token)
+            .json(&body),
+        "create",
+    )
+    .await
 }
 
 /// What `navigator project communication note` logs (LAW-230).

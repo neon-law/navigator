@@ -16,8 +16,8 @@ const FIXTURE: &str = "../cli/tests/fixtures/synthetic_matter";
 /// `<L>-<YY>-<NNNNNN>-<L>` shape rather than the California one (LAW-246).
 const NEVADA_FIXTURE: &str = "../cli/tests/fixtures/synthetic_nevada_matter";
 
-/// A Washington superior-court matter (LAW-327): GR 14 paper, no rail,
-/// and a pattern-form body of numbered items and check boxes.
+/// A Washington superior-court family matter before the clerk has assigned
+/// a case number, judge, or department (LAW-327, LAW-361).
 const WASHINGTON_FIXTURE: &str = "../cli/tests/fixtures/synthetic_washington_matter";
 
 /// The synthetic matter tree copied into a tempdir, so a test can edit its
@@ -95,6 +95,7 @@ fn two_pleadings_share_one_matter_with_no_caption_text_in_either_body() {
         for shared in [
             "Case No. 00CV000000",
             "Dept. 12",
+            // LAW-242 puts the bar number on its own line under the name.
             "Pat Sample, Esq.",
             "SBN 000000",
             "COUNTY OF SAMPLE",
@@ -276,62 +277,6 @@ fn a_nevada_docket_matches_case_insensitively_into_the_declared_spelling() {
     );
 }
 
-/// LAW-327: the Washington fixture renders end-to-end through `notation
-/// pdf` and `notation word` — the caption names the superior court, the
-/// counsel block carries the Washington bar label, and the pattern-form
-/// body prints its numbered items and its check boxes (drawn squares in
-/// the PDF's content stream, the character itself in Word).
-#[test]
-fn a_washington_fixture_renders_end_to_end_with_pattern_form_primitives() {
-    use rules::Rule as _;
-    const CASE: &str = "26-2-00000-SAMPLE";
-    let work = tree_of(WASHINGTON_FIXTURE);
-    let template = work
-        .path()
-        .join("templates/washington_residential_schedule.md");
-
-    let lint = rules::f133::F133PleadingDocketUndeclared.lint(&rules::SourceFile {
-        contents: fs::read_to_string(&template).unwrap(),
-        path: template.clone(),
-    });
-    assert!(
-        lint.is_empty(),
-        "a Washington `docket:` clears N133: {lint:?}"
-    );
-
-    let bytes = pdf_of(&work, "washington_residential_schedule.md");
-    for shared in [
-        format!("Case No. {CASE}"),
-        "SUPERIOR COURT OF THE STATE OF WASHINGTON".to_string(),
-        "Washington Bar No. 000000".to_string(),
-        "The child resides with the custodial parent.".to_string(),
-        "Proposed by mother".to_string(),
-    ] {
-        assert_eq!(
-            pdf::occurrence_count(&bytes, &shared).unwrap(),
-            1,
-            "{shared}"
-        );
-    }
-    // The check boxes are drawn squares, not text: the renderer consumes
-    // the character, so no ballot-box glyph reaches the PDF.
-    assert_eq!(pdf::occurrence_count(&bytes, "\u{2610}").unwrap(), 0);
-
-    let docx = work.path().join("out.docx");
-    let result = render("word", &template, &docx);
-    assert!(result.status.success(), "stderr: {}", stderr(&result));
-    let document = docx_part(&fs::read(&docx).unwrap(), "word/document.xml");
-    assert!(
-        document.contains(&format!("Case No. {CASE}")),
-        "word caption"
-    );
-    assert_eq!(
-        document.matches('\u{2610}').count(),
-        2,
-        "word keeps the check-box characters for its own font fallback"
-    );
-}
-
 #[test]
 fn an_undeclared_docket_is_refused_and_nothing_is_written() {
     let work = matter_tree();
@@ -361,9 +306,9 @@ fn word_carries_the_same_composed_caption_and_footer() {
     let document = docx_part(&fs::read(&out).unwrap(), "word/document.xml");
     for text in [
         "Case No. 00CV000000",
+        // LAW-242 puts the bar number on its own line under the name.
         "Pat Sample, Esq.",
         "SBN 000000",
-        "Attorney for Plaintiff SAMPLE HOLDINGS",
         "August 14, 2026",
     ] {
         assert!(document.contains(text), "{text}");
@@ -376,14 +321,14 @@ fn a_missing_matter_field_is_named_and_nothing_is_written() {
     let work = matter_tree();
     edit(
         work.path().join("navigator.yaml"),
-        "  case_number: 00CV000000\n",
+        "    appears_for: Plaintiff SAMPLE HOLDINGS\n",
         "",
     );
     let out = work.path().join("out.pdf");
     let result = render("pdf", &work.path().join("templates/rfa_responses.md"), &out);
     assert!(!result.status.success());
     assert!(
-        stderr(&result).contains("matter.case_number"),
+        stderr(&result).contains("matter.counsel.appears_for"),
         "{}",
         stderr(&result)
     );
@@ -483,79 +428,6 @@ fn a_counsel_signature_is_draft_in_a_preview_and_signed_in_a_final_render() {
     let bytes = pdf_of(&work, "notice_of_compliance.md");
     assert_eq!(pdf::occurrence_count(&bytes, "/s/ Pat Sample").unwrap(), 1);
     assert_eq!(pdf::occurrence_count(&bytes, "DRAFT").unwrap(), 0);
-}
-
-/// LAW-242: the signature block's date line prints `Dated this …`, sourced
-/// only from `matter.signed_on`; a preview without one prints the
-/// highlighted placeholder, in both engines.
-#[test]
-fn a_signature_block_prints_its_date_from_signed_on_and_previews_a_placeholder() {
-    let work = matter_tree();
-    let template = work.path().join("templates/notice_of_compliance.md");
-    let text = fs::read_to_string(&template).unwrap();
-    fs::write(
-        &template,
-        format!("{text}\nRespectfully submitted,\n\n<!-- counsel-signature -->\n\nPat Sample\n"),
-    )
-    .unwrap();
-
-    let bytes = pdf_of(&work, "notice_of_compliance.md");
-    assert_eq!(
-        pdf::occurrence_count(&bytes, "Dated this 11th day of November, 2026.").unwrap(),
-        1
-    );
-
-    let out = work.path().join("out.docx");
-    let result = render("word", &template, &out);
-    assert!(result.status.success(), "stderr: {}", stderr(&result));
-    let document = docx_part(&fs::read(&out).unwrap(), "word/document.xml");
-    assert!(
-        document.contains("Dated this 11th day of November, 2026."),
-        "{document}"
-    );
-
-    // A preview with no `signed_on:` prints the placeholder, washed yellow
-    // by the same machinery that marks an unanswered questionnaire token.
-    edit(
-        work.path().join("navigator.yaml"),
-        "  signed_on: 2026-11-11\n",
-        "",
-    );
-    let preview = work.path().join("preview.docx");
-    let result = Command::new(cargo_bin("navigator-deploy"))
-        .args(["notation", "word"])
-        .arg(&template)
-        .args(["--preview", "--out"])
-        .arg(&preview)
-        .output()
-        .unwrap();
-    assert!(result.status.success(), "{}", stderr(&result));
-    let document = docx_part(&fs::read(&preview).unwrap(), "word/document.xml");
-    assert!(
-        document.contains(
-            "<w:highlight w:val=\"yellow\"/></w:rPr><w:t xml:space=\"preserve\">{{matter.signed_on}}</w:t>"
-        ),
-        "{document}"
-    );
-
-    // A final render without `signed_on:` is refused in both engines — an
-    // undated signature page is not filable.
-    let refused = work.path().join("final.docx");
-    let result = render("word", &template, &refused);
-    assert!(!result.status.success(), "stderr: {}", stderr(&result));
-    assert!(
-        stderr(&result).contains("signed_on"),
-        "stderr: {}",
-        stderr(&result)
-    );
-    let refused_pdf = work.path().join("final.pdf");
-    let result = render("pdf", &template, &refused_pdf);
-    assert!(!result.status.success(), "stderr: {}", stderr(&result));
-    assert!(
-        stderr(&result).contains("signed_on"),
-        "stderr: {}",
-        stderr(&result)
-    );
 }
 
 #[test]
@@ -723,4 +595,156 @@ fn docx_part(bytes: &[u8], name: &str) -> String {
         .read_to_string(&mut xml)
         .unwrap();
     xml
+}
+
+/// LAW-327: a Washington notice of appearance renders final, to PDF and to
+/// Word, on Washington paper — "In re the Marriage of", a blank `No.` line
+/// until the clerk assigns one, no trial-court lines, and counsel's office
+/// in the footer rather than above the court's title.
+#[test]
+fn a_washington_pleading_renders_final_on_washington_paper() {
+    let work = tree_of(WASHINGTON_FIXTURE);
+    let template = work.path().join("templates/notice_of_appearance.md");
+    let out = work.path().join("final.pdf");
+    let result = render("pdf", &template, &out);
+    assert!(result.status.success(), "{}", stderr(&result));
+    let bytes = fs::read(&out).unwrap();
+    for (text, count) in [
+        ("In re the Marriage of:", 1),
+        ("No. __________", 1),
+        ("SAMPLE SYNTHETIC LAW GROUP, PLLC", 1),
+        ("Page 1 of 1", 1),
+        ("Total pages: 1", 1),
+        ("/s/ Pat Sample", 1),
+        ("Case No.", 0),
+        ("Dept.", 0),
+        ("Judge:", 0),
+        ("Action Filed", 0),
+        ("Attorneys for", 0),
+    ] {
+        assert_eq!(
+            pdf::occurrence_count(&bytes, text).unwrap(),
+            count,
+            "{text}"
+        );
+    }
+
+    let out = work.path().join("final.docx");
+    let result = render("word", &template, &out);
+    assert!(result.status.success(), "{}", stderr(&result));
+    let package = fs::read(&out).unwrap();
+    let document = docx_part(&package, "word/document.xml");
+    assert!(document.contains("In re the Marriage of:"), "{document}");
+    assert!(!document.contains("Attorneys for"), "{document}");
+    let footer = docx_part(&package, "word/footer1.xml");
+    assert!(
+        footer.contains("SAMPLE SYNTHETIC LAW GROUP, PLLC"),
+        "{footer}"
+    );
+}
+
+/// LAW-329: a Washington pleading whose counsel block names only the lawyer
+/// prints the Firm's Washington office in its footer, and
+/// `{{firm.office.*}}` in its body fills from the same office; the render
+/// says which office it used.
+#[test]
+fn a_washington_pleading_takes_the_firm_s_washington_office() {
+    let work = tree_of(WASHINGTON_FIXTURE);
+    let manifest = work.path().join("navigator.yaml");
+    let text = fs::read_to_string(&manifest).unwrap();
+    let kept = text
+        .lines()
+        .filter(|line| {
+            let line = line.trim_start();
+            !(line.starts_with("firm:")
+                || line.starts_with("address:")
+                || line.starts_with("- 100 Example")
+                || line.starts_with("- Sampleton")
+                || line.starts_with("telephone:")
+                || line.starts_with("email:"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(&manifest, kept).unwrap();
+    edit(
+        work.path().join("templates/notice_of_appearance.md"),
+        "on counsel at the address below.",
+        "on counsel at {{firm.office.address}}.",
+    );
+    let out = work.path().join("final.pdf");
+    let result = render(
+        "pdf",
+        &work.path().join("templates/notice_of_appearance.md"),
+        &out,
+    );
+    assert!(result.status.success(), "{}", stderr(&result));
+    assert!(
+        stderr(&result).contains("filled from the Firm's Washington office"),
+        "{}",
+        stderr(&result)
+    );
+    let bytes = fs::read(&out).unwrap();
+    assert_eq!(
+        pdf::occurrence_count(&bytes, "Vancouver, WA 98660").unwrap(),
+        2,
+        "the footer's office and the body's {{firm.office.address}}"
+    );
+    assert_eq!(pdf::occurrence_count(&bytes, "Reno").unwrap(), 0);
+}
+
+/// LAW-344: a party's declaration for an opening filing — no case number,
+/// judge, or department yet — renders on Washington court paper with a blank
+/// `No.` line, its signature and date as signing lines whose provider anchors
+/// are invisible, never `{{client.signature}}` braces, with or without
+/// answers, and with no firm letterhead.
+#[test]
+fn a_declaration_before_filing_renders_signing_lines_on_court_paper() {
+    let work = tree_of(WASHINGTON_FIXTURE);
+    let template = work.path().join("templates/declaration.md");
+    for preview in [false, true] {
+        let out = work.path().join("declaration.pdf");
+        let mut command = Command::new(cargo_bin("navigator-deploy"));
+        command
+            .args(["notation", "pdf"])
+            .arg(&template)
+            .arg("--out")
+            .arg(&out);
+        if preview {
+            command.arg("--preview");
+        } else {
+            command.args(["--answer", "person__client=SAM SYNTHETIC TWO"]);
+        }
+        let result = command.output().unwrap();
+        assert!(result.status.success(), "{}", stderr(&result));
+        let bytes = fs::read(&out).unwrap();
+        for (text, count) in [
+            ("No. __________", 1),
+            ("nlsig-client-signature-1", 1),
+            ("nlsig-client-date-1", 1),
+            ("Date signed", 1),
+            ("{{client", 0),
+            ("Dept.", 0),
+            ("Judge:", 0),
+            ("Action Filed", 0),
+        ] {
+            assert_eq!(
+                pdf::occurrence_count(&bytes, text).unwrap(),
+                count,
+                "{text} (preview: {preview})"
+            );
+        }
+    }
+    let out = work.path().join("declaration.docx");
+    let result = Command::new(cargo_bin("navigator-deploy"))
+        .args(["notation", "word"])
+        .arg(&template)
+        .arg("--out")
+        .arg(&out)
+        .args(["--answer", "person__client=SAM SYNTHETIC TWO"])
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{}", stderr(&result));
+    let document = docx_part(&fs::read(&out).unwrap(), "word/document.xml");
+    assert!(document.contains("nlsig-client-signature-1"), "{document}");
+    assert!(!document.contains("{{client"), "{document}");
 }

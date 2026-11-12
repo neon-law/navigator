@@ -845,6 +845,8 @@ mod tests {
             filed_on: "2026-02-02".into(),
             signed_on: None,
             trial_on: None,
+            in_re: String::new(),
+            page_count: false,
             parties: vec![
                 word::matter::Party {
                     name: "GAMMA LLC".into(),

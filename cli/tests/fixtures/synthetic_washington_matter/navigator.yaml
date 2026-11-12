@@ -1,34 +1,30 @@
 version: v26.10.6
 project:
   host: staging.neonlaw.com
-  name: sample-litigation
+  name: sample-washington-family
   lawyer_dri: pat@example.invalid
   client_dri: sam@example.invalid
   private_slack_channel: not provisioned
   private_notion_page: not provisioned
 matter:
   court:
-    - SUPERIOR COURT OF THE STATE OF WASHINGTON
-    - COUNTY OF SAMPLE
-  case_number: 26-2-00000-SAMPLE
-  judicial_officer: Hon. Sample Q. Jurist
-  department: "7"
-  filed_on: 2026-02-02
+    - SUPERIOR COURT OF WASHINGTON, COUNTY OF SAMPLE
+  in_re: the Marriage of
+  page_count: true
+  signed_on: 2026-11-12
   parties:
-    - name: SAMPLE SYNTHETIC PETITIONER
-      role: Plaintiff
-    - name: EXAMPLE FICTITIOUS RESPONDENT
-      role: Defendant
+    - name: PAT SYNTHETIC ONE
+      role: Petitioner
+    - name: SAM SYNTHETIC TWO
+      role: Respondent
   counsel:
     name: Pat Sample
     bar_jurisdiction: Washington
-    bar_number: "000000"
+    bar_number: "00000"
     firm: SAMPLE SYNTHETIC LAW GROUP, PLLC
     address:
-      - 100 Example Boulevard, Suite 200
-      - Sampleton, Washington 98000
+      - 100 Example Avenue, Suite 200
+      - Sampleton, Washington 99000
     telephone: (000) 555-0100
     email: pat@example.invalid
-    appears_for: Plaintiff SAMPLE SYNTHETIC PETITIONER
-dockets:
-  - 26-2-00000-SAMPLE
+    appears_for: Respondent SAM SYNTHETIC TWO

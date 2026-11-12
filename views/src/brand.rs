@@ -214,6 +214,44 @@ pub struct FirmOffice {
     /// address rather than sit in a legend somewhere else on the page.
     /// `None` publishes the address unqualified.
     pub note: Option<&'static str>,
+    /// The office a court paper or notation falls back to when the Firm has
+    /// none in the matter's jurisdiction. One per Firm.
+    pub default: bool,
+}
+
+impl FirmOffice {
+    /// The two-letter state code the address ends with (`WA` from
+    /// `…, Vancouver, WA 98660`), or `None` when it ends otherwise.
+    #[must_use]
+    pub fn state_code(&self) -> Option<&'static str> {
+        let code = self.address.rsplit(',').next()?.split_whitespace().next()?;
+        (code.len() == 2 && code.chars().all(|c| c.is_ascii_uppercase())).then_some(code)
+    }
+
+    /// The address as an envelope carries it, one line each: every comma
+    /// breaks the line except the one between the city and its state.
+    #[must_use]
+    pub fn address_lines(&self) -> Vec<String> {
+        let parts: Vec<&str> = self.address.split(',').map(str::trim).collect();
+        match parts.split_last() {
+            Some((last, rest)) if rest.len() > 1 => {
+                let (city, street) = rest.split_last().unwrap_or((&"", &[]));
+                let mut lines: Vec<String> =
+                    street.iter().map(|part| (*part).to_string()).collect();
+                lines.push(format!("{city}, {last}"));
+                lines
+            }
+            _ => vec![parts.join(", ")],
+        }
+    }
+}
+
+/// The office a notation for one jurisdiction is filled from, and whether
+/// it is the Firm's default standing in for an office it does not have.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OfficeChoice {
+    pub office: &'static FirmOffice,
+    pub fallback: bool,
 }
 
 /// The firm's published offices, rendered in the public footer.
@@ -247,21 +285,25 @@ const FIRM_OFFICES: &[FirmOffice] = &[
         state: "California",
         address: "1515 20th Street, Bakersfield, CA 93301",
         note: None,
+        default: false,
     },
     FirmOffice {
         state: "Nevada",
         address: "5150 Mae Anne Ave, Ste 405-9002, Reno, NV 89523",
         note: None,
+        default: true,
     },
     FirmOffice {
         state: "New York",
         address: "12 E 49th St, 18th Floor, New York, NY 10017",
         note: None,
+        default: false,
     },
     FirmOffice {
         state: "Washington",
         address: "1111 Main St, STE 201E, Vancouver, WA 98660",
         note: None,
+        default: false,
     },
 ];
 
@@ -1733,6 +1775,33 @@ pub fn display_phone(e164: &str) -> String {
 }
 
 impl Branding {
+    /// The office a notation for `jurisdiction` (a two-letter code) is
+    /// filled from: the Firm's office in that state, else its default
+    /// office, marked as a fallback so the caller can say so. `None` when
+    /// the Firm publishes no office at all.
+    #[must_use]
+    pub fn office_for(&self, jurisdiction: &str) -> Option<OfficeChoice> {
+        let code = jurisdiction.trim();
+        if let Some(office) = self
+            .firm_offices
+            .iter()
+            .find(|office| !code.is_empty() && office.state_code() == Some(code))
+        {
+            return Some(OfficeChoice {
+                office,
+                fallback: false,
+            });
+        }
+        self.firm_offices
+            .iter()
+            .find(|office| office.default)
+            .or_else(|| self.firm_offices.first())
+            .map(|office| OfficeChoice {
+                office,
+                fallback: true,
+            })
+    }
+
     /// The voice line this Brand publishes on this deployment: its
     /// [`NAVIGATOR_VOICE_NUMBERS`] entry when installed, else its compiled
     /// number.
@@ -1903,6 +1972,7 @@ impl Branding {
                             .note
                             .clone()
                             .map(|note| &*Box::leak(note.into_boxed_str())),
+                        default: entry.default,
                     })
                     .collect();
                 Box::leak(leaked.into_boxed_slice())
@@ -2260,6 +2330,35 @@ pub fn deployed_release() -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
+
+    /// LAW-329: a notation is filled from the Firm's office in its
+    /// jurisdiction; a jurisdiction with no office falls back to the one
+    /// default office, flagged so the fallback is never silent.
+    #[test]
+    fn a_jurisdiction_selects_its_office_and_falls_back_to_the_default() {
+        let wa = DEFAULT_BRANDING
+            .office_for("WA")
+            .expect("the firm has offices");
+        assert!(!wa.fallback);
+        assert_eq!(wa.office.state, "Washington");
+        assert_eq!(
+            wa.office.address_lines(),
+            ["1111 Main St", "STE 201E", "Vancouver, WA 98660"]
+        );
+        let tx = DEFAULT_BRANDING.office_for("TX").unwrap();
+        assert!(tx.fallback);
+        assert_eq!(tx.office.state, "Nevada");
+        assert!(DEFAULT_BRANDING.office_for("").unwrap().fallback);
+        assert_eq!(
+            DEFAULT_BRANDING
+                .firm_offices
+                .iter()
+                .filter(|office| office.default)
+                .count(),
+            1,
+            "one default office per Firm"
+        );
+    }
     use super::{scope, Branding, NavLink, DEFAULT_BRANDING, FIRM_BRAND};
     use crate::brand_bundle::BrandManifest;
 

@@ -106,19 +106,18 @@ pub fn to_typst(body: &str) -> String {
             Event::Html(html) | Event::InlineHtml(html) if word::paper::is_signer_box(&html) => {
                 out.push_str(SIGNER_BOX_TYPST);
             }
-            // A counsel signature: italic `/s/` and the name on a signature
-            // rule, `DRAFT` washed yellow until a final render names
-            // counsel. Alone on its line it is its own paragraph.
-            Event::Html(html) if word::paper::counsel_signature(&html).is_some() => {
-                if let Some(signature) = word::paper::counsel_signature(&html) {
+            // A signing line (LAW-344) or a counsel signature: alone on its
+            // line it is its own paragraph; inline it sits in the text.
+            Event::Html(html) if signature_marker_typst(&html, true).is_some() => {
+                if let Some(typst) = signature_marker_typst(&html, true) {
                     out.push_str("\n\n");
-                    out.push_str(&counsel_signature_typst(&signature));
+                    out.push_str(&typst);
                     out.push_str("\n\n");
                 }
             }
-            Event::InlineHtml(html) if word::paper::counsel_signature(&html).is_some() => {
-                if let Some(signature) = word::paper::counsel_signature(&html) {
-                    out.push_str(&counsel_signature_typst(&signature));
+            Event::InlineHtml(html) if signature_marker_typst(&html, false).is_some() => {
+                if let Some(typst) = signature_marker_typst(&html, false) {
+                    out.push_str(&typst);
                 }
             }
             // The one HTML token honored: a top-level `<!-- pagebreak -->`
@@ -414,6 +413,35 @@ pub fn bold_answer(value: &str) -> String {
 /// about an inch and a half, sized to the line it sits on.
 const SIGNER_BOX_TYPST: &str =
     "#box(width: 1.5in, height: 0.75em, stroke: (bottom: 0.5pt + black))";
+
+/// The Typst for a signature marker: a signer's signing line, a rule with
+/// the provider's anchor printed invisibly on it and, alone on its line, its
+/// caption under it; or a counsel signature, italic `/s/` and the name on a
+/// rule, `DRAFT` washed yellow until a final render names counsel. `None`
+/// for any other HTML.
+fn signature_marker_typst(html: &str, block: bool) -> Option<String> {
+    if let Some(line) = word::paper::signing_line(html) {
+        return Some(signing_line_typst(&line, block));
+    }
+    word::paper::counsel_signature(html).map(|signature| counsel_signature_typst(&signature))
+}
+
+/// A signing line: a rule holding the e-signature provider's anchor as
+/// white 4pt text, so the provider drops its field on the rule while a
+/// reader sees only the line; alone on its line, the caption follows.
+fn signing_line_typst(line: &word::paper::SigningLine, captioned: bool) -> String {
+    let rule = format!(
+        "#box(width: {}in, height: 1.4em, stroke: (bottom: 0.5pt + black))\
+         [#text(fill: white, size: 4pt)[{}]]",
+        line.width_inches(),
+        escape_text(&line.anchor)
+    );
+    if captioned {
+        format!("{rule} \\\n#text(size: 9pt)[{}]", line.label())
+    } else {
+        rule
+    }
+}
 
 /// A counsel signature line: italic `/s/` and the name in a three-and-a-half
 /// inch box whose bottom stroke is the signature rule. A draft's `DRAFT` is
@@ -794,6 +822,28 @@ mod tests {
         assert!(signed.contains("[#emph[\\/s\\/ Pat Sample]]"), "{signed}");
         assert!(!signed.contains("#highlight"), "{signed}");
         crate::render(&signed).expect("a signed signature compiles through Typst");
+    }
+
+    /// LAW-344: a signing line draws its rule with the anchor invisible on
+    /// it, never the `{{client.signature}}` braces, and compiles.
+    #[test]
+    fn a_signing_line_hides_its_anchor_on_a_rule_and_compiles() {
+        let marked = word::paper::mark_signing_lines(
+            "I declare the foregoing is true.\n\n{{client.signature}}\n\nDated: {{client.date}}\n",
+        );
+        let typst = to_typst(&marked);
+        assert!(
+            typst.contains("#text(fill: white, size: 4pt)[nlsig-client-signature-1]"),
+            "{typst}"
+        );
+        assert!(typst.contains("#text(size: 9pt)[Signature]"), "{typst}");
+        assert!(typst.contains("[nlsig-client-date-1]"), "{typst}");
+        assert!(!typst.contains("{{"), "{typst}");
+        let pdf = crate::render(&typst).expect("a signing line compiles");
+        assert_eq!(
+            crate::occurrence_count(&pdf, "nlsig-client-signature-1").unwrap(),
+            1
+        );
     }
 
     #[test]

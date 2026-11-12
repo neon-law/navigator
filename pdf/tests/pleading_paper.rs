@@ -345,6 +345,85 @@ fn text_stays_inside_the_pleading_margins() {
     }
 }
 
+/// LAW-327: Washington superior-court paper under GR 14. Letter size; the
+/// first page keeps at least 3in clear at the top (here, seven blank rail
+/// lines); every page keeps at least 1in at the bottom and both sides; 28
+/// numbered lines; the footer carries the title, "Page N of M", and
+/// counsel's office; and a clerk's page-count rule prints the total at the
+/// top left of page 1.
+#[test]
+fn washington_paper_keeps_gr_14_margins_and_carries_counsel_in_the_footer() {
+    let variant = variant_for_jurisdiction("WA").expect("WA is calibrated");
+    let mut body = String::from(
+        "```caption\ncourt: SUPERIOR COURT OF WASHINGTON, COUNTY OF SAMPLE\n\
+         parties: In re the Marriage of:\nparties: Petitioner:\nparties: PAT ONE\n\
+         parties: And Respondent:\nparties: SAM TWO\n\
+         case: No. __________\ncase: NOTICE OF APPEARANCE\n\
+         footer: NOTICE OF APPEARANCE\n\
+         office: SAMPLE LAW\noffice: 1 Example Way, Sampleton, WA 99000\n\
+         office: Tel. (000) 555-0100 · pat@example.invalid\npage_count: true\n```\n\n\
+         # NOTICE OF APPEARANCE\n\n",
+    );
+    for n in 1..=40 {
+        let _ = write!(
+            body,
+            "Synthetic paragraph {n}, stated at some length so the paper runs past one page.\n\n"
+        );
+    }
+    let bytes = pdf::render_document(
+        &body,
+        OutputFormat::Pleading(variant),
+        &Letterhead::default(),
+    )
+    .expect("the pleading renders");
+    let pages = pdf::page_count(&bytes).expect("pages");
+    assert!(pages >= 2, "need a second page");
+
+    let court_top = top(&bytes, "SUPERIOR COURT OF WASHINGTON", 1);
+    assert!(
+        court_top >= 216.0,
+        "the court's title starts {court_top}pt down, above GR 14's 3in first-page margin"
+    );
+    assert_eq!(
+        pdf::occurrence_count(&bytes, &format!("Total pages: {pages}")).expect("count"),
+        1,
+        "the page count prints once, on page 1"
+    );
+    assert!(
+        top(&bytes, "Total pages", 1) < 72.0,
+        "the page count sits in the top margin"
+    );
+    assert_eq!(
+        pdf::occurrence_count(&bytes, &format!("Page 1 of {pages}")).expect("count"),
+        1
+    );
+    assert_eq!(
+        pdf::occurrence_count(&bytes, "SAMPLE LAW").expect("count"),
+        pages,
+        "counsel's office prints in every page's footer"
+    );
+    assert_eq!(
+        pdf::occurrence_count(&bytes, "In re the Marriage of:").expect("count"),
+        1
+    );
+
+    // The body column ends at least 1in above the bottom edge and at least
+    // 1in from the right edge; the footer lives in the bottom margin.
+    for n in 1..=40 {
+        let hit = pdf::locate(&bytes, &format!("Synthetic paragraph {n},"), 1).expect("locate");
+        let rect = hit.rects[0].rect;
+        assert!(
+            (rect.y + rect.height) * PAGE_H <= PAGE_H - 72.0 + 0.5,
+            "paragraph {n} runs into the bottom inch"
+        );
+        assert!(
+            (rect.x + rect.width) * PAGE_W <= PAGE_W - 72.0 + 0.5,
+            "paragraph {n} runs into the right inch"
+        );
+    }
+    assert_eq!(variant.calibration().lines_per_page, 28);
+}
+
 // --- LAW-327: Washington ---
 
 fn washington() -> Variant {
@@ -360,41 +439,6 @@ fn washington_render(body: &str) -> Vec<u8> {
     .expect("the Washington pleading renders")
 }
 
-/// GR 14(a) (courts.wa.gov, the statewide format rule): the first page's
-/// top margin is a minimum of three inches — kept clear for the clerk's
-/// file stamp — and the side margins a minimum of one inch. The railed
-/// California frame starts its counsel block at 1in and the federal frame
-/// at 1.5in; Washington paper starts no text above 3in, and no line
-/// numbers share the margins.
-#[test]
-fn washington_paper_starts_three_inches_down_with_one_inch_side_margins() {
-    let bytes = washington_render("# MOTION FOR DEFAULT\n\nBody paragraph.\n");
-
-    let title_top = top(&bytes, "MOTION FOR DEFAULT", 1);
-    assert!(
-        (215.0..=240.0).contains(&title_top),
-        "the title starts {title_top}pt down, expected at GR 14(a)'s 3in (216pt) minimum"
-    );
-
-    let hit = pdf::locate(&bytes, "Body paragraph.", 1).expect("locate body");
-    let rect = hit.rects[0].rect;
-    assert!(
-        (rect.x * PAGE_W - 72.0).abs() < 2.0,
-        "text starts {}pt from the left edge, expected GR 14(a)'s 1in",
-        rect.x * PAGE_W
-    );
-    assert!(
-        (rect.x + rect.width) * PAGE_W <= PAGE_W - 72.0 + 1.0,
-        "text ends {}pt, inside GR 14(a)'s 1in right margin",
-        (rect.x + rect.width) * PAGE_W
-    );
-}
-
-/// LAW-327: the WA mandatory pattern-form primitives — numbered
-/// paragraphs (1. 2. 3.) and check boxes — render on Washington paper in
-/// the PDF engine. A check box is a stroked square **drawn** by the
-/// engine, not a glyph: the embedded font set covers no ballot-box
-/// codepoint, so the character itself would print as tofu on court paper.
 #[test]
 fn a_washington_pattern_form_numbers_its_items_and_draws_its_check_boxes() {
     let bytes = washington_render(

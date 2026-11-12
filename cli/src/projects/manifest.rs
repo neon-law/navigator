@@ -630,7 +630,7 @@ pub fn lint_contents(path: &Path, contents: &str) -> Vec<ManifestFinding> {
     findings.extend(lint_skills(path, mapping));
     findings.extend(lint_dockets(path, mapping));
     findings.extend(lint_pages(path, contents));
-    findings.extend(lint_matter(path, mapping));
+    findings.extend(lint_matter(path, mapping, contents));
     findings.extend(lint_allowlist_shapes(path, mapping));
     findings.extend(lint_scrapers(path, mapping));
     if let Ok(manifest) = parse(contents) {
@@ -639,27 +639,40 @@ pub fn lint_contents(path: &Path, contents: &str) -> Vec<ManifestFinding> {
     findings
 }
 
-/// `Y019` — a `matter:` block must name every field a pleading's caption needs.
-fn lint_matter(path: &Path, mapping: &serde_yaml::Mapping) -> Vec<ManifestFinding> {
+/// `Y019` — a `matter:` block must name every field a pleading's caption
+/// needs. A block that does not parse is an error; an incomplete one is a
+/// warning, because a pleading is a draft until its final render, which
+/// refuses the same gap (LAW-361).
+fn lint_matter(path: &Path, mapping: &serde_yaml::Mapping, contents: &str) -> Vec<ManifestFinding> {
     let Some(block) = mapping.get(super::matter::KEY) else {
         return Vec::new();
     };
-    let message = match serde_yaml::from_value::<word::matter::Matter>(block.clone()) {
-        Ok(matter) => {
+    match serde_yaml::from_value::<word::matter::Matter>(block.clone()) {
+        Ok(mut matter) => {
+            // Counsel's office details a render fills from the Firm's
+            // office are not missing (LAW-329).
+            super::matter::with_office_defaults(&mut matter, contents, "");
             let missing = matter.missing();
             if missing.is_empty() {
                 return Vec::new();
             }
-            format!("missing or malformed {}", missing.join(", "))
+            vec![ManifestFinding::warning(
+                path,
+                1,
+                super::matter::CODE,
+                format!(
+                    "a pleading's matter is incomplete: missing or malformed {}; a final render refuses until it is complete",
+                    missing.join(", ")
+                ),
+            )]
         }
-        Err(error) => format!("`matter:` is malformed: {error}"),
-    };
-    vec![ManifestFinding::at(
-        path,
-        1,
-        super::matter::CODE,
-        format!("a pleading's matter is incomplete: {message}"),
-    )]
+        Err(error) => vec![ManifestFinding::at(
+            path,
+            1,
+            super::matter::CODE,
+            format!("a pleading's matter is incomplete: `matter:` is malformed: {error}"),
+        )],
+    }
 }
 
 /// `Y015` — each `skills:` entry must be a map carrying non-empty
@@ -1647,15 +1660,33 @@ mod tests {
         )
         .unwrap();
         assert!(!codes(&complete).contains(&"Y019"));
-        let without_case = complete.replace("  case_number: 00CV000000\n", "");
-        let findings = lint_contents(Path::new("navigator.yaml"), &without_case);
+        let without_appears_for =
+            complete.replace("    appears_for: Plaintiff SAMPLE HOLDINGS\n", "");
+        let findings = lint_contents(Path::new("navigator.yaml"), &without_appears_for);
         let finding = findings.iter().find(|f| f.code == "Y019").unwrap();
         assert!(
-            finding.message.contains("matter.case_number"),
+            finding.message.contains("matter.counsel.appears_for"),
             "{finding:?}"
         );
+        assert!(finding.warning, "an incomplete matter warns: {finding:?}");
+        let unassigned = complete
+            .lines()
+            .filter(|line| {
+                let line = line.trim_start();
+                !["department:", "judicial_officer:", "filed_on:"]
+                    .iter()
+                    .any(|key| line.starts_with(key))
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !codes(&unassigned).contains(&"Y019"),
+            "an unassigned department, judge, and filed date are not findings"
+        );
         let typo = complete.replace("case_number:", "case_numbr:");
-        assert!(codes(&typo).contains(&"Y019"));
+        let findings = lint_contents(Path::new("navigator.yaml"), &typo);
+        let finding = findings.iter().find(|f| f.code == "Y019").unwrap();
+        assert!(!finding.warning, "a malformed matter fails: {finding:?}");
     }
 
     #[test]

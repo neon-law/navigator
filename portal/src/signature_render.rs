@@ -80,7 +80,7 @@ fn render_block(signer: &str, kind: SignatureFieldKind, anchor: &str) -> String 
 /// `(signer, field)` pair. Unique per occurrence so the provider places
 /// exactly one field per placeholder.
 fn anchor_string(signer: &str, field: &str, n: usize) -> String {
-    format!("nlsig-{signer}-{field}-{n}")
+    word::paper::signature_anchor(signer, field, n)
 }
 
 /// Replace every recognized signature placeholder in `body` with its

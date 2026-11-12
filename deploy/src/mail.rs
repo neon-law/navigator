@@ -16,6 +16,7 @@ use uuid::Uuid;
 
 pub(crate) mod attachments;
 mod login;
+mod packet;
 mod signature;
 
 const GMAIL_API: &str = "https://gmail.googleapis.com/gmail/v1";
@@ -102,6 +103,41 @@ pub enum MailAction {
         /// Attach a file read from disk. Repeat for more files.
         #[arg(long = "attach", value_name = "PATH")]
         attach: Vec<PathBuf>,
+    },
+    /// Hand a signed packet to the Firm's mail-center vendor for printing and
+    /// physical mail: an unsent Gmail draft to the vendor with the PDFs
+    /// attached and the job sheet in the body, logged on the matter as an
+    /// outbound Communication with the role `other`. Nothing is sent; the
+    /// lawyer reviews and sends the draft. A preview, a `/s/ DRAFT`
+    /// signature, or unsigned signing lines are refused.
+    Packet {
+        /// The packet's PDFs, in mailing order. Each must be the signed revision.
+        #[arg(required = true)]
+        pdfs: Vec<PathBuf>,
+        /// The vendor's email address, from its Person or Entity row.
+        #[arg(long)]
+        vendor: String,
+        /// One line of the recipient's address block. Repeat per line.
+        #[arg(long = "recipient", required = true)]
+        recipient: Vec<String>,
+        /// How the vendor mails it.
+        #[arg(long, value_enum, default_value = "certified")]
+        service: packet::Service,
+        /// Ask for a return receipt (green card).
+        #[arg(long)]
+        return_receipt: bool,
+        /// The date the packet must be mailed by, `YYYY-MM-DD`.
+        #[arg(long)]
+        mail_by: chrono::NaiveDate,
+        /// Matter code the Communication is logged on. Defaults to project.name in navigator.yaml.
+        #[arg(long)]
+        project: Option<String>,
+        /// Navigator host. Defaults to host in navigator.yaml.
+        #[arg(long)]
+        host: Option<String>,
+        /// Print the job sheet; draft nothing and log nothing.
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Authorize Gmail in the browser and store the refresh token in the
     /// macOS Keychain. Requests gmail.readonly and gmail.compose only.
@@ -1710,6 +1746,88 @@ async fn run_inner(action: MailAction) -> Result<()> {
                 "Draft saved unsent with {} attachment(s). Gmail Drafts mailbox: https://mail.google.com/mail/#drafts (choose account {}). Gmail API draft ID: {}.",
                 saved.attachments, saved.account, saved.id
             );
+            Ok(())
+        }
+        MailAction::Packet {
+            pdfs,
+            vendor,
+            recipient,
+            service,
+            return_receipt,
+            mail_by,
+            project,
+            host,
+            dry_run,
+        } => {
+            let job = packet::MailJob {
+                pdfs,
+                vendor,
+                recipient,
+                service,
+                return_receipt,
+                mail_by,
+            };
+            packet::check(&job)?;
+            if dry_run {
+                println!(
+                    "To: {}\nSubject: {}\n\n{}",
+                    job.vendor,
+                    job.subject(),
+                    job.sheet()
+                );
+                eprintln!("dry run: no draft saved and no Communication logged");
+                return Ok(());
+            }
+            let body = tempfile::NamedTempFile::new().context("create the job sheet file")?;
+            std::fs::write(body.path(), job.sheet()).context("write the job sheet")?;
+            let env_signature = std::env::var("NAVIGATOR_GMAIL_SIGNATURE").ok();
+            let sending_account = configured_setup().ok().map(|(account, _)| account);
+            let resolved =
+                resolve_draft_signature(env_signature.as_deref(), sending_account.as_deref()).await;
+            announce_signature_resolution(&resolved);
+            let saved = save_draft_command(
+                DraftRequest {
+                    to: vec![job.vendor.clone()],
+                    cc: Vec::new(),
+                    bcc: Vec::new(),
+                    subject: Some(job.subject()),
+                    body_file: body.path().to_path_buf(),
+                    thread: None,
+                    draft_id: None,
+                    attach: job.pdfs.clone(),
+                    configured_signature: resolved.signature_body(),
+                },
+                client,
+            )
+            .await?;
+            println!(
+                "Mail job drafted unsent to {} with {} attachment(s); review and send it from Gmail Drafts. Gmail API draft ID: {}.",
+                job.vendor, saved.attachments, saved.id
+            );
+            let logged = cli::projects::communication::create_row(
+                host.as_deref(),
+                project.as_deref(),
+                &cli::projects::communication::NewCommunication {
+                    channel: "email_outbound".into(),
+                    direction: "outbound".into(),
+                    counterparty: job.vendor.clone(),
+                    role: Some("other".into()),
+                    at: chrono::Utc::now().to_rfc3339(),
+                    duration: None,
+                    body_file: body.path().to_path_buf(),
+                    recorded: "none".into(),
+                    meet_and_confer: None,
+                    agreements: Vec::new(),
+                    confirms: None,
+                    acknowledges: None,
+                    source_ref: Some(format!("gmail-draft:{}", saved.id)),
+                    client_visible: false,
+                    subject: Some(job.subject()),
+                },
+            )
+            .await
+            .context("the draft is saved, but logging its Communication failed")?;
+            println!("{logged}");
             Ok(())
         }
         MailAction::Setup {

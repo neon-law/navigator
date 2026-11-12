@@ -102,6 +102,9 @@ struct Paragraph {
     italics: Vec<std::ops::Range<usize>>,
     /// Byte ranges highlighted yellow: an open item in a draft.
     highlights: Vec<std::ops::Range<usize>>,
+    /// Byte ranges set white at 4pt: an e-signature provider's anchor on a
+    /// signing line, there for the provider and invisible to a reader.
+    anchors: Vec<std::ops::Range<usize>>,
     /// The paragraph carries a counsel signature, so its bottom border is
     /// the signature rule the `/s/` line sits on.
     signature_rule: bool,
@@ -209,7 +212,10 @@ pub fn render_notation(
         file_options,
     )?;
     let footer = match (pleading, &paper) {
-        (Some(_), Some(paper)) => pleading_footer_xml(paper.footer()),
+        (Some(_), Some(paper)) => match paper.caption.as_ref().map(|c| c.office.as_slice()) {
+            Some(office) if !office.is_empty() => office_footer_xml(paper.footer(), office),
+            _ => pleading_footer_xml(paper.footer()),
+        },
         _ => footer_xml(),
     };
     write_entry(
@@ -494,6 +500,38 @@ fn blocks_with_source(markdown: &str) -> Vec<SourcePair> {
                         .push(SIGNER_BOX_RUN);
                 }
             }
+            // A signer's signing line (LAW-344): on its own line, a ruled
+            // paragraph holding the provider's anchor invisibly, then its
+            // caption; inside a paragraph, a Signer Box rule and the anchor.
+            Event::Html(html) | Event::InlineHtml(html)
+                if crate::paper::signing_line(&html).is_some() =>
+            {
+                if let Some(line) = crate::paper::signing_line(&html) {
+                    if let Some(paragraph) = cell.as_mut().or(current.as_mut()) {
+                        paragraph.text.push(SIGNER_BOX_RUN);
+                        append_anchor(paragraph, &line.anchor);
+                    } else {
+                        let mut rule = Paragraph {
+                            group,
+                            signature_rule: true,
+                            ..Paragraph::default()
+                        };
+                        append_anchor(&mut rule, &line.anchor);
+                        let caption = Paragraph {
+                            group,
+                            text: line.label().to_string(),
+                            ..Paragraph::default()
+                        };
+                        for paragraph in [rule, caption] {
+                            result.push(SourcePair {
+                                kind: SourceBlockKind::Paragraph,
+                                source: range.clone(),
+                                block: Block::Paragraph(paragraph),
+                            });
+                        }
+                    }
+                }
+            }
             // A counsel signature: italic `/s/` and the name on a signature
             // rule, `DRAFT` highlighted until a final render names counsel.
             Event::Html(html) | Event::InlineHtml(html)
@@ -677,6 +715,13 @@ const SIGNATURE_RULE_BORDER: &str =
 /// How far the signature rule runs: three and a half inches.
 const SIGNATURE_RULE_TWIPS: u32 = 5040;
 
+/// Append a signing line's anchor to `paragraph`, set invisibly.
+fn append_anchor(paragraph: &mut Paragraph, anchor: &str) {
+    let start = paragraph.text.len();
+    paragraph.text.push_str(anchor);
+    paragraph.anchors.push(start..paragraph.text.len());
+}
+
 /// Append a counsel signature's `/s/` line to `paragraph` and draw its rule.
 fn append_counsel_signature(paragraph: &mut Paragraph, signature: &crate::paper::CounselSignature) {
     append_text(paragraph, "/s/ ", true);
@@ -722,7 +767,12 @@ fn mark_open_items(paragraph: &mut Paragraph) {
 fn paragraph_runs_xml(paragraph: &Paragraph, bold: bool) -> String {
     let length = paragraph.text.len();
     let mut cuts = vec![0, length];
-    for range in paragraph.italics.iter().chain(&paragraph.highlights) {
+    for range in paragraph
+        .italics
+        .iter()
+        .chain(&paragraph.highlights)
+        .chain(&paragraph.anchors)
+    {
         cuts.push(range.start.min(length));
         cuts.push(range.end.min(length));
     }
@@ -738,6 +788,7 @@ fn paragraph_runs_xml(paragraph: &Paragraph, bold: bool) -> String {
             bold,
             italic: covers(&paragraph.italics, start),
             highlight: covers(&paragraph.highlights, start),
+            anchor: covers(&paragraph.anchors, start),
         };
         out.push_str(&runs_xml(&paragraph.text[start..end], style));
     }
@@ -751,6 +802,7 @@ struct RunStyle {
     bold: bool,
     italic: bool,
     highlight: bool,
+    anchor: bool,
 }
 
 /// A paragraph's text as runs, a `<w:br/>` for each hard break and an
@@ -760,7 +812,7 @@ fn runs_xml(text: &str, style: RunStyle) -> String {
         return String::new();
     }
     let mut weight = String::new();
-    if style.bold || style.italic || style.highlight {
+    if style.bold || style.italic || style.highlight || style.anchor {
         weight.push_str("<w:rPr>");
         if style.bold {
             weight.push_str("<w:b/>");
@@ -770,6 +822,9 @@ fn runs_xml(text: &str, style: RunStyle) -> String {
         }
         if style.highlight {
             weight.push_str("<w:highlight w:val=\"yellow\"/>");
+        }
+        if style.anchor {
+            weight.push_str("<w:color w:val=\"FFFFFF\"/><w:sz w:val=\"8\"/>");
         }
         weight.push_str("</w:rPr>");
     }
@@ -974,6 +1029,68 @@ fn pleading_footer_xml(title: Option<&str>) -> String {
     )
 }
 
+/// A Washington pleading's footer: a rule, then the paper's title and "Page
+/// N of M" on the left and counsel's office on the right, as the PDF lays
+/// it out, small enough to sit in the 76pt bottom margin.
+fn office_footer_xml(title: Option<&str>, office: &[String]) -> String {
+    let line = |text: String, half_points: u32, right: bool| {
+        let jc = if right {
+            r#"<w:jc w:val="right"/>"#
+        } else {
+            ""
+        };
+        format!(
+            r#"<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="{}" w:lineRule="exact"/>{jc}</w:pPr>{text}</w:p>"#,
+            half_points * 10 + 40
+        )
+    };
+    let run = |text: &str, half_points: u32| {
+        format!(
+            r#"<w:r><w:rPr><w:sz w:val="{half_points}"/></w:rPr><w:t xml:space="preserve">{}</w:t></w:r>"#,
+            xml(text)
+        )
+    };
+    let mut left = String::new();
+    if let Some(title) = title
+        .map(crate::paper::footer_title)
+        .filter(|title| !title.is_empty())
+    {
+        left.push_str(&line(
+            run(&title, FOOTER_TITLE_HALF_POINTS),
+            FOOTER_TITLE_HALF_POINTS,
+            false,
+        ));
+    }
+    left.push_str(&line(
+        format!(
+            "{}{}{}{}",
+            run("Page ", FOOTER_TITLE_HALF_POINTS),
+            sized_field("PAGE", FOOTER_TITLE_HALF_POINTS),
+            run(" of ", FOOTER_TITLE_HALF_POINTS),
+            sized_field("NUMPAGES", FOOTER_TITLE_HALF_POINTS)
+        ),
+        FOOTER_TITLE_HALF_POINTS,
+        false,
+    ));
+    let right: String = office
+        .iter()
+        .map(|text| {
+            line(
+                run(text, FOOTER_OFFICE_HALF_POINTS),
+                FOOTER_OFFICE_HALF_POINTS,
+                true,
+            )
+        })
+        .collect();
+    let border =
+        r#"<w:tcBorders><w:top w:val="single" w:sz="4" w:space="0" w:color="auto"/></w:tcBorders>"#;
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:tblLayout w:type="autofit"/></w:tblPr><w:tblGrid><w:gridCol/><w:gridCol/></w:tblGrid><w:tr><w:tc><w:tcPr>{border}</w:tcPr>{left}</w:tc><w:tc><w:tcPr>{border}</w:tcPr>{right}</w:tc></w:tr></w:tbl><w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="20" w:lineRule="exact"/></w:pPr></w:p></w:ftr>"#
+    )
+}
+
+/// Office-line size in a Washington footer: 9pt, as in the PDF.
+const FOOTER_OFFICE_HALF_POINTS: u32 = 18;
 /// Paper-title size in the footer: CRC 2.110's 10-point floor.
 const FOOTER_TITLE_HALF_POINTS: u32 = 20;
 /// Page-number size in the footer.
@@ -1054,7 +1171,20 @@ fn caption_xml(frame: &PleadingFrame, caption: &crate::paper::Caption) -> String
     let text_width = PAGE_WIDTH_TWIPS - frame.left_margin_twips - frame.right_margin_twips;
     let grid = frame.line_pitch_twips;
     let mut out = String::new();
-    if !caption.counsel.is_empty() {
+    if caption.page_count {
+        // In the top margin of page 1, clear of the rail and the text: a
+        // page-anchored frame half an inch down.
+        let _ = write!(
+            out,
+            r#"<w:p><w:pPr><w:framePr w:wrap="around" w:hAnchor="margin" w:vAnchor="page" w:x="0" w:y="720"/><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/></w:pPr><w:r><w:t xml:space="preserve">Total pages: </w:t></w:r>{}</w:p>"#,
+            field("NUMPAGES")
+        );
+    }
+    // A caption with no counsel block (Washington) keeps the railed page's
+    // first seven lines blank, holding the court's title below GR 14's 3in.
+    let reserve_blank =
+        caption.counsel.is_empty() && frame.rail_lines.is_some() && !caption.court.is_empty();
+    if !caption.counsel.is_empty() || reserve_blank {
         let counsel_width = text_width * 58 / 100;
         let min = if frame.rail_lines.is_some() {
             COUNSEL_LINES
@@ -1451,6 +1581,73 @@ mod tests {
             },
         )
         .unwrap()
+    }
+
+    /// LAW-344: a signing line is a ruled paragraph carrying the provider's
+    /// anchor in white 4pt text, captioned below; never literal braces.
+    #[test]
+    fn a_signing_line_is_a_ruled_paragraph_with_an_invisible_anchor() {
+        let markdown = crate::paper::mark_signing_lines(
+            "I declare the foregoing is true.\n\n{{client.signature}}\n\nDated: {{client.date}}\n",
+        );
+        let package = render_notation(&markdown, None, &RenderOptions::default()).unwrap();
+        let document = part(&package, "word/document.xml");
+        assert!(
+            document.contains(
+                "<w:rPr><w:color w:val=\"FFFFFF\"/><w:sz w:val=\"8\"/></w:rPr><w:t xml:space=\"preserve\">nlsig-client-signature-1</w:t>"
+            ),
+            "{document}"
+        );
+        assert!(document.contains(">Signature</w:t>"), "{document}");
+        assert!(document.contains("nlsig-client-date-1"), "{document}");
+        assert!(!document.contains("{{"), "{document}");
+    }
+
+    /// LAW-327: a Washington caption has no counsel block, so the railed
+    /// page's first seven lines stay blank (GR 14's 3in first-page margin);
+    /// counsel's office, the title, and "Page N of M" print in the footer;
+    /// and a clerk's page-count rule prints the total in the top margin.
+    #[test]
+    fn a_washington_caption_reserves_the_top_and_puts_counsel_in_the_footer() {
+        let markdown = "```caption\ncourt: SUPERIOR COURT OF WASHINGTON, COUNTY OF SAMPLE\n\
+            parties: In re the Marriage of:\ncase: No. __________\nfooter: NOTICE OF APPEARANCE\n\
+            office: SAMPLE LAW\noffice: Tel. (000) 555-0100\npage_count: true\n```\n\n\
+            # NOTICE OF APPEARANCE\n\n## 1. Appearance\n\nCounsel appears.\n";
+        let washington = PleadingFrame {
+            right_margin_twips: 1440,
+            bottom_margin_twips: 1520,
+            line_pitch_twips: 460,
+            ..RAILED
+        };
+        let package = render_notation(
+            markdown,
+            None,
+            &RenderOptions {
+                pleading: Some(washington),
+                ..RenderOptions::default()
+            },
+        )
+        .unwrap();
+        let document = part(&package, "word/document.xml");
+        let reserve = &document[..document.find("</w:tbl>").unwrap()];
+        assert!(
+            reserve.contains(r#"<w:trHeight w:val="3220" w:hRule="atLeast"/>"#),
+            "seven 23pt lines kept blank: {reserve}"
+        );
+        assert!(!reserve.contains("SAMPLE LAW"));
+        assert!(document.contains("Total pages: "));
+        assert!(document.contains(" NUMPAGES "));
+        let footer = part(&package, "word/footer1.xml");
+        for text in [
+            "NOTICE OF APPEARANCE",
+            "Page ",
+            " of ",
+            "SAMPLE LAW",
+            "Tel. (000) 555-0100",
+        ] {
+            assert!(footer.contains(text), "{text}: {footer}");
+        }
+        assert!(footer.contains(" NUMPAGES "), "{footer}");
     }
 
     /// CRC 2.111: the counsel block holds lines 1 through 7 with the right

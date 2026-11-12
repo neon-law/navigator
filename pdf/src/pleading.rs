@@ -118,6 +118,23 @@ impl Calibration {
         lines_per_page: 28,
     };
 
+    /// Washington superior-court paper: the same face and size, 28 lines on
+    /// a 23pt grid.
+    ///
+    /// GR 14(a) wants letter paper with at least 1in at the top of every
+    /// page after the first and at least 1in at the bottom and both sides.
+    /// [`Calibration::DEFAULT`]'s 28 lines of 24pt need 672pt, which leaves
+    /// only 48pt of an 11in page under a 1in top margin, so the grid shrinks
+    /// instead of the line count: 28 x 23pt = 644pt, and the bottom margin
+    /// is the 76pt that remains. 23pt still puts more than three numbered
+    /// lines in every vertical inch.
+    pub const WASHINGTON: Calibration = Calibration {
+        face: "Tinos",
+        type_size: 14.5,
+        grid_unit: 23.0,
+        lines_per_page: 28,
+    };
+
     /// The text column height this calibration's grid implies:
     /// `lines_per_page x grid_unit`.
     #[must_use]
@@ -155,44 +172,30 @@ pub enum Variant {
     /// Trial court with a numbered rail: 28 numbers, a double rule on the
     /// left and a single rule on the right.
     NumberedRailTrial,
-    /// Washington trial court, calibrated to GR 14(a) — the statewide
-    /// format rule (courts.wa.gov, retrieved during calibration): Letter
-    /// paper, one-sided; **the first page's top margin a minimum of three
-    /// inches**, kept clear for the clerk's file stamp; the bottom and
-    /// both side margins a minimum of one inch; every subsequent page at
-    /// a minimum of one inch. GR 14 names no line count, no type size,
-    /// and no numbered rail — statewide pattern forms are GR 14 paper,
-    /// and line numbers are a local-rule option this frame does not
-    /// presume. The variant applies the first-page three-inch minimum to
-    /// every page: the shared frame model carries one top margin, and a
-    /// continuation page holding more clearance than the rule's minimum
-    /// errs in the compliant direction. GR 14 also bars "highlighting or
-    /// other colored markings" from *filed* papers — a draft's yellow
-    /// washes are preview-only and never filed.
-    WashingtonTrial,
     /// Trial court without a rail — a deeper top margin instead.
     NoRailTrial,
     /// Appellate brief: no rail, relative (double) leading.
     Appellate,
+    /// Washington superior court (GR 14): a numbered rail on
+    /// [`Calibration::WASHINGTON`], 1in at the bottom and on both sides, and
+    /// the first page's top 3in kept clear by the caption.
+    WashingtonSuperior,
 }
 
 impl Variant {
     /// Every calibration, so a caller can enumerate rather than guess.
     pub const ALL: &'static [Variant] = &[
         Variant::NumberedRailTrial,
-        Variant::WashingtonTrial,
         Variant::NoRailTrial,
         Variant::Appellate,
+        Variant::WashingtonSuperior,
     ];
 
-    /// Top margin in inches. GR 14(a) sets Washington's three-inch
-    /// first-page minimum; the single-top-margin model applies it to
-    /// every page (see [`Variant::WashingtonTrial`]).
+    /// Top margin in inches.
     #[must_use]
     pub fn top_margin_inches(self) -> f64 {
         match self {
-            Variant::NumberedRailTrial => 1.0,
-            Variant::WashingtonTrial => 3.0,
+            Variant::NumberedRailTrial | Variant::WashingtonSuperior => 1.0,
             Variant::NoRailTrial | Variant::Appellate => 1.5,
         }
     }
@@ -223,13 +226,13 @@ impl Variant {
         }
     }
 
-    /// Right margin in inches.
+    /// Right margin in inches. GR 14 keeps 1in on both sides of a
+    /// Washington paper, rail or not.
     #[must_use]
     pub fn right_margin_inches(self) -> f64 {
-        if self.has_rail() {
-            0.5
-        } else {
-            1.0
+        match self {
+            Variant::NumberedRailTrial => 0.5,
+            Variant::NoRailTrial | Variant::Appellate | Variant::WashingtonSuperior => 1.0,
         }
     }
 
@@ -256,8 +259,8 @@ impl Variant {
     #[must_use]
     pub fn has_rail(self) -> bool {
         match self {
-            Variant::NumberedRailTrial => true,
-            Variant::WashingtonTrial | Variant::NoRailTrial | Variant::Appellate => false,
+            Variant::NumberedRailTrial | Variant::WashingtonSuperior => true,
+            Variant::NoRailTrial | Variant::Appellate => false,
         }
     }
 
@@ -273,14 +276,17 @@ impl Variant {
 
     /// The face, size, and grid this calibration renders at.
     ///
-    /// Every current variant shares [`Calibration::DEFAULT`] — Tinos is
-    /// the one calibration this module defines. This is a method rather
-    /// than a shared constant so a future SCOTUS booklet variant can
-    /// return its own Century-family calibration without every other
-    /// variant's numbers moving with it.
+    /// Washington paper runs [`Calibration::WASHINGTON`]; every other
+    /// variant shares [`Calibration::DEFAULT`]. A method rather than a
+    /// shared constant so one variant's numbers never move another's.
     #[must_use]
     pub fn calibration(self) -> Calibration {
-        Calibration::DEFAULT
+        match self {
+            Variant::WashingtonSuperior => Calibration::WASHINGTON,
+            Variant::NumberedRailTrial | Variant::NoRailTrial | Variant::Appellate => {
+                Calibration::DEFAULT
+            }
+        }
     }
 
     /// The name this calibration is declared under.
@@ -288,9 +294,9 @@ impl Variant {
     pub fn as_str(self) -> &'static str {
         match self {
             Variant::NumberedRailTrial => "numbered_rail_trial",
-            Variant::WashingtonTrial => "washington_trial",
             Variant::NoRailTrial => "no_rail_trial",
             Variant::Appellate => "appellate",
+            Variant::WashingtonSuperior => "washington_superior",
         }
     }
 
@@ -325,12 +331,9 @@ impl Variant {
 ///   most districts run no rail at all. `US` is deliberately the
 ///   lowest-common-denominator calibration rather than a rail every
 ///   federal filer would need to strip.
-/// - **`WA`** → [`Variant::WashingtonTrial`]. Washington's statewide
-///   format rule, GR 14(a), mandates Letter paper and a three-inch
-///   first-page top margin (clear for the clerk's stamp) with one-inch
-///   margins elsewhere, and names neither a line count nor a numbered
-///   rail — line numbers are a local-rule option, so the calibration is
-///   unrailed GR 14 paper (see [`Variant::WashingtonTrial`]).
+/// - **`WA`** → [`Variant::WashingtonSuperior`]. GR 14(a): letter paper,
+///   a 3in top margin on the first page, and 1in at the bottom, at both
+///   sides, and at the top of every later page.
 /// - Every other code (including a real jurisdiction this table has not
 ///   yet been extended to, and [`Variant::Appellate`], which no
 ///   jurisdiction has needed) returns `None` — there is no default
@@ -341,8 +344,8 @@ impl Variant {
 pub fn variant_for_jurisdiction(jurisdiction: &str) -> Option<Variant> {
     match jurisdiction.trim() {
         "NV" | "CA" => Some(Variant::NumberedRailTrial),
-        "WA" => Some(Variant::WashingtonTrial),
         "US" => Some(Variant::NoRailTrial),
+        "WA" => Some(Variant::WashingtonSuperior),
         _ => None,
     }
 }
@@ -519,13 +522,50 @@ const CAPTION_LEADING_POINTS: f64 = 4.0;
 /// number of grid lines, so the body that follows starts on a numbered
 /// line. The counsel block is padded to seven lines, which lands the
 /// court's title on line 8: 1in plus seven 24pt lines is 3⅓in down.
+///
+/// A caption that carries counsel's `office` (Washington) moves counsel to
+/// the footer instead: the title and "Page N of M" on the left, the office
+/// on the right, under the rule, on every page.
 #[must_use]
 pub fn chrome(variant: Variant, paper: &word::paper::Paper) -> String {
-    let mut out = footer(paper.footer());
+    let office = paper
+        .caption
+        .as_ref()
+        .map_or(&[][..], |caption| caption.office.as_slice());
+    let mut out = if office.is_empty() {
+        footer(paper.footer())
+    } else {
+        office_footer(paper.footer(), office)
+    };
     if let Some(caption) = &paper.caption {
         out.push_str(&caption_typst(variant, caption));
     }
     out
+}
+
+/// Office lines in a Washington footer: small enough that four of them sit
+/// in the 76pt bottom margin under the rule.
+const FOOTER_OFFICE_SIZE_POINTS: f64 = 9.0;
+
+fn office_footer(title: Option<&str>, office: &[String]) -> String {
+    let title = title
+        .map(word::paper::footer_title)
+        .filter(|t| !t.is_empty())
+        .map(|t| format!("{} \\\n", escape(&t)))
+        .unwrap_or_default();
+    format!(
+        "#set page(footer-descent: 6pt, footer: context {{\n\
+         \x20 set par(leading: 2pt, spacing: 0pt)\n\
+         \x20 set block(spacing: 0pt)\n\
+         \x20 line(length: 100%, stroke: 0.5pt)\n\
+         \x20 v(3pt)\n\
+         \x20 grid(columns: (1fr, auto), column-gutter: 12pt,\n\
+         \x20   text(size: {FOOTER_TITLE_SIZE_POINTS}pt)[{title}Page #counter(page).display(\"1 of 1\", both: true)],\n\
+         \x20   align(right, text(size: {FOOTER_OFFICE_SIZE_POINTS}pt)[{office}]),\n\
+         \x20 )\n\
+         }})\n",
+        office = caption_lines(office),
+    )
 }
 
 fn footer(title: Option<&str>) -> String {
@@ -577,14 +617,26 @@ fn caption_typst(variant: Variant, caption: &word::paper::Caption) -> String {
         0.0
     };
     let counsel_min = if variant.has_rail() { COUNSEL_LINES } else { 0 };
-    let mut out = format!(
+    let mut out = String::new();
+    if caption.page_count {
+        // In the top margin of page 1, clear of the rail and the text.
+        out.push_str(
+            "#place(top + left, dy: -0.5in)[#context [Total pages: \
+             #counter(page).final().first()]]\n",
+        );
+    }
+    let _ = write!(
+        out,
         "#let snap(min: 0, body) = layout(size => {{\n\
          \x20 let h = measure(block(width: size.width, body)).height\n\
          \x20 let lines = calc.max(min, calc.ceil(h / {grid}pt - 0.001))\n\
          \x20 block(width: 100%, height: lines * {grid}pt - {gap}pt, body)\n\
          }})\n"
     );
-    if !caption.counsel.is_empty() {
+    // A railed page keeps its first seven lines for counsel; a caption with
+    // no counsel block (Washington) keeps them blank, which is what holds
+    // the court's title below GR 14's 3in first-page margin.
+    if !caption.counsel.is_empty() || (variant.has_rail() && !caption.court.is_empty()) {
         let _ = write!(
             out,
             "#snap(min: {counsel_min})[\n\
@@ -685,6 +737,19 @@ mod tests {
         assert_eq!(cal.face, "Tinos");
     }
 
+    /// GR 14(a): Washington paper keeps at least 1in at the bottom and both
+    /// sides of every page, and its 28-line frame fills the column exactly.
+    #[test]
+    fn washington_paper_keeps_an_inch_at_the_bottom_and_both_sides() {
+        let variant = Variant::WashingtonSuperior;
+        assert!(variant.bottom_margin_points() >= 72.0);
+        assert!(variant.left_margin_inches() >= 1.0);
+        assert!(variant.right_margin_inches() >= 1.0);
+        let column = 792.0 - variant.top_margin_inches() * 72.0 - variant.bottom_margin_points();
+        assert!((column - variant.calibration().text_height()).abs() < f64::EPSILON);
+        assert!(72.0 / variant.calibration().grid_unit >= 3.0);
+    }
+
     /// The railed text column is exactly the numbered frame: line 1 sits
     /// 1in down the Letter page and the bottom margin is the 48pt foot the
     /// 672pt frame leaves, so `792pt - 72pt - 48pt = 672pt`. A column
@@ -721,30 +786,31 @@ mod tests {
                 rail_lines: Some(28),
             }
         );
+        assert_eq!(
+            Variant::WashingtonSuperior.word_frame(),
+            word::PleadingFrame {
+                face: "Tinos",
+                type_size_half_points: 29,
+                top_margin_twips: 1440,
+                bottom_margin_twips: 1520,
+                left_margin_twips: 2160,
+                right_margin_twips: 1440,
+                line_pitch_twips: 460,
+                rail_lines: Some(28),
+            }
+        );
         let plain = Variant::NoRailTrial.word_frame();
         assert_eq!(plain.rail_lines, None);
         assert_eq!(plain.top_margin_twips, 2160);
         assert_eq!(plain.bottom_margin_twips, 1440);
-
-        // Washington's GR 14(a) frame: a three-inch top margin (the
-        // first-page minimum, applied to every page — the shared model
-        // carries one top margin), one-inch bottom and side margins, and
-        // no rail.
-        let washington = Variant::WashingtonTrial.word_frame();
-        assert_eq!(washington.rail_lines, None);
-        assert_eq!(washington.top_margin_twips, 4320);
-        assert_eq!(washington.bottom_margin_twips, 1440);
-        assert_eq!(washington.left_margin_twips, 1440);
-        assert_eq!(washington.right_margin_twips, 1440);
     }
 
     /// The calibration table from the issue, asserted rather than
     /// trusted: a transposed row silently shifts every line on the page.
     #[test]
-    fn the_four_calibrations_match_their_specified_geometry() {
+    fn the_three_calibrations_match_their_specified_geometry() {
         let table = [
             (Variant::NumberedRailTrial, 1.0, true, Leading::Absolute),
-            (Variant::WashingtonTrial, 3.0, false, Leading::Relative),
             (Variant::NoRailTrial, 1.5, false, Leading::Relative),
             (Variant::Appellate, 1.5, false, Leading::Relative),
         ];
@@ -827,7 +893,7 @@ mod tests {
             ("NV", Some(Variant::NumberedRailTrial)),
             ("CA", Some(Variant::NumberedRailTrial)),
             ("US", Some(Variant::NoRailTrial)),
-            ("WA", Some(Variant::WashingtonTrial)),
+            ("WA", Some(Variant::WashingtonSuperior)),
         ];
         for (jurisdiction, expected) in table {
             assert_eq!(
@@ -887,12 +953,6 @@ mod tests {
             );
             assert!(plain.contains("top: 1.5in"), "{}", variant.as_str());
         }
-
-        // Washington's three-inch top margin is the GR 14(a) first-page
-        // minimum, not a deeper margin of the NoRailTrial shape.
-        let washington = preamble(Variant::WashingtonTrial);
-        assert!(!washington.contains("#let rail("), "{washington}");
-        assert!(washington.contains("top: 3in"), "{washington}");
     }
 
     /// One type size everywhere — the preamble must not introduce a
