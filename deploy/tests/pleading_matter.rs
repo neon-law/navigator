@@ -18,7 +18,7 @@ const NEVADA_FIXTURE: &str = "../cli/tests/fixtures/synthetic_nevada_matter";
 
 /// A Washington superior-court matter (LAW-327): GR 14 paper, no rail,
 /// and a pattern-form body of numbered items and check boxes.
-const WASHINGTON_FIXTURE: &str = "tests/fixtures/synthetic_washington_matter";
+const WASHINGTON_FIXTURE: &str = "../cli/tests/fixtures/synthetic_washington_matter";
 
 /// The synthetic matter tree copied into a tempdir, so a test can edit its
 /// manifest or notations without touching the checked-in fixture.
@@ -522,7 +522,7 @@ fn a_signature_block_prints_its_date_from_signed_on_and_previews_a_placeholder()
         "",
     );
     let preview = work.path().join("preview.docx");
-    let result = Command::new(cargo_bin("navigator"))
+    let result = Command::new(cargo_bin("navigator-deploy"))
         .args(["notation", "word"])
         .arg(&template)
         .args(["--preview", "--out"])
