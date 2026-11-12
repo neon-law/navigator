@@ -259,6 +259,37 @@ pub fn parse_raw_eml(raw: &[u8]) -> Option<InboundEmail> {
     })
 }
 
+/// Every From, To, and Cc mailbox address the raw RFC 5322 bytes carry, in
+/// header order and deduplicated case-insensitively — the candidate set
+/// the inbox address-match reads (`store::inbox::assign_match`). Groups
+/// flatten to their member mailboxes; headerless or unparseable bytes
+/// yield an empty list and the caller falls back to the stored From.
+#[must_use]
+pub fn envelope_addresses_from_raw(raw: &[u8]) -> Vec<String> {
+    let Some(message) = mail_parser::MessageParser::default().parse(raw) else {
+        return Vec::new();
+    };
+    let mut addresses: Vec<String> = Vec::new();
+    for list in [message.from(), message.to(), message.cc()]
+        .into_iter()
+        .flatten()
+    {
+        for mailbox in list.mailboxes() {
+            if let Some(address) = mailbox.address() {
+                let address = address.trim();
+                if !address.is_empty()
+                    && !addresses
+                        .iter()
+                        .any(|seen| seen.eq_ignore_ascii_case(address))
+                {
+                    addresses.push(address.to_owned());
+                }
+            }
+        }
+    }
+    addresses
+}
+
 /// The thread keys a raw RFC 5322 message carries, for
 /// `store::inbox::ingest_inbound_threaded`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -1311,9 +1342,40 @@ mod tests {
 
     use super::{
         attachments_from_raw, classify_inbound, classify_inbound_facts, constant_time_eq,
-        is_attachment_field, message_id_from_raw, scan_attachments, sender_domain_authenticated,
-        storage_key_for, InboundAttachment, InboundEmail, InboxRoute,
+        envelope_addresses_from_raw, is_attachment_field, message_id_from_raw, scan_attachments,
+        sender_domain_authenticated, storage_key_for, InboundAttachment, InboundEmail, InboxRoute,
     };
+
+    #[test]
+    fn envelope_addresses_gather_from_to_and_cc_without_duplicates() {
+        let raw = b"From: Client <client@example.com>\r\n\
+                    To: firm@neonlaw.com, Spouse <CLIENT@example.com>\r\n\
+                    Cc: efiling-notice@courts.example.test, paralegal@example.com\r\n\
+                    Subject: synthetic\r\n\
+                    \r\n\
+                    body";
+
+        let addresses = envelope_addresses_from_raw(raw);
+
+        assert_eq!(
+            addresses,
+            [
+                "client@example.com",
+                "firm@neonlaw.com",
+                "efiling-notice@courts.example.test",
+                "paralegal@example.com",
+            ]
+        );
+        // Dedup is case-insensitive, so the To field's uppercase spelling
+        // of client@example.com collapses into the From spelling; the
+        // matcher's case-insensitive joins would collapse them anyway.
+        assert_eq!(addresses.len(), 4);
+    }
+
+    #[test]
+    fn unparseable_bytes_gather_no_addresses() {
+        assert!(envelope_addresses_from_raw(b"not an email").is_empty());
+    }
 
     #[test]
     fn summary_sender_authentication_requires_dkim_pass_aligned_to_from_domain() {
