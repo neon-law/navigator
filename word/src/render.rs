@@ -1700,6 +1700,30 @@ mod tests {
     }
 
     #[test]
+    fn a_party_voice_render_carries_no_letterhead() {
+        // LAW-340: the CLI hands the Word renderer a letterhead only for
+        // `output: letter`. A declaration's plain frame must arrive
+        // letterhead-free end to end — no first-page header, no embedded
+        // mark, no title page — the same contract an instrument gets.
+        let bytes = render_notation(
+            "I declare under penalty of perjury that the foregoing is true and correct.",
+            None,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        assert!(archive.by_name("word/header2.xml").is_err());
+        assert!(archive.by_name("word/media/letterhead-mark.png").is_err());
+        let mut document = String::new();
+        archive
+            .by_name("word/document.xml")
+            .unwrap()
+            .read_to_string(&mut document)
+            .unwrap();
+        assert!(!document.contains("<w:titlePg/>"), "{document}");
+    }
+
+    #[test]
     fn letter_package_has_editable_outline_and_page_chrome() {
         let bytes = render();
         let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();

@@ -133,6 +133,59 @@ Members:
 {{/for}}
 ";
 
+/// LAW-340: a party-voice declaration. Not an outlined kind, so the body
+/// is plain prose; `output:` is left off so the frame is the plain default.
+const DECLARATION: &str = "\
+---
+kind: declaration
+title: Declaration of Jane Client
+respondent_type: person
+confidential: true
+questionnaire:
+  BEGIN:
+    _: END
+  END: {}
+workflow:
+  BEGIN:
+    intake_submitted: lawyer_review
+  lawyer_review:
+    approved: END
+    rejected: END
+  END: {}
+---
+
+# Declaration of Jane Client
+
+I declare under penalty of perjury that the foregoing is true and correct.
+";
+
+/// The same party-voice fixture attempting the one thing its kind may not
+/// wear: the firm's letterhead.
+const DECLARATION_LETTER: &str = "\
+---
+kind: declaration
+title: Declaration of Jane Client
+respondent_type: person
+confidential: true
+output: letter
+questionnaire:
+  BEGIN:
+    _: END
+  END: {}
+workflow:
+  BEGIN:
+    intake_submitted: lawyer_review
+  lawyer_review:
+    approved: END
+    rejected: END
+  END: {}
+---
+
+# Declaration of Jane Client
+
+I declare under penalty of perjury that the foregoing is true and correct.
+";
+
 fn write(dir: &TempDir, name: &str, body: &str) -> std::path::PathBuf {
     let path = dir.path().join(name);
     fs::write(&path, body).expect("write fixture");
@@ -646,6 +699,64 @@ Plaintiff moves to compel further responses.
 
 The request is proper under the governing rule.
 ";
+
+/// LAW-340: a party-voice document on the firm's letterhead is a gate
+/// refusal with a non-zero exit naming the outputs the kind may declare —
+/// never a warning, and never a rendered page.
+#[test]
+fn a_declaration_with_letter_output_is_refused_not_warned() {
+    let work = TempDir::new().unwrap();
+    let template = write(&work, "declaration_letter.md", DECLARATION_LETTER);
+    let out = work.path().join("declaration_letter.pdf");
+    let result = render_pdf(&[template.as_os_str(), "--out".as_ref(), out.as_os_str()]);
+    assert!(
+        !result.status.success(),
+        "a party-voice document must not render on the firm's letterhead"
+    );
+    // Violation details print on stdout (print_violation); the refusal
+    // summary goes to stderr.
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        stdout.contains("letterhead"),
+        "the refusal must name the letterhead conflict: {stdout}"
+    );
+    assert!(
+        stdout.contains("client_letter") && stdout.contains("pleading"),
+        "the refusal must name the outputs the kind may declare: {stdout}"
+    );
+    assert!(
+        stderr.contains("not rendering"),
+        "the summary must confirm nothing rendered: {stderr}"
+    );
+    assert!(!out.exists(), "no PDF should be written on refusal");
+}
+
+/// The mirror: the same kind with no `output:` renders through the plain
+/// frame — letterhead-free — in both engines.
+#[test]
+fn a_declaration_renders_letterhead_free_in_both_engines() {
+    let work = TempDir::new().unwrap();
+    let template = write(&work, "declaration.md", DECLARATION);
+
+    let pdf_out = work.path().join("declaration.pdf");
+    let pdf_result = render_pdf(&[template.as_os_str(), "--out".as_ref(), pdf_out.as_os_str()]);
+    assert!(
+        pdf_result.status.success(),
+        "declaration pdf failed: {}",
+        String::from_utf8_lossy(&pdf_result.stderr)
+    );
+    assert!(pdf_out.exists() && fs::metadata(&pdf_out).unwrap().len() > 0);
+
+    let docx_out = work.path().join("declaration.docx");
+    let word_result = render_word(&[template.as_os_str(), "--out".as_ref(), docx_out.as_os_str()]);
+    assert!(
+        word_result.status.success(),
+        "declaration word failed: {}",
+        String::from_utf8_lossy(&word_result.stderr)
+    );
+    assert!(docx_out.exists() && fs::metadata(&docx_out).unwrap().len() > 0);
+}
 
 fn pleading_fixture(jurisdiction: &str) -> String {
     VALID_PLEADING.replace("{JURISDICTION}", jurisdiction)

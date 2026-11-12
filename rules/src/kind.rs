@@ -48,6 +48,22 @@ pub enum Kind {
     /// `output: pleading`, and renders through `pdf::pleading`'s
     /// jurisdiction-calibrated geometry rather than a fillable form.
     Pleading,
+    /// A written statement made in a **party's own voice**: a declaration
+    /// (an unsworn statement given under penalty of perjury) or, with
+    /// [`Kind::Affidavit`], its sworn twin. Distinct from
+    /// [`Kind::Pleading`], which is court paper the firm argues from — a
+    /// declaration is testimony the *party* gives, the client signs it
+    /// rather than the lawyer, so it must never go out over the firm's
+    /// letterhead (LAW-340). Its default frame is `plain`, the same
+    /// unbranded page an instrument gets, and `output: letter` is a gate
+    /// refusal, never a warning (see [`crate::f109`]).
+    Declaration,
+    /// A party-voice statement sworn before a notary or other officer
+    /// authorized to administer oaths — the executed twin of
+    /// [`Kind::Declaration`]. Both kinds share one frame contract: the
+    /// party speaks, so the page carries no firm letterhead and
+    /// `output: letter` is refused (LAW-340).
+    Affidavit,
     /// The engagement that opens a matter — a lawyer creates it on the
     /// Project like any other notation (opening the Project does not open
     /// it) and it is the one kind the self-serve doors accept as a
@@ -286,6 +302,8 @@ impl Kind {
         Kind::Directive,
         Kind::Agreement,
         Kind::Pleading,
+        Kind::Declaration,
+        Kind::Affidavit,
         Kind::Onboarding,
         Kind::Offboarding,
         Kind::Memo,
@@ -331,6 +349,8 @@ impl Kind {
             Kind::Directive => "directive",
             Kind::Agreement => "agreement",
             Kind::Pleading => "pleading",
+            Kind::Declaration => "declaration",
+            Kind::Affidavit => "affidavit",
             Kind::Onboarding => "onboarding",
             Kind::Offboarding => "offboarding",
             Kind::Memo => "memo",
@@ -378,6 +398,10 @@ impl Kind {
             Kind::Directive => "An advance health-care or durable financial directive",
             Kind::Agreement => "A private agreement (employment, contractor, LLC operating)",
             Kind::Pleading => "Court paper filed with a court (complaint, motion, brief)",
+            Kind::Declaration => {
+                "A party-voice declaration — an unsworn statement under penalty of perjury"
+            }
+            Kind::Affidavit => "A party-voice affidavit — a statement sworn before a notary",
             Kind::Onboarding => "The engagement that opens a matter — one instrument or a bundle",
             Kind::Offboarding => "The firm-signed letter that closes a matter",
             Kind::Memo => "An analytical work product (a review memo or opinion)",
@@ -479,6 +503,8 @@ impl Kind {
             | Kind::Directive
             | Kind::Agreement
             | Kind::Pleading
+            | Kind::Declaration
+            | Kind::Affidavit
             | Kind::Offboarding
             | Kind::Memo
             | Kind::Resume
@@ -537,6 +563,8 @@ impl Kind {
             | Kind::Directive
             | Kind::Agreement
             | Kind::Pleading
+            | Kind::Declaration
+            | Kind::Affidavit
             | Kind::Onboarding
             | Kind::Memo
             | Kind::Resume
@@ -614,6 +642,8 @@ impl Kind {
                 | Kind::Directive
                 | Kind::Agreement
                 | Kind::Pleading
+                | Kind::Declaration
+                | Kind::Affidavit
                 | Kind::Onboarding
                 | Kind::Offboarding
                 | Kind::Memo
@@ -696,11 +726,16 @@ impl Kind {
             // A resume is dense, unbranded, and headed by the person's own
             // name and contact line.
             Kind::Resume => "resume",
+            // A party-voice statement carries no chrome at all — and
+            // never the firm letterhead, which is the LAW-340 gate's
+            // business (N109 refuses `output: letter` for these kinds).
+            Kind::Declaration
+            | Kind::Affidavit
             // Instruments the firm drafts for a client to execute alone
             // carry no chrome at all. Every other kind below never reaches
             // a render profile: content pages, matter dashboards, the
             // GitHub intake, and asset-lane-only classifications.
-            Kind::TrialPrep
+            | Kind::TrialPrep
             | Kind::Will
             | Kind::Trust
             | Kind::Directive
@@ -765,7 +800,7 @@ impl Kind {
             // drafts for a party to sign.
             Kind::Filing => Category::Filing,
             // Court paper, calibrated to a jurisdiction's own geometry.
-            Kind::Pleading => Category::CourtPaper,
+            Kind::Pleading | Kind::Declaration | Kind::Affidavit => Category::CourtPaper,
             // Public content pages, never filed on a matter.
             Kind::Event | Kind::Post | Kind::Workshop => Category::Content,
             // The engineering intake — borrows the questionnaire grammar but
@@ -868,6 +903,8 @@ impl Kind {
                 | Kind::Directive
                 | Kind::Agreement
                 | Kind::Pleading
+                | Kind::Declaration
+                | Kind::Affidavit
                 | Kind::Onboarding
                 | Kind::Offboarding
                 | Kind::Memo
@@ -916,6 +953,8 @@ impl Kind {
                 | Kind::Directive
                 | Kind::Agreement
                 | Kind::Pleading
+                | Kind::Declaration
+                | Kind::Affidavit
                 | Kind::Onboarding
                 | Kind::Offboarding
                 | Kind::Memo
@@ -994,6 +1033,8 @@ pub const VALID: &[&str] = &[
     "directive",
     "agreement",
     "pleading",
+    "declaration",
+    "affidavit",
     "onboarding",
     "offboarding",
     "memo",
@@ -1136,6 +1177,25 @@ mod tests {
         assert!(!kind.opens_a_matter());
         assert!(!kind.closes_a_matter());
         assert!(!kind.is_client_visible());
+    }
+
+    #[test]
+    fn declaration_and_affidavit_are_party_voice_notations() {
+        // A declaration or affidavit is testimony the *client* gives, so
+        // the firm's frame stays out of the way: default `plain`, no
+        // letterhead, and — the N109 half of the contract — `output:
+        // letter` refused outright.
+        for kind in [Kind::Declaration, Kind::Affidavit] {
+            assert!(kind.is_notation(), "{}", kind.as_str());
+            assert!(kind.valid_for(Lane::Template), "{}", kind.as_str());
+            assert!(kind.valid_for(Lane::Asset), "{}", kind.as_str());
+            assert_eq!(kind.render_default(), Some("plain"), "{}", kind.as_str());
+            assert_eq!(kind.category(), Category::CourtPaper, "{}", kind.as_str());
+            assert!(!kind.opens_a_matter(), "{}", kind.as_str());
+            assert!(!kind.closes_a_matter(), "{}", kind.as_str());
+            assert!(kind.is_client_visible(), "{}", kind.as_str());
+            assert!(kind.structural_rules().is_empty(), "{}", kind.as_str());
+        }
     }
 
     #[test]
