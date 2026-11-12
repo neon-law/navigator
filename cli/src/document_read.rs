@@ -19,7 +19,7 @@ use std::process::ExitCode;
 
 use anyhow::{anyhow, Context, Result};
 use comfy_table::{presets::UTF8_FULL, Cell, ContentArrangement, Table};
-use store::document_pointers::DocumentPointer;
+use model::document_pointers::DocumentPointer;
 
 use crate::document_sync::{read_manifest, read_pointer, slash_path};
 use crate::remote::{DocumentClient, RevisionSummary, RevisionsResponse};
@@ -345,7 +345,7 @@ pub async fn get(pointer: &Path, version: Option<usize>, out: &Path) -> ExitCode
                 || target.sha256.clone(),
                 |pointer| pointer.current_version.sha256.clone(),
             );
-        let actual_sha = store::documents::sha256_hex(&bytes);
+        let actual_sha = model::documents::sha256_hex(&bytes);
         if actual_sha != expected_sha {
             return Err(anyhow!(
                 "sha256 mismatch on revision {}: expected {expected_sha}, got {actual_sha}",
@@ -573,7 +573,7 @@ pub async fn validate_live_pointers(root: &Path) -> Result<()> {
         let result = if let Some(authority_id) = pointer.authority_id {
             match client.download_authority_archive(authority_id).await {
                 Ok(bytes) => {
-                    let sha = store::documents::sha256_hex(&bytes);
+                    let sha = model::documents::sha256_hex(&bytes);
                     let size = i64::try_from(bytes.len()).context("archive size overflow")?;
                     if sha == pointer.current_version.sha256
                         && size == pointer.current_version.size_bytes

@@ -45,6 +45,7 @@ WORKDIR /src
 # std`. Adding it here attaches the target to the toolchain the build uses.
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 RUN rustup target add "$(cat /tmp/rust-target)"
+COPY model             model
 COPY rules             rules
 COPY project-scaffold project-scaffold
 COPY skills            skills

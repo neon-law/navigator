@@ -1,0 +1,37 @@
+[package]
+name = "model"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The pure half of the domain model: types, constants, parsers, and
+# validators with no database, storage, or network client. `store` and
+# `cloud` re-export every item here under its original path; the lean
+# `navigator` links this crate instead of theirs.
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+base64.workspace = true
+chrono.workspace = true
+mail-parser.workspace = true
+reqwest.workspace = true
+rules.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+sha2.workspace = true
+strum.workspace = true
+thiserror.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+wiremock.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net"] }
+
+[lints]
+workspace = true

@@ -42,7 +42,7 @@ pub fn pointer_path_for_slug(root: &Path, slug: &Path) -> PathBuf {
 pub fn slug_of_document_bytes(
     root: &Path,
     relative: &Path,
-) -> Result<(PathBuf, Option<store::document_pointers::MatterFolder>)> {
+) -> Result<(PathBuf, Option<model::document_pointers::MatterFolder>)> {
     let mut found = None;
     for pointer_path in crate::document_read::discover_pointers(root)? {
         let Some(pointer) = read_pointer(&root.join(&pointer_path))? else {
@@ -269,7 +269,7 @@ fn is_signed_pdf_filename(filename: &str) -> bool {
 /// live-check pass (ENG-863), not this offline rule.
 pub fn validate_folder_pointer_keys(
     relative: &Path,
-    pointer: &store::document_pointers::DocumentPointer,
+    pointer: &model::document_pointers::DocumentPointer,
 ) -> Result<()> {
     if is_signed_engagement_folder(relative) {
         let filename = relative
@@ -342,9 +342,9 @@ async fn resolve_pointer_for_binary(
     bytes: &[u8],
     relative: &Path,
     slug: &str,
-    existing_pointer: Option<&store::document_pointers::DocumentPointer>,
-    dropped_into: Option<store::document_pointers::MatterFolder>,
-) -> Result<store::document_pointers::DocumentPointer> {
+    existing_pointer: Option<&model::document_pointers::DocumentPointer>,
+    dropped_into: Option<model::document_pointers::MatterFolder>,
+) -> Result<model::document_pointers::DocumentPointer> {
     if let Some(folder) = authority_capture_folder(relative) {
         return sync_authority_capture(host, path, bytes, existing_pointer, folder).await;
     }
@@ -387,7 +387,7 @@ fn commit_pointer_for_source(
     root: &Path,
     path: &Path,
     pointer_path: &Path,
-    pointer: &store::document_pointers::DocumentPointer,
+    pointer: &model::document_pointers::DocumentPointer,
     bytes: &[u8],
     existing_pointer_raw: Option<&str>,
     has_existing_pointer: bool,
@@ -467,7 +467,7 @@ fn read_authority_sidecar(path: &Path, folder: &str) -> Result<AuthoritySidecar>
 ///
 /// Reads the capture's sidecar, archives the bytes through the same
 /// authenticated door `navigator-deploy site authorities create` uses, and returns
-/// a [`store::document_pointers::DocumentPointer`] carrying the resulting
+/// a [`model::document_pointers::DocumentPointer`] carrying the resulting
 /// `authority_id` alongside `sha256`/`canonical_url`/`checked_on`/`created_at`
 /// — reusing the existing pointer struct rather than a parallel shape.
 /// `kind` is empty (LAW-82): the capture is archived under a global
@@ -477,9 +477,9 @@ async fn sync_authority_capture(
     host: Option<&str>,
     path: &Path,
     bytes: &[u8],
-    existing_pointer: Option<&store::document_pointers::DocumentPointer>,
+    existing_pointer: Option<&model::document_pointers::DocumentPointer>,
     folder: &str,
-) -> Result<store::document_pointers::DocumentPointer> {
+) -> Result<model::document_pointers::DocumentPointer> {
     let sidecar = read_authority_sidecar(path, folder)?;
     let authority = crate::authorities::create_authority(
         host,
@@ -503,16 +503,16 @@ async fn sync_authority_capture(
         .ok_or_else(|| anyhow!("authority create archived no asset for {}", path.display()))?;
     let version = existing_pointer.map_or(1, |pointer| pointer.current_version.version + 1);
     let previous_version = existing_pointer.map(|pointer| pointer.current_version.asset_id);
-    let pointer = store::document_pointers::DocumentPointer {
+    let pointer = model::document_pointers::DocumentPointer {
         checkout_path: None,
         kind: String::new(),
         visibility: "internal".to_string(),
         folder: None,
-        current_version: store::document_pointers::PointerVersion {
+        current_version: model::document_pointers::PointerVersion {
             version,
             asset_id,
             created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-            sha256: store::documents::sha256_hex(bytes),
+            sha256: model::documents::sha256_hex(bytes),
             size_bytes: i64::try_from(bytes.len())
                 .context("authority capture byte count does not fit in pointer")?,
             canonical_url: sidecar.canonical_url,
@@ -643,9 +643,9 @@ struct ProjectSyncPlan {
     /// cannot take a new revision).
     slug: Option<String>,
     /// The pointer the live row describes.
-    pointer: store::document_pointers::DocumentPointer,
+    pointer: model::document_pointers::DocumentPointer,
     /// The pointer committed in the checkout, if any.
-    committed: Option<store::document_pointers::DocumentPointer>,
+    committed: Option<model::document_pointers::DocumentPointer>,
     pointer_target: PathBuf,
     document_target: PathBuf,
     previous_document_target: Option<PathBuf>,
@@ -669,7 +669,7 @@ struct ProjectSyncPlan {
 /// The execution and external-id keys a pointer records by hand or from an
 /// integration, which the live inventory does not model.
 fn recorded_external_keys(
-    pointer: &store::document_pointers::DocumentPointer,
+    pointer: &model::document_pointers::DocumentPointer,
 ) -> Vec<&'static str> {
     let mut keys = Vec::new();
     if pointer.docusign_envelope_id.is_some() {
@@ -694,8 +694,8 @@ fn recorded_external_keys(
 /// the pointer an upload just produced: the server models none of the two ids,
 /// and a signing or notarization block stays unless the live row now has one.
 fn carry_recorded_keys(
-    pointer: &mut store::document_pointers::DocumentPointer,
-    from: &store::document_pointers::DocumentPointer,
+    pointer: &mut model::document_pointers::DocumentPointer,
+    from: &model::document_pointers::DocumentPointer,
 ) {
     pointer.folder = from.folder;
     pointer.docusign_envelope_id = from.docusign_envelope_id;
@@ -776,7 +776,7 @@ fn folder_dry_run_note(plan: &ProjectSyncPlan) -> Option<String> {
 fn read_local_copy(path: &Path) -> Result<Option<LocalCopy>> {
     match std::fs::read(path) {
         Ok(bytes) => Ok(Some(LocalCopy {
-            sha256: store::documents::sha256_hex(&bytes),
+            sha256: model::documents::sha256_hex(&bytes),
             size: bytes.len(),
         })),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -861,7 +861,7 @@ pub fn propose_conventional_slug(root: &Path, slug: &str) -> Option<String> {
 pub fn write_uploaded_pointer(
     root: &Path,
     slug: &str,
-    pointer: &store::document_pointers::DocumentPointer,
+    pointer: &model::document_pointers::DocumentPointer,
 ) -> Result<PathBuf> {
     let relative = PathBuf::from(slug);
     if relative.as_os_str().is_empty()
@@ -914,10 +914,10 @@ pub fn ensure_managed_copy_target(root: &Path, target: &Path) -> Result<()> {
 
 fn current_pointer_matches(
     path: &Path,
-    pointer: &store::document_pointers::DocumentPointer,
+    pointer: &model::document_pointers::DocumentPointer,
 ) -> Result<bool> {
     match std::fs::read_to_string(path) {
-        Ok(raw) => Ok(store::document_pointers::DocumentPointer::from_yaml(&raw)? == *pointer),
+        Ok(raw) => Ok(model::document_pointers::DocumentPointer::from_yaml(&raw)? == *pointer),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(error).with_context(|| format!("read {}", path.display())),
     }
@@ -940,7 +940,7 @@ fn local_pointer_assets(root: &Path) -> Result<BTreeMap<Uuid, String>> {
 }
 
 /// The live Service records of a Project, by the served asset id.
-pub type LiveService = BTreeMap<Uuid, Vec<store::project_service::ServiceRecord>>;
+pub type LiveService = BTreeMap<Uuid, Vec<model::project_service::ServiceRecord>>;
 
 #[allow(clippy::too_many_lines)]
 fn project_sync_plans_scoped(
@@ -987,7 +987,7 @@ fn project_sync_plans_scoped(
             (Some(committed), None) => recorded_external_keys(committed),
             _ => Vec::new(),
         };
-        let pointer = store::document_pointers::DocumentPointer {
+        let pointer = model::document_pointers::DocumentPointer {
             checkout_path: current
                 .metadata
                 .as_ref()
@@ -998,7 +998,7 @@ fn project_sync_plans_scoped(
             visibility: current.visibility.clone(),
             // The live inventory has no folder; the committed pointer names it.
             folder: committed.as_ref().and_then(|committed| committed.folder),
-            current_version: store::document_pointers::PointerVersion {
+            current_version: model::document_pointers::PointerVersion {
                 version: revisions.len(),
                 asset_id: current.id,
                 created_at: normalize_created_at(&current.inserted_at),
@@ -1033,7 +1033,7 @@ fn project_sync_plans_scoped(
             // served when the document takes a new revision. A hand-recorded
             // list is kept while the live Project has none.
             service: {
-                let mut live: Vec<store::project_service::ServiceRecord> = revisions
+                let mut live: Vec<model::project_service::ServiceRecord> = revisions
                     .iter()
                     .filter_map(|revision| live_service.get(&revision.id))
                     .flatten()
@@ -1479,7 +1479,7 @@ async fn stage_project_sync(
                 .await
             {
                 Ok(bytes)
-                    if store::documents::sha256_hex(&bytes)
+                    if model::documents::sha256_hex(&bytes)
                         == plan.pointer.current_version.sha256 =>
                 {
                     let staged_path = downloads.join(staged.len().to_string());
@@ -1491,7 +1491,7 @@ async fn stage_project_sync(
                         "{}: could not read: sha256 mismatch (expected {}, received {})",
                         plan.label,
                         plan.pointer.current_version.sha256,
-                        store::documents::sha256_hex(&bytes)
+                        model::documents::sha256_hex(&bytes)
                     ));
                     continue;
                 }
@@ -1524,7 +1524,7 @@ async fn stage_project_sync(
     for copy in authorities.iter().filter(|copy| copy.missing) {
         match client.download_authority_archive(copy.authority_id).await {
             Ok(bytes) => {
-                let actual = store::documents::sha256_hex(&bytes);
+                let actual = model::documents::sha256_hex(&bytes);
                 if actual != copy.sha256 {
                     unreadable.push(format!(
                         "{}: could not read: sha256 mismatch (expected {}, received {actual})",
@@ -1575,8 +1575,8 @@ async fn upload_local_revision(
     client: &DocumentClient,
     root: &Path,
     path: &Path,
-    base: Option<&store::document_pointers::DocumentPointer>,
-    carry: Option<&store::document_pointers::DocumentPointer>,
+    base: Option<&model::document_pointers::DocumentPointer>,
+    carry: Option<&model::document_pointers::DocumentPointer>,
 ) -> Result<()> {
     ensure_document_path_is_safe(root, path, false, true)?;
     let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
@@ -2420,7 +2420,7 @@ pub fn pull_target(root: &Path, pointer_relative: &Path) -> Result<PathBuf> {
 /// file never matches, so a fresh clone always pulls.
 fn matches_digest(path: &Path, expected_sha256: &str) -> Result<bool> {
     match std::fs::read(path) {
-        Ok(bytes) => Ok(store::documents::sha256_hex(&bytes) == expected_sha256),
+        Ok(bytes) => Ok(model::documents::sha256_hex(&bytes) == expected_sha256),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(error).with_context(|| format!("read {}", path.display())),
     }
@@ -2465,7 +2465,7 @@ enum PublicationFailure {
 }
 
 fn pull_transaction_path(root: &Path) -> PathBuf {
-    let root_key = store::documents::sha256_hex(root.to_string_lossy().as_bytes());
+    let root_key = model::documents::sha256_hex(root.to_string_lossy().as_bytes());
     std::env::temp_dir().join("navigator-pull").join(root_key)
 }
 
@@ -3016,13 +3016,13 @@ fn pointer_path_for_source(root: &Path, path: &Path) -> Result<(PathBuf, bool)> 
 }
 
 pub fn validate_upload_receipt(
-    pointer: &store::document_pointers::DocumentPointer,
+    pointer: &model::document_pointers::DocumentPointer,
     bytes: &[u8],
 ) -> Result<()> {
     pointer
         .validate()
         .map_err(|error| anyhow!("invalid upload pointer: {error}"))?;
-    let expected_sha256 = store::documents::sha256_hex(bytes);
+    let expected_sha256 = model::documents::sha256_hex(bytes);
     if pointer.current_version.sha256 != expected_sha256 {
         return Err(anyhow!(
             "upload pointer sha256 mismatch: expected {expected_sha256}, received {}",
@@ -3204,9 +3204,9 @@ pub fn write_pointer_atomically(path: &Path, yaml: &str) -> Result<()> {
     std::fs::rename(&temp, path).with_context(|| format!("publish {}", path.display()))
 }
 
-pub fn read_pointer(path: &Path) -> Result<Option<store::document_pointers::DocumentPointer>> {
+pub fn read_pointer(path: &Path) -> Result<Option<model::document_pointers::DocumentPointer>> {
     match std::fs::read_to_string(path) {
-        Ok(raw) => store::document_pointers::DocumentPointer::from_yaml(&raw)
+        Ok(raw) => model::document_pointers::DocumentPointer::from_yaml(&raw)
             .with_context(|| format!("validate {}", path.display()))
             .map(Some),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),

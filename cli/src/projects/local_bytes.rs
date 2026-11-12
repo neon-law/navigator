@@ -91,7 +91,7 @@ pub fn verify_with(dir: &Path, documents: &Path) -> Result<Vec<Finding>> {
 }
 
 fn compare(bytes: &[u8], sha256: &str, size_bytes: i64) -> Status {
-    let actual = store::documents::sha256_hex(bytes);
+    let actual = model::documents::sha256_hex(bytes);
     let sizes_agree = i64::try_from(bytes.len()).is_ok_and(|len| len == size_bytes);
     if actual.eq_ignore_ascii_case(sha256) && sizes_agree {
         return Status::Match;

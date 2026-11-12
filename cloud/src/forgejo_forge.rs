@@ -27,38 +27,14 @@ use crate::forgejo_governance::{
 use crate::forge::{
     message_binds_tree, ForgeError, ForgeRepository, ForgeService, SOURCE_TREE_TRAILER,
 };
+pub use model::forge::{ForgeBackend, NAVIGATOR_FORGE_BACKEND_ENV};
 
 /// The Forgejo instance's root URL, for example `https://forge.example.test`.
 pub const NAVIGATOR_FORGEJO_ROOT_URL_ENV: &str = "NAVIGATOR_FORGEJO_ROOT_URL";
-/// Selects the deployment's Project forge: `github` (the default) or
-/// `forgejo`.
-pub const NAVIGATOR_FORGE_BACKEND_ENV: &str = "NAVIGATOR_FORGE_BACKEND";
 /// Every Project repository's one branch.
 pub const DEFAULT_BRANCH: &str = "main";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const USER_AGENT: &str = concat!("neon-law-navigator/", env!("CARGO_PKG_VERSION"));
-
-/// Which forge creates a deployment's Project repositories.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ForgeBackend {
-    GitHub,
-    Forgejo,
-}
-
-impl ForgeBackend {
-    /// Read [`NAVIGATOR_FORGE_BACKEND_ENV`]. Unset is GitHub, the existing
-    /// deployments' forge; any other value than the two names fails closed.
-    ///
-    /// # Errors
-    /// [`ForgeError::InvalidConfig`] for an unknown value.
-    pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<Self, ForgeError> {
-        match get(NAVIGATOR_FORGE_BACKEND_ENV).as_deref().map(str::trim) {
-            None | Some("" | "github") => Ok(Self::GitHub),
-            Some("forgejo") => Ok(Self::Forgejo),
-            Some(_) => Err(ForgeError::InvalidConfig(NAVIGATOR_FORGE_BACKEND_ENV)),
-        }
-    }
-}
 
 /// One Firm's Forgejo namespace and credential.
 #[derive(Clone)]

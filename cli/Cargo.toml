@@ -11,13 +11,13 @@ name = "navigator"
 path = "src/main.rs"
 
 [dependencies]
+model.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 base64.workspace = true
 chrono.workspace = true
 clap.workspace = true
 comfy-table.workspace = true
-cloud.workspace = true
 dotenvy.workspace = true
 # `navigator-deploy lsp` unpacks the `.tar.gz` release archives it downloads for
 # Linux/macOS, paired with `tar` below.
@@ -28,7 +28,7 @@ include_dir.workspace = true
 # `project efiling` and `project docket ingest` read saved `.eml` notices.
 mail-parser.workspace = true
 owo-colors.workspace = true
-pdf.workspace = true
+lopdf.workspace = true
 pdf-extract.workspace = true
 project-scaffold.workspace = true
 rand.workspace = true
@@ -44,7 +44,6 @@ sha2.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
-store.workspace = true
 tar.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
@@ -69,12 +68,13 @@ security-framework = "3.7.0"
 rustix.workspace = true
 
 [dev-dependencies]
+cloud.workspace = true
+pdf.workspace = true
 assert_cmd.workspace = true
 # The gate and docket tests drive a real portal router in-process.
 axum.workspace = true
 forms.workspace = true
 portal.workspace = true
-lopdf.workspace = true
 neon.workspace = true
 nix = { workspace = true, features = ["term"] }
 predicates.workspace = true

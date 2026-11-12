@@ -5,7 +5,7 @@
 //! `projects.code`. The verbs that operate on that pair live here rather than
 //! under `crate::remote`, grouped by the noun they act on rather than by
 //! mechanism — some ([`doctor`], [`repository`]) resolve deployment-owned
-//! coordinates from [`cloud::workspace`] and inspect the operator's own
+//! coordinates from [`model::workspace`] and inspect the operator's own
 //! machine, while others ([`drift`], [`surfaces`]) are pure clients of the
 //! logged-in deployment's admin API, exactly like every command in
 //! `crate::remote`. Neither `drift` nor `surfaces` opens a database

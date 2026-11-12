@@ -9,12 +9,12 @@
 //!
 //! # This is the repository half only
 //!
-//! The row half lives in [`store::project_reconcile`], behind
+//! The row half lives in [`model::project_reconcile`], behind
 //! `GET /app/api/project-repositories`, and the split is not arbitrary: the two
 //! halves need different things and fail differently.
 //!
 //! A row can be checked against itself. A Project code *is* its repository name
-//! ([`cloud::workspace::is_valid_slug`]), so a row whose `repository_url` names
+//! ([`model::workspace::is_valid_slug`]), so a row whose `repository_url` names
 //! a different repository is drift provable from that one row — no checkout, no
 //! fleet, no configuration. That belongs on the server, where every row is
 //! visible and no local state is assumed.
@@ -32,7 +32,7 @@
 //! codes themselves, which is exactly the question and nothing more.
 //!
 //! It is deliberately *not* `GET /app/api/projects`. That route returns the
-//! caller's own matters — `store::access::visible_projects` scopes to
+//! caller's own matters — `model::access::visible_projects` scopes to
 //! participation rows for every firm tier, Owner and Admin included — so a
 //! repository whose row exists but the caller does not participate in would
 //! have read as a repository with no row at all, which is the loudest failure
@@ -86,7 +86,7 @@ use crate::projects::doctor::Status;
 /// Taken from [`super::repository`] rather than spelled again: two constants for
 /// one filename is a rename waiting to leave one of them stale, and the layout
 /// gate that admits the file and the command that reads it are exactly the pair
-/// that must agree. The same file `store::sample_project::MANIFEST_FILE` names —
+/// that must agree. The same file `model::sample_project::MANIFEST_FILE` names —
 /// a staged sample bundle's manifest is a copy of the same `navigator.yaml`,
 /// keyed `project:`, not a different contract.
 use super::repository::PROJECT_MANIFEST as MANIFEST;
@@ -129,7 +129,7 @@ impl ScannedRepository {
 /// What the two sides disagree about.
 ///
 /// Serialized internally tagged, so every variant's fields survive onto the
-/// wire beside its `kind` — the same shape `store::project_reconcile::Finding`
+/// wire beside its `kind` — the same shape `model::project_reconcile::Finding`
 /// emits, because a gate reading both halves should not need two parsers. The
 /// alternative, flattening each finding into a `detail` sentence, makes the
 /// prose the contract: a consumer wanting the repository a finding is about has
@@ -405,9 +405,9 @@ fn scan_repository(directory: &Path) -> ScannedRepository {
         .map(|code| code.trim().to_string())
         .filter(|code| !code.is_empty());
     // The manifest cannot introduce a code the rest of Navigator would refuse,
-    // the same rule `store::sample_project::project_code_from_manifest` applies.
+    // the same rule `model::sample_project::project_code_from_manifest` applies.
     if let Some(code) = &declared {
-        if !store::projects::is_valid_code(code) {
+        if !model::projects::is_valid_code(code) {
             return unreadable(format!(
                 "`{MANIFEST_CODE_KEY}: {code}` is not a valid Project code"
             ));
@@ -466,7 +466,7 @@ pub fn scan(root: &Path) -> Result<Vec<ScannedRepository>> {
 /// Read the live Project codes from the reconciliation door.
 ///
 /// `GET /app/api/project-repositories` rather than `GET /app/api/projects`. The
-/// latter returns the *caller's* matters — `store::access::visible_projects`
+/// latter returns the *caller's* matters — `model::access::visible_projects`
 /// scopes to participation rows for every firm tier, Owner and Admin included —
 /// so a repository whose row exists but this caller does not participate in
 /// would read as a repository with no row, which is the loudest finding here.

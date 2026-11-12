@@ -154,7 +154,7 @@ async fn run_offboard(
         let closed = remote::matter_close(
             host,
             &project.code,
-            store::projects::ClosureReason::EngagementCompleted,
+            model::projects::ClosureReason::EngagementCompleted,
             effective_at,
         )
         .await;
@@ -491,7 +491,7 @@ fn has_signed_pointer(root: &Path, kind: &str) -> Result<bool> {
         {
             continue;
         }
-        let pointer = store::document_pointers::DocumentPointer::from_yaml(
+        let pointer = model::document_pointers::DocumentPointer::from_yaml(
             &std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?,
         )?;
         let source_name = path

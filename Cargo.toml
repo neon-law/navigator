@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "model",
     "rules",
     "project-scaffold",
     "store",
@@ -210,6 +211,7 @@ neon = { path = "neon" }
 repos = { path = "repos" }
 sandbox-skills = { path = "sandbox-skills" }
 server = { path = "server" }
+model = { path = "model" }
 rules = { path = "rules" }
 project-scaffold = { path = "project-scaffold" }
 store = { path = "store" }

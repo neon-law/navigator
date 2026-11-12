@@ -26,7 +26,10 @@ pub fn transcribe_pdf(bytes: &[u8]) -> Result<String> {
 }
 
 fn transcribe_pdf_with(bytes: &[u8], pdftoppm: &OsStr, tesseract: &OsStr) -> Result<String> {
-    let pages = pdf::page_count(bytes).context("read source PDF page count")?;
+    let pages = lopdf::Document::load_mem(bytes)
+        .context("read source PDF page count")?
+        .get_pages()
+        .len();
     if pages == 0 {
         return Err(anyhow!("source PDF has no pages"));
     }
