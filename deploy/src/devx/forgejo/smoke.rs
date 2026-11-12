@@ -38,20 +38,20 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use sqlx::postgres::{PgConnectOptions, PgSslMode};
 
 use super::super::KindConfig;
 use super::cluster::Kube;
 use super::oidc::{self, Outcome};
 use super::{
-    actions_context, assert_analyzed_push_receipt, forwarded_port, http_probe_script,
-    parse_push_receipt_row, port_forward_args, random_hex, receipt_is_terminal,
-    receiver_endpoints_manifest, receiver_service_url, receiver_start_script, CookieJar,
-    PushReceiptRow, Seed, ADMISSION_CONFIG_MAP, ALLOWED_IDENTITY, ALLOWLIST_KEY, BOT_PUSH_WORKFLOW,
+    ADMISSION_CONFIG_MAP, ALLOWED_IDENTITY, ALLOWLIST_KEY, BOT_PUSH_WORKFLOW, CookieJar,
     DATA_CLAIM, DENIED_IDENTITIES, GATE_WORKFLOW, POD, POSTGRES_POD, PUBLISH_WORKFLOW,
-    RECEIVER_BINARY, RECEIVER_CONFIG, RECEIVER_FORGE_URL, RECEIVER_LOG, RECEIVER_NAMESPACE,
-    RECEIVER_PID, RECEIVER_PORT, RECEIVER_SERVICE, SEED_SECRET, SMOKE_ALLOWLIST, STATEFULSET,
+    PushReceiptRow, RECEIVER_BINARY, RECEIVER_CONFIG, RECEIVER_FORGE_URL, RECEIVER_LOG,
+    RECEIVER_NAMESPACE, RECEIVER_PID, RECEIVER_PORT, RECEIVER_SERVICE, SEED_SECRET,
+    SMOKE_ALLOWLIST, STATEFULSET, Seed, actions_context, assert_analyzed_push_receipt,
+    forwarded_port, http_probe_script, parse_push_receipt_row, port_forward_args, random_hex,
+    receipt_is_terminal, receiver_endpoints_manifest, receiver_service_url, receiver_start_script,
 };
 
 /// The allowed identity's Forgejo user name (`USERNAME = email` keeps the
@@ -881,8 +881,8 @@ async fn squash_merge_proofs(
     forge: &str,
     token: &str,
 ) -> Result<()> {
-    use super::policy::scheduler::{schedule_open, PullRequestOutcome};
     use super::policy::Forgejo;
+    use super::policy::scheduler::{PullRequestOutcome, schedule_open};
 
     let repository = format!("{OWNER}/{MERGE_REPOSITORY}");
     let repo_api = format!("{forge}/api/v1/repos/{repository}");
@@ -1779,7 +1779,10 @@ async fn push_webhook_proof(
     kube.output(&["exec", POSTGRES_POD, "--", RECEIVER_BINARY, "--version"])
         .context(
             "the receiver binary does not execute in the Linux pod; \
-             the push-webhook phase needs a Linux-built smoke binary",
+             the push-webhook phase needs the staged musl receiver binary \
+             (build it with --target x86_64-unknown-linux-musl and copy it \
+             to target/receiver/navigator-deploy, or point \
+             NAVIGATOR_SMOKE_RECEIVER_BINARY at one)",
         )?;
     kube.output(&[
         "exec",
@@ -1872,11 +1875,25 @@ async fn push_webhook_proof(
     Ok(())
 }
 
-/// Copy the smoke's own binary into a staging directory, symbol-stripped
-/// and gzipped for the transfer into the hosting pod.
+/// Copy the receiver binary into a staging directory, symbol-stripped and
+/// gzipped for the transfer into the hosting pod: the workspace's prebuilt
+/// musl build when one is staged (the CI job's), else the smoke's own
+/// binary — which on a macOS host fails the pod's readiness gate by design.
 fn stage_receiver_binary() -> Result<ReceiverStaging> {
     let dir = tempfile::tempdir().context("create the receiver staging directory")?;
-    let exe = std::env::current_exe().context("locate the smoke binary")?;
+    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .context("locate the workspace root")?
+        .to_path_buf();
+    let exe = super::receiver_binary_source(
+        &workspace_root,
+        std::env::var("NAVIGATOR_SMOKE_RECEIVER_BINARY")
+            .ok()
+            .as_deref(),
+    )
+    .or_else(|| std::env::current_exe().ok())
+    .context("no receiver binary to stage")?;
     let staged = dir.path().join("navigator-deploy");
     std::fs::copy(&exe, &staged).with_context(|| format!("stage {}", exe.display()))?;
     match std::process::Command::new("strip").arg(&staged).status() {
