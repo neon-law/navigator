@@ -49,8 +49,8 @@ use super::{
     parse_push_receipt_row, port_forward_args, random_hex, receipt_is_terminal,
     receiver_endpoints_manifest, receiver_service_url, CookieJar, PushReceiptRow, Seed,
     ADMISSION_CONFIG_MAP, ALLOWED_IDENTITY, ALLOWLIST_KEY, BOT_PUSH_WORKFLOW, DATA_CLAIM,
-    DENIED_IDENTITIES, GATE_WORKFLOW, POD, POSTGRES_POD, PUBLISH_WORKFLOW, RECEIVER_SERVICE,
-    SEED_SECRET, SMOKE_ALLOWLIST, STATEFULSET,
+    DENIED_IDENTITIES, GATE_WORKFLOW, POD, POSTGRES_POD, PUBLISH_WORKFLOW, RECEIVER_NAMESPACE,
+    RECEIVER_SERVICE, SEED_SECRET, SMOKE_ALLOWLIST, STATEFULSET,
 };
 
 /// The allowed identity's Forgejo user name (`USERNAME = email` keeps the
@@ -1919,7 +1919,7 @@ async fn push_webhook_proof(
             "bash",
             "-c",
             &http_probe_script(
-                &format!("{RECEIVER_SERVICE}.default.svc.cluster.local"),
+                &format!("{RECEIVER_SERVICE}.{RECEIVER_NAMESPACE}.svc.cluster.local"),
                 80,
                 "/webhook/forgejo/pod-probe",
             ),
