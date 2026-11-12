@@ -204,7 +204,17 @@ async fn seed_vesta_brand(
         // The applied schema tightens `slug` to `string READONLY` after its
         // backfill, so a Firm is born with the slug its name derives — the
         // way `store::firms::create` writes one.
-        .bind(("slug", store::firms::slug::derive(FIXTURE_FIRM_NAME)))
+        .bind((
+            "slug",
+            format!(
+                // Concurrency: every test seeds the same named Firm against a
+                // shared server SurrealDB, and `firm_slug` is a unique index —
+                // the slug carries the record's id so parallel seeds cannot collide.
+                "{}-{}",
+                store::firms::slug::derive(FIXTURE_FIRM_NAME),
+                firm_id.simple()
+            ),
+        ))
         .bind(("id", record_id("brand", brand_id)))
         .bind(("name", "Vesta".to_string()))
         .bind(("entity", VESTA_ENTITY.to_string()))
@@ -350,6 +360,18 @@ fn pdf_text(pdf: &Path) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
+/// The provenance line the binary must print for a runtime render of
+/// `row`: the revision spelled exactly as the store resolve serializes it
+/// (chrono's `+00:00`, not the seeded `Z`), so the test cannot pass on a
+/// spelling the deployment would never serve.
+fn runtime_provenance(row: &str, mark: &str) -> String {
+    let revision = serde_json::from_str::<serde_json::Value>(row)
+        .ok()
+        .and_then(|parsed| parsed["updated_at"].as_str().map(str::to_owned))
+        .unwrap_or_else(|| "n/a".to_string());
+    format!("letterhead: source=runtime brand=vesta revision={revision} mark={mark}")
+}
+
 /// One part of a `.docx` package, read back out of the zip.
 fn docx_part(bytes: &[u8], name: &str) -> String {
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("docx is a zip");
@@ -382,7 +404,8 @@ async fn the_deployment_row_frames_the_pdf_letter() {
     seed_vesta_letterhead_row(&stores, "wordmark", false).await;
     let row = door_row_from_stores(&stores).await;
     let server = wiremock::MockServer::start().await;
-    mount_row_double(&server, row).await;
+    let provenance = runtime_provenance(&row, "wordmark");
+    mount_row_double(&server, row.clone()).await;
     let work = TempDir::new().expect("tempdir");
     let src = letter_in_project(&work);
     let out = work.path().join("demand.pdf");
@@ -414,7 +437,7 @@ async fn the_deployment_row_frames_the_pdf_letter() {
         "the letter must not wear the default Brand's wordmark: {text}"
     );
     assert!(
-        stderr.contains(RUNTIME_PROVENANCE),
+        stderr.contains(&provenance),
         "the provenance line must name the runtime source, brand, revision, and mark: {stderr}"
     );
     assert!(
@@ -431,7 +454,8 @@ async fn the_deployment_row_frames_the_word_letter() {
     seed_vesta_letterhead_row(&stores, "wordmark", false).await;
     let row = door_row_from_stores(&stores).await;
     let server = wiremock::MockServer::start().await;
-    mount_row_double(&server, row).await;
+    let provenance = runtime_provenance(&row, "wordmark");
+    mount_row_double(&server, row.clone()).await;
     let work = TempDir::new().expect("tempdir");
     let src = letter_in_project(&work);
     let out = work.path().join("demand.docx");
@@ -471,7 +495,7 @@ async fn the_deployment_row_frames_the_word_letter() {
         "a mark=wordmark row draws no uploaded logo part"
     );
     assert!(
-        stderr.contains(RUNTIME_PROVENANCE),
+        stderr.contains(&provenance),
         "the provenance line must name the runtime source: {stderr}"
     );
     assert!(
@@ -570,7 +594,8 @@ async fn an_unfetchable_uploaded_mark_degrades_to_the_wordmark_loudly() {
     // The assets route is deliberately unmounted: the door answers the row,
     // the mark's bytes are not there.
     let server = wiremock::MockServer::start().await;
-    mount_row_double(&server, row).await;
+    let provenance = runtime_provenance(&row, "wordmark");
+    mount_row_double(&server, row.clone()).await;
     let work = TempDir::new().expect("tempdir");
     let src = letter_in_project(&work);
     let out = work.path().join("demand.docx");
@@ -596,7 +621,7 @@ async fn an_unfetchable_uploaded_mark_degrades_to_the_wordmark_loudly() {
         "the degraded frame still carries the runtime wordmark: {header}"
     );
     assert!(
-        stderr.contains(RUNTIME_PROVENANCE),
+        stderr.contains(&provenance),
         "the provenance names the mark it actually drew: {stderr}"
     );
 }

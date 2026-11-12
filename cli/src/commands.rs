@@ -4594,7 +4594,7 @@ pub fn parse_transcript_quality(value: &str) -> Result<String, String> {
     }
 }
 
-pub const DOCUMENT_UPLOAD_KIND_HELP: &str = "Accepted --kind values: letter, filing, will, trust, directive, agreement, pleading, declaration, onboarding, offboarding, memo, resume, trial_prep, transcript, inbound_contract, certificate_of_naturalization, exhibit, order, closed_repository, invoice, unclassified.";
+pub const DOCUMENT_UPLOAD_KIND_HELP: &str = "Accepted --kind values: letter, filing, will, trust, directive, agreement, pleading, declaration, affidavit, onboarding, offboarding, memo, resume, trial_prep, transcript, inbound_contract, certificate_of_naturalization, exhibit, order, closed_repository, invoice, unclassified.";
 
 pub const DOCUMENT_TRANSCRIBE_HELP: &str = "Each page is rendered locally, orientation-corrected, deskewed, and OCR'd before the transcript is uploaded as a `transcript` revision linked to the exact source asset id, version, and SHA-256. OCR requires local Poppler (`pdftoppm`) and Tesseract with the `eng` and `osd` language data. Source pages and transcript text are sent to no OCR provider and are never written into Git.";
 
