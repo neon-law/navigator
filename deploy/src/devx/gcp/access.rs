@@ -342,10 +342,7 @@ async fn ensure_secret_key(
             ));
         }
     }
-    let agent = format!(
-        "serviceAccount:service-{}@gcp-sa-secretmanager.iam.gserviceaccount.com",
-        project_number(client, project_id).await?
-    );
+    let agent = secret_manager_agent(&project_number(client, project_id).await?);
     let resource = Resource::Key(&key);
     let mut policy = read_policy(client, &resource).await?;
     if set_sole_member(&mut policy, KEY_ROLE, &agent) {
@@ -654,6 +651,11 @@ fn ensure_data_read(policy: &mut Value, service: &str) -> bool {
     true
 }
 
+/// The Secret Manager service agent for the project with this number.
+fn secret_manager_agent(project_number: &str) -> String {
+    format!("serviceAccount:service-{project_number}@gcp-sa-secretmanager.iam.gserviceaccount.com")
+}
+
 fn ok_json(
     response: super::client::HttpResponse,
     operation: impl FnOnce() -> String,
@@ -904,7 +906,7 @@ secrets = ["DECLARED"]
             .and(path(format!("/v1/{key}:setIamPolicy")))
             .and(body_partial_json(
                 json!({"policy": {"bindings": [{"role": KEY_ROLE, "members": [
-                    "serviceAccount:service-123@gcp-sa-secretmanager.iam.gserviceaccount.com"
+                    secret_manager_agent("123")
                 ]}]}}),
             ))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
