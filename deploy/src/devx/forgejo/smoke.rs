@@ -1677,30 +1677,19 @@ fn node_ip(kube: &Kube) -> Result<String> {
 }
 
 /// The push journal's lane: the `navigator` database on the KIND PostgreSQL,
-/// reached over a port-forward with the tier's CA certificate. `dev forgejo
-/// up` provisions the database empty; the smoke migrates it.
-async fn journal_lane(
-    kube: &Kube,
-    database: &Forward,
-    seed: &Seed,
-) -> Result<Arc<store::postgres::PostgresDb>> {
-    let ca = kube
-        .secret("navigator-forgejo-postgres-ca")?
-        .and_then(|data| data.get("ca.crt").cloned())
-        .context("the KIND PostgreSQL published no CA certificate")?;
-    let root = std::env::temp_dir().join(format!(
-        "navigator-smoke-postgres-ca-{}",
-        std::process::id()
-    ));
-    std::fs::write(&root, ca).context("stage the PostgreSQL CA certificate")?;
+/// reached over a port-forward. The connection is encrypted but its identity
+/// is not verified: the tier's self-signed certificate carries CA basic
+/// constraints, which rustls rejects as an end-entity cert (libpq accepts it
+/// through explicit trust), and the loopback forward pins the target anyway.
+/// `dev forgejo up` provisions the database empty; the smoke migrates it.
+async fn journal_lane(database: &Forward, seed: &Seed) -> Result<Arc<store::postgres::PostgresDb>> {
     let options = PgConnectOptions::new()
         .host("127.0.0.1")
         .port(database.port())
         .username("postgres")
         .password(&seed.postgres_password)
         .database("navigator")
-        .ssl_mode(PgSslMode::VerifyCa)
-        .ssl_root_cert(&root);
+        .ssl_mode(PgSslMode::Require);
     // PostgresDb::connect maps every failure to "PostgreSQL is
     // unavailable"; probe once with the raw connection so a refused
     // handshake reports its real cause.
@@ -1836,7 +1825,7 @@ async fn push_webhook_proof(
     let hmac_key = random_hex();
     let database = Forward::open_target(kube, &format!("pod/{POSTGRES_POD}"), 5432)
         .context("port-forward the KIND PostgreSQL")?;
-    let journal = journal_lane(kube, &database, seed).await?;
+    let journal = journal_lane(&database, seed).await?;
     let surreal = store::test_support::mem_surreal().await;
     let seeded = seed_firm_project(&surreal).await?;
     ensure!(
