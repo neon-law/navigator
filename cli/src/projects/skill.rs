@@ -457,6 +457,11 @@ mod tests {
     }
 
     #[test]
+    fn the_new_york_uncontested_divorce_kit_resolves_and_bundles_its_notations() {
+        assert_kit_bundles_its_notations("NY", "uncontested_divorce");
+    }
+
+    #[test]
     fn find_is_case_insensitive_on_jurisdiction() {
         let entries = catalog();
         let upper = find(&entries, "NV", "estates").expect("NV estates resolves");
