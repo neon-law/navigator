@@ -182,8 +182,15 @@ impl ForgejoForge {
         // A cluster-internal service name (the KIND smoke tier's in-pod
         // receiver) is the loopback test host's analogue: the name resolves
         // only inside the cluster network, so the token never crosses the
-        // boundary in plaintext.
-        let cluster_internal = root.starts_with("http://") && root.ends_with(".svc.cluster.local");
+        // boundary in plaintext. Strip any :port — the boundary is the
+        // name, not the port.
+        let host = root
+            .strip_prefix("http://")
+            .unwrap_or_default()
+            .split(['/', ':'])
+            .next()
+            .unwrap_or_default();
+        let cluster_internal = root.starts_with("http://") && host.ends_with(".svc.cluster.local");
         if !(root.starts_with("https://") || loopback || cluster_internal) {
             return Err(ForgeError::InvalidConfig(NAVIGATOR_FORGEJO_ROOT_URL_ENV));
         }
@@ -879,14 +886,14 @@ mod tests {
         let loopback = ForgejoForge::new("http://127.0.0.1:8080/", "firm-a", "t").unwrap();
         assert_eq!(loopback.api_base, "http://127.0.0.1:8080/api/v1");
         let in_cluster = ForgejoForge::new(
-            "http://navigator-forgejo.navigator.svc.cluster.local",
+            "http://navigator-forgejo.navigator.svc.cluster.local:3000",
             "firm-a",
             "t",
         )
         .unwrap();
         assert_eq!(
             in_cluster.api_base,
-            "http://navigator-forgejo.navigator.svc.cluster.local/api/v1"
+            "http://navigator-forgejo.navigator.svc.cluster.local:3000/api/v1"
         );
         // A bare in-cluster short name would ride the pod's DNS search
         // path — fine for a dial, but the root URL must name the boundary
