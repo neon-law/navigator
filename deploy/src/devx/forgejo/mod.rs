@@ -212,8 +212,10 @@ fn kind_app_ini(seed: &Seed, namespace: &str, forgejo_port: u16) -> Result<Strin
     );
     // Forgejo signs authorized operations with its instance key; people sign
     // in through OIDC without enrolling a separate local factor or key.
+    // The smoke's receiver is the host behind the Docker bridge — a private
+    // address the forge's SSRF default (`external`) refuses to deliver to.
     Ok(format!(
-        "{}[repository.signing]\nFORMAT = ssh\nSIGNING_KEY = {SIGNING_PUBLIC_KEY}\n\
+        "{}[webhook]\nALLOWED_HOST_LIST = external,private\n[repository.signing]\nFORMAT = ssh\nSIGNING_KEY = {SIGNING_PUBLIC_KEY}\n\
          SIGNING_NAME = {SIGNING_NAME}\nSIGNING_EMAIL = {SIGNING_EMAIL}\n\
          INITIAL_COMMIT = always\nCRUD_ACTIONS = always\nMERGES = always\n",
         rendered.replacen(disabled, "[actions]\nENABLED = true\n", 1)
@@ -380,6 +382,168 @@ fn path_and_query(location: &str) -> Result<String> {
     })
 }
 
+// --- The push-webhook proof's decisions -------------------------------------
+//
+// Pure, so the unit tests below hold them; the KIND orchestration that
+// produces their inputs lives in `smoke.rs`.
+
+/// One journaled push receipt, as the smoke's psql row carries it:
+/// `status|change_id|author|description|conflict|failure_detail`, empty
+/// strings where the pipeline has not yet written.
+#[derive(Debug)]
+pub(super) struct PushReceiptRow {
+    pub(super) status: String,
+    pub(super) change_id: String,
+    pub(super) author: String,
+    pub(super) description_summary: String,
+    pub(super) conflict_signal: String,
+    pub(super) failure_detail: String,
+}
+
+/// Parse one pipe-joined receipt row. The failure detail is last and may
+/// itself carry pipes, so the split stops at six fields.
+pub(super) fn parse_push_receipt_row(row: &str) -> Result<PushReceiptRow, String> {
+    let fields: [&str; 6] = row
+        .splitn(6, '|')
+        .collect::<Vec<_>>()
+        .try_into()
+        .map_err(|_| format!("receipt row {row:?} is not six pipe-separated fields"))?;
+    let [status, change_id, author, description, conflict, failure] = fields;
+    Ok(PushReceiptRow {
+        status: status.to_owned(),
+        change_id: change_id.to_owned(),
+        author: author.to_owned(),
+        description_summary: description.to_owned(),
+        conflict_signal: conflict.to_owned(),
+        failure_detail: failure.to_owned(),
+    })
+}
+
+/// True when the pipeline will not advance the receipt further — the
+/// smoke's poll stops here.
+pub(super) fn receipt_is_terminal(status: &str) -> bool {
+    matches!(status, "delivered" | "failed" | "skipped")
+}
+
+/// The push-webhook proof: the receipt reached `delivered` — the terminal
+/// state a clean push ends in — carrying the analysis columns: the pushed
+/// bookmark's change id, its author, its one-line description, and no
+/// conflict signal. `Err` names what the journal actually holds.
+pub(super) fn assert_analyzed_push_receipt(
+    row: &PushReceiptRow,
+    change_id: &str,
+    description: &str,
+) -> Result<(), String> {
+    match row.status.as_str() {
+        "delivered" => {}
+        "failed" => {
+            return Err(format!(
+                "the push receipt failed at consumption: {}",
+                row.failure_detail
+            ))
+        }
+        "skipped" => return Err("the push receipt was skipped, not analyzed".to_owned()),
+        other => {
+            return Err(format!(
+                "the push receipt never finished consumption: {other}"
+            ))
+        }
+    }
+    if row.change_id != change_id {
+        return Err(format!(
+            "the journal analyzed change {} for this push, not {change_id}",
+            row.change_id
+        ));
+    }
+    if row.author.is_empty() {
+        return Err("the journal holds no author for the analyzed push".to_owned());
+    }
+    if row.description_summary != description {
+        return Err(format!(
+            "the journal analyzed description {:?}, not {description:?}",
+            row.description_summary
+        ));
+    }
+    if row.conflict_signal != "false" {
+        return Err(format!(
+            "the clean push carried a conflict signal of {:?}",
+            row.conflict_signal
+        ));
+    }
+    Ok(())
+}
+
+/// The receiver probe a pod runs over the host gateway: one raw HTTP
+/// request through bash's `/dev/tcp` (the image carries no curl), answered
+/// by any status line — a wrong-secret refusal is reachability proven.
+pub(super) fn http_probe_script(host: &str, port: u16, path: &str) -> String {
+    format!(
+        "exec 3<>/dev/tcp/{host}/{port} && \
+         printf 'GET {path} HTTP/1.1\\r\\nHost: {host}\\r\\nConnection: close\\r\\n\\r\\n' >&3 && \
+         head -n1 <&3"
+    )
+}
+
+/// The in-cluster name of the receiver's Service: pods dial it, and
+/// kube-proxy delivers to the host gateway from the node's own network
+/// namespace — a path the pod overlay does not blackhole.
+pub(super) const RECEIVER_SERVICE: &str = "forgejo-receiver";
+
+/// The smoke's kubectl context namespace: every smoke resource, including
+/// the receiver's Service, lives there.
+pub(super) const RECEIVER_NAMESPACE: &str = "navigator";
+
+/// The receiver's in-cluster Service and manual Endpoints: Forgejo dials
+/// the Service name, and kube-proxy NATs the delivery to the address the
+/// receiver listens on — the postgres pod hosting the smoke's receiver,
+/// whose reachability from other pods the tier already proves.
+pub(super) fn receiver_endpoints_manifest(endpoint_ip: &str, port: u16) -> String {
+    format!(
+        "apiVersion: v1\nkind: Service\nmetadata:\n  name: {RECEIVER_SERVICE}\n  namespace: {RECEIVER_NAMESPACE}\nspec:\n  type: ClusterIP\n  ports:\n    - port: 80\n      targetPort: {port}\n---\napiVersion: v1\nkind: Endpoints\nmetadata:\n  name: {RECEIVER_SERVICE}\n  namespace: {RECEIVER_NAMESPACE}\nsubsets:\n  - addresses:\n      - ip: {endpoint_ip}\n    ports:\n      - port: {port}\n"
+    )
+}
+
+/// The receiver's in-cluster URL: Forgejo delivers webhooks through the
+/// Service, not to a host address pods cannot reach.
+pub(super) fn receiver_service_url() -> String {
+    format!("http://{RECEIVER_SERVICE}.{RECEIVER_NAMESPACE}.svc.cluster.local")
+}
+
+/// The fixed port the in-pod receiver serves on: the pod's network
+/// namespace is private, so a fixed port never collides.
+pub(super) const RECEIVER_PORT: u16 = 41080;
+
+/// Where the receiver's binary, config, log, and pid live inside the
+/// hosting pod's filesystem.
+pub(super) const RECEIVER_BINARY: &str = "/tmp/forgejo-receiver/navigator-deploy";
+pub(super) const RECEIVER_CONFIG: &str = "/tmp/forgejo-receiver/receiver.json";
+pub(super) const RECEIVER_LOG: &str = "/tmp/forgejo-receiver/receiver.log";
+pub(super) const RECEIVER_PID: &str = "/tmp/forgejo-receiver/receiver.pid";
+
+/// The receiver pod's in-cluster Forgejo API base: the analysis reads
+/// pushed changes over the cluster's own Service, in plain HTTP.
+pub(super) const RECEIVER_FORGE_URL: &str = "http://navigator-forgejo:3000";
+
+/// The pod command that (re)starts the receiver: any previous receiver dies
+/// first so re-runs are idempotent, the new one detaches with nohup so the
+/// exec session can end, and its pid is recorded for a later stop.
+pub(super) fn receiver_start_script() -> String {
+    format!(
+        "mkdir -p $(dirname {RECEIVER_CONFIG}) && \
+         kill $(cat {RECEIVER_PID} 2>/dev/null) 2>/dev/null; \
+         nohup {RECEIVER_BINARY} dev forgejo smoke --receiver-config {RECEIVER_CONFIG} \
+         >>{RECEIVER_LOG} 2>&1 & echo $! > {RECEIVER_PID}; echo started"
+    )
+}
+
+/// The kubectl port-forward arguments for an in-cluster target: the target
+/// reference and remote port as separate arguments, with an empty local port
+/// so kubectl allocates a free one (the `up` phase may already hold the
+/// fixed lanes).
+pub(super) fn port_forward_args(target: &str, remote_port: u16) -> [String; 2] {
+    [target.to_owned(), format!(":{remote_port}")]
+}
+
 /// The synthetic email-domain policy the smoke opens, and the identities it
 /// signs in with. Each pairs with a user in the Rauthy KIND fixture.
 const SMOKE_ALLOWLIST: &str = "example.test";
@@ -435,6 +599,35 @@ mod tests {
     }
 
     #[test]
+    fn the_receiver_probe_script_requests_one_url_over_dev_tcp() {
+        let script = http_probe_script("172.18.0.1", 42903, "/webhook/forgejo/probe");
+        assert!(
+            script.contains("exec 3<>/dev/tcp/172.18.0.1/42903"),
+            "{script}"
+        );
+        assert!(
+            script.contains("GET /webhook/forgejo/probe HTTP/1.1"),
+            "{script}"
+        );
+        assert!(script.contains("Host: 172.18.0.1"), "{script}");
+        assert!(script.contains(r"\r\n"), "{script}");
+        assert!(script.ends_with("head -n1 <&3"), "{script}");
+    }
+
+    #[test]
+    fn the_receiver_manifest_publishes_the_gateway_endpoint() {
+        let manifest = receiver_endpoints_manifest("172.18.0.1", 42903);
+        assert!(manifest.contains("name: forgejo-receiver"), "{manifest}");
+        assert!(manifest.contains("namespace: navigator"), "{manifest}");
+        assert!(manifest.contains("ip: 172.18.0.1"), "{manifest}");
+        assert!(manifest.contains("port: 42903"), "{manifest}");
+        assert_eq!(
+            receiver_service_url(),
+            "http://forgejo-receiver.navigator.svc.cluster.local"
+        );
+    }
+
+    #[test]
     fn an_incomplete_seed_is_refused_by_name() {
         let mut map = seed().to_map();
         map.remove("runner_secret");
@@ -454,6 +647,9 @@ mod tests {
         assert!(ini.contains("SSL_MODE = verify-full"));
         assert!(ini.contains("[actions]\nENABLED = true\n"));
         assert!(!ini.contains("ENABLED = false\n[log]"));
+        // The smoke's receiver is a private Docker-bridge address; the forge
+        // must be allowed to deliver there.
+        assert!(ini.contains("[webhook]\nALLOWED_HOST_LIST = external,private\n"));
         assert!(ini.ends_with(
             "[repository.signing]\nFORMAT = ssh\n\
              SIGNING_KEY = /etc/forgejo-signing/signing_key.pub\n\
@@ -626,6 +822,110 @@ mod tests {
             "/user/oauth2/rauthy/callback?code=a&state=b"
         );
         assert_eq!(path_and_query("http://localhost:3300/").unwrap(), "/");
+    }
+
+    #[test]
+    fn the_receiver_start_script_detaches_and_records_its_pid() {
+        let script = receiver_start_script();
+        assert!(
+            script.contains("kill $(cat /tmp/forgejo-receiver/receiver.pid"),
+            "{script}"
+        );
+        assert!(
+            script.contains("nohup /tmp/forgejo-receiver/navigator-deploy dev forgejo smoke"),
+            "{script}"
+        );
+        assert!(
+            script.contains("--receiver-config /tmp/forgejo-receiver/receiver.json"),
+            "{script}"
+        );
+        assert!(
+            script.contains("echo $! > /tmp/forgejo-receiver/receiver.pid"),
+            "{script}"
+        );
+    }
+
+    #[test]
+    fn the_port_forward_asks_for_a_free_local_port() {
+        let [target, local] = port_forward_args("pod/navigator-postgres-0", 5432);
+        assert_eq!(target, "pod/navigator-postgres-0");
+        assert_eq!(
+            local, ":5432",
+            "an empty local port lets kubectl allocate one; the fixed lanes may already be held"
+        );
+    }
+
+    #[test]
+    fn a_delivered_receipt_with_the_analysis_columns_is_the_proof() {
+        let row = parse_push_receipt_row(
+            "delivered|qsmoke|Forgejo Smoke <forge-allowed@example.test>|Amend the fee \
+             schedule|false|",
+        )
+        .unwrap();
+        assert!(receipt_is_terminal(&row.status));
+        assert_analyzed_push_receipt(&row, "qsmoke", "Amend the fee schedule").unwrap();
+    }
+
+    #[test]
+    fn every_unfinished_receipt_is_named() {
+        let failed = parse_push_receipt_row(
+            "failed|qsmoke|T-bot (tbot@neonlaw.org)|Amend the fee schedule|false|\
+             Slack delivery failed: the Firm's Slack bot token is not configured",
+        )
+        .unwrap();
+        let error =
+            assert_analyzed_push_receipt(&failed, "qsmoke", "Amend the fee schedule").unwrap_err();
+        assert!(error.contains("failed at consumption"), "{error}");
+        assert!(error.contains("Slack bot token"), "{error}");
+
+        let skipped = parse_push_receipt_row("skipped|||||").unwrap();
+        assert!(receipt_is_terminal(&skipped.status));
+        assert!(assert_analyzed_push_receipt(&skipped, "qsmoke", "x")
+            .unwrap_err()
+            .contains("skipped"));
+
+        let pending = parse_push_receipt_row("pending|||||").unwrap();
+        assert!(!receipt_is_terminal(&pending.status));
+        assert!(assert_analyzed_push_receipt(&pending, "qsmoke", "x")
+            .unwrap_err()
+            .contains("never finished consumption"));
+    }
+
+    #[test]
+    fn a_delivered_receipt_missing_its_analysis_is_refused() {
+        let row = parse_push_receipt_row("delivered|||||").unwrap();
+        assert!(
+            assert_analyzed_push_receipt(&row, "qsmoke", "Amend the fee schedule")
+                .unwrap_err()
+                .contains("analyzed change ")
+        );
+        let wrong_description =
+            parse_push_receipt_row("delivered|qsmoke|Forgejo Smoke|Amend nothing|false|").unwrap();
+        assert!(assert_analyzed_push_receipt(
+            &wrong_description,
+            "qsmoke",
+            "Amend the fee schedule"
+        )
+        .unwrap_err()
+        .contains("analyzed description"));
+        let conflicted =
+            parse_push_receipt_row("delivered|qsmoke|Forgejo Smoke|Amend the fee schedule|true|")
+                .unwrap();
+        assert!(
+            assert_analyzed_push_receipt(&conflicted, "qsmoke", "Amend the fee schedule")
+                .unwrap_err()
+                .contains("conflict signal")
+        );
+    }
+
+    #[test]
+    fn a_row_that_is_not_six_fields_is_refused() {
+        assert!(parse_push_receipt_row("delivered|qsmoke")
+            .unwrap_err()
+            .contains("not six pipe-separated fields"));
+        // The failure detail is last and may itself carry pipes.
+        let detailed = parse_push_receipt_row("failed|qsmoke|||false|one|two").unwrap();
+        assert_eq!(detailed.failure_detail, "one|two");
     }
 
     #[test]

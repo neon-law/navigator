@@ -65,6 +65,8 @@ scraper.workspace = true
 # the semver crate rather than a grammar written here.
 semver.workspace = true
 sha2.workspace = true
+# The devx Forgejo smoke connects the KIND PostgreSQL push journal directly.
+sqlx.workspace = true
 zstd.workspace = true
 telemetry.workspace = true
 serde.workspace = true
@@ -118,9 +120,6 @@ tokio = { workspace = true, features = ["test-util"] }
 tower.workspace = true
 regorus.workspace = true
 store = { workspace = true, features = ["test-support"] }
-# The disposable PostgreSQL databases the runtime-letterhead render tests
-# seed the canonical schema into.
-sqlx.workspace = true
 wiremock.workspace = true
 
 [lints]
