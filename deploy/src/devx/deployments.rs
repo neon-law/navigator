@@ -963,6 +963,7 @@ fn no_stray_plaintext(root: &Path, name: &str) -> Result<()> {
             .into_owned();
         if file_name == CONFIG_FILE
             || file_name == SECRETS_FILE
+            || file_name == super::gcp::access::ACCESS_FILE
             || file_name == ServiceSecrets::Postgres.file_name()
             || file_name == ServiceSecrets::Forgejo.file_name()
         {
@@ -2498,7 +2499,7 @@ mod tests {
                     .expect("a file has a name")
                     .to_string_lossy()
                     .into_owned();
-                if file_name == CONFIG_FILE {
+                if file_name == CONFIG_FILE || file_name == super::super::gcp::access::ACCESS_FILE {
                     continue;
                 }
                 assert_eq!(

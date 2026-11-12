@@ -60,6 +60,7 @@
 //! no GCP credentials needed. See `docs/cloud-operations.md` for the
 //! layered CI strategy.
 
+pub mod access;
 pub mod artifact_registry;
 pub mod auth;
 pub mod buckets;

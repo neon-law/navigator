@@ -1083,12 +1083,12 @@ fn forgejo_runner_help_names_explicit_isolation_and_recovery_controls() {
 }
 
 #[test]
-fn ops_gcp_help_lists_the_hub_alongside_the_environment_provisioner() {
+fn ops_gcp_help_lists_the_cloud_operations() {
     let output = help(&["ops", "gcp", "--help"]);
 
     assert_eq!(
         command_names(&output),
-        vec!["hub", "iap", "services", "setup", "help",]
+        vec!["access", "hub", "iap", "services", "setup", "help",]
     );
 }
 
