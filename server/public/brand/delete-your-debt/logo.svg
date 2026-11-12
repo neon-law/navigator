@@ -4,6 +4,12 @@
     .mark { fill: none; stroke: #1f6f4a; }
     @media (prefers-color-scheme: dark) { .mark { stroke: #32b377; } }
   </style>
-  <path class="mark" d="M18 14h13c11 0 19 7.7 19 18s-8 18-19 18H18V38" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
-  <path class="mark" d="m12 32 14-10m-14 10 14 10" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <defs>
+    <mask id="strike" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+      <rect width="64" height="64" fill="#fff"/>
+      <path d="M18 50 50 18" stroke="#000" stroke-width="5"/>
+    </mask>
+  </defs>
+  <path class="mark" d="M13 8h16a24 24 0 0 1 0 48H13z" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <path fill="#D64541" mask="url(#strike)" d="M23 18h6a14 14 0 0 1 0 28h-6z"/>
 </svg>
