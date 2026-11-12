@@ -47,11 +47,12 @@ use super::oidc::{self, Outcome};
 use super::{
     actions_context, assert_analyzed_push_receipt, forwarded_port, http_probe_script,
     parse_push_receipt_row, port_forward_args, random_hex, receipt_is_terminal,
-    receiver_endpoints_manifest, receiver_service_url, receiver_start_script, CookieJar,
-    PushReceiptRow, Seed, ADMISSION_CONFIG_MAP, ALLOWED_IDENTITY, ALLOWLIST_KEY, BOT_PUSH_WORKFLOW,
-    DATA_CLAIM, DENIED_IDENTITIES, GATE_WORKFLOW, POD, POSTGRES_POD, PUBLISH_WORKFLOW,
-    RECEIVER_BINARY, RECEIVER_CONFIG, RECEIVER_FORGE_URL, RECEIVER_LOG, RECEIVER_NAMESPACE,
-    RECEIVER_PID, RECEIVER_PORT, RECEIVER_SERVICE, SEED_SECRET, SMOKE_ALLOWLIST, STATEFULSET,
+    receiver_endpoints_manifest, receiver_service_url, receiver_start_script,
+    service_probe_failure_message, CookieJar, PushReceiptRow, Seed, ADMISSION_CONFIG_MAP,
+    ALLOWED_IDENTITY, ALLOWLIST_KEY, BOT_PUSH_WORKFLOW, DATA_CLAIM, DENIED_IDENTITIES,
+    GATE_WORKFLOW, POD, POSTGRES_POD, PUBLISH_WORKFLOW, RECEIVER_BINARY, RECEIVER_CONFIG,
+    RECEIVER_FORGE_URL, RECEIVER_LOG, RECEIVER_NAMESPACE, RECEIVER_PID, RECEIVER_PORT,
+    RECEIVER_SERVICE, SEED_SECRET, SERVICE_PROBE_DEADLINE, SMOKE_ALLOWLIST, STATEFULSET,
 };
 
 /// The allowed identity's Forgejo user name (`USERNAME = email` keeps the
@@ -1827,8 +1828,15 @@ async fn push_webhook_proof(
     let manifest = receiver_endpoints_manifest(&pod_ip, RECEIVER_PORT);
     kube.apply(&manifest)
         .context("publish the receiver as an in-cluster Service")?;
-    let relayed = kube
-        .output(&[
+    // The Service path is what Forgejo's webhook delivery rides. Give the
+    // Endpoints programming a deadline instead of a single six-second bet,
+    // and on a timeout dial the receiver directly: a loopback answer
+    // indicts the Service path, a silence indicts the receiver process.
+    let service_host = format!("{RECEIVER_SERVICE}.{RECEIVER_NAMESPACE}.svc.cluster.local");
+    let service_probe = http_probe_script(&service_host, 80, "/webhook/forgejo/pod-probe");
+    let deadline = Instant::now() + SERVICE_PROBE_DEADLINE;
+    loop {
+        match kube.output(&[
             "exec",
             POSTGRES_POD,
             "--",
@@ -1836,17 +1844,25 @@ async fn push_webhook_proof(
             "6",
             "bash",
             "-c",
-            &http_probe_script(
-                &format!("{RECEIVER_SERVICE}.{RECEIVER_NAMESPACE}.svc.cluster.local"),
-                80,
-                "/webhook/forgejo/pod-probe",
-            ),
-        ])
-        .context("the receiver Service does not deliver to the in-pod receiver")?;
-    eprintln!(
-        "    the receiver answers through the Service: {}",
-        relayed.trim()
-    );
+            &service_probe,
+        ]) {
+            Ok(answered) => {
+                eprintln!(
+                    "    the receiver answers through the Service: {}",
+                    answered.trim()
+                );
+                break;
+            }
+            Err(_) if Instant::now() < deadline => {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+            Err(_) => {
+                let direct = kube.output(&["exec", POSTGRES_POD, "--", "bash", "-c", &probe]);
+                let direct = direct.ok().map(|s| s.trim().to_owned());
+                bail!("{}", service_probe_failure_message(direct.as_deref()));
+            }
+        }
+    }
 
     register_push_hook(
         http,

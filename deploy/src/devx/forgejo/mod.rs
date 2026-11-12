@@ -25,6 +25,7 @@ mod smoke;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{bail, ensure, Context, Result};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -514,6 +515,30 @@ pub(super) fn receiver_service_url() -> String {
 /// namespace is private, so a fixed port never collides.
 pub(super) const RECEIVER_PORT: u16 = 41080;
 
+/// How long the Service probe waits for the Service to deliver before
+/// giving up: Endpoint programming after the Endpoints apply is normally
+/// sub-second, but a single six-second bet loses the whole CI cycle to a
+/// slow controller.
+pub(super) const SERVICE_PROBE_DEADLINE: Duration = Duration::from_secs(90);
+
+/// The Service probe's failure message: a direct dial to the receiver on
+/// loopback splits a dead receiver from a broken Service path — a loopback
+/// answer indicts the Endpoints pin or the hairpin route, a silence
+/// indicts the receiver process.
+pub(super) fn service_probe_failure_message(direct_answer: Option<&str>) -> String {
+    match direct_answer {
+        Some(answer) => format!(
+            "the receiver Service does not deliver to the in-pod receiver; \
+             the receiver still answers directly ({answer}) — the Service \
+             path (the Endpoints pin, pod-to-self routing) is broken"
+        ),
+        None => "the receiver Service does not deliver to the in-pod receiver; \
+                 the receiver no longer answers directly either — the receiver \
+                 process died, not the Service path"
+            .to_owned(),
+    }
+}
+
 /// Where the receiver's binary, config, log, and pid live inside the
 /// hosting pod's filesystem.
 pub(super) const RECEIVER_BINARY: &str = "/tmp/forgejo-receiver/navigator-deploy";
@@ -848,6 +873,18 @@ mod tests {
             "/user/oauth2/rauthy/callback?code=a&state=b"
         );
         assert_eq!(path_and_query("http://localhost:3300/").unwrap(), "/");
+    }
+
+    #[test]
+    fn the_service_probe_failure_message_splits_dead_receiver_from_broken_path() {
+        let with_answer = service_probe_failure_message(Some("HTTP/1.1 405 Method Not Allowed"));
+        assert!(
+            with_answer.contains("still answers directly"),
+            "{with_answer}"
+        );
+        assert!(with_answer.contains("Service path"), "{with_answer}");
+        let without = service_probe_failure_message(None);
+        assert!(without.contains("receiver process died"), "{without}");
     }
 
     #[test]
