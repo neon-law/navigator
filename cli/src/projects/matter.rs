@@ -46,25 +46,35 @@ pub fn find_manifest(start: &Path) -> Option<PathBuf> {
     }
 }
 
-/// Read the `matter:` block of the manifest at `path`.
-///
-/// # Errors
-///
-/// A message naming the field to add or fix.
-pub fn read(path: &Path) -> Result<Matter, String> {
+/// The `matter:` block exactly as the manifest at `path` declares it, with
+/// the manifest's text.
+fn declared(path: &Path) -> Result<(String, Matter), String> {
     let contents = std::fs::read_to_string(path)
         .map_err(|error| format!("read {}: {error}", manifest::FILE))?;
     let document: serde_yaml::Value = serde_yaml::from_str(&contents)
         .map_err(|error| format!("{} is not valid YAML: {error}", manifest::FILE))?;
     let block = document.get(KEY).cloned().ok_or_else(|| {
         format!(
-            "a pleading needs a `{KEY}:` block in {} (court, case_number, judicial_officer, \
-             department, filed_on, parties, counsel)",
+            "a pleading needs a `{KEY}:` block in {} (court, parties, counsel; case_number, \
+             judicial_officer, department, and filed_on once the court assigns them)",
             manifest::FILE
         )
     })?;
-    let matter: Matter = serde_yaml::from_value(block)
+    let matter = serde_yaml::from_value(block)
         .map_err(|error| format!("`{KEY}:` in {} is malformed: {error}", manifest::FILE))?;
+    Ok((contents, matter))
+}
+
+/// Read the `matter:` block of the manifest at `path`, with counsel's office
+/// details defaulted from the Firm's office in `jurisdiction`
+/// ([`with_office_defaults`]).
+///
+/// # Errors
+///
+/// A message naming the field to add or fix.
+pub fn read(path: &Path, jurisdiction: &str) -> Result<Matter, String> {
+    let (contents, mut matter) = declared(path)?;
+    with_office_defaults(&mut matter, &contents, jurisdiction);
     let missing = matter.missing();
     if missing.is_empty() {
         Ok(matter)
@@ -75,6 +85,77 @@ pub fn read(path: &Path) -> Result<Matter, String> {
             missing.join(", ")
         ))
     }
+}
+
+/// A template's `jurisdiction:` code, or blank when it declares none.
+#[must_use]
+pub fn jurisdiction_of(contents: &str) -> String {
+    rules::frontmatter::extract(contents)
+        .and_then(|fm| rules::frontmatter::field(fm, "jurisdiction"))
+        .unwrap_or_default()
+}
+
+/// Fill counsel's blank `firm`, `address`, `telephone`, and `email` from the
+/// office the Project's Brand publishes for `jurisdiction` (LAW-329), so a
+/// Washington pleading carries the Washington office without anyone typing
+/// it. A jurisdiction with no office takes the Firm's default office. A
+/// party appearing in pro per has no Firm office, and a declared value is
+/// never replaced.
+pub fn with_office_defaults(matter: &mut Matter, manifest_contents: &str, jurisdiction: &str) {
+    if matter.counsel.pro_per {
+        return;
+    }
+    let Ok(parsed) = manifest::parse(manifest_contents) else {
+        return;
+    };
+    let Ok(Some(office)) = crate::letterhead::office_for_project(
+        parsed.brand.as_deref(),
+        parsed.host.as_deref(),
+        jurisdiction,
+    ) else {
+        return;
+    };
+    let counsel = &mut matter.counsel;
+    if counsel.address.iter().all(|line| line.trim().is_empty()) {
+        counsel.address = office.address;
+    }
+    for (field, value) in [
+        (&mut counsel.firm, office.legal_entity),
+        (&mut counsel.telephone, office.phone),
+        (&mut counsel.email, office.email),
+    ] {
+        if field.trim().is_empty() {
+            *field = value;
+        }
+    }
+}
+
+/// `Y019`'s warning for a pleading whose declared counsel address is in a
+/// different state from its `jurisdiction:` — a Washington paper about to
+/// go out with the Nevada office. `None` when they agree, or when either
+/// does not name a two-letter state.
+#[must_use]
+pub fn counsel_state_mismatch(file: &Path, contents: &str) -> Option<String> {
+    let jurisdiction = jurisdiction_of(contents);
+    let state_code = |text: &str| -> Option<String> {
+        let code = text
+            .rsplit(',')
+            .next()?
+            .split_whitespace()
+            .next()?
+            .to_string();
+        (code.len() == 2 && code.chars().all(|c| c.is_ascii_uppercase())).then_some(code)
+    };
+    let jurisdiction = state_code(&jurisdiction)?;
+    let (_, matter) = declared(&find_manifest(file)?).ok()?;
+    let declared = state_code(matter.counsel.address.last()?)?;
+    (declared != jurisdiction).then(|| {
+        format!(
+            "matter.counsel.address is in {declared}, but this pleading's jurisdiction is \
+             {jurisdiction}; remove the address to print the Firm's {jurisdiction} office, or \
+             correct it"
+        )
+    })
 }
 
 /// The pleading's declared `docket:` value, exactly as written (blank or
@@ -95,7 +176,7 @@ fn declarable_dockets(path: &Path, matter: &Matter) -> Vec<String> {
                 .and_then(|value| serde_yaml::from_value::<Vec<String>>(value).ok())
         })
         .unwrap_or_default();
-    if !dockets.iter().any(|d| d == &matter.case_number) {
+    if !matter.case_number.trim().is_empty() && !dockets.iter().any(|d| d == &matter.case_number) {
         dockets.push(matter.case_number.clone());
     }
     dockets
@@ -136,7 +217,7 @@ fn resolve_case_number(
 ///
 /// [`read`]'s message, or an undeclared docket value.
 fn read_resolved(path: &Path, contents: &str) -> Result<Matter, String> {
-    let mut matter = read(path)?;
+    let mut matter = read(path, &jurisdiction_of(contents))?;
     let declarable = declarable_dockets(path, &matter);
     matter.case_number = resolve_case_number(docket_of(contents).as_deref(), &matter, &declarable)?;
     Ok(matter)
@@ -192,7 +273,8 @@ fn caption_for_export(file: &Path, contents: &str, final_export: bool) -> Result
             if final_export {
                 require_assigned(&matter)?;
             }
-            Ok(word::matter::compose(&matter, &filing).to_fence())
+            let style = word::matter::CaptionStyle::for_jurisdiction(&jurisdiction_of(contents));
+            Ok(word::matter::compose(&matter, &filing, style).to_fence())
         }
         _ => Err(format!(
             "this pleading cannot be captioned: {}",
@@ -214,7 +296,7 @@ pub fn counsel_name(file: &Path) -> Result<String, String> {
             manifest::FILE
         )
     })?;
-    Ok(read(&path)?.counsel.name.trim().to_string())
+    Ok(read(&path, "")?.counsel.name.trim().to_string())
 }
 
 /// A final export requires the court's assignments, even when a draft
@@ -250,80 +332,14 @@ fn require_assigned(matter: &Matter) -> Result<(), String> {
     }
 }
 
-/// What a preview prints for a judicial officer or department the court has
-/// not yet assigned.
-pub const TO_BE_ASSIGNED: &str = "To be assigned";
-
-/// [`caption_for`] for a preview (LAW-183): a blank department or judicial
-/// officer prints "To be assigned" instead of refusing, since a draft exists
-/// before the court assigns either. Every other missing field still refuses,
-/// and a final render never calls this.
+/// [`caption_for`] for a preview. A preview captions exactly what a final
+/// render would, except that it accepts a `pending` assignment.
 ///
 /// # Errors
 ///
-/// The same message [`caption_for`] gives for any other missing field.
+/// The same message [`caption_for`] gives for any missing field.
 pub fn caption_for_preview(file: &Path, contents: &str) -> Result<String, String> {
-    let filing = filing_from(contents);
-    let mut problems = filing.missing();
-    let matter = find_manifest(file)
-        .ok_or_else(|| {
-            format!(
-                "no {} found above this pleading; add one with a `{KEY}:` block",
-                manifest::FILE
-            )
-        })
-        .and_then(|path| {
-            read_assigning(&path).and_then(|mut matter| {
-                let declarable = declarable_dockets(&path, &matter);
-                matter.case_number =
-                    resolve_case_number(docket_of(contents).as_deref(), &matter, &declarable)?;
-                Ok(matter)
-            })
-        });
-    let matter = match matter {
-        Ok(matter) => Some(matter),
-        Err(message) => {
-            problems.insert(0, message);
-            None
-        }
-    };
-    match (matter, problems.is_empty()) {
-        (Some(matter), true) => Ok(word::matter::compose(&matter, &filing).to_fence()),
-        _ => Err(format!(
-            "this pleading cannot be captioned: {}",
-            problems.join("; ")
-        )),
-    }
-}
-
-/// [`read`] with [`TO_BE_ASSIGNED`] standing in for a blank department or
-/// judicial officer.
-fn read_assigning(path: &Path) -> Result<Matter, String> {
-    let contents = std::fs::read_to_string(path)
-        .map_err(|error| format!("read {}: {error}", manifest::FILE))?;
-    let document: serde_yaml::Value = serde_yaml::from_str(&contents)
-        .map_err(|error| format!("{} is not valid YAML: {error}", manifest::FILE))?;
-    let block = document
-        .get(KEY)
-        .cloned()
-        .ok_or_else(|| format!("a pleading needs a `{KEY}:` block in {}", manifest::FILE))?;
-    let mut matter: Matter = serde_yaml::from_value(block)
-        .map_err(|error| format!("`{KEY}:` in {} is malformed: {error}", manifest::FILE))?;
-    for field in [&mut matter.department, &mut matter.judicial_officer] {
-        if field.trim().is_empty() {
-            *field = TO_BE_ASSIGNED.to_string();
-        }
-    }
-    let missing = matter.missing();
-    if missing.is_empty() {
-        Ok(matter)
-    } else {
-        Err(format!(
-            "{} is missing or has a malformed {}",
-            manifest::FILE,
-            missing.join(", ")
-        ))
-    }
+    caption_for_export(file, contents, false)
 }
 
 #[cfg(test)]
@@ -383,5 +399,98 @@ mod tests {
         let error = resolve_case_number(Some("99CV999999"), &matter, &declared).unwrap_err();
         assert!(error.contains("99CV999999"), "{error}");
         assert!(error.contains("dockets: 00CV000000, B327654"), "{error}");
+    }
+
+    /// The synthetic Washington matter in a tempdir, its counsel block
+    /// replaced by `counsel`, and a pleading declaring `jurisdiction`.
+    fn washington_tree(
+        counsel: &str,
+        jurisdiction: &str,
+    ) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/synthetic_washington_matter/navigator.yaml");
+        let manifest = std::fs::read_to_string(fixture).unwrap();
+        let head = &manifest[..manifest.find("  counsel:\n").unwrap()];
+        std::fs::write(
+            dir.path().join("navigator.yaml"),
+            format!("{head}  counsel:\n{counsel}"),
+        )
+        .unwrap();
+        let notice = dir.path().join("notice.md");
+        std::fs::write(
+            &notice,
+            format!(
+                "---\nkind: pleading\njurisdiction: {jurisdiction}\ncaption_title: NOTICE\n\
+                 footer_title: NOTICE\n---\n\n# NOTICE\n"
+            ),
+        )
+        .unwrap();
+        (dir, notice)
+    }
+
+    const NAMED_COUNSEL: &str = "    name: Pat Sample\n    bar_jurisdiction: Washington\n    \
+        bar_number: \"00000\"\n    appears_for: Respondent SAM SYNTHETIC TWO\n";
+
+    /// LAW-329: a pleading whose counsel block names only the lawyer takes
+    /// the Firm's office in the pleading's jurisdiction — never the Nevada
+    /// default when a Washington office exists — and a jurisdiction with no
+    /// office takes the default one.
+    #[test]
+    fn counsel_s_office_defaults_to_the_firm_s_office_in_the_jurisdiction() {
+        let (dir, notice) = washington_tree(NAMED_COUNSEL, "WA");
+        let manifest = dir.path().join("navigator.yaml");
+        let matter = super::read(&manifest, "WA").expect("the office fills counsel's block");
+        assert_eq!(
+            matter.counsel.address,
+            ["1111 Main St", "STE 201E", "Vancouver, WA 98660"]
+        );
+        assert!(!matter.counsel.firm.is_empty());
+        assert!(!matter.counsel.telephone.is_empty());
+        assert!(matter.counsel.email.contains('@'));
+        let caption =
+            super::caption_for(&notice, &std::fs::read_to_string(&notice).unwrap()).unwrap();
+        assert!(caption.contains("office: Vancouver, WA 98660"), "{caption}");
+
+        let texas = super::read(&manifest, "TX").unwrap();
+        assert!(texas.counsel.address.last().unwrap().contains("NV"));
+
+        let declared = format!(
+            "{NAMED_COUNSEL}    address:\n      - 1 Example Way\n      - Sampleton, WA 99000\n"
+        );
+        let (dir, _) = washington_tree(&declared, "WA");
+        let matter = super::read(&dir.path().join("navigator.yaml"), "WA").unwrap();
+        assert_eq!(
+            matter.counsel.address,
+            ["1 Example Way", "Sampleton, WA 99000"]
+        );
+
+        let pro_per = "    name: Sam Two\n    appears_for: Respondent\n    pro_per: true\n";
+        let (dir, _) = washington_tree(pro_per, "WA");
+        let refused = super::read(&dir.path().join("navigator.yaml"), "WA").unwrap_err();
+        assert!(refused.contains("matter.counsel.address"), "{refused}");
+    }
+
+    /// LAW-329: a declared counsel address in another state than the
+    /// pleading's jurisdiction is a warning; an agreeing one is not.
+    #[test]
+    fn a_counsel_address_in_another_state_is_named() {
+        let nevada = format!(
+            "{NAMED_COUNSEL}    address:\n      - 5150 Example Ave\n      - Reno, NV 89523\n"
+        );
+        let (_dir, notice) = washington_tree(&nevada, "WA");
+        let contents = std::fs::read_to_string(&notice).unwrap();
+        let message = super::counsel_state_mismatch(&notice, &contents).expect("a mismatch");
+        assert!(
+            message.contains("in NV") && message.contains("is WA"),
+            "{message}"
+        );
+
+        let (_dir, notice) = washington_tree(&nevada, "NV");
+        let contents = std::fs::read_to_string(&notice).unwrap();
+        assert_eq!(super::counsel_state_mismatch(&notice, &contents), None);
+        let (_dir, notice) = washington_tree(NAMED_COUNSEL, "WA");
+        let contents = std::fs::read_to_string(&notice).unwrap();
+        assert_eq!(super::counsel_state_mismatch(&notice, &contents), None);
     }
 }

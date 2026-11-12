@@ -3013,8 +3013,12 @@ fn lint_project_template(
         .and_then(|fm| rules::frontmatter::field(fm, "kind"))
         .is_some_and(|kind| kind == "pleading")
     {
-        if let Err(message) = super::matter::caption_for(path, &contents) {
-            errors.push(Finding::at(
+        // A pleading in the repository is a draft: an incomplete caption
+        // warns here and refuses at the final render (LAW-361).
+        let caption = super::matter::caption_for(path, &contents).err();
+        let office = super::matter::counsel_state_mismatch(path, &contents);
+        for message in caption.into_iter().chain(office) {
+            warnings.push(Finding::at(
                 path,
                 format!("{}: {message}", super::matter::CODE),
             ));
@@ -6115,8 +6119,9 @@ jobs:
 
     /// Through the real template lint: the finding carries the rule code, the
     /// line, the spelling the file used, and the entity of record.
-    /// `Y019`: a pleading in a Project repository gates on the same matter and
-    /// frontmatter fields `notation pdf` and `notation word` compose from.
+    /// `Y019`: a pleading in a Project repository is checked against the same
+    /// matter and frontmatter fields `notation pdf` and `notation word` compose
+    /// from, as a warning, since the final render is what refuses.
     #[test]
     fn lint_project_template_names_a_pleading_s_missing_caption_fields() {
         let dir = tempfile::tempdir().unwrap();
@@ -6125,7 +6130,7 @@ jobs:
         let manifest = std::fs::read_to_string(fixture.join("navigator.yaml")).unwrap();
         std::fs::write(
             dir.path().join("navigator.yaml"),
-            manifest.replace("  department: \"12\"\n", ""),
+            manifest.replace("    appears_for: Plaintiff SAMPLE HOLDINGS\n", ""),
         )
         .unwrap();
         std::fs::create_dir(dir.path().join("templates")).unwrap();
@@ -6142,12 +6147,18 @@ jobs:
         let mut warnings: Vec<Finding> = Vec::new();
         let mut declared = std::collections::BTreeMap::new();
         lint_project_template(&path, &[], false, &mut declared, &mut errors, &mut warnings);
-        let message = errors
+        assert!(
+            errors
+                .iter()
+                .all(|error| !error.message.starts_with("Y019: ")),
+            "a draft pleading's caption warns, never fails the gate"
+        );
+        let message = warnings
             .iter()
-            .map(|error| error.message.as_str())
+            .map(|warning| warning.message.as_str())
             .find(|message| message.starts_with("Y019: "))
             .expect("a Y019 finding");
-        assert!(message.contains("matter.department"), "{message}");
+        assert!(message.contains("matter.counsel.appears_for"), "{message}");
         assert!(message.contains("footer_title"), "{message}");
     }
 

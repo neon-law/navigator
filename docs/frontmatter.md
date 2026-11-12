@@ -264,9 +264,11 @@ templates whose default is wrong for them, such as a `letter` sent in the client
   requires one) numbered line rail are a court-rule compliance decision, calibrated by the template's `jurisdiction:`
   rather than by the firm's own brand. `NV` and `CA` both render with the 28-line numbered rail their courts require, in
   the PDF and the Word document alike; `US` (federal district practice, not uniform on the rail) renders without one.
-  The Project's `matter:` block in `navigator.yaml` and the notation's `caption_title`, `footer_title`, and optional
-  `hearing_date`, `hearing_time`, and `reservation_id` give the paper its first-page caption and footer; the body's
-  `<!-- keep -->` groups give it unsplittable request/response and signature groups; see [Pleading
+  `WA` renders Washington superior-court paper under GR 14: 28 numbered lines on a 23pt grid so every page keeps 1in at
+  the bottom and both sides, the first page's top 3in clear, and counsel's office in the footer. The Project's `matter:`
+  block in `navigator.yaml` and the notation's `caption_title`, `footer_title`, and optional `hearing_date`,
+  `hearing_time`, and `reservation_id` give the paper its first-page caption and footer; the body's `<!-- keep -->`
+  groups give it unsplittable request/response and signature groups; see [Pleading
   paper](notation-authoring.md#pleading-paper). A pleading in a Project that litigates more than one case also declares
   `docket:` — a case number the Project lists under `dockets:` — so the caption carries the case the filing serves; see
   the `docket` row in the key table below. A state-court case number of any shape is a valid `dockets:` entry and

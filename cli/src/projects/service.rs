@@ -240,7 +240,7 @@ pub fn certificate_for(
             pointer_path.display()
         ));
     }
-    let matter = super::matter::read(&manifest_path)?;
+    let matter = super::matter::read(&manifest_path, &super::matter::jurisdiction_of(contents))?;
     let filing = super::matter::filing_from(contents);
     let title = if filing.caption_title.trim().is_empty() {
         slug.clone()

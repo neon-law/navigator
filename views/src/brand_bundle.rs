@@ -188,6 +188,10 @@ pub struct OfficeEntry {
     /// [`crate::brand::FirmOffice::note`]; set it deliberately, because it is a
     /// regulated statement about where the firm may practise.
     pub note: Option<String>,
+    /// The office a notation falls back to when the Firm has none in the
+    /// matter's jurisdiction. At most one office sets it.
+    #[serde(default)]
+    pub default: bool,
 }
 
 /// Static brand files relative to the bundle root.
@@ -339,6 +343,15 @@ fn validate_footer_contact(brand: &Brand, diagnostics: &mut Vec<String>) {
                 "brand.firm_offices[{index}].note must be non-empty when set"
             ));
         }
+    }
+    if brand
+        .firm_offices
+        .iter()
+        .filter(|office| office.default)
+        .count()
+        > 1
+    {
+        diagnostics.push("brand.firm_offices may mark only one office `default: true`".to_string());
     }
     for (index, attorney) in brand.firm_attorneys.iter().enumerate() {
         if attorney.name.trim().is_empty() {
@@ -573,12 +586,13 @@ mod tests {
         // licence at all, or a number whose record cannot be opened must fail
         // validation rather than reach the public footer.
         let dir = write_bundle(
-            "version: 1\nbrand:\n  firm_offices:\n    - state: '  '\n      address: ''\n  firm_attorneys:\n    - name: '   '\n      licenses:\n        - jurisdiction: ''\n          number: '  '\n          license_url: not-a-url\n    - name: No Licences\n      licenses: []\n",
+            "version: 1\nbrand:\n  firm_offices:\n    - state: '  '\n      address: ''\n      default: true\n    - state: Idaho\n      address: 1 Main St, Boise, ID 83702\n      default: true\n  firm_attorneys:\n    - name: '   '\n      licenses:\n        - jurisdiction: ''\n          number: '  '\n          license_url: not-a-url\n    - name: No Licences\n      licenses: []\n",
         );
         let error = BrandBundle::load(dir.path()).unwrap_err().to_string();
         for expected in [
             "brand.firm_offices[0].state must be non-empty",
             "brand.firm_offices[0].address must be non-empty",
+            "brand.firm_offices may mark only one office `default: true`",
             "brand.firm_attorneys[0].name must be non-empty",
             "brand.firm_attorneys[0].licenses[0].jurisdiction must be non-empty",
             "brand.firm_attorneys[0].licenses[0].number must be non-empty",

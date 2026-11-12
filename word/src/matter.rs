@@ -66,20 +66,55 @@ pub struct Matter {
     pub court: Vec<String>,
     #[serde(default)]
     pub case_number: String,
+    /// Blank when the court assigns none: the caption leaves the line out.
     #[serde(default)]
     pub judicial_officer: String,
+    /// Blank when the court assigns none: the caption leaves the line out.
     #[serde(default)]
     pub department: String,
-    /// `YYYY-MM-DD`.
+    /// `YYYY-MM-DD`; blank leaves the action-filed and trial lines out.
     #[serde(default)]
     pub filed_on: String,
-    /// `YYYY-MM-DD`; absent prints "None set".
+    /// `YYYY-MM-DD`; absent prints "None set" under a filed date.
     #[serde(default)]
     pub trial_on: Option<String>,
+    /// What an "In re" caption is about — `the Marriage of` — for a case
+    /// captioned by its subject rather than as one side against another.
+    /// Blank captions the parties `A v. B`.
+    #[serde(default)]
+    pub in_re: String,
     #[serde(default)]
     pub parties: Vec<Party>,
     #[serde(default)]
     pub counsel: Counsel,
+    /// The court's clerk wants the total page count at the top left of
+    /// page 1 (a county local rule).
+    #[serde(default)]
+    pub page_count: bool,
+}
+
+/// How a court lays out the caption [`compose`] builds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptionStyle {
+    /// Counsel block top left, `Case No.`, department, judge, and the
+    /// action-filed and trial dates (California, Nevada, federal).
+    Trial,
+    /// Washington superior court (GR 14): no counsel block above the
+    /// caption — counsel's office prints in every page's footer — and a
+    /// right cell of `No.` and the title.
+    Washington,
+}
+
+impl CaptionStyle {
+    /// The style a template's `jurisdiction:` code selects.
+    #[must_use]
+    pub fn for_jurisdiction(code: &str) -> Self {
+        if code.trim() == "WA" {
+            Self::Washington
+        } else {
+            Self::Trial
+        }
+    }
 }
 
 /// What differs from one filing to the next: read from the notation's
@@ -207,10 +242,10 @@ impl Matter {
             !self.court.is_empty() && self.court.iter().all(|l| !blank(l) && single_line(l)),
             "court",
         );
-        need(!blank(&self.case_number), "case_number");
-        need(!blank(&self.judicial_officer), "judicial_officer");
-        need(!blank(&self.department), "department");
-        need(display_date(&self.filed_on).is_some(), "filed_on");
+        need(
+            blank(&self.filed_on) || display_date(&self.filed_on).is_some(),
+            "filed_on",
+        );
         if let Some(trial) = &self.trial_on {
             need(display_date(trial).is_some(), "trial_on");
         }
@@ -262,7 +297,8 @@ impl Filing {
     }
 }
 
-/// The text a court-paper line carries when a hearing field is unset.
+/// The text a court-paper line carries when a field is unset: a hearing
+/// field, or the case number of a paper filed before the clerk assigns one.
 const FILL: &str = "__________";
 
 fn bar_label(jurisdiction: &str) -> String {
@@ -299,6 +335,36 @@ fn counsel_lines(counsel: &Counsel) -> Vec<String> {
     lines
 }
 
+/// An "In re" caption: what the case is about, then each side's role and
+/// names, the second side introduced by "And".
+fn in_re_lines(in_re: &str, parties: &[Party]) -> Vec<String> {
+    let mut lines = vec![format!("In re {}:", in_re.trim())];
+    let mut role: Option<&str> = None;
+    for party in parties {
+        if role != Some(party.role.as_str()) {
+            let and = if role.is_some() { "And " } else { "" };
+            lines.push(format!("{and}{}:", party.role));
+            role = Some(party.role.as_str());
+        }
+        lines.push(party.name.clone());
+    }
+    lines
+}
+
+/// The office lines a Washington paper prints in its footer: the firm (or
+/// counsel's own name when appearing alone), the address, and how to reach
+/// counsel.
+fn office_lines(counsel: &Counsel) -> Vec<String> {
+    let mut lines = vec![if blank(&counsel.firm) {
+        counsel.name.clone()
+    } else {
+        counsel.firm.clone()
+    }];
+    lines.extend(counsel.address.iter().cloned());
+    lines.push(format!("Tel. {} · {}", counsel.telephone, counsel.email));
+    lines
+}
+
 fn party_lines(parties: &[Party]) -> Vec<String> {
     let mut groups: Vec<(&str, Vec<&Party>)> = Vec::new();
     for party in parties {
@@ -321,21 +387,36 @@ fn party_lines(parties: &[Party]) -> Vec<String> {
     lines
 }
 
-/// Join a matter and a filing into the caption both renders print.
+/// Join a matter and a filing into the caption both renders print, laid
+/// out as `style` lays a caption out.
 ///
 /// The caption's `footer` is the filing's short title. The right cell runs
-/// case number, department, judicial officer, the filing's title, any
-/// hearing, then the action-filed and trial dates. A hearing prints when
-/// any of its three fields is declared, with each unset one a blank fill
-/// line; a filing declaring none prints no hearing lines.
+/// case number — a blank fill line before the clerk assigns one —
+/// department, judicial officer, the filing's title, any hearing, then (in
+/// the trial style) the action-filed and trial dates. A department or
+/// judicial officer the matter leaves blank prints no line, and a blank
+/// filed date prints neither date line: many courts never assign the first
+/// two. A hearing prints when any of its three fields is declared, with
+/// each unset one a blank fill line; a filing declaring none prints no
+/// hearing lines.
 #[must_use]
-pub fn compose(matter: &Matter, filing: &Filing) -> Caption {
-    let mut case = vec![
-        format!("Case No. {}", matter.case_number),
-        format!("Dept. {}", assignment(&matter.department)),
-        format!("Judge: {}", assignment(&matter.judicial_officer)),
-        filing.caption_title.clone(),
-    ];
+pub fn compose(matter: &Matter, filing: &Filing, style: CaptionStyle) -> Caption {
+    let number = if blank(&matter.case_number) {
+        FILL
+    } else {
+        matter.case_number.as_str()
+    };
+    let mut case = vec![match style {
+        CaptionStyle::Trial => format!("Case No. {number}"),
+        CaptionStyle::Washington => format!("No. {number}"),
+    }];
+    if !blank(&matter.department) {
+        case.push(format!("Dept. {}", assignment(&matter.department)));
+    }
+    if !blank(&matter.judicial_officer) {
+        case.push(format!("Judge: {}", assignment(&matter.judicial_officer)));
+    }
+    case.push(filing.caption_title.clone());
     if filing.has_hearing() {
         let shown = |value: &Option<String>| value.clone().unwrap_or_else(|| FILL.to_string());
         let date = filing
@@ -347,24 +428,35 @@ pub fn compose(matter: &Matter, filing: &Filing) -> Caption {
         case.push(format!("Time: {}", shown(&filing.hearing_time)));
         case.push(format!("Reservation ID: {}", shown(&filing.reservation_id)));
     }
-    case.push(format!(
-        "Action Filed: {}",
-        display_date(&matter.filed_on).unwrap_or_default()
-    ));
-    case.push(format!(
-        "Trial Date: {}",
-        matter
-            .trial_on
-            .as_deref()
-            .and_then(display_date)
-            .unwrap_or_else(|| "None set".to_string())
-    ));
+    let filed = display_date(&matter.filed_on).filter(|_| style == CaptionStyle::Trial);
+    if let Some(filed) = filed {
+        case.push(format!("Action Filed: {filed}"));
+        case.push(format!(
+            "Trial Date: {}",
+            matter
+                .trial_on
+                .as_deref()
+                .and_then(display_date)
+                .unwrap_or_else(|| "None set".to_string())
+        ));
+    }
+    let parties = if blank(&matter.in_re) {
+        party_lines(&matter.parties)
+    } else {
+        in_re_lines(&matter.in_re, &matter.parties)
+    };
+    let (counsel, office) = match style {
+        CaptionStyle::Trial => (counsel_lines(&matter.counsel), Vec::new()),
+        CaptionStyle::Washington => (Vec::new(), office_lines(&matter.counsel)),
+    };
     Caption {
-        counsel: counsel_lines(&matter.counsel),
+        counsel,
         court: matter.court.clone(),
-        parties: party_lines(&matter.parties),
+        parties,
         case,
         footer: Some(filing.footer_title.clone()),
+        office,
+        page_count: matter.page_count,
     }
 }
 
@@ -387,6 +479,8 @@ mod tests {
             department: "12".into(),
             filed_on: "2026-02-02".into(),
             trial_on: None,
+            in_re: String::new(),
+            page_count: false,
             parties: vec![
                 party("A CORP", "Plaintiff"),
                 party("B CORP", "Defendant"),
@@ -428,11 +522,33 @@ mod tests {
         m.department = "pending".into();
         m.judicial_officer = " Pending ".into();
         assert!(m.missing().is_empty());
-        let caption = compose(&m, &filing());
+        let caption = compose(&m, &filing(), CaptionStyle::Trial);
         assert!(caption.case.contains(&"Dept. To be assigned".to_string()));
         assert!(caption.case.contains(&"Judge: To be assigned".to_string()));
+    }
+
+    /// LAW-361: a Washington family case may never get a judicial officer or
+    /// department, and counsel appearing in an existing case may not yet know
+    /// the filed date. Blank, they gate clean and the caption leaves them out.
+    #[test]
+    fn an_unassigned_court_leaves_department_judge_and_dates_out_of_the_caption() {
+        let mut m = matter();
         m.department.clear();
-        assert_eq!(m.missing(), vec!["matter.department"]);
+        m.judicial_officer = " ".into();
+        m.filed_on.clear();
+        assert!(m.missing().is_empty(), "{:?}", m.missing());
+        let caption = compose(&m, &filing(), CaptionStyle::Trial);
+        assert_eq!(caption.case, ["Case No. 00CV000000", "NOTICE"]);
+        m.filed_on = "2026-02-02".into();
+        assert_eq!(
+            compose(&m, &filing(), CaptionStyle::Trial).case,
+            [
+                "Case No. 00CV000000",
+                "NOTICE",
+                "Action Filed: February 2, 2026",
+                "Trial Date: None set",
+            ]
+        );
     }
 
     #[test]
@@ -444,18 +560,12 @@ mod tests {
     #[test]
     fn each_missing_field_is_named_by_its_manifest_path() {
         let mut m = matter();
-        m.case_number.clear();
         m.counsel.email = " ".into();
         m.filed_on = "2026-02-30".into();
         m.parties.truncate(1);
         assert_eq!(
             m.missing(),
-            [
-                "matter.case_number",
-                "matter.filed_on",
-                "matter.parties",
-                "matter.counsel.email"
-            ]
+            ["matter.filed_on", "matter.parties", "matter.counsel.email"]
         );
         let none = Filing::default();
         assert_eq!(none.missing(), ["caption_title", "footer_title"]);
@@ -468,21 +578,21 @@ mod tests {
         m.counsel.bar_number.clear();
         m.counsel.bar_jurisdiction.clear();
         assert!(m.missing().is_empty());
-        let lines = compose(&m, &filing()).counsel;
+        let lines = compose(&m, &filing(), CaptionStyle::Trial).counsel;
         assert_eq!(lines[0], "Pat Sample");
         assert_eq!(lines.last().unwrap(), "Plaintiff A CORP, in pro per");
     }
 
     #[test]
     fn the_counsel_block_is_seven_lines_with_the_bar_label_of_its_jurisdiction() {
-        let caption = compose(&matter(), &filing());
+        let caption = compose(&matter(), &filing(), CaptionStyle::Trial);
         assert_eq!(caption.counsel.len(), 7);
         assert_eq!(caption.counsel[0], "Pat Sample (SBN 000000)");
         assert_eq!(caption.counsel[6], "Attorneys for Plaintiff A CORP");
         let mut nv = matter();
         nv.counsel.bar_jurisdiction = "Nevada".into();
         assert_eq!(
-            compose(&nv, &filing()).counsel[0],
+            compose(&nv, &filing(), CaptionStyle::Trial).counsel[0],
             "Pat Sample (Nevada Bar No. 000000)"
         );
     }
@@ -490,7 +600,7 @@ mod tests {
     #[test]
     fn parties_print_each_role_once_with_the_versus_line_between() {
         assert_eq!(
-            compose(&matter(), &filing()).parties,
+            compose(&matter(), &filing(), CaptionStyle::Trial).parties,
             [
                 "A CORP,",
                 "Plaintiff,",
@@ -521,7 +631,7 @@ mod tests {
     fn the_right_cell_runs_case_filing_title_hearing_then_dates() {
         let mut f = filing();
         f.hearing_date = Some("2026-08-14".into());
-        let caption = compose(&matter(), &f);
+        let caption = compose(&matter(), &f, CaptionStyle::Trial);
         assert_eq!(
             caption.case,
             [
@@ -541,7 +651,59 @@ mod tests {
 
     #[test]
     fn a_filing_without_a_hearing_prints_no_hearing_lines() {
-        let caption = compose(&matter(), &filing());
+        let caption = compose(&matter(), &filing(), CaptionStyle::Trial);
         assert!(caption.case.iter().all(|l| !l.contains("Hearing")));
+    }
+
+    /// LAW-327: a Washington superior-court caption — "In re the Marriage
+    /// of", each side introduced by its role, `No.` with a fill line before
+    /// the clerk assigns a number, no trial-court dates, and counsel's office
+    /// in the footer instead of a block above the court's title.
+    #[test]
+    fn a_washington_caption_is_in_re_with_no_and_counsel_in_the_footer() {
+        let mut m = matter();
+        m.court = vec!["SUPERIOR COURT OF WASHINGTON, COUNTY OF SAMPLE".into()];
+        m.in_re = "the Marriage of".into();
+        m.parties = vec![
+            party("PAT ONE", "Petitioner"),
+            party("SAM TWO", "Respondent"),
+        ];
+        m.case_number.clear();
+        m.department.clear();
+        m.judicial_officer.clear();
+        m.page_count = true;
+        assert!(m.missing().is_empty(), "{:?}", m.missing());
+        let caption = compose(&m, &filing(), CaptionStyle::Washington);
+        assert!(caption.counsel.is_empty());
+        assert_eq!(
+            caption.parties,
+            [
+                "In re the Marriage of:",
+                "Petitioner:",
+                "PAT ONE",
+                "And Respondent:",
+                "SAM TWO"
+            ]
+        );
+        assert_eq!(caption.case, ["No. __________", "NOTICE"]);
+        assert_eq!(
+            caption.office,
+            [
+                "SAMPLE LAW",
+                "1 Example Way",
+                "Sampleton, CA 90000",
+                "Tel. (000) 555-0100 · pat@example.invalid"
+            ]
+        );
+        assert!(caption.page_count);
+        assert_eq!(
+            CaptionStyle::for_jurisdiction("WA"),
+            CaptionStyle::Washington
+        );
+        assert_eq!(CaptionStyle::for_jurisdiction("CA"), CaptionStyle::Trial);
+        assert_eq!(
+            compose(&m, &filing(), CaptionStyle::Trial).case[0],
+            "Case No. __________"
+        );
     }
 }

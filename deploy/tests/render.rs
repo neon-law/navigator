@@ -1225,49 +1225,43 @@ fn a_preview_renders_a_drafting_marker_and_a_final_render_refuses_it() {
     assert!(!out.exists());
 }
 
-/// LAW-183: a preview captions a pleading whose court has not yet assigned a
-/// department or judge ("To be assigned"); a final render still refuses it.
+/// LAW-361: a court that assigns no department or judge, and a matter whose
+/// filed date counsel has not yet read off the docket, still render final:
+/// the caption simply leaves those lines out.
 #[test]
-fn a_preview_captions_an_unassigned_department_and_a_final_render_refuses() {
+fn a_final_render_leaves_an_unassigned_department_judge_and_filed_date_out() {
     let work = TempDir::new().unwrap();
     let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../cli/tests/fixtures/synthetic_matter/navigator.yaml");
-    let unassigned: String = fs::read_to_string(manifest)
+    let unassigned = fs::read_to_string(manifest)
         .unwrap()
         .lines()
-        .map(|line| {
+        .filter(|line| {
             let trimmed = line.trim_start();
-            let indent = &line[..line.len() - trimmed.len()];
-            if trimmed.starts_with("department:") || trimmed.starts_with("judicial_officer:") {
-                format!(
-                    "{indent}{}\"\"\n",
-                    trimmed.split(':').next().unwrap().to_owned() + ": "
-                )
-            } else {
-                format!("{line}\n")
-            }
+            !["department:", "judicial_officer:", "filed_on:"]
+                .iter()
+                .any(|key| trimmed.starts_with(key))
         })
-        .collect();
+        .collect::<Vec<_>>()
+        .join("\n");
     fs::write(work.path().join("navigator.yaml"), unassigned).unwrap();
     let src = write(&work, "motion.md", &pleading_fixture("CA"));
     let out = work.path().join("motion.pdf");
 
-    let refused = render_pdf(&[src.as_os_str(), "--out".as_ref(), out.as_os_str()]);
-    assert_eq!(refused.status.code(), Some(2));
-    assert!(!out.exists());
-
-    let preview = render_pdf(&[
-        src.as_os_str(),
-        "--out".as_ref(),
-        out.as_os_str(),
-        "--preview".as_ref(),
-    ]);
+    let rendered = render_pdf(&[src.as_os_str(), "--out".as_ref(), out.as_os_str()]);
     assert!(
-        preview.status.success(),
+        rendered.status.success(),
         "{}",
-        String::from_utf8_lossy(&preview.stderr)
+        String::from_utf8_lossy(&rendered.stderr)
     );
-    assert!(out.exists());
+    let bytes = fs::read(&out).unwrap();
+    for absent in ["Dept.", "Judge:", "Action Filed", "Trial Date"] {
+        assert_eq!(
+            pdf::occurrence_count(&bytes, absent).unwrap(),
+            0,
+            "{absent}"
+        );
+    }
 }
 
 /// LAW-122: a pleading is final before it is filed. A certificate of service

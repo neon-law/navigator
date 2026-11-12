@@ -368,7 +368,7 @@ impl Preview {
         };
         Snapshot {
             fingerprint,
-            matter: cli::projects::matter::read(&self.root.join(manifest::FILE)).ok(),
+            matter: cli::projects::matter::read(&self.root.join(manifest::FILE), "").ok(),
             manifest,
             findings,
             documents,

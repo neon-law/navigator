@@ -4798,6 +4798,7 @@ fn run_render(
     // hand, in the preview and the final render alike.
     let mut answer_context = rendered_answers(&contents, answers);
     fill_firm_legal_name(file, &mut answer_context);
+    fill_firm_office(file, &contents, &mut answer_context);
     let Ok(body) = pleading_body(file, &contents, &profile, &answer_context, preview)
         .map_err(|message| eprintln!("navigator: {message}"))
     else {
@@ -4891,6 +4892,64 @@ fn fill_firm_legal_name(
         answer_context
             .entry("firm.legal_name".to_string())
             .or_insert_with(|| pdf::markdown::bold_answer(&name));
+    }
+}
+
+/// Binds `{{firm.office.address}}`, `{{firm.office.phone}}`, and
+/// `{{firm.office.email}}` to the Firm's office in the template's
+/// `jurisdiction:` (LAW-329), unless the answers already supply them, and
+/// says on stderr which office it used — a fallback to the default office
+/// is never silent. A template that names none of them reads nothing.
+fn fill_firm_office(
+    file: &Path,
+    contents: &str,
+    answer_context: &mut std::collections::BTreeMap<String, String>,
+) {
+    if !contents.contains("firm.office.") {
+        return;
+    }
+    let jurisdiction = projects::matter::jurisdiction_of(contents);
+    let office = match projects::matter::find_manifest(file) {
+        Some(path) => std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|text| projects::manifest::parse(&text).ok())
+            .and_then(|manifest| {
+                cli::letterhead::office_for_project(
+                    manifest.brand.as_deref(),
+                    manifest.host.as_deref(),
+                    &jurisdiction,
+                )
+                .ok()
+                .flatten()
+            }),
+        None => cli::letterhead::office_for_brand(views::brand::BrandKey::Neon, &jurisdiction),
+    };
+    let Some(office) = office else {
+        eprintln!(
+            "navigator: the Project's Brand publishes no office; {{{{firm.office.*}}}} stays open"
+        );
+        return;
+    };
+    if office.fallback {
+        eprintln!(
+            "navigator: the Firm has no office in this template's jurisdiction; \
+             {{{{firm.office.*}}}} is filled from its default office ({})",
+            office.state
+        );
+    } else {
+        eprintln!(
+            "navigator: {{{{firm.office.*}}}} is filled from the Firm's {} office",
+            office.state
+        );
+    }
+    for (key, value) in [
+        ("firm.office.address", office.address.join(", ")),
+        ("firm.office.phone", office.phone),
+        ("firm.office.email", office.email),
+    ] {
+        answer_context
+            .entry(key.to_string())
+            .or_insert_with(|| pdf::markdown::bold_answer(&value));
     }
 }
 
@@ -5126,11 +5185,13 @@ fn pleading_body(
     let composed = rules::clauses::compile(contents)?;
     let contents = composed.as_str();
     let signer_boxes = declared_signer_boxes(contents);
-    let body = views::notation::fill_signer_boxes(
+    // Each `{{<signer>.signature|initials|date}}` becomes a signing line with
+    // the provider's anchor hidden on it, in every frame (LAW-344).
+    let body = word::paper::mark_signing_lines(&views::notation::fill_signer_boxes(
         strip_frontmatter(contents),
         answers,
         signer_boxes.iter().map(String::as_str),
-    );
+    ));
     if profile != PLEADING_PROFILE {
         return Ok(body);
     }

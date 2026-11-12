@@ -185,6 +185,27 @@ navigator-deploy mail draft --to client@example.test --subject "Engagement lette
 
 The draft stays unsent; there is still no send operation.
 
+## Mail a packet through the mail-center vendor
+
+`navigator-deploy mail packet` hands a signed packet to the Firm's mail-center vendor for printing and physical mail. It
+saves an unsent Gmail draft to the vendor with the PDFs attached, and puts a job sheet in the body: the documents in
+order, the recipient's address block, the service, the return receipt, the printing instructions (single-sided, no
+staples), and the mail-by date. It then logs the draft on the matter as an outbound Communication with the role `other`.
+Nothing is sent: the lawyer reviews and sends the draft, and the vendor replies with the receipts.
+
+```bash
+navigator-deploy mail packet "documents/correspondence/2026.11.12_reply_signed.pdf" \
+  --vendor jobs@mail-center.example --recipient "Internal Revenue Service" --recipient "Sampleton, UT 84000" \
+  --service certified --return-receipt --mail-by 2026-11-13 --dry-run
+```
+
+- **Signed revision only.** A PDF stamped "PREVIEW, NOT FOR FILING", one whose counsel signature still reads `/s/
+  DRAFT`, or one carrying signing lines (`nlsig-…` anchors) whose pointer under `blobs/` records no `signing:` is
+  refused before anything is drafted.
+- **The vendor is data.** `--vendor` is the vendor's email from its Person or Entity row; no vendor address is compiled
+  in.
+- **`--dry-run`** prints the draft's recipient, subject, and job sheet, and contacts neither Gmail nor Navigator.
+
 ## Parse one message into the log
 
 `navigator-deploy mail parse <reference>` files one message as a Project-scoped Communication — the same record write
