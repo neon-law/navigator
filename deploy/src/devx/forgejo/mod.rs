@@ -499,6 +499,26 @@ pub(super) fn http_probe_script(host: &str, port: u16, path: &str) -> String {
     )
 }
 
+/// The in-cluster name of the receiver's Service: pods dial it, and
+/// kube-proxy delivers to the host gateway from the node's own network
+/// namespace — a path the pod overlay does not blackhole.
+pub(super) const RECEIVER_SERVICE: &str = "forgejo-receiver";
+
+/// The in-cluster Service and manual Endpoints that publish the smoke's
+/// receiver to Forgejo: Forgejo dials the Service name, and kube-proxy
+/// NATs the delivery to the gateway IP the receiver listens on.
+pub(super) fn receiver_endpoints_manifest(gateway: &str, port: u16) -> String {
+    format!(
+        "apiVersion: v1\nkind: Service\nmetadata:\n  name: {RECEIVER_SERVICE}\n  namespace: default\nspec:\n  type: ClusterIP\n  ports:\n    - port: 80\n      targetPort: {port}\n---\napiVersion: v1\nkind: Endpoints\nmetadata:\n  name: {RECEIVER_SERVICE}\n  namespace: default\nsubsets:\n  - addresses:\n      - ip: {gateway}\n    ports:\n      - port: {port}\n"
+    )
+}
+
+/// The receiver's in-cluster URL: Forgejo delivers webhooks through the
+/// Service, not to a host address pods cannot reach.
+pub(super) fn receiver_service_url() -> String {
+    format!("http://{RECEIVER_SERVICE}.default.svc.cluster.local")
+}
+
 /// The kubectl port-forward arguments for an in-cluster target: the target
 /// reference and remote port as separate arguments, with an empty local port
 /// so kubectl allocates a free one (the `up` phase may already hold the
@@ -575,6 +595,18 @@ mod tests {
         assert!(script.contains("Host: 172.18.0.1"), "{script}");
         assert!(script.contains(r"\r\n"), "{script}");
         assert!(script.ends_with("head -n1 <&3"), "{script}");
+    }
+
+    #[test]
+    fn the_receiver_manifest_publishes_the_gateway_endpoint() {
+        let manifest = receiver_endpoints_manifest("172.18.0.1", 42903);
+        assert!(manifest.contains("name: forgejo-receiver"), "{manifest}");
+        assert!(manifest.contains("ip: 172.18.0.1"), "{manifest}");
+        assert!(manifest.contains("port: 42903"), "{manifest}");
+        assert_eq!(
+            receiver_service_url(),
+            "http://forgejo-receiver.default.svc.cluster.local"
+        );
     }
 
     #[test]

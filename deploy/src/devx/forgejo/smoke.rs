@@ -46,10 +46,11 @@ use super::cluster::Kube;
 use super::oidc::{self, Outcome};
 use super::{
     actions_context, assert_analyzed_push_receipt, forwarded_port, host_gateway, http_probe_script,
-    parse_push_receipt_row, port_forward_args, random_hex, receipt_is_terminal, CookieJar,
-    PushReceiptRow, Seed, ADMISSION_CONFIG_MAP, ALLOWED_IDENTITY, ALLOWLIST_KEY, BOT_PUSH_WORKFLOW,
-    DATA_CLAIM, DENIED_IDENTITIES, GATE_WORKFLOW, POD, POSTGRES_POD, PUBLISH_WORKFLOW, SEED_SECRET,
-    SMOKE_ALLOWLIST, STATEFULSET,
+    parse_push_receipt_row, port_forward_args, random_hex, receipt_is_terminal,
+    receiver_endpoints_manifest, receiver_service_url, CookieJar, PushReceiptRow, Seed,
+    ADMISSION_CONFIG_MAP, ALLOWED_IDENTITY, ALLOWLIST_KEY, BOT_PUSH_WORKFLOW, DATA_CLAIM,
+    DENIED_IDENTITIES, GATE_WORKFLOW, POD, POSTGRES_POD, PUBLISH_WORKFLOW, RECEIVER_SERVICE,
+    SEED_SECRET, SMOKE_ALLOWLIST, STATEFULSET,
 };
 
 /// The allowed identity's Forgejo user name (`USERNAME = email` keeps the
@@ -1892,12 +1893,42 @@ async fn push_webhook_proof(
         reached.trim()
     );
 
+    // The pod overlay blackholes the bridge gateway on CI runners, so the
+    // receiver is published as an in-cluster Service with manual Endpoints
+    // at the gateway: kube-proxy NATs the delivery from the node's own
+    // network namespace, and Forgejo dials the Service name. The ClusterIP
+    // is private, which the KIND app.ini's ALLOWED_HOST_LIST already
+    // permits.
+    let manifest = receiver_endpoints_manifest(&gateway, port);
+    kube.output_with_stdin(&["apply", "-f", "-"], Some(manifest.as_bytes()))
+        .context("publish the receiver as an in-cluster Service")?;
+    let relayed = kube
+        .output(&[
+            "exec",
+            POSTGRES_POD,
+            "--",
+            "timeout",
+            "6",
+            "bash",
+            "-c",
+            &http_probe_script(
+                &format!("{RECEIVER_SERVICE}.default.svc.cluster.local"),
+                80,
+                "/webhook/forgejo/pod-probe",
+            ),
+        ])
+        .context("the receiver Service does not deliver to the host receiver")?;
+    eprintln!(
+        "    the receiver answers through the Service: {}",
+        relayed.trim()
+    );
+
     register_push_hook(
         http,
         forge,
         token,
         path,
-        &format!("http://{gateway}:{port}"),
+        &receiver_service_url(),
         &path_secret,
         &hmac_key,
     )
