@@ -4972,7 +4972,7 @@ async fn notation_envelope_in(root: &Path, notation_id: Uuid, prepare: bool) -> 
 
 /// Stamp the sent envelope's id on the checkout pointer the notation's
 /// signed copy files under. The provider id must be a well-formed UUID —
-/// the pointer field is a UUID by schema, and DocuSign's ids are; a fake
+/// the pointer field is a UUID by schema, and `DocuSign`'s ids are; a fake
 /// provider's `fake-…-1` id is reported but not stamped. A checkout with
 /// no matching pointer is a notice, not an error: the send itself
 /// succeeded, and the id stays on the printed line.
