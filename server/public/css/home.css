@@ -68,6 +68,9 @@
   margin: 0 0 1.5rem;
 }
 
+.home-lead h2:has(+ .home-lead__intro) { margin-bottom: .75rem; }
+.home-lead__intro { margin: 0 0 1.5rem; color: var(--nav-color-text-muted); line-height: 1.6; }
+
 /* ---- The question --------------------------------------------------- */
 
 .home-photo {

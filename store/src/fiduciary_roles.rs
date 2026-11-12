@@ -17,21 +17,10 @@ use crate::matter_record_links::{
 };
 use crate::project_references::Party;
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
+pub use model::fiduciary_roles::ROLES;
 
 const TABLE: &str = "fiduciary_role";
 const SLOT_INDEX: &str = "fiduciary_role_order";
-
-/// Every role the schema admits, in the order a roster lists them. The
-/// `ASSERT` on `fiduciary_role.role` is the engine's copy of this list.
-pub const ROLES: [&str; 7] = [
-    "trustee",
-    "successor_trustee",
-    "executor",
-    "alternate_executor",
-    "agent_poa",
-    "health_care_agent",
-    "guardian",
-];
 
 /// One stored Fiduciary Role.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

@@ -76,12 +76,12 @@ pub async fn add_reference(
 }
 
 /// One `project_reference` seed record, in the shape
-/// `store::seed::SeedModel::ProjectReference` parses.
+/// `model::seed::SeedModel::ProjectReference` parses.
 fn reference_record(code: &str, reason: &str, party: &PartyArgs) -> Result<serde_json::Value> {
-    if !store::project_references::is_reason(reason) {
+    if !model::project_references::is_reason(reason) {
         return Err(anyhow!(
             "--reason must be one of {}",
-            store::project_references::REASONS.join(", ")
+            model::project_references::REASONS.join(", ")
         ));
     }
     let mut record = serde_json::json!({

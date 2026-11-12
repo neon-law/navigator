@@ -1535,7 +1535,6 @@ impl fantoccini::wd::WebDriverCompatibleCommand for Cdp {
 }
 
 const SHIFT: u32 = 8;
-const CONTROL: u32 = 2;
 
 /// Raise a bubbling `keydown` from script. Used when Chrome treats the
 /// headless window as hidden and drops trusted CDP key events. The page
@@ -1570,6 +1569,19 @@ async fn dispatch_keydown_from_script(
     .unwrap();
 }
 
+async fn focus_browser(c: &Client) {
+    for command in ["Emulation.setFocusEmulationEnabled", "Page.bringToFront"] {
+        let params = if command == "Page.bringToFront" {
+            serde_json::json!({})
+        } else {
+            serde_json::json!({ "enabled": true })
+        };
+        c.issue_cmd(Cdp { command, params })
+            .await
+            .unwrap_or_else(|err| panic!("{command}: {err}"));
+    }
+}
+
 /// Press and release one key as a trusted browser event.
 ///
 /// A headless page drops key events now and then, so the press is confirmed:
@@ -1587,16 +1599,19 @@ async fn press_key(
     modifiers: u32,
     text: Option<&str>,
 ) -> bool {
-    for command in ["Emulation.setFocusEmulationEnabled", "Page.bringToFront"] {
-        let params = if command == "Page.bringToFront" {
-            serde_json::json!({})
-        } else {
-            serde_json::json!({ "enabled": true })
-        };
-        c.issue_cmd(Cdp { command, params })
-            .await
-            .unwrap_or_else(|err| panic!("{command}: {err}"));
-    }
+    press_key_with_delivery(c, key, code, virtual_key, modifiers, text, true).await
+}
+
+async fn press_key_with_delivery(
+    c: &Client,
+    key: &str,
+    code: &str,
+    virtual_key: u32,
+    modifiers: u32,
+    text: Option<&str>,
+    allow_script: bool,
+) -> bool {
+    focus_browser(c).await;
     c.execute(
         "if (!window.__keydowns) { window.__keydowns = 0; \
            document.addEventListener('keydown', () => { window.__keydowns += 1; }, true); } \
@@ -1627,6 +1642,10 @@ async fn press_key(
         } else {
             // The browser took three presses and delivered none: its window is
             // being treated as hidden (a locked or sleeping display does this).
+            assert!(
+                allow_script,
+                "Chrome did not deliver the trusted {key} keydown"
+            );
             dispatch_keydown_from_script(c, key, code, modifiers).await;
             used_script = true;
         }
@@ -1788,9 +1807,43 @@ async fn palette_state(c: &fantoccini::Client) -> serde_json::Value {
     .unwrap()
 }
 
+const ALT: u32 = 1;
+const CONTROL: u32 = 2;
+
+async fn press_questionnaire_key(c: &Client, key: &str, code: &str, number: u32, modifiers: u32) {
+    press_key_with_delivery(c, key, code, number, modifiers, None, false).await;
+}
+
+/// Fill a text field using the remaining keys when Chrome drops part of a sequence.
+async fn type_questionnaire_answer(c: &Client, expected: &str) {
+    let field = c.active_element().await.unwrap();
+    for _ in 0..3 {
+        let value = field.prop("value").await.unwrap().unwrap();
+        let remaining = expected
+            .strip_prefix(&value)
+            .expect("unexpected text in the answer field");
+        if remaining.is_empty() {
+            return;
+        }
+        focus_browser(c).await;
+        field.send_keys(remaining).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+    assert_eq!(
+        field.prop("value").await.unwrap().as_deref(),
+        Some(expected)
+    );
+}
+
 /// `Ctrl+Enter` — the questionnaire's "next question, or submit" chord.
 async fn press_control_enter(c: &fantoccini::Client) {
-    press_key(c, "Enter", "Enter", 13, CONTROL, None).await;
+    press_questionnaire_key(c, "Enter", "Enter", 13, CONTROL).await;
+}
+
+/// Keep the signed-in cookies while giving Chrome a fresh input target after OIDC.
+async fn open_questionnaire_tab(c: &Client) {
+    let tab = c.new_window(true).await.unwrap();
+    c.switch_to_window(tab.handle).await.unwrap();
 }
 
 /// The question the walker is showing: its step counter text, or `None` once
@@ -1809,58 +1862,112 @@ async fn current_question(c: &fantoccini::Client) -> Option<String> {
     value.as_str().map(str::to_string)
 }
 
-/// Answer every question of the questionnaire on screen with the keyboard
-/// alone, then return how many were answered. No pointer, no scripted value:
-/// the script has already put the cursor in the question's first input, so
-/// each answer is typed (or picked with a digit, or an arrow key) where focus
-/// is, and `Ctrl+Enter` moves on. The only reads of the page are to decide
-/// which keys the focused control wants.
-async fn walk_questionnaire_with_the_keyboard(c: &fantoccini::Client) -> usize {
+/// Wait for a native shortcut to leave the current step.
+async fn wait_for_question_change(c: &Client, previous: &str) -> Option<String> {
+    let started = std::time::Instant::now();
+    loop {
+        let current = current_question(c).await;
+        if current.as_deref() != Some(previous) {
+            return current;
+        }
+        assert!(
+            started.elapsed() <= Duration::from_secs(15),
+            "{previous}: the keyboard shortcut did not move to another step"
+        );
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+}
+
+/// Answer the shipped onboarding questionnaire using WebDriver keyboard actions.
+async fn walk_questionnaire_with_the_keyboard(c: &Client, correct_at: usize) -> usize {
     let mut answered = 0;
     while let Some(count) = current_question(c).await {
         let focus = c
             .execute(
                 "const a = document.activeElement; \
                  const form = document.querySelector('form[data-nav-questionnaire]'); \
-                 return {inForm: form.contains(a), tag: a.tagName, type: a.type || ''};",
+                 const first = form.querySelector(\
+                     'input:not([type=hidden]):not(:disabled), select:not(:disabled), textarea:not(:disabled)'); \
+                 return {first: a === first, tag: a.tagName, type: a.type || '', \
+                         question: form.elements.namedItem('_nav_question_code').value};",
                 vec![],
             )
             .await
             .unwrap();
-        assert_eq!(
-            focus["inForm"], true,
-            "{count}: focus did not land in the question's first input: {focus}"
-        );
+        assert_eq!(focus["first"], true, "{count}: the first input lacks focus");
+        focus_browser(c).await;
+        let input = c.active_element().await.unwrap();
         match (
             focus["tag"].as_str().unwrap(),
             focus["type"].as_str().unwrap(),
         ) {
             ("INPUT", "radio" | "checkbox") => {
-                let _ = press_char(c, '1').await;
+                press_questionnaire_key(c, "1", "Digit1", 49, 0).await;
             }
-            ("INPUT", "datetime-local") => type_text(c, "2026-09-01T12:00").await,
+            ("INPUT", "datetime-local") => {
+                // Chrome presents the date as month, day, year, hour, minute, and period.
+                input.send_keys("09012026").await.unwrap();
+                press_questionnaire_key(c, "ArrowRight", "ArrowRight", 39, 0).await;
+                input.send_keys("1200p").await.unwrap();
+                assert_eq!(
+                    input.prop("value").await.unwrap().as_deref(),
+                    Some("2026-09-01T12:00")
+                );
+            }
             ("SELECT", _) => {
-                c.execute(
-                    "const s = document.activeElement; \
-                     s.value = Array.from(s.options).find(o => o.value && !o.disabled).value; \
-                     s.dispatchEvent(new Event('change', {bubbles: true})); return true;",
-                    vec![],
-                )
-                .await
-                .unwrap();
+                let option = c
+                    .execute(
+                        "const o = Array.from(document.activeElement.options)
+                             .find(o => o.value && !o.disabled);
+                         return {label: o.label, value: o.value};",
+                        vec![],
+                    )
+                    .await
+                    .unwrap();
+                input
+                    .send_keys(option["label"].as_str().unwrap())
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    input.prop("value").await.unwrap().as_deref(),
+                    option["value"].as_str()
+                );
             }
-            _ => type_text(c, &format!("Keyboard answer {}", answered + 1)).await,
+            _ => {
+                let answer = if focus["question"] == "address__principal_office" {
+                    "742 Meridian Ave, Reno, NV 89502".to_string()
+                } else {
+                    format!("Keyboard answer {}", answered + 1)
+                };
+                type_questionnaire_answer(c, &answer).await;
+            }
         }
         press_control_enter(c).await;
         answered += 1;
+        let next = wait_for_question_change(c, &count).await;
 
-        let started = std::time::Instant::now();
-        while current_question(c).await.as_deref() == Some(count.as_str()) {
-            assert!(
-                started.elapsed() <= Duration::from_secs(15),
-                "{count}: Ctrl+Enter never advanced the question"
-            );
-            tokio::time::sleep(Duration::from_millis(150)).await;
+        if answered == correct_at {
+            let following = next.expect("the corrected answer must precede another question");
+            let tab = "Tab";
+            for (key, number, modifier) in [("Backspace", 8, CONTROL), ("ArrowLeft", 37, ALT)] {
+                // Leave the answer field so the back chord does not edit text.
+                press_questionnaire_key(c, tab, tab, 9, 0).await;
+                press_questionnaire_key(c, key, key, number, modifier).await;
+                assert_eq!(
+                    wait_for_question_change(c, &following).await.as_deref(),
+                    Some(count.as_str())
+                );
+                let field = c.active_element().await.unwrap();
+                let previous = field.prop("value").await.unwrap().unwrap();
+                assert!(!previous.is_empty(), "the prior answer should be prefilled");
+                press_questionnaire_key(c, "End", "End", 35, 0).await;
+                type_questionnaire_answer(c, &format!("{previous} corrected")).await;
+                press_control_enter(c).await;
+                assert_eq!(
+                    wait_for_question_change(c, &count).await.as_deref(),
+                    Some(following.as_str())
+                );
+            }
         }
     }
     answered
@@ -1953,9 +2060,10 @@ async fn lawyer_walks_the_whole_questionnaire_with_the_keyboard_alone() {
         return;
     };
     login_as_lawyer(&c).await;
+    open_questionnaire_tab(&c).await;
 
     // Start the notation (the start form is not part of the questionnaire).
-    let client_email = format!("keys-{}@example.com", std::process::id());
+    let client_email = format!("keys-{}@example.com", Uuid::now_v7());
     c.goto(&format!("{}/app/lawyer/retainers/new", base_url()))
         .await
         .unwrap();
@@ -2003,7 +2111,7 @@ async fn lawyer_walks_the_whole_questionnaire_with_the_keyboard_alone() {
     c.refresh().await.unwrap();
     wait_for_text(&c, "Step 1 of 7", Duration::from_secs(10)).await;
 
-    let answered = walk_questionnaire_with_the_keyboard(&c).await;
+    let answered = walk_questionnaire_with_the_keyboard(&c, 6).await;
     assert_eq!(
         answered, 7,
         "the retainer questionnaire has seven questions"
@@ -2011,16 +2119,40 @@ async fn lawyer_walks_the_whole_questionnaire_with_the_keyboard_alone() {
     wait_for_text(&c, "Awaiting attorney review", Duration::from_secs(20)).await;
     c.close().await.unwrap();
 
-    // Exactly one transition per answer: Ctrl+Enter submitted each question once.
     let surreal = store::surreal::connect_from_env()
         .await
         .expect("connect to the port-forwarded SurrealDB");
-    let mut events = store::notation_events::for_notation(&surreal, notation_id)
+    let answers = store::answers::for_notation(&surreal, notation_id)
         .await
-        .expect("read notation_event from surreal");
-    events.retain(|e| e.machine_kind == store::notation_events::MACHINE_QUESTIONNAIRE);
-    assert_eq!(events.len(), 8, "expected BEGIN→…→END, got {events:?}");
-    assert_eq!(events.last().unwrap().to_state, "END");
+        .expect("read the notation's answer history");
+    let scopes: Vec<_> = answers
+        .iter()
+        .filter(|answer| answer.state_name.as_deref() == Some("custom_text__engagement_scope"))
+        .collect();
+    assert_eq!(scopes.len(), 3, "each correction appends one answer");
+    assert_eq!(
+        store::answers::primitive_str(&scopes[0].value),
+        Some("Keyboard answer 6")
+    );
+    assert_eq!(
+        store::answers::primitive_str(&scopes[1].value),
+        Some("Keyboard answer 6 corrected")
+    );
+    let latest = store::answers::latest_for_state(
+        &surreal,
+        scopes[0].question_id,
+        "custom_text__engagement_scope",
+        scopes[0].person_id,
+        notation_id,
+    )
+    .await
+    .unwrap()
+    .expect("read the latest engagement scope");
+    assert_eq!(latest.id, scopes[2].id);
+    assert_eq!(
+        store::answers::primitive_str(&latest.value),
+        Some("Keyboard answer 6 corrected corrected")
+    );
 }
 
 #[tokio::test]
@@ -2615,6 +2747,7 @@ async fn client_walks_the_whole_intake_with_the_keyboard_alone() {
     .expect("seed the pending client intake");
 
     login_as_client(&c).await;
+    open_questionnaire_tab(&c).await;
     c.goto(&format!("{}/app/projects/{}", base_url(), project.code))
         .await
         .unwrap();
@@ -2634,8 +2767,8 @@ async fn client_walks_the_whole_intake_with_the_keyboard_alone() {
         .await
         .unwrap();
 
-    let answered = walk_questionnaire_with_the_keyboard(&c).await;
-    assert!(answered >= 1, "the intake asked no question");
+    let answered = walk_questionnaire_with_the_keyboard(&c, 1).await;
+    assert_eq!(answered, 2, "the client intake has two questions");
     assert!(
         current_question(&c).await.is_none(),
         "the intake did not complete"

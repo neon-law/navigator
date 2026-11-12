@@ -61,19 +61,19 @@ fn integration_result(code: &str, result: Result<IntegrationOutcome>) -> Resourc
 }
 
 fn surface_outcome(
-    status: store::project_surfaces::SurfaceStatus,
+    status: model::project_surfaces::SurfaceStatus,
     detail: Option<String>,
 ) -> ResourceOutcome {
     match status {
-        store::project_surfaces::SurfaceStatus::Created => resource("created"),
-        store::project_surfaces::SurfaceStatus::Adopted => resource("adopted"),
+        model::project_surfaces::SurfaceStatus::Created => resource("created"),
+        model::project_surfaces::SurfaceStatus::Adopted => resource("adopted"),
         // The detail says how a recorded resource was found: for Drive, that
         // the folder already set on the Project was adopted, not created.
-        store::project_surfaces::SurfaceStatus::Present => match detail {
+        model::project_surfaces::SurfaceStatus::Present => match detail {
             Some(detail) => resource_with_detail("present", detail),
             None => resource("present"),
         },
-        store::project_surfaces::SurfaceStatus::Skipped => resource_with_detail(
+        model::project_surfaces::SurfaceStatus::Skipped => resource_with_detail(
             "skipped",
             detail.unwrap_or_else(|| "provider is not configured".to_string()),
         ),
@@ -81,7 +81,7 @@ fn surface_outcome(
 }
 
 fn surface_results(
-    result: Result<store::project_surfaces::ProjectSurfaces>,
+    result: Result<model::project_surfaces::ProjectSurfaces>,
 ) -> [(String, ResourceOutcome); 2] {
     match result {
         Ok(surfaces) => [
@@ -264,7 +264,7 @@ pub async fn run(
             eprintln!("navigator: provide a Project code or --all");
             return ExitCode::from(2);
         };
-        if !store::projects::is_valid_code(code) {
+        if !model::projects::is_valid_code(code) {
             eprintln!("navigator: invalid project code");
             return ExitCode::from(2);
         }

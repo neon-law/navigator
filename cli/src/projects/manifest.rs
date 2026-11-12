@@ -892,7 +892,7 @@ fn lint_flat_host(path: &Path, mapping: &serde_yaml::Mapping) -> Vec<ManifestFin
 
 fn lint_flat_project(path: &Path, mapping: &serde_yaml::Mapping) -> Vec<ManifestFinding> {
     match mapping.get("project").and_then(scalar_string) {
-        Some(code) if store::projects::is_valid_code(&code) => Vec::new(),
+        Some(code) if model::projects::is_valid_code(&code) => Vec::new(),
         Some(code) => vec![ManifestFinding::at(
             path,
             1,
@@ -958,7 +958,7 @@ fn lint_nested_project(path: &Path, project: &serde_yaml::Mapping) -> Vec<Manife
     }
 
     match project.get("name").and_then(scalar_string) {
-        Some(name) if store::projects::is_valid_code(&name) => {}
+        Some(name) if model::projects::is_valid_code(&name) => {}
         Some(name) => findings.push(ManifestFinding::at(
             path,
             1,
@@ -1025,8 +1025,8 @@ fn lint_handle(path: &Path, key: &str, value: &serde_yaml::Value) -> Vec<Manifes
         | "shared_slack_channel"
         | "shared_notion_page" => is_https_url(&value),
         "xero_customer" => true,
-        "calendar_id" => store::projects::is_valid_calendar_id(&value),
-        "drive_folder_id" => store::projects::is_valid_drive_folder_id(&value),
+        "calendar_id" => model::projects::is_valid_calendar_id(&value),
+        "drive_folder_id" => model::projects::is_valid_drive_folder_id(&value),
         _ => false,
     };
     if valid {

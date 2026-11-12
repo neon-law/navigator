@@ -139,6 +139,310 @@ pub mod route {
     }
 }
 
+/// LAW-347's first assignment method: match a thread's From/To/Cc addresses
+/// against the open Projects' Person emails. Everything here is pure — the
+/// portal door resolves the addresses against the store and hands the
+/// results in, and the tests call the same shapes without a database.
+///
+/// The TypeSafe/Jev method this slice deliberately omits (LAW-346's
+/// zero-data-retention gate) rides the same [`DecisionLog`] shape when it
+/// arrives: its model id and probabilities have fields here already, and
+/// the address-match method always leaves them absent.
+pub mod assign_match {
+    use serde::Serialize;
+    use uuid::Uuid;
+
+    /// The mailbox local parts correspondence floods through — the court
+    /// e-filing notice feed and the docket robot. They name no Person and
+    /// identify no matter, so a thread whose only candidate carries one
+    /// matches nothing. Matched case-insensitively on the local part.
+    const SHARED_INBOX_LOCAL_PARTS: &[&str] = &["efiling-notice", "autodocket"];
+
+    /// Whether an address is a shared inbox the match must ignore.
+    #[must_use]
+    pub fn is_shared_inbox(address: &str) -> bool {
+        let local = address
+            .trim()
+            .split('@')
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        SHARED_INBOX_LOCAL_PARTS.contains(&local.as_str())
+    }
+
+    /// One thread address the door resolved against the Person CRM: the
+    /// Person it belongs to, if any, and the open Projects that Person
+    /// participates in. Entity emails join the same shape when Entities
+    /// carry email storage; today no Entity field holds one.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct ResolvedAddress {
+        pub address: String,
+        pub person_id: Option<Uuid>,
+        pub open_projects: Vec<Uuid>,
+    }
+
+    /// Why an unmatched thread stayed in the inbox.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum LeftReason {
+        /// The sender address resolves to no Person row.
+        NoSenderPerson,
+        /// Every identifying address resolved, but named no open Project.
+        NoMatch,
+        /// More than one open Project matched; choosing is the lawyer's.
+        Ambiguous,
+    }
+
+    /// What the address-match method decided for one thread.
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    #[serde(tag = "decision", rename_all = "snake_case")]
+    pub enum MatchOutcome {
+        /// Exactly one open Project matched; the thread assigns to it.
+        Assigned { project_id: Uuid },
+        /// The thread stays in the inbox for the lawyer.
+        LeftInInbox { reason: LeftReason },
+    }
+
+    /// The decision log entry. The address-match method fills the first
+    /// fields and leaves the Jev fields `None`; the log's consumers read
+    /// one shape across both methods, so the later slice adds its values
+    /// without churning the format.
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+    pub struct DecisionLog {
+        /// The assignment method that decided — `"address-match"` here.
+        pub method: &'static str,
+        pub message: Uuid,
+        /// The Project the thread was assigned to, if any.
+        pub project_id: Option<Uuid>,
+        /// Whether the thread was left in the inbox for the lawyer.
+        pub left_in_inbox: bool,
+        /// Why an unmatched thread stayed, when it stayed.
+        pub reason: Option<LeftReason>,
+        /// The Jev model id — the ZDR-gated later slice sets it.
+        pub model_id: Option<String>,
+        /// The Jev probabilities ditto.
+        pub probabilities: Option<serde_json::Value>,
+    }
+
+    impl MatchOutcome {
+        /// The decision log entry this outcome produces.
+        #[must_use]
+        pub fn decision_log(&self, message: Uuid) -> DecisionLog {
+            let (project_id, left_in_inbox, reason) = match self {
+                Self::Assigned { project_id } => (Some(*project_id), false, None),
+                Self::LeftInInbox { reason } => (None, true, Some(*reason)),
+            };
+            DecisionLog {
+                method: "address-match",
+                message,
+                project_id,
+                left_in_inbox,
+                reason,
+                model_id: None,
+                probabilities: None,
+            }
+        }
+    }
+
+    /// Decide one thread. The From address is the sender: it must resolve
+    /// to a Person row or the thread stays. Every non-shared address then
+    /// contributes its open Projects, and exactly one distinct Project
+    /// across the whole thread assigns it — zero or several stay.
+    #[must_use]
+    pub fn decide(from: &str, resolved: &[ResolvedAddress]) -> MatchOutcome {
+        let sender = resolved
+            .iter()
+            .find(|row| row.address.eq_ignore_ascii_case(from.trim()) && !is_shared_inbox(from));
+        let Some(sender) = sender else {
+            // A shared inbox is non-identifying: it is no match, not a
+            // missing sender.
+            return MatchOutcome::LeftInInbox {
+                reason: if is_shared_inbox(from) {
+                    LeftReason::NoMatch
+                } else {
+                    LeftReason::NoSenderPerson
+                },
+            };
+        };
+        if sender.person_id.is_none() {
+            return MatchOutcome::LeftInInbox {
+                reason: LeftReason::NoSenderPerson,
+            };
+        }
+        let mut projects: Vec<Uuid> = resolved
+            .iter()
+            .filter(|row| !is_shared_inbox(&row.address) && row.person_id.is_some())
+            .flat_map(|row| row.open_projects.iter().copied())
+            .collect();
+        projects.sort_unstable();
+        projects.dedup();
+        match projects.as_slice() {
+            [project_id] => MatchOutcome::Assigned {
+                project_id: *project_id,
+            },
+            [] => MatchOutcome::LeftInInbox {
+                reason: LeftReason::NoMatch,
+            },
+            _ => MatchOutcome::LeftInInbox {
+                reason: LeftReason::Ambiguous,
+            },
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{decide, is_shared_inbox, LeftReason, MatchOutcome, ResolvedAddress};
+        use uuid::Uuid;
+
+        fn project(n: u128) -> Uuid {
+            Uuid::from_u128(n)
+        }
+
+        fn resolved(address: &str, person: Option<u128>, projects: &[u128]) -> ResolvedAddress {
+            ResolvedAddress {
+                address: address.to_owned(),
+                person_id: person.map(project),
+                open_projects: projects.iter().map(|n| project(*n)).collect(),
+            }
+        }
+
+        #[test]
+        fn shared_inboxes_are_never_identifying() {
+            for address in [
+                "efiling-notice@courts.example.test",
+                "EFILING-NOTICE@COURTS.EXAMPLE.TEST",
+                "autodocket@uscourts.example.test",
+            ] {
+                assert!(is_shared_inbox(address), "{address}");
+                let outcome = decide(
+                    address,
+                    &[
+                        resolved(address, Some(1), &[1]),
+                        resolved("lawyer@neonlaw.com", Some(2), &[2]),
+                    ],
+                );
+                assert_eq!(
+                    outcome,
+                    MatchOutcome::LeftInInbox {
+                        reason: LeftReason::NoMatch
+                    },
+                    "a shared sender identifies nothing, even with others resolved"
+                );
+            }
+            assert!(!is_shared_inbox("client@example.com"));
+        }
+
+        #[test]
+        fn a_sender_with_no_person_row_stays_in_the_inbox() {
+            let outcome = decide(
+                "stranger@example.com",
+                &[
+                    resolved("stranger@example.com", None, &[1]),
+                    resolved("client@example.com", Some(7), &[1]),
+                ],
+            );
+            assert_eq!(
+                outcome,
+                MatchOutcome::LeftInInbox {
+                    reason: LeftReason::NoSenderPerson
+                }
+            );
+        }
+
+        #[test]
+        fn exactly_one_matched_project_assigns_wherever_it_matched() {
+            // From identifies nothing (an alias with no participation), but
+            // the Cc names the client on one open Project.
+            let outcome = decide(
+                "assistant@example.com",
+                &[
+                    resolved("assistant@example.com", Some(3), &[]),
+                    resolved("assistant@example.com", Some(3), &[]), // duplicate candidate
+                    resolved("client@example.com", Some(7), &[1]),
+                ],
+            );
+            assert_eq!(
+                outcome,
+                MatchOutcome::Assigned {
+                    project_id: project(1)
+                }
+            );
+        }
+
+        #[test]
+        fn two_open_projects_stay_for_the_lawyer() {
+            let outcome = decide(
+                "client@example.com",
+                &[resolved("client@example.com", Some(7), &[1, 2])],
+            );
+            assert_eq!(
+                outcome,
+                MatchOutcome::LeftInInbox {
+                    reason: LeftReason::Ambiguous
+                }
+            );
+        }
+
+        #[test]
+        fn two_addresses_naming_the_same_project_collapse_to_one() {
+            let outcome = decide(
+                "client@example.com",
+                &[
+                    resolved("client@example.com", Some(7), &[1]),
+                    resolved("spouse@example.com", Some(8), &[1]),
+                ],
+            );
+            assert_eq!(
+                outcome,
+                MatchOutcome::Assigned {
+                    project_id: project(1)
+                }
+            );
+        }
+
+        #[test]
+        fn every_resolved_address_missing_the_project_stays() {
+            let outcome = decide(
+                "client@example.com",
+                &[resolved("client@example.com", Some(7), &[])],
+            );
+            assert_eq!(
+                outcome,
+                MatchOutcome::LeftInInbox {
+                    reason: LeftReason::NoMatch
+                }
+            );
+        }
+
+        #[test]
+        fn the_log_carries_the_shape_the_jev_slice_fills() {
+            let assigned = MatchOutcome::Assigned {
+                project_id: project(1),
+            }
+            .decision_log(Uuid::from_u128(9));
+            assert_eq!(assigned.method, "address-match");
+            assert_eq!(assigned.project_id, Some(project(1)));
+            assert!(!assigned.left_in_inbox);
+            assert!(assigned.model_id.is_none());
+            assert!(assigned.probabilities.is_none());
+
+            let left = MatchOutcome::LeftInInbox {
+                reason: LeftReason::NoMatch,
+            }
+            .decision_log(Uuid::from_u128(9));
+            assert_eq!(left.project_id, None);
+            assert!(left.left_in_inbox);
+            assert_eq!(left.reason, Some(LeftReason::NoMatch));
+
+            // The later Jev fields ride the same shape without a migration:
+            // the JSON keys are already there.
+            let json = serde_json::to_value(&left).unwrap();
+            assert!(json.get("model_id").is_some());
+            assert!(json.get("probabilities").is_some());
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[allow(clippy::struct_excessive_bools)] // Independent flags: unread, matter consent, promotional opt-in, promotional opt-out.
 pub struct Conversation {

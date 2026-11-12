@@ -18,8 +18,13 @@ pub use project_scaffold::{OFFBOARDING, ONBOARDING};
 
 /// Open the onboarding notation, deriving the matter and client from
 /// `navigator.yaml` in `root`.
-pub async fn onboard(host: Option<&str>, root: &Path, answers_from: Option<&Path>) -> ExitCode {
-    run(root, host, ONBOARDING, answers_from).await
+pub async fn onboard(
+    host: Option<&str>,
+    root: &Path,
+    answers_from: Option<&Path>,
+    delivery: Option<&str>,
+) -> ExitCode {
+    run(root, host, ONBOARDING, answers_from, delivery).await
 }
 
 /// Open the offboarding notation, or close and archive a matter whose signed
@@ -32,8 +37,14 @@ pub async fn offboard(
     run_offboard(root, host, effective_at).await
 }
 
-async fn run(root: &Path, host: Option<&str>, kind: &str, answers_from: Option<&Path>) -> ExitCode {
-    match run_open(root, host, kind, answers_from).await {
+async fn run(
+    root: &Path,
+    host: Option<&str>,
+    kind: &str,
+    answers_from: Option<&Path>,
+    delivery: Option<&str>,
+) -> ExitCode {
+    match run_open(root, host, kind, answers_from, delivery).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("navigator project {kind}: {error:#}");
@@ -47,6 +58,7 @@ async fn run_open(
     host: Option<&str>,
     kind: &str,
     answers_from: Option<&Path>,
+    delivery: Option<&str>,
 ) -> Result<()> {
     let project = project_coordinates(root)?;
     let template = template_path(root, kind)?;
@@ -99,6 +111,7 @@ async fn run_open(
         } else {
             None
         },
+        delivery,
     )
     .await;
     if created != ExitCode::SUCCESS {
@@ -142,7 +155,8 @@ async fn run_offboard(
                 );
                 return Ok(());
             }
-            if remote::notation_create(host, code, &project.client_dri, &project.code, None).await
+            if remote::notation_create(host, code, &project.client_dri, &project.code, None, None)
+                .await
                 != ExitCode::SUCCESS
             {
                 return Err(anyhow!("could not open the offboarding notation"));
@@ -154,7 +168,7 @@ async fn run_offboard(
         let closed = remote::matter_close(
             host,
             &project.code,
-            store::projects::ClosureReason::EngagementCompleted,
+            model::projects::ClosureReason::EngagementCompleted,
             effective_at,
         )
         .await;
@@ -491,7 +505,7 @@ fn has_signed_pointer(root: &Path, kind: &str) -> Result<bool> {
         {
             continue;
         }
-        let pointer = store::document_pointers::DocumentPointer::from_yaml(
+        let pointer = model::document_pointers::DocumentPointer::from_yaml(
             &std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?,
         )?;
         let source_name = path
@@ -804,7 +818,7 @@ mod tests {
             )
             .unwrap();
         }
-        let error = run_open(root.path(), None, ONBOARDING, None)
+        let error = run_open(root.path(), None, ONBOARDING, None, None)
             .await
             .unwrap_err();
         assert!(
@@ -996,7 +1010,7 @@ The Firm will represent the client.
             declared_letter_manifest("templates/engagement.md"),
         )
         .unwrap();
-        let error = run_open(root.path(), None, ONBOARDING, None)
+        let error = run_open(root.path(), None, ONBOARDING, None, None)
             .await
             .unwrap_err();
         assert!(
@@ -1277,7 +1291,9 @@ The Firm will represent the client.
     async fn onboarding_writes_a_stub_before_making_any_remote_request() {
         let root = tempfile::tempdir().unwrap();
         write_manifest(root.path());
-        run_open(root.path(), None, ONBOARDING, None).await.unwrap();
+        run_open(root.path(), None, ONBOARDING, None, None)
+            .await
+            .unwrap();
         let stub =
             std::fs::read_to_string(template_path(root.path(), ONBOARDING).unwrap()).unwrap();
         assert!(stub.contains("Draft this letter"));
@@ -1294,7 +1310,9 @@ The Firm will represent the client.
             "a".repeat(64)
         );
         std::fs::write(folder.join("retainer_signed.pdf.yaml"), pointer).unwrap();
-        run_open(root.path(), None, ONBOARDING, None).await.unwrap();
+        run_open(root.path(), None, ONBOARDING, None, None)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -1401,7 +1419,9 @@ The Firm will represent the client.
         std::fs::write(root.path().join(&relative), &stub).unwrap();
         // No git checkout and no host: reaching either would fail, so success
         // proves the stub stopped the command first.
-        run_open(root.path(), None, ONBOARDING, None).await.unwrap();
+        run_open(root.path(), None, ONBOARDING, None, None)
+            .await
+            .unwrap();
         assert_eq!(
             std::fs::read_to_string(root.path().join(relative)).unwrap(),
             stub

@@ -4,7 +4,7 @@ description: "A Question Type names the value type used by a questionnaire State
 ---
 
 The `<type>` half of a questionnaire [State](state.md) name (`<type>__<role>`) — a closed set defined by
-[`store::question_registry::QuestionType`](../../store/src/question_registry.rs). Each type is a **record** (creates or
+[`store::question_registry::QuestionType`](../../model/src/question_registry.rs). Each type is a **record** (creates or
 links a `store::entity` row — `person`, `entity`, `address`, …), a **reference** (selects a seeded row — `jurisdiction`,
 `entity_type`, `project`, …), or a **custom** primitive (`custom_text`, `custom_single_choice`, `custom_datetime`, …).
 Record and reference types pair a singular with an explicit plural/aggregate (`person`→`people`). A

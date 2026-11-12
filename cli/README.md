@@ -2,7 +2,8 @@
 
 The `cli` crate builds the lean `navigator` command a lawyer's Mac and every Project repository's CI install: Projects,
 their Jujutsu repositories, the offline `validate` gate, and the site session and `seeds/` import those commands use.
-Its rules live in the crate's library, so a host other than the terminal links the same code.
+Its rules live in the crate's library, so a host other than the terminal links the same code. It reads the domain types
+through the `model` crate rather than `store` or `cloud`, so it never compiles a database driver or Typst.
 
 Two more binaries live beside it. `navigator-deploy` (the `deploy` crate) is the operator CLI: the local KIND loop
 (`dev`), production operations (`ops`), and the site, mail, notation, forms, and firm commands; it also carries every

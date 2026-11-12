@@ -93,8 +93,7 @@ pub fn parse_eml(raw: &[u8], mailbox: Option<&str>) -> Result<ParsedEml, EmlPars
     })
 }
 
-/// The Date header as an RFC 3339 instant, read as UTC: the timestamp the
-/// Communication log shows alongside the message.
+/// The Date header converted from the sender's offset to UTC.
 fn eml_sent_at(date: Option<mail_parser::DateTime>) -> Result<String, EmlParseError> {
     let date = date.ok_or(EmlParseError::NoDate)?;
     chrono::NaiveDate::from_ymd_opt(
@@ -109,7 +108,8 @@ fn eml_sent_at(date: Option<mail_parser::DateTime>) -> Result<String, EmlParseEr
             u32::from(date.second),
         )
     })
-    .map(|sent| sent.and_utc().to_rfc3339())
+    .and_then(|_| chrono::DateTime::from_timestamp(date.to_timestamp(), 0))
+    .map(|sent| sent.to_rfc3339())
     .ok_or(EmlParseError::BadDate)
 }
 
@@ -186,6 +186,13 @@ Can I sign electronically?\r\n";
         assert_eq!(parsed.body, "Can I sign electronically?");
         assert_eq!(parsed.source_ref, "eml:abc-123@example.test");
         assert!(parsed.attachments.is_empty());
+    }
+
+    #[test]
+    fn filing_converts_the_sender_offset_to_utc() {
+        let raw = PLAIN.replace("30 Oct 2026 14:03:00 +0000", "30 Oct 2026 02:03:00 +0800");
+        let parsed = parse_eml(raw.as_bytes(), None).expect("a dated .eml parses");
+        assert_eq!(parsed.at, "2026-10-29T18:03:00+00:00");
     }
 
     #[test]

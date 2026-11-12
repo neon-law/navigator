@@ -178,7 +178,7 @@ from the cross-matter guard.
 
 **Severity: Low.** Sign-off with corrections.
 
-A committed pointer ([`store/src/document_pointers.rs:14`](../store/src/document_pointers.rs)) carries `kind`,
+A committed pointer ([`model/src/document_pointers.rs:14`](../model/src/document_pointers.rs)) carries `kind`,
 `visibility`, `version`, `asset_id`, `created_at`, `sha256`, `size_bytes`, and an optional `previous_version`. It is
 committed as a [Pointer](glossary/pointer.md) at `blobs/<slug>.yaml`, so that path, less `.yaml`, is the document slug.
 

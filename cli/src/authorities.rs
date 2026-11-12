@@ -6,7 +6,7 @@
 //! The CLI reads no `SurrealDB` environment and writes nothing locally: the
 //! server resolves the bearer back into the caller's session, checks the
 //! lawyer tier, ingests the archive through the Asset service, and calls
-//! `store::authorities::record`. This module only forms that one
+//! `model::authorities::record`. This module only forms that one
 //! authenticated HTTP request — [`crate::remote::resolve`] is the same
 //! stored-login seam every other CLI verb reaches through, reused here
 //! rather than duplicated.
@@ -50,7 +50,7 @@ fn first_line(body: &str) -> String {
         .to_string()
 }
 
-/// The `POST /app/api/authorities` response — `store::authorities::Authority`
+/// The `POST /app/api/authorities` response — `model::authorities::Authority`
 /// carries no `Deserialize`, so this is the CLI's own read-side mirror of the
 /// same wire shape `portal::authorities_api::create_authority_door` returns.
 ///
@@ -80,7 +80,7 @@ fn client() -> reqwest::Client {
         .unwrap_or_else(|_| reqwest::Client::new())
 }
 
-/// What a new Authority needs — mirrors `store::authorities::NewAuthority`
+/// What a new Authority needs — mirrors `model::authorities::NewAuthority`
 /// plus the archive this command reads locally, none of which a bare
 /// datastore write (forbidden by the `legal-authority` skill) could carry
 /// authenticated.

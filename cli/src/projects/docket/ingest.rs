@@ -1165,7 +1165,7 @@ fn docket_bytes(root: &Path, slug: &str) -> PathBuf {
     root.join(crate::document_sync::DOCUMENT_DIRECTORY).join(
         crate::document_layout::bytes_relative(
             Path::new(slug),
-            store::document_pointers::MatterFolder::DocketFilings,
+            model::document_pointers::MatterFolder::DocketFilings,
         ),
     )
 }
@@ -1286,7 +1286,7 @@ async fn file_one(
         .await?;
     pointer.folder = crate::document_layout::recorded_folder(
         &pointer.kind,
-        store::document_pointers::MatterFolder::DocketFilings,
+        model::document_pointers::MatterFolder::DocketFilings,
     );
     let pointer_path = crate::document_sync::write_uploaded_pointer(root, &slug, &pointer)?;
     filed.record(&slug);
@@ -1408,7 +1408,7 @@ mod tests {
 
     fn fixture(name: &str) -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../store/tests/fixtures/nef")
+            .join("../model/tests/fixtures/nef")
             .join(name)
     }
 

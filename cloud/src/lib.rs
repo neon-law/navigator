@@ -42,7 +42,7 @@ pub mod s3;
 pub mod slack;
 pub mod speech;
 pub mod vertex;
-pub mod workspace;
+pub use model::workspace;
 
 pub use audio::{decode_to_mono_pcm16, AudioError, DecodedAudio};
 pub use calendar::{

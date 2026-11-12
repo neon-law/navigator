@@ -2,7 +2,7 @@
 
 use anyhow::{bail, ensure, Context, Result};
 use async_trait::async_trait;
-use cloud::forgejo_governance::{Forgejo, MergeRequestOutcome, REQUIRED_CHECK_CONTEXT};
+use model::forgejo_governance::{Forgejo, MergeRequestOutcome, REQUIRED_CHECK_CONTEXT};
 use reqwest::Method;
 use serde::Deserialize;
 use serde_json::json;
@@ -24,7 +24,7 @@ pub struct ForgejoForge {
 
 impl ForgejoForge {
     pub fn new(root: &str, repository: &str, token: String) -> Result<Self> {
-        cloud::forgejo_governance::repository_target(repository)?;
+        model::forgejo_governance::repository_target(repository)?;
         let governance = Forgejo::new(root, token.clone())?;
         Ok(Self {
             http: reqwest::Client::builder()

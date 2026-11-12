@@ -43,7 +43,7 @@ fn text(row: &Value, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-pub use store::cases::filing_name;
+pub use model::cases::filing_name;
 
 /// The `(entry number, attachment)` a `DKT NNNN[-att] - …` file name names,
 /// with the entry number's leading zeros dropped (`0029` reads `29`).

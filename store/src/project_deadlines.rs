@@ -9,6 +9,7 @@ use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
 use crate::surreal::{record_id, record_uuid, SurrealDb};
+pub use model::project_deadlines::CATEGORIES;
 
 pub const STATUS_OPEN: &str = "open";
 pub const STATUS_COMPLETE: &str = "complete";
@@ -23,11 +24,6 @@ const AUTHORITY_KINDS: &[&str] = &[
 ];
 pub const MAX_TITLE_CHARS: usize = 200;
 const CALENDAR_ROLES: &[&str] = &["firm", "opponent", "hearing"];
-
-/// The closed category vocabulary: what kind of date the deadline is. The
-/// calendar mirror renders each category in its fixed Google color
-/// (`deadline_calendar::category_color`).
-pub const CATEGORIES: &[&str] = &["court", "hearing", "discovery", "internal"];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Deadline {

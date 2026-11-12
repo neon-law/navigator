@@ -409,10 +409,16 @@ fn check_declared_signer_backing(
     let Ok(set) = crate::f107::signer_set(contents) else {
         return;
     };
+    // Only an explicit `signers:` list needs questionnaire backing: a
+    // declared role has no other identity source. The implicit default set
+    // resolves the client from the notation's bound Person row and the firm
+    // from configuration — see `signature_flow`'s recipient resolution —
+    // so the questionnaire never has to know who they are.
     if !set.explicit {
         return;
     }
-    for role in &set.roles {
+    for signer in &set.signers {
+        let role = signer.role.as_str();
         if role == "firm" {
             // The firm countersigns from the configured signer, not a
             // questionnaire state.
@@ -849,7 +855,8 @@ mod tests {
     #[test]
     fn declared_three_party_roles_resolve_against_person_states() {
         let body = three_party(
-            "signers:\n  - client\n  - firm\n  - confirming_assignor\n",
+            "signers:\n  - client\n  - role: firm\n    delivery: emailed\n  - role: \
+             confirming_assignor\n    delivery: emailed\n",
             "  BEGIN:\n    _: person__client\n  person__client:\n    _: person__confirming_assignor\n  \
              person__confirming_assignor:\n    _: END\n  END: {}\n",
         );
@@ -863,7 +870,8 @@ mod tests {
     #[test]
     fn declared_role_without_questionnaire_state_fails() {
         let body = three_party(
-            "signers:\n  - client\n  - firm\n  - confirming_assignor\n",
+            "signers:\n  - client\n  - role: firm\n    delivery: emailed\n  - role: \
+             confirming_assignor\n    delivery: emailed\n",
             "  BEGIN:\n    _: person__client\n  person__client:\n    _: END\n  END: {}\n",
         );
         let v = F115PathResolution.lint(&file(&body));

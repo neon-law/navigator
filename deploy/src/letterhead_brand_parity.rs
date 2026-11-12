@@ -2,7 +2,7 @@
 //! identity its Brand publishes.
 //!
 //! `notation pdf` / `notation word` resolve the Project's Brand from
-//! `navigator.yaml` (`cli::letterhead`) and frame the letter with it. Which
+//! `navigator.yaml` (`cli::letterhead::resolve_brand`) and frame the letter with it. Which
 //! frame that Brand wears has two sources (LAW-266): the Brand's runtime
 //! letterhead row — the same rows `/app/admin/brands` edits — when the
 //! deployment's stores answer, and the compiled Brand registry when they
@@ -26,7 +26,7 @@ use views::brand::{BrandKey, DEFAULT_BRANDING};
 /// Firm's legal name, which only the Brand registry carries.
 #[test]
 fn the_default_letterhead_is_the_default_brands() {
-    let resolved = cli::letterhead::for_brand(BrandKey::Neon).expect("the default Brand resolves");
+    let resolved = super::for_brand(BrandKey::Neon).expect("the default Brand resolves");
     assert_eq!(
         pdf::Letterhead::default(),
         pdf::Letterhead {
@@ -45,7 +45,7 @@ fn every_registered_host_wears_its_brands_letterhead() {
     for key in BrandKey::ALL.iter().copied() {
         let branding = key.resolve_branding(&DEFAULT_BRANDING);
         for host in key.hosts() {
-            let letterhead = cli::letterhead::for_project(None, Some(host))
+            let letterhead = super::for_project(None, Some(host))
                 .unwrap_or_else(|error| panic!("{host}: {error}"));
             assert_eq!(letterhead.name, branding.firm.site_name, "{host}");
             assert_eq!(letterhead.entity, branding.firm.legal_entity, "{host}");

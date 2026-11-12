@@ -108,6 +108,7 @@ RUN cargo install wasm-bindgen-cli --version "$WASM_BINDGEN_VERSION" --locked \
     && esbuild --version \
     && wasm-bindgen --version
 
+COPY model             model
 COPY rules             rules
 COPY project-scaffold project-scaffold
 COPY skills            skills

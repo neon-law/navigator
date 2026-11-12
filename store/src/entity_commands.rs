@@ -297,24 +297,7 @@ fn optional_contact(value: Option<&str>) -> Option<String> {
 pub(crate) fn validate_metadata(
     metadata: Option<&serde_json::Map<String, serde_json::Value>>,
 ) -> Result<(), EntityCommandError> {
-    if let Some(ein) = metadata.and_then(|m| m.get("ein")) {
-        let valid = ein.as_str().is_some_and(|value| {
-            value.len() == 10
-                && value.bytes().enumerate().all(|(i, byte)| {
-                    if i == 2 {
-                        byte == b'-'
-                    } else {
-                        byte.is_ascii_digit()
-                    }
-                })
-        });
-        if !valid {
-            return Err(EntityCommandError::Invalid(
-                "EIN must be a string formatted as NN-NNNNNNN.",
-            ));
-        }
-    }
-    Ok(())
+    model::entity_commands::validate_metadata(metadata).map_err(EntityCommandError::Invalid)
 }
 
 /// Refuse a write that references a jurisdiction with no row behind it.

@@ -319,9 +319,9 @@ fn drive_folder_id(raw: Option<&str>) -> Result<Option<String>> {
     if raw.is_empty() {
         return Ok(Some(String::new()));
     }
-    store::projects::drive_folder_id_from_input(raw)
+    model::projects::drive_folder_id_from_input(raw)
         .map(Some)
-        .ok_or_else(|| anyhow!(store::projects::DRIVE_FOLDER_INPUT_INVALID))
+        .ok_or_else(|| anyhow!(model::projects::DRIVE_FOLDER_INPUT_INVALID))
 }
 
 /// Send the live-row patch, then report how the deployment checked a Drive
@@ -343,10 +343,10 @@ async fn patch_live_row(
 }
 
 /// What the deployment's answer in
-/// [`store::project_surfaces::DRIVE_FOLDER_CHECK_HEADER`] means for the
+/// [`model::project_surfaces::DRIVE_FOLDER_CHECK_HEADER`] means for the
 /// folder just recorded.
 fn drive_folder_check_note(check: Option<&str>) -> &'static str {
-    if check == Some(store::project_surfaces::DriveFolderCheck::Verified.as_str()) {
+    if check == Some(model::project_surfaces::DriveFolderCheck::Verified.as_str()) {
         "confirmed with Drive as a live folder in the Firm's Projects shared drive"
     } else {
         "only the id's shape was checked; the deployment has no Drive credential, so Drive validation was skipped"
@@ -365,27 +365,27 @@ fn live_patch(
         .map(str::trim)
         .filter(|url| !manifest::is_not_provisioned(url))
     {
-        if !store::projects::is_valid_resource_url(url) {
-            return Err(anyhow!(store::projects::RESOURCE_URL_INVALID));
+        if !model::projects::is_valid_resource_url(url) {
+            return Err(anyhow!(model::projects::RESOURCE_URL_INVALID));
         }
         patch.extend([("internal_slack_channel_url".into(), url.into())]);
     }
     if let Some(calendar_id) = fields.calendar_id.map(str::trim) {
-        if !calendar_id.is_empty() && !store::projects::is_valid_calendar_id(calendar_id) {
-            return Err(anyhow!(store::projects::CALENDAR_ID_INVALID));
+        if !calendar_id.is_empty() && !model::projects::is_valid_calendar_id(calendar_id) {
+            return Err(anyhow!(model::projects::CALENDAR_ID_INVALID));
         }
         patch.insert("calendar_id".into(), calendar_id.into());
     }
     if let Some(drive_folder_id) = fields.drive_folder_id.map(str::trim) {
         if !drive_folder_id.is_empty()
-            && !store::projects::is_valid_drive_folder_id(drive_folder_id)
+            && !model::projects::is_valid_drive_folder_id(drive_folder_id)
         {
-            return Err(anyhow!(store::projects::DRIVE_FOLDER_ID_INVALID));
+            return Err(anyhow!(model::projects::DRIVE_FOLDER_ID_INVALID));
         }
         patch.insert("drive_folder_id".into(), drive_folder_id.into());
     }
     if let Some(booking_url) = fields.booking_url.map(str::trim) {
-        if !booking_url.is_empty() && !store::projects::is_valid_resource_url(booking_url) {
+        if !booking_url.is_empty() && !model::projects::is_valid_resource_url(booking_url) {
             return Err(anyhow!(
                 "--booking-url must be the appointment schedule's booking page, an http(s) address"
             ));

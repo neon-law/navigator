@@ -14,13 +14,15 @@ Navigator-managed systems and approved stores. Follow [public contributor safety
 - Keep private plans, firm records, operational details, and client content out of Git, PRs, comments, and captures.
 
 Use Cargo, isolated worktrees, focused TDD, and shared code. Follow the [Agent Skills](.agents/skills) and name domain
-tables from the glossary. The load-bearing members of the 31-crate workspace: `store` owns PostgreSQL-backed accessors
-and the graph; `portal` is the mountable Axum application (authenticated API, inbound email, Dioxus server-side
-rendering); `webapp` is the Dioxus client bundle; `neon` is the brand binary that publishes the public face; `server`
-runs the integration tests against the mounted app; `cli` is the lean `navigator` binary (Projects, Jujutsu
-repositories, `validate`) and the library that holds their rules; `deploy` is `navigator-deploy`, the operator CLI
-(`dev`, `ops`, site, mail, notation); `scorpio` is the Ephemeris CLI; `views`, `workflows`, `workflows-service`,
-`billing`, `cloud`, and `archives` round out the surfaces the docs name. `Cargo.toml` is the authoritative member list.
+tables from the glossary. The load-bearing members of the 32-crate workspace: `store` owns PostgreSQL-backed accessors
+and the graph; `model` holds the domain types, validators, and parsers that open no connection, which `store` and
+`cloud` re-export and the lean `navigator` links instead of them; `portal` is the mountable Axum application
+(authenticated API, inbound email, Dioxus server-side rendering); `webapp` is the Dioxus client bundle; `neon` is the
+brand binary that publishes the public face; `server` runs the integration tests against the mounted app; `cli` is the
+lean `navigator` binary (Projects, Jujutsu repositories, `validate`) and the library that holds their rules; `deploy` is
+`navigator-deploy`, the operator CLI (`dev`, `ops`, site, mail, notation); `scorpio` is the Ephemeris CLI; `views`,
+`workflows`, `workflows-service`, `billing`, `cloud`, and `archives` round out the surfaces the docs name. `Cargo.toml`
+is the authoritative member list.
 
 Target macOS for development and the CLI, and Linux/amd64 for deployed services. Add no Windows paths, jobs, or release
 archives.

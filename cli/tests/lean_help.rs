@@ -31,7 +31,7 @@ fn help(args: &[&str]) -> String {
 fn the_lean_navigator_names_only_its_own_verbs() {
     assert_eq!(
         command_names(&help(&["--help"])),
-        ["project", "site", "validate", "help"].map(String::from)
+        ["project", "site", "sync", "validate", "help"].map(String::from)
     );
     assert_eq!(
         command_names(&help(&["site", "--help"])),

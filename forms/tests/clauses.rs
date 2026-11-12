@@ -56,7 +56,7 @@ fn remaining_agreement_clauses_preserve_the_compiled_body_bytes() {
         ),
         (
             include_str!("../../templates/notations/neon_law/employee_offer_letter.md"),
-            "e5d360602b0ed0a8445ec66d7993946bb6719077a30dfc0a586b268da2b45639",
+            "7e60f8d9f555fecc3d3d3d6e8ab336d409863a2ccbd334c8105999980cf0fdf7",
         ),
     ] {
         let snapshot = rules::clauses::compile(source).unwrap();

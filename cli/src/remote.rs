@@ -141,7 +141,7 @@ pub async fn send_seed_document(
 }
 
 /// `navigator site import` with no `MODEL_NAME`/`SEED_FILE` — submit every
-/// supported seed document in `dir`, in [`store::seed::SeedModel::ALL`]
+/// supported seed document in `dir`, in [`model::seed::SeedModel::ALL`]
 /// order. A missing `dir` prints a notice and succeeds, the same convention
 /// `project portal` uses for a repository with no portal: the gate still
 /// passes, there is simply nothing to import.
@@ -174,7 +174,7 @@ pub async fn seed_directory(
     .await
 }
 
-fn seed_documents_in(dir: &Path) -> Result<Vec<(store::seed::SeedModel, std::path::PathBuf)>> {
+fn seed_documents_in(dir: &Path) -> Result<Vec<(model::seed::SeedModel, std::path::PathBuf)>> {
     let mut documents = Vec::new();
     let entries =
         std::fs::read_dir(dir).with_context(|| format!("read seed directory {}", dir.display()))?;
@@ -194,7 +194,7 @@ fn seed_documents_in(dir: &Path) -> Result<Vec<(store::seed::SeedModel, std::pat
             .file_stem()
             .and_then(|stem| stem.to_str())
             .ok_or_else(|| anyhow!("seed file {} has no UTF-8 stem", path.display()))?;
-        let model = store::seed::SeedModel::parse(stem).with_context(|| {
+        let model = model::seed::SeedModel::parse(stem).with_context(|| {
             format!(
                 "seed file {} is not a supported `navigator site import` model",
                 path.display()
@@ -203,11 +203,11 @@ fn seed_documents_in(dir: &Path) -> Result<Vec<(store::seed::SeedModel, std::pat
         documents.push((model, path));
     }
     documents.sort_by(|(left_model, left_path), (right_model, right_path)| {
-        let left = store::seed::SeedModel::ALL
+        let left = model::seed::SeedModel::ALL
             .iter()
             .position(|model| model == left_model)
             .unwrap_or(usize::MAX);
-        let right = store::seed::SeedModel::ALL
+        let right = model::seed::SeedModel::ALL
             .iter()
             .position(|model| model == right_model)
             .unwrap_or(usize::MAX);
@@ -1032,9 +1032,9 @@ pub struct RevisionSummary {
     #[serde(default)]
     pub deleted_at: Option<String>,
     #[serde(default)]
-    pub signing: Option<store::documents::Signing>,
+    pub signing: Option<model::documents::Signing>,
     #[serde(default)]
-    pub notarization: Vec<store::documents::Notarization>,
+    pub notarization: Vec<model::documents::Notarization>,
 }
 
 /// Rows one integrity request asks for. Each row costs the server a storage
@@ -1142,7 +1142,7 @@ pub struct IntegrityResponse {
 #[derive(Debug, Deserialize)]
 pub struct RevisionsResponse {
     pub kind: String,
-    /// Newest first, matching `store::assets::revisions`.
+    /// Newest first, matching `model::assets::revisions`.
     pub revisions: Vec<RevisionSummary>,
 }
 
@@ -1161,9 +1161,9 @@ pub struct LiveDocumentSummary {
     pub slug: Option<String>,
     pub inserted_at: String,
     #[serde(default)]
-    pub signing: Option<store::documents::Signing>,
+    pub signing: Option<model::documents::Signing>,
     #[serde(default)]
-    pub notarization: Vec<store::documents::Notarization>,
+    pub notarization: Vec<model::documents::Notarization>,
     /// The folder the live row sits in (LAW-241); `None` is the kind's
     /// default placement, not a folder the API refuses to say.
     #[serde(default)]
@@ -1174,9 +1174,9 @@ pub struct LiveDocumentSummary {
 /// every upload that is not an executed document.
 #[derive(Debug, Clone, Default)]
 pub struct DocumentExecution {
-    pub signing: Option<store::documents::Signing>,
-    pub notarization: Vec<store::documents::Notarization>,
-    pub evidence: Option<store::documents::Evidence>,
+    pub signing: Option<model::documents::Signing>,
+    pub notarization: Vec<model::documents::Notarization>,
+    pub evidence: Option<model::documents::Evidence>,
 }
 
 impl DocumentExecution {
@@ -1208,7 +1208,7 @@ pub enum UploadLane {
 /// door and only the previously rejected sizes take the streaming lane.
 #[must_use]
 pub fn upload_lane_for(size: usize, kind: &str) -> UploadLane {
-    if size <= store::documents::max_document_upload_bytes(kind) {
+    if size <= model::documents::max_document_upload_bytes(kind) {
         UploadLane::Buffered
     } else {
         UploadLane::Streaming
@@ -1606,7 +1606,7 @@ impl DocumentClient {
     }
 
     /// `GET /app/api/projects/{id}/service` — every Service on the Project.
-    pub async fn list_service(&self) -> Result<Vec<store::project_service::ProjectService>> {
+    pub async fn list_service(&self) -> Result<Vec<model::project_service::ProjectService>> {
         let url = format!("{}/app/api/projects/{}/service", self.base, self.project_id);
         let response = self
             .client
@@ -1764,7 +1764,7 @@ impl DocumentClient {
         content_type: Option<&str>,
         slug: Option<&str>,
         metadata: Option<serde_json::Value>,
-    ) -> Result<store::document_pointers::DocumentPointer> {
+    ) -> Result<model::document_pointers::DocumentPointer> {
         self.upload_bytes_with_details(
             filename,
             bytes,
@@ -1799,13 +1799,13 @@ impl DocumentClient {
         derived_from: Option<serde_json::Value>,
         transcript_quality: Option<&str>,
         execution: &DocumentExecution,
-    ) -> Result<store::document_pointers::DocumentPointer> {
+    ) -> Result<model::document_pointers::DocumentPointer> {
         if matches!(upload_lane_for(bytes.len(), kind), UploadLane::Streaming)
-            && bytes.len() > store::documents::MAX_STREAMING_UPLOAD_BYTES
+            && bytes.len() > model::documents::MAX_STREAMING_UPLOAD_BYTES
         {
             return Err(anyhow!(
                 "{}",
-                store::documents::streaming_upload_size_message(bytes.len())
+                model::documents::streaming_upload_size_message(bytes.len())
             ));
         }
         // The conditional append's precondition (LAW-284): the chain head as
@@ -1944,13 +1944,13 @@ impl DocumentClient {
         transcript_quality: Option<&str>,
         execution: &DocumentExecution,
         expected: Option<&ExpectedHead>,
-    ) -> Result<store::document_pointers::DocumentPointer> {
+    ) -> Result<model::document_pointers::DocumentPointer> {
         validate_document_upload_size_in_bytes(kind, bytes.len())?;
         let effective_slug = slug
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .unwrap_or(filename);
-        store::documents::validate_document_slug(filename, effective_slug)
+        model::documents::validate_document_slug(filename, effective_slug)
             .map_err(anyhow::Error::from)?;
         let mut body = serde_json::json!({
             "filename": filename,
@@ -2033,7 +2033,7 @@ impl DocumentClient {
         transcript_quality: Option<&str>,
         execution: &DocumentExecution,
         expected: Option<&ExpectedHead>,
-    ) -> Result<store::document_pointers::DocumentPointer> {
+    ) -> Result<model::document_pointers::DocumentPointer> {
         let effective_slug = slug
             .map(str::trim)
             .filter(|value| !value.is_empty())
@@ -2044,7 +2044,7 @@ impl DocumentClient {
             "kind": kind,
             "visibility": visibility.unwrap_or("internal"),
             "declared_size": bytes.len(),
-            "declared_sha256": store::documents::sha256_hex(bytes),
+            "declared_sha256": model::documents::sha256_hex(bytes),
         });
         if let Some(description) = description.map(str::trim).filter(|value| !value.is_empty()) {
             body["description"] = serde_json::Value::String(description.to_string());
@@ -2588,7 +2588,7 @@ pub struct MailFileResponse {
     pub attachments: Vec<MailFileAttachment>,
     /// One pointer per filed attachment, in message-part order. Empty on a
     /// dry run, or when the message carried no attachments.
-    pub filed: Vec<store::document_pointers::DocumentPointer>,
+    pub filed: Vec<model::document_pointers::DocumentPointer>,
 }
 
 /// Refuse a document over the shared maximum before it is encoded or sent.
@@ -2601,11 +2601,11 @@ pub struct MailFileResponse {
 /// body cap and reports a raw buffering error, which is the failure ENG-602
 /// set out to replace.
 ///
-/// [`MAX_DOCUMENT_UPLOAD_REQUEST_BYTES`]: store::documents::MAX_DOCUMENT_UPLOAD_REQUEST_BYTES
+/// [`MAX_DOCUMENT_UPLOAD_REQUEST_BYTES`]: model::documents::MAX_DOCUMENT_UPLOAD_REQUEST_BYTES
 fn validate_document_upload_size_in_bytes(kind: &str, actual: usize) -> Result<()> {
-    if actual > store::documents::max_document_upload_bytes(kind) {
+    if actual > model::documents::max_document_upload_bytes(kind) {
         return Err(anyhow!(
-            store::documents::document_upload_size_message_for_kind(kind, actual)
+            model::documents::document_upload_size_message_for_kind(kind, actual)
         ));
     }
     Ok(())
@@ -2638,7 +2638,7 @@ pub async fn document_upload(
     slug: Option<&str>,
     transcript_quality: Option<&str>,
     execution: &DocumentExecution,
-    folder: Option<store::document_pointers::MatterFolder>,
+    folder: Option<model::document_pointers::MatterFolder>,
 ) -> ExitCode {
     document_upload_from(
         Path::new("."),
@@ -2670,7 +2670,7 @@ async fn document_upload_from(
     slug: Option<&str>,
     transcript_quality: Option<&str>,
     execution: &DocumentExecution,
-    folder: Option<store::document_pointers::MatterFolder>,
+    folder: Option<model::document_pointers::MatterFolder>,
 ) -> ExitCode {
     run(async {
         if transcript_quality.is_some() && kind != "transcript" {
@@ -2711,7 +2711,7 @@ async fn file_upload_target(
     content_type: Option<&str>,
     transcript_quality: Option<&str>,
     execution: &DocumentExecution,
-    folder: Option<store::document_pointers::MatterFolder>,
+    folder: Option<model::document_pointers::MatterFolder>,
 ) -> Result<()> {
     if transcript_quality.is_some() && kind != "transcript" {
         return Err(anyhow!("--quality is valid only with --kind transcript"));
@@ -2790,7 +2790,7 @@ pub async fn document_upload_directory(
     content_type: Option<&str>,
     transcript_quality: Option<&str>,
     execution: &DocumentExecution,
-    folder: Option<store::document_pointers::MatterFolder>,
+    folder: Option<model::document_pointers::MatterFolder>,
 ) -> ExitCode {
     document_upload_directory_from(
         Path::new("."),
@@ -2829,7 +2829,7 @@ async fn document_upload_directory_from<F, Fut>(
     content_type: Option<&str>,
     transcript_quality: Option<&str>,
     execution: &DocumentExecution,
-    folder: Option<store::document_pointers::MatterFolder>,
+    folder: Option<model::document_pointers::MatterFolder>,
     mut login: F,
 ) -> ExitCode
 where
@@ -2867,7 +2867,7 @@ where
                     ));
                 }
                 *slug = slug.trim().to_string();
-                store::documents::validate_document_slug(filename, slug)?;
+                model::documents::validate_document_slug(filename, slug)?;
                 validate_document_upload_size(kind, &target.file)?;
                 let bytes = std::fs::read(&target.file)
                     .with_context(|| format!("read {}", target.file.display()))?;
@@ -2881,7 +2881,7 @@ where
                     continue;
                 }
             };
-            let digest = store::assets::sha256_hex(&bytes);
+            let digest = model::documents::sha256_hex(&bytes);
             if let Some(original) = completed.get(&digest) {
                 table.add_row([
                     file.display().to_string(),
@@ -3005,7 +3005,7 @@ async fn document_transcribe_from(root: &Path, pointer_path: &Path) -> ExitCode 
         let revisions = client.list_revisions(&source_slug).await?;
         let source = source_revision(&pointer.current_version, &revisions.revisions)?;
         let bytes = client.download_revision(source.asset_id).await?;
-        let digest = store::assets::sha256_hex(&bytes);
+        let digest = model::documents::sha256_hex(&bytes);
         if digest != source.sha256 {
             return Err(anyhow!(
                 "downloaded source bytes do not match the pointer SHA-256"
@@ -3046,7 +3046,7 @@ async fn document_transcribe_from(root: &Path, pointer_path: &Path) -> ExitCode 
 }
 
 fn source_revision<'a>(
-    pointer: &store::document_pointers::PointerVersion,
+    pointer: &model::document_pointers::PointerVersion,
     revisions: &'a [RevisionSummary],
 ) -> Result<&'a RevisionSummary> {
     let source = revisions
@@ -3203,7 +3203,7 @@ fn documents_folder_prefix_len(parts: &[&str]) -> Option<usize> {
         return None;
     }
     let segments = &parts[1..];
-    store::document_pointers::MatterFolder::ALL
+    model::document_pointers::MatterFolder::ALL
         .iter()
         .filter_map(|folder| {
             let names: Vec<&str> = folder.as_str().split('/').collect();
@@ -3825,7 +3825,7 @@ pub async fn post_integration_door(
 pub async fn matter_close(
     host: Option<&str>,
     project_code: &str,
-    reason: store::projects::ClosureReason,
+    reason: model::projects::ClosureReason,
     effective_at: Option<chrono::DateTime<chrono::Utc>>,
 ) -> ExitCode {
     run(async {
@@ -3843,7 +3843,7 @@ pub async fn matter_close(
 pub async fn matter_reopen(
     host: Option<&str>,
     project_code: &str,
-    reason: store::projects::ReopenReason,
+    reason: model::projects::ReopenReason,
     effective_at: Option<chrono::DateTime<chrono::Utc>>,
 ) -> ExitCode {
     run(async {
@@ -4206,7 +4206,7 @@ async fn resolve_entity_selection(
 /// --jurisdiction] [--closed --closed-at] --attest` — open a matter through
 /// the live site's `POST /app/api/projects`, the caller's own bearer token
 /// attached so the conflict attestation stays a personal act rather than a
-/// service credential's. The only CLI door onto `store::projects::open_matter`
+/// service credential's. The only CLI door onto `model::projects::open_matter`
 /// now runs over HTTP; there is no local-store equivalent that connects to
 /// `NAVIGATOR_SURREAL_*` directly, so this works against any deployment the
 /// operator has a login for, with no database connection required.
@@ -4516,7 +4516,7 @@ pub async fn resolve_firm(
 
 /// `PATCH /app/api/projects/{id}` with `fields`, for the coordinates
 /// `navigator project set` records on the live row. Returns the value of
-/// [`store::project_surfaces::DRIVE_FOLDER_CHECK_HEADER`] when the server
+/// [`model::project_surfaces::DRIVE_FOLDER_CHECK_HEADER`] when the server
 /// checked a Drive folder named by the patch.
 pub async fn patch_project_fields(
     host: &str,
@@ -4536,7 +4536,7 @@ pub async fn patch_project_fields(
     let status = response.status();
     let drive_folder_check = response
         .headers()
-        .get(store::project_surfaces::DRIVE_FOLDER_CHECK_HEADER)
+        .get(model::project_surfaces::DRIVE_FOLDER_CHECK_HEADER)
         .and_then(|value| value.to_str().ok())
         .map(str::to_string);
     let body = response.text().await.unwrap_or_default();
@@ -4571,6 +4571,7 @@ pub async fn notation_create(
     client_email: &str,
     project_code: &str,
     answers_from: Option<&Path>,
+    delivery: Option<&str>,
 ) -> ExitCode {
     run(async {
         let (base, token) = resolve(host)?;
@@ -4581,8 +4582,8 @@ pub async fn notation_create(
             .build()
             .context("build http client")?;
         let url = format!("{base}/app/projects/{project_code}/notations/new");
-        let form: Vec<(&str, &str)> =
-            vec![("template_code", template), ("client_email", client_email)];
+        let mut form = vec![("template_code", template), ("client_email", client_email)];
+        form.extend(delivery.map(|delivery| ("delivery", delivery)));
         let resp = client
             .post(&url)
             .bearer_auth(&token)
@@ -4667,7 +4668,7 @@ async fn prefill_from_saved_answers(
                 question.code,
             ));
         };
-        let fields = if store::question_registry::answer_type_is_aggregate(&question.answer_type) {
+        let fields = if model::question_registry::answer_type_is_aggregate(&question.answer_type) {
             return Err(anyhow!(
                 "question `{}` is an aggregate ({}); a saved answer cannot fill it — answer it \
                  interactively",
@@ -5300,6 +5301,35 @@ pub async fn notation_approve(host: Option<&str>, notation_id: Uuid) -> ExitCode
     .await
 }
 
+/// Dispatch the approved notation through the same command as the lawyer's send button.
+pub async fn notation_send(host: Option<&str>, notation_id: Uuid) -> ExitCode {
+    run(async {
+        let (base, token) = resolve(host)?;
+        let response = reqwest::Client::new()
+            .post(format!("{base}/app/api/notations/{notation_id}/signature"))
+            .bearer_auth(&token)
+            .body(Vec::<u8>::new())
+            .send()
+            .await
+            .context("POST notation signature")?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow!("send failed: {}", server_error(status, &body)));
+        }
+        let result: NotationStatus = response.json().await.context("read signature response")?;
+        let request_id = result
+            .signature_request_id
+            .context("signature response has no request ID")?;
+        println!(
+            "notation {notation_id} — state {}, signature request {request_id}",
+            result.state
+        );
+        Ok(())
+    })
+    .await
+}
+
 /// `navigator-deploy site notation request-changes <id> --question <code> [--note …]`
 /// — send a notation parked at `lawyer_review` back for changes. Records the
 /// flagged question codes + note and routes `lawyer_review -> reask__client`
@@ -5809,10 +5839,10 @@ mod tests {
         document_slug, document_transcribe_from, document_upload, document_upload_from,
         document_visibility, fetch_status, mail_file, matter_close, notation_answers,
         notation_approve, notation_create, notation_document, notation_list,
-        notation_request_changes, notation_status, notation_update, picker_selection_fields,
-        project_code_exists, projects_create, projects_create_named, seed, seed_directory,
-        select_candidate, source_revision, DocumentClient, DocumentExecution, RevisionSummary,
-        SeedCredential, SeedOptions, StepResponse,
+        notation_request_changes, notation_send, notation_status, notation_update,
+        picker_selection_fields, project_code_exists, projects_create, projects_create_named, seed,
+        seed_directory, select_candidate, source_revision, DocumentClient, DocumentExecution,
+        RevisionSummary, SeedCredential, SeedOptions, StepResponse,
     };
     use super::{
         exit_code_for, fetch_step, first_line, integrity_failure, mint_refusal_annotation,
@@ -5821,7 +5851,7 @@ mod tests {
     use super::{fetch_project_list_with, trimmed_body, UploadSessionExpired};
     use crate::credentials::{self, Credentials, HostCredential};
     use uuid::Uuid;
-    use wiremock::matchers::{body_json, method, path, query_param};
+    use wiremock::matchers::{body_json, header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     static CREDENTIALS_ENV_LOCK: LazyLock<tokio::sync::Mutex<()>> =
@@ -9099,8 +9129,17 @@ mod tests {
             .mount(server)
             .await;
         Mock::given(method("POST"))
-            .and(path(format!("/app/lawyer/notations/{}/send", ids.notation)))
-            .respond_with(ResponseTemplate::new(200))
+            .and(path(format!(
+                "/app/api/notations/{}/signature",
+                ids.notation
+            )))
+            .and(header("authorization", "Bearer test-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "notation_id": ids.notation,
+                "state": "sent_for_signature__pending",
+                "signature_request_id": "00000000-0000-4000-8000-000000000001"
+            })))
+            .expect(1)
             .mount(server)
             .await;
         Mock::given(method("POST"))
@@ -9176,7 +9215,8 @@ mod tests {
                 "memo__contract_review",
                 "libra@example.com",
                 "acme",
-                None
+                None,
+                None,
             )
             .await,
             ExitCode::SUCCESS
@@ -9191,6 +9231,7 @@ mod tests {
             notation_approve(host, ids.notation).await,
             ExitCode::SUCCESS
         );
+        assert_eq!(notation_send(host, ids.notation).await, ExitCode::SUCCESS);
         assert_eq!(
             notation_answers(host, ids.notation, true, None).await,
             ExitCode::SUCCESS
@@ -9339,20 +9380,30 @@ mod tests {
                 "libra@example.com",
                 "acme",
                 Some(&answers_path),
+                Some("emailed"),
             )
             .await,
             ExitCode::SUCCESS
         );
 
-        // The walk POSTed exactly the saved value as the answer field.
-        let posted: Vec<String> = server
-            .received_requests()
-            .await
-            .unwrap()
+        assert_emailed_notation_prefill(&server, second).await;
+    }
+
+    async fn assert_emailed_notation_prefill(server: &MockServer, notation_id: Uuid) {
+        let requests = server.received_requests().await.unwrap();
+        let create = requests
+            .iter()
+            .find(|request| {
+                request.method == "POST" && request.url.path() == "/app/projects/acme/notations/new"
+            })
+            .expect("the notation was created");
+        assert!(url::form_urlencoded::parse(&create.body)
+            .any(|(key, value)| key == "delivery" && value == "emailed"));
+        let posted: Vec<String> = requests
             .iter()
             .filter(|request| {
                 request.method == "POST"
-                    && request.url.path() == format!("/app/lawyer/notations/{second}/step")
+                    && request.url.path() == format!("/app/lawyer/notations/{notation_id}/step")
             })
             .map(|request| String::from_utf8(request.body.clone()).unwrap())
             .collect();
@@ -9391,6 +9442,7 @@ mod tests {
                 "libra@example.com",
                 "acme",
                 Some(&malformed),
+                None,
             )
             .await,
             ExitCode::SUCCESS

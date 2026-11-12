@@ -39,6 +39,7 @@ WORKDIR /src
 # std`. Adding it here attaches the target to the toolchain the build uses.
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 RUN rustup target add x86_64-unknown-linux-musl
+COPY model             model
 COPY rules             rules
 COPY project-scaffold project-scaffold
 COPY store             store

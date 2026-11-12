@@ -24,6 +24,7 @@ path = "src/bin/navigator-migrate.rs"
 test-support = []
 
 [dependencies]
+model.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 base64.workspace = true

@@ -1025,6 +1025,11 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
         ),
         (
             "POST",
+            "/app/api/inbox/assign-matches",
+            post(crate::inbox_api::assign_matches),
+        ),
+        (
+            "POST",
             "/app/api/projects/{id}/documents/upload-session",
             post(create_upload_session_door),
         ),
@@ -4308,6 +4313,8 @@ struct CreateNotationRequest {
     #[serde(alias = "draft_code")]
     template_code: String,
     client_email: String,
+    #[serde(default)]
+    delivery: store::notations::SigningDelivery,
 }
 
 /// Success body for `POST /app/api/projects/{id}/notations` — the opened
@@ -4339,6 +4346,7 @@ async fn create_notation(
         id,
         &input.template_code,
         &input.client_email,
+        input.delivery,
     )
     .await?;
     Ok((
@@ -11342,6 +11350,127 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
             ..crate::SessionData::fresh("lawyer-sub", store::persons::Role::Lawyer)
         };
         (state, session)
+    }
+
+    async fn ingest_address_match_fixture(
+        db: &store::surreal::SurrealDb,
+        firm: Uuid,
+        email: &str,
+    ) -> Uuid {
+        let message = store::inbox::ingest_inbound(
+            db,
+            &store::inbox::IngestInbound {
+                firm_id: firm,
+                project_id: None,
+                brand_key: None,
+                interaction_type: None,
+                provider_post_id: None,
+                parent_provider_message_id: None,
+                visibility: None,
+                channel: store::inbox::channel::EMAIL,
+                provider_account: "test-inbox",
+                provider_message_id: email,
+                provider_thread_ref: None,
+                external_address: email,
+                external_name: None,
+                subject: None,
+                body: "Test message",
+                source_page: None,
+                source_channel: None,
+                matter_consent: true,
+                promotional_opt_in: false,
+                email_conversation_id: None,
+                attachments: Vec::new(),
+                occurred_at: "2026-01-01T12:00:00Z",
+                raw_storage_key: None,
+            },
+        )
+        .await
+        .unwrap();
+        message.conversation_id
+    }
+
+    #[tokio::test]
+    async fn inbox_address_matches_are_confined_to_the_conversations_firm() {
+        let db = store::surreal::test_support::mem().await;
+        let firm = store::test_support::seed_firm_with_brand(&db, "neon").await;
+        let other_firm = store::test_support::seed_firm_with_brand(&db, "vesta").await;
+        let local =
+            store::test_support::seed_project_on_firm(&db, Some(firm), "Local Project").await;
+        let other =
+            store::test_support::seed_project_on_firm(&db, Some(other_firm), "Other Project").await;
+        let (state, session) = eml_lawyer_state(&db, local.id, "aries@neonlaw.com").await;
+        store::firms::add_membership(
+            &db,
+            &store::firms::NewPersonFirmRole {
+                person_id: session.person_id.unwrap(),
+                firm_id: firm,
+                membership: store::firms::FirmMembership::Lawyer,
+                is_dri: false,
+            },
+        )
+        .await
+        .unwrap();
+
+        let mut conversations = Vec::new();
+        for (email, local_participation) in [
+            ("both@example.test", true),
+            ("other-only@example.test", false),
+        ] {
+            let sender = store::test_support::ensure_person(
+                &db,
+                &store::persons::NewPerson::with_role(
+                    "Test Sender".to_string(),
+                    email.to_string(),
+                    store::persons::Role::Client,
+                ),
+            )
+            .await;
+            store::projects::add_participation(&db, other.id, sender.id, "client")
+                .await
+                .unwrap();
+            if local_participation {
+                store::projects::add_participation(&db, local.id, sender.id, "client")
+                    .await
+                    .unwrap();
+            }
+            conversations.push(ingest_address_match_fixture(&db, firm, email).await);
+        }
+
+        let response = crate::inbox_api::assign_matches(
+            State(state),
+            LawyerSession(session),
+            Json(crate::inbox_api::AssignMatchesRequest {
+                apply: true,
+                after: None,
+            }),
+        )
+        .await
+        .unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let rows: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(rows.len(), 2);
+        for (index, id) in conversations.into_iter().enumerate() {
+            let row = rows
+                .iter()
+                .find(|row| row["conversation_id"] == serde_json::json!(id))
+                .unwrap();
+            let stored = store::inbox::conversation_by_id(&db, id)
+                .await
+                .unwrap()
+                .unwrap();
+            if index == 0 {
+                assert_eq!(row["decision"]["project_id"], serde_json::json!(local.id));
+                assert_eq!(row["applied"], true);
+                assert_eq!(stored.project_id, Some(local.id));
+            } else {
+                assert_eq!(row["decision"]["reason"], "no_match");
+                assert_eq!(row["applied"], false);
+                assert_eq!(stored.project_id, None);
+            }
+        }
     }
 
     fn eml_request(

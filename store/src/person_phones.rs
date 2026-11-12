@@ -16,12 +16,42 @@
 //! a subset of rows.
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 use surrealdb::types::{RecordId, SurrealValue};
 use uuid::Uuid;
 
 use crate::postgres_mirror::MirrorKey;
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
+pub use model::person_phones::PhoneLabel;
+
+/// Errors reading, writing, or normalizing a phone number.
+#[derive(Debug, thiserror::Error)]
+pub enum PhoneError {
+    /// A database operation failed.
+    #[error("database: {0}")]
+    Db(#[from] surrealdb::Error),
+    /// The number cannot be normalized to E.164. It names what was
+    /// rejected, never what the caller might have meant.
+    #[error("cannot normalize {0:?} to E.164")]
+    InvalidNumber(String),
+    /// No Person row answers to the id the write named.
+    #[error("person {0} not found")]
+    PersonMissing(Uuid),
+    /// The Person behind the write could not be read back.
+    #[error("person lookup: {0}")]
+    Person(#[from] crate::persons::PersonError),
+    /// A write reported success but returned no row, or returned one
+    /// this module could not read back — see [`PersonPhoneRow::into_phone`].
+    #[error("writing a phone returned no usable row")]
+    WriteLost,
+}
+
+/// Normalize a phone number to E.164.
+///
+/// # Errors
+/// [`PhoneError::InvalidNumber`] when the digits cannot be an E.164 number.
+pub fn normalize_e164(raw: &str) -> Result<String, PhoneError> {
+    model::person_phones::normalize_e164(raw).map_err(PhoneError::InvalidNumber)
+}
 
 /// The table these rows live in.
 const TABLE: &str = "person_phone";
@@ -29,55 +59,6 @@ const TABLE: &str = "person_phone";
 /// The projection every read shares, so one field list describes the row
 /// and a new column cannot reach [`PersonPhoneRow`] from only one query.
 const SELECT: &str = "id, person_id, e164, label, is_primary, inserted_at, updated_at";
-
-/// The kind of line a phone number is. Free-text labels rot into a
-/// dozen spellings of the same fact, so the vocabulary is closed and
-/// the schema's ASSERT holds it.
-#[derive(
-    Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum PhoneLabel {
-    /// A personal cell phone. The default.
-    #[default]
-    Mobile,
-    /// A line answered during business hours.
-    Work,
-    /// A residential line.
-    Home,
-    /// A fax line.
-    Fax,
-    /// A line none of the other labels describe.
-    Other,
-}
-
-impl PhoneLabel {
-    /// The stored spelling.
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Mobile => "mobile",
-            Self::Work => "work",
-            Self::Home => "home",
-            Self::Fax => "fax",
-            Self::Other => "other",
-        }
-    }
-
-    /// The label named by its stored spelling, or `None` for anything
-    /// else. The inverse of [`PhoneLabel::as_str`].
-    #[must_use]
-    pub fn parse(value: &str) -> Option<Self> {
-        match value.trim() {
-            "mobile" => Some(Self::Mobile),
-            "work" => Some(Self::Work),
-            "home" => Some(Self::Home),
-            "fax" => Some(Self::Fax),
-            "other" => Some(Self::Other),
-            _ => None,
-        }
-    }
-}
 
 /// One Person's phone number.
 ///
@@ -127,65 +108,6 @@ impl PersonPhoneRow {
             inserted_at: self.inserted_at.into(),
             updated_at: self.updated_at.into(),
         })
-    }
-}
-
-/// Errors reading, writing, or normalizing a phone number.
-#[derive(Debug, thiserror::Error)]
-pub enum PhoneError {
-    /// A database operation failed.
-    #[error("database: {0}")]
-    Db(#[from] surrealdb::Error),
-    /// The number cannot be normalized to E.164. It names what was
-    /// rejected, never what the caller might have meant.
-    #[error("cannot normalize {0:?} to E.164")]
-    InvalidNumber(String),
-    /// No Person row answers to the id the write named.
-    #[error("person {0} not found")]
-    PersonMissing(Uuid),
-    /// The Person behind the write could not be read back.
-    #[error("person lookup: {0}")]
-    Person(#[from] crate::persons::PersonError),
-    /// A write reported success but returned no row, or returned one
-    /// this module could not read back — see [`PersonPhoneRow::into_phone`].
-    #[error("writing a phone returned no usable row")]
-    WriteLost,
-}
-
-/// Normalize a phone number to E.164 (`+`, then 8–15 digits).
-///
-/// Punctuation (dashes, dots, spaces, parentheses) is stripped. A number
-/// already carrying a leading `+` keeps its country code. A bare number
-/// is read as North American — exactly ten digits, or eleven opening
-/// with the US country code `1` — because that is the jurisdiction
-/// Navigator's own practice runs in; anything else without a `+` is
-/// refused rather than guessed at.
-///
-/// # Errors
-///
-/// [`PhoneError::InvalidNumber`] when the digits cannot be an E.164
-/// number under those rules.
-pub fn normalize_e164(raw: &str) -> Result<String, PhoneError> {
-    let trimmed = raw.trim();
-    let explicit_country = trimmed.starts_with('+');
-    let mut digits = String::with_capacity(trimmed.len());
-    for (index, ch) in trimmed.char_indices() {
-        if ch.is_ascii_digit() {
-            digits.push(ch);
-        } else if index == 0 && ch == '+' {
-            // A leading country-code marker: remembered, not carried.
-        } else if ch.is_whitespace() || "()-.".contains(ch) {
-            // Formatting: stripped.
-        } else {
-            return Err(PhoneError::InvalidNumber(raw.to_string()));
-        }
-    }
-
-    match (explicit_country, digits.len()) {
-        (true, 8..=15) => Ok(format!("+{digits}")),
-        (false, 10) => Ok(format!("+1{digits}")),
-        (false, 11) if digits.starts_with('1') => Ok(format!("+{digits}")),
-        _ => Err(PhoneError::InvalidNumber(raw.to_string())),
     }
 }
 

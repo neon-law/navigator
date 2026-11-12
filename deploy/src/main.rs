@@ -25,7 +25,9 @@ mod forms_sync;
 mod glossary;
 mod inbox;
 mod inbox_import;
+mod import;
 mod journal;
+mod letterhead;
 mod lsp_download;
 mod lsp_publish;
 mod mail;
@@ -62,7 +64,6 @@ use cli::commands::{
     strip_frontmatter, HostOpt, ProjectGateMarkdownFilter, ProjectsCmd, CLI_STACK_BYTES,
     DOCUMENT_TRANSCRIBE_HELP, DOCUMENT_UPLOAD_KIND_HELP,
 };
-use cli::import;
 use cli::{
     answers_file, atomic_directory, authorities, credentials, document_layout, document_read,
     document_sync, legal_plans, login, palette, projects, release, remote,
@@ -5017,10 +5018,10 @@ fn project_firm_legal_name(file: &Path) -> Option<String> {
         Some(path) => {
             let contents = std::fs::read_to_string(&path).ok()?;
             let manifest = projects::manifest::parse(&contents).ok()?;
-            cli::letterhead::for_project(manifest.brand.as_deref(), manifest.host.as_deref())
+            letterhead::for_project(manifest.brand.as_deref(), manifest.host.as_deref())
                 .ok()?
         }
-        None => cli::letterhead::for_brand(views::brand::BrandKey::Neon).ok()?,
+        None => letterhead::for_brand(views::brand::BrandKey::Neon).ok()?,
     };
     let name = letterhead.entity.trim();
     if name.is_empty() {
@@ -5034,7 +5035,7 @@ fn project_firm_legal_name(file: &Path) -> Option<String> {
 /// provenance the render reports on stderr.
 ///
 /// The Project's Brand frames the letter (LAW-265, ENG-1148):
-/// `cli::letterhead` resolves `project.brand`, else `project.host`, from
+/// `letterhead` resolves `project.brand`, else `project.host`, from
 /// the nearest `navigator.yaml`. Which letterhead that Brand wears comes
 /// from one of two sources. When the deployment's letterhead door is
 /// reachable, the Brand's runtime letterhead row — the same rows
@@ -5076,7 +5077,7 @@ fn project_letterhead(
     let contents = std::fs::read_to_string(&path)
         .map_err(|error| format!("read {}: {error}", projects::manifest::FILE))?;
     let manifest = projects::manifest::parse(&contents)?;
-    let key = cli::letterhead::resolve_brand(manifest.brand.as_deref(), manifest.host.as_deref())
+    let key = letterhead::resolve_brand(manifest.brand.as_deref(), manifest.host.as_deref())
         .map_err(|error| error.to_string())?;
     attempt_runtime_letterhead(key, ci)
 }
@@ -5142,7 +5143,7 @@ fn letterhead_endpoint(key: views::brand::BrandKey) -> Result<(String, Option<St
     if let Some(base) = std::env::var_os(LETTERHEAD_API_BASE_ENV).filter(|v| !v.is_empty()) {
         return Ok((base.to_string_lossy().into_owned(), None));
     }
-    let compiled = cli::letterhead::for_brand(key).map_err(|error| error.to_string())?;
+    let compiled = letterhead::for_brand(key).map_err(|error| error.to_string())?;
     match remote::matching_stored_session(&compiled.web)
         .map_err(|error| format!("the `site login` session could not be read: {error}"))?
     {
@@ -5170,7 +5171,7 @@ async fn runtime_letterhead(
     ci: bool,
 ) -> Result<ProjectLetterhead, String> {
     let (base, token) = letterhead_endpoint(key)?;
-    let runtime = cli::letterhead::for_brand_runtime(key, &base, token.as_deref(), ci)
+    let runtime = letterhead::for_brand_runtime(key, &base, token.as_deref(), ci)
         .await
         .map_err(|error| error.to_string())?;
     let Some(runtime) = runtime else {
@@ -5204,7 +5205,7 @@ async fn runtime_letterhead(
 
 /// The compiled frame for `key`, with its provenance line.
 fn compiled_letterhead(key: views::brand::BrandKey) -> Result<ProjectLetterhead, String> {
-    let compiled = cli::letterhead::for_brand(key).map_err(|error| error.to_string())?;
+    let compiled = letterhead::for_brand(key).map_err(|error| error.to_string())?;
     let mark = match compiled.mark {
         pdf::LetterheadMark::Compiled => "compiled",
         _ => "wordmark",

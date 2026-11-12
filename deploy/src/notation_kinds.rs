@@ -17,6 +17,7 @@ use rules::{F109OutputFormat, Kind};
 pub const RENDER_FRAME_HELP: &str = "\
 Default frame by `kind:` (override with `output:`; run `navigator-deploy notation kinds` for the full list):
   letter         letter, onboarding, offboarding, memo   (firm letterhead, even with no `output:`)
+  client_letter  declaration                             (no letterhead; the party's own document)
   form           filing                                  (AcroForm fill; needs `form:` and `origin_url:`)
   pleading       pleading                                (court paper; needs a calibrated `jurisdiction:`)
   contract       agreement                               (no letterhead)
@@ -24,7 +25,8 @@ Default frame by `kind:` (override with `output:`; run `navigator-deploy notatio
   resume         resume                                  (no letterhead; dense, centered name header)
 
 `output:` accepts letter, client_letter, contract, pleading, form, resume. `plain` is never declared: omit `output:`.
-For a letter sent in a client's own name, declare `kind: letter` with `output: client_letter` (no letterhead).";
+For a letter sent in a client's own name, declare `kind: letter` with `output: client_letter` (no letterhead).
+A declaration derives that same letterhead-less frame from `kind: declaration` — no `output:` needed.";
 
 /// The listing `navigator-deploy notation kinds` prints.
 #[must_use]

@@ -2084,7 +2084,7 @@ async fn acroform_payload(
 /// content). This now renders + parks only: it fires `approved` so the
 /// worker durably renders + persists the reviewed bytes and the workflow
 /// waits at `generate_pdf__retainer_pdf`. The binding send is a separate,
-/// deliberate command ([`send_post`] / `navigator retainer send`) that
+/// deliberate command ([`send_post`] / `navigator site notation send`) that
 /// first confirms the PDF landed — so a real Restate Cloud worker's
 /// render never races the send.
 pub async fn approve_send_post(
@@ -2155,7 +2155,7 @@ pub async fn approve_send_post(
 /// POST `/app/lawyer/notations/:id/send` — dispatch the rendered
 /// document for signature. The deliberate, authenticated "send" half of
 /// the pipeline, reached from the browser's "Send for signature" button
-/// and the `navigator retainer send` CLI command.
+/// and shared with the signature API used by `navigator site notation send`.
 ///
 /// Confirms the worker's PDF is present, then sends exactly one envelope
 /// (see [`crate::signature_flow::send_notation_for_signature`]). When the PDF isn't ready yet — the worker
@@ -3155,9 +3155,9 @@ pub fn signer_role_for_recipient(template_source: &str, recipient_id: &str) -> O
     let position = recipient_id.parse::<usize>().ok()?.checked_sub(1)?;
     rules::signer_set(template_source)
         .ok()?
-        .roles
-        .get(position)
-        .cloned()
+        .roles()
+        .nth(position)
+        .map(str::to_string)
 }
 
 /// Display labels for recipient resolution and review indicators. Body
@@ -3218,6 +3218,12 @@ pub(crate) async fn build_answer_context(
     } else {
         None
     };
+    // A picked person answer stores the referenced row's id in its
+    // A picked person answer carries the referenced row's id in its
+    // envelope; resolve it to the Person row's identity fields for the
+    // declared signer defaults (`person__<role>.email`).
+    fill_picked_person_fields(surreal, &projection, &mut keys, &mut labels).await?;
+
     let project = store::projects::find_by_id(surreal, notation.project_id)
         .await
         .map_err(|error| ContextError::Db(error.to_string()))?;
@@ -3278,6 +3284,47 @@ pub(crate) async fn build_answer_context(
         }
     }
     Ok((keys, labels))
+}
+
+/// Surface the identity of every picked person answer as dotted context
+/// keys. A reference answer stores the picked row's id in its envelope
+/// (see `answer_value_for_state`); resolving that id to the Person row
+/// yields `<state>.name` and `<state>.email`. The declared signer
+/// defaults bind to `person__<role>.email`, and a non-client signer has
+/// no bound row of its own — its identity is the person the
+/// questionnaire picked. Entries fill gaps: a dotted key the envelope's
+/// own expansion already surfaced keeps its value.
+async fn fill_picked_person_fields(
+    surreal: &store::surreal::SurrealDb,
+    projection: &workflows::notation_session::RenderAnswerProjection,
+    keys: &mut BTreeMap<String, String>,
+    labels: &mut BTreeMap<String, String>,
+) -> Result<(), ContextError> {
+    for answer in &projection.answers {
+        let Some(state) = answer.state_name.as_deref() else {
+            continue;
+        };
+        if !state.starts_with("person__") {
+            continue;
+        }
+        let Some(id) = answer
+            .value
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|id| Uuid::parse_str(id).ok())
+        else {
+            continue;
+        };
+        if let Some(person) = store::persons::find_by_id(surreal, id).await? {
+            for ctx in [&mut *keys, &mut *labels] {
+                ctx.entry(format!("{state}.email"))
+                    .or_insert_with(|| person.email.clone());
+                ctx.entry(format!("{state}.name"))
+                    .or_insert_with(|| person.name.clone());
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Fill-context key for the governing-law answer. A stored choice (including
@@ -4475,6 +4522,7 @@ Sign: {{client.signature}}";
             &ctx,
             Some(&client),
             true,
+            "",
             "",
         )
         .expect("the client recipient resolves");

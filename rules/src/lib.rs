@@ -138,7 +138,8 @@ pub use f104::F104FlowQuestionCodes;
 pub use f105::F105ConfidentialRequired;
 pub use f106::F106LawyerReviewRequired;
 pub use f107::{
-    signature_placeholders, signer_set, F107SignaturePlaceholders, SignerSet, DEFAULT_SIGNERS,
+    declares_signing_state, signature_placeholders, signer_set, F107SignaturePlaceholders,
+    SignerDelivery, SignerRole, SignerSet, DEFAULT_SIGNERS,
 };
 pub use f108::F108TemplateCodeRequired;
 pub use f109::F109OutputFormat;

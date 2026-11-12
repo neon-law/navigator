@@ -24,7 +24,7 @@ use serde::Serialize;
 
 use crate::projects::surfaces::{self, ReconcileDoorError, VisibleProject};
 use crate::remote;
-use store::project_surfaces::{ProjectSurfaces, SurfaceStatus};
+use model::project_surfaces::{ProjectSurfaces, SurfaceStatus};
 
 /// What one Project's reconcile pass produced.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

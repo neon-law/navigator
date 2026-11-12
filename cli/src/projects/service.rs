@@ -218,7 +218,7 @@ pub fn certificate_for(
         .ok_or_else(|| format!("{} has no parent", manifest_path.display()))?;
     let pointer_path = crate::document_sync::pointer_path_for_slug(root, Path::new(&slug));
     let pointer = match std::fs::read_to_string(&pointer_path) {
-        Ok(raw) => store::document_pointers::DocumentPointer::from_yaml(&raw)
+        Ok(raw) => model::document_pointers::DocumentPointer::from_yaml(&raw)
             .map_err(|error| format!("{}: {error}", pointer_path.display()))?,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Err(format!(

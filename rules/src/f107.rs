@@ -56,11 +56,64 @@ use crate::{frontmatter, is_snake_case, Rule, SourceFile, Violation};
 /// Default `signers:` when the key is absent — every existing template.
 pub const DEFAULT_SIGNERS: &[&str] = &["client", "firm"];
 
-/// The signer roles a template permits, in declaration order.
+/// How the envelope reaches one declared signer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignerDelivery {
+    /// Captive embedded signing — the default posture. Navigator serves
+    /// the embedded ceremony only to the notation's bound client, so a
+    /// declared role other than `client` must not keep this default
+    /// (the parser refuses it).
+    Embedded,
+    /// The provider emails the signer their link — non-captive.
+    Emailed,
+}
+
+impl SignerDelivery {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "embedded" => Some(Self::Embedded),
+            "emailed" => Some(Self::Emailed),
+            _ => None,
+        }
+    }
+
+    /// The word the frontmatter spells, for diagnostics.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Embedded => "embedded",
+            Self::Emailed => "emailed",
+        }
+    }
+}
+
+/// One declared signer: the role, where it sits in the envelope's routing
+/// order, how the envelope reaches it, and — for roles the send path cannot
+/// resolve on its own — the questionnaire answer keys that carry its
+/// identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignerRole {
+    /// Role name (`client`, `firm`, `confirming_assignor`, …).
+    pub role: String,
+    /// 1-based envelope routing order. Declaration order when the template
+    /// does not spell routing orders out; a declared order must form a
+    /// permutation of `1..=n` across the whole `signers:` list.
+    pub routing_order: u32,
+    /// How the envelope reaches this signer.
+    pub delivery: SignerDelivery,
+    /// Questionnaire answer key overriding the default identity lookup for
+    /// the signer's name (`person__<role>.name` when undeclared).
+    pub name: Option<String>,
+    /// Questionnaire answer key overriding the default identity lookup for
+    /// the signer's email (`person__<role>.email` when undeclared).
+    pub email: Option<String>,
+}
+
+/// The signer roles a template permits, in routing order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignerSet {
-    /// Role names (`client`, `firm`, `confirming_assignor`, …).
-    pub roles: Vec<String>,
+    /// The declared signers, in routing order.
+    pub signers: Vec<SignerRole>,
     /// True when frontmatter carried an explicit `signers:` list.
     pub explicit: bool,
 }
@@ -68,29 +121,59 @@ pub struct SignerSet {
 impl SignerSet {
     fn implicit_default() -> Self {
         Self {
-            roles: DEFAULT_SIGNERS.iter().map(|s| (*s).to_string()).collect(),
+            signers: vec![
+                SignerRole {
+                    role: "client".to_string(),
+                    routing_order: 1,
+                    delivery: SignerDelivery::Embedded,
+                    name: None,
+                    email: None,
+                },
+                SignerRole {
+                    role: "firm".to_string(),
+                    routing_order: 2,
+                    delivery: SignerDelivery::Emailed,
+                    name: None,
+                    email: None,
+                },
+            ],
             explicit: false,
         }
+    }
+
+    /// The routing-ordered roles, as bare names.
+    pub fn roles(&self) -> impl Iterator<Item = &str> {
+        self.signers.iter().map(|s| s.role.as_str())
     }
 
     /// Comma-separated roles for diagnostics.
     #[must_use]
     pub fn joined(&self) -> String {
-        self.roles.join(", ")
+        self.roles().collect::<Vec<_>>().join(", ")
     }
 
     /// True when `role` is in this set.
     #[must_use]
     pub fn contains(&self, role: &str) -> bool {
-        self.roles.iter().any(|r| r == role)
+        self.signers.iter().any(|s| s.role == role)
+    }
+
+    /// A role's full declaration, when the set carries one.
+    #[must_use]
+    pub fn declared(&self, role: &str) -> Option<&SignerRole> {
+        self.signers.iter().find(|s| s.role == role)
     }
 }
 
 /// Parse the template's signer set from its full Markdown source.
 ///
 /// No frontmatter, no `signers:` key, or a null `signers:` all yield the
-/// implicit default `[client, firm]`. A present list must be lowercase
-/// `snake_case` role names with no duplicates.
+/// implicit default `[client, firm]`. A present list mixes bare role names
+/// with declarations (`role`, optional `routing_order`, `delivery`, and
+/// `name`/`email` answer-key bindings); routing orders, when any entry
+/// declares one, must form a permutation of `1..=n` across the list.
+/// Embedded signing is servable only for the notation's bound client, so
+/// every other declared role must spell `delivery: emailed`.
 pub fn signer_set(contents: &str) -> Result<SignerSet, String> {
     let Some(fm) = frontmatter::extract(contents) else {
         return Ok(SignerSet::implicit_default());
@@ -107,31 +190,209 @@ fn parse_signer_set(yaml: &Value) -> Result<SignerSet, String> {
         return Ok(SignerSet::implicit_default());
     }
     let Some(seq) = signers.as_sequence() else {
-        return Err("signers: must be a list of lowercase snake_case role names".to_string());
+        return Err(
+            "signers: must be a list of role names or `{role, delivery, …}` declarations"
+                .to_string(),
+        );
     };
-    let mut roles = Vec::with_capacity(seq.len());
+    let questionnaire_states = declared_questionnaire_states(yaml);
+    let mut signers: Vec<SignerRole> = Vec::with_capacity(seq.len());
     for (i, item) in seq.iter().enumerate() {
-        let Some(name) = item.as_str() else {
-            return Err(format!("signers[{i}] must be a string role name"));
-        };
-        if !is_signer_role_name(name) {
-            return Err(format!(
-                "`{name}` is not a lowercase snake_case signer role"
-            ));
-        }
-        if roles.iter().any(|r| r == name) {
-            return Err(format!("signer role `{name}` is listed twice"));
-        }
-        roles.push(name.to_string());
+        signers.push(parse_signer_role(i, item, &questionnaire_states)?);
     }
+    if let Some(dup) = first_duplicate_role(&signers) {
+        return Err(format!("signer role `{dup}` is listed twice"));
+    }
+    order_by_routing(&mut signers)?;
     Ok(SignerSet {
-        roles,
+        signers,
         explicit: true,
     })
 }
 
+/// The questionnaire state names a template declares, for binding checks.
+fn declared_questionnaire_states(yaml: &Value) -> std::collections::BTreeSet<String> {
+    yaml.get("questionnaire")
+        .and_then(|q| q.as_mapping())
+        .map(|m| {
+            m.keys()
+                .filter_map(|k| k.as_str())
+                .filter(|state| *state != "BEGIN" && *state != "END")
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn parse_signer_role(
+    index: usize,
+    item: &Value,
+    questionnaire_states: &std::collections::BTreeSet<String>,
+) -> Result<SignerRole, String> {
+    if let Some(role) = item.as_str() {
+        let role = require_role_name(role)?;
+        return match role.as_str() {
+            "client" => Ok(SignerRole {
+                role,
+                routing_order: positional_order(index),
+                delivery: SignerDelivery::Embedded,
+                name: None,
+                email: None,
+            }),
+            _ => Err(format!(
+                "declared signer `{role}` defaults to captive embedded signing, which \
+                 Navigator serves only to the notation's bound client; spell its \
+                 delivery with a declaration entry carrying `delivery: emailed`"
+            )),
+        };
+    }
+    let Some(entry) = item.as_mapping() else {
+        return Err(format!(
+            "signers[{index}] must be a role name or a declaration"
+        ));
+    };
+    let Some(role_str) = entry.get(Value::from("role")).and_then(Value::as_str) else {
+        return Err(format!(
+            "signers[{index}] declaration needs a string `role:`"
+        ));
+    };
+    let role = require_role_name(role_str)?;
+
+    let delivery = match entry.get(Value::from("delivery")) {
+        None | Some(Value::Null) if role == "client" => SignerDelivery::Embedded,
+        None | Some(Value::Null) => {
+            return Err(format!(
+                "declared signer `{role}` defaults to captive embedded signing, which \
+                 Navigator serves only to the notation's bound client; add \
+                 `delivery: emailed`"
+            ));
+        }
+        Some(value) => {
+            let Some(text) = value.as_str() else {
+                return Err(format!("signers[{index}].delivery must be a string"));
+            };
+            let parsed = SignerDelivery::parse(text).ok_or_else(|| {
+                format!("signers[{index}].delivery is `{text}`; expected `emailed` or `embedded`")
+            })?;
+            if role == "client" && parsed == SignerDelivery::Emailed {
+                return Err(
+                    "the client signer cannot declare `delivery: emailed`: the client's \
+                     delivery is the notation's, chosen when the matter opens (default \
+                     embedded)"
+                        .to_string(),
+                );
+            }
+            parsed
+        }
+    };
+
+    let name = answer_binding(
+        index,
+        "name",
+        entry.get(Value::from("name")),
+        questionnaire_states,
+    )?;
+    let email = answer_binding(
+        index,
+        "email",
+        entry.get(Value::from("email")),
+        questionnaire_states,
+    )?;
+    let routing_order = match entry.get(Value::from("routing_order")) {
+        None | Some(Value::Null) => None,
+        Some(value) => {
+            let order = value
+                .as_u64()
+                .and_then(|order| u32::try_from(order).ok())
+                .filter(|order| *order > 0)
+                .ok_or_else(|| {
+                    format!("signers[{index}].routing_order must be a positive integer")
+                })?;
+            Some(order)
+        }
+    };
+    Ok(SignerRole {
+        role,
+        routing_order: routing_order.unwrap_or_else(|| positional_order(index)),
+        delivery,
+        name,
+        email,
+    })
+}
+
+fn require_role_name(role: &str) -> Result<String, String> {
+    if !is_signer_role_name(role) {
+        return Err(format!(
+            "`{role}` is not a lowercase snake_case signer role"
+        ));
+    }
+    Ok(role.to_string())
+}
+
+/// Validate an optional `name:`/`email:` identity binding: a non-empty
+/// questionnaire answer key whose state part names a declared state.
+fn answer_binding(
+    index: usize,
+    field: &str,
+    value: Option<&Value>,
+    questionnaire_states: &std::collections::BTreeSet<String>,
+) -> Result<Option<String>, String> {
+    let Some(value) = value.filter(|v| !v.is_null()) else {
+        return Ok(None);
+    };
+    let Some(key) = value.as_str() else {
+        return Err(format!(
+            "signers[{index}].{field} must be a questionnaire answer key"
+        ));
+    };
+    if key.is_empty() {
+        return Err(format!("signers[{index}].{field} must not be empty"));
+    }
+    let state = key.split('.').next().unwrap_or(key);
+    if !questionnaire_states.contains(state) {
+        return Err(format!(
+            "signers[{index}].{field} binds `{key}`, which is not a declared \
+             questionnaire state"
+        ));
+    }
+    Ok(Some(key.to_string()))
+}
+
+fn first_duplicate_role(signers: &[SignerRole]) -> Option<String> {
+    for (i, signer) in signers.iter().enumerate() {
+        if signers[..i].iter().any(|s| s.role == signer.role) {
+            return Some(signer.role.clone());
+        }
+    }
+    None
+}
+
+/// Routing orders, when any entry spells one, must form a permutation of
+/// `1..=n`; the set is then stored in routing order.
+fn order_by_routing(signers: &mut [SignerRole]) -> Result<(), String> {
+    signers.sort_by_key(|s| s.routing_order);
+    for (position, signer) in signers.iter().enumerate() {
+        let expected = positional_order(position);
+        if signer.routing_order != expected {
+            return Err(format!(
+                "declared signer routing orders must form a permutation of 1..={}; \
+                 `{}` sits at position {expected} but declares {}",
+                signers.len(),
+                signer.role,
+                signer.routing_order
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn is_signer_role_name(name: &str) -> bool {
     is_snake_case(name) && !name.contains("__")
+}
+
+/// A list position as a 1-based routing order, saturating at `u32::MAX`.
+fn positional_order(index: usize) -> u32 {
+    u32::try_from(index).map_or(u32::MAX, |i| i.saturating_add(1))
 }
 
 const FOR_OPEN: &str = "{{#for ";
@@ -365,13 +626,37 @@ fn scan_placeholders(
     scan
 }
 
+fn workflow_has_signing_state(workflow: &BTreeMap<String, BTreeMap<String, String>>) -> bool {
+    workflow.keys().any(|state| {
+        state == F107SignaturePlaceholders::SIGNING_STATE
+            || state.starts_with(&format!("{}__", F107SignaturePlaceholders::SIGNING_STATE))
+    })
+}
+
+/// True when the template's workflow declares a `sent_for_signature` (or
+/// `sent_for_signature__*`) state. Shared with `spec_coherence`, whose
+/// reverse anchor check requires a body anchor for every such template.
+#[must_use]
+pub fn declares_signing_state(contents: &str) -> bool {
+    let Some(fm) = frontmatter::extract(contents) else {
+        return false;
+    };
+    let Ok(parsed) = crate::questionnaire::deserialize_frontmatter::<FrontmatterShape>(fm) else {
+        return false;
+    };
+    parsed
+        .workflow
+        .is_some_and(|workflow| workflow_has_signing_state(&workflow))
+}
+
 fn require_declared_placeholders(
     file: &SourceFile,
     set: &SignerSet,
     signed_roles: &std::collections::BTreeSet<String>,
     violations: &mut Vec<Violation>,
 ) {
-    for role in &set.roles {
+    for signer in &set.signers {
+        let role = &signer.role;
         if !signed_roles.contains(role.as_str()) {
             violations.push(n107(
                 file,
@@ -393,12 +678,9 @@ fn cross_check_signing_state(
     saw_relevant: bool,
     violations: &mut Vec<Violation>,
 ) {
-    let has_signing_state = parsed.and_then(|p| p.workflow).is_some_and(|wf| {
-        wf.keys().any(|state| {
-            state == F107SignaturePlaceholders::SIGNING_STATE
-                || state.starts_with(&format!("{}__", F107SignaturePlaceholders::SIGNING_STATE))
-        })
-    });
+    let has_signing_state = parsed
+        .and_then(|p| p.workflow)
+        .is_some_and(|wf| workflow_has_signing_state(&wf));
     if saw_valid && !has_signing_state {
         violations.push(n107(
             file,
@@ -429,9 +711,119 @@ fn cross_check_signing_state(
 
 #[cfg(test)]
 mod tests {
-    use super::{signature_placeholders, F107SignaturePlaceholders};
+    use super::{signature_placeholders, signer_set, F107SignaturePlaceholders, SignerDelivery};
     use crate::{Rule, SourceFile};
     use std::path::PathBuf;
+
+    #[test]
+    fn shipped_offboarding_letter_validates_without_a_signers_key() {
+        let body = include_str!("../../templates/notations/neon_law/offboarding__letter.md");
+        assert!(
+            F107SignaturePlaceholders.lint(&file(body)).is_empty(),
+            "the bundled closing letter must stay valid with the default signer set: {:?}",
+            F107SignaturePlaceholders.lint(&file(body)),
+        );
+    }
+
+    /// The implicit set keeps the shipped posture: the client signs
+    /// embedded (subject to the notation's delivery), the firm is emailed.
+    #[test]
+    fn implicit_set_keeps_client_embedded_and_firm_emailed() {
+        let body = "---\ntitle: T\n---\nbody";
+        let set = signer_set(body).expect("the default set parses");
+        assert!(!set.explicit);
+        assert_eq!(
+            set.declared("client").unwrap().delivery,
+            SignerDelivery::Embedded
+        );
+        assert_eq!(
+            set.declared("firm").unwrap().delivery,
+            SignerDelivery::Emailed
+        );
+        assert_eq!(
+            (
+                set.declared("client").unwrap().routing_order,
+                set.declared("firm").unwrap().routing_order
+            ),
+            (1, 2)
+        );
+    }
+
+    /// Declared routing orders reorder the set: the envelope routes the
+    /// employee before the client regardless of list order.
+    #[test]
+    fn declared_routing_order_sorts_the_set() {
+        let body = "---\ntitle: Offer\nquestionnaire:\n  BEGIN:\n    _: person__client\n  \
+                    person__client:\n    _: END\n  END: {}\nsigners:\n  - role: client\n    \
+                    routing_order: 2\n  - role: employee\n    delivery: emailed\n    \
+                    routing_order: 1\n---\nbody";
+        let set = signer_set(body).expect("the declarations parse");
+        let roles: Vec<&str> = set.roles().collect();
+        assert_eq!(roles, ["employee", "client"]);
+        assert_eq!(set.declared("employee").unwrap().routing_order, 1);
+        assert_eq!(set.declared("client").unwrap().routing_order, 2);
+    }
+
+    #[test]
+    fn routing_orders_must_form_a_permutation() {
+        let body = "---\ntitle: T\nsigners:\n  - role: client\n    \
+                    routing_order: 1\n  - role: firm\n    delivery: emailed\n    \
+                    routing_order: 1\n---\nbody";
+        let error = signer_set(body).expect_err("duplicate routing orders refuse");
+        assert!(error.contains("permutation of 1..=2"), "{error}");
+    }
+
+    #[test]
+    fn a_bare_third_party_role_is_refused_with_the_delivery_teaching() {
+        let body = "---\ntitle: T\nsigners:\n  - client\n  - firm\n---\nbody";
+        let error = signer_set(body).expect_err("a bare non-client role refuses");
+        assert!(error.contains("delivery: emailed"), "{error}");
+    }
+
+    #[test]
+    fn client_cannot_declare_emailed_delivery() {
+        let body = "---\ntitle: T\nsigners:\n  - role: client\n    delivery: \
+                    emailed\n---\nbody";
+        let error = signer_set(body).expect_err("the client's delivery is the notation's");
+        assert!(error.contains("chosen when the matter opens"), "{error}");
+    }
+
+    #[test]
+    fn unknown_delivery_value_is_refused() {
+        let body = "---\ntitle: T\nsigners:\n  - role: client\n  - role: firm\n    \
+                    delivery: courier\n---\nbody";
+        let error = signer_set(body).expect_err("courier is not a delivery");
+        assert!(
+            error.contains("expected `emailed` or `embedded`"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn identity_bindings_must_name_declared_states() {
+        let good = "---\ntitle: T\nquestionnaire:\n  BEGIN:\n    _: END\n  END: {}\n  \
+                    custom_text__employee_email: {}\nsigners:\n  - role: employee\n    \
+                    delivery: emailed\n    email: custom_text__employee_email\n---\nbody";
+        let set = signer_set(good).expect("the binding names a declared state");
+        assert_eq!(
+            set.declared("employee").unwrap().email.as_deref(),
+            Some("custom_text__employee_email")
+        );
+        let bad = "---\ntitle: T\nsigners:\n  - role: employee\n    delivery: \
+                    emailed\n    email: custom_text__nowhere\n---\nbody";
+        let error = signer_set(bad).expect_err("undeclared binding state refuses");
+        assert!(
+            error.contains("not a declared questionnaire state"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_third_party_declaration_without_delivery_is_refused() {
+        let body = "---\ntitle: T\nsigners:\n  - client\n  - role: firm\n---\nbody";
+        let error = signer_set(body).expect_err("firm without delivery refuses");
+        assert!(error.contains("add `delivery: emailed`"), "{error}");
+    }
 
     fn file(body: &str) -> SourceFile {
         SourceFile {
@@ -673,7 +1065,8 @@ mod tests {
     #[test]
     fn declared_three_party_signer_set_validates() {
         let body = three_party_assignment(
-            "signers:\n  - client\n  - firm\n  - confirming_assignor\n",
+            "signers:\n  - client\n  - role: firm\n    delivery: emailed\n  - role: \
+             confirming_assignor\n    delivery: emailed\n",
             "",
         );
         assert!(
@@ -700,8 +1093,8 @@ mod tests {
 
     #[test]
     fn declared_role_without_a_placeholder_is_an_error() {
-        let body =
-            "---\ntitle: Assignment\nsigners:\n  - client\n  - firm\n  - confirming_assignor\n\
+        let body = "---\ntitle: Assignment\nsigners:\n  - client\n  - role: firm\n    delivery: \
+                    emailed\n  - role: confirming_assignor\n    delivery: emailed\n\
                     questionnaire:\n  BEGIN:\n    _: person__client\n  person__client:\n    \
                     _: person__confirming_assignor\n  person__confirming_assignor:\n    _: END\n  \
                     END: {}\nworkflow:\n  BEGIN:\n    created: sent_for_signature__pending\n  \
@@ -724,16 +1117,6 @@ mod tests {
         assert!(
             F107SignaturePlaceholders.lint(&file(body)).is_empty(),
             "the bundled onboarding letter must stay valid with the default signer set: {:?}",
-            F107SignaturePlaceholders.lint(&file(body)),
-        );
-    }
-
-    #[test]
-    fn shipped_offboarding_letter_validates_without_a_signers_key() {
-        let body = include_str!("../../templates/notations/neon_law/offboarding__letter.md");
-        assert!(
-            F107SignaturePlaceholders.lint(&file(body)).is_empty(),
-            "the bundled closing letter must stay valid with the default signer set: {:?}",
             F107SignaturePlaceholders.lint(&file(body)),
         );
     }

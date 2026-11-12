@@ -12,10 +12,10 @@
 
 use std::path::PathBuf;
 
-use cli::import as cli_import;
+use super as cli_import;
 
 fn fixtures_dir() -> PathBuf {
-    // CARGO_MANIFEST_DIR points at cli; the templates live at the
+    // CARGO_MANIFEST_DIR points at deploy; the templates live at the
     // repository root under `templates/<category>/<name>.md`.
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../templates")
@@ -135,33 +135,6 @@ async fn catalog_seed_creates_only_shared_templates_and_question_catalog_rows() 
             .is_empty(),
         "catalog seeding must not create client-facing notations"
     );
-}
-
-#[tokio::test]
-async fn db_backed_validate_loads_codes_and_swaps_f104() {
-    let surreal = store::surreal::test_support::mem().await;
-    cli_import::import_directory(&surreal, &fs_storage().await, &fixtures_dir())
-        .await
-        .expect("import succeeds");
-
-    let codes = cli_import::load_question_codes(&surreal)
-        .await
-        .expect("load codes");
-    assert!(
-        codes.iter().any(|c| c == "custom_text"),
-        "loaded registry must contain canonical custom question types; got {codes:?}",
-    );
-    assert!(
-        codes.iter().any(|c| c == "lawyer_review"),
-        "loaded registry must preserve imported workflow codes; got {codes:?}",
-    );
-
-    let ruleset = rules::navigator_default_rules_with_codes(&codes);
-    let n104 = ruleset
-        .iter()
-        .find(|r| r.code() == "N104")
-        .expect("rule set must contain a swapped N104");
-    assert_eq!(n104.code(), "N104");
 }
 
 #[tokio::test]

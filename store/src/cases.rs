@@ -15,8 +15,7 @@
 //! `discovery_items` moved with wave six of #1093 (ENG-160), in the
 //! litigation slice.
 
-mod filing_name;
-pub use filing_name::{escalated_filing_name, filing_name, FilingNameError};
+pub use model::cases::{escalated_filing_name, filing_name, FilingNameError};
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;

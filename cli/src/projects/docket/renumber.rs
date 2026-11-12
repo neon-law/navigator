@@ -133,7 +133,7 @@ pub fn has_filings(root: &Path) -> Result<bool> {
     }
     for path in crate::document_read::discover_pointers(root)? {
         if crate::document_sync::read_pointer(&root.join(path))?.is_some_and(|pointer| {
-            pointer.matter_folder() == store::document_pointers::MatterFolder::DocketFilings
+            pointer.matter_folder() == model::document_pointers::MatterFolder::DocketFilings
         }) {
             return Ok(true);
         }
@@ -170,7 +170,7 @@ pub fn validate_checkout(root: &Path, entries: &[Value]) -> Result<()> {
         let Some(pointer) = crate::document_sync::read_pointer(&root.join(&path))? else {
             continue;
         };
-        if pointer.matter_folder() != store::document_pointers::MatterFolder::DocketFilings {
+        if pointer.matter_folder() != model::document_pointers::MatterFolder::DocketFilings {
             continue;
         }
         let slash = crate::document_sync::slash_path(&path)?;
@@ -251,7 +251,7 @@ pub async fn name_linked_document(
             }
             pointer.folder = crate::document_layout::recorded_folder(
                 &pointer.kind,
-                store::document_pointers::MatterFolder::DocketFilings,
+                model::document_pointers::MatterFolder::DocketFilings,
             );
             if let Err(error) =
                 crate::document_sync::write_pointer_atomically(&path, &pointer.to_yaml()?)
@@ -280,7 +280,7 @@ pub fn filings(root: &Path) -> Result<Vec<Filing>> {
         };
         let filename = slug.rsplit('/').next().unwrap_or(slug);
         if let Some(pointer) = crate::document_sync::read_pointer(&root.join(&relative))? {
-            if pointer.matter_folder() == store::document_pointers::MatterFolder::DocketFilings
+            if pointer.matter_folder() == model::document_pointers::MatterFolder::DocketFilings
                 || ingest::docket_key(filename).is_some()
             {
                 filings.push(Filing {

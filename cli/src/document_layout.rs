@@ -34,11 +34,11 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
-use store::document_pointers::{DocumentPointer, MatterFolder};
+use model::document_pointers::{DocumentPointer, MatterFolder};
 
 use crate::document_sync::{DOCUMENT_DIRECTORY, POINTER_DIRECTORY};
 
-pub use store::document_pointers::SIBLING_FOLDERS;
+pub use model::document_pointers::SIBLING_FOLDERS;
 
 fn first_component(relative: &Path) -> Option<&str> {
     relative

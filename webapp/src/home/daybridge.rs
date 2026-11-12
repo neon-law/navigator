@@ -1,5 +1,6 @@
-//! Daybridge Divorce Law: clear fees, three service commitments, one short path forward.
+//! Daybridge Divorce Law: a crossing at sunrise, three service commitments, one short path forward.
 
+use super::sibling_practice::{SiblingPractice, SiblingPractices};
 use super::HomeContent;
 use crate::components::is_external_href;
 use dioxus::prelude::*;
@@ -25,6 +26,8 @@ pub struct DaybridgeContent {
     pub steps: Vec<[String; 2]>,
     pub closing_heading: String,
     pub closing_body: String,
+    #[serde(default)]
+    pub sibling_practices: Vec<SiblingPractice>,
 }
 
 #[component]
@@ -48,13 +51,12 @@ pub(super) fn DaybridgeHome(content: HomeContent, daybridge: DaybridgeContent) -
                 }
                 aside { class: "daybridge-fee", "aria-label": "{daybridge.fee_label}",
                     img {
-                        class: "daybridge-fee__mark",
-                        src: "/public/brand/daybridge/logo.svg",
+                        class: "daybridge-fee__crossing",
+                        src: "/public/brand/daybridge/crossing.svg",
                         alt: "",
-                        width: "64",
-                        height: "64",
+                        width: "640",
+                        height: "560",
                     }
-                    p { class: "daybridge-eyebrow", "{daybridge.fee_label}" }
                     p { class: "daybridge-price",
                         "{daybridge.fee_price}"
                         span { "{daybridge.fee_unit}" }
@@ -92,17 +94,21 @@ pub(super) fn DaybridgeHome(content: HomeContent, daybridge: DaybridgeContent) -
                     }
                 }
             }
+            SiblingPractices { cards: daybridge.sibling_practices.clone() }
             section { class: "daybridge-closing", "aria-labelledby": "daybridge-closing-title",
                 div {
                     h2 { id: "daybridge-closing-title", "{daybridge.closing_heading}" }
                     p { "{daybridge.closing_body}" }
                 }
-                a {
-                    class: "nav-btn nav-btn--primary daybridge-cta",
-                    href: "{content.contact_href}",
-                    target: if contact_external { Some("_blank") } else { None },
-                    rel: if contact_external { Some("noopener noreferrer") } else { None },
-                    "{content.contact_label}"
+                div { class: "daybridge-closing__actions",
+                    super::HeroCall { content: content.clone() }
+                    a {
+                        class: "{content.cta_class()} daybridge-cta",
+                        href: "{content.contact_href}",
+                        target: if contact_external { Some("_blank") } else { None },
+                        rel: if contact_external { Some("noopener noreferrer") } else { None },
+                        "{content.contact_label}"
+                    }
                 }
             }
         }
@@ -114,7 +120,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn renders_the_one_time_fee_and_service_commitments() {
+    fn renders_the_crossing_the_fee_and_the_sibling_practice() {
         fn app() -> Element {
             rsx! {
                 DaybridgeHome {
@@ -131,6 +137,11 @@ mod tests {
                         fee_unit: " one-time fee".into(),
                         motions_heading: "An agreement you both understand".into(),
                         costs_heading: "A shared path forward".into(),
+                        sibling_practices: vec![SiblingPractice {
+                            heading: "After the divorce is final".into(),
+                            href: "https://estate.example.com".into(),
+                            ..SiblingPractice::default()
+                        }],
                         ..DaybridgeContent::default()
                     },
                 }
@@ -143,5 +154,13 @@ mod tests {
         assert!(html.contains("$5,000"), "{html}");
         assert!(html.contains("one-time fee"), "{html}");
         assert!(html.contains("A shared path forward"), "{html}");
+        assert!(
+            html.contains("/public/brand/daybridge/crossing.svg"),
+            "{html}"
+        );
+        assert!(
+            html.contains(r#"href="https://estate.example.com""#),
+            "{html}"
+        );
     }
 }
