@@ -1825,17 +1825,6 @@ async fn push_webhook_proof(
     let hmac_key = random_hex();
     let database = Forward::open_target(kube, &format!("pod/{POSTGRES_POD}"), 5432)
         .context("port-forward the KIND PostgreSQL")?;
-    let journal = journal_lane(&database, seed).await?;
-    let surreal = store::test_support::mem_surreal().await;
-    let seeded = seed_firm_project(&surreal).await?;
-    ensure!(
-        seeded.path.to_string() == path.to_string(),
-        "the webhook phase seeded {}, not the repository {path}",
-        seeded.path
-    );
-    store::projects::set_internal_slack_channel_id(&surreal, seeded.project_id, SLACK_CHANNEL)
-        .await
-        .map_err(|error| anyhow::anyhow!("record the Project's Slack channel: {error}"))?;
 
     // The Slack lane: a local stub answering the Web API, so the delivery
     // tail runs to its receipt without a provisioned workspace.
@@ -1844,28 +1833,21 @@ async fn push_webhook_proof(
     // The receiver, mounted as the portal serves it, on `0.0.0.0` so the
     // Forgejo pod reaches it through the Docker bridge gateway. The pipeline
     // reads pushes through the real Forgejo API with the smoke's token, and
-    // delivers to the stub — the load-bearing pairs are the journal and the
-    // in-memory graph, which the receiver and the pipeline must both hold.
-    let state = portal::test_support::app_state(surreal.clone()).await;
-    let state = portal::AppState {
-        forgejo_webhook_secret: Some(path_secret.clone()),
-        forgejo_webhook_hmac_key: Some(hmac_key.clone()),
-        forgejo_push_store: Some(journal.clone()),
-        forgejo_push_consumer: Arc::new(
-            portal::forgejo_push_pipeline::JjPushPipeline::with_credentials(
-                journal,
-                surreal,
-                Arc::new(portal::forgejo_push_pipeline::FixedPushCredentials {
-                    forgejo_token: token.to_owned(),
-                    slack_bot_token: Some("smoke-stub-token".to_owned()),
-                }),
-                Some(forge.to_owned()),
-                Some(format!("http://127.0.0.1:{}", slack.port)),
-            ),
-        ),
-        ..state
-    };
-    let port = serve_ingress(portal::router(state))?;
+    // delivers to the stub. Every async handle the receiver touches — the
+    // journal pool and the in-memory graph — is built on the receiver's own
+    // runtime: Tokio I/O is runtime-affine, and a handle polled from a
+    // foreign runtime hangs the handler (the delivery then times out with
+    // no journaled receipt).
+    let port = serve_receiver(
+        database,
+        seed.clone(),
+        path,
+        path_secret.clone(),
+        hmac_key.clone(),
+        token,
+        forge,
+        format!("http://127.0.0.1:{}", slack.port),
+    )?;
     let gateway =
         host_gateway(&node_ip(kube)?).context("the KIND node exposes no Docker bridge gateway")?;
 
@@ -1890,6 +1872,85 @@ async fn push_webhook_proof(
     runtime_block_on_delete_firm_repository(http, forge, token, path).await;
     eprintln!("    a real push landed as a journaled, analyzed receipt");
     Ok(())
+}
+
+/// Build and serve the push receiver on a runtime of its own: the journal
+/// pool, the in-memory graph, and the router all live on that runtime, since
+/// Tokio I/O is runtime-affine and a handle polled from a foreign runtime
+/// hangs the handler. Answers the bound port once the listener is up.
+#[allow(clippy::too_many_arguments)]
+fn serve_receiver(
+    database: Forward,
+    seed: Seed,
+    path: &store::firms::forgejo::RepositoryPath,
+    path_secret: String,
+    hmac_key: String,
+    token: &str,
+    forge: &str,
+    slack_base: String,
+) -> Result<u16> {
+    let path = path.to_string();
+    let token = token.to_owned();
+    let forge = forge.to_owned();
+    let (bound, receiver) = std::sync::mpsc::channel::<anyhow::Result<u16>>();
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("the smoke receiver's runtime builds");
+        let outcome = runtime.block_on(async {
+            let journal = journal_lane(&database, &seed).await?;
+            let surreal = store::test_support::mem_surreal().await;
+            let seeded = seed_firm_project(&surreal).await?;
+            ensure!(
+                seeded.path.to_string() == path,
+                "the webhook phase seeded {}, not the repository {path}",
+                seeded.path
+            );
+            store::projects::set_internal_slack_channel_id(
+                &surreal,
+                seeded.project_id,
+                SLACK_CHANNEL,
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!("record the Project's Slack channel: {error}"))?;
+            let state = portal::test_support::app_state(surreal.clone()).await;
+            let state = portal::AppState {
+                forgejo_webhook_secret: Some(path_secret),
+                forgejo_webhook_hmac_key: Some(hmac_key),
+                forgejo_push_store: Some(journal.clone()),
+                forgejo_push_consumer: Arc::new(
+                    portal::forgejo_push_pipeline::JjPushPipeline::with_credentials(
+                        journal,
+                        surreal,
+                        Arc::new(portal::forgejo_push_pipeline::FixedPushCredentials {
+                            forgejo_token: token.clone(),
+                            slack_bot_token: Some("smoke-stub-token".to_owned()),
+                        }),
+                        Some(forge.clone()),
+                        Some(slack_base),
+                    ),
+                ),
+                ..state
+            };
+            let listener = tokio::net::TcpListener::bind(("0.0.0.0", 0)).await?;
+            let port = listener
+                .local_addr()
+                .expect("invariant: a bound listener has a local address")
+                .port();
+            let _ = bound.send(Ok(port));
+            axum::serve(listener, portal::router(state))
+                .await
+                .context("the smoke receiver stopped")
+        });
+        if let Err(error) = outcome {
+            let _ = bound.send(Err(error));
+        }
+    });
+    receiver
+        .recv()
+        .context("the smoke receiver never answered its bind")?
+        .context("the smoke receiver cannot bind an ephemeral port")
 }
 
 /// Delete the Firm repository at the end of the push-webhook proof — the
