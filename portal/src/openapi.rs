@@ -106,6 +106,7 @@ pub fn document_with_base(base: &str) -> Value {
     add_private_chart_operation(&mut document);
     add_ephemeris_source_operation(&mut document);
     add_inbox_attachment_operation(&mut document);
+    add_assign_matches_operation(&mut document);
     document["paths"]["/app/api/projects/{id}/section-counts"] = serde_json::json!({
       "get": {
         "operationId": "getProjectSectionCounts", "tags": ["Projects"],
@@ -541,6 +542,44 @@ fn fi_import_mapping_schema() -> Value {
             "duration_unit": {"enum": ["seconds", "minutes"], "description": "Explicit source duration unit, normalized to whole seconds; invalid or inexact values are refused."}
         }
     })
+}
+
+fn add_assign_matches_operation(document: &mut Value) {
+    let decision = json!({"oneOf": [
+        {"type": "object", "required": ["decision", "project_id"],
+         "properties": {"decision": {"const": "assigned"}, "project_id": {"type": "string", "format": "uuid"}}},
+        {"type": "object", "required": ["decision", "reason"],
+         "properties": {"decision": {"const": "left_in_inbox"},
+                        "reason": {"enum": ["no_sender_person", "no_match", "ambiguous"],
+                                   "description": "no_sender_person: the From address resolves to no Person row; no_match: identifying addresses named no open Project; ambiguous: more than one open Project matched."}}}
+    ]});
+    let thread = json!({
+        "type": "object", "required": ["message", "conversation_id", "from", "decision", "applied"],
+        "properties": {
+            "message": {"type": "string", "format": "uuid"},
+            "conversation_id": {"type": "string", "format": "uuid"},
+            "from": {"type": "string", "description": "The thread's stored sender address."},
+            "subject": {"type": ["string", "null"]},
+            "decision": decision,
+            "applied": {"type": "boolean", "description": "True when apply was requested and each unique match was assigned; false is a proposal only."}
+        }
+    });
+    document["paths"]["/app/api/inbox/assign-matches"] = json!({"post": {
+        "operationId": "assignInboxMatches", "tags": ["Inbox"],
+        "summary": "Propose or make LAW-347 address-match assignments",
+        "description": "Requires lawyer-tier access. Each page considers up to 50 unprocessed, unattributed email messages visible to the caller in oldest-first order and proposes assignments by matching its From/To/Cc addresses against the Person CRM and same-Firm open Project participations. Shared inboxes are non-identifying. Exactly one open Project assigns the thread when apply is true, through the same door the triage surface uses; no match, several matches, or a sender with no Person row leaves the thread in the inbox. Filing and archiving are unaffected. The learned Jev method is unreachable until the zero-data-retention gate confirms.",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {
+            "type": "object", "additionalProperties": false,
+            "properties": {"apply": {"type": "boolean", "default": false, "description": "True assigns each uniquely matched thread; false only proposes."},
+                "after": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "string"}, "description": "Continuation cursor decoded from the preceding response header."}}
+        }}}},
+        "responses": {
+            "200": {"description": "One proposal or assignment per considered message", "headers": {"x-navigator-next-cursor": {"description": "JSON continuation cursor when more eligible messages remain.", "schema": {"type": "string"}}}, "content": {"application/json": {"schema": {"type": "array", "items": thread}}}},
+            "401": {"description": "No authenticated session"},
+            "403": {"description": "The caller is not Lawyer tier"},
+            "500": {"description": "Database, storage, or Inbox authority unavailable"}
+        }
+    }});
 }
 
 fn add_fi_import_operation(document: &mut Value) {
@@ -4374,7 +4413,7 @@ fn canonical_document(base: &str) -> Value {
                     "kind": {
                       "type": "string",
                       "description": "Required asset-lane document classification (`rules::kind::Kind` values valid for `Lane::Asset`). A missing or blank value is refused with `400 kind_required`; a value outside this set is refused with `400 invalid_kind`. Both messages name the accepted values; nothing is silently coerced to `unclassified`.",
-                      "enum": ["letter", "filing", "will", "trust", "directive", "agreement", "pleading", "onboarding", "offboarding", "memo", "resume", "trial_prep", "transcript", "inbound_contract", "certificate_of_naturalization", "exhibit", "order", "closed_repository", "invoice", "unclassified"]
+                      "enum": ["letter", "filing", "will", "trust", "directive", "agreement", "pleading", "declaration", "onboarding", "offboarding", "memo", "resume", "trial_prep", "transcript", "inbound_contract", "certificate_of_naturalization", "exhibit", "order", "closed_repository", "invoice", "unclassified"]
                     },
                     "visibility": { "type": "string", "enum": ["client", "internal"] },
                     "description": { "type": "string" },
@@ -4721,7 +4760,7 @@ fn canonical_document(base: &str) -> Value {
               "type": "object", "properties": {
                 "visibility": { "type": "string", "enum": ["client", "internal"] },
                 "slug": { "type": "string", "description": "Document identity. Must carry the stored filename's extension. Accepted while the row's slug is null, or (with `reslug: true`) as the target of moving the row's identity." },
-                "kind": { "type": "string", "description": "Asset-lane kind. Applied together with `slug` on a slugless row, or alone to replace a legacy kind the asset lane rejects.", "enum": ["letter", "filing", "will", "trust", "directive", "agreement", "pleading", "onboarding", "offboarding", "memo", "resume", "trial_prep", "transcript", "inbound_contract", "certificate_of_naturalization", "exhibit", "order", "closed_repository", "invoice", "unclassified"] },
+                "kind": { "type": "string", "description": "Asset-lane kind. Applied together with `slug` on a slugless row, or alone to replace a legacy kind the asset lane rejects.", "enum": ["letter", "filing", "will", "trust", "directive", "agreement", "pleading", "declaration", "onboarding", "offboarding", "memo", "resume", "trial_prep", "transcript", "inbound_contract", "certificate_of_naturalization", "exhibit", "order", "closed_repository", "invoice", "unclassified"] },
                 "reslug": { "type": "boolean", "description": "With `slug`, move the row's identity to the given `slug` instead of assigning a slugless row. Refused when the target equals the current slug or already names a chain." },
                 "dry_run": { "type": "boolean", "description": "When setting `slug`, `kind`, or moving a slug, validate and report without writing." }
               }
@@ -4774,7 +4813,7 @@ fn canonical_document(base: &str) -> Value {
             ],
             "requestBody": { "required": true, "content": { "application/json": { "schema": {
               "type": "object", "required": ["kind"], "properties": {
-                "kind": { "type": "string", "description": "The accepted asset-lane kind the chain moves to.", "enum": ["letter", "filing", "will", "trust", "directive", "agreement", "pleading", "onboarding", "offboarding", "memo", "resume", "trial_prep", "transcript", "inbound_contract", "certificate_of_naturalization", "exhibit", "order", "closed_repository", "invoice", "unclassified"] },
+                "kind": { "type": "string", "description": "The accepted asset-lane kind the chain moves to.", "enum": ["letter", "filing", "will", "trust", "directive", "agreement", "pleading", "declaration", "onboarding", "offboarding", "memo", "resume", "trial_prep", "transcript", "inbound_contract", "certificate_of_naturalization", "exhibit", "order", "closed_repository", "invoice", "unclassified"] },
                 "dry_run": { "type": "boolean", "description": "Validate and report without writing." }
               }
             } } } },

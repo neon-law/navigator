@@ -41,6 +41,20 @@ pub enum InboxAction {
         #[command(flatten)]
         host: crate::HostOpt,
     },
+    /// Propose an assignment for every unattributed backlog thread by
+    /// matching its From/To/Cc addresses against the open Projects' Person
+    /// emails. A unique match assigns the thread; shared inboxes, no
+    /// matches, several matches, and senders with no Person row leave it
+    /// in the inbox for the lawyer.
+    AssignMatches {
+        /// Print the proposed assignment per thread without assigning,
+        /// filing, archiving, or recording anything.
+        #[arg(long)]
+        dry_run: bool,
+        /// Navigator host. Defaults to host in navigator.yaml.
+        #[arg(long)]
+        host: Option<String>,
+    },
     #[command(flatten)]
     Import(crate::inbox_import::InboxCmd),
     /// List the unprocessed lawyer-mailbox messages, oldest first.
@@ -144,6 +158,9 @@ async fn run_inner(action: InboxAction) -> Result<()> {
             })
             .await
         }
+        InboxAction::AssignMatches { dry_run, host } => {
+            assign_matches(dry_run, host.as_deref()).await
+        }
         InboxAction::List { host } => list(host.as_deref()).await,
         InboxAction::Process {
             message,
@@ -194,6 +211,18 @@ fn attachment_request(base: &str) -> (Method, String) {
     (Method::POST, format!("{base}/app/api/inbox/attachment"))
 }
 
+/// The assign-matches door: one constant-path POST. The plan (apply:
+/// false) and the apply (apply: true) differ only in the request body.
+fn assign_matches_request(base: &str) -> (Method, String) {
+    (Method::POST, format!("{base}/app/api/inbox/assign-matches"))
+}
+
+/// The body the assign-matches door reads: propose only, or propose and
+/// assign. No other knob exists — the door classifies server-side.
+fn assign_matches_body(apply: bool) -> serde_json::Value {
+    serde_json::json!({ "apply": apply })
+}
+
 /// The body the process door reads: which message, and whether to record.
 fn process_body(message: Uuid, apply: bool, kind: Option<&str>) -> serde_json::Value {
     let mut body = serde_json::json!({ "message": message, "apply": apply });
@@ -229,6 +258,26 @@ struct AttachmentView {
     asset_id: Uuid,
     filename: String,
     sha256: String,
+}
+
+/// One thread's address-match proposal, as the door serves it. The
+/// decision's `project_id` is set exactly when `decision` is `assigned`;
+/// `reason` names why a thread stayed in the inbox.
+#[derive(Debug, Deserialize)]
+struct AssignMatchView {
+    message: Uuid,
+    from: String,
+    subject: Option<String>,
+    decision: MatchDecisionView,
+    applied: bool,
+}
+
+/// The decision the address-match made for one thread.
+#[derive(Debug, Deserialize)]
+struct MatchDecisionView {
+    decision: String,
+    project_id: Option<Uuid>,
+    reason: Option<String>,
 }
 
 /// An apply's response: the recorded verdict plus the notice outcome.
@@ -315,6 +364,90 @@ async fn list(host: Option<&str>) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Propose — and without `--dry-run`, make — the address-match assignment
+/// for every unattributed backlog thread. The door classifies server-side
+/// from the same Person CRM the triage surface reads; each unique match
+/// goes through the existing `inbox assign` gates. Filing and archiving
+/// stay with `inbox process` entirely: this verb never files, never
+/// archives, and (dry run) never records.
+async fn assign_matches(dry_run: bool, host: Option<&str>) -> Result<()> {
+    let (base, token) = crate::remote::resolve(host)?;
+    let (method, url) = assign_matches_request(&base);
+    let client = reqwest::Client::new();
+    let mut body = assign_matches_body(!dry_run);
+    let mut printed = false;
+    loop {
+        let response = client
+            .request(method.clone(), &url)
+            .bearer_auth(&token)
+            .json(&body)
+            .timeout(std::time::Duration::from_secs(300))
+            .send()
+            .await
+            .context("call the assign-matches door")?;
+        let status = response.status();
+        let next: Option<serde_json::Value> = response
+            .headers()
+            .get("x-navigator-next-cursor")
+            .map(|value| serde_json::from_slice(value.as_bytes()))
+            .transpose()
+            .context("parse the assign-matches continuation")?;
+        let text = response
+            .text()
+            .await
+            .context("read the assign-matches response")?;
+        if !status.is_success() {
+            return Err(anyhow!("inbox assign-matches refused: {status} {text}"));
+        }
+        let views: Vec<AssignMatchView> =
+            serde_json::from_str(&text).context("parse the assign-matches response")?;
+        printed |= !views.is_empty();
+        print_assignment_matches(&views);
+        let Some(next) = next else { break };
+        anyhow::ensure!(
+            body.get("after") != Some(&next),
+            "assign-matches continuation did not advance"
+        );
+        println!("Continuing with the next inbox batch.");
+        body["after"] = next;
+    }
+    if !printed {
+        println!("No unattributed inbox threads to assign.");
+    } else if dry_run {
+        println!(
+            "Dry run — nothing assigned, filed, archived, or recorded. Re-run without --dry-run to make these assignments."
+        );
+    }
+    Ok(())
+}
+
+fn print_assignment_matches(views: &[AssignMatchView]) {
+    for view in views {
+        println!("Message      {}", view.message);
+        println!("From         {}", view.from);
+        if let Some(subject) = &view.subject {
+            println!("Subject      {subject}");
+        }
+        match view.decision.decision.as_str() {
+            "assigned" => println!(
+                "Decision     assign to matter {}",
+                view.decision
+                    .project_id
+                    .as_ref()
+                    .map_or_else(|| "with no served project id".to_owned(), Uuid::to_string,)
+            ),
+            "left_in_inbox" => match view.decision.reason.as_deref() {
+                Some(reason) => println!("Decision     left in the inbox ({reason})"),
+                None => println!("Decision     left in the inbox"),
+            },
+            other => println!("Decision     {other}"),
+        }
+        let verb = if view.applied { "assigned" } else { "proposed" };
+        println!("Applied      {verb}");
+        println!();
+    }
 }
 
 fn print_plan(view: &ProcessView, apply: Option<&ProcessApplyView>) {
@@ -968,5 +1101,133 @@ mod tests {
     fn finish_reports_a_failed_run() {
         let exit = finish(Err(anyhow::anyhow!("synthetic failure")));
         assert_eq!(exit, std::process::ExitCode::FAILURE);
+    }
+
+    #[test]
+    fn the_assign_matches_body_and_view_read_as_the_door_serves_them() {
+        let body = super::assign_matches_body(true);
+        assert_eq!(body["apply"], serde_json::json!(true));
+        assert_eq!(
+            super::assign_matches_body(false)["apply"],
+            serde_json::json!(false)
+        );
+
+        let (method, url) = super::assign_matches_request("https://navigator.example.test");
+        assert_eq!(method, Method::POST);
+        assert_eq!(
+            url,
+            "https://navigator.example.test/app/api/inbox/assign-matches"
+        );
+
+        let views: Vec<super::AssignMatchView> = serde_json::from_str(
+            r#"[{
+                "message": "00000000-0000-0000-0000-000000000007",
+                "conversation_id": "00000000-0000-0000-0000-000000000001",
+                "from": "client@example.com",
+                "subject": "Retainer",
+                "decision": {
+                    "decision": "assigned",
+                    "project_id": "00000000-0000-0000-0000-000000000003"
+                },
+                "applied": false
+            }, {
+                "message": "00000000-0000-0000-0000-000000000008",
+                "conversation_id": "00000000-0000-0000-0000-000000000002",
+                "from": "efiling-notice@courts.example.test",
+                "subject": null,
+                "decision": {"decision": "left_in_inbox", "reason": "no_match"},
+                "applied": false
+            }]"#,
+        )
+        .unwrap();
+        assert_eq!(views.len(), 2);
+        assert_eq!(views[0].decision.decision, "assigned");
+        assert_eq!(views[0].decision.project_id, Some(Uuid::from_u128(3)));
+        assert!(!views[0].applied);
+        assert_eq!(views[1].decision.decision, "left_in_inbox");
+        assert_eq!(views[1].decision.reason.as_deref(), Some("no_match"));
+        assert!(views[1].decision.project_id.is_none());
+        assert!(!views[1].applied);
+    }
+
+    #[tokio::test]
+    async fn assign_matches_follows_the_continuation_cursor() {
+        use wiremock::matchers::{body_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let _lock = CREDENTIALS_LOCK.lock().await;
+        let previous = credentials_previous();
+        let server = MockServer::start().await;
+        let cursor = serde_json::json!(["2026-01-01T00:00:00Z", Uuid::nil()]);
+        Mock::given(method("POST"))
+            .and(path("/app/api/inbox/assign-matches"))
+            .and(body_json(serde_json::json!({"apply": false})))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("x-navigator-next-cursor", cursor.to_string())
+                    .set_body_json(serde_json::json!([])),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/app/api/inbox/assign-matches"))
+            .and(body_json(
+                serde_json::json!({"apply": false, "after": cursor}),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let base = server.uri();
+        stored_login(&base);
+
+        let result = super::assign_matches(true, Some(&base)).await;
+
+        restore_credentials(previous);
+        result.unwrap();
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn assign_matches_prints_proposals_from_a_mocked_door() {
+        let _lock = CREDENTIALS_LOCK.lock().await;
+        let previous = credentials_previous();
+        let base = serve_once(
+            "200 OK",
+            r#"[
+                {
+                    "message": "00000000-0000-0000-0000-000000000007",
+                    "conversation_id": "00000000-0000-0000-0000-000000000001",
+                    "from": "client@example.com",
+                    "subject": "Retainer",
+                    "decision": {
+                        "decision": "assigned",
+                        "project_id": "00000000-0000-0000-0000-000000000003"
+                    },
+                    "applied": false
+                },
+                {
+                    "message": "00000000-0000-0000-0000-000000000008",
+                    "conversation_id": "00000000-0000-0000-0000-000000000002",
+                    "from": "stranger@example.com",
+                    "subject": "Hello",
+                    "decision": {"decision": "left_in_inbox", "reason": "no_sender_person"},
+                    "applied": false
+                }
+            ]"#
+            .to_owned(),
+        )
+        .await;
+        stored_login(&base);
+
+        let exit = run(InboxAction::AssignMatches {
+            dry_run: true,
+            host: Some(base),
+        })
+        .await;
+
+        assert_eq!(exit, std::process::ExitCode::SUCCESS);
+        restore_credentials(previous);
     }
 }

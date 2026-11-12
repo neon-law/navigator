@@ -48,6 +48,17 @@ pub enum Kind {
     /// `output: pleading`, and renders through `pdf::pleading`'s
     /// jurisdiction-calibrated geometry rather than a fillable form.
     Pleading,
+    /// A party's **own** declaration — a signed statement the firm drafts
+    /// for a client (or another party) to give in their own name, and the
+    /// party's own document, never the firm's (LAW-340). It borrows the
+    /// airy letter geometry but carries no firm letterhead and no brand
+    /// mark, so its default frame is the letterhead-less `client_letter`
+    /// profile ([`Kind::default_output`]); the same rule LAW-14 set for a
+    /// contract and the one `output: client_letter` already gives a
+    /// client's own letter. Distinct from [`Kind::Pleading`]: a
+    /// declaration is a party's statement, not paper the firm signs and
+    /// not court-calibrated geometry.
+    Declaration,
     /// The engagement that opens a matter — a lawyer creates it on the
     /// Project like any other notation (opening the Project does not open
     /// it) and it is the one kind the self-serve doors accept as a
@@ -286,6 +297,7 @@ impl Kind {
         Kind::Directive,
         Kind::Agreement,
         Kind::Pleading,
+        Kind::Declaration,
         Kind::Onboarding,
         Kind::Offboarding,
         Kind::Memo,
@@ -331,6 +343,7 @@ impl Kind {
             Kind::Directive => "directive",
             Kind::Agreement => "agreement",
             Kind::Pleading => "pleading",
+            Kind::Declaration => "declaration",
             Kind::Onboarding => "onboarding",
             Kind::Offboarding => "offboarding",
             Kind::Memo => "memo",
@@ -378,6 +391,7 @@ impl Kind {
             Kind::Directive => "An advance health-care or durable financial directive",
             Kind::Agreement => "A private agreement (employment, contractor, LLC operating)",
             Kind::Pleading => "Court paper filed with a court (complaint, motion, brief)",
+            Kind::Declaration => "A party's own signed statement, in their own name (no letterhead)",
             Kind::Onboarding => "The engagement that opens a matter — one instrument or a bundle",
             Kind::Offboarding => "The firm-signed letter that closes a matter",
             Kind::Memo => "An analytical work product (a review memo or opinion)",
@@ -479,6 +493,7 @@ impl Kind {
             | Kind::Directive
             | Kind::Agreement
             | Kind::Pleading
+            | Kind::Declaration
             | Kind::Offboarding
             | Kind::Memo
             | Kind::Resume
@@ -537,6 +552,7 @@ impl Kind {
             | Kind::Directive
             | Kind::Agreement
             | Kind::Pleading
+            | Kind::Declaration
             | Kind::Onboarding
             | Kind::Memo
             | Kind::Resume
@@ -619,6 +635,7 @@ impl Kind {
                 | Kind::Memo
                 | Kind::Resume
                 | Kind::TrialPrep
+                | Kind::Declaration
         )
     }
 
@@ -686,6 +703,12 @@ impl Kind {
             // geometry, never firm letterhead — a pleading's typeface and
             // margins are a court-rule compliance decision.
             Kind::Pleading => "pleading",
+            // A declaration (LAW-340) is the party's own document: the
+            // firm drafts it, but the party signs and gives it in their
+            // own name, so its default frame is the letterhead-less
+            // client_letter profile — never the firm's letterhead or any
+            // other brand mark.
+            Kind::Declaration => "client_letter",
             // A contract gets the contract frame: an unadorned instrument
             // with a visible section hierarchy and no firm letterhead. It
             // defaulted to `plain` only because the frame used to print
@@ -758,8 +781,12 @@ impl Kind {
                 Category::Correspondence
             }
             // Instruments a client or counterparty executes: a will, a
-            // trust, a directive, and a private agreement.
-            Kind::Will | Kind::Trust | Kind::Directive | Kind::Agreement => Category::Instrument,
+            // trust, a directive, a private agreement, and a declaration
+            // (the declarant's own signed statement, executed in their
+            // own name rather than on the firm's letterhead).
+            Kind::Will | Kind::Trust | Kind::Directive | Kind::Agreement | Kind::Declaration => {
+                Category::Instrument
+            }
             // A government filing pairs with `output: form` and the
             // `AcroForm` fill path — distinct from an instrument the firm
             // drafts for a party to sign.
@@ -873,6 +900,7 @@ impl Kind {
                 | Kind::Memo
                 | Kind::Resume
                 | Kind::TrialPrep
+                | Kind::Declaration
                 | Kind::Event
                 | Kind::Post
                 | Kind::Workshop
@@ -921,6 +949,7 @@ impl Kind {
                 | Kind::Memo
                 | Kind::Resume
                 | Kind::TrialPrep
+                | Kind::Declaration
                 | Kind::Transcript
                 | Kind::InboundContract
                 | Kind::CertificateOfNaturalization
@@ -994,6 +1023,7 @@ pub const VALID: &[&str] = &[
     "directive",
     "agreement",
     "pleading",
+    "declaration",
     "onboarding",
     "offboarding",
     "memo",
@@ -1449,6 +1479,24 @@ mod tests {
             crate::F109OutputFormat::VALID.contains(&Kind::Agreement.default_output()),
             "the derived default must be a declarable profile"
         );
+    }
+
+    #[test]
+    fn a_declaration_defaults_to_the_client_letter_frame() {
+        // A declaration is the party's own document (LAW-340): the firm
+        // drafts it, but the party signs and gives it in their own name,
+        // so it derives the letterhead-less client_letter frame without
+        // the template having to say `output:` at all.
+        assert_eq!(Kind::Declaration.default_output(), "client_letter");
+        assert!(
+            crate::F109OutputFormat::VALID.contains(&Kind::Declaration.default_output()),
+            "the derived default must be a declarable profile"
+        );
+        assert!(Kind::Declaration.is_notation());
+        assert_eq!(Kind::parse("declaration"), Some(Kind::Declaration));
+        assert!(Kind::Declaration.valid_for(Lane::Template));
+        assert!(Kind::Declaration.valid_for(Lane::Asset));
+        assert_ne!(Kind::Declaration.category(), Category::Correspondence);
     }
 
     #[test]

@@ -733,6 +733,7 @@ pub fn skeleton(kind: Kind) -> Option<Skeleton> {
         | Kind::Memo
         | Kind::Resume
         | Kind::TrialPrep
+        | Kind::Declaration
         | Kind::Event
         | Kind::Post
         | Kind::Workshop
