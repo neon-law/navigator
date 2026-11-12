@@ -4270,6 +4270,8 @@ struct CreateNotationRequest {
     #[serde(alias = "draft_code")]
     template_code: String,
     client_email: String,
+    #[serde(default)]
+    delivery: store::notations::SigningDelivery,
 }
 
 /// Success body for `POST /app/api/projects/{id}/notations` — the opened
@@ -4301,6 +4303,7 @@ async fn create_notation(
         id,
         &input.template_code,
         &input.client_email,
+        input.delivery,
     )
     .await?;
     Ok((

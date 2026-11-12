@@ -289,6 +289,30 @@ pub async fn start_notation(
     project_id: Uuid,
     entity_id: Option<Uuid>,
 ) -> Result<StartOutcome, NotationSessionError> {
+    start_notation_with_delivery(
+        surreal,
+        runtime,
+        storage,
+        template_code,
+        person_id,
+        project_id,
+        entity_id,
+        store::notations::SigningDelivery::default(),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn start_notation_with_delivery(
+    surreal: &store::surreal::SurrealDb,
+    runtime: &dyn StateMachineRuntime,
+    storage: Option<&Arc<dyn StorageService>>,
+    template_code: &str,
+    person_id: Uuid,
+    project_id: Uuid,
+    entity_id: Option<Uuid>,
+    delivery: store::notations::SigningDelivery,
+) -> Result<StartOutcome, NotationSessionError> {
     // Prefer a Project-scoped template, falling back to the shared one.
     let template_row = store::templates::resolve(surreal, Some(project_id), template_code)
         .await?
@@ -304,6 +328,7 @@ pub async fn start_notation(
             project_id,
             entity_id,
         },
+        delivery,
     )
     .await
 }
@@ -332,7 +357,14 @@ pub async fn start_notation_pinned(
             request.template.code.clone(),
         ));
     }
-    start_resolved_notation(surreal, runtime, storage, request).await
+    start_resolved_notation(
+        surreal,
+        runtime,
+        storage,
+        request,
+        store::notations::SigningDelivery::default(),
+    )
+    .await
 }
 
 async fn start_resolved_notation(
@@ -340,6 +372,7 @@ async fn start_resolved_notation(
     runtime: &dyn StateMachineRuntime,
     storage: Option<&Arc<dyn StorageService>>,
     request: StartPinnedNotation<'_>,
+    delivery: store::notations::SigningDelivery,
 ) -> Result<StartOutcome, NotationSessionError> {
     let StartPinnedNotation {
         template: template_row,
@@ -356,7 +389,8 @@ async fn start_resolved_notation(
         project_id,
         StateName::BEGIN,
     )
-    .with_questionnaire_snapshot(snapshot);
+    .with_questionnaire_snapshot(snapshot)
+    .with_delivery(delivery.as_str());
     if let Some(entity_id) = entity_id {
         new_notation = new_notation.with_entity(entity_id);
     }
@@ -500,6 +534,7 @@ pub async fn create_notation_from_repo(
     person_id: Uuid,
     project_id: Uuid,
     entity_id: Option<Uuid>,
+    delivery: store::notations::SigningDelivery,
 ) -> Result<StartOutcome, NotationSessionError> {
     // Prefer a template authored in the Project's own repo — auto-save that
     // exact version and open pinned to it. When the code is not in the repo
@@ -530,7 +565,7 @@ pub async fn create_notation_from_repo(
     // (see [`enforce_engagement_first`]); the decision lives here, once.
     enforce_engagement_first(surreal, project_id, template_code).await?;
 
-    start_notation(
+    start_notation_with_delivery(
         surreal,
         runtime,
         Some(storage),
@@ -538,6 +573,7 @@ pub async fn create_notation_from_repo(
         person_id,
         project_id,
         entity_id,
+        delivery,
     )
     .await
 }
@@ -2267,6 +2303,7 @@ mod tests {
             person_id,
             project_id,
             None,
+            store::notations::SigningDelivery::default(),
         )
         .await
         .unwrap();
@@ -2393,6 +2430,7 @@ It has been our privilege to do this work alongside you. A future engagement req
             person_id,
             project_id,
             Some(project.entity_id),
+            store::notations::SigningDelivery::default(),
         )
         .await;
 
@@ -2457,6 +2495,7 @@ It has been our privilege to do this work alongside you. A future engagement req
             person_id,
             project_id,
             None,
+            store::notations::SigningDelivery::default(),
         )
         .await
         .unwrap();
@@ -2509,6 +2548,7 @@ It has been our privilege to do this work alongside you. A future engagement req
             person_id,
             project_id,
             None,
+            store::notations::SigningDelivery::default(),
         )
         .await
         .unwrap();
@@ -2570,6 +2610,7 @@ It has been our privilege to do this work alongside you. A future engagement req
             person_id,
             project_id,
             None,
+            store::notations::SigningDelivery::default(),
         )
         .await
         .unwrap_err();
@@ -2646,6 +2687,7 @@ It has been our privilege to do this work alongside you. A future engagement req
             person_id,
             project_id,
             None,
+            store::notations::SigningDelivery::default(),
         )
         .await
         .unwrap();

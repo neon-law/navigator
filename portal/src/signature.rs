@@ -2193,6 +2193,21 @@ mod tests {
         );
     }
 
+    #[test]
+    fn docusign_envelope_body_emails_the_client_for_remote_signing() {
+        let ds = docusign("https://demo.docusign.net/restapi".into());
+        let mut manifest = retainer_manifest();
+        manifest.recipients[0].client_user_id = None;
+        let prepared = prepare_tabs(&manifest).expect("a bound manifest prepares");
+        let body = ds.build_envelope_body(ID42, b"%PDF", &prepared);
+        let client = &body["recipients"]["signers"][0];
+
+        assert_eq!(body["status"], "sent");
+        assert_eq!(client["email"], "libra@example.com");
+        assert_eq!(client["routingOrder"], "1");
+        assert!(client.get("clientUserId").is_none());
+    }
+
     #[tokio::test]
     async fn docusign_create_recipient_view_returns_the_signing_url() {
         // The embedded-signing path: POST views/recipient with the

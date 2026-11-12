@@ -39,6 +39,8 @@ use workflows::{NotationSessionError, StartOutcome, StateMachineRuntime};
 pub struct NewProjectNotationBody {
     pub template_code: String,
     pub client_email: String,
+    #[serde(default)]
+    pub delivery: store::notations::SigningDelivery,
 }
 
 /// The matter-open notation command, shared by the lawyer browser form
@@ -59,6 +61,7 @@ pub async fn create_project_notation(
     project_id: Uuid,
     template_code: &str,
     client_email: &str,
+    delivery: store::notations::SigningDelivery,
 ) -> Result<StartOutcome, CreateProjectNotationError> {
     let code = template_code.trim();
     let email = client_email.trim();
@@ -116,6 +119,7 @@ pub async fn create_project_notation(
             person_id,
             project_id,
             Some(project.entity_id),
+            delivery,
         )
         .await
         .map_err(CreateProjectNotationError::Session)
@@ -327,6 +331,7 @@ pub async fn project_notation_new_post(
         project_id,
         &body.template_code,
         &body.client_email,
+        body.delivery,
     )
     .await
     {
@@ -436,6 +441,7 @@ mod tests {
             Uuid::new_v4(), // no such matter
             "retainer",
             "client@example.com",
+            store::notations::SigningDelivery::default(),
         )
         .await
         .expect_err("a missing matter must refuse");

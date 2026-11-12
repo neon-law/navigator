@@ -144,6 +144,12 @@ spec:
             # Once set, TWILIO_AUTH_TOKEN and TWILIO_ACCOUNT_SID must be on the Secret rail.
             - name: NAVIGATOR_SMS_NUMBER
               value: "YOUR_SMS_NUMBER"
+            # This deployment's per-Brand Twilio voice lines, comma-separated
+            # brand_key=+E164 pairs, published in each listed Brand's header
+            # call button and footer. Optional: an omitted Brand keeps its
+            # compiled number.
+            - name: NAVIGATOR_VOICE_NUMBERS
+              value: "YOUR_VOICE_NUMBERS"
             # The Workspace user Drive, Calendar, and Contacts act as, and the
             # Drive service account the pod signs delegation tokens as — no key
             # (cloud::delegation). Both render blank on a row that names no

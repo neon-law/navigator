@@ -1310,7 +1310,7 @@ pub fn home_for_host(
         lead: copy.lead,
         contact_href: match branding.brand_key {
             BrandKey::Misericordia => {
-                webapp::components::site_footer::tel_href(branding.firm_phone)
+                webapp::components::site_footer::tel_href(branding.published_phone())
             }
             BrandKey::CyberInjuryLaw => "/consultation".to_string(),
             _ => branding.consultation_url.to_string(),
