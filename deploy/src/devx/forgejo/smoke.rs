@@ -1876,22 +1876,29 @@ async fn push_webhook_proof(
         "    the receiver answers on the host ({})",
         answered.status()
     );
-    let reached = kube
-        .output(&[
-            "exec",
-            POSTGRES_POD,
-            "--",
-            "timeout",
-            "6",
-            "bash",
-            "-c",
-            &http_probe_script(&gateway, port, "/webhook/forgejo/pod-probe"),
-        ])
-        .context("a pod cannot reach the receiver through the Docker bridge gateway")?;
-    eprintln!(
-        "    the receiver answers from inside the cluster: {}",
-        reached.trim()
-    );
+    // Diagnostic, not fatal: the direct gateway path is what CI runners
+    // blackhole, and the Service relay below is the delivery route. A
+    // timeout here is recorded and the relayed probe decides.
+    match kube.output(&[
+        "exec",
+        POSTGRES_POD,
+        "--",
+        "timeout",
+        "6",
+        "bash",
+        "-c",
+        &http_probe_script(&gateway, port, "/webhook/forgejo/pod-probe"),
+    ]) {
+        Ok(reached) => {
+            eprintln!(
+                "    the receiver answers over the gateway path: {}",
+                reached.trim()
+            );
+        }
+        Err(_) => {
+            eprintln!("    the gateway path is blackholed; the Service relay carries the delivery");
+        }
+    }
 
     // The pod overlay blackholes the bridge gateway on CI runners, so the
     // receiver is published as an in-cluster Service with manual Endpoints
