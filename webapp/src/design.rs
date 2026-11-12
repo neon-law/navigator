@@ -43,11 +43,11 @@ use crate::components::{
     NavigatorFooterLink, NavigatorNavbar, NavigatorShell, NotationDocument, NotationDocumentData,
     OpenTermLink, Pagination, Panel, PeopleListInputs, PersonChoice, PersonPicker, PricingCard,
     PricingSection, Progress, PublicShell, QuestionStage, RowActions, RunParagraph,
-    SampleMattersBanner, Separator, SeparatorOrientation, SignatureSeal, SignatureSealData,
-    SiteFooterLegal, SiteHeader, SiteNavLink, SocialMeta, SortState, Stage, StageWidth, StatEntry,
-    StatGrid, StatusCell, StatusStrip, StepMeta, Stepper, StepperPanel, Tab, Tabs, TestimonialCard,
-    TestimonialCards, TestimonialSection, Toast, ToastTone, ToggleGroup, ToggleOption,
-    THEME_STYLESHEET_HREF,
+    SampleMattersBanner, SealRole, SealSigner, SealState, Separator, SeparatorOrientation,
+    SignatureSeal, SignatureSealData, SiteFooterLegal, SiteHeader, SiteNavLink, SocialMeta,
+    SortState, Stage, StageWidth, StatEntry, StatGrid, StatusCell, StatusStrip, StepMeta, Stepper,
+    StepperPanel, Tab, Tabs, TestimonialCard, TestimonialCards, TestimonialSection, Toast,
+    ToastTone, ToggleGroup, ToggleOption, THEME_STYLESHEET_HREF,
 };
 // The vendor marks come from their own module rather than the theme root: they
 // are the one component whose colours are a third party's rather than the
@@ -2073,29 +2073,72 @@ fn NotationDocumentShowcase() -> Element {
 }
 
 /// The navigator-signature seal, beside the notation document it seals: the
-/// executed element, provider, signing date, and the archived documents a
-/// completed envelope leaves behind. The gallery shows the completed state —
-/// the only state that renders a seal; an outstanding envelope renders
-/// nothing, which no screenshot can show.
+/// three states an envelope's evidence produces. The executed state renders
+/// the seal mark from the webhook-stamped facts — provider, signer lines
+/// with roles and the Firm's bar number, date-times with their time zones,
+/// the envelope pointer, and the signed PDF's SHA-256. The awaiting state
+/// shows empty labelled signature lines; a declined envelope is marked in
+/// words — never a seal.
 #[component]
 fn SignatureSealShowcase() -> Element {
     rsx! {
         section { id: "signature-seal",
             h2 { "Signature seal" }
             p {
-                "The post-execution mark a matter page shows on a Notation "
-                "whose e-signature envelope has completed: the webhook-stamped "
-                "signing date, the provider, and the signed copy and "
-                "Certificate of Completion the webhook archived. Renders only "
-                "from provider-confirmed execution — never from storage "
+                "The signature-state element a matter page shows on a "
+                "Notation with an e-signature envelope: the executed seal "
+                "from the webhook's recorded evidence, the empty labelled "
+                "signature lines while the envelope is out, and the "
+                "declined envelope marked in words. Renders only from "
+                "provider-confirmed evidence — never from storage "
                 "presence or workflow state alone."
             }
             SignatureSeal {
                 seal: SignatureSealData {
-                    signed_at: "2026-06-30T00:00:00Z".to_string(),
+                    state: SealState::Signed,
                     provider: "docusign".to_string(),
+                    signed_at: Some("2026-06-30T00:00:00Z".to_string()),
+                    signers: vec![
+                        SealSigner {
+                            name: "Avery Client".to_string(),
+                            role: SealRole::Client,
+                            bar_number: None,
+                            signed_at: Some("2026-06-30T17:05:00-07:00".to_string()),
+                        },
+                        SealSigner {
+                            name: "Nicholas Shook".to_string(),
+                            role: SealRole::Firm,
+                            bar_number: Some("12345".to_string()),
+                            signed_at: Some("2026-06-30T17:06:00-07:00".to_string()),
+                        },
+                    ],
+                    envelope_id: Some("env-seal-demo".to_string()),
+                    signed_sha256: Some(
+                        "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+                            .to_string(),
+                    ),
                     signed_href: Some("/design/signature-seal/signed".to_string()),
                     certificate_href: Some("/design/signature-seal/certificate".to_string()),
+                }
+            }
+            SignatureSeal {
+                seal: SignatureSealData {
+                    state: SealState::Awaiting,
+                    provider: "docusign".to_string(),
+                    signers: vec![SealSigner {
+                        name: "Avery Client".to_string(),
+                        role: SealRole::Client,
+                        bar_number: None,
+                        signed_at: None,
+                    }],
+                    ..SignatureSealData::default()
+                }
+            }
+            SignatureSeal {
+                seal: SignatureSealData {
+                    state: SealState::Declined,
+                    provider: "docusign".to_string(),
+                    ..SignatureSealData::default()
                 }
             }
         }
