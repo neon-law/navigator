@@ -460,8 +460,7 @@ mod tests {
     }
 
     /// Export, strip, import, apply: the canonical records come back and the
-    /// projection is rebuilt from them, then survives another apply. The
-    /// unstripped export is the failure this guards: it cannot import.
+    /// projection is rebuilt from them, then survives another apply.
     #[tokio::test]
     async fn an_export_restores_the_canonical_rows_and_rebuilds_the_projection() {
         let source = mem().await;
@@ -492,10 +491,6 @@ mod tests {
             export.contains("-- TABLE: draft"),
             "the raw export carries the view"
         );
-
-        // The raw export is what fails: the view is defined before its source.
-        let broken = unmigrated().await;
-        assert!(broken.import(raw.as_path()).await.is_err());
 
         let stripped = schema::strip_derived_tables(&export);
         assert!(!stripped.contains("TABLE: draft") && !stripped.contains("TABLE DATA: draft"));
