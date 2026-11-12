@@ -127,9 +127,9 @@ pub fn unresolved_verb(command: &str, tree: &Command) -> Option<String> {
                     .is_some_and(|site| site.find_subcommand(verb).is_none())
         });
     if moved_site_verb
-        || words.get(1).is_some_and(|verb| {
-            HUDSON_VERBS.contains(verb) && tree.find_subcommand(verb).is_none()
-        })
+        || words
+            .get(1)
+            .is_some_and(|verb| HUDSON_VERBS.contains(verb) && tree.find_subcommand(verb).is_none())
     {
         return None;
     }
@@ -272,7 +272,7 @@ mod tests {
     }
 
     #[test]
-    fn a_verb_that_moved_to_navigator_deploy_is_not_dangling() {
+    fn an_operator_verb_resolves_to_hudson() {
         let lean = Command::new("navigator")
             .subcommand(Command::new("project").subcommand(Command::new("gate")))
             .subcommand(Command::new("site").subcommand(Command::new("login")));

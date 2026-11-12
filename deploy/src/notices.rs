@@ -518,10 +518,7 @@ pub fn run(out_path: &Path, check: bool) -> ExitCode {
             );
             return ExitCode::SUCCESS;
         }
-        eprintln!(
-            "navigator: ops notices: {} is stale — re-run `hudson ops notices` and commit it",
-            out_path.display()
-        );
+        eprintln!("hudson ops notices: output is stale — rerun without --check and commit it");
         return ExitCode::from(1);
     }
 

@@ -20,10 +20,7 @@ serde = { version = \"1\" }
 ";
 
 fn run(args: &[&str]) -> assert_cmd::assert::Assert {
-    Command::cargo_bin("hudson")
-        .unwrap()
-        .args(args)
-        .assert()
+    Command::cargo_bin("hudson").unwrap().args(args).assert()
 }
 
 #[test]

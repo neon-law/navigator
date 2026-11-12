@@ -1561,9 +1561,7 @@ fn refresh_form<'a>(
 async fn client() -> Result<GmailClient> {
     let (account, client_id) = configured_setup()?;
     let refresh_token = keychain_refresh_token(&account).with_context(|| {
-        format!(
-            "Gmail refresh token unavailable; run hudson mail login (see {PROVISIONING_DOC})"
-        )
+        format!("Gmail refresh token unavailable; run hudson mail login (see {PROVISIONING_DOC})")
     })?;
     let client_secret = keychain_read(CLIENT_SECRET_SERVICE, &client_id)?;
     let response = reqwest::Client::new()
@@ -2017,8 +2015,7 @@ async fn resolve_draft_signature(
 async fn runtime_signature(
     sending_account: Option<&str>,
 ) -> Result<store::mail_signatures::MailSignature, String> {
-    let account =
-        sending_account.ok_or("no configured Gmail account; run hudson mail setup")?;
+    let account = sending_account.ok_or("no configured Gmail account; run hudson mail setup")?;
     let surreal = store::surreal::connect_from_env()
         .await
         .map_err(|error| format!("the deployment's document store is unreachable: {error}"))?;
@@ -2894,10 +2891,7 @@ MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n\
         assert_eq!(gmail_message_id(url), None);
         let message = unresolved_reference(url).to_string();
         assert!(message.contains("Gmail web id"), "{message}");
-        assert!(
-            message.contains("hudson mail search"),
-            "{message}"
-        );
+        assert!(message.contains("hudson mail search"), "{message}");
         let plain = unresolved_reference("notes/draft-body.txt").to_string();
         assert!(plain.contains("neither"), "{plain}");
     }

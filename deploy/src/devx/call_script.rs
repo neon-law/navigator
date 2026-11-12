@@ -322,10 +322,7 @@ impl TwilioStudio {
         let url = format!("{}/v2/Flows/{sid}", self.studio_base_url);
         let form = [
             ("Status", "published".to_string()),
-            (
-                "CommitMessage",
-                "hudson ops call-script".to_string(),
-            ),
+            ("CommitMessage", "hudson ops call-script".to_string()),
             ("Definition", definition.to_string()),
         ];
         let body = self

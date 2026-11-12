@@ -113,7 +113,7 @@ pub fn upload_form_limit_message() -> String {
     format!(
         "Nothing was uploaded. One upload can carry at most {files} files and {batch} in total. \
          Send the files in smaller groups. A single file over {batch}, up to {streaming}, can be \
-         filed with `navigator site document upload`; for anything larger, arrange another way \
+         filed with `hudson site document upload`; for anything larger, arrange another way \
          to receive it."
     )
 }
@@ -1559,7 +1559,7 @@ mod tests {
         assert!(message.contains(&MAX_DOCUMENT_UPLOAD_BYTES.to_string()));
         assert!(message.contains("30000000"));
         assert!(message.contains(&human_bytes(MAX_STREAMING_UPLOAD_BYTES)));
-        assert!(message.contains("navigator site document upload"));
+        assert!(message.contains("hudson site document upload"));
         let message = document_upload_size_message_for_kind("transcript", 200_000_000);
         assert!(message.contains(&MAX_MEDIA_DOCUMENT_UPLOAD_BYTES.to_string()));
     }
@@ -1578,7 +1578,7 @@ mod tests {
         assert!(message.contains(&format!("{MAX_UPLOAD_FORM_FILES} files")));
         assert!(message.contains(&human_bytes(MAX_UPLOAD_FORM_BYTES)));
         assert!(message.contains(&human_bytes(MAX_STREAMING_UPLOAD_BYTES)));
-        assert!(message.contains("navigator site document upload"));
+        assert!(message.contains("hudson site document upload"));
     }
 
     #[test]

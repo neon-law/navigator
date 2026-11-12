@@ -389,18 +389,18 @@ threads the evaluated Typst source to the **worker** as a `DocumentPayload` on t
 durability. `web` reads the PDF back from storage to hand to the signature provider. This is one-directional: template →
 fresh PDF.
 
-**Rendering a template offline — `hudson notation pdf` / `hudson notation word`.** For an ad-hoc
-artifact outside the durable workflow (a demand letter to send by hand, a draft for review), `hudson notation
-pdf <template.md> --out <file.pdf>` or `hudson notation word <template.md> --out <file.docx>` takes any
-validation-passing notation template and compiles it in pure Rust; `--out` must carry the matching extension, and any
-other extension is refused. PDF rendering converts the Markdown body to Typst. Word rendering writes editable OOXML with
-native heading styles, US Letter geometry, and page fields; a notation whose frame is `letter` receives the same firm
-identity as its PDF plus separate first-page and running headers. A `pleading` gets the same court-paper calibration in
-both formats: under `jurisdiction: CA` or `NV`, a 28-line numbered rail on a 24pt line pitch with line 1 an inch down
-the page (under `WA`, a 23pt pitch; see [Pleading paper](#pleading-paper)), the footer's page number and paper title,
-and the first-page caption described under [Pleading paper](#pleading-paper). Both commands validate the file against
-the same rule set as `navigator project gate`, fill placeholders through the same notation evaluator, and produce
-byte-identical output when the source revision and answers are unchanged.
+**Rendering a template offline — `hudson notation pdf` / `hudson notation word`.** For an ad-hoc artifact outside the
+durable workflow (a demand letter to send by hand, a draft for review), `hudson notation pdf <template.md> --out
+<file.pdf>` or `hudson notation word <template.md> --out <file.docx>` takes any validation-passing notation template and
+compiles it in pure Rust; `--out` must carry the matching extension, and any other extension is refused. PDF rendering
+converts the Markdown body to Typst. Word rendering writes editable OOXML with native heading styles, US Letter
+geometry, and page fields; a notation whose frame is `letter` receives the same firm identity as its PDF plus separate
+first-page and running headers. A `pleading` gets the same court-paper calibration in both formats: under `jurisdiction:
+CA` or `NV`, a 28-line numbered rail on a 24pt line pitch with line 1 an inch down the page (under `WA`, a 23pt pitch;
+see [Pleading paper](#pleading-paper)), the footer's page number and paper title, and the first-page caption described
+under [Pleading paper](#pleading-paper). Both commands validate the file against the same rule set as `navigator project
+gate`, fill placeholders through the same notation evaluator, and produce byte-identical output when the source revision
+and answers are unchanged.
 
 **The Firm's legal name and office fill from the Brand.** `{{firm.legal_name}}` prints the legal name of the Firm behind
 the Project's Brand. `{{firm.office.address}}`, `{{firm.office.phone}}`, and `{{firm.office.email}}` print the office

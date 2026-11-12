@@ -603,8 +603,7 @@ fn both_ship_jobs_run_the_full_ship_without_writing_iam() {
     for job_name in ["ship-staging", "ship-production"] {
         let text = job_text(job_name);
         assert!(
-            text.contains("hudson ops ship --deployment")
-                && !text.contains("--image-only"),
+            text.contains("hudson ops ship --deployment") && !text.contains("--image-only"),
             "`{job_name}` must run the full `ops ship`"
         );
         assert!(
@@ -822,9 +821,7 @@ fn the_registration_check_targets_the_rows_own_worker() {
         );
         assert_eq!(
             String::from_utf8_lossy(&output.stdout).trim(),
-            format!(
-                "hudson ops restate register --deployment {row} --project-id example-project"
-            ),
+            format!("hudson ops restate register --deployment {row} --project-id example-project"),
             "`{job_name}` must register `{row}`'s own worker"
         );
     }

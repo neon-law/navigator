@@ -755,11 +755,7 @@ fn a_moved_verb_under_the_lean_navigator_is_refused() {
         &path("navigator site document log")
     )
     .is_err());
-    assert!(lean_verb(
-        "hudson ops ship",
-        &path("hudson ops ship")
-    )
-    .is_ok());
+    assert!(lean_verb("hudson ops ship", &path("hudson ops ship")).is_ok());
     assert!(lean_verb("navigator project gate", &path("navigator project gate")).is_ok());
     assert!(lean_verb("navigator site login", &path("navigator site login")).is_ok());
 }

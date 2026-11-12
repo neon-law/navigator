@@ -63,7 +63,9 @@ fn top_level_help_is_a_terse_legal_safe_headline() {
         .arg("--help")
         .assert()
         .success()
-        .stdout(str::contains("Hudson, the Navigator operator CLI, not legal advice."));
+        .stdout(str::contains(
+            "Hudson, the Navigator operator CLI, not legal advice.",
+        ));
 }
 
 #[test]
@@ -1153,9 +1155,7 @@ fn notation_create_help_lists_template_and_client_flags() {
         .args(["site", "notation", "create", "--help"])
         .assert()
         .success()
-        .stdout(str::contains(
-            "Usage: hudson site notation create",
-        ))
+        .stdout(str::contains("Usage: hudson site notation create"))
         .stdout(str::contains("<TEMPLATE_CODE>"))
         .stdout(str::contains("--client-email"))
         .stdout(str::contains("--project"));

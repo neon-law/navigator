@@ -17282,7 +17282,7 @@ async fn project_documents_upload_rejects_a_batch_over_the_file_ceiling() {
         "{} files",
         store::documents::MAX_UPLOAD_FORM_FILES
     )));
-    assert!(refusal.contains("navigator site document upload"));
+    assert!(refusal.contains("hudson site document upload"));
     assert!(
         store::assets::list_all(&state.surreal)
             .await

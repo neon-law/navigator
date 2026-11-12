@@ -729,7 +729,7 @@ fn a_declaration_before_filing_renders_signing_lines_on_court_paper() {
     let template = work.path().join("templates/declaration.md");
     for preview in [false, true] {
         let out = work.path().join("declaration.pdf");
-        let mut command = Command::new(cargo_bin("navigator-deploy"));
+        let mut command = Command::new(cargo_bin("hudson"));
         command
             .args(["notation", "pdf"])
             .arg(&template)
@@ -761,7 +761,7 @@ fn a_declaration_before_filing_renders_signing_lines_on_court_paper() {
         }
     }
     let out = work.path().join("declaration.docx");
-    let result = Command::new(cargo_bin("navigator-deploy"))
+    let result = Command::new(cargo_bin("hudson"))
         .args(["notation", "word"])
         .arg(&template)
         .arg("--out")

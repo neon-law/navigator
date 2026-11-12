@@ -408,7 +408,9 @@ fn prompt_hidden(prompt: &str) -> Result<String> {
         .read(true)
         .write(true)
         .open("/dev/tty")
-        .context("no terminal to prompt for the client secret on; run hudson mail login interactively")?;
+        .context(
+            "no terminal to prompt for the client secret on; run hudson mail login interactively",
+        )?;
     let original = tcgetattr(&tty).context("read the terminal settings")?;
     let mut hidden = original.clone();
     hidden.local_modes.remove(LocalModes::ECHO);
