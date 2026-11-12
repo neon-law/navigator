@@ -58,7 +58,7 @@ pub fn read(path: &Path) -> Result<Matter, String> {
         .map_err(|error| format!("{} is not valid YAML: {error}", manifest::FILE))?;
     let block = document.get(KEY).cloned().ok_or_else(|| {
         format!(
-            "a pleading needs a `{KEY}:` block in {} (court, case_number, parties, counsel; \
+            "a pleading needs a `{KEY}:` block in {} (court, parties, counsel; case_number, \
              judicial_officer, department, and filed_on once the court assigns them)",
             manifest::FILE
         )
@@ -95,7 +95,7 @@ fn declarable_dockets(path: &Path, matter: &Matter) -> Vec<String> {
                 .and_then(|value| serde_yaml::from_value::<Vec<String>>(value).ok())
         })
         .unwrap_or_default();
-    if !dockets.iter().any(|d| d == &matter.case_number) {
+    if !matter.case_number.trim().is_empty() && !dockets.iter().any(|d| d == &matter.case_number) {
         dockets.push(matter.case_number.clone());
     }
     dockets
@@ -192,7 +192,12 @@ fn caption_for_export(file: &Path, contents: &str, final_export: bool) -> Result
             if final_export {
                 require_assigned(&matter)?;
             }
-            Ok(word::matter::compose(&matter, &filing).to_fence())
+            let style = word::matter::CaptionStyle::for_jurisdiction(
+                &rules::frontmatter::extract(contents)
+                    .and_then(|fm| rules::frontmatter::field(fm, "jurisdiction"))
+                    .unwrap_or_default(),
+            );
+            Ok(word::matter::compose(&matter, &filing, style).to_fence())
         }
         _ => Err(format!(
             "this pleading cannot be captioned: {}",

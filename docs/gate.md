@@ -467,8 +467,8 @@ Box](notation-authoring.md#signer-boxes): a state declared `completed_by: signer
 the render draws as an empty rule. The render's own `<!-- signer-box -->` marker typed into a template is refused the
 same way as a `____`.
 
-`Y019` reads the `matter:` block of `navigator.yaml` (court, case number, parties, counsel, and, once the court assigns
-them, the judicial officer, department, and filing date) and, for each `kind: pleading` template, its `caption_title`
+`Y019` reads the `matter:` block of `navigator.yaml` (court, parties, counsel, and, once the court assigns them, the
+case number, judicial officer, department, and filing date) and, for each `kind: pleading` template, its `caption_title`
 and `footer_title`. A block that does not parse is an error. A missing field is a warning that names it as
 `matter.<path>` or by its frontmatter key, because a pleading in the repository is a draft; `notation pdf` and `notation
 word` refuse the same gap at the final render. See [Pleading paper](notation-authoring.md#pleading-paper). `navigator

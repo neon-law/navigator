@@ -1,0 +1,29 @@
+version: v26.10.6
+project:
+  host: staging.neonlaw.com
+  name: sample-washington-family
+  lawyer_dri: pat@example.invalid
+  client_dri: sam@example.invalid
+  private_slack_channel: not provisioned
+  private_notion_page: not provisioned
+matter:
+  court:
+    - SUPERIOR COURT OF WASHINGTON, COUNTY OF SAMPLE
+  in_re: the Marriage of
+  page_count: true
+  parties:
+    - name: PAT SYNTHETIC ONE
+      role: Petitioner
+    - name: SAM SYNTHETIC TWO
+      role: Respondent
+  counsel:
+    name: Pat Sample
+    bar_jurisdiction: Washington
+    bar_number: "00000"
+    firm: SAMPLE SYNTHETIC LAW GROUP, PLLC
+    address:
+      - 100 Example Avenue, Suite 200
+      - Sampleton, Washington 99000
+    telephone: (000) 555-0100
+    email: pat@example.invalid
+    appears_for: Respondent SAM SYNTHETIC TWO

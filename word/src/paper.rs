@@ -26,6 +26,10 @@
 //! - `parties` — the left cell of the two-column caption.
 //! - `case` — the right cell: case number, department, judge.
 //! - `footer` — the short title the footer prints.
+//! - `office` — counsel's office, printed in the footer of every page
+//!   instead of a counsel block at the top (Washington).
+//! - `page_count: true` — print the total page count at the top left of
+//!   page 1, for a clerk whose local rule asks for it.
 //!
 //! A filing's caption is not authored: [`crate::matter::compose`] builds
 //! it from the Project's matter and the notation's frontmatter, and
@@ -63,7 +67,10 @@ pub enum PaperError {
     #[error("caption line {line} is not `field: value`")]
     MalformedLine { line: usize },
     /// A caption line names a field the caption does not have.
-    #[error("caption line {line} names no caption field (counsel, court, parties, case, footer)")]
+    #[error(
+        "caption line {line} names no caption field (counsel, court, parties, case, footer, \
+         office, page_count)"
+    )]
     UnknownField { line: usize },
     /// A body has one caption; a second block is ambiguous.
     #[error("a pleading carries one caption block")]
@@ -80,6 +87,12 @@ pub struct Caption {
     /// The short title the footer prints (CRC 2.110); the paper's `#`
     /// title stands in when it is absent.
     pub footer: Option<String>,
+    /// Counsel's office, one line each, printed in every page's footer
+    /// beside the title and "Page N of M" — where a Washington paper puts
+    /// counsel instead of the top-left block.
+    pub office: Vec<String>,
+    /// Print the paper's total page count at the top left of page 1.
+    pub page_count: bool,
 }
 
 impl Caption {
@@ -101,6 +114,12 @@ impl Caption {
         }
         if let Some(footer) = &self.footer {
             let _ = writeln!(out, "footer: {footer}");
+        }
+        for line in &self.office {
+            let _ = writeln!(out, "office: {line}");
+        }
+        if self.page_count {
+            out.push_str("page_count: true\n");
         }
         out.push_str("```\n\n");
         out
@@ -371,8 +390,13 @@ fn parse_caption(block: &str) -> Result<Caption, PaperError> {
             "court" => &mut caption.court,
             "parties" => &mut caption.parties,
             "case" => &mut caption.case,
+            "office" => &mut caption.office,
             "footer" => {
                 caption.footer = Some(plain_answer(value.trim()));
+                continue;
+            }
+            "page_count" => {
+                caption.page_count = value.trim().eq_ignore_ascii_case("true");
                 continue;
             }
             _ => return Err(PaperError::UnknownField { line: line_number }),
@@ -444,6 +468,24 @@ mod tests {
         assert_eq!(paper.title.as_deref(), Some("DEMAND, SET ONE"));
         assert!(!paper.body.contains("caption"));
         assert!(paper.body.contains("# DEMAND, SET ONE"));
+    }
+
+    /// A composed caption reaches both renders through its fence, so every
+    /// field — the footer office block and the page-count flag included —
+    /// must survive the trip.
+    #[test]
+    fn a_caption_round_trips_through_its_fence() {
+        let caption = Caption {
+            counsel: Vec::new(),
+            court: vec!["SUPERIOR COURT OF WASHINGTON, COUNTY OF SAMPLE".into()],
+            parties: vec!["In re the Marriage of:".into(), "Petitioner:".into()],
+            case: vec!["No. __________".into()],
+            footer: Some("NOTICE OF APPEARANCE".into()),
+            office: vec!["SAMPLE LAW".into(), "1 Example Way".into()],
+            page_count: true,
+        };
+        let paper = parse(&format!("{}# Notice\n", caption.to_fence())).unwrap();
+        assert_eq!(paper.caption, Some(caption));
     }
 
     #[test]

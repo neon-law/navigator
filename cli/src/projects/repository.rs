@@ -6128,7 +6128,7 @@ jobs:
         let manifest = std::fs::read_to_string(fixture.join("navigator.yaml")).unwrap();
         std::fs::write(
             dir.path().join("navigator.yaml"),
-            manifest.replace("  case_number: 00CV000000\n", ""),
+            manifest.replace("    email: pat@example.invalid\n", ""),
         )
         .unwrap();
         std::fs::create_dir(dir.path().join("templates")).unwrap();
@@ -6156,7 +6156,7 @@ jobs:
             .map(|warning| warning.message.as_str())
             .find(|message| message.starts_with("Y019: "))
             .expect("a Y019 finding");
-        assert!(message.contains("matter.case_number"), "{message}");
+        assert!(message.contains("matter.counsel.email"), "{message}");
         assert!(message.contains("footer_title"), "{message}");
     }
 

@@ -131,6 +131,10 @@ impl Row {
                 trial_on: self.trial_on,
                 parties: self.parties.into_iter().map(Party::from).collect(),
                 counsel: self.counsel.into(),
+                // `in_re` and `page_count` only lay out court paper, which
+                // renders from `navigator.yaml`; the matter page never
+                // reads them, so they are not stored.
+                ..Matter::default()
             },
             synced_at: self.synced_at,
         })
@@ -253,6 +257,8 @@ mod tests {
             department: "12".into(),
             filed_on: "2026-02-02".into(),
             trial_on: Some("2027-01-11".into()),
+            in_re: String::new(),
+            page_count: false,
             parties: vec![
                 Party {
                     name: "A CORP".into(),

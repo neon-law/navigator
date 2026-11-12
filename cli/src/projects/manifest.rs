@@ -1657,11 +1657,11 @@ mod tests {
         )
         .unwrap();
         assert!(!codes(&complete).contains(&"Y019"));
-        let without_case = complete.replace("  case_number: 00CV000000\n", "");
-        let findings = lint_contents(Path::new("navigator.yaml"), &without_case);
+        let without_email = complete.replace("    email: pat@example.invalid\n", "");
+        let findings = lint_contents(Path::new("navigator.yaml"), &without_email);
         let finding = findings.iter().find(|f| f.code == "Y019").unwrap();
         assert!(
-            finding.message.contains("matter.case_number"),
+            finding.message.contains("matter.counsel.email"),
             "{finding:?}"
         );
         assert!(finding.warning, "an incomplete matter warns: {finding:?}");
