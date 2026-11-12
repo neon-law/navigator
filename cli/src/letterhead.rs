@@ -11,7 +11,7 @@
 
 use std::fmt;
 
-use views::brand::{brand_key_for_apex, registered_brand_key, BrandKey};
+use views::brand::{brand_key_for_apex, registered_brand_key, BrandKey, DEFAULT_BRANDING};
 
 /// Why a Project's letter has no letterhead.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,6 +96,51 @@ pub fn resolve_brand(brand: Option<&str>, host: Option<&str>) -> Result<BrandKey
         }
     }
     Ok(resolved)
+}
+
+/// The Firm's office a notation for one jurisdiction is filled from
+/// (LAW-329): the Brand's office in that state, else its default office.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FirmOffice {
+    /// The Firm's legal name, as `{{firm.legal_name}}` prints it.
+    pub legal_entity: String,
+    /// The state the office is published under (`Washington`).
+    pub state: String,
+    /// The address as an envelope carries it, one line each.
+    pub address: Vec<String>,
+    pub phone: String,
+    pub email: String,
+    /// The Firm has no office in the jurisdiction asked for; this is its
+    /// default office standing in, which a caller must say aloud.
+    pub fallback: bool,
+}
+
+/// The office of the Brand a Project declares, for `jurisdiction` (a
+/// two-letter code; blank asks for the default office). `None` when the
+/// Brand publishes no office.
+///
+/// # Errors
+/// [`LetterheadError`] when the host has no Brand or the declaration contradicts it.
+pub fn office_for_project(
+    brand: Option<&str>,
+    host: Option<&str>,
+    jurisdiction: &str,
+) -> Result<Option<FirmOffice>, LetterheadError> {
+    Ok(office_for_brand(resolve_brand(brand, host)?, jurisdiction))
+}
+
+/// [`office_for_project`] for a known Brand.
+#[must_use]
+pub fn office_for_brand(key: BrandKey, jurisdiction: &str) -> Option<FirmOffice> {
+    let branding = key.resolve_branding(&DEFAULT_BRANDING);
+    branding.office_for(jurisdiction).map(|choice| FirmOffice {
+        legal_entity: branding.firm.legal_entity.to_string(),
+        state: choice.office.state.to_string(),
+        address: choice.office.address_lines(),
+        phone: branding.published_phone().to_string(),
+        email: branding.firm_email.to_string(),
+        fallback: choice.fallback,
+    })
 }
 
 #[cfg(test)]

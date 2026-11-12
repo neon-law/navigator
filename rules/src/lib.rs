@@ -118,6 +118,16 @@ pub mod tables;
 pub mod template_catalog;
 pub mod workflow_steps;
 
+/// The `{{firm.<field>}}` bindings a render fills from the Project's Brand
+/// rather than from a questionnaire answer: the Firm's legal name, and its
+/// office for the template's jurisdiction (LAW-329).
+pub const FIRM_RENDER_BINDINGS: &[&str] = &[
+    "legal_name",
+    "office.address",
+    "office.phone",
+    "office.email",
+];
+
 pub use assumption_keys::{
     catalog_keys as assumption_catalog_keys, SCHEMA_YAML as ASSUMPTIONS_SCHEMA_YAML,
 };

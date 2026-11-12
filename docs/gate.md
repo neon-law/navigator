@@ -478,7 +478,9 @@ judicial officer: leave either out and the caption prints no line for it, and le
 which drops the action-filed and trial lines. When an assignment is expected but not yet made, declare `department:
 pending` or `judicial_officer: pending`: the caption prints "To be assigned", and final `notation pdf` and `notation
 word` exports refuse it until the court's assignment is recorded; use `--preview` to inspect a draft. A manifest with no
-`matter:` key leaves the stored caption alone; `matter: {}` clears it.
+`matter:` key leaves the stored caption alone; `matter: {}` clears it. Counsel's firm, address, telephone, and email
+default to the Firm's office in the pleading's jurisdiction, and a declared address in another state is a `Y019`
+warning.
 
 `Y017` applies only to `kind: onboarding` and `kind: offboarding` templates. It rejects wording that identifies Neon Law
 as the Firm's trade name or contracting party. References to the Neon Law contact channel and portal remain valid.

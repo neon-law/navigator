@@ -397,10 +397,19 @@ other extension is refused. PDF rendering converts the Markdown body to Typst. W
 native heading styles, US Letter geometry, and page fields; a notation whose frame is `letter` receives the same firm
 identity as its PDF plus separate first-page and running headers. A `pleading` gets the same court-paper calibration in
 both formats: under `jurisdiction: CA` or `NV`, a 28-line numbered rail on a 24pt line pitch with line 1 an inch down
-the page, the footer's page number and paper title, and the first-page caption described under [Pleading
-paper](#pleading-paper). Both commands validate the file against the same rule set as `navigator project gate`, fill
-placeholders through the same notation evaluator, and produce byte-identical output when the source revision and answers
-are unchanged.
+the page (under `WA`, a 23pt pitch; see [Pleading paper](#pleading-paper)), the footer's page number and paper title,
+and the first-page caption described under [Pleading paper](#pleading-paper). Both commands validate the file against
+the same rule set as `navigator project gate`, fill placeholders through the same notation evaluator, and produce
+byte-identical output when the source revision and answers are unchanged.
+
+**The Firm's legal name and office fill from the Brand.** `{{firm.legal_name}}` prints the legal name of the Firm behind
+the Project's Brand. `{{firm.office.address}}`, `{{firm.office.phone}}`, and `{{firm.office.email}}` print the office
+that Brand publishes in the template's `jurisdiction:` — the Washington office for `jurisdiction: WA`. A jurisdiction
+with no office takes the Firm's one default office (`default: true` on a published office; Nevada for this Firm), and
+the render says on stderr which office it used, so a fallback is never silent. A pleading's `matter.counsel` takes the
+same office's firm, address, telephone, and email for any of them it leaves out, so a counsel block names only the
+lawyer: `name`, `bar_jurisdiction`, `bar_number`, and `appears_for`. A declared address in another state than the
+pleading's `jurisdiction:` is a `Y019` warning.
 
 ### Final documents only
 

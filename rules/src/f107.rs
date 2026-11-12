@@ -584,7 +584,7 @@ fn scan_placeholders(
         // The Firm's legal name is a render binding, filled from the Project's
         // Brand. It shares the `firm.` prefix with the signature anchors and
         // is not itself a signature field.
-        if ph.signer == "firm" && ph.field == "legal_name" {
+        if ph.signer == "firm" && crate::FIRM_RENDER_BINDINGS.contains(&ph.field.as_str()) {
             continue;
         }
         scan.saw_relevant = true;
@@ -921,7 +921,8 @@ mod tests {
 
     #[test]
     fn a_firm_legal_name_binding_is_not_a_signature_field() {
-        let body = "---\nkind: letter\ntitle: Letter\n---\n\n{{firm.legal_name}}\n";
+        let body = "---\nkind: letter\ntitle: Letter\n---\n\n{{firm.legal_name}}\n\n\
+                    {{firm.office.address}} {{firm.office.phone}} {{firm.office.email}}\n";
         assert!(F107SignaturePlaceholders.lint(&file(body)).is_empty());
     }
 

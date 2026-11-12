@@ -630,7 +630,7 @@ pub fn lint_contents(path: &Path, contents: &str) -> Vec<ManifestFinding> {
     findings.extend(lint_skills(path, mapping));
     findings.extend(lint_dockets(path, mapping));
     findings.extend(lint_pages(path, contents));
-    findings.extend(lint_matter(path, mapping));
+    findings.extend(lint_matter(path, mapping, contents));
     findings.extend(lint_allowlist_shapes(path, mapping));
     findings.extend(lint_scrapers(path, mapping));
     if let Ok(manifest) = parse(contents) {
@@ -643,12 +643,15 @@ pub fn lint_contents(path: &Path, contents: &str) -> Vec<ManifestFinding> {
 /// needs. A block that does not parse is an error; an incomplete one is a
 /// warning, because a pleading is a draft until its final render, which
 /// refuses the same gap (LAW-361).
-fn lint_matter(path: &Path, mapping: &serde_yaml::Mapping) -> Vec<ManifestFinding> {
+fn lint_matter(path: &Path, mapping: &serde_yaml::Mapping, contents: &str) -> Vec<ManifestFinding> {
     let Some(block) = mapping.get(super::matter::KEY) else {
         return Vec::new();
     };
     match serde_yaml::from_value::<word::matter::Matter>(block.clone()) {
-        Ok(matter) => {
+        Ok(mut matter) => {
+            // Counsel's office details a render fills from the Firm's
+            // office are not missing (LAW-329).
+            super::matter::with_office_defaults(&mut matter, contents, "");
             let missing = matter.missing();
             if missing.is_empty() {
                 return Vec::new();
@@ -1657,11 +1660,12 @@ mod tests {
         )
         .unwrap();
         assert!(!codes(&complete).contains(&"Y019"));
-        let without_email = complete.replace("    email: pat@example.invalid\n", "");
-        let findings = lint_contents(Path::new("navigator.yaml"), &without_email);
+        let without_appears_for =
+            complete.replace("    appears_for: Plaintiff SAMPLE HOLDINGS\n", "");
+        let findings = lint_contents(Path::new("navigator.yaml"), &without_appears_for);
         let finding = findings.iter().find(|f| f.code == "Y019").unwrap();
         assert!(
-            finding.message.contains("matter.counsel.email"),
+            finding.message.contains("matter.counsel.appears_for"),
             "{finding:?}"
         );
         assert!(finding.warning, "an incomplete matter warns: {finding:?}");

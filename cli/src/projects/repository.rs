@@ -3015,7 +3015,9 @@ fn lint_project_template(
     {
         // A pleading in the repository is a draft: an incomplete caption
         // warns here and refuses at the final render (LAW-361).
-        if let Err(message) = super::matter::caption_for(path, &contents) {
+        let caption = super::matter::caption_for(path, &contents).err();
+        let office = super::matter::counsel_state_mismatch(path, &contents);
+        for message in caption.into_iter().chain(office) {
             warnings.push(Finding::at(
                 path,
                 format!("{}: {message}", super::matter::CODE),
@@ -6128,7 +6130,7 @@ jobs:
         let manifest = std::fs::read_to_string(fixture.join("navigator.yaml")).unwrap();
         std::fs::write(
             dir.path().join("navigator.yaml"),
-            manifest.replace("    email: pat@example.invalid\n", ""),
+            manifest.replace("    appears_for: Plaintiff SAMPLE HOLDINGS\n", ""),
         )
         .unwrap();
         std::fs::create_dir(dir.path().join("templates")).unwrap();
@@ -6156,7 +6158,7 @@ jobs:
             .map(|warning| warning.message.as_str())
             .find(|message| message.starts_with("Y019: "))
             .expect("a Y019 finding");
-        assert!(message.contains("matter.counsel.email"), "{message}");
+        assert!(message.contains("matter.counsel.appears_for"), "{message}");
         assert!(message.contains("footer_title"), "{message}");
     }
 

@@ -375,8 +375,9 @@ fn handle_path(
         check_field(shape_for("person"), field, head, file, violations);
         return;
     }
-    // The Firm's legal name is filled from the Project's Brand at render.
-    if head == "firm" && tail == "legal_name" {
+    // The Firm's legal name and office are filled from the Project's Brand
+    // at render.
+    if head == "firm" && crate::FIRM_RENDER_BINDINGS.contains(&tail) {
         return;
     }
     // A loop variable resolves against its aggregate row shape.
@@ -562,9 +563,15 @@ mod tests {
     fn a_firm_legal_name_path_resolves_from_the_brand() {
         let body = tmpl(
             "  BEGIN:\n    _: person__trustor\n  person__trustor:\n    _: END\n  END: {}\n",
-            "Sincerely, {{firm.legal_name}}.",
+            "Sincerely, {{firm.legal_name}}, {{firm.office.address}}, {{firm.office.phone}}, \
+             {{firm.office.email}}.",
         );
         assert!(F115PathResolution.lint(&file(&body)).is_empty());
+        let unknown = tmpl(
+            "  BEGIN:\n    _: person__trustor\n  person__trustor:\n    _: END\n  END: {}\n",
+            "{{firm.office.fax}}",
+        );
+        assert!(!F115PathResolution.lint(&file(&unknown)).is_empty());
     }
 
     #[test]

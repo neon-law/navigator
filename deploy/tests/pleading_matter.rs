@@ -317,14 +317,14 @@ fn a_missing_matter_field_is_named_and_nothing_is_written() {
     let work = matter_tree();
     edit(
         work.path().join("navigator.yaml"),
-        "    email: pat@example.invalid\n",
+        "    appears_for: Plaintiff SAMPLE HOLDINGS\n",
         "",
     );
     let out = work.path().join("out.pdf");
     let result = render("pdf", &work.path().join("templates/rfa_responses.md"), &out);
     assert!(!result.status.success());
     assert!(
-        stderr(&result).contains("matter.counsel.email"),
+        stderr(&result).contains("matter.counsel.appears_for"),
         "{}",
         stderr(&result)
     );
@@ -637,4 +637,53 @@ fn a_washington_pleading_renders_final_on_washington_paper() {
         footer.contains("SAMPLE SYNTHETIC LAW GROUP, PLLC"),
         "{footer}"
     );
+}
+
+/// LAW-329: a Washington pleading whose counsel block names only the lawyer
+/// prints the Firm's Washington office in its footer, and
+/// `{{firm.office.*}}` in its body fills from the same office; the render
+/// says which office it used.
+#[test]
+fn a_washington_pleading_takes_the_firm_s_washington_office() {
+    let work = tree_of(WASHINGTON_FIXTURE);
+    let manifest = work.path().join("navigator.yaml");
+    let text = fs::read_to_string(&manifest).unwrap();
+    let kept = text
+        .lines()
+        .filter(|line| {
+            let line = line.trim_start();
+            !(line.starts_with("firm:")
+                || line.starts_with("address:")
+                || line.starts_with("- 100 Example")
+                || line.starts_with("- Sampleton")
+                || line.starts_with("telephone:")
+                || line.starts_with("email:"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(&manifest, kept).unwrap();
+    edit(
+        work.path().join("templates/notice_of_appearance.md"),
+        "on counsel at the address below.",
+        "on counsel at {{firm.office.address}}.",
+    );
+    let out = work.path().join("final.pdf");
+    let result = render(
+        "pdf",
+        &work.path().join("templates/notice_of_appearance.md"),
+        &out,
+    );
+    assert!(result.status.success(), "{}", stderr(&result));
+    assert!(
+        stderr(&result).contains("filled from the Firm's Washington office"),
+        "{}",
+        stderr(&result)
+    );
+    let bytes = fs::read(&out).unwrap();
+    assert_eq!(
+        pdf::occurrence_count(&bytes, "Vancouver, WA 98660").unwrap(),
+        2,
+        "the footer's office and the body's {{firm.office.address}}"
+    );
+    assert_eq!(pdf::occurrence_count(&bytes, "Reno").unwrap(), 0);
 }
