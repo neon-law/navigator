@@ -325,13 +325,17 @@ jobs:
     # before any label goes here.
     runs-on: blacksmith-4vcpu-ubuntu-2404
     # A wedge detector, not a duration budget. This job had no cap at all while
-    # it ran ~30 min; at ~40 min GitHub's 6-hour default means a hung build
-    # holds a metered runner for most of a working day and blocks the PR behind
-    # an in-progress required check the whole time. The covered run now
-    # measures ~1h50 end to end (2026-11-12: ~25 min build, ~60 min nextest,
-    # then cucumber, doctests, the coverage report, and the cache save), so
-    # 180 leaves headroom over that while still catching a genuine wedge.
-    timeout-minutes: 180
+    # it ran ~30 min; a cap well under GitHub's 6-hour default means a hung
+    # build cannot hold a metered runner for most of a working day and block
+    # the PR behind an in-progress required check the whole time. The covered
+    # run measured ~1h50 end to end on SurrealDB 3 (2026-11-12: ~25 min build,
+    # ~60 min nextest, then cucumber, doctests, the coverage report, and the
+    # cache save). Under SurrealDB 4 the same run is ~2.5x slower end to end:
+    # run 43457613469 was cancelled at the old 180-minute cap with nextest at
+    # 10,841/15,093 tests, still passing steadily with no failures. The real
+    # duration is ~4-5h, so 330 keeps ~1h of headroom over the measured pace
+    # while still catching a genuine wedge below the 6-hour ceiling.
+    timeout-minutes: 330
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
