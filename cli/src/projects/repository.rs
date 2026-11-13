@@ -2716,6 +2716,10 @@ fn states_named_entity_fact(line: &str) -> bool {
         "trademark",
         "common-law mark",
         "common law mark",
+        " is now ",
+        "renamed",
+        "formerly",
+        "changed its name",
     ]
     .iter()
     .any(|needle| lower.contains(needle))
@@ -6008,6 +6012,17 @@ jobs:
         assert!(rewrite_firm_role_prose(&fact, &names).is_none());
         let mark = format!("A common-law mark of {name}.\n");
         assert!(rewrite_firm_role_prose(&mark, &names).is_none());
+        // LAW-371: a rename is a fact about the named entity, heading or not.
+        for rename in [
+            format!("## The firm is now {name}\n"),
+            format!("The practice was renamed {name} last year.\n"),
+            format!("{name}, formerly a sole proprietorship.\n"),
+        ] {
+            assert!(
+                rewrite_firm_role_prose(&rename, &names).is_none(),
+                "{rename}"
+            );
+        }
         let wrapped = format!("{name}\nconverted from a PLLC.\n\nPrepared by {name}.\n");
         assert_eq!(
             rewrite_firm_role_prose(&wrapped, &names).expect("the role paragraph rewrites"),
