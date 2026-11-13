@@ -228,6 +228,17 @@ pub(crate) async fn project(
     projection: &Projection,
     id: Uuid,
 ) -> Result<(), AuthorityError> {
+    // Boxed so every accessor awaiting a projection keeps a small future;
+    // the SurrealDB query future would otherwise sit in each caller's frame.
+    Box::pin(project_row(pg, db, projection, id)).await
+}
+
+async fn project_row(
+    pg: &PostgresDb,
+    db: &SurrealDb,
+    projection: &Projection,
+    id: Uuid,
+) -> Result<(), AuthorityError> {
     let table = projection.table;
     let mut tx = pg.0.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2::text))")

@@ -552,7 +552,7 @@ pub async fn grant(
             .bind(input.granted_by_person_id)
             .bind(input.subject_notified_at.clone())
             .bind(input.subject_notified_channel.map(NoticeChannel::as_str));
-        return pg_write(&pg, surreal, query).await;
+        return Box::pin(pg_write(&pg, surreal, query)).await;
     }
     let now = chrono::Utc::now().to_rfc3339();
     let mut response = writing(|| {
@@ -633,7 +633,7 @@ pub async fn revoke(
         let query = sqlx::query(AssertSqlSafe(sql))
             .bind(id)
             .bind(revoked_by_person_id);
-        return pg_write(&pg, surreal, query).await;
+        return Box::pin(pg_write(&pg, surreal, query)).await;
     }
 
     let now = chrono::Utc::now().to_rfc3339();
@@ -678,7 +678,7 @@ pub async fn record_subject_notice(
         let query = sqlx::query(AssertSqlSafe(sql))
             .bind(id)
             .bind(channel.as_str());
-        return pg_write(&pg, surreal, query).await;
+        return Box::pin(pg_write(&pg, surreal, query)).await;
     }
     let now = chrono::Utc::now().to_rfc3339();
     let mut response = writing(|| {
@@ -724,7 +724,10 @@ pub async fn find_by_id(
     id: Uuid,
 ) -> Result<Option<Delegation>, DelegationError> {
     if let Some(pg) = authority::authority().await? {
-        return Ok(pg_rows(&pg, "id = $1", &[id]).await?.into_iter().next());
+        return Ok(Box::pin(pg_rows(&pg, "id = $1", &[id]))
+            .await?
+            .into_iter()
+            .next());
     }
     let mut response = surreal
         .query(format!("SELECT {SELECT} FROM ONLY $id LIMIT 1"))
@@ -772,7 +775,7 @@ async fn rows_where(
 ) -> Result<Vec<Delegation>, DelegationError> {
     if let Some(pg) = authority::authority().await? {
         let predicate = predicate.replace("$person", "$1");
-        return pg_rows(&pg, &predicate, &[person_id]).await;
+        return Box::pin(pg_rows(&pg, &predicate, &[person_id])).await;
     }
     let mut response = surreal
         .query(format!(
@@ -892,11 +895,11 @@ pub async fn find_live_for_pair(
     subject_person_id: Uuid,
 ) -> Result<Vec<Delegation>, DelegationError> {
     if let Some(pg) = authority::authority().await? {
-        return pg_rows(
+        return Box::pin(pg_rows(
             &pg,
             "delegate_person_id = $1 AND subject_person_id = $2 AND revoked_at IS NULL",
             &[delegate_person_id, subject_person_id],
-        )
+        ))
         .await;
     }
     let mut response = surreal

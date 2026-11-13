@@ -269,7 +269,7 @@ where
 /// [`PhoneError::Db`] if the query fails.
 pub async fn list_phones(db: &SurrealDb, person_id: Uuid) -> Result<Vec<PersonPhone>, PhoneError> {
     if let Some(pg) = authority::authority().await? {
-        return pg_list(&pg, person_id).await;
+        return Box::pin(pg_list(&pg, person_id)).await;
     }
     let response = db
         .query(format!(
@@ -308,7 +308,7 @@ pub async fn set_phone(
         return Err(PhoneError::PersonMissing(person_id));
     }
     if let Some(pg) = authority::authority().await? {
-        return pg_set(&pg, db, person_id, &e164, label, is_primary).await;
+        return Box::pin(pg_set(&pg, db, person_id, &e164, label, is_primary)).await;
     }
 
     let existing: Option<PersonPhoneRow> = db

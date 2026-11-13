@@ -266,7 +266,10 @@ pub async fn create(db: &SurrealDb, new: &NewAddress) -> Result<Address, Address
 /// [`AddressError::Db`] if the lookup fails.
 pub async fn find_by_id(db: &SurrealDb, id: Uuid) -> Result<Option<Address>, AddressError> {
     if let Some(pg) = authority::authority().await? {
-        return Ok(pg_rows(&pg, "id = $1", Some(id)).await?.into_iter().next());
+        return Ok(Box::pin(pg_rows(&pg, "id = $1", Some(id)))
+            .await?
+            .into_iter()
+            .next());
     }
     let mut response = db
         .query(format!("SELECT {SELECT} FROM ONLY $id"))
@@ -286,7 +289,7 @@ pub async fn find_by_id(db: &SurrealDb, id: Uuid) -> Result<Option<Address>, Add
 /// [`AddressError::Db`] if the lookup fails.
 pub async fn for_entity(db: &SurrealDb, entity_id: Uuid) -> Result<Vec<Address>, AddressError> {
     if let Some(pg) = authority::authority().await? {
-        return pg_rows(&pg, "entity_id = $1", Some(entity_id)).await;
+        return Box::pin(pg_rows(&pg, "entity_id = $1", Some(entity_id))).await;
     }
     let mut response = db
         .query(format!(
@@ -310,7 +313,7 @@ pub async fn for_entity(db: &SurrealDb, entity_id: Uuid) -> Result<Vec<Address>,
 /// [`AddressError::Db`] if the lookup fails.
 pub async fn for_person(db: &SurrealDb, person_id: Uuid) -> Result<Vec<Address>, AddressError> {
     if let Some(pg) = authority::authority().await? {
-        return pg_rows(&pg, "person_id = $1", Some(person_id)).await;
+        return Box::pin(pg_rows(&pg, "person_id = $1", Some(person_id))).await;
     }
     let mut response = db
         .query(format!(
@@ -386,7 +389,7 @@ pub async fn find_or_create_for_person(
 /// [`AddressError::Db`] if the lookup fails.
 pub async fn list_all(db: &SurrealDb) -> Result<Vec<Address>, AddressError> {
     if let Some(pg) = authority::authority().await? {
-        return pg_rows(&pg, "true", None).await;
+        return Box::pin(pg_rows(&pg, "true", None)).await;
     }
     let mut response = db
         .query(format!(

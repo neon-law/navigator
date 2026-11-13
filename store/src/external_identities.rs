@@ -462,13 +462,13 @@ pub async fn find_by_person_and_system(
     system: ExternalSystem,
 ) -> Result<Option<ExternalIdentity>, ExternalIdentityError> {
     if let Some(pg) = authority::authority().await? {
-        return pg_one(
+        return Box::pin(pg_one(
             &pg,
             "person_id = $1::uuid AND system = $2",
             person_id.to_string(),
             system.as_str().to_string(),
             system,
-        )
+        ))
         .await;
     }
     let mut response = db
@@ -502,13 +502,13 @@ pub async fn find_by_account(
     external_id: &str,
 ) -> Result<Option<ExternalIdentity>, ExternalIdentityError> {
     if let Some(pg) = authority::authority().await? {
-        return pg_one(
+        return Box::pin(pg_one(
             &pg,
             "system = $1 AND external_id = $2",
             system.as_str().to_string(),
             external_id.trim().to_string(),
             system,
-        )
+        ))
         .await;
     }
     let mut response = db
