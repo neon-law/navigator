@@ -134,7 +134,9 @@ configuration; authority cutover takes precedence over the source mirror. The mi
   `notation_rate`. These are shared catalogs owned by no Firm or Project. The Authority, glossary, Question, and
   Notation package writers in `store::authorities`, `store::glossary`, `store::questions`, and
   `store::notation_packages` call the mirror; the canonical seed reaches it through those writers. Notation rates have
-  no SurrealDB writer and reach PostgreSQL only through `reconcile`.
+  no SurrealDB writer and reach PostgreSQL only through `reconcile`. Setting `NAVIGATOR_POSTGRES_CATALOG_AUTHORITY=1`
+  routes these tables, with `jurisdiction` and `entity_type`, through PostgreSQL in their owning modules and stops the
+  mirror and parity for them; SurrealDB is no longer consulted.
 - **Identity detail:** what a Person or Entity holds beside its own row: `address`, `credential`, `email_token`,
   `entity_role`, `person_delegate`, `person_external_identity`, and `person_mailbox`. Their writers in
   `store::addresses`, `store::credentials`, `store::email_tokens`, `store::entity_roles`, `store::delegations`,

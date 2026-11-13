@@ -91,6 +91,11 @@
         "file": "store/src/postgres_mirror/catalog_tests.rs",
         "function": "catalog_rows_converge_through_their_lifecycle",
         "proves": "Catalog row images converge through create, replay, updates and removal."
+      },
+      {
+        "file": "store/src/postgres/catalog_tests.rs",
+        "function": "authorities_and_packages_live_in_postgres",
+        "proves": "Under the catalog authority, Authorities record idempotently and update in PostgreSQL, and package templates require a held Template version."
       }
     ],
     "remaining": [
@@ -396,6 +401,11 @@
         "file": "store/src/postgres_mirror/identity_tests.rs",
         "function": "person_and_entity_rows_converge_through_their_lifecycle",
         "proves": "Stable source IDs and referenced identity rows round-trip; replay is unchanged; lifecycle changes converge."
+      },
+      {
+        "file": "store/src/postgres/catalog_tests.rs",
+        "function": "reference_tables_are_written_and_read_in_postgres_only",
+        "proves": "Under the catalog authority, Jurisdictions and Entity Types are created, deduplicated and listed in PostgreSQL alone, and the mirror leaves them untouched."
       }
     ],
     "remaining": [
@@ -555,6 +565,11 @@
         "file": "store/src/postgres_mirror/catalog_tests.rs",
         "function": "catalog_rows_converge_through_their_lifecycle",
         "proves": "Catalog row images converge through create, replay, updates and removal."
+      },
+      {
+        "file": "store/src/postgres/catalog_tests.rs",
+        "function": "glossary_and_questions_converge_in_postgres",
+        "proves": "Under the catalog authority, Glossary Terms upsert in place and Questions find-or-create, narrow and list in PostgreSQL alone."
       }
     ],
     "remaining": [
@@ -720,6 +735,11 @@
         "file": "store/src/postgres_mirror/identity_tests.rs",
         "function": "person_and_entity_rows_converge_through_their_lifecycle",
         "proves": "Stable source IDs and referenced identity rows round-trip; replay is unchanged; lifecycle changes converge."
+      },
+      {
+        "file": "store/src/postgres/catalog_tests.rs",
+        "function": "reference_tables_are_written_and_read_in_postgres_only",
+        "proves": "Under the catalog authority, Jurisdictions and Entity Types are created, deduplicated and listed in PostgreSQL alone, and the mirror leaves them untouched."
       }
     ],
     "remaining": [
@@ -921,6 +941,11 @@
         "file": "store/src/postgres_mirror/catalog_tests.rs",
         "function": "catalog_rows_converge_through_their_lifecycle",
         "proves": "Catalog row images converge through create, replay, updates and removal."
+      },
+      {
+        "file": "store/src/postgres/catalog_tests.rs",
+        "function": "authorities_and_packages_live_in_postgres",
+        "proves": "Under the catalog authority, Authorities record idempotently and update in PostgreSQL, and package templates require a held Template version."
       }
     ],
     "remaining": [
@@ -934,6 +959,11 @@
         "file": "store/src/postgres_mirror/catalog_tests.rs",
         "function": "catalog_rows_converge_through_their_lifecycle",
         "proves": "Catalog row images converge through create, replay, updates and removal."
+      },
+      {
+        "file": "store/src/postgres/catalog_tests.rs",
+        "function": "authorities_and_packages_live_in_postgres",
+        "proves": "Under the catalog authority, Authorities record idempotently and update in PostgreSQL, and package templates require a held Template version."
       }
     ],
     "remaining": [
@@ -1193,6 +1223,11 @@
         "file": "store/src/postgres_mirror/catalog_tests.rs",
         "function": "catalog_rows_converge_through_their_lifecycle",
         "proves": "Catalog row images converge through create, replay, updates and removal."
+      },
+      {
+        "file": "store/src/postgres/catalog_tests.rs",
+        "function": "glossary_and_questions_converge_in_postgres",
+        "proves": "Under the catalog authority, Glossary Terms upsert in place and Questions find-or-create, narrow and list in PostgreSQL alone."
       }
     ],
     "remaining": [

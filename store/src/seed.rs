@@ -2725,8 +2725,8 @@ async fn seed_glossary_terms(surreal: &SurrealDb, report: &mut SeedReport) -> an
     Ok(())
 }
 
-/// Seed the jurisdiction reference table — into SurrealDB, where the
-/// table lives since its slice of #1093 (ENG-20). Canonical seed data:
+/// Seed the jurisdiction reference table into the catalog store
+/// ([`crate::postgres::catalog`] picks SurrealDB or PostgreSQL). Canonical seed data:
 /// it runs identically in every environment, production included, and
 /// is idempotent on `code`.
 async fn seed_jurisdictions(surreal: &SurrealDb, report: &mut SeedReport) -> anyhow::Result<()> {
@@ -2744,10 +2744,13 @@ async fn seed_jurisdictions(surreal: &SurrealDb, report: &mut SeedReport) -> any
         .await
         {
             Ok(_) => report.jurisdictions_inserted += 1,
-            // A concurrent boot won the `jurisdiction_code` unique index
-            // between the check and the insert; the row exists, which is
-            // all the seed wants.
-            Err(jurisdictions::JurisdictionError::CodeTaken) => {}
+            // A concurrent boot won the unique index (`code` in SurrealDB,
+            // `name` in PostgreSQL) between the check and the insert; the
+            // row exists, which is all the seed wants.
+            Err(
+                jurisdictions::JurisdictionError::CodeTaken
+                | jurisdictions::JurisdictionError::NameTaken,
+            ) => {}
             Err(error) => return Err(error.into()),
         }
     }
@@ -2759,8 +2762,8 @@ struct EntityTypeRec {
     name: String,
 }
 
-/// Seed the entity-type reference table — into SurrealDB, where the
-/// table lives since its slice of #1093 (ENG-20). Canonical seed data:
+/// Seed the entity-type reference table into the catalog store
+/// ([`crate::postgres::catalog`] picks SurrealDB or PostgreSQL). Canonical seed data:
 /// it runs identically in every environment, production included, and
 /// is idempotent on `name` — `find_or_create` absorbs a concurrent
 /// boot's winning write.
@@ -4082,6 +4085,49 @@ pub async fn seed_no_charge_fee_clause(
 
 #[cfg(test)]
 mod tests {
+    /// The reference seeds converge under the PostgreSQL catalog authority:
+    /// a second boot writes nothing and SurrealDB receives no row.
+    #[tokio::test]
+    async fn reference_seeds_are_idempotent_under_the_postgres_catalog_authority() {
+        let Some((options, database)) = crate::postgres_mirror::tests::fresh_schema().await else {
+            return;
+        };
+        let pg = crate::postgres_mirror::tests::connect(&options, &database).await;
+        let db = crate::test_support::mem_surreal().await;
+        let seed = || async {
+            let mut report = SeedReport::default();
+            super::seed_glossary_terms(&db, &mut report).await.unwrap();
+            super::seed_jurisdictions(&db, &mut report).await.unwrap();
+            super::seed_entity_types(&db, &mut report).await.unwrap();
+            super::seed_questions(&db, &mut report).await.unwrap();
+            report
+        };
+        let (first, second) = crate::postgres::catalog::with_test_db(pg.clone(), async {
+            (seed().await, seed().await)
+        })
+        .await;
+        assert!(first.jurisdictions_inserted > 0 && first.entity_types_inserted > 0);
+        assert!(first.questions_inserted > 0);
+        assert_eq!(
+            (
+                second.jurisdictions_inserted,
+                second.entity_types_inserted,
+                second.questions_inserted
+            ),
+            (0, 0, 0)
+        );
+        let held: i64 = sqlx::query_scalar("SELECT count(*) FROM jurisdiction")
+            .fetch_one(pg.pool())
+            .await
+            .unwrap();
+        assert_eq!(usize::try_from(held).unwrap(), first.jurisdictions_inserted);
+        assert!(crate::jurisdictions::list_all(&db)
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(crate::questions::list_all(&db).await.unwrap().is_empty());
+    }
+
     #[tokio::test]
     async fn brand_posts_seed_once_and_keep_confirmed_video_links() {
         let db = crate::test_support::mem_surreal().await;

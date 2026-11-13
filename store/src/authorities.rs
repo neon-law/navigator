@@ -30,6 +30,10 @@
 //! than relying on the engine to refuse a duplicate — the same shape
 //! `store::attestations::record` uses for the same reason.
 //!
+//! `NAVIGATOR_POSTGRES_CATALOG_AUTHORITY` moves the global `authority` rows
+//! to PostgreSQL ([`crate::postgres::catalog`]); a matter's uses and
+//! citations stay in SurrealDB and link to them by id.
+//!
 //! A matter delete reaches
 //! `authority_uses → citations → verifications`, and
 //! Surreal cascades none of it, so [`delete_for_project`] walks
@@ -40,6 +44,7 @@ use serde_json::Value as Json;
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::postgres::catalog;
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 
 const AUTHORITY_TABLE: &str = "authority";
@@ -68,6 +73,15 @@ pub enum AuthorityError {
     /// [`update`] found no Authority matching the given id or citation.
     #[error("no authority matches that id or citation")]
     NotFound,
+    /// The PostgreSQL catalog authority could not serve the call.
+    #[error(transparent)]
+    Postgres(#[from] catalog::CatalogError),
+}
+
+impl From<sqlx::Error> for AuthorityError {
+    fn from(error: sqlx::Error) -> Self {
+        Self::Postgres(error.into())
+    }
 }
 
 fn is_authority_citation_conflict(error: &surrealdb::Error) -> bool {
@@ -151,6 +165,42 @@ impl AuthorityRow {
 const AUTHORITY_SELECT: &str = "id, class, citation, short_cite, title, publisher, issued_on, \
      canonical_url, checked_on, archived_asset_id, inserted_at, updated_at";
 
+const PG_BY_ID: &str = "SELECT id, class, citation, short_cite, title, publisher, issued_on, \
+     canonical_url, checked_on, archived_asset_id, inserted_at, updated_at \
+     FROM authority WHERE id = $1";
+const PG_BY_CITATION: &str = "SELECT id, class, citation, short_cite, title, publisher, \
+     issued_on, canonical_url, checked_on, archived_asset_id, inserted_at, updated_at \
+     FROM authority WHERE citation = $1";
+const PG_UPDATE: &str = "UPDATE authority SET title = $2, short_cite = $3, publisher = $4, \
+     issued_on = $5, canonical_url = $6, checked_on = $7, archived_asset_id = $8, \
+     updated_at = now() WHERE id = $1 \
+     RETURNING id, class, citation, short_cite, title, publisher, issued_on, canonical_url, \
+     checked_on, archived_asset_id, inserted_at, updated_at";
+/// A lost race on `citation` inserts nothing; the caller re-reads the winner.
+const PG_INSERT: &str = "INSERT INTO authority (id, class, citation, short_cite, title, \
+     publisher, issued_on, canonical_url, checked_on, archived_asset_id) \
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (citation) DO NOTHING \
+     RETURNING id, class, citation, short_cite, title, publisher, issued_on, canonical_url, \
+     checked_on, archived_asset_id, inserted_at, updated_at";
+
+fn from_pg(row: &sqlx::postgres::PgRow) -> Result<Authority, sqlx::Error> {
+    use sqlx::Row;
+    Ok(Authority {
+        id: row.try_get("id")?,
+        class: row.try_get("class")?,
+        citation: row.try_get("citation")?,
+        short_cite: row.try_get("short_cite")?,
+        title: row.try_get("title")?,
+        publisher: row.try_get("publisher")?,
+        issued_on: row.try_get("issued_on")?,
+        canonical_url: row.try_get("canonical_url")?,
+        checked_on: row.try_get("checked_on")?,
+        archived_asset_id: row.try_get("archived_asset_id")?,
+        inserted_at: row.try_get("inserted_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
 async fn by_citation(
     db: &SurrealDb,
     citation: &str,
@@ -197,6 +247,14 @@ pub async fn find(
     db: &SurrealDb,
     lookup: AuthorityLookup<'_>,
 ) -> Result<Option<Authority>, AuthorityError> {
+    if let Some(pg) = catalog::authority().await? {
+        return Ok(match lookup {
+            AuthorityLookup::Id(id) => catalog::one(&pg, PG_BY_ID, id, from_pg).await?,
+            AuthorityLookup::Citation(citation) => {
+                catalog::one(&pg, PG_BY_CITATION, citation.to_string(), from_pg).await?
+            }
+        });
+    }
     Ok(match lookup {
         AuthorityLookup::Id(id) => by_id(db, id).await?,
         AuthorityLookup::Citation(citation) => by_citation(db, citation).await?,
@@ -255,6 +313,27 @@ pub async fn update(
         .map(str::to_string)
         .or_else(|| existing.checked_on.clone());
     let archived_asset_id = patch.archived_asset_id.or(existing.archived_asset_id);
+
+    if let Some(pg) = catalog::authority().await? {
+        let row = catalog::maybe_row(
+            sqlx::query(PG_UPDATE)
+                .bind(existing.id)
+                .bind(title)
+                .bind(short_cite)
+                .bind(publisher)
+                .bind(issued_on)
+                .bind(canonical_url)
+                .bind(checked_on)
+                .bind(archived_asset_id),
+            &pg,
+        )
+        .await?;
+        return row
+            .as_ref()
+            .map(from_pg)
+            .transpose()?
+            .ok_or(AuthorityError::WriteReturnedNothing);
+    }
 
     let mut response = writing(|| {
         db.query(format!(
@@ -315,6 +394,9 @@ pub struct NewAuthority<'a> {
 /// # Errors
 /// [`AuthorityError`] on a database failure.
 pub async fn record(db: &SurrealDb, new: &NewAuthority<'_>) -> Result<Authority, AuthorityError> {
+    if let Some(pg) = catalog::authority().await? {
+        return record_on(&pg, new).await;
+    }
     if let Some(existing) = by_citation(db, new.citation).await? {
         return Ok(existing);
     }
@@ -360,6 +442,37 @@ pub async fn record(db: &SurrealDb, new: &NewAuthority<'_>) -> Result<Authority,
             .await?
             .ok_or(AuthorityError::WriteReturnedNothing),
         Err(error) => Err(AuthorityError::Db(error)),
+    }
+}
+
+async fn record_on(
+    pg: &crate::postgres::PostgresDb,
+    new: &NewAuthority<'_>,
+) -> Result<Authority, AuthorityError> {
+    let citation = new.citation.to_string();
+    if let Some(existing) = catalog::one(pg, PG_BY_CITATION, citation.clone(), from_pg).await? {
+        return Ok(existing);
+    }
+    let inserted = catalog::maybe_row(
+        sqlx::query(PG_INSERT)
+            .bind(Uuid::now_v7())
+            .bind(new.class.as_str().to_string())
+            .bind(citation.clone())
+            .bind(new.short_cite.map(str::to_string))
+            .bind(new.title.to_string())
+            .bind(new.publisher.map(str::to_string))
+            .bind(new.issued_on.map(str::to_string))
+            .bind(new.canonical_url.map(str::to_string))
+            .bind(new.checked_on.map(str::to_string))
+            .bind(new.archived_asset_id),
+        pg,
+    )
+    .await?;
+    match inserted {
+        Some(row) => Ok(from_pg(&row)?),
+        None => catalog::one(pg, PG_BY_CITATION, citation, from_pg)
+            .await?
+            .ok_or(AuthorityError::WriteReturnedNothing),
     }
 }
 

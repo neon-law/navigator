@@ -14,13 +14,17 @@
 //! **reference a term by slug** instead of restating it, so the
 //! definition has exactly one home and every surface that shows it agrees.
 //!
-//! # This table lives in SurrealDB
+//! # Where this table lives
+//!
+//! SurrealDB holds it by default; `NAVIGATOR_POSTGRES_CATALOG_AUTHORITY`
+//! moves every read and write here to PostgreSQL
+//! ([`crate::postgres::catalog`]).
 //!
 //! `glossary_terms` is a leaf reference table nothing links to and that
 //! links to nothing. The unique `glossary_term_slug` index is what
 //! enforces one row per slug; a violation has no typed detail, so
 //! [`crate::surreal::retry::unique_violation`] discriminates on that index
-//! name.
+//! name. PostgreSQL's `slug` key lets [`materialize`] upsert instead.
 //!
 //! # The distinction that must not be collapsed
 //!
@@ -47,6 +51,7 @@ use serde::Serialize;
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::postgres::catalog;
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 
 /// The table these rows live in.
@@ -350,6 +355,38 @@ pub enum GlossaryError {
     /// this module could not read back — see [`GlossaryTermRow::into_term`].
     #[error("writing a glossary term returned no usable row")]
     WriteReturnedNothing,
+    /// The PostgreSQL catalog authority could not serve the call.
+    #[error(transparent)]
+    Postgres(#[from] catalog::CatalogError),
+}
+
+impl From<sqlx::Error> for GlossaryError {
+    fn from(error: sqlx::Error) -> Self {
+        Self::Postgres(error.into())
+    }
+}
+
+const PG_BY_SLUG: &str =
+    "SELECT id, slug, title, body, inserted_at, updated_at FROM glossary_term WHERE slug = $1";
+const PG_ALL: &str =
+    "SELECT id, slug, title, body, inserted_at, updated_at FROM glossary_term ORDER BY slug ASC";
+/// One authored term, written once and rewritten only when its text moved.
+const PG_UPSERT: &str =
+    "INSERT INTO glossary_term (id, slug, title, body) VALUES ($1, $2, $3, $4) \
+     ON CONFLICT (slug) DO UPDATE SET title = EXCLUDED.title, body = EXCLUDED.body, \
+     updated_at = now() \
+     WHERE glossary_term.title <> EXCLUDED.title OR glossary_term.body <> EXCLUDED.body";
+
+fn from_pg(row: &sqlx::postgres::PgRow) -> Result<GlossaryTerm, sqlx::Error> {
+    use sqlx::Row;
+    Ok(GlossaryTerm {
+        id: row.try_get("id")?,
+        slug: row.try_get("slug")?,
+        title: row.try_get("title")?,
+        body: row.try_get("body")?,
+        inserted_at: row.try_get("inserted_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
 }
 
 /// Turn a write failure into the caller-correctable conflict it names,
@@ -411,6 +448,20 @@ pub fn slugify(text: &str) -> String {
 ///
 /// Propagates any database error.
 pub async fn materialize(db: &SurrealDb, terms: &[Term]) -> Result<usize, GlossaryError> {
+    if let Some(pg) = catalog::authority().await? {
+        for t in terms {
+            catalog::execute(
+                sqlx::query(PG_UPSERT)
+                    .bind(Uuid::now_v7())
+                    .bind(t.slug.clone())
+                    .bind(t.title.clone())
+                    .bind(t.body.clone()),
+                &pg,
+            )
+            .await?;
+        }
+        return Ok(terms.len());
+    }
     for t in terms {
         match by_slug(db, &t.slug).await? {
             Some(existing) => {
@@ -474,6 +525,9 @@ async fn update(db: &SurrealDb, id: Uuid, t: &Term) -> Result<(), GlossaryError>
 ///
 /// Propagates any database error.
 pub async fn by_slug(db: &SurrealDb, slug: &str) -> Result<Option<GlossaryTerm>, GlossaryError> {
+    if let Some(pg) = catalog::authority().await? {
+        return Ok(catalog::one(&pg, PG_BY_SLUG, slug.to_string(), from_pg).await?);
+    }
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM ONLY {TABLE} WHERE slug = $slug LIMIT 1"
@@ -491,6 +545,9 @@ pub async fn by_slug(db: &SurrealDb, slug: &str) -> Result<Option<GlossaryTerm>,
 ///
 /// Propagates any database error.
 pub async fn all(db: &SurrealDb) -> Result<Vec<GlossaryTerm>, GlossaryError> {
+    if let Some(pg) = catalog::authority().await? {
+        return Ok(catalog::all(&pg, PG_ALL, None::<String>, from_pg).await?);
+    }
     let mut response = db
         .query(format!("SELECT {SELECT} FROM {TABLE} ORDER BY slug ASC"))
         .await

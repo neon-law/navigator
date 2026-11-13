@@ -22,6 +22,10 @@
 //! [`reconcile`].
 //!
 //! Reports name rows by key only.
+//!
+//! Under `NAVIGATOR_POSTGRES_CATALOG_AUTHORITY` PostgreSQL holds these rows,
+//! so a SurrealDB row (or its absence) is no evidence about them: the
+//! mirror writes nothing and [`parity`] compares no table.
 
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
@@ -721,6 +725,9 @@ pub(super) async fn mirror(
     pg: &PostgresDb,
     key: &MirrorKey,
 ) -> Result<Mirrored, MirrorError> {
+    if crate::postgres::catalog::configured() {
+        return Ok(Mirrored::Unchanged);
+    }
     match key {
         MirrorKey::Authority(id) => mirror_row::<AuthorityImage>(surreal, pg, *id).await,
         MirrorKey::GlossaryTerm(id) => mirror_row::<GlossaryTermImage>(surreal, pg, *id).await,
@@ -774,6 +781,9 @@ async fn table<C: Catalog>(
 ///
 /// Either store could not be read.
 pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
+    if crate::postgres::catalog::configured() {
+        return Ok(ParityReport { tables: Vec::new() });
+    }
     Ok(ParityReport {
         tables: vec![
             table::<AuthorityImage>(surreal, pg).await?,

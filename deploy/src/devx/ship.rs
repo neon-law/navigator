@@ -531,6 +531,7 @@ const BOOLEAN_AUTHORITY_KEYS: &[&str] = &[
     "NAVIGATOR_POSTGRES_INBOX_AUTHORITY",
     "NAVIGATOR_POSTGRES_TENANCY_AUTHORITY",
     store::postgres::matter::AUTHORITY_ENV,
+    store::postgres::catalog::AUTHORITY_ENV,
 ];
 const GRAPH_AUTHORITY_KEY: &str = "NAVIGATOR_GRAPH_AUTHORITY";
 
@@ -7661,6 +7662,7 @@ mod tests {
             ("NAVIGATOR_POSTGRES_INBOX_AUTHORITY", "1"),
             ("NAVIGATOR_POSTGRES_TENANCY_AUTHORITY", "true"),
             ("NAVIGATOR_POSTGRES_MATTER_AUTHORITY", "1"),
+            ("NAVIGATOR_POSTGRES_CATALOG_AUTHORITY", "1"),
         ];
         for (postgres, mirror) in [
             (None, None),

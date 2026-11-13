@@ -448,6 +448,10 @@ async fn mirror_jurisdiction(
     pg: &PostgresDb,
     id: Uuid,
 ) -> Result<Mirrored, MirrorError> {
+    // PostgreSQL holds the catalog under its authority; see `catalog`.
+    if crate::postgres::catalog::configured() {
+        return Ok(Mirrored::Unchanged);
+    }
     let source = crate::jurisdictions::find_by_id(surreal, id)
         .await
         .map_err(source)?;
@@ -472,6 +476,10 @@ async fn mirror_entity_type(
     pg: &PostgresDb,
     id: Uuid,
 ) -> Result<Mirrored, MirrorError> {
+    // PostgreSQL holds the catalog under its authority; see `catalog`.
+    if crate::postgres::catalog::configured() {
+        return Ok(Mirrored::Unchanged);
+    }
     let source = crate::entity_types::find_by_id(surreal, id)
         .await
         .map_err(source)?;
