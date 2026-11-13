@@ -13,7 +13,8 @@ prose are preserved; an ambiguous body leaves the existing draft untouched.
 The table is `mail_signature`. The block is stored as one row per Person — see
 [`store::mail_signatures`](../../store/src/mail_signatures.rs) — and the attorney themself is the only writer. The draft
 command reads the row when the deployment's stores are reachable and falls back to `NAVIGATOR_GMAIL_SIGNATURE`,
-announced, otherwise. The row's `updated_at` names the revision a signed draft's provenance prints.
+announced, otherwise, then to the sending Gmail account's default signature. The row's `updated_at` names the revision a
+signed draft's provenance prints.
 
 This is distinct from a document [Signature](signature.md). It creates no signing request. See [the mail
 CLI](../mail-cli.md) for configuration and draft-update semantics.

@@ -47,9 +47,17 @@ Signature:
   stored signature row (resolved by the sending Gmail account), and stderr
   prints the provenance line naming its source and revision. Offline, the
   command falls back to NAVIGATOR_GMAIL_SIGNATURE — announced on stderr,
-  never silent. With neither source set, configuration is refused before
-  Gmail is contacted. A matching signature embedded before other text
-  requires review before saving.
+  never silent. With neither set, the draft signs with the sending Gmail
+  account's default signature, and refuses only when that is blank too. A
+  matching signature embedded before other text requires review before
+  saving. The signature is the close: a sign-off line (\"Thanks!\", \"Best,\")
+  directly above it is warned about on stderr.
+
+Body:
+  --body-file is plain text. --html-body-file takes HTML instead (bold
+  topic headings and the like); the plain-text part is derived from it.
+  With --thread, the replied-to message follows the signature as quoted
+  history, as the Gmail client quotes it.
 
 Attachments:
   --attach is repeatable. Each file is read from disk, keeps its file name, and
@@ -92,8 +100,16 @@ pub enum MailAction {
         #[arg(long)]
         subject: Option<String>,
         /// Plain-text message body. The CLI adds the configured attorney signature.
+        #[arg(
+            long,
+            required_unless_present = "html_body_file",
+            conflicts_with = "html_body_file"
+        )]
+        body_file: Option<PathBuf>,
+        /// HTML message body, for bold headings and the like; the plain-text
+        /// part is derived from it. The CLI adds the configured attorney signature.
         #[arg(long)]
-        body_file: PathBuf,
+        html_body_file: Option<PathBuf>,
         /// Gmail thread ID to reply within.
         #[arg(long)]
         thread: Option<String>,
@@ -263,6 +279,9 @@ enum Operation {
     ReadThread,
     ReadMessage,
     ReadProfile,
+    /// `GET users/me/settings/sendAs/{address}` — the sending account's
+    /// default signature, the draft's last signature source (LAW-316).
+    ReadSendAs,
     CreateDraft,
     UpdateDraft,
     /// `POST users/me/messages/{id}/modify` — the label write behind
@@ -283,6 +302,11 @@ fn endpoint(
             id.map(str::to_owned),
         ),
         Operation::ReadProfile => ("GET", vec!["users", "me", "profile"], None),
+        Operation::ReadSendAs => (
+            "GET",
+            vec!["users", "me", "settings", "sendAs"],
+            id.map(str::to_owned),
+        ),
         Operation::CreateDraft => ("POST", vec!["users", "me", "drafts"], None),
         Operation::UpdateDraft => ("PUT", vec!["users", "me", "drafts"], id.map(str::to_owned)),
         Operation::ModifyMessage => (
@@ -302,6 +326,7 @@ fn endpoint_suffix(operation: Operation) -> Option<&'static str> {
         | Operation::ReadThread
         | Operation::ReadMessage
         | Operation::ReadProfile
+        | Operation::ReadSendAs
         | Operation::CreateDraft
         | Operation::UpdateDraft => None,
     }
@@ -417,6 +442,18 @@ impl GmailClient {
         self.call(Operation::ReadProfile, None, &[], None).await
     }
 
+    /// The account's default signature as plain text — blank when Gmail
+    /// holds none.
+    async fn send_as_signature(&self, address: &str) -> Result<String> {
+        let send_as: SendAs = self
+            .call(Operation::ReadSendAs, Some(address), &[], None)
+            .await
+            .context("read the Gmail account's default signature")?;
+        Ok(mail_parser::decoders::html::html_to_text(
+            send_as.signature.as_deref().unwrap_or_default(),
+        ))
+    }
+
     async fn save_draft(&self, draft: &DraftMessage) -> Result<DraftResponse> {
         let (operation, id) = match draft.id.as_deref() {
             Some(id) => (Operation::UpdateDraft, Some(id)),
@@ -518,6 +555,11 @@ struct MessageBody {
 struct GmailProfile {
     #[serde(rename = "emailAddress")]
     email_address: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SendAs {
+    signature: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -765,12 +807,47 @@ fn filename_parameters(filename: &str) -> (String, String) {
     )
 }
 
+/// Base64 in 76-character CRLF-terminated lines, the MIME body encoding.
+fn base64_lines(bytes: &[u8]) -> String {
+    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+    let mut lines = String::with_capacity(encoded.len() + encoded.len() / 38 + 2);
+    for line in encoded.as_bytes().chunks(76) {
+        lines.push_str(std::str::from_utf8(line).expect("base64 is ASCII"));
+        lines.push_str("\r\n");
+    }
+    lines
+}
+
+/// The draft's body entity: plain text alone, or, with an HTML body,
+/// `multipart/alternative` carrying the plain text and the base64 HTML part.
+fn body_entity(body: &str, html: Option<&str>) -> Result<String> {
+    let text = body.replace("\r\n", "\n").replace('\n', "\r\n");
+    let Some(html) = html else {
+        return Ok(format!(
+            "Content-Type: text/plain; charset=UTF-8\r\n\r\n{text}"
+        ));
+    };
+    let boundary = format!("navigator-alternative-{}", Uuid::new_v4().simple());
+    if text.contains(&boundary) {
+        return Err(anyhow!("draft body collides with the MIME boundary"));
+    }
+    Ok(format!(
+        "Content-Type: multipart/alternative; boundary=\"{boundary}\"\r\n\r\n\
+         --{boundary}\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n{text}\r\n\
+         --{boundary}\r\nContent-Type: text/html; charset=UTF-8\r\n\
+         Content-Transfer-Encoding: base64\r\n\r\n{}--{boundary}--\r\n",
+        base64_lines(html.as_bytes())
+    ))
+}
+
+#[allow(clippy::too_many_arguments)] // each is a distinct header or MIME part
 fn draft_raw(
     to: &[String],
     cc: &[String],
     bcc: &[String],
     subject: &str,
     body: &str,
+    html: Option<&str>,
     in_reply_to: Option<&str>,
     attachments: &[Attachment],
 ) -> Result<String> {
@@ -804,19 +881,18 @@ fn draft_raw(
             raw.push_str("\r\n");
         }
     }
-    let text = body.replace("\r\n", "\n").replace('\n', "\r\n");
+    let entity = body_entity(body, html)?;
     if attachments.is_empty() {
-        raw.push_str("Content-Type: text/plain; charset=UTF-8\r\n\r\n");
-        raw.push_str(&text);
+        raw.push_str(&entity);
         return Ok(raw);
     }
     let boundary = format!("navigator-mixed-{}", Uuid::new_v4().simple());
-    if text.contains(&boundary) {
+    if entity.contains(&boundary) {
         return Err(anyhow!("draft body collides with the MIME boundary"));
     }
     let _ = write!(
-            raw,
-        "Content-Type: multipart/mixed; boundary=\"{boundary}\"\r\n\r\n--{boundary}\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n{text}\r\n"
+        raw,
+        "Content-Type: multipart/mixed; boundary=\"{boundary}\"\r\n\r\n--{boundary}\r\n{entity}\r\n"
     );
     for attachment in attachments {
         let (name, filename) = filename_parameters(&attachment.filename);
@@ -825,11 +901,7 @@ fn draft_raw(
             "--{boundary}\r\nContent-Type: {}; {name}\r\nContent-Disposition: attachment; {filename}\r\nContent-Transfer-Encoding: base64\r\n\r\n",
             attachment.mime_type
         );
-        let encoded = base64::engine::general_purpose::STANDARD.encode(&attachment.bytes);
-        for line in encoded.as_bytes().chunks(76) {
-            raw.push_str(std::str::from_utf8(line).expect("base64 is ASCII"));
-            raw.push_str("\r\n");
-        }
+        raw.push_str(&base64_lines(&attachment.bytes));
     }
     let _ = write!(raw, "--{boundary}--\r\n");
     if raw.len() as u64 > MAX_MESSAGE_BYTES {
@@ -1715,10 +1787,16 @@ async fn run_inner(action: MailAction) -> Result<()> {
             bcc,
             subject,
             body_file,
+            html_body_file,
             thread,
             draft_id,
             attach,
         } => {
+            let (body_file, html) = match (body_file, html_body_file) {
+                (Some(path), _) => (path, false),
+                (None, Some(path)) => (path, true),
+                (None, None) => return Err(anyhow!("pass --body-file or --html-body-file")),
+            };
             // The signature resolves before any Gmail contact: the runtime
             // source is the deployment's stored row for the sending
             // account's Person, the env var is the announced offline
@@ -1734,6 +1812,7 @@ async fn run_inner(action: MailAction) -> Result<()> {
                 bcc,
                 subject,
                 body_file,
+                html,
                 thread,
                 draft_id,
                 attach,
@@ -1790,6 +1869,7 @@ async fn run_inner(action: MailAction) -> Result<()> {
                     bcc: Vec::new(),
                     subject: Some(job.subject()),
                     body_file: body.path().to_path_buf(),
+                    html: false,
                     thread: None,
                     draft_id: None,
                     attach: job.pdfs.clone(),
@@ -1914,9 +1994,12 @@ struct DraftRequest {
     bcc: Vec<String>,
     subject: Option<String>,
     body_file: PathBuf,
+    /// The body file is HTML; the plain-text part is derived from it.
+    html: bool,
     thread: Option<String>,
     draft_id: Option<String>,
     attach: Vec<PathBuf>,
+    /// `None` signs from the Gmail account's default signature.
     configured_signature: Option<String>,
 }
 
@@ -1945,9 +2028,10 @@ enum ResolvedSignature {
         signature: DraftSignature,
         announcement: String,
     },
-    /// Neither source yielded a usable block: `with_signature` refuses with
-    /// the missing-configuration error. The reason says why the runtime
-    /// source did not answer, announced before the refusal.
+    /// Neither source yielded a usable block: the draft signs with the
+    /// Gmail account's default signature, and refuses only when that is
+    /// blank too. The announcement says why the runtime source did not
+    /// answer.
     Neither(String),
 }
 
@@ -2036,24 +2120,29 @@ async fn runtime_signature(
 /// env value is not a usable block either — `with_signature` would refuse
 /// it, so it leaves `Neither` and the refusal names the env var itself.
 fn env_fallback(env_signature: Option<&str>, reason: &str) -> ResolvedSignature {
-    let announcement = format!(
-        "hudson mail: the deployment's stored signature is unavailable ({reason}); \
-         signing from the NAVIGATOR_GMAIL_SIGNATURE fallback"
-    );
+    let unavailable =
+        format!("hudson mail: the deployment's stored signature is unavailable ({reason})");
     match env_signature.filter(|value| !value.trim().is_empty()) {
         Some(body) => ResolvedSignature::Env {
             signature: DraftSignature {
                 body: body.to_owned(),
                 provenance: "signature: source=env person=n/a revision=n/a".to_owned(),
             },
-            announcement,
+            announcement: format!(
+                "{unavailable}; signing from the NAVIGATOR_GMAIL_SIGNATURE fallback"
+            ),
         },
-        None => ResolvedSignature::Neither(announcement),
+        None => ResolvedSignature::Neither(format!(
+            "{unavailable} and NAVIGATOR_GMAIL_SIGNATURE is unset; \
+             signing with the Gmail account's default signature"
+        )),
     }
 }
 
 /// Reads the body and every attachment from disk, then connects to Gmail and
-/// saves one unsent draft. Local refusals happen before `connect` runs.
+/// saves one unsent draft. Local refusals happen before `connect` runs; a
+/// draft with no configured signature signs with the Gmail account's default
+/// signature and refuses only when that is blank too (LAW-316).
 async fn save_draft_command<F, Fut>(request: DraftRequest, connect: F) -> Result<SavedDraft>
 where
     F: FnOnce() -> Fut,
@@ -2065,22 +2154,34 @@ where
         bcc,
         subject,
         body_file,
+        html,
         thread,
         draft_id,
         attach,
         configured_signature,
     } = request;
-    let body = std::fs::read_to_string(&body_file)
+    let source = std::fs::read_to_string(&body_file)
         .with_context(|| format!("read draft body {}", body_file.display()))?;
-    if body.trim().is_empty() {
+    if source.trim().is_empty() {
         return Err(anyhow!("draft body is empty"));
     }
-    let body = signature::with_signature(&body, configured_signature.as_deref())?;
-    let attachments = load_attachments(&attach, &body)?;
+    let (text, html) = if html {
+        (
+            mail_parser::decoders::html::html_to_text(&source),
+            Some(source),
+        )
+    } else {
+        (source, None)
+    };
+    let signed = configured_signature
+        .map(|configured| signature::with_signature(&text, Some(&configured)))
+        .transpose()?;
+    let attachments = load_attachments(&attach, html.as_deref().unwrap_or(&text))?;
     let gmail = connect().await?;
     let profile = gmail.profile().await?;
+    let signed = account_signed(&gmail, &profile.email_address, &text, signed).await?;
     let (project, contact) = current_project_context();
-    let (to, subject, in_reply_to) = if let Some(thread_id) = thread.as_deref() {
+    let (to, subject, in_reply_to, quoted) = if let Some(thread_id) = thread.as_deref() {
         let thread_data =
             read_project_thread(&gmail, thread_id, project.as_deref(), contact.as_deref()).await?;
         let latest = thread_data
@@ -2099,7 +2200,7 @@ where
             .or_else(|| header(latest, "Subject").map(reply_subject))
             .ok_or_else(|| anyhow!("reply subject is unavailable; pass --subject"))?;
         let message_id = header(latest, "Message-ID").map(str::to_owned);
-        (to, subject, message_id)
+        (to, subject, message_id, quoted_history(latest))
     } else {
         warn_if_project_draft_thread_unverified(project.as_deref(), draft_id.as_deref());
         if to.is_empty() {
@@ -2109,14 +2210,17 @@ where
             to,
             subject.ok_or_else(|| anyhow!("pass --subject or --thread"))?,
             None,
+            None,
         )
     };
+    let (body, html) = with_history(&signed, html.as_deref(), quoted.as_ref());
     let raw = draft_raw(
         &to,
         &cc,
         &bcc,
         &subject,
         &body,
+        html.as_deref(),
         in_reply_to.as_deref(),
         &attachments,
     )?;
@@ -2131,6 +2235,102 @@ where
         account: profile.email_address,
         attachments: attachments.len(),
     })
+}
+
+/// The signed body: `signed` when a configured signature already signed it,
+/// else `text` signed with the Gmail account's default signature. Warns when
+/// a sign-off line sits directly above the signature.
+async fn account_signed(
+    gmail: &GmailClient,
+    account: &str,
+    text: &str,
+    signed: Option<String>,
+) -> Result<String> {
+    let signed = if let Some(signed) = signed {
+        signed
+    } else {
+        let block = gmail.send_as_signature(account).await?;
+        let signed = signature::with_signature(text, Some(&block))?;
+        eprintln!("signature: source=gmail person=n/a revision=n/a");
+        signed
+    };
+    if let Some(line) = signature::sign_off(&signed) {
+        eprintln!(
+            "hudson mail: the body ends with the sign-off `{line}` above the signature; \
+             the signature is the close, so remove it"
+        );
+    }
+    Ok(signed)
+}
+
+/// The replied-to message a reply quotes: its attribution line and its
+/// plain text.
+struct QuotedHistory {
+    attribution: String,
+    text: String,
+}
+
+/// The latest thread message as quoted history, the way the Gmail client
+/// quotes it; `None` when it carries no readable text.
+fn quoted_history(message: &GmailMessage) -> Option<QuotedHistory> {
+    let text = plain_text(message.payload.as_ref()?)?;
+    let from = header(message, "From").unwrap_or("the sender");
+    let attribution = match header(message, "Date") {
+        Some(date) => format!("On {date}, {from} wrote:"),
+        None => format!("{from} wrote:"),
+    };
+    Some(QuotedHistory {
+        attribution,
+        text: text.replace("\r\n", "\n").trim_end().to_owned(),
+    })
+}
+
+/// Escapes text for an HTML part, keeping its line breaks.
+fn html_text(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('\n', "<br>")
+}
+
+/// The draft's plain-text and HTML parts: the signed body, then any quoted
+/// history after the signature. The HTML part is the lawyer's HTML with the
+/// same signature and history appended.
+fn with_history(
+    signed: &str,
+    html: Option<&str>,
+    quoted: Option<&QuotedHistory>,
+) -> (String, Option<String>) {
+    let mut text = signed.to_owned();
+    if let Some(quoted) = quoted {
+        let lines: Vec<String> = quoted
+            .text
+            .lines()
+            .map(|line| format!("> {line}").trim_end().to_owned())
+            .collect();
+        let _ = write!(text, "\n\n{}\n{}", quoted.attribution, lines.join("\n"));
+    }
+    let html = html.map(|html| {
+        let signature = signed
+            .rsplit_once("-- \n")
+            .map_or(signed, |(_, block)| block);
+        let mut tail = format!("<br><br>-- <br>{}", html_text(signature));
+        if let Some(quoted) = quoted {
+            let _ = write!(
+                tail,
+                "<br><br><div class=\"gmail_quote\">{}<blockquote class=\"gmail_quote\" \
+                 style=\"margin:0 0 0 .8ex;border-left:1px #ccc solid;padding-left:1ex\">{}\
+                 </blockquote></div>",
+                html_text(&quoted.attribution),
+                html_text(&quoted.text)
+            );
+        }
+        match html.to_ascii_lowercase().rfind("</body>") {
+            Some(at) => format!("{}{tail}{}", &html[..at], &html[at..]),
+            None => format!("{html}{tail}"),
+        }
+    });
+    (text, html)
 }
 
 fn reply_subject(subject: &str) -> String {
@@ -2768,6 +2968,10 @@ mod tests {
             "GET"
         );
         assert_eq!(endpoint(Operation::ReadProfile, None).0, "GET");
+        assert_eq!(
+            endpoint(Operation::ReadSendAs, Some("lawyer@example.test")).0,
+            "GET"
+        );
         assert_eq!(endpoint(Operation::CreateDraft, None).0, "POST");
         assert_eq!(endpoint(Operation::UpdateDraft, Some("draft-id")).0, "PUT");
         // The archive is a label write — POST modify — never a delete or a
@@ -3159,6 +3363,7 @@ MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n\
             "Hello",
             "Thanks!",
             None,
+            None,
             &[]
         )
         .is_err());
@@ -3168,6 +3373,7 @@ MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n\
             &[],
             "Subject\nBcc: victim@example.test",
             "Thanks!",
+            None,
             None,
             &[]
         )
@@ -3477,6 +3683,7 @@ MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n\
             &[],
             "Re: A question",
             "Synthetic reply",
+            None,
             Some("<message-1>"),
             &[],
         )
@@ -3565,6 +3772,7 @@ MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n\
             &[],
             "Letter",
             "Synthetic body",
+            None,
             Some("<message-1@example.test>"),
             &attachments,
         )
@@ -3605,6 +3813,7 @@ MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n\
             "Hello",
             "Body",
             None,
+            None,
             &[],
         )
         .unwrap();
@@ -3617,6 +3826,7 @@ MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n\
             &[],
             "S",
             "B",
+            None,
             None,
             &[]
         )
@@ -3657,6 +3867,7 @@ MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n\
             &[],
             "Hello",
             "Body",
+            None,
             None,
             &[],
         )
@@ -3720,6 +3931,7 @@ MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n\
                     bcc: Vec::new(),
                     subject: Some("Large".into()),
                     body_file: body_file.clone(),
+                    html: false,
                     thread: None,
                     draft_id: None,
                     attach,
@@ -3800,6 +4012,7 @@ MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n\
                 bcc: vec!["blind@example.test".into()],
                 subject: Some("Letter".into()),
                 body_file: body_file.clone(),
+                html: false,
                 thread: None,
                 draft_id: None,
                 attach: vec![letter, exhibit],
@@ -3830,6 +4043,7 @@ MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n\
                 bcc: vec!["blind@example.test".into()],
                 subject: None,
                 body_file: body_file.clone(),
+                html: false,
                 thread: Some("thread-1".into()),
                 draft_id: Some("draft-1".into()),
                 attach: vec![revised],
@@ -3848,6 +4062,7 @@ MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n\
                 bcc: Vec::new(),
                 subject: None,
                 body_file,
+                html: false,
                 thread: Some("thread-1".into()),
                 draft_id: Some("draft-1".into()),
                 attach: Vec::new(),
@@ -4518,30 +4733,6 @@ see docs/mail-cli.md#provision-gmail-for-hudson-mail."
     }
 
     #[tokio::test]
-    async fn a_missing_draft_signature_is_refused_before_connecting() {
-        let directory = tempfile::tempdir().unwrap();
-        let body_file = write_file(directory.path(), "body.txt", b"Please review.");
-        let mut request = draft_request(body_file, &["client@example.test"], Some("Review"), None);
-        request.configured_signature = None;
-        let connected = std::cell::Cell::new(false);
-        let error = save_draft_command(request, || async {
-            connected.set(true);
-            Err(anyhow!("must not connect"))
-        })
-        .await
-        .err()
-        .unwrap();
-        assert!(
-            !connected.get(),
-            "missing signature must refuse before Gmail access"
-        );
-        assert!(
-            error.to_string().contains("NAVIGATOR_GMAIL_SIGNATURE"),
-            "{error}"
-        );
-    }
-
-    #[tokio::test]
     async fn a_draft_without_a_configured_account_falls_back_to_the_env_signature() {
         let resolved = resolve_draft_signature(Some(CONFIGURED_SIGNATURE), None).await;
         let ResolvedSignature::Env {
@@ -4567,7 +4758,7 @@ see docs/mail-cli.md#provision-gmail-for-hudson-mail."
         let resolved = resolve_draft_signature(Some("   "), None).await;
         assert!(
             matches!(resolved, ResolvedSignature::Neither(_)),
-            "a blank env value must leave the missing-configuration refusal to with_signature"
+            "a blank env value must leave the draft to the Gmail account's signature"
         );
     }
 
@@ -4576,8 +4767,217 @@ see docs/mail-cli.md#provision-gmail-for-hudson-mail."
         let resolved = resolve_draft_signature(None, None).await;
         assert!(
             resolved.signature_body().is_none(),
-            "neither source must leave the draft to refuse missing configuration"
+            "neither source must leave the draft to the Gmail account's signature"
         );
+    }
+
+    /// A Gmail stub for the LAW-316 drafts: the profile, the account's
+    /// send-as signature, a one-message thread, and the draft writes.
+    async fn signature_stub(account_signature: &str) -> wiremock::MockServer {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/users/me/profile"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"emailAddress":"lawyer@example.test"})),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/users/me/settings/sendAs/lawyer@example.test"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "sendAsEmail": "lawyer@example.test",
+                "signature": account_signature,
+            })))
+            .mount(&server)
+            .await;
+        let earlier = GMAIL_BASE64URL.encode("Can you send the engagement letter?\r\nThank you.");
+        Mock::given(method("GET"))
+            .and(path("/users/me/threads/thread-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id":"thread-1",
+                "messages":[{"id":"message-1","payload":{
+                    "mimeType":"text/plain",
+                    "headers":[
+                        {"name":"From","value":"Client <client@example.test>"},
+                        {"name":"Date","value":"Mon, 9 Nov 2026 09:00:00 -0800"},
+                        {"name":"Subject","value":"A question"},
+                        {"name":"Message-ID","value":"<message-1@example.test>"}
+                    ],
+                    "body":{"data": earlier}
+                }}]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/users/me/drafts"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id":"draft-1"})))
+            .mount(&server)
+            .await;
+        server
+    }
+
+    fn unconfigured_request(body_file: PathBuf, html: bool, thread: Option<&str>) -> DraftRequest {
+        DraftRequest {
+            configured_signature: None,
+            html,
+            ..draft_request(
+                body_file,
+                &["client@example.test"],
+                Some("Engagement letter"),
+                thread,
+            )
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unconfigured_draft_signs_with_the_gmail_account_signature() {
+        let server = signature_stub("<div>Example Attorney<br>Confidential notice</div>").await;
+        let dir = tempfile::tempdir().unwrap();
+        let body_file = write_file(dir.path(), "body.txt", b"Please review.");
+        let connect = || async {
+            Ok(GmailClient::with_base_url(
+                "test-token".into(),
+                Url::parse(&server.uri()).unwrap(),
+            ))
+        };
+        save_draft_command(unconfigured_request(body_file, false, None), connect)
+            .await
+            .unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        let draft = requests
+            .iter()
+            .find(|request| request.method.as_str() == "POST")
+            .expect("one draft write");
+        assert_eq!(draft.url.path(), "/users/me/drafts");
+        let (_, raw) = decoded_draft(draft);
+        let text = parsed(&raw).body_text(0).unwrap().replace("\r\n", "\n");
+        assert!(
+            text.starts_with("Please review.\n\n-- \nExample Attorney\nConfidential notice"),
+            "{text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_blank_gmail_account_signature_refuses_without_a_draft_write() {
+        let server = signature_stub("").await;
+        let dir = tempfile::tempdir().unwrap();
+        let body_file = write_file(dir.path(), "body.txt", b"Please review.");
+        let connect = || async {
+            Ok(GmailClient::with_base_url(
+                "test-token".into(),
+                Url::parse(&server.uri()).unwrap(),
+            ))
+        };
+        let error = save_draft_command(unconfigured_request(body_file, false, None), connect)
+            .await
+            .err()
+            .expect("no signature anywhere must refuse");
+        let message = error.to_string();
+        for source in [
+            "stored signature row",
+            "NAVIGATOR_GMAIL_SIGNATURE",
+            "Gmail account's default signature",
+        ] {
+            assert!(message.contains(source), "{message}");
+        }
+        let requests = server.received_requests().await.unwrap();
+        assert!(requests
+            .iter()
+            .all(|request| request.method.as_str() == "GET"));
+    }
+
+    #[tokio::test]
+    async fn an_html_reply_carries_both_parts_the_signature_and_quoted_history() {
+        let server = signature_stub("Example Attorney").await;
+        let dir = tempfile::tempdir().unwrap();
+        let body_file = write_file(
+            dir.path(),
+            "body.html",
+            b"<p><b>Engagement</b></p><p>The letter is attached.</p>",
+        );
+        let connect = || async {
+            Ok(GmailClient::with_base_url(
+                "test-token".into(),
+                Url::parse(&server.uri()).unwrap(),
+            ))
+        };
+        save_draft_command(
+            unconfigured_request(body_file, true, Some("thread-1")),
+            connect,
+        )
+        .await
+        .unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        let draft = requests
+            .iter()
+            .find(|request| request.method.as_str() == "POST")
+            .expect("one draft write");
+        let (body, raw) = decoded_draft(draft);
+        assert_eq!(body["message"]["threadId"], "thread-1");
+        let message = parsed(&raw);
+        let text = message.body_text(0).unwrap().replace("\r\n", "\n");
+        assert!(text.contains("Engagement"), "{text}");
+        assert!(!text.contains("<b>"), "{text}");
+        assert!(
+            text.contains(
+                "-- \nExample Attorney\n\nOn Mon, 9 Nov 2026 09:00:00 -0800, \
+                 Client <client@example.test> wrote:\n\
+                 > Can you send the engagement letter?\n> Thank you."
+            ),
+            "{text}"
+        );
+        let html = message.body_html(0).unwrap();
+        assert!(html.contains("<b>Engagement</b>"), "{html}");
+        assert!(html.contains("-- <br>Example Attorney"), "{html}");
+        assert!(
+            html.contains("<blockquote") && html.contains("Can you send the engagement letter?"),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn draft_takes_exactly_one_of_a_plain_or_html_body_file() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct Mail {
+            #[command(subcommand)]
+            action: MailAction,
+        }
+
+        let parsed =
+            Mail::try_parse_from(["mail", "draft", "--html-body-file", "body.html"]).unwrap();
+        let MailAction::Draft {
+            body_file,
+            html_body_file,
+            ..
+        } = parsed.action
+        else {
+            panic!("draft subcommand");
+        };
+        assert_eq!(
+            (body_file, html_body_file),
+            (None, Some(PathBuf::from("body.html")))
+        );
+        for args in [
+            vec!["mail", "draft"],
+            vec![
+                "mail",
+                "draft",
+                "--body-file",
+                "body.txt",
+                "--html-body-file",
+                "body.html",
+            ],
+        ] {
+            assert!(Mail::try_parse_from(args).is_err());
+        }
     }
 
     #[tokio::test]
@@ -4592,6 +4992,7 @@ see docs/mail-cli.md#provision-gmail-for-hudson-mail."
                 bcc: vec![],
                 subject: Some("s".into()),
                 body_file: directory.path().join("absent.txt"),
+                html: false,
                 thread: None,
                 draft_id: None,
                 attach: vec![],
@@ -4614,6 +5015,7 @@ see docs/mail-cli.md#provision-gmail-for-hudson-mail."
                 bcc: vec![],
                 subject: Some("s".into()),
                 body_file,
+                html: false,
                 thread: None,
                 draft_id: None,
                 attach: vec![],
@@ -4946,6 +5348,7 @@ see docs/mail-cli.md#provision-gmail-for-hudson-mail."
             bcc: vec![],
             subject: subject.map(str::to_string),
             body_file,
+            html: false,
             thread: thread.map(str::to_string),
             draft_id: None,
             attach: vec![],

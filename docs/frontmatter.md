@@ -240,9 +240,9 @@ full list of structural checks, is covered in <notation-authoring.md>.
 A notation template may carry an optional **`output`** key. It is the one place a template *overrides* its render
 profile — what comes out and how it is dressed. Left off, the profile is derived from the template's `kind:`
 (`Kind::default_output`): `letter`, `onboarding`, `offboarding`, and `memo` default to letterhead; `filing` defaults to
-`form`; `pleading` defaults to court paper; `agreement` defaults to `contract`; `declaration` defaults to the
-letterhead-less `client_letter` frame; `will`, `trust`, and `directive` default to plain. `output:` exists for the
-templates whose default is wrong for them, such as a `letter` sent in the client's own name (`output: client_letter`).
+`form`; `pleading` defaults to court paper; `agreement` defaults to `contract`; `will`, `trust`, `directive`,
+`declaration`, and `affidavit` default to plain. `output:` exists for the templates whose default is wrong for them,
+such as a `letter` sent in the client's own name (`output: client_letter`).
 
 - **omit it** and the document renders on its kind's default profile — plain is our standard serif, one-inch margins,
   no letterhead. The body's `{{placeholders}}` fill from the questionnaire answers.
@@ -253,9 +253,8 @@ templates whose default is wrong for them, such as a `letter` sent in the client
   a document someone reads once before deciding to sign it.
 - **`output: client_letter`** is the `letter` frame with the letterhead left out, for a letter the client sends in their
   own name. Declare it on a `kind: letter` template; without it a letter always gets the firm letterhead. A `kind:
-  declaration` template needs no `output:` at all — a declaration is the party's own document (a signed statement they
-  give in their own name, LAW-340), so it derives this same letterhead-less frame by default and never carries the
-  firm's name, contact line, or any other brand mark.
+  declaration` or `kind: affidavit` template needs no `output:` at all — it is the party's own voice, so it derives
+  plain, and `output: letter` on it is refused (N109).
 - **`output: contract`** (retired spelling `agreement`) frames an executed contract with **no letterhead**, typeset
   curtly: narrower margins, closer leading, headings at body size, and no table ever split across a page break so a
   signature block stays whole. Reach for it when the document is navigated by section number rather than read straight
