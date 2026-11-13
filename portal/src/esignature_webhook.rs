@@ -690,9 +690,11 @@ async fn record_recipient_completion(
     Ok(())
 }
 
-/// Download the signed PDF + Certificate of Completion from the provider
-/// and store both in object storage (the source of truth; the Drive
-/// mirror is the existing sync's job). Returns the provider/storage
+/// Download the signed PDF + Certificate of Completion from the provider,
+/// store both in object storage (the source of truth; the Drive mirror is
+/// the existing sync's job), and file both copies on the matter — the
+/// Project's document set, exactly once, tagged with how they were signed
+/// and which envelope executed them (LAW-344). Returns the provider/storage
 /// error so the caller can log it without failing the webhook.
 async fn archive_completed_documents(
     state: &crate::AppState,
@@ -713,17 +715,113 @@ async fn archive_completed_documents(
             .await
             .map_err(|e| SignatureError::Provider(e.to_string()))
     };
-    put(
-        store::notations::signed_document_storage_key(notation_id),
+    let signed_key = store::notations::signed_document_storage_key(notation_id);
+    let certificate_key = store::notations::certificate_of_completion_storage_key(notation_id);
+    put(signed_key.clone(), docs.signed_pdf.clone()).await?;
+    put(certificate_key.clone(), docs.certificate_pdf.clone()).await?;
+
+    // File both copies on the matter. A retryable consumption failure after
+    // this point re-runs the whole archive — the puts are idempotent and the
+    // ingests dedup on (Project, filename, content), so a replay re-files
+    // nothing. The envelope id rides in the asset metadata, where the
+    // pointer composers recover it into the pointer's
+    // `docusign_envelope_id` (ENG-859).
+    let notation = store::notations::find_by_id(&state.surreal, notation_id)
+        .await
+        .map_err(|e| SignatureError::Provider(e.to_string()))?
+        .ok_or_else(|| {
+            SignatureError::Provider(format!(
+                "completed envelope {envelope_id} names missing notation {notation_id}"
+            ))
+        })?;
+    let template_kind = store::templates::find_by_id(&state.surreal, notation.template_id)
+        .await
+        .map_err(|e| SignatureError::Provider(e.to_string()))?
+        .and_then(|template| template.kind)
+        .unwrap_or_else(|| "unclassified".to_string());
+    let signed_on = chrono::Utc::now().date_naive();
+    // The executed instrument is the client's own document; the certificate
+    // of completion is the ESIGN record the firm keeps.
+    file_signed_copy_back(
+        &state.surreal,
+        &state.storage,
+        notation.project_id,
+        &template_kind,
+        envelope_id,
+        &format!("{template_kind}_signed.pdf"),
+        store::documents::visibility::CLIENT,
+        &signed_key,
         docs.signed_pdf,
+        Some(store::documents::Signing {
+            method: store::documents::SigningMethod::Docusign,
+            signed_on,
+        }),
     )
     .await?;
-    put(
-        store::notations::certificate_of_completion_storage_key(notation_id),
+    file_signed_copy_back(
+        &state.surreal,
+        &state.storage,
+        notation.project_id,
+        &template_kind,
+        envelope_id,
+        &format!("{template_kind}_certificate.pdf"),
+        store::documents::visibility::INTERNAL,
+        &certificate_key,
         docs.certificate_pdf,
+        None,
     )
     .await?;
-    tracing::info!(%envelope_id, "esignature webhook: archived signed retainer + certificate");
+
+    tracing::info!(
+        %envelope_id,
+        "esignature webhook: filed signed document + certificate to the matter"
+    );
+    Ok(())
+}
+
+/// Ingest one webhook-retrieved copy onto its matter, exactly once per
+/// (Project, filename, content), stamped with the envelope id in the
+/// asset's metadata — where the pointer composers recover it into the
+/// pointer's `docusign_envelope_id` (ENG-859) — and, for the executed
+/// instrument, with its signing method and date.
+#[allow(clippy::too_many_arguments)]
+async fn file_signed_copy_back(
+    db: &store::surreal::SurrealDb,
+    storage: &std::sync::Arc<dyn cloud::StorageService>,
+    project_id: uuid::Uuid,
+    template_kind: &str,
+    envelope_id: &str,
+    filename: &str,
+    visibility: &str,
+    secondary_key: &str,
+    bytes: Vec<u8>,
+    signing: Option<store::documents::Signing>,
+) -> Result<(), crate::signature::SignatureError> {
+    let identity = store::documents::DocumentIdentity {
+        signing,
+        metadata: Some(serde_json::json!({
+            store::document_pointers::DOCUSIGN_ENVELOPE_METADATA_KEY: envelope_id,
+        })),
+        ..store::documents::DocumentIdentity::default()
+    };
+    store::documents::ingest_bytes_exactly_once_as(
+        db,
+        storage,
+        &store::documents::IngestArgs {
+            project_id,
+            source: "docusign",
+            filename,
+            kind: template_kind,
+            content_type: "application/pdf",
+            description: Some(&format!("Executed by DocuSign envelope {envelope_id}")),
+            visibility,
+            secondary_storage_key: Some(secondary_key),
+        },
+        &identity,
+        &bytes,
+    )
+    .await
+    .map_err(|e| crate::signature::SignatureError::Provider(e.to_string()))?;
     Ok(())
 }
 

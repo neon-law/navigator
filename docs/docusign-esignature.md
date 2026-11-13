@@ -97,6 +97,8 @@ envelope status <notation-id>` reads per-signer state.
 Signed templates today:
 
 - **`onboarding__letter`** — the firm's engagement agreement; client signs, firm countersigns.
+- **`wa__benton_county_declaration`** — the client's own declaration (Benton County Superior Court); the
+  client signs, before or after a case number is assigned.
 
 `offboarding__letter` is firm correspondence (firm signature only).
 

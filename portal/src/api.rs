@@ -6469,9 +6469,13 @@ async fn document_pointer(
         // constructs its own pointer client-side rather than reaching this
         // door at all (see `cli::document_sync`).
         authority_id: None,
-        // ENG-859: this door never fills either external-id key itself —
-        // that's ENG-857's `project sync` job, once it exists.
-        docusign_envelope_id: None,
+        // ENG-859 + LAW-344: this door recovers the envelope id from the
+        // asset metadata the completion webhook's file-back stamps — a
+        // signed copy filed on the matter names the envelope that executed
+        // it. A non-UUID value (a fake envelope) yields no id.
+        docusign_envelope_id: store::document_pointers::envelope_id_from_asset_metadata(
+            current.metadata.as_ref(),
+        ),
         xero_invoice_id: None,
         signing: current.signing,
         notarization: current.notarization.clone(),

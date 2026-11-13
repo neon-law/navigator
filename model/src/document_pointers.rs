@@ -364,6 +364,25 @@ impl DocumentPointer {
     }
 }
 
+/// The asset-metadata key naming the `DocuSign` envelope a filed signed copy
+/// came from (LAW-344). The completion webhook's file-back stamps it at
+/// ingest; the pointer composers — the live REST door and `project sync` —
+/// recover it into the pointer's `docusign_envelope_id`, the same key
+/// ENG-859 defines on a committed pointer YAML. Stored as a string; a value
+/// that is not a well-formed UUID yields no id, so a fake provider's
+/// `fake-<notation>-1` envelope id never masquerades as a real one.
+pub const DOCUSIGN_ENVELOPE_METADATA_KEY: &str = "docusign_envelope_id";
+
+/// The `DocuSign` envelope id stamped in an asset row's metadata, or `None`
+/// when the row names none — or names one that is not a well-formed UUID.
+#[must_use]
+pub fn envelope_id_from_asset_metadata(metadata: Option<&serde_json::Value>) -> Option<Uuid> {
+    metadata?
+        .get(DOCUSIGN_ENVELOPE_METADATA_KEY)?
+        .as_str()
+        .and_then(|id| Uuid::parse_str(id).ok())
+}
+
 /// The immutable facts copied from the current `assets` row.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1016,6 +1035,31 @@ mod tests {
         assert_eq!(
             documents_path("onboarding/engagement.pdf", MatterFolder::WorkProduct),
             "onboarding/engagement.pdf"
+        );
+    }
+
+    #[test]
+    fn an_asset_metadata_envelope_id_recovers_when_well_formed() {
+        let id = Uuid::now_v7();
+        let metadata = serde_json::json!({ DOCUSIGN_ENVELOPE_METADATA_KEY: id.to_string() });
+        assert_eq!(envelope_id_from_asset_metadata(Some(&metadata)), Some(id));
+    }
+
+    #[test]
+    fn an_asset_metadata_envelope_id_refuses_a_non_uuid_value() {
+        // A fake provider's envelope id is not a real DocuSign envelope;
+        // it must not masquerade as one on the pointer.
+        let metadata =
+            serde_json::json!({ DOCUSIGN_ENVELOPE_METADATA_KEY: "fake-some-notation-1" });
+        assert_eq!(envelope_id_from_asset_metadata(Some(&metadata)), None);
+    }
+
+    #[test]
+    fn asset_metadata_without_the_key_names_no_envelope() {
+        assert_eq!(envelope_id_from_asset_metadata(None), None);
+        assert_eq!(
+            envelope_id_from_asset_metadata(Some(&serde_json::json!({ "other": "key" }))),
+            None
         );
     }
 }
