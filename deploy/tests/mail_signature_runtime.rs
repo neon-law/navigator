@@ -4,7 +4,8 @@
 //! and stderr prints the provenance line naming the source, Person, and
 //! revision. Offline, the `NAVIGATOR_GMAIL_SIGNATURE` env var signs the draft
 //! and the fallback is announced, never silent. With neither source set, the
-//! draft refuses missing configuration before any Gmail contact.
+//! draft announces that it signs with the Gmail account's default signature,
+//! which it reads only after connecting.
 //!
 //! The store-backed cases run the real `navigator` binary as a subprocess
 //! against the same dependency tier the store's own fixtures use: the
@@ -376,21 +377,23 @@ async fn a_person_with_no_row_falls_back_to_the_env_signature_announced() {
 }
 
 #[tokio::test]
-async fn neither_source_refuses_missing_configuration_before_any_gmail_contact() {
+async fn neither_source_falls_back_to_the_gmail_account_signature_announced() {
     let work = TempDir::new().expect("tempdir");
     let body_file = draft_body(&work);
     let result = draft_command(&body_file, ATTORNEY_EMAIL, None, None);
     let stderr = String::from_utf8_lossy(&result.stderr).into_owned();
     assert!(
         !result.status.success(),
-        "a draft with neither signature source must refuse"
+        "the draft stops at the Gmail-connect stage: {stderr}"
     );
     assert!(
-        stderr.contains("NAVIGATOR_GMAIL_SIGNATURE"),
-        "the missing-configuration refusal must name the env var: {stderr}"
+        stderr.contains(
+            "NAVIGATOR_GMAIL_SIGNATURE is unset; signing with the Gmail account's default signature"
+        ),
+        "the Gmail fallback must be announced: {stderr}"
     );
     assert!(
         !stderr.contains("signature: source="),
-        "a refused draft prints no provenance line: {stderr}"
+        "no provenance line before the account signature is read: {stderr}"
     );
 }

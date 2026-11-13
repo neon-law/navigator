@@ -12,8 +12,9 @@ impl fmt::Display for SignatureError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::MissingConfiguration => {
-                "configure NAVIGATOR_GMAIL_SIGNATURE with the attorney signature and \
-                 confidentiality notice before drafting"
+                "no signature to draft with: the sending account has no stored signature row, \
+                 NAVIGATOR_GMAIL_SIGNATURE is unset, and the Gmail account's default signature is \
+                 blank; configure one with the attorney signature and confidentiality notice"
             }
             Self::AmbiguousExistingBlock => {
                 "existing signature needs review: a matching signature block appears before other text; \
@@ -69,9 +70,33 @@ pub(super) fn with_signature(
     Ok(format!("{text}{separator}-- \n{signature}"))
 }
 
+/// Closing words a body ends on just above the signature. The signature is
+/// the close, so a sign-off line there is redundant (LAW-316).
+const SIGN_OFFS: [&str; 10] = [
+    "thanks",
+    "thank you",
+    "best",
+    "best regards",
+    "regards",
+    "kind regards",
+    "warm regards",
+    "sincerely",
+    "cheers",
+    "all the best",
+];
+
+/// The sign-off line a signed body (the output of [`with_signature`]) ends
+/// on directly above its signature, if any.
+pub(super) fn sign_off(signed: &str) -> Option<&str> {
+    let (text, _) = signed.rsplit_once("-- \n")?;
+    let line = text.trim_end().lines().last()?.trim();
+    let words = line.trim_end_matches([',', '!', '.']).to_lowercase();
+    SIGN_OFFS.contains(&words.as_str()).then_some(line)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{with_signature, SignatureError};
+    use super::{sign_off, with_signature, SignatureError};
 
     const SIGNATURE: &str = "Example Attorney\nConfidential: intended recipient only.";
 
@@ -119,5 +144,19 @@ mod tests {
             with_signature(&body, Some(configured)).unwrap(),
             format!("Please review.\n\n-- \n{SIGNATURE}")
         );
+    }
+
+    #[test]
+    fn a_sign_off_directly_above_the_signature_is_named() {
+        for (body, expected) in [
+            ("Please review.\n\nThanks!", Some("Thanks!")),
+            ("Please review.\n\nBest,\n", Some("Best,")),
+            ("Please review.\n\nKind regards,", Some("Kind regards,")),
+            ("Thanks for the draft. Please review.", None),
+            ("Please review.", None),
+        ] {
+            let signed = with_signature(body, Some(SIGNATURE)).unwrap();
+            assert_eq!(sign_off(&signed), expected, "{body}");
+        }
     }
 }

@@ -143,18 +143,23 @@ For drafting, provide the substantive message body. The draft wears the attorney
 deployment's stores are reachable, the row for the sending Gmail account's Person signs the draft and stderr prints
 `signature: source=runtime person=<person id> revision=<row updated_at>`; the attorney edits that row on their own
 portal account page. When the stores are unreachable, the command falls back to `NAVIGATOR_GMAIL_SIGNATURE` — the
-fallback is announced on stderr, never silent, and the provenance line reads `source=env`. Missing or blank
-configuration in both sources is refused before Gmail is contacted. The CLI appends one copy, replacing repeated
-matching trailing copies without changing other prose or quoted context. Signature insertion preserves the draft's
-recipients, reply headers and attachment bytes.
+fallback is announced on stderr, never silent, and the provenance line reads `source=env`. With neither set, the draft
+signs with the sending Gmail account's default signature, read from Gmail's [send-as
+settings](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.settings.sendAs) under the
+`gmail.readonly` grant, and the provenance line reads `source=gmail`. Only when that is blank too is the draft refused.
+The CLI appends one copy, replacing repeated matching trailing copies without changing other prose or quoted context.
+Signature insertion preserves the draft's recipients, reply headers and attachment bytes.
 
 A matching signature on its own lines before quoted history or other text requires review. The CLI refuses before
 contacting Gmail, leaving any existing draft untouched. Clearly quoted lines prefixed with `>` and inline prose stay
 intact. An attorney decides which unquoted block is current or historical.
 
-Gmail's [account signature](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.settings.sendAs)
-is a web-UI composition setting; the CLI supplies its own complete draft body. The attorney reviews the complete unsent
-draft and confirms one signature before personally sending. Do not insert another signature during that review.
+The signature is the close, so the body ends without a sign-off: the CLI warns on stderr when the last line above the
+signature is one ("Thanks!", "Best,"). `--html-body-file` takes an HTML body in place of `--body-file`, for bold topic
+headings; the draft carries it with a plain-text part derived from it, and the signature is appended to both. With
+`--thread`, the replied-to message follows the signature as `>`-quoted history, as the Gmail client quotes it. The
+attorney reviews the complete unsent draft and confirms one signature before personally sending. Do not insert another
+signature during that review.
 
 ## Recipients
 
