@@ -46,6 +46,10 @@ pub struct EnvelopeStatusReport {
     /// Envelope-wide lifecycle state: `requested`, `completed`,
     /// `declined`, `voided`, or `expired`.
     pub state: Option<String>,
+    /// The portal route that mints the lawyer's sender-view window on
+    /// this envelope — the one-click "open in DocuSign" link. `None`
+    /// until an envelope exists.
+    pub sender_view_href: Option<String>,
     /// Every declared signer in routing order, with their own step.
     pub signers: Vec<EnvelopeSignerState>,
     /// When the durable record last moved — the freshness a lawyer
@@ -99,6 +103,7 @@ pub async fn status_for_notation(
         signature_request_id: Some(signature.provider_id),
         provider: Some(signature.provider),
         state: Some(signature.state.as_str().to_string()),
+        sender_view_href: Some(format!("/app/lawyer/notations/{}/sender-view", notation.id)),
         signers,
         updated_at: Some(signature.updated_at.to_rfc3339()),
     }
@@ -143,6 +148,7 @@ mod tests {
                 "signature_request_id": null,
                 "provider": null,
                 "state": null,
+                "sender_view_href": null,
                 "signers": [],
                 "updated_at": null,
             })
@@ -155,6 +161,7 @@ mod tests {
             signature_request_id: Some("env-1".to_string()),
             provider: Some("docusign".to_string()),
             state: Some("requested".to_string()),
+            sender_view_href: Some("/app/lawyer/notations/n1/sender-view".to_string()),
             signers: vec![
                 EnvelopeSignerState {
                     role: "client".to_string(),
@@ -173,5 +180,9 @@ mod tests {
         assert_eq!(json["signers"][1]["role"], "firm");
         assert_eq!(json["signers"][1]["signed"], false);
         assert_eq!(json["state"], "requested");
+        assert_eq!(
+            json["sender_view_href"],
+            "/app/lawyer/notations/n1/sender-view"
+        );
     }
 }

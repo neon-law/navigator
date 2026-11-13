@@ -6112,6 +6112,8 @@ fn canonical_document(base: &str) -> Value {
                                         "description": "The provider that executed the request (e.g. `docusign`)." },
               "state":                { "type": "string", "nullable": true,
                                         "description": "Envelope-wide lifecycle state: `requested`, `completed`, `declined`, `voided`, or `expired`." },
+              "sender_view_href":     { "type": "string", "nullable": true,
+                                        "description": "Portal route that mints the lawyer's sender-view window on this envelope — the one-click 'open in DocuSign' link; null before the first prepare or send." },
               "signers":              { "type": "array",
                                         "description": "Every declared signer in routing order, with their own step.",
                                         "items": { "type": "object",
