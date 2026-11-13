@@ -107,6 +107,7 @@ async fn open_notation(h: &Harness, project: &store::projects::Project) -> (uuid
         "amendment",
         "libra@example.com",
         store::notations::SigningDelivery::default(),
+        None,
     )
     .await
     .expect("notation opens");

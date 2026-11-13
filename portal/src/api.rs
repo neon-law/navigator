@@ -4364,6 +4364,7 @@ async fn create_notation(
         &input.template_code,
         &input.client_email,
         input.delivery,
+        None,
     )
     .await?;
     Ok((

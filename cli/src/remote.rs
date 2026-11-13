@@ -4560,6 +4560,15 @@ pub async fn patch_project_fields(
     Ok(drive_folder_check)
 }
 
+/// A Project Draft as origin/main publishes it. Sent with a notation
+/// create, it is the template the server opens, whether or not the server
+/// hosts a copy of the Project repository.
+#[derive(Debug)]
+pub struct PublishedDraft {
+    pub source: String,
+    pub commit_sha: String,
+}
+
 /// `hudson site notation create <template-code> --project <code> --client-email …`
 /// — open a notation on an **already-existing** matter and surface the
 /// notation id. Every notation hangs on a pre-existing Project (the matter
@@ -4583,6 +4592,7 @@ pub async fn notation_create(
     project_code: &str,
     answers_from: Option<&Path>,
     delivery: Option<&str>,
+    published: Option<&PublishedDraft>,
 ) -> ExitCode {
     run(async {
         let (base, token) = resolve(host)?;
@@ -4595,6 +4605,10 @@ pub async fn notation_create(
         let url = format!("{base}/app/projects/{project_code}/notations/new");
         let mut form = vec![("template_code", template), ("client_email", client_email)];
         form.extend(delivery.map(|delivery| ("delivery", delivery)));
+        if let Some(published) = published {
+            form.push(("source", &published.source));
+            form.push(("commit_sha", &published.commit_sha));
+        }
         let resp = client
             .post(&url)
             .bearer_auth(&token)
@@ -6080,7 +6094,7 @@ mod tests {
         notation_request_changes, notation_send, notation_status, notation_update,
         picker_selection_fields, project_code_exists, projects_create, projects_create_named, seed,
         seed_directory, select_candidate, source_revision, DocumentClient, DocumentExecution,
-        RevisionSummary, SeedCredential, SeedOptions, StepResponse,
+        PublishedDraft, RevisionSummary, SeedCredential, SeedOptions, StepResponse,
     };
     use super::{
         exit_code_for, fetch_step, first_line, integrity_failure, mint_refusal_annotation,
@@ -9457,6 +9471,7 @@ mod tests {
                 "acme",
                 None,
                 None,
+                None,
             )
             .await,
             ExitCode::SUCCESS
@@ -9621,6 +9636,10 @@ mod tests {
                 "acme",
                 Some(&answers_path),
                 Some("emailed"),
+                Some(&PublishedDraft {
+                    source: "# Letter\n".to_string(),
+                    commit_sha: "0123abcd".to_string(),
+                }),
             )
             .await,
             ExitCode::SUCCESS
@@ -9639,6 +9658,13 @@ mod tests {
             .expect("the notation was created");
         assert!(url::form_urlencoded::parse(&create.body)
             .any(|(key, value)| key == "delivery" && value == "emailed"));
+        // LAW-372: the checkout's published Draft rides along, so the
+        // server opens it rather than the shared template of the same code.
+        let form: Vec<(String, String)> = url::form_urlencoded::parse(&create.body)
+            .into_owned()
+            .collect();
+        assert!(form.contains(&("source".into(), "# Letter\n".into())));
+        assert!(form.contains(&("commit_sha".into(), "0123abcd".into())));
         let posted: Vec<String> = requests
             .iter()
             .filter(|request| {
@@ -9682,6 +9708,7 @@ mod tests {
                 "libra@example.com",
                 "acme",
                 Some(&malformed),
+                None,
                 None,
             )
             .await,

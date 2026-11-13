@@ -559,7 +559,78 @@ pub async fn create_notation_from_repo(
             other => return Err(other.into()),
         }
     }
+    open_persisted(
+        surreal,
+        runtime,
+        storage,
+        template_code,
+        person_id,
+        project_id,
+        entity_id,
+        delivery,
+    )
+    .await
+}
 
+/// A Draft the caller read from its Project checkout at a published commit.
+#[derive(Debug, Clone)]
+pub struct CheckoutDraft {
+    pub contents: String,
+    pub commit_sha: String,
+}
+
+/// [`create_notation_from_repo`] for a Draft the caller read from its own
+/// checkout. The hosted repository store may hold no copy of a Project whose
+/// repository lives on the forge, and a miss there opens the shared
+/// catalog's template of the same code instead.
+///
+/// # Errors
+/// As [`create_notation_from_repo`]; an invalid Draft refuses.
+#[allow(clippy::too_many_arguments)]
+pub async fn create_notation_from_checkout(
+    surreal: &store::surreal::SurrealDb,
+    runtime: &dyn StateMachineRuntime,
+    storage: &Arc<dyn StorageService>,
+    draft: CheckoutDraft,
+    template_code: &str,
+    person_id: Uuid,
+    project_id: Uuid,
+    entity_id: Option<Uuid>,
+    delivery: store::notations::SigningDelivery,
+) -> Result<StartOutcome, NotationSessionError> {
+    store::template_source::persist_contents(
+        surreal,
+        storage,
+        project_id,
+        template_code,
+        draft.contents,
+        draft.commit_sha,
+    )
+    .await?;
+    open_persisted(
+        surreal,
+        runtime,
+        storage,
+        template_code,
+        person_id,
+        project_id,
+        entity_id,
+        delivery,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn open_persisted(
+    surreal: &store::surreal::SurrealDb,
+    runtime: &dyn StateMachineRuntime,
+    storage: &Arc<dyn StorageService>,
+    template_code: &str,
+    person_id: Uuid,
+    project_id: Uuid,
+    entity_id: Option<Uuid>,
+    delivery: store::notations::SigningDelivery,
+) -> Result<StartOutcome, NotationSessionError> {
     // The first notation opened on a matter must normally be the engagement
     // that makes it official. The preview-push door enforces the same rule
     // (see [`enforce_engagement_first`]); the decision lives here, once.
@@ -2623,6 +2694,61 @@ It has been our privilege to do this work alongside you. A future engagement req
         assert!(!store::notations::exists_for_project(&surreal, project_id)
             .await
             .unwrap());
+    }
+
+    /// LAW-372: a Draft read from the Project checkout opens as the
+    /// Project's own version even when the hosted repository store has no
+    /// copy of it and the shared catalog has the same code.
+    #[tokio::test]
+    async fn create_notation_from_checkout_pins_the_checkout_draft_over_the_catalog() {
+        const TEMPLATE: &str =
+            include_str!("../../templates/notations/neon_law/onboarding__letter.md");
+
+        let surreal = db().await;
+        let storage: Arc<dyn StorageService> = Arc::new(
+            cloud::FsStorage::new(std::env::temp_dir().join("navigator-create-from-checkout-test"))
+                .await
+                .unwrap(),
+        );
+        let person_id = seed_person(&surreal, "libra@example.com").await;
+        let project_id = store::test_support::seed_project_surreal(&surreal, "test project").await;
+        seed_retainer_template(&surreal).await;
+        let runtime = InMemoryRuntime::new();
+
+        let outcome = super::create_notation_from_checkout(
+            &surreal,
+            &runtime,
+            &storage,
+            super::CheckoutDraft {
+                contents: TEMPLATE.to_string(),
+                commit_sha: "0123456789abcdef0123456789abcdef01234567".to_string(),
+            },
+            "onboarding__letter",
+            person_id,
+            project_id,
+            None,
+            store::notations::SigningDelivery::default(),
+        )
+        .await
+        .unwrap();
+
+        let notation = store::notations::find_by_id(&surreal, outcome.notation_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let pinned = store::templates::find_by_id(&surreal, notation.template_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            pinned.project_id,
+            Some(project_id),
+            "the checkout Draft, not the catalog"
+        );
+        assert_eq!(
+            pinned.source_commit_sha.as_deref(),
+            Some("0123456789abcdef0123456789abcdef01234567")
+        );
     }
 
     #[tokio::test]
