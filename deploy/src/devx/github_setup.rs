@@ -882,9 +882,9 @@ fn desired_branch_ruleset(
             rule("non_fast_forward", None),
             rule("required_linear_history", None),
             rule("required_signatures", None),
-            // Coverage has no context of its own: `cargo llvm-cov
-            // --fail-under-lines` runs inside `cargo test (workspace)` and fails
-            // that check, so the floor is already required here.
+            // Coverage has no context of its own: the `coverage floor` job
+            // merges the test shards' LCOV and `ci` needs it, so the floor is
+            // already required here.
             rule(
                 "required_status_checks",
                 Some(serde_json::json!({
