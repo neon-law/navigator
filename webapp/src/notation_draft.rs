@@ -11,13 +11,13 @@
 //! previewing the intake. Leading with the body, as the published page
 //! does, is backwards for both.
 //!
-//! The demo controls are the client-side-only stage
-//! [`crate::notation_demo::QuestionnaireDemo`] renders for a local
-//! preview — they never save anything. Since LAW-203 a pushed draft may
-//! carry the real notation run its push opened ([`InjectedNotationDraft::run_path`]);
-//! the page then leads with the hand-off to that run, where answers count.
-//! A draft whose push predates the link — or whose run could not open —
-//! keeps the "Draft — not run" badge and the demo alone.
+//! A pushed draft may carry the real notation run its push opened
+//! ([`InjectedNotationDraft::run_path`]); the page then hands off to that
+//! run and renders no demo questionnaire, so the only answerable form is
+//! the one whose answers save. A draft whose push predates the link — or
+//! whose run could not open — keeps the "Draft — not run" badge and the
+//! client-side-only [`crate::notation_demo::QuestionnaireDemo`], which
+//! never saves anything.
 //!
 //! No auth layer, same as [`crate::notation_preview::NotationPreviewEntry`]
 //! — the draft's id is the access control, exactly like a preview link. An
@@ -172,9 +172,9 @@ pub async fn notation_draft_view() -> Result<NotationDraftView, ServerFnError> {
     })
 }
 
-/// The pure draft page: questionnaire first, rendered body below it, and —
-/// when the push opened a real run (LAW-203) — the hand-off to it, so the
-/// preview's answerable surface is one click from the shareable draft.
+/// The pure draft page: the questionnaire first, rendered body below it.
+/// When the push opened a real run, the questionnaire is the hand-off to
+/// that run alone; otherwise it is the client-side demo.
 /// Prop-driven, so it server-renders and unit-tests without a server
 /// future.
 #[component]
@@ -218,8 +218,8 @@ pub fn NotationDraftPage(
                 if let Some(run_path) = run_path.as_ref() {
                     section { class: "notation-draft__handoff",
                         p {
-                            "This preview opened a real run. The questionnaire is answered "
-                            "there — what you try on this page stays here."
+                            "This preview opened a real run. Answer its questionnaire there; "
+                            "the answers save to the matter."
                         }
                         a { href: "{run_path}", "Open the real questionnaire" }
                     }
@@ -227,9 +227,8 @@ pub fn NotationDraftPage(
                 if let Some(error) = &content.questionnaire_error {
                     {questionnaire_error_panel(error)}
                 }
-                if !content.demo_questions.is_empty() {
+                if run_path.is_none() && !content.demo_questions.is_empty() {
                     section { class: "notation-draft__questionnaire",
-                        h2 { "Questionnaire" }
                         QuestionnaireDemo {
                             questions: content.demo_questions.clone(),
                             template_html: content.stage_html.clone(),
@@ -437,12 +436,35 @@ mod tests {
         );
         assert!(out.contains("Open the real questionnaire"), "{out}");
         assert!(out.contains("Draft — run open"), "{out}");
-        // The hand-off leads: it renders before the demo questionnaire.
-        let handoff_at = out
-            .find("notation-draft__handoff")
-            .expect("hand-off renders");
-        let demo_at = out.find("Try answering this").expect("demo renders");
-        assert!(handoff_at < demo_at, "the hand-off leads the page: {out}");
+    }
+
+    /// LAW-319: a run-backed draft shows only the real questionnaire — no
+    /// sample-matter demo whose answers live in the browser, where a lawyer
+    /// could answer it and leave the real run empty.
+    #[test]
+    fn a_run_backed_draft_renders_no_sample_questionnaire() {
+        fn app() -> Element {
+            let chrome = PublicChrome::default();
+            rsx! {
+                NotationDraftPage {
+                    chrome,
+                    content: Some(draft_content()),
+                    run_path: Some("/app/lawyer/notations/0123456789/step".to_string()),
+                }
+            }
+        }
+        let out = ssr(app);
+        for demo in [
+            "Try answering this",
+            crate::notation_demo::SAMPLE_PROJECT_LABEL,
+            "notation-demo",
+        ] {
+            assert!(!out.contains(demo), "{demo:?} must not render: {out}");
+        }
+        assert!(
+            out.contains("Scope of the engagement"),
+            "the body still renders: {out}"
+        );
     }
 
     /// A run-less draft keeps the "not run" badge and renders no hand-off.
@@ -458,5 +480,7 @@ mod tests {
         let out = ssr(app);
         assert!(out.contains("Draft — not run"), "{out}");
         assert!(!out.contains("notation-draft__handoff"), "{out}");
+        // LAW-319: one "Questionnaire" heading, not the page's and the demo's.
+        assert_eq!(out.matches(">Questionnaire</h2>").count(), 1, "{out}");
     }
 }
