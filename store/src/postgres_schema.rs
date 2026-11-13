@@ -1564,6 +1564,10 @@ mod tests {
                 "20261112000000_add_costs_project_folder_slot.sql",
                 include_str!("../postgres/migrations/20261112000000_add_costs_project_folder_slot.sql"),
             ),
+            (
+                "20261114140000_matter_record_line_indexes.sql",
+                include_str!("../postgres/migrations/20261114140000_matter_record_line_indexes.sql"),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

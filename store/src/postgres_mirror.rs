@@ -466,6 +466,8 @@ pub enum MirrorError {
         "SurrealDB Inbox repair is disabled while PostgreSQL authority is enabled or misconfigured"
     )]
     InboxAuthority,
+    #[error("SurrealDB matter record repair is disabled while PostgreSQL matter authority is enabled or misconfigured")]
+    MatterAuthority,
     #[error("the SurrealDB source row carries an unreadable timestamp")]
     SourceTimestamp,
     #[error("the SurrealDB source row carries an unreadable date")]
@@ -485,6 +487,7 @@ impl MirrorError {
         match self {
             Self::Source | Self::Unavailable | Self::Timeout => true,
             Self::InboxAuthority
+            | Self::MatterAuthority
             | Self::SourceTimestamp
             | Self::SourceDate
             | Self::UnmappedSourceFields { .. } => false,

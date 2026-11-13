@@ -20,10 +20,11 @@
 //! signature. It carries a short [`TTL`] rather than accumulating.
 
 use chrono::{DateTime, Duration, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::postgres::matter::{self, MatterAuthorityError};
 use crate::surreal::{record_id, record_uuid, SurrealDb};
 
 pub const TABLE: &str = "notation_draft";
@@ -37,7 +38,7 @@ pub const TTL: Duration = Duration::hours(24);
 /// opens a real notation run beside the draft; `notation_id` carries the
 /// run the draft opened, and is `None` for a draft whose push predates the
 /// link or whose run could not open.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NotationDraft {
     pub id: Uuid,
     pub project_id: Uuid,
@@ -88,6 +89,8 @@ const SELECT: &str = "id, project_id, slug, title, source, notation_id, inserted
 pub enum NotationDraftError {
     #[error("database: {0}")]
     Db(#[from] surrealdb::Error),
+    #[error(transparent)]
+    Postgres(#[from] MatterAuthorityError),
     /// A write reported success but returned no row this module could read
     /// back.
     #[error("writing a notation draft returned no usable row")]
@@ -117,6 +120,19 @@ pub async fn create(
     let id = Uuid::now_v7();
     let inserted_at = Utc::now();
     let expires_at = inserted_at + TTL;
+    if let Some(pg) = matter::authority().await? {
+        let draft = NotationDraft {
+            id,
+            project_id: new.project_id,
+            slug: new.slug.to_owned(),
+            title: new.title.to_owned(),
+            source: new.source.to_owned(),
+            notation_id: new.notation_id,
+            inserted_at,
+            expires_at,
+        };
+        return Ok(matter::upsert(&pg, TABLE, &draft).await?);
+    }
     let mut response = db
         .query(format!(
             "CREATE $id SET \
@@ -160,13 +176,16 @@ pub async fn find_live(
     db: &SurrealDb,
     id: Uuid,
 ) -> Result<Option<NotationDraft>, NotationDraftError> {
-    let mut response = db
-        .query(format!("SELECT {SELECT} FROM ONLY $id LIMIT 1"))
-        .bind(("id", record_id(TABLE, id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<NotationDraftRow> = response.take(0)?;
-    Ok(row
-        .and_then(NotationDraftRow::into_draft)
-        .filter(|draft| draft.expires_at > Utc::now()))
+    let draft = if let Some(pg) = matter::authority().await? {
+        matter::find(&pg, TABLE, serde_json::json!({"id": id})).await?
+    } else {
+        let mut response = db
+            .query(format!("SELECT {SELECT} FROM ONLY $id LIMIT 1"))
+            .bind(("id", record_id(TABLE, id)))
+            .await
+            .and_then(surrealdb::IndexedResults::check)?;
+        let row: Option<NotationDraftRow> = response.take(0)?;
+        row.and_then(NotationDraftRow::into_draft)
+    };
+    Ok(draft.filter(|draft| draft.expires_at > Utc::now()))
 }

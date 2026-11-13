@@ -1067,6 +1067,23 @@ pub(super) fn table(name: &str) -> Result<&'static Table, MirrorError> {
         .ok_or(MirrorError::Source)
 }
 
+/// The PostgreSQL columns of a registered table, `id` first.
+pub(crate) fn columns(name: &str) -> Option<&'static [&'static str]> {
+    table(name).ok().map(|table| table.columns)
+}
+
+/// After matter authority cutover, a SurrealDB row is no evidence for a
+/// PostgreSQL-authoritative table: the mirror neither writes nor deletes it.
+fn require_source_authority(table: &Table) -> Result<(), MirrorError> {
+    if crate::postgres::matter::TABLES.contains(&table.name)
+        && crate::postgres::matter::selected().unwrap_or(true)
+    {
+        Err(MirrorError::MatterAuthority)
+    } else {
+        Ok(())
+    }
+}
+
 /// The mirror key of one row of a registered table.
 ///
 /// # Errors
@@ -1453,6 +1470,7 @@ pub async fn mirror(
     id: Uuid,
 ) -> Result<Mirrored, MirrorError> {
     let table = table(table_name)?;
+    require_source_authority(table)?;
     let Some(row) = source_one(surreal, table, id).await? else {
         // `table.name` is one of the static names above, never input.
         let deleted = if MIXED_KEY_TABLES.contains(&table.name) {
@@ -1490,6 +1508,7 @@ pub async fn mirror_string(
     id: &str,
 ) -> Result<Mirrored, MirrorError> {
     let table = table(table_name)?;
+    require_source_authority(table)?;
     if !STRING_KEY_TABLES.contains(&table.name) && !MIXED_KEY_TABLES.contains(&table.name) {
         return Err(MirrorError::Source);
     }

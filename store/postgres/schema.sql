@@ -4636,3 +4636,10 @@ ALTER TABLE matter_caption ADD COLUMN signed_on TEXT;
 ALTER TABLE project_folder DROP CONSTRAINT project_folder_slot_check;
 
 ALTER TABLE project_folder ADD CONSTRAINT project_folder_slot_check CHECK (slot IN ( 'root', 'client_submissions', 'Client Production', 'Client Production/Agreements', 'Client Production/Screenshots', 'Correspondence (Served)', 'Costs', 'Discovery (Served)', 'Docket Filings', 'Court Rules', 'Engagement', 'Work Product', 'Work Product/Client Calls (Work Product)', 'Work Product/Correspondence (Work Product)', 'Work Product/Discovery (Work Product)', 'Work Product/Motions (Work Product)', 'Work Product/Pleadings (Work Product)', 'Work Product/Research (Work Product)', 'Work Product/Stipulations (Work Product)' ));
+
+-- Migration: 20261114140000_matter_record_line_indexes.sql
+-- Matter authority enforces in PostgreSQL the one-row-per-line rules the
+-- SurrealDB schema enforces, under the same index names.
+CREATE UNIQUE INDEX estate_asset_line ON estate_asset (project_id, category, description);
+CREATE UNIQUE INDEX fiduciary_role_order ON fiduciary_role (project_id, role, successor_order);
+CREATE UNIQUE INDEX cap_table_holding_line ON cap_table_holding (project_id, holder_id, share_class);

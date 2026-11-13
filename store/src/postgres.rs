@@ -25,6 +25,9 @@ mod forgejo_push_webhook_journal_tests;
 /// attribution, and the reads the renderers use, behind an opt-in cutover flag.
 pub mod inbox;
 
+/// PostgreSQL-authoritative matter records behind an opt-in cutover flag.
+pub mod matter;
+
 /// PostgreSQL Project participation ledger, preparatory to application authority.
 pub mod participation;
 
