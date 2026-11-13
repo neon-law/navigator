@@ -567,7 +567,7 @@
   },
   "notation_transition": {
     "migration_slice": "workflow-storage",
-    "parity_scenario": "pending operation fences both machine kinds through failure and LastFailure repair; exact input/result replay and atomic completion release",
+    "parity_scenario": "pending operation fences both machine kinds through failure and repair by forking; exact input/result replay and atomic completion release",
     "scope": "project-or-platform",
     "target_only": true,
     "through": "notation_id -> Notation Project when present; ephemeral runtime ownership grants no matter access"

@@ -25,7 +25,7 @@ If a 0.5 run must be recovered after migration, 0.6 needs the old application ve
 it in place. See the [upstream upgrade instructions][dbos-upgrade] and the controlled handoff below before changing
 either value.
 
-[dbos-upgrade]: https://github.com/dbos-inc/dbos-transact-rust/tree/v0.6.0#upgrading-from-05
+[dbos-upgrade]: <https://github.com/dbos-inc/dbos-transact-rust/tree/v0.6.0#upgrading-from-05>
 
 ## Where DBOS state lives
 
@@ -357,13 +357,13 @@ the worker requires the same token and its PostgreSQL configuration. The switch 
 
 The worker stores both machines in `notation_machine_state` and serializes transitions with one PostgreSQL advisory lane
 per Notation. A target-only `notation_transition` pending row retains ownership across failure, cancellation, and
-executor loss. The first DBOS checkpoint records its logical UUID. A second pure anchor commits before admission so
-LastFailure retains that UUID even for failures outside a step. Resume and LastFailure repair forks reuse it. Another
-operation is refused until completion stores its result and releases pending ownership atomically. Fresh validation
-failures release only before checkpointed state reads or effects; later failures require repair. Forking before the
-identity checkpoint is a new operation and does not bypass a pending owner. Importing prior state never overwrites an
-existing machine. Drain the Restate object and import its state before changing traffic: its own lane does not
-coordinate with the DBOS lane.
+executor loss. The first DBOS checkpoint records its logical UUID. A second pure anchor commits before admission. To
+repair a failed run, fork from its last failed step or, if no step failed, its last recorded step. Both resume and
+repair forks retain the operation UUID. Another operation is refused until completion stores its result and releases
+pending ownership atomically. Fresh validation failures release only before checkpointed state reads or effects; later
+failures require repair. Forking before the identity checkpoint is a new operation and does not bypass a pending owner.
+Importing prior state never overwrites an existing machine. Drain the Restate object and import its state before
+changing traffic: its own lane does not coordinate with the DBOS lane.
 
 Completed DBOS checkpoints are reused on recovery. A crash after an email, artifact write, journal append, or funnel
 record succeeds but before its checkpoint commits can repeat that effect. These effects are at least once; the state

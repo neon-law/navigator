@@ -8,6 +8,21 @@ use workflows_service::dbos_notation::{self, Context};
 
 use crate::support::{database, APP_VERSION, DEADLINE};
 
+async fn fork_from_last_failure(
+    worker: &dbos::DBOS,
+    workflow_id: &str,
+) -> dbos::WorkflowHandle<dbos_notation::TransitionReport, dbos_notation::NotationTransitionError> {
+    let steps = worker.list_workflow_steps(workflow_id).await.unwrap();
+    let restart_step = steps
+        .iter()
+        .rev()
+        .find(|step| step.error.is_some())
+        .or_else(|| steps.last())
+        .expect("admitted transition has a checkpoint")
+        .step_id;
+    worker.fork(workflow_id, restart_step).await.unwrap()
+}
+
 async fn assert_read_boundary(origin: &str, notation_id: uuid::Uuid) {
     let current = format!("{origin}/notation/{notation_id}/workflow_current_state");
     let http = reqwest::Client::new();
@@ -593,13 +608,7 @@ async fn an_unfinished_predecessor_owns_the_notation_through_repair() {
     email
         .available
         .store(true, std::sync::atomic::Ordering::SeqCst);
-    let repaired = worker
-        .fork::<dbos_notation::TransitionReport, dbos_notation::NotationTransitionError>(
-            &logical,
-            dbos::ForkFrom::LastFailure,
-        )
-        .await
-        .unwrap();
+    let repaired = fork_from_last_failure(&worker, &logical).await;
     let result = tokio::time::timeout(DEADLINE, repaired.result())
         .await
         .unwrap();
@@ -764,7 +773,7 @@ async fn invalid_preflight_does_not_leave_a_pending_owner_or_cached_machine_read
 }
 
 /// Mark-started fails outside a DBOS step. The anchor must preserve the first
-/// logical UUID even when `LastFailure` falls back to its last recorded step.
+/// logical UUID when the repair forks from the last recorded step.
 #[tokio::test]
 async fn a_live_preflight_failure_repairs_under_the_original_operation_identity() {
     let Some(fixture) = PersistedNotation::new().await else {
@@ -810,14 +819,7 @@ async fn a_live_preflight_failure_repairs_under_the_original_operation_identity(
         .execute(&fixture.database.pool)
         .await
         .unwrap();
-    let repaired = fixture
-        .worker
-        .fork::<dbos_notation::TransitionReport, dbos_notation::NotationTransitionError>(
-            &logical,
-            dbos::ForkFrom::LastFailure,
-        )
-        .await
-        .unwrap();
+    let repaired = fork_from_last_failure(&fixture.worker, &logical).await;
     assert_eq!(
         tokio::time::timeout(DEADLINE, repaired.result())
             .await
