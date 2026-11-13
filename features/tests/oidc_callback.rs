@@ -195,6 +195,10 @@ async fn assert_role_preserved(world: &mut OidcWorld, role: String) {
 #[tokio::main]
 async fn main() {
     OidcWorld::cucumber()
+        // Scenarios share the process-wide embedded SurrealDB from
+        // `features::shared_surreal`; running them in parallel can leave a
+        // persons lookup waiting forever on another scenario's engine task.
+        .max_concurrent_scenarios(1)
         .run_and_exit("tests/features/oidc_callback.feature")
         .await;
 }
