@@ -1974,7 +1974,9 @@ pub enum ReferenceCmd {
 #[derive(Subcommand)]
 pub enum AdverseCmd {
     /// Record a manual, full-confidence `adverse_to` edge from the client to
-    /// a party this Project already references.
+    /// a party this Project references. With `--person-name`, or
+    /// `--entity-type` and `--jurisdiction`, the party is first referenced as
+    /// `adverse_party`, creating it if new.
     Add {
         #[command(flatten)]
         party: PartyOpt,

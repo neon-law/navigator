@@ -3812,7 +3812,9 @@ struct RecordAdversityRequest {
 }
 
 impl RecordAdversityRequest {
-    /// Exactly one party, resolved to the row it names.
+    /// Exactly one party, resolved to the row it names. A natural key that
+    /// names no row is a party the matter cannot reference either, so it is
+    /// refused as unreferenced rather than as a bare `404`.
     async fn party(
         &self,
         surreal: &store::surreal::SurrealDb,
@@ -3837,18 +3839,20 @@ impl RecordAdversityRequest {
         if let Some(id) = self.entity_id {
             return Ok(store::project_references::Party::entity(id));
         }
+        let unreferenced =
+            || ApiError::from(store::project_references::AdversityError::PartyNotReferenced);
         if let Some(email) = self.person_email.as_deref() {
             let person = store::persons::find_by_email_ci(surreal, email)
                 .await
                 .map_err(|error| ApiError::Db(error.to_string()))?
-                .ok_or(ApiError::NotFound)?;
+                .ok_or_else(unreferenced)?;
             return Ok(store::project_references::Party::person(person.id));
         }
         let name = self.entity_name.as_deref().unwrap_or_default();
         let entity = store::entities::find_by_name(surreal, name)
             .await
             .map_err(|error| ApiError::Db(error.to_string()))?
-            .ok_or(ApiError::NotFound)?;
+            .ok_or_else(unreferenced)?;
         Ok(store::project_references::Party::entity(entity.id))
     }
 }

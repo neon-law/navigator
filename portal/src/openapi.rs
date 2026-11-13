@@ -3326,10 +3326,10 @@ fn canonical_document(base: &str) -> Value {
               "403": { "description": "Authenticated caller is not Lawyer/admin", "content": { "application/json": {
                 "schema": { "$ref": "#/components/schemas/ApiError" }
               } } },
-              "404": { "description": "No such matter, out of scope, or no such party", "content": { "application/json": {
+              "404": { "description": "No such matter, or out of scope", "content": { "application/json": {
                 "schema": { "$ref": "#/components/schemas/ApiError" }
               } } },
-              "422": { "description": "The matter does not reference that party, or has no client DRI to start the edge from", "content": { "application/json": {
+              "422": { "description": "The matter does not reference that party (including one no row matches), or has no client DRI to start the edge from", "content": { "application/json": {
                 "schema": { "$ref": "#/components/schemas/ApiError" }
               } } },
               "500": { "description": "The edge could not be written (database error)", "content": { "application/json": {

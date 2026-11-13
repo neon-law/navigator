@@ -24,7 +24,8 @@ referenced party. `navigator project reference add` sends the same one-record do
 Adversity is recorded against a referenced party: `POST /app/api/projects/{id}/relationships/adverse` (`navigator
 project adverse add`) lands a `manual`, full-confidence `adverse_to` [Relationship Edge](relationship-edge.md) from the
 client — the Project's Entity, or its client DRI — to the party, sourced to the [Relationship Log](relationship-log.md)
-row the write appends on the Project.
+row the write appends on the Project. Given what a reference needs, the verb records the `adverse_party` reference
+first.
 
 - Schema and commands: [`store::project_references`](../../store/src/project_references.rs) — Lives in the
   `project_reference` relation

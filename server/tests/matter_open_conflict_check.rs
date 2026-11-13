@@ -323,25 +323,30 @@ async fn adversity_against_an_unreferenced_party_is_refused() {
         .expect("the open matter");
     let stranger = store::test_support::seed_entity(&surreal).await;
 
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(format!(
-                    "/app/api/projects/{}/relationships/adverse",
-                    matter.id
-                ))
-                .header("authorization", admin_bearer())
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    serde_json::json!({ "entity_id": stranger }).to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    // An existing row the matter never referenced, and an email that names
+    // no Person at all, are refused alike: the party is not referenced.
+    for party in [
+        serde_json::json!({ "entity_id": stranger }),
+        serde_json::json!({ "person_email": "nobody-yet@example.com" }),
+    ] {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/app/api/projects/{}/relationships/adverse",
+                        matter.id
+                    ))
+                    .header("authorization", admin_bearer())
+                    .header("content-type", "application/json")
+                    .body(Body::from(party.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY, "{party}");
+    }
     assert!(
         store::relationships::all(&surreal)
             .await
