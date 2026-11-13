@@ -771,7 +771,7 @@ mod tests {
     fn the_import_verb_refuses_a_redlined_document() {
         let redline = against(&render(V2), &render(V1), AUTHOR).unwrap();
         let error = plan_import(V2, V2.as_bytes(), &redline.bytes).unwrap_err();
-        assert!(matches!(error, ImportError::TrackedChanges));
+        assert!(matches!(error, ImportError::TrackedChanges(_)));
         assert!(error.to_string().contains("tracked changes"));
     }
 

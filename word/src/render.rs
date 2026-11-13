@@ -100,6 +100,7 @@ struct Paragraph {
     text: String,
     /// Byte ranges styled as Markdown emphasis; the import baseline stays plain text.
     italics: Vec<std::ops::Range<usize>>,
+    bold: Vec<std::ops::Range<usize>>,
     /// Byte ranges highlighted yellow: an open item in a draft.
     highlights: Vec<std::ops::Range<usize>>,
     /// Byte ranges set white at 4pt: an e-signature provider's anchor on a
@@ -181,7 +182,7 @@ pub fn render_notation(
         write_entry(
             &mut archive,
             PROVENANCE_PART,
-            provenance.to_xml().as_bytes(),
+            provenance.with_blocks(body).as_bytes(),
             file_options,
         )?;
     }
@@ -275,6 +276,7 @@ pub struct SourceBlock {
     pub kind: SourceBlockKind,
     pub text: String,
     pub source: std::ops::Range<usize>,
+    pub(crate) formatted: Vec<Vec<String>>,
 }
 
 /// The Markdown shape a source block was written as. Drives the prefix
@@ -309,6 +311,26 @@ pub fn source_blocks(markdown: &str) -> Vec<SourceBlock> {
                     .join(" | "),
             },
             source: pair.source,
+            formatted: match &pair.block {
+                Block::Paragraph(paragraph) => vec![vec![crate::import::paragraph_markdown(
+                    &paragraph_runs_xml(paragraph, false),
+                    false,
+                )]],
+                Block::Table(table) => table
+                    .rows
+                    .iter()
+                    .map(|row| {
+                        row.iter()
+                            .map(|paragraph| {
+                                crate::import::paragraph_markdown(
+                                    &paragraph_runs_xml(paragraph, false),
+                                    false,
+                                )
+                            })
+                            .collect()
+                    })
+                    .collect(),
+            },
         })
         .collect()
 }
@@ -335,6 +357,7 @@ fn blocks_with_source(markdown: &str) -> Vec<SourcePair> {
     let mut cell: Option<Paragraph> = None;
     let mut lists: Vec<Option<u64>> = Vec::new();
     let mut italic_depth = 0usize;
+    let mut bold_depth = 0usize;
     let mut quote_depth = 0usize;
     let mut group: Option<usize> = None;
     let mut groups = 0usize;
@@ -394,6 +417,8 @@ fn blocks_with_source(markdown: &str) -> Vec<SourcePair> {
                 }
                 lists.push(start);
             }
+            Event::Start(Tag::Strong) => bold_depth += 1,
+            Event::End(TagEnd::Strong) => bold_depth = bold_depth.saturating_sub(1),
             Event::Start(Tag::Emphasis) => italic_depth += 1,
             Event::End(TagEnd::Emphasis) => italic_depth = italic_depth.saturating_sub(1),
             Event::Start(Tag::BlockQuote(_)) => quote_depth += 1,
@@ -427,6 +452,7 @@ fn blocks_with_source(markdown: &str) -> Vec<SourcePair> {
                     cell.get_or_insert_with(Paragraph::default),
                     &text,
                     italic_depth > 0,
+                    bold_depth > 0,
                 );
             }
             Event::SoftBreak if cell.is_some() => {
@@ -434,6 +460,7 @@ fn blocks_with_source(markdown: &str) -> Vec<SourcePair> {
                     cell.get_or_insert_with(Paragraph::default),
                     " ",
                     italic_depth > 0,
+                    bold_depth > 0,
                 );
             }
             Event::HardBreak if cell.is_some() => {
@@ -444,6 +471,7 @@ fn blocks_with_source(markdown: &str) -> Vec<SourcePair> {
                     current.get_or_insert_with(Paragraph::default),
                     &text,
                     italic_depth > 0,
+                    bold_depth > 0,
                 );
             }
             // A soft break is a plain source-line wrap (S102 packs prose to
@@ -456,6 +484,7 @@ fn blocks_with_source(markdown: &str) -> Vec<SourcePair> {
                     current.get_or_insert_with(Paragraph::default),
                     " ",
                     italic_depth > 0,
+                    bold_depth > 0,
                 );
             }
             Event::HardBreak => {
@@ -492,7 +521,12 @@ fn blocks_with_source(markdown: &str) -> Vec<SourcePair> {
             // placeholder: an empty rule the signer completes by hand.
             Event::Html(html) | Event::InlineHtml(html) if crate::paper::is_signer_box(&html) => {
                 if let Some(cell) = cell.as_mut() {
-                    append_text(cell, &SIGNER_BOX_RUN.to_string(), italic_depth > 0);
+                    append_text(
+                        cell,
+                        &SIGNER_BOX_RUN.to_string(),
+                        italic_depth > 0,
+                        bold_depth > 0,
+                    );
                 } else {
                     current
                         .get_or_insert_with(Paragraph::default)
@@ -693,18 +727,21 @@ fn document_xml(
 }
 
 /// Append a text event without losing its emphasis or contaminating the plain import baseline.
-fn append_text(paragraph: &mut Paragraph, text: &str, italic: bool) {
+fn append_text(paragraph: &mut Paragraph, text: &str, italic: bool, bold: bool) {
     let start = paragraph.text.len();
     paragraph.text.push_str(text);
-    if italic && !text.is_empty() {
-        if let Some(last) = paragraph
-            .italics
-            .last_mut()
-            .filter(|range| range.end == start)
-        {
-            last.end = paragraph.text.len();
-        } else {
-            paragraph.italics.push(start..paragraph.text.len());
+    if !text.is_empty() {
+        for (enabled, ranges) in [
+            (italic, &mut paragraph.italics),
+            (bold, &mut paragraph.bold),
+        ] {
+            if enabled {
+                if let Some(last) = ranges.last_mut().filter(|range| range.end == start) {
+                    last.end = paragraph.text.len();
+                } else {
+                    ranges.push(start..paragraph.text.len());
+                }
+            }
         }
     }
 }
@@ -724,9 +761,9 @@ fn append_anchor(paragraph: &mut Paragraph, anchor: &str) {
 
 /// Append a counsel signature's `/s/` line to `paragraph` and draw its rule.
 fn append_counsel_signature(paragraph: &mut Paragraph, signature: &crate::paper::CounselSignature) {
-    append_text(paragraph, "/s/ ", true);
+    append_text(paragraph, "/s/ ", true, false);
     let start = paragraph.text.len();
-    append_text(paragraph, signature.name(), true);
+    append_text(paragraph, signature.name(), true, false);
     if *signature == crate::paper::CounselSignature::Draft {
         paragraph.highlights.push(start..paragraph.text.len());
     }
@@ -770,6 +807,7 @@ fn paragraph_runs_xml(paragraph: &Paragraph, bold: bool) -> String {
     for range in paragraph
         .italics
         .iter()
+        .chain(&paragraph.bold)
         .chain(&paragraph.highlights)
         .chain(&paragraph.anchors)
     {
@@ -785,7 +823,7 @@ fn paragraph_runs_xml(paragraph: &Paragraph, bold: bool) -> String {
     for window in cuts.windows(2) {
         let (start, end) = (window[0], window[1]);
         let style = RunStyle {
-            bold,
+            bold: bold || covers(&paragraph.bold, start),
             italic: covers(&paragraph.italics, start),
             highlight: covers(&paragraph.highlights, start),
             anchor: covers(&paragraph.anchors, start),

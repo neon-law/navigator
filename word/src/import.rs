@@ -28,9 +28,8 @@
 //! the project gate's line width on the way back in, and the CLI re-runs
 //! the blocking gate over the updated template before anything is written.
 //!
-//! Tables are protected: baseline table blocks are never rewritten, and
-//! paragraphs inside the package's tables are ignored. Drafts rendered with
-//! a pleading caption are also out of scope — the caption has no baseline.
+//! Tables map to GFM pipe table blocks. Drafts rendered with a pleading
+//! caption are out of scope because the caption has no source block.
 
 use std::collections::HashMap;
 use std::io::Read;
@@ -104,8 +103,8 @@ pub struct ImportPlan {
 pub enum ImportError {
     #[error(transparent)]
     Provenance(#[from] ProvenanceError),
-    #[error("the edited draft still carries tracked changes; accept or reject them in Word, then export again")]
-    TrackedChanges,
+    #[error("the edited draft still carries tracked changes; accept or reject them in Word, then import again{0}")]
+    TrackedChanges(String),
     #[error("the edit removed the placeholder {0}, which the template needs")]
     PlaceholderRemoved(String),
     #[error("the edit added a new placeholder {0}, which the template never had")]
@@ -124,6 +123,8 @@ pub enum ImportError {
     },
     #[error("an import hunk no longer fits the template")]
     HunkOutOfBounds,
+    #[error("the edited Word table cannot be represented as a Markdown pipe table")]
+    UnsupportedTable,
 }
 
 /// One review comment an edited package still carries, reported in the
@@ -175,10 +176,11 @@ pub fn plan_import(
     verify_template_hash(&record, template_bytes)?;
 
     let body = extract_body_xml(docx).ok_or(ProvenanceError::Unreadable)?;
-    let edited_doc = parse_body(&body).ok_or(ProvenanceError::Unreadable)?;
-    if edited_doc.tracked_changes {
-        return Err(ImportError::TrackedChanges);
+    let revisions = list_revisions(&body);
+    if !revisions.is_empty() {
+        return Err(ImportError::TrackedChanges(revisions));
     }
+    let edited_doc = parse_body(&body)?;
     if edited_doc.commented {
         let comments = read_comments(docx, &edited_doc.comment_anchors());
         return Err(ImportError::Comments {
@@ -193,20 +195,14 @@ pub fn plan_import(
     let frontmatter_len = body_offset(template);
     let baseline: Vec<SourceBlock> = source_blocks(&template[frontmatter_len..])
         .into_iter()
-        .filter(|block| block.kind != SourceBlockKind::Table)
         .map(|mut block| {
             block.source = block.source.start + frontmatter_len..block.source.end + frontmatter_len;
             block
         })
         .collect();
-    let edited: Vec<String> = edited_doc
-        .paragraphs
-        .iter()
-        .map(|paragraph| normalize(&paragraph.text))
-        .filter(|text| !text.is_empty())
-        .collect();
+    let edited = &edited_doc.blocks;
 
-    let hunks = align(template, &baseline, &edited);
+    let hunks = align(template, &baseline, edited);
     let plan = ImportPlan {
         template_path: record.template_path,
         hunks,
@@ -285,7 +281,7 @@ pub fn body_offset(contents: &str) -> usize {
 /// dynamic programming — templates are small (hundreds of blocks), so the
 /// quadratic table is fine and stays deterministic. Between matches, paired
 /// runs become replacements and leftovers become inserts or deletes.
-fn align(template: &str, baseline: &[SourceBlock], edited: &[String]) -> Vec<Hunk> {
+fn align(template: &str, baseline: &[SourceBlock], edited: &[EditedBlock]) -> Vec<Hunk> {
     let mut table = vec![vec![0usize; edited.len() + 1]; baseline.len() + 1];
     for (b, base_block) in baseline.iter().enumerate().rev() {
         for (e, text) in edited.iter().enumerate().rev() {
@@ -348,8 +344,21 @@ fn align(template: &str, baseline: &[SourceBlock], edited: &[String]) -> Vec<Hun
     hunks
 }
 
-fn equal(block: &SourceBlock, edited: &str) -> bool {
-    normalize(&block.text) == edited
+fn equal(block: &SourceBlock, edited: &EditedBlock) -> bool {
+    match edited {
+        EditedBlock::Paragraph(paragraph) => {
+            block.kind != SourceBlockKind::Table && block.formatted[0][0] == paragraph.markdown
+        }
+        EditedBlock::Table(rows) => {
+            block.kind == SourceBlockKind::Table
+                && block.formatted.len() == rows.len()
+                && block
+                    .formatted
+                    .iter()
+                    .zip(rows)
+                    .all(|(source, edited)| source == edited)
+        }
+    }
 }
 
 /// Normalize for comparison only: collapse whitespace runs and unify the
@@ -427,7 +436,7 @@ fn reflow_prose(text: &str) -> String {
 fn push_run_hunks(
     template: &str,
     deleted: &[SourceBlock],
-    inserted: &[String],
+    inserted: &[EditedBlock],
     anchor: usize,
     hunks: &mut Vec<Hunk>,
 ) {
@@ -459,14 +468,12 @@ fn push_run_hunks(
     }
     // Remaining inserts land one after another at the run's anchor, each
     // closed with a blank line so the next block still starts fresh.
-    let mut at = anchor;
     for new in &inserted[paired..] {
-        let text = format!("{}\n\n", reflow_prose(new));
+        let text = format!("{}\n\n", new.markdown(None));
         hunks.push(Hunk {
-            source: at..at,
-            kind: HunkKind::Inserted { new: text.clone() },
+            source: anchor..anchor,
+            kind: HunkKind::Inserted { new: text },
         });
-        at += text.len();
     }
 }
 
@@ -482,7 +489,13 @@ fn insert_position(template: &str, from: usize) -> usize {
 
 /// The replacement text for one rewritten block: the edited text under the
 /// baseline block's own Markdown shape, at the level the template wrote.
-fn rewrite(template: &str, block: &SourceBlock, edited: &str) -> String {
+fn rewrite(template: &str, block: &SourceBlock, edited: &EditedBlock) -> String {
+    let EditedBlock::Paragraph(edited) = edited else {
+        let source =
+            (block.kind == SourceBlockKind::Table).then(|| &template[block.source.clone()]);
+        return edited.markdown(source);
+    };
+    let edited = edited.markdown.as_str();
     let text = match block.kind {
         SourceBlockKind::ListItem => {
             let edited = edited.trim_start();
@@ -538,16 +551,16 @@ fn protect_placeholders(template: &str, plan: &ImportPlan) -> Result<(), ImportE
         let old = template
             .get(hunk.source.start..hunk.source.end)
             .unwrap_or("");
-        let new = hunk.replacement();
-        for code in spans(old) {
-            if !spans(new).contains(&code) {
-                return Err(ImportError::PlaceholderRemoved(code));
-            }
+        let old_spans = spans(old);
+        let mut new_spans = spans(hunk.replacement());
+        for code in old_spans {
+            let Some(index) = new_spans.iter().position(|candidate| candidate == &code) else {
+                return Err(ImportError::PlaceholderRemoved(code.trim().to_string()));
+            };
+            new_spans.remove(index);
         }
-        for code in spans(new) {
-            if !spans(old).contains(&code) {
-                return Err(ImportError::PlaceholderAdded(code));
-            }
+        if let Some(code) = new_spans.first() {
+            return Err(ImportError::PlaceholderAdded(code.trim().to_string()));
         }
     }
     Ok(())
@@ -563,7 +576,7 @@ pub fn spans(text: &str) -> Vec<String> {
         let after = &rest[open + 2..];
         match after.find("}}") {
             Some(close) => {
-                found.push(after[..close].trim().to_string());
+                found.push(after[..close].to_string());
                 rest = &after[close + 2..];
             }
             None => break,
@@ -607,12 +620,75 @@ fn push_block(report: &mut String, marker: char, block: &str) {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct EditedParagraph {
     text: String,
+    markdown: String,
     comment_refs: Vec<String>,
 }
 
+enum EditedBlock {
+    Paragraph(EditedParagraph),
+    Table(Vec<Vec<String>>),
+}
+
+impl EditedBlock {
+    fn markdown(&self, source: Option<&str>) -> String {
+        match self {
+            Self::Paragraph(paragraph) => reflow_prose(&paragraph.markdown),
+            Self::Table(rows) => {
+                let columns = rows.first().map_or(0, Vec::len);
+                let (leading_pipe, trailing_pipe) = source
+                    .and_then(|text| text.lines().next())
+                    .map_or((true, true), |line| {
+                        (
+                            line.trim_start().starts_with('|'),
+                            line.trim_end().ends_with('|'),
+                        )
+                    });
+                let delimiters: Vec<&str> = source
+                    .and_then(|text| text.lines().nth(1))
+                    .map(|line| {
+                        line.trim()
+                            .trim_matches('|')
+                            .split('|')
+                            .map(str::trim)
+                            .collect()
+                    })
+                    .filter(|cells: &Vec<_>| cells.len() == columns)
+                    .unwrap_or_else(|| vec!["---"; columns]);
+                let table_row = |cells: &[String]| {
+                    let mut line = cells.join(" | ");
+                    if leading_pipe {
+                        line.insert_str(0, "| ");
+                    }
+                    if trailing_pipe {
+                        line.push_str(" |");
+                    }
+                    line
+                };
+                let mut lines = Vec::with_capacity(rows.len() + 1);
+                for (index, row) in rows.iter().enumerate() {
+                    let cells = row
+                        .iter()
+                        .map(|markdown| markdown.replace('|', "\\|"))
+                        .collect::<Vec<_>>();
+                    lines.push(table_row(&cells));
+                    if index == 0 {
+                        lines.push(table_row(
+                            &delimiters
+                                .iter()
+                                .map(ToString::to_string)
+                                .collect::<Vec<_>>(),
+                        ));
+                    }
+                }
+                lines.join("\n")
+            }
+        }
+    }
+}
+
 struct EditedDocument {
+    blocks: Vec<EditedBlock>,
     paragraphs: Vec<EditedParagraph>,
-    tracked_changes: bool,
     commented: bool,
 }
 
@@ -649,33 +725,188 @@ pub(crate) fn extract_body_xml(docx: &[u8]) -> Option<String> {
 }
 
 /// Walk the body's top-level elements: paragraphs in reading order (with
-/// their text) and a whole-table skip. No XML dependency beyond the package
-/// shape the renderer itself writes — and Word preserves that shape.
-fn parse_body(body: &str) -> Option<EditedDocument> {
-    let tracked_changes = body.contains("<w:ins ") || body.contains("<w:del ");
+/// their text) and tables in reading order.
+fn parse_body(body: &str) -> Result<EditedDocument, ImportError> {
     let commented = body.contains("<w:commentReference ");
     let mut paragraphs = Vec::new();
+    let mut blocks = Vec::new();
     let mut rest = body;
     while let Some(position) = rest.find('<') {
         let element = &rest[position..];
         if element.starts_with("<w:p>") || element.starts_with("<w:p ") {
-            let end = element.find("</w:p>")? + "</w:p>".len();
-            paragraphs.push(EditedParagraph {
-                text: paragraph_text(&element[..end]),
-                comment_refs: comment_reference_ids(&element[..end]),
-            });
+            let end = element.find("</w:p>").ok_or(ProvenanceError::Unreadable)? + "</w:p>".len();
+            let paragraph = read_paragraph(&element[..end], false);
+            if !normalize(&paragraph.text).is_empty() {
+                blocks.push(EditedBlock::Paragraph(paragraph.clone()));
+            }
+            paragraphs.push(paragraph);
             rest = &element[end..];
-        } else if element.starts_with("<w:tbl>") {
-            let end = element.find("</w:tbl>")? + "</w:tbl>".len();
+        } else if opens_element(element, "tbl") {
+            let end = element
+                .find("</w:tbl>")
+                .ok_or(ImportError::UnsupportedTable)?
+                + "</w:tbl>".len();
+            let table = &element[..end];
+            if table.contains("<w:gridSpan")
+                || table.contains("<w:vMerge")
+                || child_elements(&table[1..], "tbl").next().is_some()
+            {
+                return Err(ImportError::UnsupportedTable);
+            }
+            let rows: Vec<Vec<String>> = child_elements(table, "tr")
+                .enumerate()
+                .map(|(row_index, row)| {
+                    child_elements(row, "tc")
+                        .map(|cell| {
+                            let mut contents = child_elements(cell, "p");
+                            let markdown = contents.next().map_or_else(String::new, |xml| {
+                                let paragraph = read_paragraph(xml, row_index == 0);
+                                let markdown = paragraph.markdown.clone();
+                                paragraphs.push(paragraph);
+                                markdown
+                            });
+                            if contents.next().is_some() {
+                                return Err(ImportError::UnsupportedTable);
+                            }
+                            Ok(markdown)
+                        })
+                        .collect()
+                })
+                .collect::<Result<_, _>>()?;
+            let columns = rows.first().map_or(0, Vec::len);
+            if columns == 0 || rows.iter().any(|row| row.len() != columns) {
+                return Err(ImportError::UnsupportedTable);
+            }
+            blocks.push(EditedBlock::Table(rows));
             rest = &element[end..];
         } else {
             rest = &rest[position + 1..];
         }
     }
-    Some(EditedDocument {
+    Ok(EditedDocument {
+        blocks,
         paragraphs,
-        tracked_changes,
         commented,
+    })
+}
+
+fn opens_element(xml: &str, name: &str) -> bool {
+    xml.strip_prefix("<w:")
+        .and_then(|tag| tag.strip_prefix(name))
+        .is_some_and(|suffix| suffix.starts_with(['>', ' ']))
+}
+
+fn child_elements<'a>(mut xml: &'a str, name: &'static str) -> impl Iterator<Item = &'a str> {
+    let prefix = format!("<w:{name}");
+    let closing = format!("</w:{name}>");
+    std::iter::from_fn(move || loop {
+        let start = xml.find(&prefix)?;
+        xml = &xml[start..];
+        if opens_element(xml, name) {
+            let end = xml.find(&closing)? + closing.len();
+            let element = &xml[..end];
+            xml = &xml[end..];
+            return Some(element);
+        }
+        xml = &xml[prefix.len()..];
+    })
+}
+
+fn read_paragraph(xml: &str, table_header: bool) -> EditedParagraph {
+    EditedParagraph {
+        text: paragraph_text(xml),
+        markdown: paragraph_markdown(xml, table_header),
+        comment_refs: comment_reference_ids(xml),
+    }
+}
+
+pub(crate) fn paragraph_markdown(xml: &str, table_header: bool) -> String {
+    let mut runs: Vec<(bool, bool, String)> = Vec::new();
+    for run in child_elements(xml, "r") {
+        let text = paragraph_text(run);
+        if text.is_empty() {
+            continue;
+        }
+        let properties = child_elements(run, "rPr").next().unwrap_or("");
+        let bold = !table_header && run_property(properties, "b");
+        let italic = run_property(properties, "i");
+        if let Some((_, _, last)) = runs
+            .last_mut()
+            .filter(|(last_bold, last_italic, _)| (*last_bold, *last_italic) == (bold, italic))
+        {
+            last.push_str(&text);
+        } else {
+            runs.push((bold, italic, text));
+        }
+    }
+
+    let mut markdown = String::new();
+    for (bold, italic, text) in runs {
+        let marker = match (bold, italic) {
+            (true, true) => "***",
+            (true, false) => "**",
+            (false, true) => "*",
+            (false, false) => "",
+        };
+        let contents = text.trim();
+        if marker.is_empty() || contents.is_empty() {
+            markdown.push_str(&text);
+        } else {
+            markdown.push_str(&text[..text.len() - text.trim_start().len()]);
+            markdown.push_str(marker);
+            markdown.push_str(contents);
+            markdown.push_str(marker);
+            markdown.push_str(&text[text.trim_end().len()..]);
+        }
+    }
+    normalize(&markdown)
+}
+
+fn list_revisions(body: &str) -> String {
+    use std::fmt::Write as _;
+    let mut report = String::new();
+    for (kind, description) in [
+        ("ins", "insertion"),
+        ("del", "deletion"),
+        ("moveFrom", "move source"),
+        ("moveTo", "move destination"),
+        ("rPrChange", "run formatting change"),
+        ("pPrChange", "paragraph formatting change"),
+        ("tblPrChange", "table formatting change"),
+        ("trPrChange", "row formatting change"),
+        ("tcPrChange", "cell formatting change"),
+    ] {
+        let prefix = format!("<w:{kind}");
+        for (at, _) in body.match_indices(&prefix) {
+            let element = &body[at..];
+            if !opens_element(element, kind) {
+                continue;
+            }
+            let Some((start, _)) = element.split_once('>') else {
+                continue;
+            };
+            let id = start
+                .split_once("w:id=\"")
+                .and_then(|(_, value)| value.split_once('"'))
+                .map_or("unknown", |(id, _)| id);
+            let _ = write!(report, "\n  - {description} (revision {id})");
+        }
+    }
+    report
+}
+
+fn run_property(properties: &str, property: &str) -> bool {
+    let name = format!("<w:{property}");
+    properties.match_indices(&name).any(|(at, _)| {
+        let suffix = &properties[at + name.len()..];
+        suffix.starts_with("/>")
+            || suffix.starts_with('>')
+            || suffix.starts_with(' ')
+                && suffix.split('>').next().is_some_and(|attributes| {
+                    !["0", "false", "off"]
+                        .iter()
+                        .any(|disabled| attributes.contains(&format!("w:val=\"{disabled}\"")))
+                })
     })
 }
 
@@ -1077,6 +1308,16 @@ mod tests {
     }
 
     #[test]
+    fn deleting_one_of_two_identical_placeholders_is_refused() {
+        let template = "Contact {{name}} or send a letter to {{name}}.\n";
+        let docx = export_then_edit(template, |document| {
+            *document = replace_paragraph_text(document, "{{name}}.", "the office.");
+        });
+        let error = plan_import(template, template.as_bytes(), &docx).unwrap_err();
+        assert!(matches!(error, ImportError::PlaceholderRemoved(ref code) if code == "name"));
+    }
+
+    #[test]
     fn inventing_a_placeholder_is_refused() {
         let docx = export_then_edit(TEMPLATE, |document| {
             *document = replace_paragraph_text(
@@ -1105,9 +1346,12 @@ mod tests {
     #[test]
     fn a_hash_mismatch_refuses_the_import() {
         let docx = export_then_edit(TEMPLATE, |_| {});
-        let changed = format!("{TEMPLATE}\n<!-- edited later -->\n");
+        let changed = TEMPLATE.replace("Fees are due", "Fees are payable");
         let error = plan_import(&changed, changed.as_bytes(), &docx).unwrap_err();
         assert!(error.to_string().contains("re-export a fresh draft"));
+        assert!(error
+            .to_string()
+            .contains("Changed or removed block at exported body line 9"));
         assert!(matches!(
             error,
             ImportError::Provenance(crate::provenance::ProvenanceError::HashMismatch { .. })
@@ -1130,8 +1374,8 @@ mod tests {
             );
         });
         let error = plan_import(TEMPLATE, TEMPLATE.as_bytes(), &docx).unwrap_err();
-        assert!(matches!(error, ImportError::TrackedChanges));
-        assert!(error.to_string().contains("tracked changes"));
+        assert!(matches!(error, ImportError::TrackedChanges(_)));
+        assert!(error.to_string().contains("insertion (revision 1)"));
     }
 
     #[test]
@@ -1189,24 +1433,45 @@ mod tests {
     }
 
     #[test]
-    fn tables_are_protected_from_edits() {
+    fn formatting_only_changes_are_imported() {
+        let template = "Payment is due today.\n";
+        let docx = export_then_edit(template, |document| {
+            *document = replace_paragraph_text(
+                document,
+                "<w:r><w:t xml:space=\"preserve\">Payment",
+                "<w:r><w:rPr><w:b/></w:rPr><w:t xml:space=\"preserve\">Payment",
+            );
+        });
+        let (_, applied) = dry_run_import(template, template.as_bytes(), &docx).unwrap();
+        assert_eq!(applied, "**Payment is due today.**\n");
+    }
+
+    #[test]
+    fn changed_prose_preserves_bold_and_italic_runs() {
+        let template = "Pay **promptly** and *in full*.\n";
+        let docx = export_then_edit(template, |document| {
+            *document = replace_paragraph_text(document, "promptly", "by Friday");
+        });
+        let (_, applied) = dry_run_import(template, template.as_bytes(), &docx).unwrap();
+        assert_eq!(applied, "Pay **by Friday** and *in full*.\n");
+    }
+
+    #[test]
+    fn edited_table_cells_return_to_their_markdown_block() {
         let template = concat!(
             "# Rates\n",
             "\n",
             "| Service | Fee |\n",
-            "|---------|-----|\n",
+            "| --- | --- |\n",
             "| Filing | $200 |\n",
             "\n",
             "Contact {{attorney_email}} for questions.\n",
         );
         let docx = export_then_edit(template, |document| {
-            *document = replace_paragraph_text(document, "Contact", "Write");
+            *document = replace_paragraph_text(document, "$200", "$250");
         });
-        // The edit lands in the paragraph after the table; the table's cells
-        // were never offered to the aligner.
         let (plan, applied) = dry_run_import(template, template.as_bytes(), &docx).unwrap();
-        assert!(applied.contains("| Filing | $200 |"));
-        assert!(applied.contains("Write {{attorney_email}} for questions."));
+        assert_eq!(applied, template.replace("$200", "$250"));
         assert_eq!(plan.hunks.len(), 1);
     }
 

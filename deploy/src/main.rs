@@ -1046,9 +1046,8 @@ enum NotationCmd {
     /// changed since the export, refuses drafts still carrying tracked
     /// changes or review comments, and refuses any edit that drops a
     /// `{{placeholder}}` or `{{> partial}}` the template needs or invents
-    /// one it never had. Tables are carried verbatim and never touched.
-    /// With `--dry-run` the plan and the updated template print and
-    /// nothing is written.
+    /// one it never had. With `--dry-run` it prints the block-level
+    /// diff without writing.
     Import {
         /// Path to the notation template (`.md`) the document was rendered
         /// from. Updated in place without `--dry-run`.
@@ -1056,8 +1055,7 @@ enum NotationCmd {
         /// Path to the edited Word document (`hudson notation word`'s
         /// output, edited in Word and re-saved). Must end in `.docx`.
         edited: PathBuf,
-        /// Print the plan and the updated template without writing
-        /// anything.
+        /// Print the block-level diff without writing.
         #[arg(long)]
         dry_run: bool,
     },

@@ -15,12 +15,10 @@ is where the edit lands. Never commit a `.docx`.
 
 ```bash
 hudson notation word --preview drafts/<code>.md --out "documents/Work Product/drafts/<code>.docx"
-cp "documents/Work Product/drafts/<code>.docx" "documents/Work Product/drafts/<code>.baseline.docx"
 open -a "Microsoft Word" "documents/Work Product/drafts/<code>.docx"
 ```
 
-The baseline copy measures the lawyer's edits; make it with the export, before Word opens the file. `--preview` keeps
-every `{{placeholder}}` verbatim so an edit maps back to the template.
+The preview keeps every `{{placeholder}}` verbatim and records the template hash and block map.
 
 Tell the lawyer three things:
 
@@ -30,24 +28,16 @@ Tell the lawyer three things:
 
 ## Update the notation
 
-When the lawyer says the file is saved:
+When the lawyer says the file is saved, preview the block-level changes:
 
-1. **Refuse unresolved tracked changes.** Search the edited file's `word/document.xml` for a `w:ins` or `w:del` element.
-   If one is present, stop and ask the lawyer to accept or reject them.
-2. **Diff the text.** Convert the baseline and the edited copy with `textutil -convert txt -stdout` and diff them. Each
-   hunk is one edit to carry back.
-3. **Read the comments.** List `word/comments.xml`, if present. A comment is an instruction or a question: apply it or
-   answer it, and never drop one silently.
-4. **Apply each hunk to its source block** in the template. Change only the words the lawyer changed. Keep the
-   template's Markdown: bold, italics, headings, list markers, and table rows. Leave the frontmatter alone.
-5. **Guard the placeholders.** If a hunk edits, splits, or deletes a `{{placeholder}}` or a `{{> clause}}` include,
-   or replaces a placeholder with a filled value, do not apply it. Show it to the lawyer and ask.
-6. **Gate and re-render.** Refill changed prose to 120 columns, run `navigator project gate`, and render the PDF with
-   `hudson notation pdf --preview` for the lawyer to check.
-7. **Report.** List every hunk applied, every hunk held, and every comment, with its answer.
-8. **Reset the baseline.** Export again and copy a new baseline, so the next round diffs against what the template now
-   says.
+```bash
+hudson notation import drafts/<code>.md "documents/Work Product/drafts/<code>.docx" --dry-run
+```
 
-## Limits
+If the command reports unresolved revisions or comments, have the lawyer resolve them in Word. If the template changed
+after export, compare the conflicting blocks with the lawyer's edits before exporting a fresh draft. If an edit changes
+a placeholder or Clause include, review the proposed wording and keep the template token intact.
 
-Compare the files and map each edit to its template block manually. Preserve the baseline and placeholder checks.
+Review the diff before applying it. Run the same command without `--dry-run` to apply the plan. Import checks the edited
+template against the blocking project rules before writing. Then run `navigator project gate` and render a fresh PDF
+with `hudson notation pdf --preview` for the lawyer to check. Report the edits applied and any held items.

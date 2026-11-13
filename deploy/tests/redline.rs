@@ -200,9 +200,20 @@ fn a_redline_writes_real_tracked_changes() {
     // inserted), the struck-out receipts paragraph, and the added
     // interest paragraph — nothing else revised.
     assert!(document.contains("<w:delText"), "struck text: {document}");
+    let deleted_text = document
+        .split("<w:delText")
+        .skip(1)
+        .filter_map(|run| run.split_once('>'))
+        .filter_map(|(_, content)| content.split_once("</w:delText>"))
+        .map(|(text, _)| text)
+        .collect::<String>();
     assert!(
-        document.contains("first of each month"),
+        deleted_text.contains("Fees are due on the first of each month."),
         "the previous fee text survives struck: {document}"
+    );
+    assert!(
+        document.contains(r#"<w:b/></w:rPr><w:delText xml:space="preserve">first</w:delText>"#),
+        "the deleted fee date retains its bold run: {document}"
     );
     assert!(
         document.contains("Interest accrues at the statutory rate."),

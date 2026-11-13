@@ -43,15 +43,25 @@ impl Provenance<'_> {
     /// XML the same way the renderer escapes every other part.
     #[must_use]
     pub fn to_xml(&self) -> String {
+        self.with_blocks("")
+    }
+
+    pub(crate) fn with_blocks(&self, markdown: &str) -> String {
+        use std::fmt::Write as _;
+        let mut blocks = String::new();
+        for (line, hash) in block_hashes(markdown) {
+            let _ = write!(blocks, r#"<navigator:block line="{line}" hash="{hash}"/>"#);
+        }
         format!(
             concat!(
                 "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>",
                 "<navigator:provenance xmlns:navigator=\"{}\" template-path=\"{}\" ",
-                "template-hash=\"{}\"/>"
+                "template-hash=\"{}\">{}</navigator:provenance>"
             ),
             PROVENANCE_RELATIONSHIP_TYPE,
             xml_escape(self.template_path),
             xml_escape(self.template_hash),
+            blocks,
         )
     }
 }
@@ -61,6 +71,7 @@ impl Provenance<'_> {
 pub struct ProvenanceRecord {
     pub template_path: String,
     pub template_hash: String,
+    pub block_hashes: Vec<(usize, String)>,
 }
 
 /// Why a package's provenance could not be trusted for an import.
@@ -76,9 +87,13 @@ pub enum ProvenanceError {
     MissingAttribute(&'static str),
     #[error(
         "the template changed since this draft was exported (export hash {exported}, current {current}); \
-         re-export a fresh draft before importing"
+         re-export a fresh draft before importing{blocks}"
     )]
-    HashMismatch { exported: String, current: String },
+    HashMismatch {
+        exported: String,
+        current: String,
+        blocks: String,
+    },
 }
 
 /// SHA-256 of a template file's bytes, hex-encoded — the hash the render
@@ -126,6 +141,16 @@ pub fn read_provenance(docx: &[u8]) -> Result<ProvenanceRecord, ProvenanceError>
     Ok(ProvenanceRecord {
         template_path: path,
         template_hash: hash,
+        block_hashes: xml
+            .split("<navigator:block ")
+            .skip(1)
+            .filter_map(|element| {
+                let tag = element.split_once('>')?.0;
+                let line = attribute(tag, "line")?.parse().ok()?;
+                let hash = attribute(tag, "hash")?;
+                Some((line, hash))
+            })
+            .collect(),
     })
 }
 
@@ -146,8 +171,59 @@ pub fn verify_template_hash(
         Err(ProvenanceError::HashMismatch {
             exported: record.template_hash.clone(),
             current,
+            blocks: describe_conflicts(record, current_template_bytes),
         })
     }
+}
+
+fn block_hashes(markdown: &str) -> Vec<(usize, String)> {
+    crate::source_blocks(markdown)
+        .into_iter()
+        .map(|block| {
+            let line = markdown[..block.source.start]
+                .bytes()
+                .filter(|b| *b == b'\n')
+                .count()
+                + 1;
+            (line, template_hash(markdown[block.source].as_bytes()))
+        })
+        .collect()
+}
+
+fn describe_conflicts(record: &ProvenanceRecord, current_template_bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let Ok(current) = std::str::from_utf8(current_template_bytes) else {
+        return String::new();
+    };
+    if record.block_hashes.is_empty() {
+        return String::new();
+    }
+    let current_blocks = block_hashes(&current[crate::body_offset(current)..]);
+    let mut report = String::new();
+    for (line, hash) in &record.block_hashes {
+        if !current_blocks
+            .iter()
+            .any(|(_, candidate)| candidate == hash)
+        {
+            let _ = write!(
+                report,
+                "\n  - Changed or removed block at exported body line {line}"
+            );
+        }
+    }
+    for (line, hash) in &current_blocks {
+        if !record
+            .block_hashes
+            .iter()
+            .any(|(_, candidate)| candidate == hash)
+        {
+            let _ = write!(
+                report,
+                "\n  - Changed or added block at current body line {line}"
+            );
+        }
+    }
+    report
 }
 
 /// One attribute of the provenance element. The renderer writes this part
@@ -210,6 +286,7 @@ mod tests {
             ProvenanceRecord {
                 template_path: "templates/nevada/llc.md".into(),
                 template_hash: "abc123".into(),
+                block_hashes: super::block_hashes(BODY),
             }
         );
     }
@@ -277,6 +354,7 @@ mod tests {
         let record = ProvenanceRecord {
             template_path: "templates/x.md".into(),
             template_hash: template_hash(b"template body"),
+            block_hashes: Vec::new(),
         };
         assert!(verify_template_hash(&record, b"template body").is_ok());
         let error = verify_template_hash(&record, b"edited template body").unwrap_err();
