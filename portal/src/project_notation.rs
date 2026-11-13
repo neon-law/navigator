@@ -41,6 +41,24 @@ pub struct NewProjectNotationBody {
     pub client_email: String,
     #[serde(default)]
     pub delivery: store::notations::SigningDelivery,
+    /// The Draft's source at `source_commit` on the Project repository's
+    /// `main`, sent by `navigator project onboard` from its checkout. Read
+    /// only when this deployment holds no copy of the Draft.
+    #[serde(default)]
+    pub source: Option<String>,
+    /// The `main` commit `source` was read from.
+    #[serde(default)]
+    pub source_commit: Option<String>,
+}
+
+impl NewProjectNotationBody {
+    /// The checkout Draft, when the caller sent both its bytes and commit.
+    fn checkout(&self) -> Option<store::template_source::CheckoutDraft> {
+        Some(store::template_source::CheckoutDraft {
+            contents: self.source.clone()?,
+            commit_sha: self.source_commit.clone()?,
+        })
+    }
 }
 
 /// The matter-open notation command, shared by the lawyer browser form
@@ -62,6 +80,7 @@ pub async fn create_project_notation(
     template_code: &str,
     client_email: &str,
     delivery: store::notations::SigningDelivery,
+    checkout: Option<store::template_source::CheckoutDraft>,
 ) -> Result<StartOutcome, CreateProjectNotationError> {
     let code = template_code.trim();
     let email = client_email.trim();
@@ -120,6 +139,7 @@ pub async fn create_project_notation(
             project_id,
             Some(project.entity_id),
             delivery,
+            checkout,
         )
         .await
         .map_err(CreateProjectNotationError::Session)
@@ -332,6 +352,7 @@ pub async fn project_notation_new_post(
         &body.template_code,
         &body.client_email,
         body.delivery,
+        body.checkout(),
     )
     .await
     {
@@ -442,6 +463,7 @@ mod tests {
             "retainer",
             "client@example.com",
             store::notations::SigningDelivery::default(),
+            None,
         )
         .await
         .expect_err("a missing matter must refuse");

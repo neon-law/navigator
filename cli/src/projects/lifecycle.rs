@@ -81,7 +81,7 @@ async fn run_open(
         );
         return Ok(());
     }
-    require_template_matches_main(root, kind)?;
+    let (source, commit) = require_template_matches_main(root, kind)?;
 
     if has_signed_pointer(root, kind)? {
         println!("{kind} letter is already signed and filed; Project is onboarded/offboarded");
@@ -112,6 +112,7 @@ async fn run_open(
             None
         },
         delivery,
+        Some((&source, &commit)),
     )
     .await;
     if created != ExitCode::SUCCESS {
@@ -140,7 +141,7 @@ async fn run_offboard(
             );
             return Ok(());
         }
-        require_template_matches_main(root, OFFBOARDING)?;
+        let (source, commit) = require_template_matches_main(root, OFFBOARDING)?;
 
         if !has_signed_pointer(root, OFFBOARDING)? {
             if let Some(row) = remote::notation_rows(host, &project.code)
@@ -155,8 +156,16 @@ async fn run_offboard(
                 );
                 return Ok(());
             }
-            if remote::notation_create(host, code, &project.client_dri, &project.code, None, None)
-                .await
+            if remote::notation_create(
+                host,
+                code,
+                &project.client_dri,
+                &project.code,
+                None,
+                None,
+                Some((&source, &commit)),
+            )
+            .await
                 != ExitCode::SUCCESS
             {
                 return Err(anyhow!("could not open the offboarding notation"));
@@ -467,7 +476,9 @@ fn retyped_kind(contents: &str, new_kind: &str) -> Option<String> {
     ))
 }
 
-fn require_template_matches_main(root: &Path, kind: &str) -> Result<()> {
+/// The published Draft's source and the `origin/main` commit it was read
+/// from, once the checkout's copy is confirmed identical to it.
+fn require_template_matches_main(root: &Path, kind: &str) -> Result<(String, String)> {
     git(root, &["fetch", "origin", "main"])
         .context("fetch origin/main before opening the notation")?;
     let relative = template_relative(root, kind)?;
@@ -486,7 +497,11 @@ fn require_template_matches_main(root: &Path, kind: &str) -> Result<()> {
             "local {relative} differs from origin/main; publish the template before opening its notation"
         ));
     }
-    Ok(())
+    Ok((
+        std::fs::read_to_string(root.join(&relative))
+            .with_context(|| format!("read {relative}"))?,
+        git_text(root, &["rev-parse", "origin/main"])?,
+    ))
 }
 
 fn has_signed_pointer(root: &Path, kind: &str) -> Result<bool> {
@@ -882,7 +897,15 @@ mod tests {
     fn published_templates_must_exist_on_main_and_match_the_checkout() {
         let root = tempfile::tempdir().unwrap();
         init_project_repository(root.path(), ONBOARDING);
-        require_template_matches_main(root.path(), ONBOARDING).unwrap();
+        // LAW-283: the published bytes and their `main` commit travel with
+        // the create, for a server that holds no copy of the repository.
+        let (source, commit) = require_template_matches_main(root.path(), ONBOARDING).unwrap();
+        assert_eq!(
+            source,
+            std::fs::read_to_string(template_path(root.path(), ONBOARDING).unwrap()).unwrap()
+        );
+        let head = git(root.path(), &["rev-parse", "origin/main"]).stdout;
+        assert_eq!(commit, String::from_utf8(head).unwrap().trim());
 
         let missing = require_template_matches_main(root.path(), "unpublished").unwrap_err();
         assert!(missing.to_string().contains("origin/main has no"));

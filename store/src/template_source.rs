@@ -43,6 +43,17 @@ pub struct Persisted {
     pub written: bool,
 }
 
+/// A Draft the caller read from its own checkout at a commit on the Project
+/// repository's `main`. A Project whose repository lives on a forge this
+/// deployment holds no copy of opens from these bytes, pinned to that commit.
+#[derive(Debug, Clone)]
+pub struct CheckoutDraft {
+    /// The Draft's Markdown source at `commit_sha`.
+    pub contents: String,
+    /// The `main` commit the bytes were read from.
+    pub commit_sha: String,
+}
+
 /// Errors from [`persist_from_repo`].
 #[derive(Debug, thiserror::Error)]
 pub enum TemplateSourceError {

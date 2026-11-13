@@ -535,6 +535,7 @@ pub async fn create_notation_from_repo(
     project_id: Uuid,
     entity_id: Option<Uuid>,
     delivery: store::notations::SigningDelivery,
+    checkout: Option<store::template_source::CheckoutDraft>,
 ) -> Result<StartOutcome, NotationSessionError> {
     // Prefer a template authored in the Project's own repo — auto-save that
     // exact version and open pinned to it. When the code is not in the repo
@@ -549,11 +550,25 @@ pub async fn create_notation_from_repo(
             .await
     {
         match e {
-            // Not authored in the repo (or the repo has no commits yet) —
-            // try the owning Firm's Library, then the bundled catalog below.
+            // Not in the hosted repo (or it holds no copy, as for a Project
+            // on another forge): open from the caller's checkout Draft when it
+            // sent one, else try the owning Firm's Library, then the bundled
+            // catalog below.
             TemplateSourceError::TemplateNotFound { .. } | TemplateSourceError::RepoEmpty(_) => {
-                persist_from_firm_library(surreal, storage, repo, project_id, template_code)
+                if let Some(draft) = checkout {
+                    store::template_source::persist_contents(
+                        surreal,
+                        storage,
+                        project_id,
+                        template_code,
+                        draft.contents,
+                        draft.commit_sha,
+                    )
                     .await?;
+                } else {
+                    persist_from_firm_library(surreal, storage, repo, project_id, template_code)
+                        .await?;
+                }
             }
             // A template that IS in the repo but is invalid hard-errors.
             other => return Err(other.into()),
@@ -2304,6 +2319,7 @@ mod tests {
             project_id,
             None,
             store::notations::SigningDelivery::default(),
+            None,
         )
         .await
         .unwrap();
@@ -2334,6 +2350,58 @@ mod tests {
             matches!(outcome.next, NextStep::NeedsAnswer { .. }),
             "opening the notation must leave the questionnaire ready to answer"
         );
+    }
+
+    /// LAW-283: a Project whose repository lives on a forge this deployment
+    /// holds no copy of opens from the Draft the caller read at `main`,
+    /// pinned to that commit — not a missing-repo failure, and not the
+    /// bundled catalog's letter of the same code.
+    #[tokio::test]
+    async fn a_project_with_no_hosted_repo_opens_from_the_checkout_draft() {
+        use super::create_notation_from_repo;
+        const TEMPLATE: &str =
+            include_str!("../../templates/notations/neon_law/onboarding__letter.md");
+        const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
+
+        let surreal = db().await;
+        let storage: Arc<dyn StorageService> = Arc::new(
+            cloud::FsStorage::new(std::env::temp_dir().join("navigator-create-from-checkout-test"))
+                .await
+                .unwrap(),
+        );
+        let person_id = seed_person(&surreal, "libra@example.com").await;
+        let project_id = store::test_support::seed_project_surreal(&surreal, "test project").await;
+        let dir = tempfile::tempdir().unwrap();
+        let repo = repos::RepoStore::new(dir.path().join("absent"));
+
+        let outcome = create_notation_from_repo(
+            &surreal,
+            &InMemoryRuntime::new(),
+            &storage,
+            &repo,
+            "onboarding__letter",
+            person_id,
+            project_id,
+            None,
+            store::notations::SigningDelivery::default(),
+            Some(store::template_source::CheckoutDraft {
+                contents: TEMPLATE.to_string(),
+                commit_sha: COMMIT.to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+
+        let notation = store::notations::find_by_id(&surreal, outcome.notation_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let pinned = store::templates::find_by_id(&surreal, notation.template_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(pinned.project_id, Some(project_id));
+        assert_eq!(pinned.source_commit_sha.as_deref(), Some(COMMIT));
     }
 
     /// LAW-273: a pitch whose only Draft is an offboarding letter with an empty
@@ -2431,6 +2499,7 @@ It has been our privilege to do this work alongside you. A future engagement req
             project_id,
             Some(project.entity_id),
             store::notations::SigningDelivery::default(),
+            None,
         )
         .await;
 
@@ -2496,6 +2565,7 @@ It has been our privilege to do this work alongside you. A future engagement req
             project_id,
             None,
             store::notations::SigningDelivery::default(),
+            None,
         )
         .await
         .unwrap();
@@ -2549,6 +2619,7 @@ It has been our privilege to do this work alongside you. A future engagement req
             project_id,
             None,
             store::notations::SigningDelivery::default(),
+            None,
         )
         .await
         .unwrap();
@@ -2611,6 +2682,7 @@ It has been our privilege to do this work alongside you. A future engagement req
             project_id,
             None,
             store::notations::SigningDelivery::default(),
+            None,
         )
         .await
         .unwrap_err();
@@ -2688,6 +2760,7 @@ It has been our privilege to do this work alongside you. A future engagement req
             project_id,
             None,
             store::notations::SigningDelivery::default(),
+            None,
         )
         .await
         .unwrap();

@@ -4576,6 +4576,9 @@ pub async fn patch_project_fields(
 /// interpolated fields match the notation the file was saved from. A
 /// question the file does not answer fails the create — prefill is whole,
 /// never partial.
+///
+/// `checkout` is the Draft's source and the `main` commit it was read from;
+/// the server opens from it when it holds no copy of the Project repository.
 pub async fn notation_create(
     host: Option<&str>,
     template: &str,
@@ -4583,6 +4586,7 @@ pub async fn notation_create(
     project_code: &str,
     answers_from: Option<&Path>,
     delivery: Option<&str>,
+    checkout: Option<(&str, &str)>,
 ) -> ExitCode {
     run(async {
         let (base, token) = resolve(host)?;
@@ -4595,6 +4599,9 @@ pub async fn notation_create(
         let url = format!("{base}/app/projects/{project_code}/notations/new");
         let mut form = vec![("template_code", template), ("client_email", client_email)];
         form.extend(delivery.map(|delivery| ("delivery", delivery)));
+        if let Some((source, commit)) = checkout {
+            form.extend([("source", source), ("source_commit", commit)]);
+        }
         let resp = client
             .post(&url)
             .bearer_auth(&token)
@@ -9457,6 +9464,7 @@ mod tests {
                 "acme",
                 None,
                 None,
+                None,
             )
             .await,
             ExitCode::SUCCESS
@@ -9621,6 +9629,7 @@ mod tests {
                 "acme",
                 Some(&answers_path),
                 Some("emailed"),
+                None,
             )
             .await,
             ExitCode::SUCCESS
@@ -9648,6 +9657,48 @@ mod tests {
             .map(|request| String::from_utf8(request.body.clone()).unwrap())
             .collect();
         assert_eq!(posted, vec!["value=Libra+Example".to_string()]);
+    }
+
+    /// LAW-283: a create from a checkout carries the published Draft and its
+    /// `main` commit, so a server holding no copy of the repository can open it.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_checkout_create_sends_the_published_draft_and_commit() {
+        let _lock = CREDENTIALS_ENV_LOCK.lock().await;
+        let server = MockServer::start().await;
+        let uri = server.uri();
+        let _env = CredentialsEnv::new(&uri);
+        Mock::given(method("POST"))
+            .and(path("/app/projects/acme/notations/new"))
+            .respond_with(ResponseTemplate::new(303).append_header(
+                "location",
+                format!("/app/lawyer/notations/{}/step", Uuid::new_v4()),
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        assert_eq!(
+            notation_create(
+                Some(uri.as_str()),
+                "onboarding__letter",
+                "libra@example.com",
+                "acme",
+                None,
+                None,
+                Some(("---\nkind: onboarding\n---\nBody.\n", "abc123")),
+            )
+            .await,
+            ExitCode::SUCCESS
+        );
+        let requests = server.received_requests().await.unwrap();
+        let form: Vec<(String, String)> = url::form_urlencoded::parse(&requests[0].body)
+            .into_owned()
+            .collect();
+        assert!(form.contains(&(
+            "source".to_string(),
+            "---\nkind: onboarding\n---\nBody.\n".to_string()
+        )));
+        assert!(form.contains(&("source_commit".to_string(), "abc123".to_string())));
     }
 
     /// A malformed answers file stops the prefill with a failure exit — a
@@ -9682,6 +9733,7 @@ mod tests {
                 "libra@example.com",
                 "acme",
                 Some(&malformed),
+                None,
                 None,
             )
             .await,
