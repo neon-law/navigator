@@ -365,6 +365,9 @@ pub(super) async fn mirror(
     pg: &PostgresDb,
     key: &MirrorKey,
 ) -> Result<Mirrored, MirrorError> {
+    if key.held_by_people_authority() {
+        return Ok(Mirrored::Unchanged);
+    }
     // Keep the row writer's provider/store futures off callers' stack frames.
     Box::pin(mirror_inner(surreal, pg, key)).await
 }
@@ -393,15 +396,10 @@ async fn mirror_inner(
             }
             upsert_entity(pg, &image).await
         }
-        MirrorKey::Person(id) => {
-            if crate::persons::postgres_people_authority_configured() {
-                return Ok(Mirrored::Unchanged);
-            }
-            match source_person(surreal, *id).await? {
-                Some(person) => upsert_person(pg, &person).await,
-                None => delete(pg, "DELETE FROM person WHERE id = $1", *id).await,
-            }
-        }
+        MirrorKey::Person(id) => match source_person(surreal, *id).await? {
+            Some(person) => upsert_person(pg, &person).await,
+            None => delete(pg, "DELETE FROM person WHERE id = $1", *id).await,
+        },
         // `super::mirror` routes only identity keys here.
         _ => Err(MirrorError::Source),
     }

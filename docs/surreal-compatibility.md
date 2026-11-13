@@ -20,12 +20,12 @@ database](test-database.md). Database table permissions are `NONE`; application 
 ## People
 
 Without PostgreSQL People authority, `store::persons` writes SurrealDB. A normalized `person_mailbox` record key
-serializes competing claims; a unique email index supplies a backstop. Alias writes and Person merges use this path and
-are refused under PostgreSQL People authority. PostgreSQL People writes project compatibility rows after their
-transaction commits; this projection is a separate write, not a transaction spanning both engines.
+serializes competing claims; a unique email index supplies a backstop. PostgreSQL People writes, including aliases,
+merges, and identity detail, project compatibility rows after their transaction commits; this projection is a separate
+write, not a transaction spanning both engines.
 
-`store::person_phones` writes structured phone rows through SurrealDB and mirrors them through `source_domain_records`.
-Its transaction demotes other primary numbers before setting a primary row.
+Without the authority, `store::person_phones` writes structured phone rows through SurrealDB and mirrors them through
+`source_domain_records`. Its transaction demotes other primary numbers before setting a primary row.
 
 ## Relationship Log
 

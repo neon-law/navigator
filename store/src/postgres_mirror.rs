@@ -222,6 +222,26 @@ pub enum MirrorKey {
 }
 
 impl MirrorKey {
+    /// Whether PostgreSQL holds this row under People authority. SurrealDB
+    /// then holds only a projection of it, which is never copied back.
+    pub(crate) fn held_by_people_authority(&self) -> bool {
+        matches!(
+            self,
+            Self::Person(_)
+                | Self::PersonMailbox(_)
+                | Self::Entity(_)
+                | Self::Address(_)
+                | Self::Credential(_)
+                | Self::EmailToken(_)
+                | Self::PersonDelegate(_)
+                | Self::ExternalIdentity(_)
+                | Self::Record {
+                    table: "person_phone",
+                    ..
+                }
+        ) && crate::persons::postgres_people_authority_configured()
+    }
+
     /// A divergent row's UUID key, or `None` when its key carries text that
     /// could identify a client, such as a Brand key.
     #[must_use]

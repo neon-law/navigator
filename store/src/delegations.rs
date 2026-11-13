@@ -83,7 +83,11 @@ use serde::Serialize;
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use sqlx::{postgres::PgRow, AssertSqlSafe, Row};
+
 use crate::persons::Role;
+use crate::postgres::identity::{self as authority, AuthorityError, PERSON_DELEGATE};
+use crate::postgres::PostgresDb;
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 
 const TABLE: &str = "person_delegate";
@@ -327,6 +331,78 @@ pub enum DelegationError {
     AlreadyGranted,
     #[error("delegation {0} is already revoked")]
     AlreadyRevoked(Uuid),
+    /// PostgreSQL identity authority is configured and failed.
+    #[error(transparent)]
+    Authority(#[from] AuthorityError),
+}
+
+fn rfc3339(row: &PgRow, column: &str) -> Result<Option<String>, sqlx::Error> {
+    Ok(row
+        .try_get::<Option<chrono::DateTime<chrono::Utc>>, _>(column)?
+        .map(|at| at.to_rfc3339()))
+}
+
+fn from_pg(row: &PgRow) -> Result<Option<Delegation>, sqlx::Error> {
+    let basis: String = row.try_get("basis")?;
+    let Some(basis) = Basis::parse(&basis) else {
+        return Ok(None);
+    };
+    let channel: Option<String> = row.try_get("subject_notified_channel")?;
+    Ok(Some(Delegation {
+        id: row.try_get("id")?,
+        delegate_person_id: row.try_get("delegate_person_id")?,
+        subject_person_id: row.try_get("subject_person_id")?,
+        basis,
+        instrument_reference: row.try_get("instrument_reference")?,
+        granted_by_person_id: row.try_get("granted_by_person_id")?,
+        granted_at: rfc3339(row, "granted_at")?.unwrap_or_default(),
+        subject_notified_at: rfc3339(row, "subject_notified_at")?,
+        subject_notified_channel: channel.as_deref().and_then(NoticeChannel::parse),
+        revoked_at: rfc3339(row, "revoked_at")?,
+        revoked_by_person_id: row.try_get("revoked_by_person_id")?,
+        inserted_at: rfc3339(row, "inserted_at")?.unwrap_or_default(),
+        updated_at: rfc3339(row, "updated_at")?.unwrap_or_default(),
+    }))
+}
+
+/// Delegations from PostgreSQL matching `predicate` over the bound UUIDs,
+/// oldest grant first.
+async fn pg_rows(
+    pg: &PostgresDb,
+    predicate: &str,
+    ids: &[Uuid],
+) -> Result<Vec<Delegation>, DelegationError> {
+    let mut query = sqlx::query(AssertSqlSafe(format!(
+        "SELECT {SELECT} FROM {TABLE} WHERE {predicate} ORDER BY granted_at, id"
+    )));
+    for id in ids {
+        query = query.bind(*id);
+    }
+    let rows = query.fetch_all(&pg.0).await.map_err(AuthorityError::from)?;
+    let rows: Vec<Option<Delegation>> = rows
+        .iter()
+        .map(from_pg)
+        .collect::<Result<_, _>>()
+        .map_err(AuthorityError::from)?;
+    Ok(rows.into_iter().flatten().collect())
+}
+
+/// Run one delegation write in PostgreSQL and project the row it returns.
+async fn pg_write(
+    pg: &PostgresDb,
+    surreal: &SurrealDb,
+    query: sqlx::query::Query<'_, sqlx::Postgres, sqlx::postgres::PgArguments>,
+) -> Result<Delegation, DelegationError> {
+    let row = query
+        .fetch_optional(&pg.0)
+        .await
+        .map_err(AuthorityError::from)?
+        .ok_or(DelegationError::WriteReturnedNothing)?;
+    let delegation = from_pg(&row)
+        .map_err(AuthorityError::from)?
+        .ok_or(DelegationError::WriteReturnedNothing)?;
+    authority::project(pg, surreal, &PERSON_DELEGATE, delegation.id).await?;
+    Ok(delegation)
 }
 
 #[derive(SurrealValue)]
@@ -460,6 +536,24 @@ pub async fn grant(
         return Err(DelegationError::AlreadyGranted);
     }
 
+    if let Some(pg) = authority::authority().await? {
+        let sql = format!(
+            "INSERT INTO {TABLE} (id, delegate_person_id, subject_person_id, basis, \
+             instrument_reference, granted_by_person_id, granted_at, subject_notified_at, \
+             subject_notified_channel) \
+             VALUES ($1, $2, $3, $4, $5, $6, now(), $7::timestamptz, $8) RETURNING {SELECT}"
+        );
+        let query = sqlx::query(AssertSqlSafe(sql))
+            .bind(Uuid::now_v7())
+            .bind(input.delegate_person_id)
+            .bind(input.subject_person_id)
+            .bind(input.basis.as_str())
+            .bind(input.instrument_reference.clone())
+            .bind(input.granted_by_person_id)
+            .bind(input.subject_notified_at.clone())
+            .bind(input.subject_notified_channel.map(NoticeChannel::as_str));
+        return pg_write(&pg, surreal, query).await;
+    }
     let now = chrono::Utc::now().to_rfc3339();
     let mut response = writing(|| {
         surreal
@@ -531,6 +625,16 @@ pub async fn revoke(
     {
         return Err(DelegationError::NoSuchPerson(revoked_by_person_id));
     }
+    if let Some(pg) = authority::authority().await? {
+        let sql = format!(
+            "UPDATE {TABLE} SET revoked_at = now(), revoked_by_person_id = $2, \
+             updated_at = now() WHERE id = $1 RETURNING {SELECT}"
+        );
+        let query = sqlx::query(AssertSqlSafe(sql))
+            .bind(id)
+            .bind(revoked_by_person_id);
+        return pg_write(&pg, surreal, query).await;
+    }
 
     let now = chrono::Utc::now().to_rfc3339();
     let mut response = writing(|| {
@@ -565,6 +669,16 @@ pub async fn record_subject_notice(
 ) -> Result<Delegation, DelegationError> {
     if find_by_id(surreal, id).await?.is_none() {
         return Err(DelegationError::NoSuchDelegation(id));
+    }
+    if let Some(pg) = authority::authority().await? {
+        let sql = format!(
+            "UPDATE {TABLE} SET subject_notified_at = now(), subject_notified_channel = $2, \
+             updated_at = now() WHERE id = $1 RETURNING {SELECT}"
+        );
+        let query = sqlx::query(AssertSqlSafe(sql))
+            .bind(id)
+            .bind(channel.as_str());
+        return pg_write(&pg, surreal, query).await;
     }
     let now = chrono::Utc::now().to_rfc3339();
     let mut response = writing(|| {
@@ -609,6 +723,9 @@ pub async fn find_by_id(
     surreal: &SurrealDb,
     id: Uuid,
 ) -> Result<Option<Delegation>, DelegationError> {
+    if let Some(pg) = authority::authority().await? {
+        return Ok(pg_rows(&pg, "id = $1", &[id]).await?.into_iter().next());
+    }
     let mut response = surreal
         .query(format!("SELECT {SELECT} FROM ONLY $id LIMIT 1"))
         .bind(("id", record_id(TABLE, id)))
@@ -653,6 +770,10 @@ async fn rows_where(
     predicate: &str,
     person_id: Uuid,
 ) -> Result<Vec<Delegation>, DelegationError> {
+    if let Some(pg) = authority::authority().await? {
+        let predicate = predicate.replace("$person", "$1");
+        return pg_rows(&pg, &predicate, &[person_id]).await;
+    }
     let mut response = surreal
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE {predicate} ORDER BY granted_at"
@@ -770,6 +891,14 @@ pub async fn find_live_for_pair(
     delegate_person_id: Uuid,
     subject_person_id: Uuid,
 ) -> Result<Vec<Delegation>, DelegationError> {
+    if let Some(pg) = authority::authority().await? {
+        return pg_rows(
+            &pg,
+            "delegate_person_id = $1 AND subject_person_id = $2 AND revoked_at IS NULL",
+            &[delegate_person_id, subject_person_id],
+        )
+        .await;
+    }
     let mut response = surreal
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE delegate_person_id = $delegate \

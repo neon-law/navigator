@@ -4,6 +4,10 @@
 //! keyed by email, so the directory ends up with two rows for one human and
 //! the Conflict-Check Graph splits their relationships across both.
 //! [`merge`] folds the duplicate into the Person to keep.
+//!
+//! Under PostgreSQL People authority the SurrealDB records move first, then
+//! one PostgreSQL transaction moves every row that links the dropped Person
+//! and deletes it.
 
 use uuid::Uuid;
 
@@ -96,6 +100,7 @@ const UNIQUE_LINKS: &[(&str, &str, &str)] = &[
     ("credential", "person_id", "jurisdiction_id"),
     ("person_external_identity", "person_id", "system"),
     ("testimonial", "person_id", "[project_id, quote]"),
+    ("person_phone", "person_id", "e164"),
 ];
 
 /// The whole move as one transaction: it commits entirely or not at all, and
@@ -233,10 +238,6 @@ pub async fn merge(
     if dropped.role != persons::Role::Client {
         return Err(PersonMergeError::Blocked);
     }
-    // Aliases are SurrealDB mailbox claims; refuse early under PostgreSQL
-    // People authority rather than half-move.
-    persons::aliases(db, keep_id).await?;
-
     // Participation rows the relink rewrites or deletes, so the Project
     // ledger can be republished once the relink commits.
     let mut participations: Vec<Uuid> = Vec::new();
@@ -249,6 +250,8 @@ pub async fn merge(
         );
     }
 
+    // Records still held in SurrealDB move first. Rerunning the move is a
+    // no-op, so a PostgreSQL failure after it leaves the merge retryable.
     let script = relink_script();
     crate::surreal::retry::writing(|| {
         db.query(script.as_str())
@@ -259,8 +262,12 @@ pub async fn merge(
     })
     .await?;
     crate::projects::publish_participations(db, participations).await?;
-    crate::postgres_mirror::after_write(db, MirrorKey::PersonMailbox(keep_id)).await;
-    persons::delete(db, drop_id).await?;
+    if let Some(pg) = persons::postgres_authority().await? {
+        Box::pin(crate::postgres::people::merge(&pg, db, keep_id, drop_id)).await?;
+    } else {
+        crate::postgres_mirror::after_write(db, MirrorKey::PersonMailbox(keep_id)).await;
+        persons::delete(db, drop_id).await?;
+    }
 
     let mut emails = persons::aliases(db, keep_id).await?;
     emails.push(keep.email.trim().to_lowercase());

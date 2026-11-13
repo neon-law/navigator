@@ -4644,6 +4644,18 @@ CREATE UNIQUE INDEX estate_asset_line ON estate_asset (project_id, category, des
 CREATE UNIQUE INDEX fiduciary_role_order ON fiduciary_role (project_id, role, successor_order);
 CREATE UNIQUE INDEX cap_table_holding_line ON cap_table_holding (project_id, holder_id, share_class);
 
+-- Migration: 20261114150000_identity_authority_constraints.sql
+-- Uniqueness PostgreSQL enforces itself once People authority writes identity
+-- detail. SurrealDB holds the same rules as UNIQUE indexes, so mirrored rows
+-- already satisfy them.
+
+-- One Entity per Firm anchor key: the claim a second anchor collides with.
+CREATE UNIQUE INDEX entity_firm_anchor_key ON entity (firm_anchor_key)
+    WHERE firm_anchor_key IS NOT NULL;
+
+-- One row per number per Person.
+CREATE UNIQUE INDEX person_phone_pair ON person_phone (person_id, e164);
+
 -- Migration: 20261114170000_catalog_authority_jurisdiction_constraints.sql
 -- Under the catalog authority a Jurisdiction's type stays in the closed set the
 -- SurrealDB schema asserts.

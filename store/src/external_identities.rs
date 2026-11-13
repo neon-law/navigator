@@ -75,7 +75,10 @@ use chrono::{DateTime, Utc};
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use sqlx::{postgres::PgRow, AssertSqlSafe, Row};
+
 use crate::persons::{self, PersonError};
+use crate::postgres::identity::{self as authority, AuthorityError, EXTERNAL_IDENTITY};
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 
 /// The table these rows live in.
@@ -226,6 +229,57 @@ pub enum ExternalIdentityError {
     /// [`ExternalIdentityRow::into_identity`].
     #[error("writing an external identity returned no usable row")]
     WriteReturnedNothing,
+    /// PostgreSQL identity authority is configured and failed.
+    #[error(transparent)]
+    Authority(#[from] AuthorityError),
+}
+
+fn from_pg(row: &PgRow) -> Result<ExternalIdentity, sqlx::Error> {
+    let system: String = row.try_get("system")?;
+    Ok(ExternalIdentity {
+        id: row.try_get("id")?,
+        person_id: row.try_get("person_id")?,
+        system: ExternalSystem::parse(&system).ok_or_else(|| sqlx::Error::ColumnDecode {
+            index: "system".into(),
+            source: Box::new(std::io::Error::other("unknown external system")),
+        })?,
+        external_id: row.try_get("external_id")?,
+        handle: row.try_get("handle")?,
+        inserted_at: row.try_get("inserted_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+fn pg_error(error: sqlx::Error, system: ExternalSystem) -> ExternalIdentityError {
+    if authority::violates(&error, "person_external_identity_system_external_id_key") {
+        ExternalIdentityError::AccountTaken { system }
+    } else if authority::violates(&error, "person_external_identity_person_id_system_key") {
+        ExternalIdentityError::SystemAlreadyLinked { system }
+    } else {
+        ExternalIdentityError::Authority(error.into())
+    }
+}
+
+/// One identity row from PostgreSQL matching `predicate` over `$1` and `$2`.
+async fn pg_one(
+    pg: &crate::postgres::PostgresDb,
+    predicate: &str,
+    first: String,
+    second: String,
+    system: ExternalSystem,
+) -> Result<Option<ExternalIdentity>, ExternalIdentityError> {
+    let row = sqlx::query(AssertSqlSafe(format!(
+        "SELECT {SELECT} FROM {TABLE} WHERE {predicate} LIMIT 1"
+    )))
+    .bind(first)
+    .bind(second)
+    .fetch_optional(&pg.0)
+    .await
+    .map_err(|error| pg_error(error, system))?;
+    row.as_ref()
+        .map(from_pg)
+        .transpose()
+        .map_err(|error| pg_error(error, system))
 }
 
 /// Turn a write failure into the caller-correctable conflict it names,
@@ -344,6 +398,23 @@ pub async fn link(
     }
 
     let id = Uuid::now_v7();
+    if let Some(pg) = authority::authority().await? {
+        let row = sqlx::query(AssertSqlSafe(format!(
+            "INSERT INTO {TABLE} (id, person_id, system, external_id, handle) \
+             VALUES ($1, $2, $3, $4, $5) RETURNING {SELECT}"
+        )))
+        .bind(id)
+        .bind(person_id)
+        .bind(system.as_str())
+        .bind(external_id.trim())
+        .bind(handle)
+        .fetch_one(&pg.0)
+        .await
+        .map_err(|error| pg_error(error, system))?;
+        let identity = from_pg(&row).map_err(|error| pg_error(error, system))?;
+        authority::project(&pg, db, &EXTERNAL_IDENTITY, id).await?;
+        return Ok(identity);
+    }
     let mut response = writing(system, || {
         db.query(format!(
             "CREATE $id SET \
@@ -390,6 +461,16 @@ pub async fn find_by_person_and_system(
     person_id: Uuid,
     system: ExternalSystem,
 ) -> Result<Option<ExternalIdentity>, ExternalIdentityError> {
+    if let Some(pg) = authority::authority().await? {
+        return pg_one(
+            &pg,
+            "person_id = $1::uuid AND system = $2",
+            person_id.to_string(),
+            system.as_str().to_string(),
+            system,
+        )
+        .await;
+    }
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM ONLY {TABLE} \
@@ -420,6 +501,16 @@ pub async fn find_by_account(
     system: ExternalSystem,
     external_id: &str,
 ) -> Result<Option<ExternalIdentity>, ExternalIdentityError> {
+    if let Some(pg) = authority::authority().await? {
+        return pg_one(
+            &pg,
+            "system = $1 AND external_id = $2",
+            system.as_str().to_string(),
+            external_id.trim().to_string(),
+            system,
+        )
+        .await;
+    }
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM ONLY {TABLE} \
@@ -510,6 +601,20 @@ pub async fn for_person(
     db: &SurrealDb,
     person_id: Uuid,
 ) -> Result<Vec<ExternalIdentity>, ExternalIdentityError> {
+    if let Some(pg) = authority::authority().await? {
+        let rows = sqlx::query(AssertSqlSafe(format!(
+            "SELECT {SELECT} FROM {TABLE} WHERE person_id = $1 ORDER BY inserted_at, id"
+        )))
+        .bind(person_id)
+        .fetch_all(&pg.0)
+        .await
+        .map_err(AuthorityError::from)?;
+        return Ok(rows
+            .iter()
+            .map(from_pg)
+            .collect::<Result<_, _>>()
+            .map_err(AuthorityError::from)?);
+    }
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE person_id = $person_id ORDER BY inserted_at ASC"
@@ -600,6 +705,21 @@ pub async fn set_for_person(
         if identity.external_id == external_id {
             return Ok(Some(identity));
         }
+        if let Some(pg) = authority::authority().await? {
+            let row = sqlx::query(AssertSqlSafe(format!(
+                "UPDATE {TABLE} SET external_id = $2, updated_at = now() \
+                 WHERE id = $1 RETURNING {SELECT}"
+            )))
+            .bind(identity.id)
+            .bind(external_id)
+            .fetch_optional(&pg.0)
+            .await
+            .map_err(|error| pg_error(error, system))?
+            .ok_or(ExternalIdentityError::WriteReturnedNothing)?;
+            let updated = from_pg(&row).map_err(|error| pg_error(error, system))?;
+            authority::project(&pg, db, &EXTERNAL_IDENTITY, identity.id).await?;
+            return Ok(Some(updated));
+        }
         let mut response = writing(system, || {
             db.query(format!(
                 "UPDATE $id SET external_id = $external_id, updated_at = time::now() \
@@ -629,6 +749,15 @@ pub async fn set_for_person(
 ///
 /// [`ExternalIdentityError::Db`] if the delete fails.
 pub async fn unlink(db: &SurrealDb, identity_id: Uuid) -> Result<(), ExternalIdentityError> {
+    if let Some(pg) = authority::authority().await? {
+        sqlx::query(AssertSqlSafe(format!("DELETE FROM {TABLE} WHERE id = $1")))
+            .bind(identity_id)
+            .execute(&pg.0)
+            .await
+            .map_err(AuthorityError::from)?;
+        authority::project(&pg, db, &EXTERNAL_IDENTITY, identity_id).await?;
+        return Ok(());
+    }
     db.query("DELETE $id")
         .bind(("id", record_id(TABLE, identity_id)))
         .await

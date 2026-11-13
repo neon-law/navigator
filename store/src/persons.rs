@@ -673,8 +673,8 @@ pub async fn find_by_any_email(db: &SurrealDb, email: &str) -> Result<Option<Per
 ///
 /// [`PersonError::Db`] if the lookup fails.
 pub async fn aliases(db: &SurrealDb, id: Uuid) -> Result<Vec<String>, PersonError> {
-    if postgres_authority().await?.is_some() {
-        return Err(alias_unsupported_under_postgres());
+    if let Some(pg) = postgres_authority().await? {
+        return Box::pin(crate::postgres::people::aliases(&pg, id)).await;
     }
     let Some(person) = find_by_id(db, id).await? else {
         return Ok(Vec::new());
@@ -704,8 +704,8 @@ pub async fn aliases(db: &SurrealDb, id: Uuid) -> Result<Vec<String>, PersonErro
 /// [`PersonError::EmailTaken`] when another person holds `email`;
 /// [`PersonError::Db`] if a write fails.
 pub async fn add_alias(db: &SurrealDb, id: Uuid, email: &str) -> Result<(), PersonError> {
-    if postgres_authority().await?.is_some() {
-        return Err(alias_unsupported_under_postgres());
+    if let Some(pg) = postgres_authority().await? {
+        return Box::pin(crate::postgres::people::add_alias(&pg, db, id, email)).await;
     }
     let email_lower = email.trim().to_lowercase();
     if take_mailbox(db, &email_lower, id).await? {
@@ -716,14 +716,6 @@ pub async fn add_alias(db: &SurrealDb, id: Uuid, email: &str) -> Result<(), Pers
         Some(holder) if holder == id => Ok(()),
         _ => Err(PersonError::EmailTaken),
     }
-}
-
-fn alias_unsupported_under_postgres() -> PersonError {
-    PersonError::Postgres(
-        "alias emails are written through the SurrealDB mailbox claim; not yet available under \
-         PostgreSQL People authority"
-            .to_string(),
-    )
 }
 
 /// The digits of a phone number, minus a leading US `1` on an eleven-digit

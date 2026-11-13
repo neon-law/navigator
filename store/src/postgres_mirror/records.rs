@@ -1470,6 +1470,14 @@ pub async fn mirror(
     id: Uuid,
 ) -> Result<Mirrored, MirrorError> {
     let table = table(table_name)?;
+    if (MirrorKey::Record {
+        table: table.name,
+        id,
+    })
+    .held_by_people_authority()
+    {
+        return Ok(Mirrored::Unchanged);
+    }
     require_source_authority(table)?;
     let Some(row) = source_one(surreal, table, id).await? else {
         // `table.name` is one of the static names above, never input.

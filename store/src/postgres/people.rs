@@ -345,7 +345,13 @@ async fn sync_current_surreal(
     if let Some(row) = row {
         let admitted: bool = row.try_get("is_admitted").map_err(database)?;
         let current = person(&row).map_err(database)?;
-        sync_surreal(db, &current, admitted).await?;
+        let claims: Vec<String> =
+            sqlx::query_scalar("SELECT id FROM person_mailbox WHERE person_id=$1 ORDER BY id")
+                .bind(id)
+                .fetch_all(&mut *tx)
+                .await
+                .map_err(database)?;
+        sync_surreal(db, &current, admitted, &claims).await?;
     } else {
         db.query("DELETE $id")
             .bind(("id", record_id("person", id)))
@@ -613,6 +619,157 @@ pub(crate) async fn delete(pg: &PostgresDb, db: &SurrealDb, id: Uuid) -> Result<
     sync_current_surreal(pg, db, id).await
 }
 
+/// Tables where a unique index spans a Person link, with the other columns
+/// of that index. A row the dropped Person holds that the kept Person
+/// already holds an equivalent of is deleted, and the kept Person's row stands.
+const MERGE_UNIQUE_LINKS: &[(&str, &[&str])] = &[
+    ("person_firm_role", &["firm_id"]),
+    ("person_project_role", &["project_id"]),
+    ("credential", &["jurisdiction_id"]),
+    ("entity_role", &["entity_id", "role"]),
+    ("person_external_identity", &["system"]),
+    ("project_reference", &["project_id", "reason"]),
+    ("testimonial", &["project_id", "quote"]),
+    ("sandbox_usage", &["period"]),
+    ("person_phone", &["e164"]),
+];
+
+/// Fold `drop_id` into `keep_id` in one transaction: every PostgreSQL row
+/// that links the dropped Person moves to the kept Person, the kept Person
+/// takes each provider subject it lacks and every mailbox claim, and the
+/// dropped row is deleted last. Links are read from the catalog's foreign
+/// keys, so a table added later moves without a list to update.
+pub(crate) async fn merge(
+    pg: &PostgresDb,
+    db: &SurrealDb,
+    keep_id: Uuid,
+    drop_id: Uuid,
+) -> Result<(), PersonError> {
+    let mut tx = pg.0.begin().await.map_err(database)?;
+    let mut locked = [keep_id, drop_id];
+    locked.sort();
+    for id in locked {
+        sqlx::query("SELECT pg_advisory_xact_lock(1312902736, hashtext($1::text))")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(database)?;
+    }
+    for flag in ["is_lawyer_dri", "is_client_dri"] {
+        sqlx::query(AssertSqlSafe(format!(
+            "UPDATE person_project_role SET {flag} = true WHERE person_id = $1 AND project_id IN \
+             (SELECT project_id FROM person_project_role WHERE person_id = $2 AND {flag})"
+        )))
+        .bind(keep_id)
+        .bind(drop_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(database)?;
+    }
+    for (table, others) in MERGE_UNIQUE_LINKS {
+        let same = others
+            .iter()
+            .map(|column| format!("k.{column} = d.{column}"))
+            .collect::<Vec<_>>()
+            .join(" AND ");
+        sqlx::query(AssertSqlSafe(format!(
+            "DELETE FROM {table} d WHERE d.person_id = $2 AND EXISTS \
+             (SELECT 1 FROM {table} k WHERE k.person_id = $1 AND {same})"
+        )))
+        .bind(keep_id)
+        .bind(drop_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(database)?;
+    }
+    sqlx::query(
+        "UPDATE relationship_log SET subject_id = $1 \
+         WHERE subject_type = 'person' AND subject_id = $2",
+    )
+    .bind(keep_id)
+    .bind(drop_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(database)?;
+    let links: Vec<(String, String)> = sqlx::query_as(
+        "SELECT c.conrelid::regclass::text, a.attname::text FROM pg_constraint c \
+         JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey) \
+         WHERE c.contype = 'f' AND c.confrelid = 'person'::regclass ORDER BY 1, 2",
+    )
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(database)?;
+    for (table, column) in links {
+        sqlx::query(AssertSqlSafe(format!(
+            "UPDATE {table} SET {column} = $1 WHERE {column} = $2"
+        )))
+        .bind(keep_id)
+        .bind(drop_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(classify)?;
+    }
+    // `person_phone` names its Person without a foreign key. The kept
+    // Person's primary number stays the only primary.
+    let phones: Vec<Uuid> = sqlx::query_scalar(
+        "UPDATE person_phone d SET person_id = $1, updated_at = now(), \
+         is_primary = d.is_primary AND NOT EXISTS \
+         (SELECT 1 FROM person_phone k WHERE k.person_id = $1 AND k.is_primary) \
+         WHERE d.person_id = $2 RETURNING d.id",
+    )
+    .bind(keep_id)
+    .bind(drop_id)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(database)?;
+    move_subjects(&mut tx, keep_id, drop_id).await?;
+    sqlx::query("DELETE FROM person WHERE id = $1")
+        .bind(drop_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(database)?;
+    tx.commit().await.map_err(database)?;
+    sync_current_surreal(pg, db, drop_id).await?;
+    sync_current_surreal(pg, db, keep_id).await?;
+    for phone in phones {
+        crate::postgres::identity::project(pg, db, &crate::postgres::identity::PERSON_PHONE, phone)
+            .await
+            .map_err(|error| PersonError::PostgresProjection(error.to_string()))?;
+    }
+    Ok(())
+}
+
+/// Give the kept Person each provider subject it lacks from the dropped one.
+/// Each subject column is unique, so the dropped row lets go first.
+async fn move_subjects(
+    tx: &mut Transaction<'_, Postgres>,
+    keep_id: Uuid,
+    drop_id: Uuid,
+) -> Result<(), PersonError> {
+    let subjects: (Option<String>, Option<String>, Option<String>) = sqlx::query_as(
+        "UPDATE person d SET oidc_subject = NULL, microsoft_subject = NULL, apple_subject = NULL \
+         FROM person o WHERE d.id = $1 AND o.id = d.id \
+         RETURNING o.oidc_subject, o.microsoft_subject, o.apple_subject",
+    )
+    .bind(drop_id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(database)?;
+    sqlx::query(
+        "UPDATE person SET oidc_subject = COALESCE(oidc_subject, $2), \
+         microsoft_subject = COALESCE(microsoft_subject, $3), \
+         apple_subject = COALESCE(apple_subject, $4), updated_at = now() WHERE id = $1",
+    )
+    .bind(keep_id)
+    .bind(subjects.0)
+    .bind(subjects.1)
+    .bind(subjects.2)
+    .execute(&mut **tx)
+    .await
+    .map_err(classify)?;
+    Ok(())
+}
+
 #[cfg(test)]
 #[path = "people_tests.rs"]
 mod tests;
@@ -644,7 +801,12 @@ async fn insert_person(
     person(&row).map_err(database)
 }
 
-async fn sync_surreal(db: &SurrealDb, person: &Person, admitted: bool) -> Result<(), PersonError> {
+async fn sync_surreal(
+    db: &SurrealDb,
+    person: &Person,
+    admitted: bool,
+    claims: &[String],
+) -> Result<(), PersonError> {
     let query = db.query("UPSERT $id SET name=$name, given_name=$given_name, family_name=$family_name, middle_name=$middle_name, email=$email, oidc_subject=$oidc_subject, microsoft_subject=$microsoft_subject, apple_subject=$apple_subject, role=$role, title=$title, phone=$phone, xero_contact_id=$xero_contact_id, profile_image_url=$profile_image_url, linkedin_url=$linkedin_url, email_confirmed=$email_confirmed, is_admitted=$is_admitted, inserted_at=$inserted_at, updated_at=$updated_at")
         .bind(("id", record_id("person", person.id))).bind(("name", person.name.clone()))
         .bind(("given_name", person.given_name.clone())).bind(("family_name", person.family_name.clone()))
@@ -662,14 +824,55 @@ async fn sync_surreal(db: &SurrealDb, person: &Person, admitted: bool) -> Result
         .map_err(|error| {
             PersonError::PostgresProjection(format!("SurrealDB write failed: {error}"))
         })?;
-    let email_lower = person.email.trim().to_lowercase();
-    db.query("DELETE person_mailbox WHERE person_id = $id; UPSERT type::record('person_mailbox', $email_lower) SET person_id = $id")
-        .bind(("id", record_id("person", person.id))).bind(("email_lower", email_lower))
+    // Every claim the Person holds in PostgreSQL, primary and aliases alike,
+    // replaces the projected set in one statement.
+    db.query("DELETE person_mailbox WHERE person_id = $id; FOR $claim IN $claims { UPSERT type::record('person_mailbox', $claim) SET person_id = $id; };")
+        .bind(("id", record_id("person", person.id))).bind(("claims", claims.to_vec()))
         .await.and_then(surrealdb::IndexedResults::check)
         .map_err(|error| {
             PersonError::PostgresProjection(format!("SurrealDB mailbox sync failed: {error}"))
         })?;
     Ok(())
+}
+
+/// Every address `id` holds besides its primary one, lowercased and sorted.
+pub(crate) async fn aliases(pg: &PostgresDb, id: Uuid) -> Result<Vec<String>, PersonError> {
+    sqlx::query_scalar(
+        "SELECT m.id FROM person_mailbox m JOIN person p ON p.id = m.person_id \
+         WHERE m.person_id = $1 AND m.id <> lower(p.email::text) ORDER BY m.id",
+    )
+    .bind(id)
+    .fetch_all(&pg.0)
+    .await
+    .map_err(database)
+}
+
+/// Claim `email` as another address of `id`. A claim `id` already holds is
+/// left as it is; one another Person holds is refused, never taken.
+pub(crate) async fn add_alias(
+    pg: &PostgresDb,
+    db: &SurrealDb,
+    id: Uuid,
+    email: &str,
+) -> Result<(), PersonError> {
+    let mut tx = person_transaction(pg, id).await?;
+    let holder: Option<Uuid> = sqlx::query_scalar(
+        "WITH claimed AS (INSERT INTO person_mailbox(id, person_id) VALUES (lower($1), $2) \
+         ON CONFLICT (id) DO NOTHING RETURNING person_id) \
+         SELECT person_id FROM claimed UNION ALL \
+         SELECT person_id FROM person_mailbox WHERE id = lower($1) LIMIT 1",
+    )
+    .bind(email.trim())
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(database)?;
+    if holder != Some(id) {
+        tx.rollback().await.map_err(database)?;
+        return Err(PersonError::EmailTaken);
+    }
+    tx.commit().await.map_err(database)?;
+    sync_current_surreal(pg, db, id).await
 }
 
 pub(crate) async fn create(

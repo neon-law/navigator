@@ -32,7 +32,10 @@ use chrono::{DateTime, Utc};
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use sqlx::{postgres::PgRow, AssertSqlSafe, Row};
+
 use crate::git_access_tokens::hash_token;
+use crate::postgres::identity::{self as authority, AuthorityError, EMAIL_TOKEN};
 use crate::surreal::{record_id, SurrealDb};
 
 /// The token in a "reset your password" email. Claiming it lets the
@@ -60,6 +63,22 @@ pub enum TokenError {
     /// that bypassed [`crate::surreal::record_id`].
     #[error("minting an email token returned no usable row")]
     MintReturnedNothing,
+    /// PostgreSQL identity authority is configured and failed.
+    #[error(transparent)]
+    Authority(#[from] AuthorityError),
+}
+
+fn from_pg(row: &PgRow) -> Result<EmailToken, sqlx::Error> {
+    Ok(EmailToken {
+        id: row.try_get("id")?,
+        person_id: row.try_get("person_id")?,
+        email: row.try_get("email")?,
+        purpose: row.try_get("purpose")?,
+        token_hash: row.try_get("token_hash")?,
+        expires_at: row.try_get("expires_at")?,
+        used_at: row.try_get("used_at")?,
+        inserted_at: row.try_get("inserted_at")?,
+    })
 }
 
 /// A minted token row, as callers read it back.
@@ -129,6 +148,24 @@ pub async fn mint(
     expires_at: DateTime<Utc>,
 ) -> Result<EmailToken, TokenError> {
     let id = Uuid::now_v7();
+    if let Some(pg) = authority::authority().await? {
+        let row = sqlx::query(AssertSqlSafe(format!(
+            "INSERT INTO {TABLE} (id, person_id, email, purpose, token_hash, expires_at) \
+             VALUES ($1, $2, $3, $4, $5, $6) RETURNING {SELECT}"
+        )))
+        .bind(id)
+        .bind(person_id)
+        .bind(email)
+        .bind(purpose)
+        .bind(hash_token(plaintext))
+        .bind(expires_at)
+        .fetch_one(&pg.0)
+        .await
+        .map_err(AuthorityError::from)?;
+        let token = from_pg(&row).map_err(AuthorityError::from)?;
+        authority::project(&pg, db, &EMAIL_TOKEN, id).await?;
+        return Ok(token);
+    }
     let mut response = db
         .query(format!(
             "CREATE $id SET \
@@ -176,6 +213,23 @@ pub async fn validate(
     // Single use and expiry are both engine-side: `used_at = NONE` and
     // `expires_at > $now` are the two gates, applied in the query rather
     // than in Rust after loading the row.
+    if let Some(pg) = authority::authority().await? {
+        let row = sqlx::query(AssertSqlSafe(format!(
+            "SELECT {SELECT} FROM {TABLE} WHERE token_hash = $1 AND purpose = $2 \
+             AND used_at IS NULL AND expires_at > $3 LIMIT 1"
+        )))
+        .bind(hash_token(plaintext))
+        .bind(purpose)
+        .bind(now)
+        .fetch_optional(&pg.0)
+        .await
+        .map_err(AuthorityError::from)?;
+        return Ok(row
+            .as_ref()
+            .map(from_pg)
+            .transpose()
+            .map_err(AuthorityError::from)?);
+    }
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} \
@@ -203,6 +257,18 @@ pub async fn validate(
 /// # Errors
 /// [`TokenError::Db`] if the update fails.
 pub async fn consume(db: &SurrealDb, token_id: Uuid, now: DateTime<Utc>) -> Result<(), TokenError> {
+    if let Some(pg) = authority::authority().await? {
+        sqlx::query(AssertSqlSafe(format!(
+            "UPDATE {TABLE} SET used_at = $2, updated_at = $2 WHERE id = $1"
+        )))
+        .bind(token_id)
+        .bind(now)
+        .execute(&pg.0)
+        .await
+        .map_err(AuthorityError::from)?;
+        authority::project(&pg, db, &EMAIL_TOKEN, token_id).await?;
+        return Ok(());
+    }
     db.query(format!(
         "UPDATE $id SET used_at = $now, updated_at = $now RETURN {SELECT}"
     ))
@@ -233,6 +299,19 @@ pub async fn has_live_token_since(
     since: DateTime<Utc>,
     now: DateTime<Utc>,
 ) -> Result<bool, TokenError> {
+    if let Some(pg) = authority::authority().await? {
+        return Ok(sqlx::query_scalar(AssertSqlSafe(format!(
+            "SELECT EXISTS (SELECT 1 FROM {TABLE} WHERE person_id = $1 AND purpose = $2 \
+             AND used_at IS NULL AND expires_at > $3 AND inserted_at >= $4)"
+        )))
+        .bind(person_id)
+        .bind(purpose)
+        .bind(now)
+        .bind(since)
+        .fetch_one(&pg.0)
+        .await
+        .map_err(AuthorityError::from)?);
+    }
     let mut response = db
         .query(format!(
             "SELECT VALUE count() FROM {TABLE} \

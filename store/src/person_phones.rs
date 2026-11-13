@@ -19,6 +19,10 @@ use chrono::{DateTime, Utc};
 use surrealdb::types::{RecordId, SurrealValue};
 use uuid::Uuid;
 
+use sqlx::{postgres::PgRow, AssertSqlSafe, Row};
+
+use crate::postgres::identity::{self as authority, AuthorityError, PERSON_PHONE};
+use crate::postgres::PostgresDb;
 use crate::postgres_mirror::MirrorKey;
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 pub use model::person_phones::PhoneLabel;
@@ -43,6 +47,114 @@ pub enum PhoneError {
     /// this module could not read back — see [`PersonPhoneRow::into_phone`].
     #[error("writing a phone returned no usable row")]
     WriteLost,
+    /// PostgreSQL identity authority is configured and failed.
+    #[error(transparent)]
+    Authority(#[from] AuthorityError),
+}
+
+fn from_pg(row: &PgRow) -> Result<Option<PersonPhone>, sqlx::Error> {
+    // An unknown label hides the row, as it does on the SurrealDB path.
+    let label: String = row.try_get("label")?;
+    let Some(label) = PhoneLabel::parse(&label) else {
+        return Ok(None);
+    };
+    Ok(Some(PersonPhone {
+        id: row.try_get("id")?,
+        person_id: row.try_get("person_id")?,
+        e164: row.try_get("e164")?,
+        label,
+        is_primary: row.try_get("is_primary")?,
+        inserted_at: row.try_get("inserted_at")?,
+        updated_at: row.try_get("updated_at")?,
+    }))
+}
+
+async fn pg_list(pg: &PostgresDb, person_id: Uuid) -> Result<Vec<PersonPhone>, PhoneError> {
+    let rows = sqlx::query(AssertSqlSafe(format!(
+        "SELECT {SELECT} FROM {TABLE} WHERE person_id = $1 \
+         ORDER BY is_primary DESC, inserted_at, id"
+    )))
+    .bind(person_id)
+    .fetch_all(&pg.0)
+    .await
+    .map_err(AuthorityError::from)?;
+    let phones: Vec<Option<PersonPhone>> = rows
+        .iter()
+        .map(from_pg)
+        .collect::<Result<_, _>>()
+        .map_err(AuthorityError::from)?;
+    Ok(phones.into_iter().flatten().collect())
+}
+
+/// [`set_phone`] in one PostgreSQL transaction, serialized per Person so
+/// the first-number and one-primary rules see every committed row. Each
+/// row whose primary flag moved is projected afterwards.
+async fn pg_set(
+    pg: &PostgresDb,
+    db: &SurrealDb,
+    person_id: Uuid,
+    e164: &str,
+    label: PhoneLabel,
+    is_primary: bool,
+) -> Result<PersonPhone, PhoneError> {
+    let query = |error: sqlx::Error| PhoneError::Authority(error.into());
+    let mut tx = pg.0.begin().await.map_err(query)?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext('person_phone'), hashtext($1::text))")
+        .bind(person_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(query)?;
+    let existing: Option<Uuid> = sqlx::query_scalar(AssertSqlSafe(format!(
+        "SELECT id FROM {TABLE} WHERE person_id = $1 AND e164 = $2"
+    )))
+    .bind(person_id)
+    .bind(e164)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(query)?;
+    let has_any: bool = sqlx::query_scalar(AssertSqlSafe(format!(
+        "SELECT EXISTS (SELECT 1 FROM {TABLE} WHERE person_id = $1)"
+    )))
+    .bind(person_id)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(query)?;
+    let is_primary = is_primary || !has_any;
+    let id = existing.unwrap_or_else(Uuid::now_v7);
+    let mut touched: Vec<Uuid> = if is_primary {
+        sqlx::query_scalar(AssertSqlSafe(format!(
+            "UPDATE {TABLE} SET is_primary = false, updated_at = now() \
+             WHERE person_id = $1 AND is_primary AND id <> $2 RETURNING id"
+        )))
+        .bind(person_id)
+        .bind(id)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(query)?
+    } else {
+        Vec::new()
+    };
+    let row = sqlx::query(AssertSqlSafe(format!(
+        "INSERT INTO {TABLE} (id, person_id, e164, label, is_primary, inserted_at, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, now(), now()) \
+         ON CONFLICT (id) DO UPDATE SET label = EXCLUDED.label, \
+         is_primary = EXCLUDED.is_primary, updated_at = now() RETURNING {SELECT}"
+    )))
+    .bind(id)
+    .bind(person_id)
+    .bind(e164)
+    .bind(label.as_str())
+    .bind(is_primary)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(query)?;
+    let phone = from_pg(&row).map_err(query)?.ok_or(PhoneError::WriteLost)?;
+    tx.commit().await.map_err(query)?;
+    touched.push(id);
+    for row in touched {
+        authority::project(pg, db, &PERSON_PHONE, row).await?;
+    }
+    Ok(phone)
 }
 
 /// Normalize a phone number to E.164.
@@ -156,6 +268,9 @@ where
 ///
 /// [`PhoneError::Db`] if the query fails.
 pub async fn list_phones(db: &SurrealDb, person_id: Uuid) -> Result<Vec<PersonPhone>, PhoneError> {
+    if let Some(pg) = authority::authority().await? {
+        return pg_list(&pg, person_id).await;
+    }
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM person_phone WHERE person_id = $person"
@@ -191,6 +306,9 @@ pub async fn set_phone(
     let e164 = normalize_e164(raw)?;
     if crate::persons::find_by_id(db, person_id).await?.is_none() {
         return Err(PhoneError::PersonMissing(person_id));
+    }
+    if let Some(pg) = authority::authority().await? {
+        return pg_set(&pg, db, person_id, &e164, label, is_primary).await;
     }
 
     let existing: Option<PersonPhoneRow> = db
@@ -295,6 +413,21 @@ pub async fn remove_phone(
     raw: &str,
 ) -> Result<Option<String>, PhoneError> {
     let e164 = normalize_e164(raw)?;
+    if let Some(pg) = authority::authority().await? {
+        let removed: Option<Uuid> = sqlx::query_scalar(AssertSqlSafe(format!(
+            "DELETE FROM {TABLE} WHERE person_id = $1 AND e164 = $2 RETURNING id"
+        )))
+        .bind(person_id)
+        .bind(&e164)
+        .fetch_optional(&pg.0)
+        .await
+        .map_err(AuthorityError::from)?;
+        let Some(id) = removed else {
+            return Ok(None);
+        };
+        authority::project(&pg, db, &PERSON_PHONE, id).await?;
+        return Ok(Some(e164));
+    }
     let mut removed: Vec<PersonPhoneRow> = db
         .query(format!(
             "SELECT {SELECT} FROM (DELETE person_phone \
