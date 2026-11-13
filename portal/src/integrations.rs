@@ -79,17 +79,17 @@ impl IntegrationError {
 const RUNTIME_DOC: &str = "docs/third-party-integrations.md#provisioning-the-integration-runtime";
 
 /// Which piece of the Firm integration runtime (Notion and Slack) a
-/// deployment lacks. [`from_env`] reads them in this order, so the first gap
-/// is the one reported.
+/// deployment lacks. The runtime key and workload credential gate both
+/// providers; the Notion database gates Notion alone.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum FirmRuntimeGap {
     /// `NAVIGATOR_RUNTIME_KMS_KEY` is unset — every local checkout and KIND
     /// cluster.
     #[default]
     RuntimeKmsKey,
-    /// The runtime key is set but `NAVIGATOR_NOTION_DATABASE_ID` is not.
+    /// `NAVIGATOR_NOTION_DATABASE_ID` is unset. Only Notion needs it.
     NotionDatabase,
-    /// Both coordinates are set but no application-default credential
+    /// The runtime key is set but no application-default credential
     /// resolved for the workload.
     WorkloadCredential,
 }
@@ -100,8 +100,8 @@ impl FirmRuntimeGap {
     pub fn detail(self) -> String {
         match self {
             Self::RuntimeKmsKey => format!(
-                "NAVIGATOR_RUNTIME_KMS_KEY is unset; Notion and Slack need it and \
-                 NAVIGATOR_NOTION_DATABASE_ID in the deployment's secrets.enc.yaml, then \
+                "NAVIGATOR_RUNTIME_KMS_KEY is unset; Notion and Slack need it (Notion also \
+                 needs NAVIGATOR_NOTION_DATABASE_ID) in the deployment's secrets.enc.yaml, then \
                  `navigator ops secrets apply --deployment <row>` and \
                  `navigator ops ship --deployment <row> --restart-only` (see {RUNTIME_DOC})"
             ),
@@ -276,7 +276,7 @@ impl IntegrationProviders for UnconfiguredIntegrations {
 /// live for as long as it survived.
 pub struct FirmIntegrations {
     kms: Arc<dyn cloud::RuntimeKms>,
-    notion_database_id: String,
+    notion_database_id: Option<String>,
 }
 
 impl std::fmt::Debug for FirmIntegrations {
@@ -293,7 +293,17 @@ impl FirmIntegrations {
     pub fn new(kms: Arc<dyn cloud::RuntimeKms>, notion_database_id: impl Into<String>) -> Self {
         Self {
             kms,
-            notion_database_id: notion_database_id.into(),
+            notion_database_id: Some(notion_database_id.into()),
+        }
+    }
+
+    /// A runtime with no parent Notion database: Notion refuses naming the
+    /// missing database, and Slack, which never needs it, still resolves.
+    #[must_use]
+    pub fn without_notion_database(kms: Arc<dyn cloud::RuntimeKms>) -> Self {
+        Self {
+            kms,
+            notion_database_id: None,
         }
     }
 
@@ -324,6 +334,9 @@ impl IntegrationProviders for FirmIntegrations {
         surreal: &SurrealDb,
         project_id: Uuid,
     ) -> Result<Arc<dyn cloud::NotionService>, IntegrationError> {
+        let database_id = self.notion_database_id.clone().ok_or_else(|| {
+            IntegrationError::NotConfigured(FirmRuntimeGap::NotionDatabase.detail())
+        })?;
         let token = self
             .credential(
                 surreal,
@@ -332,10 +345,7 @@ impl IntegrationProviders for FirmIntegrations {
                 IntegrationSecretKind::NotionToken,
             )
             .await?;
-        Ok(Arc::new(cloud::NotionClient::new(
-            token,
-            self.notion_database_id.clone(),
-        )))
+        Ok(Arc::new(cloud::NotionClient::new(token, database_id)))
     }
 
     async fn slack(
@@ -367,22 +377,15 @@ pub async fn runtime_kms_from_env() -> Arc<dyn cloud::RuntimeKms> {
 
 /// Select the resolver from the environment.
 ///
-/// Both coordinates are required together. A runtime KMS key with no parent
-/// Notion database would build a resolver whose Notion arm cannot create a
-/// page, and a database id with no KMS key cannot decrypt a token, so a half
-/// configuration is refused as unconfigured rather than half-working.
+/// The runtime KMS key and a workload credential are required: without them
+/// no Firm credential can be decrypted, so both providers refuse naming the
+/// gap. The parent Notion database is Notion's alone; without it Notion
+/// refuses naming the database and Slack still resolves.
 pub async fn from_env() -> Arc<dyn IntegrationProviders> {
     let Ok(config) = cloud::GoogleKmsConfig::from_env() else {
         tracing::info!("firm integrations: unconfigured (NAVIGATOR_RUNTIME_KMS_KEY unset)");
         return Arc::new(UnconfiguredIntegrations::missing(
             FirmRuntimeGap::RuntimeKmsKey,
-        ));
-    };
-    let Ok(database) = cloud::NotionDatabaseConfig::from_lookup(|key| std::env::var(key).ok())
-    else {
-        tracing::info!("firm integrations: unconfigured (NAVIGATOR_NOTION_DATABASE_ID unset)");
-        return Arc::new(UnconfiguredIntegrations::missing(
-            FirmRuntimeGap::NotionDatabase,
         ));
     };
     let Ok(tokens) = cloud::AdcTokenSource::new().await else {
@@ -394,11 +397,14 @@ pub async fn from_env() -> Arc<dyn IntegrationProviders> {
             FirmRuntimeGap::WorkloadCredential,
         ));
     };
-    tracing::info!("firm integrations: FirmIntegrations (runtime KMS + Notion database)");
-    Arc::new(FirmIntegrations::new(
-        Arc::new(cloud::GoogleKms::new(config, Arc::new(tokens))),
-        database.database_id,
-    ))
+    let kms = Arc::new(cloud::GoogleKms::new(config, Arc::new(tokens)));
+    if let Ok(database) = cloud::NotionDatabaseConfig::from_lookup(|key| std::env::var(key).ok()) {
+        tracing::info!("firm integrations: FirmIntegrations (runtime KMS + Notion database)");
+        Arc::new(FirmIntegrations::new(kms, database.database_id))
+    } else {
+        tracing::info!("firm integrations: Slack only (NAVIGATOR_NOTION_DATABASE_ID unset)");
+        Arc::new(FirmIntegrations::without_notion_database(kms))
+    }
 }
 
 /// In-process providers for dev and tests. One shared fake per provider, so a
@@ -496,6 +502,32 @@ mod tests {
             assert!(detail.contains("NAVIGATOR_RUNTIME_KMS_KEY"), "{detail}");
             assert!(detail.contains("navigator ops secrets apply"), "{detail}");
         }
+    }
+
+    /// LAW-370: Slack needs the runtime key, not the Notion database. A
+    /// deployment without the database refuses Notion alone, and Slack goes
+    /// on to resolve the Firm's own credential.
+    #[tokio::test]
+    async fn a_missing_notion_database_refuses_notion_and_not_slack() {
+        let surreal = store::test_support::mem_surreal().await;
+        let providers = super::FirmIntegrations::without_notion_database(std::sync::Arc::new(
+            cloud::FakeKms::new("runtime-test"),
+        ));
+        let notion = providers
+            .notion(&surreal, Uuid::now_v7())
+            .await
+            .err()
+            .expect("Notion needs its database");
+        assert_eq!(
+            notion.detail(),
+            Some(FirmRuntimeGap::NotionDatabase.detail().as_str())
+        );
+        let slack = providers
+            .slack(&surreal, Uuid::now_v7())
+            .await
+            .err()
+            .expect("an unknown Project has no Slack credential");
+        assert_ne!(slack.slug(), "runtime_not_configured", "{slack:?}");
     }
 
     #[test]

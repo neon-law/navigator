@@ -81,7 +81,7 @@ async fn run_open(
         );
         return Ok(());
     }
-    require_template_matches_main(root, kind)?;
+    let published = require_template_matches_main(root, kind)?;
 
     if has_signed_pointer(root, kind)? {
         println!("{kind} letter is already signed and filed; Project is onboarded/offboarded");
@@ -112,6 +112,7 @@ async fn run_open(
             None
         },
         delivery,
+        Some(&published),
     )
     .await;
     if created != ExitCode::SUCCESS {
@@ -140,7 +141,7 @@ async fn run_offboard(
             );
             return Ok(());
         }
-        require_template_matches_main(root, OFFBOARDING)?;
+        let published = require_template_matches_main(root, OFFBOARDING)?;
 
         if !has_signed_pointer(root, OFFBOARDING)? {
             if let Some(row) = remote::notation_rows(host, &project.code)
@@ -155,8 +156,16 @@ async fn run_offboard(
                 );
                 return Ok(());
             }
-            if remote::notation_create(host, code, &project.client_dri, &project.code, None, None)
-                .await
+            if remote::notation_create(
+                host,
+                code,
+                &project.client_dri,
+                &project.code,
+                None,
+                None,
+                Some(&published),
+            )
+            .await
                 != ExitCode::SUCCESS
             {
                 return Err(anyhow!("could not open the offboarding notation"));
@@ -467,7 +476,10 @@ fn retyped_kind(contents: &str, new_kind: &str) -> Option<String> {
     ))
 }
 
-fn require_template_matches_main(root: &Path, kind: &str) -> Result<()> {
+/// Refuse unless `kind`'s Draft is published unchanged on origin/main, and
+/// return it as published: the server opens this letter, never the shared
+/// catalog's template of the same code.
+fn require_template_matches_main(root: &Path, kind: &str) -> Result<remote::PublishedDraft> {
     git(root, &["fetch", "origin", "main"])
         .context("fetch origin/main before opening the notation")?;
     let relative = template_relative(root, kind)?;
@@ -486,7 +498,12 @@ fn require_template_matches_main(root: &Path, kind: &str) -> Result<()> {
             "local {relative} differs from origin/main; publish the template before opening its notation"
         ));
     }
-    Ok(())
+    let shown = git(root, &["show", &format!("origin/main:{relative}")])?;
+    Ok(remote::PublishedDraft {
+        source: String::from_utf8(shown.stdout)
+            .with_context(|| format!("{relative} on origin/main is not UTF-8"))?,
+        commit_sha: git_text(root, &["rev-parse", "origin/main"])?,
+    })
 }
 
 fn has_signed_pointer(root: &Path, kind: &str) -> Result<bool> {
@@ -1406,7 +1423,18 @@ The Firm will represent the client.
         init_project_repository(root.path(), ONBOARDING);
         let tracked = git(root.path(), &["ls-files"]);
         assert!(String::from_utf8_lossy(&tracked.stdout).contains("drafts/onboarding__letter.md"));
-        require_template_matches_main(root.path(), ONBOARDING).unwrap();
+        // LAW-372: the published Draft travels with the create request, so
+        // the server opens this letter rather than the shared template.
+        let published = require_template_matches_main(root.path(), ONBOARDING).unwrap();
+        assert_eq!(
+            published.source,
+            std::fs::read_to_string(root.path().join("drafts/onboarding__letter.md")).unwrap()
+        );
+        let head = git(root.path(), &["rev-parse", "origin/main"]);
+        assert_eq!(
+            published.commit_sha,
+            String::from_utf8_lossy(&head.stdout).trim()
+        );
     }
 
     #[tokio::test]

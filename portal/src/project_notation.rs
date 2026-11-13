@@ -41,6 +41,23 @@ pub struct NewProjectNotationBody {
     pub client_email: String,
     #[serde(default)]
     pub delivery: store::notations::SigningDelivery,
+    /// The Draft's source as the caller's Project checkout holds it at
+    /// `commit_sha`. When present it is the template, so a Project whose
+    /// repository the server does not host still opens its own Draft rather
+    /// than the shared catalog's template of the same code.
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub commit_sha: Option<String>,
+}
+
+impl NewProjectNotationBody {
+    fn checkout(&self) -> Option<workflows::CheckoutDraft> {
+        Some(workflows::CheckoutDraft {
+            contents: self.source.clone()?,
+            commit_sha: self.commit_sha.clone()?,
+        })
+    }
 }
 
 /// The matter-open notation command, shared by the lawyer browser form
@@ -62,6 +79,7 @@ pub async fn create_project_notation(
     template_code: &str,
     client_email: &str,
     delivery: store::notations::SigningDelivery,
+    checkout: Option<workflows::CheckoutDraft>,
 ) -> Result<StartOutcome, CreateProjectNotationError> {
     let code = template_code.trim();
     let email = client_email.trim();
@@ -103,6 +121,21 @@ pub async fn create_project_notation(
         .map_err(|error| CreateProjectNotationError::Db(error.to_string()))?;
     let started_at = chrono::Utc::now();
     let outcome = async {
+        if let Some(draft) = checkout {
+            return workflows::create_notation_from_checkout(
+                surreal,
+                runtime,
+                storage,
+                draft,
+                code,
+                person_id,
+                project_id,
+                Some(project.entity_id),
+                delivery,
+            )
+            .await
+            .map_err(CreateProjectNotationError::Session);
+        }
         // The repo layer is env-selected, exactly like the documents export path
         // (`project_export.rs`); a process with no repo root cannot read a repo.
         let repo = repos::RepoStore::from_env().map_err(|e| {
@@ -332,6 +365,7 @@ pub async fn project_notation_new_post(
         &body.template_code,
         &body.client_email,
         body.delivery,
+        body.checkout(),
     )
     .await
     {
@@ -442,6 +476,7 @@ mod tests {
             "retainer",
             "client@example.com",
             store::notations::SigningDelivery::default(),
+            None,
         )
         .await
         .expect_err("a missing matter must refuse");
@@ -452,6 +487,51 @@ mod tests {
         );
         let response = error.into_lawyer_response();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// LAW-372: a checkout's published Draft opens with no hosted repository
+    /// store at all, pinned to the commit the checkout named.
+    #[tokio::test]
+    async fn a_checkout_draft_opens_without_a_hosted_repository() {
+        let surreal = store::test_support::mem_surreal().await;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let storage: Arc<dyn cloud::StorageService> = Arc::new(
+            cloud::FsStorage::new(tmp.path().to_path_buf())
+                .await
+                .expect("storage"),
+        );
+        let runtime = workflows::InMemoryRuntime::new();
+        let project_id = store::test_support::seed_project_surreal(&surreal, "checkout").await;
+
+        let opened = create_project_notation(
+            &surreal,
+            &runtime,
+            &storage,
+            None,
+            Role::Admin,
+            project_id,
+            "onboarding__letter",
+            "client@example.com",
+            store::notations::SigningDelivery::default(),
+            Some(workflows::CheckoutDraft {
+                contents: include_str!("../../templates/notations/neon_law/onboarding__letter.md")
+                    .to_string(),
+                commit_sha: "feedface".to_string(),
+            }),
+        )
+        .await
+        .expect("the checkout Draft opens");
+
+        let notation = store::notations::find_by_id(&surreal, opened.notation_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let template = store::templates::find_by_id(&surreal, notation.template_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(template.project_id, Some(project_id));
+        assert_eq!(template.source_commit_sha.as_deref(), Some("feedface"));
     }
 
     /// LAW-200: a questionnaire that fails the engine's runtime parse names
