@@ -2273,6 +2273,7 @@ async fn file_thread(
         if has_attachments(message) {
             let filed = file_raw_message(&gmail, &target, &message.id, kind).await?;
             attachments_filed += filed.attachments_filed;
+            filed.print_skipped();
         } else {
             file_message(&target, message, &body).await?;
         }
@@ -2465,6 +2466,7 @@ async fn parse_gmail_message(
         names.len(),
         names.join(", ")
     );
+    filed.print_skipped();
     Ok(())
 }
 
@@ -2533,6 +2535,7 @@ async fn parse_eml_file(
             summary.attachments_filed
         );
     }
+    summary.print_skipped();
     Ok(())
 }
 
@@ -2621,6 +2624,31 @@ fn eml_filing_summary(response: &serde_json::Value) -> EmlFiled {
             .to_string(),
         deduped: response["deduped"].as_bool().unwrap_or(false),
         attachments_filed: response["filed"].as_array().map_or(0, std::vec::Vec::len),
+        skipped: response["skipped"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|part| {
+                let filename = part["filename"].as_str().unwrap_or_default();
+                let reason = part["reason"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .replace('_', " ");
+                match part["document_slug"].as_str() {
+                    Some(slug) => format!("{filename}: {reason} as {slug}"),
+                    None => format!("{filename}: {reason}"),
+                }
+            })
+            .collect(),
+    }
+}
+
+impl EmlFiled {
+    /// Name every attachment the door left unfiled, and why.
+    fn print_skipped(&self) {
+        for line in &self.skipped {
+            println!("Skipped {line}");
+        }
     }
 }
 
@@ -2628,6 +2656,8 @@ struct EmlFiled {
     source_ref: String,
     deduped: bool,
     attachments_filed: usize,
+    /// One `<filename>: <reason>` line per attachment left unfiled.
+    skipped: Vec<String>,
 }
 
 /// `mail save`: fetch the message's RFC 822 copy through the read-only Gmail
@@ -2959,6 +2989,23 @@ MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n\
         assert_eq!(summary.source_ref, "eml:abc-123@example.test");
         assert!(summary.deduped);
         assert_eq!(summary.attachments_filed, 2);
+        assert!(summary.skipped.is_empty());
+
+        // An attachment the matter already holds is named, with its document.
+        let summary = eml_filing_summary(&serde_json::json!({
+            "source_ref": "eml:abc-123@example.test",
+            "deduped": false,
+            "filed": [],
+            "skipped": [{
+                "filename": "order.pdf",
+                "reason": "already_on_file",
+                "document_slug": "2026.10.30_order.pdf"
+            }]
+        }));
+        assert_eq!(
+            summary.skipped,
+            ["order.pdf: already on file as 2026.10.30_order.pdf"]
+        );
 
         // A dry-run response: no communication row, no attachments filed.
         let summary = eml_filing_summary(&serde_json::json!({

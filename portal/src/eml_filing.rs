@@ -44,8 +44,11 @@ pub struct ParsedEml {
     pub at: String,
     /// The message's trimmed plain-text body.
     pub body: String,
-    /// Every attachment part, names and bytes included.
+    /// Every attachment part, names and bytes included, except inline images.
     pub attachments: Vec<crate::inbound_email::InboundAttachment>,
+    /// Filenames of the images the HTML body shows inline by `cid:` (a
+    /// signature logo), which file nowhere.
+    pub inline_images: Vec<String>,
 }
 
 /// Parse raw `.eml` bytes for filing. `mailbox`, when given, marks a message
@@ -80,6 +83,19 @@ pub fn parse_eml(raw: &[u8], mailbox: Option<&str>) -> Result<ParsedEml, EmlPars
         _ => "inbound",
     };
     let message_ref = eml_message_ref(message.message_id(), raw);
+    let html = message.body_html(0).unwrap_or_default();
+    let (inline, attachments): (Vec<_>, Vec<_>) = message
+        .attachments()
+        .map(|part| {
+            let shown = part
+                .content_type()
+                .is_some_and(|mime| mime.ctype().eq_ignore_ascii_case("image"))
+                && part
+                    .content_id()
+                    .is_some_and(|id| html.contains(&format!("cid:{id}")));
+            (shown, crate::inbound_email::inbound_attachment(&part))
+        })
+        .partition(|(shown, _)| *shown);
     Ok(ParsedEml {
         message_ref: message_ref.clone(),
         source_ref: format!("eml:{message_ref}"),
@@ -89,7 +105,8 @@ pub fn parse_eml(raw: &[u8], mailbox: Option<&str>) -> Result<ParsedEml, EmlPars
         subject: message.subject().map(str::to_string),
         at,
         body,
-        attachments: crate::inbound_email::attachments_from_raw(raw),
+        attachments: attachments.into_iter().map(|(_, part)| part).collect(),
+        inline_images: inline.into_iter().map(|(_, part)| part.filename).collect(),
     })
 }
 

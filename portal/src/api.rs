@@ -6715,6 +6715,7 @@ async fn mail_file_door(
         &MailAttachmentSource {
             exactly_once: false,
             attachment_kinds: None,
+            skip: &[],
             message_id: &input.message_id.to_string(),
             sender: &message.from_addr,
             received_at: &message.inserted_at.to_rfc3339(),
@@ -6747,6 +6748,8 @@ pub(crate) struct MailAttachmentSource<'a> {
     pub(crate) exactly_once: bool,
     /// Optional per-part classifications; absent parts use the filing kind.
     pub(crate) attachment_kinds: Option<&'a [&'a str]>,
+    /// Part indexes left unfiled; every other part keeps its own index slug.
+    pub(crate) skip: &'a [usize],
     /// Slug component. A UUID for a stored message; a sanitized `.eml`
     /// message reference for an upload.
     pub(crate) message_id: &'a str,
@@ -6774,6 +6777,9 @@ pub(crate) async fn file_mail_attachments(
     let received_at = source.received_at.to_string();
     let mut filed = Vec::with_capacity(attachments.len());
     for (index, attachment) in attachments.iter().enumerate() {
+        if source.skip.contains(&index) {
+            continue;
+        }
         let kind = source
             .attachment_kinds
             .and_then(|kinds| kinds.get(index))
@@ -6880,6 +6886,18 @@ struct EmlUploadResponse {
     /// One pointer per filed attachment, in message-part order. Empty when
     /// `dry_run`, or when the message carried no attachments.
     filed: Vec<store::document_pointers::DocumentPointer>,
+    /// Attachments left unfiled, and why.
+    skipped: Vec<EmlSkippedAttachment>,
+}
+
+/// An attachment the .eml door did not file: an `inline_image` the HTML body
+/// shows by `cid:` (a signature logo), or one `already_on_file`, which names
+/// the live document on the matter that already holds the same bytes.
+#[derive(Serialize)]
+struct EmlSkippedAttachment {
+    filename: String,
+    reason: &'static str,
+    document_slug: Option<String>,
 }
 
 /// The `400` error code a filing refusal names.
@@ -6979,6 +6997,7 @@ async fn eml_upload_door(
                 communication_id: None,
                 attachments,
                 filed: Vec::new(),
+                skipped: Vec::new(),
             }),
         )
             .into_response());
@@ -7047,6 +7066,15 @@ async fn file_parsed_eml(
     )
     .await
     .map_err(crate::communications_api::map_communication)?;
+    let mut skipped: Vec<EmlSkippedAttachment> = parsed
+        .inline_images
+        .iter()
+        .map(|filename| EmlSkippedAttachment {
+            filename: filename.clone(),
+            reason: "inline_image",
+            document_slug: None,
+        })
+        .collect();
     let filed = if parsed.attachments.is_empty() {
         Vec::new()
     } else {
@@ -7062,6 +7090,8 @@ async fn file_parsed_eml(
             })
             .collect();
         let kind = kind.expect("invariant: kind_required returned early without one");
+        let skip =
+            attachments_on_file(state, project_id, &message_id_slug, &parsed, &mut skipped).await?;
         file_mail_attachments(
             state,
             project_id,
@@ -7070,6 +7100,7 @@ async fn file_parsed_eml(
             &MailAttachmentSource {
                 exactly_once: false,
                 attachment_kinds: None,
+                skip: &skip,
                 message_id: &message_id_slug,
                 sender: &parsed.from,
                 received_at: &parsed.at,
@@ -7093,9 +7124,46 @@ async fn file_parsed_eml(
             communication_id: Some(ingested.communication_id),
             attachments,
             filed,
+            skipped,
         }),
     )
         .into_response())
+}
+
+/// The part indexes of `parsed` whose bytes a live document on the matter
+/// already holds, each named in `skipped`. A part's own earlier filing under
+/// its mail slug is a replay, not a copy, so it files (and reads back) again.
+async fn attachments_on_file(
+    state: &ApiState,
+    project_id: Uuid,
+    message_id_slug: &str,
+    parsed: &crate::eml_filing::ParsedEml,
+    skipped: &mut Vec<EmlSkippedAttachment>,
+) -> Result<Vec<usize>, ApiError> {
+    let live = store::assets::for_project(&state.surreal, project_id)
+        .await
+        .map_err(ApiError::Asset)?;
+    let mut skip = Vec::new();
+    for (index, attachment) in parsed.attachments.iter().enumerate() {
+        let sha = store::assets::sha256_hex(&attachment.bytes);
+        let slug = format!("mail/{message_id_slug}/{index}");
+        let holders: Vec<_> = live.iter().filter(|a| a.sha256_hex == sha).collect();
+        if holders
+            .iter()
+            .any(|a| a.slug.as_deref() == Some(slug.as_str()))
+        {
+            continue;
+        }
+        if let Some(holder) = holders.first() {
+            skip.push(index);
+            skipped.push(EmlSkippedAttachment {
+                filename: attachment.filename.clone(),
+                reason: "already_on_file",
+                document_slug: holder.slug.clone(),
+            });
+        }
+    }
+    Ok(skip)
 }
 
 /// `GET /app/api/projects/{id}/documents/revisions?slug=`, the query, not a
@@ -11726,6 +11794,138 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
             .await
             .unwrap();
         assert_eq!(filed.len(), 1, "the replay wrote no second row");
+    }
+
+    #[tokio::test]
+    async fn eml_door_skips_an_attachment_already_on_file_and_names_the_document() {
+        let db = store::surreal::test_support::mem().await;
+        let project_id = store::test_support::seed_project_surreal(&db, "eml-door-on-file").await;
+        let (state, session) = eml_lawyer_state(&db, project_id, "aries@neonlaw.com").await;
+        let args = store::documents::IngestArgs {
+            project_id,
+            source: store::documents::source::UPLOAD,
+            filename: "2026.10.30_order.pdf",
+            kind: "exhibit",
+            content_type: "application/pdf",
+            description: None,
+            secondary_storage_key: None,
+            visibility: store::documents::visibility::INTERNAL,
+        };
+        let identity = store::documents::DocumentIdentity {
+            slug: Some("2026.10.30_order.pdf"),
+            published_at: None,
+            metadata: None,
+            derived_from: None,
+            transcript_quality: None,
+            signing: None,
+            notarization: Vec::new(),
+            evidence: None,
+            folder: None,
+        };
+        store::assets::file_revision(&db, &state.storage, &args, &identity, b"%PDF-1.4")
+            .await
+            .expect("the lawyer uploaded the attachment first");
+
+        let response = eml_upload_door(
+            State(state),
+            LawyerSession(session),
+            Path(project_id),
+            Json(eml_request(
+                EML_WITH_ATTACHMENT.as_bytes(),
+                None,
+                Some("letter".to_string()),
+                false,
+            )),
+        )
+        .await
+        .expect("the message files");
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json["communication_id"].is_string(), "the message files");
+        assert!(
+            json["filed"].as_array().unwrap().is_empty(),
+            "the attachment is not filed a second time"
+        );
+        assert_eq!(
+            json["skipped"],
+            serde_json::json!([{
+                "filename": "order.pdf",
+                "reason": "already_on_file",
+                "document_slug": "2026.10.30_order.pdf",
+            }])
+        );
+        let assets = store::assets::for_project(&db, project_id).await.unwrap();
+        assert_eq!(assets.len(), 1, "no second document chain");
+    }
+
+    #[tokio::test]
+    async fn eml_door_files_the_message_and_skips_an_inline_signature_logo() {
+        const SIGNED: &str = "Message-ID: <signed-1@example.test>\r\n\
+From: Clerk <clerk@example.test>\r\n\
+To: lawyer@neonlaw.test\r\n\
+Subject: Hearing confirmed\r\n\
+Date: Fri, 30 Oct 2026 14:03:00 +0000\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: multipart/related; boundary=\"REL\"\r\n\
+\r\n\
+--REL\r\n\
+Content-Type: multipart/alternative; boundary=\"ALT\"\r\n\
+\r\n\
+--ALT\r\n\
+Content-Type: text/plain\r\n\
+\r\n\
+The hearing is confirmed.\r\n\
+--ALT\r\n\
+Content-Type: text/html\r\n\
+\r\n\
+<p>The hearing is confirmed.</p><img src=\"cid:image001.png@01DB0000.00000000\">\r\n\
+--ALT--\r\n\
+--REL\r\n\
+Content-Type: image/png; name=\"image001.png\"\r\n\
+Content-Disposition: inline; filename=\"image001.png\"\r\n\
+Content-ID: <image001.png@01DB0000.00000000>\r\n\
+\r\n\
+PNG\r\n\
+--REL--\r\n";
+        let db = store::surreal::test_support::mem().await;
+        let project_id = store::test_support::seed_project_surreal(&db, "eml-door-logo").await;
+        let (state, session) = eml_lawyer_state(&db, project_id, "aries@neonlaw.com").await;
+
+        let response = eml_upload_door(
+            State(state),
+            LawyerSession(session),
+            Path(project_id),
+            Json(eml_request(SIGNED.as_bytes(), None, None, false)),
+        )
+        .await
+        .expect("a message whose only part is a signature logo files");
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json["communication_id"].is_string(), "the message files");
+        assert!(json["filed"].as_array().unwrap().is_empty());
+        assert_eq!(
+            json["skipped"],
+            serde_json::json!([{
+                "filename": "image001.png",
+                "reason": "inline_image",
+                "document_slug": null,
+            }])
+        );
+        assert!(
+            store::assets::for_project(&db, project_id)
+                .await
+                .unwrap()
+                .is_empty(),
+            "the logo files no document"
+        );
     }
 
     #[tokio::test]
