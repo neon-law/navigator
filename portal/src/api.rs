@@ -6886,8 +6886,9 @@ struct EmlUploadResponse {
     skipped: Vec<EmlSkippedAttachment>,
 }
 
-/// An attachment the .eml door did not file. `already_on_file` names the
-/// live document on the matter that already holds the same bytes.
+/// An attachment the .eml door did not file: an `inline_image` the HTML body
+/// shows by `cid:` (a signature logo), or one `already_on_file`, which names
+/// the live document on the matter that already holds the same bytes.
 #[derive(Serialize)]
 struct EmlSkippedAttachment {
     filename: String,
@@ -7061,7 +7062,15 @@ async fn file_parsed_eml(
     )
     .await
     .map_err(crate::communications_api::map_communication)?;
-    let mut skipped = Vec::new();
+    let mut skipped: Vec<EmlSkippedAttachment> = parsed
+        .inline_images
+        .iter()
+        .map(|filename| EmlSkippedAttachment {
+            filename: filename.clone(),
+            reason: "inline_image",
+            document_slug: None,
+        })
+        .collect();
     let filed = if parsed.attachments.is_empty() {
         Vec::new()
     } else {
@@ -7077,31 +7086,8 @@ async fn file_parsed_eml(
             })
             .collect();
         let kind = kind.expect("invariant: kind_required returned early without one");
-        // A part whose bytes a live document on the matter already holds is
-        // on file; its own earlier filing under its mail slug is a replay.
-        let live = store::assets::for_project(&state.surreal, project_id)
-            .await
-            .map_err(ApiError::Asset)?;
-        let mut skip = Vec::new();
-        for (index, attachment) in parsed.attachments.iter().enumerate() {
-            let sha = store::assets::sha256_hex(&attachment.bytes);
-            let slug = format!("mail/{message_id_slug}/{index}");
-            let holders: Vec<_> = live.iter().filter(|a| a.sha256_hex == sha).collect();
-            if holders
-                .iter()
-                .any(|a| a.slug.as_deref() == Some(slug.as_str()))
-            {
-                continue;
-            }
-            if let Some(holder) = holders.first() {
-                skip.push(index);
-                skipped.push(EmlSkippedAttachment {
-                    filename: attachment.filename.clone(),
-                    reason: "already_on_file",
-                    document_slug: holder.slug.clone(),
-                });
-            }
-        }
+        let skip =
+            attachments_on_file(state, project_id, &message_id_slug, &parsed, &mut skipped).await?;
         file_mail_attachments(
             state,
             project_id,
@@ -7138,6 +7124,42 @@ async fn file_parsed_eml(
         }),
     )
         .into_response())
+}
+
+/// The part indexes of `parsed` whose bytes a live document on the matter
+/// already holds, each named in `skipped`. A part's own earlier filing under
+/// its mail slug is a replay, not a copy, so it files (and reads back) again.
+async fn attachments_on_file(
+    state: &ApiState,
+    project_id: Uuid,
+    message_id_slug: &str,
+    parsed: &crate::eml_filing::ParsedEml,
+    skipped: &mut Vec<EmlSkippedAttachment>,
+) -> Result<Vec<usize>, ApiError> {
+    let live = store::assets::for_project(&state.surreal, project_id)
+        .await
+        .map_err(ApiError::Asset)?;
+    let mut skip = Vec::new();
+    for (index, attachment) in parsed.attachments.iter().enumerate() {
+        let sha = store::assets::sha256_hex(&attachment.bytes);
+        let slug = format!("mail/{message_id_slug}/{index}");
+        let holders: Vec<_> = live.iter().filter(|a| a.sha256_hex == sha).collect();
+        if holders
+            .iter()
+            .any(|a| a.slug.as_deref() == Some(slug.as_str()))
+        {
+            continue;
+        }
+        if let Some(holder) = holders.first() {
+            skip.push(index);
+            skipped.push(EmlSkippedAttachment {
+                filename: attachment.filename.clone(),
+                reason: "already_on_file",
+                document_slug: holder.slug.clone(),
+            });
+        }
+    }
+    Ok(skip)
 }
 
 /// `GET /app/api/projects/{id}/documents/revisions?slug=`, the query, not a
@@ -11834,6 +11856,72 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
         );
         let assets = store::assets::for_project(&db, project_id).await.unwrap();
         assert_eq!(assets.len(), 1, "no second document chain");
+    }
+
+    #[tokio::test]
+    async fn eml_door_files_the_message_and_skips_an_inline_signature_logo() {
+        const SIGNED: &str = "Message-ID: <signed-1@example.test>\r\n\
+From: Clerk <clerk@example.test>\r\n\
+To: lawyer@neonlaw.test\r\n\
+Subject: Hearing confirmed\r\n\
+Date: Fri, 30 Oct 2026 14:03:00 +0000\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: multipart/related; boundary=\"REL\"\r\n\
+\r\n\
+--REL\r\n\
+Content-Type: multipart/alternative; boundary=\"ALT\"\r\n\
+\r\n\
+--ALT\r\n\
+Content-Type: text/plain\r\n\
+\r\n\
+The hearing is confirmed.\r\n\
+--ALT\r\n\
+Content-Type: text/html\r\n\
+\r\n\
+<p>The hearing is confirmed.</p><img src=\"cid:image001.png@01DB0000.00000000\">\r\n\
+--ALT--\r\n\
+--REL\r\n\
+Content-Type: image/png; name=\"image001.png\"\r\n\
+Content-Disposition: inline; filename=\"image001.png\"\r\n\
+Content-ID: <image001.png@01DB0000.00000000>\r\n\
+\r\n\
+PNG\r\n\
+--REL--\r\n";
+        let db = store::surreal::test_support::mem().await;
+        let project_id = store::test_support::seed_project_surreal(&db, "eml-door-logo").await;
+        let (state, session) = eml_lawyer_state(&db, project_id, "aries@neonlaw.com").await;
+
+        let response = eml_upload_door(
+            State(state),
+            LawyerSession(session),
+            Path(project_id),
+            Json(eml_request(SIGNED.as_bytes(), None, None, false)),
+        )
+        .await
+        .expect("a message whose only part is a signature logo files");
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json["communication_id"].is_string(), "the message files");
+        assert!(json["filed"].as_array().unwrap().is_empty());
+        assert_eq!(
+            json["skipped"],
+            serde_json::json!([{
+                "filename": "image001.png",
+                "reason": "inline_image",
+                "document_slug": null,
+            }])
+        );
+        assert!(
+            store::assets::for_project(&db, project_id)
+                .await
+                .unwrap()
+                .is_empty(),
+            "the logo files no document"
+        );
     }
 
     #[tokio::test]

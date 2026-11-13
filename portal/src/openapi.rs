@@ -5106,9 +5106,9 @@ fn canonical_document(base: &str) -> Value {
                   "communication_id": { "type": "string", "format": "uuid" },
                   "attachments": { "type": "array", "items": { "type": "object" } },
                   "filed": { "type": "array", "items": { "type": "object", "required": ["kind", "visibility", "current_version"] } },
-                  "skipped": { "type": "array", "description": "Attachments left unfiled: `already_on_file` names the live document holding the same bytes.", "items": { "type": "object", "required": ["filename", "reason"], "properties": {
+                  "skipped": { "type": "array", "description": "Attachments left unfiled: an `inline_image` the HTML body shows by cid: (a signature logo), or one `already_on_file`, which names the live document holding the same bytes.", "items": { "type": "object", "required": ["filename", "reason"], "properties": {
                     "filename": { "type": "string" },
-                    "reason": { "type": "string", "enum": ["already_on_file"] },
+                    "reason": { "type": "string", "enum": ["inline_image", "already_on_file"] },
                     "document_slug": { "type": "string" }
                   } } }
                 }

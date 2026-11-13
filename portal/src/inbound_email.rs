@@ -740,27 +740,28 @@ pub fn attachments_from_raw(raw: &[u8]) -> Vec<InboundAttachment> {
     };
     message
         .attachments()
-        .map(|part| {
-            let content_type = part.content_type().map_or_else(
-                || "application/octet-stream".to_owned(),
-                |mime| {
-                    format!(
-                        "{}/{}",
-                        mime.ctype(),
-                        mime.subtype().unwrap_or("octet-stream")
-                    )
-                },
-            );
-            InboundAttachment {
-                filename: non_empty_metadata(
-                    part.attachment_name().unwrap_or_default(),
-                    "attachment",
-                ),
-                content_type: non_empty_metadata(&content_type, "application/octet-stream"),
-                bytes: part.decoded().into_owned(),
-            }
-        })
+        .map(|part| inbound_attachment(&part))
         .collect()
+}
+
+/// One MIME attachment part as filing reads it: name, type, decoded bytes.
+#[must_use]
+pub fn inbound_attachment(part: &mail_parser::MessagePart<'_>) -> InboundAttachment {
+    let content_type = part.content_type().map_or_else(
+        || "application/octet-stream".to_owned(),
+        |mime| {
+            format!(
+                "{}/{}",
+                mime.ctype(),
+                mime.subtype().unwrap_or("octet-stream")
+            )
+        },
+    );
+    InboundAttachment {
+        filename: non_empty_metadata(part.attachment_name().unwrap_or_default(), "attachment"),
+        content_type: non_empty_metadata(&content_type, "application/octet-stream"),
+        bytes: part.decoded().into_owned(),
+    }
 }
 
 /// Storage key for a freshly received inbound message. Includes a
