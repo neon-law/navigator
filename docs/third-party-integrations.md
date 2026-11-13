@@ -111,10 +111,10 @@ Standing up a Firm on a deployment includes its integration runtime. Each provid
 first and a Firm credential second; until the first exists, the door reports `runtime_not_configured` and its `detail`
 names the gap.
 
-- **Notion and Slack** need `NAVIGATOR_RUNTIME_KMS_KEY` and `NAVIGATOR_NOTION_DATABASE_ID` in `secrets.enc.yaml`. The
-  operator creates the runtime key and grants the runtime service account `roles/cloudkms.cryptoKeyEncrypterDecrypter`
-  on it through Workload Identity. Both providers share one resolver, so both need both variables even when a Firm uses
-  only Slack. A pod with no application-default credential for the key reports that gap instead.
+- **Notion and Slack** need `NAVIGATOR_RUNTIME_KMS_KEY` in `secrets.enc.yaml`; Notion also needs
+  `NAVIGATOR_NOTION_DATABASE_ID`. The operator creates the runtime key and grants the runtime service account
+  `roles/cloudkms.cryptoKeyEncrypterDecrypter` on it through Workload Identity. A pod with no application-default
+  credential for the key reports that gap instead.
 - **Calendar** needs only the row's delegated user, `NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER`, stored with
   `hudson ops deployments set`. `ops ship` renders it and `NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT`, the email of the
   row's `NAVIGATOR_DRIVE_GCP_SERVICE_ACCOUNT_ID` account, into the web pod. No key exists: the pod's runtime identity
