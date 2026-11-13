@@ -17,7 +17,6 @@ use rules::{F109OutputFormat, Kind};
 pub const RENDER_FRAME_HELP: &str = "\
 Default frame by `kind:` (override with `output:`; run `hudson notation kinds` for the full list):
   letter         letter, onboarding, offboarding, memo   (firm letterhead, even with no `output:`)
-  client_letter  declaration                             (no letterhead; the party's own document)
   form           filing                                  (AcroForm fill; needs `form:` and `origin_url:`)
   pleading       pleading                                (court paper; needs a calibrated `jurisdiction:`)
   contract       agreement                               (no letterhead)
@@ -26,7 +25,7 @@ Default frame by `kind:` (override with `output:`; run `hudson notation kinds` f
 
 `output:` accepts letter, client_letter, contract, pleading, form, resume. `plain` is never declared: omit `output:`.
 For a letter sent in a client's own name, declare `kind: letter` with `output: client_letter` (no letterhead).
-A declaration derives that same letterhead-less frame from `kind: declaration` — no `output:` needed.";
+A declaration or affidavit is the party's own voice: it derives `plain`, and `output: letter` is refused.";
 
 /// The listing `hudson notation kinds` prints.
 #[must_use]
@@ -112,6 +111,24 @@ mod tests {
             assert!(
                 line.contains(kind.as_str()),
                 "help does not list {} under {frame}",
+                kind.as_str()
+            );
+            let rows = RENDER_FRAME_HELP
+                .lines()
+                .filter(|l| l.starts_with("  "))
+                .filter(|l| {
+                    let kinds = l.split('(').next().unwrap_or_default();
+                    kinds
+                        .split([' ', ','])
+                        .filter(|word| !word.is_empty())
+                        .skip(1)
+                        .any(|word| word == kind.as_str())
+                })
+                .count();
+            assert_eq!(
+                rows,
+                1,
+                "help lists {} under more than one frame",
                 kind.as_str()
             );
         }
