@@ -18,11 +18,11 @@ FROM rust:1.99-bookworm AS builder
 # Which crate's `trigger` binary to build. Required — no sensible default.
 ARG CRATE
 RUN test -n "$CRATE" \
-    || (echo "build-arg CRATE is required (archives|billing-workflows|cli)" && false)
+    || (echo "build-arg CRATE is required (archives|billing-workflows|hudson)" && false)
 
 # Which binary within the crate. Defaults to `trigger` (the canary / archives
 # entrypoint); billing-workflows also ships `reconcile-trigger`, while the
-# SurrealDB archive selects `navigator`.
+# SurrealDB archive selects `hudson`, the binary that owns `ops`.
 ARG BIN=trigger
 
 RUN apt-get update \
