@@ -2251,6 +2251,33 @@ pub async fn send_post(
     }
 }
 
+/// The envelope status card (LAW-326) for the notation review page,
+/// composed once from the durable signature record — the same read the
+/// REST status door serves. A notation with no envelope carries no card.
+fn envelope_card(
+    status: &crate::signature_status::EnvelopeStatusReport,
+    notation_id: Uuid,
+) -> Option<webapp::intake_review::EnvelopeCard> {
+    status
+        .signature_request_id
+        .clone()
+        .map(|request_id| webapp::intake_review::EnvelopeCard {
+            request_id,
+            provider: status.provider.clone().unwrap_or_default(),
+            state: status.state.clone().unwrap_or_default(),
+            signers: status
+                .signers
+                .iter()
+                .map(|s| webapp::intake_review::EnvelopeSignerView {
+                    role: s.role.clone(),
+                    signed: s.signed,
+                })
+                .collect(),
+            updated_at: status.updated_at.clone(),
+            sender_view_href: format!("/app/lawyer/notations/{notation_id}/sender-view"),
+        })
+}
+
 /// Resolve the notation review screen for `GET /app/lawyer/notations/:id/review`, in
 /// the wasm-safe shape the Dioxus page renders (#956 Phase 4).
 ///
@@ -2297,6 +2324,13 @@ pub(crate) async fn resolve_intake_review(
         }))
         .into_response());
     }
+
+    // The envelope status card (LAW-326): the same read the REST status
+    // door serves. A notation with no envelope carries no card.
+    let status =
+        crate::signature_status::status_for_notation(&state.surreal, &state.storage, &notation_row)
+            .await;
+    let envelope = envelope_card(&status, notation_id);
 
     let rendered_html = match render_assembled_document(&render_deps(state), notation_id).await {
         Ok(html) => html,
@@ -2352,6 +2386,7 @@ pub(crate) async fn resolve_intake_review(
         rendered_html,
         governing_law_defaulted,
         reask_questions,
+        envelope,
         approve_send_label: "Approve and send for signature".to_string(),
     })
 }

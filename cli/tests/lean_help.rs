@@ -37,6 +37,10 @@ fn the_lean_navigator_names_only_its_own_verbs() {
         command_names(&help(&["site", "--help"])),
         ["import", "login", "logout", "whoami", "help"].map(String::from)
     );
+    assert_eq!(
+        command_names(&help(&["notation", "envelope", "--help"])),
+        ["prepare", "send", "status", "help"].map(String::from)
+    );
 }
 
 #[test]

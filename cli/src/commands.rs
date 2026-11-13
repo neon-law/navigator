@@ -154,6 +154,14 @@ pub enum EnvelopeCmd {
         /// The notation whose rendered document is dispatched.
         notation_id: uuid::Uuid,
     },
+    /// Report the envelope's state and each declared signer's own step,
+    /// read off the durable signature record the prepare/send flow
+    /// maintains and the completion webhook stamps. A notation with no
+    /// envelope says so — a status read never creates anything.
+    Status {
+        /// The notation whose envelope status is read.
+        notation_id: uuid::Uuid,
+    },
 }
 
 /// The site verbs a Project checkout and its CI need: the stored session and
@@ -306,6 +314,9 @@ fn run() -> ExitCode {
             }
             EnvelopeCmd::Send { notation_id } => {
                 runtime().block_on(remote::notation_envelope(notation_id, false))
+            }
+            EnvelopeCmd::Status { notation_id } => {
+                runtime().block_on(remote::notation_envelope_status(notation_id))
             }
         },
         Command::Site { action } => match action {

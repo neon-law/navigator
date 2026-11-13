@@ -459,3 +459,136 @@ async fn admin_bypasses_scope_and_sends() {
     let resp = post(&h.app, Some(&admin), notation_id, "signature").await;
     assert_eq!(resp.status(), StatusCode::OK);
 }
+
+async fn get(
+    app: &axum::Router,
+    auth: Option<&str>,
+    notation_id: uuid::Uuid,
+) -> axum::http::Response<Body> {
+    let mut req = Request::builder()
+        .method("GET")
+        .uri(format!("/app/api/notations/{notation_id}/signature"));
+    if let Some(auth) = auth {
+        req = req.header("authorization", auth);
+    }
+    app.clone()
+        .oneshot(req.body(Body::empty()).unwrap())
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn status_of_a_notation_with_no_envelope_is_an_empty_200() {
+    let h = build_app().await;
+    let project = open_project(&h.surreal).await;
+    let notation_id = seed_lawyer_review_notation(&h, project.id).await;
+    let lawyer = bearer_new_person(
+        &h.surreal,
+        "acting-lawyer@example.com",
+        Role::Lawyer,
+        Some((project.id, "lawyer")),
+    )
+    .await;
+
+    // No prepare or send has happened: the door answers with the
+    // notation's id and empty status fields — informational, not an error.
+    let resp = get(&h.app, Some(&lawyer), notation_id).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["notation_id"], notation_id.to_string());
+    assert!(json["signature_request_id"].is_null(), "{json}");
+    assert!(json["state"].is_null(), "{json}");
+}
+
+#[tokio::test]
+async fn the_status_door_gates_like_the_send_door() {
+    let h = build_app().await;
+    let project = open_project(&h.surreal).await;
+    let notation_id = seed_lawyer_review_notation(&h, project.id).await;
+
+    let resp = get(&h.app, None, notation_id).await;
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    let client = bearer_new_person(&h.surreal, "client@example.com", Role::Client, None).await;
+    let resp = get(&h.app, Some(&client), notation_id).await;
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    let outsider = bearer_new_person(&h.surreal, "outsider@example.com", Role::Lawyer, None).await;
+    let resp = get(&h.app, Some(&outsider), notation_id).await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+/// LAW-326: after a real dispatch through the shared send flow, the
+/// status door reports the envelope, the provider, and each declared
+/// signer's own step — and the webhook's per-role receipts
+/// (`record_signer_completion`) move the read.
+#[tokio::test]
+async fn status_reports_the_sent_envelope_and_the_webhooks_receipts() {
+    let h = build_app().await;
+    let project = open_project(&h.surreal).await;
+    let notation_id = seed_lawyer_review_notation(&h, project.id).await;
+    let lawyer = bearer_new_person(
+        &h.surreal,
+        "acting-lawyer@example.com",
+        Role::Lawyer,
+        Some((project.id, "lawyer")),
+    )
+    .await;
+
+    let approve = post(&h.app, Some(&lawyer), notation_id, "approval").await;
+    assert_eq!(approve.status(), StatusCode::OK, "approval renders the PDF");
+    let sent = post(&h.app, Some(&lawyer), notation_id, "signature").await;
+    assert_eq!(sent.status(), StatusCode::OK);
+    let body = sent.into_body().collect().await.unwrap().to_bytes();
+    let sent_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let request_id = sent_json["signature_request_id"].as_str().unwrap();
+
+    let resp = get(&h.app, Some(&lawyer), notation_id).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["notation_id"], notation_id.to_string());
+    assert_eq!(json["signature_request_id"], *request_id);
+    assert_eq!(json["state"], "requested");
+    assert!(
+        json["provider"].is_string(),
+        "the provider is named: {json}"
+    );
+    let signers = json["signers"].as_array().expect("per-signer state");
+    assert!(
+        signers
+            .iter()
+            .all(|s| s["signed"] == serde_json::Value::Bool(false)),
+        "nothing has signed yet: {json}"
+    );
+    assert!(json["sender_view_href"].is_string(), "{json}");
+
+    // The completion webhook stamps per-role receipts on the durable
+    // record; the next read shows the client's receipt and nothing else.
+    let stamped = store::signatures::record_signer_completion(
+        &h.surreal,
+        store::signatures::SignatureProvider::DocuSign,
+        request_id,
+        "client",
+    )
+    .await
+    .unwrap();
+    assert!(stamped, "the receipt lands on the dispatched envelope");
+
+    let resp = get(&h.app, Some(&lawyer), notation_id).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let signers = json["signers"].as_array().expect("per-signer state");
+    let by_role = |role: &str| {
+        signers
+            .iter()
+            .find(|s| s["role"] == role)
+            .unwrap_or_else(|| panic!("no {role} signer: {json}"))["signed"]
+            .as_bool()
+            .unwrap()
+    };
+    assert!(by_role("client"), "the client's receipt is read: {json}");
+    assert!(!by_role("firm"), "the firm has not signed yet: {json}");
+}
