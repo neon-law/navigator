@@ -78,6 +78,8 @@ async fn shared_scenario_passes(world: &mut TrustAcceptanceWorld, id: String) {
 #[tokio::main]
 async fn main() {
     TrustAcceptanceWorld::cucumber()
+        // One scenario at a time on the shared embedded SurrealDB.
+        .max_concurrent_scenarios(1)
         .run_and_exit("tests/features/portal_trust_position_acceptance.feature")
         .await;
 }

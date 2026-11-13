@@ -232,5 +232,9 @@ async fn twin_contains(world: &mut DeployWorld, needle: String) {
 
 #[tokio::main]
 async fn main() {
-    DeployWorld::run("tests/features/deploy_the_navigator_walkthrough.feature").await;
+    DeployWorld::cucumber()
+        // One scenario at a time on the shared embedded SurrealDB.
+        .max_concurrent_scenarios(1)
+        .run_and_exit("tests/features/deploy_the_navigator_walkthrough.feature")
+        .await;
 }

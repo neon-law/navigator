@@ -155,6 +155,8 @@ async fn assert_gate(_world: &mut ReportWorld) {
 #[tokio::main]
 async fn main() {
     ReportWorld::cucumber()
+        // One scenario at a time on the shared embedded SurrealDB.
+        .max_concurrent_scenarios(1)
         .run_and_exit("tests/features/annual_report_filing.feature")
         .await;
 }

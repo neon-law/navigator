@@ -554,6 +554,8 @@ fn truncated(s: &str) -> String {
 #[tokio::main]
 async fn main() {
     TrustWorld::cucumber()
+        // One scenario at a time on the shared embedded SurrealDB.
+        .max_concurrent_scenarios(1)
         .run_and_exit("tests/features/portal_trust_position.feature")
         .await;
 }
