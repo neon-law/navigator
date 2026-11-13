@@ -1453,15 +1453,15 @@ pub enum CommunicationCmd {
         #[command(flatten)]
         host: HostOpt,
     },
-    /// Log a call or email and print the stored Communication.
+    /// Log a call, email, or SMS and print the stored Communication.
     ///
     /// Communications stay server-only: nothing is written under
     /// `documents/`, and `project sync` writes no pointer for one.
     Create {
-        /// `call`, `email_inbound`, or `email_outbound`.
+        /// `call`, `email_inbound`, `email_outbound`, or firm-internal `sms`.
         #[arg(long, default_value = "call")]
         channel: String,
-        /// `inbound` or `outbound`: who placed the call or sent the email.
+        /// `inbound` or `outbound`: who placed the call or sent the message.
         #[arg(long)]
         direction: String,
         /// The other party, as an email or a name.
@@ -1499,6 +1499,9 @@ pub enum CommunicationCmd {
         /// External message identity for traceability and idempotent ingest.
         #[arg(long)]
         source_ref: Option<String>,
+        /// Already-filed Project document to attach to an SMS.
+        #[arg(long)]
+        asset_id: Option<uuid::Uuid>,
         /// Share the note with the client. Refused for `--role opposing_counsel`.
         #[arg(long)]
         client_visible: bool,
@@ -2272,6 +2275,7 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 confirms,
                 acknowledges,
                 source_ref,
+                asset_id,
                 client_visible,
                 subject,
                 dry_run,
@@ -2295,6 +2299,7 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
                         confirms,
                         acknowledges,
                         source_ref,
+                        asset_id,
                         client_visible,
                         subject,
                     },

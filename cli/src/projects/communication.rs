@@ -1,6 +1,6 @@
 //! `navigator project communication create|list` — log a call as an
 //! internal-note [Communication](../../../docs/glossary/communication.md),
-//! or an email with its source and receipt relation, and read the firm view of
+//! an email with its source and receipt relation, or an SMS, and read the firm view of
 //! the log back.
 //!
 //! Communications stay server-only: no pointer is written under
@@ -112,6 +112,7 @@ pub struct NewCommunication {
     pub confirms: Option<Uuid>,
     pub acknowledges: Option<Uuid>,
     pub source_ref: Option<String>,
+    pub asset_id: Option<Uuid>,
     pub client_visible: bool,
     pub subject: Option<String>,
 }
@@ -119,7 +120,7 @@ pub struct NewCommunication {
 fn create_body(new: &NewCommunication) -> Result<Value> {
     let body = std::fs::read_to_string(&new.body_file)
         .with_context(|| format!("read {}", new.body_file.display()))?;
-    if body.trim().is_empty() {
+    if body.trim().is_empty() && !(new.channel == "sms" && new.asset_id.is_some()) {
         return Err(anyhow!("{} is empty", new.body_file.display()));
     }
     let mut request = json!({
@@ -131,6 +132,9 @@ fn create_body(new: &NewCommunication) -> Result<Value> {
     });
     if let Some(role) = &new.role {
         request["role"] = json!(role);
+    }
+    if let Some(asset_id) = new.asset_id {
+        request["asset_id"] = json!(asset_id);
     }
     if let Some(source_ref) = &new.source_ref {
         request["source_ref"] = json!(source_ref);
@@ -150,11 +154,11 @@ fn create_body(new: &NewCommunication) -> Result<Value> {
         if !new.agreements.is_empty() {
             request["agreements"] = json!(new.agreements);
         }
-        if new.client_visible {
-            request["client_visible"] = json!(true);
-        }
     } else if let Some(confirms) = new.confirms {
         request["confirms"] = json!(confirms);
+    }
+    if new.client_visible && matches!(new.channel.as_str(), "call" | "sms") {
+        request["client_visible"] = json!(true);
     }
     if let Some(subject) = &new.subject {
         request["subject"] = json!(subject);
@@ -316,6 +320,27 @@ mod tests {
         })
         .is_err());
     }
+    #[test]
+    fn a_photo_only_text_carries_the_channel_direction_and_asset() {
+        let dir = tempfile::tempdir().unwrap();
+        let body = dir.path().join("empty.md");
+        std::fs::write(&body, "").unwrap();
+        let asset_id = uuid::Uuid::now_v7();
+        let request = create_body(&NewCommunication {
+            channel: "sms".into(),
+            direction: "inbound".into(),
+            counterparty: "Synthetic Client".into(),
+            body_file: body,
+            asset_id: Some(asset_id),
+            ..NewCommunication::default()
+        })
+        .unwrap();
+        assert_eq!(request["channel"], "sms");
+        assert_eq!(request["direction"], "inbound");
+        assert_eq!(request["asset_id"], asset_id.to_string());
+        assert_eq!(request["body"], "");
+    }
+
     #[test]
     fn a_note_is_internal_without_a_counterparty() {
         let dir = tempfile::tempdir().unwrap();

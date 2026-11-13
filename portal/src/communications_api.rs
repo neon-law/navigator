@@ -6,6 +6,7 @@
 //! `GET .../conversation`, which excludes internal notes in the query. The
 //! write logs a call as an internal-note Communication with its structure,
 //! or an email with its source, counterparty role, and optional call confirmation or receipt relation.
+//! Manually filed SMS records retain the transport channel and stay in the firm view.
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -20,7 +21,7 @@ use crate::api::{ApiError, ApiState, LawyerSession};
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CreateCommunicationRequest {
-    /// `call`, `email_inbound`, `email_outbound`, or `note`.
+    /// `call`, `email_inbound`, `email_outbound`, `sms`, or `note`.
     channel: String,
     /// `inbound`, `outbound`, or `internal` (a note).
     direction: String,
@@ -33,6 +34,8 @@ pub(crate) struct CreateCommunicationRequest {
     /// Opaque client-supplied idempotency key, such as a provider Message-ID.
     /// This value is not proof of provider identity.
     source_ref: Option<String>,
+    /// A filed Project document attached to a manually logged text.
+    asset_id: Option<Uuid>,
     duration_minutes: Option<i64>,
     body: String,
     subject: Option<String>,
@@ -82,11 +85,12 @@ fn validate_source_ref<'a>(
     match channel.trim() {
         store::communications::channel::CALL if source_ref.is_some() => {
             Err(ApiError::CommunicationInvalid(
-                "source_ref is only accepted for email Communications".into(),
+                "source_ref is only accepted for email and SMS Communications".into(),
             ))
         }
         store::communications::channel::EMAIL_INBOUND
-        | store::communications::channel::EMAIL_OUTBOUND => {
+        | store::communications::channel::EMAIL_OUTBOUND
+        | "sms" => {
             let source_ref = source_ref.map(str::trim);
             if source_ref.is_some_and(|value| value.is_empty() || value.len() > 512) {
                 return Err(ApiError::CommunicationInvalid(
@@ -302,6 +306,87 @@ fn require_counterparty(value: Option<&str>, channel: &str) -> Result<String, Ap
         .ok_or_else(|| ApiError::CommunicationInvalid(format!("{channel} names its counterparty")))
 }
 
+fn message_timestamp(at: &str) -> Result<String, ApiError> {
+    chrono::DateTime::parse_from_rfc3339(at.trim())
+        .map(|at| at.to_rfc3339())
+        .map_err(|_| {
+            ApiError::CommunicationInvalid(
+                "at must be an RFC 3339 timestamp with an explicit offset".into(),
+            )
+        })
+}
+
+async fn create_sms(
+    state: &ApiState,
+    author_person_id: Option<Uuid>,
+    project_id: Uuid,
+    source_ref: Option<&str>,
+    input: &CreateCommunicationRequest,
+) -> Result<store::communications::Communication, ApiError> {
+    use store::communications::{self, channel, direction};
+
+    let channel = match input.direction.trim() {
+        direction::INBOUND => channel::SMS_INBOUND,
+        direction::OUTBOUND => channel::SMS_OUTBOUND,
+        _ => {
+            return Err(ApiError::CommunicationInvalid(
+                "SMS direction must be inbound or outbound".into(),
+            ))
+        }
+    };
+    if input.client_visible || input.acknowledges.is_some() || input.confirms.is_some() {
+        return Err(ApiError::CommunicationInvalid(
+            "manually logged SMS is firm-internal and does not confirm calls or acknowledge emails"
+                .into(),
+        ));
+    }
+    let counterparty = require_counterparty(input.counterparty.as_deref(), "an SMS")?;
+    let at = message_timestamp(&input.at)?;
+    let body = input.body.trim();
+    if body.is_empty() && input.asset_id.is_none() {
+        return Err(ApiError::CommunicationInvalid(
+            "SMS needs a body or attachment".into(),
+        ));
+    }
+    if let Some(asset_id) = input.asset_id {
+        store::assets::find_by_id(&state.surreal, asset_id)
+            .await
+            .map_err(ApiError::Asset)?
+            .filter(|asset| asset.project_id == Some(project_id) && asset.deleted_at.is_none())
+            .ok_or(ApiError::NotFound)?;
+    }
+
+    // Keep user-supplied identifiers out of the Inbox projection's keyspace.
+    let source_ref = source_ref.map(|value| format!("manual-sms:{value}"));
+    let ingested = communications::ingest(
+        &state.surreal,
+        &communications::IngestArgs {
+            project_id,
+            channel,
+            direction: direction::INTERNAL,
+            author_person_id,
+            counterparty: Some(&counterparty),
+            subject: input.subject.as_deref(),
+            body,
+            source_ref: source_ref.as_deref(),
+            asset_id: input.asset_id,
+            occurred_at: &at,
+        },
+    )
+    .await
+    .map_err(map_communication)?;
+    let row = communications::find(&state.surreal, project_id, ingested.communication_id)
+        .await
+        .map_err(map_communication)?
+        .ok_or_else(|| ApiError::Db("the SMS could not be read back".into()))?;
+    if row.asset_id != input.asset_id {
+        return Err(ApiError::CommunicationInvalid(
+            "source reference already has a different attachment".into(),
+        ));
+    }
+    Ok(row)
+}
+
 /// Logs an email Communication, then links any call it confirms.
 async fn create_email(
     state: &ApiState,
@@ -321,13 +406,7 @@ async fn create_email(
             ))
         }
     };
-    let at = chrono::DateTime::parse_from_rfc3339(input.at.trim())
-        .map(|at| at.to_rfc3339())
-        .map_err(|_| {
-            ApiError::CommunicationInvalid(
-                "at must be an RFC 3339 timestamp with an explicit offset".into(),
-            )
-        })?;
+    let at = message_timestamp(&input.at)?;
     if input.body.trim().is_empty() {
         return Err(ApiError::CommunicationInvalid("the body is empty".into()));
     }
@@ -402,14 +481,20 @@ pub(crate) async fn create_communication(
     Json(input): Json<CreateCommunicationRequest>,
 ) -> Result<Response, ApiError> {
     require_participant(&state, session.person_id, session.role, id).await?;
-    let source_ref = validate_source_ref(input.channel.trim(), input.source_ref.as_deref())?;
+    let channel = input.channel.trim();
+    if input.asset_id.is_some() && channel != "sms" {
+        return Err(ApiError::CommunicationInvalid(
+            "asset_id is only accepted for SMS Communications".into(),
+        ));
+    }
+    let source_ref = validate_source_ref(channel, input.source_ref.as_deref())?;
     if input.channel.trim() == store::communications::channel::CALL && input.acknowledges.is_some()
     {
         return Err(ApiError::CommunicationInvalid(
             "only inbound email can acknowledge receipt".into(),
         ));
     }
-    let row = match input.channel.trim() {
+    let row = match channel {
         store::communications::channel::CALL => {
             let counterparty = require_counterparty(input.counterparty.as_deref(), "a call")?;
             store::communications::record_call(
@@ -473,9 +558,10 @@ pub(crate) async fn create_communication(
             )
             .await?
         }
+        "sms" => create_sms(&state, session.person_id, id, source_ref, &input).await?,
         other => {
             return Err(ApiError::CommunicationInvalid(format!(
-                "`{other}` cannot be logged here; use `call`, `email_inbound`, or `email_outbound`"
+                "`{other}` cannot be logged here; use `call`, `email_inbound`, `email_outbound`, `sms`, or `note`"
             )))
         }
     };
@@ -501,7 +587,7 @@ mod tests {
     }
 
     #[test]
-    fn source_reference_is_bounded_and_email_only() {
+    fn source_reference_is_bounded_and_supported_for_email_and_sms() {
         assert_eq!(
             validate_source_ref("email_inbound", Some(" ref ")).unwrap(),
             Some("ref")

@@ -1899,6 +1899,7 @@ async fn run_inner(action: MailAction) -> Result<()> {
                     confirms: None,
                     acknowledges: None,
                     source_ref: Some(format!("gmail-draft:{}", saved.id)),
+                    asset_id: None,
                     client_visible: false,
                     subject: Some(job.subject()),
                 },

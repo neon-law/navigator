@@ -217,6 +217,90 @@ async fn a_participant_logs_a_call_lists_it_and_confirms_it_by_email() {
 }
 
 #[tokio::test]
+async fn manually_logged_texts_keep_their_channel_and_stay_in_the_firm_view() {
+    let f = fixture().await;
+    let uri = format!("/app/api/projects/{}/communications", f.project_id);
+    for (direction, channel) in [("inbound", "sms_inbound"), ("outbound", "sms_outbound")] {
+        let payload = json!({
+            "channel": "sms", "direction": direction, "counterparty": "Synthetic Client",
+            "at": "2026-10-09T15:00:00-07:00", "body": "Confirmed receipt.",
+            "source_ref": "manual-text:example",
+        });
+        let (status, row) = send(&f.app, "POST", &uri, &f.participant, payload.clone()).await;
+        assert_eq!(status, 201, "{row}");
+        assert_eq!(row["channel"], channel);
+        assert_eq!(row["direction"], "internal");
+        let (status, replay) = send(&f.app, "POST", &uri, &f.participant, payload.clone()).await;
+        assert_eq!(status, 201, "{replay}");
+        assert_eq!(replay["id"], row["id"]);
+        let (status, refusal) = send(&f.app, "POST", &uri, &f.outsider, payload.clone()).await;
+        assert_eq!(status, 404, "{refusal}");
+        let mut public = payload;
+        public["client_visible"] = json!(true);
+        let (status, refusal) = send(&f.app, "POST", &uri, &f.participant, public).await;
+        assert_eq!(status, 400, "{refusal}");
+    }
+    let (_, rows) = send(&f.app, "GET", &uri, &f.participant, Value::Null).await;
+    assert_eq!(rows.as_array().unwrap().len(), 2);
+    let client_uri = format!("/app/api/projects/{}/conversation", f.project_id);
+    let (status, rows) = send(&f.app, "GET", &client_uri, &f.client, Value::Null).await;
+    assert_eq!(status, 200, "{rows}");
+    assert!(rows.as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_photo_only_text_accepts_only_a_filed_attachment_from_its_project() {
+    let f = fixture().await;
+    let state = portal::test_support::app_state(f.surreal.clone()).await;
+    let other_project =
+        store::test_support::seed_project_surreal(&f.surreal, "Another synthetic matter").await;
+    let uri = format!("/app/api/projects/{}/communications", f.project_id);
+    for project_id in [other_project, f.project_id] {
+        let photo = store::documents::ingest_bytes_as(
+            &f.surreal,
+            &state.storage,
+            &store::documents::IngestArgs {
+                project_id,
+                source: store::documents::source::UPLOAD,
+                filename: "photo.png",
+                kind: "exhibit",
+                content_type: "image/png",
+                description: None,
+                secondary_storage_key: None,
+                visibility: store::documents::visibility::INTERNAL,
+            },
+            &store::documents::DocumentIdentity::default(),
+            b"synthetic attachment",
+        )
+        .await
+        .unwrap();
+        let payload = json!({
+            "channel": "sms", "direction": "inbound", "counterparty": "Synthetic Client",
+            "at": "2026-10-09T15:00:00-07:00", "body": "", "asset_id": photo.asset_id,
+        });
+        let (status, row) = send(&f.app, "POST", &uri, &f.participant, payload).await;
+        if project_id == f.project_id {
+            assert_eq!(status, 201, "{row}");
+            assert_eq!(row["asset_id"], json!(photo.asset_id));
+            let (_, listed) = send(
+                &f.app,
+                "GET",
+                &format!("{uri}?attachments=true"),
+                &f.participant,
+                Value::Null,
+            )
+            .await;
+            assert_eq!(
+                listed[0]["attachments"][0]["asset_id"],
+                json!(photo.asset_id)
+            );
+        } else {
+            assert_eq!(status, 404, "{row}");
+        }
+    }
+}
+
+#[tokio::test]
 async fn a_non_participant_is_refused() {
     let f = fixture().await;
     let uri = format!("/app/api/projects/{}/communications", f.project_id);
