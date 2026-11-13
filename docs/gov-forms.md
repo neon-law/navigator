@@ -241,9 +241,9 @@ The registry keeps three surfaces in lockstep, enforced by `cli/tests/court_regi
 | vendored `FormMeta` | `FormMeta.code` | `origin_url`, pin, fee, and fee-waiver code match the registry row |
 
 Templates sit at `templates/notations/forms/<country>/<jurisdiction>/<office>/<code>.md`. The office directory decides
-what a template is: an agency form (`irs`, `uscis`, `state`) or a court form, whose directory is the registry court's
-key. A court template with no registry entry is an orphan and fails CI; an agency form can never become a registry
-entry.
+what a template is: an agency form (`irs`, `uscis`, `state`, `state_bar`) or a court form, whose directory is the
+registry court's key. A court template with no registry entry is an orphan and fails CI; an agency form can never become
+a registry entry.
 
 Fee entries are only as strong as their source: amounts are decimal strings with ISO 4217 currency codes; when a
 published schedule is tiered or varies by county, `fee_note` carries the prose instead of a false flat amount; and rows

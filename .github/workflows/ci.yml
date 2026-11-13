@@ -318,9 +318,11 @@ jobs:
     # A wedge detector, not a duration budget. This job had no cap at all while
     # it ran ~30 min; at ~40 min GitHub's 6-hour default means a hung build
     # holds a metered runner for most of a working day and blocks the PR behind
-    # an in-progress required check the whole time. 120 leaves wide headroom
-    # over the measured 18 while still catching a genuine wedge.
-    timeout-minutes: 120
+    # an in-progress required check the whole time. The covered run now
+    # measures ~1h50 end to end (2026-11-12: ~25 min build, ~60 min nextest,
+    # then cucumber, doctests, the coverage report, and the cache save), so
+    # 180 leaves headroom over that while still catching a genuine wedge.
+    timeout-minutes: 180
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
