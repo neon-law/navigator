@@ -11414,12 +11414,13 @@ async fn assert_brand_home_lead_capture(
         "{host}: confirmation"
     );
     let privacy = get_on_host(app, "/privacy", host).await;
-    if brand.is_guieb_shook() {
+    let branding = brand.resolve_branding(&views::brand::DEFAULT_BRANDING);
+    if brand.is_guieb_shook() || branding.privacy_url == "/privacy" {
+        // A brand that keeps the in-app path renders the in-app policy.
         assert_eq!(privacy.status(), StatusCode::OK, "{host}: privacy");
     } else {
-        // Another firm's brand never presents Guieb & Shook PC's policy as its
-        // own: it sends the reader to the policy its firm publishes, or 404s.
-        let branding = brand.resolve_branding(&views::brand::DEFAULT_BRANDING);
+        // Otherwise another firm's brand sends the reader to the policy its
+        // firm publishes, or 404s.
         if branding.privacy_url.is_empty() {
             assert_eq!(privacy.status(), StatusCode::NOT_FOUND, "{host}: privacy");
         } else {

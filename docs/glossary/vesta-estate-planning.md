@@ -1,9 +1,9 @@
 ---
 title: "Vesta Estate Planning"
-description: "Vesta Estate Planning is the Guieb & Shook PC practice for wills, trusts, and tailored estate plans."
+description: "Vesta Estate Planning is the Lex Tecnica, Ltd. practice for wills, trusts, and tailored estate plans."
 ---
 
-The Guieb & Shook PC practice for estate planning: wills, trusts, powers of attorney, and health-care directives
+The Lex Tecnica, Ltd. practice for estate planning: wills, trusts, powers of attorney, and health-care directives
 tailored to each person, with Nevada asset protection planning when it fits. It is a house [Brand](brand.md) with its
 own hosts (`vestaestateplanning.com`), keyed `vesta` in [`views::brand::BrandKey`](../../views/src/brand.rs), and Neon
 Law points to it from its own `/estate-planning` page.

@@ -101,16 +101,17 @@ async fn the_lawyer_projects_list_renders_state_and_next_for_a_live_notation_and
         .expect("the sample-portfolio fixture seeds the fixture Lawyer");
 
     // `sample-litigation` gets a live Notation below, so its row must read a
-    // non-generic State/Next; `sample-estate` gets none, so its row must
+    // non-generic State/Next; `sample-transactional` gets none, so its row must
     // render both columns empty rather than a generic placeholder phrase.
     let with_notation = store::projects::find_by_code(&surreal, "sample-litigation")
         .await
         .unwrap()
         .expect("the sample-matter fixture seeds sample-litigation");
-    let without_notation = store::projects::find_by_code(&surreal, "sample-estate")
+    // `sample-estate` is a Vesta matter, so it lists under Lex Tecnica, Ltd.
+    let without_notation = store::projects::find_by_code(&surreal, "sample-transactional")
         .await
         .unwrap()
-        .expect("the sample-matter fixture seeds sample-estate");
+        .expect("the sample-matter fixture seeds sample-transactional");
 
     let template = store::templates::save_version(
         &surreal,

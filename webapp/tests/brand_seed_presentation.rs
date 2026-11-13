@@ -44,9 +44,7 @@ async fn every_compiled_brand_seeds_its_typeface_and_primary() {
     .await
     .expect("a first boot seeds every compiled brand row");
 
-    // Lex Tecnica's brands are seeded only into a Lex Tecnica Firm; see
-    // `store::seed`'s `boot_attaches_lex_tecnica_brands` test.
-    for key in BrandKey::GUIEB_SHOOK_FAMILY {
+    for key in BrandKey::ALL {
         let row = store::brands::find_by_key(&surreal, key.as_str())
             .await
             .unwrap()

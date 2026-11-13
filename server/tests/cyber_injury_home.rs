@@ -68,7 +68,7 @@ async fn cyber_injury_home_serves_its_copy_assets_and_fonts() {
             "href=\"https://www.cyberinjurylaw.com/testimonials?via=home-qr-testimonials\"",
             "cyber-incident",
             "cyber-timing",
-            "Guieb &#38; Shook PC",
+            "Lex Tecnica, Ltd.",
             "site-footer",
             "Law.com",
             "cyber-consultation-qr.svg",

@@ -1924,22 +1924,22 @@ fn resolve_firm_contact_content(
              Attorney advertisement. Nothing here is legal advice without a signed retainer for \
              an active project."
         ),
-        BrandKey::Vesta
-        | BrandKey::Misericordia
-        | BrandKey::Abhaya
-        | BrandKey::DeleteYourDebt
-        | BrandKey::Summons
-        | BrandKey::Daybridge
-        | BrandKey::CyberInjuryLaw
-        | BrandKey::Aegis
-        | BrandKey::Groundwork => format!(
+        BrandKey::DeleteYourDebt => format!(
             "Reach {firm_name}, a practice of Guieb & Shook PC, about legal services. \
              Attorney advertisement. Nothing here is legal advice without a signed retainer for \
              an active project."
         ),
-        // IEP Defenders belongs to the second firm, so its contact page
-        // names Lex Tecnica, Ltd. — never Guieb & Shook PC.
-        BrandKey::IepDefenders => format!(
+        // These practices belong to the second firm, so their contact pages
+        // name Lex Tecnica, Ltd. — never Guieb & Shook PC.
+        BrandKey::Vesta
+        | BrandKey::Misericordia
+        | BrandKey::Abhaya
+        | BrandKey::Summons
+        | BrandKey::Daybridge
+        | BrandKey::CyberInjuryLaw
+        | BrandKey::Aegis
+        | BrandKey::Groundwork
+        | BrandKey::IepDefenders => format!(
             "Reach {firm_name}, a practice of Lex Tecnica, Ltd., about legal services. \
              Attorney advertisement. Nothing here is legal advice without a signed retainer for \
              an active project."
