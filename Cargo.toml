@@ -270,7 +270,7 @@ word = { path = "word" }
 restate-sdk = "0.13"
 # Native DBOS durable execution on PostgreSQL (docs/dbos-durability.md). Pinned
 # exactly: a minor release can change the system schema it migrates on launch.
-dbos = { version = "=0.6.0", default-features = false, features = ["engine"] }
+dbos = { version = "=0.6.0", default-features = false, features = ["engine", "runtime-tokio"] }
 restate-jwt = { package = "jsonwebtoken", version = "10.4", default-features = false, features = ["rust_crypto"] }
 serde_yaml = "0.9"
 chrono = { version = "0.4", default-features = false, features = ["serde", "clock", "std"] }

@@ -8,10 +8,24 @@ individually while `workflows-service` keeps serving the Restate endpoint for ev
 
 | Item | Value |
 | --- | --- |
-| Crate | `dbos` 0.5.0 (MIT), the official native Rust SDK |
+| Crate | `dbos` 0.6.0 (MIT), the official native Rust SDK |
 | Database driver | SQLx 0.9 with ring rustls, the same build as the workspace |
 | PostgreSQL | the pinned `navigator/postgres` image ([PostgreSQL compatibility](postgres-compatibility.md)) |
-| Missing from 0.5.0 | a scheduler and a transactional step |
+| Missing from 0.6.0 | a transactional step |
+
+## Upgrading the deployed DBOS schema
+
+The first deployment of DBOS 0.6 requires a coordinated cutover for each database. Quiesce workflow starts and let the
+0.5 runs finish before changing the release tag, which changes the DBOS application version. Stop every 0.5 executor and
+client sharing the system database before starting 0.6. The first 0.6 executor migrates the schema on launch. Start any
+0.6 clients after the migration. Resume workflow starts after the new executor is healthy. Use a forward fix after
+migration. Redeploying a release built with 0.5 cannot roll back the schema.
+
+If a 0.5 run must be recovered after migration, 0.6 needs the old application version and executor identity to recover
+it in place. See the [upstream upgrade instructions][dbos-upgrade] and the controlled handoff below before changing
+either value.
+
+[dbos-upgrade]: https://github.com/dbos-inc/dbos-transact-rust/tree/v0.6.0#upgrading-from-05
 
 ## Where DBOS state lives
 
