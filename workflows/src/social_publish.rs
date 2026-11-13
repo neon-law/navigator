@@ -584,7 +584,11 @@ mod tests {
             Err(CredentialFailure::Reconnect { provider: "instagram", reason })
                 if reason.contains("instagram_content_publish")
         ));
-        server.verify().await;
+        // Wiremock verifies again during Drop. Run that synchronous wait
+        // outside the current-thread Tokio runtime.
+        tokio::task::spawn_blocking(move || drop(server))
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
