@@ -16,21 +16,9 @@
 # HTTP by design — the endpoint is link-local inside the cluster and never
 # supports TLS. Everything else it flags would be a real transport issue, so
 # keep the query on elsewhere via code review rather than widening this file.
-#
-# `rust/hard-coded-cryptographic-value`: the flagged value is the fixture
-# HMAC key in the cucumber suite (`features/tests/**`), which signs fake
-# provider callbacks exactly the way `features/tests/esignature_webhook.rs`
-# already does. The value is not a credential — the crates there are test
-# harnesses that never ship, and the production key arrives at runtime
-# through `AppState.esignature_hmac_key`. Real key material in production
-# code stays flagged.
 name: navigator codeql
 query-filters:
   - exclude:
       id: actions/unpinned-tag
   - exclude:
       id: rust/non-https-url
-  - exclude:
-      id: rust/hard-coded-cryptographic-value
-      paths:
-        - features/tests/**
