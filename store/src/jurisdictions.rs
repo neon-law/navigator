@@ -2,7 +2,13 @@
 //! sovereigns an Entity can be organized under — and every query that
 //! reads or writes a `jurisdiction` row.
 //!
-//! # This table lives in SurrealDB
+//! # Where this table lives
+//!
+//! SurrealDB holds it by default; `NAVIGATOR_POSTGRES_CATALOG_AUTHORITY`
+//! moves every read and write here to PostgreSQL
+//! ([`crate::postgres::catalog`]). There the unique `name` stops a racing
+//! duplicate ([`JurisdictionError::NameTaken`]) and the
+//! `jurisdiction_type_closed` check holds the closed type set.
 //!
 //! `jurisdictions` moved with its slice of #1093 (ENG-20). It is a leaf
 //! lookup table — no outbound references — so the port could not cascade
@@ -43,6 +49,7 @@ use serde::Serialize;
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::postgres::catalog;
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 
 /// The table these rows live in.
@@ -123,11 +130,49 @@ pub enum JurisdictionError {
     /// holds this code.
     #[error("that jurisdiction code is already in use")]
     CodeTaken,
+    /// PostgreSQL's unique `name` refused the write — another row already
+    /// holds this name.
+    #[error("that jurisdiction name is already in use")]
+    NameTaken,
     /// A write reported success but returned no row, or returned one
     /// this module could not read back — see
     /// [`JurisdictionRow::into_jurisdiction`].
     #[error("writing a jurisdiction returned no usable row")]
     WriteReturnedNothing,
+    /// The PostgreSQL catalog authority could not serve the call.
+    #[error(transparent)]
+    Postgres(#[from] catalog::CatalogError),
+}
+
+impl From<sqlx::Error> for JurisdictionError {
+    fn from(error: sqlx::Error) -> Self {
+        Self::Postgres(error.into())
+    }
+}
+
+const PG_BY_ID: &str = "SELECT id, name, code, jurisdiction_type, inserted_at, updated_at \
+     FROM jurisdiction WHERE id = $1";
+const PG_BY_CODE: &str = "SELECT id, name, code, jurisdiction_type, inserted_at, updated_at \
+     FROM jurisdiction WHERE code = $1";
+const PG_BY_NAME: &str = "SELECT id, name, code, jurisdiction_type, inserted_at, updated_at \
+     FROM jurisdiction WHERE name = $1";
+const PG_ALL: &str = "SELECT id, name, code, jurisdiction_type, inserted_at, updated_at \
+     FROM jurisdiction ORDER BY name ASC";
+const PG_BY_TYPE: &str = "SELECT id, name, code, jurisdiction_type, inserted_at, updated_at \
+     FROM jurisdiction WHERE jurisdiction_type = $1 ORDER BY name ASC";
+const PG_INSERT: &str = "INSERT INTO jurisdiction (id, name, code, jurisdiction_type) \
+     VALUES ($1, $2, $3, $4) RETURNING id, name, code, jurisdiction_type, inserted_at, updated_at";
+
+fn from_pg(row: &sqlx::postgres::PgRow) -> Result<Jurisdiction, sqlx::Error> {
+    use sqlx::Row;
+    Ok(Jurisdiction {
+        id: row.try_get("id")?,
+        name: row.try_get("name")?,
+        code: row.try_get("code")?,
+        jurisdiction_type: row.try_get("jurisdiction_type")?,
+        inserted_at: row.try_get("inserted_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
 }
 
 /// Turn a write failure into the caller-correctable conflict it names,
@@ -209,6 +254,9 @@ pub async fn find_by_id(
     db: &SurrealDb,
     id: Uuid,
 ) -> Result<Option<Jurisdiction>, JurisdictionError> {
+    if let Some(pg) = catalog::authority().await? {
+        return Ok(catalog::one(&pg, PG_BY_ID, id, from_pg).await?);
+    }
     let response = db
         .query(format!("SELECT {SELECT} FROM ONLY $id LIMIT 1"))
         .bind(("id", record_id(TABLE, id)))
@@ -227,6 +275,9 @@ pub async fn find_by_code(
     db: &SurrealDb,
     code: &str,
 ) -> Result<Option<Jurisdiction>, JurisdictionError> {
+    if let Some(pg) = catalog::authority().await? {
+        return Ok(catalog::one(&pg, PG_BY_CODE, code.trim().to_string(), from_pg).await?);
+    }
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM ONLY {TABLE} WHERE code = $code LIMIT 1"
@@ -248,6 +299,9 @@ pub async fn find_by_name(
     db: &SurrealDb,
     name: &str,
 ) -> Result<Option<Jurisdiction>, JurisdictionError> {
+    if let Some(pg) = catalog::authority().await? {
+        return Ok(catalog::one(&pg, PG_BY_NAME, name.trim().to_string(), from_pg).await?);
+    }
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM ONLY {TABLE} WHERE name = $name LIMIT 1"
@@ -265,6 +319,9 @@ pub async fn find_by_name(
 ///
 /// [`JurisdictionError::Db`] if the lookup fails.
 pub async fn list_all(db: &SurrealDb) -> Result<Vec<Jurisdiction>, JurisdictionError> {
+    if let Some(pg) = catalog::authority().await? {
+        return Ok(catalog::all(&pg, PG_ALL, None::<String>, from_pg).await?);
+    }
     let response = db
         .query(format!("SELECT {SELECT} FROM {TABLE} ORDER BY name ASC"))
         .await
@@ -283,6 +340,10 @@ pub async fn list_by_type(
     db: &SurrealDb,
     jurisdiction_type: &str,
 ) -> Result<Vec<Jurisdiction>, JurisdictionError> {
+    if let Some(pg) = catalog::authority().await? {
+        let kind = Some(jurisdiction_type.to_string());
+        return Ok(catalog::all(&pg, PG_BY_TYPE, kind, from_pg).await?);
+    }
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} \
@@ -310,6 +371,25 @@ pub async fn create(
     input: &NewJurisdiction,
 ) -> Result<Jurisdiction, JurisdictionError> {
     let id = Uuid::now_v7();
+    if let Some(pg) = catalog::authority().await? {
+        let row = catalog::row(
+            sqlx::query(PG_INSERT)
+                .bind(id)
+                .bind(input.name.trim().to_string())
+                .bind(input.code.trim().to_string())
+                .bind(input.jurisdiction_type.clone()),
+            &pg,
+        )
+        .await
+        .map_err(catalog::CatalogError::from);
+        return match row {
+            Ok(row) => Ok(from_pg(&row)?),
+            Err(error) if error.violates("jurisdiction_name_key") => {
+                Err(JurisdictionError::NameTaken)
+            }
+            Err(error) => Err(error.into()),
+        };
+    }
     let mut response = writing(|| {
         db.query(format!(
             "CREATE $id SET \
@@ -332,9 +412,9 @@ pub async fn create(
 
 /// Find the jurisdiction holding `input.code`, creating it if absent.
 /// Race-safe without a lock: a concurrent creator that wins the
-/// `jurisdiction_code` unique index turns this call's insert into
-/// [`JurisdictionError::CodeTaken`], which is re-read as the winner's
-/// row. The seed runs this on every boot, so idempotence is the
+/// unique index (`code` in SurrealDB, `name` in PostgreSQL) turns this
+/// call's insert into [`JurisdictionError::CodeTaken`] or
+/// [`JurisdictionError::NameTaken`], which is re-read as the winner's row. The seed runs this on every boot, so idempotence is the
 /// contract.
 ///
 /// # Errors
@@ -349,9 +429,9 @@ pub async fn find_or_create(
     }
     match create(db, input).await {
         Ok(created) => Ok(created),
-        Err(JurisdictionError::CodeTaken) => find_by_code(db, &input.code)
-            .await?
-            .ok_or(JurisdictionError::WriteReturnedNothing),
+        Err(error @ (JurisdictionError::CodeTaken | JurisdictionError::NameTaken)) => {
+            find_by_code(db, &input.code).await?.ok_or(error)
+        }
         Err(error) => Err(error),
     }
 }

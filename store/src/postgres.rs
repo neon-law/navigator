@@ -5,6 +5,8 @@ use sqlx::migrate::{Migration, MigrationType, Migrator};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgSslMode};
 use sqlx::{AssertSqlSafe, PgPool, SqlSafeStr};
 
+/// PostgreSQL authority for the shared catalogs, behind an opt-in switch.
+pub mod catalog;
 pub mod notation_creation_attempts;
 pub mod people;
 

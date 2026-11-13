@@ -1568,6 +1568,12 @@ mod tests {
                 "20261114140000_matter_record_line_indexes.sql",
                 include_str!("../postgres/migrations/20261114140000_matter_record_line_indexes.sql"),
             ),
+            (
+                "20261114170000_catalog_authority_jurisdiction_constraints.sql",
+                include_str!(
+                    "../postgres/migrations/20261114170000_catalog_authority_jurisdiction_constraints.sql"
+                ),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

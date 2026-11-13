@@ -5,12 +5,18 @@
 //! still a separate [`crate::notations::Notation`] with its own signing and
 //! audit trail. The package holds a starting price, never an invoice or a
 //! promise to perform unquoted work. Xero remains the invoicing record.
+//!
+//! SurrealDB holds the catalog by default; `NAVIGATOR_POSTGRES_CATALOG_AUTHORITY`
+//! moves every read and write here to PostgreSQL
+//! ([`crate::postgres::catalog`]), where a package template must name a
+//! Template version PostgreSQL already holds.
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::postgres::catalog;
 use crate::surreal::{record_id, record_uuid, SurrealDb};
 
 const PACKAGE_TABLE: &str = "notation_package";
@@ -135,6 +141,53 @@ pub enum NotationPackageError {
     Db(#[from] surrealdb::Error),
     #[error("writing a notation package returned no usable row")]
     WriteReturnedNothing,
+    /// The PostgreSQL catalog authority could not serve the call.
+    #[error(transparent)]
+    Postgres(#[from] catalog::CatalogError),
+}
+
+impl From<sqlx::Error> for NotationPackageError {
+    fn from(error: sqlx::Error) -> Self {
+        Self::Postgres(error.into())
+    }
+}
+
+const PG_INSERT: &str = "INSERT INTO notation_package \
+     (id, code, title, description, complexity, starting_price_cents, currency) \
+     VALUES ($1, $2, $3, $4, $5, $6, $7) \
+     RETURNING id, code, title, description, complexity, starting_price_cents, currency, active, \
+     inserted_at, updated_at";
+const PG_BY_CODE: &str = "SELECT id, code, title, description, complexity, starting_price_cents, \
+     currency, active, inserted_at, updated_at FROM notation_package WHERE code = $1";
+const PG_ADD_TEMPLATE: &str = "INSERT INTO notation_package_template \
+     (id, package_id, template_id, position, required) VALUES ($1, $2, $3, $4, $5)";
+const PG_TEMPLATES: &str = "SELECT package_id, template_id, position, required \
+     FROM notation_package_template WHERE package_id = $1 ORDER BY position ASC";
+
+fn package_from_pg(row: &sqlx::postgres::PgRow) -> Result<NotationPackage, sqlx::Error> {
+    use sqlx::Row;
+    Ok(NotationPackage {
+        id: row.try_get("id")?,
+        code: row.try_get("code")?,
+        title: row.try_get("title")?,
+        description: row.try_get("description")?,
+        complexity: row.try_get("complexity")?,
+        starting_price_cents: row.try_get("starting_price_cents")?,
+        currency: row.try_get("currency")?,
+        active: row.try_get("active")?,
+        inserted_at: row.try_get("inserted_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+fn template_from_pg(row: &sqlx::postgres::PgRow) -> Result<PackageTemplate, sqlx::Error> {
+    use sqlx::Row;
+    Ok(PackageTemplate {
+        package_id: row.try_get("package_id")?,
+        template_id: row.try_get("template_id")?,
+        position: row.try_get("position")?,
+        required: row.try_get("required")?,
+    })
 }
 
 fn one(
@@ -151,6 +204,21 @@ pub async fn create(
     new: &NewNotationPackage,
 ) -> Result<NotationPackage, NotationPackageError> {
     let id = Uuid::now_v7();
+    if let Some(pg) = catalog::authority().await? {
+        let row = catalog::row(
+            sqlx::query(PG_INSERT)
+                .bind(id)
+                .bind(new.code.clone())
+                .bind(new.title.clone())
+                .bind(new.description.clone())
+                .bind(new.complexity.clone())
+                .bind(new.starting_price_cents)
+                .bind(new.currency.clone()),
+            &pg,
+        )
+        .await?;
+        return Ok(package_from_pg(&row)?);
+    }
     let mut response = db
         .query(format!(
             "CREATE $id SET code = $code, title = $title, description = $description, \
@@ -190,6 +258,19 @@ pub async fn add_template(
     required: bool,
 ) -> Result<(), NotationPackageError> {
     let id = Uuid::now_v7();
+    if let Some(pg) = catalog::authority().await? {
+        catalog::execute(
+            sqlx::query(PG_ADD_TEMPLATE)
+                .bind(id)
+                .bind(package_id)
+                .bind(template_id)
+                .bind(position)
+                .bind(required),
+            &pg,
+        )
+        .await?;
+        return Ok(());
+    }
     db.query(
         "CREATE $id SET package_id = $package_id, \
          template_id = $template_id, position = $position, required = $required",
@@ -214,6 +295,9 @@ pub async fn find_by_code(
     db: &SurrealDb,
     code: &str,
 ) -> Result<Option<NotationPackage>, NotationPackageError> {
+    if let Some(pg) = catalog::authority().await? {
+        return Ok(catalog::one(&pg, PG_BY_CODE, code.to_string(), package_from_pg).await?);
+    }
     let response = db
         .query(format!(
             "SELECT {PACKAGE_SELECT} FROM {PACKAGE_TABLE} WHERE code = $code LIMIT 1"
@@ -229,6 +313,9 @@ pub async fn templates(
     db: &SurrealDb,
     package_id: Uuid,
 ) -> Result<Vec<PackageTemplate>, NotationPackageError> {
+    if let Some(pg) = catalog::authority().await? {
+        return Ok(catalog::all(&pg, PG_TEMPLATES, Some(package_id), template_from_pg).await?);
+    }
     let mut response = db
         .query(format!(
             "SELECT {TEMPLATE_SELECT} FROM {MEMBER_TABLE} WHERE package_id = $package_id \

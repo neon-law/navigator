@@ -2,7 +2,11 @@
 //! firm forms (LLC, Corporation, Trust, …) — and every query that reads
 //! or writes an `entity_type` row.
 //!
-//! # This table lives in SurrealDB
+//! # Where this table lives
+//!
+//! SurrealDB holds it by default; `NAVIGATOR_POSTGRES_CATALOG_AUTHORITY`
+//! moves every read and write here to PostgreSQL
+//! ([`crate::postgres::catalog`]).
 //!
 //! `entity_types` is a leaf lookup table — one `name` column, no
 //! outbound references. `entity.entity_type_id` is a
@@ -32,6 +36,7 @@ use serde::Serialize;
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::postgres::catalog;
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 
 /// The table these rows live in.
@@ -95,6 +100,25 @@ pub enum EntityTypeError {
     /// [`EntityTypeRow::into_entity_type`].
     #[error("writing an entity type returned no usable row")]
     WriteReturnedNothing,
+    /// The PostgreSQL catalog authority could not serve the call.
+    #[error(transparent)]
+    Postgres(#[from] catalog::CatalogError),
+}
+
+impl From<sqlx::Error> for EntityTypeError {
+    fn from(error: sqlx::Error) -> Self {
+        Self::Postgres(error.into())
+    }
+}
+
+fn from_pg(row: &sqlx::postgres::PgRow) -> Result<EntityType, sqlx::Error> {
+    use sqlx::Row;
+    Ok(EntityType {
+        id: row.try_get("id")?,
+        name: row.try_get("name")?,
+        inserted_at: row.try_get("inserted_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
 }
 
 /// Turn a write failure into the caller-correctable conflict it names,
@@ -142,6 +166,16 @@ fn many(mut response: surrealdb::IndexedResults) -> Result<Vec<EntityType>, Enti
         .collect())
 }
 
+const PG_BY_ID: &str = "SELECT id, name, inserted_at, updated_at FROM entity_type WHERE id = $1";
+const PG_BY_NAME: &str =
+    "SELECT id, name, inserted_at, updated_at FROM entity_type WHERE name = $1";
+const PG_LIST_ASC: &str =
+    "SELECT id, name, inserted_at, updated_at FROM entity_type ORDER BY name ASC";
+const PG_LIST_DESC: &str =
+    "SELECT id, name, inserted_at, updated_at FROM entity_type ORDER BY name DESC";
+const PG_INSERT: &str =
+    "INSERT INTO entity_type (id, name) VALUES ($1, $2) RETURNING id, name, inserted_at, updated_at";
+
 /// Resolve an entity type by id — the read-back
 /// `entity_commands::require_entity_type` performs before an entity
 /// write stores the cross-engine reference.
@@ -150,6 +184,9 @@ fn many(mut response: surrealdb::IndexedResults) -> Result<Vec<EntityType>, Enti
 ///
 /// [`EntityTypeError::Db`] if the lookup fails.
 pub async fn find_by_id(db: &SurrealDb, id: Uuid) -> Result<Option<EntityType>, EntityTypeError> {
+    if let Some(pg) = catalog::authority().await? {
+        return Ok(catalog::one(&pg, PG_BY_ID, id, from_pg).await?);
+    }
     let response = db
         .query(format!("SELECT {SELECT} FROM ONLY $id LIMIT 1"))
         .bind(("id", record_id(TABLE, id)))
@@ -168,6 +205,9 @@ pub async fn find_by_name(
     db: &SurrealDb,
     name: &str,
 ) -> Result<Option<EntityType>, EntityTypeError> {
+    if let Some(pg) = catalog::authority().await? {
+        return Ok(catalog::one(&pg, PG_BY_NAME, name.trim().to_string(), from_pg).await?);
+    }
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM ONLY {TABLE} WHERE name = $name LIMIT 1"
@@ -195,6 +235,14 @@ pub async fn list(
         .rev()
         .find_map(|(key, descending)| (key == "name").then_some(*descending))
         .unwrap_or(false);
+    if let Some(pg) = catalog::authority().await? {
+        let sql = if descending {
+            PG_LIST_DESC
+        } else {
+            PG_LIST_ASC
+        };
+        return Ok(catalog::all(&pg, sql, None::<String>, from_pg).await?);
+    }
     let direction = if descending { "DESC" } else { "ASC" };
     let response = db
         .query(format!(
@@ -216,6 +264,21 @@ pub async fn list(
 /// name, and [`EntityTypeError::Db`] for anything else.
 pub async fn create(db: &SurrealDb, name: &str) -> Result<EntityType, EntityTypeError> {
     let id = Uuid::now_v7();
+    if let Some(pg) = catalog::authority().await? {
+        let row = catalog::row(
+            sqlx::query(PG_INSERT)
+                .bind(id)
+                .bind(name.trim().to_string()),
+            &pg,
+        )
+        .await
+        .map_err(catalog::CatalogError::from);
+        return match row {
+            Ok(row) => Ok(from_pg(&row)?),
+            Err(error) if error.violates("entity_type_name_key") => Err(EntityTypeError::NameTaken),
+            Err(error) => Err(error.into()),
+        };
+    }
     let mut response = writing(|| {
         db.query(format!("CREATE $id SET name = $name RETURN {SELECT}"))
             .bind(("id", record_id(TABLE, id)))

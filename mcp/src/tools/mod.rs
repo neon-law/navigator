@@ -644,8 +644,10 @@ impl From<store::jurisdictions::JurisdictionError> for ToolError {
         match err {
             // The unique code index is caller-correctable: the model can
             // retry with a different code.
-            E::CodeTaken => ToolError::Conflict(err.to_string()),
-            E::Db(_) | E::WriteReturnedNothing => ToolError::Internal(err.to_string()),
+            E::CodeTaken | E::NameTaken => ToolError::Conflict(err.to_string()),
+            E::Db(_) | E::WriteReturnedNothing | E::Postgres(_) => {
+                ToolError::Internal(err.to_string())
+            }
         }
     }
 }
@@ -676,7 +678,9 @@ impl From<store::entity_types::EntityTypeError> for ToolError {
             // The unique name index is caller-correctable: the model can
             // retry with a different name.
             E::NameTaken => ToolError::Conflict(err.to_string()),
-            E::Db(_) | E::WriteReturnedNothing => ToolError::Internal(err.to_string()),
+            E::Db(_) | E::WriteReturnedNothing | E::Postgres(_) => {
+                ToolError::Internal(err.to_string())
+            }
         }
     }
 }

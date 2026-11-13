@@ -4643,3 +4643,8 @@ ALTER TABLE project_folder ADD CONSTRAINT project_folder_slot_check CHECK (slot 
 CREATE UNIQUE INDEX estate_asset_line ON estate_asset (project_id, category, description);
 CREATE UNIQUE INDEX fiduciary_role_order ON fiduciary_role (project_id, role, successor_order);
 CREATE UNIQUE INDEX cap_table_holding_line ON cap_table_holding (project_id, holder_id, share_class);
+
+-- Migration: 20261114170000_catalog_authority_jurisdiction_constraints.sql
+-- Under the catalog authority a Jurisdiction's type stays in the closed set the
+-- SurrealDB schema asserts.
+ALTER TABLE jurisdiction ADD CONSTRAINT jurisdiction_type_closed CHECK (jurisdiction_type IN ('state', 'country', 'global'));

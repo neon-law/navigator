@@ -1,7 +1,11 @@
 //! The questionnaire's question catalog — one prompt presented to a
 //! respondent during template traversal — and every query against it.
 //!
-//! # This table lives in SurrealDB
+//! # Where this table lives
+//!
+//! SurrealDB holds it by default; `NAVIGATOR_POSTGRES_CATALOG_AUTHORITY`
+//! moves every read and write here to PostgreSQL
+//! ([`crate::postgres::catalog`]).
 //!
 //! `questions` moved with wave five of #1093 (ENG-121), together with
 //! [`crate::answers`], because `answers.question_id` couples them: porting
@@ -33,6 +37,7 @@ use serde::Serialize;
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::postgres::catalog;
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 
 /// The table these rows live in.
@@ -128,6 +133,46 @@ pub enum QuestionError {
     /// module could not read back — see [`QuestionRow::into_question`].
     #[error("writing a question returned no usable row")]
     WriteReturnedNothing,
+    /// The PostgreSQL catalog authority could not serve the call.
+    #[error(transparent)]
+    Postgres(#[from] catalog::CatalogError),
+}
+
+impl From<sqlx::Error> for QuestionError {
+    fn from(error: sqlx::Error) -> Self {
+        Self::Postgres(error.into())
+    }
+}
+
+const PG_BY_ID: &str = "SELECT id, code, prompt, answer_type, audience, inserted_at, updated_at \
+     FROM question WHERE id = $1";
+const PG_BY_CODE: &str = "SELECT id, code, prompt, answer_type, audience, inserted_at, updated_at \
+     FROM question WHERE code = $1";
+const PG_BY_CODES: &str =
+    "SELECT id, code, prompt, answer_type, audience, inserted_at, updated_at \
+     FROM question WHERE code = ANY($1) ORDER BY code ASC";
+const PG_BY_IDS: &str = "SELECT id, code, prompt, answer_type, audience, inserted_at, updated_at \
+     FROM question WHERE id = ANY($1) ORDER BY code ASC";
+const PG_ALL: &str = "SELECT id, code, prompt, answer_type, audience, inserted_at, updated_at \
+     FROM question ORDER BY code ASC";
+const PG_INSERT: &str = "INSERT INTO question (id, code, prompt, answer_type, audience) \
+     VALUES ($1, $2, $3, $4, $5) \
+     RETURNING id, code, prompt, answer_type, audience, inserted_at, updated_at";
+const PG_SET_AUDIENCE: &str = "UPDATE question SET audience = $2, updated_at = now() \
+     WHERE code = $1 \
+     RETURNING id, code, prompt, answer_type, audience, inserted_at, updated_at";
+
+fn from_pg(row: &sqlx::postgres::PgRow) -> Result<Question, sqlx::Error> {
+    use sqlx::Row;
+    Ok(Question {
+        id: row.try_get("id")?,
+        code: row.try_get("code")?,
+        prompt: row.try_get("prompt")?,
+        answer_type: row.try_get("answer_type")?,
+        audience: row.try_get("audience")?,
+        inserted_at: row.try_get("inserted_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
 }
 
 /// Turn a write failure into the caller-correctable conflict it names, or
@@ -216,6 +261,9 @@ fn many(mut response: surrealdb::IndexedResults) -> Result<Vec<Question>, Questi
 ///
 /// [`QuestionError::Db`] if the lookup fails.
 pub async fn find_by_id(db: &SurrealDb, id: Uuid) -> Result<Option<Question>, QuestionError> {
+    if let Some(pg) = catalog::authority().await? {
+        return Ok(catalog::one(&pg, PG_BY_ID, id, from_pg).await?);
+    }
     let response = db
         .query(format!("SELECT {SELECT} FROM ONLY $id LIMIT 1"))
         .bind(("id", record_id(TABLE, id)))
@@ -231,6 +279,9 @@ pub async fn find_by_id(db: &SurrealDb, id: Uuid) -> Result<Option<Question>, Qu
 ///
 /// [`QuestionError::Db`] if the lookup fails.
 pub async fn find_by_code(db: &SurrealDb, code: &str) -> Result<Option<Question>, QuestionError> {
+    if let Some(pg) = catalog::authority().await? {
+        return Ok(catalog::one(&pg, PG_BY_CODE, code.trim().to_string(), from_pg).await?);
+    }
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM ONLY {TABLE} WHERE code = $code LIMIT 1"
@@ -256,6 +307,9 @@ pub async fn find_by_codes(
     if codes.is_empty() {
         return Ok(Vec::new());
     }
+    if let Some(pg) = catalog::authority().await? {
+        return Ok(catalog::all(&pg, PG_BY_CODES, Some(codes.to_vec()), from_pg).await?);
+    }
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE code IN $codes ORDER BY code ASC"
@@ -276,6 +330,9 @@ pub async fn find_by_ids(db: &SurrealDb, ids: &[Uuid]) -> Result<Vec<Question>, 
     if ids.is_empty() {
         return Ok(Vec::new());
     }
+    if let Some(pg) = catalog::authority().await? {
+        return Ok(catalog::all(&pg, PG_BY_IDS, Some(ids.to_vec()), from_pg).await?);
+    }
     let keys: Vec<surrealdb::types::RecordId> =
         ids.iter().map(|id| record_id(TABLE, *id)).collect();
     let response = db
@@ -293,6 +350,9 @@ pub async fn find_by_ids(db: &SurrealDb, ids: &[Uuid]) -> Result<Vec<Question>, 
 ///
 /// [`QuestionError::Db`] if the lookup fails.
 pub async fn list_all(db: &SurrealDb) -> Result<Vec<Question>, QuestionError> {
+    if let Some(pg) = catalog::authority().await? {
+        return Ok(catalog::all(&pg, PG_ALL, None::<String>, from_pg).await?);
+    }
     let response = db
         .query(format!("SELECT {SELECT} FROM {TABLE} ORDER BY code ASC"))
         .await
@@ -311,6 +371,24 @@ pub async fn list_all(db: &SurrealDb) -> Result<Vec<Question>, QuestionError> {
 /// ASSERT refusing an `audience` outside `lawyer`/`client`/`both`.
 pub async fn create(db: &SurrealDb, input: &NewQuestion) -> Result<Question, QuestionError> {
     let id = Uuid::now_v7();
+    if let Some(pg) = catalog::authority().await? {
+        let row = catalog::row(
+            sqlx::query(PG_INSERT)
+                .bind(id)
+                .bind(input.code.trim().to_string())
+                .bind(input.prompt.clone())
+                .bind(input.answer_type.clone())
+                .bind(input.audience.clone()),
+            &pg,
+        )
+        .await
+        .map_err(catalog::CatalogError::from);
+        return match row {
+            Ok(row) => Ok(from_pg(&row)?),
+            Err(error) if error.violates("question_code_key") => Err(QuestionError::CodeTaken),
+            Err(error) => Err(error.into()),
+        };
+    }
     let mut response = writing(|| {
         db.query(format!(
             "CREATE $id SET \
@@ -352,6 +430,16 @@ pub async fn set_audience(
     code: &str,
     audience: &str,
 ) -> Result<Option<Question>, QuestionError> {
+    if let Some(pg) = catalog::authority().await? {
+        let row = catalog::maybe_row(
+            sqlx::query(PG_SET_AUDIENCE)
+                .bind(code.to_string())
+                .bind(audience.to_string()),
+            &pg,
+        )
+        .await?;
+        return Ok(row.as_ref().map(from_pg).transpose()?);
+    }
     let response = writing(|| {
         db.query(format!(
             "UPDATE {TABLE} SET audience = $audience, updated_at = time::now() \
