@@ -326,6 +326,8 @@ async fn assert_post_end_redirect(world: &mut RetainerWorld) {
 #[tokio::main]
 async fn main() {
     RetainerWorld::cucumber()
+        // One scenario at a time on the shared embedded SurrealDB.
+        .max_concurrent_scenarios(1)
         .run_and_exit("tests/features/retainer_intake.feature")
         .await;
 }

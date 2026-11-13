@@ -248,6 +248,8 @@ async fn assert_last_state(world: &mut ClosingWorld, name: String) {
 #[tokio::main]
 async fn main() {
     ClosingWorld::cucumber()
+        // One scenario at a time on the shared embedded SurrealDB.
+        .max_concurrent_scenarios(1)
         .run_and_exit("tests/features/closing_letter.feature")
         .await;
 }

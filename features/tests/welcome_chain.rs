@@ -319,6 +319,8 @@ async fn assert_subject(world: &mut ChainWorld, expected: String) {
 #[tokio::main]
 async fn main() {
     ChainWorld::cucumber()
+        // One scenario at a time on the shared embedded SurrealDB.
+        .max_concurrent_scenarios(1)
         .run_and_exit("tests/features/welcome_chain.feature")
         .await;
 }

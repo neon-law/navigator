@@ -433,5 +433,9 @@ async fn assert_no_notation(world: &mut NotationWorld) {
 
 #[tokio::main]
 async fn main() {
-    NotationWorld::run("tests/features/create_notation.feature").await;
+    NotationWorld::cucumber()
+        // One scenario at a time on the shared embedded SurrealDB.
+        .max_concurrent_scenarios(1)
+        .run_and_exit("tests/features/create_notation.feature")
+        .await;
 }

@@ -249,6 +249,8 @@ async fn assert_no_relay(world: &mut EmailWorld) {
 #[tokio::main]
 async fn main() {
     EmailWorld::cucumber()
+        // One scenario at a time on the shared embedded SurrealDB.
+        .max_concurrent_scenarios(1)
         .run_and_exit("tests/features/inbound_email_round_trip.feature")
         .await;
 }
