@@ -33,11 +33,16 @@ async fn authorize(
 }
 
 /// Legal Plans are PostgreSQL-native; without PostgreSQL the request fails
-/// rather than answering from anywhere else.
-async fn plan_store() -> Result<store::postgres::PostgresDb, ApiError> {
-    store::postgres::PostgresDb::from_env()
-        .await
-        .map_err(|_| ApiError::Db("PostgreSQL legal plans unavailable".into()))
+/// with `503 legal_plans_unavailable` rather than answering from anywhere
+/// else.
+async fn plan_store() -> Result<store::postgres::PostgresDb, Response> {
+    store::postgres::PostgresDb::from_env().await.map_err(|_| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({ "error": "legal_plans_unavailable" })),
+        )
+            .into_response()
+    })
 }
 
 fn plan_error(error: &LegalPlanError) -> Response {
@@ -66,7 +71,10 @@ pub(super) async fn list(
     Path(firm): Path<Uuid>,
 ) -> Result<Response, ApiError> {
     authorize(&state, &session, firm, FirmCapability::ViewDirectory).await?;
-    let pg = plan_store().await?;
+    let pg = match plan_store().await {
+        Ok(pg) => pg,
+        Err(unavailable) => return Ok(unavailable),
+    };
     Ok(match legal_plans::list(&pg, firm).await {
         Ok(plans) => Json(plans).into_response(),
         Err(e) => plan_error(&e),
@@ -82,7 +90,10 @@ pub(super) async fn create(
     Json(input): Json<NewLegalPlan>,
 ) -> Result<Response, ApiError> {
     authorize(&state, &session, firm, FirmCapability::ManageLegalPlans).await?;
-    let pg = plan_store().await?;
+    let pg = match plan_store().await {
+        Ok(pg) => pg,
+        Err(unavailable) => return Ok(unavailable),
+    };
     Ok(match legal_plans::create(&pg, firm, &input).await {
         Ok(plan) => (StatusCode::CREATED, Json(plan)).into_response(),
         Err(e) => plan_error(&e),
@@ -122,13 +133,13 @@ async fn firm_project(
     Ok((project, firm))
 }
 
-async fn project_plan_view(
-    pg: &store::postgres::PostgresDb,
-    firm: Uuid,
-    project: Project,
-) -> Result<ProjectPlan, LegalPlanError> {
+/// The matter's plan columns beside its Firm plan row. PostgreSQL is read
+/// only for a matter that links a plan.
+async fn project_plan_view(firm: Uuid, project: Project) -> Result<ProjectPlan, Response> {
     let legal_plan = match project.legal_plan_id {
-        Some(id) => legal_plans::find(pg, firm, id).await?,
+        Some(id) => legal_plans::find(&plan_store().await?, firm, id)
+            .await
+            .map_err(|e| plan_error(&e))?,
         None => None,
     };
     Ok(ProjectPlan {
@@ -155,10 +166,9 @@ pub(super) async fn project(
     Path(project_id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
     let (project, firm) = firm_project(&state, &session, project_id).await?;
-    let pg = plan_store().await?;
-    Ok(match project_plan_view(&pg, firm, project).await {
+    Ok(match project_plan_view(firm, project).await {
         Ok(view) => Json(view).into_response(),
-        Err(e) => plan_error(&e),
+        Err(refused) => refused,
     })
 }
 
@@ -199,7 +209,10 @@ pub(super) async fn set_project(
     Json(patch): Json<ProjectPlanPatch>,
 ) -> Result<Response, ApiError> {
     let (project, firm) = firm_project(&state, &session, project_id).await?;
-    let pg = plan_store().await?;
+    let pg = match plan_store().await {
+        Ok(pg) => pg,
+        Err(unavailable) => return Ok(unavailable),
+    };
     let mut columns = PlanColumns::of(&project);
     if let Some(name) = patch.legal_plan.as_deref().map(str::trim) {
         columns.legal_plan_id = if name.is_empty() {
@@ -227,9 +240,9 @@ pub(super) async fn set_project(
     let updated = store::projects::set_plan_columns(&state.surreal, &pg, project_id, &columns)
         .await?
         .ok_or(ApiError::NotFound)?;
-    Ok(match project_plan_view(&pg, firm, updated).await {
+    Ok(match project_plan_view(firm, updated).await {
         Ok(view) => Json(view).into_response(),
-        Err(e) => plan_error(&e),
+        Err(refused) => refused,
     })
 }
 

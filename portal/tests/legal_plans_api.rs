@@ -113,6 +113,87 @@ async fn send(
     )
 }
 
+async fn api(surreal: store::surreal::SurrealDb) -> Router {
+    let state = portal::test_support::app_state(surreal).await;
+    portal::api::routes().with_state(portal::api::ApiState {
+        surreal: state.surreal.clone(),
+        email: state.email.clone(),
+        bootstrap_owner_email: state.bootstrap_owner_email.clone(),
+        bootstrap_company: "Synthetic Firm".into(),
+        questionnaire_runtime: state.questionnaire_runtime.clone(),
+        storage: state.storage.clone(),
+        workflow_runtime: state.workflow_runtime.clone(),
+        assets_storage: state.assets_storage.clone(),
+        forms_registry: state.forms_registry.clone(),
+        signature_provider: state.signature_provider.clone(),
+        contract_reviewer: state.contract_reviewer.clone(),
+        integration_providers: state.integration_providers.clone(),
+        billing_provider: state.billing_provider.clone(),
+        canonical_base_url: None,
+    })
+}
+
+/// A deployment whose `web` has no PostgreSQL connection still reads a
+/// matter no plan referred, and names the missing plan store instead of
+/// answering `500 internal` where it needs one.
+#[tokio::test]
+async fn without_postgresql_an_unlinked_matter_reads_and_a_write_names_the_store() {
+    if std::env::var("NAVIGATOR_POSTGRES_HOST").is_ok() {
+        return;
+    }
+    let surreal = store::test_support::mem_surreal().await;
+    let owner = store::persons::create(
+        &surreal,
+        &NewPerson::with_role("Synthetic Owner", "unlinked-owner@example.com", Role::Owner),
+    )
+    .await
+    .unwrap();
+    let entity_id = store::test_support::seed_entity(&surreal).await;
+    let firm = store::firms::create(
+        &surreal,
+        &store::firms::NewFirm {
+            name: format!("Synthetic Unlinked Firm {}", Uuid::now_v7()),
+            status: "active".into(),
+            entity_id,
+            admin_dri_person_id: owner.id,
+        },
+    )
+    .await
+    .unwrap();
+    let project = store::projects::create(
+        &surreal,
+        &store::projects::NewProject {
+            code: store::projects::code_from_name("Synthetic Unlinked Matter", Uuid::new_v4()),
+            name: "Synthetic Unlinked Matter".into(),
+            status: "open".into(),
+            entity_id,
+            firm_id: Some(firm.id),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let app = api(surreal).await;
+    let owner = session(&owner, Role::Owner);
+    let link = format!("/app/api/projects/{}/legal-plan", project.id);
+
+    let (status, unlinked) = send(&app, &owner, "GET", &link, None).await;
+    assert_eq!(status, StatusCode::OK, "{unlinked}");
+    assert_eq!(unlinked["legal_plan"], Value::Null);
+    assert_eq!(unlinked["code"], project.code);
+
+    let (status, refused) = send(
+        &app,
+        &owner,
+        "PATCH",
+        &link,
+        Some(json!({"plan_case_number": "4900000-001"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(refused["error"], "legal_plans_unavailable");
+}
+
 fn session(person: &store::persons::Person, role: Role) -> portal::SessionData {
     portal::SessionData {
         person_id: Some(person.id),
@@ -190,23 +271,7 @@ async fn run() {
     )
     .await
     .unwrap();
-    let state = portal::test_support::app_state(surreal).await;
-    let app = portal::api::routes().with_state(portal::api::ApiState {
-        surreal: state.surreal.clone(),
-        email: state.email.clone(),
-        bootstrap_owner_email: state.bootstrap_owner_email.clone(),
-        bootstrap_company: "Synthetic Firm".into(),
-        questionnaire_runtime: state.questionnaire_runtime.clone(),
-        storage: state.storage.clone(),
-        workflow_runtime: state.workflow_runtime.clone(),
-        assets_storage: state.assets_storage.clone(),
-        forms_registry: state.forms_registry.clone(),
-        signature_provider: state.signature_provider.clone(),
-        contract_reviewer: state.contract_reviewer.clone(),
-        integration_providers: state.integration_providers.clone(),
-        billing_provider: state.billing_provider.clone(),
-        canonical_base_url: None,
-    });
+    let app = api(surreal).await;
     let owner = session(&owner, Role::Owner);
     let outsider = session(&outsider, Role::Lawyer);
     let plans = format!("/app/api/firms/{}/legal-plans", firm.id);

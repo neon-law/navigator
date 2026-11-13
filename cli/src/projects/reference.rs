@@ -6,7 +6,8 @@
 //! as a one-record `project_reference` document, the same door a Project
 //! repository's `seeds/ProjectReference.yaml` reconciles through. Adversity
 //! is then asserted against a referenced party through
-//! `POST /app/api/projects/{id}/relationships/adverse`.
+//! `POST /app/api/projects/{id}/relationships/adverse`; `adverse add` given
+//! what a reference needs records the `adverse_party` reference first.
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -55,13 +56,8 @@ pub async fn add_reference(
         let code = project_code(project)?;
         let host = host_from_manifest(host);
         let record = reference_record(&code, reason, &party)?;
-        let yaml = serde_yaml::to_string(&serde_json::json!({
-            "lookup_fields": ["project_id", "reason"],
-            "records": [record],
-        }))
-        .context("encode project_reference seed")?;
         let session = remote::resolve(host.as_deref())?;
-        let body = remote::send_seed_document(&session, "project_reference", &yaml).await?;
+        let body = send_reference(&session, record).await?;
         println!("{body}");
         Ok(())
     }
@@ -73,6 +69,17 @@ pub async fn add_reference(
             ExitCode::FAILURE
         }
     }
+}
+
+/// Send one reference record through the seed door, which creates a new
+/// Person or Entity from it and leaves an existing reference unchanged.
+async fn send_reference(session: &(String, String), record: serde_json::Value) -> Result<String> {
+    let yaml = serde_yaml::to_string(&serde_json::json!({
+        "lookup_fields": ["project_id", "reason"],
+        "records": [record],
+    }))
+    .context("encode project_reference seed")?;
+    remote::send_seed_document(session, "project_reference", &yaml).await
 }
 
 /// One `project_reference` seed record, in the shape
@@ -119,46 +126,75 @@ fn reference_record(code: &str, reason: &str, party: &PartyArgs) -> Result<serde
     Ok(record)
 }
 
-/// `navigator project adverse add (--person-email <email> | --entity-name
-/// <name>) [--subject entity|client_dri]`.
+/// `navigator project adverse add (--person-email <email> [--person-name
+/// <name>] | --entity-name <name> [--entity-type <type> --jurisdiction
+/// <name>]) [--subject entity|client_dri]`.
 pub async fn add_adversity(
     host: Option<&str>,
     project: Option<&str>,
     party: PartyArgs,
     subject: &str,
 ) -> ExitCode {
-    let result: Result<()> = async {
+    let result: Result<String> = async {
         let code = project_code(project)?;
         let host = host_from_manifest(host);
         let body = adversity_body(&party, subject)?;
-        let (base, token) = remote::resolve(host.as_deref())?;
-        let id = surfaces::resolve_project_id(&base, &token, &code).await?;
-        let response = reqwest::Client::new()
-            .post(format!(
-                "{base}/app/api/projects/{id}/relationships/adverse"
-            ))
-            .timeout(Duration::from_secs(30))
-            .bearer_auth(token)
-            .json(&body)
-            .send()
-            .await
-            .context("record adversity")?;
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        if status != reqwest::StatusCode::CREATED {
-            return Err(anyhow!("adversity refused: {status}: {text}"));
-        }
-        println!("{text}");
-        Ok(())
+        let reference = adverse_reference(&code, &party)?;
+        let session = remote::resolve(host.as_deref())?;
+        record_adversity(&session, &code, reference, &body).await
     }
     .await;
     match result {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(edge) => {
+            println!("{edge}");
+            ExitCode::SUCCESS
+        }
         Err(error) => {
             eprintln!("navigator project adverse add: {error:#}");
             ExitCode::FAILURE
         }
     }
+}
+
+/// The `adverse_party` reference to record first, when the verb names what
+/// one needs — `--person-name`, or `--entity-type` and `--jurisdiction` —
+/// since adversity is asserted only against a party the matter references.
+fn adverse_reference(code: &str, party: &PartyArgs) -> Result<Option<serde_json::Value>> {
+    if party.person_name.is_none() && party.entity_type.is_none() && party.jurisdiction.is_none() {
+        return Ok(None);
+    }
+    reference_record(code, model::project_references::REASON_ADVERSE_PARTY, party).map(Some)
+}
+
+/// Reference the party when asked, creating it if new, then assert the
+/// client's adversity to it.
+async fn record_adversity(
+    session: &(String, String),
+    code: &str,
+    reference: Option<serde_json::Value>,
+    body: &serde_json::Value,
+) -> Result<String> {
+    if let Some(record) = reference {
+        send_reference(session, record).await?;
+    }
+    let (base, token) = session;
+    let id = surfaces::resolve_project_id(base, token, code).await?;
+    let response = reqwest::Client::new()
+        .post(format!(
+            "{base}/app/api/projects/{id}/relationships/adverse"
+        ))
+        .timeout(Duration::from_secs(30))
+        .bearer_auth(token)
+        .json(body)
+        .send()
+        .await
+        .context("record adversity")?;
+    let status = response.status();
+    let text = response.text().await.unwrap_or_default();
+    if status != reqwest::StatusCode::CREATED {
+        return Err(anyhow!("adversity refused: {status}: {text}"));
+    }
+    Ok(text)
 }
 
 fn adversity_body(party: &PartyArgs, subject: &str) -> Result<serde_json::Value> {
@@ -180,7 +216,9 @@ fn adversity_body(party: &PartyArgs, subject: &str) -> Result<serde_json::Value>
 
 #[cfg(test)]
 mod tests {
-    use super::{adversity_body, reference_record, PartyArgs};
+    use super::{adverse_reference, adversity_body, record_adversity, reference_record, PartyArgs};
+    use wiremock::matchers::{body_partial_json, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn entity() -> PartyArgs {
         PartyArgs {
@@ -217,5 +255,71 @@ mod tests {
         assert_eq!(body["entity_name"], "Widget Works LLC");
         assert_eq!(body["subject"], "entity");
         assert!(adversity_body(&entity(), "client").is_err());
+    }
+
+    #[tokio::test]
+    async fn a_new_person_is_referenced_as_an_adverse_party_before_the_edge() {
+        let server = MockServer::start().await;
+        let project = uuid::Uuid::nil();
+        Mock::given(method("POST"))
+            .and(path("/app/api/seed"))
+            .and(body_partial_json(
+                serde_json::json!({ "model": "project_reference" }),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_string("created 1"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/app/api/projects"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!([{ "id": project, "code": "acme" }])),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(format!(
+                "/app/api/projects/{project}/relationships/adverse"
+            )))
+            .and(body_partial_json(
+                serde_json::json!({ "person_email": "counsel@example.com" }),
+            ))
+            .respond_with(
+                ResponseTemplate::new(201).set_body_json(serde_json::json!({"kind": "adverse_to"})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let party = PartyArgs {
+            person_email: Some("counsel@example.com".into()),
+            person_name: Some("Synthetic Counsel".into()),
+            entity_name: None,
+            entity_type: None,
+            jurisdiction: None,
+        };
+        let reference = adverse_reference("acme", &party).unwrap();
+        let body = adversity_body(&party, "entity").unwrap();
+        let session = (server.uri(), "token".to_string());
+        let edge = record_adversity(&session, "acme", reference, &body)
+            .await
+            .unwrap();
+        assert!(edge.contains("adverse_to"));
+        let requests = server.received_requests().await.unwrap();
+        let seed = requests
+            .iter()
+            .find(|request| request.url.path() == "/app/api/seed")
+            .unwrap();
+        let seed: serde_json::Value = serde_json::from_slice(&seed.body).unwrap();
+        let yaml = seed["yaml"].as_str().unwrap();
+        assert!(yaml.contains("reason: adverse_party"), "{yaml}");
+        assert!(yaml.contains("name: Synthetic Counsel"), "{yaml}");
+
+        // A party named by email alone is asserted against as it stands.
+        let bare = PartyArgs {
+            person_name: None,
+            ..party
+        };
+        assert!(adverse_reference("acme", &bare).unwrap().is_none());
     }
 }

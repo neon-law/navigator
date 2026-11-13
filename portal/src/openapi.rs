@@ -1296,7 +1296,8 @@ fn canonical_document(base: &str) -> Value {
                 "plan_closed_on": { "type": ["string", "null"], "format": "date" }
               } } } } },
               "401": { "description": "No authenticated session" },
-              "404": { "description": "No such Project, a Project with no Firm, or the caller is not a member of its Firm" }
+              "404": { "description": "No such Project, a Project with no Firm, or the caller is not a member of its Firm" },
+              "503": { "description": "The matter links a plan and the PostgreSQL plan store is unavailable (`legal_plans_unavailable`)" }
             }
           },
           "patch": {
@@ -1342,7 +1343,8 @@ fn canonical_document(base: &str) -> Value {
               } } } } },
               "400": { "description": "A field is invalid, or `legal_plan` names no plan of the Firm" },
               "401": { "description": "No authenticated session" },
-              "404": { "description": "No such Project, a Project with no Firm, or the caller is not a member of its Firm" }
+              "404": { "description": "No such Project, a Project with no Firm, or the caller is not a member of its Firm" },
+              "503": { "description": "The PostgreSQL plan store is unavailable (`legal_plans_unavailable`)" }
             }
           }
         },
@@ -3326,10 +3328,10 @@ fn canonical_document(base: &str) -> Value {
               "403": { "description": "Authenticated caller is not Lawyer/admin", "content": { "application/json": {
                 "schema": { "$ref": "#/components/schemas/ApiError" }
               } } },
-              "404": { "description": "No such matter, out of scope, or no such party", "content": { "application/json": {
+              "404": { "description": "No such matter, or out of scope", "content": { "application/json": {
                 "schema": { "$ref": "#/components/schemas/ApiError" }
               } } },
-              "422": { "description": "The matter does not reference that party, or has no client DRI to start the edge from", "content": { "application/json": {
+              "422": { "description": "The matter does not reference that party (including one no row matches), or has no client DRI to start the edge from", "content": { "application/json": {
                 "schema": { "$ref": "#/components/schemas/ApiError" }
               } } },
               "500": { "description": "The edge could not be written (database error)", "content": { "application/json": {

@@ -50,7 +50,9 @@ own persistence logic.
   and never creates either; `--overwrite` replaces the other fields of a match.
 - **Record adversity.** `navigator project adverse add (--person-email <email> | --entity-name <name>) [--subject
   entity|client_dri]` calls `POST /app/api/projects/{id}/relationships/adverse`, which lands a `manual`, full-confidence
-  `adverse_to` edge from the client to a party the Project already references.
+  `adverse_to` edge from the client to a party the Project references. Given `--person-name`, or `--entity-type` and
+  `--jurisdiction`, it first references the party as `adverse_party`, creating it if new; an unreferenced party is a
+  422.
 - **Document upload.** `hudson site document upload --project <code> --file <path> --kind <kind>` reads the
   file locally and sends it with the same bearer to `POST /app/api/projects/{id}/documents`. `--kind` is required and
   must be an asset-lane value — the same enum OpenAPI publishes on that operation. Run inside the matching Project
