@@ -115,7 +115,7 @@ own images.
 
 ### PostgreSQL and Apache AGE image
 
-`ghcr.io/neon-law/navigator/postgres:16.15-age1.6.0-vector0.8.7` is PostgreSQL 16.15 with Apache AGE 1.6.0 and pgvector
+`ghcr.io/neon-law/navigator/postgres:16.16-age1.6.0-vector0.8.7` is PostgreSQL 16.16 with Apache AGE 1.6.0 and pgvector
 0.8.7, built from `images/postgres/Containerfile`. The manifests under `k8s/postgres/` pin it by digest.
 [`postgres-compatibility.md`](postgres-compatibility.md) lists the tested matrix.
 

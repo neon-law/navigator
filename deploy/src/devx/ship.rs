@@ -444,6 +444,7 @@ where
     substitutions.extend(archives_substitutions(&get));
     substitutions.extend(replica_substitutions(deployment, &get)?);
     substitutions.extend(mirror_substitutions(&get)?);
+    substitutions.push(authority_substitution(&get)?);
     // Not in PLAINTEXT_SUBSTITUTIONS and not read from `get` at all: the additional brand
     // hosts this deployment's environment serves come from the compiled
     // `views::brand::BrandKey` registry, keyed off the `NAVIGATOR_PUBLIC_HOST`
@@ -523,6 +524,52 @@ const NAVIGATOR_POSTGRES_ENABLED: &str = "NAVIGATOR_POSTGRES_ENABLED";
 
 const MIRROR_RESOURCE_TOKEN: &str = "  # NAVIGATOR_POSTGRES_MIRROR_RESOURCE\n";
 const MIRROR_ENV_TOKEN: &str = "            # NAVIGATOR_POSTGRES_MIRROR_ENV\n";
+const AUTHORITY_ENV_TOKEN: &str = "            # NAVIGATOR_POSTGRES_AUTHORITY_ENV\n";
+const BOOLEAN_AUTHORITY_KEYS: &[&str] = &[
+    store::persons::POSTGRES_PEOPLE_AUTHORITY_ENV,
+    "NAVIGATOR_POSTGRES_PROJECT_LIFECYCLE_AUTHORITY",
+    "NAVIGATOR_POSTGRES_INBOX_AUTHORITY",
+    "NAVIGATOR_POSTGRES_TENANCY_AUTHORITY",
+];
+const GRAPH_AUTHORITY_KEY: &str = "NAVIGATOR_GRAPH_AUTHORITY";
+
+fn authority_substitution(get: &impl Fn(&str) -> Option<String>) -> Result<Substitution> {
+    let postgres = non_empty_env(NAVIGATOR_POSTGRES_ENABLED, get).as_deref() == Some("true");
+    let mirror = non_empty_env(store::postgres_mirror::MIRROR_ENV, get).as_deref() == Some("1");
+    let mut value = String::new();
+    for &key in BOOLEAN_AUTHORITY_KEYS.iter().chain([&GRAPH_AUTHORITY_KEY]) {
+        let Some(setting) = get(key) else { continue };
+        let setting = if key == GRAPH_AUTHORITY_KEY {
+            setting.trim().to_ascii_lowercase()
+        } else {
+            setting
+        };
+        let enabled = match (key, setting.as_str()) {
+            (GRAPH_AUTHORITY_KEY, "age") => true,
+            (GRAPH_AUTHORITY_KEY, "surreal") => false,
+            (GRAPH_AUTHORITY_KEY, _) => bail!("{key} must be age or surreal"),
+            (_, "1" | "true") => true,
+            (_, "0" | "false") => false,
+            _ => bail!("{key} must be 0, 1, false, or true"),
+        };
+        ensure!(
+            !enabled || (postgres && mirror),
+            "{key} requires NAVIGATOR_POSTGRES_ENABLED=true and NAVIGATOR_POSTGRES_MIRROR=1"
+        );
+        if postgres {
+            use std::fmt::Write as _;
+            writeln!(
+                value,
+                "            - name: {key}\n              value: \"{setting}\""
+            )?;
+        }
+    }
+    Ok(Substitution {
+        token: AUTHORITY_ENV_TOKEN,
+        env: NAVIGATOR_POSTGRES_ENABLED,
+        value,
+    })
+}
 
 fn mirror_substitutions(get: &impl Fn(&str) -> Option<String>) -> Result<Vec<Substitution>> {
     let enabled = match non_empty_env(store::postgres_mirror::MIRROR_ENV, get).as_deref() {
@@ -7602,6 +7649,50 @@ mod tests {
             !manifest.contains("kind: Job\n"),
             "initial scan is a separate release gate"
         );
+    }
+
+    #[test]
+    fn authority_switches_render_on_web_and_require_postgres_and_mirroring() {
+        let switches = [
+            ("NAVIGATOR_POSTGRES_PEOPLE_AUTHORITY", "1"),
+            ("NAVIGATOR_GRAPH_AUTHORITY", "age"),
+            ("NAVIGATOR_POSTGRES_PROJECT_LIFECYCLE_AUTHORITY", "true"),
+            ("NAVIGATOR_POSTGRES_INBOX_AUTHORITY", "1"),
+            ("NAVIGATOR_POSTGRES_TENANCY_AUTHORITY", "true"),
+        ];
+        for (postgres, mirror) in [
+            (None, None),
+            (Some("true"), None),
+            (Some("true"), Some("1")),
+        ] {
+            let get = |key: &str| match key {
+                NAVIGATOR_POSTGRES_ENABLED => postgres.map(str::to_owned),
+                store::postgres_mirror::MIRROR_ENV => mirror.map(str::to_owned),
+                key => switches
+                    .iter()
+                    .find(|(name, _)| *name == key)
+                    .map(|(_, value)| (*value).to_owned())
+                    .or_else(|| env_getter(FULL_ENV)(key)),
+            };
+            if mirror.is_none() {
+                let error = resolve_substitutions_for_deployment("synthetic", "26.9.16", get)
+                    .unwrap_err()
+                    .to_string();
+                assert!(
+                    error.contains("AUTHORITY") && error.contains("requires"),
+                    "{error}"
+                );
+                continue;
+            }
+            let env = rendered_web_env_entries(get);
+            for (name, value) in switches {
+                assert!(
+                    env.iter()
+                        .any(|entry| entry["name"] == name && entry["value"] == value),
+                    "{name}={value} missing from rendered web environment"
+                );
+            }
+        }
     }
 
     #[test]

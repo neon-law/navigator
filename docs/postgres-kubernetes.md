@@ -160,6 +160,11 @@ hudson ops postgres mirror reconcile --dry-run [--json] # read only
 hudson ops postgres mirror reconcile [--json]           # re-mirror from SurrealDB
 ```
 
+`ops ship` renders configured People, Project lifecycle, Inbox, tenancy, and graph authority settings into the web
+Deployment's PostgreSQL patch. Selecting PostgreSQL authority explicitly requires both settings above. The four
+`NAVIGATOR_POSTGRES_*_AUTHORITY` switches accept `1`, `0`, `true`, or `false`. `NAVIGATOR_GRAPH_AUTHORITY` accepts `age`
+or `surreal`. Each domain's runtime applies its own cutover prerequisites.
+
 It reads the same `NAVIGATOR_SURREAL_*` and `NAVIGATOR_POSTGRES_*` variables `web` reads. Each table reports its
 SurrealDB and PostgreSQL row counts and its missing, extra, and differing rows. Divergent rows are named by UUID only. A
 Social Handle or `firm_brand` row is keyed by its Brand key, so it is counted and never named. Reconcile runs parents

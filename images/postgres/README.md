@@ -1,6 +1,6 @@
 # PostgreSQL image
 
-`ghcr.io/neon-law/navigator/postgres` is PostgreSQL 16.15 (Debian Bookworm) with Apache AGE 1.6.0, pgvector 0.8.7, and
+`ghcr.io/neon-law/navigator/postgres` is PostgreSQL 16.16 (Debian Bookworm) with Apache AGE 1.6.0, pgvector 0.8.7, and
 PostGIS 3.6.4. This directory is its source and its build context: the `Containerfile`, the Apache-2.0 `LICENSE` and
 `NOTICE` copied into the image, and the smoke tests under `tests/`. The directory has its own license; the repository
 root's must not replace it. It replaces `ghcr.io/neon-law/neon-law-postgres` and the `neon-law/neon-law-postgres`
@@ -47,8 +47,8 @@ GeoJSON round trips. It also checks restart persistence, a spatial database rest
    updates, so each week's image carries current security fixes while the server stays at the pinned minor.
 4. **Test.** AMD64 and ARM64 candidates are built and tested natively with `tests/run.sh`.
 5. **Publish.** The tested candidates are promoted together without rebuilding and signed with cosign. Tags are
-   `16.15-age1.6.0-vector0.8.7` (moving), `16.15-age1.6.0-vector0.8.7-YYYYMMDD`, and
-   `16.15-age1.6.0-vector0.8.7-<commit>`. Consumers pin the digest, never a tag.
+   `16.16-age1.6.0-vector0.8.7` (moving), `16.16-age1.6.0-vector0.8.7-YYYYMMDD`, and
+   `16.16-age1.6.0-vector0.8.7-<commit>`. Consumers pin the digest, never a tag.
 6. **Dogfood.** [`scripts/postgres-image-pin.sh`](../../scripts/postgres-image-pin.sh) moves every Navigator pin to
    the new digest, and the workflow opens a pull request as the automerge App. That pull request runs [PostgreSQL
    compatibility](../../.github/workflows/postgres-compatibility.yml) and [PVC

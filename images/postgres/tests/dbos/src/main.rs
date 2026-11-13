@@ -6,7 +6,7 @@ use std::time::Duration;
 struct SmokeError(String);
 
 async fn write_effect(key: &str) -> dbos::Result<(), SmokeError> {
-    let url = std::env::var("DBOS_DATABASE_URL").map_err(|e| SmokeError(e.to_string()))?;
+    let url = std::env::var("DBOS_SYSTEM_DATABASE_URL").map_err(|e| SmokeError(e.to_string()))?;
     let (client, connection) = tokio_postgres::connect(&url, tokio_postgres::NoTls)
         .await
         .map_err(|e| SmokeError(e.to_string()))?;
