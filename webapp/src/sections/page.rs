@@ -239,10 +239,9 @@ pub async fn request_tab() -> Option<MatterTab> {
         .and_then(|uri| MatterTab::from_path(uri.path()))
 }
 
-/// The built-in tabs `viewer` reads after the declared pages. The workbench
-/// sections are a lawyer's; a Clerk has no workbench, so their
-/// Communications tab is the Project inbox the route admits them to; only
-/// the client DRI writes the testimonial.
+/// The built-in tabs `viewer` reads after the declared pages. Lawyers have
+/// the workbench and the Project Inbox. Clerks have the Project Inbox, and
+/// the client DRI has the testimonial.
 #[cfg(feature = "server")]
 #[must_use]
 pub fn builtin_tabs(code: &str, viewer: store::access::MatterViewer) -> Vec<PageTab> {
@@ -250,14 +249,22 @@ pub fn builtin_tabs(code: &str, viewer: store::access::MatterViewer) -> Vec<Page
     match viewer {
         MatterViewer::Lawyer | MatterViewer::LawyerDri => MatterTab::WORKBENCH
             .iter()
-            .map(|tab| tab.page_tab(code))
+            .map(|tab| match tab {
+                MatterTab::Communications => project_communications_tab(code),
+                tab => tab.page_tab(code),
+            })
             .collect(),
-        MatterViewer::Clerk => vec![PageTab {
-            label: MatterTab::Communications.label().to_string(),
-            href: format!("/app/projects/{code}/inbox"),
-        }],
+        MatterViewer::Clerk => vec![project_communications_tab(code)],
         MatterViewer::ClientDri => vec![MatterTab::Testimonial.page_tab(code)],
         MatterViewer::Client => Vec::new(),
+    }
+}
+
+#[cfg(feature = "server")]
+fn project_communications_tab(code: &str) -> PageTab {
+    PageTab {
+        label: MatterTab::Communications.label().to_string(),
+        href: format!("/app/projects/{code}/inbox"),
     }
 }
 
@@ -1207,7 +1214,7 @@ mod tests {
                 "/app/projects/m/timeline",
                 "/app/projects/m/engagement",
                 "/app/projects/m/tasks",
-                "/app/projects/m/communications",
+                "/app/projects/m/inbox",
                 "/app/projects/m/documents",
                 "/app/projects/m/billing",
                 "/app/projects/m/participants",
