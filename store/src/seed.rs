@@ -1731,7 +1731,6 @@ async fn seed_canonical_into(
 ) -> anyhow::Result<()> {
     seed_jurisdictions(surreal, r).await?;
     seed_entity_types(surreal, r).await?;
-    rename_legacy_firm_entity(surreal).await?;
     seed_entities(surreal, canonical::ENTITY, "Entity.yaml", r).await?;
     seed_firm_ein(surreal).await?;
     // The practice's Firm needs an existing `role = admin` person for its
@@ -2904,77 +2903,13 @@ async fn wait_for_seed_entity(surreal: &SurrealDb, name: &str) -> anyhow::Result
     Ok(())
 }
 
-/// The public EIN supplied for the corporation also known as Shook Law PC.
+/// The firm's public EIN.
 /// The canonical seed runs in staging and production; only a missing EIN is filled.
 async fn seed_firm_ein(surreal: &SurrealDb) -> anyhow::Result<()> {
     let entity_id = crate::entities::firm_anchor_holder(surreal, &FIRM_ENTITY_NAME.to_lowercase())
         .await?
         .ok_or_else(|| anyhow::anyhow!("seed: firm Entity anchor missing"))?;
     crate::entities::seed_ein(surreal, entity_id, "81-3099614").await?;
-    Ok(())
-}
-
-/// The firm's earlier names, newest first. `Shook Law PLLC` predates the
-/// California professional corporation (only a PC may practise law in
-/// California); `Shook Law PC` is that corporation before it was renamed
-/// [`FIRM_ENTITY_NAME`].
-const LEGACY_FIRM_ENTITY_NAMES: &[&str] = &["Shook Law PC", "Shook Law PLLC"];
-
-/// Move a database that still carries a legacy firm row onto the PC.
-///
-/// The seed finds rows by name and type, so without this a persisted
-/// database would keep the old row holding `firm_anchor_key` and the new
-/// row could never be minted. Renaming in place keeps the row's id, so
-/// every Firm, Address, and Matter that points at it stays pointed.
-/// The anchor is surrendered first because `entities::update` refuses to
-/// rename a row that holds it. Idempotent: a no-op once no legacy row is
-/// left, and when the PC row already exists.
-async fn rename_legacy_firm_entity(surreal: &SurrealDb) -> anyhow::Result<()> {
-    let mut legacy = None;
-    for name in LEGACY_FIRM_ENTITY_NAMES {
-        legacy = crate::entities::find_by_name(surreal, name).await?;
-        if legacy.is_some() {
-            break;
-        }
-    }
-    let Some(legacy) = legacy else {
-        return Ok(());
-    };
-    if crate::entities::find_by_name(surreal, FIRM_ENTITY_NAME)
-        .await?
-        .is_some()
-    {
-        return Ok(());
-    }
-    let pc = crate::entity_types::find_by_name(surreal, "Professional Corporation")
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("seed: entity_type `Professional Corporation` missing"))?;
-    let california = jurisdictions::find_by_name(surreal, "California")
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("seed: jurisdiction `California` missing"))?;
-    crate::entities::set_firm_anchor_key(surreal, legacy.id, None).await?;
-    let renamed = crate::entities::update(
-        surreal,
-        legacy.id,
-        &crate::entities::NewEntity {
-            name: FIRM_ENTITY_NAME.to_string(),
-            entity_type_id: pc.id,
-            jurisdiction_id: california.id,
-            phone: legacy.phone,
-            url: legacy.url,
-            xero_id: legacy.xero_id,
-            firm_anchor_key: crate::entity_commands::firm_anchor_key(
-                FIRM_ENTITY_NAME,
-                FIRM_ENTITY_NAME,
-            ),
-        },
-    )
-    .await?;
-    anyhow::ensure!(
-        renamed.is_some(),
-        "seed: renaming {} to {FIRM_ENTITY_NAME} wrote no row",
-        legacy.name
-    );
     Ok(())
 }
 
@@ -6546,7 +6481,7 @@ records:
     /// both: the Entity is canonical, so every deployment carries it, while
     /// the mailbox is the Firm's own and rides the brand layer.
     #[tokio::test]
-    async fn shook_law_holds_mailbox_9002_at_ridgeview() {
+    async fn the_practice_firm_holds_mailbox_9002_at_ridgeview() {
         let surreal = mem_surreal().await;
         let storage = fs_storage().await;
 
@@ -6719,94 +6654,6 @@ records:
             .expect("the professional-corporation type seeds");
 
         assert_ne!(pa.id, pc.id, "a P.A. is not a P.C.");
-    }
-
-    /// A database seeded before the firm became a California professional
-    /// corporation still holds `Shook Law PLLC` as the anchor. Boot must move
-    /// that same row to the PC, so its id — and every Firm and Address that
-    /// points at it — survives, and no second anchor is forked.
-    #[tokio::test]
-    async fn a_legacy_pllc_firm_row_is_renamed_to_the_pc_in_place() {
-        a_legacy_firm_row_is_renamed_in_place("Shook Law PLLC", "Professional LLC", "Nevada").await;
-    }
-
-    /// The same move for a database seeded before the corporation was
-    /// renamed from `Shook Law PC` to [`super::FIRM_ENTITY_NAME`].
-    #[tokio::test]
-    async fn a_shook_law_pc_firm_row_is_renamed_to_the_current_name_in_place() {
-        a_legacy_firm_row_is_renamed_in_place(
-            "Shook Law PC",
-            "Professional Corporation",
-            "California",
-        )
-        .await;
-    }
-
-    async fn a_legacy_firm_row_is_renamed_in_place(
-        legacy_name: &str,
-        legacy_type: &str,
-        legacy_jurisdiction: &str,
-    ) {
-        assert!(super::LEGACY_FIRM_ENTITY_NAMES.contains(&legacy_name));
-        let surreal = mem_surreal().await;
-        seed_canonical(&surreal, &fs_storage().await)
-            .await
-            .expect("seed");
-
-        let anchor = crate::entities::find_by_name(&surreal, super::FIRM_ENTITY_NAME)
-            .await
-            .unwrap()
-            .expect("the anchor seeds");
-        let legacy_type = crate::entity_types::find_by_name(&surreal, legacy_type)
-            .await
-            .unwrap()
-            .expect("the legacy entity type seeds");
-        let legacy_jurisdiction = jurisdictions::find_by_name(&surreal, legacy_jurisdiction)
-            .await
-            .unwrap()
-            .expect("the legacy jurisdiction seeds");
-        crate::entities::set_firm_anchor_key(&surreal, anchor.id, None)
-            .await
-            .unwrap();
-        crate::entities::update(
-            &surreal,
-            anchor.id,
-            &crate::entities::NewEntity {
-                name: legacy_name.to_string(),
-                entity_type_id: legacy_type.id,
-                jurisdiction_id: legacy_jurisdiction.id,
-                phone: None,
-                url: None,
-                xero_id: None,
-                firm_anchor_key: Some(legacy_name.to_ascii_lowercase()),
-            },
-        )
-        .await
-        .unwrap()
-        .expect("rewound to the legacy name");
-
-        seed_canonical(&surreal, &fs_storage().await)
-            .await
-            .expect("a reseed renames the legacy firm");
-
-        let renamed = crate::entities::find_by_id(&surreal, anchor.id)
-            .await
-            .unwrap()
-            .expect("the row survives under its old id");
-        assert_eq!(renamed.name, super::FIRM_ENTITY_NAME);
-        assert!(renamed.is_firm_anchor());
-        assert!(
-            crate::entities::find_by_name(&surreal, legacy_name)
-                .await
-                .unwrap()
-                .is_none(),
-            "no {legacy_name} row may remain"
-        );
-        let pc = crate::entity_types::find_by_name(&surreal, "Professional Corporation")
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(renamed.entity_type_id, pc.id);
     }
 
     /// Losing it is not hypothetical: this seed finds an existing entity

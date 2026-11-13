@@ -1672,7 +1672,7 @@ mod tests {
         super::record_forgejo_run_finished_with_meter(
             &meter,
             &super::ForgejoRunFinished {
-                repository: "shook-law-pc/sample-estate",
+                repository: "example-firm/sample-estate",
                 workflow: "cd.yml",
                 event: "push",
                 outcome: "failure",
@@ -1693,7 +1693,7 @@ mod tests {
             names.push(metric.name().to_owned());
             let rendered = format!("{:?}", metric.data());
             assert!(
-                rendered.contains("shook-law-pc/sample-estate"),
+                rendered.contains("example-firm/sample-estate"),
                 "{rendered}"
             );
             for refused in ["title", "branch", "message", "sha"] {

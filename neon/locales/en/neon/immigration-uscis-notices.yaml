@@ -1,10 +1,9 @@
 head_title: "{site_name} | USCIS notices"
 meta_description: >-
-  Abhaya Immigration, a Shook Law PC practice, responds to requests for
-  evidence, notices of intent to deny, and other USCIS notices: what each
-  notice type means, the deadline, what a response needs, and what it
-  costs. Government filing fees are separate, and no approval or timeline
-  is promised.
+  Abhaya Immigration, a practice of Lex Tecnica, Ltd., responds to requests for
+  evidence, notices of intent to deny, and other USCIS notices: what each notice
+  type means, the deadline, what a response needs, and what it costs. Government
+  filing fees are separate, and no approval or timeline is promised.
 title: USCIS notices
 tagline: Got a notice from USCIS? Read it, then act on the clock.
 skin: practice
@@ -196,10 +195,10 @@ bands:
   - kind: cta
     heading: Show us the notice
     body: >-
-      A first conversation covers what the notice asks, the real deadline,
-      and what a complete response looks like for your case. Abhaya
-      Immigration, a Shook Law PC practice, responds to requests for
-      evidence, notices of intent to deny, and other USCIS notices.
+      A first conversation covers what the notice asks, the real deadline, and
+      what a complete response looks like for your case. Abhaya Immigration, a
+      practice of Lex Tecnica, Ltd., responds to requests for evidence, notices
+      of intent to deny, and other USCIS notices.
     email: "{firm_email}"
     action:
       href: "https://www.abhayaimmigration.com/"

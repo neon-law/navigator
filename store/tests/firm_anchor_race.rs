@@ -36,7 +36,7 @@ async fn unguarded_create(db: &SurrealDb, key: &str) -> Result<(), surrealdb::Er
          firm_anchor_key = $key, inserted_at = time::now(), updated_at = time::now()",
     )
     .bind(("id", record_id("entity", Uuid::now_v7())))
-    .bind(("name", "Shook Law PLLC".to_string()))
+    .bind(("name", "Example Law PLLC".to_string()))
     .bind(("key", key.to_string()))
     .bind((
         "t",
@@ -56,7 +56,7 @@ async fn unguarded_create(db: &SurrealDb, key: &str) -> Result<(), surrealdb::Er
 
 fn anchor_input(key: &str) -> NewEntity {
     NewEntity {
-        name: "Shook Law PLLC".to_string(),
+        name: "Example Law PLLC".to_string(),
         entity_type_id: store::test_support::SEED_ENTITY_TYPE_ID,
         jurisdiction_id: store::test_support::SEED_ENTITY_JURISDICTION_ID,
         phone: None,
@@ -106,9 +106,9 @@ async fn concurrent_creates_through_the_command_door_land_exactly_one_anchor() {
             tasks.spawn(async move {
                 store::entity_commands::create_entity(
                     &db,
-                    "Shook Law PLLC",
+                    "Example Law PLLC",
                     &store::entity_commands::CreateEntityCommand {
-                        name: "Shook Law PLLC".to_string(),
+                        name: "Example Law PLLC".to_string(),
                         entity_type_id,
                         jurisdiction_id,
                     },
@@ -147,7 +147,7 @@ async fn concurrent_creates_through_the_command_door_land_exactly_one_anchor() {
 /// how a broken guard looks green.
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn concurrent_creates_land_exactly_one_anchor() {
-    let key = "shook law pllc";
+    let key = "example law pllc";
     for round in 0..8 {
         let db = Arc::new(store::test_support::mem_surreal().await);
         let claim_ids: Vec<surrealdb::types::RecordId> = db
@@ -211,7 +211,7 @@ async fn the_unique_index_alone_does_not_serialize_racers() {
     let mut tasks = tokio::task::JoinSet::new();
     for _ in 0..RACERS {
         let db = Arc::clone(&db);
-        tasks.spawn(async move { unguarded_create(&db, "shook law pllc").await });
+        tasks.spawn(async move { unguarded_create(&db, "example law pllc").await });
     }
     let mut landed = 0;
     while let Some(outcome) = tasks.join_next().await {
@@ -234,7 +234,7 @@ async fn the_unique_index_alone_does_not_serialize_racers() {
 #[tokio::test]
 async fn a_second_entity_is_refused_the_held_anchor() {
     let db = store::test_support::mem_surreal().await;
-    let key = "shook law pllc";
+    let key = "example law pllc";
     let first = entities::create(&db, &anchor_input(key))
         .await
         .expect("mint");
@@ -258,7 +258,7 @@ async fn a_second_entity_is_refused_the_held_anchor() {
 #[tokio::test]
 async fn the_holder_may_rewrite_its_own_anchor() {
     let db = store::test_support::mem_surreal().await;
-    let key = "shook law pllc";
+    let key = "example law pllc";
     let anchor = entities::create(&db, &anchor_input(key))
         .await
         .expect("mint");
@@ -285,7 +285,7 @@ async fn the_holder_may_rewrite_its_own_anchor() {
 #[tokio::test]
 async fn releasing_the_key_frees_the_claim_for_the_next_holder() {
     let db = store::test_support::mem_surreal().await;
-    let key = "shook law pllc";
+    let key = "example law pllc";
     let outgoing = entities::create(&db, &anchor_input(key))
         .await
         .expect("mint");

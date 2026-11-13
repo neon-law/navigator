@@ -288,7 +288,7 @@ mod tests {
         let firm = store::firms::create(
             &surreal,
             &store::firms::NewFirm {
-                name: "Shook Law".to_string(),
+                name: "Guieb & Shook".to_string(),
                 status: "active".to_string(),
                 entity_id: entity.id,
                 admin_dri_person_id: admin.id,

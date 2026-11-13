@@ -175,10 +175,10 @@ reason = "A lookalike court domain the inbox classifier must refuse; the mailbox
 
 [[allow]]
 class = "build"
-paths = ["server/public/dioxus/assets/webapp_bg-dxhaad25a449be4e414.wasm"]
+paths = ["server/public/dioxus/assets/webapp_bg-dxh9cd41e725e6d6ad9.wasm"]
 reason = "Explicitly requested release wasm client built from repository source; inspected module has only target_features custom metadata and contains no runtime birth data."
 
 [[allow]]
 class = "binary"
-paths = ["server/public/dioxus/assets/webapp_bg-dxhaad25a449be4e414.wasm"]
+paths = ["server/public/dioxus/assets/webapp_bg-dxh9cd41e725e6d6ad9.wasm"]
 reason = "Explicitly requested release wasm client built from repository source; inspected module has only target_features custom metadata and contains no runtime birth data."

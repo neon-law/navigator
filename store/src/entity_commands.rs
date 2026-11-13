@@ -873,7 +873,7 @@ mod tests {
     #[test]
     fn protection_tolerates_case_and_whitespace_drift_between_env_and_row() {
         assert!(is_firm_anchor(
-            "  shook law pllc  ",
+            "  rebrand law pllc  ",
             crate::seed::FIRM_ENTITY_NAME
         ));
         assert!(is_firm_anchor("Rebrand Law PLLC", " REBRAND LAW PLLC "));

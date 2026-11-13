@@ -293,7 +293,7 @@ values = ["Meet Aster"]
 
 [[paths]]
 reason = "Explicitly staged minified release wasm-bindgen glue generated from repository source; source is scanned separately and contains no runtime birth data."
-values = ["server/public/dioxus/assets/webapp-dxh6edfaa1b9a452a86.js"]
+values = ["server/public/dioxus/assets/webapp-dxh58c6397088dd47f8.js"]
 
 [[names]]
 reason = "Barycentric Dynamical Time is the named astronomical time scale in the Delta T glossary entry, not a person."

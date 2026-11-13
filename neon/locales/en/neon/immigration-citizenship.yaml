@@ -1,9 +1,9 @@
 head_title: "{site_name} | Citizenship"
 meta_description: >-
-  Abhaya Immigration, a Shook Law PC practice, guides lawful permanent
-  residents through naturalization: eligibility, the N-400, the interview,
-  the tests, and the oath. Government filing fees are separate, and no
-  approval or timeline is promised.
+  Abhaya Immigration, a practice of Lex Tecnica, Ltd., guides lawful permanent
+  residents through naturalization: eligibility, the N-400, the interview, the
+  tests, and the oath. Government filing fees are separate, and no approval or
+  timeline is promised.
 title: Citizenship
 tagline: Naturalization, from the N-400 to the oath.
 skin: practice
@@ -230,10 +230,10 @@ bands:
   - kind: cta
     heading: Review your naturalization case with Abhaya Immigration
     body: >-
-      A first conversation covers whether you meet the general
-      requirements, what your record shows, and what the application
-      needs. Abhaya Immigration, a Shook Law PC practice, guides applicants
-      through naturalization.
+      A first conversation covers whether you meet the general requirements,
+      what your record shows, and what the application needs. Abhaya
+      Immigration, a practice of Lex Tecnica, Ltd., guides applicants through
+      naturalization.
     email: "{firm_email}"
     action:
       href: "https://www.abhayaimmigration.com/"
