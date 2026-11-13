@@ -6848,8 +6848,8 @@ mod tests {
     /// binary serves, not a hand-built stand-in. Exercises the two things a
     /// props-driven page test cannot: the live `{id}` resolution and the
     /// shared `FullstackState` actually carrying both mounts. The draft is
-    /// linked to the run its push opened (LAW-203), so the page also renders
-    /// the hand-off to that run.
+    /// linked to the run its push opened (LAW-203), so the page renders the
+    /// hand-off to that run in place of the demo questionnaire.
     #[tokio::test]
     async fn the_draft_route_resolves_a_live_draft_through_the_shared_router() {
         let surreal = store::surreal::test_support::mem().await;
@@ -6896,18 +6896,18 @@ mod tests {
         let html = String::from_utf8(bytes.to_vec()).unwrap();
         assert!(html.contains("Sample Letter"), "{html}");
         assert!(html.contains("Draft"), "{html}");
-        let questionnaire_at = html
-            .find("Try answering this")
-            .expect("the questionnaire renders: {html}");
+        let handoff_at = html
+            .find("Open the real questionnaire")
+            .expect("the hand-off renders: {html}");
         let body_at = html
             .find("Body prose")
             .expect("the document body renders: {html}");
         assert!(
-            questionnaire_at < body_at,
-            "questionnaire must render before the body: {html}"
+            handoff_at < body_at,
+            "the questionnaire hand-off must render before the body: {html}"
         );
-        // The hand-off (LAW-203): the run the push opened is one click
-        // away, and leads the page.
+        // The run the push opened is the only questionnaire (LAW-319).
+        assert!(!html.contains("Try answering this"), "{html}");
         assert!(
             html.contains(&format!("href=\"/app/lawyer/notations/{run_id}/step\"")),
             "the hand-off links the run's step page: {html}"
