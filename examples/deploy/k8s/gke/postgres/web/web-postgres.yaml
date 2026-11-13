@@ -25,6 +25,7 @@ spec:
         - name: web
           env:
             # NAVIGATOR_POSTGRES_MIRROR_ENV
+            # NAVIGATOR_POSTGRES_AUTHORITY_ENV
             - name: NAVIGATOR_POSTGRES_HOST
               value: navigator-postgres.navigator.svc.cluster.local
             - name: NAVIGATOR_POSTGRES_PORT

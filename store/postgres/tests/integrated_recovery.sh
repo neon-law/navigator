@@ -7,8 +7,9 @@ port=${3:-25473}
 [[ "$context" == kind-* && "$port" =~ ^[0-9]+$ && -x "$dbos_binary" ]]
 kubectl_cmd=(kubectl --context "$context" -n navigator)
 target=$(kubectl kustomize k8s/overlays/postgres-spike | awk '/image:/ {print $2}')
-recipe_arg() { sed -n "s/^ARG $1=//p" images/postgres/Containerfile; }
-base="postgres:$(recipe_arg PG_VERSION)-bookworm@$(recipe_arg PG_DIGEST)"
+# The extension image is the deployed digest and can lag the image recipe.
+# Start from the vanilla baseline so the replacement tests a forward upgrade.
+base="postgres:16.15-bookworm@sha256:5264710be20f409750ac6dc4e5706dcef929c87e241605463f0f9aefa932a8d9"
 [[ "$target" =~ @sha256:[a-f0-9]{64}$ && "$base" =~ @sha256:[a-f0-9]{64}$ ]]
 scratch=$(mktemp -d)
 worker_pid=''
@@ -76,7 +77,7 @@ sql compatibility_source < store/postgres/tests/integrated_seed.sql
 sql compatibility_source < store/postgres/tests/integrated_verify.sql
 
 forward
-DBOS_DATABASE_URL="postgresql://postgres:synthetic@127.0.0.1:$port/compatibility_source" \
+DBOS_SYSTEM_DATABASE_URL="postgresql://postgres:synthetic@127.0.0.1:$port/compatibility_source" \
 INJECT_CRASH_WINDOW=1 "$dbos_binary" > "$scratch/dbos-before.log" 2>&1 &
 worker_pid=$!
 for attempt in $(seq 1 60); do
@@ -108,7 +109,7 @@ before=$("${kubectl_cmd[@]}" get pod postgres-spike-0 -o jsonpath='{.metadata.ui
 [[ "$("${kubectl_cmd[@]}" get pvc data-postgres-spike-0 -o jsonpath='{.metadata.uid}')" == "$pvc" ]]
 sql compatibility_restore < store/postgres/tests/integrated_verify.sql
 forward
-DBOS_DATABASE_URL="postgresql://postgres:synthetic@127.0.0.1:$port/compatibility_restore" \
+DBOS_SYSTEM_DATABASE_URL="postgresql://postgres:synthetic@127.0.0.1:$port/compatibility_restore" \
     "$dbos_binary" > "$scratch/dbos-after.log" 2>&1 &
 worker_pid=$!
 for attempt in $(seq 1 60); do

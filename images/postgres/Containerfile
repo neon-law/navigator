@@ -2,8 +2,8 @@
 # PostgreSQL minor, Apache AGE, and pgvector releases for PG_MAJOR. A major
 # upgrade is a data migration, so PG_MAJOR changes only by hand.
 ARG PG_MAJOR=16
-ARG PG_VERSION=16.15
-ARG PG_DIGEST=sha256:5264710be20f409750ac6dc4e5706dcef929c87e241605463f0f9aefa932a8d9
+ARG PG_VERSION=16.16
+ARG PG_DIGEST=sha256:a49f7438ba03589f9b1ca062f2da82e899b48ea1dc50d2449fa09a70be83ebca
 ARG AGE_VERSION=1.6.0
 ARG AGE_SHA512=1e0a434d53d669e5d067721e1eba8c3c3c2ae072709d5f90783beeba6f5e88f592fa5d8808d621b720c22edfe8c698baa9b0adb9c7b4e3e2a83e7a753bd795c8
 ARG PGVECTOR_VERSION=0.8.7
@@ -16,7 +16,12 @@ ARG AGE_VERSION
 ARG AGE_SHA512
 ARG PGVECTOR_VERSION
 ARG PGVECTOR_SHA256
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential postgresql-server-dev-${PG_MAJOR} curl ca-certificates flex bison && rm -rf /var/lib/apt/lists/*
+# Build the extensions with the exact server package from the shared base.
+RUN pg_package_version="$(dpkg-query -W -f='${Version}' "postgresql-${PG_MAJOR}")" \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends build-essential curl ca-certificates flex bison \
+      "postgresql-${PG_MAJOR}=${pg_package_version}" "postgresql-server-dev-${PG_MAJOR}=${pg_package_version}" \
+ && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 # downloads.apache.org is the primary dist server (CDN-backed); the
 # archive.apache.org mirror has been unreachable from CI runners, and the

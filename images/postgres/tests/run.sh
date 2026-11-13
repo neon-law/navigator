@@ -58,7 +58,7 @@ if [[ -n "$postgis_version" ]]; then
 fi
 sql 'CREATE TABLE effects(key text PRIMARY KEY); CREATE TABLE attempts(key text NOT NULL);'
 port=$(docker port "$name" 5432/tcp | cut -d: -f2)
-export DBOS_DATABASE_URL="postgres://postgres:synthetic@127.0.0.1:${port}/smoke"
+export DBOS_SYSTEM_DATABASE_URL="postgres://postgres:synthetic@127.0.0.1:${port}/smoke"
 cargo build --locked --manifest-path tests/dbos/Cargo.toml
 INJECT_CRASH_WINDOW=1 tests/dbos/target/debug/dbos-image-smoke > worker-first.log 2>&1 &
 worker=$!
