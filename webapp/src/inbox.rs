@@ -1088,6 +1088,48 @@ async fn project_for_code(code: &str) -> Result<store::projects::Project, Server
         .ok_or_else(|| ServerFnError::new("project was not found"))
 }
 
+#[cfg(feature = "server")]
+async fn project_inbox_metadata(
+    surreal: &store::surreal::SurrealDb,
+    actor: uuid::Uuid,
+    role: ViewerRole,
+    project: &store::projects::Project,
+    project_code: &str,
+) -> (
+    Option<String>,
+    Vec<crate::sections::page::PageTab>,
+    Option<String>,
+) {
+    let store_role = match role {
+        ViewerRole::Owner => store::persons::Role::Owner,
+        ViewerRole::Admin => store::persons::Role::Admin,
+        ViewerRole::Lawyer => store::persons::Role::Lawyer,
+        ViewerRole::Clerk => store::persons::Role::Clerk,
+        ViewerRole::Client => store::persons::Role::Client,
+    };
+    let viewer = store::access::matter_viewer(surreal, Some(actor), store_role, project.id)
+        .await
+        .ok()
+        .flatten()
+        .filter(|viewer| viewer.is_firm_side() || *viewer == store::access::MatterViewer::Clerk);
+    if let Some(viewer) = viewer {
+        let client = store::entities::find_by_id(surreal, project.entity_id)
+            .await
+            .ok()
+            .flatten()
+            .map(|entity| entity.name);
+        let tabs =
+            crate::sections::page::stored_page_tabs(surreal, project.id, project_code, viewer)
+                .await;
+        let logged = viewer
+            .is_firm_side()
+            .then(|| crate::sections::page::MatterTab::Communications.href(project_code));
+        (client, tabs, logged)
+    } else {
+        (None, Vec::new(), None)
+    }
+}
+
 /// Project inbox list for a participant who is not a Client.
 #[server]
 pub async fn project_inbox_page() -> Result<InboxPage, ServerFnError> {
@@ -1114,34 +1156,8 @@ pub async fn project_inbox_page() -> Result<InboxPage, ServerFnError> {
     let all_rows = store::inbox::list_project(&surreal, actor, project.id)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?;
-    let store_role = match role {
-        ViewerRole::Owner => store::persons::Role::Owner,
-        ViewerRole::Admin => store::persons::Role::Admin,
-        ViewerRole::Lawyer => store::persons::Role::Lawyer,
-        ViewerRole::Clerk => store::persons::Role::Clerk,
-        ViewerRole::Client => store::persons::Role::Client,
-    };
-    let viewer = store::access::matter_viewer(&surreal, Some(actor), store_role, project.id)
-        .await
-        .ok()
-        .flatten()
-        .filter(|viewer| viewer.is_firm_side() || *viewer == store::access::MatterViewer::Clerk);
-    let (project_client, project_tabs, logged_communications_href) = if let Some(viewer) = viewer {
-        let client = store::entities::find_by_id(&surreal, project.entity_id)
-            .await
-            .ok()
-            .flatten()
-            .map(|entity| entity.name);
-        let tabs =
-            crate::sections::page::stored_page_tabs(&surreal, project.id, &project_code, viewer)
-                .await;
-        let logged = viewer
-            .is_firm_side()
-            .then(|| crate::sections::page::MatterTab::Communications.href(&project_code));
-        (client, tabs, logged)
-    } else {
-        (None, Vec::new(), None)
-    };
+    let (project_client, project_tabs, logged_communications_href) =
+        project_inbox_metadata(&surreal, actor, role, &project, &project_code).await;
     let brands = inbox_brands(&all_rows);
     let brand_filter = brand_filter.filter(|brand| brands.contains(brand));
     let rows = all_rows
@@ -1380,7 +1396,7 @@ fn InboxWorkspace(page: InboxPage) -> Element {
                     selected,
                     project_code: page.project_code.clone(),
                     pane_title,
-                    on_escape: move |_| {
+                    on_escape: move |()| {
                         if let Some(index) = opener() {
                             focus_element(rows.peek().get(index).cloned().flatten());
                         }
@@ -1443,7 +1459,7 @@ fn compose_dialog(page: &InboxPage) -> Element {
     }
 }
 
-fn conversation_target(key: Key, index: usize, total: usize) -> Option<usize> {
+fn conversation_target(key: &Key, index: usize, total: usize) -> Option<usize> {
     let last = total.checked_sub(1)?;
     match key {
         Key::ArrowDown => Some((index + 1).min(last)),
@@ -1529,7 +1545,7 @@ fn inbox_list(
                             if !event.modifiers().is_empty() {
                                 return;
                             }
-                            if let Some(target) = conversation_target(event.key(), index, total) {
+                            if let Some(target) = conversation_target(&event.key(), index, total) {
                                 event.prevent_default();
                                 focus_element(rows.peek()[target].clone());
                             }
@@ -3152,13 +3168,13 @@ mod tests {
 
     #[test]
     fn conversation_navigation_stays_within_the_filtered_list() {
-        assert_eq!(conversation_target(Key::ArrowUp, 0, 3), Some(0));
-        assert_eq!(conversation_target(Key::ArrowDown, 0, 3), Some(1));
-        assert_eq!(conversation_target(Key::ArrowDown, 2, 3), Some(2));
-        assert_eq!(conversation_target(Key::Home, 1, 3), Some(0));
-        assert_eq!(conversation_target(Key::End, 1, 3), Some(2));
-        assert_eq!(conversation_target(Key::Enter, 1, 3), None);
-        assert_eq!(conversation_target(Key::End, 0, 0), None);
+        assert_eq!(conversation_target(&Key::ArrowUp, 0, 3), Some(0));
+        assert_eq!(conversation_target(&Key::ArrowDown, 0, 3), Some(1));
+        assert_eq!(conversation_target(&Key::ArrowDown, 2, 3), Some(2));
+        assert_eq!(conversation_target(&Key::Home, 1, 3), Some(0));
+        assert_eq!(conversation_target(&Key::End, 1, 3), Some(2));
+        assert_eq!(conversation_target(&Key::Enter, 1, 3), None);
+        assert_eq!(conversation_target(&Key::End, 0, 0), None);
     }
 
     #[test]
