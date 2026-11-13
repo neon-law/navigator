@@ -851,7 +851,7 @@ fn postgres_mirror_reconcile_job_runs_once_as_the_runtime_login() {
         assert_eq!(
             reconcile["image"].as_str(),
             Some("navigator-surreal-archive"),
-            "the operator pins the release image carrying the navigator CLI"
+            "the operator pins the release image carrying hudson, the binary with `ops`"
         );
         let args: Vec<&str> = reconcile["args"]
             .as_sequence()
@@ -888,6 +888,22 @@ fn postgres_mirror_reconcile_job_runs_once_as_the_runtime_login() {
         );
         assert_eq!(secret_volumes(job), vec!["navigator-postgres-app"]);
     }
+}
+
+/// The mirror reconcile Job, the mirror recovery `CronJob`, and the Surreal
+/// archive `CronJob` all run `ops …` in `navigator-surreal-archive`. `ops`
+/// lives in `hudson`; the lean `navigator` binary rejects it, which failed the
+/// 26.11.13 staging ship.
+#[test]
+fn surreal_archive_image_carries_the_binary_that_owns_ops() {
+    let workflow = std::fs::read_to_string(workspace().join(".github/workflows/deploy.yml"))
+        .expect("read deploy.yml");
+    let entry = workflow
+        .split("- image: ")
+        .find(|entry| entry.starts_with("navigator-surreal-archive\n"))
+        .expect("deploy.yml builds navigator-surreal-archive");
+    assert!(entry.contains("CRATE=hudson"), "{entry}");
+    assert!(entry.contains("BIN=hudson"), "{entry}");
 }
 
 #[test]

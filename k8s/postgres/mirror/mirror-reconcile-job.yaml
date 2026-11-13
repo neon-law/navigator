@@ -1,10 +1,10 @@
 # Reconcile the PostgreSQL mirrors from SurrealDB, once, on an operator's
-# request: `navigator ops postgres mirror reconcile --json`.
+# request: `hudson ops postgres mirror reconcile --json`.
 #
 # It backfills rows written before the mirror was enabled and repairs any
 # write the mirror missed, then exits non-zero if drift remains. The image is
 # the placeholder `navigator-surreal-archive`, the release image that carries
-# the `navigator` CLI; the operator pins it to the release being reconciled
+# `hudson`, the operator CLI; the operator pins it to the release being reconciled
 # (see docs/postgres-kubernetes.md). It reads SurrealDB through the
 # deployment Secret's `NAVIGATOR_SURREAL_*` keys and writes PostgreSQL as the
 # `navigator_app` runtime login with verify-full TLS. The report names rows by
