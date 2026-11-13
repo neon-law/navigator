@@ -1108,9 +1108,19 @@ fn project_sync_plans_scoped(
             },
             previous_version: revisions.get(1).map(|revision| revision.id),
             authority_id: None,
-            // ENG-859: `projects sync` does not resolve either external-id
-            // key from a live DocuSign/Xero link yet.
-            docusign_envelope_id: local.as_ref().and_then(|local| local.docusign_envelope_id),
+            // LAW-344: the live asset's metadata names the DocuSign
+            // envelope the webhook's file-back stamped, so a synced
+            // checkout's pointer carries the same envelope id the live
+            // door reports. The committed pointer wins — sync never
+            // rewrites an id a checkout already recorded.
+            docusign_envelope_id: local
+                .as_ref()
+                .and_then(|local| local.docusign_envelope_id)
+                .or_else(|| {
+                    model::document_pointers::envelope_id_from_asset_metadata(
+                        current.metadata.as_ref(),
+                    )
+                }),
             xero_invoice_id: local.as_ref().and_then(|local| local.xero_invoice_id),
             // The live record wins; a block recorded by hand on the committed
             // pointer is kept while the live row has none.

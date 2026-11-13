@@ -1032,6 +1032,21 @@ pub async fn ingest_bytes_exactly_once(
     args: &IngestArgs<'_>,
     bytes: &[u8],
 ) -> Result<IngestedDocument, IngestError> {
+    ingest_bytes_exactly_once_as(db, storage, args, &DocumentIdentity::default(), bytes).await
+}
+
+/// [`ingest_bytes_exactly_once`] for a caller that knows the document's
+/// identity — the signing record and per-kind metadata an executed document
+/// carries (LAW-344). Same `(Project, filename, content)` dedup; the
+/// identity rides onto the written row only when the ingest is the one that
+/// writes it, so a replay returns the already-tagged row untouched.
+pub async fn ingest_bytes_exactly_once_as(
+    db: &SurrealDb,
+    storage: &Arc<dyn StorageService>,
+    args: &IngestArgs<'_>,
+    identity: &DocumentIdentity<'_>,
+    bytes: &[u8],
+) -> Result<IngestedDocument, IngestError> {
     let sha_hex = crate::assets::sha256_hex(bytes);
     if let Some(existing) =
         crate::assets::find_filed_copy(db, args.project_id, args.filename, &sha_hex).await?
@@ -1044,7 +1059,7 @@ pub async fn ingest_bytes_exactly_once(
             reused: true,
         });
     }
-    ingest_bytes(db, storage, args, bytes).await
+    ingest_bytes_as(db, storage, args, identity, bytes).await
 }
 
 /// Ingest one server-generated document under a caller-supplied stable key.
