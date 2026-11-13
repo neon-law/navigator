@@ -119,11 +119,9 @@ pub fn communications_tab(view: &LawyerDetailView) -> Element {
     rsx! {
         section {
             class: "lawyer-detail__section detail-communications",
-            h2 { "Communications" }
-            p { class: "nav-muted",
-                a { class: "nav-link", href: "/app/projects/{view.code}/inbox",
-                    "New email, texts, and calls for this project are triaged in the project inbox."
-                }
+            h2 { "Logged communications" }
+            a { class: "nav-link", href: "/app/projects/{view.code}/inbox",
+                "Back to Communications inbox"
             }
             if view.correspondence.is_empty() {
                 p {

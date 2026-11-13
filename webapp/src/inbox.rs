@@ -3,6 +3,8 @@
 //! Firm participants triage conversations after intake, then communicate
 //! through the shared message transcript with project-scoped authorization.
 
+use std::rc::Rc;
+
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -157,6 +159,12 @@ pub struct InboxPage {
     /// reading pane fetches through the Project-scoped server function.
     #[serde(default)]
     pub project_code: Option<String>,
+    #[serde(default)]
+    pub project_client: Option<String>,
+    #[serde(default)]
+    pub project_tabs: Vec<crate::sections::page::PageTab>,
+    #[serde(default)]
+    pub logged_communications_href: Option<String>,
     pub error: Option<String>,
     /// Where the compose dialog posts a new text; absent unless this viewer
     /// may text a new number and the deployment's number is registered.
@@ -177,6 +185,8 @@ pub struct InboxPage {
 pub struct InboxThreadPage {
     pub role: ViewerRole,
     pub title: String,
+    #[serde(default)]
+    pub project_code: Option<String>,
     #[serde(default)]
     pub brand_key: Option<String>,
     #[serde(default)]
@@ -654,10 +664,14 @@ fn row_view(row: &store::inbox::IntakeRow, href: String) -> InboxRowView {
     }
 }
 
-/// `Pat Client (client)`: whose number this is and what they are to the firm.
+/// A client-tier account can be created for any external sender.
 #[cfg(feature = "server")]
 fn contact_label(contact: &store::inbox::ContactLink) -> String {
-    format!("{} ({})", contact.name, contact.role)
+    if contact.role == "client" {
+        contact.name.clone()
+    } else {
+        format!("{} ({})", contact.name, contact.role)
+    }
 }
 
 #[cfg(feature = "server")]
@@ -939,6 +953,9 @@ pub async fn owner_inbox_page() -> Result<InboxPage, ServerFnError> {
         brands,
         channels: inbox_channels(),
         project_code: None,
+        project_client: None,
+        project_tabs: Vec::new(),
+        logged_communications_href: None,
         rows: rows
             .iter()
             .map(|row| row_view(row, format!("/app/inbox/{}", row.id)))
@@ -987,6 +1004,7 @@ async fn firm_thread_page(conversation_id: uuid::Uuid) -> Result<InboxThreadPage
     let (logo, tokens_href, firm_name) = chrome().await;
     Ok(InboxThreadPage {
         role,
+        project_code: None,
         title: detail
             .conversation
             .subject
@@ -1070,6 +1088,48 @@ async fn project_for_code(code: &str) -> Result<store::projects::Project, Server
         .ok_or_else(|| ServerFnError::new("project was not found"))
 }
 
+#[cfg(feature = "server")]
+async fn project_inbox_metadata(
+    surreal: &store::surreal::SurrealDb,
+    actor: uuid::Uuid,
+    role: ViewerRole,
+    project: &store::projects::Project,
+    project_code: &str,
+) -> (
+    Option<String>,
+    Vec<crate::sections::page::PageTab>,
+    Option<String>,
+) {
+    let store_role = match role {
+        ViewerRole::Owner => store::persons::Role::Owner,
+        ViewerRole::Admin => store::persons::Role::Admin,
+        ViewerRole::Lawyer => store::persons::Role::Lawyer,
+        ViewerRole::Clerk => store::persons::Role::Clerk,
+        ViewerRole::Client => store::persons::Role::Client,
+    };
+    let viewer = store::access::matter_viewer(surreal, Some(actor), store_role, project.id)
+        .await
+        .ok()
+        .flatten()
+        .filter(|viewer| viewer.is_firm_side() || *viewer == store::access::MatterViewer::Clerk);
+    if let Some(viewer) = viewer {
+        let client = store::entities::find_by_id(surreal, project.entity_id)
+            .await
+            .ok()
+            .flatten()
+            .map(|entity| entity.name);
+        let tabs =
+            crate::sections::page::stored_page_tabs(surreal, project.id, project_code, viewer)
+                .await;
+        let logged = viewer
+            .is_firm_side()
+            .then(|| crate::sections::page::MatterTab::Communications.href(project_code));
+        (client, tabs, logged)
+    } else {
+        (None, Vec::new(), None)
+    }
+}
+
 /// Project inbox list for a participant who is not a Client.
 #[server]
 pub async fn project_inbox_page() -> Result<InboxPage, ServerFnError> {
@@ -1096,6 +1156,8 @@ pub async fn project_inbox_page() -> Result<InboxPage, ServerFnError> {
     let all_rows = store::inbox::list_project(&surreal, actor, project.id)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?;
+    let (project_client, project_tabs, logged_communications_href) =
+        project_inbox_metadata(&surreal, actor, role, &project, &project_code).await;
     let brands = inbox_brands(&all_rows);
     let brand_filter = brand_filter.filter(|brand| brands.contains(brand));
     let rows = all_rows
@@ -1128,6 +1190,9 @@ pub async fn project_inbox_page() -> Result<InboxPage, ServerFnError> {
         brands,
         channels: inbox_channels(),
         project_code: Some(project_code.clone()),
+        project_client,
+        project_tabs,
+        logged_communications_href,
         rows: rows
             .iter()
             .map(|row| {
@@ -1197,6 +1262,7 @@ async fn project_thread_page(
     let trashed = thread.conversation.trashed_at.is_some();
     Ok(InboxThreadPage {
         role,
+        project_code: Some(project_code.clone()),
         title: thread
             .conversation
             .subject
@@ -1308,6 +1374,11 @@ pub fn ProjectInboxThread() -> Element {
 #[component]
 fn InboxWorkspace(page: InboxPage) -> Element {
     let selected = use_signal(|| None::<String>);
+    // Filter links navigate to a new workspace, so these handles track the
+    // filtered rows in their rendered order for the lifetime of this page.
+    let rows = use_signal(|| vec![None::<Rc<MountedData>>; page.rows.len()]);
+    let pane_title = use_signal(|| None::<Rc<MountedData>>);
+    let opener = use_signal(|| None::<usize>);
     rsx! {
         document::Title { "{page.firm_name} | {page.title}" }
         document::Meta { name: "description", content: "Firm and project conversations." }
@@ -1320,11 +1391,16 @@ fn InboxWorkspace(page: InboxPage) -> Element {
         main { id: "inbox", class: "nav-theme",
             { inbox_rail(&page) }
             div { class: "inbox-main",
-                { inbox_list(&page, selected) }
+                { inbox_list(&page, selected, rows, pane_title, opener) }
                 InboxPane {
                     selected,
                     project_code: page.project_code.clone(),
-                    csrf_token: page.csrf_token.clone(),
+                    pane_title,
+                    on_escape: move |()| {
+                        if let Some(index) = opener() {
+                            focus_element(rows.peek().get(index).cloned().flatten());
+                        }
+                    },
                 }
             }
             { compose_dialog(&page) }
@@ -1383,23 +1459,54 @@ fn compose_dialog(page: &InboxPage) -> Element {
     }
 }
 
+fn conversation_target(key: &Key, index: usize, total: usize) -> Option<usize> {
+    let last = total.checked_sub(1)?;
+    match key {
+        Key::ArrowDown => Some((index + 1).min(last)),
+        Key::ArrowUp => Some(index.saturating_sub(1)),
+        Key::Home => Some(0),
+        Key::End => Some(last),
+        _ => None,
+    }
+}
+
+fn focus_element(element: Option<Rc<MountedData>>) {
+    if let Some(element) = element {
+        spawn(async move { drop(element.set_focus(true).await) });
+    }
+}
+
 #[allow(clippy::too_many_lines)]
-fn inbox_list(page: &InboxPage, selected: Signal<Option<String>>) -> Element {
-    let title = if page.trash_only {
-        "Trash".to_string()
+fn inbox_list(
+    page: &InboxPage,
+    selected: Signal<Option<String>>,
+    rows: Signal<Vec<Option<Rc<MountedData>>>>,
+    pane_title: Signal<Option<Rc<MountedData>>>,
+    opener: Signal<Option<usize>>,
+) -> Element {
+    let folder = if page.trash_only {
+        Some("Trash")
     } else if page.sent_only {
-        "Sent".to_string()
+        Some("Sent")
     } else {
-        page.title.clone()
+        None
+    };
+    let title = match (page.project_code.is_some(), folder) {
+        (true, Some(folder)) => format!("{} · {folder}", page.title),
+        (false, Some(folder)) => folder.to_string(),
+        (_, None) => page.title.clone(),
     };
     let subtitle = if page.trash_only {
         "Conversations moved out of the inbox. Nothing here is deleted; new mail restores a conversation."
     } else if page.sent_only {
         "Conversations someone at the firm wrote in, newest first."
+    } else if page.project_code.is_some() {
+        "Conversations assigned to this Project, newest first."
     } else {
-        "Every email, text, and message to the firm, newest first."
+        "Conversations across the firm, newest first."
     };
-    let rows = page.rows.iter().map(|row| {
+    let total = page.rows.len();
+    let items = page.rows.iter().enumerate().map(|(index, row)| {
         let unread = if row.unread { "Unread" } else { "Read" };
         let brand = row.brand_key.as_deref().unwrap_or("unbranded");
         let selected_now = selected.read().as_ref() == Some(&row.id);
@@ -1411,6 +1518,8 @@ fn inbox_list(page: &InboxPage, selected: Signal<Option<String>>) -> Element {
             "inbox-table__row"
         };
         let mut selected = selected;
+        let mut rows = rows;
+        let mut opener = opener;
         let row_id = row.id.clone();
         rsx! {
             tr {
@@ -1431,14 +1540,24 @@ fn inbox_list(page: &InboxPage, selected: Signal<Option<String>>) -> Element {
                 td { class: "inbox-table__subject",
                     a {
                         href: "{row.href}",
+                        onmounted: move |event| rows.write()[index] = Some(event.data()),
+                        onkeydown: move |event| {
+                            if !event.modifiers().is_empty() {
+                                return;
+                            }
+                            if let Some(target) = conversation_target(&event.key(), index, total) {
+                                event.prevent_default();
+                                focus_element(rows.peek()[target].clone());
+                            }
+                        },
                         onclick: move |event: MouseEvent| {
+                            if !event.modifiers().is_empty() {
+                                return;
+                            }
                             event.prevent_default();
                             selected.set(Some(row_id.clone()));
-                            document::eval(
-                                "const t = document.getElementById('inbox-pane-title'); \
-                                 t?.focus({preventScroll: true}); \
-                                 t?.scrollIntoView({behavior: 'smooth', block: 'start'});",
-                            );
+                            opener.set(Some(index));
+                            focus_element(pane_title.peek().clone());
                         },
                         "{row.subject}"
                     }
@@ -1462,7 +1581,20 @@ fn inbox_list(page: &InboxPage, selected: Signal<Option<String>>) -> Element {
         div { class: "inbox-list",
             header { class: "page-header inbox-list__header",
                 h1 { "{title}" }
-                a { href: crate::communication_dashboard::PARKED_CALLS_PATH, "Parked calls" }
+                if page.project_code.is_some() {
+                    crate::sections::page::CaseNav {
+                        tabs: page.project_tabs.clone(),
+                        current: page.base_href.clone(),
+                    }
+                    if let Some(client) = page.project_client.as_ref() {
+                        p { class: "page-subtitle", "Client: {client}" }
+                    }
+                    if let Some(href) = page.logged_communications_href.as_ref() {
+                        a { class: "nav-link", href: "{href}", "Logged communications" }
+                    }
+                } else {
+                    a { href: crate::communication_dashboard::PARKED_CALLS_PATH, "Parked calls" }
+                }
                 p { class: "page-subtitle", "{subtitle}" }
             }
             if let Some(error) = page.error.clone() {
@@ -1471,14 +1603,18 @@ fn inbox_list(page: &InboxPage, selected: Signal<Option<String>>) -> Element {
             if page.rows.is_empty() {
                 p { class: "page-subtitle", "No conversations yet." }
             } else {
+                p { id: "inbox-keyboard-help", class: "page-subtitle",
+                    "Use the arrow keys to move, Enter to open, and Esc to return to the list."
+                }
                 div { class: "inbox-table__scroll",
                     table { class: "inbox-table", "aria-label": "Conversations",
+                        "aria-describedby": "inbox-keyboard-help",
                         thead {
                             tr {
                                 th { scope: "col", class: "inbox-table__state",
                                     span { class: "nav-visually-hidden", "Unread" }
                                 }
-                                th { scope: "col", "From" }
+                                th { scope: "col", "Counterparty" }
                                 th { scope: "col", "Subject" }
                                 th { scope: "col", "Brand" }
                                 th { scope: "col", "Channel" }
@@ -1486,7 +1622,7 @@ fn inbox_list(page: &InboxPage, selected: Signal<Option<String>>) -> Element {
                                 th { scope: "col", "Date" }
                             }
                         }
-                        tbody { {rows} }
+                        tbody { {items} }
                     }
                 }
             }
@@ -1665,12 +1801,19 @@ fn inbox_rail(page: &InboxPage) -> Element {
 fn InboxPane(
     selected: ReadSignal<Option<String>>,
     project_code: Option<String>,
-    csrf_token: String,
+    mut pane_title: Signal<Option<Rc<MountedData>>>,
+    on_escape: EventHandler<()>,
 ) -> Element {
     rsx! {
         section { id: "inbox-pane", class: "inbox-pane",
             "aria-label": "Conversation reading pane",
+            onkeydown: move |event| {
+                if event.key() == Key::Escape && selected.peek().is_some() {
+                    on_escape.call(());
+                }
+            },
             h2 { id: "inbox-pane-title", class: "inbox-pane__title", tabindex: "-1",
+                onmounted: move |event| pane_title.set(Some(event.data())),
                 "Reading pane"
             }
             if let Some(conversation_id) = selected().clone() {
@@ -2036,7 +2179,11 @@ pub fn inbox_thread_body(page: &InboxThreadPage) -> Element {
             logo: page.logo.clone(),
         }
         main { id: "inbox-thread", class: "nav-theme",
-            a { href: INBOX_PATH, "Back to Inbox" }
+            if let Some(code) = page.project_code.as_ref() {
+                a { href: "/app/projects/{code}/inbox", "Back to Communications inbox" }
+            } else {
+                a { href: INBOX_PATH, "Back to Inbox" }
+            }
             header { class: "page-header",
                 h1 { "{title}" }
                 ul { class: "inbox-chips", "aria-label": "Conversation facts",
@@ -2370,6 +2517,9 @@ mod tests {
             tokens_href: String::new(),
             firm_name: "Practice".into(),
             project_code: None,
+            project_client: None,
+            project_tabs: Vec::new(),
+            logged_communications_href: None,
         }
     }
 
@@ -2386,6 +2536,7 @@ mod tests {
         InboxThreadPage {
             role: ViewerRole::Owner,
             title: "Question".into(),
+            project_code: None,
             brand_key: Some("neon".into()),
             provider_account: "support@example.com".into(),
             source_page: Some("support@example.com".into()),
@@ -2782,7 +2933,7 @@ mod tests {
     }
 
     #[test]
-    fn a_linked_text_sender_shows_the_person_and_role() {
+    fn a_linked_sender_shows_the_person_without_inferred_client_status() {
         let row = store::inbox::IntakeRow {
             contact: Some(store::inbox::ContactLink {
                 person_id: uuid::Uuid::nil(),
@@ -2809,7 +2960,7 @@ mod tests {
             person: None,
             updated_at: chrono::Utc::now(),
         };
-        assert_eq!(row_view(&row, "/x".into()).sender, "Pat Client (client)");
+        assert_eq!(row_view(&row, "/x".into()).sender, "Pat Client");
     }
 
     #[test]
@@ -3013,6 +3164,17 @@ mod tests {
         assert!(brand_matches(Some("neon"), Some("neon")));
         assert!(!brand_matches(Some("neon"), Some("vesta")));
         assert!(!brand_matches(None, Some("neon")));
+    }
+
+    #[test]
+    fn conversation_navigation_stays_within_the_filtered_list() {
+        assert_eq!(conversation_target(&Key::ArrowUp, 0, 3), Some(0));
+        assert_eq!(conversation_target(&Key::ArrowDown, 0, 3), Some(1));
+        assert_eq!(conversation_target(&Key::ArrowDown, 2, 3), Some(2));
+        assert_eq!(conversation_target(&Key::Home, 1, 3), Some(0));
+        assert_eq!(conversation_target(&Key::End, 1, 3), Some(2));
+        assert_eq!(conversation_target(&Key::Enter, 1, 3), None);
+        assert_eq!(conversation_target(&Key::End, 0, 0), None);
     }
 
     #[test]
@@ -3330,11 +3492,9 @@ mod tests {
             assert_eq!(page.assignee, "Inbox Loader Matter");
             assert_eq!(page.brand_key.as_deref(), Some("neon"));
             assert_eq!(page.provider_account, "support@example.com");
-            // A1 resolves the thread's sender through the association
-            // persisted at ingest — an unknown email sender auto-created a
-            // client-tier Person — so the label carries the role suffix,
-            // matching every other conversation surface.
-            assert_eq!(page.sender, "Sender Name (client)");
+            // Ingest creates a client-tier Person for an unknown sender.
+            // The label preserves their identity without inferring client status.
+            assert_eq!(page.sender, "Sender Name");
             assert_eq!(page.channel, "email");
             assert_eq!(page.delivery, store::inbox::delivery::RECEIVED);
             assert_eq!(
@@ -3406,7 +3566,22 @@ mod tests {
             assert_eq!(page.brands, vec!["neon".to_string()]);
             assert_eq!(page.brand_filter.as_deref(), Some("neon"));
             assert_eq!(page.compose_action, None);
+            assert!(page.project_client.is_some(), "the Project's client Entity");
+            assert!(page
+                .project_tabs
+                .iter()
+                .any(|tab| tab.label == "Communications" && tab.href == page.base_href));
+            assert_eq!(
+                page.logged_communications_href,
+                Some(format!("/app/projects/{code}/communications"))
+            );
             assert_eq!(page.rows.len(), 1, "only the assigned conversation");
+            assert_eq!(page.rows[0].sender, "Sender Name");
+            let html = super::list_html(&page);
+            assert!(html.contains("Client: "));
+            assert!(html.contains("Counterparty"));
+            assert!(html.contains("Sender Name"));
+            assert!(html.contains("Logged communications"));
             assert_eq!(
                 page.rows[0].href,
                 format!("/app/projects/{code}/inbox/{}", world.assigned)
@@ -3422,6 +3597,7 @@ mod tests {
             )
             .unwrap();
             assert_eq!(page.title, "Notice of hearing");
+            assert!(super::thread(&page).contains(&format!("href=\"/app/projects/{code}/inbox\"")));
             assert!(page.bodies_visible);
             assert_eq!(page.sender, "Sender Name");
             assert_eq!(page.messages.len(), 1);
