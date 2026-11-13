@@ -977,8 +977,9 @@ DEFINE INDEX OVERWRITE firm_entity ON firm FIELDS entity_id UNIQUE;
 -- `option<string>` here only so a row written before the field existed still
 -- applies: `store::schema::apply` backfills every missing slug, failing the
 -- boot on an invalid or colliding one, then tightens the field to
--- `string READONLY`, so a rename, or any direct write, can never move it.
-DEFINE FIELD OVERWRITE slug ON firm TYPE option<string>;
+-- `string READONLY`. The guard preserves the tightened definition on repeat
+-- applies, so a rename or direct write cannot move the slug.
+DEFINE FIELD IF NOT EXISTS slug ON firm TYPE option<string>;
 DEFINE INDEX OVERWRITE firm_slug ON firm FIELDS slug UNIQUE;
 
 -- `firm_integration_secret`: one encrypted, versioned credential per Firm,
