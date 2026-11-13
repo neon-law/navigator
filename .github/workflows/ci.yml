@@ -564,7 +564,7 @@ jobs:
         run: |
           docker run -d --name test-surreal \
             -p 8000:8000 \
-            surrealdb/surrealdb:v3.2.3 \
+            surrealdb/surrealdb:v4.0.1 \
             start --bind 0.0.0.0:8000 --user root --pass root --no-banner memory
           for i in $(seq 1 30); do
               if curl -sS http://127.0.0.1:8000/health >/dev/null 2>&1; then

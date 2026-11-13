@@ -75,7 +75,7 @@ pub(super) const REQUIRED: &[Formula] = &[
     Formula {
         tap: Some("surrealdb/tap"),
         name: "surreal",
-        pin: "3.2.3",
+        pin: "4.0.1",
         manifest: Some("k8s/overlays/kind/surreal/surreal.yaml"),
     },
     Formula {

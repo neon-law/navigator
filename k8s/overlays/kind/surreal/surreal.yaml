@@ -69,10 +69,10 @@ spec:
       containers:
         - name: surreal
           # Pinned to the version the workspace compiles against
-          # (`surrealdb = "3.2.3"`). Bump both together: a client and a
+          # (`surrealdb = "4.0.1"`). Bump both together: a client and a
           # server from different minor lines is exactly the drift the
           # pin exists to prevent.
-          image: surrealdb/surrealdb:v3.2.3
+          image: surrealdb/surrealdb:v4.0.1
           args:
             - start
             # 0.0.0.0 so the Service can reach the container. The pod
