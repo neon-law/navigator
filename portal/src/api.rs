@@ -8881,6 +8881,14 @@ impl From<crate::contract_review_walk::ContractReviewError> for ApiError {
 fn workflow_drive_error(e: crate::retainer_walk::WorkflowDriveError) -> Response {
     use crate::retainer_walk::WorkflowDriveError as E;
     match e {
+        e @ E::ApprovalNotReady { .. } => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "approval_not_ready",
+                "reason": e.to_string(),
+            })),
+        )
+            .into_response(),
         // The worker has not rendered + persisted the PDF yet — not a fault,
         // a "retry in a moment" the caller resolves by re-polling and retrying.
         E::DocumentNotReady(_) => (
