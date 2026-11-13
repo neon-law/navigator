@@ -423,3 +423,62 @@ fn washington_paper_keeps_gr_14_margins_and_carries_counsel_in_the_footer() {
     }
     assert_eq!(variant.calibration().lines_per_page, 28);
 }
+
+// --- LAW-327: Washington ---
+
+fn washington() -> Variant {
+    variant_for_jurisdiction("WA").expect("WA is calibrated")
+}
+
+fn washington_render(body: &str) -> Vec<u8> {
+    pdf::render_document(
+        body,
+        OutputFormat::Pleading(washington()),
+        &Letterhead::default(),
+    )
+    .expect("the Washington pleading renders")
+}
+
+#[test]
+fn a_washington_pattern_form_numbers_its_items_and_draws_its_check_boxes() {
+    let bytes = washington_render(
+        "# PARENTING PLAN\n\n## 1. Residential Schedule\n\n1. The child resides with the \
+         custodial parent.\n2. The other parent has visitation.\n3. Holidays alternate.\n\n\
+         \u{2610} Proposed by mother    \u{2610} Proposed by father\n",
+    );
+
+    for item in [
+        "The child resides with the custodial parent.",
+        "The other parent has visitation.",
+        "Holidays alternate.",
+        "Proposed by mother",
+        "Proposed by father",
+    ] {
+        assert_eq!(
+            pdf::occurrence_count(&bytes, item).expect("count"),
+            1,
+            "{item} reached the page"
+        );
+    }
+    // The pattern form's paragraph numbers print before their items.
+    for marker in ["1.", "2.", "3."] {
+        assert!(
+            pdf::occurrence_count(&bytes, marker).expect("count") >= 1,
+            "the numbered item {marker} did not print"
+        );
+    }
+
+    // Each check box is a stroked square path in the first page's
+    // content stream, drawn at this primitive's 0.6pt stroke width — a
+    // weight nothing else on an unrailed, caption-free page uses (the
+    // footer rule strokes at 0.5pt). Two boxes, two stroke settings.
+    let doc = Document::load_mem(&bytes).expect("load");
+    let page = doc.get_pages().into_iter().next().expect("page").1;
+    let raw = doc.get_page_content(page);
+    let content = String::from_utf8_lossy(&raw);
+    assert_eq!(
+        content.matches("0.6 w").count(),
+        2,
+        "expected two drawn check boxes: {content}"
+    );
+}

@@ -419,6 +419,15 @@ declaration for an opening filing renders this way on court paper (`kind: declar
 clerk assigns a case number; see the [synthetic Washington
 declaration](../cli/tests/fixtures/synthetic_washington_matter/templates/declaration.md).
 
+**Redlining a revision — `--redline-against`.** When a notation has been delivered before and the template (or its
+answers) have since changed, `hudson notation word <template.md> --out <new.docx> --redline-against <previous.docx>`
+renders the current template exactly as `notation word` does, then writes the difference from the previous document as
+real Word tracked changes (`w:ins`/`w:del`) instead of clean prose. The revisions are attributed to the signing lawyer —
+`--redline-author` if given, else `matter.counsel.name` from the Project's `navigator.yaml`, the same name the `/s/`
+signature line signs with — and a run with no author available from either source is refused. The revisions open in
+Microsoft Word's review pane for the counterparty to accept or reject; a redlined document is for review, never for
+splicing back, so `notation import` continues to refuse it. Rendering without `--redline-against` is unchanged.
+
 ### Final documents only
 
 Every document a Project produces for a client, a court, a counterparty, or a signer is final: each fact is filled in
@@ -481,16 +490,17 @@ matter:
 
 Dates are `YYYY-MM-DD` and print as a court writes them (`February 2, 2026`); `trial_on` is optional and prints "None
 set". `judicial_officer`, `department`, and `filed_on` are optional: a court that assigns no judge or department prints
-no line for it, and a blank `filed_on` drops the action-filed and trial lines. The counsel block prints as name and bar
-number (`SBN` for California, `<jurisdiction> Bar No.` elsewhere), firm, address lines, telephone, email, and "Attorneys
-for …", from line 1 (one inch down) in the left 58% of the page. When no lawyer has appeared, set `pro_per: true`: the
-bar fields are not required and the last line reads "…, in pro per". The court prints centred from line 8 (at or below
-3⅓ inches), per CRC 2.111; the right of the counsel block stays clear for the clerk through line 7. Parties print in the
-caption's left cell, each role once with `v.` between sides; the right cell runs case number, department, judge, the
-filing's title, any hearing, then the action-filed and trial dates. Counsel and caption lines are single-spaced, then
-padded to whole grid lines so the body after them starts on a numbered line. `navigator project gate` warns on an
-incomplete `matter:` (`Y019`), naming each missing field as `matter.<path>`, and `notation pdf` and `notation word`
-refuse the same way.
+no line for it, and a blank `filed_on` drops the action-filed and trial lines. The counsel block prints the name with an
+`Esq.` suffix, then the bar number on its own line (`SBN` for California, `<jurisdiction> Bar No.` elsewhere), firm,
+address lines, telephone, email, and "Attorney for …", from line 1 (one inch down) in the left 58% of the page. Names
+print as written; nothing is capitalized on their behalf. When no lawyer has appeared, set `pro_per: true`: the bar
+fields are not required, the block opens with the bare name, and the last line reads "…, in pro per". The court prints
+centred from line 8 (at or below 3⅓ inches), per CRC 2.111; the right of the counsel block stays clear for the clerk
+through line 7. Parties print in the caption's left cell, each role once with `v.` between sides; the right cell runs
+case number, department, judge, the filing's title, any hearing, then the action-filed and trial dates. Counsel and
+caption lines are single-spaced, then padded to whole grid lines so the body after them starts on a numbered line.
+`navigator project gate` warns on an incomplete `matter:` (`Y019`), naming each missing field as `matter.<path>`, and
+`notation pdf` and `notation word` refuse the same way.
 
 **Washington paper.** A template with `jurisdiction: WA` renders GR 14 court paper: letter size, 28 numbered lines on a
 23pt grid, 1in at the bottom and both sides of every page, and the first page's top seven lines left blank so the

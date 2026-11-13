@@ -44,6 +44,7 @@ fn matter(case_number: &str) -> Matter {
         department: "12".into(),
         filed_on: "2026-02-02".into(),
         trial_on: None,
+        signed_on: None,
         in_re: String::new(),
         page_count: false,
         parties: vec![

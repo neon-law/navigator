@@ -1555,6 +1555,12 @@ mod tests {
                 ),
             ),
             (
+                "20261111120000_add_matter_caption_signed_on.sql",
+                include_str!(
+                    "../postgres/migrations/20261111120000_add_matter_caption_signed_on.sql"
+                ),
+            ),
+            (
                 "20261112000000_add_costs_project_folder_slot.sql",
                 include_str!("../postgres/migrations/20261112000000_add_costs_project_folder_slot.sql"),
             ),

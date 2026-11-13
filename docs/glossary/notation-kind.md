@@ -4,11 +4,11 @@ description: "A Notation Kind is the kind value of a template, which names what 
 ---
 
 The `kind:` frontmatter key names what a Navigator markdown file *is*. It is the only discriminator: the checker reads
-it directly and never infers a family from a file's structure or path. `S103` accepts exactly the 16 values below, and
+it directly and never infers a family from a file's structure or path. `S103` accepts exactly the 18 values below, and
 `S104` flags a file that carries notation structure but declares none. Not to be confused with a [Letter](letter.md),
 which is one piece of physical mail; `kind: letter` is a template.
 
-Only the twelve **notation** kinds render to a document, and each has a default [Output Format](output-format.md) that
+Only the fourteen **notation** kinds render to a document, and each has a default [Output Format](output-format.md) that
 applies when the template declares no `output:`. The rest are content pages and an engineering intake, which are never
 rendered through `hudson notation pdf`.
 
@@ -22,6 +22,10 @@ rendered through `hudson notation pdf`.
   output: `form`, AcroForm fill.
 - `pleading` — Court paper filed with a court (complaint, motion, brief). Default output: `pleading`, court geometry
   from `jurisdiction:`.
+- `declaration` — A written statement made in a **party's own voice**: an unsworn statement given under penalty of
+  perjury. Default output: plain, no letterhead; `output: letter` is refused — the party speaks, not the firm.
+- `affidavit` — The sworn twin of a `declaration`: the same party-voice statement executed before a notary or other
+  officer authorized to administer oaths. Default output: plain, no letterhead; `output: letter` is refused.
 - `agreement` — A private agreement between the client and a third party (employment, contractor, operating
   agreement). Default output: `contract`, no letterhead.
 - `will` — A last will and testament. Default output: plain, no letterhead.

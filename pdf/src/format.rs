@@ -188,9 +188,7 @@ impl Letterhead {
 
 /// The signed closing of a letter: valediction, then the signer, printed
 /// under blank space for a pen signature — a letter is signed by one
-/// person and never routes to e-signature (contrast
-/// [`crate::signature_render`], which anchors an e-signature tab inside a
-/// notation *body* for the documents that do route there).
+/// person and never routes to e-signature.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Closing {
     /// e.g. `Sincerely,`.

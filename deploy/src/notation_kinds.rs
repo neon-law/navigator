@@ -21,7 +21,7 @@ Default frame by `kind:` (override with `output:`; run `hudson notation kinds` f
   form           filing                                  (AcroForm fill; needs `form:` and `origin_url:`)
   pleading       pleading                                (court paper; needs a calibrated `jurisdiction:`)
   contract       agreement                               (no letterhead)
-  plain          will, trust, directive, trial_prep      (no letterhead; trial prep is lawyer-only)
+  plain          will, trust, directive, trial_prep, declaration, affidavit   (no letterhead; trial prep is lawyer-only)
   resume         resume                                  (no letterhead; dense, centered name header)
 
 `output:` accepts letter, client_letter, contract, pleading, form, resume. `plain` is never declared: omit `output:`.

@@ -1344,7 +1344,7 @@ fn core_xml(revision: Option<&str>) -> String {
     )
 }
 
-fn xml(value: &str) -> String {
+pub(crate) fn xml(value: &str) -> String {
     value
         .replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -1494,6 +1494,67 @@ mod tests {
         assert!(document.contains(r#"<w:pgMar w:top="2160""#));
         let styles = part(&bytes, "word/styles.xml");
         assert!(!styles.contains(r#"w:lineRule="exact""#));
+    }
+
+    /// The Washington frame `pdf::pleading` hands the CLI: GR 14(a) —
+    /// three-inch top margin kept clear for the clerk's file stamp,
+    /// one-inch margins elsewhere, no rail.
+    const WASHINGTON: PleadingFrame = PleadingFrame {
+        top_margin_twips: 4320,
+        bottom_margin_twips: 1440,
+        left_margin_twips: 1440,
+        right_margin_twips: 1440,
+        rail_lines: None,
+        ..RAILED
+    };
+
+    #[test]
+    fn a_washington_pleading_uses_the_gr_14_frame() {
+        let bytes = render_pleading(WASHINGTON);
+        let header = part(&bytes, "word/header1.xml");
+        assert!(rail_numbers(&header).is_empty(), "GR 14 requires no rail");
+        let document = part(&bytes, "word/document.xml");
+        assert!(document
+            .contains(r#"<w:pgMar w:top="4320" w:right="1440" w:bottom="1440" w:left="1440""#));
+        assert!(!document.contains("w:pgBorders"));
+    }
+
+    /// LAW-327: the WA pattern-form primitives reach the Word engine —
+    /// numbered paragraphs keep their literal numbers, and the check box
+    /// character passes through for Word's own font fallback (Word
+    /// substitutes a symbol font for an uncovered glyph; the drawn square
+    /// primitive is the PDF engine's answer to the same gap).
+    #[test]
+    fn a_washington_pattern_form_numbers_its_items_and_prints_its_check_boxes() {
+        let bytes = render_notation(
+            "# PARENTING PLAN\n\n## 1. Residential Schedule\n\n1. The child resides with the \
+             custodial parent.\n2. The other parent has visitation.\n3. Holidays alternate.\n\n\
+             \u{2610} Proposed by mother    \u{2610} Proposed by father\n",
+            None,
+            &RenderOptions {
+                provenance: None,
+                source_revision: None,
+                pleading: Some(WASHINGTON),
+                preview: false,
+            },
+        )
+        .unwrap();
+        let document = part(&bytes, "word/document.xml");
+        for item in [
+            "1. The child resides with the custodial parent.",
+            "2. The other parent has visitation.",
+            "3. Holidays alternate.",
+        ] {
+            assert!(
+                document.contains(&format!(r#"<w:t xml:space="preserve">{item}</w:t>"#)),
+                "the numbered item was lost: {document}"
+            );
+        }
+        assert_eq!(
+            document.matches('\u{2610}').count(),
+            2,
+            "both check boxes must print"
+        );
     }
 
     #[test]
@@ -1833,6 +1894,30 @@ mod tests {
         assert!(header.contains("EXAMPLE BRAND"), "{header}");
         assert!(!header.contains("<w:drawing>"), "{header}");
         assert!(!has_logo);
+    }
+
+    #[test]
+    fn a_party_voice_render_carries_no_letterhead() {
+        // LAW-340: the CLI hands the Word renderer a letterhead only for
+        // `output: letter`. A declaration's plain frame must arrive
+        // letterhead-free end to end — no first-page header, no embedded
+        // mark, no title page — the same contract an instrument gets.
+        let bytes = render_notation(
+            "I declare under penalty of perjury that the foregoing is true and correct.",
+            None,
+            &RenderOptions::default(),
+        )
+        .unwrap();
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        assert!(archive.by_name("word/header2.xml").is_err());
+        assert!(archive.by_name("word/media/letterhead-mark.png").is_err());
+        let mut document = String::new();
+        archive
+            .by_name("word/document.xml")
+            .unwrap()
+            .read_to_string(&mut document)
+            .unwrap();
+        assert!(!document.contains("<w:titlePg/>"), "{document}");
     }
 
     #[test]

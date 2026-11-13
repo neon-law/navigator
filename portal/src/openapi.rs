@@ -990,6 +990,37 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/brands/{key}/letterhead": {
+          "get": {
+            "summary": "Read a brand's resolved letterhead",
+            "description":
+              "Returns the letterhead row the brand's letters wear, fully resolved — an \
+               unset line is the brand's own fallback, and the firm's legal name is always \
+               the brand's own `legal_entity`. The CLI's `notation` render reads this door \
+               with the `site login` bearer (LAW-341) instead of the deployment's stores \
+               directly. Authorization: lawyer tier and above; a client or clerk session \
+               is refused, and an unknown key answers the same bare 404 every brand door \
+               gives (ENG-626).",
+            "parameters": [
+              { "name": "key", "in": "path", "required": true,
+                "schema": { "type": "string" } }
+            ],
+            "responses": {
+              "200": { "description": "The resolved letterhead row", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/BrandLetterhead" }
+              } } },
+              "401": { "description": "No authenticated session", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } },
+              "403": { "description": "Caller is below lawyer tier", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } },
+              "404": { "description": "No brand with that key", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } }
+            }
+          }
+        },
         "/app/api/entities": {
           "get": {
             "summary": "List all entities",
@@ -4413,7 +4444,7 @@ fn canonical_document(base: &str) -> Value {
                     "kind": {
                       "type": "string",
                       "description": "Required asset-lane document classification (`rules::kind::Kind` values valid for `Lane::Asset`). A missing or blank value is refused with `400 kind_required`; a value outside this set is refused with `400 invalid_kind`. Both messages name the accepted values; nothing is silently coerced to `unclassified`.",
-                      "enum": ["letter", "filing", "will", "trust", "directive", "agreement", "pleading", "declaration", "onboarding", "offboarding", "memo", "resume", "trial_prep", "transcript", "inbound_contract", "certificate_of_naturalization", "exhibit", "order", "closed_repository", "invoice", "receipt", "unclassified"]
+                      "enum": ["letter", "filing", "will", "trust", "directive", "agreement", "pleading", "declaration", "affidavit", "onboarding", "offboarding", "memo", "resume", "trial_prep", "transcript", "inbound_contract", "certificate_of_naturalization", "exhibit", "order", "closed_repository", "invoice", "receipt", "unclassified"]
                     },
                     "visibility": { "type": "string", "enum": ["client", "internal"] },
                     "description": { "type": "string" },
@@ -4760,7 +4791,7 @@ fn canonical_document(base: &str) -> Value {
               "type": "object", "properties": {
                 "visibility": { "type": "string", "enum": ["client", "internal"] },
                 "slug": { "type": "string", "description": "Document identity. Must carry the stored filename's extension. Accepted while the row's slug is null, or (with `reslug: true`) as the target of moving the row's identity." },
-                "kind": { "type": "string", "description": "Asset-lane kind. Applied together with `slug` on a slugless row, or alone to replace a legacy kind the asset lane rejects.", "enum": ["letter", "filing", "will", "trust", "directive", "agreement", "pleading", "declaration", "onboarding", "offboarding", "memo", "resume", "trial_prep", "transcript", "inbound_contract", "certificate_of_naturalization", "exhibit", "order", "closed_repository", "invoice", "receipt", "unclassified"] },
+                "kind": { "type": "string", "description": "Asset-lane kind. Applied together with `slug` on a slugless row, or alone to replace a legacy kind the asset lane rejects.", "enum": ["letter", "filing", "will", "trust", "directive", "agreement", "pleading", "declaration", "affidavit", "onboarding", "offboarding", "memo", "resume", "trial_prep", "transcript", "inbound_contract", "certificate_of_naturalization", "exhibit", "order", "closed_repository", "invoice", "receipt", "unclassified"] },
                 "reslug": { "type": "boolean", "description": "With `slug`, move the row's identity to the given `slug` instead of assigning a slugless row. Refused when the target equals the current slug or already names a chain." },
                 "dry_run": { "type": "boolean", "description": "When setting `slug`, `kind`, or moving a slug, validate and report without writing." }
               }
@@ -4813,7 +4844,7 @@ fn canonical_document(base: &str) -> Value {
             ],
             "requestBody": { "required": true, "content": { "application/json": { "schema": {
               "type": "object", "required": ["kind"], "properties": {
-                "kind": { "type": "string", "description": "The accepted asset-lane kind the chain moves to.", "enum": ["letter", "filing", "will", "trust", "directive", "agreement", "pleading", "declaration", "onboarding", "offboarding", "memo", "resume", "trial_prep", "transcript", "inbound_contract", "certificate_of_naturalization", "exhibit", "order", "closed_repository", "invoice", "receipt", "unclassified"] },
+                "kind": { "type": "string", "description": "The accepted asset-lane kind the chain moves to.", "enum": ["letter", "filing", "will", "trust", "directive", "agreement", "pleading", "declaration", "affidavit", "onboarding", "offboarding", "memo", "resume", "trial_prep", "transcript", "inbound_contract", "certificate_of_naturalization", "exhibit", "order", "closed_repository", "invoice", "receipt", "unclassified"] },
                 "dry_run": { "type": "boolean", "description": "Validate and report without writing." }
               }
             } } } },
@@ -6145,6 +6176,25 @@ fn canonical_document(base: &str) -> Value {
               "font_family": { "type": "string" },
               "font_object_key": { "type": "string" },
               "font_licence": { "type": "string" }
+            }
+          },
+          "BrandLetterhead": {
+            "type": "object",
+            "required": ["brand_key", "wordmark", "mark"],
+            "properties": {
+              "brand_key": { "type": "string" },
+              "wordmark": { "type": "string" },
+              "mark": { "type": "string", "enum": ["wordmark", "logo"] },
+              "logo_object_key": { "type": "string" },
+              "firm_legal_name": { "type": "string" },
+              "phone": { "type": "string" },
+              "email": { "type": "string" },
+              "web": { "type": "string" },
+              "postal_address": { "type": "string" },
+              "font_family": { "type": "string" },
+              "font_object_key": { "type": "string" },
+              "updated_at": { "type": "string",
+                             "description": "RFC 3339 — the revision a render's provenance names." }
             }
           },
           "CreateEntityRequest": {

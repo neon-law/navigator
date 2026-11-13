@@ -529,6 +529,10 @@ fn escape_marking_open_flags(s: &str) -> String {
 fn escape_text(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
+        if c == CHECKBOX_CHAR {
+            out.push_str(CHECKBOX_TYPST);
+            continue;
+        }
         if matches!(
             c,
             '\\' | '#' | '$' | '*' | '_' | '`' | '<' | '@' | '[' | ']'
@@ -539,6 +543,16 @@ fn escape_text(s: &str) -> String {
     }
     out
 }
+
+/// The pattern-form check box a WA mandatory form's body writes as a
+/// literal `☐` (U+2610 BALLOT BOX) in its Markdown, and the Typst that
+/// renders it: a stroked square **drawn** rather than a glyph, because
+/// the embedded font set (Tinos, the Noto Serif and brand faces) covers
+/// no ballot-box codepoint — the character itself would print as tofu on
+/// court paper. Sized to the type, so it scales with the one size a
+/// pleading calibration sets.
+const CHECKBOX_CHAR: char = '\u{2610}';
+const CHECKBOX_TYPST: &str = "#box(square(size: 0.75em, stroke: 0.6pt))";
 
 /// Whether `tag` opens a bracketed Typst content container — one whose
 /// markup wraps its children in `[...]` (block quote, table cell, link,
@@ -639,6 +653,19 @@ mod tests {
     fn ordered_list_numbers_explicitly() {
         let out = to_typst("1. first\n2. second\n");
         assert_eq!(out, "1. first\n2. second");
+    }
+
+    /// LAW-327: a pattern-form check box is a drawn square, not the
+    /// character — the embedded fonts cover no ballot-box codepoint.
+    #[test]
+    fn a_checkbox_becomes_a_drawn_square_and_compiles() {
+        let out = to_typst("☐ Custodial parent\n☐ Noncustodial parent");
+        assert_eq!(out.matches("#box(square(").count(), 2, "{out}");
+        assert!(
+            !out.contains('\u{2610}'),
+            "the raw character must not reach Typst: {out}"
+        );
+        crate::render(&out).expect("a checkbox body must compile through Typst");
     }
 
     #[test]

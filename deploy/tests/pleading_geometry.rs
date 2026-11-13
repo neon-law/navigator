@@ -266,7 +266,7 @@ fn the_first_page_places_counsel_the_clerks_space_the_court_and_the_caption() {
     // after the whole counsel block.
     let court = bbox(first, "SUPERIOR");
     assert!(court.y0 >= 240.0 - 1.0, "court title at {}pt", court.y0);
-    let last_counsel = bbox(first, "Attorneys");
+    let last_counsel = bbox(first, "Attorney");
     assert!(court.y0 > last_counsel.y1);
 
     // The caption is two columns, ruled, and never carries a header row.

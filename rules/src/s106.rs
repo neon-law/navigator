@@ -25,8 +25,9 @@
 //!    times, divide, plus-minus, registered, trademark), foreign-language
 //!    letters, arrows and the command key, mathematical and comparison
 //!    symbols, bullets, box-drawing characters (U+2500..=U+257F),
-//!    triangles, and the zodiac glyphs the council documents use
-//!    (U+2648..=U+2653).
+//!    triangles, the zodiac glyphs the council documents use
+//!    (U+2648..=U+2653), and the ballot box (U+2610) the Washington
+//!    mandatory pattern forms check.
 //!
 //! What the allowlist deliberately excludes is everything mojibake and
 //! stray pastes produce: CJK ideographs, Hangul, Cyrillic, Arabic,
@@ -66,6 +67,11 @@ impl S106MarkdownHygiene {
         // Typographic bullet.
         '\u{2022}', // Solid triangles (tree/graph renderings).
         '\u{25B2}', '\u{25BC}',
+        // The ballot box (U+2610 BALLOT BOX): the check box of the
+        // Washington mandatory pattern forms (LAW-327). The PDF engine
+        // draws it as a stroked square and the Word engine passes the
+        // character through, so a template carries it deliberately.
+        '\u{2610}',
     ];
 
     /// Contiguous ranges of characters allowed wholesale. Box-drawing
@@ -285,6 +291,15 @@ mod tests {
     fn a_clean_english_file_passes() {
         let contents = "# Title\n\nPlain English prose with an em dash \u{2014} and \u{201C}curly quotes\u{201D}.\n";
         assert!(lint(contents).is_empty());
+    }
+
+    /// LAW-327: the Washington pattern forms' check box is allowed
+    /// Markdown — it renders as a drawn square in the PDF engine and the
+    /// character itself in Word.
+    #[test]
+    fn the_pattern_form_check_box_is_allowed_markdown() {
+        assert!(S106MarkdownHygiene::is_allowed('\u{2610}'));
+        assert!(lint("\u{2610} Proposed by mother\n").is_empty());
     }
 
     #[test]

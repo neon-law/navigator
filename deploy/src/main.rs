@@ -20,6 +20,7 @@ mod downloads;
 mod firm_admin;
 mod firm_forgejo;
 mod firms_doctor;
+mod forms_render;
 mod forms_sync;
 mod glossary;
 mod import;
@@ -63,7 +64,6 @@ use cli::commands::{
     strip_frontmatter, HostOpt, ProjectGateMarkdownFilter, ProjectsCmd, CLI_STACK_BYTES,
     DOCUMENT_TRANSCRIBE_HELP, DOCUMENT_UPLOAD_KIND_HELP,
 };
-
 use cli::{
     answers_file, atomic_directory, authorities, credentials, document_layout, document_read,
     document_sync, legal_plans, login, palette, projects, release, remote,
@@ -993,6 +993,13 @@ enum NotationCmd {
         /// outside a signature block, or drafting note.
         #[arg(long)]
         preview: bool,
+        /// Refuse to fetch render inputs over the network: render only
+        /// from bytes already pinned in the checkout or the local blank
+        /// cache (LAW-19). A form template whose blank is neither vendored
+        /// nor cached is a loud refusal, never a silent download that
+        /// could change the bytes between two runs.
+        #[arg(long)]
+        ci: bool,
     },
     /// Render a single notation template to editable Word, framed the same
     /// way as `pdf` — see its documentation for how the frame, jurisdiction,
@@ -1014,6 +1021,22 @@ enum NotationCmd {
         /// outside a signature block, or drafting note.
         #[arg(long)]
         preview: bool,
+        /// Write the render as a **redline** against this previous `.docx`:
+        /// every difference from it becomes a real Word tracked change
+        /// (`w:ins`/`w:del`) in the output, for the lawyer to accept or
+        /// reject in Word before the version is delivered. The previous
+        /// document must be a fresh `notation word` export carrying no
+        /// unresolved revisions or review comments of its own. Pairs with
+        /// `notation import`, which still refuses any document carrying the
+        /// revisions this writes — a redline is for review, never for
+        /// splicing.
+        #[arg(long, value_name = "PREVIOUS.docx")]
+        redline_against: Option<PathBuf>,
+        /// The name the tracked changes record as their author. Defaults to
+        /// `matter.counsel.name` in `navigator.yaml` — the same name the
+        /// `/s/` signature line signs with.
+        #[arg(long, value_name = "NAME")]
+        redline_author: Option<String>,
     },
     /// Apply an edited Word document back into the notation template it was
     /// rendered from — the second half of `notation word`.
@@ -3623,13 +3646,6 @@ enum NotationAction {
         #[command(flatten)]
         host: HostOpt,
     },
-    /// Send the approved, rendered notation for signature using its configured delivery.
-    Send {
-        /// Notation UUID.
-        notation_id: uuid::Uuid,
-        #[command(flatten)]
-        host: HostOpt,
-    },
     /// Send a notation parked at `lawyer_review` back for changes: flag the
     /// wrong answers so they get re-collected, then return to review
     /// (`POST …/request-changes`). A rejected review re-collects the wrong
@@ -4043,6 +4059,7 @@ fn run() -> ExitCode {
                 answers_file,
                 answers_from,
                 preview,
+                ci,
             } => {
                 let answers = match answers_file {
                     Some(path) => match answers_file::pdf_answers(&path, answers) {
@@ -4064,14 +4081,26 @@ fn run() -> ExitCode {
                         }
                     },
                 };
-                run_render(&file, &out, &answers, "pdf", preview)
+                run_render(&file, &out, &answers, "pdf", preview, ci)
             }
             NotationCmd::Word {
                 file,
                 out,
                 answers,
                 preview,
-            } => run_render(&file, &out, &answers, "docx", preview),
+                redline_against,
+                redline_author,
+            } => match redline_against {
+                Some(previous) => run_word_redline(
+                    &file,
+                    &out,
+                    &answers,
+                    preview,
+                    &previous,
+                    redline_author.as_deref(),
+                ),
+                None => run_render(&file, &out, &answers, "docx", preview, false),
+            },
             NotationCmd::Import {
                 file,
                 edited,
@@ -4415,9 +4444,6 @@ async fn run_notation(action: NotationAction) -> ExitCode {
         NotationAction::Approve { notation_id, host } => {
             remote::notation_approve(host.host.as_deref(), notation_id).await
         }
-        NotationAction::Send { notation_id, host } => {
-            remote::notation_send(host.host.as_deref(), notation_id).await
-        }
         NotationAction::RequestChanges {
             notation_id,
             host,
@@ -4684,7 +4710,6 @@ fn render_validation_gate(
 
 fn resolve_render_format(
     field: impl Fn(&str) -> Option<String>,
-    output_extension: &str,
 ) -> Result<(String, pdf::OutputFormat), ExitCode> {
     let profile = field("output")
         .or_else(|| {
@@ -4693,20 +4718,6 @@ fn resolve_render_format(
                 .map(|k| k.default_output().to_string())
         })
         .unwrap_or_else(|| PLAIN_PROFILE.to_string());
-    if output_extension == "pdf" && profile == "form" {
-        let message = match field("form") {
-            Some(code) => match forms::get(&code) {
-                Ok(Some(_)) => {
-                    "AcroForm PDFs are filled by the server-side notation workflow after Lawyer Review"
-                }
-                Ok(None) => "the declared form is not in the form registry",
-                Err(_) => "could not read the form registry",
-            },
-            None => "form output requires a form registry binding",
-        };
-        eprintln!("navigator: {message}");
-        return Err(ExitCode::from(2));
-    }
     // `pleading` is the one profile a bare name cannot construct: court
     // geometry is calibrated by the template's `jurisdiction:`, a second
     // field `OutputFormat::parse` never sees, so it returns `None` for the
@@ -4751,6 +4762,7 @@ fn run_render(
     answers: &[(String, String)],
     output_extension: &str,
     preview: bool,
+    ci: bool,
 ) -> ExitCode {
     if !has_extension(out, output_extension) {
         eprintln!("navigator: output file extension does not match the render format");
@@ -4786,10 +4798,20 @@ fn run_render(
             .and_then(|fm| rules::frontmatter::field(fm, key))
             .filter(|value| !value.is_empty())
     };
-    let (profile, format) = match resolve_render_format(field, output_extension) {
+    let (profile, format) = match resolve_render_format(field) {
         Ok(resolved) => resolved,
         Err(code) => return code,
     };
+
+    // `form` is the AcroForm fill mode, not a Typst frame: it fills the
+    // pinned blank from the vendored forms registry (or refuses loudly)
+    // and never reaches the body renderer below. `Kind::Filing`'s
+    // default output is this profile, so a `kind: filing` template that
+    // declares no `output:` fills too — `kind:` is not a second silent
+    // path into the old plain fallback.
+    if profile == forms_render::FORM_PROFILE {
+        return forms_render::run(file, &contents, out, answers, output_extension, ci);
+    }
 
     // Body is everything after the frontmatter block; fill placeholders
     // through the same evaluator as preview and final document generation.
@@ -4823,7 +4845,7 @@ fn run_render(
     }
 
     let Ok(rendered) =
-        project_letterhead(file, &format).map_err(|message| eprintln!("navigator: {message}"))
+        project_letterhead(file, &format, ci).map_err(|message| eprintln!("navigator: {message}"))
     else {
         return ExitCode::from(2);
     };
@@ -4869,6 +4891,108 @@ fn run_render(
         ))
     );
     ExitCode::SUCCESS
+}
+
+/// `notation word --redline-against`: render exactly as `notation word`
+/// does, then turn the difference from the previous version into real Word
+/// tracked changes ([`word::redline::against`]). The render stages in a
+/// temporary file first, so a refusal never leaves an un-redlined document
+/// sitting at `--out` looking final.
+fn run_word_redline(
+    file: &std::path::Path,
+    out: &std::path::Path,
+    answers: &[(String, String)],
+    preview: bool,
+    previous: &std::path::Path,
+    author: Option<&str>,
+) -> ExitCode {
+    let staging = match tempfile::Builder::new()
+        .prefix("navigator-redline-")
+        .suffix(".docx")
+        .tempfile_in(out.parent().unwrap_or(std::path::Path::new(".")))
+    {
+        Ok(staging) => staging,
+        Err(error) => {
+            eprintln!("navigator: could not stage the render: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let code = run_render(file, staging.path(), answers, "docx", preview, false);
+    if code != ExitCode::SUCCESS {
+        return code;
+    }
+    let rendered = match std::fs::read(staging.path()) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            eprintln!("navigator: read the staged render: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let previous_bytes = match std::fs::read(previous) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            eprintln!("navigator: read {}: {error}", previous.display());
+            return ExitCode::from(2);
+        }
+    };
+    let author = match author {
+        Some(name) => name.to_string(),
+        None => match resolve_redline_author(file) {
+            Ok(name) => name,
+            Err(message) => {
+                eprintln!("navigator: {message}");
+                return ExitCode::from(2);
+            }
+        },
+    };
+    let redlined = match word::redline::against(&rendered, &previous_bytes, &author) {
+        Ok(redline) => redline,
+        Err(error) => {
+            eprintln!("navigator: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    if let Err(error) = std::fs::write(out, &redlined.bytes) {
+        eprintln!("navigator: write {}: {error}", out.display());
+        return ExitCode::from(2);
+    }
+    let counts = redlined.counts;
+    if counts.total() == 0 {
+        println!(
+            "{}",
+            palette::dim("No differences from the previous version; the render is unchanged.")
+        );
+    } else {
+        println!(
+            "{}",
+            palette::dim(format!(
+                "Redlined {} insertion(s), {} deletion(s), {} rewrite(s), authored by \
+                 {author} → {}",
+                counts.insertions,
+                counts.deletions,
+                counts.replacements,
+                out.display()
+            ))
+        );
+    }
+    ExitCode::SUCCESS
+}
+
+/// The signing lawyer's name, for the revision author of every tracked
+/// change a redline writes. The same source the pleading `/s/` line signs
+/// with: `matter.counsel.name` in the Project's manifest.
+///
+/// # Errors
+///
+/// When the manifest is missing or malformed, naming both outs — the flag
+/// and the manifest key.
+fn resolve_redline_author(file: &std::path::Path) -> Result<String, String> {
+    projects::matter::counsel_name(file).map_err(|error| {
+        format!(
+            "a redline records who made each change: pass --redline-author, or add \
+             `matter.counsel.name` to navigator.yaml ({error})"
+        )
+    })
 }
 
 /// Final documents only: the filled text carries nothing a person is still
@@ -4994,9 +5118,10 @@ fn project_firm_legal_name(file: &Path) -> Option<String> {
 /// The Project's Brand frames the letter (LAW-265, ENG-1148):
 /// `letterhead` resolves `project.brand`, else `project.host`, from
 /// the nearest `navigator.yaml`. Which letterhead that Brand wears comes
-/// from one of two sources. When the deployment's stores are reachable,
-/// the Brand's runtime letterhead row — the same rows `/app/admin/brands`
-/// edits — frames the letter; when they are not, the compiled registry
+/// from one of two sources. When the deployment's letterhead door is
+/// reachable, the Brand's runtime letterhead row — the same rows
+/// `/app/admin/brands` edits, served over HTTPS with the `site login`
+/// bearer — frames the letter; when it is not, the compiled registry
 /// does, and the fallback is announced, never silent: a template
 /// re-render reflects the letterhead its Brand currently publishes, while
 /// executed and filed artifacts keep their stored bytes (ENG-1148), so a
@@ -5014,6 +5139,7 @@ struct ProjectLetterhead {
 fn project_letterhead(
     file: &Path,
     format: &pdf::OutputFormat,
+    ci: bool,
 ) -> Result<ProjectLetterhead, String> {
     if !matches!(format, pdf::OutputFormat::Letter(_)) {
         return Ok(ProjectLetterhead {
@@ -5034,45 +5160,101 @@ fn project_letterhead(
     let manifest = projects::manifest::parse(&contents)?;
     let key = letterhead::resolve_brand(manifest.brand.as_deref(), manifest.host.as_deref())
         .map_err(|error| error.to_string())?;
-    attempt_runtime_letterhead(key)
+    attempt_runtime_letterhead(key, ci)
 }
 
-/// The runtime source, tried within a bounded budget so a hung store
-/// cannot hang the render; any failure — connect, read, or budget — falls
-/// back to the compiled registry, announced.
-fn attempt_runtime_letterhead(key: views::brand::BrandKey) -> Result<ProjectLetterhead, String> {
+/// The runtime source, tried within a bounded budget so a hung deployment
+/// cannot hang the render. Any failure — no session, connect, read, or
+/// budget — falls back to the compiled registry, announced; under `--ci`
+/// the same failure refuses, because a CI render's bytes must not depend
+/// on which answer a live read would have given (LAW-19).
+fn attempt_runtime_letterhead(
+    key: views::brand::BrandKey,
+    ci: bool,
+) -> Result<ProjectLetterhead, String> {
     let budget = std::time::Duration::from_secs(3);
     // The timeout's timer is built under the runtime, not as a `block_on`
     // argument — `tokio::time::timeout` constructs its `Sleep` eagerly, and
     // eager construction needs the time driver it is about to run under.
     let attempted = tokio::runtime::Runtime::new()
         .expect("tokio runtime")
-        .block_on(async move { tokio::time::timeout(budget, runtime_letterhead(key)).await });
+        .block_on(async move { tokio::time::timeout(budget, runtime_letterhead(key, ci)).await });
     match attempted {
         Ok(Ok(rendered)) => Ok(rendered),
-        Ok(Err(reason)) => compiled_fallback(key, &reason),
-        Err(elapsed) => compiled_fallback(
+        Ok(Err(reason)) => letterhead_failure(key, &reason, ci),
+        Err(elapsed) => letterhead_failure(
             key,
-            &format!("the letterhead store did not answer within {budget:?}: {elapsed:?}"),
+            &format!(
+                "the deployment's letterhead door did not answer within {budget:?}: {elapsed:?}"
+            ),
+            ci,
         ),
     }
 }
 
-/// The Brand's letterhead from the deployment's stores — the same rows
-/// `/app/admin/brands` edits. `Err` names why the stores could not answer;
-/// the caller falls back to the compiled registry and announces it.
-async fn runtime_letterhead(key: views::brand::BrandKey) -> Result<ProjectLetterhead, String> {
-    let surreal = store::surreal::connect_from_env()
-        .await
-        .map_err(|error| format!("the deployment's document store is unreachable: {error}"))?;
-    let pg = store::postgres::PostgresDb::from_env()
-        .await
-        .map_err(|error| format!("the deployment's relational store is unreachable: {error}"))?;
+/// A letterhead read that could not answer: under `--ci` it refuses — a CI
+/// render must render pinned bytes or not at all — and anywhere else it
+/// falls back to the compiled registry, announced on stderr.
+fn letterhead_failure(
+    key: views::brand::BrandKey,
+    reason: &str,
+    ci: bool,
+) -> Result<ProjectLetterhead, String> {
+    if ci {
+        return Err(format!(
+            "--ci refuses a letter whose letterhead row could not be read from the deployment \
+             ({reason}); warm the letterhead cache with a non---ci render, or repair the \
+             `site login` session, before rendering under --ci"
+        ));
+    }
+    compiled_fallback(key, reason)
+}
+
+/// Test-harness override for the letterhead door's base URL: points the
+/// row read at a double instead of the Brand's signed-in deployment. The
+/// double serves the row itself, so no `site login` session is resolved.
+const LETTERHEAD_API_BASE_ENV: &str = "NAVIGATOR_LETTERHEAD_API_BASE";
+
+/// The deployment base and bearer the letterhead row is read with: the
+/// Brand's own host, as `navigator site login` stored the lawyer's
+/// session. The `NAVIGATOR_LETTERHEAD_API_BASE` override points the read
+/// at a test double or harness endpoint instead, and skips the session —
+/// such an endpoint serves the row itself.
+fn letterhead_endpoint(key: views::brand::BrandKey) -> Result<(String, Option<String>), String> {
+    if let Some(base) = std::env::var_os(LETTERHEAD_API_BASE_ENV).filter(|v| !v.is_empty()) {
+        return Ok((base.to_string_lossy().into_owned(), None));
+    }
     let compiled = letterhead::for_brand(key).map_err(|error| error.to_string())?;
-    let runtime =
-        letterhead::for_brand_runtime(key, &credentials::base_url(&compiled.web), &surreal, &pg)
-            .await
-            .map_err(|error| error.to_string())?;
+    match remote::matching_stored_session(&compiled.web)
+        .map_err(|error| format!("the `site login` session could not be read: {error}"))?
+    {
+        remote::MatchingSession::Valid(base, token) => Ok((base, Some(token))),
+        remote::MatchingSession::Absent => Err(format!(
+            "no `navigator site login` session for {} — run `navigator site login --host {}`",
+            compiled.web,
+            key.apex().unwrap_or_else(|| key.as_str())
+        )),
+        remote::MatchingSession::Expired => Err(format!(
+            "the `site login` session for {} has expired — run `navigator site login --host {}`",
+            compiled.web,
+            key.apex().unwrap_or_else(|| key.as_str())
+        )),
+    }
+}
+
+/// The Brand's letterhead from the signed-in deployment's letterhead door —
+/// the same rows `/app/admin/brands` edits, served by
+/// `GET /app/api/brands/{key}/letterhead` with the `site login` bearer
+/// (LAW-341). `Err` names why the door could not answer; the caller falls
+/// back to the compiled registry and announces it.
+async fn runtime_letterhead(
+    key: views::brand::BrandKey,
+    ci: bool,
+) -> Result<ProjectLetterhead, String> {
+    let (base, token) = letterhead_endpoint(key)?;
+    let runtime = letterhead::for_brand_runtime(key, &base, token.as_deref(), ci)
+        .await
+        .map_err(|error| error.to_string())?;
     let Some(runtime) = runtime else {
         // A Brand with no runtime row wears its compiled frame — the
         // compiled mark included — but the render still names the source.
@@ -5219,12 +5401,75 @@ fn pleading_body(
         .unwrap_or_default();
     // A draft's counsel signature prints `/s/ DRAFT`; a final render signs
     // it `/s/ <counsel>` from `matter.counsel.name`.
+    let body = pleading_signature_dates(&body, file, preview)?;
     let body = if preview {
         body
     } else {
         word::paper::sign_counsel_signatures(&body, &projects::matter::counsel_name(file)?)
     };
     Ok(format!("{caption}{body}{certificate}"))
+}
+
+/// The token a preview's date line carries while `matter.signed_on` is
+/// unset: an unfilled placeholder, which both renders wash yellow. It is
+/// inserted at fill time, so it never sits in the template for `F115` to
+/// flag, and a final render — which never inserts it — never carries it.
+const UNSIGNED_DATE_PLACEHOLDER: &str = "{{matter.signed_on}}";
+
+/// Insert the signature block's date line (LAW-242): `Dated this …`,
+/// sourced only from `matter.signed_on`, above every counsel signature
+/// block. A preview with no `signed_on:` prints the highlighted
+/// [`UNSIGNED_DATE_PLACEHOLDER`]; a final render with none is refused — an
+/// undated signature page is not filable.
+///
+/// # Errors
+///
+/// No manifest above the pleading, a `signed_on:` that is not a real
+/// calendar date, or a final pleading whose signature block has no
+/// `signed_on:` to date it.
+fn pleading_signature_dates(body: &str, file: &Path, preview: bool) -> Result<String, String> {
+    if !word::paper::has_counsel_signature(body) {
+        return Ok(body.to_string());
+    }
+    let line = match projects::matter::signed_on(file)? {
+        Some(date) => word::matter::date_line(&date)
+            .ok_or_else(|| format!("`matter.signed_on` is not a calendar date: {date}"))?,
+        None if preview => UNSIGNED_DATE_PLACEHOLDER.to_string(),
+        // LAW-242: a final pleading never prints an undated signature page.
+        None => {
+            return Err(
+                "this final pleading has a signature block, but its `matter:` block declares \
+                 no `signed_on:` signing date; set it before final export"
+                    .to_string(),
+            )
+        }
+    };
+    Ok(insert_before_counsel_signatures(body, &line))
+}
+
+/// `body` with `line` inserted as its own paragraph above each counsel
+/// signature block. The marker is authored alone on its line, so the line
+/// start — not the comment itself — is where the date goes.
+fn insert_before_counsel_signatures(body: &str, line: &str) -> String {
+    let mut out = String::with_capacity(body.len() + line.len() + 2);
+    let mut rest = body;
+    while let Some(start) = rest.find("<!--") {
+        let Some(length) = rest[start..].find("-->").map(|end| end + "-->".len()) else {
+            break;
+        };
+        if word::paper::counsel_signature(&rest[start..start + length]).is_some() {
+            let line_start = rest[..start].rfind('\n').map_or(0, |at| at + 1);
+            out.push_str(&rest[..line_start]);
+            out.push_str(line);
+            out.push_str("\n\n");
+            out.push_str(&rest[line_start..start + length]);
+        } else {
+            out.push_str(&rest[..start + length]);
+        }
+        rest = &rest[start + length..];
+    }
+    out.push_str(rest);
+    out
 }
 
 fn has_extension(out: &Path, expected: &str) -> bool {

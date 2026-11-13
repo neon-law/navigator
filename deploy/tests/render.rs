@@ -133,6 +133,59 @@ Members:
 {{/for}}
 ";
 
+/// LAW-340: a party-voice declaration. Not an outlined kind, so the body
+/// is plain prose; `output:` is left off so the frame is the plain default.
+const DECLARATION: &str = "\
+---
+kind: declaration
+title: Declaration of Jane Client
+respondent_type: person
+confidential: true
+questionnaire:
+  BEGIN:
+    _: END
+  END: {}
+workflow:
+  BEGIN:
+    intake_submitted: lawyer_review
+  lawyer_review:
+    approved: END
+    rejected: END
+  END: {}
+---
+
+# Declaration of Jane Client
+
+I declare under penalty of perjury that the foregoing is true and correct.
+";
+
+/// The same party-voice fixture attempting the one thing its kind may not
+/// wear: the firm's letterhead.
+const DECLARATION_LETTER: &str = "\
+---
+kind: declaration
+title: Declaration of Jane Client
+respondent_type: person
+confidential: true
+output: letter
+questionnaire:
+  BEGIN:
+    _: END
+  END: {}
+workflow:
+  BEGIN:
+    intake_submitted: lawyer_review
+  lawyer_review:
+    approved: END
+    rejected: END
+  END: {}
+---
+
+# Declaration of Jane Client
+
+I declare under penalty of perjury that the foregoing is true and correct.
+";
+
 fn write(dir: &TempDir, name: &str, body: &str) -> std::path::PathBuf {
     let path = dir.path().join(name);
     fs::write(&path, body).expect("write fixture");
@@ -357,85 +410,6 @@ fn a_letter_kind_renders_on_letterhead_with_no_output_declared() {
     assert!(
         stdout.contains("Plain"),
         "a `kind: will` template should report Plain, got: {stdout}"
-    );
-}
-
-/// A party's own declaration (LAW-340): `kind: declaration` and no
-/// `output:` — the frame must derive from the kind, and the kind's
-/// default is the letterhead-less `client_letter` frame.
-const VALID_DECLARATION_NO_OUTPUT: &str = "\
----
-kind: declaration
-title: Client Declaration
-respondent_type: person
-confidential: true
-questionnaire:
-  BEGIN:
-    _: END
-  END: {}
-workflow:
-  BEGIN:
-    intake_submitted: lawyer_review
-  lawyer_review:
-    approved: END
-    rejected: END
-  END: {}
----
-
-# Declaration
-
-I, the declarant, declare as follows:
-
-The facts stated here are true of my own knowledge.
-";
-
-#[test]
-fn a_declaration_kind_renders_the_client_letter_frame_with_no_output_declared() {
-    // LAW-340: a declaration is the party's own document, so a `kind:
-    // declaration` template with no `output:` must derive the
-    // letterhead-less client_letter frame — the same frame
-    // `output: client_letter` selects explicitly, never the firm
-    // letterhead its `kind: letter` sibling wears.
-    let work = TempDir::new().unwrap();
-    let src = write(&work, "declaration.md", VALID_DECLARATION_NO_OUTPUT);
-    let declaration_out = work.path().join("declaration.pdf");
-    let declaration = render_pdf(&[
-        "--preview".as_ref(),
-        src.as_os_str(),
-        "--out".as_ref(),
-        declaration_out.as_ref(),
-    ]);
-    assert!(
-        declaration.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&declaration.stderr)
-    );
-    let stdout = String::from_utf8_lossy(&declaration.stdout);
-    assert!(
-        stdout.contains("ClientLetter"),
-        "a `kind: declaration` template with no `output:` should render the \
-         ClientLetter frame, got: {stdout}"
-    );
-
-    // The contrast case is a different `kind:`, not a flag: `letter`
-    // derives the letterhead frame, and the letterhead is what makes the
-    // branded PDF the larger of the two.
-    let letter_src = write(&work, "demand.md", VALID_NO_OUTPUT);
-    let letter_out = work.path().join("letter.pdf");
-    let letter = render_pdf(&[
-        "--preview".as_ref(),
-        letter_src.as_os_str(),
-        "--out".as_ref(),
-        letter_out.as_ref(),
-    ]);
-    assert!(letter.status.success());
-
-    let letter_len = fs::read(&letter_out).unwrap().len();
-    let declaration_len = fs::read(&declaration_out).unwrap().len();
-    assert!(
-        letter_len > declaration_len,
-        "a `kind: letter` render carries the letterhead ({letter_len}) a \
-         declaration must not ({declaration_len}) — letterhead leaked?"
     );
 }
 
@@ -725,6 +699,64 @@ Plaintiff moves to compel further responses.
 
 The request is proper under the governing rule.
 ";
+
+/// LAW-340: a party-voice document on the firm's letterhead is a gate
+/// refusal with a non-zero exit naming the outputs the kind may declare —
+/// never a warning, and never a rendered page.
+#[test]
+fn a_declaration_with_letter_output_is_refused_not_warned() {
+    let work = TempDir::new().unwrap();
+    let template = write(&work, "declaration_letter.md", DECLARATION_LETTER);
+    let out = work.path().join("declaration_letter.pdf");
+    let result = render_pdf(&[template.as_os_str(), "--out".as_ref(), out.as_os_str()]);
+    assert!(
+        !result.status.success(),
+        "a party-voice document must not render on the firm's letterhead"
+    );
+    // Violation details print on stdout (print_violation); the refusal
+    // summary goes to stderr.
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        stdout.contains("letterhead"),
+        "the refusal must name the letterhead conflict: {stdout}"
+    );
+    assert!(
+        stdout.contains("client_letter") && stdout.contains("pleading"),
+        "the refusal must name the outputs the kind may declare: {stdout}"
+    );
+    assert!(
+        stderr.contains("not rendering"),
+        "the summary must confirm nothing rendered: {stderr}"
+    );
+    assert!(!out.exists(), "no PDF should be written on refusal");
+}
+
+/// The mirror: the same kind with no `output:` renders through the plain
+/// frame — letterhead-free — in both engines.
+#[test]
+fn a_declaration_renders_letterhead_free_in_both_engines() {
+    let work = TempDir::new().unwrap();
+    let template = write(&work, "declaration.md", DECLARATION);
+
+    let pdf_out = work.path().join("declaration.pdf");
+    let pdf_result = render_pdf(&[template.as_os_str(), "--out".as_ref(), pdf_out.as_os_str()]);
+    assert!(
+        pdf_result.status.success(),
+        "declaration pdf failed: {}",
+        String::from_utf8_lossy(&pdf_result.stderr)
+    );
+    assert!(pdf_out.exists() && fs::metadata(&pdf_out).unwrap().len() > 0);
+
+    let docx_out = work.path().join("declaration.docx");
+    let word_result = render_word(&[template.as_os_str(), "--out".as_ref(), docx_out.as_os_str()]);
+    assert!(
+        word_result.status.success(),
+        "declaration word failed: {}",
+        String::from_utf8_lossy(&word_result.stderr)
+    );
+    assert!(docx_out.exists() && fs::metadata(&docx_out).unwrap().len() > 0);
+}
 
 fn pleading_fixture(jurisdiction: &str) -> String {
     VALID_PLEADING.replace("{JURISDICTION}", jurisdiction)
@@ -1551,31 +1583,27 @@ fn a_plain_document_in_a_project_needs_no_brand() {
 }
 
 #[test]
-fn notation_pdf_refuses_form_output_before_writing_a_plain_pdf() {
+fn notation_pdf_refuses_an_unregistered_form_before_writing_a_plain_pdf() {
     let dir = TempDir::new().unwrap();
     let source = include_str!(
         "../../templates/notations/forms/united_states/nevada/state/nv__llc_formation.md"
     );
-    for (template, expected) in [
-        (source.to_string(), "server-side notation workflow"),
-        (
-            source.replace("form: nv__llc_formation", "form: unknown_form_fixture"),
-            "not in the form registry",
-        ),
-    ] {
-        let input = dir.path().join("nv__llc_formation.md");
-        let output = dir.path().join("filled.pdf");
-        fs::write(&input, template).unwrap();
-        let result = Command::new(cargo_bin("hudson"))
-            .args(["notation", "pdf", "--preview"])
-            .arg(&input)
-            .arg("--out")
-            .arg(&output)
-            .output()
-            .unwrap();
-        assert!(!result.status.success());
-        let stderr = String::from_utf8_lossy(&result.stderr);
-        assert!(stderr.contains(expected), "{stderr}");
-        assert!(!output.exists());
-    }
+    let template = source.replace("form: nv__llc_formation", "form: unknown_form_fixture");
+    let input = dir.path().join("nv__llc_formation.md");
+    let output = dir.path().join("filled.pdf");
+    fs::write(&input, template).unwrap();
+    let result = Command::new(cargo_bin("hudson"))
+        .args(["notation", "pdf", "--preview"])
+        .arg(&input)
+        .arg("--out")
+        .arg(&output)
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        stderr.contains("not in the vendored forms registry"),
+        "{stderr}"
+    );
+    assert!(!output.exists());
 }

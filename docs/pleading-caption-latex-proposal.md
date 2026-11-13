@@ -22,9 +22,10 @@ Preserve attorney contact hard breaks, a two-column party and case caption, docu
 request-response grouping, and an intact verification. Substitution values must be escaped for the target syntax and
 must not become executable LaTeX or Typst. Never put client data in fixtures.
 
-The present PDF calibration intentionally uses a 27-line 24-point grid. An optional 28-line profile needs its own
-baseline and margin measurements; changing the global count alone is insufficient. Do not describe the current count
-alone as a proved rule violation. Word must use the same profile measurements instead of silently losing the rail.
+The present PDF calibration uses a 28-line 24-point grid, pinned by `Calibration::DEFAULT` and the
+`text_height_is_twenty_eight_twenty_four_point_lines` test. An alternative line count needs its own baseline and margin
+measurements; changing the global count alone is insufficient. Do not describe the current count alone as a proved rule
+violation. Word must use the same profile measurements instead of silently losing the rail.
 
 ## LaTeX spike
 

@@ -144,7 +144,9 @@ pub use row_actions::RowActions;
 pub use sample_matters_banner::render_sample_matters_banner;
 pub use sample_matters_banner::{SampleMattersBanner, SAMPLE_MATTERS_BANNER_ID};
 pub use separator::{Separator, SeparatorOrientation};
-pub use signature_seal::{provider_label, signed_on, SignatureSeal, SignatureSealData};
+pub use signature_seal::{
+    provider_label, signed_on, SealRole, SealSigner, SealState, SignatureSeal, SignatureSealData,
+};
 pub use site_footer::{
     FooterAttorney, FooterBarLicense, FooterMembership, FooterNavLink, FooterOffice,
     FooterSocialLink, SiteFooterLegal, FOOTER_TAGLINE,

@@ -14,7 +14,8 @@
 //!
 //! ~~~text
 //! ```caption
-//! counsel: Pat Counsel (SBN 000000)
+//! counsel: Pat Counsel, Esq.
+//! counsel: SBN 000000
 //! court: SUPERIOR COURT OF CALIFORNIA
 //! parties: SAMPLE PLAINTIFF, Plaintiff,
 //! case: Case No. 00CV000000
@@ -364,6 +365,18 @@ pub fn has_draft_counsel_signature(body: &str) -> bool {
         after.find("-->").is_some_and(|end| {
             counsel_signature(&format!("<!--{}-->", &after[..end])) == Some(CounselSignature::Draft)
         })
+    })
+}
+
+/// Whether `body` carries a counsel signature block at all, draft or
+/// signed. A pleading's date line belongs above every one of them, and the
+/// final-export gate asks after them together with `matter.signed_on`.
+#[must_use]
+pub fn has_counsel_signature(body: &str) -> bool {
+    body.split("<!--").skip(1).any(|after| {
+        after
+            .find("-->")
+            .is_some_and(|end| counsel_signature(&format!("<!--{}-->", &after[..end])).is_some())
     })
 }
 
@@ -718,8 +731,16 @@ mod tests {
 
         let body = format!("<!-- keep -->\nSubmitted,\n\n{COUNSEL_SIGNATURE}\n\n{SIGNER_BOX}\n");
         assert!(has_draft_counsel_signature(&body));
+        assert!(has_counsel_signature(&body));
         let final_body = sign_counsel_signatures(&body, "Pat Sample");
         assert!(!has_draft_counsel_signature(&final_body));
+        assert!(
+            has_counsel_signature(&final_body),
+            "a signed block still is one"
+        );
+        assert!(!has_counsel_signature(&format!(
+            "<!-- keep -->\nText\n\n{SIGNER_BOX}\n"
+        )));
         assert_eq!(
             final_body,
             format!(

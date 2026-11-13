@@ -95,7 +95,9 @@ fn two_pleadings_share_one_matter_with_no_caption_text_in_either_body() {
         for shared in [
             "Case No. 00CV000000",
             "Dept. 12",
-            "Pat Sample (SBN 000000)",
+            // LAW-242 puts the bar number on its own line under the name.
+            "Pat Sample, Esq.",
+            "SBN 000000",
             "COUNTY OF SAMPLE",
         ] {
             assert_eq!(
@@ -304,7 +306,9 @@ fn word_carries_the_same_composed_caption_and_footer() {
     let document = docx_part(&fs::read(&out).unwrap(), "word/document.xml");
     for text in [
         "Case No. 00CV000000",
-        "Pat Sample (SBN 000000)",
+        // LAW-242 puts the bar number on its own line under the name.
+        "Pat Sample, Esq.",
+        "SBN 000000",
         "August 14, 2026",
     ] {
         assert!(document.contains(text), "{text}");

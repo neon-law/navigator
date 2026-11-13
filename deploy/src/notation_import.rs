@@ -7,11 +7,29 @@
 //! than splicing edits into the wrong lines. Placeholders are protected: an
 //! edit may rewrite prose around a `{{code}}` or `{{> partial}}` span but
 //! may not drop one the template needs or invent one the template never
-//! had. `--dry-run` prints the plan and the resulting template without
-//! writing anything — the word-editing flow's read-then-approve step.
+//! had. `--dry-run` prints the plan as a block-level diff — every hunk's
+//! old and new block text in full — without writing anything: the
+//! word-editing flow's read-then-approve step. Before anything is written,
+//! the updated template re-runs the project gate's blocking rules, so an
+//! import can never hand the repository a new violation: an edit that
+//! fails a rule the template did not already carry (an over-long heading,
+//! a broken table, a bad frontmatter line) is refused instead of written.
 
 use std::path::Path;
 use std::process::ExitCode;
+
+/// Blocking-rule violation codes for a candidate template body — the
+/// import's gate re-check compares these before and after the edit.
+fn violation_codes(path: &Path, contents: &str) -> Vec<&'static str> {
+    let source = rules::SourceFile {
+        path: path.to_path_buf(),
+        contents: contents.to_string(),
+    };
+    rules::blocking_violations(&source)
+        .into_iter()
+        .map(|violation| violation.code)
+        .collect()
+}
 
 /// One import command: plan, report, and — without `--dry-run` — write.
 pub fn run(template: &Path, edited: &Path, dry_run: bool) -> ExitCode {
@@ -55,9 +73,33 @@ pub fn run(template: &Path, edited: &Path, dry_run: bool) -> ExitCode {
     for hunk in &plan.hunks {
         println!("  {}", hunk.summary());
     }
+
+    // The project gate re-check: the plan promises value-preserving prose,
+    // and the reflow should keep lines inside the gate's width, but the
+    // updated template is checked rather than assumed. An import may not
+    // make the template's gate state worse, so the refusal fires only when
+    // the updated template fails a blocking rule the original did not —
+    // violations the template already carried are not this edit's doing.
+    let before = violation_codes(template, &template_text);
+    let updated_source = rules::SourceFile {
+        path: template.to_path_buf(),
+        contents: applied.clone(),
+    };
+    let introduced: Vec<rules::Violation> = rules::blocking_violations(&updated_source)
+        .into_iter()
+        .filter(|violation| !before.contains(&violation.code))
+        .collect();
+    if !introduced.is_empty() {
+        eprintln!("navigator: import refused: the updated template fails the project gate:");
+        for violation in &introduced {
+            eprintln!("  {violation}");
+        }
+        return ExitCode::from(2);
+    }
+
     if dry_run {
-        println!("\nDry run — the updated template, not written:");
-        println!("{applied}");
+        println!("\nDry run — the block-level diff, not written:");
+        print!("{}", word::diff_report(&plan));
         return ExitCode::SUCCESS;
     }
 
@@ -83,21 +125,35 @@ mod tests {
     use std::path::PathBuf;
     use tempfile::TempDir;
 
-    const TEMPLATE: &str = "# Service Agreement\n\nThis agreement is between {{client_name}} and the Firm.\n\nFees are due on the first of each month.\n";
-    const EDITED: &str = "# Service Agreement\n\nThis agreement is between {{client_name}} and the Firm.\n\nFees are due on the tenth of each month.\n";
+    const TEMPLATE: &str = "---\ntitle: Service Agreement\nkind: agreement\n---\n\n# Service Agreement\n\nThis agreement is between {{client_name}} and the Firm.\n\nFees are due on the first of each month.\n";
+    const EDITED: &str = "---\ntitle: Service Agreement\nkind: agreement\n---\n\n# Service Agreement\n\nThis agreement is between {{client_name}} and the Firm.\n\nFees are due on the tenth of each month.\n";
 
     /// An "edited" Word file for the CLI layer: the same Word render the
     /// export produces, built from text a lawyer changed, with provenance
     /// claiming the original template's bytes. The word crate's own tests
     /// cover the planner; here the render stands in for the lawyer's edit.
+    /// The export renders the frontmatter-stripped body, so the render gets
+    /// the body slice.
     fn edited_docx(original_template: &str) -> Vec<u8> {
+        render_with_hash(&EDITED[word::body_offset(EDITED)..], original_template)
+    }
+
+    /// An edited Word file whose heading is far over the gate's line width —
+    /// the import's reflow deliberately does not touch headings, so the
+    /// project gate re-check must refuse the write.
+    fn gate_failing_docx(original_template: &str) -> Vec<u8> {
+        const LONG_HEADING: &str = "# This heading is deliberately far longer than one hundred and twenty characters so the project gate refuses to accept the import of this template into the repository.\n\nFees are due on the first of each month.\n";
+        render_with_hash(LONG_HEADING, original_template)
+    }
+
+    fn render_with_hash(body: &str, provenance_template: &str) -> Vec<u8> {
         word::render_notation(
-            EDITED,
+            body,
             None,
             &word::RenderOptions {
                 provenance: Some(word::Provenance {
                     template_path: "service.md",
-                    template_hash: &word::template_hash(original_template.as_bytes()),
+                    template_hash: &word::template_hash(provenance_template.as_bytes()),
                 }),
                 ..word::RenderOptions::default()
             },
@@ -168,22 +224,49 @@ mod tests {
         let template = dir.path().join("service.md");
         fs::write(&template, TEMPLATE).unwrap();
         // The lawyer exported and made no edit: the render's text is the
-        // template's own, and the provenance hash still matches the bytes.
+        // template's own body, and the provenance hash still matches the
+        // template's bytes.
         let docx_path = dir.path().join("service.docx");
-        let docx = word::render_notation(
-            TEMPLATE,
-            None,
-            &word::RenderOptions {
-                provenance: Some(word::Provenance {
-                    template_path: "service.md",
-                    template_hash: &word::template_hash(TEMPLATE.as_bytes()),
-                }),
-                ..word::RenderOptions::default()
-            },
-        )
-        .unwrap();
+        let docx = render_with_hash(&TEMPLATE[word::body_offset(TEMPLATE)..], TEMPLATE);
         fs::write(&docx_path, docx).unwrap();
         assert_eq!(run(&template, &docx_path, false), ExitCode::SUCCESS);
         assert_eq!(fs::read_to_string(&template).unwrap(), TEMPLATE);
+    }
+
+    #[test]
+    fn an_edit_that_fails_the_project_gate_is_refused_without_writing() {
+        let dir = TempDir::new().unwrap();
+        let template = dir.path().join("service.md");
+        fs::write(&template, TEMPLATE).unwrap();
+        let docx_path = dir.path().join("service.docx");
+        fs::write(&docx_path, gate_failing_docx(TEMPLATE)).unwrap();
+        assert_eq!(run(&template, &docx_path, false), ExitCode::from(2));
+        assert_eq!(fs::read_to_string(&template).unwrap(), TEMPLATE);
+    }
+
+    #[test]
+    fn a_reflowed_prose_edit_stays_inside_the_gate_width() {
+        const LONG_PARAGRAPH: &str = "---\ntitle: Service Agreement\nkind: agreement\n---\n\n# Service Agreement\n\nThis agreement is between {{client_name}} and the Firm.\n\nThe Firm agrees to provide the professional legal services described in the statement of work, and the client agrees to pay for them monthly, subject to the limitation of liability set forth in the following section of this agreement.\n";
+        let dir = TempDir::new().unwrap();
+        let template = dir.path().join("service.md");
+        fs::write(&template, TEMPLATE).unwrap();
+        let docx_path = dir.path().join("service.docx");
+        fs::write(
+            &docx_path,
+            render_with_hash(
+                &LONG_PARAGRAPH[word::body_offset(LONG_PARAGRAPH)..],
+                TEMPLATE,
+            ),
+        )
+        .unwrap();
+        assert_eq!(run(&template, &docx_path, false), ExitCode::SUCCESS);
+        let applied = fs::read_to_string(&template).unwrap();
+        assert!(
+            applied.lines().all(|line| line.chars().count() <= 120),
+            "{applied}"
+        );
+        // The paragraph survives the wrap as one paragraph of prose.
+        assert!(applied.contains("The Firm agrees to provide"));
+        assert!(applied.contains("section of this agreement."));
     }
 }

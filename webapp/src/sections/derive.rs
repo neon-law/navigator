@@ -843,6 +843,7 @@ mod tests {
             judicial_officer: "Hon. Sample Jurist".into(),
             department: "12".into(),
             filed_on: "2026-02-02".into(),
+            signed_on: None,
             trial_on: None,
             in_re: String::new(),
             page_count: false,

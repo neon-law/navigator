@@ -11,6 +11,7 @@ matter:
     - SUPERIOR COURT OF WASHINGTON, COUNTY OF SAMPLE
   in_re: the Marriage of
   page_count: true
+  signed_on: 2026-11-12
   parties:
     - name: PAT SYNTHETIC ONE
       role: Petitioner

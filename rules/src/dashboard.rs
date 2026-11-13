@@ -728,12 +728,13 @@ pub fn skeleton(kind: Kind) -> Option<Skeleton> {
         | Kind::Directive
         | Kind::Agreement
         | Kind::Pleading
+        | Kind::Declaration
+        | Kind::Affidavit
         | Kind::Onboarding
         | Kind::Offboarding
         | Kind::Memo
         | Kind::Resume
         | Kind::TrialPrep
-        | Kind::Declaration
         | Kind::Event
         | Kind::Post
         | Kind::Workshop
