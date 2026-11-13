@@ -1604,7 +1604,7 @@ fn inbox_list(
                 p { class: "page-subtitle", "No conversations yet." }
             } else {
                 p { id: "inbox-keyboard-help", class: "page-subtitle",
-                    "↑/↓ to move, Enter to open, Esc to return to the list."
+                    "Use the arrow keys to move, Enter to open, and Esc to return to the list."
                 }
                 div { class: "inbox-table__scroll",
                     table { class: "inbox-table", "aria-label": "Conversations",
