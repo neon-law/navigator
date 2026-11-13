@@ -1433,7 +1433,9 @@ async fn merge_people(
                 PersonMergeError::SameRecord => (StatusCode::BAD_REQUEST, "same_person"),
                 PersonMergeError::NotFound(_) => (StatusCode::NOT_FOUND, "not_found"),
                 PersonMergeError::Blocked => (StatusCode::CONFLICT, "blocked"),
-                PersonMergeError::Person(_) | PersonMergeError::Db(_) => {
+                PersonMergeError::Person(_)
+                | PersonMergeError::Db(_)
+                | PersonMergeError::Project(_) => {
                     (StatusCode::INTERNAL_SERVER_ERROR, "merge_failed")
                 }
             };

@@ -1,8 +1,11 @@
-//! PostgreSQL authority for Firms, Brands, Firm Brands and Firm memberships.
+//! PostgreSQL authority for Firms, Brands, Firm Brands, Firm memberships,
+//! Projects and Project participation.
 //!
 //! These are canonical tenancy rows, not mirror payloads. The authority
-//! switch is opt-in during the migration; once enabled, configuration and
-//! database errors are returned to callers and never fall back to SurrealDB.
+//! switch is opt-in per deployment; once enabled, configuration and database
+//! errors are returned to callers and never fall back to SurrealDB. Projects
+//! and their participation ledger keep a SurrealDB compatibility projection
+//! (see `crate::projects`) for the readers that have not moved yet.
 
 use crate::{brands, firms};
 use chrono::{DateTime, Utc};
@@ -10,21 +13,17 @@ use sqlx::Row;
 use uuid::Uuid;
 
 const AUTHORITY_ENV: &str = "NAVIGATOR_POSTGRES_TENANCY_AUTHORITY";
-// Deliberately false in the preparatory tenancy PR. The follow-on authority
-// slice flips this only when Project and access consumers have also moved.
-const CUTOVER_READY: bool = false;
 
 #[cfg(test)]
 tokio::task_local! {
     static TEST_TENANCY_DB: crate::postgres::PostgresDb;
+    static TEST_TENANCY_AUTHORITY: bool;
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum TenancyError {
     #[error("PostgreSQL tenancy authority configuration is invalid")]
     Configuration,
-    #[error("PostgreSQL tenancy authority requires the complete Project and access cutover")]
-    CutoverIncomplete,
     #[error("PostgreSQL is unavailable for tenancy authority")]
     Postgres(#[from] crate::postgres::PostgresError),
     #[error("PostgreSQL tenancy operation failed")]
@@ -33,31 +32,30 @@ pub enum TenancyError {
     InvalidRow,
 }
 
-/// Resolve the migration switch strictly: unset/off means legacy mode, on is
-/// accepted only after the complete cutover, and unknown values fail closed.
+/// Resolve the switch strictly: unset/off means legacy mode, on means
+/// PostgreSQL authority, and unknown values fail closed.
 pub(crate) fn enabled() -> Result<bool, TenancyError> {
+    #[cfg(test)]
+    if let Ok(enabled) = TEST_TENANCY_AUTHORITY.try_with(|enabled| *enabled) {
+        return Ok(enabled);
+    }
     let value = match std::env::var(AUTHORITY_ENV) {
         Err(std::env::VarError::NotPresent) => return Ok(false),
         Err(std::env::VarError::NotUnicode(_)) => return Err(TenancyError::Configuration),
         Ok(value) => value,
     };
-    enabled_value(Some(&value), CUTOVER_READY)
+    enabled_value(Some(&value))
 }
 
-fn enabled_value(value: Option<&str>, cutover_ready: bool) -> Result<bool, TenancyError> {
-    let configured = match value {
-        None | Some("0" | "false") => false,
-        Some("1" | "true") => true,
-        Some(_) => return Err(TenancyError::Configuration),
-    };
-    if configured && !cutover_ready {
-        Err(TenancyError::CutoverIncomplete)
-    } else {
-        Ok(configured)
+fn enabled_value(value: Option<&str>) -> Result<bool, TenancyError> {
+    match value {
+        None | Some("0" | "false") => Ok(false),
+        Some("1" | "true") => Ok(true),
+        Some(_) => Err(TenancyError::Configuration),
     }
 }
 
-async fn db() -> Result<crate::postgres::PostgresDb, TenancyError> {
+pub(crate) async fn db() -> Result<crate::postgres::PostgresDb, TenancyError> {
     #[cfg(test)]
     if let Ok(pg) = TEST_TENANCY_DB.try_with(Clone::clone) {
         return Ok(pg);
@@ -71,6 +69,19 @@ pub(crate) async fn with_test_db<T>(
     future: impl std::future::Future<Output = T>,
 ) -> T {
     TEST_TENANCY_DB.scope(pg, future).await
+}
+
+/// Run `future` as a deployment with the tenancy switch set to `enabled`,
+/// resolving PostgreSQL to `pg`.
+#[cfg(test)]
+pub(crate) async fn with_test_authority<T>(
+    pg: crate::postgres::PostgresDb,
+    enabled: bool,
+    future: impl std::future::Future<Output = T>,
+) -> T {
+    TEST_TENANCY_AUTHORITY
+        .scope(enabled, TEST_TENANCY_DB.scope(pg, future))
+        .await
 }
 
 fn time(value: DateTime<Utc>) -> String {
@@ -1084,21 +1095,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tenancy_authority_fails_closed_until_project_cutover_is_ready() {
-        assert!(!enabled_value(None, false).unwrap());
-        assert!(!enabled_value(Some("0"), false).unwrap());
-        assert!(!enabled_value(Some("false"), false).unwrap());
+    fn tenancy_authority_switch_parses_strictly() {
+        assert!(!enabled_value(None).unwrap());
+        assert!(!enabled_value(Some("0")).unwrap());
+        assert!(!enabled_value(Some("false")).unwrap());
+        assert!(enabled_value(Some("1")).unwrap());
+        assert!(enabled_value(Some("true")).unwrap());
         assert!(matches!(
-            enabled_value(Some("1"), false),
-            Err(TenancyError::CutoverIncomplete)
-        ));
-        assert!(matches!(
-            enabled_value(Some("true"), false),
-            Err(TenancyError::CutoverIncomplete)
-        ));
-        assert!(enabled_value(Some("1"), true).unwrap());
-        assert!(matches!(
-            enabled_value(Some("yes"), true),
+            enabled_value(Some("yes")),
             Err(TenancyError::Configuration)
         ));
     }

@@ -29,6 +29,9 @@ pub enum PersonMergeError {
     /// A database operation failed.
     #[error("database: {0}")]
     Db(#[from] surrealdb::Error),
+    /// The Project participation ledger could not be read or republished.
+    #[error(transparent)]
+    Project(#[from] crate::projects::ProjectStoreError),
 }
 
 /// What a merge did.
@@ -234,6 +237,18 @@ pub async fn merge(
     // People authority rather than half-move.
     persons::aliases(db, keep_id).await?;
 
+    // Participation rows the relink rewrites or deletes, so the Project
+    // ledger can be republished once the relink commits.
+    let mut participations: Vec<Uuid> = Vec::new();
+    for person in [drop_id, keep_id] {
+        participations.extend(
+            crate::projects::participations_for_person(db, person)
+                .await?
+                .into_iter()
+                .map(|row| row.id),
+        );
+    }
+
     let script = relink_script();
     crate::surreal::retry::writing(|| {
         db.query(script.as_str())
@@ -243,6 +258,7 @@ pub async fn merge(
             .bind(("drop_uuid", drop_id))
     })
     .await?;
+    crate::projects::publish_participations(db, participations).await?;
     crate::postgres_mirror::after_write(db, MirrorKey::PersonMailbox(keep_id)).await;
     persons::delete(db, drop_id).await?;
 

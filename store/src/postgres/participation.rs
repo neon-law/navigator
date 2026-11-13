@@ -1,7 +1,7 @@
 //! Canonical PostgreSQL Project participation ledger.
 //!
-//! The application authority guard remains closed until Projects and their
-//! access consumers move together. These operations never read SurrealDB.
+//! `crate::projects` routes participation reads, writes and access checks
+//! here under tenancy authority. These operations never read SurrealDB.
 
 use super::PostgresDb;
 use crate::projects::{DriSide, PersonProjectRole};
@@ -63,6 +63,30 @@ pub async fn for_person_on(
         .as_ref()
         .map(row)
         .transpose()
+}
+
+/// Read one participation row by its id.
+pub async fn by_id_on(
+    pg: &PostgresDb,
+    id: Uuid,
+) -> Result<Option<PersonProjectRole>, ParticipationError> {
+    sqlx::query("SELECT * FROM person_project_role WHERE id=$1")
+        .bind(id)
+        .fetch_optional(pg.pool())
+        .await?
+        .as_ref()
+        .map(row)
+        .transpose()
+}
+
+/// Every participation row, ordered for the lawyer directory.
+pub async fn all_on(pg: &PostgresDb) -> Result<Vec<PersonProjectRole>, ParticipationError> {
+    sqlx::query("SELECT * FROM person_project_role ORDER BY project_id,person_id")
+        .fetch_all(pg.pool())
+        .await?
+        .iter()
+        .map(row)
+        .collect()
 }
 
 /// Read the Project's ledger in stable insertion order.

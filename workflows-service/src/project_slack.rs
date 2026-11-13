@@ -258,7 +258,11 @@ fn project_id(key: &str) -> Result<uuid::Uuid, LaneError> {
 }
 
 fn project_store_error(error: &store::projects::ProjectStoreError) -> LaneError {
-    if matches!(error, store::projects::ProjectStoreError::Db(_)) {
+    use store::projects::ProjectStoreError as Error;
+    if matches!(
+        error,
+        Error::Db(_) | Error::Postgres(_) | Error::Tenancy(_) | Error::Authority(_)
+    ) {
         LaneError::Store(error.to_string())
     } else {
         LaneError::Refused(error.to_string())
