@@ -874,7 +874,9 @@ source = "git+https://example.invalid/repo"
             .unwrap_or_else(|| panic!("no paragraph for {house}: {out}"));
         let flat = paragraph.replace('\n', " ");
         assert!(
-            flat.contains("these names: DeleteYourData.com, DeleteYourDebt.com, and Guieb & Shook."),
+            flat.contains(
+                "these names: DeleteYourData.com, DeleteYourDebt.com, and Guieb & Shook."
+            ),
             "{flat}"
         );
         assert!(flat.contains("NEON LAW is addressed in NOTICE."), "{flat}");

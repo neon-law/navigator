@@ -254,7 +254,10 @@ mod tests {
         );
         let other = compiled_firm_footer_model(views::brand::BrandKey::Vesta, 2026);
         assert_eq!(other.legal_entity, "Lex Tecnica, Ltd.");
-        assert_eq!(other.firm_home_href, "", "another firm's brand links no Guieb home");
+        assert_eq!(
+            other.firm_home_href, "",
+            "another firm's brand links no Guieb home"
+        );
     }
 
     /// The resolver reads the Firm's Entity, and grants compiled identity only to the anchored one.

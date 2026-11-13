@@ -3253,7 +3253,6 @@ pub fn practice_worn_brand_keys() -> Vec<&'static str> {
     seeded_brand_keys(SeedFirm::Practice).collect()
 }
 
-
 /// The one practice this deployment already is, wearing every registered
 /// house-brand key the Lex firm does not own. Resolves or creates the Firm
 /// first (ENG-659: every compiled brand must be created *as* that Firm's
@@ -4331,10 +4330,7 @@ mod tests {
     /// read as one registry.
     #[test]
     fn compiled_brands_cover_every_closed_brand_key() {
-        let seeded: Vec<&str> = COMPILED_BRANDS
-            .iter()
-            .map(|brand| brand.key)
-            .collect();
+        let seeded: Vec<&str> = COMPILED_BRANDS.iter().map(|brand| brand.key).collect();
         assert_eq!(
             seeded,
             crate::firms::CLOSED_BRAND_KEYS.to_vec(),
@@ -7284,7 +7280,12 @@ records:
             .unwrap();
         assert_eq!(
             neon_keys,
-            ["neon", "delete-your-data", "delete-your-debt", "guieb-shook"]
+            [
+                "neon",
+                "delete-your-data",
+                "delete-your-debt",
+                "guieb-shook"
+            ]
         );
         let lex_keys = crate::firms::brand_keys_for_firm(&surreal, lex.id)
             .await
