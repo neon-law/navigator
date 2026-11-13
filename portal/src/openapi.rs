@@ -1296,7 +1296,8 @@ fn canonical_document(base: &str) -> Value {
                 "plan_closed_on": { "type": ["string", "null"], "format": "date" }
               } } } } },
               "401": { "description": "No authenticated session" },
-              "404": { "description": "No such Project, a Project with no Firm, or the caller is not a member of its Firm" }
+              "404": { "description": "No such Project, a Project with no Firm, or the caller is not a member of its Firm" },
+              "503": { "description": "The matter links a plan and the PostgreSQL plan store is unavailable (`legal_plans_unavailable`)" }
             }
           },
           "patch": {
@@ -1342,7 +1343,8 @@ fn canonical_document(base: &str) -> Value {
               } } } } },
               "400": { "description": "A field is invalid, or `legal_plan` names no plan of the Firm" },
               "401": { "description": "No authenticated session" },
-              "404": { "description": "No such Project, a Project with no Firm, or the caller is not a member of its Firm" }
+              "404": { "description": "No such Project, a Project with no Firm, or the caller is not a member of its Firm" },
+              "503": { "description": "The PostgreSQL plan store is unavailable (`legal_plans_unavailable`)" }
             }
           }
         },
