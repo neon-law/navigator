@@ -406,6 +406,9 @@ const FORM_WA_SMALL_CLAIMS_NOTICE: &str = include_str!(
 const FORM_WA_SMALL_CLAIMS_PLAINTIFF_PACKET: &str = include_str!(
     "../../templates/notations/forms/united_states/washington/king_county_district_court/wa__small_claims_plaintiff_packet.md"
 );
+const FORM_WA_BENTON_COUNTY_DECLARATION: &str = include_str!(
+    "../../templates/notations/forms/united_states/washington/benton_county_superior_court/wa__benton_county_declaration.md"
+);
 
 /// Every published notation whose Workflow the start door may open intake
 /// for: one per show page that declares a `workflow:`, keyed by its slug, with
@@ -780,6 +783,11 @@ fn notation_preview_docs() -> Vec<webapp::notation_preview::PreviewDoc> {
             "wa-small-claims-plaintiff-packet",
             "notations/forms/united_states/washington/king_county_district_court/wa__small_claims_plaintiff_packet.md",
             FORM_WA_SMALL_CLAIMS_PLAINTIFF_PACKET,
+        ),
+        preview_doc(
+            "wa-benton-county-declaration",
+            "notations/forms/united_states/washington/benton_county_superior_court/wa__benton_county_declaration.md",
+            FORM_WA_BENTON_COUNTY_DECLARATION,
         ),
     ]);
     docs
@@ -1291,6 +1299,13 @@ fn notations_index_content() -> webapp::catalog_index::CatalogIndexContent {
         "wa-small-claims-plaintiff-packet",
         "Bundled court-form notation.",
         FORM_WA_SMALL_CLAIMS_PLAINTIFF_PACKET,
+    ));
+    content.materials.push(notation_card(
+        "Washington",
+        "Client Declaration — Benton County Superior Court",
+        "wa-benton-county-declaration",
+        "Bundled court-form notation.",
+        FORM_WA_BENTON_COUNTY_DECLARATION,
     ));
     let business = BUSINESS_NOTATIONS
         .iter()
