@@ -5165,9 +5165,9 @@ mod surreal_read_tests {
         )
         .await
         .unwrap();
-        db.query("DEFINE FIELD OVERWRITE brand ON project TYPE option<string>")
+        db.query("ALTER DATABASE COMPATIBILITY 3; DEFINE FIELD OVERWRITE brand ON project TYPE option<string>")
             .await
-            .unwrap();
+            .unwrap().check().unwrap();
         let project_id = uuid::Uuid::now_v7();
         let entity_id = uuid::Uuid::now_v7();
         db.query(
