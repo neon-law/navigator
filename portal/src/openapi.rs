@@ -5058,7 +5058,7 @@ fn canonical_document(base: &str) -> Value {
           "post": {
             "summary": "File a raw .eml message as a matter Communication",
             "description":
-              "Files one raw RFC 822 message the caller already holds (a saved copy, a downloaded export) as a matter \\\n               Communication, entirely server-side — no per-machine Gmail OAuth grant is involved. The message files \\\n               through the idempotent (channel, source_ref) ingest, so re-uploading the same message writes nothing \\\n               a second time. Each attachment files as a linked document under a deterministic slug \\\n               (mail/<message reference>/<index>). Authorization: lawyer or admin, and the caller must participate \\\n               in the matter (out-of-scope → 404). A missing or blank `kind` on a message with attachments is \\\n               `400 kind_required`; non-MIME bytes are `400 not_mime`; a message with no Date header, an \\\n               out-of-range one, or no text body is `400 no_date`, `400 bad_date`, or `400 no_body`. \\\n               `dry_run` lists the attachments and writes nothing.",
+              "Files one raw RFC 822 message the caller already holds (a saved copy, a downloaded export) as a matter \\\n               Communication, entirely server-side — no per-machine Gmail OAuth grant is involved. The message files \\\n               through the idempotent (channel, source_ref) ingest, so re-uploading the same message writes nothing \\\n               a second time. Each attachment files as a linked document under a deterministic slug \\\n               (mail/<message reference>/<index>), unless a live document on the matter already holds the same bytes, \\\n               which the response names under `skipped`. Authorization: lawyer or admin, and the caller must participate \\\n               in the matter (out-of-scope → 404). A missing or blank `kind` on a message with attachments is \\\n               `400 kind_required`; non-MIME bytes are `400 not_mime`; a message with no Date header, an \\\n               out-of-range one, or no text body is `400 no_date`, `400 bad_date`, or `400 no_body`. \\\n               `dry_run` lists the attachments and writes nothing.",
             "parameters": [
               { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
             ],
@@ -5094,7 +5094,8 @@ fn canonical_document(base: &str) -> Value {
                     "content_type": { "type": "string" },
                     "size_bytes": { "type": "integer" }
                   } } },
-                  "filed": { "type": "array", "items": { "type": "object", "required": ["kind", "visibility", "current_version"] } }
+                  "filed": { "type": "array", "items": { "type": "object", "required": ["kind", "visibility", "current_version"] } },
+                  "skipped": { "type": "array", "items": { "type": "object" } }
                 }
               } } } },
               "201": { "description": "The message filed as a Communication, with one pointer per filed attachment", "content": { "application/json": { "schema": {
@@ -5104,7 +5105,12 @@ fn canonical_document(base: &str) -> Value {
                   "deduped": { "type": "boolean" },
                   "communication_id": { "type": "string", "format": "uuid" },
                   "attachments": { "type": "array", "items": { "type": "object" } },
-                  "filed": { "type": "array", "items": { "type": "object", "required": ["kind", "visibility", "current_version"] } }
+                  "filed": { "type": "array", "items": { "type": "object", "required": ["kind", "visibility", "current_version"] } },
+                  "skipped": { "type": "array", "description": "Attachments left unfiled: `already_on_file` names the live document holding the same bytes.", "items": { "type": "object", "required": ["filename", "reason"], "properties": {
+                    "filename": { "type": "string" },
+                    "reason": { "type": "string", "enum": ["already_on_file"] },
+                    "document_slug": { "type": "string" }
+                  } } }
                 }
               } } } },
               "400": { "description": "Unparseable base64 (`not_base64`), unparseable MIME (`not_mime`), a Date problem (`no_date`/`bad_date`), no text body (`no_body`), or a missing `kind` on a message with attachments (`kind_required`)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },

@@ -244,6 +244,7 @@ async fn file_notice_documents(
             &crate::api::MailAttachmentSource {
                 exactly_once: true,
                 attachment_kinds: Some(&kinds),
+                skip: &[],
                 message_id: &row.id.to_string(),
                 sender: &row.external_address,
                 received_at: &row.occurred_at,
@@ -393,6 +394,7 @@ pub(crate) async fn file_message_attachments(
         &crate::api::MailAttachmentSource {
             exactly_once: true,
             attachment_kinds: None,
+            skip: &[],
             message_id: &row.id.to_string(),
             sender: &row.external_address,
             received_at: &row.occurred_at,
