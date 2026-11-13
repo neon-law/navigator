@@ -918,8 +918,10 @@ jobs:
           NAVIGATOR_TEST_POSTGRES_PORT: "25432"
           NAV_REQUIRE_POSTGRES: "1"
           RUST_BACKTRACE: full
-        # Compile at the machine's full width. Test execution uses Rust and
-        # nextest defaults — neither libtest nor nextest gets an extra cap.
+          # Coverage-instrumented routes and the embedded SurrealDB engine
+          # share a test thread. Keep the larger stack in this CI lane.
+          RUST_MIN_STACK: "8388608"
+        # Compile and run at the machine's full width.
         run: |
           set -uo pipefail
           ulimit -n "$(ulimit -Hn)" || true
