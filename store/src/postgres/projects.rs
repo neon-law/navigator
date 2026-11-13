@@ -1,7 +1,7 @@
-//! Native PostgreSQL Project records, preparatory to coherent application authority.
+//! Native PostgreSQL Project records.
 //!
-//! These operations use the supplied PostgreSQL pool exclusively. The shared
-//! tenancy authority guard remains closed until lifecycle and access consumers move.
+//! `crate::projects` routes Project reads and writes here under tenancy
+//! authority. These operations use the supplied PostgreSQL pool exclusively.
 
 use super::PostgresDb;
 use crate::projects::{NewProject, Project};

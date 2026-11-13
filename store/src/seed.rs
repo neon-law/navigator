@@ -2376,10 +2376,7 @@ async fn ensure_participation_in_surreal(
                 // write. Losing that race is not an error — adopt the winner's
                 // row and reconcile its value, the same settle-on-one-row
                 // contract `find_or_create_by_code` gives the project itself.
-                Err(crate::projects::ProjectStoreError::Db(error))
-                    if crate::surreal::retry::unique_violation(&error)
-                        == Some("person_project_role_pair") =>
-                {
+                Err(crate::projects::ProjectStoreError::DuplicateParticipation) => {
                     if let Some(existing) =
                         crate::projects::participation_for_person(surreal, person_id, project_id)
                             .await?

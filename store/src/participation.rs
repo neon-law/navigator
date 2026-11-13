@@ -405,12 +405,7 @@ fn db_add(error: projects::ProjectStoreError) -> AddParticipantError {
     match error {
         projects::ProjectStoreError::NoSuchProject(_) => AddParticipantError::ProjectNotFound,
         projects::ProjectStoreError::NoSuchPerson(_) => AddParticipantError::PersonNotFound,
-        projects::ProjectStoreError::Db(error)
-            if crate::surreal::retry::unique_violation(&error)
-                == Some("person_project_role_pair") =>
-        {
-            AddParticipantError::Duplicate
-        }
+        projects::ProjectStoreError::DuplicateParticipation => AddParticipantError::Duplicate,
         other => AddParticipantError::Db(other.to_string()),
     }
 }
@@ -505,12 +500,7 @@ pub async fn update_participant(
 fn db_update(error: projects::ProjectStoreError) -> UpdateParticipantError {
     match error {
         projects::ProjectStoreError::NoSuchPerson(_) => UpdateParticipantError::PersonNotFound,
-        projects::ProjectStoreError::Db(error)
-            if crate::surreal::retry::unique_violation(&error)
-                == Some("person_project_role_pair") =>
-        {
-            UpdateParticipantError::Duplicate
-        }
+        projects::ProjectStoreError::DuplicateParticipation => UpdateParticipantError::Duplicate,
         other => UpdateParticipantError::Db(other.to_string()),
     }
 }

@@ -283,6 +283,50 @@ impl ProjectRow {
     }
 }
 
+impl ProjectRow {
+    fn from_project(project: &Project) -> Self {
+        let link = |table, id: Option<Uuid>| id.map(|id| record_id(table, id));
+        Self {
+            id: record_id(PROJECT_TABLE, project.id),
+            code: project.code.clone(),
+            name: project.name.clone(),
+            status: project.status.clone(),
+            brand: project.brand.clone(),
+            entity_id: record_id(ENTITY_TABLE, project.entity_id),
+            firm_id: link(crate::firms::TABLE, project.firm_id),
+            jurisdiction_id: link(crate::jurisdictions::TABLE, project.jurisdiction_id),
+            description: project.description.clone(),
+            drive_folder_id: project.drive_folder_id.clone(),
+            repository_url: project.repository_url.clone(),
+            git_initialized_at: project.git_initialized_at.clone(),
+            forge_provisioned_at: project.forge_provisioned_at.clone(),
+            closed_at: project.closed_at.clone(),
+            closure_reason: project.closure_reason.clone(),
+            internal_slack_channel_url: project.internal_slack_channel_url.clone(),
+            external_slack_channel_url: project.external_slack_channel_url.clone(),
+            internal_slack_channel_id: project.internal_slack_channel_id.clone(),
+            private_notion_page_url: project.private_notion_page_url.clone(),
+            shared_notion_page_url: project.shared_notion_page_url.clone(),
+            calendar_id: project.calendar_id.clone(),
+            booking_url: project.booking_url.clone(),
+            onboarding_jurisdiction: project.onboarding_jurisdiction.clone(),
+            client_dri_person_id: link("person", project.client_dri_person_id),
+            legal_plan_id: project.legal_plan_id,
+            plan_member_id: project.plan_member_id.clone(),
+            plan_case_number: project.plan_case_number.clone(),
+            benefit_code: project.benefit_code.clone(),
+            plan_matter_type: project.plan_matter_type.clone(),
+            plan_state: project.plan_state.clone(),
+            plan_assigned_on: project.plan_assigned_on.clone(),
+            plan_accepted_on: project.plan_accepted_on.clone(),
+            plan_closed_on: project.plan_closed_on.clone(),
+            kit_version: project.kit_version.clone(),
+            inserted_at: project.inserted_at.clone(),
+            updated_at: project.updated_at.clone(),
+        }
+    }
+}
+
 pub(crate) const PROJECT_TABLE: &str = "project";
 /// The entities cluster this table links into (ENG-120).
 const ENTITY_TABLE: &str = "entity";
@@ -301,7 +345,7 @@ const PROJECT_SELECT: &str = "id, code, name, status, brand, entity_id, firm_id,
                               plan_accepted_on, plan_closed_on, kit_version, \
                               inserted_at, updated_at";
 
-/// Errors from the SurrealDB Project read seam.
+/// Errors from the Project and participation seams.
 #[derive(Debug, thiserror::Error)]
 pub enum ProjectStoreError {
     #[error("PostgreSQL Project lifecycle state is unavailable")]
@@ -349,6 +393,75 @@ pub enum ProjectStoreError {
     /// read spans four tables, not one.
     #[error("matter lifecycle: {0}")]
     Lifecycle(String),
+    /// The person already holds a participation on the matter
+    /// (`person_project_role_pair`).
+    #[error("that person already participates in the matter")]
+    DuplicateParticipation,
+    #[error("no entity {0}")]
+    NoSuchEntity(Uuid),
+    #[error(transparent)]
+    Tenancy(#[from] crate::postgres::tenancy::TenancyError),
+    /// Under tenancy authority, PostgreSQL did not accept a Project write that
+    /// committed through the SurrealDB transaction path.
+    #[error("PostgreSQL did not accept the Project write: {0}")]
+    Authority(#[from] crate::postgres_mirror::MirrorError),
+    #[error("PostgreSQL Project operation failed: {0}")]
+    Postgres(String),
+}
+
+fn pg_project_error(
+    error: crate::postgres::projects::ProjectError,
+    input: &NewProject,
+) -> ProjectStoreError {
+    use crate::postgres::projects::ProjectError as Pg;
+    match error {
+        Pg::CodeTaken => ProjectStoreError::CodeTaken,
+        Pg::CodeImmutable => ProjectStoreError::CodeImmutable,
+        Pg::UnknownBrand => ProjectStoreError::UnknownBrand(input.brand.clone()),
+        Pg::NoSuchEntity => ProjectStoreError::NoSuchEntity(input.entity_id),
+        Pg::NoSuchFirm => ProjectStoreError::NoSuchFirm(input.firm_id.unwrap_or_default()),
+        Pg::NoSuchJurisdiction => {
+            ProjectStoreError::NoSuchJurisdiction(input.jurisdiction_id.unwrap_or_default())
+        }
+        Pg::WriteReturnedNothing => ProjectStoreError::WriteReturnedNothing,
+        other => ProjectStoreError::Postgres(other.to_string()),
+    }
+}
+
+impl From<crate::postgres::projects::ProjectError> for ProjectStoreError {
+    fn from(error: crate::postgres::projects::ProjectError) -> Self {
+        Self::Postgres(error.to_string())
+    }
+}
+
+fn pg_participation_error(
+    error: crate::postgres::participation::ParticipationError,
+    project_id: Uuid,
+    person_id: Uuid,
+) -> ProjectStoreError {
+    use crate::postgres::participation::ParticipationError as Pg;
+    match error {
+        Pg::NoSuchPerson => ProjectStoreError::NoSuchPerson(person_id),
+        Pg::NoSuchProject => ProjectStoreError::NoSuchProject(project_id),
+        Pg::Duplicate => ProjectStoreError::DuplicateParticipation,
+        other => ProjectStoreError::Postgres(other.to_string()),
+    }
+}
+
+impl From<ProjectStoreError> for ProjectCommandError {
+    fn from(error: ProjectStoreError) -> Self {
+        Self::Db(error.to_string())
+    }
+}
+
+/// The PostgreSQL handle when tenancy authority owns Projects and their
+/// participation ledger (`NAVIGATOR_POSTGRES_TENANCY_AUTHORITY`), else `None`.
+async fn authority() -> Result<Option<PostgresDb>, ProjectStoreError> {
+    if crate::postgres::tenancy::enabled()? {
+        Ok(Some(Box::pin(crate::postgres::tenancy::db()).await?))
+    } else {
+        Ok(None)
+    }
 }
 
 impl From<crate::external_identities::ExternalIdentityError> for ProjectStoreError {
@@ -358,14 +471,16 @@ impl From<crate::external_identities::ExternalIdentityError> for ProjectStoreErr
 }
 
 fn classify_project_write(error: surrealdb::Error) -> ProjectStoreError {
-    if crate::surreal::retry::unique_violation(&error) == Some("project_code") {
-        ProjectStoreError::CodeTaken
-    } else {
-        let message = error.to_string();
-        if message.contains("field `code`") && message.contains("readonly") {
-            ProjectStoreError::CodeImmutable
-        } else {
-            ProjectStoreError::Db(error)
+    match crate::surreal::retry::unique_violation(&error) {
+        Some("project_code") => ProjectStoreError::CodeTaken,
+        Some("person_project_role_pair") => ProjectStoreError::DuplicateParticipation,
+        _ => {
+            let message = error.to_string();
+            if message.contains("field `code`") && message.contains("readonly") {
+                ProjectStoreError::CodeImmutable
+            } else {
+                ProjectStoreError::Db(error)
+            }
         }
     }
 }
@@ -470,6 +585,21 @@ impl PersonProjectRoleRow {
     }
 }
 
+impl PersonProjectRoleRow {
+    fn from_role(role: &PersonProjectRole) -> Self {
+        Self {
+            id: record_id(PERSON_PROJECT_ROLE_TABLE, role.id),
+            person_id: record_id("person", role.person_id),
+            project_id: record_id(PROJECT_TABLE, role.project_id),
+            participation: role.participation.clone(),
+            is_lawyer_dri: role.is_lawyer_dri,
+            is_client_dri: role.is_client_dri,
+            inserted_at: role.inserted_at.clone(),
+            updated_at: role.updated_at.clone(),
+        }
+    }
+}
+
 const PERSON_PROJECT_ROLE_SELECT: &str =
     "id, person_id, project_id, participation, is_lawyer_dri, \
                                            is_client_dri, inserted_at, updated_at";
@@ -495,6 +625,20 @@ pub fn participation_for_role(role: Role) -> &'static str {
 
 /// All participation rows for a matter, in stable insertion order.
 pub async fn participations_for_project(
+    surreal: &SurrealDb,
+    project_id: Uuid,
+) -> Result<Vec<PersonProjectRole>, ProjectStoreError> {
+    if let Some(pg) = authority().await? {
+        return Box::pin(crate::postgres::participation::for_project_on(
+            &pg, project_id,
+        ))
+        .await
+        .map_err(|error| pg_participation_error(error, project_id, Uuid::nil()));
+    }
+    participations_for_project_in_surreal(surreal, project_id).await
+}
+
+async fn participations_for_project_in_surreal(
     surreal: &SurrealDb,
     project_id: Uuid,
 ) -> Result<Vec<PersonProjectRole>, ProjectStoreError> {
@@ -535,6 +679,11 @@ pub async fn lawyer_dri_people(
 pub async fn all_participations(
     surreal: &SurrealDb,
 ) -> Result<Vec<PersonProjectRole>, ProjectStoreError> {
+    if let Some(pg) = authority().await? {
+        return Box::pin(crate::postgres::participation::all_on(&pg))
+            .await
+            .map_err(|error| pg_participation_error(error, Uuid::nil(), Uuid::nil()));
+    }
     let mut response = surreal
         .query(format!(
             "SELECT {PERSON_PROJECT_ROLE_SELECT} FROM {PERSON_PROJECT_ROLE_TABLE} \
@@ -554,6 +703,19 @@ pub async fn participation_by_id(
     surreal: &SurrealDb,
     id: Uuid,
 ) -> Result<Option<PersonProjectRole>, ProjectStoreError> {
+    if let Some(pg) = authority().await? {
+        return Box::pin(crate::postgres::participation::by_id_on(&pg, id))
+            .await
+            .map_err(|error| pg_participation_error(error, Uuid::nil(), Uuid::nil()));
+    }
+    participation_by_id_in_surreal(surreal, id).await
+}
+
+/// The SurrealDB copy of one participation row: the mirror's source.
+pub(crate) async fn participation_by_id_in_surreal(
+    surreal: &SurrealDb,
+    id: Uuid,
+) -> Result<Option<PersonProjectRole>, ProjectStoreError> {
     let mut response = surreal
         .query(format!("SELECT {PERSON_PROJECT_ROLE_SELECT} FROM ONLY $id"))
         .bind(("id", record_id(PERSON_PROJECT_ROLE_TABLE, id)))
@@ -563,24 +725,64 @@ pub async fn participation_by_id(
     Ok(row.and_then(PersonProjectRoleRow::into_role))
 }
 
-/// Mirror one Project write into PostgreSQL; a no-op unless the mirror is
-/// enabled. Returns the Project unchanged.
-async fn mirrored(surreal: &SurrealDb, project: Option<Project>) -> Option<Project> {
-    if let Some(project) = &project {
-        crate::postgres_mirror::after_write(surreal, MirrorKey::Project(project.id)).await;
+/// Publish rows a SurrealDB transaction wrote. Under tenancy authority the
+/// write is not complete until PostgreSQL holds every row, so a refusal is
+/// returned; otherwise the best-effort mirror runs when configured.
+async fn publish(
+    surreal: &SurrealDb,
+    keys: impl IntoIterator<Item = MirrorKey>,
+) -> Result<Option<PostgresDb>, ProjectStoreError> {
+    let Some(pg) = authority().await? else {
+        crate::postgres_mirror::after_writes(surreal, keys).await;
+        return Ok(None);
+    };
+    for key in keys {
+        Box::pin(crate::postgres_mirror::mirror(surreal, &pg, &key)).await?;
     }
-    project
+    Ok(Some(pg))
 }
 
-/// Mirror a Project and every participation on it, parent first.
-async fn mirror_project_with_participations(surreal: &SurrealDb, project_id: Uuid) {
-    if !crate::postgres_mirror::enabled() {
-        return;
+/// Publish participation rows a whole-graph SurrealDB rewrite moved or
+/// deleted ([`crate::person_merge`]).
+pub(crate) async fn publish_participations(
+    surreal: &SurrealDb,
+    ids: impl IntoIterator<Item = Uuid>,
+) -> Result<(), ProjectStoreError> {
+    publish(
+        surreal,
+        ids.into_iter().map(MirrorKey::ProjectParticipation),
+    )
+    .await?;
+    Ok(())
+}
+
+/// Publish one Project write and return the authoritative row: PostgreSQL's
+/// under tenancy authority, otherwise the SurrealDB row written.
+async fn mirrored(
+    surreal: &SurrealDb,
+    project: Option<Project>,
+) -> Result<Option<Project>, ProjectStoreError> {
+    let Some(project) = project else {
+        return Ok(None);
+    };
+    match Box::pin(publish(surreal, [MirrorKey::Project(project.id)])).await? {
+        Some(pg) => Box::pin(crate::postgres::projects::find_by_id_on(&pg, project.id))
+            .await
+            .map_err(ProjectStoreError::from),
+        None => Ok(Some(project)),
     }
-    let participations = participations_for_project(surreal, project_id)
-        .await
-        .unwrap_or_default();
-    crate::postgres_mirror::after_writes(
+}
+
+/// Publish a Project and every participation on it, parent first.
+async fn mirror_project_with_participations(
+    surreal: &SurrealDb,
+    project_id: Uuid,
+) -> Result<(), ProjectStoreError> {
+    if !crate::postgres_mirror::enabled() && authority().await?.is_none() {
+        return Ok(());
+    }
+    let participations = participations_for_project_in_surreal(surreal, project_id).await?;
+    publish(
         surreal,
         std::iter::once(MirrorKey::Project(project_id)).chain(
             participations
@@ -588,7 +790,40 @@ async fn mirror_project_with_participations(surreal: &SurrealDb, project_id: Uui
                 .map(|role| MirrorKey::ProjectParticipation(role.id)),
         ),
     )
-    .await;
+    .await?;
+    Ok(())
+}
+
+/// Write PostgreSQL's committed Project into the SurrealDB compatibility copy
+/// that the readers still on SurrealDB query.
+async fn project_into_surreal(
+    surreal: &SurrealDb,
+    project: &Project,
+) -> Result<(), ProjectStoreError> {
+    writing_project(|| {
+        surreal
+            .query("UPSERT $id CONTENT $row RETURN NONE")
+            .bind(("id", record_id(PROJECT_TABLE, project.id)))
+            .bind(("row", ProjectRow::from_project(project)))
+    })
+    .await?;
+    Ok(())
+}
+
+/// Write PostgreSQL's committed participation row into the SurrealDB
+/// compatibility copy.
+async fn participation_into_surreal(
+    surreal: &SurrealDb,
+    role: &PersonProjectRole,
+) -> Result<(), ProjectStoreError> {
+    writing_project(|| {
+        surreal
+            .query("UPSERT $id CONTENT $row RETURN NONE")
+            .bind(("id", record_id(PERSON_PROJECT_ROLE_TABLE, role.id)))
+            .bind(("row", PersonProjectRoleRow::from_role(role)))
+    })
+    .await?;
+    Ok(())
 }
 
 /// Add one person to a Project, validating both record links at the command
@@ -599,6 +834,17 @@ pub async fn add_participation(
     person_id: Uuid,
     participation: &str,
 ) -> Result<PersonProjectRole, ProjectStoreError> {
+    if let Some(pg) = authority().await? {
+        // PostgreSQL derives the label from the Person's tier
+        // ([`participation_for_role`]) inside the insert's transaction.
+        let role = Box::pin(crate::postgres::participation::add_on(
+            &pg, project_id, person_id,
+        ))
+        .await
+        .map_err(|error| pg_participation_error(error, project_id, person_id))?;
+        Box::pin(participation_into_surreal(surreal, &role)).await?;
+        return Ok(role);
+    }
     if crate::persons::find_by_id(surreal, person_id)
         .await?
         .is_none()
@@ -639,6 +885,17 @@ pub async fn update_participation(
     person_id: Uuid,
     participation: &str,
 ) -> Result<Option<PersonProjectRole>, ProjectStoreError> {
+    if let Some(pg) = authority().await? {
+        let role = Box::pin(crate::postgres::participation::update_on(
+            &pg, role_id, person_id,
+        ))
+        .await
+        .map_err(|error| pg_participation_error(error, Uuid::nil(), person_id))?;
+        if let Some(role) = &role {
+            Box::pin(participation_into_surreal(surreal, role)).await?;
+        }
+        return Ok(role);
+    }
     if crate::persons::find_by_id(surreal, person_id)
         .await?
         .is_none()
@@ -669,13 +926,22 @@ pub async fn remove_participation(
     surreal: &SurrealDb,
     role_id: Uuid,
 ) -> Result<(), ProjectStoreError> {
+    let pg = authority().await?;
+    if let Some(pg) = &pg {
+        Box::pin(crate::postgres::participation::remove_on(pg, role_id))
+            .await
+            .map_err(|error| pg_participation_error(error, Uuid::nil(), Uuid::nil()))?;
+    }
     writing_project(|| {
         surreal
             .query("DELETE $id")
             .bind(("id", record_id(PERSON_PROJECT_ROLE_TABLE, role_id)))
     })
     .await?;
-    crate::postgres_mirror::after_write(surreal, MirrorKey::ProjectParticipation(role_id)).await;
+    if pg.is_none() {
+        crate::postgres_mirror::after_write(surreal, MirrorKey::ProjectParticipation(role_id))
+            .await;
+    }
     Ok(())
 }
 
@@ -685,6 +951,13 @@ pub async fn participation_for_person(
     person_id: Uuid,
     project_id: Uuid,
 ) -> Result<Option<PersonProjectRole>, ProjectStoreError> {
+    if let Some(pg) = authority().await? {
+        return Box::pin(crate::postgres::participation::for_person_on(
+            &pg, person_id, project_id,
+        ))
+        .await
+        .map_err(|error| pg_participation_error(error, project_id, person_id));
+    }
     let mut response = surreal
         .query(format!(
             "SELECT {PERSON_PROJECT_ROLE_SELECT} FROM ONLY {PERSON_PROJECT_ROLE_TABLE} \
@@ -703,6 +976,13 @@ pub async fn participations_for_person(
     surreal: &SurrealDb,
     person_id: Uuid,
 ) -> Result<Vec<PersonProjectRole>, ProjectStoreError> {
+    if let Some(pg) = authority().await? {
+        return Box::pin(crate::postgres::participation::for_person_projects_on(
+            &pg, person_id,
+        ))
+        .await
+        .map_err(|error| pg_participation_error(error, Uuid::nil(), person_id));
+    }
     let mut response = surreal
         .query(format!(
             "SELECT {PERSON_PROJECT_ROLE_SELECT} FROM {PERSON_PROJECT_ROLE_TABLE} \
@@ -731,19 +1011,11 @@ pub async fn has_firm_participation(
     person_id: Uuid,
     project_id: Uuid,
 ) -> Result<bool, ProjectStoreError> {
-    let mut response = surreal
-        .query(format!(
-            "SELECT VALUE id FROM ONLY {PERSON_PROJECT_ROLE_TABLE} \
-             WHERE person_id = $person_id AND project_id = $project_id \
-             AND participation NOT IN ['client', 'counterparty'] \
-             AND is_client_dri = false LIMIT 1"
-        ))
-        .bind(("person_id", record_id("person", person_id)))
-        .bind(("project_id", record_id(PROJECT_TABLE, project_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let result: Option<surrealdb::types::RecordId> = response.take(0)?;
-    Ok(result.is_some())
+    Ok(participation_for_person(surreal, person_id, project_id)
+        .await?
+        .is_some_and(|row| {
+            !PARTICIPATION_CLIENT_SIDE.contains(&row.participation.as_str()) && !row.is_client_dri
+        }))
 }
 
 /// Whether a lawyer-tier actor may read a Project through the firm lens,
@@ -793,18 +1065,11 @@ pub async fn can_access_as_client_in_surreal(
     let Some(person_id) = person_id else {
         return Ok(false);
     };
-    let mut response = surreal
-        .query(format!(
-            "SELECT VALUE id FROM ONLY {PERSON_PROJECT_ROLE_TABLE} \
-             WHERE person_id = $person_id AND project_id = $project_id \
-             AND (participation IN ['client', 'counterparty'] OR is_client_dri = true) LIMIT 1"
-        ))
-        .bind(("person_id", record_id("person", person_id)))
-        .bind(("project_id", record_id(PROJECT_TABLE, project_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let result: Option<surrealdb::types::RecordId> = response.take(0)?;
-    Ok(result.is_some())
+    Ok(participation_for_person(surreal, person_id, project_id)
+        .await?
+        .is_some_and(|row| {
+            PARTICIPATION_CLIENT_SIDE.contains(&row.participation.as_str()) || row.is_client_dri
+        }))
 }
 
 /// One matter as the Owner/Admin directory lens sees it: what the matter is,
@@ -1229,6 +1494,19 @@ pub async fn designate_dri_in_surreal(
     person_id: Uuid,
     side: DriSide,
 ) -> Result<(), ProjectStoreError> {
+    if let Some(pg) = authority().await? {
+        let role = Box::pin(crate::postgres::participation::designate_dri_on(
+            &pg, project_id, person_id, side,
+        ))
+        .await
+        .map_err(|error| pg_participation_error(error, project_id, person_id))?;
+        let project = Box::pin(crate::postgres::projects::find_by_id_on(&pg, project_id))
+            .await
+            .map_err(ProjectStoreError::from)?
+            .ok_or(ProjectStoreError::NoSuchProject(project_id))?;
+        Box::pin(project_into_surreal(surreal, &project)).await?;
+        return Box::pin(participation_into_surreal(surreal, &role)).await;
+    }
     let Some(person) = crate::persons::find_by_id(surreal, person_id).await? else {
         return Err(ProjectStoreError::NoSuchPerson(person_id));
     };
@@ -1266,8 +1544,7 @@ pub async fn designate_dri_in_surreal(
             .bind(("now", now.clone()))
     })
     .await?;
-    mirror_project_with_participations(surreal, project_id).await;
-    Ok(())
+    mirror_project_with_participations(surreal, project_id).await
 }
 
 /// Drop one participation row's DRI marker for `side`.
@@ -1281,6 +1558,20 @@ pub async fn clear_dri_in_surreal(
     role_id: Uuid,
     side: DriSide,
 ) -> Result<(), ProjectStoreError> {
+    if let Some(pg) = authority().await? {
+        Box::pin(crate::postgres::participation::clear_dri_on(
+            &pg, role_id, side,
+        ))
+        .await
+        .map_err(|error| pg_participation_error(error, Uuid::nil(), Uuid::nil()))?;
+        if let Some(role) = Box::pin(crate::postgres::participation::by_id_on(&pg, role_id))
+            .await
+            .map_err(|error| pg_participation_error(error, Uuid::nil(), Uuid::nil()))?
+        {
+            Box::pin(participation_into_surreal(surreal, &role)).await?;
+        }
+        return Ok(());
+    }
     let flag = match side {
         DriSide::Lawyer => "is_lawyer_dri",
         DriSide::Client => "is_client_dri",
@@ -1304,6 +1595,13 @@ pub async fn clear_dri_in_surreal(
 /// Writes retry only typed Surreal transaction conflicts; a code collision is
 /// a caller-correctable conflict and is never retried as if it were transient.
 pub async fn create(surreal: &SurrealDb, input: &NewProject) -> Result<Project, ProjectStoreError> {
+    if let Some(pg) = authority().await? {
+        let project = Box::pin(crate::postgres::projects::create_on(&pg, input))
+            .await
+            .map_err(|error| pg_project_error(error, input))?;
+        Box::pin(project_into_surreal(surreal, &project)).await?;
+        return Ok(project);
+    }
     if let Some(firm_id) = input.firm_id {
         if crate::firms::find_by_id(surreal, firm_id).await?.is_none() {
             return Err(ProjectStoreError::NoSuchFirm(firm_id));
@@ -1358,7 +1656,7 @@ pub async fn create(surreal: &SurrealDb, input: &NewProject) -> Result<Project, 
     .await?;
     let row: Option<ProjectRow> = response.take(0)?;
     mirrored(surreal, row.and_then(ProjectRow::into_project))
-        .await
+        .await?
         .ok_or(ProjectStoreError::WriteReturnedNothing)
 }
 
@@ -1466,7 +1764,7 @@ pub async fn restore_archived(
     .await?;
     let row: Option<ProjectRow> = response.take(0)?;
     mirrored(surreal, row.and_then(ProjectRow::into_project))
-        .await
+        .await?
         .ok_or(ProjectStoreError::WriteReturnedNothing)?;
     Ok(crate::assets::RowRestore::Created)
 }
@@ -1503,6 +1801,11 @@ pub async fn find_by_code(
     surreal: &SurrealDb,
     code: &str,
 ) -> Result<Option<Project>, ProjectStoreError> {
+    if let Some(pg) = authority().await? {
+        return Box::pin(crate::postgres::projects::find_by_code_on(&pg, code))
+            .await
+            .map_err(ProjectStoreError::from);
+    }
     let mut response = surreal
         .query(format!(
             "SELECT {PROJECT_SELECT} FROM ONLY {PROJECT_TABLE} WHERE code = $code LIMIT 1"
@@ -1555,6 +1858,13 @@ pub async fn upsert_with_id(
     id: Uuid,
     input: &NewProject,
 ) -> Result<Project, ProjectStoreError> {
+    if let Some(pg) = authority().await? {
+        let project = Box::pin(crate::postgres::projects::upsert_with_id_on(&pg, id, input))
+            .await
+            .map_err(|error| pg_project_error(error, input))?;
+        Box::pin(project_into_surreal(surreal, &project)).await?;
+        return Ok(project);
+    }
     if let Some(firm_id) = input.firm_id {
         if crate::firms::find_by_id(surreal, firm_id).await?.is_none() {
             return Err(ProjectStoreError::NoSuchFirm(firm_id));
@@ -1622,7 +1932,7 @@ pub async fn upsert_with_id(
     .await?;
     let row: Option<ProjectRow> = response.take(0)?;
     mirrored(surreal, row.and_then(ProjectRow::into_project))
-        .await
+        .await?
         .ok_or(ProjectStoreError::WriteReturnedNothing)
 }
 
@@ -1631,6 +1941,20 @@ pub async fn upsert_with_id(
 /// This is the validation read a writer uses to prove a project id names a
 /// real row before storing a reference to it.
 pub async fn find_by_id(
+    surreal: &SurrealDb,
+    id: Uuid,
+) -> Result<Option<Project>, ProjectStoreError> {
+    if let Some(pg) = authority().await? {
+        return Box::pin(crate::postgres::projects::find_by_id_on(&pg, id))
+            .await
+            .map_err(ProjectStoreError::from);
+    }
+    find_by_id_in_surreal(surreal, id).await
+}
+
+/// The SurrealDB copy of one Project, lifecycle overlay applied: the
+/// mirror's source.
+pub(crate) async fn find_by_id_in_surreal(
     surreal: &SurrealDb,
     id: Uuid,
 ) -> Result<Option<Project>, ProjectStoreError> {
@@ -1655,6 +1979,11 @@ pub async fn find_by_name(
     surreal: &SurrealDb,
     name: &str,
 ) -> Result<Option<Project>, ProjectStoreError> {
+    if let Some(pg) = authority().await? {
+        return Box::pin(crate::postgres::projects::find_by_name_on(&pg, name))
+            .await
+            .map_err(ProjectStoreError::from);
+    }
     let mut response = surreal
         .query(format!(
             "SELECT {PROJECT_SELECT} FROM ONLY {PROJECT_TABLE} WHERE name = $name LIMIT 1"
@@ -1668,6 +1997,11 @@ pub async fn find_by_name(
 
 /// Every project in stable lawyer-list order.
 pub async fn all(surreal: &SurrealDb) -> Result<Vec<Project>, ProjectStoreError> {
+    if let Some(pg) = authority().await? {
+        return Box::pin(crate::postgres::projects::all_on(&pg))
+            .await
+            .map_err(ProjectStoreError::from);
+    }
     let mut response = surreal
         .query(format!(
             "SELECT {PROJECT_SELECT} FROM {PROJECT_TABLE} ORDER BY name, id"
@@ -2061,7 +2395,7 @@ pub async fn transition_project_attested(
     let updated =
         project_lifecycle_projection(surreal, id, target, closed_at, closure_reason).await?;
     mirrored(surreal, Some(updated))
-        .await
+        .await?
         .ok_or(ProjectCommandError::NotFound)
 }
 
@@ -2385,7 +2719,7 @@ pub async fn set_drive_folder_id(
     let updated: Option<ProjectRow> = response
         .take(0)
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    Ok(mirrored(surreal, updated.and_then(ProjectRow::into_project)).await)
+    Ok(mirrored(surreal, updated.and_then(ProjectRow::into_project)).await?)
 }
 
 /// Record the Slack Web API channel ID provisioned for a matter's private
@@ -2421,7 +2755,7 @@ pub async fn set_internal_slack_channel_id(
     let updated: Option<ProjectRow> = response
         .take(0)
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    Ok(mirrored(surreal, updated.and_then(ProjectRow::into_project)).await)
+    Ok(mirrored(surreal, updated.and_then(ProjectRow::into_project)).await?)
 }
 
 /// Record the canonical Slack URL for a matter's private firm-side channel.
@@ -2462,7 +2796,7 @@ pub async fn set_internal_slack_channel_url(
     let updated: Option<ProjectRow> = response
         .take(0)
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    Ok(mirrored(surreal, updated.and_then(ProjectRow::into_project)).await)
+    Ok(mirrored(surreal, updated.and_then(ProjectRow::into_project)).await?)
 }
 
 /// Record the Slack channel's id and canonical URL in one database update.
@@ -2506,7 +2840,7 @@ pub async fn set_internal_slack_channel(
     let updated: Option<ProjectRow> = response
         .take(0)
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    Ok(mirrored(surreal, updated.and_then(ProjectRow::into_project)).await)
+    Ok(mirrored(surreal, updated.and_then(ProjectRow::into_project)).await?)
 }
 
 /// Set or clear the matter's governing jurisdiction.
@@ -2561,7 +2895,7 @@ pub async fn set_jurisdiction(
     let updated: Option<ProjectRow> = response
         .take(0)
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    Ok(mirrored(surreal, updated.and_then(ProjectRow::into_project)).await)
+    Ok(mirrored(surreal, updated.and_then(ProjectRow::into_project)).await?)
 }
 
 /// Refusal for a `client_dri_person_id` naming a Person who holds no
@@ -2639,7 +2973,7 @@ pub async fn set_client_dri_person_id(
     let updated = find_by_id(surreal, project_id)
         .await
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    Ok(mirrored(surreal, updated).await)
+    Ok(mirrored(surreal, updated).await?)
 }
 
 /// The legal-plan panel columns staged onto a plan matter (ENG-1269). The
@@ -2808,7 +3142,7 @@ pub async fn set_plan_columns(
     let updated: Option<ProjectRow> = response
         .take(0)
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    Ok(mirrored(surreal, updated.and_then(ProjectRow::into_project)).await)
+    Ok(mirrored(surreal, updated.and_then(ProjectRow::into_project)).await?)
 }
 
 /// Record the firm-private Notion page provisioned for a Project. This is a
@@ -2843,7 +3177,7 @@ pub async fn set_private_notion_page_url(
     let updated: Option<ProjectRow> = response
         .take(0)
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    Ok(mirrored(surreal, updated.and_then(ProjectRow::into_project)).await)
+    Ok(mirrored(surreal, updated.and_then(ProjectRow::into_project)).await?)
 }
 
 /// Record the shared Google Calendar provisioned for a Project. Like the
@@ -2907,7 +3241,7 @@ async fn set_optional_column(
     let updated: Option<ProjectRow> = response
         .take(0)
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    Ok(mirrored(surreal, updated.and_then(ProjectRow::into_project)).await)
+    Ok(mirrored(surreal, updated.and_then(ProjectRow::into_project)).await?)
 }
 
 /// Request body for updating a matter's **descriptive** fields through the
@@ -3065,7 +3399,7 @@ pub async fn set_repository_url(
     let updated: Option<ProjectRow> = response
         .take(0)
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    Ok(mirrored(surreal, updated.and_then(ProjectRow::into_project)).await)
+    Ok(mirrored(surreal, updated.and_then(ProjectRow::into_project)).await?)
 }
 
 /// Record a provisioned repository's URL and when it was provisioned in one
@@ -3087,6 +3421,20 @@ pub async fn record_provisioned_repository(
     if !is_valid_repository_url(repository_url.trim()) {
         return Err(ProjectCommandError::Invalid(REPOSITORY_URL_INVALID));
     }
+    if let Some(pg) = authority().await? {
+        let project = Box::pin(crate::postgres::projects::record_provisioned_repository_on(
+            &pg,
+            project_id,
+            repository_url,
+            provisioned_at,
+        ))
+        .await
+        .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
+        if let Some(project) = &project {
+            Box::pin(project_into_surreal(surreal, project)).await?;
+        }
+        return Ok(project);
+    }
     surreal
         .query(
             "UPDATE $id SET repository_url = $url, forge_provisioned_at = $at, updated_at = $at \
@@ -3101,7 +3449,7 @@ pub async fn record_provisioned_repository(
     let project = find_by_id(surreal, project_id)
         .await
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    Ok(mirrored(surreal, project).await)
+    Ok(mirrored(surreal, project).await?)
 }
 
 /// Record that a verified first commit initialized the Project's source at
@@ -3122,6 +3470,20 @@ pub async fn record_source_initialized(
     if !is_valid_repository_url(url) {
         return Err(ProjectCommandError::Invalid(REPOSITORY_URL_INVALID));
     }
+    if let Some(pg) = authority().await? {
+        let project = Box::pin(crate::postgres::projects::record_source_initialized_on(
+            &pg,
+            project_id,
+            repository_url,
+            initialized_at,
+        ))
+        .await
+        .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
+        if let Some(project) = &project {
+            Box::pin(project_into_surreal(surreal, project)).await?;
+        }
+        return Ok(project);
+    }
     surreal
         .query(
             "UPDATE $id SET repository_url = $url, \
@@ -3138,7 +3500,7 @@ pub async fn record_source_initialized(
     let project = find_by_id(surreal, project_id)
         .await
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    Ok(mirrored(surreal, project).await)
+    Ok(mirrored(surreal, project).await?)
 }
 
 /// A matter's descriptive update could not be applied.
@@ -3478,7 +3840,7 @@ async fn update_project_inner(
         .take(0)
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
     mirrored(surreal, updated.and_then(ProjectRow::into_project))
-        .await
+        .await?
         .ok_or(ProjectCommandError::NotFound)
 }
 
@@ -3596,7 +3958,7 @@ pub async fn delete_project_with_surreal(
         .await
         .and_then(surrealdb::IndexedResults::check)
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    crate::postgres_mirror::after_write(surreal, MirrorKey::Project(id)).await;
+    publish(surreal, [MirrorKey::Project(id)]).await?;
     Ok(project)
 }
 
@@ -4006,7 +4368,9 @@ pub async fn open_matter(
         &conflict.summary_lines(),
     )
     .await?;
-    mirror_project_with_participations(surreal, project_id).await;
+    mirror_project_with_participations(surreal, project_id)
+        .await
+        .map_err(|error| OpenMatterError::Db(error.to_string()))?;
 
     Ok(created)
 }

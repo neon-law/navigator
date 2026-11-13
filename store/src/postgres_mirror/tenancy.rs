@@ -656,7 +656,7 @@ async fn mirror_inner(
             Ok(changed(deleted.rows_affected(), Mirrored::Deleted))
         }
         MirrorKey::Project(id) => {
-            let source = crate::projects::find_by_id(surreal, *id)
+            let source = crate::projects::find_by_id_in_surreal(surreal, *id)
                 .await
                 .map_err(|_| MirrorError::Source)?;
             match source {
@@ -686,7 +686,7 @@ async fn mirror_inner(
             Ok(changed(deleted.rows_affected(), Mirrored::Deleted))
         }
         MirrorKey::ProjectParticipation(id) => {
-            let source = crate::projects::participation_by_id(surreal, *id)
+            let source = crate::projects::participation_by_id_in_surreal(surreal, *id)
                 .await
                 .map_err(|_| MirrorError::Source)?;
             match source {
