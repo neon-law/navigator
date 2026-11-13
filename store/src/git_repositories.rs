@@ -16,17 +16,19 @@
 //! name.
 
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::postgres::matter::{self, MatterAuthorityError};
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 
 /// The table these rows live in.
 const TABLE: &str = "git_repository";
 
 /// One tracked repository.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GitRepository {
     pub id: Uuid,
     /// SHA-256 hash of `git remote get-url origin`. Unique.
@@ -73,6 +75,9 @@ pub enum GitRepositoryError {
     /// A database operation failed.
     #[error("database: {0}")]
     Db(#[from] surrealdb::Error),
+    /// A PostgreSQL matter-authority operation failed.
+    #[error(transparent)]
+    Postgres(MatterAuthorityError),
     /// The write collided with `git_repository_remote_hash` — another
     /// row already holds this remote hash.
     #[error("that repository remote is already tracked")]
@@ -82,6 +87,15 @@ pub enum GitRepositoryError {
     /// [`GitRepositoryRow::into_repository`].
     #[error("writing a git repository returned no usable row")]
     WriteReturnedNothing,
+}
+
+impl From<MatterAuthorityError> for GitRepositoryError {
+    fn from(error: MatterAuthorityError) -> Self {
+        match error {
+            MatterAuthorityError::Conflict(_) => Self::RemoteTaken,
+            error => Self::Postgres(error),
+        }
+    }
 }
 
 /// Turn a write failure into the caller-correctable conflict it names,
@@ -121,6 +135,10 @@ pub async fn find_by_remote_hash(
     db: &SurrealDb,
     remote_hash: &str,
 ) -> Result<Option<GitRepository>, GitRepositoryError> {
+    if let Some(pg) = matter::authority().await? {
+        let filter = json!({"remote_hash": remote_hash});
+        return Ok(matter::find(&pg, TABLE, filter).await?);
+    }
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM ONLY {TABLE} WHERE remote_hash = $remote_hash LIMIT 1"
@@ -139,6 +157,9 @@ pub async fn find_by_remote_hash(
 ///
 /// [`GitRepositoryError::Db`] if the lookup fails.
 pub async fn list_all(db: &SurrealDb) -> Result<Vec<GitRepository>, GitRepositoryError> {
+    if let Some(pg) = matter::authority().await? {
+        return Ok(matter::select(&pg, TABLE, json!({}), &["remote_hash"]).await?);
+    }
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} ORDER BY remote_hash ASC"
@@ -164,6 +185,17 @@ pub async fn create(
     last_commit_sha: &str,
 ) -> Result<GitRepository, GitRepositoryError> {
     let id = Uuid::now_v7();
+    if let Some(pg) = matter::authority().await? {
+        let now = Utc::now();
+        let row = GitRepository {
+            id,
+            remote_hash: remote_hash.to_owned(),
+            last_commit_sha: last_commit_sha.to_owned(),
+            inserted_at: now,
+            updated_at: now,
+        };
+        return Ok(matter::upsert(&pg, TABLE, &row).await?);
+    }
     let mut response = writing(|| {
         db.query(format!(
             "CREATE $id SET \

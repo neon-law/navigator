@@ -7,14 +7,17 @@ use chrono::NaiveDate;
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::postgres::matter::{self, MatterAuthorityError};
 use crate::projects;
 use crate::surreal::{record_id, record_uuid, SurrealDb};
+
+const TABLE: &str = "statutory_deadline";
 
 pub const STATUS_OPEN: &str = "open";
 pub const STATUS_SATISFIED: &str = "satisfied";
 pub const STATUS_CLOSED: &str = "closed";
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct StatutoryDeadline {
     pub id: Uuid,
     pub project_id: Uuid,
@@ -68,6 +71,8 @@ pub enum DeadlineError {
     Db(#[from] surrealdb::Error),
     #[error(transparent)]
     Project(#[from] projects::ProjectStoreError),
+    #[error(transparent)]
+    Postgres(#[from] MatterAuthorityError),
     #[error("writing a statutory deadline returned no usable row")]
     WriteReturnedNothing,
 }
@@ -92,6 +97,21 @@ pub async fn record(
     // this append, so the record link is deliberately not re-validated
     // here.
     let now = chrono::Utc::now().to_rfc3339();
+    if let Some(pg) = matter::authority().await? {
+        let existing: Option<StatutoryDeadline> = matter::find(&pg, TABLE, replay_key(new)).await?;
+        let (id, inserted_at) = existing.map_or_else(
+            || (Uuid::now_v7(), now.clone()),
+            |deadline| (deadline.id, deadline.inserted_at),
+        );
+        let mut row = replay_key(new);
+        row["id"] = serde_json::json!(id);
+        row["due_on"] = serde_json::json!(new.due_on);
+        row["statute"] = serde_json::json!(new.statute);
+        row["status"] = serde_json::json!(STATUS_OPEN);
+        row["inserted_at"] = serde_json::json!(inserted_at);
+        row["updated_at"] = serde_json::json!(now);
+        return Ok(matter::upsert(&pg, TABLE, &row).await?);
+    }
     let existing = find_replay(surreal, new).await?;
     let id = existing
         .as_ref()
@@ -110,7 +130,7 @@ pub async fn record(
     };
     let mut response = surreal
         .query(statement)
-        .bind(("id", record_id("statutory_deadline", id)))
+        .bind(("id", record_id(TABLE, id)))
         .bind(("project_id", record_id("project", new.project_id)))
         .bind(("kind", new.kind.to_string()))
         .bind(("trigger_on", new.trigger_on.to_string()))
@@ -122,9 +142,19 @@ pub async fn record(
         .await
         .and_then(surrealdb::IndexedResults::check)?;
     let row: Option<DeadlineRow> = response.take(0)?;
-    crate::postgres_mirror::records::after_write(surreal, "statutory_deadline", id).await;
+    crate::postgres_mirror::records::after_write(surreal, TABLE, id).await;
     row.and_then(DeadlineRow::into_deadline)
         .ok_or(DeadlineError::WriteReturnedNothing)
+}
+
+/// The columns of the `(project_id, kind, trigger_on, source)` replay key.
+fn replay_key(new: &NewStatutoryDeadline<'_>) -> serde_json::Value {
+    serde_json::json!({
+        "project_id": new.project_id,
+        "kind": new.kind,
+        "trigger_on": new.trigger_on,
+        "source": new.source,
+    })
 }
 
 async fn find_replay(
@@ -164,6 +194,10 @@ pub async fn by_project(
     surreal: &SurrealDb,
     project_id: Uuid,
 ) -> Result<Vec<StatutoryDeadline>, DeadlineError> {
+    if let Some(pg) = matter::authority().await? {
+        let filter = serde_json::json!({"project_id": project_id});
+        return Ok(matter::select(&pg, TABLE, filter, &["due_on", "id"]).await?);
+    }
     let mut response = surreal
         .query(format!(
             "SELECT {DEADLINE_SELECT} FROM statutory_deadline WHERE project_id = $project_id \

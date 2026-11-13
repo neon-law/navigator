@@ -34,6 +34,16 @@ transition records the known starting state. Status reads use the PostgreSQL pro
 lifecycle command also refreshes the SurrealDB compatibility projection. If that refresh fails, retry the same
 transition to repair it. Keep lifecycle authority enabled once a deployment has recorded transitions.
 
+## Matter records
+
+`NAVIGATOR_POSTGRES_MATTER_AUTHORITY=1` (or `true`) routes the owning modules of `statutory_deadline`, `notation_draft`,
+`estate_asset`, `cap_table_holding`, `fiduciary_role`, and `git_repository` to PostgreSQL through
+`store::postgres::matter`, a generic accessor over the records mirror's table registry. Writes land only in PostgreSQL.
+The records mirror then refuses to repair those tables from SurrealDB, because a missing SurrealDB row is not deletion
+evidence. Reference checks still read the Project, Person, Entity, and Notation from their own authorities, and the
+Project mirror supplies the parent rows. Run the records reconcile and resolve drift before enabling the switch. Keep it
+enabled once a deployment has written matter records.
+
 ## Other domains
 
 The [Firm journal](firm-journal.md) documents its backend selection and PostgreSQL-only reconciliation features.

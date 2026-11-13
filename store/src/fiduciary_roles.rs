@@ -8,6 +8,7 @@
 //! matter does so through a `person_delegate`.
 
 use serde::Serialize;
+use serde_json::json;
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
@@ -15,7 +16,9 @@ use crate::matter_record_links::{
     one_of, party_from_record, party_record, require_party, require_project,
     require_project_notation,
 };
+use crate::postgres::matter::{self, MatterAuthorityError};
 use crate::project_references::Party;
+use crate::relationships::Endpoint;
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 pub use model::fiduciary_roles::ROLES;
 
@@ -71,6 +74,42 @@ impl FiduciaryRoleRow {
     }
 }
 
+/// The row as PostgreSQL stores it: the fiduciary is a tagged `JSONB` link.
+#[derive(Serialize, serde::Deserialize)]
+struct PgRow {
+    id: Uuid,
+    project_id: Uuid,
+    role: String,
+    fiduciary_id: serde_json::Value,
+    successor_order: i64,
+    notation_id: Option<Uuid>,
+    inserted_at: String,
+    updated_at: String,
+}
+
+impl PgRow {
+    fn into_role(self) -> Option<FiduciaryRole> {
+        let (table, id) = matter::untagged(&self.fiduciary_id)?;
+        Some(FiduciaryRole {
+            id: self.id,
+            project_id: self.project_id,
+            role: self.role,
+            fiduciary: Party {
+                kind: Endpoint::from_table(table)?,
+                id,
+            },
+            successor_order: self.successor_order,
+            notation_id: self.notation_id,
+            inserted_at: self.inserted_at,
+            updated_at: self.updated_at,
+        })
+    }
+}
+
+fn roles(rows: Vec<PgRow>) -> Vec<FiduciaryRole> {
+    rows.into_iter().filter_map(PgRow::into_role).collect()
+}
+
 const SELECT: &str = "id, project_id, role, fiduciary_id, successor_order, notation_id, \
      inserted_at, updated_at";
 
@@ -78,6 +117,8 @@ const SELECT: &str = "id, project_id, role, fiduciary_id, successor_order, notat
 pub enum FiduciaryRoleError {
     #[error("database: {0}")]
     Db(#[from] surrealdb::Error),
+    #[error(transparent)]
+    Postgres(#[from] MatterAuthorityError),
     #[error("{0}")]
     Invalid(String),
     #[error("no such fiduciary role")]
@@ -120,6 +161,27 @@ async fn persist(
     inserted_at: &str,
 ) -> Result<FiduciaryRole, FiduciaryRoleError> {
     let now = chrono::Utc::now().to_rfc3339();
+    if let Some(pg) = matter::authority().await? {
+        let row = PgRow {
+            id,
+            project_id,
+            role,
+            fiduciary_id: matter::tagged(fields.fiduciary.kind.table(), fields.fiduciary.id),
+            successor_order: fields.successor_order,
+            notation_id: fields.notation_id,
+            inserted_at: inserted_at.to_owned(),
+            updated_at: now,
+        };
+        let stored: PgRow = match matter::upsert(&pg, TABLE, &row).await {
+            Err(MatterAuthorityError::Conflict(index)) if index == SLOT_INDEX => {
+                return Err(slot_taken(fields));
+            }
+            stored => stored?,
+        };
+        return stored
+            .into_role()
+            .ok_or(FiduciaryRoleError::WriteReturnedNothing);
+    }
     let response = surreal
         .query(format!(
             "UPSERT $id SET project_id = $project_id, role = $role, \
@@ -143,17 +205,21 @@ async fn persist(
     let mut response = match response {
         Ok(response) => response,
         Err(error) if retry::unique_violation(&error) == Some(SLOT_INDEX) => {
-            return Err(FiduciaryRoleError::Invalid(format!(
-                "this Project already names a {} at successor order {}",
-                fields.role.trim(),
-                fields.successor_order
-            )));
+            return Err(slot_taken(fields));
         }
         Err(error) => return Err(error.into()),
     };
     let row: Option<FiduciaryRoleRow> = response.take(0)?;
     row.and_then(FiduciaryRoleRow::into_role)
         .ok_or(FiduciaryRoleError::WriteReturnedNothing)
+}
+
+fn slot_taken(fields: &FiduciaryRoleFields) -> FiduciaryRoleError {
+    FiduciaryRoleError::Invalid(format!(
+        "this Project already names a {} at successor order {}",
+        fields.role.trim(),
+        fields.successor_order
+    ))
 }
 
 fn roster_rank(role: &FiduciaryRole) -> (usize, i64) {
@@ -173,20 +239,24 @@ pub async fn list(
     surreal: &SurrealDb,
     project_id: Uuid,
 ) -> Result<Vec<FiduciaryRole>, FiduciaryRoleError> {
-    let mut response = surreal
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} WHERE project_id = $project_id"
-        ))
-        .bind(("project_id", record_id("project", project_id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<FiduciaryRoleRow> = response.take(0)?;
-    let mut roles: Vec<FiduciaryRole> = rows
-        .into_iter()
-        .filter_map(FiduciaryRoleRow::into_role)
-        .collect();
-    roles.sort_by_key(roster_rank);
-    Ok(roles)
+    let mut list = if let Some(pg) = matter::authority().await? {
+        let filter = json!({"project_id": project_id});
+        roles(matter::select(&pg, TABLE, filter, &[]).await?)
+    } else {
+        let mut response = surreal
+            .query(format!(
+                "SELECT {SELECT} FROM {TABLE} WHERE project_id = $project_id"
+            ))
+            .bind(("project_id", record_id("project", project_id)))
+            .await
+            .and_then(surrealdb::IndexedResults::check)?;
+        let rows: Vec<FiduciaryRoleRow> = response.take(0)?;
+        rows.into_iter()
+            .filter_map(FiduciaryRoleRow::into_role)
+            .collect()
+    };
+    list.sort_by_key(roster_rank);
+    Ok(list)
 }
 
 /// One Fiduciary Role on a Project, or `None`.
@@ -199,6 +269,10 @@ pub async fn find(
     project_id: Uuid,
     id: Uuid,
 ) -> Result<Option<FiduciaryRole>, FiduciaryRoleError> {
+    if let Some(pg) = matter::authority().await? {
+        let filter = json!({"id": id, "project_id": project_id});
+        return Ok(roles(matter::select(&pg, TABLE, filter, &[]).await?).pop());
+    }
     let mut response = surreal
         .query(format!(
             "SELECT {SELECT} FROM ONLY {TABLE} \
@@ -223,6 +297,14 @@ pub async fn find_by_slot(
     role: &str,
     successor_order: i64,
 ) -> Result<Option<FiduciaryRole>, FiduciaryRoleError> {
+    if let Some(pg) = matter::authority().await? {
+        let filter = json!({
+            "project_id": project_id,
+            "role": role.trim(),
+            "successor_order": successor_order,
+        });
+        return Ok(roles(matter::select(&pg, TABLE, filter, &[]).await?).pop());
+    }
     let mut response = surreal
         .query(format!(
             "SELECT {SELECT} FROM ONLY {TABLE} WHERE project_id = $project_id \
@@ -303,6 +385,10 @@ pub async fn delete(
     find(surreal, project_id, id)
         .await?
         .ok_or(FiduciaryRoleError::NotFound)?;
+    if let Some(pg) = matter::authority().await? {
+        matter::delete(&pg, TABLE, json!({"id": id})).await?;
+        return Ok(());
+    }
     surreal
         .query("DELETE $id")
         .bind(("id", record_id(TABLE, id)))
@@ -321,6 +407,10 @@ pub async fn delete_for_project(
     surreal: &SurrealDb,
     project_id: Uuid,
 ) -> Result<(), FiduciaryRoleError> {
+    if let Some(pg) = matter::authority().await? {
+        matter::delete(&pg, TABLE, json!({"project_id": project_id})).await?;
+        return Ok(());
+    }
     surreal
         .query(format!("DELETE {TABLE} WHERE project_id = $project_id"))
         .bind(("project_id", record_id("project", project_id)))
