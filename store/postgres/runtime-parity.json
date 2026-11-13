@@ -55,11 +55,24 @@
         "file": "store/src/assistant_turns.rs",
         "function": "purge_removes_one_subscribers_chat_and_repeats_cleanly",
         "proves": "Purge removes every stored turn for one owner and repeats cleanly without touching other owners."
+      },
+      {
+        "file": "store/src/assistant_turns/postgres_tests.rs",
+        "function": "history_is_the_owners_turns_in_append_order_and_purge_removes_them",
+        "proves": "PostgreSQL keeps each owner's turns in append order, isolates other owners, and purge removes exactly one chat."
+      },
+      {
+        "file": "store/src/assistant_turns/postgres_tests.rs",
+        "function": "surreal_turns_copy_once_with_their_identity",
+        "proves": "The backfill copies SurrealDB turns once with their ids and refuses an ownerless turn by id only."
+      },
+      {
+        "file": "store/src/postgres_backfill_tests.rs",
+        "function": "born_in_postgres_accessors_use_postgres_when_it_is_configured",
+        "proves": "With a PostgreSQL host, every accessor of the table reads and writes PostgreSQL and SurrealDB stays empty."
       }
     ],
-    "remaining": [
-      "The identity-storage PostgreSQL migration and its convergence tests are pending; application-read parity through the portal route requires separate acceptance."
-    ]
+    "remaining": []
   },
   "attestation": {
     "scenario": "pending, recorded, and failed attestations; source identity and Notation retention",
@@ -270,11 +283,24 @@
         "file": "store/src/documents.rs",
         "function": "a_session_resumes_from_its_received_bytes_and_files_the_original_bytes",
         "proves": "Source-store upload retries preserve the acknowledged offset and completion files the original digest."
+      },
+      {
+        "file": "store/src/documents/upload_sessions_tests.rs",
+        "function": "a_session_resumes_advances_once_per_offset_and_is_removed",
+        "proves": "PostgreSQL sessions are Project-scoped, resume until expiry, advance once per offset, and are removed at completion."
+      },
+      {
+        "file": "store/src/documents/upload_sessions_tests.rs",
+        "function": "surreal_sessions_copy_once_with_their_resume_point",
+        "proves": "The backfill copies an in-flight SurrealDB session with its folder and resume point."
+      },
+      {
+        "file": "store/src/postgres_backfill_tests.rs",
+        "function": "born_in_postgres_accessors_use_postgres_when_it_is_configured",
+        "proves": "With a PostgreSQL host, every accessor of the table reads and writes PostgreSQL and SurrealDB stays empty."
       }
     ],
-    "remaining": [
-      "PostgreSQL application accessors and lifecycle parity require separate acceptance; the runtime still uses the source store."
-    ]
+    "remaining": []
   },
   "draft": {
     "scenario": "view equals source projection; no independent writes",
@@ -429,6 +455,21 @@
         "file": "server/tests/esignature_loop.rs",
         "function": "a_failed_replay_keeps_its_receipt_pending_and_the_backlog_moving",
         "proves": "a failed consumption keeps its receipt pending and the replay sweep continues through the backlog"
+      },
+      {
+        "file": "store/src/signature_webhook_journal/postgres_tests.rs",
+        "function": "a_redelivery_lands_on_the_journaled_row_and_consumption_drains_it",
+        "proves": "PostgreSQL deduplicates a redelivery on the event index and drains a consumed receipt."
+      },
+      {
+        "file": "store/src/signature_webhook_journal/postgres_tests.rs",
+        "function": "surreal_receipts_copy_once_with_their_identity",
+        "proves": "The backfill copies SurrealDB receipts once with their ids."
+      },
+      {
+        "file": "store/src/postgres_backfill_tests.rs",
+        "function": "born_in_postgres_accessors_use_postgres_when_it_is_configured",
+        "proves": "With a PostgreSQL host, every accessor of the table reads and writes PostgreSQL and SurrealDB stays empty."
       }
     ],
     "remaining": []
@@ -1028,11 +1069,29 @@
         "file": "store/src/plan_intake.rs",
         "function": "the_review_queue_lists_a_firms_staged_assignments_newest_first",
         "proves": "The review queue is firm-scoped and ordered newest first."
+      },
+      {
+        "file": "store/src/plan_intake/postgres_tests.rs",
+        "function": "staging_is_idempotent_per_message_and_a_decision_lands_once",
+        "proves": "PostgreSQL staging is idempotent per message and a decision applies only to a staged row."
+      },
+      {
+        "file": "store/src/plan_intake/postgres_tests.rs",
+        "function": "a_firms_queue_is_newest_first_and_its_own",
+        "proves": "The PostgreSQL review queue is Firm-scoped and newest first."
+      },
+      {
+        "file": "store/src/plan_intake/postgres_tests.rs",
+        "function": "surreal_rows_copy_once_with_their_decision",
+        "proves": "The backfill copies SurrealDB rows once with their decision."
+      },
+      {
+        "file": "store/src/postgres_backfill_tests.rs",
+        "function": "born_in_postgres_accessors_use_postgres_when_it_is_configured",
+        "proves": "With a PostgreSQL host, every accessor of the table reads and writes PostgreSQL and SurrealDB stays empty."
       }
     ],
-    "remaining": [
-      "PostgreSQL-cutover read parity is unexercised: the record is SurrealDB-authored with no PostgreSQL mirror yet."
-    ]
+    "remaining": []
   },
   "person": {
     "scenario": "case-folded unique email; stable external identity; singular role; Firm directory and Project participation isolation",
@@ -1257,10 +1316,29 @@
   },
   "sandbox_usage": {
     "scenario": "stable identity; tenant link isolation and no inferred participation",
-    "runtime_tests": [],
-    "remaining": [
-      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
-    ]
+    "runtime_tests": [
+      {
+        "file": "store/src/sandbox_usage/postgres_tests.rs",
+        "function": "grant_converges_and_the_crossing_debit_completes_then_exhausts",
+        "proves": "A re-grant never resets spend; the crossing debit completes and the next is refused."
+      },
+      {
+        "file": "store/src/sandbox_usage/postgres_tests.rs",
+        "function": "parallel_debits_apply_exactly_once",
+        "proves": "Parallel debits of one period apply exactly once each."
+      },
+      {
+        "file": "store/src/sandbox_usage/postgres_tests.rs",
+        "function": "surreal_periods_copy_once_and_never_overwrite_a_postgres_balance",
+        "proves": "The backfill copies SurrealDB periods once and keeps a PostgreSQL balance in place."
+      },
+      {
+        "file": "store/src/postgres_backfill_tests.rs",
+        "function": "born_in_postgres_accessors_use_postgres_when_it_is_configured",
+        "proves": "With a PostgreSQL host, every accessor of the table reads and writes PostgreSQL and SurrealDB stays empty."
+      }
+    ],
+    "remaining": []
   },
   "schema_version": {
     "scenario": "operator authorization; no matter visibility grant",

@@ -16,5 +16,5 @@ a reason; either way the review row keeps who decided and when.
 
 - Vocabulary: [`store::plan_intake`](../../store/src/plan_intake.rs)
 
-The review record is `plan_intake`, authored in SurrealDB as pre-matter intake state; the opened [Project](project.md)
-carries the durable outcome.
+The review record is the [Staged Assignment](staged-assignment.md); the opened [Project](project.md) carries the durable
+outcome.

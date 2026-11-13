@@ -18,6 +18,12 @@
 //! differ, and rows only PostgreSQL holds, are reported, never written: the
 //! mirror's own `reconcile` owns those repairs.
 //!
+//! The tables born in PostgreSQL ([`BORN_IN_POSTGRES_TABLES`]) have no write
+//! mirror: PostgreSQL is their system of record whenever it is configured. The
+//! born-in-PostgreSQL arm copies the rows SurrealDB held before that switch,
+//! keeping each row's identity and leaving every row PostgreSQL already holds
+//! untouched, so a rerun writes nothing.
+//!
 //! [`plan`] reads both stores and writes nothing, not even a run record.
 //! Only one backfill advances at a time: a run holds a PostgreSQL advisory
 //! lock for as long as it writes.
@@ -34,6 +40,21 @@ use uuid::Uuid;
 /// domain data. Keep this list exact: every other populated source table must
 /// have a registered canonical mirror.
 const RECREATED_SOURCE_METADATA: &[&str] = &["schema_version"];
+
+/// Tables PostgreSQL owns whenever `NAVIGATOR_POSTGRES_HOST` is set, with
+/// SurrealDB only as the fallback for a deployment without PostgreSQL. No
+/// write mirror covers them; the born-in-PostgreSQL arm copies their earlier
+/// SurrealDB rows.
+pub const BORN_IN_POSTGRES_TABLES: &[&str] = &[
+    "assistant_turn",
+    "document_upload_session",
+    "esignature_webhook_journal",
+    "plan_intake",
+    "sandbox_usage",
+];
+
+/// The checkpoint name of the born-in-PostgreSQL arm.
+pub const BORN_IN_POSTGRES: &str = "born_in_postgres";
 
 /// A hung object backend must fail verification rather than stall a migration gate.
 const OBJECT_CHECK_TIMEOUT: Duration = Duration::from_secs(120);
@@ -541,6 +562,7 @@ pub struct UncoveredTable {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceDisposition {
     Mirrored,
+    BornInPostgres,
     Derived,
     RecreatedMetadata,
     Unsupported,
@@ -552,6 +574,7 @@ impl SourceDisposition {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Mirrored => "mirrored",
+            Self::BornInPostgres => "born_in_postgres",
             Self::Derived => "derived",
             Self::RecreatedMetadata => "recreated_metadata",
             Self::Unsupported => "unsupported",
@@ -712,6 +735,8 @@ async fn source_inventory(
             SourceDisposition::Derived
         } else if RECREATED_SOURCE_METADATA.contains(&table.as_str()) {
             SourceDisposition::RecreatedMetadata
+        } else if BORN_IN_POSTGRES_TABLES.contains(&table.as_str()) {
+            SourceDisposition::BornInPostgres
         } else if covered.contains(table.as_str()) {
             SourceDisposition::Mirrored
         } else {
@@ -1039,6 +1064,7 @@ async fn advance(
         }
         complete_group(surreal, pg, run_id, group, failed).await?;
     }
+    written += born_in_postgres(surreal, pg, run_id).await?;
     // The graph arm runs last: the AGE graph projects from the mirrors this
     // run just backfilled, then validates against them and parity-checks its
     // traversal against SurrealDB.
@@ -1119,6 +1145,179 @@ async fn complete_group(
     .bind(group.name)
     .bind(recovered)
     .bind(i32::try_from(reasons.len()).unwrap_or(i32::MAX))
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// One born-in-PostgreSQL table's copy from SurrealDB: rows written, and
+/// rows PostgreSQL refused, named by table and UUID only.
+#[derive(Debug, Default)]
+pub(crate) struct Copied {
+    pub(crate) applied: usize,
+    pub(crate) failures: Vec<(&'static str, Option<String>, String)>,
+}
+
+impl Copied {
+    /// Count one insert's outcome. The reason carries the SQLSTATE, never a
+    /// row value.
+    pub(crate) fn record(
+        &mut self,
+        table: &'static str,
+        id: Option<Uuid>,
+        result: Result<u64, sqlx::Error>,
+    ) {
+        match result {
+            Ok(rows) => self.applied += usize::try_from(rows).unwrap_or(0),
+            Err(error) => {
+                let code = error
+                    .as_database_error()
+                    .and_then(|error| error.code().map(std::borrow::Cow::into_owned))
+                    .unwrap_or_else(|| "connection".into());
+                self.failures.push((
+                    table,
+                    id.map(|id| id.to_string()),
+                    format!("PostgreSQL refused the row (SQLSTATE {code})"),
+                ));
+            }
+        }
+    }
+
+    /// Count a SurrealDB row that has no UUID key and cannot be copied.
+    pub(crate) fn unrepresentable(&mut self, table: &'static str) {
+        self.failures
+            .push((table, None, "the SurrealDB row is not representable".into()));
+    }
+}
+
+/// Copy the SurrealDB rows of every [`BORN_IN_POSTGRES_TABLES`] table that
+/// PostgreSQL does not hold. A failed SurrealDB read is recorded against its
+/// table and the arm continues.
+async fn born_in_postgres(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+    run_id: Uuid,
+) -> Result<usize, BackfillError> {
+    if open_checkpoint(pg, run_id, BORN_IN_POSTGRES).await? {
+        return Ok(0);
+    }
+    let reads = [
+        (
+            "assistant_turn",
+            crate::assistant_turns::postgres::copy_from_surreal(surreal, pg).await,
+        ),
+        (
+            "document_upload_session",
+            crate::documents::upload_sessions::copy_from_surreal(surreal, pg).await,
+        ),
+        (
+            "esignature_webhook_journal",
+            crate::signature_webhook_journal::postgres::copy_from_surreal(surreal, pg).await,
+        ),
+        (
+            "plan_intake",
+            crate::plan_intake::postgres::copy_from_surreal(surreal, pg).await,
+        ),
+        (
+            "sandbox_usage",
+            crate::sandbox_usage::postgres::copy_from_surreal(surreal, pg).await,
+        ),
+    ];
+    // A batch is a table that wrote rows, so a rerun with nothing left to
+    // copy reports no batches.
+    let mut batches = 0;
+    let mut copied = Copied::default();
+    for (table, read) in reads {
+        match read {
+            Ok(table_copy) => {
+                batches += usize::from(table_copy.applied > 0);
+                copied.applied += table_copy.applied;
+                copied.failures.extend(table_copy.failures);
+            }
+            Err(_) => copied.failures.push((
+                table,
+                None,
+                "could not read the SurrealDB source table".into(),
+            )),
+        }
+    }
+    complete_checkpoint(
+        pg,
+        run_id,
+        BORN_IN_POSTGRES,
+        batches,
+        copied.applied,
+        copied.failures,
+    )
+    .await?;
+    Ok(batches)
+}
+
+/// Ensure an arm's checkpoint row exists; `true` when it already completed.
+pub(crate) async fn open_checkpoint(
+    pg: &PostgresDb,
+    run_id: Uuid,
+    mirror: &str,
+) -> Result<bool, BackfillError> {
+    sqlx::query(
+        "INSERT INTO mirror_backfill_checkpoint (run_id, mirror) VALUES ($1, $2) \
+         ON CONFLICT (run_id, mirror) DO NOTHING",
+    )
+    .bind(run_id)
+    .bind(mirror)
+    .execute(&pg.0)
+    .await?;
+    let done: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
+        "SELECT completed_at FROM mirror_backfill_checkpoint WHERE run_id = $1 AND mirror = $2",
+    )
+    .bind(run_id)
+    .bind(mirror)
+    .fetch_one(&pg.0)
+    .await?;
+    Ok(done.is_some())
+}
+
+/// Record an arm's outcome in its checkpoint and failure rows, in one
+/// transaction — the same shape `complete_group` leaves relational groups in.
+pub(crate) async fn complete_checkpoint(
+    pg: &PostgresDb,
+    run_id: Uuid,
+    mirror: &str,
+    batches: usize,
+    applied: usize,
+    failures: Vec<(&'static str, Option<String>, String)>,
+) -> Result<(), BackfillError> {
+    let mut tx = pg.0.begin().await?;
+    sqlx::query("DELETE FROM mirror_backfill_failure WHERE run_id = $1 AND mirror = $2")
+        .bind(run_id)
+        .bind(mirror)
+        .execute(&mut *tx)
+        .await?;
+    for (table, row_id, reason) in &failures {
+        sqlx::query(
+            "INSERT INTO mirror_backfill_failure (id, run_id, mirror, row_table, row_id, reason) \
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(run_id)
+        .bind(mirror)
+        .bind(table)
+        .bind(row_id)
+        .bind(reason)
+        .execute(&mut *tx)
+        .await?;
+    }
+    sqlx::query(
+        "UPDATE mirror_backfill_checkpoint SET batches = batches + $3, applied = applied + $4, \
+         failed = $5, completed_at = now(), updated_at = now() \
+         WHERE run_id = $1 AND mirror = $2",
+    )
+    .bind(run_id)
+    .bind(mirror)
+    .bind(i32::try_from(batches).unwrap_or(i32::MAX))
+    .bind(i64::try_from(applied).unwrap_or(i64::MAX))
+    .bind(i32::try_from(failures.len()).unwrap_or(i32::MAX))
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;

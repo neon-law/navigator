@@ -21,7 +21,13 @@
 //! ([`purge`]) removes one subscriber's whole chat in one statement, so
 //! whatever retention rule the product settles on is a caller of that
 //! seam — not a schema migration.
+//!
+//! PostgreSQL holds the transcript whenever `NAVIGATOR_POSTGRES_HOST` is set
+//! ([`PostgresDb::configured`]); without a PostgreSQL host the same calls use
+//! the SurrealDB table. Turns SurrealDB still holds reach PostgreSQL through
+//! the Mirror Backfill's born-in-PostgreSQL arm.
 
+use crate::postgres::PostgresDb;
 use crate::surreal::{record_id, retry, SurrealDb};
 use std::str::FromStr;
 use strum::EnumString;
@@ -34,6 +40,10 @@ const SELECT: &str = "id, person_id, kind, content, tool_name, input_tokens, out
                       inserted_at, updated_at";
 
 const PERSON_TABLE: &str = "person";
+
+pub(crate) mod postgres;
+#[cfg(test)]
+pub(crate) mod postgres_tests;
 
 /// The kind of one [Assistant Turn](../../docs/glossary/assistant-turn.md),
 /// exactly the glossary's four.
@@ -99,6 +109,12 @@ pub enum AssistantTurnError {
     /// A database operation failed.
     #[error("database: {0}")]
     Db(#[from] surrealdb::Error),
+    /// The configured PostgreSQL server could not be reached.
+    #[error("PostgreSQL: {0}")]
+    Postgres(#[from] crate::postgres::PostgresError),
+    /// A PostgreSQL statement failed.
+    #[error("PostgreSQL query: {0}")]
+    Sql(#[from] sqlx::Error),
     /// A row came back that this module cannot faithfully represent —
     /// an unknown `kind`, or a record id that is not a native UUID.
     /// Possible only through a writer that bypassed this module.
@@ -180,6 +196,9 @@ where
 /// [`AssistantTurnError::WriteReturnedNothing`] when a write that claimed
 /// success returns no usable row.
 pub async fn append(db: &SurrealDb, turn: NewTurn) -> Result<AssistantTurn, AssistantTurnError> {
+    if let Some(pg) = PostgresDb::configured().await? {
+        return Box::pin(postgres::append(&pg, &turn)).await;
+    }
     let id = Uuid::now_v7();
     let response = writing(|| {
         db.query(format!(
@@ -216,6 +235,9 @@ pub async fn history(
     db: &SurrealDb,
     person_id: Uuid,
 ) -> Result<Vec<AssistantTurn>, AssistantTurnError> {
+    if let Some(pg) = PostgresDb::configured().await? {
+        return Box::pin(postgres::history(&pg, person_id)).await;
+    }
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} \
@@ -240,6 +262,9 @@ const HISTORY_LIMIT: i64 = 200;
 ///
 /// [`AssistantTurnError::Db`] when SurrealDB cannot run the delete.
 pub async fn purge(db: &SurrealDb, person_id: Uuid) -> Result<u64, AssistantTurnError> {
+    if let Some(pg) = PostgresDb::configured().await? {
+        return Box::pin(postgres::purge(&pg, person_id)).await;
+    }
     let mut response = db
         .query(format!(
             "DELETE {TABLE} WHERE person_id = $person_id RETURN BEFORE"

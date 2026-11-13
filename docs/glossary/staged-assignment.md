@@ -16,4 +16,6 @@ once — accepted (which opens the matter) or declined with a reason — and nev
 
 - Vocabulary: [`store::plan_intake`](../../store/src/plan_intake.rs)
 
-The record is `plan_intake`, authored in SurrealDB as pre-matter intake state; it has no PostgreSQL mirror.
+The record lives in PostgreSQL whenever it is configured, with SurrealDB as the fallback.
+
+The table is `plan_intake`.

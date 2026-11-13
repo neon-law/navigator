@@ -44,6 +44,7 @@ use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
 use crate::assets::{SELECT, TABLE};
+use crate::postgres::PostgresDb;
 use crate::surreal::{record_id, record_uuid, SurrealDb};
 pub use model::documents::{
     document_upload_size_message_for_kind, human_bytes, max_document_upload_bytes, sha256_hex,
@@ -209,6 +210,17 @@ pub mod visibility {
 // is written (by `file_revision`) before the session row and parts are
 // removed. A failure between the steps leaves inert staged content or a
 // resumable session, never a row pointing at bytes that are not there.
+//
+// # Where the session row lives
+//
+// PostgreSQL holds the session row whenever `NAVIGATOR_POSTGRES_HOST` is set
+// (`PostgresDb::configured`, see `upload_sessions`); without a PostgreSQL host
+// the same calls use the SurrealDB table. Sessions SurrealDB still holds
+// reach PostgreSQL through the Mirror Backfill's born-in-PostgreSQL arm.
+
+pub(crate) mod upload_sessions;
+#[cfg(test)]
+pub(crate) mod upload_sessions_tests;
 
 /// The table holding upload sessions.
 const UPLOAD_SESSION_TABLE: &str = "document_upload_session";
@@ -261,6 +273,12 @@ pub struct UploadSession {
 pub enum UploadSessionError {
     #[error("database: {0}")]
     Db(#[from] surrealdb::Error),
+    /// The configured PostgreSQL server could not be reached.
+    #[error("PostgreSQL: {0}")]
+    Postgres(#[from] crate::postgres::PostgresError),
+    /// A PostgreSQL statement failed.
+    #[error("PostgreSQL query: {0}")]
+    Sql(#[from] sqlx::Error),
     #[error("storage: {0}")]
     Storage(#[from] StorageError),
     #[error(transparent)]
@@ -443,8 +461,32 @@ pub async fn create_upload_session(
     if let Some(existing) = find_resumable_session(db, args, now).await? {
         return Ok(existing);
     }
-    let id = Uuid::now_v7();
-    let expires_at = now + chrono::Duration::hours(UPLOAD_SESSION_TTL_HOURS);
+    let session = UploadSession {
+        id: Uuid::now_v7(),
+        project_id: args.project_id,
+        filename: args.filename.trim().to_string(),
+        kind: args.kind.to_string(),
+        content_type: args.content_type.to_string(),
+        visibility: args.visibility.to_string(),
+        description: args.description.map(String::from),
+        slug: args.slug.map(String::from),
+        transcript_quality: args.transcript_quality.map(String::from),
+        metadata: args.metadata.clone(),
+        derived_from: args.derived_from.clone(),
+        signing: args.signing.clone(),
+        notarization: args.notarization.clone(),
+        folder: args.folder.map(String::from),
+        declared_size,
+        declared_sha256: args.declared_sha256.to_string(),
+        chunk_size: i64::try_from(STREAMING_UPLOAD_CHUNK_SIZE).unwrap_or(i64::MAX),
+        received_bytes: 0,
+        created_at: now,
+        expires_at: now + chrono::Duration::hours(UPLOAD_SESSION_TTL_HOURS),
+    };
+    if let Some(pg) = PostgresDb::configured().await? {
+        Box::pin(upload_sessions::create(&pg, &session)).await?;
+        return Ok(session);
+    }
     crate::assets::writing(|| {
         db.query(format!(
             "CREATE $id SET \
@@ -469,62 +511,39 @@ pub async fn create_upload_session(
              expires_at = $expires_at \
              RETURN {UPLOAD_SESSION_SELECT}"
         ))
-        .bind(("id", record_id(UPLOAD_SESSION_TABLE, id)))
+        .bind(("id", record_id(UPLOAD_SESSION_TABLE, session.id)))
         .bind((
             "project_id",
-            record_id(crate::projects::PROJECT_TABLE, args.project_id),
+            record_id(crate::projects::PROJECT_TABLE, session.project_id),
         ))
-        .bind(("filename", args.filename.trim().to_string()))
-        .bind(("kind", args.kind.to_string()))
-        .bind(("content_type", args.content_type.to_string()))
-        .bind(("visibility", args.visibility.to_string()))
-        .bind(("description", args.description.map(String::from)))
-        .bind(("slug", args.slug.map(String::from)))
+        .bind(("filename", session.filename.clone()))
+        .bind(("kind", session.kind.clone()))
+        .bind(("content_type", session.content_type.clone()))
+        .bind(("visibility", session.visibility.clone()))
+        .bind(("description", session.description.clone()))
+        .bind(("slug", session.slug.clone()))
+        .bind(("transcript_quality", session.transcript_quality.clone()))
+        .bind(("metadata", session.metadata.clone()))
+        .bind(("derived_from", session.derived_from.clone()))
+        .bind(("signing", session.signing.clone()))
+        .bind(("notarization", session.notarization.clone()))
+        .bind(("folder", session.folder.clone()))
+        .bind(("declared_size", session.declared_size))
+        .bind(("declared_sha256", session.declared_sha256.clone()))
+        .bind(("chunk_size", session.chunk_size))
         .bind((
-            "transcript_quality",
-            args.transcript_quality.map(String::from),
+            "created_at",
+            surrealdb::types::Datetime::from(session.created_at),
         ))
-        .bind(("metadata", args.metadata.clone()))
-        .bind(("derived_from", args.derived_from.clone()))
-        .bind(("signing", args.signing.clone()))
-        .bind(("notarization", args.notarization.clone()))
-        .bind(("folder", args.folder.map(String::from)))
-        .bind(("declared_size", declared_size))
-        .bind(("declared_sha256", args.declared_sha256.to_string()))
         .bind((
-            "chunk_size",
-            i64::try_from(STREAMING_UPLOAD_CHUNK_SIZE).unwrap_or(i64::MAX),
+            "expires_at",
+            surrealdb::types::Datetime::from(session.expires_at),
         ))
-        .bind(("created_at", surrealdb::types::Datetime::from(now)))
-        .bind(("expires_at", surrealdb::types::Datetime::from(expires_at)))
     })
     .await?;
-
-    // Return the session as the client needs it. The create wrote every
-    // field from the validated arguments, so the reply is the same session
-    // a read-back would return.
-    Ok(UploadSession {
-        id,
-        project_id: args.project_id,
-        filename: args.filename.trim().to_string(),
-        kind: args.kind.to_string(),
-        content_type: args.content_type.to_string(),
-        visibility: args.visibility.to_string(),
-        description: args.description.map(String::from),
-        slug: args.slug.map(String::from),
-        transcript_quality: args.transcript_quality.map(String::from),
-        metadata: args.metadata.clone(),
-        derived_from: args.derived_from.clone(),
-        signing: args.signing.clone(),
-        notarization: args.notarization.clone(),
-        folder: args.folder.map(String::from),
-        declared_size,
-        declared_sha256: args.declared_sha256.to_string(),
-        chunk_size: i64::try_from(STREAMING_UPLOAD_CHUNK_SIZE).unwrap_or(i64::MAX),
-        received_bytes: 0,
-        created_at: now,
-        expires_at,
-    })
+    // The create wrote every field of `session`, so the reply is the same
+    // session a read-back would return.
+    Ok(session)
 }
 
 /// The live session this exact upload already has, if any: same matter,
@@ -535,6 +554,9 @@ async fn find_resumable_session(
     args: &UploadSessionArgs<'_>,
     now: DateTime<Utc>,
 ) -> Result<Option<UploadSession>, UploadSessionError> {
+    if let Some(pg) = PostgresDb::configured().await? {
+        return Box::pin(upload_sessions::find_resumable(&pg, args, now)).await;
+    }
     let mut response = db
         .query(format!(
             "SELECT {UPLOAD_SESSION_SELECT} FROM {UPLOAD_SESSION_TABLE} \
@@ -573,6 +595,9 @@ pub async fn find_upload_session(
     project_id: Uuid,
     session_id: Uuid,
 ) -> Result<Option<UploadSession>, UploadSessionError> {
+    if let Some(pg) = PostgresDb::configured().await? {
+        return Box::pin(upload_sessions::find(&pg, project_id, session_id)).await;
+    }
     let mut response = db
         .query(format!(
             "SELECT {UPLOAD_SESSION_SELECT} FROM ONLY $id LIMIT 1"
@@ -618,15 +643,7 @@ pub async fn append_upload_chunk(
     }
     let key = upload_part_key(session_id, offset);
     storage.put(&key, chunk, "application/octet-stream").await?;
-    let mut response = crate::assets::writing(|| {
-        db.query("UPDATE $id SET received_bytes = $received_bytes WHERE received_bytes = $offset RETURN AFTER")
-            .bind(("id", record_id(UPLOAD_SESSION_TABLE, session_id)))
-            .bind(("received_bytes", new_received))
-            .bind(("offset", offset))
-    })
-    .await?;
-    let updated: Vec<UploadSessionRow> = response.take(0)?;
-    if updated.is_empty() {
+    if !advance_received(db, session_id, offset, new_received).await? {
         let current = find_upload_session(db, project_id, session_id)
             .await?
             .ok_or(UploadSessionError::NoSuchSession(session_id))?;
@@ -637,6 +654,34 @@ pub async fn append_upload_chunk(
     }
     session.received_bytes = new_received;
     Ok(session)
+}
+
+/// Move a session's resume point from `offset` to `received_bytes` with one
+/// conditional write; `false` when a concurrent append already moved it.
+async fn advance_received(
+    db: &SurrealDb,
+    session_id: Uuid,
+    offset: i64,
+    received_bytes: i64,
+) -> Result<bool, UploadSessionError> {
+    if let Some(pg) = PostgresDb::configured().await? {
+        return Box::pin(upload_sessions::advance(
+            &pg,
+            session_id,
+            offset,
+            received_bytes,
+        ))
+        .await;
+    }
+    let mut response = crate::assets::writing(|| {
+        db.query("UPDATE $id SET received_bytes = $received_bytes WHERE received_bytes = $offset RETURN AFTER")
+            .bind(("id", record_id(UPLOAD_SESSION_TABLE, session_id)))
+            .bind(("received_bytes", received_bytes))
+            .bind(("offset", offset))
+    })
+    .await?;
+    let updated: Vec<UploadSessionRow> = response.take(0)?;
+    Ok(!updated.is_empty())
 }
 
 /// Compose the staged parts, verify them against the digest declared at
@@ -783,11 +828,19 @@ async fn remove_upload_parts(
 /// Best-effort removal of the session row. A failure is logged: the next
 /// completion of the same id re-files idempotently until the row goes.
 async fn remove_upload_session_row(db: &SurrealDb, session_id: Uuid) {
-    let result = crate::assets::writing(|| {
-        db.query("DELETE $id")
-            .bind(("id", record_id(UPLOAD_SESSION_TABLE, session_id)))
-    })
-    .await;
+    let result = match PostgresDb::configured().await {
+        Ok(Some(pg)) => upload_sessions::remove(&pg, session_id)
+            .await
+            .map_err(|error| error.to_string()),
+        Ok(None) => crate::assets::writing(|| {
+            db.query("DELETE $id")
+                .bind(("id", record_id(UPLOAD_SESSION_TABLE, session_id)))
+        })
+        .await
+        .map(drop)
+        .map_err(|error| error.to_string()),
+        Err(error) => Err(error.to_string()),
+    };
     if let Err(error) = result {
         tracing::warn!(%session_id, error = %error, "removing a completed upload session stalled");
     }

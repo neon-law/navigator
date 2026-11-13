@@ -8,13 +8,6 @@
       "table": "cap_table_holding"
     },
     {
-      "extra_column": null,
-      "extra_table": null,
-      "missing_column": "folder",
-      "missing_table": null,
-      "table": "document_upload_session"
-    },
-    {
       "extra_column": "entity_id",
       "extra_table": null,
       "missing_column": null,
@@ -565,13 +558,6 @@
       "extra_table": null,
       "missing_column": null,
       "missing_table": "draft",
-      "table": null
-    },
-    {
-      "extra_column": null,
-      "extra_table": null,
-      "missing_column": null,
-      "missing_table": "plan_intake",
       "table": null
     },
     {
@@ -2036,7 +2022,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 166,
+    "table_count": 167,
     "tables": {
       "address": {
         "columns": {
@@ -2769,6 +2755,7 @@
           "description": "text",
           "expires_at": "timestamptz",
           "filename": "text",
+          "folder": "text",
           "id": "uuid",
           "kind": "text",
           "metadata": "jsonb",
@@ -4782,6 +4769,46 @@
           "firm",
           "legal_plan"
         ]
+      },
+      "plan_intake": {
+        "columns": {
+          "accepted_by": "UUID",
+          "assigned_at": "TIMESTAMPTZ",
+          "benefit_code": "TEXT",
+          "conflict_blocking": "BOOLEAN",
+          "conflict_checked": "BOOLEAN",
+          "conflict_summary": "TEXT",
+          "conversation_id": "UUID",
+          "decided_at": "TIMESTAMPTZ",
+          "decline_reason": "TEXT",
+          "fee_covered_benefit": "TEXT",
+          "fee_effective_on": "DATE",
+          "fee_plan_fee_cents": "INTEGER",
+          "fee_supplemental_flat_cents": "INTEGER",
+          "fee_supplemental_hourly_cents": "INTEGER",
+          "firm_id": "UUID",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "legal_plan_id": "UUID",
+          "legal_plan_name": "TEXT",
+          "member_email": "TEXT",
+          "member_entity_id": "UUID",
+          "member_name": "TEXT",
+          "member_person_id": "UUID",
+          "plan_matter_type": "TEXT",
+          "plan_member_id": "TEXT",
+          "plan_number": "TEXT",
+          "plan_portal_only": "BOOLEAN",
+          "plan_state": "TEXT",
+          "project_id": "UUID",
+          "provider": "TEXT",
+          "source_message_id": "UUID",
+          "status": "TEXT",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "plan_intake",
+        "references": []
       },
       "playbook": {
         "columns": {

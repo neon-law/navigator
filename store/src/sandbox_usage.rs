@@ -47,6 +47,14 @@
 //! A closed period's row is never rewritten or deleted, so an overage row
 //! survives exactly as the overage-invoice job needs to read it: [`find`]
 //! and [`overage_rows`] are the only reads it requires.
+//!
+//! # PostgreSQL
+//!
+//! PostgreSQL holds the ledger whenever `NAVIGATOR_POSTGRES_HOST` is set
+//! ([`PostgresDb::configured`]); there `UNIQUE (person_id, period)` and one
+//! conditional `UPDATE` play the record id's part. Without a PostgreSQL host
+//! the same calls use the SurrealDB table. Rows SurrealDB still holds reach
+//! PostgreSQL through the Mirror Backfill's born-in-PostgreSQL arm.
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -54,7 +62,12 @@ use surrealdb::types::{AlreadyExistsError, ErrorDetails, RecordId, SurrealValue}
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::postgres::PostgresDb;
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
+
+pub(crate) mod postgres;
+#[cfg(test)]
+mod postgres_tests;
 
 /// The SurrealDB table holding the sandbox usage ledger.
 pub(crate) const TABLE: &str = "sandbox_usage";
@@ -128,6 +141,12 @@ pub enum SandboxUsageError {
     /// A database operation failed.
     #[error("database: {0}")]
     Db(#[from] surrealdb::Error),
+    /// The configured PostgreSQL server could not be reached.
+    #[error("PostgreSQL: {0}")]
+    Postgres(#[from] crate::postgres::PostgresError),
+    /// A PostgreSQL statement failed.
+    #[error("PostgreSQL query: {0}")]
+    Sql(#[from] sqlx::Error),
     /// A write claimed success but returned no usable row.
     #[error("writing the sandbox usage ledger returned no usable row")]
     WriteReturnedNothing,
@@ -263,6 +282,9 @@ pub async fn find(
     period: &str,
 ) -> Result<Option<SandboxUsage>, SandboxUsageError> {
     require_period(period)?;
+    if let Some(pg) = PostgresDb::configured().await? {
+        return Box::pin(postgres::find(&pg, person_id, period)).await;
+    }
     let response = db
         .query(format!("SELECT {SELECT} FROM ONLY $id"))
         .bind(("id", record_for(person_id, period)))
@@ -322,6 +344,9 @@ pub async fn grant(
     period: &str,
 ) -> Result<SandboxUsage, SandboxUsageError> {
     require_period(period)?;
+    if let Some(pg) = PostgresDb::configured().await? {
+        return Box::pin(postgres::grant(&pg, person_id, period)).await;
+    }
     if let Some(row) = find(db, person_id, period).await? {
         return Ok(row);
     }
@@ -396,6 +421,9 @@ pub async fn debit(
         return Err(SandboxUsageError::NegativePrice(price_cents));
     }
     require_period(period)?;
+    if let Some(pg) = PostgresDb::configured().await? {
+        return Box::pin(postgres::debit(&pg, person_id, period, price_cents)).await;
+    }
 
     if find(db, person_id, period).await?.is_none() {
         create(db, person_id, period).await?;
@@ -427,6 +455,9 @@ pub async fn overage_rows(
     period: &str,
 ) -> Result<Vec<SandboxUsage>, SandboxUsageError> {
     require_period(period)?;
+    if let Some(pg) = PostgresDb::configured().await? {
+        return Box::pin(postgres::overage_rows(&pg, period)).await;
+    }
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} \

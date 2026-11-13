@@ -925,3 +925,259 @@ fn missing_source_inventory_is_an_error_instead_of_an_empty_database() {
         .unwrap()
         .is_empty());
 }
+
+/// SurrealDB rows from before the switch reach PostgreSQL through the run:
+/// the arm copies them after the identity groups mirror their owners, marks
+/// the tables covered, and a second run writes nothing.
+#[tokio::test]
+async fn the_born_in_postgres_arm_copies_earlier_rows_once() {
+    let Some((surreal, pg, people, _)) = history().await else {
+        return;
+    };
+    let turn = crate::assistant_turns::append(
+        &surreal,
+        crate::assistant_turns::NewTurn {
+            person_id: people[0],
+            kind: crate::assistant_turns::TurnKind::Prompt,
+            content: "Synthetic prompt".into(),
+            tool_name: None,
+            input_tokens: None,
+            output_tokens: None,
+        },
+    )
+    .await
+    .unwrap();
+    crate::sandbox_usage::debit(&surreal, people[1], "2026-11", 125)
+        .await
+        .unwrap();
+    crate::signature_webhook_journal::journal_verified_receipt(
+        &surreal,
+        crate::signatures::SignatureProvider::DocuSign,
+        "synthetic-envelope",
+        "completed",
+        "{}",
+    )
+    .await
+    .unwrap();
+
+    let planned = super::plan(&surreal, &pg, 500).await.unwrap();
+    for name in [
+        "assistant_turn",
+        "sandbox_usage",
+        "esignature_webhook_journal",
+    ] {
+        let source = planned
+            .source_tables
+            .iter()
+            .find(|table| table.table == name)
+            .unwrap();
+        assert_eq!(source.disposition, SourceDisposition::BornInPostgres);
+        assert_eq!(source.rows, 1);
+    }
+
+    let first = start(&surreal, &pg, 500, None).await.unwrap();
+    let arm = first
+        .groups
+        .iter()
+        .find(|group| group.mirror == BORN_IN_POSTGRES)
+        .unwrap();
+    assert_eq!((arm.applied, arm.failed, arm.batches), (3, 0, 3));
+    assert!(first.failures.is_empty(), "{:?}", first.failures);
+    let copied: Uuid = sqlx::query_scalar("SELECT id FROM assistant_turn")
+        .fetch_one(&pg.0)
+        .await
+        .unwrap();
+    assert_eq!(copied, turn.id);
+    assert_eq!(rows(&pg, "sandbox_usage").await, 1);
+    assert_eq!(rows(&pg, "esignature_webhook_journal").await, 1);
+
+    let second = start(&surreal, &pg, 500, None).await.unwrap();
+    let rerun = second
+        .groups
+        .iter()
+        .find(|group| group.mirror == BORN_IN_POSTGRES)
+        .unwrap();
+    assert_eq!((rerun.applied, rerun.batches), (0, 0));
+    assert_eq!(rows(&pg, "assistant_turn").await, 1);
+}
+
+const BORN_IN_POSTGRES_CHILD: &str = "NAVIGATOR_BORN_IN_POSTGRES_CHILD";
+
+/// With `NAVIGATOR_POSTGRES_HOST` set, every accessor of the five
+/// born-in-PostgreSQL tables reads and writes PostgreSQL and leaves SurrealDB
+/// untouched. The store reads the environment once per process, so the
+/// scenario runs in a child process that owns it.
+#[tokio::test]
+async fn born_in_postgres_accessors_use_postgres_when_it_is_configured() {
+    if std::env::var(BORN_IN_POSTGRES_CHILD).as_deref() == Ok("1") {
+        born_in_postgres_scenario().await;
+        return;
+    }
+    let Some((options, database)) = fresh_schema().await else {
+        return;
+    };
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "postgres_backfill::tests::born_in_postgres_accessors_use_postgres_when_it_is_configured",
+            "--nocapture",
+        ])
+        .env(BORN_IN_POSTGRES_CHILD, "1")
+        .env("NAVIGATOR_POSTGRES_HOST", "127.0.0.1")
+        .env("NAVIGATOR_POSTGRES_PORT", options.get_port().to_string())
+        .env("NAVIGATOR_POSTGRES_USER", "postgres")
+        .env("NAVIGATOR_POSTGRES_PASSWORD", "synthetic")
+        .env("NAVIGATOR_POSTGRES_DATABASE", &database)
+        .env("NAVIGATOR_POSTGRES_SSLMODE", "disable")
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+#[allow(clippy::too_many_lines)] // One scenario walks all five tables' accessors.
+async fn born_in_postgres_scenario() {
+    use crate::{
+        assistant_turns, documents, plan_intake, sandbox_usage, signature_webhook_journal,
+    };
+    let surreal = mem_surreal().await;
+    let pg = PostgresDb::configured().await.unwrap().unwrap();
+    let person = crate::assistant_turns::postgres_tests::person(&pg).await;
+
+    let turn = assistant_turns::append(
+        &surreal,
+        assistant_turns::NewTurn {
+            person_id: person,
+            kind: assistant_turns::TurnKind::Prompt,
+            content: "Synthetic prompt".into(),
+            tool_name: None,
+            input_tokens: None,
+            output_tokens: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        assistant_turns::history(&surreal, person).await.unwrap(),
+        vec![turn]
+    );
+    assert_eq!(assistant_turns::purge(&surreal, person).await.unwrap(), 1);
+
+    sandbox_usage::grant(&surreal, person, "2026-11")
+        .await
+        .unwrap();
+    sandbox_usage::debit(&surreal, person, "2026-11", 600)
+        .await
+        .unwrap();
+    assert_eq!(
+        sandbox_usage::find(&surreal, person, "2026-11")
+            .await
+            .unwrap()
+            .map(|row| row.spent_cents),
+        Some(600)
+    );
+    assert_eq!(
+        sandbox_usage::overage_rows(&surreal, "2026-11")
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let provider = crate::signatures::SignatureProvider::DocuSign;
+    let receipt = signature_webhook_journal::journal_verified_receipt(
+        &surreal,
+        provider,
+        "synthetic-envelope",
+        "completed",
+        "{}",
+    )
+    .await
+    .unwrap();
+    signature_webhook_journal::record_attempt_failure(&surreal, receipt.id, "synthetic")
+        .await
+        .unwrap();
+    assert_eq!(
+        signature_webhook_journal::pending_receipts(&surreal, 10)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    signature_webhook_journal::mark_consumed(&surreal, receipt.id)
+        .await
+        .unwrap();
+    assert!(signature_webhook_journal::by_event(
+        &surreal,
+        provider,
+        "synthetic-envelope",
+        "completed"
+    )
+    .await
+    .unwrap()
+    .unwrap()
+    .consumed_at
+    .is_some());
+
+    let project_id = documents::upload_sessions_tests::project(&pg).await;
+    let upload = documents::upload_sessions_tests::args(project_id);
+    let opened = documents::create_upload_session(&surreal, &upload)
+        .await
+        .unwrap();
+    assert_eq!(
+        documents::create_upload_session(&surreal, &upload)
+            .await
+            .unwrap()
+            .id,
+        opened.id,
+        "the same upload resumes its session"
+    );
+    assert_eq!(
+        documents::find_upload_session(&surreal, project_id, opened.id)
+            .await
+            .unwrap()
+            .map(|session| session.folder),
+        Some(Some("Discovery".to_string()))
+    );
+
+    let staged = plan_intake::postgres::stage(
+        &pg,
+        &plan_intake::postgres_tests::staged_row(Uuid::now_v7()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        plan_intake::find_by_source_message(&surreal, staged.source_message_id)
+            .await
+            .unwrap()
+            .map(|row| row.id),
+        Some(staged.id)
+    );
+    assert_eq!(
+        plan_intake::list_by_firm(&surreal, staged.firm_id)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    let declined = plan_intake::decline(&surreal, staged.id, " Synthetic reason ")
+        .await
+        .unwrap();
+    assert_eq!(declined.decline_reason.as_deref(), Some("Synthetic reason"));
+    assert_eq!(
+        plan_intake::find_by_id(&surreal, staged.id)
+            .await
+            .unwrap()
+            .map(|row| row.status),
+        Some("declined".to_string())
+    );
+
+    for table in BORN_IN_POSTGRES_TABLES {
+        let mut response = surreal
+            .query("SELECT VALUE id FROM type::table($table)")
+            .bind(("table", (*table).to_string()))
+            .await
+            .unwrap();
+        let ids: Vec<surrealdb::types::Value> = response.take(0).unwrap();
+        assert!(ids.is_empty(), "{table} stayed out of SurrealDB");
+    }
+}
