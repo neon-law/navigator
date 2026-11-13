@@ -195,8 +195,8 @@ palette and the chords against a live page — on a firm app page and a Portal p
 
 ## Gates
 
-CI's `cargo test (workspace)` job runs the whole suite plus `clippy --workspace --all-targets -D warnings`. Locally, run
-the affected package rather than the workspace sweep.
+CI's four `cargo test (workspace, shard N/4)` jobs split the whole suite, and shard 1 also runs `clippy --workspace
+--all-targets -D warnings`. Locally, run the affected package rather than the workspace sweep.
 
 ## Boundaries
 

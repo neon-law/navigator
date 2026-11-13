@@ -202,9 +202,9 @@ reconcile that never converges is a reconcile whose drift report means nothing.
 
 Every administered repository terminates its `ci` workflow in a single aggregating job spelled exactly `ci`, and that
 one context is what the ruleset requires. The job runs nothing itself: it `needs:` the real jobs and fails unless they
-all succeeded. The jobs behind it stay free to differ per repository — this workspace runs `cargo test (workspace)` on a
-large runner, `neon-law/ui` runs a `lint`/`verify` pair — and free to be renamed, because the required context never
-moves.
+all succeeded. The jobs behind it stay free to differ per repository — this workspace runs four `cargo test (workspace)`
+shards and a `coverage floor` merge, `neon-law/ui` runs a `lint`/`verify` pair — and free to be renamed, because the
+required context never moves.
 
 The indirection exists because the alternative fails silently. A required status check is matched by string, so renaming
 the job renames its check run while the ruleset goes on waiting for the old spelling. Nothing turns red; pull requests

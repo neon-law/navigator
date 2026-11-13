@@ -301,9 +301,18 @@ jobs:
       - name: test the external deployment-coordinate denylist scanner
         run: python3 scripts/validate-deployment-coordinates.py --self-test
   rust:
-    name: cargo test (workspace)
+    name: cargo test (workspace, shard ${{ matrix.shard }}/4)
     needs: [changes]
     if: needs.changes.outputs.rust == 'true'
+    # Four shards run the suite in parallel through `nextest --partition`,
+    # each under coverage instrumentation; the `coverage` job merges their
+    # LCOV and holds the floor. Shard 1 also runs the one-shot checks (fmt,
+    # clippy, the content gate, notices, the lockfile) and shard 2 the
+    # cucumber suites and doctests, so the four finish close together.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     # `neon-law-medium` does not exist in the `neon-law-source-code` org. That
     # label was a GitHub-hosted larger runner on the previous org, and a label
     # with no runner behind it does not fail the job — it queues it forever, so
@@ -567,6 +576,7 @@ jobs:
           docker logs test-surreal >&2 || true
           exit 1
       - name: cargo fmt
+        if: matrix.shard == 1
         run: cargo fmt --all -- --check
       # The wasm client build, which nothing else in this workflow compiles.
       #
@@ -608,6 +618,7 @@ jobs:
       # exists to close, and the check is cheap next to a wrong skip.
       - name: does this PR touch the wasm client graph
         id: wasm-scope
+        if: matrix.shard == 1
         run: |
           set -uo pipefail
           if ! changed="$(git diff --name-only HEAD^ HEAD 2>/dev/null)" || [ -z "${changed}" ]; then
@@ -625,10 +636,10 @@ jobs:
               echo "run=false" >> "${GITHUB_OUTPUT}"
           fi
       - name: install the wasm client target
-        if: steps.wasm-scope.outputs.run == 'true'
+        if: matrix.shard == 1 && steps.wasm-scope.outputs.run == 'true'
         run: rustup target add wasm32-unknown-unknown
       - name: cargo check (webapp, wasm client)
-        if: steps.wasm-scope.outputs.run == 'true'
+        if: matrix.shard == 1 && steps.wasm-scope.outputs.run == 'true'
         run: cargo check -p webapp --target wasm32-unknown-unknown --features web
       # Dogfood the CLI as the Markdown gate: build `navigator` once, then run
       # that binary over the full visible repository tree (including
@@ -638,13 +649,16 @@ jobs:
       # `${CARGO_TARGET_DIR:-target}`, not `./target`: the step above may have
       # moved the build directory onto the larger disk.
       - name: build navigator CLI
+        if: matrix.shard == 1
         run: cargo build -p hudson --quiet
       - name: verify generated SendGrid adapter
+        if: matrix.shard == 1
         run: "${CARGO_TARGET_DIR:-target}/debug/hudson dev sendgrid-openapi --verify"
       # One content validator over the whole tree: lint every `.md` against the
       # classified rule set, run the typed event checks over each event file,
       # and parse every `.yaml`/`.yml` in the same walk.
       - name: gate the content tree with navigator
+        if: matrix.shard == 1
         run: "${CARGO_TARGET_DIR:-target}/debug/hudson project gate --ci"
       # ---- The release preflight, run on every pull request ----------------
       #
@@ -658,6 +672,7 @@ jobs:
       # ordinary PR and only have anything to say when a bump is involved.
       #
       - name: is the workspace version a releasable one
+        if: matrix.shard == 1
         run: "${CARGO_TARGET_DIR:-target}/debug/hudson ops release check"
       # `ops notices --check` is here now. It could not be while `notices_for`
       # read "this crate's source is absent" and "this crate ships no licence
@@ -688,6 +703,7 @@ jobs:
       # mutable files left in registry/src by an earlier run cannot change the
       # generated notice text for an unchanged Cargo.lock.
       - name: are the third-party notices current
+        if: matrix.shard == 1
         run: |
           rm -rf "${CARGO_HOME:-$HOME/.cargo}/registry/src"
           cargo fetch --locked
@@ -700,6 +716,7 @@ jobs:
       # `ops release version` refreshes both files together; this is the check
       # that proves it happened.
       - name: does Cargo.lock agree with the manifest
+        if: matrix.shard == 1
         run: cargo metadata --locked --no-deps --format-version 1 > /dev/null
       # The repo holds the firm's OWN data and synthetic fixtures — never a
       # client's. That invariant is enforced by `cli/tests/no_client_data.rs`,
@@ -707,11 +724,13 @@ jobs:
       # server/content) inside the workspace test pass below. See AGENTS.md
       # "No client data in the repo".
       - name: cargo clippy
+        if: matrix.shard == 1
         run: cargo clippy --workspace --all-targets -- -D warnings
       # The headroom the clippy artifacts leave behind, which is the number that
       # says whether the narrowed clean below stays affordable. It was never
       # recorded while the bare `cargo clean` hid it.
       - name: report free disk after clippy
+        if: matrix.shard == 1
         run: df -h
       # Clear the WORKSPACE crates' clippy output, and nothing else.
       #
@@ -737,6 +756,7 @@ jobs:
       # always real workspace members and `cargo clean -p` cannot fail on an
       # unmatched spec.
       - name: clear the clippy check artifacts for workspace crates
+        if: matrix.shard == 1
         run: |
           set -euo pipefail
           cargo metadata --no-deps --format-version 1 \
@@ -924,7 +944,8 @@ jobs:
           # Tee the suite so a red run still has the panic after the log
           # stream is gone; the step after this one uploads the JUnit on every
           # outcome and the tee file on failure.
-          cargo nextest run --workspace --no-fail-fast --profile ci 2>&1 | tee /tmp/navigator-workspace-tests.log
+          cargo nextest run --workspace --no-fail-fast --profile ci \
+              --partition hash:${{ matrix.shard }}/4 2>&1 | tee /tmp/navigator-workspace-tests.log
           # The two lanes nextest does not run, kept so this gate stays exactly
           # as wide as the `cargo test --workspace` it replaces — and so the
           # coverage number keeps measuring the same test set.
@@ -941,8 +962,10 @@ jobs:
           #     local `cargo llvm-cov --workspace` lane reads lower than this
           #     job — so dropping them would both narrow the gate and move the
           #     percentage it is compared against.
-          cargo test -p features
-          cargo test --workspace --doc
+          if [ "${{ matrix.shard }}" = 2 ]; then
+              cargo test -p features
+              cargo test --workspace --doc
+          fi
           # THE COVERAGE GATE. `--fail-under-lines` exits non-zero when total
           # workspace line coverage is under the floor, which fails this job and
           # therefore the `ci` merge gate. There is no upload, no separate
@@ -1036,7 +1059,7 @@ jobs:
           # capability shape, port polling — stay counted in
           # `scraper/session.rs` with their tests.
           cargo llvm-cov report \
-              --fail-under-lines 90.2 \
+              --lcov --output-path /tmp/lcov-shard-${{ matrix.shard }}.info \
               --ignore-filename-regex '(deploy/src/devx/(browser_e2e|chrome|e2e|seaweedfs|orchestrate|staging)|deploy/src/devx/forgejo/(cluster|oidc|smoke)|deploy/src/devx/email_summary_e2e/(harness|scenarios)|features/src/webdriver|deploy/src/scraper/browser)\.rs$'
       - name: stop covered PostgreSQL fixture
         if: always()
@@ -1045,14 +1068,20 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: nextest-junit
+          name: nextest-junit-${{ matrix.shard }}
           path: target/nextest/ci/junit.xml
       - name: upload workspace test log
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: workspace-test-log
+          name: workspace-test-log-${{ matrix.shard }}
           path: /tmp/navigator-workspace-tests.log
+      - name: upload this shard's coverage
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: lcov-shard-${{ matrix.shard }}
+          path: /tmp/lcov-shard-${{ matrix.shard }}.info
+          retention-days: 3
       - name: report free disk after the test build
         if: always()
         run: df -h
@@ -1091,6 +1120,56 @@ jobs:
   # a red run is a regression in the seam, the anchors, or the webhook
   # trust path — never an environment problem, because nothing here reaches
   # past localhost.
+  # THE COVERAGE GATE. Each shard ran a quarter of the suite and exported
+  # LCOV for the same instrumented sources; a line counts as covered when any
+  # shard executed it. `--fail-under-lines` used to run inside the single test
+  # job; this applies the same floor to the merged total and prints the files
+  # with the most uncovered lines when it trips.
+  coverage:
+    name: coverage floor
+    needs: [rust]
+    if: needs.rust.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: download every shard's coverage
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: lcov-shard-*
+          path: lcov
+          merge-multiple: true
+      - name: merge and hold the floor
+        env:
+          FLOOR: "90.2"
+        run: |
+          python3 - <<'PYTHON'
+          import collections, glob, os, sys
+          files = sorted(glob.glob('lcov/lcov-shard-*.info'))
+          if len(files) != 4:
+              sys.exit(f'expected 4 shard reports, found {len(files)}: {files}')
+          hits = collections.defaultdict(dict)
+          for path in files:
+              source = None
+              for line in open(path):
+                  if line.startswith('SF:'):
+                      source = line[3:].strip()
+                  elif line.startswith('DA:'):
+                      number, count = line[3:].split(',')[:2]
+                      lines = hits[source]
+                      lines[number] = lines.get(number, 0) + int(count)
+          found = sum(len(lines) for lines in hits.values())
+          covered = sum(1 for lines in hits.values() for count in lines.values() if count)
+          percent = 100 * covered / found
+          worst = sorted(hits.items(), key=lambda item: -sum(1 for c in item[1].values() if not c))[:40]
+          for source, lines in worst:
+              missed = sum(1 for c in lines.values() if not c)
+              print(f'{missed:7d} missed  {100 * (len(lines) - missed) / len(lines):6.2f}%  {source}')
+          print(f'TOTAL {covered}/{found} lines = {percent:.2f}% (floor {os.environ["FLOOR"]}%)')
+          if percent < float(os.environ['FLOOR']):
+              print(f'::error::line coverage {percent:.2f}% is under the {os.environ["FLOOR"]}% floor')
+              sys.exit(1)
+          PYTHON
+
   signature-loop:
     name: signature loop
     needs: [changes]
@@ -1133,7 +1212,7 @@ jobs:
 
   ci:
     name: ci
-    needs: [changes, gate, rust, word-adapter, signature-loop]
+    needs: [changes, gate, rust, coverage, word-adapter, signature-loop]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -1143,6 +1222,7 @@ jobs:
           CHANGES_RESULT: ${{ needs.changes.result }}
           GATE_RESULT: ${{ needs.gate.result }}
           RUST_RESULT: ${{ needs.rust.result }}
+          COVERAGE_RESULT: ${{ needs.coverage.result }}
           WORD_ADAPTER_RESULT: ${{ needs.word-adapter.result }}
           SIGNATURE_LOOP_RESULT: ${{ needs.signature-loop.result }}
         run: |
@@ -1162,6 +1242,11 @@ jobs:
           fi
           if [ "${RUST_RESULT}" != "success" ] && [ "${RUST_RESULT}" != "skipped" ]; then
               echo "::error::the merge gate is red — cargo test (workspace) reported ${RUST_RESULT}"
+              exit 1
+          fi
+          echo "coverage floor: ${COVERAGE_RESULT}"
+          if [ "${RUST_RESULT}" = "success" ] && [ "${COVERAGE_RESULT}" != "success" ]; then
+              echo "::error::the merge gate is red — coverage floor reported ${COVERAGE_RESULT}"
               exit 1
           fi
           if [ "${WORD_ADAPTER_RESULT}" != "success" ] && [ "${WORD_ADAPTER_RESULT}" != "skipped" ]; then
