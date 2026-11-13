@@ -129,8 +129,8 @@ mod tests {
     #[test]
     fn a_task_log_lives_under_its_hex_bucket() {
         assert_eq!(
-            log_path("shook-law-pc/sample-estate", 300),
-            "/var/lib/gitea/data/actions_log/shook-law-pc/sample-estate/2c/300.log"
+            log_path("example-firm/sample-estate", 300),
+            "/var/lib/gitea/data/actions_log/example-firm/sample-estate/2c/300.log"
         );
         assert_eq!(
             log_path("o/r", 7),

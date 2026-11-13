@@ -152,7 +152,7 @@ without adopting competitor experience or outcome claims.
 
 [NRS 669.080(1)(c), (n)](https://www.leg.state.nv.us/NRS/NRS-669.html#NRS669Sec080) exempts performance of attorney
 duties and individual fiduciary service from that chapter. This supports the advertised legal-advice and
-individual-appointment paths; it does not establish that Guieb & Shook PC is a licensed trust company or qualified for
+individual-appointment paths; it does not establish that Lex Tecnica, Ltd. is a licensed trust company or qualified for
 every proposed trust. [NRS 162.310](https://www.leg.state.nv.us/NRS/NRS-162.html#NRS162Sec310) distinguishes a
 fiduciary's attorney from duties to the principal arising solely from that representation. The engagement must identify
 the client.

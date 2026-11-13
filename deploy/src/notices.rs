@@ -392,9 +392,15 @@ fn firm_paragraphs() -> Vec<String> {
                     .iter()
                     .map(|key| format!("neon/locales/en/{}/", key.as_str()))
                     .collect();
+                // A brand keeps its logos in its own directory, or, for the
+                // older ones, as a single file named for the brand.
                 let logos: Vec<String> = keys
                     .iter()
-                    .map(|key| format!("server/public/brand/{}/", key.as_str()))
+                    .map(|key| {
+                        let dir = format!("/public/brand/{}/", key.as_str());
+                        let logo = key.resolve_branding(&DEFAULT_BRANDING).firm.logo_href;
+                        format!("server{}", if logo.starts_with(&dir) { &dir } else { logo })
+                    })
                     .collect();
                 let marks: Vec<String> = names.iter().map(|name| name.to_uppercase()).collect();
                 format!(
@@ -868,10 +874,11 @@ source = "git+https://example.invalid/repo"
             .unwrap_or_else(|| panic!("no paragraph for {house}: {out}"));
         let flat = paragraph.replace('\n', " ");
         assert!(
-            flat.contains("DeleteYourData.com, DeleteYourDebt.com, Vesta Estate Planning,"),
+            flat.contains(
+                "these names: DeleteYourData.com, DeleteYourDebt.com, and Guieb & Shook."
+            ),
             "{flat}"
         );
-        assert!(flat.contains(", and Guieb & Shook."), "{flat}");
         assert!(flat.contains("NEON LAW is addressed in NOTICE."), "{flat}");
         assert!(!flat.contains("Permission must come from"), "{flat}");
     }
@@ -890,8 +897,9 @@ source = "git+https://example.invalid/repo"
         let flat = paragraph.replace('\n', " ");
         for phrase in [
             "[Draft — pending review by counsel.]",
-            "Lex Tecnica and IEP Defenders material belongs to Lex Tecnica, Ltd.",
-            "the names LEX TECNICA or IEP DEFENDERS",
+            "Lex Tecnica, and IEP Defenders material belongs to Lex Tecnica, Ltd.",
+            "Vesta Estate Planning, Misericordia Injury Law, Abhaya Immigration,",
+            "LEX TECNICA, or IEP DEFENDERS",
             "Permission must come from Lex Tecnica, Ltd. in writing.",
             "views/src/brand.rs and views/src/brand_presentation.rs",
         ] {
@@ -901,11 +909,13 @@ source = "git+https://example.invalid/repo"
         for path in [
             "neon/locales/en/lex-tecnica/",
             "neon/locales/en/iep-defenders/",
+            "neon/locales/en/vesta/",
             "server/public/brand/lex-tecnica/",
             "server/public/brand/iep-defenders/",
+            "server/public/brand/vesta.svg",
         ] {
             assert!(flat.contains(path), "{path} missing: {flat}");
-            assert!(workspace.join(path).is_dir(), "{path} is not in the tree");
+            assert!(workspace.join(path).exists(), "{path} is not in the tree");
         }
     }
 

@@ -232,7 +232,7 @@ mod tests {
                 ("FORGEJO_ACTIONS", "true"),
                 ("GITHUB_SHA", "ABCDEF0123456789abcdef0123456789abcdef01"),
                 ("GITHUB_SERVER_URL", "https://forge.example/"),
-                ("GITHUB_REPOSITORY", "shook-law-pc/sample-estate"),
+                ("GITHUB_REPOSITORY", "example-firm/sample-estate"),
                 ("GITHUB_RUN_NUMBER", "12"),
                 ("GITHUB_RUN_ID", "9001"),
                 ("GITHUB_ACTOR", "nick_s.law"),
@@ -245,7 +245,7 @@ mod tests {
             body,
             json!({
                 "short_sha": "abcdef0",
-                "run_url": "https://forge.example/shook-law-pc/sample-estate/actions/runs/12",
+                "run_url": "https://forge.example/example-firm/sample-estate/actions/runs/12",
                 "author_login": "nick_s.law",
                 "gate": "fail",
                 "run_attempt": 1,

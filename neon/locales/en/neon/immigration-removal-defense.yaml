@@ -1,9 +1,9 @@
 head_title: "{site_name} | Removal defense"
 meta_description: >-
-  Abhaya Immigration, a Shook Law PC practice, defends people in immigration
-  court: responding to a Notice to Appear, hearings, bond and detention, and
-  relief from removal. Deadlines in immigration court are short; government
-  filing fees are separate, and no outcome is promised.
+  Abhaya Immigration, a practice of Lex Tecnica, Ltd., defends people in
+  immigration court: responding to a Notice to Appear, hearings, bond and
+  detention, and relief from removal. Deadlines in immigration court are short;
+  government filing fees are separate, and no outcome is promised.
 title: Removal defense
 tagline: If you have a court date, the calendar is the first thing to know.
 skin: practice
@@ -167,9 +167,9 @@ bands:
   - kind: cta
     heading: Bring the Notice to Appear
     body: >-
-      A first conversation covers the hearing date, the charges, and what
-      relief the law allows in your case. Abhaya Immigration, a Shook Law PC
-      practice, defends people in immigration court.
+      A first conversation covers the hearing date, the charges, and what relief
+      the law allows in your case. Abhaya Immigration, a practice of Lex
+      Tecnica, Ltd., defends people in immigration court.
     email: "{firm_email}"
     action:
       href: "https://www.abhayaimmigration.com/"

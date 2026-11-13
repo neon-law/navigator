@@ -345,7 +345,8 @@ pub async fn resolve_brand_and_enforce_host(
 }
 
 /// The response for `/privacy` or `/terms` on a brand of another firm: a 302
-/// to that firm's own published page, or 404 when it publishes none.
+/// to that firm's own published page, 404 when it publishes none, or `None`
+/// (the in-app page) when the brand keeps the local path.
 fn other_firm_legal_page(key: BrandKey, path: &str) -> Option<Response> {
     let branding = key.resolve_branding(&views::brand::DEFAULT_BRANDING);
     let target = match path.trim_end_matches('/') {
@@ -353,6 +354,10 @@ fn other_firm_legal_page(key: BrandKey, path: &str) -> Option<Response> {
         "/terms" => branding.terms_url,
         _ => return None,
     };
+    // A brand that keeps the in-app page renders it as it is.
+    if target == path.trim_end_matches('/') {
+        return None;
+    }
     Some(if target.starts_with("https://") {
         Redirect::to(target).into_response()
     } else {

@@ -5978,7 +5978,7 @@ jobs:
     fn california_templates_refuse_an_llc_as_the_law_firm_but_allow_nonparty_mentions() {
         let california = concat!(
             "---\nkind: onboarding\ntitle: Letter\njurisdiction: CA\n---\n",
-            "Thank you for choosing Shook Law PLLC.\n",
+            "Thank you for choosing Example Law PLLC.\n",
             "The attorney's license is held by Nick Shook.\n",
             "The client may have an LLC.\n",
         );
@@ -5988,7 +5988,7 @@ jobs:
         assert!(california_law_firm_entity_claims(&nv).is_empty());
 
         let client_reference = california.replace(
-            "Thank you for choosing Shook Law PLLC.",
+            "Thank you for choosing Example Law PLLC.",
             "The client may have an LLC.",
         );
         assert!(california_law_firm_entity_claims(&client_reference).is_empty());

@@ -2603,14 +2603,14 @@ mod tests {
                  firm_anchor_key = '{key}'"
             )
         };
-        db.query(anchor("firm", "shook law pc"))
+        db.query(anchor("firm", "example law pc"))
             .await
             .unwrap()
             .check()
             .unwrap();
 
         let forked = db
-            .query(anchor("fork", "shook law pc"))
+            .query(anchor("fork", "example law pc"))
             .await
             .unwrap()
             .check();

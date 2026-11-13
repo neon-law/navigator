@@ -55,11 +55,11 @@ async fn persistent_boot_registers_vesta_idempotently() {
         }
         brand_id = Some(vesta.id);
         let firms = store::firms::all(&surreal).await.unwrap();
-        let practice = firms
+        let lex = firms
             .iter()
-            .find(|firm| firm.name == store::seed::FIRM_ENTITY_NAME)
-            .expect("the practice firm is seeded");
-        assert!(store::firms::brand_keys_for_firm(&surreal, practice.id)
+            .find(|firm| firm.name == store::seed::LEX_FIRM_NAME)
+            .expect("the Lex firm is seeded");
+        assert!(store::firms::brand_keys_for_firm(&surreal, lex.id)
             .await
             .unwrap()
             .contains(&"vesta".to_string()));
@@ -767,7 +767,18 @@ async fn a_first_boot_registers_every_brand_key_the_practice_wears() {
         .unwrap();
     assert_eq!(
         lex_brands,
-        vec!["iep-defenders".to_string(), "lex-tecnica".to_string()]
+        [
+            "vesta",
+            "misericordia",
+            "abhaya",
+            "summons",
+            "daybridge",
+            "cyber-injury-law",
+            "aegis",
+            "groundwork",
+            "iep-defenders",
+            "lex-tecnica",
+        ]
     );
 }
 
@@ -813,8 +824,10 @@ async fn the_dev_boot_seeds_the_practice_once() {
     for project in projects::all(&surreal).await.unwrap() {
         assert_eq!(
             project.firm_id,
-            Some(firm.id),
-            "every sample matter belongs to the seeded practice"
+            store::firms::firm_id_for_brand_key(&surreal, &project.brand)
+                .await
+                .unwrap(),
+            "every sample matter belongs to the Firm that wears its brand"
         );
     }
 

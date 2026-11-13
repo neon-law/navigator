@@ -93,10 +93,13 @@ pub fn compiled_firm_footer_model(
         legal_entity: brand.legal_entity.to_string(),
         compiled_identity_allowed: true,
         copyright_year,
-        // The compiled firm brand's production home: the same door the
-        // practice footer's copyright has always linked, now single-sourced
-        // from the brand registry instead of a literal in the mapping.
-        firm_home_href: views::brand::BrandKey::GuiebShook.public_home_href(),
+        // The compiled firm brand's production home, for Guieb & Shook PC's
+        // own brands only: another firm's brand never links Guieb & Shook.
+        firm_home_href: if current.is_guieb_shook() {
+            views::brand::BrandKey::GuiebShook.public_home_href()
+        } else {
+            String::new()
+        },
     }
 }
 
@@ -249,6 +252,12 @@ mod tests {
             views::brand::BrandKey::GuiebShook.public_home_href(),
             "the compiled fallback resolves the compiled firm brand's production home"
         );
+        let other = compiled_firm_footer_model(views::brand::BrandKey::Vesta, 2026);
+        assert_eq!(other.legal_entity, "Lex Tecnica, Ltd.");
+        assert_eq!(
+            other.firm_home_href, "",
+            "another firm's brand links no Guieb home"
+        );
     }
 
     /// The resolver reads the Firm's Entity, and grants compiled identity only to the anchored one.
@@ -282,7 +291,7 @@ mod tests {
         let firm = store::firms::create(
             &surreal,
             &store::firms::NewFirm {
-                name: "Shook Law".to_string(),
+                name: "Guieb & Shook".to_string(),
                 status: "active".to_string(),
                 entity_id: entity.id,
                 admin_dri_person_id: admin.id,
@@ -546,7 +555,12 @@ mod tests {
             store::seed::compiled_brand_website_url("lex-tecnica"),
             Some("https://www.lextecnica.com")
         );
-        for key in views::brand::BrandKey::GUIEB_SHOOK_FAMILY {
+        for key in views::brand::BrandKey::ALL.iter().filter(|key| {
+            !matches!(
+                key,
+                views::brand::BrandKey::LexTecnica | views::brand::BrandKey::IepDefenders
+            )
+        }) {
             assert_eq!(
                 store::seed::compiled_brand_website_url(key.as_str()),
                 Some(format!("https://{}", key.canonical_host()).as_str()),

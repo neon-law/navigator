@@ -1322,7 +1322,7 @@ mod tests {
             &db,
             ordinary.id,
             &NewEntity {
-                firm_anchor_key: Some("shook law pc".into()),
+                firm_anchor_key: Some("example law pc".into()),
                 ..input("Neon Law")
             },
         )

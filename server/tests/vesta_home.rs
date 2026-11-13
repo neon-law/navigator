@@ -135,19 +135,20 @@ async fn design_gallery_has_the_host_header_and_footer() {
 
 #[tokio::test]
 async fn every_firm_footer_destination_publishes_the_complete_footer() {
-    let links = views::brand::scope(&views::brand::VESTA_BRANDING, async {
+    let links = views::brand::scope(&views::brand::DELETE_YOUR_DATA_BRANDING, async {
         views::brand::firm_footer_nav()
     })
     .await;
     for link in links {
-        // Absolute footer links leave Vesta for the host that publishes the
-        // page. Team is Guieb & Shook; the rest of the shared row is Neon.
+        // Absolute footer links leave DeleteYourData for the host that
+        // publishes the page. Team is Guieb & Shook; the rest of the shared
+        // row is Neon.
         let (brand, path) = if let Some(path) = link.href.strip_prefix("https://www.neonlaw.com") {
             (BrandKey::Neon, path)
         } else if let Some(path) = link.href.strip_prefix("https://www.guiebshook.com") {
             (BrandKey::GuiebShook, path)
         } else {
-            (BrandKey::Vesta, link.href)
+            (BrandKey::DeleteYourData, link.href)
         };
         let html = preview(brand, path).await;
         // API is the shared standalone Swagger explorer, not a brand content page.
@@ -185,7 +186,7 @@ async fn vesta_shows_starting_price_and_shared_booking_calendar() {
         "trustee appointment",
         "https://calendar.notion.so/meet/nick-shook/or15n4yy7",
         "/public/brand/vesta.svg",
-        "Guieb &#38; Shook PC",
+        "Lex Tecnica, Ltd.",
         "site-footer",
     ] {
         assert!(html.contains(expected), "missing {expected}");
@@ -276,11 +277,12 @@ async fn vesta_services_describe_tailored_planning_with_a_starting_price() {
 }
 
 #[tokio::test]
-async fn vesta_footer_links_the_firm_without_a_brand_family() {
+async fn vesta_footer_names_lex_tecnica_without_a_brand_family() {
     let html = preview(BrandKey::Vesta, "/").await;
     let footer = html.split("<footer").nth(1).expect("shared footer");
-    assert!(footer.contains("https://www.guiebshook.com"));
-    assert!(footer.contains("Everyone deserves access to justice."));
+    assert!(!footer.contains("https://www.guiebshook.com"), "{footer}");
+    assert!(footer.contains("Lex Tecnica, Ltd."), "{footer}");
+    assert!(!footer.contains("Everyone deserves access to justice."));
     assert!(!footer.contains("Our Family"));
     assert!(!footer.contains("common-law mark of Guieb &#38; Shook PC"));
 }

@@ -1,9 +1,9 @@
 head_title: "{site_name} | Consular processing"
 meta_description: >-
-  Abhaya Immigration, a Shook Law PC practice, walks families through
-  consular processing: eligibility, the National Visa Center, the DS-260,
-  the embassy interview, documents, fees, and waivers. Government filing
-  fees are separate, and no approval or timeline is promised.
+  Abhaya Immigration, a practice of Lex Tecnica, Ltd., walks families through
+  consular processing: eligibility, the National Visa Center, the DS-260, the
+  embassy interview, documents, fees, and waivers. Government filing fees are
+  separate, and no approval or timeline is promised.
 title: Consular processing
 tagline: The last step happens at a consulate. Prepare for it.
 skin: practice
@@ -229,9 +229,9 @@ bands:
   - kind: cta
     heading: Prepare the consulate stage with Abhaya Immigration
     body: >-
-      A first conversation covers where your case stands, which documents
-      the embassy will ask for, and whether a waiver question applies.
-      Abhaya Immigration, a Shook Law PC practice, walks families through
+      A first conversation covers where your case stands, which documents the
+      embassy will ask for, and whether a waiver question applies. Abhaya
+      Immigration, a practice of Lex Tecnica, Ltd., walks families through
       consular processing.
     email: "{firm_email}"
     action:

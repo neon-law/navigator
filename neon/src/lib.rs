@@ -6,8 +6,8 @@
 //! to its own [`views::brand::BrandKey`], so the same running process renders
 //! Neon Law's chrome on its own hosts and a second house brand's on its own,
 //! from the one composed router this crate declares. Neon Law is the practice
-//! of Guieb & Shook PC, and every page this crate serves is the firm's or a
-//! house brand the firm operates.
+//! of Guieb & Shook PC, and every page this crate serves is a house brand
+//! Guieb & Shook PC or Lex Tecnica, Ltd. operates.
 //!
 //! This crate owns the public surface outright: its marketing copy, its page
 //! compositions, and its path table. `portal` owns the authenticated

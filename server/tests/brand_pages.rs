@@ -35,15 +35,10 @@ async fn assert_brand_pages(
     home_copy: &str,
     services_copy: &str,
     tokens_css: &str,
+    entity: &str,
 ) {
     let home = page(host, "/").await;
-    for expected in [
-        title,
-        home_copy,
-        "site-footer",
-        tokens_css,
-        "Guieb &#38; Shook PC",
-    ] {
+    for expected in [title, home_copy, "site-footer", tokens_css, entity] {
         assert!(
             home.contains(expected),
             "{host} home is missing {expected:?}"
@@ -75,6 +70,7 @@ async fn vesta_publishes_estate_planning_home_and_services() {
         "Your life is part of a larger story.",
         "Custom scope and fees",
         "/public/css/brand-vesta-tokens.css",
+        "Lex Tecnica, Ltd.",
     )
     .await;
 }
@@ -87,6 +83,7 @@ async fn misericordia_publishes_injury_home_and_services() {
         "You were hurt. We are here to listen.",
         "How we are paid",
         "/public/css/brand-misericordia-tokens.css",
+        "Lex Tecnica, Ltd.",
     )
     .await;
 }
@@ -99,6 +96,7 @@ async fn abhaya_publishes_immigration_home_and_services() {
         "Your next chapter, without fear.",
         "Immigration services",
         "/public/css/brand-abhaya-tokens.css",
+        "Lex Tecnica, Ltd.",
     )
     .await;
 }
@@ -136,6 +134,7 @@ async fn delete_your_debt_publishes_panda_home_and_services() {
         "A next step beyond debt.",
         "Debt relief with PandA Law",
         "/public/css/brand-delete-your-debt-tokens.css",
+        "Guieb &#38; Shook PC",
     )
     .await;
 }
