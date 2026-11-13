@@ -3128,16 +3128,10 @@ async fn resolve_person(
             // pass the subject and email lookups above before either insert
             // runs; one wins and the loser trips the unique provider-subject
             // or `email_lower` index. Rather than surface that loser as a
-            // 500, re-resolve the row the winner created and treat this
+            // 500, settle on the row the winner created and treat this
             // login as an existing (non-fresh) sign-in.
             Err(insert_err) => {
-                match resolve_existing_after_race(surreal, provider, &claims.sub, &email).await? {
-                    Some(existing) if persons::is_admitted(surreal, existing.id).await? => {
-                        Ok((existing.id, existing.role, ResolutionMetadata::existing()))
-                    }
-                    Some(_) => Err(ResolveError::NotAdmitted),
-                    None => Err(ResolveError::Db(insert_err)),
-                }
+                settle_lost_signup_race(surreal, provider, &claims.sub, &email, insert_err).await
             }
         };
     }
@@ -3229,6 +3223,56 @@ async fn resolve_foreign_tenant_person(
             }
             None => Err(ResolveError::Db(insert_err)),
         },
+    }
+}
+
+/// The first window the lost-signup-race settle waits before re-reading a
+/// winner's row that has not committed yet. Same shape as the shared write
+/// backoff and the settle loop in `persons::find_or_create`: every loser is
+/// refused at the same instant, so looking again immediately just re-reads
+/// the same un-committed row.
+const RACE_RECOVERY_FIRST_BACKOFF: std::time::Duration = std::time::Duration::from_millis(2);
+
+/// The largest window the lost-signup-race settle waits, so the shared write
+/// budget bounds the whole settle rather than one sleep.
+const RACE_RECOVERY_BACKOFF_CEILING: std::time::Duration = std::time::Duration::from_millis(64);
+
+/// Settle a lost first-signup race on the row the winner created.
+///
+/// The mailbox claim commits before the winner's person row — the window
+/// between them is inherent to the claim mechanism, not a fault, so a loser
+/// refused at the claim can observe [`store::persons::PersonError::EmailTaken`]
+/// before the winner's row is readable (`persons::find_or_create` documents
+/// the same window and settles through it). SurrealDB 4's engine widened that
+/// window enough for a single read to miss, so poll the recovery lookups on
+/// the same shape of backoff the crate's settle loop uses, bounded by the
+/// shared write budget.
+///
+/// `insert_err` is this loser's own create failure, returned only when the
+/// write budget expires without the winner's row ever appearing.
+async fn settle_lost_signup_race(
+    surreal: &store::surreal::SurrealDb,
+    provider: Option<ProviderId>,
+    sub: &str,
+    email: &str,
+    insert_err: store::persons::PersonError,
+) -> Result<(Uuid, Role, ResolutionMetadata), ResolveError> {
+    let deadline = tokio::time::Instant::now() + store::surreal::retry::WRITE_BUDGET;
+    let mut backoff = RACE_RECOVERY_FIRST_BACKOFF;
+    loop {
+        match resolve_existing_after_race(surreal, provider, sub, email).await? {
+            Some(existing) if store::persons::is_admitted(surreal, existing.id).await? => {
+                break Ok((existing.id, existing.role, ResolutionMetadata::existing()))
+            }
+            Some(_) => break Err(ResolveError::NotAdmitted),
+            None if tokio::time::Instant::now() >= deadline => {
+                break Err(ResolveError::Db(insert_err))
+            }
+            None => {
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(RACE_RECOVERY_BACKOFF_CEILING);
+            }
+        }
     }
 }
 
