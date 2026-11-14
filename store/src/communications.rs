@@ -29,6 +29,7 @@ use serde::Serialize;
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::postgres::communications::{self as authority, CommunicationsAuthorityError};
 use crate::surreal::{record_id, record_uuid, SurrealDb};
 
 /// The table these rows live in.
@@ -144,7 +145,7 @@ pub mod direction {
 /// One message in a matter's privileged conversation log.
 ///
 /// The application-facing shape: plain Rust types, no engine handles.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct Communication {
     pub id: Uuid,
     /// The matter this message belongs to.
@@ -170,6 +171,7 @@ pub struct Communication {
     /// Outbound email whose receipt this inbound email acknowledges.
     pub acknowledges: Option<Uuid>,
     /// Earliest linked inbound receipt timestamp, derived within this Project.
+    #[serde(default)]
     pub receipt_acknowledged_at: Option<String>,
     /// Raw payload (verbatim `.eml`, …); `None` for comments.
     pub asset_id: Option<Uuid>,
@@ -240,6 +242,19 @@ impl CommunicationRow {
     }
 }
 
+/// A PostgreSQL row as `row`, `occurred_at` rendered as RFC 3339 text the
+/// way the SurrealDB rows carry it.
+macro_rules! pg_communication {
+    () => {
+        "SELECT to_jsonb(c) || jsonb_build_object('occurred_at', \
+         to_char(c.occurred_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.USZ')) AS row \
+         FROM communication c"
+    };
+}
+
+/// The `(channel, source_ref)` unique index, named alike in both stores.
+const SOURCE_REF_INDEX: &str = "communication_channel_source_ref";
+
 /// The projection every read shares.
 const SELECT: &str = "id, project_id, channel, direction, author_person_id, counterparty, \
                       subject, body, source_ref, counterparty_role, acknowledges, asset_id, occurred_at, call, agreements, \
@@ -251,6 +266,9 @@ pub enum CommunicationError {
     /// A database operation failed.
     #[error("database: {0}")]
     Db(#[from] surrealdb::Error),
+    /// PostgreSQL, under the communications authority, failed.
+    #[error(transparent)]
+    Postgres(#[from] CommunicationsAuthorityError),
     /// A call the caller can correct: an unknown direction, role, or
     /// recording consent, a non-RFC 3339 time, or a blank body.
     #[error("{0}")]
@@ -279,6 +297,34 @@ pub struct NewCall {
     pub client_visible: bool,
 }
 
+/// Refuse a call's direction, role, recording consent, or duration the
+/// caller can correct.
+fn check_call(call: &CallDetails) -> Result<(), CommunicationError> {
+    if !matches!(call.direction.as_str(), "inbound" | "outbound") {
+        return Err(CommunicationError::Invalid(
+            "direction must be inbound or outbound".into(),
+        ));
+    }
+    if !counterparty_role::ALL.contains(&call.counterparty_role.as_str()) {
+        return Err(CommunicationError::Invalid(format!(
+            "role must be one of {}",
+            counterparty_role::ALL.join(", ")
+        )));
+    }
+    if !recorded::ALL.contains(&call.recorded.as_str()) {
+        return Err(CommunicationError::Invalid(format!(
+            "recorded must be one of {}",
+            recorded::ALL.join(", ")
+        )));
+    }
+    if call.duration_minutes.is_some_and(|minutes| minutes < 0) {
+        return Err(CommunicationError::Invalid(
+            "duration must be zero or more minutes".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Log a call as a Communication (LAW-140). The row is an internal note
 /// unless `client_visible` is set, and a call with opposing counsel is
 /// always internal: that note is work product.
@@ -290,28 +336,7 @@ pub async fn record_call(
     db: &SurrealDb,
     new: &NewCall,
 ) -> Result<Communication, CommunicationError> {
-    if !matches!(new.call.direction.as_str(), "inbound" | "outbound") {
-        return Err(CommunicationError::Invalid(
-            "direction must be inbound or outbound".into(),
-        ));
-    }
-    if !counterparty_role::ALL.contains(&new.call.counterparty_role.as_str()) {
-        return Err(CommunicationError::Invalid(format!(
-            "role must be one of {}",
-            counterparty_role::ALL.join(", ")
-        )));
-    }
-    if !recorded::ALL.contains(&new.call.recorded.as_str()) {
-        return Err(CommunicationError::Invalid(format!(
-            "recorded must be one of {}",
-            recorded::ALL.join(", ")
-        )));
-    }
-    if new.call.duration_minutes.is_some_and(|minutes| minutes < 0) {
-        return Err(CommunicationError::Invalid(
-            "duration must be zero or more minutes".into(),
-        ));
-    }
+    check_call(&new.call)?;
     let at = DateTime::parse_from_rfc3339(new.at.trim())
         .map(|at| at.to_rfc3339())
         .map_err(|_| {
@@ -351,6 +376,23 @@ pub async fn record_call(
         })
         .collect();
     let id = Uuid::now_v7();
+    if let Some(pg) = authority::authority().await? {
+        let row = serde_json::json!({
+            "id": id, "project_id": new.project_id, "channel": channel::CALL,
+            "direction": direction, "author_person_id": new.author_person_id,
+            "counterparty": counterparty, "subject": new.subject, "body": body,
+            "occurred_at": at, "call": new.call, "agreements": agreements,
+        });
+        let query = sqlx::query(
+            "INSERT INTO communication SELECT * FROM jsonb_populate_record(NULL::communication, \
+             $1 || jsonb_build_object('inserted_at', now(), 'updated_at', now()))",
+        )
+        .bind(row);
+        authority::execute(&pg, query).await?;
+        return find_pg(&pg, new.project_id, id)
+            .await?
+            .ok_or_else(|| CommunicationError::Invalid("the call could not be read back".into()));
+    }
     let mut response = db
         .query(format!(
             "CREATE $id SET \
@@ -396,6 +438,9 @@ pub async fn find(
     project_id: Uuid,
     id: Uuid,
 ) -> Result<Option<Communication>, CommunicationError> {
+    if let Some(pg) = authority::authority().await? {
+        return Ok(find_pg(&pg, project_id, id).await?);
+    }
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE id = $id AND project_id = $project LIMIT 1"
@@ -444,6 +489,19 @@ pub async fn confirm_agreements(
             }
         })
         .collect();
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "UPDATE communication SET agreements = $3, updated_at = now() \
+             WHERE id = $1 AND project_id = $2",
+        )
+        .bind(call_id)
+        .bind(project_id)
+        .bind(serde_json::to_value(&agreements).map_err(CommunicationsAuthorityError::from)?);
+        authority::execute(&pg, query).await?;
+        return find_pg(&pg, project_id, call_id)
+            .await?
+            .ok_or(CommunicationError::NotFound);
+    }
     let mut response = db
         .query(format!(
             "UPDATE $id SET agreements = $agreements, updated_at = time::now() RETURN {SELECT}"
@@ -644,27 +702,74 @@ pub async fn ingest(db: &SurrealDb, args: &IngestArgs<'_>) -> Result<Ingested, C
     ingest_with_details(db, args, EmailDetails::default()).await
 }
 
+/// The row a replayed `(channel, source_ref)` already resolves to, checked
+/// against this ingest: the same Project and the same email metadata.
+async fn replayed(
+    db: &SurrealDb,
+    args: &IngestArgs<'_>,
+    details: EmailDetails<'_>,
+) -> Result<Option<Ingested>, CommunicationError> {
+    let Some(source_ref) = args.source_ref else {
+        return Ok(None);
+    };
+    let Some(row) = find_by_source(db, args.channel, source_ref).await? else {
+        return Ok(None);
+    };
+    if row.project_id != args.project_id {
+        return Err(CommunicationError::Invalid(
+            "source reference already belongs to another Project".into(),
+        ));
+    }
+    validate_replayed_details(&row, details)?;
+    Ok(Some(Ingested {
+        communication_id: row.id,
+        deduped: true,
+    }))
+}
+
 async fn ingest_with_details(
     db: &SurrealDb,
     args: &IngestArgs<'_>,
     details: EmailDetails<'_>,
 ) -> Result<Ingested, CommunicationError> {
-    if let Some(source_ref) = args.source_ref {
-        if let Some(row) = find_by_source(db, args.channel, source_ref).await? {
-            if row.project_id != args.project_id {
-                return Err(CommunicationError::Invalid(
-                    "source reference already belongs to another Project".into(),
-                ));
-            }
-            validate_replayed_details(&row, details)?;
-            return Ok(Ingested {
-                communication_id: row.id,
-                deduped: true,
-            });
-        }
+    if let Some(ingested) = replayed(db, args, details).await? {
+        return Ok(ingested);
     }
 
     let id = Uuid::now_v7();
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "INSERT INTO communication (id, project_id, channel, direction, author_person_id, \
+             counterparty, subject, body, source_ref, asset_id, counterparty_role, acknowledges, \
+             occurred_at, inserted_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::timestamptz, \
+             now(), now())",
+        )
+        .bind(id)
+        .bind(args.project_id)
+        .bind(args.channel.to_owned())
+        .bind(args.direction.to_owned())
+        .bind(args.author_person_id)
+        .bind(args.counterparty.map(str::to_owned))
+        .bind(args.subject.map(str::to_owned))
+        .bind(args.body.to_owned())
+        .bind(args.source_ref.map(str::to_owned))
+        .bind(args.asset_id)
+        .bind(details.counterparty_role.map(str::to_owned))
+        .bind(details.acknowledges)
+        .bind(args.occurred_at.to_owned());
+        return match authority::execute(&pg, query).await {
+            Ok(_) => Ok(Ingested {
+                communication_id: id,
+                deduped: false,
+            }),
+            // A racer won between our lookup and this insert.
+            Err(error) if error.violates(SOURCE_REF_INDEX) => replayed(db, args, details)
+                .await?
+                .ok_or_else(|| error.into()),
+            Err(error) => Err(error.into()),
+        };
+    }
     let created = db
         .query(format!(
             "CREATE $id SET \
@@ -712,26 +817,8 @@ async fn ingest_with_details(
             // A racer won between our lookup and this insert. Return their
             // row: the whole point of the key is that one source produces
             // one message.
-            let Some(source_ref) = args.source_ref else {
-                return Err(CommunicationError::Db(error));
-            };
-            let existing = find_by_source(db, args.channel, source_ref).await?;
-            if existing
-                .as_ref()
-                .is_some_and(|row| row.project_id != args.project_id)
-            {
-                return Err(CommunicationError::Invalid(
-                    "source reference already belongs to another Project".into(),
-                ));
-            }
-            if let Some(row) = &existing {
-                validate_replayed_details(row, details)?;
-            }
-            return existing
-                .map(|row| Ingested {
-                    communication_id: row.id,
-                    deduped: true,
-                })
+            return replayed(db, args, details)
+                .await?
                 .ok_or(CommunicationError::Db(error));
         }
         Err(error) => return Err(CommunicationError::Db(error)),
@@ -748,6 +835,20 @@ async fn ingest_with_details(
     })
 }
 
+fn find_pg(
+    pg: &crate::postgres::PostgresDb,
+    project_id: Uuid,
+    id: Uuid,
+) -> authority::Op<'_, Option<Communication>> {
+    let query = sqlx::query(concat!(
+        pg_communication!(),
+        " WHERE c.id = $1 AND c.project_id = $2"
+    ))
+    .bind(id)
+    .bind(project_id);
+    authority::maybe(pg, query)
+}
+
 /// Whether this failure is the `(channel, source_ref)` key rejecting a
 /// duplicate.
 ///
@@ -756,7 +857,7 @@ async fn ingest_with_details(
 /// unclassified failure also uses, so the index name — which the workspace
 /// owns and no other failure mentions — is the only reliable signal.
 fn is_duplicate_source_ref(error: &surrealdb::Error) -> bool {
-    crate::surreal::retry::unique_violation(error) == Some("communication_channel_source_ref")
+    crate::surreal::retry::unique_violation(error) == Some(SOURCE_REF_INDEX)
 }
 
 /// Move one communication onto another Project.
@@ -773,6 +874,15 @@ pub async fn move_to_project(
     id: Uuid,
     project_id: Uuid,
 ) -> Result<(), CommunicationError> {
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "UPDATE communication SET project_id = $2, updated_at = now() WHERE id = $1",
+        )
+        .bind(id)
+        .bind(project_id);
+        authority::execute(&pg, query).await?;
+        return Ok(());
+    }
     db.query("UPDATE $id SET project_id = $project, updated_at = time::now()")
         .bind(("id", record_id(TABLE, id)))
         .bind((
@@ -791,6 +901,15 @@ pub(crate) async fn find_by_source(
     channel: &str,
     source_ref: &str,
 ) -> Result<Option<Communication>, CommunicationError> {
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(concat!(
+            pg_communication!(),
+            " WHERE c.channel = $1 AND c.source_ref = $2"
+        ))
+        .bind(channel.to_owned())
+        .bind(source_ref.to_owned());
+        return Ok(authority::maybe(&pg, query).await?);
+    }
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} \
@@ -833,6 +952,13 @@ pub async fn exists_for_project(
     db: &SurrealDb,
     project_id: Uuid,
 ) -> Result<bool, CommunicationError> {
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "SELECT to_jsonb(EXISTS (SELECT 1 FROM communication WHERE project_id = $1)) AS row",
+        )
+        .bind(project_id);
+        return Ok(authority::maybe(&pg, query).await?.unwrap_or(false));
+    }
     let mut response = db
         .query(format!(
             "SELECT VALUE id FROM {TABLE} WHERE project_id = $project LIMIT 1"
@@ -873,6 +999,16 @@ async fn read_thread(
     project_id: Uuid,
     exclude_direction: Option<&str>,
 ) -> Result<Vec<Communication>, CommunicationError> {
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(concat!(
+            pg_communication!(),
+            " WHERE c.project_id = $1 AND c.direction IS DISTINCT FROM $2 \
+             ORDER BY c.occurred_at, c.id"
+        ))
+        .bind(project_id)
+        .bind(exclude_direction.map(str::to_owned));
+        return Ok(with_receipts(authority::rows(&pg, query).await?));
+    }
     let filter = if exclude_direction.is_some() {
         "AND direction != $excluded "
     } else {
@@ -894,10 +1030,16 @@ async fn read_thread(
         .await
         .and_then(surrealdb::IndexedResults::check)?;
     let rows: Vec<CommunicationRow> = response.take(0)?;
-    let mut rows: Vec<_> = rows
-        .into_iter()
-        .filter_map(CommunicationRow::into_communication)
-        .collect();
+    Ok(with_receipts(
+        rows.into_iter()
+            .filter_map(CommunicationRow::into_communication)
+            .collect(),
+    ))
+}
+
+/// Stamp each outbound email with the earliest inbound receipt in the
+/// thread that acknowledges it.
+fn with_receipts(mut rows: Vec<Communication>) -> Vec<Communication> {
     let mut receipts = std::collections::HashMap::<Uuid, String>::new();
     for row in &rows {
         if row.channel == channel::EMAIL_INBOUND && row.direction == direction::INBOUND {
@@ -920,7 +1062,7 @@ async fn read_thread(
             row.receipt_acknowledged_at = receipts.remove(&row.id);
         }
     }
-    Ok(rows)
+    rows
 }
 
 /// Errors from a retention purge — the DB deletes and the storage-object
@@ -985,23 +1127,33 @@ pub async fn purge_for_project(
     crate::document_comments::clear_communication_links(surreal, &comm_ids).await?;
 
     let deleted = u64::try_from(comm_ids.len()).unwrap_or(u64::MAX);
-    surreal
-        .query(format!("DELETE {TABLE} WHERE project_id = $project"))
-        .bind((
-            "project",
-            record_id(crate::projects::PROJECT_TABLE, project_id),
-        ))
+    if let Some(pg) = authority::authority()
         .await
-        .and_then(surrealdb::IndexedResults::check)
-        .map_err(CommunicationError::Db)?;
-    crate::postgres_mirror::after_writes(
-        surreal,
-        comm_ids
-            .iter()
-            .copied()
-            .map(crate::postgres_mirror::MirrorKey::Communication),
-    )
-    .await;
+        .map_err(CommunicationError::from)?
+    {
+        let query = sqlx::query("DELETE FROM communication WHERE project_id = $1").bind(project_id);
+        authority::execute(&pg, query)
+            .await
+            .map_err(CommunicationError::from)?;
+    } else {
+        surreal
+            .query(format!("DELETE {TABLE} WHERE project_id = $project"))
+            .bind((
+                "project",
+                record_id(crate::projects::PROJECT_TABLE, project_id),
+            ))
+            .await
+            .and_then(surrealdb::IndexedResults::check)
+            .map_err(CommunicationError::Db)?;
+        crate::postgres_mirror::after_writes(
+            surreal,
+            comm_ids
+                .iter()
+                .copied()
+                .map(crate::postgres_mirror::MirrorKey::Communication),
+        )
+        .await;
+    }
 
     // Which assets lost their last communication referent — read after the
     // delete, so the answer reflects it. A raw payload referenced by a
@@ -1060,6 +1212,13 @@ pub async fn purge_for_project(
 
 /// Whether any communication still points at this raw-payload asset.
 async fn asset_is_referenced(db: &SurrealDb, asset_id: Uuid) -> Result<bool, CommunicationError> {
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "SELECT to_jsonb(EXISTS (SELECT 1 FROM communication WHERE asset_id = $1)) AS row",
+        )
+        .bind(asset_id);
+        return Ok(authority::maybe(&pg, query).await?.unwrap_or(false));
+    }
     let mut response = db
         .query(format!(
             "SELECT VALUE id FROM {TABLE} WHERE asset_id = $asset LIMIT 1"

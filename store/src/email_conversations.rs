@@ -14,11 +14,12 @@
 //! slice alongside [`crate::communications`].
 
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use surrealdb::types::SurrealValue;
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::postgres::communications::{self as authority, CommunicationsAuthorityError};
 use crate::surreal::{record_id, record_uuid, SurrealDb};
 
 /// Bound as `$thread_token`, never `$token`: SurrealDB reserves `$token`
@@ -53,6 +54,9 @@ pub enum EmailConversationError {
     /// A database operation failed.
     #[error("database: {0}")]
     Db(#[from] surrealdb::Error),
+    /// PostgreSQL, under the communications authority, failed.
+    #[error(transparent)]
+    Postgres(#[from] CommunicationsAuthorityError),
     /// The token already belongs to another thread. Its own variant
     /// because a token collision is the one failure a caller can act on:
     /// mint another and retry.
@@ -61,7 +65,7 @@ pub enum EmailConversationError {
 }
 
 /// One threaded support exchange.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EmailConversation {
     pub id: Uuid,
     /// Opaque, unguessable thread token; the VERP key in `Reply-To`.
@@ -124,8 +128,18 @@ impl ConversationRow {
 const SELECT: &str = "id, token, external_email, external_name, person_id, subject, status, \
                       notation_id, firm_id, project_id, inserted_at, updated_at";
 
+/// A PostgreSQL conversation as `row`.
+macro_rules! pg_conversation {
+    () => {
+        "SELECT to_jsonb(c) AS row FROM email_conversation c"
+    };
+}
+
+/// PostgreSQL's unique index on the thread token.
+const PG_TOKEN_INDEX: &str = "email_conversation_token_key";
+
 /// One hop in a thread's append-only transcript.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EmailConversationMessage {
     pub id: Uuid,
     pub conversation_id: Uuid,
@@ -240,6 +254,26 @@ pub async fn open(
     new: &NewConversation<'_>,
 ) -> Result<Uuid, EmailConversationError> {
     let id = Uuid::now_v7();
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "INSERT INTO email_conversation (id, token, external_email, external_name, \
+             person_id, subject, status, notation_id, inserted_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), now())",
+        )
+        .bind(id)
+        .bind(new.token.to_owned())
+        .bind(new.external_email.to_owned())
+        .bind(new.external_name.map(str::to_owned))
+        .bind(new.person_id)
+        .bind(new.subject.to_owned())
+        .bind(STATUS_OPEN)
+        .bind(new.notation_id);
+        return match authority::execute(&pg, query).await {
+            Ok(_) => Ok(id),
+            Err(error) if error.violates(PG_TOKEN_INDEX) => Err(EmailConversationError::TokenTaken),
+            Err(error) => Err(error.into()),
+        };
+    }
     let mut response = db
         .query(format!(
             "CREATE $id SET \
@@ -298,6 +332,11 @@ pub async fn by_token(
     db: &SurrealDb,
     token: &str,
 ) -> Result<Option<EmailConversation>, EmailConversationError> {
+    if let Some(pg) = authority::authority().await? {
+        let query =
+            sqlx::query(concat!(pg_conversation!(), " WHERE c.token = $1")).bind(token.to_owned());
+        return Ok(authority::maybe(&pg, query).await?);
+    }
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE token = $thread_token LIMIT 1"
@@ -325,6 +364,14 @@ pub async fn by_external_email(
     db: &SurrealDb,
     external_email: &str,
 ) -> Result<Option<EmailConversation>, EmailConversationError> {
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(concat!(
+            pg_conversation!(),
+            " WHERE c.external_email = $1 ORDER BY c.id DESC LIMIT 1"
+        ))
+        .bind(external_email.to_owned());
+        return Ok(authority::maybe(&pg, query).await?);
+    }
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} \
@@ -348,6 +395,10 @@ pub async fn by_id(
     db: &SurrealDb,
     id: Uuid,
 ) -> Result<Option<EmailConversation>, EmailConversationError> {
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(concat!(pg_conversation!(), " WHERE c.id = $1")).bind(id);
+        return Ok(authority::maybe(&pg, query).await?);
+    }
     let mut response = db
         .query(format!("SELECT {SELECT} FROM $id"))
         .bind(("id", record_id(TABLE, id)))
@@ -366,6 +417,27 @@ pub async fn by_id(
 /// Propagates any database error.
 pub async fn append(db: &SurrealDb, new: &NewMessage<'_>) -> Result<Uuid, EmailConversationError> {
     let id = Uuid::now_v7();
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "INSERT INTO email_conversation_message (id, conversation_id, direction, from_addr, \
+             to_addr, subject, body_text, raw_storage_key, provider_message_id, in_reply_to, \
+             command_payload, inserted_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now(), now())",
+        )
+        .bind(id)
+        .bind(new.conversation_id)
+        .bind(new.direction.to_owned())
+        .bind(new.from_addr.to_owned())
+        .bind(new.to_addr.to_owned())
+        .bind(new.subject.to_owned())
+        .bind(new.body_text.to_owned())
+        .bind(new.raw_storage_key.map(str::to_owned))
+        .bind(new.provider_message_id.map(str::to_owned))
+        .bind(new.in_reply_to.map(str::to_owned))
+        .bind(new.command_payload.map(str::to_owned));
+        authority::execute(&pg, query).await?;
+        return Ok(id);
+    }
     let mut response = db
         .query(format!(
             "CREATE $id SET \
@@ -411,6 +483,14 @@ pub async fn messages(
     db: &SurrealDb,
     conversation_id: Uuid,
 ) -> Result<Vec<EmailConversationMessage>, EmailConversationError> {
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "SELECT to_jsonb(m) AS row FROM email_conversation_message m \
+             WHERE m.conversation_id = $1 ORDER BY m.id",
+        )
+        .bind(conversation_id);
+        return Ok(authority::rows(&pg, query).await?);
+    }
     let mut response = db
         .query(format!(
             "SELECT {MESSAGE_SELECT} FROM {MESSAGE_TABLE} \
@@ -437,6 +517,13 @@ pub async fn message_by_id(
     db: &SurrealDb,
     id: Uuid,
 ) -> Result<Option<EmailConversationMessage>, EmailConversationError> {
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "SELECT to_jsonb(m) AS row FROM email_conversation_message m WHERE m.id = $1",
+        )
+        .bind(id);
+        return Ok(authority::maybe(&pg, query).await?);
+    }
     let mut response = db
         .query(format!("SELECT {MESSAGE_SELECT} FROM ONLY $id"))
         .bind(("id", record_id(MESSAGE_TABLE, id)))
@@ -457,6 +544,15 @@ pub async fn set_status(
     id: Uuid,
     status: &str,
 ) -> Result<Option<EmailConversation>, EmailConversationError> {
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "UPDATE email_conversation c SET status = $2, updated_at = now() WHERE c.id = $1 \
+             RETURNING to_jsonb(c) AS row",
+        )
+        .bind(id)
+        .bind(status.to_owned());
+        return Ok(authority::maybe(&pg, query).await?);
+    }
     let mut response = db
         .query(format!(
             "UPDATE $id SET status = $status, updated_at = time::now() RETURN {SELECT}"
@@ -492,6 +588,15 @@ pub async fn set_notation(
     id: Uuid,
     notation_id: Uuid,
 ) -> Result<Option<EmailConversation>, EmailConversationError> {
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "UPDATE email_conversation c SET notation_id = $2, updated_at = now() \
+             WHERE c.id = $1 RETURNING to_jsonb(c) AS row",
+        )
+        .bind(id)
+        .bind(notation_id);
+        return Ok(authority::maybe(&pg, query).await?);
+    }
     let mut response = db
         .query(format!(
             "UPDATE $id SET notation_id = $notation, updated_at = time::now() RETURN {SELECT}"
@@ -525,6 +630,16 @@ pub async fn set_scope(
     firm_id: Option<Uuid>,
     project_id: Option<Uuid>,
 ) -> Result<Option<EmailConversation>, EmailConversationError> {
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "UPDATE email_conversation c SET firm_id = $2, project_id = $3, updated_at = now() \
+             WHERE c.id = $1 RETURNING to_jsonb(c) AS row",
+        )
+        .bind(id)
+        .bind(firm_id)
+        .bind(project_id);
+        return Ok(authority::maybe(&pg, query).await?);
+    }
     let mut response = db
         .query(format!(
             "UPDATE $id SET firm_id = $firm, project_id = $project, updated_at = time::now() \

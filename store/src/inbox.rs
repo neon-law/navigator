@@ -728,7 +728,7 @@ pub enum InboxError {
     /// The import entry point requires the postgres Inbox authority —
     /// imports are postgres-native (LAW-238 D1) and the legacy Surreal path
     /// has no direction-aware writer.
-    #[error("inbox import requires the PostgreSQL Inbox authority (set NAVIGATOR_POSTGRES_INBOX_AUTHORITY=1)")]
+    #[error("inbox import requires PostgreSQL (set NAVIGATOR_POSTGRES_HOST)")]
     PostgresAuthorityRequired,
     #[error("{0}")]
     Contact(String),

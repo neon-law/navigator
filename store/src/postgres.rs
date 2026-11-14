@@ -7,6 +7,9 @@ use sqlx::{AssertSqlSafe, PgPool, SqlSafeStr};
 
 /// PostgreSQL authority for the shared catalogs, behind an opt-in switch.
 pub mod catalog;
+/// PostgreSQL authority for Communications and the email tables, behind an
+/// opt-in switch.
+pub mod communications;
 /// PostgreSQL authority for a Person's and an Entity's identity detail.
 pub mod identity;
 pub mod notation_creation_attempts;
