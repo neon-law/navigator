@@ -3078,8 +3078,16 @@ const COMPILED_BRANDS: &[CompiledBrand] = &[
         firm: SeedFirm::Lex,
         website_url: "https://www.lextecnica.com",
         name: "Lex Tecnica",
-        typeface: "eb-garamond",
-        primary_hex: "#7A5E27",
+        typeface: "tinos",
+        primary_hex: "#000000",
+    },
+    CompiledBrand {
+        key: "same-day-legal",
+        firm: SeedFirm::Lex,
+        website_url: "https://sameday.neonlaw.com",
+        name: "Same Day Legal",
+        typeface: "nunito-sans",
+        primary_hex: "#000000",
     },
 ];
 
@@ -7371,6 +7379,7 @@ records:
                 "groundwork",
                 "iep-defenders",
                 "lex-tecnica",
+                "same-day-legal",
             ]
         );
 

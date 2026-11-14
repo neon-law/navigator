@@ -62,6 +62,7 @@ const UNCONFIGURED_AEGIS_ID: &str = "pa-unconfigured-aegis";
 const UNCONFIGURED_GROUNDWORK_ID: &str = "pa-unconfigured-groundwork";
 const UNCONFIGURED_LEX_TECNICA_ID: &str = "pa-unconfigured-lex-tecnica";
 const UNCONFIGURED_IEP_DEFENDERS_ID: &str = "pa-unconfigured-iep-defenders";
+const UNCONFIGURED_SAME_DAY_LEGAL_ID: &str = "pa-unconfigured-same-day-legal";
 
 /// The Plausible script id (the `pa-…` stem of the snippet's script URL) for
 /// `key`'s public site.
@@ -86,6 +87,7 @@ pub const fn script_id(key: BrandKey) -> Option<&'static str> {
         // No analytics site is configured for the practice yet; the
         // unconfigured stub id keeps the public brand excluded until it is.
         BrandKey::IepDefenders => Some(UNCONFIGURED_IEP_DEFENDERS_ID),
+        BrandKey::SameDayLegal => Some(UNCONFIGURED_SAME_DAY_LEGAL_ID),
     }
 }
 

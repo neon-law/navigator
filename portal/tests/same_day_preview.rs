@@ -1,14 +1,14 @@
-//! The `nautilus_preview_router` contract — `navigator nautilus preview`'s
+//! The `same_day_preview_router` contract — `hudson same-day preview`'s
 //! served surface.
 //!
 //! Two properties, one per mode the command is honest about:
 //!
-//! 1. **Degraded (no staged bundle):** the Nautilus home still renders
+//! 1. **Degraded (no staged bundle):** the Same Day Legal home still renders
 //!    server-side — the shell is static content, so a missing bundle is the
 //!    designed mode the command's banner reports, never a 500 or a blank
 //!    page — and with no bundle mounted there is nothing at `/wasm` to
 //!    half-load.
-//! 2. **Hydrated (a bundle staged under `NAUTILUS_DIOXUS_PUBLIC_PATH`):**
+//! 2. **Hydrated (a bundle staged under `SAME_DAY_DIOXUS_PUBLIC_PATH`):**
 //!    the same shell renders, head-tagged so the wasm may run, and the
 //!    staged bundle's wasm and glue are served at the paths the bundle's own
 //!    `index.html` references.
@@ -32,13 +32,13 @@ use tower::ServiceExt;
 /// template-follows-the-override assertion keys off.
 const INDEX_HTML: &str = "<!DOCTYPE html>\n\
 <html lang=\"en\"><head><meta charset=\"UTF-8\" />\n\
-<title>Nautilus</title>\n\
-<script type=\"module\" src=\"/assets/nautilus-preview.js\"></script></head>\n\
-<body><div id=\"main\" data-fixture=\"nautilus-bundle\"></div></body></html>\n";
+<title>Same Day Legal</title>\n\
+<script type=\"module\" src=\"/assets/same-day-preview.js\"></script></head>\n\
+<body><div id=\"main\" data-fixture=\"same-day-bundle\"></div></body></html>\n";
 
-/// The wasm-bindgen glue a real `dx` build of `nautilus-preview` ships,
+/// The wasm-bindgen glue a real `dx` build of `same-day-preview` ships,
 /// named for the crate the way `dx` names the webapp bundle's for `webapp`.
-const GLUE_JS: &str = "// nautilus-preview browser bundle fixture";
+const GLUE_JS: &str = "// same-day-preview browser bundle fixture";
 
 async fn body_string(response: axum::response::Response) -> String {
     String::from_utf8(
@@ -66,19 +66,19 @@ async fn get(router: axum::Router, uri: &str) -> axum::response::Response {
 }
 
 #[tokio::test]
-async fn the_nautilus_preview_serves_the_mobile_shell_and_degrades_without_a_bundle() {
+async fn the_same_day_preview_serves_the_mobile_shell_and_degrades_without_a_bundle() {
     // ── Degraded mode: no staged bundle ──
-    std::env::remove_var("NAUTILUS_DIOXUS_PUBLIC_PATH");
+    std::env::remove_var("SAME_DAY_DIOXUS_PUBLIC_PATH");
     let foreign = tempfile::tempdir().expect("foreign bundle");
     std::fs::write(
         foreign.path().join("index.html"),
-        INDEX_HTML.replace("nautilus-preview.js", "foreign-app.js"),
+        INDEX_HTML.replace("same-day-preview.js", "foreign-app.js"),
     )
     .expect("foreign template");
     std::env::set_var("DIOXUS_PUBLIC_PATH", foreign.path());
-    let router = portal::dioxus_app::nautilus_preview_router();
+    let router = portal::dioxus_app::same_day_preview_router();
 
-    let response = get(router, portal::dioxus_app::NAUTILUS_PREVIEW_PATH).await;
+    let response = get(router, portal::dioxus_app::SAME_DAY_PREVIEW_PATH).await;
     assert_eq!(response.status(), StatusCode::OK);
     let html = body_string(response).await;
     assert!(
@@ -86,7 +86,7 @@ async fn the_nautilus_preview_serves_the_mobile_shell_and_degrades_without_a_bun
         "the SSR-only shell must ignore another app's template: {html}"
     );
     assert!(
-        html.contains("<h1>Nautilus</h1>"),
+        html.contains("<h1>Same Day Legal</h1>"),
         "the subscription home must render server-side before any hydration: {html}"
     );
     assert!(
@@ -98,14 +98,14 @@ async fn the_nautilus_preview_serves_the_mobile_shell_and_degrades_without_a_bun
         "the navigation hook the native shell taps must be in the SSR markup: {html}"
     );
     assert!(
-        html.contains("data-nautilus-preview-banner"),
+        html.contains("data-same-day-preview-banner"),
         "the degraded page itself must carry the local-render notice: {html}"
     );
 
     // Degraded means SSR-only: with no bundle mounted there is no wasm to
     // half-load, so a browser that somehow asks for one is told plainly.
-    let router = portal::dioxus_app::nautilus_preview_router();
-    let response = get(router, "/wasm/nautilus-preview.js").await;
+    let router = portal::dioxus_app::same_day_preview_router();
+    let response = get(router, "/wasm/same-day-preview.js").await;
     assert_eq!(
         response.status(),
         StatusCode::NOT_FOUND,
@@ -116,17 +116,17 @@ async fn the_nautilus_preview_serves_the_mobile_shell_and_degrades_without_a_bun
     let dir = tempfile::tempdir().expect("temp dir");
     std::fs::write(dir.path().join("index.html"), INDEX_HTML).expect("write index.html");
     std::fs::create_dir(dir.path().join("wasm")).expect("dx wasm directory");
-    std::fs::write(dir.path().join("wasm/nautilus-preview.js"), GLUE_JS).expect("write glue");
+    std::fs::write(dir.path().join("wasm/same-day-preview.js"), GLUE_JS).expect("write glue");
     std::fs::create_dir(dir.path().join("assets")).expect("dx assets directory");
     std::fs::write(
-        dir.path().join("assets/nautilus-preview.js"),
+        dir.path().join("assets/same-day-preview.js"),
         "// optimized glue fixture",
     )
     .expect("write assets glue");
-    std::env::set_var("NAUTILUS_DIOXUS_PUBLIC_PATH", dir.path());
+    std::env::set_var("SAME_DAY_DIOXUS_PUBLIC_PATH", dir.path());
 
-    let router = portal::dioxus_app::nautilus_preview_router();
-    let response = get(router, portal::dioxus_app::NAUTILUS_PREVIEW_PATH).await;
+    let router = portal::dioxus_app::same_day_preview_router();
+    let response = get(router, portal::dioxus_app::SAME_DAY_PREVIEW_PATH).await;
     assert_eq!(response.status(), StatusCode::OK);
     // The route scopes a nonce'd CSP so Dioxus's inline hydration scripts run
     // under `script-src 'self' 'nonce-…' 'wasm-unsafe-eval'` — the same
@@ -143,7 +143,7 @@ async fn the_nautilus_preview_serves_the_mobile_shell_and_degrades_without_a_bun
     );
     let html = body_string(response).await;
     assert!(
-        html.contains(r#"data-mobile-nav="dyd""#) && html.contains("Nautilus"),
+        html.contains(r#"data-mobile-nav="dyd""#) && html.contains("Same Day Legal"),
         "the shell renders identically with a bundle staged: {html}"
     );
     // The template — not just the assets — follows the override: the served
@@ -151,30 +151,30 @@ async fn the_nautilus_preview_serves_the_mobile_shell_and_degrades_without_a_bun
     // markup and loader reference. This is the contract that breaks when the
     // router points only the assets mount at the override.
     assert!(
-        html.contains(r#"data-fixture="nautilus-bundle""#)
-            && html.contains(r#"src="/assets/nautilus-preview.js""#),
+        html.contains(r#"data-fixture="same-day-bundle""#)
+            && html.contains(r#"src="/assets/same-day-preview.js""#),
         "the staged bundle's own index.html is the served template: {html}"
     );
     assert!(
-        html.contains("data-nautilus-preview-banner"),
+        html.contains("data-same-day-preview-banner"),
         "the hydrated page itself must carry the local-render notice: {html}"
     );
 
     // The staged bundle's wasm and glue are served at the paths its own
     // index.html references — what turns the SSR shell into a hydrated app.
-    let router = portal::dioxus_app::nautilus_preview_router();
-    let response = get(router, "/wasm/nautilus-preview.js").await;
+    let router = portal::dioxus_app::same_day_preview_router();
+    let response = get(router, "/wasm/same-day-preview.js").await;
     assert_eq!(response.status(), StatusCode::OK, "wasm glue must serve");
     assert_eq!(body_string(response).await, GLUE_JS);
 
-    let router = portal::dioxus_app::nautilus_preview_router();
-    let response = get(router, "/assets/nautilus-preview.js").await;
+    let router = portal::dioxus_app::same_day_preview_router();
+    let response = get(router, "/assets/same-day-preview.js").await;
     assert_eq!(
         response.status(),
         StatusCode::OK,
         "optimized assets must serve"
     );
 
-    std::env::remove_var("NAUTILUS_DIOXUS_PUBLIC_PATH");
+    std::env::remove_var("SAME_DAY_DIOXUS_PUBLIC_PATH");
     std::env::remove_var("DIOXUS_PUBLIC_PATH");
 }

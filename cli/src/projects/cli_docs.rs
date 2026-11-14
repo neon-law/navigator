@@ -97,7 +97,7 @@ pub const HUDSON_VERBS: &[&str] = &[
     "legal-plans",
     "lsp",
     "mail",
-    "nautilus",
+    "same-day",
     "notation",
     "ops",
     "person",

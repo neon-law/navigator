@@ -176,12 +176,12 @@ cyber_injury:
     attorney-client relationship. Any engagement requires a written agreement.
   sibling_practices:
     - brand: neon
-      path: /nautilus
+      path: /same-day-legal
       eyebrow: "BEFORE YOU NEED US"
       heading: "PROTECT YOUR PRIVACY FIRST."
       body: >-
-        Nautilus is a non-legal service from Neon Law: data removal, credit
-        and dark-web monitoring, and identity-theft insurance, for $29/mo or
+        Same Day Legal, from Lex Tecnica, Ltd., runs data removal, credit and
+        dark-web monitoring, and identity-theft insurance for $29/mo or
         $290/year prepaid. Data removal does not guarantee that a company
         will comply or prevent a future leak.
-      cta_label: Visit the Nautilus plan
+      cta_label: Visit Same Day Legal

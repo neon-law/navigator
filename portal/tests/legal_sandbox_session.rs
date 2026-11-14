@@ -16,7 +16,7 @@ use axum::http::{header, Request, StatusCode};
 use axum::Router;
 use chrono::{Datelike, Utc};
 use gateway::StubModelProvider;
-use portal::nautilus::{self, SandboxBackends};
+use portal::legal_sandbox::{self, SandboxBackends};
 use portal::test_support::{app_state, TEST_SESSION_KEY};
 use portal::{SessionData, SessionStore};
 use store::persons::{NewPerson, Role};
@@ -42,7 +42,7 @@ async fn database() -> Option<store::postgres::PostgresDb> {
         )
         .ssl_mode(PgSslMode::Disable);
     let admin = sqlx::PgPool::connect_with(options.clone()).await.unwrap();
-    let name = format!("nautilus_session_{}", Uuid::new_v4().simple());
+    let name = format!("sandbox_session_{}", Uuid::new_v4().simple());
     sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {name}")))
         .execute(&admin)
         .await
@@ -74,7 +74,7 @@ async fn fixture() -> Option<Fixture> {
     let surreal = state.surreal.clone();
     let stub = Arc::new(StubModelProvider::new());
     let model: Arc<dyn gateway::ModelProvider> = stub.clone();
-    let app = nautilus::routes_with(
+    let app = legal_sandbox::routes_with(
         &state,
         Some(pg.clone()),
         SandboxBackends {
@@ -184,7 +184,7 @@ async fn row(surreal: &SurrealDb, person_id: Uuid) -> store::sandbox_usage::Sand
 }
 
 async fn get(app: &Router, bearer: &str) -> (StatusCode, String, String) {
-    get_at(app, bearer, nautilus::NAUTILUS_PATH).await
+    get_at(app, bearer, legal_sandbox::SANDBOX_PATH).await
 }
 
 async fn get_at(app: &Router, bearer: &str, uri: &str) -> (StatusCode, String, String) {
@@ -218,7 +218,7 @@ async fn post_prompt(app: &Router, bearer: &str, prompt: &str) -> (StatusCode, S
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(nautilus::MESSAGES_PATH)
+                .uri(legal_sandbox::MESSAGES_PATH)
                 .header(header::AUTHORIZATION, bearer)
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .body(Body::from(form))
@@ -269,7 +269,7 @@ async fn a_prompt_runs_one_metered_completion_and_renders_the_conversation() {
     // the reply on the page.
     let (status, location, _) = post_prompt(&fx.app, &bearer, "Is my lease assignable?").await;
     assert_eq!(status, StatusCode::SEE_OTHER);
-    assert_eq!(location, nautilus::NAUTILUS_PATH);
+    assert_eq!(location, legal_sandbox::SANDBOX_PATH);
 
     let (status, _, body) = get(&fx.app, &bearer).await;
     assert_eq!(status, StatusCode::OK);
@@ -397,7 +397,7 @@ async fn a_preview_callers_post_never_reaches_a_model() {
 
     let (status, location, _) = post_prompt(&fx.app, &bearer, "Let me in anyway.").await;
     assert_eq!(status, StatusCode::SEE_OTHER);
-    assert_eq!(location, nautilus::NAUTILUS_PATH);
+    assert_eq!(location, legal_sandbox::SANDBOX_PATH);
     assert!(fx.stub.calls().is_empty());
     // No credit row, no transcript: a preview caller spent nothing.
     assert!(
@@ -423,7 +423,7 @@ async fn a_failed_completion_charges_nothing_and_flags_the_page() {
     assert_eq!(status, StatusCode::SEE_OTHER);
     assert_eq!(
         location,
-        format!("{}?error=completion", nautilus::NAUTILUS_PATH)
+        format!("{}?error=completion", legal_sandbox::SANDBOX_PATH)
     );
 
     // The nothing-charged notice stands, and the saved question shows.

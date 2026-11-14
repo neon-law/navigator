@@ -60,7 +60,9 @@ is served by the redirect service, which sends both its apex and `www` host to t
 | `staging.deleteyourdata.com` | the staging deployment | its `<prefix>-gateway-ip` |
 | `staging.guiebshook.com` | the staging deployment | its `<prefix>-gateway-ip` |
 | `iep.neonlaw.com` / `lex-tecnica.neonlaw.com` | the production deployment | its `<prefix>-gateway-ip` |
+| `sameday.neonlaw.com` | the production deployment | its `<prefix>-gateway-ip` |
 | `staging-iep.neonlaw.com` / `staging-lex-tecnica.neonlaw.com` | the staging deployment | its `<prefix>-gateway-ip` |
+| `staging-sameday.neonlaw.com` | the staging deployment | its `<prefix>-gateway-ip` |
 | `neonlaw.org` / `www.neonlaw.org` | the redirect service | `https://www.neonlaw.com` (path-preserving 301) |
 
 The `neonlaw.com` apex is not a deployment entry: it carries a `URL` record that 301s to `https://www.neonlaw.com`,
@@ -69,11 +71,12 @@ GKE `ManagedCertificate`: the name does not resolve to the load balancer, and a 
 `Provisioning` until every listed name validates. The `neonlaw.org` zone has its own host-dispatched redirect service so
 deep links survive the domain migration.
 
-Lex Tecnica's two brands, Lex Tecnica and IEP Defenders, are served on `neonlaw.com` subdomains rather than domains of
-their own: `lex-tecnica` and `iep` in production, `staging-lex-tecnica` and `staging-iep` on staging. They have no apex
-to redirect. Their records sit in the `neonlaw.com` zone, and their `ManagedCertificate` entries render from the
-registry's release inventory (`views::brand::release_brand_hosts()`) like every other brand host. Bring each one online
-with `hudson ops host setup` (below).
+Lex Tecnica's three subdomain brands, Lex Tecnica, IEP Defenders, and Same Day Legal, are served on `neonlaw.com`
+subdomains rather than domains of their own: `lex-tecnica`, `iep`, and `sameday` in production, `staging-lex-tecnica`,
+`staging-iep`, and `staging-sameday` on staging. They have no apex to redirect. Their records sit in the `neonlaw.com`
+zone, and their `ManagedCertificate` entries render from the registry's release inventory
+(`views::brand::release_brand_hosts()`) like every other brand host. Bring each one online with `hudson ops host setup`
+(below).
 
 `DNS_ACCT` is the DNSimple account that holds the zone. Read it from `dnsimple accounts list` — a user token can span
 several accounts, and a command run against the wrong one fails with `Zone not found` rather than a permission error,

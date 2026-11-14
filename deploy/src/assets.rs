@@ -168,6 +168,23 @@ pub const DM_SANS: FontFamily = FontFamily {
     extra_weights: &[],
 };
 
+/// The Lex Tecnica brand kit's small-capital display face, worn by Lex
+/// Tecnica and Same Day Legal.
+pub const CORMORANT_SC: FontFamily = FontFamily {
+    label: "Cormorant SC",
+    dir: "cormorant-sc",
+    stem: "CormorantSC",
+    extra_weights: &[],
+};
+
+/// Same Day Legal's body face, the OFL stand-in for the brand kit's Avenir.
+pub const NUNITO_SANS: FontFamily = FontFamily {
+    label: "Nunito Sans",
+    dir: "nunito-sans",
+    stem: "NunitoSans",
+    extra_weights: &[],
+};
+
 /// Every family this binary publishes and verifies — the one list both halves
 /// of the font lane read.
 ///
@@ -188,6 +205,8 @@ pub const BUCKET_FONT_FAMILIES: &[&FontFamily] = &[
     &LIBRE_FRANKLIN,
     &BARLOW_CONDENSED,
     &DM_SANS,
+    &CORMORANT_SC,
+    &NUNITO_SANS,
 ];
 
 /// Slide markdown is embedded in the release binary so `ops ship` can discover

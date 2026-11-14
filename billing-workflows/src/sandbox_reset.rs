@@ -1,7 +1,7 @@
 //! The `SandboxCreditReset` Restate workflow — the monthly job that turns
 //! the calendar into the Legal Sandbox's credit contract.
 //!
-//! On the first of each month it grants every Nautilus subscriber the
+//! On the first of each month it grants every Same Day Legal subscriber the
 //! glossary's fresh 500-cent credit ([`store::sandbox_usage::grant`], the
 //! ledger's own idempotent rollover primitive — this job never touches
 //! ledger rows directly), then converts the closed month's overage rows
@@ -46,7 +46,7 @@ pub struct SandboxResetReport {
     /// Closed-month overage rows invoiced à la carte this run.
     pub overage_invoiced: usize,
     /// Closed-month overage rows that became no invoice: the subscriber's
-    /// Nautilus Purchase is gone, so there is no contact or account code to
+    /// Same Day Legal Purchase is gone, so there is no contact or account code to
     /// bill. Reported, never silently dropped.
     pub overage_skipped: usize,
     /// Invoices already raised for this closed period on an earlier run —
@@ -142,8 +142,8 @@ impl SandboxCreditResetService {
     }
 }
 
-/// Grant the fresh period's credit to every current Nautilus subscriber —
-/// one `active` Purchase of either Nautilus offering makes a subscriber.
+/// Grant the fresh period's credit to every current Same Day Legal subscriber —
+/// one `active` Purchase of either Same Day Legal offering makes a subscriber.
 ///
 /// Grading who is "active" on Purchases in any state would grant credit to
 /// cancelled and never-paid subscriptions; `active` is the state the
@@ -153,7 +153,7 @@ pub async fn grant_active_subscribers(
     surreal: &SurrealDb,
     new_period: &str,
 ) -> anyhow::Result<usize> {
-    let purchases = purchases::for_offerings(pg, &purchases::NAUTILUS_OFFERINGS).await?;
+    let purchases = purchases::for_offerings(pg, &purchases::SAME_DAY_LEGAL_OFFERINGS).await?;
     let mut granted = 0;
     for person_id in subscriber_ids(&purchases) {
         sandbox_usage::grant(surreal, person_id, new_period).await?;
@@ -162,7 +162,7 @@ pub async fn grant_active_subscribers(
     Ok(granted)
 }
 
-/// The distinct person ids holding an `active` Nautilus Purchase, ordered
+/// The distinct person ids holding an `active` Same Day Legal Purchase, ordered
 /// for a deterministic grant batch.
 fn subscriber_ids(purchases: &[store::purchases::Purchase]) -> Vec<uuid::Uuid> {
     let mut people: Vec<uuid::Uuid> = purchases
@@ -175,7 +175,7 @@ fn subscriber_ids(purchases: &[store::purchases::Purchase]) -> Vec<uuid::Uuid> {
     people
 }
 
-/// The latest Nautilus Purchase of one person: the invoice's account code
+/// The latest Same Day Legal Purchase of one person: the invoice's account code
 /// and the purchase the subscription billed through.
 fn latest_purchase(
     purchases: &[store::purchases::Purchase],
@@ -190,8 +190,8 @@ fn latest_purchase(
 /// Convert a closed period's overage rows into à la carte invoices.
 ///
 /// Each overage row becomes one `InvoiceRequest` — one line, the overage
-/// amount, on the subscriber's Nautilus account code, billed to the person
-/// the ledger row belongs to. A row whose person or Nautilus Purchase is
+/// amount, on the subscriber's Same Day Legal account code, billed to the person
+/// the ledger row belongs to. A row whose person or Same Day Legal Purchase is
 /// gone is skipped and counted; the run continues, because one orphaned
 /// ledger row must not stop every other subscriber's invoice.
 ///
@@ -206,7 +206,7 @@ async fn invoice_closed_overage(
     closed_period: &str,
 ) -> anyhow::Result<SandboxResetReport> {
     let rows = sandbox_usage::overage_rows(surreal, closed_period).await?;
-    let purchases = purchases::for_offerings(pg, &purchases::NAUTILUS_OFFERINGS).await?;
+    let purchases = purchases::for_offerings(pg, &purchases::SAME_DAY_LEGAL_OFFERINGS).await?;
 
     let mut report = SandboxResetReport {
         new_period: String::new(),
@@ -276,7 +276,7 @@ pub async fn invoice_one_from_env(
 ) -> anyhow::Result<OverageOutcome> {
     let mut billing =
         XeroBillingProvider::from_env().ok_or_else(|| anyhow::anyhow!("Xero is not configured"))?;
-    let purchases = purchases::for_offerings(pg, &purchases::NAUTILUS_OFFERINGS).await?;
+    let purchases = purchases::for_offerings(pg, &purchases::SAME_DAY_LEGAL_OFFERINGS).await?;
     invoice_one(
         &mut billing,
         surreal,
@@ -323,7 +323,7 @@ async fn invoice_one(
         contact_id: Some(contact),
         contact_name: person.name.clone(),
         contact_email: person.email.clone(),
-        reference: format!("Nautilus sandbox usage {closed_period}"),
+        reference: format!("Same Day Legal sandbox usage {closed_period}"),
         line_items: vec![InvoiceLine {
             description: format!(
                 "Legal Sandbox model usage beyond the included $5.00, {closed_period}"
@@ -399,7 +399,7 @@ mod tests {
         Some(pg)
     }
 
-    /// A Nautilus monthly plan for one person, mirroring the store's own
+    /// A Same Day Legal monthly plan for one person, mirroring the store's own
     /// purchase-test fixture.
     fn plan(person_id: uuid::Uuid) -> NewPurchase {
         NewPurchase {
@@ -466,7 +466,7 @@ mod tests {
                 .await
                 .unwrap()
                 .is_none(),
-            "a non-Nautilus offering grants nothing"
+            "a non-Same Day Legal offering grants nothing"
         );
     }
 
@@ -517,7 +517,7 @@ mod tests {
         assert_eq!(call.request.line_items[0].unit_amount_cents, 125);
         assert_eq!(
             call.request.line_items[0].account_code, "200",
-            "the overage posts to the subscriber's Nautilus account code"
+            "the overage posts to the subscriber's Same Day Legal account code"
         );
         assert_eq!(
             call.matter_id,
@@ -575,7 +575,7 @@ mod tests {
             MeterDecision::Charge { .. }
         ));
 
-        // No Nautilus Purchase anywhere: the subscriber's purchase is gone.
+        // No Same Day Legal Purchase anywhere: the subscriber's purchase is gone.
         let mut stub = StubBillingProvider::new();
         let report = invoice_closed_overage(&mut stub, &pg, &surreal, "2026-10")
             .await

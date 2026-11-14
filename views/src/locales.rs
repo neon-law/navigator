@@ -63,7 +63,6 @@ pub const KNOWN_PAGES: &[&str] = &[
     "immigration-uscis-notices",
     "legal-aid",
     "litigation",
-    "nautilus",
     "navigator",
     "notations",
 ];
@@ -117,7 +116,8 @@ pub enum PageSkin {
     #[default]
     Marketing,
     Practice,
-    Nautilus,
+    /// Same Day Legal: the practice components in the Lex Tecnica brand kit.
+    SameDayLegal,
     /// Neon's home: the practice components on the light surface.
     Home,
 }
@@ -723,7 +723,6 @@ pub fn locale_page_kind(stem: &str) -> Option<LocalePageKind> {
         "fractional-gc" => Some(LocalePageKind::Transactional),
         "legal-aid"
         | "navigator"
-        | "nautilus"
         | "notations"
         | "services"
         | "car-accidents"

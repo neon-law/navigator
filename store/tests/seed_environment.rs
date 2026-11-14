@@ -780,6 +780,7 @@ async fn a_first_boot_registers_every_brand_key_the_practice_wears() {
             "groundwork",
             "iep-defenders",
             "lex-tecnica",
+            "same-day-legal",
         ]
     );
 }

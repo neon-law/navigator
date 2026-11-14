@@ -1,4 +1,4 @@
-//! The Nautilus Legal Sandbox page (`/app/nautilus`) — the presentational
+//! The Same Day Legal sandbox page (`/app/sandbox`) — the presentational
 //! slice of the subscriber workspace ([Legal Sandbox](docs/glossary/legal-sandbox.md)).
 //!
 //! The page renders from an injected [`SandboxView`] only — the portal router
@@ -30,7 +30,7 @@ pub const LOCAL_BACKEND: &str = "Local open-weights";
 
 /// The billing-month credit row for the current subscriber, in integer cents —
 /// the same unit the `billing` contract prices in. `None` renders the preview
-/// state: an authenticated visitor without an active Nautilus subscription.
+/// state: an authenticated visitor without an active Same Day Legal subscription.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
 pub struct SandboxCredit {
     /// The monthly grant: 500 cents ($5.00) per the glossary contract.
@@ -189,7 +189,7 @@ fn composer(view: &SandboxView) -> Element {
         section { class: "portal-detail__section",
             h2 { "Ask the sandbox" }
             form { class: "legal-sandbox-composer", method: "post",
-                action: "/app/nautilus/messages",
+                action: "/app/sandbox/messages",
                 input { r#type: "hidden", name: "_csrf", value: "{view.csrf_token}" }
                 textarea {
                     class: "nav-input",
@@ -304,7 +304,7 @@ pub fn sandbox_body(view: &SandboxView) -> Element {
                                     p {
                                         "Your included $5.00 of model usage is used up. "
                                         "Anything further is priced à la carte — reply to "
-                                        "your Nautilus receipt to be quoted for the overage."
+                                        "your Same Day Legal receipt to be quoted for the overage."
                                     }
                                 }
                             },
@@ -314,16 +314,16 @@ pub fn sandbox_body(view: &SandboxView) -> Element {
                 }
                 None => rsx! {
                     section { class: "legal-sandbox-preview portal-detail__section",
-                        h2 { "The Legal Sandbox comes with Nautilus" }
+                        h2 { "The Legal Sandbox comes with Same Day Legal" }
                         p {
-                            "An active Nautilus subscription unlocks this "
+                            "An active Same Day Legal subscription unlocks this "
                             "workspace: your own private sessions with an AI "
                             "assistant on your legal questions and drafts, with "
                             "$5.00 of model usage included each month."
                         }
                         p {
-                            a { class: "nav-btn nav-btn--primary", href: "/nautilus",
-                                "See Nautilus" }
+                            a { class: "nav-btn nav-btn--primary", href: "/same-day-legal",
+                                "See Same Day Legal" }
                         }
                     }
                 },
@@ -458,10 +458,7 @@ mod tests {
     fn the_composer_posts_natively_with_the_csrf_token() {
         let html = render(&view(Some(credit(500))));
         assert!(html.contains(r#"method="post""#), "{html}");
-        assert!(
-            html.contains(r#"action="/app/nautilus/messages""#),
-            "{html}"
-        );
+        assert!(html.contains(r#"action="/app/sandbox/messages""#), "{html}");
         assert!(html.contains(r#"name="_csrf""#), "{html}");
         assert!(html.contains("TOK"), "{html}");
         assert!(!html.contains("<script"), "{html}");

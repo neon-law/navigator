@@ -232,7 +232,7 @@ pub mod relationships;
 pub mod review_documents;
 /// Publishing a built sample-project bundle into the applications bucket.
 pub mod sample_project;
-/// The metered-credit ledger behind the Nautilus Legal Sandbox.
+/// The metered-credit ledger behind the Same Day Legal sandbox.
 pub mod sandbox_usage;
 /// The schema, applied as one idempotent `DEFINE` file (#1093).
 pub mod schema;

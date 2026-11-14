@@ -236,11 +236,11 @@ async fn cyber_injury_practice_pages_serve_their_fight() {
     }
 }
 
-/// The Nautilus panel travels with the brand: the home page's sibling card
-/// and the data-theft page's plan band both name the plan, its price and
-/// scope, the non-legal-service note, and the link to Neon's hosted page.
+/// The Same Day Legal panel travels with the brand: the home page's sibling card
+/// and the data-theft page's band both name the subscription, its price and
+/// scope, the firm behind it, and the link to its host.
 #[tokio::test]
-async fn cyber_injury_home_and_data_theft_link_the_nautilus_plan() {
+async fn cyber_injury_home_and_data_theft_link_same_day_legal() {
     for host in HOSTS {
         let (status, home) = page(host, "/").await;
         assert_eq!(status, StatusCode::OK, "{host}");
@@ -250,9 +250,9 @@ async fn cyber_injury_home_and_data_theft_link_the_nautilus_plan() {
             "$290/year prepaid",
             "dark-web monitoring",
             "identity-theft insurance",
-            "non-legal service",
-            "Visit the Nautilus plan",
-            "neonlaw.com/nautilus",
+            "Lex Tecnica, Ltd.",
+            "Visit Same Day Legal",
+            "neonlaw.com/same-day-legal",
         ] {
             assert!(
                 home.contains(expected),
@@ -264,14 +264,14 @@ async fn cyber_injury_home_and_data_theft_link_the_nautilus_plan() {
         assert_eq!(status, StatusCode::OK, "{host}/data-theft");
         for expected in [
             "Make your data harder to use before you need us.",
-            "The Nautilus plan",
+            "Same Day Legal",
             "$29/mo",
             "$290/year prepaid",
             "dark-web monitoring",
             "identity-theft insurance",
-            "non-legal service",
-            "Visit the Nautilus plan",
-            "https://www.neonlaw.com/nautilus",
+            "Lex Tecnica, Ltd.",
+            "Visit Same Day Legal",
+            "https://sameday.neonlaw.com",
         ] {
             assert!(
                 data_theft.contains(expected),

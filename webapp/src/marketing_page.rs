@@ -433,8 +433,8 @@ pub enum PageSkin {
     /// The firm's practice look — the serif statement, the glow, and the carded
     /// body the `/disputes` and `/business` pages wear.
     Practice,
-    /// Aquatic product presentation using the shared practice components.
-    Nautilus,
+    /// Same Day Legal: the shared practice components in the Lex Tecnica brand kit.
+    SameDayLegal,
     /// Neon's home: the practice components on the light surface, with a short
     /// hero so the first band sits under the question it asks.
     Home,
@@ -447,7 +447,7 @@ impl PageSkin {
         match self {
             Self::Marketing => "",
             Self::Practice => " fm-page--practice",
-            Self::Nautilus => " fm-page--practice fm-page--nautilus",
+            Self::SameDayLegal => " fm-page--practice fm-page--same-day-legal",
             Self::Home => " fm-page--practice fm-page--home",
         }
     }
@@ -781,14 +781,14 @@ pub(crate) fn Bands(
                                 a { class: "nav-btn nav-btn--primary", href: "{booking_href}", "{booking_label}" }
                             } else {
                                 div {
-                                    "data-nautilus-intake": "true",
+                                    "data-enrollment-intake": "true",
                                     "data-steps": steps.join("|"),
                                     "data-next": next_label,
                                     "data-back": back_label,
                                     "data-submit": submit_label,
                                     LeadCaptureForm { copy: lead_copy.clone(), context: lead_context.clone(), submit_label: submit_label.clone() }
                                 }
-                                document::Script { src: "/public/js/nautilus-intake.js", defer: true }
+                                document::Script { src: "/public/js/enrollment-intake.js", defer: true }
                             }
                         }
                     }
@@ -1217,7 +1217,7 @@ pub(crate) fn Bands(
                                             span { class: "fm-phone__camera" }
                                         }
                                         div { class: "fm-phone__listing",
-                                            img { class: "fm-phone__icon", src: "/public/images/nautilus-shell.svg", alt: "", width: "56", height: "56" }
+                                            img { class: "fm-phone__icon", src: "/public/brand/same-day-legal/icon.svg", alt: "", width: "56", height: "56" }
                                             div { class: "fm-phone__name",
                                                 p { class: "fm-phone__app", "{app_name}" }
                                                 p { class: "fm-phone__subtitle", "{app_subtitle}" }
@@ -1249,7 +1249,7 @@ pub(crate) fn Bands(
                                                 span { class: "fm-phone__camera" }
                                             }
                                             div { class: "fm-phone__appbar",
-                                                img { class: "fm-phone__icon", src: "/public/images/nautilus-shell.svg", alt: "", width: "40", height: "40" }
+                                                img { class: "fm-phone__icon", src: "/public/brand/same-day-legal/icon.svg", alt: "", width: "40", height: "40" }
                                                 p { class: "fm-phone__app", "{app_name}" }
                                             }
                                             h3 { class: "fm-phone__heading", "{android_heading}" }
@@ -1438,16 +1438,16 @@ mod tests {
             dioxus_ssr::render_element(rsx! {
                 Bands {
                     items: vec![band.clone()], signed_in,
-                    lead_context: LeadCaptureContext { csrf_token: "synthetic-csrf".into(), source_path: "/nautilus".into(), ..LeadCaptureContext::default() },
+                    lead_context: LeadCaptureContext { csrf_token: "synthetic-csrf".into(), source_path: "/".into(), ..LeadCaptureContext::default() },
                 }
             })
         };
         let anonymous = render(false);
         assert!(anonymous.contains(r#"action="/leads""#));
         assert!(anonymous.contains("synthetic-csrf"));
-        assert!(anonymous.contains("data-nautilus-intake"));
+        assert!(anonymous.contains("data-enrollment-intake"));
         assert!(!anonymous.contains("https://booking.example.test/"));
-        crate::components::assert_forms_accessible(&anonymous, "nautilus intake");
+        crate::components::assert_forms_accessible(&anonymous, "enrollment intake");
         let signed_in = render(true);
         assert!(!signed_in.contains(r#"action="/leads""#));
         assert!(signed_in.contains("https://booking.example.test/"));
@@ -1460,7 +1460,7 @@ mod tests {
             overline: "Coming soon".into(),
             heading: "In your pocket".into(),
             description: None,
-            app_name: "Nautilus".into(),
+            app_name: "Same Day Legal".into(),
             app_subtitle: "Checks".into(),
             price: "$29/mo".into(),
             install_label: "Get".into(),

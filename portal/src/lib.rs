@@ -176,12 +176,12 @@ pub(crate) mod integrations_api;
 mod journal_webhooks;
 pub mod lead_capture;
 pub mod lead_confirm;
+pub mod legal_sandbox;
 pub mod list_api;
 pub mod mail_signature_edit;
 pub mod marketing;
 pub mod matter_documents;
 pub mod mcp_principal;
-pub mod nautilus;
 pub(crate) mod nef_pipeline;
 pub mod notation_draft;
 pub mod notation_preview_doc;
@@ -2019,10 +2019,10 @@ pub fn bootstrap_with_forgejo_oidc(
     // composition is merged behind this same boundary.
     let boundary_sessions = state.sessions.clone();
     let boundary_auth = state.auth.clone();
-    // The Nautilus Legal Sandbox rides the same boundary plus its own
+    // The Same Day Legal sandbox rides the same boundary plus its own
     // active-subscription layer; build it before `state` moves into the
     // chain below.
-    let sandbox = nautilus::routes(&state);
+    let sandbox = legal_sandbox::routes(&state);
     let firm_context_store = state.surreal.clone();
     let mut router = mount_brand_assets(router, brand_bundle.as_ref())
         .route("/site-brand.json", get(site_brand::site_brand))

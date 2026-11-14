@@ -6,7 +6,7 @@
 //! The journal is PostgreSQL-backed, so each test owns an isolated
 //! database off the CI test container, absent locally — the caller skips
 //! the assertions it cannot serve (the house fixture, as in
-//! `nautilus_gate.rs`).
+//! `legal_sandbox_gate.rs`).
 
 use axum::{
     body::Body,

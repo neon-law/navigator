@@ -1,0 +1,13 @@
+# Dioxus CLI configuration for the Same Day Legal mobile app. `dx` reads this from
+# the crate directory — run dx commands from same-day-mobile/.
+[application]
+name = "same-day-legal"
+default_platform = "ios"
+
+[bundle]
+identifier = "com.neonlaw.sameday"
+icon = [
+    "icons/same-day-32.png",
+    "icons/same-day-64.png",
+    "icons/same-day-256.png",
+]
