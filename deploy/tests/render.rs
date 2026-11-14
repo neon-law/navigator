@@ -1607,3 +1607,109 @@ fn notation_pdf_refuses_an_unregistered_form_before_writing_a_plain_pdf() {
     );
     assert!(!output.exists());
 }
+
+const NEVADA_FORM_PATH: &str =
+    "templates/notations/forms/united_states/nevada/state/nv__llc_formation.md";
+
+fn local_formation_blank(work: &TempDir) -> (std::path::PathBuf, std::path::PathBuf) {
+    use pdf::acroform::FieldSpec;
+    let input = work.path().join(NEVADA_FORM_PATH);
+    fs::create_dir_all(input.parent().unwrap()).unwrap();
+    fs::write(
+        &input,
+        include_str!(
+            "../../templates/notations/forms/united_states/nevada/state/nv__llc_formation.md"
+        ),
+    )
+    .unwrap();
+    let mut fields: Vec<_> = include_str!(
+        "../../templates/notations/forms/united_states/nevada/state/nv__llc_formation.fields"
+    )
+    .lines()
+    .filter(|field| !field.starts_with("unmapped__"))
+    .map(|name| FieldSpec::Text { name: name.into() })
+    .collect();
+    let choice = "custom_single_choice__management_structure";
+    fields.retain(|field| !matches!(field, FieldSpec::Text { name } if name == choice));
+    fields.push(FieldSpec::Radio {
+        name: choice.into(),
+        options: vec!["members".into(), "managers".into()],
+    });
+    let blank = pdf::acroform::blank_acroform_with(&fields);
+    let blank_path = input.with_extension("pdf");
+    fs::write(&blank_path, &blank).unwrap();
+    fs::write(input.with_extension("sha256"), forms::sha256_hex(&blank)).unwrap();
+    (input, blank_path)
+}
+
+#[test]
+fn formation_pdf_fills_pinned_acroform_from_saved_answers_and_overrides() {
+    let dir = TempDir::new().unwrap();
+    let (input, _) = local_formation_blank(&dir);
+    let answers = dir.path().join("formation.yaml");
+    fs::write(
+        &answers,
+        include_str!("../../docs/examples/nv__llc_formation.answers.yaml"),
+    )
+    .unwrap();
+    let output = dir.path().join("filled.pdf");
+    let result = Command::new(cargo_bin("hudson"))
+        .current_dir(dir.path())
+        .args(["notation", "pdf", "--ci"])
+        .arg(input)
+        .arg("--out")
+        .arg(&output)
+        .arg("--answers-file")
+        .arg(answers)
+        .args([
+            "--answer",
+            "people__managing_members.0.name=Alternate Example",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let filled = fs::read(output).unwrap();
+    assert!(filled.starts_with(b"%PDF"));
+    for (field, expected) in [
+        ("entity__company.name", "Example Formation LLC"),
+        ("people__managing_members.0.name", "Alternate Example"),
+        ("people__managing_members.0.zip", "00123"),
+        ("custom_single_choice__management_structure", "members"),
+    ] {
+        assert_eq!(
+            pdf::acroform::read_field_value(&filled, field).as_deref(),
+            Some(expected),
+            "{field}"
+        );
+    }
+}
+
+#[test]
+fn formation_pdf_refuses_missing_or_mismatched_pinned_blanks() {
+    let dir = TempDir::new().unwrap();
+    let (input, blank) = local_formation_blank(&dir);
+    let output = dir.path().join("filled.pdf");
+    fs::write(&blank, b"changed").unwrap();
+    for reason in ["does not match its", "--ci refuses to fetch"] {
+        let result = Command::new(cargo_bin("hudson"))
+            .current_dir(dir.path())
+            .env("NAVIGATOR_FORM_CACHE", dir.path().join("empty-cache"))
+            .args(["notation", "pdf", "--ci"])
+            .arg(&input)
+            .arg("--out")
+            .arg(&output)
+            .output()
+            .unwrap();
+        assert!(!result.status.success());
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(stderr.contains(reason), "{stderr}");
+        assert!(!output.exists());
+        if blank.exists() {
+            fs::remove_file(&blank).unwrap();
+        }
+    }
+}

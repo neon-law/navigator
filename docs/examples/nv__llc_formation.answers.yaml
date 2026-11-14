@@ -1,0 +1,17 @@
+person__client:
+  name: Example Organizer
+  email: organizer@example.test
+entity__company:
+  name: Example Formation LLC
+person__registered_agent:
+  name: Example Registered Agent
+custom_single_choice__management_structure: members
+custom_datetime__formation_date: 2026-07-01
+people__managing_members:
+  - name: Example Organizer
+    street: 100 Example Way
+    city: Example City
+    state: NV
+    zip: "00123"
+    country: USA
+    title: Member

@@ -34,8 +34,7 @@ lawyer_review → workflows::dispatch_generate_pdf → pdf::fill_acroform → pd
 signature / filing
 ```
 
-The fill path **always pulls**: there are no baked-in bytes and no fallback. A blank missing from the bucket, or one
-whose bytes fail the pin, parks the matter with a loud error — `web` never fills against bytes it hasn't pinned. The
+The server workflow pulls every blank from the bucket and parks the matter if the blank is missing or fails the pin. The
 verified bytes are staged into the private documents lane at the same key for the worker's `dispatch_generate_pdf` fill,
 so what the worker fills is byte-identical to what was verified.
 
@@ -52,8 +51,29 @@ form: nv__llc_formation
 be obtained. The bucket holds the vendored bytes; the `.sha256` pin records exactly which bytes; the URL records
 provenance.
 
-`hudson notation pdf` refuses `output: form`. Open the server-side notation workflow to fill the pinned AcroForm after
-Lawyer Review.
+## Fill The Nevada LLC Packet Locally
+
+Use [the synthetic answers file](examples/nv__llc_formation.answers.yaml) with the Nevada Secretary of State packet.
+
+```bash
+hudson notation pdf \
+  templates/notations/forms/united_states/nevada/state/nv__llc_formation.md \
+  --answers-file docs/examples/nv__llc_formation.answers.yaml \
+  --out /tmp/formation.pdf
+```
+
+Use a scalar for a single answer, a map for record properties such as `entity__company.name`, or a list of maps for
+`people__managing_members`. Quote ZIP codes with leading zeroes. A repeatable `--answer key=value` overrides the
+corresponding field. For example, `--answer 'people__managing_members.0.title=Manager'` overrides the first row's title.
+The `.fields` manifest lists the answer paths the PDF accepts.
+
+Hudson verifies the pinned blank before filling it. It uses the checkout's working copy, the local cache, or a download
+from the configured assets storage. Set `NAVIGATOR_ASSETS_BUCKET` to use the deployment's assets bucket, or place a
+pin-matching blank beside the catalog card for a local render. Use `--ci` to prevent a download.
+
+The local PDF retains the editable form fields for attorney review. Generating it does not file the packet or pay the
+state fee. The state charges filing fees separately, and the Firm passes them through at cost. The server workflow
+supports Lawyer Review and freezes the approved fields before filing.
 
 ## Vendoring
 
@@ -90,8 +110,7 @@ remain the human steps.
 
 All three subcommands target `NAVIGATOR_ASSETS_BUCKET` (or `--bucket`) and honor the `NAVIGATOR_STORAGE_ENDPOINT`
 emulator override, so the commands vendor into KIND's SeaweedFS `navigator-assets` bucket. Before its first filing, a
-fresh environment downloads each blank from its `origin_url` to the working-copy path and runs the sync. An offline mode
-(a warmed local cache) is deliberately not built.
+fresh environment downloads each blank from its `origin_url` to the working-copy path and runs the sync.
 
 ## Field Maps and Manifests
 
