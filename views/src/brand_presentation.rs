@@ -138,6 +138,22 @@ pub const TYPEFACES: &[Typeface] = &[
         stack: "\"DM Sans\", ui-sans-serif, system-ui, sans-serif",
         operator_licence_required: false,
     },
+    // The Lex Tecnica brand kit's small-capital display face.
+    Typeface {
+        id: "cormorant-sc",
+        label: "Cormorant SC",
+        stack: "\"Cormorant SC\", \"Times New Roman\", serif",
+        operator_licence_required: false,
+    },
+    // The brand kit sets Avenir, which is licensed per site and cannot be
+    // self-hosted from this repository; Nunito Sans is the nearest OFL face.
+    // A visitor who has Avenir installed still sees it.
+    Typeface {
+        id: "nunito-sans",
+        label: "Nunito Sans",
+        stack: "Avenir, \"Avenir Next\", \"Nunito Sans\", ui-sans-serif, system-ui, sans-serif",
+        operator_licence_required: false,
+    },
 ];
 
 const CYBER_SCHEME: PaletteScheme = PaletteScheme {
@@ -234,38 +250,38 @@ pub const PALETTE: &[Palette] = &[
     },
     Palette {
         id: "lex-tecnica",
-        label: "Lex Tecnica gold and parchment",
+        label: "Lex Tecnica brand-kit monochrome",
         light: PaletteScheme {
-            primary: "#7A5E27",
-            primary_hover: "#614B1F",
-            primary_active: "#4D3B18",
+            primary: "#000000",
+            primary_hover: "#2B2B2B",
+            primary_active: "#3F3F3F",
             on_primary: "#FFFFFF",
             on_brand: "#FFFFFF",
-            link: "#7A5E27",
-            link_hover: "#614B1F",
-            surface_subtle: "#EFE8DA",
-            bg: Some("#FBF8F1"),
-            surface: Some("#FBF8F1"),
-            surface_raised: Some("#EFE8DA"),
-            text: Some("#1F1B16"),
-            text_muted: Some("#5A5247"),
-            border: Some("#8E8577"),
+            link: "#000000",
+            link_hover: "#3F3F3F",
+            surface_subtle: "#ECECEC",
+            bg: Some("#ECECEC"),
+            surface: Some("#FFFFFF"),
+            surface_raised: Some("#FFFFFF"),
+            text: Some("#2B2B2B"),
+            text_muted: Some("#555555"),
+            border: Some("#767676"),
         },
         dark: PaletteScheme {
-            primary: "#D9B66E",
-            primary_hover: "#E8CB8E",
-            primary_active: "#C9A257",
-            on_primary: "#1C1812",
-            on_brand: "#1C1812",
-            link: "#D9B66E",
-            link_hover: "#E8CB8E",
-            surface_subtle: "#2A241B",
-            bg: Some("#1C1812"),
-            surface: Some("#1C1812"),
-            surface_raised: Some("#2A241B"),
-            text: Some("#F5EFE3"),
-            text_muted: Some("#C9BFAE"),
-            border: Some("#8E8577"),
+            primary: "#FFFFFF",
+            primary_hover: "#ECECEC",
+            primary_active: "#D4D4D4",
+            on_primary: "#000000",
+            on_brand: "#000000",
+            link: "#FFFFFF",
+            link_hover: "#D4D4D4",
+            surface_subtle: "#1A1A1A",
+            bg: Some("#000000"),
+            surface: Some("#0D0D0D"),
+            surface_raised: Some("#1A1A1A"),
+            text: Some("#ECECEC"),
+            text_muted: Some("#B3B3B3"),
+            border: Some("#8A8A8A"),
         },
     },
     Palette {
@@ -693,8 +709,11 @@ impl BrandKey {
             Self::Aegis | Self::CyberInjuryLaw => {
                 typeface_by_id("dm-sans").expect("invariant: dm-sans is catalogued above")
             }
-            // The nearest catalogued face to Lex Tecnica's classical capitals.
-            Self::LexTecnica => typeface_by_id("eb-garamond").expect("eb-garamond is catalogued"),
+            // The brand kit's Times New Roman body, self-hosted as Tinos.
+            Self::LexTecnica => typeface_by_id("tinos").expect("tinos is catalogued"),
+            // The brand kit's Avenir, self-hosted as Nunito Sans: an app's
+            // face for a subscription people manage from their phone.
+            Self::SameDayLegal => typeface_by_id("nunito-sans").expect("nunito-sans is catalogued"),
             Self::Neon => typeface_by_id("gorp-serif").expect("gorp-serif is catalogued"),
             Self::DeleteYourData => {
                 typeface_by_id("plus-jakarta-sans").expect("plus-jakarta-sans is catalogued")
@@ -738,6 +757,10 @@ impl BrandKey {
             Self::Misericordia | Self::IepDefenders => {
                 Some(typeface_by_id("source-serif-4").expect("source-serif-4 is catalogued"))
             }
+            // The Lex Tecnica brand kit's small-capital headings.
+            Self::LexTecnica | Self::SameDayLegal => {
+                Some(typeface_by_id("cormorant-sc").expect("cormorant-sc is catalogued"))
+            }
             // One face throughout. For most of these that is simply how the
             // brand was drawn; for Abhaya it is the point of the choice,
             // since Mukta carries Devanagari as well as Latin and a second
@@ -750,8 +773,7 @@ impl BrandKey {
             | Self::DeleteYourDebt
             | Self::Summons
             | Self::Daybridge
-            | Self::Groundwork
-            | Self::LexTecnica => None,
+            | Self::Groundwork => None,
         }
     }
 
@@ -766,7 +788,9 @@ impl BrandKey {
                 palette_by_id("delete-your-data").expect("delete-your-data is catalogued")
             }
             Self::GuiebShook => palette_by_id("guieb-shook").expect("guieb-shook is catalogued"),
-            Self::LexTecnica => palette_by_id("lex-tecnica").expect("lex-tecnica is catalogued"),
+            Self::LexTecnica | Self::SameDayLegal => {
+                palette_by_id("lex-tecnica").expect("lex-tecnica is catalogued")
+            }
             Self::Vesta => palette_by_id("vesta").expect("vesta is catalogued"),
             Self::Misericordia => {
                 palette_by_id("misericordia").expect("misericordia is catalogued")
@@ -911,6 +935,8 @@ fn webfont_css(face: &Typeface) -> Option<String> {
             ),
         )),
         "mukta" => Some(bucket_face("Mukta", "mukta", "Mukta")),
+        "cormorant-sc" => Some(bucket_face("Cormorant SC", "cormorant-sc", "CormorantSC")),
+        "nunito-sans" => Some(bucket_face("Nunito Sans", "nunito-sans", "NunitoSans")),
         "public-sans" => Some(bucket_face("Public Sans", "public-sans", "PublicSans")),
         "libre-franklin" => Some(bucket_face(
             "Libre Franklin",
@@ -1216,7 +1242,10 @@ mod tests {
                 "public-sans",
                 "libre-franklin",
                 "barlow-condensed",
-                "dm-sans"
+                "dm-sans",
+                // The Lex Tecnica brand kit.
+                "cormorant-sc",
+                "nunito-sans"
             ]
         );
         assert!(

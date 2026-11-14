@@ -1089,7 +1089,7 @@ mod tests {
                 chrome: PublicChrome { canonical_origin: "https://www.example.com".into(), ..Default::default() },
                 content: HomeContent {
                     marketing_page: Some(crate::marketing_page::PageContent {
-                        title: "Nautilus".into(),
+                        title: "Same Day Legal".into(),
                         tagline: "Your shell in a connected world.".into(),
                         bands: vec![crate::marketing_page::Band::Enrollment {
                             heading: "Start".into(), body: String::new(), steps: vec![],
@@ -1108,7 +1108,7 @@ mod tests {
         dom.rebuild_in_place();
         let html = dioxus_ssr::render(&dom);
         assert!(html.contains("Your shell in a connected world."), "{html}");
-        assert!(html.contains("data-nautilus-intake"), "{html}");
+        assert!(html.contains("data-enrollment-intake"), "{html}");
         assert!(html.contains("synthetic-csrf"), "{html}");
         assert!(html.contains(r#"name="source_path" value="/""#), "{html}");
         assert!(!html.contains("company-pricing"), "{html}");

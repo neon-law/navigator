@@ -3228,7 +3228,6 @@ async fn llms_txt_indexes_the_markdown_corpus_with_absolute_urls() {
     // presentations catalog is not curated into the index at all.
     for page in [
         "https://www.example.com/)",
-        "https://www.example.com/nautilus)",
         "https://www.example.com/navigator)",
         "https://www.example.com/notations)",
     ] {
@@ -10644,6 +10643,13 @@ const LIVE_HOME_CONTRACTS: &[(views::brand::BrandKey, LiveHomeContract)] = &[
             copy: "defending your child",
         },
     ),
+    (
+        views::brand::BrandKey::SameDayLegal,
+        LiveHomeContract {
+            title: "<title>Same Day Legal | Home</title>",
+            copy: "Privacy, paperwork, and a lawyer, for one monthly fee.",
+        },
+    ),
 ];
 
 fn live_home_contract(key: views::brand::BrandKey) -> &'static LiveHomeContract {
@@ -10953,7 +10959,7 @@ async fn the_delete_your_data_host_renders_its_own_home_catalog() {
         !delete_your_data_body.contains("Exacting agentic lawyering."),
         "{delete_your_data_body}"
     );
-    assert!(!delete_your_data_body.contains("data-nautilus-intake"));
+    assert!(!delete_your_data_body.contains("data-enrollment-intake"));
     assert!(delete_your_data_body.contains(r#"aria-labelledby="privacy-benefits-title""#));
 
     let litigation = app
@@ -11402,7 +11408,13 @@ async fn assert_brand_home_lead_capture(
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::SEE_OTHER, "{host}: submit");
-    assert_eq!(response.headers()[header::LOCATION], "/contact/sent");
+    // Same Day Legal's enrollment continues to sign-in and the booking link.
+    let sent = if brand == views::brand::BrandKey::SameDayLegal {
+        "/auth/login?return_to=%2F%23enrollment"
+    } else {
+        "/contact/sent"
+    };
+    assert_eq!(response.headers()[header::LOCATION], sent, "{host}: next page");
     let leads = store::leads::list(db).await.unwrap();
     assert!(
         leads
@@ -11489,7 +11501,12 @@ fn assert_brand_home_lead_markup(body: &str, host: &str, brand: views::brand::Br
         !body.contains(r#"data-lead-modal="true""#),
         "{host}: home form is inline"
     );
-    if brand == views::brand::BrandKey::CyberInjuryLaw {
+    if brand == views::brand::BrandKey::SameDayLegal {
+        assert!(
+            body.contains("data-enrollment-intake"),
+            "{host}: Same Day Legal enrollment"
+        );
+    } else if brand == views::brand::BrandKey::CyberInjuryLaw {
         assert!(
             html.select(&lead_form)
                 .any(|form| form.select(&inline_contact).next().is_some()),

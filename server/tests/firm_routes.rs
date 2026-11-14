@@ -258,10 +258,9 @@ async fn the_retired_services_page_redirects_home() {
     assert!(!home.contains(r#"href="/services""#), "{home}");
 }
 
-/// The retired business-counsel page sends its published links to Nautilus,
-/// where formation and contract templates now live.
+/// The retired business-counsel page sends its published links home.
 #[tokio::test]
-async fn the_retired_business_path_redirects_to_nautilus() {
+async fn the_retired_business_path_redirects_home() {
     let resp = anon_get(&site_app().await, "/business").await;
     assert_eq!(resp.status(), StatusCode::MOVED_PERMANENTLY);
     assert_eq!(
@@ -270,22 +269,6 @@ async fn the_retired_business_path_redirects_to_nautilus() {
             .and_then(|value| value.to_str().ok()),
         Some("/"),
     );
-}
-
-#[tokio::test]
-async fn nautilus_renders_its_enrollment_intake() {
-    let app = site_app().await;
-    for path in ["/nautilus"] {
-        let response = anon_get(&app, path).await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = body_string(response).await;
-        assert!(body.contains("data-nautilus-intake"), "{path}: {body}");
-        assert!(
-            body.contains("/public/js/nautilus-intake.js"),
-            "{path}: {body}"
-        );
-        assert!(body.contains(r#"name="_csrf""#), "{path}: {body}");
-    }
 }
 
 #[tokio::test]
@@ -457,9 +440,10 @@ async fn every_public_page_wears_the_brand_mark_as_its_tab_icon() {
 async fn the_sitemap_lists_the_products_and_excludes_retired_pages() {
     let app = site_app().await;
     let body = body_string(anon_get(&app, "/sitemap.xml").await).await;
-    for path in ["/navigator", "/notations", "/nautilus"] {
+    for path in ["/navigator", "/notations"] {
         assert!(body.contains(path), "missing {path}: {body}");
     }
+    assert!(!body.contains("/nautilus"));
     assert!(!body.contains("/disputes"));
     assert!(!body.contains("/business"));
     assert!(!body.contains("/services"));

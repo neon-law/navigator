@@ -1,6 +1,6 @@
-//! The metered-credit ledger behind the Nautilus Legal Sandbox.
+//! The metered-credit ledger behind the Same Day Legal sandbox.
 //!
-//! A Nautilus subscriber's Legal Sandbox includes $5 of model usage per
+//! A Same Day Legal subscriber's Legal Sandbox includes $5 of model usage per
 //! billing month; usage beyond that is priced à la carte. This module owns
 //! the ledger that makes that promise enforceable: one row per subscriber
 //! per billing month — the month's grant (500 cents), the running debit
@@ -76,7 +76,7 @@ const SELECT: &str = "person_id, period, granted_cents, spent_cents, overage, \
 
 const PERSON_TABLE: &str = "person";
 
-/// The model-usage credit a Nautilus subscription includes for one billing
+/// The model-usage credit a Same Day Legal subscription includes for one billing
 /// month: $5.00 in integer cents. The glossary's number, not a call-site
 /// choice — every fresh row starts here and the rollover job grants it.
 pub const MONTHLY_GRANT_CENTS: i64 = 500;

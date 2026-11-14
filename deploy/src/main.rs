@@ -31,7 +31,7 @@ mod lsp_download;
 mod lsp_publish;
 mod mail;
 mod mcp_bridge;
-mod nautilus_preview;
+mod same_day_preview;
 mod notation_import;
 mod notation_kinds;
 mod notations_preview;
@@ -868,10 +868,10 @@ enum Command {
         dir: Option<PathBuf>,
     },
 
-    /// The Nautilus mobile shell, served locally for a browser.
-    Nautilus {
+    /// The Same Day Legal mobile shell, served locally for a browser.
+    SameDay {
         #[command(subcommand)]
-        action: nautilus_preview::NautilusCmd,
+        action: same_day_preview::SameDayCmd,
     },
 
     /// Render a Project checkout's declared pages on localhost, under a draft
@@ -1480,13 +1480,13 @@ enum DevCmd {
         #[arg(long)]
         release: bool,
     },
-    /// Build the Nautilus web preview bundle: drive `dx` to compile the
-    /// `nautilus-preview` crate (its own workspace, with its own Dioxus.toml)
+    /// Build the Same Day Legal web preview bundle: drive `dx` to compile the
+    /// `same-day-preview` crate (its own workspace, with its own Dioxus.toml)
     /// to `wasm32-unknown-unknown` and stage it under
-    /// `server/public/nautilus`, where `web` serves it same-origin for the
-    /// Nautilus mobile-shell preview. A build artifact — gitignored, never
+    /// `server/public/same-day`, where `web` serves it same-origin for the
+    /// Same Day Legal mobile-shell preview. A build artifact — gitignored, never
     /// committed.
-    BuildNautilus {
+    BuildSameDay {
         /// Build with optimizations (the deploy default). Omit for a faster
         /// debug build during local iteration.
         #[arg(long)]
@@ -2866,6 +2866,10 @@ enum FontFamilyArg {
     BarlowCondensed,
     /// `CyberInjuryLaw` body face.
     DmSans,
+    /// The Lex Tecnica family's display face (Lex Tecnica, Same Day Legal).
+    CormorantSc,
+    /// Same Day Legal's body face, the free stand-in for Avenir.
+    NunitoSans,
 }
 
 impl FontFamilyArg {
@@ -2881,6 +2885,8 @@ impl FontFamilyArg {
             Self::LibreFranklin => &assets::LIBRE_FRANKLIN,
             Self::BarlowCondensed => &assets::BARLOW_CONDENSED,
             Self::DmSans => &assets::DM_SANS,
+            Self::CormorantSc => &assets::CORMORANT_SC,
+            Self::NunitoSans => &assets::NUNITO_SANS,
         }
     }
 }
@@ -3497,9 +3503,9 @@ fn run() -> ExitCode {
             },
         },
         Command::Lsp { dir } => lsp_download::run_download(cli_version(), dir),
-        Command::Nautilus { action } => match action {
-            nautilus_preview::NautilusCmd::Preview { port } => {
-                devx_result(runtime().block_on(nautilus_preview::run(port)))
+        Command::SameDay { action } => match action {
+            same_day_preview::SameDayCmd::Preview { port } => {
+                devx_result(runtime().block_on(same_day_preview::run(port)))
             }
         },
         Command::Notation { action } => match action {
