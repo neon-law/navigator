@@ -272,9 +272,14 @@ receipt, the `GeneralNag` rule. A day with no open contingent matter posts nothi
 
 ## Linear backlog
 
-Set `SLACK_LINEAR_BACKLOG_CHANNEL_ID` to the private channel ID and provide `LINEAR_BACKLOG_READ_KEY` and
-`SLACK_BOT_TOKEN` as deployment secrets. Invite the Slack bot to the destination and grant it message and channel
-history access. The Linear key needs read access to both teams. Point staging at a separate test channel for rollout.
+The Linear backlog digest is a built-in DBOS feature. It runs when the web executor has a private Slack destination and
+its credentials. Set `SLACK_LINEAR_BACKLOG_CHANNEL_ID` to the destination's channel ID and provide
+`LINEAR_BACKLOG_READ_KEY` and `SLACK_BOT_TOKEN` as deployment secrets. The Linear key needs read access to both teams.
+Use a separate test channel in staging.
+
+Grant `chat:write` and `groups:history` by following [Deployment Slack app][deployment-slack-app].
+
+[deployment-slack-app]: third-party-integrations.md#deployment-slack-app
 
 The DBOS web executor starts `LinearBacklog-<Eastern date>` at 9 a.m. America/New_York. The snapshot reads every page
 before composing the Slack post. If the executor starts late, it catches up for the current day. A retry checks for the
