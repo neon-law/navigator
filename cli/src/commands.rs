@@ -986,6 +986,9 @@ pub enum ProjectsCmd {
         /// Emit the report as JSON instead of a table.
         #[arg(long)]
         json: bool,
+        /// Compare the live main refs of the origin and forgejo remotes in each reconciled checkout.
+        #[arg(long)]
+        forge_parity: bool,
     },
     /// Check this repository: Markdown, YAML, seeds, locales, and — when
     /// `navigator.yaml` declares a Project — its layout, mount, and origin.
@@ -2798,7 +2801,8 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
             dir,
             all,
             json,
-        } => projects::drift::run(host.host.as_deref(), &dir, all, json).await,
+            forge_parity,
+        } => projects::drift::run(host.host.as_deref(), &dir, all, json, forge_parity).await,
         ProjectsCmd::Gate {
             tracked_files: true,
             ..

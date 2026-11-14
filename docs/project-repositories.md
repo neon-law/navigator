@@ -1241,6 +1241,12 @@ navigator project drift --dir ~/<organization>
 navigator project drift --dir ~/<organization> --all --json
 ```
 
+During the GitHub and Forgejo dual run, add `--forge-parity` to compare the live `main` refs advertised by the `origin`
+and `forgejo` fetch remotes for each checked-out Project that reconciles to a live row. It reports absent remote
+configuration, unreadable remotes, missing `main` refs, and mismatched commit IDs as failures. The check does not fetch,
+push, verify forge identity, or grant cutover approval. A forge can return the same error for a missing private
+repository and insufficient access.
+
 It reads every checkout directly under `--dir` — the [local checkout root](#local-checkouts) — and takes the live
 Project codes from `project_codes` on the reconciliation report. The codes rather than the findings, because a row that
 is entirely fine produces no finding: an absence in the finding set would mean "reconciled" and "does not exist"
