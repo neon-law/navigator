@@ -4938,11 +4938,11 @@ mod command_boundary_tests {
         "journal",
         "legal-plans",
         "lsp",
-        "nautilus",
         "ops",
         "person",
         "pii",
         "quickstart",
+        "same-day",
         "scraper",
     ];
 
