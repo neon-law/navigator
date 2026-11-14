@@ -49,7 +49,6 @@ mod native;
 // `navigator project repository jj` installs jj with the same Homebrew seam.
 // `hudson same-day preview` serves the bundle this module stages, so
 // its staging helper is crate-reachable.
-pub(crate) mod same_day;
 mod observability;
 mod orchestrate;
 mod postgres_volume;
@@ -57,6 +56,7 @@ mod quickstart;
 pub(crate) mod registry;
 mod restate_handover;
 mod runtime;
+pub(crate) mod same_day;
 mod sample_project;
 mod seaweedfs;
 mod serve;

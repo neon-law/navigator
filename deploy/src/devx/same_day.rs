@@ -75,7 +75,10 @@ pub fn build(release: bool) -> Result<()> {
             .with_context(|| format!("clearing stale bundle at {}", dest.display()))?;
     }
     copy_dir_all(&bundle, &dest)?;
-    eprintln!("==> staged Same Day Legal preview bundle -> {}", dest.display());
+    eprintln!(
+        "==> staged Same Day Legal preview bundle -> {}",
+        dest.display()
+    );
     Ok(())
 }
 

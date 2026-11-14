@@ -62,7 +62,8 @@ pub const MESSAGES_PATH: &str = "/app/sandbox/messages";
 /// the one subscription under two names — DeleteYourData.com and Same Day Legal —
 /// and the services catalog records both as offerings of the same price pair,
 /// so a gate keyed on either name would drift when a third name is published.
-pub const SAME_DAY_LEGAL_OFFERINGS: [&str; 2] = ["delete-your-data-monthly", "delete-your-data-annual"];
+pub const SAME_DAY_LEGAL_OFFERINGS: [&str; 2] =
+    ["delete-your-data-monthly", "delete-your-data-annual"];
 
 /// The bounded number of tool passes one exchange may spend before the loop
 /// stops and says so. A search that keeps asking for more searches is a loop,

@@ -458,10 +458,7 @@ mod tests {
     fn the_composer_posts_natively_with_the_csrf_token() {
         let html = render(&view(Some(credit(500))));
         assert!(html.contains(r#"method="post""#), "{html}");
-        assert!(
-            html.contains(r#"action="/app/sandbox/messages""#),
-            "{html}"
-        );
+        assert!(html.contains(r#"action="/app/sandbox/messages""#), "{html}");
         assert!(html.contains(r#"name="_csrf""#), "{html}");
         assert!(html.contains("TOK"), "{html}");
         assert!(!html.contains("<script"), "{html}");

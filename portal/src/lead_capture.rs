@@ -233,10 +233,7 @@ fn valid_phone(phone: &str) -> bool {
 
 fn safe_source_path(path: &str) -> String {
     let path = path.trim();
-    if matches!(
-        path,
-        "/" | "/contact" | "/navigator" | "/services"
-    ) {
+    if matches!(path, "/" | "/contact" | "/navigator" | "/services") {
         path.to_string()
     } else {
         "/leads".to_string()

@@ -144,7 +144,8 @@ const COLUMNS: &str = "id, person_id, email, offering, offering_name, cadence, a
 /// canonical catalog anchor — the portal's subscription gate and the monthly
 /// sandbox credit reset both key on these ids, so they live next to the
 /// Purchase model rather than in either caller.
-pub const SAME_DAY_LEGAL_OFFERINGS: [&str; 2] = ["delete-your-data-monthly", "delete-your-data-annual"];
+pub const SAME_DAY_LEGAL_OFFERINGS: [&str; 2] =
+    ["delete-your-data-monthly", "delete-your-data-annual"];
 
 fn from_row(row: &sqlx::postgres::PgRow) -> Result<Purchase, PurchaseError> {
     Ok(Purchase {
