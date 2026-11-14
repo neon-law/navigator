@@ -156,36 +156,46 @@ pub fn run(command: PostgresCmd) -> ExitCode {
             return ExitCode::from(UNAVAILABLE);
         }
     };
-    if let Ok(report) = runtime.block_on(measure(mode)) {
-        println!(
-            "{}",
-            if json {
-                render_json(&report)
-            } else {
-                render_text(&report)
-            }
-        );
-        report.exit_code()
-    } else {
-        if json {
+    match runtime.block_on(measure(mode)) {
+        Ok(report) => {
             println!(
                 "{}",
-                json!({"mode": mode.label(), "clean": false, "error": "store unavailable; parity could not be measured"})
+                if json {
+                    render_json(&report)
+                } else {
+                    render_text(&report)
+                }
             );
-        } else {
+            report.exit_code()
+        }
+        Err(error) => {
+            // The cause goes to stderr in both modes: the Job's log is the only
+            // place an operator can read why a ship stopped here.
             eprintln!(
-                "navigator: mirror {}: store unavailable; parity could not be measured",
+                "navigator: mirror {}: store unavailable; parity could not be measured: {error:#}",
                 mode.label()
             );
+            if json {
+                println!("{}", unavailable_json(mode, &error));
+            }
+            ExitCode::from(UNAVAILABLE)
         }
-        ExitCode::from(UNAVAILABLE)
     }
+}
+
+fn unavailable_json(mode: Mode, error: &anyhow::Error) -> serde_json::Value {
+    json!({
+        "mode": mode.label(),
+        "clean": false,
+        "error": "store unavailable; parity could not be measured",
+        "detail": format!("{error:#}"),
+    })
 }
 
 async fn measure(mode: Mode) -> anyhow::Result<Report> {
     let surreal = store::surreal::connect_from_env()
         .await
-        .map_err(|_| anyhow::anyhow!("SurrealDB is unavailable"))?;
+        .map_err(|error| anyhow::anyhow!("SurrealDB is unavailable: {error}"))?;
     let pg = PostgresDb::from_env().await?;
     let before = store::postgres_mirror::parity_all(&surreal, &pg).await?;
     let before_rows = table_rows(&pg, &before).await?;
@@ -520,6 +530,18 @@ mod tests {
                 })
                 .collect(),
         }
+    }
+
+    #[test]
+    fn an_unavailable_store_names_its_cause() {
+        let error = anyhow::anyhow!("relation \"citation\" does not exist")
+            .context("measure parity for citation");
+        let report = super::unavailable_json(Mode::Reconcile, &error);
+        assert_eq!(report["clean"], false);
+        assert_eq!(
+            report["detail"],
+            "measure parity for citation: relation \"citation\" does not exist"
+        );
     }
 
     #[test]
