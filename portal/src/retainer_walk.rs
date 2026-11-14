@@ -4891,15 +4891,15 @@ Sign: {{client.signature}}";
     #[tokio::test]
     async fn start_post_refuses_when_no_firm_wears_the_request_brand() {
         let (state, surreal) = start_walk_state().await;
-        let anchor = store::firms::anchor_firm(&surreal)
+        let worn_by = store::firms::firm_id_for_brand_key(&surreal, "delete-your-data")
             .await
-            .expect("anchor lookup")
-            .expect("seeded practice is the anchor");
+            .expect("seat lookup")
+            .expect("the seed seats delete-your-data");
         store::firms::detach_brand(
             &surreal,
             store::persons::Role::Owner,
             None,
-            anchor.id,
+            worn_by,
             "delete-your-data",
         )
         .await

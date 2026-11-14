@@ -135,25 +135,28 @@ async fn design_gallery_has_the_host_header_and_footer() {
 
 #[tokio::test]
 async fn every_firm_footer_destination_publishes_the_complete_footer() {
-    let links = views::brand::scope(&views::brand::DELETE_YOUR_DATA_BRANDING, async {
+    let links = views::brand::scope(&views::brand::DEFAULT_BRANDING, async {
         views::brand::firm_footer_nav()
     })
     .await;
     for link in links {
-        // Absolute footer links leave DeleteYourData for the host that
-        // publishes the page. Team is Guieb & Shook; the rest of the shared
-        // row is Neon.
+        // The complete footer row is Guieb & Shook PC's. Team is the firm's
+        // own site; the rest of the shared row is Neon.
         let (brand, path) = if let Some(path) = link.href.strip_prefix("https://www.neonlaw.com") {
             (BrandKey::Neon, path)
         } else if let Some(path) = link.href.strip_prefix("https://www.guiebshook.com") {
             (BrandKey::GuiebShook, path)
         } else {
-            (BrandKey::DeleteYourData, link.href)
+            (BrandKey::Neon, link.href)
         };
         let html = preview(brand, path).await;
         // API is the shared standalone Swagger explorer, not a brand content page.
         if link.label == "API" {
-            assert_eq!(link.href, "https://www.neonlaw.com/api");
+            assert!(
+                link.href == "https://www.neonlaw.com/api" || link.href == "/api",
+                "{}",
+                link.href
+            );
             assert!(html.contains("id=\"swagger-ui\""));
             continue;
         }

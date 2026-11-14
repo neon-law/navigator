@@ -335,8 +335,8 @@ async fn brand_move_mirror_probe() {
         .execute(pg.pool())
         .await
         .unwrap();
-    // The compiled seed points elsewhere after an Owner move. Native restart
-    // refresh must respect its current seat and preserve the Owner's website.
+    // A compiled reseed seats the brand on the firm the seed names and keeps
+    // the website an Owner already stored.
     let before_reseed = store::postgres::tenancy::brand_by_key("neon")
         .await
         .unwrap()
@@ -345,6 +345,8 @@ async fn brand_move_mirror_probe() {
         name: before_reseed.name.clone(),
         key: "neon".into(),
         firm_id: Some(target.id),
+        primary_color: Some("#007c91".into()),
+        typeface: Some("gorp-serif".into()),
         ..Default::default()
     };
     for _ in 0..2 {
@@ -352,14 +354,17 @@ async fn brand_move_mirror_probe() {
             store::postgres::tenancy::seed_brand(&input, Some("https://example.test/compiled"))
                 .await
                 .unwrap();
-        assert_eq!(refreshed.firm_id, Some(from.id));
+        assert_eq!(refreshed.firm_id, Some(target.id));
         assert_eq!(refreshed.website_url, before_reseed.website_url);
-        assert_eq!(ownership_snapshot(&pg, brand.id).await.owner, Some(from.id));
+        assert_eq!(
+            ownership_snapshot(&pg, brand.id).await.owner,
+            Some(target.id)
+        );
         let seated: Uuid =
             sqlx::query_scalar("SELECT firm_id FROM firm_brand WHERE brand_key='neon'")
                 .fetch_one(pg.pool())
                 .await
                 .unwrap();
-        assert_eq!(seated, from.id);
+        assert_eq!(seated, target.id);
     }
 }

@@ -629,6 +629,16 @@ fn the_home_band_and_footer_share_the_theme_wash_and_hairline() {
         footer_before.contains("background: var(--nav-public-hairline);"),
         "the footer hairline must consume the theme value: {footer_before}"
     );
+
+    let wordmark = theme
+        .split_once(".site-footer__wordmark {")
+        .and_then(|(_, rest)| rest.split_once('}'))
+        .map(|(declarations, _)| declarations)
+        .expect("theme.css must carry the footer wordmark rule");
+    assert!(
+        wordmark.contains("font-family: \"EB Garamond\", Garamond, Georgia, serif;"),
+        "the footer wordmark uses one face so the firm name has one length: {wordmark}"
+    );
 }
 
 #[test]

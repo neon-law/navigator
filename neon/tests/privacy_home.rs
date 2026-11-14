@@ -59,10 +59,14 @@ async fn privacy_home_publishes_both_plans_with_referrals_and_shared_footer() {
         r#"href="https://www.cyberinjurylaw.com""#,
         "privacy-cloak",
         "site-footer__legal",
-        "https://www.guiebshook.com",
+        "Lex Tecnica, Ltd.",
     ] {
         assert!(html.contains(required), "missing {required}");
     }
+    assert!(
+        !html.contains("https://www.guiebshook.com"),
+        "DeleteYourData publishes Lex Tecnica's footer"
+    );
     for retired in [
         "$30",
         "$300",
@@ -82,10 +86,12 @@ async fn privacy_home_publishes_both_plans_with_referrals_and_shared_footer() {
     assert!(!html.contains("Coming soon"));
     assert!(!html.contains("Removal depends on the company"));
     assert!(!html.contains("href=\"/services\""));
+    // Four consultation links on the page, plus the footer Contact. A Lex
+    // Tecnica brand's Contact uses that brand's consultation calendar.
     assert_eq!(
         html.matches("href=\"https://calendar.notion.so/meet/nick-shook/or15n4yy7\"")
             .count(),
-        4
+        5
     );
     assert!(!html.contains("calendar.app.google"));
     let response = app

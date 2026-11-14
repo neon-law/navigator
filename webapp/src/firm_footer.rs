@@ -245,18 +245,18 @@ mod tests {
     #[cfg(feature = "server")]
     #[test]
     fn the_compiled_fallback_resolves_the_legal_entity_and_the_firm_home() {
-        let model = compiled_firm_footer_model(views::brand::BrandKey::DeleteYourData, 2026);
+        let model = compiled_firm_footer_model(views::brand::BrandKey::Neon, 2026);
         assert_eq!(model.legal_entity, "Guieb & Shook PC");
         assert_eq!(
             model.firm_home_href,
             views::brand::BrandKey::GuiebShook.public_home_href(),
             "the compiled fallback resolves the compiled firm brand's production home"
         );
-        let other = compiled_firm_footer_model(views::brand::BrandKey::Vesta, 2026);
+        let other = compiled_firm_footer_model(views::brand::BrandKey::DeleteYourData, 2026);
         assert_eq!(other.legal_entity, "Lex Tecnica, Ltd.");
         assert_eq!(
             other.firm_home_href, "",
-            "another firm's brand links no Guieb home"
+            "a Lex Tecnica brand links no Guieb home"
         );
     }
 

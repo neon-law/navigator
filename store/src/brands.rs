@@ -540,10 +540,11 @@ async fn create_unchecked(surreal: &SurrealDb, input: &NewBrand) -> Result<Brand
 }
 
 /// System/seed-only: create a compiled Brand or refresh its presentation.
-/// An existing Firm Brand seat controls ownership; only an unseated legacy
-/// or fixture row acquires `input.firm_id`. Repeated boots preserve Owner
-/// moves and an existing website URL. Human and API writes use the authorized
-/// [`create`]/[`update`] paths, which never let `firm_id` move.
+/// Under PostgreSQL tenancy the row and its `firm_brand` seat take
+/// `input.firm_id`. SurrealDB leaves an existing seat for the boot seed,
+/// which returns the brand to the firm that seed names. An existing website
+/// URL stays. Human and API writes use the authorized [`create`]/[`update`]
+/// paths, which never let `firm_id` move.
 pub(crate) async fn seed_upsert(
     surreal: &SurrealDb,
     input: &NewBrand,

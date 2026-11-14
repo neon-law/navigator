@@ -825,21 +825,54 @@ pub async fn seed_brand(
         None
     };
     if let Some(existing) = brand_by_key(&input.key).await? {
-        // Lock the Brand before reading its fresh seat. A concurrent move updates
-        // the same row, so both ownership records remain aligned.
+        // The compiled seed names the firm. Lock the brand and its seat, then
+        // point both at that firm. An existing website URL stays.
         let mut tx = pg.pool().begin().await?;
         sqlx::query("SELECT id FROM brand WHERE id=$1 FOR UPDATE")
             .bind(existing.id)
             .fetch_one(&mut *tx)
             .await?;
-        let seated_firm: Option<Uuid> =
+        sqlx::query("SELECT firm_id FROM firm_brand WHERE brand_key=$1 FOR UPDATE")
+            .bind(&input.key)
+            .fetch_optional(&mut *tx)
+            .await?;
+        let row = sqlx::query("UPDATE brand SET firm_id=$2,primary_color=$3,accent_color=$4,typeface=$5,legal_entity=$6,updated_at=now() WHERE id=$1 RETURNING id,name,brand_key,firm_id,primary_color,accent_color,typeface,is_law_firm,legal_entity,logo_object_key,logo_content_type,font_family,font_object_key,font_licence,website_url,inserted_at,updated_at")
+            .bind(existing.id).bind(firm_id).bind(&input.primary_color).bind(&input.accent_color).bind(&input.typeface).bind(&legal_entity)
+            .fetch_one(&mut *tx).await.map_err(map_brand_write)?;
+        sqlx::query("DELETE FROM firm_brand WHERE brand_key=$1 AND firm_id<>$2")
+            .bind(&input.key)
+            .bind(firm_id)
+            .execute(&mut *tx)
+            .await?;
+        let seated: Option<Uuid> =
             sqlx::query_scalar("SELECT firm_id FROM firm_brand WHERE brand_key=$1")
                 .bind(&input.key)
                 .fetch_optional(&mut *tx)
                 .await?;
-        let row = sqlx::query("UPDATE brand SET firm_id=$2,primary_color=$3,accent_color=$4,typeface=$5,updated_at=now() WHERE id=$1 RETURNING id,name,brand_key,firm_id,primary_color,accent_color,typeface,is_law_firm,legal_entity,logo_object_key,logo_content_type,font_family,font_object_key,font_licence,website_url,inserted_at,updated_at")
-            .bind(existing.id).bind(seated_firm.unwrap_or(firm_id)).bind(&input.primary_color).bind(&input.accent_color).bind(&input.typeface)
-            .fetch_one(&mut *tx).await.map_err(map_brand_write)?;
+        if seated.is_none() {
+            sqlx::query("INSERT INTO firm_brand (id,firm_id,brand_key) VALUES ($1,$2,$3)")
+                .bind(Uuid::new_v4())
+                .bind(firm_id)
+                .bind(&input.key)
+                .execute(&mut *tx)
+                .await
+                .map_err(|error| {
+                    if error
+                        .as_database_error()
+                        .and_then(sqlx::error::DatabaseError::constraint)
+                        .is_some_and(|name| {
+                            matches!(
+                                name,
+                                "firm_brand_brand_key_key" | "firm_brand_firm_id_brand_key_key"
+                            )
+                        })
+                    {
+                        brands::BrandError::DuplicateKey
+                    } else {
+                        brands::BrandError::Postgres(TenancyError::Query(error))
+                    }
+                })?;
+        }
         tx.commit().await?;
         return brand(&row).map_err(brands::BrandError::Postgres);
     }

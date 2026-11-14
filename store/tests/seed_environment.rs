@@ -768,6 +768,8 @@ async fn a_first_boot_registers_every_brand_key_the_practice_wears() {
     assert_eq!(
         lex_brands,
         [
+            "delete-your-data",
+            "delete-your-debt",
             "vesta",
             "misericordia",
             "abhaya",

@@ -557,23 +557,19 @@ pub static DELETE_YOUR_DATA_BRANDING: Branding = Branding {
         social_image: "/public/brand/delete-your-data/logo.png",
         nav: &[],
         is_law_firm: true,
-        legal_entity: "Guieb & Shook PC",
+        legal_entity: LEX_TECNICA_LEGAL_ENTITY,
     },
     firm_email: "contact@deleteyourdata.com",
     support_domain: "deleteyourdata.com",
     firm_phone: "+1 510 800 2090",
-    // The firm's one office, on this practice's pages as on the firm's own:
-    // the address is Guieb & Shook PC's, and a reader on any house brand is
-    // reading the same firm.
+    // The published Reno box, on this practice's pages as on the firm's own.
     firm_offices: FIRM_OFFICES,
     firm_attorneys: &[],
-    // The affiliated organization is Guieb & Shook PC and the family is its
-    // brands, on this practice's pages as on the firm's own.
     firm_memberships: FIRM_MEMBERSHIPS,
     firm_social: SHARED_SOCIAL,
-    firm_family: BrandKey::GUIEB_SHOOK_FAMILY,
+    firm_family: BrandKey::LEX_TECNICA_FAMILY,
     consultation_url: SHOOK_CONSULTATION_URL,
-    terms_url: "/terms",
+    terms_url: LEX_TECNICA_TERMS_URL,
     privacy_url: "/privacy",
     base_url: "",
     primary_domain: "deleteyourdata.com",
@@ -800,7 +796,7 @@ pub static DELETE_YOUR_DEBT_BRANDING: Branding = Branding {
         social_image: "",
         nav: &[NavLink::leaf("How it works", "/services"), NavLink::leaf("Talk to PandA Law", "https://www.pandalawfirm.com/contact/")],
         is_law_firm: true,
-        legal_entity: "Guieb & Shook PC",
+        legal_entity: LEX_TECNICA_LEGAL_ENTITY,
     },
     firm_email: "contact@deleteyourdebt.com",
     support_domain: "deleteyourdebt.com",
@@ -809,14 +805,14 @@ pub static DELETE_YOUR_DEBT_BRANDING: Branding = Branding {
     firm_attorneys: &[],
     firm_memberships: FIRM_MEMBERSHIPS,
     firm_social: SHARED_SOCIAL,
-    firm_family: BrandKey::GUIEB_SHOOK_FAMILY,
+    firm_family: BrandKey::LEX_TECNICA_FAMILY,
     consultation_url: "https://www.pandalawfirm.com/contact/",
-    terms_url: "/terms",
+    terms_url: LEX_TECNICA_TERMS_URL,
     privacy_url: "/privacy",
     base_url: "",
     primary_domain: "deleteyourdebt.com",
     firm_disclaimer: "Attorney advertisement. Legal services are provided by PandA Law Firm. Nothing here is legal advice without a signed engagement with PandA Law Firm. Past results do not guarantee future outcomes.",
-    mission_description: "DeleteYourDebt.com is operated by Guieb & Shook PC; legal services are provided by PandA Law Firm. It connects people with PandA Law for debt relief in Nevada, Washington, New York, and California. Our team works across the country, with in-person meetings in Brooklyn. Attorney advertisement. No result is promised.",
+    mission_description: "DeleteYourDebt.com is operated by Lex Tecnica, Ltd.; legal services are provided by PandA Law Firm. It connects people with PandA Law for debt relief in Nevada, Washington, New York, and California. Our team works across the country, with in-person meetings in Brooklyn. Attorney advertisement. No result is promised.",
     service_description: "Work with PandA Law on debt relief in Nevada, Washington, New York, and California. Remote conversations and in-person meetings in Brooklyn. Scope and fees are agreed in writing before representation begins.",
     portal_only: false,
     brand_key: BrandKey::DeleteYourDebt,
@@ -1085,16 +1081,13 @@ impl BrandKey {
         Self::IepDefenders,
     ];
 
-    /// The brands Guieb & Shook PC trades under.
-    pub const GUIEB_SHOOK_FAMILY: &'static [Self] = &[
-        Self::Neon,
-        Self::DeleteYourData,
-        Self::DeleteYourDebt,
-        Self::GuiebShook,
-    ];
+    /// The brands Guieb & Shook PC trades under: Neon Law and the firm's own site.
+    pub const GUIEB_SHOOK_FAMILY: &'static [Self] = &[Self::Neon, Self::GuiebShook];
 
     /// The brands Lex Tecnica, Ltd. trades under.
     pub const LEX_TECNICA_FAMILY: &'static [Self] = &[
+        Self::DeleteYourData,
+        Self::DeleteYourDebt,
         Self::Vesta,
         Self::Misericordia,
         Self::Abhaya,
@@ -2589,9 +2582,9 @@ mod tests {
     /// The firm's affiliations stay with the firm: a bundle that
     /// renames the firm publishes no association affiliation and lists no
     /// house-brand family, because both are Guieb & Shook PC's; a bundle that
-    /// changes anything else keeps them. Every house brand carries the same
-    /// two, since the affiliated organization and the family are the firm, not
-    /// the brand.
+    /// changes anything else keeps them. Guieb & Shook's own brand carries
+    /// that family. DeleteYourData carries Lex Tecnica's family, and both
+    /// brands publish the same offices, memberships, and shared profiles.
     #[tokio::test]
     async fn a_renamed_firm_claims_no_membership_and_lists_no_family() {
         let renamed: BrandManifest =
@@ -2610,11 +2603,17 @@ mod tests {
             assert_eq!(super::firm_social(), DEFAULT_BRANDING.firm_social);
         })
         .await;
+        assert_eq!(
+            DELETE_YOUR_DATA_BRANDING.firm_family,
+            BrandKey::LEX_TECNICA_FAMILY
+        );
+        assert_eq!(
+            super::GUIEB_SHOOK_BRANDING.firm_family,
+            BrandKey::GUIEB_SHOOK_FAMILY
+        );
         for branding in [&DELETE_YOUR_DATA_BRANDING, &super::GUIEB_SHOOK_BRANDING] {
             assert_eq!(branding.firm_memberships, DEFAULT_BRANDING.firm_memberships);
-            assert_eq!(branding.firm_family, BrandKey::GUIEB_SHOOK_FAMILY);
             assert_eq!(branding.firm_social, super::SHARED_SOCIAL);
-            // Every house brand publishes the same firm offices.
             assert_eq!(branding.firm_offices, DEFAULT_BRANDING.firm_offices);
         }
     }
@@ -3161,7 +3160,7 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let neon = labels();
-        for branding in [&super::DELETE_YOUR_DATA_BRANDING] {
+        for branding in [&super::GUIEB_SHOOK_BRANDING] {
             scope(branding, async {
                 assert_eq!(labels(), neon, "every brand shares Neon's footer row");
                 let nav = super::firm_footer_nav();

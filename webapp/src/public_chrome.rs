@@ -410,7 +410,18 @@ fn chrome_for(brand: &views::brand::SiteBrand, utility: Vec<ChromeNavLink>) -> P
                 href: link.href.to_string(),
             })
             .collect(),
-        firm_name: FIRM_BRAND.site_name.to_string(),
+        // Lex Tecnica's brands share one footer wordmark, so the firm name
+        // has one length on every brand. Neon Law and Guieb & Shook keep
+        // the name the page trades under; the copyright still names the
+        // legal entity.
+        firm_name: if brand.legal_entity == views::brand::LEX_TECNICA_LEGAL_ENTITY {
+            views::brand::LEX_TECNICA_BRANDING
+                .firm
+                .site_name
+                .to_string()
+        } else {
+            brand.site_name.to_string()
+        },
         firm_logo_href: FIRM_BRAND.logo_href.to_string(),
         firm_home_href: FIRM_BRAND.home_href.to_string(),
         legal_entity: FIRM_BRAND.legal_entity.to_string(),
@@ -1013,6 +1024,12 @@ mod tests {
                 "{name}'s page names {} as the publisher: {copyright}",
                 branding.firm.legal_entity
             );
+            if branding.firm.legal_entity == views::brand::LEX_TECNICA_LEGAL_ENTITY {
+                assert!(
+                    out.contains(r#"<strong class="site-footer__wordmark">Lex Tecnica</strong>"#),
+                    "{name}'s footer wordmark is the shared firm name: {out}"
+                );
+            }
         }
     }
 

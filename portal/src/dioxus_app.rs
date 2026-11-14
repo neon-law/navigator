@@ -339,7 +339,14 @@ pub(crate) async fn dioxus_document_head(req: Request, next: Next) -> Response {
     } else {
         ""
     };
-    let font_head: &str = font_head(views::brand::brand_key());
+    let brand_fonts = font_head(views::brand::brand_key());
+    // The footer wordmark is EB Garamond on every brand, so a page whose own
+    // face is something else still has the face to measure that name with.
+    let font_head = if brand_fonts.contains("EB Garamond") {
+        brand_fonts.to_string()
+    } else {
+        format!("{brand_fonts}{}", GUIEB_SHOOK_HEAD.as_str())
+    };
     let html = stamp_document_title(
         &stamp_html_lang(&rendered, lang),
         &path,
