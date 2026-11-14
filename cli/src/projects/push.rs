@@ -7,8 +7,8 @@
 //! signed commit, push; open the review request ready for review; arm
 //! merge-when-green and read the arm back; watch the required check to a
 //! verdict, naming each stall separately; capture the merge commit; then
-//! hand the merge commit to the merge watcher. Every forge question goes
-//! through the [`Forge`] seam, never through a forge's API.
+//! synchronize a configured secondary mirror and hand the merge commit to the
+//! merge watcher. Review and deployment queries use the [`Forge`] seam.
 
 use std::future::Future;
 use std::path::Path;
@@ -63,6 +63,7 @@ pub async fn dispatch(
         title,
         body,
         dry_run,
+        github,
         forge.as_ref(),
         tokio::time::sleep,
     )
@@ -76,13 +77,14 @@ pub async fn dispatch(
 /// verb's CLI surface plus the two test injections (the forge and the
 /// sleep), so the count is intentional.
 #[allow(clippy::too_many_arguments)]
-pub async fn run<S, Fut>(
+async fn run<S, Fut>(
     dir: &Path,
     base: &str,
     branch: Option<&str>,
     title: &str,
     body: Option<&str>,
     dry_run: bool,
+    github: bool,
     forge: &dyn Forge,
     sleep: S,
 ) -> Result<LaneReport>
@@ -182,14 +184,118 @@ where
         }
     };
 
-    finish_delivery(
+    let sync_mirror = github && base == "main" && target != base;
+    let mirror = sync_secondary_remote(dir, sync_mirror, target, &review, &merge_commit);
+    let delivery = finish_delivery(
         forge,
         &review,
-        merge_commit,
+        merge_commit.clone(),
         Instant::now() + CHECK_TIMEOUT,
         sleep,
+    );
+    let (mirror, delivery) = tokio::join!(mirror, delivery);
+    mirror?;
+    delivery
+}
+
+async fn sync_secondary_remote(
+    dir: &Path,
+    enabled: bool,
+    branch: String,
+    review: &ReviewRef,
+    merge_commit: &str,
+) -> Result<()> {
+    if !enabled {
+        return Ok(());
+    }
+    let dir = dir.to_path_buf();
+    let head = review.head_sha.clone();
+    let sha = merge_commit.to_owned();
+    tokio::task::spawn_blocking(move || sync_github_mirror(&dir, &branch, &head, &sha))
+        .await
+        .with_context(|| {
+            format!("Forgejo synchronization worker stopped after merge {merge_commit}")
+        })?
+}
+
+fn sync_github_mirror(
+    dir: &Path,
+    branch: &str,
+    reviewed_head: &str,
+    merge_commit: &str,
+) -> Result<()> {
+    if !git_text(dir, &["remote"])?
+        .lines()
+        .any(|name| name == "forgejo")
+    {
+        return Ok(());
+    }
+    sync_mirror_refs(dir, branch, reviewed_head, merge_commit).with_context(|| {
+        format!(
+            "GitHub merged {merge_commit}, but Forgejo synchronization failed. Verify its refs, \
+             fast-forward main to that SHA, and delete {branch} only at reviewed head {reviewed_head}"
+        )
+    })
+}
+
+fn sync_mirror_refs(
+    dir: &Path,
+    branch: &str,
+    reviewed_head: &str,
+    merge_commit: &str,
+) -> Result<()> {
+    anyhow::ensure!(
+        [reviewed_head, merge_commit]
+            .iter()
+            .all(|sha| sha.len() == 40 && sha.bytes().all(|byte| byte.is_ascii_hexdigit())),
+        "the review did not return full GitHub commit IDs"
+    );
+    let mirror = git_text(dir, &["remote", "get-url", "forgejo"])?;
+    let destinations = git_text(dir, &["remote", "get-url", "--push", "--all", "origin"])?;
+    anyhow::ensure!(
+        mirror != git_text(dir, &["remote", "get-url", "origin"])?
+            && destinations
+                .lines()
+                .any(|destination| destination == mirror),
+        "the Forgejo fetch URL must match an explicit secondary push destination"
+    );
+
+    git_text(
+        dir,
+        &[
+            "fetch",
+            "--no-tags",
+            "--no-write-fetch-head",
+            "origin",
+            merge_commit,
+        ],
     )
-    .await
+    .map_err(|_| anyhow::anyhow!("could not fetch the exact GitHub squash merge"))?;
+    let main = format!("{merge_commit}:refs/heads/main");
+    let topic = format!("refs/heads/{branch}");
+    let refs = git_text(dir, &["ls-remote", "--refs", "forgejo", &topic])
+        .map_err(|_| anyhow::anyhow!("could not inspect the mirrored topic branch"))?;
+    let delete_reviewed = refs == format!("{reviewed_head}\t{topic}");
+    let mut options = vec!["push", "--atomic", "--no-follow-tags", "--no-force"];
+    let lease = format!("--force-with-lease={topic}:{reviewed_head}");
+    if delete_reviewed {
+        options.push(&lease);
+    }
+    options.extend(["--", &mirror, &main]);
+    let delete = format!(":{topic}");
+    if delete_reviewed {
+        options.push(&delete);
+    }
+    git_text(dir, &options).map_err(|_| {
+        anyhow::anyhow!(
+            "Forgejo rejected the atomic push. Check mirror access, branch protection, and ref divergence"
+        )
+    })?;
+    println!("mirror: synchronized Forgejo main");
+    if !refs.is_empty() && !delete_reviewed {
+        println!("mirror: preserved the topic branch because it differs from the reviewed head");
+    }
+    Ok(())
 }
 
 async fn finish_delivery<S, Fut>(
@@ -494,6 +600,7 @@ mod tests {
     struct MockForge {
         review: ReviewRef,
         arm: ArmOutcome,
+        merge_sha: String,
         /// The verdict every poll answers with; the verb reaches a verdict
         /// immediately or names the stall, so a static answer covers both.
         check: CheckVerdict,
@@ -514,6 +621,7 @@ mod tests {
                     url: "https://forge.example/review/7".to_string(),
                 },
                 arm: ArmOutcome::Armed,
+                merge_sha: "merge111".to_string(),
                 check: CheckVerdict::Green,
                 polls: Mutex::new(0),
                 merge_after_polls: polls,
@@ -558,7 +666,7 @@ mod tests {
 
         async fn merge_commit(&self, _review: &ReviewRef) -> Result<Option<String>> {
             if *self.polls.lock().unwrap() >= self.merge_after_polls {
-                Ok(Some("merge111".to_string()))
+                Ok(Some(self.merge_sha.clone()))
             } else {
                 Ok(None)
             }
@@ -777,11 +885,13 @@ mod tests {
     /// The lane's own preflight requires signing, so its tests do too.
     struct TempCheckout {
         root: PathBuf,
+        temp: tempfile::TempDir,
     }
 
     impl TempCheckout {
         fn new() -> Self {
-            let root = tempfile::tempdir().unwrap().keep();
+            let temp = tempfile::tempdir().unwrap();
+            let root = temp.path();
             let repo = root.join("repo");
             std::fs::create_dir_all(&repo).unwrap();
             git_sh(Some(&repo), &["init", "--initial-branch=main"]);
@@ -809,7 +919,7 @@ mod tests {
                     root.join("origin.git").to_str().unwrap(),
                 ],
             );
-            Self { root: repo }
+            Self { root: repo, temp }
         }
 
         fn with_signing(self) -> Self {
@@ -843,6 +953,43 @@ mod tests {
         fn path(&self) -> &Path {
             &self.root
         }
+
+        fn dual_remote(&self) -> PathBuf {
+            let root = self.temp.path();
+            let origin = root.join("origin.git");
+            let mirror = root.join("mirror.git");
+            let origin = origin.to_str().unwrap();
+            let mirror_path = mirror.to_str().unwrap();
+            let github = "https://github.com/example/project.git";
+            git_sh(None, &["init", "--bare", mirror_path]);
+            git_sh(Some(self.path()), &["remote", "set-url", "origin", github]);
+            git_sh(
+                Some(self.path()),
+                &["config", &format!("url.{origin}.insteadOf"), github],
+            );
+            git_sh(
+                Some(self.path()),
+                &["remote", "add", "forgejo", mirror_path],
+            );
+            git_sh(
+                Some(self.path()),
+                &[
+                    "remote",
+                    "set-url",
+                    "--push",
+                    "forgejo",
+                    "DISABLED-use-origin",
+                ],
+            );
+            for url in [origin, mirror_path] {
+                git_sh(
+                    Some(self.path()),
+                    &["remote", "set-url", "--add", "--push", "origin", url],
+                );
+            }
+            git_sh(Some(self.path()), &["push", "origin", "main"]);
+            mirror
+        }
     }
 
     fn git_sh(dir: Option<&Path>, args: &[&str]) {
@@ -857,6 +1004,113 @@ mod tests {
             args.join(" "),
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+
+    #[tokio::test]
+    async fn github_merge_advances_the_mirror_and_deletes_only_the_reviewed_branch() {
+        let checkout = TempCheckout::new().with_signing();
+        let mirror = checkout.dual_remote();
+        let dir = checkout.path();
+        let initial_sha = super::git_text(dir, &["rev-parse", "HEAD"]).unwrap();
+        git_sh(Some(dir), &["branch", "mirror-only"]);
+        git_sh(
+            Some(dir),
+            &["push", mirror.to_str().unwrap(), "mirror-only"],
+        );
+
+        git_sh(Some(dir), &["checkout", "-b", "push/the-change"]);
+        git_sh(Some(dir), &["commit", "--allow-empty", "-m", "reviewed"]);
+        let mut forge = MockForge::green_after(1);
+        forge.review.head_sha = super::git_text(dir, &["rev-parse", "HEAD"]).unwrap();
+        git_sh(Some(dir), &["checkout", "main"]);
+        git_sh(Some(dir), &["commit", "--allow-empty", "-m", "merged"]);
+        forge.merge_sha = super::git_text(dir, &["rev-parse", "HEAD"]).unwrap();
+        let origin = checkout.temp.path().join("origin.git");
+        git_sh(Some(dir), &["push", origin.to_str().unwrap(), "main"]);
+
+        let deliver = |github| {
+            super::run(
+                dir,
+                "main",
+                Some("push/the-change"),
+                "the change",
+                None,
+                false,
+                github,
+                &forge,
+                instant_sleep,
+            )
+        };
+        deliver(false).await.unwrap();
+        assert_eq!(
+            super::git_text(&mirror, &["rev-parse", "refs/heads/main"]).unwrap(),
+            initial_sha
+        );
+        assert_eq!(
+            super::git_text(&mirror, &["rev-parse", "refs/heads/push/the-change"]).unwrap(),
+            forge.review.head_sha
+        );
+        deliver(true).await.unwrap();
+
+        assert_eq!(
+            super::git_text(&mirror, &["rev-parse", "refs/heads/main"]).unwrap(),
+            forge.merge_sha
+        );
+        assert!(super::git_text(&mirror, &["rev-parse", "refs/heads/push/the-change"]).is_err());
+        assert_eq!(
+            super::git_text(&mirror, &["rev-parse", "refs/heads/mirror-only"]).unwrap(),
+            initial_sha
+        );
+        let sync = || {
+            super::sync_github_mirror(
+                dir,
+                "push/the-change",
+                &forge.review.head_sha,
+                &forge.merge_sha,
+            )
+        };
+        sync().unwrap();
+
+        git_sh(
+            Some(dir),
+            &[
+                "push",
+                mirror.to_str().unwrap(),
+                "main:refs/heads/push/the-change",
+            ],
+        );
+        sync().unwrap();
+        assert_eq!(
+            super::git_text(&mirror, &["rev-parse", "refs/heads/push/the-change"]).unwrap(),
+            forge.merge_sha
+        );
+
+        git_sh(
+            Some(dir),
+            &[
+                "push",
+                "--force",
+                mirror.to_str().unwrap(),
+                "push/the-change:main",
+            ],
+        );
+        git_sh(
+            Some(dir),
+            &[
+                "push",
+                "--force",
+                mirror.to_str().unwrap(),
+                "push/the-change",
+            ],
+        );
+        let error = sync().unwrap_err();
+        assert!(error.to_string().contains(&forge.merge_sha));
+        for reference in ["refs/heads/main", "refs/heads/push/the-change"] {
+            assert_eq!(
+                super::git_text(&mirror, &["rev-parse", reference]).unwrap(),
+                forge.review.head_sha
+            );
+        }
     }
 
     #[test]
@@ -885,6 +1139,7 @@ mod tests {
             "the change",
             Some("body"),
             false,
+            true,
             &forge,
             instant_sleep,
         )
@@ -916,6 +1171,7 @@ mod tests {
             "the change",
             Some("body"),
             false,
+            true,
             &forge,
             instant_sleep,
         )
@@ -941,6 +1197,7 @@ mod tests {
             Some("push/the-change"),
             "the change",
             None,
+            true,
             true,
             &forge,
             instant_sleep,
