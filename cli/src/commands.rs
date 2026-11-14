@@ -151,6 +151,9 @@ pub enum EnvelopeCmd {
     Prepare {
         /// The notation whose rendered document the envelope holds.
         notation_id: uuid::Uuid,
+        /// Open the prepared envelope in the browser to review its signing fields.
+        #[arg(long)]
+        open: bool,
     },
     /// Dispatch the envelope to its declared signers. Promotes an
     /// envelope a previous prepare created instead of creating a second
@@ -334,11 +337,11 @@ fn run() -> ExitCode {
         Command::Notation {
             action: NotationCmd::Envelope { action },
         } => match action {
-            EnvelopeCmd::Prepare { notation_id } => {
-                runtime().block_on(remote::notation_envelope(notation_id, true))
+            EnvelopeCmd::Prepare { notation_id, open } => {
+                runtime().block_on(remote::notation_envelope(notation_id, true, open))
             }
             EnvelopeCmd::Send { notation_id } => {
-                runtime().block_on(remote::notation_envelope(notation_id, false))
+                runtime().block_on(remote::notation_envelope(notation_id, false, false))
             }
             EnvelopeCmd::Status { notation_id } => {
                 runtime().block_on(remote::notation_envelope_status(notation_id))

@@ -1832,9 +1832,24 @@ impl SignatureProvider for DocuSignSignatureProvider {
             "v2.1/accounts/{}/envelopes/{}/views/sender",
             self.account_id, request_id.0
         ))?;
-        // The sender view carries no recipient identity — only where the
-        // console sends the browser when the sender closes it.
-        let body = serde_json::json!({ "returnUrl": return_url });
+        // Keep dispatch in Navigator so the notation enters its signing
+        // state before any signer can complete the envelope.
+        let body = serde_json::json!({
+            "returnUrl": return_url,
+            "viewAccess": "envelope",
+            "settings": {
+                "startingScreen": "Tagger",
+                "sendButtonAction": "redirect",
+                "showBackButton": "false",
+                "showDiscardAction": "false",
+                "showSignNow": "false",
+                "recipientSettings": { "showEditRecipients": "false" },
+                "documentSettings": {
+                    "showEditDocuments": "false",
+                    "showEditPages": "false"
+                }
+            }
+        });
         let resp = self
             .http
             .post(url)
@@ -2486,6 +2501,38 @@ mod tests {
             .await
             .expect("recipient view succeeds");
         assert_eq!(url, "https://demo.docusign.net/signing/abc123");
+    }
+
+    #[tokio::test]
+    async fn docusign_sender_view_returns_to_navigator_for_dispatch() {
+        let server = MockServer::start().await;
+        let return_url = "https://navigator.example/app/lawyer/notations/example/step";
+        Mock::given(method("POST"))
+            .and(path(
+                "/v2.1/accounts/acct-guid/envelopes/env-1/views/sender",
+            ))
+            .and(wiremock::matchers::body_partial_json(serde_json::json!({
+                "returnUrl": return_url,
+                "viewAccess": "envelope",
+                "settings": {
+                    "startingScreen": "Tagger",
+                    "sendButtonAction": "redirect",
+                    "recipientSettings": { "showEditRecipients": "false" },
+                    "documentSettings": { "showEditDocuments": "false" }
+                }
+            })))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "url": "https://docusign.example/sender"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let view = docusign(server.uri())
+            .create_sender_view(&SignatureRequestId("env-1".into()), return_url)
+            .await
+            .unwrap();
+        assert_eq!(view, "https://docusign.example/sender");
     }
 
     #[tokio::test]

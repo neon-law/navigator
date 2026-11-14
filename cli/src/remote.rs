@@ -5025,13 +5025,18 @@ struct NotationEnvelope {
 /// creating a second one — and stamps the returned envelope id on the
 /// notation's document pointer in the checkout, the committed `blobs/**`
 /// YAML the signed copy files under.
-pub async fn notation_envelope(notation_id: Uuid, prepare: bool) -> ExitCode {
-    notation_envelope_in(Path::new("."), notation_id, prepare).await
+pub async fn notation_envelope(notation_id: Uuid, prepare: bool, open: bool) -> ExitCode {
+    notation_envelope_in(Path::new("."), notation_id, prepare, open).await
 }
 
 /// [`notation_envelope`] against an explicit checkout root — the testable
 /// core; the command reads the checkout the process sits in.
-async fn notation_envelope_in(root: &Path, notation_id: Uuid, prepare: bool) -> ExitCode {
+async fn notation_envelope_in(
+    root: &Path,
+    notation_id: Uuid,
+    prepare: bool,
+    open: bool,
+) -> ExitCode {
     let Some(manifest) = crate::projects::manifest::read(root) else {
         eprintln!("navigator notation envelope: no navigator.yaml in the current directory");
         return ExitCode::from(2);
@@ -5069,6 +5074,11 @@ async fn notation_envelope_in(root: &Path, notation_id: Uuid, prepare: bool) -> 
                 palette::highlight(envelope.notation_id.to_string()),
                 envelope.state
             );
+            let href = sender_view_url(&client.base, envelope.notation_id);
+            println!("open in DocuSign: {href}");
+            if open {
+                let _ = crate::host::open_browser(&href);
+            }
             println!("dispatch it with: navigator notation envelope send {notation_id}");
             return Ok(());
         }
@@ -5082,6 +5092,10 @@ async fn notation_envelope_in(root: &Path, notation_id: Uuid, prepare: bool) -> 
         Ok(())
     })
     .await
+}
+
+fn sender_view_url(base: &str, notation_id: Uuid) -> String {
+    format!("{base}/app/lawyer/notations/{notation_id}/sender-view")
 }
 
 /// Stamp the sent envelope's id on the checkout pointer the notation's
@@ -5229,7 +5243,7 @@ async fn notation_envelope_status_in(root: &Path, notation_id: Uuid) -> ExitCode
             println!("  {}: {}", signer.role, step);
         }
         if let Some(href) = &envelope.sender_view_href {
-            println!("open in DocuSign: {href}");
+            println!("open in DocuSign: {}{href}", client.base);
         }
         Ok(())
     })
@@ -12826,7 +12840,7 @@ mod tests {
         )
         .unwrap();
 
-        let exit = super::notation_envelope_in(dir.path(), notation_id, false).await;
+        let exit = super::notation_envelope_in(dir.path(), notation_id, false, false).await;
         assert_eq!(exit, ExitCode::SUCCESS);
 
         // The envelope id landed on the pointer the signed copy files
@@ -12836,6 +12850,15 @@ mod tests {
         )
         .unwrap();
         assert_eq!(stamped.docusign_envelope_id, Some(envelope_id));
+    }
+
+    #[test]
+    fn prepared_envelope_links_to_the_lawyer_sender_view() {
+        let notation_id = Uuid::now_v7();
+        assert_eq!(
+            super::sender_view_url("https://navigator.example", notation_id),
+            format!("https://navigator.example/app/lawyer/notations/{notation_id}/sender-view")
+        );
     }
 
     /// LAW-270: a prepare holds a draft and never stamps a pointer — the
@@ -12885,7 +12908,7 @@ mod tests {
         )
         .unwrap();
 
-        let exit = super::notation_envelope_in(dir.path(), notation_id, true).await;
+        let exit = super::notation_envelope_in(dir.path(), notation_id, true, false).await;
         assert_eq!(exit, ExitCode::SUCCESS);
 
         let unstamped = model::document_pointers::DocumentPointer::from_yaml(

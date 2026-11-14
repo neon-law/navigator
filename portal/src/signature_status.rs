@@ -3,8 +3,7 @@
 //!
 //! The send path ([`crate::signature_flow`]) writes the durable
 //! `signature` row; the inbound webhook stamps its state and each signer's
-//! own step ([`crate::esignature_webhook`]). Nothing on `main` reads that
-//! record back per signer. This module is that read: the envelope-wide
+//! own step ([`crate::esignature_webhook`]). This module reads the envelope-wide
 //! lifecycle state plus per-declared-signer progress, composed from
 //! [`store::signatures::latest_for_notation`] and the template's declared
 //! signer set — the same declaration the send path built the manifest
@@ -76,12 +75,13 @@ pub async fn status_for_notation(
         return EnvelopeStatusReport::default();
     };
 
+    let completed = signature.state == store::signatures::SignatureState::Completed;
     let signed_roles = &signature.completed_signer_roles;
     let signers = match declared_roles(surreal, storage, notation).await {
         Ok(declared) => declared
             .into_iter()
             .map(|role| {
-                let signed = signed_roles.contains(&role);
+                let signed = completed || signed_roles.contains(&role);
                 EnvelopeSignerState { role, signed }
             })
             .collect(),
