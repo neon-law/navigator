@@ -133,6 +133,71 @@ impl GitHubForge {
             .with_context(|| format!("read the response body of {method} {path}"))?;
         Ok((status, text))
     }
+    /// Find a merged review that identifies this exact source branch and commit.
+    /// GitHub's list endpoint filters by owner and branch, and the response
+    /// identifies the full source repository and the merge timestamp.
+    pub(super) async fn merged_review_for_head(
+        &self,
+        branch: &str,
+        sha: &str,
+    ) -> Result<Option<u64>> {
+        #[derive(Deserialize)]
+        struct ReviewedRepository {
+            full_name: String,
+        }
+
+        #[derive(Deserialize)]
+        struct ReviewedHead {
+            sha: String,
+            #[serde(rename = "ref")]
+            git_ref: String,
+            repo: Option<ReviewedRepository>,
+        }
+
+        #[derive(Deserialize)]
+        struct ClosedReview {
+            number: u64,
+            merged_at: Option<String>,
+            head: ReviewedHead,
+            base: PullBase,
+        }
+
+        let head = format!("{}:{branch}", self.owner);
+        let repository = format!("{}/{}", self.owner, self.name);
+        let mut page = 1_u32;
+        loop {
+            let query = url::form_urlencoded::Serializer::new(String::new())
+                .append_pair("state", "closed")
+                .append_pair("base", "main")
+                .append_pair("head", &head)
+                .append_pair("per_page", "100")
+                .append_pair("page", &page.to_string())
+                .finish();
+            let pulls: Vec<ClosedReview> = self
+                .get_json(&self.repo_path(&format!("pulls?{query}")))
+                .await?;
+            if let Some(pull) = pulls.iter().find(|pull| {
+                pull.merged_at.is_some()
+                    && pull.base.git_ref == "main"
+                    && pull.head.sha == sha
+                    && pull.head.git_ref == branch
+                    && pull
+                        .head
+                        .repo
+                        .as_ref()
+                        .is_some_and(|repo| repo.full_name.eq_ignore_ascii_case(&repository))
+            }) {
+                return Ok(Some(pull.number));
+            }
+            if pulls.len() < 100 {
+                return Ok(None);
+            }
+            page = page
+                .checked_add(1)
+                .context("GitHub pull request page overflow")?;
+        }
+    }
+
     async fn workflow_run(
         &self,
         merge_commit: &str,
@@ -550,6 +615,53 @@ mod tests {
     use serde_json::json;
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn mirror_review_matches_only_a_merged_main_review_for_the_exact_source_tip() {
+        let server = MockServer::start().await;
+        let pull = |number, repo, sha, merged_at: Option<&str>| {
+            json!({
+                "number": number, "merged_at": merged_at, "base": {"ref": "main"},
+                "head": {"sha": sha, "ref": "push/change", "repo": {"full_name": repo}}
+            })
+        };
+        let merged = Some("2026-10-31T12:00:00Z");
+        let first_page = vec![pull(1, "acme/nav", "old", merged); 100];
+        Mock::given(method("GET"))
+            .and(path("/repos/acme/nav/pulls"))
+            .and(query_param("head", "acme:push/change"))
+            .and(query_param("state", "closed"))
+            .and(query_param("base", "main"))
+            .and(query_param("page", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(first_page))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/repos/acme/nav/pulls"))
+            .and(query_param("page", "2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                pull(2, "someone-else/nav", "current", merged),
+                pull(3, "acme/nav", "current", None),
+                pull(4, "acme/nav", "current", merged)
+            ])))
+            .mount(&server)
+            .await;
+        let github = GitHubForge::new(&server.uri(), "acme", "nav", "test").unwrap();
+        assert_eq!(
+            github
+                .merged_review_for_head("push/change", "current")
+                .await
+                .unwrap(),
+            Some(4)
+        );
+        assert_eq!(
+            github
+                .merged_review_for_head("push/change", "unknown")
+                .await
+                .unwrap(),
+            None
+        );
+    }
 
     fn review(number: u64, head_sha: &str) -> ReviewRef {
         ReviewRef {
