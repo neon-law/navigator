@@ -3280,11 +3280,11 @@ async fn lawyer_workbench_card_opens_the_unified_inbox() {
         .path()
         .ends_with("/app/inbox"));
     capture_inbox_frames(&c, capture_dir, 8..16).await;
-    activate_inbox_link(
-        &c,
-        "nav[aria-label='Filter inbox by Brand'] a[href='/app/inbox?brand=neon']",
-    )
-    .await;
+    // The Brand switcher shows only when the lawyer's conversations span
+    // several Brands, so the walkthrough opens the Brand view by its URL.
+    c.goto(&format!("{}/app/inbox?brand=neon", base_url()))
+        .await
+        .unwrap();
     activate_inbox_link(
         &c,
         "nav[aria-label='Filter inbox by channel'] a[href='/app/inbox?channel=sms&brand=neon']",

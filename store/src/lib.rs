@@ -161,6 +161,7 @@ pub mod matter_outcomes;
 pub mod matter_pages;
 pub mod matter_projections;
 pub(crate) mod matter_record_links;
+pub use model::correspondence;
 pub use model::nef;
 pub mod notarizations;
 pub mod notation_clauses;

@@ -48,6 +48,10 @@ pub struct InboxRowView {
     /// Last activity, short and human ("Oct 11, 04:06 UTC").
     #[serde(default)]
     pub updated: String,
+    /// Last activity as the dense row shows it ("Oct 11"); the full
+    /// `updated` rides along as the element's title.
+    #[serde(default)]
+    pub updated_short: String,
     /// Last activity as RFC 3339, for the `<time>` element.
     #[serde(default)]
     pub updated_iso: String,
@@ -120,6 +124,22 @@ pub struct InboxAttachmentView {
     pub href: String,
 }
 
+/// One Brand the inbox can narrow to: its registry key (the `?brand=` value)
+/// and its display name.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrandOption {
+    pub key: String,
+    pub name: String,
+}
+
+/// One fact read out of the conversation's inbound messages for the thread
+/// view: `kind` is `deadline`, `date`, `case`, or `attachments`.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InboxFactView {
+    pub kind: String,
+    pub label: String,
+}
+
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectOption {
     pub id: String,
@@ -152,7 +172,7 @@ pub struct InboxPage {
     #[serde(default)]
     pub trash_only: bool,
     #[serde(default)]
-    pub brands: Vec<String>,
+    pub brands: Vec<BrandOption>,
     #[serde(default)]
     pub channels: Vec<String>,
     /// The Project code when this workspace lists one Project's inbox — the
@@ -208,6 +228,10 @@ pub struct InboxThreadPage {
     pub next_action: String,
     pub bodies_visible: bool,
     pub messages: Vec<InboxMessageView>,
+    /// Dates, case numbers, and an attachments count read from the inbound
+    /// messages; empty when bodies are hidden.
+    #[serde(default)]
+    pub facts: Vec<InboxFactView>,
     pub projects: Vec<ProjectOption>,
     pub assign_action: Option<String>,
     pub can_attribute: bool,
@@ -612,6 +636,70 @@ fn inbox_brands(rows: &[store::inbox::IntakeRow]) -> Vec<String> {
     brands
 }
 
+/// Each Brand key as a switcher option, named from its Brand row and falling
+/// back to the key itself when the row cannot be read.
+#[cfg(feature = "server")]
+async fn brand_options(surreal: &store::surreal::SurrealDb, keys: Vec<String>) -> Vec<BrandOption> {
+    let mut options = Vec::with_capacity(keys.len());
+    for key in keys {
+        let name = store::brands::find_by_key(surreal, &key)
+            .await
+            .ok()
+            .flatten()
+            .map_or_else(|| key.clone(), |brand| brand.name);
+        options.push(BrandOption { key, name });
+    }
+    options
+}
+
+/// The facts the thread view surfaces from a conversation's inbound
+/// messages: deadlines first, then other dates, case numbers, and a count of
+/// attachments. Outbound and internal messages are the firm's own words and
+/// are not read.
+#[cfg(any(feature = "server", test))]
+fn correspondence_facts(messages: &[InboxMessageView]) -> Vec<InboxFactView> {
+    let mut read = store::correspondence::CorrespondenceFacts::default();
+    let inbound = messages
+        .iter()
+        .filter(|message| message.direction == "inbound");
+    let mut attachments = 0;
+    for message in inbound {
+        read.merge(store::correspondence::read(&message.body));
+        attachments += message.attachments.len();
+    }
+    let fact = |kind: &str, label: String| InboxFactView {
+        kind: kind.into(),
+        label,
+    };
+    let mut dates = read.dates;
+    dates.sort_by_key(|detected| (!detected.deadline, detected.date));
+    let mut facts = dates
+        .into_iter()
+        .map(|detected| {
+            let day = detected.date.format("%b %-d, %Y").to_string();
+            if detected.deadline {
+                fact("deadline", format!("Deadline? {day}"))
+            } else {
+                fact("date", day)
+            }
+        })
+        .collect::<Vec<_>>();
+    facts.extend(
+        read.case_numbers
+            .into_iter()
+            .map(|number| fact("case", format!("Case {number}"))),
+    );
+    if attachments > 0 {
+        let noun = if attachments == 1 {
+            "attachment"
+        } else {
+            "attachments"
+        };
+        facts.push(fact("attachments", format!("{attachments} {noun}")));
+    }
+    facts
+}
+
 #[cfg(feature = "server")]
 fn inbox_channels() -> Vec<String> {
     vec![
@@ -653,6 +741,7 @@ fn row_view(row: &store::inbox::IntakeRow, href: String) -> InboxRowView {
             contact_label,
         ),
         updated: row.updated_at.format("%b %-d, %H:%M UTC").to_string(),
+        updated_short: row.updated_at.format("%b %-d").to_string(),
         updated_iso: row.updated_at.to_rfc3339(),
         direction: row.direction.clone(),
         has_attachments: row.has_attachments,
@@ -918,6 +1007,7 @@ pub async fn owner_inbox_page() -> Result<InboxPage, ServerFnError> {
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?;
     let brand_filter = brand_filter.filter(|brand| brands.contains(brand));
+    let brands = brand_options(&surreal, brands).await;
     let scoped_rows = match brand_filter.as_deref() {
         Some(brand) => store::inbox::list_intake_in_brand(&surreal, actor, brand).await,
         None => store::inbox::list_intake(&surreal, actor).await,
@@ -1002,6 +1092,13 @@ async fn firm_thread_page(conversation_id: uuid::Uuid) -> Result<InboxThreadPage
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?;
     let (logo, tokens_href, firm_name) = chrome().await;
+    let messages = firm_messages_with_attachments(
+        &surreal,
+        detail.conversation.firm_id,
+        conversation_id,
+        &detail.messages,
+    )
+    .await;
     Ok(InboxThreadPage {
         role,
         project_code: None,
@@ -1047,13 +1144,12 @@ async fn firm_thread_page(conversation_id: uuid::Uuid) -> Result<InboxThreadPage
             ),
         next_action: detail.next_action,
         bodies_visible: detail.bodies_visible,
-        messages: firm_messages_with_attachments(
-            &surreal,
-            detail.conversation.firm_id,
-            conversation_id,
-            &detail.messages,
-        )
-        .await,
+        facts: if detail.bodies_visible {
+            correspondence_facts(&messages)
+        } else {
+            Vec::new()
+        },
+        messages,
         projects: detail
             .projects
             .iter()
@@ -1160,6 +1256,7 @@ pub async fn project_inbox_page() -> Result<InboxPage, ServerFnError> {
         project_inbox_metadata(&surreal, actor, role, &project, &project_code).await;
     let brands = inbox_brands(&all_rows);
     let brand_filter = brand_filter.filter(|brand| brands.contains(brand));
+    let brands = brand_options(&surreal, brands).await;
     let rows = all_rows
         .into_iter()
         .filter(|row| {
@@ -1260,6 +1357,15 @@ async fn project_thread_page(
         .map_err(|error| ServerFnError::new(error.to_string()))?;
     let (logo, tokens_href, firm_name) = chrome().await;
     let trashed = thread.conversation.trashed_at.is_some();
+    let messages = thread_messages_with_attachments(
+        &surreal,
+        &project_code,
+        project.id,
+        thread.conversation.firm_id,
+        thread.conversation.id,
+        &thread.messages,
+    )
+    .await;
     Ok(InboxThreadPage {
         role,
         project_code: Some(project_code.clone()),
@@ -1285,15 +1391,8 @@ async fn project_thread_page(
         delivery: thread.delivery,
         next_action: thread.next_action,
         bodies_visible: true,
-        messages: thread_messages_with_attachments(
-            &surreal,
-            &project_code,
-            project.id,
-            thread.conversation.firm_id,
-            thread.conversation.id,
-            &thread.messages,
-        )
-        .await,
+        facts: correspondence_facts(&messages),
+        messages,
         projects: Vec::new(),
         assign_action: thread
             .can_attribute
@@ -1506,9 +1605,18 @@ fn inbox_list(
         "Conversations across the firm, newest first."
     };
     let total = page.rows.len();
+    // The Brand chip earns its width only while rows of several Brands share
+    // the list; once the switcher narrows to one, every row would repeat it.
+    let show_brand = page.brand_filter.is_none() && page.brands.len() > 1;
     let items = page.rows.iter().enumerate().map(|(index, row)| {
         let unread = if row.unread { "Unread" } else { "Read" };
-        let brand = row.brand_key.as_deref().unwrap_or("unbranded");
+        let brand = row.brand_key.as_deref().map(|key| {
+            page.brands
+                .iter()
+                .find(|option| option.key == key)
+                .map_or(key, |option| option.name.as_str())
+        });
+        let matter = (row.assignee != "Unassigned").then_some(row.assignee.as_str());
         let selected_now = selected.read().as_ref() == Some(&row.id);
         let row_class = if selected_now {
             "inbox-table__row inbox-table__row--selected"
@@ -1532,6 +1640,8 @@ fn inbox_list(
                     span { class: "nav-visually-hidden", "{unread}" }
                 }
                 td { class: "inbox-table__sender",
+                    {channel_icon(&row.channel)}
+                    span { class: "nav-visually-hidden", "{channel_name(&row.channel)}: " }
                     "{row.sender}"
                     if let Some(person) = row.person.as_ref() {
                         span { class: "inbox-person-badge", "{person.name}" }
@@ -1562,17 +1672,23 @@ fn inbox_list(
                         "{row.subject}"
                     }
                     if let Some(preview) = row.preview.as_ref() {
-                        span { class: "inbox-table__preview", "{preview}" }
+                        span { class: "inbox-table__preview", " — {preview}" }
                     }
                 }
-                td { class: "inbox-table__tag inbox-table__brand", "{brand}" }
-                td { class: "inbox-table__tag inbox-table__channel",
-                    {channel_icon(&row.channel)}
-                    span { class: "nav-visually-hidden", "{channel_name(&row.channel)}" }
+                td { class: "inbox-table__matter",
+                    if let Some(matter) = matter {
+                        span { class: "inbox-tag", "{matter}" }
+                    } else {
+                        span { class: "inbox-tag inbox-tag--muted", "Unassigned" }
+                    }
+                    if show_brand {
+                        if let Some(brand) = brand {
+                            span { class: "inbox-tag inbox-tag--brand", "{brand}" }
+                        }
+                    }
                 }
-                td { class: "inbox-table__assignee", "{row.assignee}" }
                 td { class: "inbox-table__date",
-                    time { datetime: "{row.updated_iso}", "{row.updated}" }
+                    time { datetime: "{row.updated_iso}", title: "{row.updated}", "{row.updated_short}" }
                 }
             }
         }
@@ -1581,6 +1697,7 @@ fn inbox_list(
         div { class: "inbox-list",
             header { class: "page-header inbox-list__header",
                 h1 { "{title}" }
+                { brand_switcher(page) }
                 if page.project_code.is_some() {
                     crate::sections::page::CaseNav {
                         tabs: page.project_tabs.clone(),
@@ -1614,15 +1731,65 @@ fn inbox_list(
                                 th { scope: "col", class: "inbox-table__state",
                                     span { class: "nav-visually-hidden", "Unread" }
                                 }
-                                th { scope: "col", "Counterparty" }
+                                th { scope: "col", "From" }
                                 th { scope: "col", "Subject" }
-                                th { scope: "col", "Brand" }
-                                th { scope: "col", "Channel" }
-                                th { scope: "col", "Project" }
-                                th { scope: "col", "Date" }
+                                th { scope: "col", "Matter" }
+                                th { scope: "col", class: "inbox-table__date", "Date" }
                             }
                         }
                         tbody { {items} }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The Brand switcher: one compact segmented row over the list, offered when
+/// the viewer's conversations span more than one Brand (or a Brand is already
+/// chosen, so it can be cleared). Choosing a Brand narrows the list only: the
+/// page keeps the look of the Brand the viewer signed in through, since one
+/// login wears one Brand. Every link keeps the other filters, so a view stays
+/// shareable.
+fn brand_switcher(page: &InboxPage) -> Element {
+    if page.brands.len() < 2 && page.brand_filter.is_none() {
+        return rsx! {};
+    }
+    let current = Filters::of(page);
+    let base = page.base_href.as_str();
+    let all = Filters {
+        brand: None,
+        ..current
+    }
+    .href(base);
+    let options = page.brands.iter().map(|option| {
+        let active = page.brand_filter.as_deref() == Some(option.key.as_str());
+        let href = Filters {
+            brand: Some(option.key.as_str()),
+            ..current
+        }
+        .href(base);
+        (option.name.clone(), href, active)
+    });
+    rsx! {
+        nav { class: "inbox-brands", "aria-label": "Filter inbox by Brand",
+            ul {
+                li {
+                    a {
+                        class: "inbox-brands__link",
+                        href: "{all}",
+                        "aria-current": page.brand_filter.is_none().then_some("true"),
+                        "All Brands"
+                    }
+                }
+                for (name, href, active) in options {
+                    li {
+                        a {
+                            class: "inbox-brands__link",
+                            href: "{href}",
+                            "aria-current": active.then_some("true"),
+                            "{name}"
+                        }
                     }
                 }
             }
@@ -1687,26 +1854,6 @@ fn inbox_rail(page: &InboxPage) -> Element {
             }
             .href(base),
             page.channel_filter.as_deref() == Some(channel.as_str()),
-        ));
-    }
-    let mut brand_options = vec![rail_option(
-        "All Brands",
-        Filters {
-            brand: None,
-            ..current
-        }
-        .href(base),
-        page.brand_filter.is_none(),
-    )];
-    for brand in &page.brands {
-        brand_options.push(rail_option(
-            brand,
-            Filters {
-                brand: Some(brand.as_str()),
-                ..current
-            }
-            .href(base),
-            page.brand_filter.as_deref() == Some(brand.as_str()),
         ));
     }
     let unread_options = vec![
@@ -1787,7 +1934,6 @@ fn inbox_rail(page: &InboxPage) -> Element {
             }
             { inbox_rail_group("Mailboxes", "Mail", &mailbox_options) }
             { inbox_rail_group("Filter inbox by channel", "Channel", &channel_options) }
-            { inbox_rail_group("Filter inbox by Brand", "Brand", &brand_options) }
             { inbox_rail_group("Inbox unread filter", "Unread", &unread_options) }
             { inbox_rail_group("Inbox direction filter", "Direction", &direction_options) }
             { inbox_rail_group("Inbox attachments filter", "Attachments", &attachment_options) }
@@ -1892,6 +2038,7 @@ pub fn inbox_pane_body(page: &InboxThreadPage, href: &str) -> Element {
                 li { class: "inbox-chip", "{brand}" }
                 li { class: "inbox-chip", "Project: {page.assignee}" }
             }
+            { facts_list(page) }
             { assign_control(page, true) }
             { trash_control(page) }
             if page.bodies_visible {
@@ -1900,6 +2047,27 @@ pub fn inbox_pane_body(page: &InboxThreadPage, href: &str) -> Element {
                 p { class: "inbox-pane__empty",
                     "Message bodies stay on the project. Assign or reassign from here."
                 }
+            }
+        }
+    }
+}
+
+/// What the inbound messages name — deadlines, dates, case numbers, and an
+/// attachments count — as one chip row. A detected date is a prompt for the
+/// Lawyer, never a Deadline on its own, and the row says so.
+fn facts_list(page: &InboxThreadPage) -> Element {
+    if page.facts.is_empty() {
+        return rsx! {};
+    }
+    rsx! {
+        div { class: "inbox-facts",
+            ul { class: "inbox-chips", "aria-label": "Detected in the correspondence",
+                for fact in page.facts.iter() {
+                    li { class: "inbox-chip inbox-chip--{fact.kind}", "{fact.label}" }
+                }
+            }
+            p { class: "inbox-facts__note",
+                "Read automatically from inbound messages. Confirm before docketing a Deadline."
             }
         }
     }
@@ -2209,6 +2377,7 @@ pub fn inbox_thread_body(page: &InboxThreadPage) -> Element {
                         li { class: "inbox-chip", "Provider thread: {reference}" }
                     }
                 }
+                { facts_list(page) }
                 { assign_control(page, false) }
                 { trash_control(page) }
                 if unsupported_private {
@@ -2245,7 +2414,10 @@ mod tests {
     fn channel_filter_links_keep_the_selected_brand() {
         let mut view = page(ViewerRole::Lawyer, Vec::new());
         view.brand_filter = Some("vesta".into());
-        view.brands = vec!["vesta".into()];
+        view.brands = vec![BrandOption {
+            key: "vesta".into(),
+            name: "Vesta".into(),
+        }];
         let html = list_html(&view);
         assert!(html.contains("channel=sms&#38;brand=vesta"), "{html}");
     }
@@ -2268,6 +2440,7 @@ mod tests {
                     sender: "court@example.com".into(),
                     updated: "Oct 11, 04:06 UTC".into(),
                     updated_iso: "2026-10-11T04:06:15+00:00".into(),
+                    updated_short: "Oct 11".into(),
                     direction: store::inbox::direction::INBOUND.into(),
                     has_attachments: true,
                     sent: false,
@@ -2287,6 +2460,7 @@ mod tests {
                     sender: "firm@example.com".into(),
                     updated: "Oct 12, 04:06 UTC".into(),
                     updated_iso: "2026-10-12T04:06:15+00:00".into(),
+                    updated_short: "Oct 11".into(),
                     direction: store::inbox::direction::OUTBOUND.into(),
                     has_attachments: false,
                     sent: false,
@@ -2484,6 +2658,13 @@ mod tests {
             .collect::<Vec<_>>();
         brands.sort();
         brands.dedup();
+        let brands = brands
+            .into_iter()
+            .map(|key| BrandOption {
+                name: key.clone(),
+                key,
+            })
+            .collect();
         InboxPage {
             role,
             title: "Inbox".into(),
@@ -2550,6 +2731,7 @@ mod tests {
             delivery: "received".into(),
             next_action: "Assign to a project".into(),
             bodies_visible: true,
+            facts: Vec::new(),
             messages: vec![InboxMessageView {
                 id: "m1".into(),
                 direction: "inbound".into(),
@@ -2990,6 +3172,7 @@ mod tests {
                 sender: "Pat Client".into(),
                 updated: "Oct 11, 04:06 UTC".into(),
                 updated_iso: "2026-10-11T04:06:15+00:00".into(),
+                updated_short: "Oct 11".into(),
                 direction: store::inbox::direction::INBOUND.into(),
                 has_attachments: false,
                 sent: false,
@@ -3003,7 +3186,6 @@ mod tests {
             "Pat Client",
             "Question",
             "sms",
-            "neon",
             "Unassigned",
             "Oct 11, 04:06 UTC",
             "Unread",
@@ -3016,7 +3198,10 @@ mod tests {
             "{html}"
         );
         assert!(html.contains(r#"href="/app/inbox?channel=sms""#), "{html}");
-        assert!(html.contains(r#"href="/app/inbox?brand=neon""#), "{html}");
+        assert!(
+            !html.contains("Filter inbox by Brand"),
+            "one Brand needs no switcher: {html}"
+        );
     }
 
     #[test]
@@ -3183,7 +3368,10 @@ mod tests {
         page.error = Some("Choose a project first.".into());
         page.channel_filter = Some("instagram".into());
         page.brand_filter = Some("neon".into());
-        page.brands = vec!["neon".into()];
+        page.brands = vec![BrandOption {
+            key: "neon".into(),
+            name: "Neon Law".into(),
+        }];
         let html = list_html(&page);
         assert!(html.contains("Choose a project first."), "{html}");
         // The filters live in the folder rail; the active filter is marked on
@@ -3202,13 +3390,82 @@ mod tests {
         );
         // The channel link names the provider beside its mark.
         assert!(html.contains("</span>Instagram</a>"), "{html}");
+        // The Brand switcher sits over the list and names the Brand.
         assert!(
             html.contains(
-                "inbox-rail__link--active\" href=\"/app/inbox?channel=instagram&#38;brand=neon\" aria-current=\"true\">neon</a>"
+                "inbox-brands__link\" href=\"/app/inbox?channel=instagram&#38;brand=neon\" aria-current=\"true\">Neon Law</a>"
             ),
             "{html}"
         );
         assert!(html.contains("No conversations yet."), "{html}");
+    }
+
+    /// The switcher is offered only when the viewer's conversations span
+    /// several Brands; with one Brand and none chosen it stays out of the way.
+    #[test]
+    fn the_brand_switcher_appears_only_across_several_brands() {
+        let mut view = page(ViewerRole::Lawyer, Vec::new());
+        view.brands = vec![BrandOption {
+            key: "neon".into(),
+            name: "Neon Law".into(),
+        }];
+        assert!(!list_html(&view).contains("Filter inbox by Brand"));
+        view.brands.push(BrandOption {
+            key: "lex-tecnica".into(),
+            name: "Lex Tecnica".into(),
+        });
+        let html = list_html(&view);
+        assert!(
+            html.contains("aria-label=\"Filter inbox by Brand\""),
+            "{html}"
+        );
+        assert!(
+            html.contains("href=\"/app/inbox?brand=lex%2Dtecnica\">Lex Tecnica</a>"),
+            "{html}"
+        );
+    }
+
+    /// Facts come from inbound messages only, deadlines first, with the
+    /// attachments count last; the thread renders them as one chip row.
+    #[test]
+    fn inbound_correspondence_facts_render_on_the_thread() {
+        let mut thread = base_thread();
+        let mut outbound = thread.messages[0].clone();
+        outbound.direction = "outbound".into();
+        outbound.body = "We will file by January 9, 2027.".into();
+        thread.messages[0].body =
+            "Case No. A-24-123456-D: the hearing is on December 18, 2026. Letter of Nov. 2, 2026 enclosed."
+                .into();
+        thread.messages[0].attachments = vec![InboxAttachmentView {
+            filename: Some("notice.pdf".into()),
+            kind: None,
+            content_type: Some("application/pdf".into()),
+            href: "/x".into(),
+        }];
+        thread.messages.push(outbound);
+        let labels = correspondence_facts(&thread.messages)
+            .into_iter()
+            .map(|fact| fact.label)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            labels,
+            vec![
+                "Deadline? Dec 18, 2026",
+                "Nov 2, 2026",
+                "Case A-24-123456-D",
+                "1 attachment"
+            ]
+        );
+        thread.facts = correspondence_facts(&thread.messages);
+        let html = dioxus_ssr::render_element(inbox_thread_body(&thread));
+        assert!(
+            html.contains("aria-label=\"Detected in the correspondence\""),
+            "{html}"
+        );
+        assert!(
+            html.contains("inbox-chip--deadline\">Deadline? Dec 18, 2026</li>"),
+            "{html}"
+        );
     }
 
     #[cfg(feature = "server")]
@@ -3418,7 +3675,13 @@ mod tests {
                 2,
                 "both conversations are in the Firm list"
             );
-            assert_eq!(page.brands, vec!["neon".to_string()]);
+            assert_eq!(
+                page.brands
+                    .iter()
+                    .map(|b| b.key.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["neon"]
+            );
             assert_eq!(page.channels, inbox_channels());
             assert_eq!(page.csrf_token, "CSRF");
             let text = page
@@ -3563,7 +3826,13 @@ mod tests {
             .unwrap();
             assert_eq!(page.title, "Inbox Loader Matter inbox");
             assert_eq!(page.base_href, format!("/app/projects/{code}/inbox"));
-            assert_eq!(page.brands, vec!["neon".to_string()]);
+            assert_eq!(
+                page.brands
+                    .iter()
+                    .map(|b| b.key.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["neon"]
+            );
             assert_eq!(page.brand_filter.as_deref(), Some("neon"));
             assert_eq!(page.compose_action, None);
             assert!(page.project_client.is_some(), "the Project's client Entity");
@@ -3579,7 +3848,7 @@ mod tests {
             assert_eq!(page.rows[0].sender, "Sender Name");
             let html = super::list_html(&page);
             assert!(html.contains("Client: "));
-            assert!(html.contains("Counterparty"));
+            assert!(html.contains(">From</th>"));
             assert!(html.contains("Sender Name"));
             assert!(html.contains("Logged communications"));
             assert_eq!(

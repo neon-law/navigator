@@ -7,6 +7,7 @@
 //! `SurrealDB`, `SQLx`, Typst, and the cloud SDKs out of its build.
 
 pub mod cases;
+pub mod correspondence;
 pub mod document_pointers;
 pub mod documents;
 pub mod efiling_transactions;
