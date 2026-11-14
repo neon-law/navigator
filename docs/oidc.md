@@ -65,6 +65,24 @@ including the full handoff round trip and a refused handoff without the nonce co
 worktree's secondary listener at `127.0.0.1` and the primary callback at `localhost`, so the browser enforces host-only
 cookie isolation.
 
+### Brand sign-in and Firm employee access
+
+The sign-in host identifies the Brand. The Brand's owning Firm determines which employee access policy applies. The
+Brand's configured support email identifies its contact mailbox. Employee admission uses each person's verified sign-in
+identity and their membership in the owning Firm. Project participation continues to determine matter access.
+
+For a hosted employee access pilot, verify these cases in staging before enabling enforcement:
+
+- An invited employee can sign in through the Firm's identity provider and use Navigator from an approved device.
+- An employee from another Firm cannot use their session or network access to enter the first Firm's employee surfaces.
+- Employee web and API requests respect removal from the Firm and revocation of device access.
+- Clients can sign in and reach their participating Projects through the normal public ingress.
+- An administrator can restore access during a tailnet or connector outage from an independent recovery path.
+
+Run the checks separately for Google Workspace and Microsoft Entra. Outlook and Gmail mailbox consent are separate from
+browser sign-in. The first VPN pilot covers Navigator employee access. Provider-side access policies for Microsoft 365
+and Google Workspace have their own rollout and verification.
+
 ### Authorization Code flow
 
 The full Authorization Code + PKCE flow, end to end, with the upsert step that links the IdP to a local `persons` row
