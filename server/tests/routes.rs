@@ -11414,7 +11414,11 @@ async fn assert_brand_home_lead_capture(
     } else {
         "/contact/sent"
     };
-    assert_eq!(response.headers()[header::LOCATION], sent, "{host}: next page");
+    assert_eq!(
+        response.headers()[header::LOCATION],
+        sent,
+        "{host}: next page"
+    );
     let leads = store::leads::list(db).await.unwrap();
     assert!(
         leads

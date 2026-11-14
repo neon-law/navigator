@@ -216,7 +216,7 @@ values = [
 
 [[names]]
 reason = "The published firm and legal Entity names verified at lextecnica.com/terms-conditions/."
-values = ["Lex Tecnica", "Lex Tecnica, Ltd."]
+values = ["Lex Tecnica", "Lex Tecnica, Ltd.", "Lex Tecnica, Ltd.'s"]
 
 [[names]]
 reason = "Synthetic design-gallery demo attributions: the marketing-band showcase's sample testimonial quotes (webapp/src/design.rs and its SSR test)."
@@ -252,7 +252,7 @@ values = [
 [[non_name_words]]
 reason = "Words that mark a font, product, place, or firm, not a person."
 values = [
-  "serif", "condensed", "gyre", "schola", "tinos", "bold", "italic",
+  "serif", "sans", "condensed", "gyre", "schola", "tinos", "bold", "italic",
   "ave", "ste", "suite", "way", "county", "recorder", "leone", "tome",
   "vincent", "lucia", "anne",
   "law", "pllc", "llc", "holdco", "bakery", "supply", "divorce",

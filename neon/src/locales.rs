@@ -198,7 +198,7 @@ pub fn catalog_yaml(key: BrandKey, page: &str) -> Option<&'static str> {
         (BrandKey::Neon, "notations") => Some(NEON_NOTATIONS_YAML),
         (BrandKey::Neon, "navigator") => Some(NEON_NAVIGATOR_YAML),
         (BrandKey::Neon, "legal-aid") => Some(NEON_LEGAL_AID_YAML),
-                (BrandKey::Neon, "home-marketing") => Some(NEON_HOME_MARKETING_YAML),
+        (BrandKey::Neon, "home-marketing") => Some(NEON_HOME_MARKETING_YAML),
         (BrandKey::Neon, "gateway-delete-your-debt") => Some(NEON_GATEWAY_DELETE_YOUR_DEBT_YAML),
         (BrandKey::Neon, "gateway-delete-your-data") => Some(NEON_GATEWAY_DELETE_YOUR_DATA_YAML),
         (BrandKey::Neon, "gateway-immigration") => Some(NEON_GATEWAY_IMMIGRATION_YAML),
@@ -1846,15 +1846,12 @@ mod tests {
     fn every_brand_home_carries_the_account_invitation() {
         // Lex Tecnica, IEP Defenders, and Same Day Legal have band-built marketing-page
         // homes, not the legacy home schema this invariant polices.
-        for key in views::brand::BrandKey::ALL
-            .iter()
-            .filter(|key| {
-                !matches!(
-                    key,
-                    BrandKey::IepDefenders | BrandKey::LexTecnica | BrandKey::SameDayLegal
-                )
-            })
-        {
+        for key in views::brand::BrandKey::ALL.iter().filter(|key| {
+            !matches!(
+                key,
+                BrandKey::IepDefenders | BrandKey::LexTecnica | BrandKey::SameDayLegal
+            )
+        }) {
             let content = home(key.resolve_branding(&views::brand::DEFAULT_BRANDING));
             assert!(content.signup.is_some(), "{}", key.as_str());
         }
@@ -2691,8 +2688,7 @@ mod tests {
             ("sameday.neonlaw.com", "#enrollment"),
             ("staging-sameday.neonlaw.com", "#enrollment"),
         ] {
-            let content =
-                same_day_legal_home(&views::brand::SAME_DAY_LEGAL_BRANDING, Some(host));
+            let content = same_day_legal_home(&views::brand::SAME_DAY_LEGAL_BRANDING, Some(host));
             assert_eq!(
                 content.hero_cta.as_ref().expect("hero CTA").href,
                 expected,

@@ -1685,8 +1685,14 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
     // Same Day Legal lives on its own host. Neon's `/same-day-legal` link and
     // the retired `/nautilus` page answer a 301 to it in this deployment.
     let same_day_legal = locales::same_day_legal_href(deployment_host);
-    routers.push(moved_permanently_to(FIRM_SAME_DAY_LEGAL_PATH, same_day_legal.clone()));
-    routers.push(moved_permanently_to(FIRM_RETIRED_NAUTILUS_PATH, same_day_legal));
+    routers.push(moved_permanently_to(
+        FIRM_SAME_DAY_LEGAL_PATH,
+        same_day_legal.clone(),
+    ));
+    routers.push(moved_permanently_to(
+        FIRM_RETIRED_NAUTILUS_PATH,
+        same_day_legal,
+    ));
     // `/immigration` — Neon's own gateway to the Abhaya Immigration
     // practice. Same admission shape as `/delete-your-debt` above.
     routers.push(dioxus_app::marketing_page_router(
