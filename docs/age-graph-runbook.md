@@ -53,12 +53,14 @@ extension by hand; the next `roles.sql` run would then converge around it and hi
 ## 2. Migrations (as `navigator_owner`)
 
 `navigator-migrate` is the one operator entrypoint for schema; it reads the same discrete `NAVIGATOR_POSTGRES_*`
-variables `web` does and is carried by the app image at `/app/navigator-migrate`. Two graph migrations are in scope:
+variables `web` does and is carried by the app image at `/app/navigator-migrate`. Three graph migrations are in scope:
 
 - `20261031010000_create_navigator_graph.sql` — the graph, its nine labels, property indexes, and the three loader
   functions;
-- `20261031020000_graph_conflict_names_and_runtime_grants.sql` — the conflict-name frontier reader, the vertex-ensure
-  function, and the runtime DML/graph grants for `navigator_app`.
+- `20261031025000_graph_conflict_names_and_runtime_grants.sql` — the conflict-name frontier reader, the vertex-ensure
+  function, and the runtime DML/graph grants for `navigator_app`;
+- `20261114200000_graph_runtime_writes_as_owner.sql` — runs the two runtime graph writers (`graph_load_edges`,
+  `graph_ensure_vertices`) as their owner, so `navigator_app` writes an edge without holding INSERT on any label table.
 
 ```bash
 cargo run -p store --bin navigator-migrate        # every pending migration, then verifies
@@ -75,6 +77,17 @@ SELECT proname FROM pg_proc
 WHERE proname IN ('graph_load_vertices', 'graph_load_edges',
                   'graph_conflict_edges', 'graph_conflict_frontier',
                   'graph_ensure_vertices');                            -- five functions
+```
+
+The runtime writers must run as the login that owns the label tables. Expect two rows, with `prosecdef` and `owns_graph`
+both true:
+
+```sql
+SELECT p.proname, p.prosecdef,
+       p.proowner = (SELECT relowner FROM pg_class
+                     WHERE oid = '"navigator_graph"."RELATIONSHIP"'::regclass) AS owns_graph
+FROM pg_proc AS p
+WHERE p.proname IN ('graph_load_edges', 'graph_ensure_vertices');
 ```
 
 ## 3. Backfill and parity
