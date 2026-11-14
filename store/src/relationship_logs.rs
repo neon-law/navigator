@@ -7,12 +7,16 @@
 //! against a subject. That is a different question from the two-sided
 //! edges `store::relationships` holds, and the two are deliberately not
 //! merged — the log *feeds* the graph (an LLM may later parse an edge
-//! out of `detail`), but the conflict traversal never reads it.
+//! out of `detail`, and a manual adversity edge cites its log row as
+//! `source_id`), but the conflict traversal never reads it.
 //!
-//! Its writers — `store::projects` and `store::project_modules` — are
-//! Surreal-resident, so this insert lands on the same engine and inside
-//! the same transaction as the matter it audits. Neither the matter nor
-//! its audit entry can land without the other.
+//! So it lives where the graph lives
+//! ([`crate::postgres_graph::graph_authority`]): PostgreSQL wherever it is
+//! configured, else SurrealDB. In PostgreSQL the
+//! row's actor and Project are foreign keys, so a writer appends the entry
+//! only once PostgreSQL holds the Person and the Project it names —
+//! `store::projects::open_matter` records its attestation after the
+//! matter's PostgreSQL copy lands.
 //!
 //! # Append-only
 //!
@@ -23,9 +27,12 @@
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+use sqlx::Row;
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::postgres::PostgresDb;
+use crate::postgres_graph::graph_authority;
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 
 const TABLE: &str = "relationship_log";
@@ -90,8 +97,35 @@ impl RelationshipLogRow {
     }
 }
 
+/// The projection every read shares, in both engines.
 const SELECT: &str = "id, actor_person_id, subject_type, subject_id, action, detail, \
                       project_id, inserted_at, updated_at";
+
+fn from_pg(row: &sqlx::postgres::PgRow) -> Result<RelationshipLog, sqlx::Error> {
+    Ok(RelationshipLog {
+        id: row.try_get("id")?,
+        actor_person_id: row.try_get("actor_person_id")?,
+        subject_type: row.try_get("subject_type")?,
+        subject_id: row.try_get("subject_id")?,
+        action: row.try_get("action")?,
+        detail: row.try_get("detail")?,
+        project_id: row.try_get("project_id")?,
+        inserted_at: row.try_get("inserted_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+fn many_pg(rows: &[sqlx::postgres::PgRow]) -> Result<Vec<RelationshipLog>, RelationshipLogError> {
+    rows.iter()
+        .map(|row| from_pg(row).map_err(RelationshipLogError::from))
+        .collect()
+}
+
+async fn authority() -> Result<Option<PostgresDb>, RelationshipLogError> {
+    graph_authority()
+        .await
+        .map_err(RelationshipLogError::Engine)
+}
 
 /// What a write stores.
 #[derive(Debug, Clone)]
@@ -111,18 +145,42 @@ pub enum RelationshipLogError {
     Db(#[from] surrealdb::Error),
     #[error("writing a relationship log entry returned no usable row")]
     WriteReturnedNothing,
+    /// The authoritative PostgreSQL store refused the read or write.
+    #[error("PostgreSQL: {0}")]
+    Postgres(#[from] sqlx::Error),
+    /// PostgreSQL is configured but unreachable.
+    #[error("{0}")]
+    Engine(String),
 }
 
 /// Append one entry to the trail.
 ///
 /// # Errors
 ///
-/// [`RelationshipLogError::Db`] if the write fails.
+/// [`RelationshipLogError::Db`] or [`RelationshipLogError::Postgres`] if
+/// the write fails, or [`RelationshipLogError::Engine`] if PostgreSQL is
+/// configured but unreachable.
 pub async fn record(
     db: &SurrealDb,
     input: &NewRelationshipLog,
 ) -> Result<RelationshipLog, RelationshipLogError> {
     let id = Uuid::now_v7();
+    if let Some(pg) = authority().await? {
+        let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "INSERT INTO relationship_log (id, actor_person_id, subject_type, subject_id, \
+             action, detail, project_id) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING {SELECT}"
+        )))
+        .bind(id)
+        .bind(input.actor_person_id)
+        .bind(&input.subject_type)
+        .bind(input.subject_id)
+        .bind(&input.action)
+        .bind(&input.detail)
+        .bind(input.project_id)
+        .fetch_one(&pg.0)
+        .await?;
+        return Ok(from_pg(&row)?);
+    }
     let mut response = retry::writing(|| {
         db.query(format!(
             "CREATE $id SET actor_person_id = $actor, subject_type = $subject_type, \
@@ -161,11 +219,25 @@ pub async fn record(
 ///
 /// # Errors
 ///
-/// [`RelationshipLogError::Db`] if the lookup fails.
+/// [`RelationshipLogError::Db`] or [`RelationshipLogError::Postgres`] if
+/// the lookup fails.
 pub async fn exists(
     db: &SurrealDb,
     input: &NewRelationshipLog,
 ) -> Result<bool, RelationshipLogError> {
+    if let Some(pg) = authority().await? {
+        let found = sqlx::query(
+            "SELECT 1 FROM relationship_log WHERE subject_type = $1 \
+             AND subject_id = $2 AND action = $3 AND detail = $4 LIMIT 1",
+        )
+        .bind(&input.subject_type)
+        .bind(input.subject_id)
+        .bind(&input.action)
+        .bind(&input.detail)
+        .fetch_optional(&pg.0)
+        .await?;
+        return Ok(found.is_some());
+    }
     let mut response = db
         .query(format!(
             "SELECT id FROM {TABLE} WHERE subject_type = $subject_type \
@@ -182,12 +254,22 @@ pub async fn exists(
 }
 
 /// The whole trail, newest first — the order the lawyer listing reads,
-/// which `relationship_log_inserted_at` indexes.
+/// which `relationship_log_inserted_at` indexes. Entries recorded in one
+/// statement share `inserted_at`; the UUIDv7 id breaks the tie.
 ///
 /// # Errors
 ///
-/// [`RelationshipLogError::Db`] if the lookup fails.
+/// [`RelationshipLogError::Db`] or [`RelationshipLogError::Postgres`] if
+/// the lookup fails.
 pub async fn all(db: &SurrealDb) -> Result<Vec<RelationshipLog>, RelationshipLogError> {
+    if let Some(pg) = authority().await? {
+        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT {SELECT} FROM relationship_log ORDER BY inserted_at DESC, id DESC"
+        )))
+        .fetch_all(&pg.0)
+        .await?;
+        return many_pg(&rows);
+    }
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} ORDER BY inserted_at DESC"
@@ -205,12 +287,24 @@ pub async fn all(db: &SurrealDb) -> Result<Vec<RelationshipLog>, RelationshipLog
 ///
 /// # Errors
 ///
-/// [`RelationshipLogError::Db`] if the lookup fails.
+/// [`RelationshipLogError::Db`] or [`RelationshipLogError::Postgres`] if
+/// the lookup fails.
 pub async fn for_subject(
     db: &SurrealDb,
     subject_type: &str,
     subject_id: Uuid,
 ) -> Result<Vec<RelationshipLog>, RelationshipLogError> {
+    if let Some(pg) = authority().await? {
+        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT {SELECT} FROM relationship_log WHERE subject_type = $1 AND subject_id = $2 \
+             ORDER BY inserted_at DESC, id DESC"
+        )))
+        .bind(subject_type)
+        .bind(subject_id)
+        .fetch_all(&pg.0)
+        .await?;
+        return many_pg(&rows);
+    }
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} \
@@ -232,11 +326,22 @@ pub async fn for_subject(
 ///
 /// # Errors
 ///
-/// [`RelationshipLogError::Db`] if the lookup fails.
+/// [`RelationshipLogError::Db`] or [`RelationshipLogError::Postgres`] if
+/// the lookup fails.
 pub async fn for_project(
     db: &SurrealDb,
     project_id: Uuid,
 ) -> Result<Vec<RelationshipLog>, RelationshipLogError> {
+    if let Some(pg) = authority().await? {
+        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT {SELECT} FROM relationship_log WHERE project_id = $1 \
+             ORDER BY inserted_at DESC, id DESC"
+        )))
+        .bind(project_id)
+        .fetch_all(&pg.0)
+        .await?;
+        return many_pg(&rows);
+    }
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE project_id = $project \
@@ -250,6 +355,47 @@ pub async fn for_project(
         .into_iter()
         .filter_map(RelationshipLogRow::into_log)
         .collect())
+}
+
+/// Copy every SurrealDB entry PostgreSQL does not hold, keeping its id and
+/// timestamps — the backfill's born-in-PostgreSQL arm. No write mirror ever
+/// copied the trail, so this is how its Surreal-era history reaches
+/// PostgreSQL. An entry PostgreSQL already holds is left alone.
+pub(crate) async fn copy_from_surreal(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+) -> Result<crate::postgres_backfill::Copied, surrealdb::Error> {
+    let rows: Vec<RelationshipLogRow> = surreal
+        .query(format!("SELECT {SELECT} FROM {TABLE}"))
+        .await
+        .and_then(surrealdb::IndexedResults::check)?
+        .take(0)?;
+    let mut copied = crate::postgres_backfill::Copied::default();
+    for row in rows {
+        let Some(log) = row.into_log() else {
+            copied.unrepresentable(TABLE);
+            continue;
+        };
+        let result = sqlx::query(
+            "INSERT INTO relationship_log (id, actor_person_id, subject_type, subject_id, \
+             action, detail, project_id, inserted_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (id) DO NOTHING",
+        )
+        .bind(log.id)
+        .bind(log.actor_person_id)
+        .bind(&log.subject_type)
+        .bind(log.subject_id)
+        .bind(&log.action)
+        .bind(&log.detail)
+        .bind(log.project_id)
+        .bind(log.inserted_at)
+        .bind(log.updated_at)
+        .execute(&pg.0)
+        .await
+        .map(|done| done.rows_affected());
+        copied.record(TABLE, Some(log.id), result);
+    }
+    Ok(copied)
 }
 
 #[cfg(test)]

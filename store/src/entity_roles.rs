@@ -18,6 +18,13 @@
 //! is its endpoints plus its `role`, which is exactly what the UNIQUE
 //! `entity_role_tie` index says.
 //!
+//! # Where the tie lives
+//!
+//! Under the AGE graph engine PostgreSQL holds the tie — the relational
+//! `entity_role` row and its `HAS_ROLE` edge — and every read here answers
+//! from it; the Surreal relation is the fallback for a deployment without
+//! PostgreSQL ([`crate::postgres_graph::graph_authority`]).
+//!
 //! # Idempotence is the contract
 //!
 //! `store::seed` and `import::apply` both re-run over a live database
@@ -33,7 +40,7 @@ use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
 use crate::postgres::PostgresDb;
-use crate::postgres_graph::{ensure_vertices, graph_engine, load_edge, GraphEngine};
+use crate::postgres_graph::{ensure_vertices, graph_authority, load_edge};
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 
 const TABLE: &str = "entity_role";
@@ -84,8 +91,8 @@ pub enum EntityRoleError {
     /// could not read back.
     #[error("writing an entity role returned no usable row")]
     WriteReturnedNothing,
-    /// The engine flag could not be read or parsed. A grant under an
-    /// unusable flag fails rather than guessing an engine.
+    /// PostgreSQL is configured but unreachable. A grant fails rather
+    /// than guessing a store.
     #[error("{0}")]
     Engine(String),
     /// The authoritative PostgreSQL store refused the write.
@@ -111,9 +118,9 @@ fn many(mut response: surrealdb::IndexedResults) -> Result<Vec<EntityRole>, Enti
         .collect())
 }
 
-/// Record one structural tie, on the engine [`GRAPH_AUTHORITY_ENV`]
-/// selects: PostgreSQL authoritatively (the relational row, then the
-/// graph's `HAS_ROLE` edge), or SurrealDB as the rollback path's write.
+/// Record one structural tie: in PostgreSQL (the relational row, then
+/// the graph's `HAS_ROLE` edge) wherever it is configured, else in
+/// SurrealDB ([`graph_authority`]).
 ///
 /// Idempotent and race-safe: the `entity_role_tie` index makes the
 /// second writer lose, and the loser re-reads rather than failing. The
@@ -124,7 +131,7 @@ fn many(mut response: surrealdb::IndexedResults) -> Result<Vec<EntityRole>, Enti
 /// [`EntityRoleError::Db`] if the Surreal lookup or write fails,
 /// [`EntityRoleError::Postgres`] or [`EntityRoleError::Sqlx`] if the
 /// authoritative PostgreSQL write fails, or [`EntityRoleError::Engine`]
-/// if the flag itself is unusable.
+/// if PostgreSQL is configured but unreachable.
 pub async fn grant(
     db: &SurrealDb,
     person_id: Uuid,
@@ -132,13 +139,17 @@ pub async fn grant(
     role: &str,
 ) -> Result<EntityRole, EntityRoleError> {
     let role = role.trim();
-    match graph_engine().await.map_err(EntityRoleError::Engine)? {
-        GraphEngine::Surreal => grant_in_surreal(db, person_id, entity_id, role).await,
-        GraphEngine::Age => grant_in_postgres(db, person_id, entity_id, role).await,
+    match authority().await? {
+        None => grant_in_surreal(db, person_id, entity_id, role).await,
+        Some(postgres) => grant_in_postgres(db, &postgres, person_id, entity_id, role).await,
     }
 }
 
-/// The SurrealDB write the check has always used: the rollback engine's
+async fn authority() -> Result<Option<PostgresDb>, EntityRoleError> {
+    graph_authority().await.map_err(EntityRoleError::Engine)
+}
+
+/// The SurrealDB write for a deployment without PostgreSQL: its only
 /// write path, and the seam the fixtures seed the Surreal graph with.
 /// Its PostgreSQL copy is the mirror's business, exactly as before the
 /// cutover.
@@ -148,7 +159,7 @@ pub(crate) async fn grant_in_surreal(
     entity_id: Uuid,
     role: &str,
 ) -> Result<EntityRole, EntityRoleError> {
-    if let Some(existing) = find(db, person_id, entity_id, role).await? {
+    if let Some(existing) = find_in_surreal(db, person_id, entity_id, role).await? {
         return Ok(existing);
     }
 
@@ -187,7 +198,7 @@ pub(crate) async fn grant_in_surreal(
         // this write. Its row is the answer. A unique violation is not
         // retryable, so the shared policy hands it straight back here
         // rather than spending the budget on a write that cannot win.
-        Err(error) if is_duplicate_tie(&error) => find(db, person_id, entity_id, role)
+        Err(error) if is_duplicate_tie(&error) => find_in_surreal(db, person_id, entity_id, role)
             .await?
             .ok_or(EntityRoleError::WriteReturnedNothing),
         Err(error) => Err(EntityRoleError::Db(error)),
@@ -206,12 +217,12 @@ pub(crate) async fn grant_in_surreal(
 /// relational row's own name for a `None`.
 async fn grant_in_postgres(
     db: &SurrealDb,
+    postgres: &PostgresDb,
     person_id: Uuid,
     entity_id: Uuid,
     role: &str,
 ) -> Result<EntityRole, EntityRoleError> {
-    let postgres = PostgresDb::from_env().await?;
-    if let Some(existing) = find_in_postgres(&postgres, person_id, entity_id, role).await? {
+    if let Some(existing) = find_in_postgres(postgres, person_id, entity_id, role).await? {
         return Ok(existing);
     }
 
@@ -231,7 +242,7 @@ async fn grant_in_postgres(
         // Another writer minted the same tie between the read above and
         // this write. Its row is the answer — the same loser-rereads
         // contract the Surreal path's unique index provides.
-        return find_in_postgres(&postgres, person_id, entity_id, role)
+        return find_in_postgres(postgres, person_id, entity_id, role)
             .await?
             .ok_or(EntityRoleError::WriteReturnedNothing);
     };
@@ -243,7 +254,7 @@ async fn grant_in_postgres(
         updated_at: row.try_get("updated_at")?,
     };
 
-    write_edge_with_names(db, &postgres, person_id, entity_id, role).await?;
+    write_edge_with_names(db, postgres, person_id, entity_id, role).await?;
     Ok(tie)
 }
 
@@ -297,34 +308,70 @@ async fn find_in_postgres(
     entity_id: Uuid,
     role: &str,
 ) -> Result<Option<EntityRole>, EntityRoleError> {
-    let row = sqlx::query(
-        "SELECT person_id, entity_id, role, inserted_at, updated_at \
-         FROM entity_role \
-         WHERE person_id = $1 AND entity_id = $2 AND role = $3",
-    )
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT {PG_SELECT} FROM entity_role \
+         WHERE person_id = $1 AND entity_id = $2 AND role = $3"
+    )))
     .bind(person_id)
     .bind(entity_id)
-    .bind(role)
+    .bind(role.trim())
     .fetch_optional(&postgres.0)
     .await?;
-    let Some(row) = row else {
-        return Ok(None);
-    };
-    Ok(Some(EntityRole {
+    Ok(row.as_ref().map(from_pg).transpose()?)
+}
+
+const PG_SELECT: &str = "person_id, entity_id, role, inserted_at, updated_at";
+
+fn from_pg(row: &sqlx::postgres::PgRow) -> Result<EntityRole, sqlx::Error> {
+    Ok(EntityRole {
         person_id: row.try_get("person_id")?,
         entity_id: row.try_get("entity_id")?,
         role: row.try_get("role")?,
         inserted_at: row.try_get("inserted_at")?,
         updated_at: row.try_get("updated_at")?,
-    }))
+    })
 }
 
-/// The one tie matching all three parts of the natural key, if any.
+/// The ties a PostgreSQL filter selects, oldest first.
+async fn select_in_postgres(
+    postgres: &PostgresDb,
+    filter: &str,
+    id: Option<Uuid>,
+) -> Result<Vec<EntityRole>, EntityRoleError> {
+    // `filter` is one of this module's literals, never input.
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT {PG_SELECT} FROM entity_role {filter} ORDER BY inserted_at ASC, id ASC"
+    )))
+    .bind(id)
+    .fetch_all(&postgres.0)
+    .await?
+    .iter()
+    .map(|row| from_pg(row).map_err(EntityRoleError::from))
+    .collect()
+}
+
+/// The one tie matching all three parts of the natural key, if any, from
+/// the store the graph engine names.
 ///
 /// # Errors
 ///
-/// [`EntityRoleError::Db`] if the lookup fails.
+/// [`EntityRoleError::Db`] or [`EntityRoleError::Sqlx`] if the lookup
+/// fails.
 pub async fn find(
+    db: &SurrealDb,
+    person_id: Uuid,
+    entity_id: Uuid,
+    role: &str,
+) -> Result<Option<EntityRole>, EntityRoleError> {
+    match authority().await? {
+        Some(postgres) => find_in_postgres(&postgres, person_id, entity_id, role).await,
+        None => find_in_surreal(db, person_id, entity_id, role).await,
+    }
+}
+
+/// [`find`] against SurrealDB alone — the Surreal engine's read and the
+/// mirror's source.
+pub(crate) async fn find_in_surreal(
     db: &SurrealDb,
     person_id: Uuid,
     entity_id: Uuid,
@@ -348,8 +395,17 @@ pub async fn find(
 ///
 /// # Errors
 ///
-/// [`EntityRoleError::Db`] if the lookup fails.
+/// [`EntityRoleError::Db`] or [`EntityRoleError::Sqlx`] if the lookup
+/// fails.
 pub async fn all(db: &SurrealDb) -> Result<Vec<EntityRole>, EntityRoleError> {
+    match authority().await? {
+        Some(postgres) => select_in_postgres(&postgres, "WHERE $1::uuid IS NULL", None).await,
+        None => all_in_surreal(db).await,
+    }
+}
+
+/// [`all`] against SurrealDB alone — the mirror's source.
+pub(crate) async fn all_in_surreal(db: &SurrealDb) -> Result<Vec<EntityRole>, EntityRoleError> {
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} ORDER BY inserted_at ASC"
@@ -368,6 +424,9 @@ pub async fn for_person(
     db: &SurrealDb,
     person_id: Uuid,
 ) -> Result<Vec<EntityRole>, EntityRoleError> {
+    if let Some(postgres) = authority().await? {
+        return select_in_postgres(&postgres, "WHERE person_id = $1", Some(person_id)).await;
+    }
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE in = $person ORDER BY inserted_at ASC"
@@ -387,6 +446,9 @@ pub async fn for_entity(
     db: &SurrealDb,
     entity_id: Uuid,
 ) -> Result<Vec<EntityRole>, EntityRoleError> {
+    if let Some(postgres) = authority().await? {
+        return select_in_postgres(&postgres, "WHERE entity_id = $1", Some(entity_id)).await;
+    }
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE out = $entity ORDER BY inserted_at ASC"

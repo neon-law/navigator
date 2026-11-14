@@ -959,12 +959,26 @@ async fn the_born_in_postgres_arm_copies_earlier_rows_once() {
     )
     .await
     .unwrap();
+    let log = crate::relationship_logs::record(
+        &surreal,
+        &crate::relationship_logs::NewRelationshipLog {
+            actor_person_id: Some(people[2]),
+            subject_type: crate::relationship_logs::PERSON_SUBJECT.into(),
+            subject_id: people[2],
+            action: "synthetic_action".into(),
+            detail: String::new(),
+            project_id: None,
+        },
+    )
+    .await
+    .unwrap();
 
     let planned = super::plan(&surreal, &pg, 500).await.unwrap();
     for name in [
         "assistant_turn",
         "sandbox_usage",
         "esignature_webhook_journal",
+        "relationship_log",
     ] {
         let source = planned
             .source_tables
@@ -981,7 +995,7 @@ async fn the_born_in_postgres_arm_copies_earlier_rows_once() {
         .iter()
         .find(|group| group.mirror == BORN_IN_POSTGRES)
         .unwrap();
-    assert_eq!((arm.applied, arm.failed, arm.batches), (3, 0, 3));
+    assert_eq!((arm.applied, arm.failed, arm.batches), (4, 0, 4));
     assert!(first.failures.is_empty(), "{:?}", first.failures);
     let copied: Uuid = sqlx::query_scalar("SELECT id FROM assistant_turn")
         .fetch_one(&pg.0)
@@ -990,6 +1004,11 @@ async fn the_born_in_postgres_arm_copies_earlier_rows_once() {
     assert_eq!(copied, turn.id);
     assert_eq!(rows(&pg, "sandbox_usage").await, 1);
     assert_eq!(rows(&pg, "esignature_webhook_journal").await, 1);
+    let copied_log: Uuid = sqlx::query_scalar("SELECT id FROM relationship_log")
+        .fetch_one(&pg.0)
+        .await
+        .unwrap();
+    assert_eq!(copied_log, log.id, "the trail keeps its identity");
 
     let second = start(&surreal, &pg, 500, None).await.unwrap();
     let rerun = second

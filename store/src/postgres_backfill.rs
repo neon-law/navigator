@@ -50,6 +50,7 @@ pub const BORN_IN_POSTGRES_TABLES: &[&str] = &[
     "document_upload_session",
     "esignature_webhook_journal",
     "plan_intake",
+    "relationship_log",
     "sandbox_usage",
 ];
 
@@ -1230,6 +1231,10 @@ async fn born_in_postgres(
         (
             "plan_intake",
             crate::plan_intake::postgres::copy_from_surreal(surreal, pg).await,
+        ),
+        (
+            "relationship_log",
+            crate::relationship_logs::copy_from_surreal(surreal, pg).await,
         ),
         (
             "sandbox_usage",

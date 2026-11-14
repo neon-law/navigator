@@ -185,3 +185,173 @@ async fn delete_source_person_reference(surreal: &SurrealDb, pg: &PostgresDb, ro
     );
     assert!(parity(surreal, pg).await.unwrap().is_clean());
 }
+
+/// Wherever PostgreSQL is configured it holds every graph table:
+/// references, structural ties, the adversity write's log row and edge, and
+/// the Relationship Log reads all land in and answer from PostgreSQL,
+/// SurrealDB receives nothing, and the mirror copies Surreal-era rows but
+/// never lets a row SurrealDB lacks delete an authoritative one.
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one cutover walks every graph table's routed write and read and the mirror guard"
+)]
+async fn the_age_engine_holds_the_graph_tables_and_the_mirror_stands_down() {
+    use crate::postgres_graph::with_test_authority;
+    use crate::project_references::{
+        find, for_project, is_referenced, record_adversity, reference, AdversitySubject,
+        RecordAdversityCommand, ADVERSITY_RECORDED_ACTION, REASON_SIGNATORY,
+    };
+    let Some((options, database)) = fresh_schema().await else {
+        return;
+    };
+    let pg = connect(&options, &database).await;
+    let surreal = mem_surreal().await;
+    // The Surreal-era rows, mirrored before the cutover: PostgreSQL now
+    // holds the Project, the Person, the Entity, and both references.
+    let rows = fixture(&surreal).await;
+    assert_mirrors(&surreal, &pg, &rows).await;
+    let MirrorKey::ProjectReference {
+        party_id: entity_id,
+        ..
+    } = rows.entity_key.clone()
+    else {
+        unreachable!("the fixture keys a project reference");
+    };
+    let held = Some(pg.clone());
+
+    with_test_authority(held.clone(), async {
+        // A Surreal-era row still copies across, but a row SurrealDB lacks
+        // deletes nothing PostgreSQL holds.
+        assert_eq!(
+            mirror(&surreal, &pg, &rows.entity_key).await.unwrap(),
+            Mirrored::Unchanged
+        );
+        surreal
+            .query("DELETE project_reference WHERE out = $party")
+            .bind(("party", record_id("person", rows.person_id)))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        assert!(matches!(
+            mirror(&surreal, &pg, &rows.person_key).await,
+            Err(MirrorError::GraphAuthority)
+        ));
+        assert!(crate::postgres_graph::holds("relationship_log").await);
+
+        // References write and read PostgreSQL only, idempotently.
+        let signatory = Party::person(rows.person_id);
+        let first = reference(&surreal, rows.project_id, signatory, REASON_SIGNATORY)
+            .await
+            .unwrap();
+        let again = reference(&surreal, rows.project_id, signatory, REASON_SIGNATORY)
+            .await
+            .unwrap();
+        assert_eq!(first, again, "the second write reads the first row back");
+        assert_eq!(
+            find(&surreal, rows.project_id, signatory, REASON_SIGNATORY)
+                .await
+                .unwrap(),
+            Some(first)
+        );
+        assert_eq!(
+            for_project(&surreal, rows.project_id).await.unwrap().len(),
+            3
+        );
+        assert!(is_referenced(&surreal, rows.project_id, signatory)
+            .await
+            .unwrap());
+
+        // Structural ties read back on both ends from PostgreSQL.
+        let tie = crate::entity_roles::grant(&surreal, rows.person_id, entity_id, "manages")
+            .await
+            .unwrap();
+        assert_eq!(
+            crate::entity_roles::find(&surreal, rows.person_id, entity_id, "manages")
+                .await
+                .unwrap(),
+            Some(tie.clone())
+        );
+        assert_eq!(
+            crate::entity_roles::for_person(&surreal, rows.person_id)
+                .await
+                .unwrap(),
+            vec![tie.clone()]
+        );
+        assert_eq!(
+            crate::entity_roles::for_entity(&surreal, entity_id)
+                .await
+                .unwrap(),
+            vec![tie.clone()]
+        );
+        assert_eq!(crate::entity_roles::all(&surreal).await.unwrap(), vec![tie]);
+
+        // Adversity appends its log row and sources its edge to it.
+        let edge = record_adversity(
+            &surreal,
+            &RecordAdversityCommand {
+                project_id: rows.project_id,
+                party: Party::entity(entity_id),
+                subject: AdversitySubject::Entity,
+                actor_person_id: Some(rows.person_id),
+            },
+        )
+        .await
+        .unwrap();
+        let log = crate::relationship_logs::for_project(&surreal, rows.project_id)
+            .await
+            .unwrap();
+        assert_eq!(log.len(), 1);
+        assert_eq!(log[0].action, ADVERSITY_RECORDED_ACTION);
+        assert_eq!(log[0].actor_person_id, Some(rows.person_id));
+        assert_eq!(edge.source_id, Some(log[0].id));
+        assert_eq!(
+            crate::relationships::all(&surreal).await.unwrap(),
+            vec![edge]
+        );
+        let entry = crate::relationship_logs::NewRelationshipLog {
+            actor_person_id: Some(rows.person_id),
+            subject_type: "project".into(),
+            subject_id: rows.project_id,
+            action: ADVERSITY_RECORDED_ACTION.into(),
+            detail: log[0].detail.clone(),
+            project_id: Some(rows.project_id),
+        };
+        assert!(crate::relationship_logs::exists(&surreal, &entry)
+            .await
+            .unwrap());
+        assert_eq!(
+            crate::relationship_logs::for_subject(&surreal, "project", rows.project_id)
+                .await
+                .unwrap(),
+            log
+        );
+        assert_eq!(crate::relationship_logs::all(&surreal).await.unwrap(), log);
+    })
+    .await;
+
+    // SurrealDB received none of it; the AGE graph took both edges.
+    with_test_authority(None, async {
+        assert_eq!(
+            for_project(&surreal, rows.project_id).await.unwrap().len(),
+            1
+        );
+        assert!(crate::entity_roles::all(&surreal).await.unwrap().is_empty());
+        assert!(crate::relationships::all(&surreal)
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(crate::relationship_logs::all(&surreal)
+            .await
+            .unwrap()
+            .is_empty());
+    })
+    .await;
+    let edges = sqlx::query("SELECT t.v::text FROM graph_conflict_edges($1) AS t(v)")
+        .bind(serde_json::json!([entity_id.to_string()]).to_string())
+        .fetch_all(&pg.0)
+        .await
+        .unwrap();
+    assert_eq!(edges.len(), 2, "HAS_ROLE and the adverse RELATIONSHIP");
+}

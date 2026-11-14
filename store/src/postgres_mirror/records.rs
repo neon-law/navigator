@@ -1084,6 +1084,17 @@ fn require_source_authority(table: &Table) -> Result<(), MirrorError> {
     }
 }
 
+/// A row SurrealDB lacks is no evidence against a graph table PostgreSQL
+/// holds ([`crate::postgres_graph::holds`]): the mirror still copies the
+/// Surreal-era rows across, but never deletes.
+async fn refuse_graph_delete(table: &Table) -> Result<(), MirrorError> {
+    if crate::postgres_graph::holds(table.name).await {
+        Err(MirrorError::GraphAuthority)
+    } else {
+        Ok(())
+    }
+}
+
 /// The mirror key of one row of a registered table.
 ///
 /// # Errors
@@ -1480,6 +1491,7 @@ pub async fn mirror(
     }
     require_source_authority(table)?;
     let Some(row) = source_one(surreal, table, id).await? else {
+        refuse_graph_delete(table).await?;
         // `table.name` is one of the static names above, never input.
         let deleted = if MIXED_KEY_TABLES.contains(&table.name) {
             sqlx::query(sqlx::AssertSqlSafe(format!(
@@ -1521,6 +1533,7 @@ pub async fn mirror_string(
         return Err(MirrorError::Source);
     }
     let Some(row) = source_one_string(surreal, table, id).await? else {
+        refuse_graph_delete(table).await?;
         let statement = if MIXED_KEY_TABLES.contains(&table.name) {
             format!(
                 "DELETE FROM \"{}\" WHERE id_kind = 'string' AND id = $1",

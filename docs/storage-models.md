@@ -24,10 +24,11 @@ SurrealDB with any Firm anchor claim. Under the switch the legacy mirror never c
 
 ## Relationship graph
 
-`NAVIGATOR_GRAPH_AUTHORITY=age` selects PostgreSQL relational edge writes and Apache AGE traversal of `navigator_graph`.
-Follow the [AGE graph runbook](age-graph-runbook.md) for extension setup, migrations, backfill, parity, and cutover.
-After PostgreSQL graph writes begin, the SurrealDB graph is a frozen snapshot; changing the reader back cannot supply
-fresh graph data. The Relationship Log has a separate append contract.
+Wherever PostgreSQL is configured it holds the graph tables: `entity_role`, `relationship`, `project_reference`,
+`disclosure`, and the append-only `relationship_log`. Their writes and reads run on PostgreSQL, the edges land in
+`navigator_graph`, and the conflict check traverses it in Apache AGE. The mirror backfill copies their Surreal-era rows
+across but never deletes one PostgreSQL holds. A deployment without PostgreSQL keeps them in SurrealDB. Follow the [AGE
+graph runbook](age-graph-runbook.md) for extension setup, migrations, backfill, parity, and cutover.
 
 ## Project lifecycle
 

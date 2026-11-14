@@ -8,7 +8,9 @@
 //! the instrument, or the counterparty organization itself must be durable
 //! so the Conflict-Check Graph can collide a future matter with them.
 //! A reference grants no participation or access to the matter. The row
-//! is its own relation, `RELATE project->project_reference->(person|entity)`, carrying
+//! is its own row — a PostgreSQL `project_reference` wherever PostgreSQL is
+//! configured, else a Surreal `project->project_reference->(person|entity)`
+//! relation ([`crate::postgres_graph::graph_authority`]) — carrying
 //! only a `reason`. `store::access` and the embedded Rego policy never
 //! read it. The lawyer party roster lists references under "Referenced,
 //! no standing on the matter"; the client lens never loads or renders
@@ -32,9 +34,12 @@
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+use sqlx::Row;
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::postgres::PostgresDb;
+use crate::postgres_graph::graph_authority;
 use crate::relationships::{Endpoint, NewRelationship, Relationship};
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 pub use model::project_references::{is_reason, REASONS};
@@ -76,6 +81,14 @@ impl Party {
     fn record(self) -> surrealdb::types::RecordId {
         record_id(self.kind.table(), self.id)
     }
+
+    /// The PostgreSQL column that names this party. A literal, never input.
+    const fn column(self) -> &'static str {
+        match self.kind {
+            Endpoint::Person => "person_id",
+            Endpoint::Entity => "entity_id",
+        }
+    }
 }
 
 /// One reference from a Project to a party.
@@ -113,6 +126,31 @@ impl ProjectReferenceRow {
 }
 
 const SELECT: &str = "in, out, reason, inserted_at, updated_at";
+const PG_SELECT: &str = "project_id, person_id, entity_id, reason, inserted_at, updated_at";
+
+fn from_pg(row: &sqlx::postgres::PgRow) -> Result<ProjectReference, ProjectReferenceError> {
+    let person_id: Option<Uuid> = row.try_get("person_id")?;
+    let entity_id: Option<Uuid> = row.try_get("entity_id")?;
+    let party = match (person_id, entity_id) {
+        (Some(id), None) => Party::person(id),
+        (None, Some(id)) => Party::entity(id),
+        // The table's CHECK makes exactly one party column set.
+        _ => return Err(ProjectReferenceError::WriteReturnedNothing),
+    };
+    Ok(ProjectReference {
+        project_id: row.try_get("project_id")?,
+        party,
+        reason: row.try_get("reason")?,
+        inserted_at: row.try_get("inserted_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+async fn authority() -> Result<Option<PostgresDb>, ProjectReferenceError> {
+    graph_authority()
+        .await
+        .map_err(ProjectReferenceError::Engine)
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProjectReferenceError {
@@ -126,6 +164,12 @@ pub enum ProjectReferenceError {
     /// could not read back.
     #[error("writing a project reference returned no usable row")]
     WriteReturnedNothing,
+    /// The authoritative PostgreSQL store refused the read or write.
+    #[error("PostgreSQL: {0}")]
+    Postgres(#[from] sqlx::Error),
+    /// PostgreSQL is configured but unreachable.
+    #[error("{0}")]
+    Engine(String),
 }
 
 fn is_duplicate_tie(error: &surrealdb::Error) -> bool {
@@ -161,6 +205,23 @@ pub async fn reference(
     let reason = reason.trim();
     if !is_reason(reason) {
         return Err(ProjectReferenceError::UnknownReason(reason.to_string()));
+    }
+    if let Some(postgres) = authority().await? {
+        // A concurrent writer's row wins the partial unique index; either
+        // way the one row is read back.
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "INSERT INTO project_reference (project_id, {}, reason, inserted_at, updated_at) \
+             VALUES ($1, $2, $3, now(), now()) ON CONFLICT DO NOTHING",
+            party.column()
+        )))
+        .bind(project_id)
+        .bind(party.id)
+        .bind(reason)
+        .execute(&postgres.0)
+        .await?;
+        return find_in_postgres(&postgres, project_id, party, reason)
+            .await?
+            .ok_or(ProjectReferenceError::WriteReturnedNothing);
     }
     if let Some(existing) = find(db, project_id, party, reason).await? {
         mirror_reference(db, &existing).await;
@@ -227,6 +288,9 @@ pub async fn find(
     party: Party,
     reason: &str,
 ) -> Result<Option<ProjectReference>, ProjectReferenceError> {
+    if let Some(postgres) = authority().await? {
+        return find_in_postgres(&postgres, project_id, party, reason).await;
+    }
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} \
@@ -244,6 +308,27 @@ pub async fn find(
         .and_then(ProjectReferenceRow::into_reference))
 }
 
+async fn find_in_postgres(
+    postgres: &PostgresDb,
+    project_id: Uuid,
+    party: Party,
+    reason: &str,
+) -> Result<Option<ProjectReference>, ProjectReferenceError> {
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT {PG_SELECT} FROM project_reference \
+         WHERE project_id = $1 AND {} = $2 AND reason = $3",
+        party.column()
+    )))
+    .bind(project_id)
+    .bind(party.id)
+    .bind(reason.trim())
+    .fetch_optional(&postgres.0)
+    .await?
+    .as_ref()
+    .map(from_pg)
+    .transpose()
+}
+
 /// Whether `project_id` references `party` for any reason.
 ///
 /// # Errors
@@ -254,6 +339,17 @@ pub async fn is_referenced(
     project_id: Uuid,
     party: Party,
 ) -> Result<bool, ProjectReferenceError> {
+    if let Some(postgres) = authority().await? {
+        let found = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT 1 FROM project_reference WHERE project_id = $1 AND {} = $2 LIMIT 1",
+            party.column()
+        )))
+        .bind(project_id)
+        .bind(party.id)
+        .fetch_optional(&postgres.0)
+        .await?;
+        return Ok(found.is_some());
+    }
     let mut response = db
         .query(format!(
             "SELECT VALUE id FROM ONLY {TABLE} WHERE in = $project AND out = $party LIMIT 1"
@@ -275,6 +371,18 @@ pub async fn for_project(
     db: &SurrealDb,
     project_id: Uuid,
 ) -> Result<Vec<ProjectReference>, ProjectReferenceError> {
+    if let Some(postgres) = authority().await? {
+        return sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT {PG_SELECT} FROM project_reference WHERE project_id = $1 \
+             ORDER BY inserted_at ASC, id ASC"
+        )))
+        .bind(project_id)
+        .fetch_all(&postgres.0)
+        .await?
+        .iter()
+        .map(from_pg)
+        .collect();
+    }
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE in = $project ORDER BY inserted_at ASC"

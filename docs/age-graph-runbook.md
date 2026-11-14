@@ -95,14 +95,10 @@ list is in `mirror_backfill_failure` by table and UUID, never by name.
 
 ## 4. Staging soak, then production cutover
 
-The conflict check defaults to the AGE engine (`NAVIGATOR_GRAPH_AUTHORITY` unset means `age`). Cut a deployment over by
-rolling its `web` after steps 1–3 are done — there is no separate flag flip to make. Set the variable explicitly only to
-pin the *old* engine:
-
-| Value | Behavior |
-| --- | --- |
-| unset / `age` | AGE engine: reads walk `navigator_graph`; writes land the PostgreSQL row and the graph edge |
-| `surreal` | the rollback path — frozen Surreal graph reads; Surreal rows again (limits below) |
+Wherever PostgreSQL is configured, it holds the graph: `entity_role`, `relationship`, `project_reference`, `disclosure`,
+and `relationship_log` are written and read there, the edges land in `navigator_graph`, and the conflict check walks it
+in AGE. There is no switch. Cut a deployment over by rolling its `web` after steps 1–3 are done. Only a deployment
+without PostgreSQL keeps these tables in SurrealDB.
 
 Staging soaks first: seed the sample matters, open matters through the real flows, and watch the conflict findings on
 the pre-matter checks (the intake walk, project conflict scans). CI runs the findings-level dual-engine parity suite on
@@ -112,28 +108,16 @@ hop-by-hop expansion, `size()`/`id(e)` forms).
 
 Then production, with Nick's go-ahead, in the same order: roles Job, migrations, backfill, web rollout.
 
-## 5. Rollback — and its honest limits
+## 5. Recovery
 
-`NAVIGATOR_GRAPH_AUTHORITY=surreal` plus a `web` rollout is the rollback, but read the limits before you reach for it.
-They follow from the write retirement: during the AGE-authoritative window, SurrealDB's graph tables receive nothing and
-freeze at the moment of the flip.
+From the cutover, SurrealDB's graph tables receive nothing. The mirror backfill (step 3) still copies their Surreal-era
+rows into PostgreSQL — the Relationship Log through the born-in-PostgreSQL arm, since no write mirror ever covered it —
+but a row SurrealDB lacks never deletes an authoritative one. An unusable PostgreSQL fails the write and the check
+loudly — that is the designed behavior, not a bug to route around.
 
-- **Reads during rollback are frozen.** The Surreal engine serves the graph as it stood when the AGE window began.
-  Edges recorded since then are invisible to a conflict check running on Surreal — a missed adverse relationship is
-  exactly the failure the check exists to prevent. Time-box the rollback and treat every check it produces in that
-  window as understated.
-- **A Surreal catch-up has no automated path.** The relational rows written to PostgreSQL during the window are absent
-  from SurrealDB's copies too. Restoring them is a manual one-off export from PostgreSQL and load into SurrealDB; there
-  is no tool for it. Plan the catch-up before flipping, not after.
-- **The flip forward is always safe.** The AGE graph and its relational tables stay authoritative and whole during a
-  Surreal rollback; re-flipping to `age` needs no migration and re-reads current data.
-- **Do not flip during a PostgreSQL outage.** Under the AGE engine an unusable PostgreSQL fails the write and the
-  check loudly — that is the designed behavior, not a bug to route around. Flipping to Surreal mid-outage would restart
-  Surreal writes that the mirror cannot reconcile later.
-
-If the problem is the AGE *data* rather than the engine, the fix is a rebuild, not a rollback: re-run the mirror
-backfill (step 3). The projection is a derived copy; a wholesale rebuild is the deduplicator of last resort, and the
-conflict check reads edges by id, which a rebuild renumbers.
+If the problem is the AGE *data* rather than the relational rows, the fix is a rebuild: re-run the graph projection
+(step 3). The projection is a derived copy; a wholesale rebuild is the deduplicator of last resort, and the conflict
+check reads edges by id, which a rebuild renumbers.
 
 ## 6. Upgrades: logical dump/restore, never `pg_upgrade`
 
