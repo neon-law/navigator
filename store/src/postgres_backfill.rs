@@ -637,7 +637,10 @@ pub async fn plan(
     let mut tables = Vec::new();
     let mut covered = BTreeSet::new();
     for group in MIRRORS {
-        let report = group.parity(surreal, pg).await?;
+        let report = group
+            .parity(surreal, pg)
+            .await
+            .map_err(|error| error.at(format!("mirror {}", group.name)))?;
         for table in &report.tables {
             covered.insert(table.table);
             let drift = crate::postgres_mirror::drift(pg, table).await?;
@@ -677,7 +680,10 @@ async fn mirror_coverage(
 ) -> Result<BTreeSet<&'static str>, BackfillError> {
     let mut covered = BTreeSet::new();
     for group in MIRRORS {
-        let report = group.parity(surreal, pg).await?;
+        let report = group
+            .parity(surreal, pg)
+            .await
+            .map_err(|error| error.at(format!("mirror {}", group.name)))?;
         covered.extend(report.tables.iter().map(|table| table.table));
     }
     Ok(covered)
@@ -960,7 +966,10 @@ async fn parity_report(
 ) -> Result<Vec<ParityTableReport>, BackfillError> {
     let mut tables = Vec::new();
     for group in MIRRORS {
-        let report = group.parity(surreal, pg).await?;
+        let report = group
+            .parity(surreal, pg)
+            .await
+            .map_err(|error| error.at(format!("mirror {}", group.name)))?;
         for table in report.tables {
             let drift = crate::postgres_mirror::drift(pg, &table).await?;
             let (divergent_ids, omitted_divergent_ids, withheld_non_uuid_keys) =
@@ -1085,7 +1094,10 @@ async fn missing_keys(
     pg: &PostgresDb,
     group: &Mirror,
 ) -> Result<Vec<MirrorKey>, BackfillError> {
-    let report = group.parity(surreal, pg).await?;
+    let report = group
+        .parity(surreal, pg)
+        .await
+        .map_err(|error| error.at(format!("mirror {}", group.name)))?;
     let mut keys = Vec::new();
     for table in &report.tables {
         keys.extend(missing(pg, table).await?);

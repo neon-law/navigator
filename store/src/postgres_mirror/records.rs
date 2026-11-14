@@ -1567,8 +1567,16 @@ pub async fn parity(
     for table in tables(group) {
         reports.push(super::compare(
             table.name,
-            &comparable(source(surreal, table).await?),
-            &comparable(target(pg, table).await?),
+            &comparable(
+                source(surreal, table)
+                    .await
+                    .map_err(|error| error.at(format!("table {}", table.name)))?,
+            ),
+            &comparable(
+                target(pg, table)
+                    .await
+                    .map_err(|error| error.at(format!("table {}", table.name)))?,
+            ),
         ));
     }
     Ok(ParityReport { tables: reports })

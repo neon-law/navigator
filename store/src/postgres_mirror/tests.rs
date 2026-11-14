@@ -2349,3 +2349,14 @@ async fn an_empty_target_holds_no_key_of_any_shape() {
         }
     );
 }
+
+#[test]
+fn a_failed_comparison_names_its_mirror_and_table() {
+    let error = MirrorError::Source
+        .at("table citation")
+        .at("mirror source_domain_records");
+    assert_eq!(
+        error.to_string(),
+        "mirror source_domain_records: table citation: the SurrealDB source row could not be read"
+    );
+}

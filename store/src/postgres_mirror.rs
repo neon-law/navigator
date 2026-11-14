@@ -482,6 +482,13 @@ pub enum MirrorOutcome {
 pub enum MirrorError {
     #[error("the SurrealDB source row could not be read")]
     Source,
+    /// Where a comparison failed: the mirror group or table being read.
+    /// Names only, never row values.
+    #[error("{location}: {cause}")]
+    At {
+        location: String,
+        cause: Box<MirrorError>,
+    },
     #[error("SurrealDB Inbox repair is disabled while PostgreSQL holds the Inbox")]
     InboxAuthority,
     #[error("SurrealDB matter record repair is disabled while PostgreSQL matter authority is enabled or misconfigured")]
@@ -504,6 +511,7 @@ impl MirrorError {
     fn retryable(&self) -> bool {
         match self {
             Self::Source | Self::Unavailable | Self::Timeout => true,
+            Self::At { cause, .. } => cause.retryable(),
             Self::InboxAuthority
             | Self::MatterAuthority
             | Self::SourceTimestamp
@@ -1384,6 +1392,17 @@ pub struct MirrorParity {
 /// # Errors
 ///
 /// Either store could not be read.
+impl MirrorError {
+    /// Name where this error happened, keeping the original as its source.
+    #[must_use]
+    pub fn at(self, location: impl Into<String>) -> Self {
+        Self::At {
+            location: location.into(),
+            cause: Box::new(self),
+        }
+    }
+}
+
 pub async fn parity_all(
     surreal: &SurrealDb,
     pg: &PostgresDb,
@@ -1392,7 +1411,9 @@ pub async fn parity_all(
     for mirror in MIRRORS {
         reports.push(MirrorParity {
             mirror: mirror.name,
-            report: (mirror.parity)(surreal, pg).await?,
+            report: (mirror.parity)(surreal, pg)
+                .await
+                .map_err(|error| error.at(format!("mirror {}", mirror.name)))?,
         });
     }
     Ok(reports)
@@ -1413,7 +1434,9 @@ pub async fn reconcile_all(
     pg: &PostgresDb,
 ) -> Result<Vec<MirrorParity>, MirrorError> {
     for mirror in MIRRORS {
-        (mirror.reconcile)(surreal, pg).await?;
+        (mirror.reconcile)(surreal, pg)
+            .await
+            .map_err(|error| error.at(format!("mirror {}", mirror.name)))?;
     }
     let after = parity_all(surreal, pg).await?;
     if after.iter().all(|mirror| mirror.report.is_clean()) {
