@@ -22,6 +22,11 @@ receipt of an outbound email in the same Project through `--acknowledges`. The s
 `receipt_acknowledged_at` in the conversation list is the earliest linked inbound acknowledgment time, distinct from its
 sent time. This records an acknowledgment; it does not independently verify delivery with an email provider.
 
+Use `navigator project communication create --channel sms` with `--direction inbound` or `--direction outbound` to log
+an existing text. The stored channel is `sms_inbound` or `sms_outbound`. The entry appears in the firm's Communication
+list. Use `--asset-id` to link a filed document from the same Project, such as a photo. A photo-only text can use an
+empty `--body-file`.
+
 - Schema and queries: [`store::communications`](../../store/src/communications.rs) —
   [`store/postgres/schema.sql`](../../store/postgres/schema.sql)
 

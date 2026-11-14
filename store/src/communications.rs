@@ -1021,6 +1021,14 @@ pub async fn purge_for_project(
     // identical bytes are stored once and may be referenced several times.
     let mut storage_keys: Vec<String> = Vec::new();
     for aid in orphaned {
+        // A filed Project document can be linked from a manually logged
+        // Communication. Its own retention and Legal Hold still govern it.
+        if crate::assets::find_by_id(surreal, aid)
+            .await?
+            .is_some_and(|asset| asset.project_id.is_some())
+        {
+            continue;
+        }
         let Some(deleted) = crate::assets::delete(surreal, aid).await? else {
             continue;
         };
