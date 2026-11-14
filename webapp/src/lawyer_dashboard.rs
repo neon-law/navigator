@@ -33,6 +33,8 @@
 //! docket — a hearing or trial's `scheduled_on`, following a continuance chain.
 //! Documents and project rows are not events.
 
+mod timeline;
+
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -148,6 +150,8 @@ pub struct DashboardView {
     /// Current upcoming appearances across the caller's visible matters.
     #[serde(default)]
     pub calendar_events: Vec<crate::project_calendar::CalendarEvent>,
+    timeline: Vec<timeline::Entry>,
+    timeline_now: chrono::DateTime<chrono::Utc>,
     /// Ranked firm-wide conflict findings anchored on the caller's visible
     /// matters (ENG-307). Empty when the graph raises nothing — rendered as
     /// the section's own empty state, never synthesized.
@@ -250,6 +254,7 @@ pub async fn get_lawyer_dashboard() -> Result<DashboardView, ServerFnError> {
         .collect();
 
     let calendar_events = calendar_events_for_projects(&surreal, &projects).await?;
+    let timeline = timeline::load(&surreal, &projects).await?;
     let conflict_findings = conflict_findings_for_projects(&surreal, &projects).await?;
     let pipeline =
         crate::projected_cash::derive::load_pipeline(&surreal, person_id, &projects).await;
@@ -275,6 +280,8 @@ pub async fn get_lawyer_dashboard() -> Result<DashboardView, ServerFnError> {
         logo: crate::app_chrome::app_logo_from_context().await,
         tokens_href: crate::app_chrome::app_tokens_href_from_context().await,
         calendar_events,
+        timeline,
+        timeline_now: chrono::Utc::now(),
         conflict_findings,
         pipeline,
     })
@@ -572,6 +579,7 @@ fn lawyer_dashboard_body(view: &DashboardView) -> Element {
                 dir: view.dir.clone(),
                 events: view.calendar_events.clone(),
             }
+            timeline::WorkbenchTimeline { entries: view.timeline.clone(), now: view.timeline_now }
             ConflictsSection { findings: view.conflict_findings.clone() }
             DashboardDetails { role }
         }
@@ -881,6 +889,8 @@ mod tests {
             role: ViewerRole::Lawyer,
             logo: None,
             calendar_events: vec![],
+            timeline: vec![],
+            timeline_now: chrono::DateTime::default(),
             conflict_findings: vec![],
             pipeline: crate::projected_cash::PipelineCardView::default(),
         }

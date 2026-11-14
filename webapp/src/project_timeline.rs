@@ -129,7 +129,7 @@ pub fn timeline_events(
 }
 
 #[cfg(feature = "server")]
-fn parse_filed_date(raw: &str) -> Option<chrono::NaiveDate> {
+pub(crate) fn parse_filed_date(raw: &str) -> Option<chrono::NaiveDate> {
     let raw = raw.trim();
     chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d")
         .or_else(|_| chrono::NaiveDate::parse_from_str(raw, "%m/%d/%Y"))

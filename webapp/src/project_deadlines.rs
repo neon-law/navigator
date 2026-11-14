@@ -250,6 +250,7 @@ pub fn ProjectDeadlinesPanel(
                                 tr {
                                     key: "{row.id}",
                                     class: if row.overdue { "project-deadlines__row project-deadlines__row--overdue" } else { "project-deadlines__row" },
+                                    id: "deadline-{row.id}",
                                     "data-deadline": "{row.id}",
                                     td { "{row.due}" }
                                     td {
@@ -302,6 +303,7 @@ pub fn ProjectDeadlinesPanel(
                                 for row in past.iter() {
                                     tr {
                                         key: "past-{row.id}",
+                                        id: "deadline-{row.id}",
                                         "data-deadline": "{row.id}",
                                         td { "{row.due}" }
                                         td {
