@@ -143,6 +143,29 @@ async fn cli_bearer_opens_retainer_then_approve_parks_and_send_dispatches_once()
         .parse()
         .expect("redirect carries the notation id");
 
+    // An unanswered notation cannot be approved through either command door.
+    for path in [
+        format!("/app/lawyer/notations/{notation_id}/approve-send"),
+        format!("/app/api/notations/{notation_id}/approval"),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .header("authorization", &bearer)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = body_string(response).await;
+        assert!(body.contains("BEGIN"), "{body}");
+        assert!(body.contains("questionnaire"), "{body}");
+    }
+
     // Walk the retainer questionnaire (entity, principal office, client
     // name, firm DRI, engagement name, engagement start date, engagement
     // scope, then the governing-law choice) — the last answer drives the

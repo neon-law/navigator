@@ -1610,6 +1610,9 @@ pub enum WorkflowDriveError {
     /// send route maps this to `409` + a "retry" reason, never a 500.
     #[error("document not ready: the retainer PDF for notation {0} has not been rendered yet")]
     DocumentNotReady(Uuid),
+    #[error("notation is at `{state}`. Complete the questionnaire and reach lawyer review before approving.")]
+    ApprovalNotReady { state: String },
+
     /// The template carries the custom-clause slot and the notation has no
     /// clauses, so its fee terms were never written. Refused before the
     /// `pdf_persisted` transition, so the walk stays at `lawyer_review`
@@ -1949,6 +1952,15 @@ pub(crate) async fn render_and_park(
     let notation_row = store::notations::find_by_id(deps.surreal, notation_id)
         .await?
         .ok_or(WorkflowDriveError::TemplateMissing(notation_id))?;
+    let current_state = runtime
+        .current_state(MachineKind::Workflow, notation_id)
+        .await
+        .unwrap_or_else(|| StateName::from(notation_row.state.as_str()));
+    if current_state.prefix() != "lawyer_review" {
+        return Err(WorkflowDriveError::ApprovalNotReady {
+            state: current_state.0,
+        });
+    }
     let template_row = store::templates::find_by_id(deps.surreal, notation_row.template_id)
         .await?
         .ok_or(WorkflowDriveError::TemplateMissing(notation_id))?;
@@ -2087,6 +2099,24 @@ pub async fn approve_send_post(
     AxumPath(notation_id): AxumPath<Uuid>,
     session: Option<Extension<SessionData>>,
 ) -> Response {
+    let Some(notation) = store::notations::find_by_id(&state.surreal, notation_id)
+        .await
+        .ok()
+        .flatten()
+    else {
+        return (StatusCode::NOT_FOUND, "notation not found").into_response();
+    };
+    let acting = resolve_lawyer_actor(&state.surreal, session.as_deref()).await;
+    let role = session
+        .as_deref()
+        .map_or(store::persons::Role::Lawyer, |session| session.role);
+    if !store::access::can_see_project_as_lawyer(&state.surreal, acting, role, notation.project_id)
+        .await
+        .unwrap_or(false)
+    {
+        return (StatusCode::NOT_FOUND, "notation not found").into_response();
+    }
+
     // Idempotent approve: if the worker has already rendered + persisted
     // this notation's PDF — a prior approve, or the auto-approve a clean
     // machine-only intake takes when it walks straight through to
@@ -2100,29 +2130,11 @@ pub async fn approve_send_post(
         .await
         .unwrap_or(false)
     {
-        let notation_row = store::notations::find_by_id(&state.surreal, notation_id)
-            .await
-            .ok()
-            .flatten();
-        let workflow_state = notation_row
-            .as_ref()
-            .map_or_else(String::new, |n| n.state.clone());
-        let signature_request_id =
-            store::signatures::request_id_for_notation(&state.surreal, notation_id)
-                .await
-                .ok()
-                .flatten();
-        tracing::info!(
-            %notation_id, %workflow_state, outcome = "already-ready",
-            "approve_send: document already rendered — no-op approve",
-        );
-        let _ = signature_request_id;
         return back_to_review(notation_id);
     }
 
     // The attorney approving owns the `approved` transition — attribute it
     // to their session Person, not the notation's client (#252).
-    let acting = resolve_lawyer_actor(&state.surreal, session.as_deref()).await;
     let deps = RenderDeps {
         surreal: &state.surreal,
         runtime: state.workflow_runtime.as_ref(),
@@ -2139,6 +2151,9 @@ pub async fn approve_send_post(
                 "approve_send: rendered and parked",
             );
             back_to_review(notation_id)
+        }
+        Err(e @ WorkflowDriveError::ApprovalNotReady { .. }) => {
+            (StatusCode::CONFLICT, e.to_string()).into_response()
         }
         Err(e) => {
             tracing::error!(error = %e, %notation_id, "approve_send: render_and_park failed");

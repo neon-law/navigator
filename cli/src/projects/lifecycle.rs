@@ -93,9 +93,15 @@ async fn run_open(
         .into_iter()
         .find(|row| row.template_code == code && row.notation_id.is_some())
     {
+        let notation_id = row.notation_id.as_deref().unwrap_or_default();
+        if let Some(path) = answers_from {
+            let id = notation_id
+                .parse()
+                .context("parse the existing notation id")?;
+            return remote::notation_prefill(host, id, path).await;
+        }
         println!(
-            "{kind} notation {} is already open in state {}",
-            row.notation_id.as_deref().unwrap_or_default(),
+            "{kind} notation {notation_id} is already open in state {}",
             row.current_state.as_deref().unwrap_or("unknown")
         );
         return Ok(());

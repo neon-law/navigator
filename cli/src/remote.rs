@@ -4658,6 +4658,18 @@ pub async fn notation_create(
     .await
 }
 
+/// Resume an existing notation's questionnaire with the saved answers.
+pub(crate) async fn notation_prefill(
+    host: Option<&str>,
+    notation_id: Uuid,
+    path: &Path,
+) -> Result<()> {
+    let saved = crate::answers_file::load_answers_file(path)?;
+    let (base, token) = resolve(host)?;
+    let client = authenticated_client_builder(&base)?.build()?;
+    prefill_from_saved_answers(&client, &base, &token, notation_id, &saved).await
+}
+
 /// Answer a notation's questionnaire entirely from a saved answers file:
 /// walk the same `/app/lawyer/notations/:id/step` route the intake walker
 /// uses, posting each question's saved `state: value` as the answer.
@@ -4674,6 +4686,7 @@ async fn prefill_from_saved_answers(
     saved: &crate::answers_file::SavedAnswers,
 ) -> Result<()> {
     let mut answered = 0u32;
+    let mut previous_question = None;
     loop {
         let step = fetch_step(client, base, token, notation_id).await?;
         let Some(question) = step.question else {
@@ -4684,6 +4697,12 @@ async fn prefill_from_saved_answers(
             );
             return Ok(());
         };
+        if previous_question.as_deref() == Some(question.code.as_str()) {
+            return Err(anyhow!(
+                "the questionnaire did not accept the saved answer for `{}`",
+                question.code
+            ));
+        }
         let Some(value) = saved.get(&question.code) else {
             return Err(anyhow!(
                 "the answers file has no answer for question `{}` ({}); prefill covers every \
@@ -4693,21 +4712,23 @@ async fn prefill_from_saved_answers(
                 question.code,
             ));
         };
-        let fields = if model::question_registry::answer_type_is_aggregate(&question.answer_type) {
-            return Err(anyhow!(
+        let mut fields =
+            if model::question_registry::answer_type_is_aggregate(&question.answer_type) {
+                return Err(anyhow!(
                 "question `{}` is an aggregate ({}); a saved answer cannot fill it — answer it \
                  interactively",
                 question.code,
                 question.answer_type,
             ));
-        } else if question.has_candidates() {
-            picker_selection_fields(&question, &crate::answers_file::saved_scalar(value)?)?
-        } else {
-            vec![(
-                "value".to_string(),
-                crate::answers_file::saved_scalar(value)?,
-            )]
-        };
+            } else if question.has_candidates() {
+                picker_selection_fields(&question, &crate::answers_file::saved_scalar(value)?)?
+            } else {
+                vec![(
+                    "value".to_string(),
+                    crate::answers_file::saved_scalar(value)?,
+                )]
+            };
+        fields.push(("_nav_question_code".to_string(), question.code.clone()));
         let resp = client
             .post(format!("{base}/app/lawyer/notations/{notation_id}/step"))
             .bearer_auth(token)
@@ -4729,6 +4750,7 @@ async fn prefill_from_saved_answers(
             palette::dim("prefilled"),
             palette::highlight(&question.code)
         );
+        previous_question = Some(question.code);
         answered += 1;
     }
 }
@@ -9673,7 +9695,10 @@ mod tests {
             })
             .map(|request| String::from_utf8(request.body.clone()).unwrap())
             .collect();
-        assert_eq!(posted, vec!["value=Libra+Example".to_string()]);
+        assert_eq!(
+            posted,
+            vec!["value=Libra+Example&_nav_question_code=client_full_name".to_string()]
+        );
     }
 
     /// A malformed answers file stops the prefill with a failure exit — a

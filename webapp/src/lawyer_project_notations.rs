@@ -398,7 +398,17 @@ pub fn ProjectNotationBoard(rows: Vec<ProjectNotationRow>) -> Element {
                                         td { "{notation_state_cell(row, state)}" }
                                     }
                                     th { scope: "row", "{row.template_code}" }
-                                    td { "{row.notation_id.as_deref().unwrap_or(row.unopened_label())}" }
+                                    td {
+                                        if let Some(id) = row.notation_id.as_deref() {
+                                            if row.current_state.as_deref() == Some("BEGIN") {
+                                                a { href: "/app/lawyer/notations/{id}/step", "{id}" }
+                                            } else {
+                                                a { href: "/app/lawyer/notations/{id}/review", "{id}" }
+                                            }
+                                        } else {
+                                            "{row.unopened_label()}"
+                                        }
+                                    }
                                     td { "{row.respondent_email.as_deref().unwrap_or(\"—\")}" }
                                     td { "{row.signature_request_id.as_deref().unwrap_or(\"—\")}" }
                                     td { "{row.last_transition_at.as_deref().unwrap_or(\"—\")}" }
@@ -439,7 +449,7 @@ mod tests {
         let live = ProjectNotationRow {
             template_code: "engagement".to_string(),
             notation_id: Some("notation-uuid".to_string()),
-            current_state: Some("lawyer_review".to_string()),
+            current_state: Some("BEGIN".to_string()),
             workflow_states: vec!["BEGIN".to_string(), "lawyer_review".to_string()],
             state_entered_at: [(
                 "lawyer_review".to_string(),
@@ -460,7 +470,10 @@ mod tests {
             ProjectNotationBoard { rows: vec![live, waiting] }
         });
         assert!(html.contains("engagement"), "{html}");
-        assert!(html.contains("notation-uuid"), "{html}");
+        assert!(
+            html.contains("href=\"/app/lawyer/notations/notation-uuid/step\""),
+            "{html}"
+        );
         assert!(html.contains("client@example.test"), "{html}");
         assert!(html.contains("signature-uuid"), "{html}");
         assert!(html.contains("never started"), "{html}");

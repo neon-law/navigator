@@ -999,7 +999,8 @@ The Project workflow board also reads the chosen blueprint directory from Naviga
 current `main`. A blueprint appears before its first run, with its workflow states and a never-started row. Reading the
 board does not import a Template or open a Notation. Existing runs keep the workflow of their pinned Template version; a
 revised blueprint appears beside them as a new never-started row. Repository read failures fail the board request
-instead of presenting an empty board.
+instead of presenting an empty board. Open a Notation from its ID in the board. A Notation at `BEGIN` opens the
+questionnaire, and a later state opens its review page.
 
 A Project references a shared catalog template by its existing `code`, without carrying a local copy. When no matching
 `<code>.md` exists in the chosen Project blueprint directory, notation creation reads the owning Firm's [Firm
@@ -1013,7 +1014,8 @@ single authored Draft declaring its lifecycle `kind`, so an existing `onboarding
 rename. Unedited stubs are ignored during that selection. Conflicting declared letters or multiple authored Drafts
 require the lawyer to choose one before opening a notation. The selected filename stem is the template code sent to
 Navigator. Only when no authored letter exists does the command write the canonical `onboarding__letter.md` or
-`offboarding__letter.md` stub and wait for the lawyer to draft it.
+`offboarding__letter.md` stub and wait for the lawyer to draft it. Run `navigator project onboard --answers-from <file>`
+again to fill the remaining questionnaire on an open onboarding Notation.
 
 An agreement Draft with an `onboarding__*` lineage requires `navigator project migrate-letter` before onboarding. The
 migration retypes the letter as `onboarding`, moves it to the canonical path and updates every Matter Page reference to
