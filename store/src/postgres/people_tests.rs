@@ -56,10 +56,18 @@ async fn configured_authority_fails_closed_when_postgres_is_unavailable() {
         return;
     }
 
-    let surreal = crate::test_support::mem_surreal().await;
+    // Applying the schema reads the Firm anchor, which this configuration
+    // refuses too; the accessors below are refused before any query.
+    let surreal = crate::surreal::test_support::unmigrated().await;
     assert!(matches!(
         crate::persons::find_by_id(&surreal, Uuid::nil()).await,
         Err(PersonError::Postgres(_))
+    ));
+    assert!(matches!(
+        crate::addresses::list_all(&surreal).await,
+        Err(crate::addresses::AddressError::Authority(
+            crate::postgres::identity::AuthorityError::Unavailable(_)
+        ))
     ));
 }
 

@@ -660,7 +660,9 @@ impl From<store::entities::EntityError> for ToolError {
             // can act on that — it is a caller-correctable conflict, not a
             // fault.
             E::FirmAnchorTaken => ToolError::Conflict(err.to_string()),
-            E::Db(_) | E::WriteReturnedNothing => ToolError::Internal(err.to_string()),
+            E::Db(_) | E::WriteReturnedNothing | E::Authority(_) => {
+                ToolError::Internal(err.to_string())
+            }
         }
     }
 }

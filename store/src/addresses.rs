@@ -23,7 +23,10 @@ use serde::Serialize;
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use sqlx::{postgres::PgRow, AssertSqlSafe, Row};
+
 use crate::persons::{self, PersonError};
+use crate::postgres::identity::{self as authority, AuthorityError, ADDRESS};
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 
 /// The table these rows live in.
@@ -124,6 +127,46 @@ pub enum AddressError {
     /// this module could not read back — see [`AddressRow::into_address`].
     #[error("writing an address returned no usable row")]
     WriteReturnedNothing,
+    /// PostgreSQL identity authority is configured and failed.
+    #[error(transparent)]
+    Authority(#[from] AuthorityError),
+}
+
+fn from_pg(row: &PgRow) -> Result<Address, sqlx::Error> {
+    Ok(Address {
+        id: row.try_get("id")?,
+        person_id: row.try_get("person_id")?,
+        entity_id: row.try_get("entity_id")?,
+        line1: row.try_get("line1")?,
+        line2: row.try_get("line2")?,
+        city: row.try_get("city")?,
+        region: row.try_get("region")?,
+        postal_code: row.try_get("postal_code")?,
+        country: row.try_get("country")?,
+        inserted_at: row.try_get("inserted_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+/// Addresses from PostgreSQL matching `predicate` over an optional UUID,
+/// oldest first.
+async fn pg_rows(
+    pg: &crate::postgres::PostgresDb,
+    predicate: &str,
+    id: Option<Uuid>,
+) -> Result<Vec<Address>, AddressError> {
+    let mut query = sqlx::query(AssertSqlSafe(format!(
+        "SELECT {SELECT} FROM {TABLE} WHERE {predicate} ORDER BY inserted_at, id"
+    )));
+    if let Some(id) = id {
+        query = query.bind(id);
+    }
+    let rows = query.fetch_all(&pg.0).await.map_err(AuthorityError::from)?;
+    Ok(rows
+        .iter()
+        .map(from_pg)
+        .collect::<Result<_, _>>()
+        .map_err(AuthorityError::from)?)
 }
 
 /// Run a write under the shared retry policy
@@ -156,6 +199,27 @@ pub async fn create(db: &SurrealDb, new: &NewAddress) -> Result<Address, Address
     }
 
     let id = Uuid::now_v7();
+    if let Some(pg) = authority::authority().await? {
+        let row = sqlx::query(AssertSqlSafe(format!(
+            "INSERT INTO {TABLE} (id, person_id, entity_id, line1, line2, city, region, \
+             postal_code, country) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING {SELECT}"
+        )))
+        .bind(id)
+        .bind(new.person_id)
+        .bind(new.entity_id)
+        .bind(&new.line1)
+        .bind(&new.line2)
+        .bind(&new.city)
+        .bind(&new.region)
+        .bind(&new.postal_code)
+        .bind(&new.country)
+        .fetch_one(&pg.0)
+        .await
+        .map_err(AuthorityError::from)?;
+        let address = from_pg(&row).map_err(AuthorityError::from)?;
+        authority::project(&pg, db, &ADDRESS, id).await?;
+        return Ok(address);
+    }
     let mut response = writing(|| {
         db.query(format!(
             "CREATE $id SET \
@@ -201,6 +265,12 @@ pub async fn create(db: &SurrealDb, new: &NewAddress) -> Result<Address, Address
 ///
 /// [`AddressError::Db`] if the lookup fails.
 pub async fn find_by_id(db: &SurrealDb, id: Uuid) -> Result<Option<Address>, AddressError> {
+    if let Some(pg) = authority::authority().await? {
+        return Ok(Box::pin(pg_rows(&pg, "id = $1", Some(id)))
+            .await?
+            .into_iter()
+            .next());
+    }
     let mut response = db
         .query(format!("SELECT {SELECT} FROM ONLY $id"))
         .bind(("id", record_id(TABLE, id)))
@@ -218,6 +288,9 @@ pub async fn find_by_id(db: &SurrealDb, id: Uuid) -> Result<Option<Address>, Add
 ///
 /// [`AddressError::Db`] if the lookup fails.
 pub async fn for_entity(db: &SurrealDb, entity_id: Uuid) -> Result<Vec<Address>, AddressError> {
+    if let Some(pg) = authority::authority().await? {
+        return Box::pin(pg_rows(&pg, "entity_id = $1", Some(entity_id))).await;
+    }
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE entity_id = $entity_id ORDER BY inserted_at ASC"
@@ -239,6 +312,9 @@ pub async fn for_entity(db: &SurrealDb, entity_id: Uuid) -> Result<Vec<Address>,
 ///
 /// [`AddressError::Db`] if the lookup fails.
 pub async fn for_person(db: &SurrealDb, person_id: Uuid) -> Result<Vec<Address>, AddressError> {
+    if let Some(pg) = authority::authority().await? {
+        return Box::pin(pg_rows(&pg, "person_id = $1", Some(person_id))).await;
+    }
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE person_id = $person_id ORDER BY inserted_at ASC"
@@ -312,6 +388,9 @@ pub async fn find_or_create_for_person(
 ///
 /// [`AddressError::Db`] if the lookup fails.
 pub async fn list_all(db: &SurrealDb) -> Result<Vec<Address>, AddressError> {
+    if let Some(pg) = authority::authority().await? {
+        return Box::pin(pg_rows(&pg, "true", None)).await;
+    }
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} ORDER BY inserted_at ASC"
@@ -332,6 +411,14 @@ pub async fn list_all(db: &SurrealDb) -> Result<Vec<Address>, AddressError> {
 ///
 /// [`AddressError::Db`] if the count fails.
 pub async fn count(db: &SurrealDb) -> Result<i64, AddressError> {
+    if let Some(pg) = authority::authority().await? {
+        return Ok(
+            sqlx::query_scalar(AssertSqlSafe(format!("SELECT count(*) FROM {TABLE}")))
+                .fetch_one(&pg.0)
+                .await
+                .map_err(AuthorityError::from)?,
+        );
+    }
     let mut response = db
         .query(format!("SELECT VALUE count() FROM {TABLE} GROUP ALL"))
         .await

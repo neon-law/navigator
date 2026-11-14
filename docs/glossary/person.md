@@ -26,9 +26,9 @@ more `person_mailbox` rows, so they are exactly as unique as a primary email and
 any of them is updated to the record's `email` instead of duplicated, and the rest are kept as aliases. When a duplicate
 already exists, `hudson site person merge <keep> <drop>` ([`store::person_merge`](../../store/src/person_merge.rs))
 moves the dropped client Person's relationships — Conflict-Check Graph edges, Project participation, Relationship Log
-rows — to the kept Person in one transaction, hands over both addresses, and deletes the duplicate last. Alias writes
-and Person merges require the compatibility path; PostgreSQL People authority refuses them. See [SurrealDB
-compatibility](../surreal-compatibility.md#people).
+rows — to the kept Person in one transaction, hands over both addresses, and deletes the duplicate last. Under
+PostgreSQL People authority the aliases are PostgreSQL mailbox claims and the merge moves every PostgreSQL row that
+names the dropped Person. See [storage models](../storage-models.md#people).
 
 - Schema: [`person` in the PostgreSQL schema](../../store/postgres/schema.sql) Queries:
   [`store::persons`](../../store/src/persons.rs)

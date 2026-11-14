@@ -873,6 +873,9 @@ pub(super) async fn mirror(
     pg: &PostgresDb,
     key: &MirrorKey,
 ) -> Result<Mirrored, MirrorError> {
+    if key.held_by_people_authority() {
+        return Ok(Mirrored::Unchanged);
+    }
     match key {
         MirrorKey::Address(id) => mirror_detail::<AddressImage>(surreal, pg, *id).await,
         MirrorKey::Credential(id) => mirror_detail::<CredentialImage>(surreal, pg, *id).await,
@@ -886,9 +889,6 @@ pub(super) async fn mirror(
             entity_id,
             role,
         } => mirror_entity_role(surreal, pg, *person_id, *entity_id, role).await,
-        MirrorKey::PersonMailbox(_) if crate::persons::postgres_people_authority_configured() => {
-            Ok(Mirrored::Unchanged)
-        }
         MirrorKey::PersonMailbox(person) => mirror_mailboxes(surreal, pg, *person).await,
         // `super::mirror` routes only identity-detail keys here.
         _ => Err(MirrorError::Source),

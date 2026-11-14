@@ -27,8 +27,11 @@ use chrono::{DateTime, Utc};
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use sqlx::{postgres::PgRow, AssertSqlSafe, Row};
+
 use crate::jurisdictions::{self, JurisdictionError};
 use crate::persons::{self, PersonError};
+use crate::postgres::identity::{self as authority, AuthorityError, CREDENTIAL};
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 
 /// The table these rows live in.
@@ -67,6 +70,28 @@ pub enum CredentialError {
     /// something that bypassed [`crate::surreal::record_id`].
     #[error("writing a credential returned no usable row")]
     WriteReturnedNothing,
+    /// PostgreSQL identity authority is configured and failed.
+    #[error(transparent)]
+    Authority(#[from] AuthorityError),
+}
+
+fn from_pg(row: &PgRow) -> Result<Credential, sqlx::Error> {
+    Ok(Credential {
+        id: row.try_get("id")?,
+        person_id: row.try_get("person_id")?,
+        jurisdiction_id: row.try_get("jurisdiction_id")?,
+        license_number: row.try_get("license_number")?,
+        inserted_at: row.try_get("inserted_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+fn pg_error(error: sqlx::Error) -> CredentialError {
+    if authority::violates(&error, "credential_person_id_jurisdiction_id_key") {
+        CredentialError::AlreadyGranted
+    } else {
+        CredentialError::Authority(error.into())
+    }
 }
 
 /// Turn a write failure into the caller-correctable conflict it names,
@@ -168,6 +193,22 @@ pub async fn grant(
     }
 
     let id = Uuid::now_v7();
+    if let Some(pg) = authority::authority().await? {
+        let row = sqlx::query(AssertSqlSafe(format!(
+            "INSERT INTO {TABLE} (id, person_id, jurisdiction_id, license_number) \
+             VALUES ($1, $2, $3, $4) RETURNING {SELECT}"
+        )))
+        .bind(id)
+        .bind(person_id)
+        .bind(jurisdiction_id)
+        .bind(license_number)
+        .fetch_one(&pg.0)
+        .await
+        .map_err(pg_error)?;
+        let credential = from_pg(&row).map_err(pg_error)?;
+        authority::project(&pg, db, &CREDENTIAL, id).await?;
+        return Ok(credential);
+    }
     let mut response = writing(|| {
         db.query(format!(
             "CREATE $id SET \
@@ -206,6 +247,17 @@ pub async fn find_by_person_and_jurisdiction(
     person_id: Uuid,
     jurisdiction_id: Uuid,
 ) -> Result<Option<Credential>, CredentialError> {
+    if let Some(pg) = authority::authority().await? {
+        let row = sqlx::query(AssertSqlSafe(format!(
+            "SELECT {SELECT} FROM {TABLE} WHERE person_id = $1 AND jurisdiction_id = $2"
+        )))
+        .bind(person_id)
+        .bind(jurisdiction_id)
+        .fetch_optional(&pg.0)
+        .await
+        .map_err(pg_error)?;
+        return row.as_ref().map(from_pg).transpose().map_err(pg_error);
+    }
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM ONLY {TABLE} \
@@ -271,6 +323,20 @@ pub async fn for_person(
     db: &SurrealDb,
     person_id: Uuid,
 ) -> Result<Vec<Credential>, CredentialError> {
+    if let Some(pg) = authority::authority().await? {
+        let rows = sqlx::query(AssertSqlSafe(format!(
+            "SELECT {SELECT} FROM {TABLE} WHERE person_id = $1 ORDER BY inserted_at, id"
+        )))
+        .bind(person_id)
+        .fetch_all(&pg.0)
+        .await
+        .map_err(pg_error)?;
+        return rows
+            .iter()
+            .map(from_pg)
+            .collect::<Result<_, _>>()
+            .map_err(pg_error);
+    }
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE person_id = $person_id ORDER BY inserted_at ASC"
@@ -298,6 +364,13 @@ pub async fn is_licensed_in(
     person_id: Uuid,
     jurisdiction_id: Uuid,
 ) -> Result<bool, CredentialError> {
+    if authority::authority().await?.is_some() {
+        return Ok(
+            find_by_person_and_jurisdiction(db, person_id, jurisdiction_id)
+                .await?
+                .is_some(),
+        );
+    }
     let mut response = db
         .query(format!(
             "SELECT VALUE count() FROM {TABLE} \
@@ -323,6 +396,15 @@ pub async fn is_licensed_in(
 ///
 /// [`CredentialError::Db`] if the delete fails.
 pub async fn revoke(db: &SurrealDb, credential_id: Uuid) -> Result<(), CredentialError> {
+    if let Some(pg) = authority::authority().await? {
+        sqlx::query(AssertSqlSafe(format!("DELETE FROM {TABLE} WHERE id = $1")))
+            .bind(credential_id)
+            .execute(&pg.0)
+            .await
+            .map_err(pg_error)?;
+        authority::project(&pg, db, &CREDENTIAL, credential_id).await?;
+        return Ok(());
+    }
     db.query("DELETE $id")
         .bind(("id", record_id(TABLE, credential_id)))
         .await
