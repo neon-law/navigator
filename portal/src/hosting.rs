@@ -1695,7 +1695,7 @@ mod tests {
     type Gate = fn(bool, &dyn Fn(&str) -> Option<String>) -> anyhow::Result<bool>;
 
     /// The schedules gated only by DBOS and their own flag.
-    fn recovery_gates() -> [(Gate, &'static str); 8] {
+    fn recovery_gates() -> [(Gate, &'static str); 7] {
         [
             (
                 |host, lookup| should_host_billing_digest(host, lookup),
