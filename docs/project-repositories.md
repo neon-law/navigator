@@ -361,6 +361,13 @@ site document retire <asset_id> --project <code> --yes-retire`; `--dry-run` repo
 applies the same 180-day soft deletion and can be undone with `hudson site document restore`. Remove the local pointer
 and byte copy for that slug before the next project sync.
 
+An inbound email thread files each attachment under `mail/<message id>/<YYYY.MM.DD>_<name>-<part>.<ext>`, skips
+signature logos and inline images, and does not file bytes the matter already holds. Rows it filed without a slug fail
+the gate with "live row has no slug"; `hudson site document slugless --project <code> --dry-run` lists what it would do
+with each: retire the inline images and repeated bytes (the same 180-day soft deletion), slug the rest under
+`mail/<asset id>/`, and leave rows from other channels alone. `--yes` applies the plan; run `navigator project sync`
+afterwards to write the new pointers.
+
 A confirmed deletion calls `POST /app/api/projects/{id}/documents/{asset_id}/delete` with the commit that removed the
 pointer. The server stamps every revision of the slug chain with `deleted_at`, `purge_after` (180 days later), the
 deleting person, and that commit. Direct retirement records the deleting person without a source commit. A soft-deleted

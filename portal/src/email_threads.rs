@@ -280,7 +280,7 @@ async fn open_first_contact(
     )
     .await?;
 
-    conv::append(
+    let message_id = conv::append(
         surreal,
         &conv::NewMessage {
             conversation_id,
@@ -312,7 +312,9 @@ async fn open_first_contact(
         ));
     }
     if let Some(conversation) = conv::by_id(surreal, conversation_id).await? {
-        if let Some(note) = process_attachments(ctx, &conversation, &inbound.attachments).await? {
+        if let Some(note) =
+            process_attachments(ctx, &conversation, message_id, &inbound.attachments).await?
+        {
             notes.push(note);
         }
     }
@@ -564,7 +566,7 @@ async fn continue_thread(
         .await?;
     } else {
         // Client follow-up on an open thread — re-notify lawyer.
-        conv::append(
+        let message_id = conv::append(
             surreal,
             &conv::NewMessage {
                 conversation_id: conversation.id,
@@ -582,7 +584,7 @@ async fn continue_thread(
         // File any attachments as documents on the linked matter and fold a
         // review request into the lawyer notification.
         let attachments_note =
-            process_attachments(ctx, &conversation, &inbound.attachments).await?;
+            process_attachments(ctx, &conversation, message_id, &inbound.attachments).await?;
         let extra_note = combine_notes(attachments_note, quarantine_note(inbound));
         notify_lawyer(
             ctx,
@@ -636,12 +638,21 @@ fn combine_notes(left: Option<String>, right: Option<String>) -> Option<String> 
 /// On an unlinked thread the bytes stay in the archived `.eml` and we
 /// return a note telling lawyer to link the thread first. Returns the
 /// lawyer-facing review note, or `None` when there were no attachments.
+///
+/// Each filed part gets the deterministic slug
+/// [`store::mail_attachments::slug`] names from `message_id` and its part
+/// position, so the Project gate never meets a slugless row. Signature logos
+/// and inline images are left in the archived `.eml`, and bytes the matter
+/// already holds under any name are not filed a second time.
 async fn process_attachments(
     ctx: &ThreadCtx<'_>,
     conversation: &conv::EmailConversation,
+    message_id: uuid::Uuid,
     attachments: &[InboundAttachment],
 ) -> Result<Option<String>, ThreadError> {
-    let (surreal, storage) = (ctx.surreal, ctx.storage);
+    use store::mail_attachments;
+
+    let surreal = ctx.surreal;
     if attachments.is_empty() {
         return Ok(None);
     }
@@ -662,48 +673,69 @@ async fn process_attachments(
         return Ok(None);
     };
 
-    // File each attachment as the external sender, so the matter repo's
-    // `git log` attributes it to whoever emailed it in.
-    let author = repos::Author {
-        name: conversation
-            .external_name
-            .as_deref()
-            .unwrap_or(conversation.external_email.as_str()),
-        email: conversation.external_email.as_str(),
-    };
-
-    let mut lines = Vec::new();
-    for att in attachments {
-        let filename = non_empty_or(att.filename.as_str(), "attachment");
-        let content_type = non_empty_or(att.content_type.as_str(), "application/octet-stream");
-        let ingested = crate::matter_documents::record_document(
-            surreal,
-            storage,
-            author,
-            &documents::IngestArgs {
-                project_id: notation.project_id,
-                source: documents::source::EMAIL,
-                filename,
-                kind: "unclassified",
-                content_type,
-                description: Some("received via support@ email"),
-                secondary_storage_key: None,
-                visibility: documents::visibility::INTERNAL,
+    let message_id_str = message_id.to_string();
+    let received_at = chrono::Utc::now();
+    let received_at_str = received_at.to_rfc3339();
+    let mut filed = Vec::new();
+    let mut held = Vec::new();
+    for (index, att) in attachments.iter().enumerate() {
+        let filename = mail_attachments::filename_with_extension(&att.filename);
+        if mail_attachments::is_inline_image(&filename, &att.content_type, att.bytes.len()) {
+            held.push(format!(
+                "• {filename} — inline or signature image, not filed"
+            ));
+            continue;
+        }
+        let sha256 = documents::sha256_hex(&att.bytes);
+        if let Some(existing) =
+            store::assets::find_live_by_sha256(surreal, notation.project_id, &sha256)
+                .await
+                .map_err(|error| ThreadError::Db(error.to_string()))?
+        {
+            held.push(format!(
+                "• {filename} — already on the matter as document {}",
+                existing.id
+            ));
+            continue;
+        }
+        let slug =
+            mail_attachments::slug(&message_id_str, index, &filename, received_at.date_naive());
+        let asset_id = file_attachment(
+            ctx,
+            notation.project_id,
+            &slug,
+            &filename,
+            att,
+            &documents::MailProvenance {
+                message_id: &message_id_str,
+                sender: &conversation.external_email,
+                received_at: &received_at_str,
+                subject: &conversation.subject,
             },
-            &att.bytes,
         )
         .await?;
-        lines.push(format!(
-            "• {filename} ({} bytes) → document {}",
-            ingested.byte_size, ingested.asset_id
+        filed.push(format!(
+            "• {filename} ({} bytes) → document {asset_id}",
+            att.bytes.len()
         ));
     }
 
-    let summary = format!(
-        "{} document(s) received for review and filed to the matter:\n{}",
-        attachments.len(),
-        lines.join("\n")
-    );
+    let mut sections = Vec::new();
+    if !filed.is_empty() {
+        sections.push(format!(
+            "{} document(s) received for review and filed to the matter:\n{}",
+            filed.len(),
+            filed.join("\n")
+        ));
+    }
+    if !held.is_empty() {
+        sections.push(format!(
+            "{} attachment(s) kept in the raw message only:\n{}",
+            held.len(),
+            held.join("\n")
+        ));
+    }
+    let summary = sections.join("\n\n");
 
     conv::append(
         surreal,
@@ -720,6 +752,45 @@ async fn process_attachments(
     .await?;
 
     Ok(Some(summary))
+}
+
+/// File one inbound attachment under `slug` as an internal, unclassified
+/// matter document stamped with its message provenance. Identical bytes
+/// re-filed under the same slug write nothing and return the existing row.
+async fn file_attachment(
+    ctx: &ThreadCtx<'_>,
+    project_id: uuid::Uuid,
+    slug: &str,
+    filename: &str,
+    att: &InboundAttachment,
+    provenance: &documents::MailProvenance<'_>,
+) -> Result<uuid::Uuid, ThreadError> {
+    let outcome = store::assets::file_revision_with_provenance(
+        ctx.surreal,
+        ctx.storage,
+        &documents::IngestArgs {
+            project_id,
+            source: documents::source::EMAIL,
+            filename,
+            kind: "unclassified",
+            content_type: non_empty_or(att.content_type.as_str(), "application/octet-stream"),
+            description: Some("received via support@ email"),
+            secondary_storage_key: None,
+            visibility: documents::visibility::INTERNAL,
+        },
+        &documents::DocumentIdentity {
+            slug: Some(slug),
+            ..Default::default()
+        },
+        provenance,
+        &att.bytes,
+    )
+    .await
+    .map_err(|error| ThreadError::Storage(error.to_string()))?;
+    Ok(match outcome {
+        store::assets::Filed::Revision(document) => document.asset_id,
+        store::assets::Filed::Unchanged { asset_id } => asset_id,
+    })
 }
 
 /// `s` trimmed, or `fallback` when `s` is blank.
@@ -3636,6 +3707,17 @@ mod tests {
         assert_eq!(docs[0].filename.as_deref(), Some("signed-form.pdf"));
         assert_eq!(docs[0].source.as_deref(), Some("email"));
         assert_eq!(docs[0].kind.as_deref(), Some("unclassified"));
+        // Every filed row carries a slug, or `project gate --check` fails
+        // the Project on it; its file name follows the C004 convention.
+        let slug = docs[0].slug.as_deref().expect("filed with a slug");
+        assert!(
+            slug.starts_with("mail/") && slug.ends_with("_signed-form-0.pdf"),
+            "{slug}"
+        );
+        assert!(
+            rules::c004::is_conventional_filename(slug.rsplit('/').next().unwrap()),
+            "{slug}"
+        );
 
         // The transcript records the ingest as a `system` hop.
         let convo = store::email_conversations::by_token(&surreal, token)
@@ -3659,6 +3741,82 @@ mod tests {
         assert_eq!(sent[0].attachments.len(), 1);
         assert_eq!(sent[0].attachments[0].filename, "signed-form.pdf");
         assert_eq!(sent[0].attachments[0].bytes, b"%PDF-1.4 fake");
+    }
+
+    #[tokio::test]
+    async fn signature_images_and_already_filed_bytes_are_not_filed_again() {
+        let surreal = mem_surreal().await;
+        let storage = storage().await;
+        let notation_id = store::test_support::seed_notation(&surreal).await;
+        let project_id = store::notations::find_by_id(&surreal, notation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .project_id;
+        let cap = CapturingEmail::new();
+        let rt = RecordingRuntime::default();
+        let token = "0000000000000000000000000000000d";
+        seed_linked_conversation(&surreal, token, notation_id).await;
+
+        let part = |filename: &str, content_type: &str, bytes: &[u8]| InboundAttachment {
+            filename: filename.into(),
+            content_type: content_type.into(),
+            bytes: bytes.to_vec(),
+        };
+        // Two messages of one thread, each carrying the sender's signature
+        // logo and an inline image; the second repeats the first's letter.
+        for (round, eml) in ["inbound/one.eml", "inbound/two.eml"]
+            .into_iter()
+            .enumerate()
+        {
+            let mut msg = inbound(
+                "Pisces <pisces@example.com>",
+                &format!("c{token}@parse.neonlaw.com"),
+                "Re: Estate plan",
+                "See attached.",
+            );
+            msg.attachments = vec![
+                part("Email Signature.png", "image/png", &[7; 90_000]),
+                part("image001.png", "image/png", b"inline"),
+                part("letter.pdf", "application/pdf", b"%PDF letter"),
+            ];
+            if round == 1 {
+                msg.attachments
+                    .push(part("letter copy.pdf", "application/pdf", b"%PDF letter"));
+                msg.attachments
+                    .push(part("notice.pdf", "application/pdf", b"%PDF notice"));
+            }
+            thread_inbound(&surreal, &storage, &cap, &rt, &cfg(), &msg, eml)
+                .await
+                .unwrap();
+        }
+
+        let docs = store::assets::for_project(&surreal, project_id)
+            .await
+            .unwrap();
+        let mut filenames: Vec<_> = docs
+            .iter()
+            .map(|doc| doc.filename.clone().unwrap_or_default())
+            .collect();
+        filenames.sort();
+        assert_eq!(filenames, ["letter.pdf", "notice.pdf"]);
+        assert!(
+            docs.iter().all(|doc| doc.slug.is_some()),
+            "every row slugged"
+        );
+
+        let sent = cap.captured();
+        let last = &sent.last().unwrap().body;
+        assert!(
+            last.contains("Email Signature.png — inline or signature image"),
+            "{last}"
+        );
+        assert!(
+            last.contains("letter copy.pdf — already on the matter"),
+            "{last}"
+        );
+        // The lawyer still receives every attachment with the notification.
+        assert_eq!(sent.last().unwrap().attachments.len(), 5);
     }
 
     #[tokio::test]
