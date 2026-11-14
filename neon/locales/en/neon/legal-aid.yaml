@@ -1,30 +1,55 @@
-head_title: "{site_name} | Navigator for legal aid"
+head_title: "{site_name} | Legal Aid"
 meta_description: >-
-  Bring an open Navigator workshop to your legal aid organization, run the
-  software yourself, or ask about hosted access. Attorney advertisement.
-title: Navigator for legal aid
-tagline: Start with the work your community needs.
+  Hosted Navigator for legal aid organizations: one price per user per month
+  plus model tokens, with your own brand name and Forgejo instance included.
+title: Legal Aid
+tagline: We run Navigator under your name so your team can run its cases.
 bands:
+  - kind: cards
+    anchor: pricing
+    overline: Hosted Navigator
+    heading: One price for legal aid organizations.
+    description: >-
+      Model tokens are billed on top at the provider's cost, with no markup.
+    pricing_style: true
+    items:
+      - title: Legal aid organizations
+        chips: ["$20"]
+        cadence: / user / month, plus model tokens
+        body:
+          - - text: Hosted Navigator for your organization, under your own brand name.
+        features:
+          - Your organization's name, colors, and websites
+          - Your own Forgejo instance for Project repositories
+          - Hosting, upgrades, backups, and sign-in
+        href: /contact
+        href_label: Ask about hosting
   - kind: statement
-    heading: Explore Navigator together
-    lead: An open workshop at your organization.
+    heading: What we run for you
+    lead: You do the legal work. We keep Navigator running.
     body:
       - - text: >-
-            You can host an open workshop at your organization at no cost to
-            your organization. Explore agentic lawyering with Navigator and
-            discuss the workflows your team wants to build.
-      - - text: >-
-            Navigator brings questionnaires, document templates, and matter
-            pages together. Your team can explore how those pieces fit your
-            practice before choosing how to run the software.
+            We put your organization's brand name on Navigator and stand up a
+            Forgejo instance that holds each Project's repository. We run the
+            database, the releases, and the sign-in, and we help you write
+            token-efficient prompts for your practice.
+  - kind: statement
+    heading: Learn Navigator
+    lead: Two open workshops.
+    body:
+      - - text: Using Navigator
+          href: /workshops/use-the-navigator
+        - text: " works one litigation matter end to end, from the retainer Template to its Matter Pages."
+      - - text: Operating Navigator
+          href: /workshops/deploy-the-navigator
+        - text: " stands up and runs your own Navigator instance on Google Cloud."
   - kind: statement
     heading: Self-hosting
     lead: Run Navigator yourself.
     body:
       - - text: >-
             Navigator's first-party software is free to self-host under
-            MIT OR Apache-2.0. Commercial use is permitted under either
-            license's terms. You manage your deployment and pay your own
+            MIT OR Apache-2.0. You manage your deployment and pay your own
             infrastructure and operating costs.
       - - text: >-
             Third-party software and assets retain their own terms. The
@@ -33,8 +58,7 @@ bands:
           href: https://github.com/neon-law/navigator/blob/main/docs/oss-install.md
         - text: " for the setup requirements and instructions."
   - kind: cta
-    heading: Tell us what your organization needs
+    heading: Tell us about your organization
     body: >-
-      Ask about an open workshop, self-hosting, or hosted Navigator. Tell us
-      which workflow you want to explore and how your team wants to run it.
+      Tell us which cases you take and how many people will use Navigator.
     email: "{firm_email}"

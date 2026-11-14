@@ -16,7 +16,8 @@ pub fn navigator(branding: &views::brand::Branding) -> PageContent {
     locales::navigator(branding)
 }
 
-/// `/legal-aid` — the workshop, self-hosted, and hosted paths for organizations.
+/// `/legal-aid` — hosted Navigator for legal aid organizations, the
+/// workshops, and self-hosting. See `locales/en/neon/legal-aid.yaml`.
 pub fn legal_aid(branding: &views::brand::Branding) -> PageContent {
     locales::legal_aid(branding)
 }
@@ -182,32 +183,35 @@ pub fn divorce_gateway(
 mod firm_copy_tests {
     use webapp::marketing_page::{Band, Paragraph};
 
+    /// Hosted Navigator is offered only to legal aid organizations: the one
+    /// price card lives on `/legal-aid`, and no other Neon page prices it.
     #[test]
-    fn legal_aid_reuses_the_canonical_hosted_card_and_usage_disclosure() {
-        let pricing = |page: webapp::marketing_page::PageContent| {
+    fn hosted_navigator_is_priced_only_for_legal_aid_organizations() {
+        let pricing_cards = |page: webapp::marketing_page::PageContent| {
             page.bands
                 .into_iter()
-                .find_map(|band| match band {
+                .filter_map(|band| match band {
                     Band::Cards {
-                        anchor,
-                        description,
+                        pricing_style: true,
                         items,
                         ..
-                    } if anchor == "pricing" => Some((description, items)),
+                    } => Some(items),
                     _ => None,
                 })
-                .expect("published pricing band")
+                .flatten()
+                .collect::<Vec<_>>()
         };
         let branding = &views::brand::DEFAULT_BRANDING;
-        let (canonical_disclosure, canonical_cards) = pricing(super::navigator(branding));
-        let canonical_card = canonical_cards
-            .into_iter()
-            .find(|card| card.title == "Legal aid organizations")
-            .expect("canonical legal-aid card");
-        let (audience_disclosure, audience_cards) = pricing(super::legal_aid(branding));
-        assert_eq!(audience_disclosure, canonical_disclosure);
-        assert_eq!(audience_cards.len(), 1);
-        assert!(audience_cards[0] == canonical_card);
+        let cards = pricing_cards(super::legal_aid(branding));
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].title, "Legal aid organizations");
+        assert_eq!(cards[0].chips.len(), 1);
+        assert!(cards[0]
+            .cadence
+            .as_deref()
+            .is_some_and(|c| c.contains("model tokens")));
+        assert!(pricing_cards(super::navigator(branding)).is_empty());
+        assert!(pricing_cards(crate::locales::neon_home(branding, None)).is_empty());
     }
 
     /// Every string the services band puts in front of a reader: the

@@ -25,12 +25,12 @@ Neon Law (`neon/`):
 
 | File | Page |
 | --- | --- |
-| `neon/locales/en/neon/home.yaml` | `/` |
+| `neon/locales/en/neon/home-marketing.yaml` | `/` — Navigator, open source software for agentic lawyering |
 | `neon/locales/en/neon/litigation.yaml` | `/disputes` |
 | `neon/locales/en/neon/fractional-gc.yaml` | unpublished; `/business` answers a 301 to `/` |
 | `neon/locales/en/neon/personal-plan.yaml` | `/personal` |
-| `neon/locales/en/neon/navigator.yaml` | `/navigator` and the shared hosted legal-aid offer |
-| `neon/locales/en/neon/legal-aid.yaml` | `/legal-aid` workshop and self-hosting paths |
+| `neon/locales/en/neon/navigator.yaml` | `/navigator` |
+| `neon/locales/en/neon/legal-aid.yaml` | `/legal-aid` hosted offer, workshops, and self-hosting |
 | `neon/locales/en/neon/notations.yaml` | `/notations/about` format story |
 | `neon/locales/en/guieb-shook/team.yaml` | `/team` and profiles on guiebshook.com |
 | `neon/locales/en/neon/gateway-delete-your-debt.yaml` | `/delete-your-debt` — Neon-only gateway to DeleteYourDebt.com |
@@ -293,13 +293,15 @@ public contact intake before sign-in; the signed-in page exposes the configured 
 paperwork follows the enrollment review. The page expressly distinguishes privacy from attorney-client privilege. Every
 other brand host answers `/nautilus` with a 404.
 
-Neon's home at `/` reads `neon/locales/en/neon/home-marketing.yaml` and wears the `home` skin: the light surface of the
-Notations index with a short hero. It opens by asking "What is your legal need?" and answers inside the first screen: a
-`needs` card band names each piece of paperwork the Nautilus subscription covers (an LLC, a will, a name change, small
-claims, an NDA, an offer letter, a privacy policy, data removal, unclaimed property) and links each to its notation or
-to enrollment. Pricing, the enrollment steps, the app preview, and the enrollment intake follow, resolving the same
-prices as `/nautilus`. The home publishes no price for legal work: legal work is a separate, prepaid retainer with the
-partner firm Lex Tecnica, which sets its own fees.
+Neon's home at `/` reads `neon/locales/en/neon/home-marketing.yaml` and presents Navigator under the tagline "Exacting
+agentic lawyering.": what Navigator does, a Notation band linking `/notations/about` and `/notations`, and a pointer to
+Legal Aid. It carries no subscription or services content. Its only call to action is "Star the repo", linking
+[neon-law/navigator](https://github.com/neon-law/navigator) from the hero and the closing band.
+
+Hosted Navigator is offered only to legal aid organizations, at `/legal-aid`: one price per user per month plus model
+tokens at the provider's cost, with the organization's own brand name and Forgejo instance included. The price appears
+only in the pricing card in `legal-aid.yaml`; `/` and `/navigator` link there without restating it. The page links the
+Using and Operating Navigator workshops.
 
 Neon's header names its three products: Nautilus at `/nautilus`, Navigator at `/navigator`, and Notations at
 `/notations`. Its fee schedule stays at `/services`. Business counsel is not sold separately: `/business` answers a 301

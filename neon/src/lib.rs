@@ -61,7 +61,7 @@ pub const PUBLIC_PATHS: &[&str] = &[
     "/purchases",
     "/purchases/{offering}",
     "/disputes",
-    // Answers a 301 to Nautilus at `/`, like `/personal` above: the business
+    // Answers a 301 to the home at `/`, like `/personal` above: the business
     // counsel page is retired and its formation and template work is part of
     // the Nautilus subscription.
     "/business",
@@ -445,6 +445,12 @@ fn indexed_pages(mark: &str) -> Vec<portal::LlmsTxtLink> {
             "/navigator",
             "The firm's legal project platform, open source under MIT OR Apache-2.0, with \
                  an open invitation to co-counsel a pro bono case.",
+        ),
+        indexed_page(
+            "Legal Aid",
+            "/legal-aid",
+            "Hosted Navigator for legal aid organizations: a monthly price per user plus model \
+             tokens, with the organization's own brand name and Forgejo instance included.",
         ),
         indexed_page(
             "Presentations",

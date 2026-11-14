@@ -33,15 +33,12 @@ bands:
                 Ask “List Navigator’s public Templates.” If you ask “Create a work in progress,”
                 Navigator asks whether you want a matter summary or want to record time or a cost.
   - kind: statement
-    heading: Notations and Nautilus
+    heading: Notations
     lead: Notations are filled-in Templates with a workflow.
     body:
       - - text: >-
             Use Navigator to browse public Templates in chat. A Notation is
             what you get when you fill in a Template for a Person in a Project.
-      - - text: Nautilus
-          href: /nautilus
-        - text: " is Neon Law’s subscription for privacy and paperwork."
   - kind: project_network
     anchor: connected-project
     overline: One connected Project
@@ -159,39 +156,15 @@ bands:
       - - text: >-
             The CLI and MCP server give Claude Code, Codex, and Cursor the same
             commands a lawyer runs.
-  - kind: cards
-    anchor: pricing
-    overline: Hosted Navigator
-    heading: Navigator as a service
-    description: >-
-      Monthly pricing is per user. Google Cloud Vertex AI token charges are
-      passed through at cost.
-    pricing_style: true
-    items:
-      - title: Law firms
-        chips: ["$50"]
-        cadence: / user / month
-        body:
-          - - text: Hosted Navigator access for your firm.
-        href: /contact
-        href_label: Contact us for a demo
-      - title: Legal aid organizations
-        chips: ["$5"]
-        cadence: / user / month
-        body:
-          - - text: Hosted Navigator access for your organization.
-        href: /contact
-        href_label: Contact us for a demo
   - kind: statement
-    heading: See Navigator in production
-    lead: Privacy comes first.
+    heading: Hosted Navigator for legal aid
+    lead: One price per user per month, plus model tokens.
     body:
       - - text: >-
-            We invite law firms to see our production account. The statistics
-            we use are anonymized and aggregated. We take privacy seriously.
-      - - text: >-
-            Our experience includes managing a 30-petabyte data warehouse for
-            Apple Finance.
+            We host Navigator for legal aid organizations, with your own
+            brand name and Forgejo instance included.
+      - - text: See the Legal Aid offer
+          href: /legal-aid
   - kind: video
     anchor: video
     overline: Video
@@ -222,17 +195,6 @@ bands:
               seeded sample firm and three sample matters, each cloned from
               its own Project repository: Cruller v. Prine, Widget Works, and
               the Estate of Cornelius Montgomery.
-  - kind: statement
-    heading: Skin Navigator for your firm
-    lead: Make Navigator your firm's own.
-    body:
-      - - text: >-
-            Contact Neon Law any time to put your firm's name, colors, and
-            websites on Navigator. We help you write token-efficient prompts
-            for your practice.
-      - - text: Contact us
-          href: /contact
-        - text: " to start."
   - kind: cta
     heading: Free use for those who co-counsel with us.
     body: >-
