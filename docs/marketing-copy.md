@@ -30,7 +30,7 @@ Neon Law (`neon/`):
 | `neon/locales/en/neon/fractional-gc.yaml` | unpublished; `/business` answers a 301 to `/` |
 | `neon/locales/en/neon/personal-plan.yaml` | `/personal` |
 | `neon/locales/en/neon/navigator.yaml` | `/navigator` |
-| `neon/locales/en/neon/pro-bono.yaml` | `/pro-bono` hosted offer, workshops, self-hosting; `/legal-aid` 301s |
+| `neon/locales/en/neon/legal-aid.yaml` | `/legal-aid` hosted offer, workshops, and self-hosting |
 | `neon/locales/en/neon/notations.yaml` | `/notations/about` format story |
 | `neon/locales/en/guieb-shook/team.yaml` | `/team` and profiles on guiebshook.com |
 | `neon/locales/en/neon/gateway-delete-your-debt.yaml` | `/delete-your-debt` — Neon-only gateway to DeleteYourDebt.com |
@@ -293,14 +293,15 @@ public contact intake before sign-in; the signed-in page exposes the configured 
 paperwork follows the enrollment review. The page expressly distinguishes privacy from attorney-client privilege. Every
 other brand host answers `/nautilus` with a 404.
 
-Neon's home at `/` reads `neon/locales/en/neon/home-marketing.yaml` and presents Navigator, open source software for
-agentic lawyering: what Navigator does, a Notation band linking `/notations/about` and `/notations`, and a pointer to
-the pro bono offer. Its only call to action is "Star the repo", linking the public
-[neon-law/navigator](https://github.com/neon-law/navigator) repository from the hero and the closing band.
+Neon's home at `/` reads `neon/locales/en/neon/home-marketing.yaml` and presents Navigator under the tagline "Exacting
+agentic lawyering.": what Navigator does, a Notation band linking `/notations/about` and `/notations`, and a pointer to
+Legal Aid. It carries no subscription or services content. Its only call to action is "Star the repo", linking
+[neon-law/navigator](https://github.com/neon-law/navigator) from the hero and the closing band.
 
-Hosted Navigator is offered only to pro bono organizations, at `/pro-bono`: $5 a month plus model tokens at the
-provider's cost, with the organization's own branding and Forgejo instance included. `/navigator` prices no hosted plan
-and links there. The pro bono page links the Using and Operating Navigator workshops.
+Hosted Navigator is offered only to legal aid organizations, at `/legal-aid`: one price per user per month plus model
+tokens at the provider's cost, with the organization's own brand name and Forgejo instance included. The price appears
+only in the pricing card in `legal-aid.yaml`; `/` and `/navigator` link there without restating it. The page links the
+Using and Operating Navigator workshops.
 
 Neon's header names its three products: Nautilus at `/nautilus`, Navigator at `/navigator`, and Notations at
 `/notations`. Its fee schedule stays at `/services`. Business counsel is not sold separately: `/business` answers a 301

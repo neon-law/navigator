@@ -1,24 +1,23 @@
-head_title: "{site_name} | Navigator for pro bono"
+head_title: "{site_name} | Legal Aid"
 meta_description: >-
-  Hosted Navigator for pro bono organizations: $5 a month plus model tokens,
-  with your own branding and Forgejo instance included.
-title: Navigator for pro bono
-tagline: We run Navigator so your organization can run its cases.
+  Hosted Navigator for legal aid organizations: one price per user per month
+  plus model tokens, with your own brand name and Forgejo instance included.
+title: Legal Aid
+tagline: We run Navigator under your name so your team can run its cases.
 bands:
   - kind: cards
     anchor: pricing
     overline: Hosted Navigator
-    heading: One price for pro bono organizations.
+    heading: One price for legal aid organizations.
     description: >-
-      Model tokens are billed at the provider's cost, with no markup. Hosted
-      Navigator is available only to pro bono organizations.
+      Model tokens are billed on top at the provider's cost, with no markup.
     pricing_style: true
     items:
-      - title: Pro bono organizations
-        chips: ["$5"]
-        cadence: / month, plus model tokens
+      - title: Legal aid organizations
+        chips: ["$10"]
+        cadence: / user / month, plus model tokens
         body:
-          - - text: Hosted Navigator for your whole organization.
+          - - text: Hosted Navigator for your organization, under your own brand name.
         features:
           - Your organization's name, colors, and websites
           - Your own Forgejo instance for Project repositories
@@ -30,7 +29,7 @@ bands:
     lead: You do the legal work. We keep Navigator running.
     body:
       - - text: >-
-            We put your organization's branding on Navigator and stand up a
+            We put your organization's brand name on Navigator and stand up a
             Forgejo instance that holds each Project's repository. We run the
             database, the releases, and the sign-in, and we help you write
             token-efficient prompts for your practice.

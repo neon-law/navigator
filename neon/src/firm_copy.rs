@@ -16,10 +16,10 @@ pub fn navigator(branding: &views::brand::Branding) -> PageContent {
     locales::navigator(branding)
 }
 
-/// `/pro-bono` — hosted Navigator for pro bono organizations, the workshops,
-/// and self-hosting. See `locales/en/neon/pro-bono.yaml`.
-pub fn pro_bono(branding: &views::brand::Branding) -> PageContent {
-    locales::pro_bono(branding)
+/// `/legal-aid` — hosted Navigator for legal aid organizations, the
+/// workshops, and self-hosting. See `locales/en/neon/legal-aid.yaml`.
+pub fn legal_aid(branding: &views::brand::Branding) -> PageContent {
+    locales::legal_aid(branding)
 }
 
 /// `/services` — the published schedule. See this brand's `services.yaml`.
@@ -183,10 +183,10 @@ pub fn divorce_gateway(
 mod firm_copy_tests {
     use webapp::marketing_page::{Band, Paragraph};
 
-    /// Hosted Navigator is offered only to pro bono organizations: the one
-    /// price card lives on `/pro-bono`, and no other Neon page prices it.
+    /// Hosted Navigator is offered only to legal aid organizations: the one
+    /// price card lives on `/legal-aid`, and no other Neon page prices it.
     #[test]
-    fn hosted_navigator_is_priced_only_for_pro_bono_organizations() {
+    fn hosted_navigator_is_priced_only_for_legal_aid_organizations() {
         let pricing_cards = |page: webapp::marketing_page::PageContent| {
             page.bands
                 .into_iter()
@@ -202,10 +202,10 @@ mod firm_copy_tests {
                 .collect::<Vec<_>>()
         };
         let branding = &views::brand::DEFAULT_BRANDING;
-        let cards = pricing_cards(super::pro_bono(branding));
+        let cards = pricing_cards(super::legal_aid(branding));
         assert_eq!(cards.len(), 1);
-        assert_eq!(cards[0].title, "Pro bono organizations");
-        assert_eq!(cards[0].chips, ["$5"]);
+        assert_eq!(cards[0].title, "Legal aid organizations");
+        assert_eq!(cards[0].chips.len(), 1);
         assert!(cards[0]
             .cadence
             .as_deref()

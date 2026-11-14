@@ -219,11 +219,11 @@ async fn the_home_presents_navigator_and_asks_for_a_star() {
     let body = body_string(anon_get(&app, "/").await).await;
     assert_eq!(body.matches("<h1").count(), 1);
     for text in [
-        "Open source software for agentic lawyering.",
+        "Exacting agentic lawyering.",
         "Star the repo",
         r#"href="https://github.com/neon-law/navigator""#,
         r#"href="/notations/about""#,
-        r#"href="/pro-bono""#,
+        r#"href="/legal-aid""#,
     ] {
         assert!(body.contains(text), "missing {text}: {body}");
     }
@@ -522,10 +522,10 @@ async fn supporting_pages_do_not_publish_separate_fees() {
     }
 }
 
-/// The platform page points hosting to the pro bono offer and keeps the
+/// The platform page points hosting to the Legal Aid offer and keeps the
 /// co-counsel invitation; it prices no subscription for law firms.
 #[tokio::test]
-async fn the_navigator_page_points_hosting_to_pro_bono_and_invites_co_counsel() {
+async fn the_navigator_page_points_hosting_to_legal_aid_and_invites_co_counsel() {
     let app = site_app().await;
     let body = body_string(anon_get(&app, "/navigator").await).await;
     assert!(
@@ -543,9 +543,9 @@ async fn the_navigator_page_points_hosting_to_pro_bono_and_invites_co_counsel() 
         "contact address: {body}"
     );
     for expected in [
-        "Hosted Navigator for pro bono organizations",
-        "$5 a month plus model tokens.",
-        r#"href="/pro-bono""#,
+        "Hosted Navigator for legal aid",
+        "One price per user per month, plus model tokens.",
+        r#"href="/legal-aid""#,
     ] {
         assert!(body.contains(expected), "missing {expected}: {body}");
     }
@@ -889,7 +889,7 @@ async fn home_metadata_describes_navigator_at_the_root_url() {
     let app = site_app().await;
     let body = body_string(anon_get(&app, "/").await).await;
     assert!(
-        body.contains("Navigator is open source software for agentic lawyering"),
+        body.contains("Navigator, exacting agentic lawyering"),
         "{body}"
     );
     assert!(
@@ -1035,31 +1035,29 @@ async fn an_unpublished_path_answers_not_found() {
     }
 }
 
-/// Pro bono organizations get the one hosted Navigator price, the workshops,
-/// and the self-hosting path; the retired legal-aid path lands here.
+/// Legal aid organizations get the one hosted Navigator price, the
+/// workshops, and the self-hosting path.
 #[tokio::test]
-async fn pro_bono_page_prices_hosted_navigator_and_links_the_workshops() {
+async fn legal_aid_page_prices_hosted_navigator_and_links_the_workshops() {
     let app = site_app().await;
-    let response = anon_get(&app, "/pro-bono").await;
+    let response = anon_get(&app, "/legal-aid").await;
     assert_eq!(response.status(), StatusCode::OK);
     let body = body_string(response).await;
     for expected in [
-        "Pro bono organizations",
-        "$5",
-        "/ month, plus model tokens",
+        "Legal aid organizations",
+        "/ user / month, plus model tokens",
+        "own brand name",
         "Forgejo",
         r#"href="/workshops/use-the-navigator""#,
         r#"href="/workshops/deploy-the-navigator""#,
         "MIT OR Apache-2.0",
         "https://github.com/neon-law/navigator/blob/main/docs/oss-install.md",
         "action=\"/leads\"",
-        "name=\"source_path\" value=\"/pro-bono\"",
+        "name=\"source_path\" value=\"/legal-aid\"",
     ] {
         assert!(body.contains(expected), "missing {expected}");
     }
-    for forbidden in ["$50", "/ user / month"] {
-        assert!(!body.contains(forbidden), "unexpected {forbidden}");
-    }
+    assert!(!body.contains("$50"), "unexpected law-firm price");
     let navigator = body_string(anon_get(&app, "/navigator").await).await;
     for retired in ["$50", "Navigator as a service"] {
         assert!(
@@ -1067,23 +1065,14 @@ async fn pro_bono_page_prices_hosted_navigator_and_links_the_workshops() {
             "/navigator still offers {retired}"
         );
     }
-    assert!(navigator.contains(r#"href="/pro-bono""#));
+    assert!(navigator.contains(r#"href="/legal-aid""#));
     let sitemap = body_string(anon_get(&app, "/sitemap.xml").await).await;
-    assert!(sitemap.contains("/pro-bono") && !sitemap.contains("/legal-aid"));
-    let moved = anon_get(&app, "/legal-aid").await;
-    assert_eq!(moved.status(), StatusCode::MOVED_PERMANENTLY);
-    assert_eq!(
-        moved
-            .headers()
-            .get("location")
-            .and_then(|value| value.to_str().ok()),
-        Some("/pro-bono"),
-    );
+    assert!(sitemap.contains("/legal-aid"));
 }
 
 /// The audience page belongs to Neon; foundation routes and sibling-brand paths remain absent.
 #[tokio::test]
-async fn pro_bono_page_is_only_published_by_neon() {
+async fn legal_aid_page_is_only_published_by_neon() {
     let mut state = site_state().await;
     let ports = views::brand::BrandKey::ALL
         .iter()
@@ -1098,7 +1087,7 @@ async fn pro_bono_page_is_only_published_by_neon() {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/pro-bono")
+                    .uri("/legal-aid")
                     .header("host", format!("localhost:{port}"))
                     .body(Body::empty())
                     .unwrap(),

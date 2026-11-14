@@ -1,15 +1,13 @@
 head_title: "{site_name} | Home"
 meta_description: >-
-  Navigator is open source software for agentic lawyering: each matter is a
-  Project repository, each document is a Notation, and a lawyer reviews every
-  step. Star the repository on GitHub.
+  Navigator, exacting agentic lawyering: each matter is a Project repository,
+  each document is a Notation, and a lawyer reviews every step.
 title: Navigator
 hero_mark: helm
-tagline: Open source software for agentic lawyering.
+tagline: Exacting agentic lawyering.
 hero_lead: >-
   Navigator gives a lawyer and an AI agent one place to work a matter: the
-  facts, the documents, the deadlines, and the review. You can read every
-  line, run it yourself, and help build it.
+  facts, the documents, the deadlines, and the review.
 hero_cta:
   href: https://github.com/neon-law/navigator
   label: Star the repo
@@ -75,19 +73,18 @@ bands:
         href: /notations
         href_label: Browse the Notations
   - kind: statement
-    heading: Navigator for pro bono organizations
-    lead: We host Navigator for pro bono organizations for $5 a month plus model tokens.
+    heading: Navigator for legal aid
+    lead: We host Navigator for legal aid organizations under their own brand name.
     body:
       - - text: >-
-            Your organization's own branding and Forgejo instance are included.
-            We run the rest.
-      - - text: See the pro bono offer
-          href: /pro-bono
+            Each user pays one monthly price, plus model tokens. Your own
+            Forgejo instance is included, and we run the rest.
+      - - text: See the Legal Aid offer
+          href: /legal-aid
   - kind: cta
     heading: Star Navigator on GitHub.
     body: >-
-      Navigator is open source under MIT OR Apache-2.0. A star helps other
-      lawyers find it.
+      A star helps other lawyers find Navigator.
     email: "{firm_email}"
     action:
       href: https://github.com/neon-law/navigator

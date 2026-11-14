@@ -31,7 +31,7 @@ const NEON_HOME_YAML: &str = include_str!("../locales/en/neon/home.yaml");
 const NEON_LITIGATION_YAML: &str = include_str!("../locales/en/neon/litigation.yaml");
 const NEON_FRACTIONAL_GC_YAML: &str = include_str!("../locales/en/neon/fractional-gc.yaml");
 const NEON_NOTATIONS_YAML: &str = include_str!("../locales/en/neon/notations.yaml");
-const NEON_PRO_BONO_YAML: &str = include_str!("../locales/en/neon/pro-bono.yaml");
+const NEON_LEGAL_AID_YAML: &str = include_str!("../locales/en/neon/legal-aid.yaml");
 const NEON_NAVIGATOR_YAML: &str = include_str!("../locales/en/neon/navigator.yaml");
 const NEON_FREE_RESOURCES_YAML: &str = include_str!("../locales/en/neon/free-resources.yaml");
 /// `/delete-your-debt` — Neon's own gateway to the DeleteYourDebt.com
@@ -199,7 +199,7 @@ pub fn catalog_yaml(key: BrandKey, page: &str) -> Option<&'static str> {
         (BrandKey::Neon, "fractional-gc") => Some(NEON_FRACTIONAL_GC_YAML),
         (BrandKey::Neon, "notations") => Some(NEON_NOTATIONS_YAML),
         (BrandKey::Neon, "navigator") => Some(NEON_NAVIGATOR_YAML),
-        (BrandKey::Neon, "pro-bono") => Some(NEON_PRO_BONO_YAML),
+        (BrandKey::Neon, "legal-aid") => Some(NEON_LEGAL_AID_YAML),
         (BrandKey::Neon, "nautilus") => Some(NEON_NAUTILUS_YAML),
         (BrandKey::Neon, "home-marketing") => Some(NEON_HOME_MARKETING_YAML),
         (BrandKey::Neon, "gateway-delete-your-debt") => Some(NEON_GATEWAY_DELETE_YOUR_DEBT_YAML),
@@ -1304,7 +1304,6 @@ pub fn home_for_host(
     webapp::home::HomeContent {
         path: String::new(),
         marketing_page: None,
-        nautilus_search: false,
         head_title: copy.head_title,
         meta_description: copy.meta_description,
         og_description: copy.og_description,
@@ -1501,9 +1500,9 @@ pub fn navigator(branding: &views::brand::Branding) -> PageContent {
     marketing_page(load_page(branding, "navigator"), None, branding)
 }
 
-/// `/pro-bono`, from this brand's `pro-bono.yaml`.
-pub fn pro_bono(branding: &views::brand::Branding) -> PageContent {
-    marketing_page(load_page(branding, "pro-bono"), None, branding)
+/// `/legal-aid`, from this brand's `legal-aid.yaml`.
+pub fn legal_aid(branding: &views::brand::Branding) -> PageContent {
+    marketing_page(load_page(branding, "legal-aid"), None, branding)
 }
 
 /// `/services`, from this brand's `services.yaml`.
@@ -2723,15 +2722,12 @@ mod tests {
     }
 
     /// The home is the Navigator page: it gives Notation its own band, links
-    /// the pro bono offer, and its only call to action stars the repository.
+    /// the Legal Aid offer, and its only call to action stars the repository.
     #[test]
     fn neon_home_presents_navigator_and_asks_only_for_a_star() {
         const REPO: &str = "https://github.com/neon-law/navigator";
         let content = neon_home(&views::brand::DEFAULT_BRANDING, None);
-        assert_eq!(
-            content.tagline,
-            "Open source software for agentic lawyering."
-        );
+        assert_eq!(content.tagline, "Exacting agentic lawyering.");
         let hero = content.hero_cta.as_ref().expect("hero action");
         assert_eq!(
             (hero.href.as_str(), hero.label.as_str()),
@@ -2753,7 +2749,8 @@ mod tests {
         }
         assert!(anchors.contains(&"notation"), "{anchors:?}");
         let text = serde_yaml::to_string(&content).expect("home serializes");
-        assert!(text.contains("/pro-bono"));
+        assert!(text.contains("/legal-aid"));
+        assert!(!text.contains("open source"));
         for retired in [
             "/nautilus",
             "Nautilus",

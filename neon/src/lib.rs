@@ -66,9 +66,7 @@ pub const PUBLIC_PATHS: &[&str] = &[
     // the Nautilus subscription.
     "/business",
     "/navigator",
-    // Answers a 301 to `/pro-bono`, like `/personal` above.
     "/legal-aid",
-    "/pro-bono",
     // The Neon-hosted gateway to the DeleteYourDebt.com practice. Neon-only —
     // 404s on every other registered brand host; see
     // `views::brand::BrandKey::publishes_firm_path`.
@@ -203,7 +201,7 @@ pub fn sitemap_paths(state: &AppState, key: BrandKey) -> std::collections::BTree
             let mut paths: std::collections::BTreeSet<String> = [
                 "/",
                 "/navigator",
-                "/pro-bono",
+                "/legal-aid",
                 "/delete-your-debt",
                 "/delete-your-data",
                 "/nautilus",
@@ -449,10 +447,10 @@ fn indexed_pages(mark: &str) -> Vec<portal::LlmsTxtLink> {
                  an open invitation to co-counsel a pro bono case.",
         ),
         indexed_page(
-            "Navigator for pro bono",
-            "/pro-bono",
-            "Hosted Navigator for pro bono organizations: $5 a month plus model tokens, with \
-             the organization's own branding and Forgejo instance included.",
+            "Legal Aid",
+            "/legal-aid",
+            "Hosted Navigator for legal aid organizations: a monthly price per user plus model \
+             tokens, with the organization's own brand name and Forgejo instance included.",
         ),
         indexed_page(
             "Presentations",
