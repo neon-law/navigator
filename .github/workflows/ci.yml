@@ -945,7 +945,23 @@ jobs:
           cargo llvm-cov clean --profraw-only
           # Build every test binary at the machine's full width first, so
           # execution is a separate cargo invocation.
+          stamp="$(mktemp)"
           cargo nextest run --workspace --no-run
+          # The build directory persists between runs, and `llvm-cov report`
+          # reads every instrumented binary in it. A binary this build
+          # superseded still maps the source it was built from, so a renamed
+          # file is reported at 0% and a changed one is counted twice. Delete
+          # each executable this build did not touch when a same-named sibling
+          # was rebuilt; the run below relinks any that are still current.
+          deps="${CARGO_TARGET_DIR:-target}/debug/deps"
+          find "${deps}" -maxdepth 1 -type f -perm -u+x -newer "${stamp}" -printf '%f\n' \
+              | sed -E 's/-[0-9a-f]{16}$//' | sort -u > "${stamp}.rebuilt"
+          find "${deps}" -maxdepth 1 -type f -perm -u+x ! -newer "${stamp}" -printf '%f\n' \
+              | while read -r bin; do
+                  if grep -qxF "$(sed -E 's/-[0-9a-f]{16}$//' <<<"${bin}")" "${stamp}.rebuilt"; then
+                      rm -f -- "${deps:?}/${bin:?}"
+                  fi
+              done
           # `--profile ci` is `.config/nextest.toml`: two retries, JUnit at
           # `target/nextest/ci/junit.xml`, and a fail-then-pass recorded FLAKY.
           # Tee the suite so a red run still has the panic after the log
