@@ -1,7 +1,9 @@
 //! The Firm edit form — `/app/admin/firms/{id}/edit`.
 //!
 //! A descriptive edit on `store::firms::update`: name, status
-//! (`active`/`suspended`/`archived`), and the Entity the Firm is. For Owner
+//! (`active`/`suspended`/`archived`), the Entity the Firm is, and its Portal
+//! Theme Brand — one of the Brands it owns, which every `/app` page reached
+//! through the Firm's hosts wears. For Owner
 //! only, it also offers the Admin DRI picker, which the update handler hands
 //! to `store::firms::appoint_admin_dri` — the designation's only writer. It
 //! never touches any other membership row; those move only through
@@ -39,6 +41,13 @@ pub struct FirmEntityOption {
     pub name: String,
 }
 
+/// One `<option>` in the Portal Theme Brand picker: a Brand the Firm owns.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct FirmBrandOption {
+    pub key: String,
+    pub name: String,
+}
+
 /// The rendered "edit firm" form.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
 pub struct FirmEditView {
@@ -52,6 +61,12 @@ pub struct FirmEditView {
     pub status: String,
     pub entity_id: Option<String>,
     pub entities: Vec<FirmEntityOption>,
+    /// The Firm's Portal Theme Brand key; `None` keeps each host's own look.
+    #[serde(default)]
+    pub portal_theme_brand_key: Option<String>,
+    /// The Brands this Firm owns, the only ones the theme picker offers.
+    #[serde(default)]
+    pub owned_brands: Vec<FirmBrandOption>,
     /// `true` when this caller holds `FirmCapability::ManageAdminDri` —
     /// Owner only — and so sees the Admin DRI picker.
     #[serde(default)]
@@ -189,11 +204,31 @@ pub async fn get_firm_edit_form() -> Result<FirmEditView, ServerFnError> {
         status: firm.status,
         entity_id: firm.entity_id.map(|id| id.to_string()),
         entities,
+        portal_theme_brand_key: firm.portal_theme_brand_key,
+        owned_brands: owned_brands(&surreal, id)
+            .await
+            .map_err(|error| ServerFnError::new(error.to_string()))?,
         can_appoint_dri,
         admin_dri_person_id,
         dri_candidates,
         ..base
     })
+}
+
+/// The Brands this Firm owns: the only choices for its Portal Theme Brand.
+#[cfg(feature = "server")]
+async fn owned_brands(
+    surreal: &store::surreal::SurrealDb,
+    firm_id: uuid::Uuid,
+) -> Result<Vec<FirmBrandOption>, store::brands::BrandError> {
+    Ok(store::brands::for_firm(surreal, firm_id)
+        .await?
+        .into_iter()
+        .map(|brand| FirmBrandOption {
+            key: brand.key,
+            name: brand.name,
+        })
+        .collect())
 }
 
 /// The current Admin DRI and every person `store::firms::appoint_admin_dri`
@@ -239,6 +274,16 @@ fn entity_options(entities: &[FirmEntityOption]) -> Vec<Choice> {
     options
 }
 
+fn theme_options(brands: &[FirmBrandOption]) -> Vec<Choice> {
+    let mut options = vec![Choice::new("", "Each host's own brand")];
+    options.extend(
+        brands
+            .iter()
+            .map(|brand| Choice::new(brand.key.clone(), brand.name.clone())),
+    );
+    options
+}
+
 fn edit_form(view: &FirmEditView) -> Element {
     let mut fields = vec![
         Field::text("Name", "name", view.name.clone()).required(),
@@ -257,6 +302,16 @@ fn edit_form(view: &FirmEditView) -> Element {
         )
         .required()
         .help("The legal organization this Firm is. Create the entity first if it isn't listed."),
+        Field::select(
+            "Portal theme",
+            "portal_theme_brand_key",
+            theme_options(&view.owned_brands),
+            view.portal_theme_brand_key.clone(),
+        )
+        .help(
+            "The brand whose colours, logo, and name every signed-in page wears, \
+             whichever of this firm's addresses a person signs in through.",
+        ),
     ];
     if view.can_appoint_dri {
         fields.push(
@@ -336,7 +391,7 @@ pub fn FirmEdit() -> Element {
 
 #[cfg(test)]
 mod tests {
-    use super::{edit_form, FirmEditView, FirmEntityOption};
+    use super::{edit_form, FirmBrandOption, FirmEditView, FirmEntityOption};
     use crate::components::PersonChoice;
     use crate::people::ViewerRole;
 
@@ -357,6 +412,17 @@ mod tests {
                 id: ENTITY_ID.to_string(),
                 name: "Guieb & Shook PC".to_string(),
             }],
+            portal_theme_brand_key: Some("guieb-shook".to_string()),
+            owned_brands: vec![
+                FirmBrandOption {
+                    key: "guieb-shook".to_string(),
+                    name: "Guieb & Shook".to_string(),
+                },
+                FirmBrandOption {
+                    key: "neon".to_string(),
+                    name: "Neon Law".to_string(),
+                },
+            ],
             can_appoint_dri: true,
             admin_dri_person_id: Some(ADMIN_ID.to_string()),
             dri_candidates: vec![
@@ -419,6 +485,20 @@ mod tests {
             html.contains(r#"<option value="active" selected"#),
             "{html}"
         );
+    }
+
+    /// The theme picker offers only the Firm's own Brands, plus the option
+    /// of each host keeping its own look, with the current theme selected.
+    #[test]
+    fn the_portal_theme_picker_offers_the_firm_s_own_brands() {
+        let html = render(&view());
+        assert!(html.contains(r#"name="portal_theme_brand_key""#), "{html}");
+        assert!(
+            html.contains(r#"<option value="guieb-shook" selected"#),
+            "{html}"
+        );
+        assert!(html.contains(r#"<option value="neon""#), "{html}");
+        assert!(html.contains(r#"<option value="""#), "{html}");
     }
 
     #[test]

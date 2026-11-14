@@ -1586,6 +1586,12 @@ mod tests {
                     "../postgres/migrations/20261114180000_create_plan_intake_and_upload_session_folder.sql"
                 ),
             ),
+            (
+                "20261114190000_add_firm_portal_theme_brand.sql",
+                include_str!(
+                    "../postgres/migrations/20261114190000_add_firm_portal_theme_brand.sql"
+                ),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());
