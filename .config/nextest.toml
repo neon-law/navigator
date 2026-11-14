@@ -49,6 +49,16 @@ retries = { backoff = "exponential", count = 2, delay = "2s", jitter = true }
 status-level = "pass"
 final-status-level = "flaky"
 
+# workflows-service tests on the embedded SurrealDB 4 engine intermittently
+# hang (a different test each time; #742 lost two shard runs to them at
+# 2,100s+). Kill one after 5 minutes so the ci profile's retries run it again
+# and JUnit records it as FLAKY, instead of the shard sitting until the job
+# timeout. Scoped to this package: deploy.yml's browser suites share the ci
+# profile and legitimately run longer.
+[[profile.ci.overrides]]
+filter = "package(workflows-service)"
+slow-timeout = { period = "60s", terminate-after = 5 }
+
 [profile.ci.junit]
 # Emitted at `target/nextest/ci/junit.xml`; uploaded as a CI artifact.
 path = "junit.xml"
