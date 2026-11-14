@@ -2268,7 +2268,7 @@ async fn a_chord_survives_dropped_input_after_its_prefix() {
 }
 
 #[tokio::test]
-async fn question_mark_opens_the_shortcut_overlay_from_a_signed_in_page() {
+async fn question_mark_toggles_the_shortcut_overlay_from_a_signed_in_page() {
     let Some(c) = new_client_or_skip().await else {
         return;
     };
@@ -2288,6 +2288,15 @@ async fn question_mark_opens_the_shortcut_overlay_from_a_signed_in_page() {
         &["Show keyboard shortcuts", "Open search", "Go to matters"],
     )
     .await;
+    press_char(&c, '?').await;
+    let is_open = "return document.querySelector('#nav-shortcuts-dialog').open;";
+    assert_eq!(c.execute(is_open, vec![]).await.unwrap(), true);
+    press_char(&c, '?').await;
+    assert_eq!(
+        c.execute(is_open, vec![]).await.unwrap(),
+        false,
+        "a second ? did not close the overlay"
+    );
     c.close().await.unwrap();
 }
 

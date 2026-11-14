@@ -165,8 +165,8 @@ fills the `?` overlay and the `/` palette from the same list, so a key that work
 - **Where it mounts.** `ShortcutHost` rides in `AppProfileMenu`, which every authenticated page renders, so no page
   wires it. The client intake has no navbar and hosts it itself. A page with shortcuts of its own renders
   `PageShortcuts`; `QuestionStage` does, for both questionnaire walkers.
-- **The overlay** is a native modal `<dialog>` labelled "Keyboard shortcuts": the platform supplies the focus trap, the
-  inert background and `Esc`, and focus returns to where it was when it closes.
+- **The overlay** is a native modal `<dialog>` labelled "Keyboard shortcuts". Press `?` to open or close it, or press
+  `Esc` to close it. The platform traps focus and makes the background inert. Closing the dialog restores prior focus.
 - **The palette.** `/` opens a second native `<dialog>`, `nav-palette-dialog`, listing the page's role-scoped
   destinations — the same `app_chrome` links the navbar renders, carried in `data-nav-palette-destinations`. Typing
   narrows the rows with a client-side substring match; `ArrowDown` and `ArrowUp` move the selection, `Enter` navigates,

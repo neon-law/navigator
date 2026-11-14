@@ -201,7 +201,9 @@
   function run(shortcut, event) {
     switch (shortcut.action) {
       case "help":
-        openHelp();
+        if (!event.repeat) {
+          openHelp();
+        }
         break;
       case "open_palette":
         openPalette();
@@ -577,9 +579,9 @@
       return;
     }
     if (isOpen()) {
-      // The dialog is modal: while it is up it owns the keyboard, and Esc
-      // closes it even where the platform's own cancel event never arrives.
-      if (event.key === "Escape") {
+      // The modal owns the keyboard. Accept a fresh help shortcut or Escape.
+      if (event.key === "Escape" || (!event.repeat && matchesStep("?", event))) {
+        event.preventDefault();
         closeHelp();
       }
       return;
