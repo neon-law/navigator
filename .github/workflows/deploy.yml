@@ -892,6 +892,11 @@ jobs:
     timeout-minutes: 60
     env:
       CHROME_FOR_TESTING_VERSION: 150.0.7871.46
+      # KIND's default 2 MiB test stack overflows
+      # prepared_practice_brands_pass_axe_in_light_and_dark_schemes at
+      # PracticePreview::start (mem_surreal). 32 MiB holds that helper, matching
+      # the coverage lane in ci.yml.
+      RUST_MIN_STACK: "33554432"
     steps:
       # No disk sweep: `blacksmith-4vcpu-ubuntu-2404` has a single ~145 GB root
       # disk, ample for the service images, the KIND node image, and the e2e
