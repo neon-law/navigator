@@ -48,6 +48,16 @@ evidence. Reference checks still read the Project, Person, Entity, and Notation 
 Project mirror supplies the parent rows. Run the records reconcile and resolve drift before enabling the switch. Keep it
 enabled once a deployment has written matter records.
 
+## Communications and email
+
+Whenever `NAVIGATOR_POSTGRES_HOST` is set, `store::communications`, `store::email_conversations`,
+`store::email_receipts`, and `store::email_deliveries` read and write PostgreSQL only: the `communication`,
+`email_conversation`, `email_conversation_message`, `email_receipt`, `email_delivery`, and `email_delivery_attempt`
+tables. The mirror neither copies nor compares those tables. Without a host, SurrealDB is the fallback. The unique
+indexes decide replay races, and a delivery's reservation commits with its attempt. Parent rows (Project, Person, Firm,
+Notation, Asset) must exist in PostgreSQL. A retention purge refuses while an Inbox Message or a Notation source still
+names a Communication it would delete. The Inbox tables follow the same rule.
+
 ## Other domains
 
 The [Firm journal](firm-journal.md) documents its backend selection and PostgreSQL-only reconciliation features.

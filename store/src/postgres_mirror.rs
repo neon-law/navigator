@@ -482,9 +482,7 @@ pub enum MirrorOutcome {
 pub enum MirrorError {
     #[error("the SurrealDB source row could not be read")]
     Source,
-    #[error(
-        "SurrealDB Inbox repair is disabled while PostgreSQL authority is enabled or misconfigured"
-    )]
+    #[error("SurrealDB Inbox repair is disabled while PostgreSQL holds the Inbox")]
     InboxAuthority,
     #[error("SurrealDB matter record repair is disabled while PostgreSQL matter authority is enabled or misconfigured")]
     MatterAuthority,

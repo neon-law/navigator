@@ -2,22 +2,20 @@
 //! `inbox_ingress`, `inbox_assignment`, and `inbox_delivery_attempt`, plus the
 //! reads the renderers use.
 //!
-//! Opt-in per deployment through `NAVIGATOR_POSTGRES_INBOX_AUTHORITY`. When
-//! enabled, every `store::inbox` entry point dispatches here instead of
-//! SurrealDB: ingest, dedup, threading, attribution, replies, notes, SMS,
+//! Whenever `NAVIGATOR_POSTGRES_HOST` is set ([`PostgresDb::configured`]),
+//! every `store::inbox` entry point dispatches here instead of SurrealDB:
+//! ingest, dedup, threading, attribution, replies, notes, SMS,
 //! dispatch, delivery callbacks, and the intake/project reads. The dispatcher
 //! semantics are unchanged — the Surreal statement flow is ported statement
 //! for statement, with one improvement: ingest writes inside a single
 //! transaction so a lost ingress race cannot strand an orphan Message, which
 //! the Surreal path repaired by deleting after the fact.
 //!
-//! Two kinds of state deliberately stay on their existing authorities and are
-//! read through the Surreal handle the callers already hold: the
-//! Communication spine projection (`communications::ingest`) and the
-//! person/project/brand authorization lookups. This module writes no new
-//! Surreal Inbox rows — once the deployment cuts over, the Surreal Inbox
-//! tables go stale by design and the recurring inbox mirror reconciliation
-//! must be retired for the slice (`docs/postgres-tooling.md`).
+//! The Communication spine projection (`communications::ingest`) and the
+//! person/project/brand authorization lookups stay with their own modules,
+//! reached through the handle the callers already hold. This module writes no
+//! Surreal Inbox rows, and the inbox mirror refuses to repair the slice from
+//! SurrealDB (`docs/postgres-tooling.md`).
 
 use chrono::Utc;
 use uuid::Uuid;
@@ -31,39 +29,16 @@ use crate::persons::Role;
 use crate::postgres::PostgresDb;
 use crate::surreal::SurrealDb;
 
-/// Opt-in switch for the postgres-authoritative Inbox slice.
-pub(crate) const AUTHORITY_ENV: &str = "NAVIGATOR_POSTGRES_INBOX_AUTHORITY";
-
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum InboxAuthorityError {
-    #[error("PostgreSQL inbox authority setting must be one of 0, 1, false, or true")]
-    Configuration,
-    #[error("PostgreSQL is unavailable for inbox authority")]
+    #[error("PostgreSQL is unavailable for the Inbox")]
     Unavailable,
 }
 
-/// Strict parse, matching the people authority's accepted values.
-pub(crate) fn enabled_from(setting: Option<&str>) -> Result<bool, InboxAuthorityError> {
-    match setting {
-        None | Some("0" | "false") => Ok(false),
-        Some("1" | "true") => Ok(true),
-        Some(_) => Err(InboxAuthorityError::Configuration),
-    }
-}
-
-/// The pool to dispatch to, or `None` when the deployment keeps Surreal.
+/// The pool to dispatch to, or `None` when no PostgreSQL host is configured.
 pub(crate) async fn authority() -> Result<Option<PostgresDb>, InboxAuthorityError> {
-    let setting = match std::env::var(AUTHORITY_ENV) {
-        Ok(setting) => Some(setting),
-        Err(std::env::VarError::NotPresent) => None,
-        Err(std::env::VarError::NotUnicode(_)) => return Err(InboxAuthorityError::Configuration),
-    };
-    if !enabled_from(setting.as_deref())? {
-        return Ok(None);
-    }
-    PostgresDb::from_env()
+    PostgresDb::configured()
         .await
-        .map(Some)
         .map_err(|_| InboxAuthorityError::Unavailable)
 }
 

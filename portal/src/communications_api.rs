@@ -75,6 +75,9 @@ pub(crate) fn map_communication(error: store::communications::CommunicationError
         }
         store::communications::CommunicationError::NotFound => ApiError::NotFound,
         store::communications::CommunicationError::Db(error) => ApiError::Db(error.to_string()),
+        store::communications::CommunicationError::Postgres(error) => {
+            ApiError::Db(error.to_string())
+        }
     }
 }
 

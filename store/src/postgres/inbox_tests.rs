@@ -60,7 +60,6 @@ async fn native_authority_routes_the_public_inbox_lifecycle_to_postgres() {
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", &name, "--nocapture"])
             .env(CHILD, "1")
-            .env(pg_inbox::AUTHORITY_ENV, "0")
             .env_remove("NAVIGATOR_POSTGRES_MIRROR")
             .output()
             .unwrap();
@@ -87,7 +86,6 @@ async fn native_authority_routes_the_public_inbox_lifecycle_to_postgres() {
         ("NAVIGATOR_POSTGRES_PASSWORD", "synthetic".to_string()),
         ("NAVIGATOR_POSTGRES_SSLMODE", "disable".to_string()),
         ("NAVIGATOR_POSTGRES_DATABASE", database),
-        (pg_inbox::AUTHORITY_ENV, "1".to_string()),
     ] {
         std::env::set_var(name, value);
     }
@@ -2433,27 +2431,34 @@ async fn native_attachments_and_intake_details_follow_firm_and_project_scope() {
 }
 
 #[tokio::test]
-async fn legacy_inbox_repair_cannot_replace_native_authority_or_guess_on_invalid_config() {
+async fn legacy_inbox_repair_cannot_replace_native_authority() {
     const CHILD: &str = "NAVIGATOR_TEST_INBOX_REPAIR_AUTHORITY_CHILD";
-    let Some(case) = std::env::var(CHILD).ok() else {
+    if std::env::var_os(CHILD).is_none() {
         if crate::postgres_mirror::tests::test_postgres().is_none() {
             return;
         }
-        for case in ["1", "not-a-valid-authority"] {
-            let output=std::process::Command::new(std::env::current_exe().unwrap())
-                .args(["--exact",format!("{}::legacy_inbox_repair_cannot_replace_native_authority_or_guess_on_invalid_config",module_path!().split_once("::").unwrap().1).as_str(),"--nocapture"])
-                .env(CHILD,case).env(pg_inbox::AUTHORITY_ENV,"0").env_remove("NAVIGATOR_POSTGRES_MIRROR")
-                .output().unwrap();
-            assert!(
-                output.status.success()
-                    && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
-                "authority case {case}: {}\n{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                &format!(
+                    "{}::legacy_inbox_repair_cannot_replace_native_authority",
+                    module_path!().split_once("::").unwrap().1
+                ),
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env_remove("NAVIGATOR_POSTGRES_HOST")
+            .env_remove("NAVIGATOR_POSTGRES_MIRROR")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "isolated repair: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
         return;
-    };
+    }
     let Some(f) = fixture().await else {
         return;
     };
@@ -2496,17 +2501,22 @@ async fn legacy_inbox_repair_cannot_replace_native_authority_or_guess_on_invalid
     .execute(f.pg.pool())
     .await
     .unwrap();
-    std::env::set_var(pg_inbox::AUTHORITY_ENV, &case);
+    std::env::set_var("NAVIGATOR_POSTGRES_HOST", "127.0.0.1");
     let repair = crate::postgres_mirror::mirror(
         &f.db,
         &f.pg,
         &crate::postgres_mirror::MirrorKey::InboxMessage(source.message_id),
     )
     .await;
-    assert!(repair.is_err(),"a stale Source row cannot overwrite native Inbox or select authority on malformed configuration");
+    assert!(
+        repair.is_err(),
+        "a stale Source row cannot overwrite the native Inbox"
+    );
     assert!(crate::postgres_mirror::inbox::reconcile(&f.db, &f.pg)
         .await
-        .is_err());
+        .unwrap()
+        .tables
+        .is_empty());
     let body: String = sqlx::query_scalar("SELECT body FROM message WHERE id=$1")
         .bind(source.message_id)
         .fetch_one(f.pg.pool())
@@ -2725,7 +2735,6 @@ async fn native_triage_public_doors_preserve_canonical_inbox_authority() {
             let output = std::process::Command::new(std::env::current_exe().unwrap())
                 .args(["--exact", &name, "--nocapture"])
                 .env(CHILD, case)
-                .env(pg_inbox::AUTHORITY_ENV, "0")
                 .env_remove("NAVIGATOR_POSTGRES_MIRROR")
                 .output()
                 .unwrap();
@@ -2804,7 +2813,6 @@ async fn configure_native_triage_fixture(f: &Fixture) {
         ("NAVIGATOR_POSTGRES_PASSWORD", "synthetic".to_string()),
         ("NAVIGATOR_POSTGRES_DATABASE", database),
         ("NAVIGATOR_POSTGRES_SSLMODE", "disable".to_string()),
-        (pg_inbox::AUTHORITY_ENV, "1".to_string()),
     ] {
         std::env::set_var(key, value);
     }
@@ -2927,12 +2935,9 @@ async fn native_triage_mirror_preserves_native_parent(
     ));
     assert!(crate::postgres_mirror::inbox::reconcile(&f.db, &f.pg)
         .await
-        .is_err());
-    std::env::set_var(pg_inbox::AUTHORITY_ENV, "invalid-native-authority");
-    assert!(matches!(
-        Box::pin(mirror(&f.db, &f.pg, &MirrorKey::InboxTriage(triage.id))).await,
-        Err(MirrorError::InboxAuthority)
-    ));
+        .unwrap()
+        .tables
+        .is_empty());
 }
 
 async fn seed_triage_mirror_catalogs(f: &Fixture) {
@@ -3745,7 +3750,6 @@ async fn fi_project_destination_is_reserved_before_any_history_commit() {
             let output = std::process::Command::new(std::env::current_exe().unwrap())
                 .args(["--exact", &name, "--nocapture"])
                 .env(CHILD, case)
-                .env(pg_inbox::AUTHORITY_ENV, "0")
                 .env_remove("NAVIGATOR_POSTGRES_MIRROR")
                 .output()
                 .unwrap();

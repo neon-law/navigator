@@ -1,4 +1,8 @@
 //! PostgreSQL projections for privileged Communications and email threads.
+//!
+//! Whenever `NAVIGATOR_POSTGRES_HOST` is set PostgreSQL holds these rows, so a
+//! SurrealDB row (or its absence) is no evidence about them: the mirror writes
+//! nothing and parity compares no table.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -402,6 +406,9 @@ pub async fn mirror(
     pg: &PostgresDb,
     key: &MirrorKey,
 ) -> Result<Mirrored, MirrorError> {
+    if crate::postgres::communications::configured() {
+        return Ok(Mirrored::Unchanged);
+    }
     match key {
         MirrorKey::Communication(id) => Box::pin(mirror_communication(s, pg, *id)).await,
         MirrorKey::EmailConversation(id) => {
@@ -477,6 +484,9 @@ pub async fn mirror(
     }
 }
 pub async fn parity(s: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
+    if crate::postgres::communications::configured() {
+        return Ok(ParityReport { tables: Vec::new() });
+    }
     let (a, b, c) = source_all(s).await?;
     Ok(ParityReport {
         tables: vec![
@@ -487,6 +497,9 @@ pub async fn parity(s: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, Mirr
     })
 }
 pub async fn reconcile(s: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
+    if crate::postgres::communications::configured() {
+        return Ok(ParityReport { tables: Vec::new() });
+    }
     let (a, b, c) = source_all(s).await?;
     for (src, tgt) in [
         (a, target_comms(pg).await?),

@@ -1,10 +1,12 @@
 //! Durable Slack delivery state for inbound email summaries.
 
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::postgres::communications::{self as authority, CommunicationsAuthorityError};
+use crate::postgres::PostgresDb;
 use crate::surreal::{record_id, record_uuid, SurrealDb};
 
 const DELIVERY_TABLE: &str = "email_delivery";
@@ -16,7 +18,7 @@ pub const UNKNOWN: &str = "unknown";
 pub const CONFIRMED: &str = "confirmed";
 pub const FAILED: &str = "failed";
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EmailDelivery {
     pub id: Uuid,
     pub receipt_id: Uuid,
@@ -32,7 +34,7 @@ pub struct EmailDelivery {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EmailDeliveryAttempt {
     pub id: Uuid,
     pub delivery_id: Uuid,
@@ -63,6 +65,8 @@ struct DeliveryUpdate<'a> {
 pub enum EmailDeliveryError {
     #[error("database: {0}")]
     Db(#[from] surrealdb::Error),
+    #[error(transparent)]
+    Postgres(#[from] CommunicationsAuthorityError),
     #[error("delivery record was not found")]
     NotFound,
     #[error("delivery is not confirmed")]
@@ -143,6 +147,21 @@ pub async fn ensure(
     receipt_id: Uuid,
     channel_id: &str,
 ) -> Result<EmailDelivery, EmailDeliveryError> {
+    if let Some(pg) = authority::authority().await? {
+        // The unique `receipt_id` decides a race; the loser reads the winner.
+        let query = sqlx::query(
+            "INSERT INTO email_delivery (id, receipt_id, channel_id, state, inserted_at, \
+             updated_at) VALUES ($1, $2, $3, $4, now(), now()) ON CONFLICT (receipt_id) DO NOTHING",
+        )
+        .bind(Uuid::now_v7())
+        .bind(receipt_id)
+        .bind(channel_id.to_owned())
+        .bind(NOT_ATTEMPTED);
+        authority::execute(&pg, query).await?;
+        return find_pg(&pg, receipt_id)
+            .await?
+            .ok_or(EmailDeliveryError::WriteReturnedNothing);
+    }
     if let Some(delivery) = find(db, receipt_id).await? {
         crate::postgres_mirror::after_write(
             db,
@@ -194,6 +213,9 @@ pub async fn find(
     db: &SurrealDb,
     receipt_id: Uuid,
 ) -> Result<Option<EmailDelivery>, EmailDeliveryError> {
+    if let Some(pg) = authority::authority().await? {
+        return Ok(find_pg(&pg, receipt_id).await?);
+    }
     let mut response = db
         .query(format!(
             "SELECT {DELIVERY_SELECT} FROM {DELIVERY_TABLE} \
@@ -216,6 +238,9 @@ pub async fn admit_attempt(
     receipt_id: Uuid,
     correlation_id: &str,
 ) -> Result<DeliveryAdmission, EmailDeliveryError> {
+    if let Some(pg) = authority::authority().await? {
+        return Box::pin(admit_attempt_pg(&pg, receipt_id, correlation_id)).await;
+    }
     let delivery = find(db, receipt_id)
         .await?
         .ok_or(EmailDeliveryError::NotFound)?;
@@ -409,6 +434,9 @@ async fn update_delivery(
     receipt_id: Uuid,
     update: DeliveryUpdate<'_>,
 ) -> Result<EmailDelivery, EmailDeliveryError> {
+    if let Some(pg) = authority::authority().await? {
+        return Box::pin(update_delivery_pg(&pg, receipt_id, update)).await;
+    }
     let delivery = find(db, receipt_id)
         .await?
         .ok_or(EmailDeliveryError::NotFound)?;
@@ -492,6 +520,14 @@ pub async fn list_by_state(
     db: &SurrealDb,
     state: &str,
 ) -> Result<Vec<EmailDelivery>, EmailDeliveryError> {
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "SELECT to_jsonb(d) AS row FROM email_delivery d WHERE d.state = $1 \
+             ORDER BY d.updated_at DESC",
+        )
+        .bind(state.to_owned());
+        return Ok(authority::rows(&pg, query).await?);
+    }
     let mut response = db
         .query(format!(
             "SELECT {DELIVERY_SELECT} FROM {DELIVERY_TABLE} \
@@ -514,6 +550,14 @@ pub async fn attempts(
     let delivery = find(db, receipt_id)
         .await?
         .ok_or(EmailDeliveryError::NotFound)?;
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "SELECT to_jsonb(a) AS row FROM email_delivery_attempt a WHERE a.delivery_id = $1 \
+             ORDER BY a.inserted_at, a.id",
+        )
+        .bind(delivery.id);
+        return Ok(authority::rows(&pg, query).await?);
+    }
     let mut response = db
         .query(format!(
             "SELECT {ATTEMPT_SELECT} FROM {ATTEMPT_TABLE} \
@@ -527,6 +571,120 @@ pub async fn attempts(
         .into_iter()
         .filter_map(AttemptRow::into_attempt)
         .collect())
+}
+
+fn find_pg(pg: &PostgresDb, receipt_id: Uuid) -> authority::Op<'_, Option<EmailDelivery>> {
+    let query =
+        sqlx::query("SELECT to_jsonb(d) AS row FROM email_delivery d WHERE d.receipt_id = $1")
+            .bind(receipt_id);
+    authority::maybe(pg, query)
+}
+
+fn row<T: serde::de::DeserializeOwned>(value: serde_json::Value) -> Result<T, EmailDeliveryError> {
+    Ok(serde_json::from_value(value).map_err(CommunicationsAuthorityError::from)?)
+}
+
+/// The reservation and its attempt commit together; the state guard in the
+/// `UPDATE` admits one sender when two race.
+async fn admit_attempt_pg(
+    pg: &PostgresDb,
+    receipt_id: Uuid,
+    correlation_id: &str,
+) -> Result<DeliveryAdmission, EmailDeliveryError> {
+    let sql = CommunicationsAuthorityError::from;
+    let delivery = find_pg(pg, receipt_id)
+        .await?
+        .ok_or(EmailDeliveryError::NotFound)?;
+    if delivery.state == CONFIRMED || delivery.state == UNKNOWN || delivery.state == SENDING {
+        return Ok(DeliveryAdmission {
+            delivery,
+            attempt_id: None,
+        });
+    }
+    let mut tx = pg.pool().begin().await.map_err(sql)?;
+    let changed: Option<serde_json::Value> = sqlx::query_scalar(
+        "UPDATE email_delivery d SET state = $2, current_correlation_id = $3, \
+         last_error = NULL, updated_at = now() \
+         WHERE d.id = $1 AND d.state IN ('not_attempted', 'failed') RETURNING to_jsonb(d)",
+    )
+    .bind(delivery.id)
+    .bind(SENDING)
+    .bind(correlation_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(sql)?;
+    let Some(changed) = changed else {
+        return Ok(DeliveryAdmission {
+            delivery: find_pg(pg, receipt_id)
+                .await?
+                .ok_or(EmailDeliveryError::NotFound)?,
+            attempt_id: None,
+        });
+    };
+    let attempt_id = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO email_delivery_attempt (id, delivery_id, correlation_id, state, \
+         inserted_at, updated_at) VALUES ($1, $2, $3, $4, now(), now())",
+    )
+    .bind(attempt_id)
+    .bind(delivery.id)
+    .bind(correlation_id)
+    .bind(SENDING)
+    .execute(&mut *tx)
+    .await
+    .map_err(sql)?;
+    tx.commit().await.map_err(sql)?;
+    Ok(DeliveryAdmission {
+        delivery: row(changed)?,
+        attempt_id: Some(attempt_id),
+    })
+}
+
+/// The delivery and its current attempt move together.
+async fn update_delivery_pg(
+    pg: &PostgresDb,
+    receipt_id: Uuid,
+    update: DeliveryUpdate<'_>,
+) -> Result<EmailDelivery, EmailDeliveryError> {
+    let sql = CommunicationsAuthorityError::from;
+    let mut tx = pg.pool().begin().await.map_err(sql)?;
+    let updated: Option<serde_json::Value> = sqlx::query_scalar(
+        "UPDATE email_delivery d SET state = $2, channel_id = COALESCE($3, d.channel_id), \
+         current_correlation_id = CASE WHEN $2 = 'not_attempted' THEN NULL \
+         ELSE d.current_correlation_id END, \
+         slack_timestamp = $4, last_error = $5, reconciled_by = $6, reconciliation = $7, \
+         reconciled_at = CASE WHEN $6 IS NULL THEN d.reconciled_at ELSE now() END, \
+         updated_at = now() WHERE d.receipt_id = $1 RETURNING to_jsonb(d)",
+    )
+    .bind(receipt_id)
+    .bind(update.state)
+    .bind(update.channel_id)
+    .bind(update.timestamp)
+    .bind(update.error)
+    .bind(update.actor)
+    .bind(update.reconciliation)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(sql)?;
+    let updated: EmailDelivery = row(updated.ok_or(EmailDeliveryError::NotFound)?)?;
+    if update.state != NOT_ATTEMPTED {
+        if let Some(correlation_id) = updated.current_correlation_id.as_deref() {
+            sqlx::query(
+                "UPDATE email_delivery_attempt SET state = $1, slack_timestamp = $2, \
+                 error = $3, updated_at = now() WHERE delivery_id = $4 AND correlation_id = $5",
+            )
+            .bind(update.state)
+            .bind(update.timestamp)
+            .bind(update.error)
+            .bind(updated.id)
+            .bind(correlation_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(sql)?;
+        }
+    }
+    tx.commit().await.map_err(sql)?;
+    Ok(updated)
 }
 
 #[cfg(test)]

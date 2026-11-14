@@ -1,7 +1,8 @@
 //! PostgreSQL mirror for inbound Email Receipts and their Slack delivery records.
 //!
-//! SurrealDB remains authoritative. The receipt identity preserves inbound
-//! deduplication, while delivery and attempt rows keep the durable dispatch
+//! Whenever `NAVIGATOR_POSTGRES_HOST` is set PostgreSQL holds these rows, and
+//! the mirror writes and compares nothing. The receipt identity preserves
+//! inbound deduplication, while delivery and attempt rows keep the durable dispatch
 //! state and provider outcomes. Mirror errors identify rows only by UUID.
 
 use std::collections::BTreeMap;
@@ -443,6 +444,9 @@ pub async fn mirror(
     pg: &PostgresDb,
     key: &MirrorKey,
 ) -> Result<Mirrored, MirrorError> {
+    if crate::postgres::communications::configured() {
+        return Ok(Mirrored::Unchanged);
+    }
     match key {
         MirrorKey::EmailReceipt(id) => {
             let Some(row) =
@@ -504,6 +508,9 @@ pub async fn mirror(
 }
 
 pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
+    if crate::postgres::communications::configured() {
+        return Ok(ParityReport { tables: Vec::new() });
+    }
     let source = source(surreal).await?;
     let target = target(pg).await?;
     Ok(ParityReport {
