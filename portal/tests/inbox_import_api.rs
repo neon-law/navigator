@@ -603,7 +603,6 @@ async fn an_import_walks_the_postgres_ingest_idempotently() {
         // The attachment filing mirrors the Surreal asset row into
         // PostgreSQL; `set_attachment_asset`'s foreign key needs it there.
         .env("NAVIGATOR_POSTGRES_MIRROR", "1")
-        .env("NAVIGATOR_POSTGRES_INBOX_AUTHORITY", "1")
         .output()
         .expect("spawn the postgres-backed child test");
     remove_isolated_database(&port, &database).await;

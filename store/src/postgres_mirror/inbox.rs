@@ -215,19 +215,14 @@ fn parent(column: &str, id: Uuid) -> Option<MirrorKey> {
     })
 }
 
-// No Source row is deletion or overwrite evidence after native Inbox cutover.
-fn native_inbox_authority_selected() -> Result<bool, MirrorError> {
-    let setting = match std::env::var(crate::postgres::inbox::AUTHORITY_ENV) {
-        Ok(value) => Some(value),
-        Err(std::env::VarError::NotPresent) => None,
-        Err(std::env::VarError::NotUnicode(_)) => return Err(MirrorError::InboxAuthority),
-    };
-    crate::postgres::inbox::enabled_from(setting.as_deref())
-        .map_err(|_| MirrorError::InboxAuthority)
+// PostgreSQL holds the Inbox whenever a host is configured, so no Source row
+// is deletion or overwrite evidence then.
+fn native_inbox_authority_selected() -> bool {
+    std::env::var_os("NAVIGATOR_POSTGRES_HOST").is_some()
 }
 
 fn require_source_authority() -> Result<(), MirrorError> {
-    if native_inbox_authority_selected()? {
+    if native_inbox_authority_selected() {
         Err(MirrorError::InboxAuthority)
     } else {
         Ok(())
@@ -275,7 +270,7 @@ async fn mirror_inner(
     key: &MirrorKey,
 ) -> Result<Mirrored, MirrorError> {
     let native_triage = if matches!(key, MirrorKey::InboxTriage(_)) {
-        native_inbox_authority_selected()?
+        native_inbox_authority_selected()
     } else {
         require_source_authority()?;
         false
@@ -365,8 +360,12 @@ async fn mirror_inner(
     }
 }
 
-/// Compare the complete Inbox transcript and its audit rows.
+/// Compare the complete Inbox transcript and its audit rows. Once PostgreSQL
+/// holds the Inbox there is no SurrealDB image to compare.
 pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
+    if native_inbox_authority_selected() {
+        return Ok(ParityReport { tables: Vec::new() });
+    }
     let mut tables = Vec::with_capacity(TABLES.len());
     for table in TABLES {
         let source = source(surreal, table).await?;
@@ -389,7 +388,6 @@ pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport
 /// Repair mutable projections and insert missing audit rows. Changed or extra
 /// audit rows remain drift; mutable target-only rows delete in reverse order.
 pub async fn reconcile(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
-    require_source_authority()?;
     let report = parity(surreal, pg).await?;
     let mut deletes: Vec<&TableParity> = Vec::new();
     for table_report in &report.tables {

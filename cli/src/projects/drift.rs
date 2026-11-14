@@ -164,11 +164,31 @@ pub enum Finding {
     /// Project repository that never got one is invisible to every check
     /// above, which is indistinguishable from having no drift.
     NoManifest { repository: String },
+    /// A Forgejo topic requires review before cleanup. Review evidence
+    /// identifies the exact head and never grants permission to delete it.
+    ForgejoBranch {
+        repository: String,
+        branch: String,
+        forgejo_head: String,
+        origin_head: Option<String>,
+        #[serde(flatten)]
+        review: BranchReview,
+    },
     /// A dual-forge checkout could not establish main parity.
     ForgeParity {
         repository: String,
         problem: ForgeParityProblem,
     },
+}
+
+/// Evidence about a Forgejo topic absent from the GitHub ref advertisement.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "review", rename_all = "kebab-case")]
+pub enum BranchReview {
+    DifferentGitHubHead,
+    MergedGitHubReview { number: u64 },
+    NoMatchingReview,
+    ReviewUnavailable,
 }
 
 /// Why the checkout's two main refs could not be verified equal.
@@ -177,6 +197,7 @@ pub enum Finding {
 pub enum ForgeParityProblem {
     Unconfigured { remote: &'static str },
     Unavailable { remote: &'static str },
+    SameRemote,
     MainMissing { remote: &'static str },
     MainMismatch { origin: String, forgejo: String },
 }
@@ -190,7 +211,9 @@ impl Finding {
     pub fn status(&self) -> Status {
         match self {
             Self::RowlessByDeclaration { .. } => Status::Ok,
-            Self::ManifestDisagreesWithName { .. } | Self::NoManifest { .. } => Status::Warn,
+            Self::ManifestDisagreesWithName { .. }
+            | Self::NoManifest { .. }
+            | Self::ForgejoBranch { .. } => Status::Warn,
             Self::RepositoryHasNoRow { .. }
             | Self::DuplicateCode { .. }
             | Self::UnreadableManifest { .. }
@@ -209,6 +232,7 @@ impl Finding {
             Self::UnreadableManifest { .. } => "unreadable-manifest",
             Self::NoManifest { .. } => "no-manifest",
             Self::ForgeParity { .. } => "forge-parity",
+            Self::ForgejoBranch { .. } => "forgejo-branch",
         }
     }
 
@@ -223,7 +247,8 @@ impl Finding {
             Self::ManifestDisagreesWithName { repository, .. }
             | Self::UnreadableManifest { repository, .. }
             | Self::NoManifest { repository }
-            | Self::ForgeParity { repository, .. } => repository,
+            | Self::ForgeParity { repository, .. }
+            | Self::ForgejoBranch { repository, .. } => repository,
         }
     }
 
@@ -258,12 +283,28 @@ impl Finding {
                 "`{repository}` carries no {MANIFEST}, so it declares no Project and cannot \
                  be reconciled"
             ),
+            Self::ForgejoBranch { branch, review, .. } => {
+                let evidence = match review {
+                    BranchReview::DifferentGitHubHead => "GitHub has a different head".to_owned(),
+                    BranchReview::MergedGitHubReview { number } => {
+                        format!("GitHub PR #{number} merged this exact head")
+                    }
+                    BranchReview::NoMatchingReview => "no matching merged GitHub review".to_owned(),
+                    BranchReview::ReviewUnavailable => {
+                        "GitHub review evidence unavailable".to_owned()
+                    }
+                };
+                format!("Forgejo branch `{branch}`: {evidence}")
+            }
             Self::ForgeParity { problem, .. } => match problem {
                 ForgeParityProblem::Unconfigured { remote } => {
                     format!("missing `{remote}` fetch remote")
                 }
                 ForgeParityProblem::Unavailable { remote } => {
                     format!("could not read `{remote}`; verify provisioning and Git access")
+                }
+                ForgeParityProblem::SameRemote => {
+                    "both fetch remotes resolve to the same endpoint".to_owned()
                 }
                 ForgeParityProblem::MainMissing { remote } => {
                     format!("`{remote}` does not advertise refs/heads/main")
@@ -677,26 +718,17 @@ pub async fn run(
     };
 
     let mut report = analyze(&repositories, &live_codes);
-    if forge_parity {
-        let live: BTreeSet<&str> = live_codes.iter().map(String::as_str).collect();
-        for repository in &repositories {
-            if repository.manifest_error.is_none()
-                && repository.rowless_reason.is_none()
-                && repository.declared_code.as_deref() == Some(repository.directory.as_str())
-                && live.contains(repository.code())
-            {
-                let checkout = dir.join(&repository.directory);
-                if let Err(problem) = check_forge_parity(&checkout).await {
-                    report.findings.push(Finding::ForgeParity {
-                        repository: repository.code().to_owned(),
-                        problem,
-                    });
-                }
-            }
-        }
-    }
+    let forge_coverage = if forge_parity {
+        Some(report_fleet_forge_parity(dir, &repositories, &live_codes, &mut report.findings).await)
+    } else {
+        None
+    };
     if json {
-        match serde_json::to_string_pretty(&as_json(&report, &scan_root)) {
+        let mut value = as_json(&report, &scan_root);
+        if let Some(coverage) = &forge_coverage {
+            value["forge_coverage"] = serde_json::json!(coverage);
+        }
+        match serde_json::to_string_pretty(&value) {
             Ok(rendered) => println!("{rendered}"),
             Err(error) => {
                 eprintln!("navigator: render the report: {error}");
@@ -705,6 +737,12 @@ pub async fn run(
         }
     } else {
         render(&report, &scan_root, all);
+        if let Some(coverage) = &forge_coverage {
+            println!(
+                "Forge parity: {} checkout(s) checked, {} with other origins skipped",
+                coverage.checked, coverage.other_origin
+            );
+        }
     }
 
     if report.is_reconciled() {
@@ -712,6 +750,37 @@ pub async fn run(
     } else {
         ExitCode::from(1)
     }
+}
+
+async fn report_fleet_forge_parity(
+    dir: &Path,
+    repositories: &[ScannedRepository],
+    live_codes: &[String],
+    findings: &mut Vec<Finding>,
+) -> ForgeCoverage {
+    let live: BTreeSet<&str> = live_codes.iter().map(String::as_str).collect();
+    let mut coverage = ForgeCoverage::default();
+    for repository in repositories {
+        if repository.manifest_error.is_none()
+            && repository.rowless_reason.is_none()
+            && repository.declared_code.as_deref() == Some(repository.directory.as_str())
+            && live.contains(repository.code())
+        {
+            let checkout = dir.join(&repository.directory);
+            if check_forge_parity(&checkout, repository.code(), findings).await {
+                coverage.checked += 1;
+            } else {
+                coverage.other_origin += 1;
+            }
+        }
+    }
+    coverage
+}
+
+#[derive(Default, serde::Serialize)]
+struct ForgeCoverage {
+    checked: usize,
+    other_origin: usize,
 }
 
 async fn git_probe(dir: &Path, args: &[&str]) -> Option<std::process::Output> {
@@ -729,47 +798,157 @@ async fn git_probe(dir: &Path, args: &[&str]) -> Option<std::process::Output> {
     .ok()
 }
 
-async fn remote_main(dir: &Path, remote: &'static str) -> Result<String, ForgeParityProblem> {
+async fn remote_url(
+    dir: &Path,
+    remote: &'static str,
+    configured: bool,
+) -> Result<String, ForgeParityProblem> {
     let unavailable = ForgeParityProblem::Unavailable { remote };
-    let configured = git_probe(dir, &["remote", "get-url", remote])
+    let key = format!("remote.{remote}.url");
+    let args = if configured {
+        ["config", "--get", key.as_str()]
+    } else {
+        ["remote", "get-url", remote]
+    };
+    let output = git_probe(dir, &args)
         .await
         .ok_or_else(|| unavailable.clone())?;
-    match configured.status.code() {
-        Some(0) => {}
-        Some(2) => return Err(ForgeParityProblem::Unconfigured { remote }),
-        _ => return Err(unavailable),
-    }
-
-    let output = git_probe(
-        dir,
-        &["ls-remote", "--exit-code", remote, "refs/heads/main"],
-    )
-    .await
-    .ok_or_else(|| unavailable.clone())?;
     match output.status.code() {
-        Some(0) => {}
-        Some(2) => return Err(ForgeParityProblem::MainMissing { remote }),
-        _ => return Err(unavailable),
+        Some(0) => String::from_utf8(output.stdout)
+            .ok()
+            .map(|url| url.trim().to_owned())
+            .filter(|url| !url.is_empty())
+            .ok_or(unavailable),
+        Some(1) if configured => Err(ForgeParityProblem::Unconfigured { remote }),
+        Some(2) if !configured => Err(ForgeParityProblem::Unconfigured { remote }),
+        _ => Err(unavailable),
     }
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .find_map(|line| {
-            let (sha, reference) = line.split_once('\t')?;
-            (reference == "refs/heads/main"
-                && matches!(sha.len(), 40 | 64)
-                && sha.bytes().all(|byte| byte.is_ascii_hexdigit()))
-            .then(|| sha.to_owned())
-        })
-        .ok_or(unavailable)
 }
 
-async fn check_forge_parity(dir: &Path) -> Result<(), ForgeParityProblem> {
-    let (origin, forgejo) =
-        tokio::try_join!(remote_main(dir, "origin"), remote_main(dir, "forgejo"))?;
+async fn remote_heads(
+    dir: &Path,
+    remote: &'static str,
+) -> Result<BTreeMap<String, String>, ForgeParityProblem> {
+    let unavailable = ForgeParityProblem::Unavailable { remote };
+    let output = git_probe(dir, &["ls-remote", "--heads", remote])
+        .await
+        .filter(|output| output.status.success())
+        .ok_or_else(|| unavailable.clone())?;
+    let text = String::from_utf8(output.stdout).map_err(|_| unavailable.clone())?;
+    text.lines()
+        .map(|line| {
+            let (sha, reference) = line.split_once('\t').ok_or_else(|| unavailable.clone())?;
+            let branch = reference
+                .strip_prefix("refs/heads/")
+                .ok_or_else(|| unavailable.clone())?;
+            if branch.is_empty()
+                || !matches!(sha.len(), 40 | 64)
+                || !sha.bytes().all(|byte| byte.is_ascii_hexdigit())
+            {
+                return Err(unavailable.clone());
+            }
+            Ok((branch.to_owned(), sha.to_owned()))
+        })
+        .collect()
+}
+
+fn compare_main(
+    origin: &BTreeMap<String, String>,
+    forgejo: &BTreeMap<String, String>,
+) -> Result<(), ForgeParityProblem> {
+    let origin = origin
+        .get("main")
+        .ok_or(ForgeParityProblem::MainMissing { remote: "origin" })?;
+    let forgejo = forgejo
+        .get("main")
+        .ok_or(ForgeParityProblem::MainMissing { remote: "forgejo" })?;
     if origin == forgejo {
         Ok(())
     } else {
-        Err(ForgeParityProblem::MainMismatch { origin, forgejo })
+        Err(ForgeParityProblem::MainMismatch {
+            origin: origin.clone(),
+            forgejo: forgejo.clone(),
+        })
+    }
+}
+
+async fn check_forge_parity(dir: &Path, repository: &str, findings: &mut Vec<Finding>) -> bool {
+    match review_forge_refs(dir, repository, findings).await {
+        Ok(checked) => checked,
+        Err(problem) => {
+            findings.push(Finding::ForgeParity {
+                repository: repository.to_owned(),
+                problem,
+            });
+            true
+        }
+    }
+}
+
+async fn review_forge_refs(
+    dir: &Path,
+    repository: &str,
+    findings: &mut Vec<Finding>,
+) -> Result<bool, ForgeParityProblem> {
+    let origin_url = remote_url(dir, "origin", true).await?;
+    let Ok((owner, name)) = super::lifecycle::github_owner_name(&origin_url) else {
+        return Ok(false);
+    };
+    let (origin_fetch, mirror_fetch) = tokio::try_join!(
+        remote_url(dir, "origin", false),
+        remote_url(dir, "forgejo", false)
+    )?;
+    if origin_fetch == mirror_fetch {
+        return Err(ForgeParityProblem::SameRemote);
+    }
+    let (origin, forgejo) =
+        tokio::try_join!(remote_heads(dir, "origin"), remote_heads(dir, "forgejo"))?;
+    // Resolve GitHub credentials only when an upstream-deleted topic needs review.
+    let github = if forgejo
+        .keys()
+        .any(|branch| branch != "main" && !origin.contains_key(branch))
+    {
+        super::lifecycle::github_token().ok().and_then(|token| {
+            super::forge_github::GitHubForge::new("https://api.github.com", &owner, &name, &token)
+                .ok()
+        })
+    } else {
+        None
+    };
+    report_forgejo_branches(repository, &origin, &forgejo, github.as_ref(), findings).await;
+    compare_main(&origin, &forgejo).map(|()| true)
+}
+
+async fn report_forgejo_branches(
+    repository: &str,
+    origin: &BTreeMap<String, String>,
+    forgejo: &BTreeMap<String, String>,
+    github: Option<&super::forge_github::GitHubForge>,
+    findings: &mut Vec<Finding>,
+) {
+    let branches = forgejo
+        .iter()
+        .filter(|(branch, sha)| branch.as_str() != "main" && origin.get(*branch) != Some(*sha));
+    for (branch, forgejo_head) in branches {
+        let origin_head = origin.get(branch).cloned();
+        let review = if origin_head.is_some() {
+            BranchReview::DifferentGitHubHead
+        } else if let Some(github) = github {
+            match github.merged_review_for_head(branch, forgejo_head).await {
+                Ok(Some(number)) => BranchReview::MergedGitHubReview { number },
+                Ok(None) => BranchReview::NoMatchingReview,
+                Err(_) => BranchReview::ReviewUnavailable,
+            }
+        } else {
+            BranchReview::ReviewUnavailable
+        };
+        findings.push(Finding::ForgejoBranch {
+            repository: repository.to_owned(),
+            branch: branch.clone(),
+            forgejo_head: forgejo_head.clone(),
+            origin_head,
+            review,
+        });
     }
 }
 
@@ -780,6 +959,7 @@ mod tests {
         MANIFEST,
     };
     use crate::projects::doctor::Status;
+    use std::collections::BTreeMap;
     use std::path::Path;
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -815,48 +995,138 @@ mod tests {
         git(&checkout, &["config", "user.name", "Fixture"]);
         git(&checkout, &["config", "user.email", "fixture@example.test"]);
         git(&checkout, &["config", "commit.gpgsign", "false"]);
-        let probe = || super::check_forge_parity(&checkout);
+        let probe = || async {
+            let mut findings = Vec::new();
+            let result = super::review_forge_refs(&checkout, "matter", &mut findings).await;
+            (result, findings)
+        };
         assert!(matches!(
-            probe().await,
+            probe().await.0,
             Err(ForgeParityProblem::Unconfigured { .. })
         ));
 
+        let github = "https://github.com/example/matter.git";
+        git(&checkout, &["remote", "add", "origin", github]);
         git(
             &checkout,
-            &["remote", "add", "origin", origin.to_str().unwrap()],
+            &[
+                "config",
+                &format!("url.{}.insteadOf", origin.display()),
+                github,
+            ],
+        );
+        assert_eq!(
+            probe().await.0,
+            Err(ForgeParityProblem::Unconfigured { remote: "forgejo" })
         );
         git(
             &checkout,
             &["remote", "add", "forgejo", mirror.to_str().unwrap()],
         );
         assert!(matches!(
-            probe().await,
+            probe().await.0,
             Err(ForgeParityProblem::Unavailable { .. })
         ));
 
         git(&origin, &["init", "--bare"]);
         git(&mirror, &["init", "--bare"]);
         assert!(matches!(
-            probe().await,
+            probe().await.0,
             Err(ForgeParityProblem::MainMissing { .. })
         ));
 
         git(&checkout, &["commit", "--allow-empty", "-m", "initial"]);
         git(&checkout, &["push", "origin", "main"]);
         git(&checkout, &["push", "forgejo", "main"]);
-        assert_eq!(probe().await, Ok(()));
+        assert_eq!(probe().await, (Ok(true), vec![]));
 
         git(&checkout, &["commit", "--allow-empty", "-m", "landed"]);
         git(&checkout, &["push", "origin", "main"]);
-        assert!(matches!(
-            probe().await,
-            Err(ForgeParityProblem::MainMismatch { .. })
-        ));
+        git(&checkout, &["push", "origin", "main:refs/heads/topic"]);
+        git(&checkout, &["push", "forgejo", "HEAD^:refs/heads/topic"]);
+        let (main, findings) = probe().await;
+        assert!(matches!(main, Err(ForgeParityProblem::MainMismatch { .. })));
+        assert!(matches!(&findings[..], [Finding::ForgejoBranch {
+            branch, review: super::BranchReview::DifferentGitHubHead, ..
+        }] if branch == "topic"));
         assert_eq!(
             git(&mirror, &["rev-parse", "refs/heads/main"]),
             git(&checkout, &["rev-parse", "HEAD^"])
         );
+        git(
+            &checkout,
+            &["remote", "set-url", "origin", mirror.to_str().unwrap()],
+        );
+        assert_eq!(probe().await, (Ok(false), vec![]));
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn branch_review_distinguishes_missing_different_and_merged_heads() {
+        use super::BranchReview;
+        use wiremock::matchers::query_param;
+
+        let remote = MockServer::start().await;
+        for (branch, body) in [
+            (
+                "merged",
+                serde_json::json!([{
+                    "number": 17,
+                    "merged_at": "2026-10-31T12:00:00Z",
+                    "base": {"ref": "main"},
+                    "head": {"sha": "shipped", "ref": "merged", "repo": {"full_name": "acme/nav"}}
+                }]),
+            ),
+            ("only", serde_json::json!([])),
+        ] {
+            Mock::given(method("GET"))
+                .and(path("/repos/acme/nav/pulls"))
+                .and(query_param("head", format!("acme:{branch}")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(body))
+                .mount(&remote)
+                .await;
+        }
+        let github = crate::projects::forge_github::GitHubForge::new(
+            &remote.uri(),
+            "acme",
+            "nav",
+            "fixture",
+        )
+        .unwrap();
+        let heads = |items: &[(&str, &str)]| {
+            items
+                .iter()
+                .map(|(branch, sha)| ((*branch).to_owned(), (*sha).to_owned()))
+                .collect::<BTreeMap<_, _>>()
+        };
+        let origin = heads(&[("main", "current"), ("same", "shared"), ("split", "github")]);
+        let mirror = heads(&[
+            ("main", "behind"),
+            ("same", "shared"),
+            ("split", "forgejo"),
+            ("merged", "shipped"),
+            ("only", "unknown"),
+        ]);
+        let mut findings = Vec::new();
+        super::report_forgejo_branches("matter", &origin, &mirror, Some(&github), &mut findings)
+            .await;
+        assert!(matches!(
+            findings.as_slice(),
+            [
+                Finding::ForgejoBranch {
+                    review: BranchReview::MergedGitHubReview { number: 17 },
+                    ..
+                },
+                Finding::ForgejoBranch {
+                    review: BranchReview::NoMatchingReview,
+                    ..
+                },
+                Finding::ForgejoBranch {
+                    review: BranchReview::DifferentGitHubHead,
+                    ..
+                }
+            ]
+        ));
     }
 
     /// A repository that parsed cleanly and declares its own name as its code —

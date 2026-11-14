@@ -1,5 +1,5 @@
 use super::*;
-use crate::postgres_mirror::tests::{connect, fresh_schema, test_postgres};
+use crate::postgres_mirror::tests::{connect, fresh_schema};
 use crate::test_support::mem_surreal;
 use std::process::Command;
 
@@ -136,21 +136,19 @@ async fn receipt_delivery_attempt_mirror_replays_reconciles_and_cascades() {
     pg.0.close().await;
 }
 
-/// The hook reads process-global PostgreSQL configuration, so run each case
+/// The writers read process-global PostgreSQL configuration, so run each case
 /// in a subprocess with a private environment as the broader mirror suite does.
+/// Without a host they write SurrealDB; with one, PostgreSQL holds the rows and
+/// SurrealDB none, whether or not the mirror is on.
 #[test]
-fn email_write_hooks_are_isolated() {
+fn email_writers_follow_the_postgres_host() {
     let Some((options, database)) = tokio::runtime::Runtime::new()
         .unwrap()
         .block_on(fresh_schema())
     else {
         return;
     };
-    let mut cases = vec!["disabled"];
-    if test_postgres().is_some() {
-        cases.extend(["off", "mirrored"]);
-    }
-    for case in cases {
+    for case in ["disabled", "postgres"] {
         let mut child = Command::new(std::env::current_exe().unwrap());
         child
             .args([
@@ -161,34 +159,22 @@ fn email_write_hooks_are_isolated() {
             .env("NAVIGATOR_EMAIL_MIRROR_TEST_CASE", case)
             .env(crate::postgres_mirror::MIRROR_ENV, "1")
             .env("NAVIGATOR_POSTGRES_HOST", "127.0.0.1")
-            .env("NAVIGATOR_POSTGRES_PORT", "1")
-            .env("NAVIGATOR_POSTGRES_USER", "synthetic-writer")
+            .env(
+                "NAVIGATOR_POSTGRES_PORT",
+                std::env::var("NAVIGATOR_TEST_POSTGRES_PORT").unwrap(),
+            )
+            .env("NAVIGATOR_POSTGRES_USER", "postgres")
             .env("NAVIGATOR_POSTGRES_PASSWORD", "synthetic")
-            .env("NAVIGATOR_POSTGRES_DATABASE", "synthetic")
+            .env("NAVIGATOR_POSTGRES_DATABASE", &database)
             .env("NAVIGATOR_POSTGRES_SSLMODE", "disable")
             .env_remove("NAVIGATOR_POSTGRES_ROOT_CERT");
-        match case {
-            "disabled" => {
-                child.env_remove("NAVIGATOR_POSTGRES_HOST");
-            }
-            "off" | "mirrored" => {
-                if case == "off" {
-                    child.env_remove(crate::postgres_mirror::MIRROR_ENV);
-                }
-                child
-                    .env(
-                        "NAVIGATOR_POSTGRES_PORT",
-                        std::env::var("NAVIGATOR_TEST_POSTGRES_PORT").unwrap(),
-                    )
-                    .env("NAVIGATOR_POSTGRES_USER", "postgres")
-                    .env("NAVIGATOR_POSTGRES_DATABASE", &database);
-            }
-            _ => unreachable!(),
+        if case == "disabled" {
+            child.env_remove("NAVIGATOR_POSTGRES_HOST");
         }
         let output = child.output().unwrap();
         assert!(
-            output.status.success(),
-            "email hook scenario {case}: {}{}",
+            output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "email writer scenario {case}: {}{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
@@ -207,25 +193,32 @@ async fn email_write_hook_probe() {
         .await
         .unwrap()
         .is_some());
-    if case == "mirrored" {
+    let attempts: Vec<String> = crate::email_deliveries::attempts(&surreal, receipt_id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|attempt| attempt.state)
+        .collect();
+    assert_eq!(attempts, ["unknown", "failed", "confirmed"]);
+    let surreal_rows: Vec<surrealdb::types::RecordId> = surreal
+        .query("SELECT VALUE id FROM email_receipt")
+        .await
+        .unwrap()
+        .take(0)
+        .unwrap();
+    assert_eq!(surreal_rows.len(), usize::from(case == "disabled"));
+    if case == "postgres" {
         let pg = PostgresDb::from_env().await.unwrap();
-        let report = super::parity(&surreal, &pg).await.unwrap();
-        assert!(report.is_clean(), "{report:?}");
-        let states: Vec<String> =
-            sqlx::query_scalar("SELECT state FROM email_delivery_attempt ORDER BY inserted_at")
-                .fetch_all(&pg.0)
+        assert!(super::parity(&surreal, &pg)
+            .await
+            .unwrap()
+            .tables
+            .is_empty());
+        assert_eq!(
+            mirror(&surreal, &pg, &MirrorKey::EmailReceipt(receipt_id))
                 .await
-                .unwrap();
-        assert_eq!(states, ["unknown", "failed", "confirmed"]);
-    } else if case == "off" {
-        let pg = PostgresDb::from_env().await.unwrap();
-        for table in ["email_receipt", "email_delivery", "email_delivery_attempt"] {
-            let count: i64 =
-                sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM {table}")))
-                    .fetch_one(&pg.0)
-                    .await
-                    .unwrap();
-            assert_eq!(count, 0, "{table} written with mirror disabled");
-        }
+                .unwrap(),
+            Mirrored::Unchanged
+        );
     }
 }
