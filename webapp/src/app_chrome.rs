@@ -231,48 +231,6 @@ pub async fn resolve_app_brand_mark(
     }
 }
 
-/// The navbar's mark for a matter whose brand is `project`, seen from a request
-/// the `host` brand answers.
-///
-/// The portal lives on one host (the firm's), so a Project's own brand cannot
-/// come from the `Host:` header: the matter names it (`project.brand`). The mark
-/// shows that brand's logo and name, and its link leaves the portal for the
-/// brand's own home page, an absolute URL because the portal's host is not the
-/// brand's. When the two brands are the same this is
-/// [`resolve_app_brand_mark`] unchanged.
-///
-/// A brand key this build does not compile (a runtime brand) keeps the host's
-/// mark rather than guessing at one.
-#[cfg(feature = "server")]
-pub async fn resolve_project_brand_mark(
-    surreal: &store::surreal::SurrealDb,
-    host: views::brand::BrandKey,
-    project: &str,
-    deployment_host: Option<&str>,
-) -> AppBrandMark {
-    let host_mark = resolve_app_brand_mark(surreal, host).await;
-    let Some(key) = views::brand::BrandKey::parse(project).filter(|key| *key != host) else {
-        return host_mark;
-    };
-    let firm = &key.resolve_branding(&views::brand::DEFAULT_BRANDING).firm;
-    let uploaded = store::brands::find_by_key(surreal, key.as_str())
-        .await
-        .ok()
-        .flatten()
-        .and_then(|brand| brand.logo_object_key)
-        .map(|object_key| format!("/assets/{object_key}"));
-    let src = uploaded.unwrap_or_else(|| firm.logo_href.to_string());
-    AppBrandMark {
-        logo: (!src.is_empty()).then(|| AppLogo {
-            src,
-            href: key.public_home_href_for(deployment_host),
-            brand_name: firm.site_name.to_string(),
-        }),
-        firm_name: firm.site_name.to_string(),
-        tokens_href: crate::brand_style::brand_tokens_href(key.as_str()),
-    }
-}
-
 /// Resolve the navbar's brand mark for the current request.
 ///
 /// Prefers the mark the portal pre-layer (`inject_app_brand_mark`) resolved on
@@ -687,33 +645,6 @@ mod tests {
         let surreal = store::surreal::test_support::mem().await;
         let mark = resolve_app_brand_mark(&surreal, views::brand::BrandKey::Neon).await;
         assert_eq!(mark, firm_brand_mark());
-    }
-
-    /// A matter of another brand shows that brand, not the portal host's: its
-    /// name, its tokens, and a link that leaves the portal for its home page.
-    #[cfg(feature = "server")]
-    #[tokio::test]
-    async fn a_matter_of_another_brand_wears_that_brand_and_links_its_home() {
-        let surreal = store::surreal::test_support::mem().await;
-        let neon = views::brand::BrandKey::Neon;
-        let mark = resolve_project_brand_mark(&surreal, neon, "delete-your-data", None).await;
-        let logo = mark.logo.expect("the brand ships a logo");
-        assert_eq!(logo.href, "https://www.deleteyourdata.com");
-        assert_eq!(mark.firm_name, logo.brand_name);
-        assert_ne!(mark.firm_name, firm_brand_mark().firm_name);
-        let staging = resolve_project_brand_mark(
-            &surreal,
-            neon,
-            "delete-your-data",
-            Some("staging.neonlaw.com"),
-        )
-        .await;
-        assert_eq!(
-            staging.logo.unwrap().href,
-            "https://staging.deleteyourdata.com"
-        );
-        let same = resolve_project_brand_mark(&surreal, neon, "neon", None).await;
-        assert_eq!(same, firm_brand_mark(), "the host's own brand is unchanged");
     }
 
     /// A brand with an uploaded logo (ENG-586) renders it in preference to
