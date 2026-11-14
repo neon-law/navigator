@@ -8,8 +8,8 @@
 //! re-uses its checkpoint instead of reading the clock again. A six-hour
 //! window with no line is the alarm.
 //!
-//! **The workflow id is the idempotency key.** DBOS 0.5.0 has no scheduler,
-//! so [`schedule`] starts the workflow for each six-hour UTC slot with the id
+//! **The workflow id is the idempotency key.** [`schedule`] starts the
+//! workflow for each six-hour UTC slot with the id
 //! [`workflow_id`] derives from that slot. A restart, or a second replica,
 //! computes the same id, and a second start joins the first run.
 //!

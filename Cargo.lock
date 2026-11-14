@@ -2618,6 +2618,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "790eea4361631c5e7d22598ecd5723ff611904e3344ce8720784c93e3d83d40b"
 
 [[package]]
+name = "croner"
+version = "4.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0097e28936e948e8f759478e1b5ec2e5ca70ab62cf38aaa9bd3aa660023e3fca"
+dependencies = [
+ "derive_builder",
+ "jiff",
+ "strum 0.27.2",
+]
+
+[[package]]
 name = "crossbeam-channel"
 version = "0.5.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3058,11 +3069,14 @@ checksum = "be1e0bca6c3637f992fc1cc7cbc52a78c1ef6db076dbf1059c4323d6a2048376"
 
 [[package]]
 name = "dbos"
-version = "0.5.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d414b6e8ab88e09d0d711066aa2898daa626c985c33e2f45ca352a92e120c86"
+checksum = "52002b63cc5090beac80d464aa659e1332b93e20ce6ae4756a9cd3c8e1d57488"
 dependencies = [
  "async-trait",
+ "croner",
+ "erased-serde",
+ "jiff",
  "serde",
  "serde_json",
  "sqlx",

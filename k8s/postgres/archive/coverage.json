@@ -81,6 +81,20 @@
       {
         "action": "export",
         "schema": "dbos",
+        "name": "workflow_input",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "dbos",
+        "name": "workflow_output",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "dbos",
         "name": "workflow_schedules",
         "kind": "table",
         "accessible": true

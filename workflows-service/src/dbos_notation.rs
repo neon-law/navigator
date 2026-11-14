@@ -9,7 +9,7 @@
 //!   PostgreSQL advisory lock (`store::notation_machine_state::acquire_lane`) —
 //!   questionnaire and workflow transitions on one notation still serialize,
 //!   including failure and repair. A checkpointed logical UUID survives
-//!   `LastFailure` forks; completion releases ownership atomically with its result.
+//!   repair forks; completion releases ownership atomically with its result.
 //!   The Restate object has its own lane;
 //!   operators must drain it before moving a notation to DBOS.
 //! - **The K/V state** is the `notation_machine_state` row; every state move
@@ -310,14 +310,14 @@ async fn transition(
             other => dbos::Error::Application(NotationTransitionError::Store(other.to_string())),
         })?;
 
-    // A checkpointed UUID survives resume/relaunch and LastFailure forks.
+    // A checkpointed UUID survives resume/relaunch and repair forks.
     // It commits before admission, so a lost identity checkpoint cannot own work.
     let operation_id = dbos::step("notation-operation-id", || async {
         Ok::<_, dbos::Error<NotationTransitionError>>(uuid::Uuid::now_v7())
     })
     .await?;
-    // LastFailure excludes its selected step. Its outside-step-error fallback
-    // is the last recorded step, so commit this anchor before owning work:
+    // Repair forks exclude the selected step. For a failure outside a step,
+    // fork from the last recorded step. Commit this anchor before owning work:
     // every possible repair of an admitted operation retains the UUID above.
     dbos::step("notation-operation-anchor", || async {
         Ok::<_, dbos::Error<NotationTransitionError>>(())
