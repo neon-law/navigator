@@ -94,6 +94,10 @@ checkout, `navigator notation envelope prepare <notation-id>` drafts and `naviga
 <notation-id>` dispatches, stamping the returned envelope id on the notation's document pointer; `navigator notation
 envelope status <notation-id>` reads per-signer state.
 
+After preparing a draft, open the sender-view URL printed by the CLI to review the placed fields. Add `--open` to
+`navigator notation envelope prepare <notation-id>` to launch the browser. Continue back to Navigator, then run
+`navigator notation envelope send <notation-id>` to dispatch.
+
 Signed templates today:
 
 - **`onboarding__letter`** — the firm's engagement agreement; client signs, firm countersigns.

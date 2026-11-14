@@ -538,10 +538,37 @@ async fn status_reports_the_sent_envelope_and_the_webhooks_receipts() {
 
     let approve = post(&h.app, Some(&lawyer), notation_id, "approval").await;
     assert_eq!(approve.status(), StatusCode::OK, "approval renders the PDF");
+    let prepare = h
+        .app
+        .clone()
+        .oneshot(
+            Request::post(format!("/app/api/notations/{notation_id}/signature"))
+                .header("authorization", &lawyer)
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"prepare":true}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(prepare.status(), StatusCode::OK);
+    let body = prepare.into_body().collect().await.unwrap().to_bytes();
+    let prepared: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let envelopes = h.signature_provider.envelopes().unwrap();
+    assert_eq!(envelopes.len(), 1);
+    assert_eq!(
+        envelopes[0].status,
+        portal::signature::EnvelopeStatus::Prepared
+    );
+
     let sent = post(&h.app, Some(&lawyer), notation_id, "signature").await;
     assert_eq!(sent.status(), StatusCode::OK);
     let body = sent.into_body().collect().await.unwrap().to_bytes();
     let sent_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        sent_json["signature_request_id"],
+        prepared["signature_request_id"]
+    );
+    assert_eq!(h.signature_provider.envelopes().unwrap().len(), 1);
     let request_id = sent_json["signature_request_id"].as_str().unwrap();
 
     let resp = get(&h.app, Some(&lawyer), notation_id).await;
@@ -591,4 +618,19 @@ async fn status_reports_the_sent_envelope_and_the_webhooks_receipts() {
     };
     assert!(by_role("client"), "the client's receipt is read: {json}");
     assert!(!by_role("firm"), "the firm has not signed yet: {json}");
+
+    store::signatures::stamp_signed(
+        &h.surreal,
+        store::signatures::SignatureProvider::DocuSign,
+        request_id,
+        "2026-11-12T00:00:00Z",
+    )
+    .await
+    .unwrap();
+    let response = get(&h.app, Some(&lawyer), notation_id).await;
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let completed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(completed["state"], "completed");
+    assert_eq!(completed["signers"][1]["role"], "firm");
+    assert_eq!(completed["signers"][1]["signed"], true);
 }
