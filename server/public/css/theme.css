@@ -110,6 +110,14 @@ textarea {
   text-decoration: none;
 }
 
+/* Headings wear the Brand's display face from its tokens sheet (Cormorant SC
+ * for a small-cap serif house, say), body text its body face. A Brand with
+ * one face, or a free-hex Brand with no display token, falls back to the body
+ * face, so the heading reads exactly as before. */
+.nav-theme :is(h1, h2, h3) {
+  font-family: var(--brand-font-display, var(--nav-font-family));
+}
+
 .nav-theme a:hover {
   color: var(--nav-color-link-hover);
   text-decoration: underline;
@@ -2933,6 +2941,52 @@ a.nav-link:hover {
   min-width: 0;
 }
 
+/* Inbox chrome — rail, Brand switcher, column heads, sender, chips, dates —
+ * wears the Brand's UI face when its tokens name one, else the body face;
+ * subjects and message bodies keep the body face. */
+#inbox :is(.inbox-rail, .inbox-brands, th, .inbox-table__sender, .inbox-table__matter, .inbox-table__date),
+:is(#inbox, #inbox-thread) :is(.inbox-chip, .inbox-message__header, .inbox-facts__note) {
+  font-family: var(--brand-font-ui, var(--nav-font-family));
+}
+
+/* The Brand switcher: one segmented row of Brands over the list. The chosen
+ * Brand is filled and named by aria-current, so selection is not colour
+ * alone. */
+.inbox-brands ul {
+  display: inline-flex;
+  flex-wrap: wrap;
+  margin: 0.25rem 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius-sm);
+  overflow: hidden;
+}
+
+.inbox-brands li + li {
+  border-left: 1px solid var(--nav-color-border);
+}
+
+.inbox-brands__link {
+  display: block;
+  padding: 0.2rem 0.7rem;
+  color: var(--nav-color-text-muted);
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.inbox-brands__link:hover,
+.inbox-brands__link:focus-visible {
+  background: var(--nav-color-surface-raised);
+  color: var(--nav-color-text);
+}
+
+.inbox-brands__link[aria-current="true"] {
+  background: var(--nav-color-primary);
+  color: var(--nav-color-on-primary);
+  font-weight: 600;
+}
+
 .inbox-rail__compose {
   width: 100%;
   margin-bottom: 1.25rem;
@@ -3028,11 +3082,12 @@ a.nav-link:hover {
 .inbox-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.9rem;
+  font-size: 0.875rem;
+  line-height: 1.35;
 }
 
 .inbox-table th {
-  padding: 0.5rem 0.75rem;
+  padding: 0.3rem 0.6rem;
   border-bottom: 1px solid var(--nav-color-border);
   background: var(--nav-color-surface-subtle);
   color: var(--nav-color-text-muted);
@@ -3045,7 +3100,7 @@ a.nav-link:hover {
 }
 
 .inbox-table td {
-  padding: 0.55rem 0.75rem;
+  padding: 0.3rem 0.6rem;
   border-bottom: 1px solid var(--nav-color-border);
   color: var(--nav-color-text-muted);
   max-width: 24rem;
@@ -3086,16 +3141,50 @@ a.nav-link:hover {
 }
 
 .inbox-table__sender {
-  width: 14rem;
+  width: 13rem;
+  max-width: 13rem;
 }
 
+/* Subject and snippet share one ellipsized line, as a mail client draws it. */
 .inbox-table__subject {
   width: 100%;
   min-width: 12rem;
+  max-width: 0;
 }
 
 .inbox-table__subject a {
-  color: inherit;
+  color: var(--nav-color-text);
+}
+
+.inbox-table__matter {
+  width: 1%;
+  max-width: 18rem;
+}
+
+.inbox-tag {
+  display: inline-block;
+  max-width: 11rem;
+  margin-right: 0.25rem;
+  padding: 0 0.4rem;
+  border: 1px solid var(--nav-color-border);
+  border-radius: var(--nav-radius-sm);
+  color: var(--nav-color-text-muted);
+  font-size: 0.72rem;
+  font-weight: 500;
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.inbox-tag--muted {
+  border-style: dashed;
+}
+
+.inbox-tag--brand {
+  border-color: var(--nav-color-primary);
+  color: var(--nav-color-text);
 }
 
 .inbox-table__subject a::after {
@@ -3105,7 +3194,9 @@ a.nav-link:hover {
 }
 
 .inbox-table__date {
+  width: 1%;
   text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 .inbox-table__delivery {
@@ -3119,16 +3210,9 @@ a.nav-link:hover {
   box-shadow: inset 0.2rem 0 0 var(--nav-color-primary);
 }
 
-/* The latest-message snippet sits under the subject link; the wrapping
- * overrides the dense table cell's nowrap, clamped to two lines. */
+/* The latest-message snippet trails the subject on the same line. */
 .inbox-table__preview {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  white-space: normal;
   color: var(--nav-color-text-muted);
-  font-size: 0.8rem;
   font-weight: 400;
 }
 
@@ -3170,9 +3254,27 @@ a.nav-link:hover {
   height: 100%;
 }
 
-.inbox-table__channel .inbox-channel-icon {
-  margin-right: 0;
-  font-size: 1.1rem;
+/* Detected facts: deadlines carry a solid primary edge so they read first
+ * without relying on colour alone (they also say "Deadline?"). */
+.inbox-facts {
+  margin: 0.25rem 0 0.5rem;
+}
+
+.inbox-facts .inbox-chips {
+  margin: 0;
+}
+
+.inbox-chip--deadline {
+  border-color: var(--nav-color-primary);
+  border-left-width: 0.2rem;
+  color: var(--nav-color-text);
+  font-weight: 600;
+}
+
+.inbox-facts__note {
+  margin: 0.2rem 0 0;
+  color: var(--nav-color-text-muted);
+  font-size: 0.72rem;
 }
 
 .inbox-rail__link {
@@ -3437,10 +3539,10 @@ a.nav-link:hover {
 
   .inbox-table__row {
     display: grid;
-    grid-template-columns: 1.25rem minmax(0, 1fr) auto auto;
+    grid-template-columns: 1.25rem minmax(0, 1fr) auto;
     grid-template-areas:
-      "dot sender channel date"
-      "dot subject subject subject";
+      "dot sender date"
+      "dot subject subject";
     align-items: baseline;
     column-gap: 0.5rem;
     padding: 0.75rem;
@@ -3466,10 +3568,6 @@ a.nav-link:hover {
     font-size: 1rem;
   }
 
-  .inbox-table__channel {
-    grid-area: channel;
-  }
-
   .inbox-table__date {
     grid-area: date;
     font-size: 0.8rem;
@@ -3477,11 +3575,10 @@ a.nav-link:hover {
 
   .inbox-table__subject {
     grid-area: subject;
-    white-space: normal;
+    max-width: none;
   }
 
-  .inbox-table__brand,
-  .inbox-table__assignee {
+  .inbox-table__matter {
     display: none !important;
   }
 
