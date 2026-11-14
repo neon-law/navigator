@@ -159,39 +159,15 @@ bands:
       - - text: >-
             The CLI and MCP server give Claude Code, Codex, and Cursor the same
             commands a lawyer runs.
-  - kind: cards
-    anchor: pricing
-    overline: Hosted Navigator
-    heading: Navigator as a service
-    description: >-
-      Monthly pricing is per user. Google Cloud Vertex AI token charges are
-      passed through at cost.
-    pricing_style: true
-    items:
-      - title: Law firms
-        chips: ["$50"]
-        cadence: / user / month
-        body:
-          - - text: Hosted Navigator access for your firm.
-        href: /contact
-        href_label: Contact us for a demo
-      - title: Legal aid organizations
-        chips: ["$5"]
-        cadence: / user / month
-        body:
-          - - text: Hosted Navigator access for your organization.
-        href: /contact
-        href_label: Contact us for a demo
   - kind: statement
-    heading: See Navigator in production
-    lead: Privacy comes first.
+    heading: Hosted Navigator for pro bono organizations
+    lead: $5 a month plus model tokens.
     body:
       - - text: >-
-            We invite law firms to see our production account. The statistics
-            we use are anonymized and aggregated. We take privacy seriously.
-      - - text: >-
-            Our experience includes managing a 30-petabyte data warehouse for
-            Apple Finance.
+            We host Navigator for pro bono organizations, with your own
+            branding and Forgejo instance included.
+      - - text: See the pro bono offer
+          href: /pro-bono
   - kind: video
     anchor: video
     overline: Video
@@ -222,17 +198,6 @@ bands:
               seeded sample firm and three sample matters, each cloned from
               its own Project repository: Cruller v. Prine, Widget Works, and
               the Estate of Cornelius Montgomery.
-  - kind: statement
-    heading: Skin Navigator for your firm
-    lead: Make Navigator your firm's own.
-    body:
-      - - text: >-
-            Contact Neon Law any time to put your firm's name, colors, and
-            websites on Navigator. We help you write token-efficient prompts
-            for your practice.
-      - - text: Contact us
-          href: /contact
-        - text: " to start."
   - kind: cta
     heading: Free use for those who co-counsel with us.
     body: >-

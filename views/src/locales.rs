@@ -61,11 +61,11 @@ pub const KNOWN_PAGES: &[&str] = &[
     "immigration-humanitarian-relief",
     "immigration-removal-defense",
     "immigration-uscis-notices",
-    "legal-aid",
     "litigation",
     "nautilus",
     "navigator",
     "notations",
+    "pro-bono",
 ];
 
 /// Replace the two brand placeholders a catalog file may carry.
@@ -721,10 +721,10 @@ pub fn locale_page_kind(stem: &str) -> Option<LocalePageKind> {
         "litigation" => Some(LocalePageKind::Litigation),
         "free-resources" => Some(LocalePageKind::FreeResources),
         "fractional-gc" => Some(LocalePageKind::Transactional),
-        "legal-aid"
-        | "navigator"
+        "navigator"
         | "nautilus"
         | "notations"
+        | "pro-bono"
         | "services"
         | "car-accidents"
         | "cybercrime"

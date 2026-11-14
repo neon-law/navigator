@@ -1,227 +1,94 @@
 head_title: "{site_name} | Home"
 meta_description: >-
-  Legal paperwork, handled for $29/mo or $290/year prepaid: form an LLC, write
-  a will, change your name, file small claims, and fill contracts from your
-  answers, with data removal, privacy protection, credit monitoring, dark web
-  monitoring, identity theft insurance, unclaimed property, and estate planning
-  included. Cancel anytime. Legal work is a separate retainer with our partner
-  firm Lex Tecnica. Attorney advertisement.
-title: Nautilus
+  Navigator is open source software for agentic lawyering: each matter is a
+  Project repository, each document is a Notation, and a lawyer reviews every
+  step. Star the repository on GitHub.
+title: Navigator
 hero_mark: helm
-tagline: What is your legal need?
+tagline: Open source software for agentic lawyering.
 hero_lead: >-
-  Pick it below. We prepare the papers for one fixed price: $29/mo, or
-  $290/year with two months free. Cancel anytime, even after one month.
+  Navigator gives a lawyer and an AI agent one place to work a matter: the
+  facts, the documents, the deadlines, and the review. You can read every
+  line, run it yourself, and help build it.
 hero_cta:
-  href: "#enrollment"
-  label: Start for $29/mo
-skin: home
+  href: https://github.com/neon-law/navigator
+  label: Star the repo
+skin: marketing
 bands:
-  - kind: cards
-    anchor: needs
-    overline: Included for $29 a month
-    heading: Each of these is included. Government fees are separate.
-    items:
-      - title: Start an LLC
-        chips: ["Nevada"]
-        body:
-          - - text: Articles of organization, prepared from a few answers.
-        href: /notations/nevada-llc-formation
-        href_label: See the filing
-      - title: Write a will
-        chips: ["California", "Nevada", "New York", "Washington"]
-        body:
-          - - text: A basic last will and testament, with a yearly check-in on your plan.
-        href: /notations/basic-will
-        href_label: See the will
-      - title: Change your name
-        chips: ["California", "Nevada", "New York", "Washington"]
-        body:
-          - - text: The court petition for an adult name change, filled for your state.
-        href: /notations
-        href_label: See the petitions
-      - title: File in small claims
-        chips: ["Nevada", "New York", "Washington"]
-        body:
-          - - text: The complaint or statement of claim that opens your case.
-        href: /notations
-        href_label: See the forms
-      - title: Send an NDA
-        chips: ["Business"]
-        body:
-          - - text: Mutual or one-way confidentiality before you share anything.
-        href: /notations/mutual-nda
-        href_label: See the agreement
-      - title: Make a job offer
-        chips: ["Business"]
-        body:
-          - - text: An offer letter for any U.S. state, with role, pay, and benefit terms.
-        href: /notations/employee-offer-letter
-        href_label: See the letter
-      - title: Publish a privacy policy
-        chips: ["Business"]
-        body:
-          - - text: Data practices, cookies, and privacy requests, with U.S. state and GDPR clauses.
-        href: /notations/privacy-policy
-        href_label: See the policy
-      - title: Delete your data
-        chips: ["Privacy"]
-        body:
-          - - text: Requests that companies delete your personal data, with a record of every reply.
-        href: "#enrollment"
-        href_label: Start for $29/mo
-      - title: Find unclaimed property
-        chips: ["Money"]
-        body:
-          - - text: We search government databases and file the claims for you.
-        href: "#enrollment"
-        href_label: Start for $29/mo
-  - kind: cards
-    anchor: pricing
-    overline: Pricing
-    heading: One fixed price. Cancel anytime.
-    description: >-
-      Every document and every check is included in either price. Keep Nautilus
-      for one month or for years. Government fees are separate. Nautilus is a
-      non-legal service: legal fees are excluded from both plans and must be
-      prepaid to Lex Tecnica before any legal work begins.
-    pricing_style: true
-    items:
-      - title: Monthly
-        body:
-          - - text: Everything, billed each month. Cancel anytime.
-        href: "#enrollment"
-        href_label: Start monthly
-      - title: Annual
-        body:
-          - - text: Everything, prepaid for the year. Two months free.
-        href: "#enrollment"
-        href_label: Start annual
   - kind: steps
-    anchor: how-it-works
-    overline: How it works
-    heading: Tell us what you need, and we prepare it.
+    anchor: what-it-does
+    overline: What Navigator does
+    heading: The agent drafts. The lawyer decides.
     items:
-      - title: Tell us what you need
+      - title: One Project per matter
         body:
-          - - text: Share your contact details below. No account is needed to start.
-      - title: Book a short enrollment call
-        body:
-          - - text: >-
-                We confirm your choices and the subscription terms, then send
-                the paperwork to sign. Pay $29/mo, or prepay $290 for the year.
-      - title: Answer the questions
+          - - text: "Each matter is a Project with its own Git repository. The agent reads the Project's "
+            - text: navigator.yaml
+              code: true
+            - text: " and its Project Skills before it does any work."
+      - title: Documents as Notations
         body:
           - - text: >-
-                Each document asks plain questions and fills itself from your
-                answers. Your privacy checks start running alongside.
-      - title: Add a lawyer when you want one
+                A Template plus a questionnaire becomes a Notation for one
+                Person in one Project, with its answers and history kept
+                together.
+      - title: A lawyer reviews every step
         body:
           - - text: >-
-                Ask a licensed attorney at Lex Tecnica, our partner firm, to
-                review what you prepared. Lex Tecnica sets its own fees under a
-                separate, prepaid retainer.
-  - kind: app_preview
-    anchor: app
-    overline: Coming to iPhone and Android
-    heading: The same subscription, in your pocket.
-    description: >-
-      Nautilus is coming to the App Store and Google Play. Each check will
-      report back in the app, so you see what was requested, what was found,
-      and what was filed. Until then, enroll below. Screens are illustrative.
-    app_name: Nautilus
-    app_subtitle: Privacy and paperwork
-    install_label: Get
-    checks_heading: Your checks
-    checks:
-      - title: Data removal
-        detail: Requests that companies delete your personal data, with a record of each.
-      - title: Privacy protection
-        detail: Privacy monitoring you choose at enrollment.
-      - title: Credit monitoring
-        detail: Opt in at enrollment. We confirm coverage before activation.
-      - title: Dark web monitoring
-        detail: Availability and coverage are confirmed before activation.
-      - title: Identity theft insurance
-        detail: Policy terms and limits are confirmed before activation.
-      - title: Unclaimed property
-        detail: We search government databases and file claims for you.
-      - title: Estate planning
-        detail: A yearly check-in on your will, beneficiaries, and plan documents.
-      - title: Basic form filings
-        detail: Simple filings, such as forming an LLC. Government fees are separate.
-    android_heading: Your paperwork
-    android_items:
-      - title: Form an LLC
-        detail: Answer a few questions. We prepare the filing for you.
-      - title: Contract templates
-        detail: NDAs, offer letters, and privacy notices, filled from your answers.
-      - title: Removal requests
-        detail: Each request and each reply, kept in one record.
-      - title: Unclaimed property
-        detail: Claims you can follow from search to filing.
-      - title: Ask a lawyer
-        detail: Request a review from Lex Tecnica, our partner firm.
-    app_store_label: App Store
-    play_store_label: Google Play
-    availability: Coming soon to
+                Agents prepare drafts. Email stays a draft until a lawyer sends
+                it, and nothing reaches a client before Lawyer Review.
+      - title: Use the tools you already have
+        body:
+          - - text: >-
+                The CLI and the MCP server give Claude Code, Codex, and Cursor
+                the same commands a lawyer runs.
   - kind: cards
-    anchor: lawyer-review
-    overline: When you want a lawyer
-    heading: A lawyer, on a separate retainer.
+    anchor: notation
+    overline: Notation
+    heading: A document format built for agents and lawyers.
     description: >-
-      Legal work is offered by Lex Tecnica, our partner law firm, under its own
-      retainer. Lex Tecnica sets its fees and tells you the number before the
-      work starts.
+      Notation is Markdown with Frontmatter. One file holds the document, the
+      questions that fill it, and the review it needs.
     items:
-      - title: Lawyer review
-        chips: ["Priced by Lex Tecnica"]
+      - title: Plain text
         body:
           - - text: >-
-                A licensed attorney at Lex Tecnica reviews a document or
-                question you prepared. Lex Tecnica quotes the fee before the
-                work starts.
-      - title: Private legal sandbox
-        chips: ["$5 of usage included monthly"]
+                Drafts live in Git, so each revision is a reviewable change
+                instead of a new file.
+      - title: Questionnaires
         body:
           - - text: >-
-                Work with Claude Sonnet, a frontier model, in a private
-                sandbox. Your subscription includes $5 of model usage each
-                month. After that, usage is priced à la carte, with pricing
-                provided by Lex Tecnica.
+                Typed questions gather the answers a Template needs, from a
+                client or from the agent.
+      - title: Many outputs
+        body:
+          - - text: >-
+                Render to PDF, return edits to Word with tracked changes, or
+                fill a government form.
+        href: /notations/about
+        href_label: Read about Notation
+      - title: A public library
+        body:
+          - - text: >-
+                Browse letters, agreements, and government forms written in
+                Notation.
+        href: /notations
+        href_label: Browse the Notations
   - kind: statement
-    heading: Privacy and legal advice
-    lead: A private space is not an attorney-client relationship.
+    heading: Navigator for pro bono organizations
+    lead: We host Navigator for pro bono organizations for $5 a month plus model tokens.
     body:
       - - text: >-
-            Nautilus is a non-legal service. Subscribing, the app, and the
-            sandbox do not make us your attorney or establish attorney-client
-            privilege. Legal advice, representation, and lawyer review require a
-            separate retainer with Lex Tecnica and must be prepaid.
-      - - text: >-
-            Attorney advertisement. Data removal does not guarantee that a
-            company will comply or prevent a future leak. Monitoring and
-            insurance coverage are confirmed before activation. Form filing does
-            not promise that an agency will accept the papers, and an unclaimed
-            property search does not promise that property will be found.
-      - - text: >-
-            Do not put Social Security numbers, account passwords, financial
-            records, or confidential legal questions in this public intake. We
-            confirm the appropriate private channel before collecting sensitive
-            information.
-  - kind: enrollment
-    heading: Get started.
+            Your organization's own branding and Forgejo instance are included.
+            We run the rest.
+      - - text: See the pro bono offer
+          href: /pro-bono
+  - kind: cta
+    heading: Star Navigator on GitHub.
     body: >-
-      Start here without an account. Share your contact details, choose whether
-      we may text you, and review before sending. Then sign in to open the booking
-      link for a quick enrollment appointment.
-    steps: [Your contact details, Your contact choices, Review and continue]
-    next_label: Continue
-    back_label: Back
-    submit_label: Send and continue to sign in
-    booking_label: Book your enrollment appointment
-    booking_body: >-
-      You are signed in. Book a quick enrollment appointment to confirm your
-      monitoring choices and subscription terms. We arrange the applicable DocuSign
-      paperwork after that review. Booking alone does not activate protection or
-      create an attorney-client relationship.
+      Navigator is open source under MIT OR Apache-2.0. A star helps other
+      lawyers find it.
+    email: "{firm_email}"
+    action:
+      href: https://github.com/neon-law/navigator
+      label: Star the repo

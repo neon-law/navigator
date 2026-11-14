@@ -214,29 +214,27 @@ async fn no_firm_page_still_markets_the_retired_consumer_plan() {
 }
 
 #[tokio::test]
-async fn the_home_publishes_nautilus_and_links_the_three_products() {
+async fn the_home_presents_navigator_and_asks_for_a_star() {
     let app = site_app().await;
     let body = body_string(anon_get(&app, "/").await).await;
+    assert_eq!(body.matches("<h1").count(), 1);
     for text in [
-        "What is your legal need?",
-        "data-nautilus-intake",
-        r#"data-phone="ios""#,
-        r#"data-phone="android""#,
-        "Cancel anytime",
-        "Form an LLC",
-        r#"href="/nautilus""#,
-        r#"href="/navigator""#,
-        r#"href="/notations""#,
+        "Open source software for agentic lawyering.",
+        "Star the repo",
+        r#"href="https://github.com/neon-law/navigator""#,
+        r#"href="/notations/about""#,
+        r#"href="/pro-bono""#,
     ] {
         assert!(body.contains(text), "missing {text}: {body}");
     }
-    for retired in [r#"href="/business""#, "company-pricing"] {
+    for retired in [
+        r#"href="/business""#,
+        "company-pricing",
+        "data-nautilus-intake",
+        "What is your legal need?",
+    ] {
         assert!(!body.contains(retired), "{retired} survives: {body}");
     }
-    // The product page keeps its own headline; only the home asks the question.
-    let nautilus = body_string(anon_get(&app, "/nautilus").await).await;
-    assert!(nautilus.contains("Your shell in a connected world."));
-    assert!(!nautilus.contains("What is your legal need?"));
     assert_eq!(
         anon_get(&app, "/disputes").await.status(),
         StatusCode::NOT_FOUND
@@ -275,9 +273,9 @@ async fn the_retired_business_path_redirects_to_nautilus() {
 }
 
 #[tokio::test]
-async fn the_neon_home_reuses_nautilus_enrollment() {
+async fn nautilus_renders_its_enrollment_intake() {
     let app = site_app().await;
-    for path in ["/", "/nautilus"] {
+    for path in ["/nautilus"] {
         let response = anon_get(&app, path).await;
         assert_eq!(response.status(), StatusCode::OK);
         let body = body_string(response).await;
@@ -524,12 +522,10 @@ async fn supporting_pages_do_not_publish_separate_fees() {
     }
 }
 
-/// The platform page publishes `SaaS` pricing and a co-counsel invitation.
-///
-/// The firm builds Navigator, and the page offers free use to attorneys who
-/// co-counsel a case with it. Both offers must survive on the rendered page.
+/// The platform page points hosting to the pro bono offer and keeps the
+/// co-counsel invitation; it prices no subscription for law firms.
 #[tokio::test]
-async fn the_navigator_page_prices_saas_and_invites_pro_bono_co_counsel() {
+async fn the_navigator_page_points_hosting_to_pro_bono_and_invites_co_counsel() {
     let app = site_app().await;
     let body = body_string(anon_get(&app, "/navigator").await).await;
     assert!(
@@ -547,30 +543,21 @@ async fn the_navigator_page_prices_saas_and_invites_pro_bono_co_counsel() {
         "contact address: {body}"
     );
     for expected in [
-        "Navigator as a service",
-        "Law firms",
-        "$50",
-        "Legal aid organizations",
-        "$5",
-        "/ user / month",
-        "Google Cloud Vertex AI token charges are passed through at cost.",
-        "Contact us for a demo",
-        "See Navigator in production",
-        "We invite law firms to see our production account.",
-        "The statistics we use are anonymized and aggregated.",
-        "We take privacy seriously.",
-        "Our experience includes managing a 30-petabyte data warehouse for Apple Finance.",
+        "Hosted Navigator for pro bono organizations",
+        "$5 a month plus model tokens.",
+        r#"href="/pro-bono""#,
     ] {
         assert!(body.contains(expected), "missing {expected}: {body}");
     }
-    assert!(
-        !body.contains("$20"),
-        "the old law-firm rate appears: {body}"
-    );
-    assert!(
-        body.matches(r#"href="/contact""#).count() >= 2,
-        "each plan links to the contact page: {body}"
-    );
+    for retired in [
+        "Navigator as a service",
+        "$50",
+        "Contact us for a demo",
+        "We invite law firms to see our production account.",
+        "Skin Navigator for your firm",
+    ] {
+        assert!(!body.contains(retired), "{retired} survives: {body}");
+    }
     assert!(
         body.contains(r#"id="video""#)
             && body.contains(r#"aria-label="Neon Law presentation""#)
@@ -591,7 +578,7 @@ async fn the_navigator_page_prices_saas_and_invites_pro_bono_co_counsel() {
     }
 }
 
-/// The Navigator page offers MCP setup and the local quickstart alongside firm hosting.
+/// The Navigator page offers MCP setup and the local quickstart.
 #[tokio::test]
 async fn the_navigator_page_explains_the_workflow_and_the_quickstart() {
     let app = site_app().await;
@@ -610,18 +597,12 @@ async fn the_navigator_page_explains_the_workflow_and_the_quickstart() {
         "Navigator is open source under MIT OR Apache-2.0.",
         "navigator quickstart",
         "it brings up the full stack in KIND with a seeded sample firm and three sample matters",
-        "Skin Navigator for your firm",
-        "We help you write token-efficient prompts for your practice.",
     ] {
         assert!(body.contains(expected), "missing {expected}: {body}");
     }
     assert!(
         body.contains(webapp::cli_release::HOMEBREW_INSTALL_COMMAND),
         "the quickstart follows the Homebrew install command: {body}"
-    );
-    assert!(
-        body.matches(r#"href="/contact""#).count() >= 3,
-        "both plans and the skinning invitation link the contact page: {body}"
     );
 }
 
@@ -904,31 +885,11 @@ async fn home_publishes_no_amount_in_controversy_and_no_co_counsel_claim() {
 }
 
 #[tokio::test]
-async fn home_presents_nautilus_subscription_and_checks() {
-    let app = site_app().await;
-    let body = body_string(anon_get(&app, "/").await).await;
-    assert_eq!(body.matches("<h1").count(), 1);
-    for text in [
-        "What is your legal need?",
-        "$29",
-        "$290",
-        "Your checks",
-        "Data removal",
-        "Unclaimed property",
-        "Basic form filings",
-    ] {
-        assert!(body.contains(text), "missing {text}: {body}");
-    }
-    assert!(!body.contains("Counsel on call."));
-    assert!(!body.contains("company-simulator"));
-}
-
-#[tokio::test]
-async fn home_metadata_describes_nautilus_at_the_root_url() {
+async fn home_metadata_describes_navigator_at_the_root_url() {
     let app = site_app().await;
     let body = body_string(anon_get(&app, "/").await).await;
     assert!(
-        body.contains("Legal paperwork, handled for $29/mo or $290/year prepaid"),
+        body.contains("Navigator is open source software for agentic lawyering"),
         "{body}"
     );
     assert!(
@@ -1074,52 +1035,52 @@ async fn an_unpublished_path_answers_not_found() {
     }
 }
 
-/// Legal-aid organizations can choose a workshop, self-hosting, or the canonical hosted offer.
+/// Pro bono organizations get the one hosted Navigator price, the workshops,
+/// and the self-hosting path; the retired legal-aid path lands here.
 #[tokio::test]
-async fn legal_aid_page_presents_the_three_paths_and_existing_lead_form() {
+async fn pro_bono_page_prices_hosted_navigator_and_links_the_workshops() {
     let app = site_app().await;
-    let response = anon_get(&app, "/legal-aid").await;
+    let response = anon_get(&app, "/pro-bono").await;
     assert_eq!(response.status(), StatusCode::OK);
     let body = body_string(response).await;
-    let workshop = body
-        .find("An open workshop at your organization")
-        .expect("workshop");
-    let self_host = body.find("Run Navigator yourself").expect("self-host path");
-    let hosted = body.find("Navigator as a service").expect("hosted path");
-    assert!(workshop < self_host && self_host < hosted);
     for expected in [
-        "at no cost to your organization",
-        "MIT OR Apache-2.0",
-        "infrastructure and operating costs",
-        "https://github.com/neon-law/navigator/blob/main/docs/oss-install.md",
-        "Legal aid organizations",
+        "Pro bono organizations",
         "$5",
-        "/ user / month",
-        "Google Cloud Vertex AI token charges are passed through at cost.",
+        "/ month, plus model tokens",
+        "Forgejo",
+        r#"href="/workshops/use-the-navigator""#,
+        r#"href="/workshops/deploy-the-navigator""#,
+        "MIT OR Apache-2.0",
+        "https://github.com/neon-law/navigator/blob/main/docs/oss-install.md",
         "action=\"/leads\"",
-        "name=\"source_path\" value=\"/legal-aid\"",
+        "name=\"source_path\" value=\"/pro-bono\"",
     ] {
         assert!(body.contains(expected), "missing {expected}");
     }
-    assert!(body_string(anon_get(&app, "/sitemap.xml").await)
-        .await
-        .contains("/legal-aid"));
-    for forbidden in ["$20", "$50", "free for life", "perpetual", "minimum seats"] {
+    for forbidden in ["$50", "/ user / month"] {
         assert!(!body.contains(forbidden), "unexpected {forbidden}");
     }
     let navigator = body_string(anon_get(&app, "/navigator").await).await;
-    for shared in [
-        "$5",
-        "/ user / month",
-        "Google Cloud Vertex AI token charges are passed through at cost.",
-    ] {
-        assert!(navigator.contains(shared) && body.contains(shared));
+    for retired in ["$50", "Navigator as a service"] {
+        assert!(!navigator.contains(retired), "/navigator still offers {retired}");
     }
+    assert!(navigator.contains(r#"href="/pro-bono""#));
+    let sitemap = body_string(anon_get(&app, "/sitemap.xml").await).await;
+    assert!(sitemap.contains("/pro-bono") && !sitemap.contains("/legal-aid"));
+    let moved = anon_get(&app, "/legal-aid").await;
+    assert_eq!(moved.status(), StatusCode::MOVED_PERMANENTLY);
+    assert_eq!(
+        moved
+            .headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok()),
+        Some("/pro-bono"),
+    );
 }
 
 /// The audience page belongs to Neon; foundation routes and sibling-brand paths remain absent.
 #[tokio::test]
-async fn legal_aid_page_is_only_published_by_neon() {
+async fn pro_bono_page_is_only_published_by_neon() {
     let mut state = site_state().await;
     let ports = views::brand::BrandKey::ALL
         .iter()
@@ -1134,7 +1095,7 @@ async fn legal_aid_page_is_only_published_by_neon() {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/legal-aid")
+                    .uri("/pro-bono")
                     .header("host", format!("localhost:{port}"))
                     .body(Body::empty())
                     .unwrap(),

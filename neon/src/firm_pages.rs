@@ -1571,7 +1571,7 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
     ));
     // The retired business-counsel page. Company formation and contract
     // templates are part of the Nautilus subscription, so its published links
-    // land on Nautilus at `/`.
+    // land on the home at `/`.
     routers.push(moved_permanently(FIRM_RETIRED_BUSINESS_PATH, "/"));
     routers.push(dioxus_app::marketing_page_router(
         dioxus_app::FIRM_NAVIGATOR_PATH,
@@ -1579,9 +1579,12 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
         state.sessions.clone(),
         portal::secure_cookies(state),
     ));
+    // The retired legal-aid audience page; its published links land on the
+    // pro bono offer.
+    routers.push(moved_permanently("/legal-aid", "/pro-bono"));
     routers.push(dioxus_app::marketing_page_router(
-        "/legal-aid",
-        firm_copy::legal_aid(branding),
+        "/pro-bono",
+        firm_copy::pro_bono(branding),
         state.sessions.clone(),
         portal::secure_cookies(state),
     ));
@@ -1991,7 +1994,7 @@ fn resolve_world_content(branding: &views::brand::Branding) -> webapp::world_pag
 /// Brand-safe like [`resolve_firm_contact_content`]: the `<title>` names the
 /// mounted brand, resolved at router-build time.
 ///
-/// Neon asks "What is your legal need?" through the shared marketing bands.
+/// Neon's home is the Navigator page, built from the shared marketing bands.
 /// Other house brands resolve their own home catalogs.
 pub(crate) fn resolve_firm_home_content(
     branding: &views::brand::Branding,
@@ -2264,7 +2267,7 @@ pub(crate) fn resolve_litigation_content(
     locales::litigation(branding)
 }
 
-/// The retired business-counsel path; it answers a 301 to Nautilus at `/`.
+/// The retired business-counsel path; it answers a 301 to the home at `/`.
 const FIRM_RETIRED_BUSINESS_PATH: &str = "/business";
 
 /// A permanent `301` from a retired marketing path to where its readers go now.

@@ -10548,7 +10548,7 @@ const LIVE_HOME_CONTRACTS: &[(views::brand::BrandKey, LiveHomeContract)] = &[
         views::brand::BrandKey::Neon,
         LiveHomeContract {
             title: "<title>Neon Law | Home</title>",
-            copy: "What is your legal need?",
+            copy: "Open source software for agentic lawyering.",
         },
     ),
     (
@@ -10916,7 +10916,7 @@ async fn the_delete_your_data_host_renders_its_own_home_catalog() {
     assert_eq!(neon_resp.status(), StatusCode::OK);
     let neon_body = body_string(neon_resp).await;
     assert!(
-        neon_body.contains("What is your legal need?"),
+        neon_body.contains("Open source software for agentic lawyering."),
         "{neon_body}"
     );
     assert!(
@@ -10950,10 +10950,9 @@ async fn the_delete_your_data_host_renders_its_own_home_catalog() {
         "{delete_your_data_body}"
     );
     assert!(
-        !delete_your_data_body.contains("What is your legal need?"),
+        !delete_your_data_body.contains("Open source software for agentic lawyering."),
         "{delete_your_data_body}"
     );
-    assert!(neon_body.contains("data-nautilus-intake"));
     assert!(!delete_your_data_body.contains("data-nautilus-intake"));
     assert!(delete_your_data_body.contains(r#"aria-labelledby="privacy-benefits-title""#));
 
@@ -11357,13 +11356,16 @@ async fn assert_brand_home_lead_capture(
     brand: views::brand::BrandKey,
 ) {
     // The band-built IEP Defenders and Lex Tecnica homes close on a
-    // Contact Us link to `/contact` — their published CTA shape — rather
-    // than an inline lead form. Their lead-capture path runs through the
-    // contact page on the brand's own host, which serves the one lead
+    // Contact Us link to `/contact` — their published CTA shape — and the
+    // Neon home's only call to action stars the Navigator repository, so
+    // none carries an inline lead form. Their lead-capture path runs through
+    // the contact page on the brand's own host, which serves the one lead
     // form.
     if matches!(
         brand,
-        views::brand::BrandKey::IepDefenders | views::brand::BrandKey::LexTecnica
+        views::brand::BrandKey::IepDefenders
+            | views::brand::BrandKey::LexTecnica
+            | views::brand::BrandKey::Neon
     ) {
         let host = brand.canonical_host();
         let response = get_on_host(app, "/", host).await;
@@ -11487,12 +11489,7 @@ fn assert_brand_home_lead_markup(body: &str, host: &str, brand: views::brand::Br
         !body.contains(r#"data-lead-modal="true""#),
         "{host}: home form is inline"
     );
-    if brand == views::brand::BrandKey::Neon {
-        assert!(
-            body.contains("data-nautilus-intake"),
-            "{host}: Nautilus enrollment"
-        );
-    } else if brand == views::brand::BrandKey::CyberInjuryLaw {
+    if brand == views::brand::BrandKey::CyberInjuryLaw {
         assert!(
             html.select(&lead_form)
                 .any(|form| form.select(&inline_contact).next().is_some()),

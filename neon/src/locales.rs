@@ -31,7 +31,7 @@ const NEON_HOME_YAML: &str = include_str!("../locales/en/neon/home.yaml");
 const NEON_LITIGATION_YAML: &str = include_str!("../locales/en/neon/litigation.yaml");
 const NEON_FRACTIONAL_GC_YAML: &str = include_str!("../locales/en/neon/fractional-gc.yaml");
 const NEON_NOTATIONS_YAML: &str = include_str!("../locales/en/neon/notations.yaml");
-const NEON_LEGAL_AID_YAML: &str = include_str!("../locales/en/neon/legal-aid.yaml");
+const NEON_PRO_BONO_YAML: &str = include_str!("../locales/en/neon/pro-bono.yaml");
 const NEON_NAVIGATOR_YAML: &str = include_str!("../locales/en/neon/navigator.yaml");
 const NEON_FREE_RESOURCES_YAML: &str = include_str!("../locales/en/neon/free-resources.yaml");
 /// `/delete-your-debt` — Neon's own gateway to the DeleteYourDebt.com
@@ -45,8 +45,7 @@ const NEON_GATEWAY_DELETE_YOUR_DATA_YAML: &str =
     include_str!("../locales/en/neon/gateway-delete-your-data.yaml");
 /// Nautilus subscription and optional Vesta Death Check.
 const NEON_NAUTILUS_YAML: &str = include_str!("../locales/en/neon/nautilus.yaml");
-/// Neon's home: the question "What is your legal need?" over the needs the
-/// Nautilus subscription covers.
+/// Neon's home: Navigator, open source software for agentic lawyering.
 const NEON_HOME_MARKETING_YAML: &str = include_str!("../locales/en/neon/home-marketing.yaml");
 /// `/immigration` — Neon's own gateway to the Abhaya Immigration practice.
 /// Same family as [`NEON_GATEWAY_DELETE_YOUR_DEBT_YAML`].
@@ -200,7 +199,7 @@ pub fn catalog_yaml(key: BrandKey, page: &str) -> Option<&'static str> {
         (BrandKey::Neon, "fractional-gc") => Some(NEON_FRACTIONAL_GC_YAML),
         (BrandKey::Neon, "notations") => Some(NEON_NOTATIONS_YAML),
         (BrandKey::Neon, "navigator") => Some(NEON_NAVIGATOR_YAML),
-        (BrandKey::Neon, "legal-aid") => Some(NEON_LEGAL_AID_YAML),
+        (BrandKey::Neon, "pro-bono") => Some(NEON_PRO_BONO_YAML),
         (BrandKey::Neon, "nautilus") => Some(NEON_NAUTILUS_YAML),
         (BrandKey::Neon, "home-marketing") => Some(NEON_HOME_MARKETING_YAML),
         (BrandKey::Neon, "gateway-delete-your-debt") => Some(NEON_GATEWAY_DELETE_YOUR_DEBT_YAML),
@@ -1502,32 +1501,9 @@ pub fn navigator(branding: &views::brand::Branding) -> PageContent {
     marketing_page(load_page(branding, "navigator"), None, branding)
 }
 
-/// The legal-aid audience shares the canonical Navigator price card and usage disclosure.
-pub fn legal_aid(branding: &views::brand::Branding) -> PageContent {
-    let mut content = marketing_page(load_page(branding, "legal-aid"), None, branding);
-    let pricing = navigator(branding)
-        .bands
-        .into_iter()
-        .find_map(|mut band| match &mut band {
-            Band::Cards { anchor, items, .. } if anchor == "pricing" => {
-                let card = items
-                    .drain(..)
-                    .find(|card| card.title == "Legal aid organizations")
-                    .expect("invariant: navigator.yaml publishes the Legal aid organizations card");
-                items.push(card);
-                Some(band)
-            }
-            _ => None,
-        })
-        .expect("invariant: navigator.yaml publishes the pricing band");
-    // The contact band stays last, after workshop, self-hosting, and hosting.
-    let contact = content
-        .bands
-        .iter()
-        .position(|band| matches!(band, Band::Cta { .. }))
-        .unwrap_or(content.bands.len());
-    content.bands.insert(contact, pricing);
-    content
+/// `/pro-bono`, from this brand's `pro-bono.yaml`.
+pub fn pro_bono(branding: &views::brand::Branding) -> PageContent {
+    marketing_page(load_page(branding, "pro-bono"), None, branding)
 }
 
 /// `/services`, from this brand's `services.yaml`.
@@ -1635,9 +1611,9 @@ pub fn nautilus(branding: &views::brand::Branding, _deployment_host: Option<&str
     subscription_page(branding, "nautilus")
 }
 
-/// Neon's home sells the same subscription, so it resolves the same prices.
+/// Neon's home is the Navigator page, from `home-marketing.yaml`.
 pub fn neon_home(branding: &views::brand::Branding, _deployment_host: Option<&str>) -> PageContent {
-    subscription_page(branding, "home-marketing")
+    marketing_page(load_page(branding, "home-marketing"), None, branding)
 }
 
 fn subscription_page(branding: &views::brand::Branding, page: &str) -> PageContent {
@@ -2596,7 +2572,6 @@ mod tests {
                 include_str!("../locales/en/neon/gateway-delete-your-data.yaml"),
             ),
             ("Nautilus", include_str!("../locales/en/neon/nautilus.yaml")),
-            ("Neon home", NEON_HOME_MARKETING_YAML),
             ("Vesta", include_str!("../locales/en/vesta/home.yaml")),
             (
                 "Cyber Injury Law",
@@ -2747,26 +2722,35 @@ mod tests {
         }
     }
 
-    /// The home asks the question, lists the needs first, and prices the
-    /// subscription from the same catalog as `/nautilus`.
+    /// The home is the Navigator page: it gives Notation its own band, links
+    /// the pro bono offer, and its only call to action stars the repository.
     #[test]
-    fn neon_home_asks_the_legal_need_and_resolves_the_nautilus_prices() {
+    fn neon_home_presents_navigator_and_asks_only_for_a_star() {
+        const REPO: &str = "https://github.com/neon-law/navigator";
         let content = neon_home(&views::brand::DEFAULT_BRANDING, None);
-        assert_eq!(content.tagline, "What is your legal need?");
-        assert!(content.skin == webapp::marketing_page::PageSkin::Home);
-        let json = serde_yaml::to_string(&content).expect("home serializes");
-        for copy in [
-            "Start an LLC",
-            "$29/mo",
-            "$290/year",
-            "Priced by Lex Tecnica",
-        ] {
-            assert!(json.contains(copy), "home copy: {copy}");
+        assert_eq!(content.tagline, "Open source software for agentic lawyering.");
+        let hero = content.hero_cta.as_ref().expect("hero action");
+        assert_eq!((hero.href.as_str(), hero.label.as_str()), (REPO, "Star the repo"));
+        let mut anchors = Vec::new();
+        for band in &content.bands {
+            match band {
+                Band::Cta { action, .. } => {
+                    let action = action.as_ref().expect("the closing band stars the repo");
+                    assert_eq!(action.href, REPO);
+                }
+                Band::Cards { anchor, .. } | Band::Steps { anchor, .. } => {
+                    anchors.push(anchor.as_str());
+                }
+                Band::Statement { .. } => {}
+                _ => panic!("the home publishes only steps, cards, statements, and the closing call to action"),
+            }
         }
-        assert!(
-            !json.contains("From $20"),
-            "the home publishes no legal price"
-        );
+        assert!(anchors.contains(&"notation"), "{anchors:?}");
+        let text = serde_yaml::to_string(&content).expect("home serializes");
+        assert!(text.contains("/pro-bono"));
+        for retired in ["/nautilus", "Nautilus", "#enrollment", "$29", "consultation", "Book"] {
+            assert!(!text.contains(retired), "the home publishes {retired}");
+        }
     }
 
     #[test]

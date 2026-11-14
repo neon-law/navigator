@@ -59,7 +59,7 @@ async fn nautilus_intake_preserves_answers_and_reviews_before_sign_in() {
     let Some(c) = new_client_or_skip().await else {
         return;
     };
-    c.goto(&format!("{}/#enrollment", base_url()))
+    c.goto(&format!("{}/nautilus#enrollment", base_url()))
         .await
         .expect("Nautilus");
     wait_for_text(&c, "Your contact details", Duration::from_secs(20)).await;
@@ -5606,20 +5606,16 @@ async fn every_sample_matter_page_renders_in_the_client_and_lawyer_lens() {
     c.close().await.unwrap();
 }
 
-/// Nautilus is the subscription home; the header carries a reader to
-/// Navigator and back.
+/// The home presents Navigator; the header carries a reader to the
+/// Navigator page and back.
 #[tokio::test]
-async fn nautilus_home_links_to_navigator_and_back() {
+async fn navigator_home_links_to_the_navigator_page_and_back() {
     let Some(c) = new_client_or_skip().await else {
         return;
     };
     c.set_window_size(1280, 900).await.unwrap();
     c.goto(&format!("{}/", base_url())).await.unwrap();
-    c.wait()
-        .at_most(Duration::from_secs(10))
-        .for_element(Locator::Css("[data-nautilus-intake]"))
-        .await
-        .expect("Nautilus enrollment on the home page");
+    wait_for_text(&c, "Star the repo", Duration::from_secs(10)).await;
     c.find(Locator::Css(".site-header a[href='/navigator']"))
         .await
         .expect("Navigator link")
@@ -5634,11 +5630,7 @@ async fn nautilus_home_links_to_navigator_and_back() {
         .click()
         .await
         .unwrap();
-    c.wait()
-        .at_most(Duration::from_secs(10))
-        .for_element(Locator::Css("[data-nautilus-intake]"))
-        .await
-        .expect("return to Nautilus enrollment");
+    wait_for_text(&c, "Open source software for agentic lawyering.", Duration::from_secs(10)).await;
     assert_eq!(c.current_url().await.unwrap().path(), "/");
     c.close().await.unwrap();
 }
