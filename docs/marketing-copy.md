@@ -302,8 +302,8 @@ tokens at the provider's cost, with the organization's own brand name and Forgej
 only in the pricing card in `legal-aid.yaml`; `/` and `/navigator` link there without restating it. The page links the
 Using and Operating Navigator workshops.
 
-Neon's header names its three products: Same Day Legal at `/same-day-legal`, Navigator at `/navigator`, and Notations at
-`/notations`. Its fee schedule stays at `/services`. Business counsel is not sold separately: `/business` answers a 301
+Neon's header names its three pages: Navigator at `/navigator`, Notations at `/notations`, and Legal Aid at
+`/legal-aid`. Its fee schedule stays at `/services`. Business counsel is not sold separately: `/business` answers a 301
 to `/`, because formation and the contract templates are part of the Same Day Legal subscription. The `/disputes` route
 returns a 404. Other brands retain their own home layouts. The business template inventory is documented in [business
 notations](business-notations.md).

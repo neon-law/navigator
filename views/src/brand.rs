@@ -149,9 +149,9 @@ const FIRM_NAV: &[NavLink] = &[
 /// `/same-day-legal` redirects to; Navigator, the engine; and Notations, the document format. The shared
 /// footer row still links Navigator and Notations for every brand.
 const NEON_NAV: &[NavLink] = &[
-    NavLink::leaf("Same Day Legal", "/same-day-legal"),
     NavLink::leaf("Navigator", "/navigator"),
     NavLink::leaf("Notations", "/notations"),
+    NavLink::leaf("Legal Aid", "/legal-aid"),
 ];
 
 /// Public footer pages. `firm_footer_nav` adds Contact, Testimonials, Privacy,
@@ -3058,14 +3058,14 @@ mod tests {
     }
 
     #[test]
-    fn the_neon_nav_links_its_three_products() {
+    fn the_neon_nav_links_its_three_pages() {
         let nav: Vec<(&str, &str)> = FIRM_BRAND.nav.iter().map(|n| (n.label, n.href)).collect();
         assert_eq!(
             nav,
             [
-                ("Same Day Legal", "/same-day-legal"),
                 ("Navigator", "/navigator"),
                 ("Notations", "/notations"),
+                ("Legal Aid", "/legal-aid"),
             ]
         );
     }
