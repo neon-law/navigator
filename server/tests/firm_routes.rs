@@ -1062,7 +1062,10 @@ async fn pro_bono_page_prices_hosted_navigator_and_links_the_workshops() {
     }
     let navigator = body_string(anon_get(&app, "/navigator").await).await;
     for retired in ["$50", "Navigator as a service"] {
-        assert!(!navigator.contains(retired), "/navigator still offers {retired}");
+        assert!(
+            !navigator.contains(retired),
+            "/navigator still offers {retired}"
+        );
     }
     assert!(navigator.contains(r#"href="/pro-bono""#));
     let sitemap = body_string(anon_get(&app, "/sitemap.xml").await).await;

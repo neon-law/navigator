@@ -30,7 +30,7 @@ Neon Law (`neon/`):
 | `neon/locales/en/neon/fractional-gc.yaml` | unpublished; `/business` answers a 301 to `/` |
 | `neon/locales/en/neon/personal-plan.yaml` | `/personal` |
 | `neon/locales/en/neon/navigator.yaml` | `/navigator` |
-| `neon/locales/en/neon/pro-bono.yaml` | `/pro-bono` hosted offer, workshops, and self-hosting; `/legal-aid` answers a 301 |
+| `neon/locales/en/neon/pro-bono.yaml` | `/pro-bono` hosted offer, workshops, self-hosting; `/legal-aid` 301s |
 | `neon/locales/en/neon/notations.yaml` | `/notations/about` format story |
 | `neon/locales/en/guieb-shook/team.yaml` | `/team` and profiles on guiebshook.com |
 | `neon/locales/en/neon/gateway-delete-your-debt.yaml` | `/delete-your-debt` — Neon-only gateway to DeleteYourDebt.com |
@@ -294,8 +294,8 @@ paperwork follows the enrollment review. The page expressly distinguishes privac
 other brand host answers `/nautilus` with a 404.
 
 Neon's home at `/` reads `neon/locales/en/neon/home-marketing.yaml` and presents Navigator, open source software for
-agentic lawyering: what Navigator does, a Notation band linking `/notations/about` and `/notations`, and a pointer to the
-pro bono offer. Its only call to action is "Star the repo", linking the public
+agentic lawyering: what Navigator does, a Notation band linking `/notations/about` and `/notations`, and a pointer to
+the pro bono offer. Its only call to action is "Star the repo", linking the public
 [neon-law/navigator](https://github.com/neon-law/navigator) repository from the hero and the closing band.
 
 Hosted Navigator is offered only to pro bono organizations, at `/pro-bono`: $5 a month plus model tokens at the

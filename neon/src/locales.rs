@@ -2728,9 +2728,15 @@ mod tests {
     fn neon_home_presents_navigator_and_asks_only_for_a_star() {
         const REPO: &str = "https://github.com/neon-law/navigator";
         let content = neon_home(&views::brand::DEFAULT_BRANDING, None);
-        assert_eq!(content.tagline, "Open source software for agentic lawyering.");
+        assert_eq!(
+            content.tagline,
+            "Open source software for agentic lawyering."
+        );
         let hero = content.hero_cta.as_ref().expect("hero action");
-        assert_eq!((hero.href.as_str(), hero.label.as_str()), (REPO, "Star the repo"));
+        assert_eq!(
+            (hero.href.as_str(), hero.label.as_str()),
+            (REPO, "Star the repo")
+        );
         let mut anchors = Vec::new();
         for band in &content.bands {
             match band {
@@ -2748,7 +2754,14 @@ mod tests {
         assert!(anchors.contains(&"notation"), "{anchors:?}");
         let text = serde_yaml::to_string(&content).expect("home serializes");
         assert!(text.contains("/pro-bono"));
-        for retired in ["/nautilus", "Nautilus", "#enrollment", "$29", "consultation", "Book"] {
+        for retired in [
+            "/nautilus",
+            "Nautilus",
+            "#enrollment",
+            "$29",
+            "consultation",
+            "Book",
+        ] {
             assert!(!text.contains(retired), "the home publishes {retired}");
         }
     }

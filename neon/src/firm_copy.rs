@@ -206,7 +206,10 @@ mod firm_copy_tests {
         assert_eq!(cards.len(), 1);
         assert_eq!(cards[0].title, "Pro bono organizations");
         assert_eq!(cards[0].chips, ["$5"]);
-        assert!(cards[0].cadence.as_deref().is_some_and(|c| c.contains("model tokens")));
+        assert!(cards[0]
+            .cadence
+            .as_deref()
+            .is_some_and(|c| c.contains("model tokens")));
         assert!(pricing_cards(super::navigator(branding)).is_empty());
         assert!(pricing_cards(crate::locales::neon_home(branding, None)).is_empty());
     }
