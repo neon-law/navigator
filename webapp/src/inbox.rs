@@ -1596,13 +1596,13 @@ fn inbox_list(
         (_, None) => page.title.clone(),
     };
     let subtitle = if page.trash_only {
-        "Conversations moved out of the inbox. Nothing here is deleted; new mail restores a conversation."
+        Some("Conversations moved out of the inbox. Nothing here is deleted; new mail restores a conversation.")
     } else if page.sent_only {
-        "Conversations someone at the firm wrote in, newest first."
+        Some("Conversations someone at the firm wrote in, newest first.")
     } else if page.project_code.is_some() {
-        "Conversations assigned to this Project, newest first."
+        Some("Conversations assigned to this Project, newest first.")
     } else {
-        "Conversations across the firm, newest first."
+        None
     };
     let total = page.rows.len();
     // The Brand chip earns its width only while rows of several Brands share
@@ -1709,10 +1709,10 @@ fn inbox_list(
                     if let Some(href) = page.logged_communications_href.as_ref() {
                         a { class: "nav-link", href: "{href}", "Logged communications" }
                     }
-                } else {
-                    a { href: crate::communication_dashboard::PARKED_CALLS_PATH, "Parked calls" }
                 }
-                p { class: "page-subtitle", "{subtitle}" }
+                if let Some(subtitle) = subtitle {
+                    p { class: "page-subtitle", "{subtitle}" }
+                }
             }
             if let Some(error) = page.error.clone() {
                 p { class: "page-subtitle", role: "alert", "{error}" }
@@ -2820,6 +2820,18 @@ mod tests {
             html.contains(r#"href="/app/inbox?channel=sms">Inbox</a>"#),
             "{html}"
         );
+    }
+
+    #[test]
+    fn the_firm_inbox_header_carries_no_parked_calls_link_or_subtitle() {
+        let mut view = page(ViewerRole::Owner, Vec::new());
+        view.channel_filter = Some("voice".into());
+        let html = list_html(&view);
+        assert!(!html.contains("Parked calls"), "{html}");
+        assert!(!html.contains("Conversations across the firm"), "{html}");
+
+        view.sent_only = true;
+        assert!(list_html(&view).contains("Conversations someone at the firm wrote in"));
     }
 
     #[test]
