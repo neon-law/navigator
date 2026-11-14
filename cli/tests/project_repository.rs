@@ -99,32 +99,6 @@ jobs:
           fi
 "#;
 
-/// The synced skill catalog every Project repository carries, named for the
-/// canonical copies under Navigator's own `.agents/skills/` (see
-/// `SYNCED_SKILLS` in `cli/src/projects/repository.rs`).
-const SYNCED_SKILL_NAMES: &[&str] = &[
-    "council",
-    "legal-council",
-    "analyze-memo",
-    "client-council",
-    "human-readable",
-    "stay-in-repo",
-    "legal-writing",
-    "case-downloader",
-    "project-setup",
-    "deadline",
-    "browser-handoff",
-    "case-timeline",
-    "opposing-communication-review",
-    "record-search",
-    "working-notes",
-    "pull-changes",
-    "push-changes",
-    "push-to-navigator",
-    "word-editing",
-    "court-filing-drafts",
-];
-
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
@@ -252,14 +226,8 @@ fn write_repository_shell(dir: &Path, project_code: &str) {
     )
     .unwrap();
     fs::write(dir.join(".gitignore"), ROOT_GITIGNORE).unwrap();
-    for name in SYNCED_SKILL_NAMES {
-        let source = workspace_root()
-            .join(".agents/skills")
-            .join(name)
-            .join("SKILL.md");
-        let contents = fs::read_to_string(&source)
-            .unwrap_or_else(|e| panic!("read {}: {e}", source.display()));
-        let dest = dir.join(".agents/skills").join(name).join("SKILL.md");
+    for (relative, contents) in project_scaffold::synced_skill_files() {
+        let dest = dir.join(relative);
         fs::create_dir_all(dest.parent().unwrap()).unwrap();
         fs::write(dest, contents).unwrap();
     }

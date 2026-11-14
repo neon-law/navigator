@@ -141,6 +141,7 @@ pub const SYNCED_SKILLS: &[(&str, &str)] = &[
         "record-search",
         include_str!("../../.agents/skills/record-search/SKILL.md"),
     ),
+    ("ocr", include_str!("../../.agents/skills/ocr/SKILL.md")),
     (
         "working-notes",
         include_str!("../../.agents/skills/working-notes/SKILL.md"),

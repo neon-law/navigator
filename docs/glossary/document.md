@@ -14,7 +14,8 @@ An OCR transcript is another `transcript` Document revision. Its `derived_from` 
 asset id, revision number, and SHA-256, so a live document check can tell when the source has moved on. Its
 `transcript_quality` is `machine` until a lawyer proofreads and uploads a newer revision as `proofread` on the same
 slug. OCR text belongs in object storage and an ignored local body, never in Project Git. `hudson site document
-transcribe <pointer>` renders and OCRs each PDF page locally.
+transcribe <pointer>` renders and OCRs each PDF page locally. Use `--text-file` to file a reviewed UTF-8 transcript
+against the same source revision.
 
 > **Source of truth = object storage plus the assets row.** When the application generates or proxies a document (a
 > rendered retainer PDF, a raw inbound email body), the bytes land in object storage via
