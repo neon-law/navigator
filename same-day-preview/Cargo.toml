@@ -1,17 +1,17 @@
 [package]
-name = "nautilus-preview"
+name = "same-day-preview"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.95"
 license = "MIT OR Apache-2.0"
 publish = false
 
-# Web launcher for the Nautilus mobile shell (`webapp::mobile`). `dx` reads
+# Web launcher for the Same Day Legal mobile shell (`webapp::mobile`). `dx` reads
 # the sibling Dioxus.toml from this directory — run dx commands from
-# nautilus-preview/ (see `navigator dev build-nautilus`).
+# same-day-preview/ (see `navigator dev build-same-day`).
 #
 # Deliberately its own workspace with its own, untracked lockfile, mirroring
-# `nautilus-mobile/`: the Dioxus CLI's renderer dependency set stays out of
+# `same-day-mobile/`: the Dioxus CLI's renderer dependency set stays out of
 # the root Cargo.lock that the static musl images build from
 # (`no_crate_links_openssl_so_the_musl_images_can_build`).
 [workspace]

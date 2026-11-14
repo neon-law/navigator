@@ -218,12 +218,12 @@ route_allow if {
 
 # The Legal Sandbox is the subscriber's own workspace: a client reads the
 # page and posts a prompt to the session. Whether the caller's subscription
-# actually opens the composer — versus the preview — is the Nautilus gate's
+# actually opens the composer — versus the preview — is the Same Day Legal gate's
 # decision, made against the Purchase ledger; Rego carries only the role
 # contract, like the purchase page above.
 route_allow if {
     input.path[0] == "app"
-    input.path[1] == "nautilus"
+    input.path[1] == "sandbox"
     count(input.path) == 2
     input.method == "GET"
     input.session.role == "client"
@@ -231,7 +231,7 @@ route_allow if {
 
 route_allow if {
     input.path[0] == "app"
-    input.path[1] == "nautilus"
+    input.path[1] == "sandbox"
     count(input.path) == 3
     input.path[2] == "messages"
     input.method == "POST"

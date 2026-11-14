@@ -1,6 +1,6 @@
 /* Progressive enhancement: the shared contact form remains usable without JS. */
 (() => {
-  const root = document.querySelector('[data-nautilus-intake]');
+  const root = document.querySelector('[data-enrollment-intake]');
   if (!root || root.dataset.ready) return;
   const form = root.querySelector('form');
   const email = form.querySelector('[name="email"]');

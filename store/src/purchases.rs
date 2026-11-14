@@ -139,12 +139,13 @@ const COLUMNS: &str = "id, person_id, email, offering, offering_name, cadence, a
      currency, account_code, state, xero_contact_id, xero_invoice_id, invoice_url, xero_repeating_invoice_id, \
      inserted_at, updated_at, activated_at";
 
-/// The offerings whose Purchase is a Neon Law Nautilus subscription: the one
-/// subscription sold under two names, DeleteYourData.com and Nautilus. The
+/// The offerings whose Purchase is a Same Day Legal subscription: the one
+/// subscription sold under two names, DeleteYourData.com and Same Day Legal. The
 /// canonical catalog anchor — the portal's subscription gate and the monthly
 /// sandbox credit reset both key on these ids, so they live next to the
 /// Purchase model rather than in either caller.
-pub const NAUTILUS_OFFERINGS: [&str; 2] = ["delete-your-data-monthly", "delete-your-data-annual"];
+pub const SAME_DAY_LEGAL_OFFERINGS: [&str; 2] =
+    ["delete-your-data-monthly", "delete-your-data-annual"];
 
 fn from_row(row: &sqlx::postgres::PgRow) -> Result<Purchase, PurchaseError> {
     Ok(Purchase {

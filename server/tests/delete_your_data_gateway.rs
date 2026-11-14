@@ -130,59 +130,76 @@ async fn the_gateway_is_404_on_every_non_neon_brand_host() {
     }
 }
 
-/// `GET /nautilus` on a Neon host describes Nautilus plainly: the checks it
-/// runs, drawn as one iPhone app listing, monthly and prepaid annual pricing,
-/// lawyer review and the private legal sandbox, and the public intake.
+/// Same Day Legal's home on its own hosts describes the subscription: the
+/// checks it runs, drawn as one iPhone app listing, monthly and prepaid annual
+/// pricing, the free tool and the single attorney review, and the intake.
 #[tokio::test]
-async fn the_nautilus_page_renders_on_neon_hosts_with_the_app_checks_and_pricing() {
+async fn the_same_day_legal_home_renders_with_the_app_checks_and_pricing() {
     let app = app(state().await);
-    for host in [None, Some("www.neonlaw.com")] {
-        let (status, body) = get_on_host(&app, "/nautilus", host).await;
-        assert_eq!(status, StatusCode::OK, "{host:?}: {body}");
+    for host in ["sameday.neonlaw.com", "staging-sameday.neonlaw.com"] {
+        let (status, body) = get_on_host(&app, "/", Some(host)).await;
+        assert_eq!(status, StatusCode::OK, "{host}: {body}");
         for expected in [
-            "<title>Neon Law | Nautilus</title>",
+            "<title>Same Day Legal | Home</title>",
+            "fm-page--same-day-legal",
             r#"data-phone="ios""#,
             r#"data-store="ios""#,
             r#"data-store="android""#,
             "Identity theft insurance",
             "Dark web monitoring",
-            "Estate planning",
+            "Vesta Estate Planning",
             "$29/mo",
             "$290/year",
+            "$50",
             "forming an LLC",
-            "From $20",
-            "Lex Tecnica",
+            "Lex Tecnica, Ltd.",
             r##"href="#enrollment""##,
             r#"action="/leads""#,
-            r#"data-nautilus-intake="true""#,
+            r#"data-enrollment-intake="true""#,
             "Send and continue to sign in",
-            "Nautilus is a non-legal service.",
-            "A private space is not an attorney-client relationship.",
             "Attorney advertisement.",
             "site-footer",
         ] {
-            assert!(body.contains(expected), "{host:?} is missing {expected:?}");
+            assert!(body.contains(expected), "{host} is missing {expected:?}");
         }
-        for retired in ["The Reef", "The Cove", "Write your triggers together"] {
-            assert!(
-                !body.contains(retired),
-                "{host:?} still carries {retired:?}"
-            );
+        for retired in ["Nautilus", "From $20", "non-legal service"] {
+            assert!(!body.contains(retired), "{host} still carries {retired:?}");
         }
     }
 }
 
-/// `/nautilus` is Neon's page alone: every other registered brand host 404s it.
+/// Neon's `/same-day-legal` link and retired `/nautilus` page answer a 301 to
+/// Same Day Legal's host; every other brand host 404s both.
 #[tokio::test]
-async fn the_nautilus_page_is_404_on_every_non_neon_brand_host() {
+async fn neon_redirects_to_same_day_legal_and_other_brand_hosts_404() {
     let app = app(state().await);
-    for host in [
-        "www.deleteyourdata.com",
-        "www.vestaestateplanning.com",
-        "www.cyberinjurylaw.com",
-        "www.guiebshook.com",
-    ] {
-        let (status, _) = get_on_host(&app, "/nautilus", Some(host)).await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "{host}");
+    for path in ["/same-day-legal", "/nautilus"] {
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(path)
+                    .header("host", "www.neonlaw.com")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::MOVED_PERMANENTLY, "{path}");
+        assert_eq!(
+            response.headers()["location"],
+            "https://sameday.neonlaw.com",
+            "{path}"
+        );
+        for host in [
+            "www.deleteyourdata.com",
+            "www.vestaestateplanning.com",
+            "www.cyberinjurylaw.com",
+            "www.guiebshook.com",
+            "sameday.neonlaw.com",
+        ] {
+            let (status, _) = get_on_host(&app, path, Some(host)).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{host}{path}");
+        }
     }
 }

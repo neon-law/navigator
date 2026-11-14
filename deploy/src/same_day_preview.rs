@@ -1,10 +1,10 @@
-//! `hudson nautilus preview` — the Nautilus mobile shell, served locally
+//! `hudson same-day preview` — the Same Day Legal mobile shell, served locally
 //! and hydrated.
 //!
 //! The shell itself ([`webapp::mobile::MobileApp`]) is content-local and
 //! static by design; what this command adds is the browser experience of it
 //! without a Mac, Xcode, or `dx`: one Axum listener that server-renders the
-//! shell and layers the staged `nautilus-preview` web bundle on top — the
+//! shell and layers the staged `same-day-preview` web bundle on top — the
 //! exact composition the portal's hydration mechanics exist for. Shaped like
 //! the `hudson notation preview` offline lint: a provenance banner that
 //! never lets the render masquerade as the Project's portal, an honest
@@ -17,14 +17,14 @@ use anyhow::{Context, Result};
 use axum::Router;
 use clap::Subcommand;
 
-use crate::devx::nautilus::{staged_bundle_dir, STAGED_BUNDLE_ENV};
+use crate::devx::same_day::{staged_bundle_dir, STAGED_BUNDLE_ENV};
 
-/// `hudson nautilus …` — the Nautilus mobile shell, served locally for a
+/// `hudson same-day …` — the Same Day Legal mobile shell, served locally for a
 /// browser.
 #[derive(Subcommand)]
-pub enum NautilusCmd {
+pub enum SameDayCmd {
     /// Serve the mobile shell on this machine, hydrated when a staged
-    /// `nautilus-preview` bundle exists.
+    /// `same-day-preview` bundle exists.
     Preview {
         /// Port to serve on. `0` picks a free one.
         #[arg(long, default_value_t = 0)]
@@ -32,7 +32,7 @@ pub enum NautilusCmd {
     },
 }
 
-/// `hudson nautilus preview`: serve the mobile shell on one localhost
+/// `hudson same-day preview`: serve the mobile shell on one localhost
 /// listener until the process is interrupted. `port` `0` asks the OS for a
 /// free one, so several previews can run at once.
 pub async fn run(port: u16) -> Result<()> {
@@ -59,7 +59,7 @@ pub async fn run(port: u16) -> Result<()> {
     axum::serve(listener, router())
         .with_graceful_shutdown(portal::hosting::shutdown_signal())
         .await
-        .context("serving the Nautilus preview")?;
+        .context("serving the Same Day Legal preview")?;
     Ok(())
 }
 
@@ -68,7 +68,7 @@ pub async fn run(port: u16) -> Result<()> {
 /// The degraded, SSR-only case is the portal router's designed mode, not a
 /// gap to fill here.
 fn router() -> Router {
-    portal::dioxus_app::nautilus_preview_router()
+    portal::dioxus_app::same_day_preview_router()
 }
 
 /// The provenance banner, one line per `eprintln!`: what this server is,
@@ -77,14 +77,14 @@ fn router() -> Router {
 /// testable.
 fn provenance_banner(bundle: Option<&Path>) -> Vec<String> {
     let mut lines = vec![
-        "==> Nautilus mobile shell — a local render, not the Project's portal.".to_string(),
+        "==> Same Day Legal mobile shell — a local render, not the Project's portal.".to_string(),
         "    nothing here is pushed, stored, or reachable beyond this machine.".to_string(),
     ];
     match bundle {
         Some(dir) => lines.push(format!("    preview bundle: {}", dir.display())),
         None => lines.push(
             "    preview bundle: none — the home renders but navigation is inert. \
-             Build one with `hudson dev build-nautilus`."
+             Build one with `hudson dev build-same-day`."
                 .to_string(),
         ),
     }
@@ -112,7 +112,7 @@ mod tests {
         );
         assert!(banner.contains("navigation is inert"), "{banner}");
         assert!(
-            banner.contains("hudson dev build-nautilus"),
+            banner.contains("hudson dev build-same-day"),
             "names the build step: {banner}"
         );
     }
@@ -122,16 +122,16 @@ mod tests {
     #[test]
     fn with_a_bundle_the_banner_names_it_and_drops_the_inert_note() {
         let banner =
-            provenance_banner(Some(Path::new("/checkout/server/public/nautilus"))).join("\n");
+            provenance_banner(Some(Path::new("/checkout/server/public/same-day"))).join("\n");
 
         assert!(
-            banner.contains("/checkout/server/public/nautilus"),
+            banner.contains("/checkout/server/public/same-day"),
             "names the staged bundle: {banner}"
         );
         assert!(!banner.contains("inert"), "{banner}");
     }
 
-    /// The served surface renders the mobile shell server-side: the Nautilus
+    /// The served surface renders the mobile shell server-side: the Same Day Legal
     /// home markup and its navigation hook are readable before any wasm
     /// hydrates, with or without a staged bundle — this test process makes no
     /// claim about which, and the router serves the shell either way.
@@ -155,7 +155,7 @@ mod tests {
                 .to_vec(),
         )
         .expect("UTF-8 HTML");
-        assert!(html.contains("Nautilus"), "home markup: {html}");
+        assert!(html.contains("Same Day Legal"), "home markup: {html}");
         assert!(
             html.contains(r#"data-mobile-nav="dyd""#),
             "the navigation hook the native shell taps: {html}"

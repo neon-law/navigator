@@ -1,12 +1,12 @@
-//! The `/app/nautilus` gate: who reaches the Legal Sandbox.
+//! The `/app/sandbox` gate: who reaches the Legal Sandbox.
 //!
 //! Four outcomes, each against the real gated route family:
 //!
 //! 1. An anonymous browser is sent through the login door — `303` to
-//!    `/auth/login?return_to=/app/nautilus`.
+//!    `/auth/login?return_to=/app/sandbox`.
 //! 2. An authenticated caller without an active subscription sees the
 //!    preview state, never a composer.
-//! 3. An authenticated caller whose Purchase of a Nautilus offering is
+//! 3. An authenticated caller whose Purchase of a Same Day Legal offering is
 //!    `active` sees the composer placeholder (the Dioxus sandbox page is a
 //!    sibling change; the gate and the extension it reads are its contract).
 //! 4. The `OIDC_DISABLED` dev posture keeps working: with no verifier
@@ -25,7 +25,7 @@ use axum::http::{header, Request, StatusCode};
 use axum::Router;
 use chrono::Utc;
 use portal::test_support::{app_state, TEST_SESSION_KEY};
-use portal::{nautilus, SessionData, SessionStore};
+use portal::{legal_sandbox, SessionData, SessionStore};
 use store::persons::{NewPerson, Role};
 use store::purchases::{self, Cadence, NewPurchase};
 use store::surreal::SurrealDb;
@@ -49,7 +49,7 @@ async fn database() -> Option<store::postgres::PostgresDb> {
         )
         .ssl_mode(PgSslMode::Disable);
     let admin = sqlx::PgPool::connect_with(options.clone()).await.unwrap();
-    let name = format!("nautilus_gate_{}", Uuid::new_v4().simple());
+    let name = format!("sandbox_gate_{}", Uuid::new_v4().simple());
     sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {name}")))
         .execute(&admin)
         .await
@@ -85,10 +85,10 @@ async fn fixture_with(pg: store::postgres::PostgresDb, auth: portal::AuthConfig)
     let surreal = state.surreal.clone();
     // Bootstrap applies the cookie manager around the whole application; the
     // session boundary reads cookies through it. Mirror that layering here.
-    let app = nautilus::routes_with(
+    let app = legal_sandbox::routes_with(
         &state,
         Some(pg.clone()),
-        nautilus::SandboxBackends {
+        legal_sandbox::SandboxBackends {
             model: Some(Arc::new(gateway::StubModelProvider::new())),
             search: mcp::SearchBackends {
                 case_law: None,
@@ -179,7 +179,7 @@ async fn open_purchase(
 }
 
 async fn get(app: &Router, bearer: Option<&str>) -> (StatusCode, String, String) {
-    let mut builder = Request::builder().uri(nautilus::NAUTILUS_PATH);
+    let mut builder = Request::builder().uri(legal_sandbox::SANDBOX_PATH);
     if let Some(token) = bearer {
         builder = builder.header(header::AUTHORIZATION, token);
     }
@@ -209,7 +209,7 @@ async fn an_anonymous_browser_is_sent_through_the_login_door() {
     };
     let (status, location, _) = get(&fx.app, None).await;
     assert_eq!(status, StatusCode::SEE_OTHER);
-    assert_eq!(location, "/auth/login?return_to=/app/nautilus");
+    assert_eq!(location, "/auth/login?return_to=/app/sandbox");
 }
 
 #[tokio::test]

@@ -60,6 +60,7 @@ pub const CLOSED_BRAND_KEYS: &[&str] = &[
     "guieb-shook",
     "iep-defenders",
     "lex-tecnica",
+    "same-day-legal",
 ];
 
 /// Whether a `brand` row exists carrying this key — the live check

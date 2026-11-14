@@ -1,17 +1,17 @@
-//! The Nautilus mobile shell: the DeleteYourData.com subscription experience
+//! The Same Day Legal mobile shell: the DeleteYourData.com subscription experience
 //! as a native Dioxus app.
 //!
 //! The web root ([`crate::App`]) is SSR-bound — server futures and
 //! SSR-injected context do not exist on a native target — so the
-//! `nautilus-mobile` crate launches this module's root instead. Navigation is a
+//! `same-day-mobile` crate launches this module's root instead. Navigation is a
 //! two-state signal rather than `dioxus_router`: the crate has no router
 //! precedent, and this shell's tests render pages through `dioxus-ssr` the
 //! same way the `marketing_page` component tests do.
 //!
 //! Pages reuse the [`crate::marketing_page::PageSkin`] visual vocabulary —
-//! the `fm-page--practice fm-page--nautilus` modifier classes — so the app
-//! reads as the same product the `/nautilus` page previews. Content is local
-//! and static by design (see the Nautilus Mobile App Spec): no server
+//! the `fm-page--practice fm-page--same-day-legal` modifier classes — so the app
+//! reads as the same product Same Day Legal's home previews. Content is local
+//! and static by design (see the Same Day Legal Mobile App Spec): no server
 //! functions, no store reads.
 
 use dioxus::prelude::*;
@@ -19,14 +19,14 @@ use dioxus::prelude::*;
 /// The two pages the shell can show.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum MobilePage {
-    /// The subscription home: what Nautilus includes and what it costs.
+    /// The subscription home: what Same Day Legal includes and what it costs.
     #[default]
     Home,
-    /// Delete Your Data: leaving Nautilus with your records.
+    /// Delete Your Data: leaving Same Day Legal with your records.
     Dyd,
 }
 
-/// The mobile root. `nautilus-mobile` launches this; the page
+/// The mobile root. `same-day-mobile` launches this; the page
 /// signal is the shell's router.
 #[component]
 pub fn MobileApp() -> Element {
@@ -34,23 +34,23 @@ pub fn MobileApp() -> Element {
     rsx! {
         div { class: "fm-page fm-page--mobile",
             match page() {
-                MobilePage::Home => rsx! { NautilusHome { on_open_dyd: move |_| page.set(MobilePage::Dyd) } },
+                MobilePage::Home => rsx! { SameDayHome { on_open_dyd: move |_| page.set(MobilePage::Dyd) } },
                 MobilePage::Dyd => rsx! { DydPage { on_back_home: move |_| page.set(MobilePage::Home) } },
             }
         }
     }
 }
 
-/// The Nautilus subscription home.
+/// The Same Day Legal subscription home.
 #[component]
-pub fn NautilusHome(on_open_dyd: EventHandler<MouseEvent>) -> Element {
+pub fn SameDayHome(on_open_dyd: EventHandler<MouseEvent>) -> Element {
     rsx! {
-        main { class: "fm-page--practice fm-page--nautilus",
-            h1 { "Nautilus" }
+        main { class: "fm-page--practice fm-page--same-day-legal",
+            h1 { "Same Day Legal" }
             p { class: "fm-page__lede",
                 "Private, protected paperwork — one subscription for your estate plan and the documents your family keeps."
             }
-            section { class: "nautilus-included",
+            section { class: "same-day-included",
                 h2 { "Included" }
                 ul {
                     li { "Your will, health care directive, and power of attorney" }
@@ -59,7 +59,7 @@ pub fn NautilusHome(on_open_dyd: EventHandler<MouseEvent>) -> Element {
                     li { "Encrypted storage you can reach from anywhere" }
                 }
             }
-            section { class: "nautilus-pricing",
+            section { class: "same-day-pricing",
                 h2 { "Pricing" }
                 p { "$29/month or $290/year — cancel anytime." }
             }
@@ -70,16 +70,16 @@ pub fn NautilusHome(on_open_dyd: EventHandler<MouseEvent>) -> Element {
     }
 }
 
-/// The Delete Your Data page: leaving Nautilus with your records.
+/// The Delete Your Data page: leaving Same Day Legal with your records.
 #[component]
 pub fn DydPage(on_back_home: EventHandler<MouseEvent>) -> Element {
     rsx! {
-        main { class: "fm-page--practice fm-page--nautilus",
+        main { class: "fm-page--practice fm-page--same-day-legal",
             h1 { "Delete Your Data" }
             p { class: "fm-page__lede",
                 "You own your documents. Leaving is designed to be clean, not punitive."
             }
-            section { class: "nautilus-dyd-steps",
+            section { class: "same-day-dyd-steps",
                 h2 { "How it works" }
                 ol {
                     li { "Download everything — signed wills, directives, and every version you filed." }
@@ -88,7 +88,7 @@ pub fn DydPage(on_back_home: EventHandler<MouseEvent>) -> Element {
                 }
             }
             button { class: "nav-mobile-home", "data-mobile-nav": "home", onclick: on_back_home,
-                "Back to Nautilus"
+                "Back to Same Day Legal"
             }
         }
     }
@@ -114,18 +114,18 @@ mod tests {
     fn TestShell(page: MobilePage) -> Element {
         rsx! {
             match page {
-                MobilePage::Home => rsx! { NautilusHome { on_open_dyd: move |_| {} } },
+                MobilePage::Home => rsx! { SameDayHome { on_open_dyd: move |_| {} } },
                 MobilePage::Dyd => rsx! { DydPage { on_back_home: move |_| {} } },
             }
         }
     }
 
     #[test]
-    fn nautilus_home_renders_the_subscription_experience() {
+    fn same_day_home_renders_the_subscription_experience() {
         let html = render(MobilePage::Home);
         assert!(
-            html.contains("fm-page--nautilus"),
-            "home must wear the Nautilus skin"
+            html.contains("fm-page--same-day-legal"),
+            "home must wear the Same Day Legal skin"
         );
         assert!(html.contains("Included"));
         assert!(html.contains("$29/month"), "monthly price must be present");
@@ -142,7 +142,7 @@ mod tests {
         assert!(html.contains("Delete Your Data"));
         assert!(html.contains("erase your records"));
         assert!(
-            html.contains("fm-page--nautilus"),
+            html.contains("fm-page--same-day-legal"),
             "the DYD page wears the same skin"
         );
         assert!(
@@ -161,7 +161,7 @@ mod tests {
         // The launch root's initial signal state is the default `MobilePage`;
         // SSR renders that first paint, so the app must open on the home page.
         let html = dioxus_ssr::render_element(rsx! { MobileApp {} });
-        assert!(html.contains("fm-page--nautilus"));
+        assert!(html.contains("fm-page--same-day-legal"));
         assert!(html.contains("$29/month"));
         assert!(
             !html.contains("Delete Your Data</h1>"),

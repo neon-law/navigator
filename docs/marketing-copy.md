@@ -271,27 +271,26 @@ separate. Gift cards are available, and privacy and credit monitoring requires o
 `sibling_practices` cards point at two sibling practices: the optional [Death Check](glossary/death-check.md) through
 Vesta Estate Planning, which sets the triggers written into a client's Vesta estate plan in motion while their
 subscription is active, and cyber-crime claims through Cyber Injury Law. Vesta's `estate` block carries a
-`sibling_practices` card pointing back at DeleteYourData.com; Cyber Injury Law's `cyber_injury` block points to the
-Nautilus plan (the same subscription under its current name) hosted on Neon. Each card names its destination by brand
+`sibling_practices` card pointing back at DeleteYourData.com; Cyber Injury Law's `cyber_injury` block points to the Same
+Day Legal plan (the same subscription under its current name) hosted on Neon. Each card names its destination by brand
 key; the address is resolved per deployment, and a card for a brand that is not live is dropped. Signup and gift-card
 links use the same Notion booking calendar as Neon and Vesta. Plus Jakarta Sans is used throughout the page and footer.
 Pricing uses the shared `PricingSection` with the brand palette and typeface. The cloak crossing an internet grid is
 decorative; reduced-motion preferences disable animation. The Solana section carries the approved request-record and
-litigation copy. The page uses the same footer treatment as Neon and Vesta. The subscription is also called [Neon Law
-Nautilus](glossary/neon-law-nautilus.md). Neon publishes Nautilus at `/nautilus` from
-`neon/locales/en/neon/nautilus.yaml`. An `app_preview` band draws an iPhone in its body proportions, listing every check
-as an equal peer: data removal, privacy protection, credit monitoring, dark web monitoring, identity theft insurance,
-unclaimed property, estate planning, and basic form filings. Its `android_items` draw a Pixel beside it with a second
-screen, the paperwork view; screens are labelled illustrative. The ocean palette fills the viewport, header to
-enrollment band, and the shell swims through the opening screen; reduced-motion preferences hold it still. The page
-sells the subscription as cancel-anytime, billed through the App Store or Google Play, with LLC formation and the
-contract-template library included. Its listing price, like the $29/mo and $290/year pricing cards, resolves from
-DeleteYourData's home catalog. The store badges read "Coming soon" and link nowhere until the apps are published. A
-lawyer review starts at $20 and is prepaid; the private legal sandbox includes $5 of model usage a month, then is priced
-à la carte by Lex Tecnica. Monitoring and insurance coverage are confirmed before activation. Its CTA opens a three-step
-public contact intake before sign-in; the signed-in page exposes the configured enrollment booking link. DocuSign
-paperwork follows the enrollment review. The page expressly distinguishes privacy from attorney-client privilege. Every
-other brand host answers `/nautilus` with a 404.
+litigation copy. The page uses the same footer treatment as Neon and Vesta. The same subscription is sold as [Same Day
+Legal](glossary/same-day-legal.md), Lex Tecnica, Ltd.'s brand at `sameday.neonlaw.com`, whose home reads
+`neon/locales/en/same-day-legal/home-marketing.yaml` and wears the `same_day_legal` skin: the Lex Tecnica brand kit in
+monochrome, with Cormorant SC display type. An `app_preview` band draws an iPhone in its body proportions, listing every
+check as an equal peer: data removal, privacy protection, credit monitoring, dark web monitoring, identity theft
+insurance, unclaimed property, estate planning, and basic form filings. Its `android_items` draw a Pixel beside it with
+a second screen, the paperwork view; screens are labelled illustrative. The page sells the subscription as
+cancel-anytime at $29/mo or $290/year, with LLC formation, the contract-template library, attorney review, and limited
+changes to a Vesta estate plan included. Its listing price and pricing cards resolve from DeleteYourData's home catalog.
+A second band offers the alternatives: Navigator, free, with no lawyer review, or one attorney review for $50 paid once.
+The store badges read "Coming soon" and link nowhere until the apps are published. Its CTA opens a three-step public
+contact intake before sign-in; the signed-in page exposes the configured enrollment booking link. Legal work begins
+under a written engagement with Lex Tecnica, Ltd. Neon's `/same-day-legal` and retired `/nautilus` paths answer a 301 to
+the Same Day Legal host.
 
 Neon's home at `/` reads `neon/locales/en/neon/home-marketing.yaml` and presents Navigator under the tagline "Exacting
 agentic lawyering.": what Navigator does, a Notation band linking `/notations/about` and `/notations`, and a pointer to
@@ -303,9 +302,9 @@ tokens at the provider's cost, with the organization's own brand name and Forgej
 only in the pricing card in `legal-aid.yaml`; `/` and `/navigator` link there without restating it. The page links the
 Using and Operating Navigator workshops.
 
-Neon's header names its three products: Nautilus at `/nautilus`, Navigator at `/navigator`, and Notations at
-`/notations`. Its fee schedule stays at `/services`. Business counsel is not sold separately: `/business` answers a 301
-to `/`, because formation and the contract templates are part of the Nautilus subscription. The `/disputes` route
+Neon's header names its three pages: Navigator at `/navigator`, Notations at `/notations`, and Legal Aid at
+`/legal-aid`. Its fee schedule stays at `/services`. Business counsel is not sold separately: `/business` answers a 301
+to `/`, because formation and the contract templates are part of the Same Day Legal subscription. The `/disputes` route
 returns a 404. Other brands retain their own home layouts. The business template inventory is documented in [business
 notations](business-notations.md).
 
@@ -323,10 +322,10 @@ belongs in `views::locales` and is a Rust change.
 The catalog is compiled into the brand crate with `include_str!`. A merged YAML edit lands on the next image build that
 compiles `neon`.
 
-Every registered house brand publishes a Lead form on its home page. Neon uses the Nautilus enrollment form and Summons
-keeps its intake form; the other layouts show the shared form inline, including Cyber Injury. Each form posts to
-`/leads` with the request's CSRF token and source path. Email is required, phone is optional, and SMS consent is a
-separate choice. The route test submits a synthetic inquiry from every live brand and verifies its attribution.
+Every registered house brand publishes a Lead form on its home page. Neon uses the enrollment form and Summons keeps its
+intake form; the other layouts show the shared form inline, including Cyber Injury. Each form posts to `/leads` with the
+request's CSRF token and source path. Email is required, phone is optional, and SMS consent is a separate choice. The
+route test submits a synthetic inquiry from every live brand and verifies its attribution.
 
 Misericordia focuses on compassionate personal injury representation: vehicle collisions, premises injuries,
 catastrophic injuries, wrongful death, elder care abuse and neglect, and medical negligence. Cyber Injury Law reviews

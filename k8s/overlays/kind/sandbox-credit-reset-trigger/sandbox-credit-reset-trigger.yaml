@@ -7,7 +7,7 @@
 # This CronJob is the thin trigger: it POSTs to the Restate ingress to start
 # one invocation, then exits. Restate owns retries.
 #
-# On the first of the month the workflow grants every active Nautilus
+# On the first of the month the workflow grants every active Same Day Legal
 # subscriber the fresh 500-cent Legal Sandbox credit and invoices the closed
 # month's overage à la carte through the `billing` contract. The trigger keys
 # each invocation on the billing period (`YYYY-MM`), so a same-month re-fire

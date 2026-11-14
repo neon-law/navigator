@@ -1,6 +1,6 @@
 //! The sandbox usage ledger's money rules.
 //!
-//! The ledger is the only thing standing between a Nautilus subscriber's
+//! The ledger is the only thing standing between a Same Day Legal subscriber's
 //! $5 of model usage and a meter that lies. These tests pin the four
 //! behaviors the meter must never get wrong: grant/debit arithmetic in
 //! integer cents, the crossing completion (billed, flagged overage),

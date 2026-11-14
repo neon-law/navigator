@@ -48,12 +48,6 @@ pub fn delete_your_debt_gateway(
     locales::delete_your_debt_gateway(branding, deployment_host)
 }
 
-/// `/nautilus` — Neon Law Nautilus, the DeleteYourData.com subscription. See
-/// `locales/en/neon/nautilus.yaml`.
-pub fn nautilus(branding: &views::brand::Branding, deployment_host: Option<&str>) -> PageContent {
-    locales::nautilus(branding, deployment_host)
-}
-
 /// `/delete-your-data` — Neon's own gateway to the DeleteYourData.com
 /// practice. See `locales/en/neon/gateway-delete-your-data.yaml`.
 pub fn delete_your_data_gateway(
@@ -997,7 +991,7 @@ mod firm_copy_tests {
         );
         assert!(
             home.contains("$29/mo") && home.contains("$290/year prepaid"),
-            "the Nautilus referral keeps its prices: {home}"
+            "the subscription referral keeps its prices: {home}"
         );
     }
 }

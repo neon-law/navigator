@@ -1,13 +1,13 @@
 ---
 title: "Death Check"
-description: "A Death Check sets a Vesta estate plan's agreed triggers in motion when an active Nautilus client dies."
+description: "A Death Check starts a Vesta estate plan's agreed triggers when an active Same Day Legal client dies."
 ---
 
 An optional service that sets the triggers in a [Vesta Estate Planning](vesta-estate-planning.md) estate plan in motion
 when the client dies. The client and the firm write those triggers together while drafting the plan: who to tell, which
 claims to file, such as a life insurance claim, and which accounts to close. The check runs only while the client holds
-an active [Neon Law Nautilus](neon-law-nautilus.md) subscription, which is the same subscription as DeleteYourData.com,
-and only if the client turns it on.
+an active [Same Day Legal](same-day-legal.md) subscription, which is the same subscription as DeleteYourData.com, and
+only if the client turns it on.
 
 It is **client-English, not a schema noun** — like [Referral](referral.md), it names an offer a lawyer makes out loud,
 not a table. The offer is authored as a `sibling_practices` card in the DeleteYourData.com home catalog

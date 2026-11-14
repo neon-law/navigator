@@ -193,8 +193,9 @@ async fn submit(
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     }
-    if source_path == "/nautilus" {
-        return Redirect::to("/auth/login?return_to=%2Fnautilus%23enrollment").into_response();
+    // Same Day Legal's enrollment continues to sign-in and its booking link.
+    if brand == BrandKey::SameDayLegal && source_path == "/" {
+        return Redirect::to("/auth/login?return_to=%2F%23enrollment").into_response();
     }
     neutral_redirect()
 }
@@ -232,10 +233,7 @@ fn valid_phone(phone: &str) -> bool {
 
 fn safe_source_path(path: &str) -> String {
     let path = path.trim();
-    if matches!(
-        path,
-        "/" | "/contact" | "/navigator" | "/services" | "/nautilus"
-    ) {
+    if matches!(path, "/" | "/contact" | "/navigator" | "/services") {
         path.to_string()
     } else {
         "/leads".to_string()
@@ -288,7 +286,9 @@ mod tests {
             .merge(routes(rate_limit))
             .layer(axum::middleware::from_fn(
                 |mut req: Request, next: Next| async move {
-                    req.extensions_mut().insert(BrandKey::Neon);
+                    if req.extensions().get::<BrandKey>().is_none() {
+                        req.extensions_mut().insert(BrandKey::Neon);
+                    }
                     next.run(req).await
                 },
             ))
@@ -325,7 +325,7 @@ mod tests {
 
     #[test]
     fn source_path_accepts_only_routes_that_mount_the_lead_form() {
-        for path in ["/", "/contact", "/navigator", "/services", "/nautilus"] {
+        for path in ["/", "/contact", "/navigator", "/services"] {
             assert_eq!(safe_source_path(path), path);
         }
 
@@ -366,24 +366,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn nautilus_records_contact_before_redirecting_to_sign_in() {
+    async fn same_day_legal_records_contact_before_redirecting_to_sign_in() {
         let db = store::test_support::mem_surreal().await;
         let (app, sessions) = test_app(db.clone(), RateLimit::disabled()).await;
-        let token = "nautilus-csrf";
+        let token = "same-day-csrf";
         let payload = body(token, "visitor@example.com", "", false)
-            .replace("source_path=%2Fservices", "source_path=%2Fnautilus");
-        let response = app
-            .oneshot(request(payload, Some(csrf_cookie(&sessions, token))))
-            .await
-            .unwrap();
+            .replace("source_path=%2Fservices", "source_path=%2F");
+        let mut req = request(payload, Some(csrf_cookie(&sessions, token)));
+        req.extensions_mut().insert(BrandKey::SameDayLegal);
+        let response = app.oneshot(req).await.unwrap();
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
         assert_eq!(
             response.headers()["location"],
-            "/auth/login?return_to=%2Fnautilus%23enrollment"
+            "/auth/login?return_to=%2F%23enrollment"
         );
         let leads = store::leads::list(&db).await.unwrap();
         assert_eq!(leads.len(), 1);
-        assert_eq!(leads[0].source_path, "/nautilus");
+        assert_eq!(leads[0].source_path, "/");
         assert!(store::persons::find_by_email_ci(&db, "visitor@example.com")
             .await
             .unwrap()

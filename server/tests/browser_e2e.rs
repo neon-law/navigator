@@ -53,18 +53,30 @@ mod inbox_triage;
 #[path = "common/private_chart.rs"]
 mod private_chart;
 
-/// Nautilus collects contact details before sign-in and keeps them when going Back.
+/// Same Day Legal's origin for the browser suite, e.g. `http://localhost:<port>`.
+const SAME_DAY_LEGAL_BASE_URL_ENV: &str = "NAV_SAME_DAY_LEGAL_BASE_URL";
+
+/// The enrollment intake collects contact details before sign-in and keeps them when going Back.
 #[tokio::test]
-async fn nautilus_intake_preserves_answers_and_reviews_before_sign_in() {
+async fn enrollment_intake_preserves_answers_and_reviews_before_sign_in() {
+    // The intake lives on Same Day Legal's own host, which the harness does
+    // not serve under `base_url()`; Neon's `/nautilus` only redirects there.
+    let Some(origin) = env::var(SAME_DAY_LEGAL_BASE_URL_ENV)
+        .ok()
+        .filter(|url| !url.trim().is_empty())
+    else {
+        eprintln!("skipping the enrollment intake test: set {SAME_DAY_LEGAL_BASE_URL_ENV}");
+        return;
+    };
     let Some(c) = new_client_or_skip().await else {
         return;
     };
-    c.goto(&format!("{}/nautilus#enrollment", base_url()))
+    c.goto(&format!("{origin}/#enrollment"))
         .await
-        .expect("Nautilus");
+        .expect("Same Day Legal");
     wait_for_text(&c, "Your contact details", Duration::from_secs(20)).await;
     let email = c
-        .find(Locator::Css("[data-nautilus-intake] [name=email]"))
+        .find(Locator::Css("[data-enrollment-intake] [name=email]"))
         .await
         .expect("email");
     email
@@ -86,7 +98,7 @@ async fn nautilus_intake_preserves_answers_and_reviews_before_sign_in() {
         .expect("review");
     wait_for_text(&c, "Review and continue", Duration::from_secs(5)).await;
     let review = c
-        .find(Locator::Css("[data-nautilus-intake] dl"))
+        .find(Locator::Css("[data-enrollment-intake] dl"))
         .await
         .expect("review details")
         .text()
@@ -103,7 +115,7 @@ async fn nautilus_intake_preserves_answers_and_reviews_before_sign_in() {
     }
     let preserved = c
         .execute(
-            "return document.querySelector('[data-nautilus-intake] [name=email]').value",
+            "return document.querySelector('[data-enrollment-intake] [name=email]').value",
             vec![],
         )
         .await
@@ -121,7 +133,7 @@ async fn nautilus_intake_preserves_answers_and_reviews_before_sign_in() {
         assert_eq!(
             fits,
             serde_json::json!(true),
-            "Nautilus overflows at {width}px"
+            "Same Day Legal overflows at {width}px"
         );
     }
     c.close().await.expect("close browser");
@@ -129,14 +141,14 @@ async fn nautilus_intake_preserves_answers_and_reviews_before_sign_in() {
 
 /// A verified fixture session reaches the configured booking handoff.
 #[tokio::test]
-async fn nautilus_signed_in_view_offers_enrollment_booking() {
+async fn signed_in_enrollment_offers_booking() {
     let Some(c) = new_client_or_skip().await else {
         return;
     };
     login_as_lawyer(&c).await;
-    c.goto(&format!("{}/nautilus#enrollment", base_url()))
+    c.goto(&format!("{}/#enrollment", base_url()))
         .await
-        .expect("Nautilus booking");
+        .expect("Same Day Legal booking");
     wait_for_text(&c, "You are signed in.", Duration::from_secs(20)).await;
     let booking = c
         .find(Locator::Css("#enrollment a.nav-btn"))
@@ -155,7 +167,7 @@ async fn nautilus_signed_in_view_offers_enrollment_booking() {
     assert!(c.find(Locator::Css("#enrollment form")).await.is_err());
     std::fs::create_dir_all("/tmp/navigator-screenshots").expect("capture directory");
     std::fs::write(
-        "/tmp/navigator-screenshots/nautilus-booking.png",
+        "/tmp/navigator-screenshots/enrollment-booking.png",
         c.screenshot().await.expect("booking capture"),
     )
     .expect("save booking capture");

@@ -10,5 +10,5 @@ Law points to it from its own `/estate-planning` page.
 
 A Vesta estate plan is where the client and the firm write the triggers that an optional [Death Check](death-check.md)
 sets in motion: who to tell, which claims to file, such as a life insurance claim, and which accounts to close. The
-check runs only while the client also holds an active [Neon Law Nautilus](neon-law-nautilus.md) subscription. Vesta's
-home links to DeleteYourData.com, and DeleteYourData.com's home links back.
+check runs only while the client also holds an active [Same Day Legal](same-day-legal.md) subscription. Vesta's home
+links to DeleteYourData.com, and DeleteYourData.com's home links back.

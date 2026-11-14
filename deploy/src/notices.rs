@@ -892,9 +892,9 @@ source = "git+https://example.invalid/repo"
         let flat = paragraph.replace('\n', " ");
         for phrase in [
             "[Draft — pending review by counsel.]",
-            "Lex Tecnica, and IEP Defenders material belongs to Lex Tecnica, Ltd.",
+            "IEP Defenders, and Same Day Legal material belongs to Lex Tecnica, Ltd.",
             "Vesta Estate Planning, Misericordia Injury Law, Abhaya Immigration,",
-            "LEX TECNICA, or IEP DEFENDERS",
+            "IEP DEFENDERS, or SAME DAY LEGAL",
             "Permission must come from Lex Tecnica, Ltd. in writing.",
             "views/src/brand.rs and views/src/brand_presentation.rs",
         ] {

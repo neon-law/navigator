@@ -1,0 +1,13 @@
+# Dioxus CLI configuration for the Same Day Legal web preview. `dx` reads this from
+# the crate directory — run dx commands from same-day-preview/.
+[application]
+name = "same-day-preview"
+default_platform = "web"
+
+[bundle]
+identifier = "com.neonlaw.sameday.preview"
+icon = [
+    "icons/same-day-32.png",
+    "icons/same-day-64.png",
+    "icons/same-day-256.png",
+]

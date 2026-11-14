@@ -1061,7 +1061,7 @@ async fn public_navigation_images_and_collage_dialog_are_accessible() {
         .expect("the home call to action has an href");
     assert_eq!(
         href, "#enrollment",
-        "the home call to action reaches Nautilus enrollment"
+        "the home call to action reaches Same Day Legal enrollment"
     );
 
     c.goto(&format!("{site_base_url}/blog/thanks-apple"))
