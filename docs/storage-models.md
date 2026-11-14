@@ -67,6 +67,18 @@ indexes decide replay races, and a delivery's reservation commits with its attem
 Notation, Asset) must exist in PostgreSQL. A retention purge refuses while an Inbox Message or a Notation source still
 names a Communication it would delete. The Inbox tables follow the same rule.
 
+## Brand and social content
+
+Whenever `NAVIGATOR_POSTGRES_HOST` is set, `store::posts`, `store::social_handles`, `store::social_publications`,
+`store::social_accounts`, and `store::social_account_selections` read and write PostgreSQL only, through
+`store::postgres::social`: the `post`, `blog_video`, `social_handle`, `social_publication`, `social_account`, and
+`social_account_selection` tables. Without a host, SurrealDB is the fallback. The unique indexes decide races: a Post's
+Brand and slug, a Blog Video's object key, a Social Publication's Post and provider (one sender is admitted), and a
+Social Account's Brand, provider, and account. These tables are held on the same terms as the matter records: only the
+first [Mirror Backfill](postgres-tooling.md#mirror-backfill) copies SurrealDB's rows in, and after it parity compares
+nothing. Brand authority still reads the Brand and Firm from their own authority, and the Brand, Firm, and Person rows
+must exist in PostgreSQL.
+
 ## Other domains
 
 The [Firm journal](firm-journal.md) documents its backend selection and PostgreSQL-only reconciliation features.

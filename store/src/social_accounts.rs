@@ -12,9 +12,22 @@ use uuid::Uuid;
 
 use crate::firm_capability::{FirmCapability, FirmCapabilityDecision};
 use crate::persons::Role;
+use crate::postgres::social::{self as authority, SocialAuthorityError};
 use crate::surreal::{record_id, record_uuid, SurrealDb};
 
 const TABLE: &str = "social_account";
+
+/// A PostgreSQL account's non-secret metadata as `row`: the sealed token
+/// bundle and its key material never leave the database in a listing.
+macro_rules! pg_account {
+    ($alias:literal) => {
+        concat!(
+            "to_jsonb(",
+            $alias,
+            ") - 'ciphertext' - 'wrapped_dek' - 'kms_key_version' - 'kms_context' AS row"
+        )
+    };
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -143,7 +156,7 @@ pub enum TokenRenewal {
     Reconnect,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SocialAccount {
     pub id: String,
     pub firm_id: Uuid,
@@ -374,6 +387,16 @@ pub async fn connect(
     let wrapped_result = kms.wrap_data_key(&data_key, &context).await;
     data_key.fill(0);
     let wrapped = wrapped_result.map_err(SocialAccountError::Encryption)?;
+    if let Some(pg) = authority::authority().await? {
+        let sealed = Sealed {
+            firm_id,
+            ciphertext: BASE64.encode(ciphertext),
+            wrapped_dek: BASE64.encode(wrapped.ciphertext),
+            kms_key_version: wrapped.key_version,
+            kms_context: context.aad(),
+        };
+        return connect_pg(&pg, key, &input, sealed).await;
+    }
     let now = Utc::now();
     let mut response = db
         .query(format!(
@@ -421,6 +444,47 @@ pub async fn connect(
     Ok(account)
 }
 
+/// Upsert a connection under its stable key; a reconnect clears revocation.
+async fn connect_pg(
+    pg: &crate::postgres::PostgresDb,
+    key: String,
+    input: &ConnectSocialAccount<'_>,
+    sealed: Sealed,
+) -> Result<SocialAccount, SocialAccountError> {
+    let query = sqlx::query(concat!(
+        "WITH w AS (INSERT INTO social_account (id, firm_id, brand_key, provider, \
+         provider_account_id, display_name, scopes, expires_at, ciphertext, wrapped_dek, \
+         kms_key_version, kms_context, status, connected_by_person_id, inserted_at, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'connected', $13, now(), now()) \
+         ON CONFLICT (id) DO UPDATE SET firm_id = EXCLUDED.firm_id, \
+         display_name = EXCLUDED.display_name, scopes = EXCLUDED.scopes, \
+         expires_at = EXCLUDED.expires_at, ciphertext = EXCLUDED.ciphertext, \
+         wrapped_dek = EXCLUDED.wrapped_dek, kms_key_version = EXCLUDED.kms_key_version, \
+         kms_context = EXCLUDED.kms_context, status = 'connected', \
+         connected_by_person_id = EXCLUDED.connected_by_person_id, \
+         revoked_by_person_id = NULL, revoked_at = NULL, updated_at = now() RETURNING *) \
+         SELECT ",
+        pg_account!("w"),
+        " FROM w"
+    ))
+    .bind(key)
+    .bind(sealed.firm_id)
+    .bind(input.brand_key.to_owned())
+    .bind(input.provider.as_str())
+    .bind(input.provider_account_id.to_owned())
+    .bind(input.display_name.map(str::to_owned))
+    .bind(input.scopes.to_vec())
+    .bind(input.expires_at)
+    .bind(sealed.ciphertext)
+    .bind(sealed.wrapped_dek)
+    .bind(sealed.kms_key_version)
+    .bind(sealed.kms_context)
+    .bind(input.actor_person_id);
+    authority::maybe(pg, query)
+        .await?
+        .ok_or(SocialAccountError::NotFound)
+}
+
 const SELECT: &str = "id, firm_id, brand_key, provider, provider_account_id, display_name, scopes, expires_at, status, connected_by_person_id, revoked_by_person_id, revoked_at, inserted_at, updated_at";
 
 /// List metadata for Brands the actor can manage; tokens are never selected.
@@ -432,6 +496,16 @@ pub async fn for_actor(
     let brand_keys = crate::posts::manageable_brand_keys(db, actor_role, actor_person_id)
         .await
         .map_err(|error| SocialAccountError::Db(error.to_string()))?;
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(concat!(
+            "SELECT ",
+            pg_account!("a"),
+            " FROM social_account a WHERE a.brand_key = ANY($1) \
+             ORDER BY array_position($1, a.brand_key), a.provider"
+        ))
+        .bind(brand_keys);
+        return Ok(authority::rows(&pg, query).await?);
+    }
     let mut accounts = Vec::new();
     for brand_key in brand_keys {
         let mut response = db
@@ -470,6 +544,17 @@ pub async fn for_provider_identity(
     provider: SocialProvider,
     provider_account_id: &str,
 ) -> Result<Vec<SocialAccount>, SocialAccountError> {
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(concat!(
+            "SELECT ",
+            pg_account!("a"),
+            " FROM social_account a WHERE a.provider = $1 \
+             AND a.provider_account_id = $2 AND a.status = 'connected'"
+        ))
+        .bind(provider.as_str())
+        .bind(provider_account_id.to_owned());
+        return Ok(authority::rows(&pg, query).await?);
+    }
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE provider = $provider \
@@ -496,6 +581,17 @@ pub async fn selected_for_brand(
 ) -> Result<Vec<SocialAccount>, SocialAccountError> {
     if account_keys.is_empty() {
         return Ok(Vec::new());
+    }
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(concat!(
+            "SELECT ",
+            pg_account!("a"),
+            " FROM social_account a WHERE a.brand_key = $1 \
+             AND a.status = 'connected' AND a.id = ANY($2) ORDER BY a.provider"
+        ))
+        .bind(brand_key.to_owned())
+        .bind(account_keys.to_vec());
+        return Ok(authority::rows(&pg, query).await?);
     }
     let ids = account_keys
         .iter()
@@ -526,6 +622,17 @@ pub async fn connected_account(
     provider_account_id: &str,
 ) -> Result<Option<SocialAccount>, SocialAccountError> {
     let key = account_key(brand_key, provider, provider_account_id);
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(concat!(
+            "SELECT ",
+            pg_account!("a"),
+            " FROM social_account a WHERE a.id = $1 AND a.status = 'connected' \
+             AND a.brand_key = $2"
+        ))
+        .bind(key)
+        .bind(brand_key.to_owned());
+        return Ok(authority::maybe(&pg, query).await?);
+    }
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM ONLY $id WHERE status = 'connected' AND brand_key = $brand"
@@ -538,6 +645,56 @@ pub async fn connected_account(
     Ok(row.and_then(AccountRow::into_account))
 }
 
+/// A connected account's sealed token bundle and the KMS context it was
+/// sealed under.
+#[derive(Deserialize)]
+struct Sealed {
+    firm_id: Uuid,
+    ciphertext: String,
+    wrapped_dek: String,
+    kms_key_version: String,
+    kms_context: String,
+}
+
+/// The sealed bundle of a connected account; `None` once it is revoked.
+async fn sealed(db: &SurrealDb, key: &str) -> Result<Option<Sealed>, SocialAccountError> {
+    #[derive(SurrealValue)]
+    struct SecretRow {
+        firm_id: surrealdb::types::RecordId,
+        ciphertext: String,
+        wrapped_dek: String,
+        kms_key_version: String,
+        kms_context: String,
+    }
+
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "SELECT to_jsonb(a) AS row FROM social_account a \
+             WHERE a.id = $1 AND a.status = 'connected'",
+        )
+        .bind(key.to_owned());
+        return Ok(authority::maybe(&pg, query).await?);
+    }
+    let mut response = db
+        .query(
+            "SELECT firm_id, ciphertext, wrapped_dek, kms_key_version, kms_context \
+             FROM ONLY $id WHERE status = 'connected'",
+        )
+        .bind(("id", surrealdb::types::RecordId::new(TABLE, key.to_owned())))
+        .await?
+        .check()?;
+    let row: Option<SecretRow> = response.take(0)?;
+    Ok(row.and_then(|row| {
+        Some(Sealed {
+            firm_id: record_uuid(&row.firm_id)?,
+            ciphertext: row.ciphertext,
+            wrapped_dek: row.wrapped_dek,
+            kms_key_version: row.kms_key_version,
+            kms_context: row.kms_context,
+        })
+    }))
+}
+
 /// Resolve tokens by account identity for a provider service. Revoked accounts
 /// cannot be resolved; there is deliberately no access-token cache here.
 pub async fn resolve_tokens(
@@ -547,31 +704,11 @@ pub async fn resolve_tokens(
     provider_account_id: &str,
     kms: &dyn RuntimeKms,
 ) -> Result<ResolvedSocialTokens, SocialAccountError> {
-    #[derive(SurrealValue)]
-    struct SecretRow {
-        firm_id: surrealdb::types::RecordId,
-        ciphertext: String,
-        wrapped_dek: String,
-        kms_key_version: String,
-        kms_context: String,
-        status: String,
-    }
-
     let key = account_key(brand_key, provider, provider_account_id);
-    let mut response = db
-        .query(
-            "SELECT firm_id, ciphertext, wrapped_dek, kms_key_version, kms_context, status \
-             FROM ONLY $id"
-                .to_string(),
-        )
-        .bind(("id", surrealdb::types::RecordId::new(TABLE, key.clone())))
+    let row = sealed(db, &key)
         .await?
-        .check()?;
-    let row: Option<SecretRow> = response.take(0)?;
-    let row = row
-        .filter(|row| row.status == "connected")
         .ok_or(SocialAccountError::NotFound)?;
-    let firm_id = record_uuid(&row.firm_id).ok_or(SocialAccountError::NotFound)?;
+    let firm_id = row.firm_id;
     let brand = crate::brands::find_by_key(db, brand_key)
         .await
         .map_err(|error| SocialAccountError::Db(error.to_string()))?
@@ -608,24 +745,14 @@ pub async fn update_refreshed_tokens(
     input: RefreshSocialAccount<'_>,
     kms: &dyn RuntimeKms,
 ) -> Result<(), SocialAccountError> {
-    #[derive(SurrealValue)]
-    struct ContextRow {
-        firm_id: surrealdb::types::RecordId,
-        kms_context: String,
-    }
-
     if input.access_token.trim().is_empty() {
         return Err(SocialAccountError::MissingCredential);
     }
     let key = account_key(input.brand_key, input.provider, input.provider_account_id);
-    let mut response = db
-        .query("SELECT firm_id, kms_context FROM ONLY $id WHERE status = 'connected'")
-        .bind(("id", surrealdb::types::RecordId::new(TABLE, key.clone())))
+    let row = sealed(db, &key)
         .await?
-        .check()?;
-    let row: Option<ContextRow> = response.take(0)?;
-    let row = row.ok_or(SocialAccountError::NotFound)?;
-    let firm_id = record_uuid(&row.firm_id).ok_or(SocialAccountError::NotFound)?;
+        .ok_or(SocialAccountError::NotFound)?;
+    let firm_id = row.firm_id;
     let context = kms_context(firm_id, &key);
     if context.aad() != row.kms_context {
         return Err(SocialAccountError::InvalidCredential);
@@ -642,6 +769,19 @@ pub async fn update_refreshed_tokens(
     let wrapped_result = kms.wrap_data_key(&data_key, &context).await;
     data_key.fill(0);
     let wrapped = wrapped_result.map_err(SocialAccountError::Encryption)?;
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "UPDATE social_account SET ciphertext = $2, wrapped_dek = $3, kms_key_version = $4, \
+             expires_at = $5, updated_at = now() WHERE id = $1 AND status = 'connected'",
+        )
+        .bind(key)
+        .bind(BASE64.encode(ciphertext))
+        .bind(BASE64.encode(wrapped.ciphertext))
+        .bind(wrapped.key_version)
+        .bind(input.expires_at);
+        authority::execute(&pg, query).await?;
+        return Ok(());
+    }
     db.query("UPDATE $id SET ciphertext = $ciphertext, wrapped_dek = $wrapped, kms_key_version = $key_version, expires_at = $expires_at, updated_at = time::now() WHERE status = 'connected'")
         .bind(("id", surrealdb::types::RecordId::new(TABLE, key)))
         .bind(("ciphertext", BASE64.encode(ciphertext)))
@@ -684,6 +824,19 @@ pub async fn revoke(
         return Err(SocialAccountError::Denied);
     }
     let key = account_key(brand_key, provider, provider_account_id);
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "UPDATE social_account SET status = 'revoked', ciphertext = '', wrapped_dek = '', \
+             revoked_by_person_id = $2, revoked_at = now(), updated_at = now() \
+             WHERE id = $1 AND status = 'connected'",
+        )
+        .bind(key)
+        .bind(actor_person_id);
+        return match authority::execute(&pg, query).await? {
+            0 => Err(SocialAccountError::NotFound),
+            _ => Ok(()),
+        };
+    }
     let mut response = db
         .query("UPDATE $id SET status = 'revoked', ciphertext = '', wrapped_dek = '', revoked_by_person_id = $actor, revoked_at = time::now(), updated_at = time::now() WHERE status = 'connected' RETURN VALUE id")
         .bind(("id", surrealdb::types::RecordId::new(TABLE, key)))
@@ -708,6 +861,12 @@ pub async fn revoke(
 
 impl From<surrealdb::Error> for SocialAccountError {
     fn from(error: surrealdb::Error) -> Self {
+        Self::Db(error.to_string())
+    }
+}
+
+impl From<SocialAuthorityError> for SocialAccountError {
+    fn from(error: SocialAuthorityError) -> Self {
         Self::Db(error.to_string())
     }
 }

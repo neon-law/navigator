@@ -1,4 +1,8 @@
 //! PostgreSQL projection of a Brand's registered video uploads.
+//!
+//! Where PostgreSQL holds these rows ([`crate::postgres::social`]) the mirror
+//! writes them only during the first Mirror Backfill, and parity reports only
+//! the SurrealDB rows PostgreSQL lacks until one has completed.
 
 use std::collections::BTreeMap;
 
@@ -157,6 +161,9 @@ pub(super) async fn mirror(
     pg: &PostgresDb,
     id: Uuid,
 ) -> Result<Mirrored, MirrorError> {
+    if super::social_held() {
+        return Ok(Mirrored::Unchanged);
+    }
     match source_one(surreal, id).await? {
         Some(image) => upsert(pg, &image).await,
         None => delete(pg, id).await,
@@ -164,6 +171,9 @@ pub(super) async fn mirror(
 }
 
 pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
+    if !super::social_compared(pg).await? {
+        return Ok(ParityReport { tables: Vec::new() });
+    }
     let source = source_all(surreal).await?;
     let target = target(pg).await?;
     let mut divergent = source
@@ -178,27 +188,23 @@ pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport
         )
         .collect::<Vec<_>>();
     divergent.sort();
+    let table = TableParity {
+        table: "blog_video",
+        source_rows: source.len(),
+        target_rows: target.len(),
+        divergent,
+    };
     Ok(ParityReport {
-        tables: vec![TableParity {
-            table: "blog_video",
-            source_rows: source.len(),
-            target_rows: target.len(),
-            divergent,
-        }],
+        tables: vec![super::social_table(pg, table).await?],
     })
 }
 
 pub async fn reconcile(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
-    let source = source_all(surreal).await?;
-    let target = target(pg).await?;
-    for image in source.values() {
-        upsert(pg, image).await?;
-    }
-    for key in target.keys().filter(|key| !source.contains_key(*key)) {
+    for key in parity(surreal, pg).await?.divergent() {
         let MirrorKey::BlogVideo(id) = key else {
             return Err(MirrorError::Source);
         };
-        delete(pg, *id).await?;
+        mirror(surreal, pg, *id).await?;
     }
     parity(surreal, pg).await
 }

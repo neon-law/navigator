@@ -123,13 +123,15 @@ configuration; authority cutover takes precedence over the source mirror. The mi
   `store::notation_events`, `store::answers`, `store::notation_reset`, and `store::notation_clauses` call the mirror.
 - **Templates:** versioned Template metadata. `store::templates::save_version` mirrors each newly written version and
   the retired version; the nullable unique `current_key` is copied from SurrealDB, while bodies remain in Assets.
-- **Editorial:** `post`, `social_handle`, and `social_publication`.
-- **Social Accounts:** `social_account` and `social_account_selection`. Connect, refresh, and revoke mirror the
-  encrypted KMS bundle and account metadata after each successful SurrealDB write. The account mirror preserves
-  ciphertext and wrapped-key bytes, and never decrypts them. Firm, Brand, and connected or revoking Person links remain
-  explicit. The saved-selection mirror preserves the chosen Brand/provider destination without credentials or publishing
-  authority; disconnecting the account leaves that selection intact. The one-use Social OAuth Attempt, including its
-  PKCE verifier, stays in SurrealDB.
+- **Editorial:** `post`, `blog_video`, `social_handle`, and `social_publication`. Wherever PostgreSQL is configured
+  these tables and the Social Account tables are read and written in PostgreSQL by their owning modules; only the first
+  [Mirror Backfill](#mirror-backfill) copies SurrealDB rows into them (see [storage
+  models](storage-models.md#brand-and-social-content)).
+- **Social Accounts:** `social_account` and `social_account_selection`. The account mirror copies the encrypted KMS
+  bundle and account metadata as SurrealDB stored them. It preserves ciphertext and wrapped-key bytes, and never
+  decrypts them. Firm, Brand, and connected or revoking Person links remain explicit. The saved-selection mirror
+  preserves the chosen Brand/provider destination without credentials or publishing authority; disconnecting the account
+  leaves that selection intact. The one-use Social OAuth Attempt, including its PKCE verifier, stays in SurrealDB.
 - **Catalog:** `authority`, `glossary_term`, `question`, `notation_package`, `notation_package_template`, and
   `notation_rate`. These are shared catalogs owned by no Firm or Project. The Authority, glossary, Question, and
   Notation package writers in `store::authorities`, `store::glossary`, `store::questions`, and
@@ -210,9 +212,9 @@ reconciliation CronJob every five minutes. It uses the existing CLI image, verif
 Concurrent scheduled runs are forbidden; failed or overdue recovery raises a critical monitoring rule. Alert routing and
 kube-state metrics must be operational in the deployment.
 
-The tables PostgreSQL holds authoritatively (the catalogs above and the matter records in [storage
-models](storage-models.md)) are never repaired from SurrealDB. Until a Mirror Backfill has completed against the
-database, their parity names each SurrealDB row PostgreSQL lacks, so reconciliation stays unclean and a ship stops
+The tables PostgreSQL holds authoritatively (the catalogs above, and the matter records and the Brand and social content
+in [storage models](storage-models.md)) are never repaired from SurrealDB. Until a Mirror Backfill has completed against
+the database, their parity names each SurrealDB row PostgreSQL lacks, so reconciliation stays unclean and a ship stops
 before `web` reads an empty table. After it, SurrealDB is no evidence for them and parity skips them.
 
 Durable source rows and target drift allow the recurring scan to rediscover missing, differing, and extra mutable rows
@@ -313,9 +315,9 @@ written. It never overwrites a differing row or deletes a PostgreSQL-only row; t
 reconcile`.
 
 The first backfill against a database, the one before any run has completed, is also the only copy into the tables
-PostgreSQL holds authoritatively: the catalogs and the matter records. It writes the SurrealDB rows those tables lack
-and leaves every row PostgreSQL holds. Its completion is what lets `ops ship` cut a deployment over; later runs leave
-those tables alone, so a row deleted in PostgreSQL is never restored from SurrealDB.
+PostgreSQL holds authoritatively: the catalogs, the matter records, and the Brand and social content. It writes the
+SurrealDB rows those tables lack and leaves every row PostgreSQL holds. Its completion is what lets `ops ship` cut a
+deployment over; later runs leave those tables alone, so a row deleted in PostgreSQL is never restored from SurrealDB.
 
 ```bash
 hudson ops postgres backfill --dry-run --json          # the plan; writes nothing

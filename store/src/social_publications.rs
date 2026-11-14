@@ -1,11 +1,42 @@
 //! Durable per-Brand, per-provider publication state.
 
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::postgres::social::{self as authority, SocialAuthorityError};
+use crate::postgres::PostgresDb;
 use crate::surreal::{record_id, record_uuid, SurrealDb};
+
+/// A PostgreSQL publication as `row`, its `id` the stable
+/// [`publication_key`] rather than the row's own UUID.
+macro_rules! pg_publication {
+    ($alias:literal) => {
+        concat!(
+            "to_jsonb(",
+            $alias,
+            ") || jsonb_build_object('id', ",
+            $alias,
+            ".post_id::text || '_' || ",
+            $alias,
+            ".provider) AS row"
+        )
+    };
+}
+
+/// A PostgreSQL write on one publication that returns the written row.
+macro_rules! returning {
+    ($statement:literal) => {
+        concat!(
+            "WITH w AS (",
+            $statement,
+            " RETURNING *) SELECT ",
+            pg_publication!("w"),
+            " FROM w"
+        )
+    };
+}
 
 const TABLE: &str = "social_publication";
 const SELECT: &str = "id, post_id, provider, state, attempt_count, provider_task_id, provider_post_id, permalink, last_error, inserted_at, updated_at";
@@ -14,7 +45,7 @@ pub const UNKNOWN: &str = "unknown";
 pub const FAILED: &str = "failed";
 pub const CONFIRMED: &str = "confirmed";
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SocialPublication {
     pub id: String,
     pub post_id: Uuid,
@@ -76,6 +107,8 @@ pub enum Admission {
 pub enum SocialPublicationError {
     #[error("database: {0}")]
     Db(#[from] surrealdb::Error),
+    #[error(transparent)]
+    Postgres(#[from] SocialAuthorityError),
     #[error("unsupported social provider")]
     UnsupportedProvider,
     #[error("publication was not found")]
@@ -100,6 +133,9 @@ pub async fn admit(
     post_id: Uuid,
     provider: &str,
 ) -> Result<Admission, SocialPublicationError> {
+    if let Some(pg) = authority::authority().await? {
+        return Box::pin(admit_pg(&pg, post_id, &supported(provider)?)).await;
+    }
     let admission = admit_in_surreal(db, post_id, provider).await?;
     if let Admission::Admitted(publication) = &admission {
         mirror(db, post_id, &publication.provider).await;
@@ -124,13 +160,7 @@ async fn admit_in_surreal(
     post_id: Uuid,
     provider: &str,
 ) -> Result<Admission, SocialPublicationError> {
-    let provider = provider.to_ascii_lowercase();
-    if !matches!(
-        provider.as_str(),
-        "facebook" | "instagram" | "threads" | "youtube" | "linkedin" | "x" | "tiktok"
-    ) {
-        return Err(SocialPublicationError::UnsupportedProvider);
-    }
+    let provider = supported(provider)?;
     let key = publication_key(post_id, &provider);
     let id = surrealdb::types::RecordId::new(TABLE, key.clone());
     match read_by_id(db, &id).await? {
@@ -189,6 +219,63 @@ async fn admit_in_surreal(
     }
 }
 
+/// The provider's lowercase name, when Navigator publishes to it.
+fn supported(provider: &str) -> Result<String, SocialPublicationError> {
+    let provider = provider.to_ascii_lowercase();
+    if crate::social_handles::is_provider(&provider) {
+        Ok(provider)
+    } else {
+        Err(SocialPublicationError::UnsupportedProvider)
+    }
+}
+
+/// The unique `(post_id, provider)` index decides a race over the first
+/// admission: the loser's insert does nothing and it reads the winner's row.
+async fn admit_pg(
+    pg: &PostgresDb,
+    post_id: Uuid,
+    provider: &str,
+) -> Result<Admission, SocialPublicationError> {
+    let first = sqlx::query(returning!(
+        "INSERT INTO social_publication (post_id, provider, state, attempt_count) \
+         VALUES ($1, $2, 'sending', 1) ON CONFLICT (post_id, provider) DO NOTHING"
+    ))
+    .bind(post_id)
+    .bind(provider.to_owned());
+    if let Some(publication) = authority::maybe(pg, first).await? {
+        return Ok(Admission::Admitted(publication));
+    }
+    let retry = sqlx::query(returning!(
+        "UPDATE social_publication SET state = 'sending', attempt_count = attempt_count + 1, \
+         provider_task_id = NULL, last_error = NULL, updated_at = now() \
+         WHERE post_id = $1 AND provider = $2 AND state = 'failed'"
+    ))
+    .bind(post_id)
+    .bind(provider.to_owned());
+    if let Some(publication) = authority::maybe(pg, retry).await? {
+        return Ok(Admission::Admitted(publication));
+    }
+    find_pg(pg, post_id, provider)
+        .await?
+        .map(admission_for_existing)
+        .ok_or(SocialPublicationError::NotFound)
+}
+
+fn find_pg<'a>(
+    pg: &'a PostgresDb,
+    post_id: Uuid,
+    provider: &str,
+) -> authority::Op<'a, Option<SocialPublication>> {
+    let query = sqlx::query(concat!(
+        "SELECT ",
+        pg_publication!("p"),
+        " FROM social_publication p WHERE p.post_id = $1 AND p.provider = $2"
+    ))
+    .bind(post_id)
+    .bind(provider.to_ascii_lowercase());
+    authority::maybe(pg, query)
+}
+
 fn admission_for_existing(publication: SocialPublication) -> Admission {
     match publication.state.as_str() {
         CONFIRMED => Admission::AlreadyConfirmed(publication),
@@ -208,6 +295,16 @@ pub async fn begin_provider_write(
     post_id: Uuid,
     provider: &str,
 ) -> Result<bool, SocialPublicationError> {
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "UPDATE social_publication SET state = 'unknown', last_error = $3, \
+             updated_at = now() WHERE post_id = $1 AND provider = $2 AND state = 'sending'",
+        )
+        .bind(post_id)
+        .bind(provider.to_ascii_lowercase())
+        .bind(AWAITING_PROVIDER);
+        return Ok(authority::execute(&pg, query).await? > 0);
+    }
     let key = publication_key(post_id, provider);
     let mut response = db
         .query(format!(
@@ -281,6 +378,20 @@ pub async fn record_provider_task(
     if task.trim().is_empty() || task.len() > 256 {
         return Err(SocialPublicationError::InvalidConfirmation);
     }
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "UPDATE social_publication SET provider_task_id = $3, updated_at = now() \
+             WHERE post_id = $1 AND provider = $2 AND state = 'unknown' \
+             AND (provider_task_id IS NULL OR provider_task_id = $3)",
+        )
+        .bind(post_id)
+        .bind(provider.to_ascii_lowercase())
+        .bind(task.to_owned());
+        return match authority::execute(&pg, query).await? {
+            0 => Err(SocialPublicationError::InvalidTransition),
+            _ => Ok(()),
+        };
+    }
     let id = surrealdb::types::RecordId::new(TABLE, publication_key(post_id, provider));
     let mut result = db.query("UPDATE $id SET provider_task_id = $task, updated_at = time::now() WHERE state = 'unknown' AND (provider_task_id IS NONE OR provider_task_id = $task) RETURN id")
         .bind(("id",id)).bind(("task",task.to_string())).await?.check()?;
@@ -302,6 +413,18 @@ pub async fn record_permalink(
 ) -> Result<SocialPublication, SocialPublicationError> {
     if !is_public_link(permalink) {
         return Err(SocialPublicationError::InvalidConfirmation);
+    }
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(returning!(
+            "UPDATE social_publication SET permalink = $3, last_error = NULL, updated_at = now() \
+             WHERE post_id = $1 AND provider = $2 AND state = 'confirmed' AND permalink IS NULL"
+        ))
+        .bind(post_id)
+        .bind(provider.to_ascii_lowercase())
+        .bind(permalink.to_owned());
+        return authority::maybe(&pg, query)
+            .await?
+            .ok_or(SocialPublicationError::InvalidTransition);
     }
     let key = publication_key(post_id, provider);
     let mut response = db
@@ -361,6 +484,18 @@ pub async fn mark_failed_before_send(
     error: &str,
 ) -> Result<SocialPublication, SocialPublicationError> {
     let error = bounded_error(error);
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(returning!(
+            "UPDATE social_publication SET state = 'failed', last_error = $3, updated_at = now() \
+             WHERE post_id = $1 AND provider = $2 AND state = 'sending'"
+        ))
+        .bind(post_id)
+        .bind(provider.to_ascii_lowercase())
+        .bind(error);
+        return authority::maybe(&pg, query)
+            .await?
+            .ok_or(SocialPublicationError::InvalidTransition);
+    }
     let key = publication_key(post_id, provider);
     let mut response = db
         .query(format!(
@@ -411,6 +546,15 @@ pub async fn for_posts(
     if post_ids.is_empty() {
         return Ok(Vec::new());
     }
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(concat!(
+            "SELECT ",
+            pg_publication!("p"),
+            " FROM social_publication p WHERE p.post_id = ANY($1) ORDER BY p.updated_at DESC"
+        ))
+        .bind(post_ids.to_vec());
+        return Ok(authority::rows(&pg, query).await?);
+    }
     let ids = post_ids
         .iter()
         .copied()
@@ -440,6 +584,14 @@ pub async fn due_or_future_scheduled(
     struct ScheduledRow {
         id: surrealdb::types::RecordId,
         publish_at: surrealdb::types::Datetime,
+    }
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "SELECT jsonb_build_array(id, publish_at) AS row FROM post \
+             WHERE status = 'scheduled' AND publish_at IS NOT NULL ORDER BY publish_at LIMIT $1",
+        )
+        .bind(i64::from(limit));
+        return Ok(authority::rows(&pg, query).await?);
     }
     let mut response = db
         .query("SELECT id, publish_at FROM post WHERE status = 'scheduled' AND publish_at IS NOT NONE ORDER BY publish_at LIMIT $limit")
@@ -471,6 +623,29 @@ async fn transition(
     provider: &str,
     transition: PublicationTransition<'_>,
 ) -> Result<SocialPublication, SocialPublicationError> {
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(returning!(
+            "UPDATE social_publication SET state = $3, provider_post_id = $4, permalink = $5, \
+             last_error = $6, updated_at = now() \
+             WHERE post_id = $1 AND provider = $2 AND state = ANY($7)"
+        ))
+        .bind(post_id)
+        .bind(provider.to_ascii_lowercase())
+        .bind(transition.next.to_owned())
+        .bind(transition.provider_post_id.map(str::to_owned))
+        .bind(transition.permalink.map(str::to_owned))
+        .bind(transition.error.map(str::to_owned))
+        .bind(
+            transition
+                .expected
+                .iter()
+                .map(|state| (*state).to_owned())
+                .collect::<Vec<_>>(),
+        );
+        return authority::maybe(&pg, query)
+            .await?
+            .ok_or(SocialPublicationError::InvalidTransition);
+    }
     let key = publication_key(post_id, provider);
     let id = surrealdb::types::RecordId::new(TABLE, key);
     let query = db
@@ -510,8 +685,32 @@ pub async fn find(
     post_id: Uuid,
     provider: &str,
 ) -> Result<Option<SocialPublication>, SocialPublicationError> {
+    if let Some(pg) = authority::authority().await? {
+        return Ok(find_pg(&pg, post_id, provider).await?);
+    }
     let id = surrealdb::types::RecordId::new(TABLE, publication_key(post_id, provider));
     read_by_id(db, &id).await
+}
+
+/// Confirmed receipts of one provider, `pending` only those whose public
+/// link is still unverified, ordered by `updated_at` (`ascending` or not).
+fn confirmed_pg<'a>(
+    pg: &'a PostgresDb,
+    provider: &str,
+    limit: usize,
+    pending: bool,
+) -> authority::Op<'a, Vec<SocialPublication>> {
+    let query = sqlx::query(concat!(
+        "SELECT ",
+        pg_publication!("p"),
+        " FROM social_publication p WHERE p.provider = $1 AND p.state = 'confirmed' \
+         AND p.provider_post_id IS NOT NULL AND (NOT $2 OR p.permalink IS NULL) \
+         ORDER BY CASE WHEN $2 THEN p.updated_at END ASC, p.updated_at DESC LIMIT $3"
+    ))
+    .bind(provider.to_owned())
+    .bind(pending)
+    .bind(i64::try_from(limit.min(100)).unwrap_or(100));
+    authority::rows(pg, query)
 }
 
 /// Confirmed receipts whose public links still need provider verification.
@@ -524,6 +723,9 @@ pub async fn pending_links(
     provider: &str,
     limit: usize,
 ) -> Result<Vec<SocialPublication>, SocialPublicationError> {
+    if let Some(pg) = authority::authority().await? {
+        return Ok(confirmed_pg(&pg, provider, limit, true).await?);
+    }
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE provider = $provider AND state = $confirmed \
@@ -554,6 +756,9 @@ pub async fn confirmed_links(
     provider: &str,
     limit: usize,
 ) -> Result<Vec<SocialPublication>, SocialPublicationError> {
+    if let Some(pg) = authority::authority().await? {
+        return Ok(confirmed_pg(&pg, provider, limit, false).await?);
+    }
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE provider = $provider AND state = $confirmed \
@@ -571,7 +776,7 @@ pub async fn confirmed_links(
         .collect())
 }
 
-/// Every publication, for the PostgreSQL parity check.
+/// Every publication SurrealDB holds, for the PostgreSQL parity check.
 pub(crate) async fn all(db: &SurrealDb) -> Result<Vec<SocialPublication>, SocialPublicationError> {
     let mut response = db
         .query(format!("SELECT {SELECT} FROM {TABLE}"))
