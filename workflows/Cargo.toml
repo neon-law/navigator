@@ -11,6 +11,7 @@ async-trait.workspace = true
 base64.workspace = true
 billing.workspace = true
 chrono.workspace = true
+chrono-tz = { workspace = true, optional = true }
 cloud.workspace = true
 # DBOS durable execution (`dbos_engine`), behind the `dbos` feature so only the
 # processes that host an executor — `portal` (the web process) and
@@ -59,7 +60,7 @@ uuid.workspace = true
 views.workspace = true
 
 [features]
-dbos = ["dep:dbos", "dep:tokio", "dep:url"]
+dbos = ["dep:chrono-tz", "dep:dbos", "dep:tokio", "dep:url"]
 
 [dev-dependencies]
 store = { workspace = true, features = ["test-support"] }

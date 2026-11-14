@@ -1203,7 +1203,13 @@ async fn dbos_schedules(
     };
     let profit_digest = profit_digest_context(rt, host_dbos, lookup).await?;
     let ceo_digest = ceo_digest_schedule(rt, host_dbos, lookup).await?;
+    let linear_backlog = if host_dbos && dbos_engine::enabled(lookup)? {
+        dbos_engine::linear_backlog::Context::from_lookup(lookup)?
+    } else {
+        None
+    };
     Ok(dbos_engine::Schedules {
+        linear_backlog,
         general_nag,
         dri_digest,
         project_recovery,
@@ -1296,31 +1302,21 @@ fn should_host_notation_reset(
         .context("read NAVIGATOR_DBOS_NOTATION_RESET_ENABLED")
 }
 
-/// Resolve the independent ProfitDigest gate before constructing its
-/// context, so an unused schedule never requires Slack or PostgreSQL.
-fn should_host_profit_digest(
-    host_dbos: bool,
-    lookup: impl Fn(&str) -> Option<String>,
-) -> anyhow::Result<bool> {
-    if !host_dbos || !dbos_engine::enabled(&lookup).context("read NAVIGATOR_DBOS_ENABLED")? {
-        return Ok(false);
-    }
-    workflows::dbos_engine::profit_digest::enabled(lookup)
-        .context("read NAVIGATOR_DBOS_PROFIT_DIGEST_ENABLED")
-}
-
-/// The ProfitDigest context when its gate is on, else `None`.
+/// Configure ProfitDigest on a DBOS host with its PostgreSQL and Slack coordinates.
 async fn profit_digest_context(
     rt: &HostRuntime,
     host_dbos: bool,
     lookup: impl Fn(&str) -> Option<String> + Copy,
 ) -> anyhow::Result<Option<workflows::dbos_engine::profit_digest::Context>> {
     use workflows::dbos_engine::profit_digest;
-    if !should_host_profit_digest(host_dbos, lookup)? {
+    if !host_dbos || !dbos_engine::enabled(lookup)? {
         return Ok(None);
     }
     let simulated = store::sample_matters(rt.config.environment)
         .context("resolve simulated-matters deployment")?;
+    if !profit_digest::configured(simulated, lookup) {
+        return Ok(None);
+    }
     let pg = store::postgres::PostgresDb::from_env()
         .await
         .context("connect PostgreSQL for the profit digest")?;
@@ -1613,9 +1609,9 @@ mod tests {
     use super::{
         archives_context, bind_ports, sent_email_export_source, should_host_billing_canary,
         should_host_billing_digest, should_host_deadline_mirror, should_host_dri_digest,
-        should_host_general_nag, should_host_notation_reset, should_host_profit_digest,
-        should_host_project_recovery, should_host_purchase_activation, should_host_retention_purge,
-        should_host_source_imports, voice_numbers_by_brand,
+        should_host_general_nag, should_host_notation_reset, should_host_project_recovery,
+        should_host_purchase_activation, should_host_retention_purge, should_host_source_imports,
+        voice_numbers_by_brand,
     };
 
     /// Voice numbers are optional and per Brand, and every listed one must
@@ -1699,7 +1695,7 @@ mod tests {
     type Gate = fn(bool, &dyn Fn(&str) -> Option<String>) -> anyhow::Result<bool>;
 
     /// The schedules gated only by DBOS and their own flag.
-    fn recovery_gates() -> [(Gate, &'static str); 8] {
+    fn recovery_gates() -> [(Gate, &'static str); 7] {
         [
             (
                 |host, lookup| should_host_billing_digest(host, lookup),
@@ -1728,10 +1724,6 @@ mod tests {
             (
                 |host, lookup| should_host_notation_reset(host, lookup),
                 workflows::dbos_engine::notation_reset::ENABLED_ENV,
-            ),
-            (
-                |host, lookup| should_host_profit_digest(host, lookup),
-                workflows::dbos_engine::profit_digest::ENABLED_ENV,
             ),
         ]
     }

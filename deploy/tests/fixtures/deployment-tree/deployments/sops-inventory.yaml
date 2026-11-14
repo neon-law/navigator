@@ -14,6 +14,7 @@ common:
   OAUTH_APPLE_KEY_ID: Sign in with Apple key identifier
   OAUTH_APPLE_PRIVATE_KEY: Sign in with Apple ES256 private key (PKCS#8 PEM, multiline)
   HCAPTCHA_SECRET: hCaptcha account secret redeeming the public lead forms' challenge
+  LINEAR_BACKLOG_READ_KEY: Read-only Linear key for the daily backlog digest
   RESTATE_BROKER_URL: Restate workflow broker URL
   RESTATE_INGRESS_URL: Restate invocation ingress URL
   RESTATE_AUTH_TOKEN: Restate invocation bearer token
