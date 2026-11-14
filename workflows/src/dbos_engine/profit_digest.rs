@@ -652,7 +652,7 @@ mod tests {
 
     #[test]
     fn the_schedule_needs_postgres_and_its_own_channel_and_is_keyed_by_utc_date() {
-        let lookup = |key| match key {
+        let lookup = |key: &str| match key {
             "NAVIGATOR_POSTGRES_HOST" | "SLACK_MESSAGES_CHANNEL_ID" => {
                 Some("configured".to_owned())
             }

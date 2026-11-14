@@ -316,7 +316,7 @@ pub(super) fn register(dbos: &DBOS, context: Context) -> dbos::Result<Workflow> 
         async move {
             let source = context.clone();
             let text =
-                dbos::step_with::<_, dbos::Error<DigestError>, _, _>("read", retry(), move || {
+                dbos::step_with::<String, DigestError, _, _>("read", retry(), move || {
                     let source = source.clone();
                     async move {
                         dbos::Result::<String, DigestError>::Ok(
@@ -325,7 +325,7 @@ pub(super) fn register(dbos: &DBOS, context: Context) -> dbos::Result<Workflow> 
                     }
                 })
                 .await?;
-            dbos::step_with::<_, dbos::Error<DigestError>, _, _>("post", retry(), move || {
+            dbos::step_with::<(), DigestError, _, _>("post", retry(), move || {
                 let (context, text) = (context.clone(), text.clone());
                 async move {
                     if super::post_once(context.slack.as_ref(), &context.channel, &text, slot(day))
@@ -343,7 +343,7 @@ pub(super) fn register(dbos: &DBOS, context: Context) -> dbos::Result<Workflow> 
     })
 }
 
-fn retry() -> StepOptions {
+fn retry() -> StepOptions<DigestError> {
     StepOptions {
         max_attempts: 5,
         ..Default::default()
@@ -406,7 +406,7 @@ mod tests {
     async fn paginates_and_rejects_graphql_partial_data() {
         use wiremock::{matchers::body_partial_json, Mock, MockServer, ResponseTemplate};
         let server = MockServer::start().await;
-        let lookup = |key| match key {
+        let lookup = |key: &str| match key {
             CHANNEL => Some("C012BACKLOG".to_owned()),
             API_KEY | "SLACK_BOT_TOKEN" => Some("synthetic".to_owned()),
             _ => None,
