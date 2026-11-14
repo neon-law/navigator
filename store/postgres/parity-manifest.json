@@ -1093,6 +1093,7 @@
         "id": "record",
         "inserted_at": "string",
         "name": "string",
+        "portal_theme_brand_key": "option<string>",
         "slug": "option<string>",
         "status": "string",
         "updated_at": "string"
@@ -3153,6 +3154,7 @@
           "id": "UUID",
           "inserted_at": "TIMESTAMPTZ",
           "name": "TEXT",
+          "portal_theme_brand_key": "TEXT",
           "slug": "TEXT",
           "status": "TEXT",
           "updated_at": "TIMESTAMPTZ"

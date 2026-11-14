@@ -981,6 +981,11 @@ DEFINE INDEX OVERWRITE firm_entity ON firm FIELDS entity_id UNIQUE;
 -- applies, so a rename or direct write cannot move the slug.
 DEFINE FIELD IF NOT EXISTS slug ON firm TYPE option<string>;
 DEFINE INDEX OVERWRITE firm_slug ON firm FIELDS slug UNIQUE;
+-- `portal_theme_brand_key` names the Portal Theme Brand: one Brand this Firm
+-- owns (`brand.firm_id`), whose look every `/app` page reached through the
+-- Firm's hosts wears. `store::firms::update` checks ownership; NONE keeps the
+-- host's own Brand.
+DEFINE FIELD OVERWRITE portal_theme_brand_key ON firm TYPE option<string>;
 
 -- `firm_integration_secret`: one encrypted, versioned credential per Firm,
 -- provider, and typed kind. Plaintext is never a column. The runtime KMS key

@@ -95,6 +95,7 @@ fn firm(row: &sqlx::postgres::PgRow) -> Result<firms::Firm, TenancyError> {
         slug: row.try_get("slug")?,
         status: row.try_get("status")?,
         entity_id: row.try_get("entity_id")?,
+        portal_theme_brand_key: row.try_get("portal_theme_brand_key")?,
         inserted_at: time(row.try_get("inserted_at")?),
         updated_at: time(row.try_get("updated_at")?),
     })
@@ -133,7 +134,7 @@ pub(crate) async fn find_firm_on(
     id: Uuid,
 ) -> Result<Option<firms::Firm>, TenancyError> {
     let row = sqlx::query(
-        "SELECT id,name,slug,status,entity_id,inserted_at,updated_at FROM firm WHERE id=$1",
+        "SELECT id,name,slug,status,entity_id,portal_theme_brand_key,inserted_at,updated_at FROM firm WHERE id=$1",
     )
     .bind(id)
     .fetch_optional(pg.pool())
@@ -176,7 +177,7 @@ pub(crate) async fn create_firm_on(
     let id = Uuid::new_v4();
     let membership_id = Uuid::new_v4();
     let mut tx = pg.pool().begin().await?;
-    let row = sqlx::query("INSERT INTO firm (id,name,slug,status,entity_id) VALUES ($1,$2,$3,$4,$5) RETURNING id,name,slug,status,entity_id,inserted_at,updated_at")
+    let row = sqlx::query("INSERT INTO firm (id,name,slug,status,entity_id) VALUES ($1,$2,$3,$4,$5) RETURNING id,name,slug,status,entity_id,portal_theme_brand_key,inserted_at,updated_at")
         .bind(id).bind(&input.name).bind(&slug).bind(&input.status).bind(input.entity_id)
         .fetch_one(&mut *tx).await.map_err(|error| {
             match error.as_database_error().and_then(sqlx::error::DatabaseError::constraint) {
@@ -215,11 +216,24 @@ pub async fn update_firm(
             return Err(firms::FirmError::NoSuchEntity(entity_id));
         }
     }
-    let row = sqlx::query("UPDATE firm SET name=CASE WHEN $2 THEN $3 ELSE name END, status=CASE WHEN $4 THEN $5 ELSE status END, entity_id=CASE WHEN $6 THEN $7 ELSE entity_id END, updated_at=now() WHERE id=$1 RETURNING id,name,slug,status,entity_id,inserted_at,updated_at")
+    if let Some(Some(key)) = &input.portal_theme_brand_key {
+        let owned: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM brand WHERE brand_key=$1 AND firm_id=$2)",
+        )
+        .bind(key)
+        .bind(firm_id)
+        .fetch_one(pg.pool())
+        .await?;
+        if !owned {
+            return Err(firms::FirmError::ThemeBrandNotOwned(firm_id, key.clone()));
+        }
+    }
+    let row = sqlx::query("UPDATE firm SET name=CASE WHEN $2 THEN $3 ELSE name END, status=CASE WHEN $4 THEN $5 ELSE status END, entity_id=CASE WHEN $6 THEN $7 ELSE entity_id END, portal_theme_brand_key=CASE WHEN $8 THEN $9 ELSE portal_theme_brand_key END, updated_at=now() WHERE id=$1 RETURNING id,name,slug,status,entity_id,portal_theme_brand_key,inserted_at,updated_at")
         .bind(firm_id)
         .bind(input.name.is_some()).bind(input.name.as_deref())
         .bind(input.status.is_some()).bind(input.status.as_deref())
         .bind(input.entity_id.is_some()).bind(input.entity_id)
+        .bind(input.portal_theme_brand_key.is_some()).bind(input.portal_theme_brand_key.clone().flatten())
         .fetch_one(pg.pool()).await.map_err(|error| {
             if error.as_database_error().and_then(sqlx::error::DatabaseError::constraint).is_some_and(|name| name == "firm_entity") {
                 firms::FirmError::DuplicateEntity
@@ -307,7 +321,7 @@ pub(crate) async fn authorize_firm_management(
 pub async fn all_firms() -> Result<Vec<firms::Firm>, TenancyError> {
     let pg = db().await?;
     sqlx::query(
-        "SELECT id,name,slug,status,entity_id,inserted_at,updated_at FROM firm ORDER BY name,id",
+        "SELECT id,name,slug,status,entity_id,portal_theme_brand_key,inserted_at,updated_at FROM firm ORDER BY name,id",
     )
     .fetch_all(pg.pool())
     .await?
@@ -318,7 +332,7 @@ pub async fn all_firms() -> Result<Vec<firms::Firm>, TenancyError> {
 
 pub async fn firm_by_entity(entity_id: Uuid) -> Result<Option<firms::Firm>, TenancyError> {
     let pg = db().await?;
-    let row = sqlx::query("SELECT id,name,slug,status,entity_id,inserted_at,updated_at FROM firm WHERE entity_id=$1 LIMIT 1")
+    let row = sqlx::query("SELECT id,name,slug,status,entity_id,portal_theme_brand_key,inserted_at,updated_at FROM firm WHERE entity_id=$1 LIMIT 1")
         .bind(entity_id).fetch_optional(pg.pool()).await?;
     row.as_ref().map(firm).transpose()
 }

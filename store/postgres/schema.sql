@@ -4712,3 +4712,11 @@ CREATE TABLE plan_intake (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX plan_intake_firm ON plan_intake (firm_id, assigned_at DESC);
+
+-- Migration: 20261114190000_add_firm_portal_theme_brand.sql
+-- A Firm's Portal Theme Brand: the key of one Brand the Firm owns, whose look
+-- every `/app` page reached through the Firm's hosts wears. NULL keeps each
+-- host's own Brand. `store::firms::update` checks that the Firm owns the
+-- Brand, and the `/app` resolver re-checks it, so a Brand later moved to
+-- another Firm stops theming this one's portal.
+ALTER TABLE firm ADD COLUMN portal_theme_brand_key TEXT;

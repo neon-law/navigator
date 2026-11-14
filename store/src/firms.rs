@@ -33,7 +33,8 @@ const MEMBERSHIP_TABLE: &str = "person_firm_role";
 const PERSON_TABLE: &str = "person";
 const BRAND_TABLE: &str = "firm_brand";
 const ENTITY_TABLE: &str = "entity";
-const FIRM_SELECT: &str = "id, name, slug, status, entity_id, inserted_at, updated_at";
+const FIRM_SELECT: &str =
+    "id, name, slug, status, entity_id, portal_theme_brand_key, inserted_at, updated_at";
 const MEMBERSHIP_SELECT: &str =
     "id, person_id, firm_id, membership, is_dri, inserted_at, updated_at";
 
@@ -94,6 +95,11 @@ pub struct Firm {
     /// The legal Entity this practice is. `None` only on a historical row
     /// written before `entity_id` existed.
     pub entity_id: Option<Uuid>,
+    /// The [Portal Theme Brand](../../docs/glossary/portal-theme-brand.md):
+    /// the key of one Brand this Firm owns, whose tokens, logo, and name every
+    /// `/app` page reached through one of the Firm's hosts wears. `None`
+    /// keeps the host's own Brand.
+    pub portal_theme_brand_key: Option<String>,
     pub inserted_at: String,
     pub updated_at: String,
 }
@@ -105,6 +111,7 @@ struct FirmRow {
     slug: String,
     status: String,
     entity_id: Option<surrealdb::types::RecordId>,
+    portal_theme_brand_key: Option<String>,
     inserted_at: String,
     updated_at: String,
 }
@@ -120,6 +127,7 @@ impl FirmRow {
                 Some(id) => Some(record_uuid(id)?),
                 None => None,
             },
+            portal_theme_brand_key: self.portal_theme_brand_key,
             inserted_at: self.inserted_at,
             updated_at: self.updated_at,
         })
@@ -331,6 +339,9 @@ pub enum FirmError {
     /// [`crate::brands::BrandError`] itself carries a `FirmError`.
     #[error(transparent)]
     Brand(Box<crate::brands::BrandError>),
+    /// The proposed Portal Theme Brand is not a Brand this Firm owns.
+    #[error("firm {0} does not own brand {1}")]
+    ThemeBrandNotOwned(Uuid, String),
 }
 
 impl FirmError {
@@ -383,6 +394,9 @@ impl FirmError {
             }
             Self::NotAMember(_, _) => "That person is not a member of this firm.".to_string(),
             Self::BrandHasNoFirm(_) => "That brand belongs to no firm.".to_string(),
+            Self::ThemeBrandNotOwned(_, _) => {
+                "The portal theme must be one of this firm's own brands.".to_string()
+            }
             Self::Db(_)
             | Self::Postgres(_)
             | Self::PostgresSql(_)
@@ -556,6 +570,9 @@ pub struct FirmEdit {
     /// `active`, `suspended`, or `archived`.
     pub status: Option<String>,
     pub entity_id: Option<Uuid>,
+    /// `Some(Some(key))` sets the [`Firm::portal_theme_brand_key`] to a Brand
+    /// this Firm owns (`brand.firm_id`); `Some(None)` clears it.
+    pub portal_theme_brand_key: Option<Option<String>>,
 }
 
 /// Gate a Firm-scoped settings/membership/brand write through
@@ -637,6 +654,15 @@ pub async fn update(
             return Err(FirmError::NoSuchEntity(entity_id));
         }
     }
+    if let Some(Some(key)) = &input.portal_theme_brand_key {
+        let owner = crate::brands::find_by_key(surreal, key)
+            .await
+            .map_err(|error| FirmError::Brand(Box::new(error)))?
+            .and_then(|brand| brand.firm_id);
+        if owner != Some(firm_id) {
+            return Err(FirmError::ThemeBrandNotOwned(firm_id, key.clone()));
+        }
+    }
 
     let mut assignments: Vec<&str> = vec!["updated_at = $updated_at"];
     if input.name.is_some() {
@@ -647,6 +673,9 @@ pub async fn update(
     }
     if input.entity_id.is_some() {
         assignments.push("entity_id = $entity_id");
+    }
+    if input.portal_theme_brand_key.is_some() {
+        assignments.push("portal_theme_brand_key = $portal_theme_brand_key");
     }
 
     let now = chrono::Utc::now().to_rfc3339();
@@ -663,6 +692,10 @@ pub async fn update(
             .bind((
                 "entity_id",
                 input.entity_id.map(|id| record_id(ENTITY_TABLE, id)),
+            ))
+            .bind((
+                "portal_theme_brand_key",
+                input.portal_theme_brand_key.clone().flatten(),
             ))
     })
     .await?;
@@ -3139,6 +3172,7 @@ mod tests {
                 name: Some("Renamed Practice".to_string()),
                 status: Some("archived".to_string()),
                 entity_id: Some(new_entity),
+                portal_theme_brand_key: None,
             },
         )
         .await
@@ -3190,6 +3224,131 @@ mod tests {
         .await
         .unwrap_err();
         assert!(matches!(err, FirmError::NoSuchEntity(id) if id == missing_entity));
+    }
+
+    fn theme(key: Option<&str>) -> FirmEdit {
+        FirmEdit {
+            portal_theme_brand_key: Some(key.map(str::to_string)),
+            ..FirmEdit::default()
+        }
+    }
+
+    /// The Portal Theme Brand: only Owner or the Firm's own Admin sets it,
+    /// only to a Brand the Firm owns, and `Some(None)` clears it.
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)] // One fixture walks every refusal, then the set and clear.
+    async fn portal_theme_is_a_brand_the_firm_owns_set_by_its_admin() {
+        let db = mem_surreal().await;
+        let admin = admin_dri_person(&db).await;
+        let firm = practice_with_admin(&db, "Themed Practice", admin).await;
+        let other_admin = admin_dri_person(&db).await;
+        let other = practice_with_admin(&db, "Other Practice", other_admin).await;
+        for (owner, admin_id, key) in [
+            (firm.id, admin, "themed-house"),
+            (other.id, other_admin, "other-house"),
+        ] {
+            crate::brands::create(
+                &db,
+                Role::Admin,
+                Some(admin_id),
+                &crate::brands::NewBrand {
+                    name: format!("Brand {key}"),
+                    key: key.to_string(),
+                    firm_id: Some(owner),
+                    primary_color: None,
+                    accent_color: None,
+                    typeface: None,
+                },
+            )
+            .await
+            .unwrap();
+        }
+        let lawyer = crate::persons::create(
+            &db,
+            &NewPerson::with_role("Lawyer", "theme-lawyer@example.com", Role::Lawyer),
+        )
+        .await
+        .unwrap()
+        .id;
+        add_membership(
+            &db,
+            &NewPersonFirmRole {
+                person_id: lawyer,
+                firm_id: firm.id,
+                membership: FirmMembership::Lawyer,
+                is_dri: false,
+            },
+        )
+        .await
+        .unwrap();
+
+        // Neither a Lawyer of the Firm nor another Firm's Admin may set it.
+        for (role, person) in [(Role::Lawyer, lawyer), (Role::Admin, other_admin)] {
+            let refused = update(
+                &db,
+                role,
+                Some(person),
+                firm.id,
+                &theme(Some("themed-house")),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(refused, FirmError::NotAuthorized), "{refused:?}");
+        }
+        // A Brand another Firm owns, or none at all, is refused.
+        for key in ["other-house", "no-such-brand"] {
+            let refused = update(&db, Role::Admin, Some(admin), firm.id, &theme(Some(key)))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(&refused, FirmError::ThemeBrandNotOwned(id, k) if *id == firm.id && k == key),
+                "{refused:?}"
+            );
+        }
+        assert_eq!(
+            find_by_id(&db, firm.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .portal_theme_brand_key,
+            None,
+            "no refusal wrote anything"
+        );
+
+        let themed = update(
+            &db,
+            Role::Admin,
+            Some(admin),
+            firm.id,
+            &theme(Some("themed-house")),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            themed.portal_theme_brand_key.as_deref(),
+            Some("themed-house")
+        );
+        // An edit that does not name the theme leaves it alone.
+        let renamed = update(
+            &db,
+            Role::Owner,
+            None,
+            firm.id,
+            &FirmEdit {
+                name: Some("Themed Practice PC".to_string()),
+                ..FirmEdit::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            renamed.portal_theme_brand_key.as_deref(),
+            Some("themed-house")
+        );
+        let cleared = update(&db, Role::Owner, None, firm.id, &theme(None))
+            .await
+            .unwrap();
+        assert_eq!(cleared.portal_theme_brand_key, None);
     }
 
     /// `delete` refuses a Firm that still owns Projects, and otherwise
