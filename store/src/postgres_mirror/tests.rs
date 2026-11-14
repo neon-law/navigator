@@ -3,7 +3,6 @@ use crate::posts::{import_source, SourceCaptions, SourcePost};
 use crate::test_support;
 use sqlx::postgres::{PgConnectOptions, PgSslMode};
 use std::process::Command;
-use surrealdb::types::SurrealValue;
 
 const BRAND: &str = "synthetic-mirror";
 
@@ -115,19 +114,6 @@ fn social_account_selection_is_a_measured_mirror_with_a_private_stable_key() {
     assert!(mirrors.contains(&"social_account_selections"));
 }
 
-#[derive(SurrealValue)]
-struct SocialAccountBundle {
-    ciphertext: String,
-    wrapped_dek: String,
-    kms_key_version: String,
-    kms_context: String,
-}
-
-#[derive(SurrealValue)]
-struct SocialAccountTokens {
-    ciphertext: String,
-    wrapped_dek: String,
-}
 
 pub(super) fn source<'a>(slug: &'a str, title: &'a str) -> SourcePost<'a> {
     SourcePost {
@@ -522,12 +508,18 @@ async fn write_hook_probe() {
     };
     let surreal = test_support::mem_surreal().await;
     let started = std::time::Instant::now();
-    // Every write succeeds whatever the mirror does.
-    let post = import_source(&surreal, &source("hooked", "Hooked"), Utc::now())
-        .await
-        .unwrap()
-        .post_id;
-    let (admin, entity, firm_id) = hooked_practice(&surreal).await;
+    // Every write succeeds whatever the mirror does. PostgreSQL holds Posts
+    // wherever a host is set, so this one is written to SurrealDB alone, and
+    // its replay below must leave PostgreSQL untouched.
+    let post = super::from_source(import_source(
+        &surreal,
+        &source("hooked", "Hooked"),
+        Utc::now(),
+    ))
+    .await
+    .unwrap()
+    .post_id;
+    let (admin, entity, _) = hooked_practice(&surreal).await;
     let address = crate::addresses::create(
         &surreal,
         &crate::addresses::NewAddress {
@@ -573,58 +565,6 @@ async fn write_hook_probe() {
     )
     .await
     .unwrap();
-    let brand = crate::brands::create(
-        &surreal,
-        crate::persons::Role::Admin,
-        Some(admin),
-        &crate::brands::NewBrand {
-            name: "Synthetic Hooked Brand".into(),
-            key: format!("hooked-{}", Uuid::now_v7().simple()),
-            firm_id: Some(firm_id),
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-    let kms = cloud::FakeKms::new("synthetic-social-account-key");
-    let granted_scopes = vec!["pages_manage_posts".to_string()];
-    let account = crate::social_accounts::connect(
-        &surreal,
-        crate::social_accounts::ConnectSocialAccount {
-            actor_role: crate::persons::Role::Admin,
-            actor_person_id: admin,
-            brand_key: &brand.key,
-            provider: crate::social_accounts::SocialProvider::Facebook,
-            provider_account_id: "synthetic-hook-page",
-            display_name: Some("Synthetic Hook Page"),
-            scopes: &granted_scopes,
-            expires_at: Some(Utc::now() + chrono::Duration::days(7)),
-            access_token: "synthetic-hook-access-token",
-            refresh_token: Some("synthetic-hook-refresh-token"),
-        },
-        &kms,
-    )
-    .await
-    .unwrap();
-    assert!(crate::social_accounts::connected_account(
-        &surreal,
-        &brand.key,
-        crate::social_accounts::SocialProvider::Facebook,
-        "synthetic-hook-page",
-    )
-    .await
-    .unwrap()
-    .is_some());
-    crate::social_handles::set(&surreal, BRAND, "x", "SyntheticMirror")
-        .await
-        .unwrap();
-    crate::social_publications::admit(&surreal, post, "x")
-        .await
-        .unwrap();
-    assert!(crate::posts::find_by_id(&surreal, post)
-        .await
-        .unwrap()
-        .is_some());
     let replay = after_write(&surreal, MirrorKey::Post(post)).await;
     match case.as_str() {
         "disabled" => {
@@ -691,80 +631,6 @@ async fn write_hook_probe() {
                     assert_eq!(table.target_rows, 1, "{table:?}");
                 }
             }
-            let id = account.id.clone();
-            let expected_bundle: Option<SocialAccountBundle> = surreal
-                .query("SELECT ciphertext, wrapped_dek, kms_key_version, kms_context FROM ONLY $id")
-                .bind((
-                    "id",
-                    surrealdb::types::RecordId::new("social_account", account.id.clone()),
-                ))
-                .await
-                .unwrap()
-                .check()
-                .unwrap()
-                .take::<Option<SocialAccountBundle>>(0)
-                .unwrap();
-            let mirrored_bundle: (String, String, String, String) = sqlx::query_as(
-                "SELECT ciphertext, wrapped_dek, kms_key_version, kms_context FROM social_account WHERE id=$1",
-            ).bind(&id).fetch_one(&pg.0).await.unwrap();
-            let expected_bundle = expected_bundle.unwrap();
-            assert_eq!(mirrored_bundle.0, expected_bundle.ciphertext);
-            assert_eq!(mirrored_bundle.1, expected_bundle.wrapped_dek);
-            assert_eq!(mirrored_bundle.2, expected_bundle.kms_key_version);
-            assert_eq!(mirrored_bundle.3, expected_bundle.kms_context);
-            crate::social_accounts::update_refreshed_tokens(
-                &surreal,
-                crate::social_accounts::RefreshSocialAccount {
-                    brand_key: &brand.key,
-                    provider: crate::social_accounts::SocialProvider::Facebook,
-                    provider_account_id: "synthetic-hook-page",
-                    expires_at: Utc::now() + chrono::Duration::days(14),
-                    access_token: "synthetic-refreshed-access",
-                    refresh_token: Some("synthetic-refreshed-refresh"),
-                },
-                &kms,
-            )
-            .await
-            .unwrap();
-            let mirrored_refresh: (String, String) =
-                sqlx::query_as("SELECT ciphertext, wrapped_dek FROM social_account WHERE id=$1")
-                    .bind(&id)
-                    .fetch_one(&pg.0)
-                    .await
-                    .unwrap();
-            let source_refresh: Option<SocialAccountTokens> = surreal
-                .query("SELECT ciphertext, wrapped_dek FROM ONLY $id")
-                .bind((
-                    "id",
-                    surrealdb::types::RecordId::new("social_account", account.id.clone()),
-                ))
-                .await
-                .unwrap()
-                .check()
-                .unwrap()
-                .take::<Option<SocialAccountTokens>>(0)
-                .unwrap();
-            let source_refresh = source_refresh.unwrap();
-            assert_eq!(mirrored_refresh.0, source_refresh.ciphertext);
-            assert_eq!(mirrored_refresh.1, source_refresh.wrapped_dek);
-            crate::social_accounts::revoke(
-                &surreal,
-                crate::persons::Role::Admin,
-                admin,
-                &brand.key,
-                crate::social_accounts::SocialProvider::Facebook,
-                "synthetic-hook-page",
-            )
-            .await
-            .unwrap();
-            let revoked: (String, String, String) = sqlx::query_as(
-                "SELECT status, ciphertext, wrapped_dek FROM social_account WHERE id=$1",
-            )
-            .bind(&id)
-            .fetch_one(&pg.0)
-            .await
-            .unwrap();
-            assert_eq!(revoked, ("revoked".into(), String::new(), String::new()));
             // An asset write mirrors itself, and so does its removal.
             let tmp = tempfile::tempdir().unwrap();
             let storage: std::sync::Arc<dyn cloud::StorageService> = std::sync::Arc::new(
@@ -1186,16 +1052,14 @@ async fn write_hook_probe() {
                     .collect::<Vec<_>>(),
                 [1, 1, 1]
             );
+            // PostgreSQL holds the editorial tables: the hook wrote nothing,
+            // so parity names the SurrealDB-only Post until a backfill.
             let report = parity(&surreal, &pg).await.unwrap();
-            assert!(report.is_clean(), "{report:?}");
             assert_eq!(
-                report
-                    .tables
-                    .iter()
-                    .map(|table| table.target_rows)
-                    .collect::<Vec<_>>(),
-                [1, 1, 1]
+                report.divergent().cloned().collect::<Vec<_>>(),
+                [MirrorKey::Post(post)]
             );
+            assert!(report.tables.iter().all(|table| table.target_rows == 0));
         }
         _ => unreachable!(),
     }

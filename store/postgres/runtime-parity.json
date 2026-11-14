@@ -134,6 +134,16 @@
         "file": "store/src/posts.rs",
         "function": "declared_video_must_be_this_brands_measured_upload",
         "proves": "A Post refuses a measured video uploaded for a different Brand."
+      },
+      {
+        "file": "store/src/postgres/social_tests.rs",
+        "function": "posts_handles_and_videos_live_in_postgres",
+        "proves": "An upload registers once in PostgreSQL by its unique object key and reads back measured."
+      },
+      {
+        "file": "store/src/postgres/social_tests.rs",
+        "function": "the_mirror_leaves_postgres_alone",
+        "proves": "Where PostgreSQL holds the table, the write hook and reconcile write nothing, parity names only rows PostgreSQL lacks, and only the first Mirror Backfill copies them."
       }
     ],
     "remaining": [
@@ -1204,6 +1214,16 @@
         "file": "store/src/postgres_mirror/tests.rs",
         "function": "create_update_and_delete_converge_and_replays_write_nothing",
         "proves": "Editorial row images converge through create, update and delete; replays do not write."
+      },
+      {
+        "file": "store/src/postgres/social_tests.rs",
+        "function": "posts_handles_and_videos_live_in_postgres",
+        "proves": "Imports, the Brand+slug creation race, links, schedule reads and cancellation run on PostgreSQL alone."
+      },
+      {
+        "file": "store/src/postgres/social_tests.rs",
+        "function": "the_mirror_leaves_postgres_alone",
+        "proves": "Where PostgreSQL holds the table, the write hook and reconcile write nothing, parity names only rows PostgreSQL lacks, and only the first Mirror Backfill copies them."
       }
     ],
     "remaining": [
@@ -1374,6 +1394,16 @@
         "file": "store/src/postgres_mirror/social_accounts_tests.rs",
         "function": "encrypted_social_account_mirrors_replays_revocation_and_reconcile",
         "proves": "Encrypted bundles round-trip byte-for-byte and revocation/replay/reconciliation preserve source state."
+      },
+      {
+        "file": "store/src/postgres/social_tests.rs",
+        "function": "social_accounts_live_in_postgres",
+        "proves": "Connect, reads, token refresh and revocation run on PostgreSQL; listings never carry the sealed bundle."
+      },
+      {
+        "file": "store/src/postgres/social_tests.rs",
+        "function": "the_mirror_leaves_postgres_alone",
+        "proves": "Where PostgreSQL holds the table, the write hook and reconcile write nothing, parity names only rows PostgreSQL lacks, and only the first Mirror Backfill copies them."
       }
     ],
     "remaining": [
@@ -1399,6 +1429,16 @@
         "file": "store/src/postgres_mirror/social_account_selections_tests.rs",
         "function": "saved_selection_write_hook_uses_the_isolated_postgres_database",
         "proves": "The public save operation reaches its opt-in PostgreSQL hook in an isolated database."
+      },
+      {
+        "file": "store/src/postgres/social_tests.rs",
+        "function": "social_accounts_live_in_postgres",
+        "proves": "A saved destination is replaced per Brand and provider in PostgreSQL."
+      },
+      {
+        "file": "store/src/postgres/social_tests.rs",
+        "function": "the_mirror_leaves_postgres_alone",
+        "proves": "Where PostgreSQL holds the table, the write hook and reconcile write nothing, parity names only rows PostgreSQL lacks, and only the first Mirror Backfill copies them."
       }
     ],
     "scenario": "saved destination round trip; cancellation preservation; Brand and Firm isolation"
@@ -1410,6 +1450,16 @@
         "file": "store/src/postgres_mirror/tests.rs",
         "function": "create_update_and_delete_converge_and_replays_write_nothing",
         "proves": "Editorial row images converge through create, update and delete; replays do not write."
+      },
+      {
+        "file": "store/src/postgres/social_tests.rs",
+        "function": "posts_handles_and_videos_live_in_postgres",
+        "proves": "A Brand holds one handle per provider in PostgreSQL; a Post links only that handle."
+      },
+      {
+        "file": "store/src/postgres/social_tests.rs",
+        "function": "the_mirror_leaves_postgres_alone",
+        "proves": "Where PostgreSQL holds the table, the write hook and reconcile write nothing, parity names only rows PostgreSQL lacks, and only the first Mirror Backfill copies them."
       }
     ],
     "remaining": [
@@ -1430,6 +1480,16 @@
         "file": "store/src/postgres_mirror/tests.rs",
         "function": "create_update_and_delete_converge_and_replays_write_nothing",
         "proves": "Editorial row images converge through create, update and delete; replays do not write."
+      },
+      {
+        "file": "store/src/postgres/social_tests.rs",
+        "function": "social_publications_live_in_postgres",
+        "proves": "The unique (Post, provider) index admits one sender; every state transition runs on PostgreSQL."
+      },
+      {
+        "file": "store/src/postgres/social_tests.rs",
+        "function": "the_mirror_leaves_postgres_alone",
+        "proves": "Where PostgreSQL holds the table, the write hook and reconcile write nothing, parity names only rows PostgreSQL lacks, and only the first Mirror Backfill copies them."
       }
     ],
     "remaining": [

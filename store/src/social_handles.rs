@@ -7,15 +7,17 @@
 //! provider permalink that is derivable from the handle and the provider's post
 //! id is derived here rather than typed in.
 
+use serde::Deserialize;
 use surrealdb::types::SurrealValue;
 
+use crate::postgres::social::{self as authority, SocialAuthorityError};
 use crate::social_accounts::SocialProvider;
 use crate::surreal::SurrealDb;
 
 const TABLE: &str = "social_handle";
 
 /// A Brand's handle on one provider.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct SocialHandle {
     pub brand_key: String,
     pub provider: String,
@@ -34,6 +36,12 @@ pub enum SocialHandleError {
 
 impl From<surrealdb::Error> for SocialHandleError {
     fn from(value: surrealdb::Error) -> Self {
+        Self::Db(value.to_string())
+    }
+}
+
+impl From<SocialAuthorityError> for SocialHandleError {
+    fn from(value: SocialAuthorityError) -> Self {
         Self::Db(value.to_string())
     }
 }
@@ -89,6 +97,17 @@ pub async fn set(
     if !is_valid_handle(handle) {
         return Err(SocialHandleError::InvalidHandle(handle.to_string()));
     }
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "INSERT INTO social_handle (brand_key, provider, handle) VALUES ($1, $2, $3) \
+             ON CONFLICT (brand_key, provider) DO UPDATE SET handle = EXCLUDED.handle",
+        )
+        .bind(brand_key.to_owned())
+        .bind(provider.to_owned())
+        .bind(handle.to_owned());
+        authority::execute(&pg, query).await?;
+        return Ok(());
+    }
     db.query(format!(
         "DELETE {TABLE} WHERE brand_key = $brand AND provider = $provider; \
          CREATE {TABLE} SET brand_key = $brand, provider = $provider, handle = $handle"
@@ -109,7 +128,7 @@ pub async fn set(
     Ok(())
 }
 
-/// Every recorded handle, for the PostgreSQL parity check.
+/// Every handle SurrealDB holds, for the PostgreSQL parity check.
 pub(crate) async fn all(db: &SurrealDb) -> Result<Vec<SocialHandle>, SocialHandleError> {
     let mut response = db
         .query(format!("SELECT brand_key, provider, handle FROM {TABLE}"))
@@ -136,6 +155,15 @@ pub async fn find(
     brand_key: &str,
     provider: &str,
 ) -> Result<Option<SocialHandle>, SocialHandleError> {
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "SELECT to_jsonb(h) AS row FROM social_handle h \
+             WHERE h.brand_key = $1 AND h.provider = $2",
+        )
+        .bind(brand_key.to_owned())
+        .bind(provider.to_owned());
+        return Ok(authority::maybe(&pg, query).await?);
+    }
     let mut response = db
         .query(format!(
             "SELECT brand_key, provider, handle FROM {TABLE} \

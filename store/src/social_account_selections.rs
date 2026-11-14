@@ -1,13 +1,15 @@
 //! Intended provider destinations, independent of OAuth credentials.
 use crate::{
     persons::Role,
+    postgres::social as authority,
     social_accounts::{SocialAccountError, SocialProvider},
     surreal::SurrealDb,
 };
+use serde::Deserialize;
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, PartialEq, Eq, SurrealValue)]
+#[derive(Debug, Clone, PartialEq, Eq, SurrealValue, Deserialize)]
 pub struct SocialAccountSelection {
     pub brand_key: String,
     pub provider: String,
@@ -40,6 +42,22 @@ pub async fn save(
     if !crate::social_handles::is_valid_handle(identity) {
         return Err(SocialAccountError::MissingAccountIdentity);
     }
+    if let Some(pg) = authority::authority().await? {
+        // One destination per Brand and provider: a later save replaces it.
+        let query = sqlx::query(
+            "INSERT INTO social_account_selection (id, firm_id, brand_key, provider, \
+             provider_account_id, inserted_at, updated_at) VALUES ($1, $2, $3, $4, $5, now(), now()) \
+             ON CONFLICT (brand_key, provider) DO UPDATE SET firm_id = EXCLUDED.firm_id, \
+             provider_account_id = EXCLUDED.provider_account_id, updated_at = now()",
+        )
+        .bind(format!("{brand}:{}", provider.as_str()))
+        .bind(firm)
+        .bind(brand.to_owned())
+        .bind(provider.as_str())
+        .bind(identity.to_owned());
+        authority::execute(&pg, query).await?;
+        return Ok(());
+    }
     let id = surrealdb::types::RecordId::new(
         "social_account_selection",
         format!("{brand}:{}", provider.as_str()),
@@ -70,6 +88,15 @@ pub async fn for_brand(
     else {
         return Ok(Vec::new());
     };
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "SELECT to_jsonb(s) AS row FROM social_account_selection s \
+             WHERE s.brand_key = $1 AND s.firm_id = $2 ORDER BY s.provider",
+        )
+        .bind(brand.to_owned())
+        .bind(firm);
+        return Ok(authority::rows(&pg, query).await?);
+    }
     let mut response = db.query("SELECT brand_key, provider, provider_account_id FROM social_account_selection WHERE brand_key = $brand AND firm_id = $firm ORDER BY provider").bind(("brand", brand.to_string())).bind(("firm", crate::surreal::record_id("firm", firm))).await?.check()?;
     Ok(response.take(0)?)
 }
