@@ -284,6 +284,7 @@ pub static WEB_REQUIREMENTS: &[Requirement] = &[
     // inline env; once a deployment names one, `portal::hcaptcha` refuses to
     // boot without the secret that redeems a solved challenge.
     required!(integration "HCAPTCHA_SECRET" if "HCAPTCHA_SITEKEY"),
+    required!(integration "LINEAR_BACKLOG_READ_KEY" if "SLACK_LINEAR_BACKLOG_CHANNEL_ID"),
     // Email/password sign-in through Identity Platform. The browser key is
     // the whole declaration: `portal::oauth::IdentityPasswordConfig::from_env`
     // reads an absent key as "SSO only", and there is no public coordinate
