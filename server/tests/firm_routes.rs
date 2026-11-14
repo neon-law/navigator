@@ -230,7 +230,7 @@ async fn the_home_presents_navigator_and_asks_for_a_star() {
     for retired in [
         r#"href="/business""#,
         "company-pricing",
-        "data-nautilus-intake",
+        "data-enrollment-intake",
         "What is your legal need?",
     ] {
         assert!(!body.contains(retired), "{retired} survives: {body}");

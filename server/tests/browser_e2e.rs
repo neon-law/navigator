@@ -53,13 +53,25 @@ mod inbox_triage;
 #[path = "common/private_chart.rs"]
 mod private_chart;
 
+/// Same Day Legal's origin for the browser suite, e.g. `http://localhost:<port>`.
+const SAME_DAY_LEGAL_BASE_URL_ENV: &str = "NAV_SAME_DAY_LEGAL_BASE_URL";
+
 /// The enrollment intake collects contact details before sign-in and keeps them when going Back.
 #[tokio::test]
 async fn enrollment_intake_preserves_answers_and_reviews_before_sign_in() {
+    // The intake lives on Same Day Legal's own host, which the harness does
+    // not serve under `base_url()`; Neon's `/nautilus` only redirects there.
+    let Some(origin) = env::var(SAME_DAY_LEGAL_BASE_URL_ENV)
+        .ok()
+        .filter(|url| !url.trim().is_empty())
+    else {
+        eprintln!("skipping the enrollment intake test: set {SAME_DAY_LEGAL_BASE_URL_ENV}");
+        return;
+    };
     let Some(c) = new_client_or_skip().await else {
         return;
     };
-    c.goto(&format!("{}/nautilus#enrollment", base_url()))
+    c.goto(&format!("{origin}/#enrollment"))
         .await
         .expect("Same Day Legal");
     wait_for_text(&c, "Your contact details", Duration::from_secs(20)).await;
