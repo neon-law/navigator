@@ -2960,9 +2960,8 @@ struct CompiledBrand {
 ///
 /// Each row names the Firm that wears it. Guieb & Shook PC keeps Neon Law
 /// and its own site; Lex Tecnica, Ltd. owns every other compiled brand. A
-/// boot moves a brand that is still seated on the other of those two firms.
-/// A seat on any other firm stays, because that firm is an Owner's. The
-/// `iep-defenders` and `lex-tecnica` website URLs are
+/// boot returns a compiled brand to that firm, including one an Owner moved.
+/// The `iep-defenders` and `lex-tecnica` website URLs are
 /// the firm's own public sites rather than the `neonlaw.com` hosts they are
 /// served on: the URL is what approves an email domain for account
 /// admission ([`crate::brand_domains`]), separate from host routing.
@@ -3280,9 +3279,9 @@ async fn seed_practice(surreal: &SurrealDb) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Return a compiled brand to the canonical firm [`COMPILED_BRANDS`] names
-/// when it is seated on the other of the two canonical firms. A seat on any
-/// other firm stays.
+/// Return a compiled brand to the firm [`COMPILED_BRANDS`] names. PostgreSQL
+/// tenancy does this inside `seed_brand`; this pass covers the SurrealDB
+/// seat and a Postgres seat the brand upsert left in place.
 async fn align_canonical_brand_seats(
     surreal: &SurrealDb,
     practice_id: Uuid,
@@ -3296,7 +3295,7 @@ async fn align_canonical_brand_seats(
         let Some(current) = crate::firms::firm_id_for_brand_key(surreal, brand.key).await? else {
             continue;
         };
-        if current == target || (current != practice_id && current != lex_id) {
+        if current == target {
             continue;
         }
         crate::firms::move_brand(
