@@ -14,7 +14,8 @@
 //!
 //! A table PostgreSQL holds authoritatively (the catalog in
 //! [`crate::postgres::catalog`], the matter records in
-//! [`crate::postgres::matter`]) is copied only by the first Mirror Backfill
+//! [`crate::postgres::matter`], the Brand and social content in
+//! [`crate::postgres::social`]) is copied only by the first Mirror Backfill
 //! ([`initial_copy`]). Until a backfill has completed, its parity reports
 //! every SurrealDB row PostgreSQL lacks, so `reconcile` stays unclean and
 //! `ops ship` stops before the application cuts over to an empty table.
@@ -651,6 +652,40 @@ pub(crate) async fn only_missing(
     Ok(table)
 }
 
+/// Whether the mirror leaves the social content tables alone: PostgreSQL
+/// holds them ([`crate::postgres::social`]) and this is not the first
+/// Mirror Backfill.
+pub(crate) fn social_held() -> bool {
+    crate::postgres::social::configured() && !initial_copy()
+}
+
+/// Whether parity compares the social content tables: always without a
+/// PostgreSQL host, and otherwise only until a Mirror Backfill completes.
+///
+/// # Errors
+///
+/// PostgreSQL could not be read.
+pub(crate) async fn social_compared(pg: &PostgresDb) -> Result<bool, MirrorError> {
+    Ok(!crate::postgres::social::configured() || compares_authoritative(pg).await?)
+}
+
+/// One social content table's comparison: where PostgreSQL holds the table,
+/// only the SurrealDB rows it lacks are divergent.
+///
+/// # Errors
+///
+/// PostgreSQL could not be read.
+pub(crate) async fn social_table(
+    pg: &PostgresDb,
+    table: TableParity,
+) -> Result<TableParity, MirrorError> {
+    if crate::postgres::social::configured() {
+        only_missing(pg, table).await
+    } else {
+        Ok(table)
+    }
+}
+
 /// Mirror one row after its Surreal write succeeded.
 ///
 /// Returns [`MirrorOutcome::Disabled`] without touching PostgreSQL when the
@@ -721,7 +756,14 @@ pub async fn mirror(
         key @ MirrorKey::ProjectReference { .. } => {
             project_references::mirror(surreal, pg, key).await
         }
-        MirrorKey::Post(id) => match crate::posts::find_by_id(surreal, *id)
+        MirrorKey::Post(_)
+        | MirrorKey::SocialHandle { .. }
+        | MirrorKey::SocialPublication { .. }
+            if social_held() =>
+        {
+            Ok(Mirrored::Unchanged)
+        }
+        MirrorKey::Post(id) => match from_source(crate::posts::find_by_id(surreal, *id))
             .await
             .map_err(|_| MirrorError::Source)?
         {
@@ -734,19 +776,7 @@ pub async fn mirror(
             provider,
         } => mirror_social_handle(surreal, pg, brand_key, provider).await,
         MirrorKey::SocialPublication { post_id, provider } => {
-            let source = crate::social_publications::find(surreal, *post_id, provider)
-                .await
-                .map_err(|_| MirrorError::Source)?;
-            if let Some(publication) = source {
-                return upsert_publication(pg, &publication).await;
-            }
-            let deleted =
-                sqlx::query("DELETE FROM social_publication WHERE post_id = $1 AND provider = $2")
-                    .bind(post_id)
-                    .bind(provider)
-                    .execute(&pg.0)
-                    .await?;
-            Ok(changed(deleted.rows_affected(), Mirrored::Deleted))
+            mirror_publication(surreal, pg, *post_id, provider).await
         }
         MirrorKey::Firm(_)
         | MirrorKey::Brand(_)
@@ -800,13 +830,34 @@ pub async fn mirror(
     }
 }
 
+async fn mirror_publication(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+    post_id: Uuid,
+    provider: &str,
+) -> Result<Mirrored, MirrorError> {
+    let source = from_source(crate::social_publications::find(surreal, post_id, provider))
+        .await
+        .map_err(|_| MirrorError::Source)?;
+    if let Some(publication) = source {
+        return upsert_publication(pg, &publication).await;
+    }
+    let deleted =
+        sqlx::query("DELETE FROM social_publication WHERE post_id = $1 AND provider = $2")
+            .bind(post_id)
+            .bind(provider)
+            .execute(&pg.0)
+            .await?;
+    Ok(changed(deleted.rows_affected(), Mirrored::Deleted))
+}
+
 async fn mirror_social_handle(
     surreal: &SurrealDb,
     pg: &PostgresDb,
     brand_key: &str,
     provider: &str,
 ) -> Result<Mirrored, MirrorError> {
-    let source = crate::social_handles::find(surreal, brand_key, provider)
+    let source = from_source(crate::social_handles::find(surreal, brand_key, provider))
         .await
         .map_err(|_| MirrorError::Source)?;
     if let Some(handle) = source {
@@ -1091,12 +1142,17 @@ fn compare(
 /// Compare every Post, Social Handle, and Social Publication in both stores.
 ///
 /// Reads whole tables; these editorial tables are small. Timestamps compare
-/// at PostgreSQL's microsecond precision.
+/// at PostgreSQL's microsecond precision. Where PostgreSQL holds these tables
+/// only the SurrealDB rows it lacks are divergent, and after a completed
+/// Mirror Backfill no table is compared (see [`social_compared`]).
 ///
 /// # Errors
 ///
 /// Either store could not be read.
 pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
+    if !social_compared(pg).await? {
+        return Ok(ParityReport { tables: Vec::new() });
+    }
     let source_posts: BTreeMap<_, _> = crate::posts::all(surreal)
         .await
         .map_err(|_| MirrorError::Source)?
@@ -1150,17 +1206,19 @@ pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport
         .map(publication_entry)
         .collect();
 
-    Ok(ParityReport {
-        tables: vec![
-            compare("post", &source_posts, &target_posts),
-            compare("social_handle", &source_handles, &target_handles),
-            compare(
-                "social_publication",
-                &source_publications,
-                &target_publications,
-            ),
-        ],
-    })
+    let mut tables = Vec::with_capacity(3);
+    for table in [
+        compare("post", &source_posts, &target_posts),
+        compare("social_handle", &source_handles, &target_handles),
+        compare(
+            "social_publication",
+            &source_publications,
+            &target_publications,
+        ),
+    ] {
+        tables.push(social_table(pg, table).await?);
+    }
+    Ok(ParityReport { tables })
 }
 
 /// Re-mirror every divergent row from SurrealDB, then compare again.

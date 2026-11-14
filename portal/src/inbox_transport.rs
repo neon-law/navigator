@@ -364,6 +364,15 @@ fn classify_social_response(status: reqwest::StatusCode, body: &[u8]) -> Transpo
     TransportOutcome::Unknown
 }
 
+/// Whether a TikTok connection may reply to a comment. The reply needs both
+/// grants: `comment.list` to read the parent comment's visibility before
+/// answering it, and `comment.list.manage` to post the answer.
+fn tiktok_can_reply(scopes: &[String]) -> bool {
+    ["comment.list", "comment.list.manage"]
+        .iter()
+        .all(|required| scopes.iter().any(|scope| scope == required))
+}
+
 fn rejected(detail: &str) -> TransportOutcome {
     TransportOutcome::Rejected {
         detail: detail.to_string(),
@@ -395,11 +404,7 @@ impl OutboundTransport for SocialReplyTransport {
         if accounts.len() != 1 {
             return Ok(rejected("social account is missing or ambiguous"));
         }
-        if provider == SocialProvider::Tiktok
-            && ["comment.list", "comment.list.manage"]
-                .iter()
-                .any(|required| !accounts[0].scopes.iter().any(|scope| scope == required))
-        {
+        if provider == SocialProvider::Tiktok && !tiktok_can_reply(&accounts[0].scopes) {
             return Ok(rejected(
                 "Reconnect TikTok with comment.list and comment.list.manage permissions to reply",
             ));
@@ -721,6 +726,17 @@ mod tests {
         account: &str,
         server: &wiremock::MockServer,
     ) -> SocialReplyTransport {
+        connected_reply_transport_with(provider, account, server, &[]).await
+    }
+
+    /// A reply transport whose one connection holds the provider's required
+    /// scopes plus `extra_scopes`.
+    async fn connected_reply_transport_with(
+        provider: store::social_accounts::SocialProvider,
+        account: &str,
+        server: &wiremock::MockServer,
+        extra_scopes: &[&str],
+    ) -> SocialReplyTransport {
         use store::brands::NewBrand;
         use store::firms::NewFirm;
         use store::persons::{NewPerson, Role};
@@ -778,6 +794,7 @@ mod tests {
                 scopes: &provider
                     .required_scopes()
                     .iter()
+                    .chain(extra_scopes)
                     .map(|scope| (*scope).to_string())
                     .collect::<Vec<_>>(),
                 expires_at: None,
@@ -796,39 +813,42 @@ mod tests {
         )
     }
 
-    #[tokio::test]
-    async fn tiktok_publishing_connection_without_comment_permission_cannot_reply() {
-        use wiremock::MockServer;
-        let server = MockServer::start().await;
-        let transport =
-            connected_reply_transport(SocialProvider::Tiktok, "page-reply", &server).await;
-        assert!(
-            matches!(transport.deliver(&social_envelope(channel::TIKTOK, "public", "comment")).await.unwrap(), TransportOutcome::Rejected { detail } if detail.contains("comment.list.manage"))
-        );
-        assert!(server.received_requests().await.unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn tiktok_manage_without_read_grant_cannot_skip_parent_visibility_check() {
-        let server = wiremock::MockServer::start().await;
-        let transport =
-            connected_reply_transport(SocialProvider::Tiktok, "page-reply", &server).await;
-        transport.surreal.query("UPDATE social_account SET scopes += ['comment.list.manage'] WHERE provider = 'tiktok'")
-            .await.unwrap().check().unwrap();
-        assert!(
-            matches!(transport.deliver(&social_envelope(channel::TIKTOK, "public", "comment")).await.unwrap(), TransportOutcome::Rejected { detail } if detail.contains("comment.list"))
-        );
-        assert!(server.received_requests().await.unwrap().is_empty());
+    #[test]
+    fn a_tiktok_reply_needs_both_comment_grants() {
+        let publishing = SocialProvider::Tiktok
+            .required_scopes()
+            .iter()
+            .map(|scope| (*scope).to_string())
+            .collect::<Vec<_>>();
+        let with = |extra: &[&str]| {
+            let mut scopes = publishing.clone();
+            scopes.extend(extra.iter().map(|scope| (*scope).to_string()));
+            scopes
+        };
+        for (granted, can_reply) in [
+            // A publishing connection holds neither grant.
+            (with(&[]), false),
+            // Managing comments without reading them would skip the parent
+            // comment's visibility check.
+            (with(&["comment.list.manage"]), false),
+            (with(&["comment.list"]), false),
+            (with(&["comment.list", "comment.list.manage"]), true),
+        ] {
+            assert_eq!(tiktok_can_reply(&granted), can_reply, "{granted:?}");
+        }
     }
 
     #[tokio::test]
     async fn tiktok_comment_grant_routes_the_reply_through_accounts_api() {
         use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
         let server = MockServer::start().await;
-        let transport =
-            connected_reply_transport(SocialProvider::Tiktok, "page-reply", &server).await;
-        transport.surreal.query("UPDATE social_account SET scopes += ['comment.list', 'comment.list.manage'] WHERE provider = 'tiktok'")
-            .await.unwrap().check().unwrap();
+        let transport = connected_reply_transport_with(
+            SocialProvider::Tiktok,
+            "page-reply",
+            &server,
+            &["comment.list", "comment.list.manage"],
+        )
+        .await;
         Mock::given(matchers::method("GET")).and(matchers::path("/business/comment/list/"))
             .and(matchers::header("Access-Token", "synthetic-reply-token"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"code":0,"data":{"comments":[{

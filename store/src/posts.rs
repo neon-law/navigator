@@ -15,13 +15,22 @@ use uuid::Uuid;
 
 use crate::firm_capability::{FirmCapability, FirmCapabilityDecision};
 use crate::persons::Role;
+use crate::postgres::social::{self as authority, SocialAuthorityError};
+use crate::postgres::PostgresDb;
 use crate::surreal::{record_id, record_uuid, SurrealDb};
 
 const TABLE: &str = "post";
 const SELECT: &str = "id, brand_key, slug, title, description, body_html, body_markdown, status, publish_at, inserted_at, updated_at, video_asset, vertical_video, tiktok_ai_generated, video_orientation, facebook_caption, instagram_caption, threads_caption, youtube_caption, selected_social_accounts, source_digest, social_links";
 const VIDEO_TABLE: &str = "blog_video";
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// PostgreSQL Posts as `row`, aliased `p` for the caller's `WHERE`.
+macro_rules! pg_posts {
+    () => {
+        "SELECT to_jsonb(p) AS row FROM post p"
+    };
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Post {
     pub id: Uuid,
     pub brand_key: String,
@@ -251,6 +260,13 @@ pub async fn cancel(
     if post.status != "scheduled" || post.publish_at.is_some_and(|at| at <= Utc::now()) {
         return Err(PostError::InvalidStatus);
     }
+    if let Some(pg) = authority::authority().await? {
+        let query =
+            sqlx::query("UPDATE post SET status = 'cancelled', updated_at = now() WHERE id = $1")
+                .bind(post_id);
+        authority::execute(&pg, query).await?;
+        return Ok(());
+    }
     db.query("UPDATE $id SET status = 'cancelled', updated_at = time::now()")
         .bind(("id", record_id(TABLE, post_id)))
         .await?
@@ -288,6 +304,12 @@ async fn authorize_brand(
 }
 
 async fn post_by_id(db: &SurrealDb, post_id: Uuid) -> Result<Post, PostError> {
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(concat!(pg_posts!(), " WHERE p.id = $1")).bind(post_id);
+        return authority::maybe(&pg, query)
+            .await?
+            .ok_or(PostError::NotFound);
+    }
     let mut response = db
         .query(format!("SELECT {SELECT} FROM ONLY $id"))
         .bind(("id", record_id(TABLE, post_id)))
@@ -312,12 +334,30 @@ impl From<surrealdb::Error> for PostError {
     }
 }
 
+impl From<SocialAuthorityError> for PostError {
+    fn from(value: SocialAuthorityError) -> Self {
+        Self::Db(value.to_string())
+    }
+}
+
 /// Public posts visible to this registered Brand, newest first.
 pub async fn published_for_brand(
     db: &SurrealDb,
     brand_key: &str,
     now: DateTime<Utc>,
 ) -> Result<Vec<Post>, PostError> {
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(concat!(
+            pg_posts!(),
+            " WHERE p.brand_key = $1 \
+             AND (p.status = 'published' OR (p.status = 'scheduled' AND p.publish_at <= $2)) \
+             AND (p.publish_at IS NULL OR p.publish_at <= $2) \
+             ORDER BY p.publish_at DESC NULLS LAST, p.inserted_at DESC"
+        ))
+        .bind(brand_key.to_owned())
+        .bind(now);
+        return Ok(authority::rows(&pg, query).await?);
+    }
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE brand_key = $brand \
@@ -391,6 +431,15 @@ pub async fn find_by_brand_slug(
     brand_key: &str,
     slug: &str,
 ) -> Result<Option<Post>, PostError> {
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(concat!(
+            pg_posts!(),
+            " WHERE p.brand_key = $1 AND p.slug = $2"
+        ))
+        .bind(brand_key.to_owned())
+        .bind(slug.to_owned());
+        return Ok(authority::maybe(&pg, query).await?);
+    }
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE brand_key = $brand AND slug = $slug LIMIT 1"
@@ -408,6 +457,12 @@ pub async fn slugs_for_brand(
     db: &SurrealDb,
     brand_key: &str,
 ) -> Result<std::collections::HashSet<String>, PostError> {
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query("SELECT to_jsonb(slug) AS row FROM post WHERE brand_key = $1")
+            .bind(brand_key.to_owned());
+        let slugs: Vec<String> = authority::rows(&pg, query).await?;
+        return Ok(slugs.into_iter().collect());
+    }
     let mut response = db
         .query(format!(
             "SELECT VALUE slug FROM {TABLE} WHERE brand_key = $brand"
@@ -419,7 +474,7 @@ pub async fn slugs_for_brand(
     Ok(slugs.into_iter().collect())
 }
 
-/// Every Post, for the PostgreSQL parity check.
+/// Every Post SurrealDB holds, for the PostgreSQL parity check.
 pub(crate) async fn all(db: &SurrealDb) -> Result<Vec<Post>, PostError> {
     let mut response = db
         .query(format!("SELECT {SELECT} FROM {TABLE}"))
@@ -430,6 +485,14 @@ pub(crate) async fn all(db: &SurrealDb) -> Result<Vec<Post>, PostError> {
 }
 
 async fn posts_for_brand(db: &SurrealDb, brand_key: &str) -> Result<Vec<Post>, PostError> {
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(concat!(
+            pg_posts!(),
+            " WHERE p.brand_key = $1 ORDER BY p.updated_at DESC"
+        ))
+        .bind(brand_key.to_owned());
+        return Ok(authority::rows(&pg, query).await?);
+    }
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE brand_key = $brand ORDER BY updated_at DESC"
@@ -444,7 +507,7 @@ async fn posts_for_brand(db: &SurrealDb, brand_key: &str) -> Result<Vec<Post>, P
 /// A video uploaded for one Brand's Posts, measured at upload time from the
 /// MP4 track header so a Post's `vertical_video` declaration is checked
 /// against the media rather than trusted.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct BlogVideo {
     pub brand_key: String,
     pub object_key: String,
@@ -482,6 +545,40 @@ pub async fn record_video(
 ) -> Result<BlogVideo, PostError> {
     let orientation = orientation_for(width, height);
     let id = Uuid::now_v7();
+    if let Some(pg) = authority::authority().await? {
+        // `object_key` is unique: a second registration of one upload fails.
+        let query = sqlx::query(
+            "INSERT INTO blog_video (id, brand_key, object_key, width, height, orientation) \
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(id)
+        .bind(brand_key.to_owned())
+        .bind(object_key.to_owned())
+        .bind(i64::from(width))
+        .bind(i64::from(height))
+        .bind(orientation);
+        authority::execute(&pg, query).await?;
+    } else {
+        record_video_in_surreal(db, id, brand_key, object_key, width, height).await?;
+    }
+    Ok(BlogVideo {
+        brand_key: brand_key.to_string(),
+        object_key: object_key.to_string(),
+        width,
+        height,
+        orientation: orientation.to_string(),
+    })
+}
+
+async fn record_video_in_surreal(
+    db: &SurrealDb,
+    id: Uuid,
+    brand_key: &str,
+    object_key: &str,
+    width: u32,
+    height: u32,
+) -> Result<(), PostError> {
+    let orientation = orientation_for(width, height);
     db.query(
         "CREATE $id SET brand_key = $brand, object_key = $key, \
          width = $width, height = $height, orientation = $orientation, inserted_at = time::now()",
@@ -495,17 +592,17 @@ pub async fn record_video(
     .await?
     .check()?;
     crate::postgres_mirror::after_write(db, crate::postgres_mirror::MirrorKey::BlogVideo(id)).await;
-    Ok(BlogVideo {
-        brand_key: brand_key.to_string(),
-        object_key: object_key.to_string(),
-        width,
-        height,
-        orientation: orientation.to_string(),
-    })
+    Ok(())
 }
 
 /// The registered upload behind a video asset key, from any Brand.
 pub async fn find_video(db: &SurrealDb, object_key: &str) -> Result<Option<BlogVideo>, PostError> {
+    if let Some(pg) = authority::authority().await? {
+        let query =
+            sqlx::query("SELECT to_jsonb(v) AS row FROM blog_video v WHERE v.object_key = $1")
+                .bind(object_key.to_owned());
+        return Ok(authority::maybe(&pg, query).await?);
+    }
     let mut response = db
         .query(format!(
             "SELECT brand_key, object_key, width, height, orientation FROM {VIDEO_TABLE} \
@@ -831,13 +928,27 @@ pub async fn encode_social_link(
         .collect();
     links.push(link.clone());
     links.sort_by(|a, b| a.provider.cmp(&b.provider));
+    set_links(db, post_id, links).await?;
+    Ok(link)
+}
+
+/// Replace a Post's social links: display data, never a send.
+async fn set_links(db: &SurrealDb, post_id: Uuid, links: Vec<SocialLink>) -> Result<(), PostError> {
+    if let Some(pg) = authority::authority().await? {
+        let query =
+            sqlx::query("UPDATE post SET social_links = $2, updated_at = now() WHERE id = $1")
+                .bind(post_id)
+                .bind(sqlx::types::Json(links));
+        authority::execute(&pg, query).await?;
+        return Ok(());
+    }
     db.query("UPDATE $id SET social_links = $links, updated_at = time::now()")
         .bind(("id", record_id(TABLE, post_id)))
         .bind(("links", links))
         .await?
         .check()?;
     crate::postgres_mirror::after_write(db, crate::postgres_mirror::MirrorKey::Post(post_id)).await;
-    Ok(link)
+    Ok(())
 }
 
 /// Apply one seeded Post: create it when its Brand+slug is new, and leave an
@@ -899,11 +1010,55 @@ pub struct ImportResult {
     pub unresolved_accounts: Vec<String>,
 }
 
-#[derive(SurrealValue)]
-struct ResolvedAccountRow {
-    id: surrealdb::types::RecordId,
+/// One Social Account connection a declared alias names, from any Brand.
+#[derive(Deserialize)]
+struct AliasAccount {
+    id: String,
     brand_key: String,
     status: String,
+}
+
+async fn alias_accounts(
+    db: &SurrealDb,
+    alias: &AccountAlias,
+) -> Result<Vec<AliasAccount>, PostError> {
+    #[derive(SurrealValue)]
+    struct Row {
+        id: surrealdb::types::RecordId,
+        brand_key: String,
+        status: String,
+    }
+
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "SELECT jsonb_build_object('id', id, 'brand_key', brand_key, 'status', status) AS row \
+             FROM social_account WHERE provider = $1 AND provider_account_id = $2",
+        )
+        .bind(alias.provider.clone())
+        .bind(alias.provider_account_id.clone());
+        return Ok(authority::rows(&pg, query).await?);
+    }
+    let mut response = db
+        .query(
+            "SELECT id, brand_key, status FROM social_account \
+             WHERE provider = $provider AND provider_account_id = $account",
+        )
+        .bind(("provider", alias.provider.clone()))
+        .bind(("account", alias.provider_account_id.clone()))
+        .await?
+        .check()?;
+    let rows: Vec<Row> = response.take(0)?;
+    Ok(rows
+        .into_iter()
+        .map(|row| AliasAccount {
+            id: match row.id.key {
+                surrealdb::types::RecordIdKey::String(key) => key,
+                other => format!("{other:?}"),
+            },
+            brand_key: row.brand_key,
+            status: row.status,
+        })
+        .collect())
 }
 
 async fn resolve_accounts(
@@ -914,40 +1069,16 @@ async fn resolve_accounts(
     let mut resolved = Vec::new();
     let mut unresolved = Vec::new();
     for alias in accounts {
-        let mut response = db
-            .query(
-                "SELECT id, brand_key, status FROM social_account \
-                 WHERE provider = $provider AND provider_account_id = $account",
-            )
-            .bind(("provider", alias.provider.clone()))
-            .bind(("account", alias.provider_account_id.clone()))
-            .await?
-            .check()?;
-        let rows: Vec<ResolvedAccountRow> = response.take(0)?;
+        let rows = alias_accounts(db, alias).await?;
         if rows.iter().any(|row| row.brand_key != brand_key) {
             return Err(PostError::CrossBrandSocialAccount(alias.to_string()));
         }
         match rows.into_iter().find(|row| row.status == "connected") {
-            Some(row) => {
-                let key = match row.id.key {
-                    surrealdb::types::RecordIdKey::String(key) => key,
-                    other => format!("{other:?}"),
-                };
-                resolved.push((alias.provider.clone(), key));
-            }
+            Some(row) => resolved.push((alias.provider.clone(), row.id)),
             None => unresolved.push(alias.to_string()),
         }
     }
     Ok((resolved, unresolved))
-}
-
-#[derive(SurrealValue)]
-struct ExistingRow {
-    id: surrealdb::types::RecordId,
-    status: String,
-    publish_at: Option<surrealdb::types::Datetime>,
-    source_digest: Option<String>,
-    social_links: Option<Vec<SocialLink>>,
 }
 
 /// Refuse a link whose provider post id contradicts this deployment's own
@@ -1090,16 +1221,7 @@ pub async fn import_source(
     }
     let selected: Vec<String> = resolved.into_iter().map(|(_, key)| key).collect();
 
-    let mut response = db
-        .query(format!(
-            "SELECT id, status, publish_at, source_digest, social_links FROM {TABLE} \
-             WHERE brand_key = $brand AND slug = $slug LIMIT 1"
-        ))
-        .bind(("brand", post.brand_key.to_string()))
-        .bind(("slug", post.slug.to_string()))
-        .await?
-        .check()?;
-    let existing: Option<ExistingRow> = response.take(0)?;
+    let existing = find_by_brand_slug(db, post.brand_key, post.slug).await?;
 
     // A scheduled time that has already passed publishes the article and
     // schedules no social send.
@@ -1115,11 +1237,10 @@ pub async fn import_source(
             ImportChange::Created,
         ),
         Some(row) => {
-            let id = record_uuid(&row.id).ok_or(PostError::NotFound)?;
+            let id = row.id;
             check_receipts(db, id, post.social_links).await?;
-            let links_changed =
-                row.social_links.as_deref().unwrap_or_default() != post.social_links;
-            let current_at: Option<DateTime<Utc>> = row.publish_at.map(Into::into);
+            let links_changed = row.social_links != post.social_links;
+            let current_at = row.publish_at;
             let live = row.status == "published"
                 || (row.status == "scheduled" && current_at.is_some_and(|at| at <= now));
             let held = row.status == "cancelled"
@@ -1164,15 +1285,26 @@ pub async fn import_source(
         return Ok(result);
     }
     if change == ImportChange::Receipts {
-        db.query("UPDATE $id SET social_links = $links, updated_at = time::now()")
-            .bind(("id", record_id(TABLE, id)))
-            .bind(("links", post.social_links.to_vec()))
-            .await?
-            .check()?;
-        crate::postgres_mirror::after_write(db, crate::postgres_mirror::MirrorKey::Post(id)).await;
+        set_links(db, id, post.social_links.to_vec()).await?;
         return Ok(result);
     }
     let digest = source_digest(post, &selected);
+    if let Some(pg) = authority::authority().await? {
+        let write = Written {
+            id,
+            status,
+            orientation,
+            selected,
+            digest,
+        };
+        let created = change == ImportChange::Created;
+        if Box::pin(write_pg(&pg, post, write, created)).await? == 0 && created {
+            // A concurrent import created this Brand+slug first; classify
+            // this source against the row it wrote.
+            return Box::pin(import_source(db, post, now)).await;
+        }
+        return Ok(result);
+    }
     let verb = if change == ImportChange::Created {
         "CREATE"
     } else {
@@ -1223,6 +1355,63 @@ pub async fn import_source(
     .check()?;
     crate::postgres_mirror::after_write(db, crate::postgres_mirror::MirrorKey::Post(id)).await;
     Ok(result)
+}
+
+/// The columns an import decides beyond its source.
+struct Written {
+    id: Uuid,
+    status: String,
+    orientation: Option<String>,
+    selected: Vec<String>,
+    digest: String,
+}
+
+/// Create or update one imported Post in PostgreSQL; returns the rows
+/// written. The unique Brand+slug decides a race over the creation: the
+/// loser writes nothing.
+async fn write_pg(
+    pg: &PostgresDb,
+    post: &SourcePost<'_>,
+    write: Written,
+    created: bool,
+) -> Result<u64, SocialAuthorityError> {
+    let sql = if created {
+        "INSERT INTO post (id, brand_key, slug, title, description, body_html, body_markdown, \
+         status, publish_at, video_asset, vertical_video, tiktok_ai_generated, video_orientation, \
+         facebook_caption, instagram_caption, threads_caption, youtube_caption, \
+         selected_social_accounts, source_digest, social_links, inserted_at, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, \
+         $18, $19, $20, now(), now()) ON CONFLICT (brand_key, slug) DO NOTHING"
+    } else {
+        "UPDATE post SET brand_key = $2, slug = $3, title = $4, description = $5, \
+         body_html = $6, body_markdown = $7, status = $8, publish_at = $9, video_asset = $10, \
+         vertical_video = $11, tiktok_ai_generated = $12, video_orientation = $13, \
+         facebook_caption = $14, instagram_caption = $15, threads_caption = $16, \
+         youtube_caption = $17, selected_social_accounts = $18, source_digest = $19, \
+         social_links = $20, updated_at = now() WHERE id = $1"
+    };
+    let query = sqlx::query(sql)
+        .bind(write.id)
+        .bind(post.brand_key.to_owned())
+        .bind(post.slug.to_owned())
+        .bind(post.title.to_owned())
+        .bind(post.description.to_owned())
+        .bind(post.body_html.to_owned())
+        .bind(post.body_markdown.map(str::to_owned))
+        .bind(write.status)
+        .bind(post.publish_at)
+        .bind(post.video_asset.map(str::to_owned))
+        .bind(post.vertical_video.unwrap_or(false))
+        .bind(post.tiktok_ai_generated)
+        .bind(write.orientation)
+        .bind(post.captions.facebook.map(str::to_owned))
+        .bind(post.captions.instagram.map(str::to_owned))
+        .bind(post.captions.threads.map(str::to_owned))
+        .bind(post.captions.youtube.map(str::to_owned))
+        .bind(write.selected)
+        .bind(write.digest)
+        .bind(sqlx::types::Json(post.social_links.to_vec()));
+    authority::execute(pg, query).await
 }
 
 #[cfg(test)]

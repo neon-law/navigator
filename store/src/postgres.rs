@@ -42,6 +42,10 @@ pub mod project_lifecycle;
 /// Native Project records; application authority remains guarded.
 pub mod projects;
 
+/// PostgreSQL authority for Posts, Blog Videos, Social Handles, Social
+/// Publications, Social Accounts, and their saved selections.
+pub mod social;
+
 /// PostgreSQL-authoritative Firm and Brand operations.
 pub mod tenancy;
 

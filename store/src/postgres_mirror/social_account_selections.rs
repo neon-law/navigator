@@ -1,4 +1,8 @@
 //! PostgreSQL projection of a Brand's saved provider destination.
+//!
+//! Where PostgreSQL holds these rows ([`crate::postgres::social`]) the mirror
+//! writes them only during the first Mirror Backfill, and parity reports only
+//! the SurrealDB rows PostgreSQL lacks until one has completed.
 
 use super::{changed, compare, micros, Columns, MirrorError, MirrorKey, Mirrored, ParityReport};
 use crate::{
@@ -140,6 +144,9 @@ pub async fn mirror(
     else {
         return Err(MirrorError::Source);
     };
+    if super::social_held() {
+        return Ok(Mirrored::Unchanged);
+    }
     let Some(row) = source_one(surreal, brand_key, provider).await? else {
         let id = format!("{brand_key}:{provider}");
         let result = sqlx::query("DELETE FROM social_account_selection WHERE id = $1")
@@ -184,25 +191,21 @@ pub async fn mirror(
 }
 
 pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
+    if !super::social_compared(pg).await? {
+        return Ok(ParityReport { tables: Vec::new() });
+    }
+    let table = compare(
+        "social_account_selection",
+        &source(surreal).await?,
+        &target(pg).await?,
+    );
     Ok(ParityReport {
-        tables: vec![compare(
-            "social_account_selection",
-            &source(surreal).await?,
-            &target(pg).await?,
-        )],
+        tables: vec![super::social_table(pg, table).await?],
     })
 }
 
 pub async fn reconcile(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
-    let source = source(surreal).await?;
-    let target = target(pg).await?;
-    for key in source
-        .keys()
-        .filter(|key| target.get(*key) != source.get(*key))
-    {
-        mirror(surreal, pg, key).await?;
-    }
-    for key in target.keys().filter(|key| !source.contains_key(*key)) {
+    for key in parity(surreal, pg).await?.divergent() {
         mirror(surreal, pg, key).await?;
     }
     parity(surreal, pg).await
