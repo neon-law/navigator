@@ -82,7 +82,7 @@ Verify the Project, document kind, visibility, and revision before filing.
   Project's show page in the portal, which renders the stored URL verbatim (or nothing). No CLI command prints it
   (`navigator project doctor --project <code>` is an offline diagnosis). If no URL is recorded, do not guess an
   organization.
-- **Direct upload versus staged sync.** `hudson site document upload --project <code> --file <path> --kind
+- **Direct upload versus staged sync.** `navigator site document upload --project <code> --file <path> --kind
   <kind>` files one document immediately through the API; use it for a single filing during a session. `navigator
   project sync` is the batch path: it uploads files staged under a checkout's `documents/` folder, which the root
   `.gitignore` keeps out of Git, and writes each document's pointer under `blobs/`.
@@ -94,9 +94,9 @@ Verify the Project, document kind, visibility, and revision before filing.
   or subject, compressed), since `--slug` defaults to it.
 - **Kind.** One of `letter`, `filing`, `will`, `trust`, `directive`, `agreement`, `pleading`, `onboarding`,
   `offboarding`, `memo`, `transcript`, `inbound_contract`, `certificate_of_naturalization`, `exhibit`, `order`,
-  `closed_repository`, `invoice`, `unclassified` (`hudson site document upload --help` prints the same list). `filing`
-  is a document filed with a government body; `pleading` is a court paper (a complaint, motion, or brief) filed with a
-  court. A scanned motion is `filing` only before it is filed with the court. A court's own order is `order`.
+  `closed_repository`, `invoice`, `unclassified` (`navigator site document upload --help` prints the same list).
+  `filing` is a document filed with a government body; `pleading` is a court paper (a complaint, motion, or brief) filed
+  with a court. A scanned motion is `filing` only before it is filed with the court. A court's own order is `order`.
 - **Visibility.** `--visibility internal` (default) or `--visibility client`, the client-visible lane.
 - **Metadata.** `document upload` has no `--metadata` flag. The committed pointer carries only `kind`, `visibility`,
   and the current revision's `version`, `asset_id`, `created_at`, `sha256`, and `size_bytes`. `--description` lands on
@@ -110,7 +110,7 @@ Verify the Project, document kind, visibility, and revision before filing.
   ```
 
 - **Pointer path and revision verification.** The pointer lives at `blobs/<slug>.yaml` once written. Confirm a revision
-  landed with `hudson site document log blobs/<slug>.yaml`. It prints the revision chain, newest first, marking the
+  landed with `navigator site document log blobs/<slug>.yaml`. It prints the revision chain, newest first, marking the
   operative row with `*`. That table is the verification step, not the exit code.
 - **Login.** `navigator site login --host <host>` opens a browser-loopback flow. Where the browser will not launch,
   pass `--no-browser` to print the URL and open it by hand. The token is stored at `~/.navigator.json`.

@@ -16,6 +16,7 @@ anyhow.workspace = true
 async-trait.workspace = true
 base64.workspace = true
 chrono.workspace = true
+include_dir.workspace = true
 mail-parser.workspace = true
 reqwest.workspace = true
 rules.workspace = true

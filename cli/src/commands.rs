@@ -119,6 +119,12 @@ enum Command {
         #[command(subcommand)]
         action: NotationCmd,
     },
+    /// Read the Neon Law Navigator glossary — the ontology, one term per
+    /// file under `docs/glossary/`, embedded in this binary.
+    Glossary {
+        #[command(subcommand)]
+        action: crate::glossary::GlossaryCmd,
+    },
 }
 
 /// The Notation envelope verbs a lawyer runs from a Project checkout.
@@ -164,11 +170,30 @@ pub enum EnvelopeCmd {
     },
 }
 
-/// The site verbs a Project checkout and its CI need: the stored session and
-/// the `seeds/` import. `hudson site` carries the rest of the site
-/// client.
+/// The site verbs a Project checkout and its CI need: the stored session,
+/// the `seeds/` import, and the matter work on a live site — documents,
+/// emailed attachments, and notations. `hudson site` keeps the Firm-wide
+/// configuration verbs.
 #[derive(Subcommand)]
+#[allow(clippy::large_enum_variant)] // parsed once per process
 pub enum SiteCmd {
+    /// File, read, and verify a Project's documents — every document is
+    /// scoped to one Project, and every Project to one brand deployment
+    /// (`--host`, defaulting to the sole stored login).
+    Document {
+        #[command(subcommand)]
+        action: crate::matter_site::DocumentAction,
+    },
+    /// File an inbound email's attachments on a live site.
+    Mail {
+        #[command(subcommand)]
+        action: crate::matter_site::SiteMailAction,
+    },
+    /// Inspect or drive a notation's workflow on a live site.
+    Notation {
+        #[command(subcommand)]
+        action: crate::matter_site::NotationAction,
+    },
     /// Import a seed-shaped YAML document through the logged-in deployment.
     ///
     /// With neither `MODEL_NAME` nor `SEED_FILE`, imports every supported
@@ -319,62 +344,73 @@ fn run() -> ExitCode {
                 runtime().block_on(remote::notation_envelope_status(notation_id))
             }
         },
-        Command::Site { action } => match action {
-            SiteCmd::Login { host, no_browser } => {
-                runtime().block_on(login::run_login(&host, no_browser))
-            }
-            SiteCmd::Logout { host } => login::run_logout(host.as_deref()),
-            SiteCmd::Whoami { host } => login::run_whoami(host.as_deref()),
-            SiteCmd::Import {
-                model_name,
-                seed_file,
-                overwrite,
-                dry_run,
-                ci,
-                as_ci,
-                host,
-            } => {
-                let credential = if ci {
-                    remote::SeedCredential::Ci {
-                        host: host.host.expect("clap requires --host with --ci"),
-                    }
-                } else {
-                    remote::SeedCredential::Stored { host: host.host }
-                };
-                let as_ci_project = if as_ci {
-                    match remote::as_ci_project_code() {
-                        Ok(code) => Some(code),
-                        Err(error) => {
-                            eprintln!("navigator: {error:#}");
-                            return ExitCode::from(2);
-                        }
-                    }
-                } else {
-                    None
-                };
-                let options = remote::SeedOptions {
-                    overwrite,
-                    dry_run,
-                    as_ci_project: as_ci_project.as_deref(),
-                };
-                match (model_name, seed_file) {
-                    (Some(model_name), Some(seed_file)) => runtime().block_on(remote::seed(
-                        credential,
-                        &model_name,
-                        &seed_file,
-                        options,
-                    )),
-                    (None, None) => runtime().block_on(remote::seed_directory(
-                        credential,
-                        Path::new("seeds"),
-                        options,
-                    )),
-                    (Some(_), None) | (None, Some(_)) => {
-                        unreachable!("clap requires MODEL_NAME and SEED_FILE together")
+        Command::Glossary { action } => crate::glossary::run(action),
+        Command::Site { action } => run_site(action),
+    }
+}
+
+/// Run one `navigator site` verb.
+fn run_site(action: SiteCmd) -> ExitCode {
+    let runtime = || tokio::runtime::Runtime::new().expect("tokio runtime");
+    match action {
+        SiteCmd::Document { action } => {
+            runtime().block_on(crate::matter_site::run_document(action))
+        }
+        SiteCmd::Mail { action } => runtime().block_on(crate::matter_site::run_mail(action)),
+        SiteCmd::Notation { action } => {
+            runtime().block_on(crate::matter_site::run_notation(action))
+        }
+        SiteCmd::Login { host, no_browser } => {
+            runtime().block_on(login::run_login(&host, no_browser))
+        }
+        SiteCmd::Logout { host } => login::run_logout(host.as_deref()),
+        SiteCmd::Whoami { host } => login::run_whoami(host.as_deref()),
+        SiteCmd::Import {
+            model_name,
+            seed_file,
+            overwrite,
+            dry_run,
+            ci,
+            as_ci,
+            host,
+        } => {
+            let credential = if ci {
+                remote::SeedCredential::Ci {
+                    host: host.host.expect("clap requires --host with --ci"),
+                }
+            } else {
+                remote::SeedCredential::Stored { host: host.host }
+            };
+            let as_ci_project = if as_ci {
+                match remote::as_ci_project_code() {
+                    Ok(code) => Some(code),
+                    Err(error) => {
+                        eprintln!("navigator: {error:#}");
+                        return ExitCode::from(2);
                     }
                 }
+            } else {
+                None
+            };
+            let options = remote::SeedOptions {
+                overwrite,
+                dry_run,
+                as_ci_project: as_ci_project.as_deref(),
+            };
+            match (model_name, seed_file) {
+                (Some(model_name), Some(seed_file)) => {
+                    runtime().block_on(remote::seed(credential, &model_name, &seed_file, options))
+                }
+                (None, None) => runtime().block_on(remote::seed_directory(
+                    credential,
+                    Path::new("seeds"),
+                    options,
+                )),
+                (Some(_), None) | (None, Some(_)) => {
+                    unreachable!("clap requires MODEL_NAME and SEED_FILE together")
+                }
             }
-        },
+        }
     }
 }
 
@@ -1022,8 +1058,8 @@ pub enum ProjectsCmd {
         /// pointer, and moves pointers left under `documents/` to `blobs/`. A missing or
         /// corrupt object, or a live row with no slug, needs a person. Under
         /// `--ci` any of those fixes fails the job and names the fix.
-        /// A live row with no slug is `hudson site document slug`. A missing
-        /// storage object is `hudson site document repair`. Uploading a
+        /// A live row with no slug is `navigator site document slug`. A missing
+        /// storage object is `navigator site document repair`. Uploading a
         /// staged file is `navigator project sync`.
         #[arg(long)]
         check: bool,

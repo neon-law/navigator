@@ -72,7 +72,9 @@ const PREFIXES: &[&str] = &["navigator", "hudson", "cli", "deploy"];
 const LEAN_PREFIXES: &[&str] = &["navigator", "cli"];
 
 /// The `site` verbs the lean `navigator` kept.
-const LEAN_SITE_VERBS: &[&str] = &["import", "login", "logout", "whoami"];
+const LEAN_SITE_VERBS: &[&str] = &[
+    "document", "import", "login", "logout", "mail", "notation", "whoami",
+];
 
 /// A floor on what the scan finds, so an extractor that quietly stops matching
 /// fails loudly instead of passing over an empty set. The real count is
@@ -597,7 +599,7 @@ fn the_guard_rejects_a_command_that_does_not_exist() {
     let shallow = subcommand_path("cli notation create").expect("an invocation");
     resolve(&mut cache, &shallow).expect_err("`notation` is nested under `site`");
 
-    let retired = subcommand_path("hudson site notation create").expect("an invocation");
+    let retired = subcommand_path("navigator site notation create").expect("an invocation");
     let why = resolve(&mut cache, &retired).expect_err("the retired command is hidden");
     assert!(
         why.contains("`create` is not a subcommand of `hudson site notation`"),
@@ -751,10 +753,15 @@ fn a_moved_verb_under_the_lean_navigator_is_refused() {
     let path = |literal| subcommand_path(literal).expect("an invocation");
     assert!(lean_verb("navigator ops ship", &path("navigator ops ship")).is_err());
     assert!(lean_verb(
+        "navigator site blog publish",
+        &path("navigator site blog publish")
+    )
+    .is_err());
+    assert!(lean_verb(
         "navigator site document log",
         &path("navigator site document log")
     )
-    .is_err());
+    .is_ok());
     assert!(lean_verb("hudson ops ship", &path("hudson ops ship")).is_ok());
     assert!(lean_verb("navigator project gate", &path("navigator project gate")).is_ok());
     assert!(lean_verb("navigator site login", &path("navigator site login")).is_ok());

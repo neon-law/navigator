@@ -344,7 +344,7 @@ fn deployment_workshop_describes_deployment_scoped_bucket_lanes() {
 //
 // The `--help` grounding above pins command *syntax*: clap short-circuits on
 // `--help` before it validates a positional, so
-// `hudson site notation create onboarding__retainer --help` parses happily
+// `navigator site notation create onboarding__retainer --help` parses happily
 // long after that code has left the catalog. It did — #229 folded
 // `onboarding__retainer` into `onboarding__engagement_letter` and three decks
 // went on teaching the dead code with every test green.
@@ -354,7 +354,7 @@ fn deployment_workshop_describes_deployment_scoped_bucket_lanes() {
 // seeder uses, so the decks cannot drift from the shipped catalog again.
 //
 // Scope is deliberate: a template code is checked where it must *resolve* —
-// inside a `hudson site notation create` invocation, and as the `code:` key
+// inside a `navigator site notation create` invocation, and as the `code:` key
 // of a notation-frontmatter sample. Prose that merely names a code in
 // backticks is not checked, because `AGENTS.md` ("Leave a slide's words
 // alone") makes a deck's wording the author's call, and a guard over prose
@@ -428,7 +428,7 @@ fn every_documented_notation_create_names_a_seeded_template_code() {
             checked += 1;
             if !codes.iter().any(|seeded| seeded == code) {
                 failures.push(format!(
-                    "{doc}: `hudson site notation create {code}` names a template code \
+                    "{doc}: `navigator site notation create {code}` names a template code \
                      that is not in the seeded catalog",
                 ));
             }

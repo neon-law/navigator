@@ -20,7 +20,7 @@ and the graph; `model` holds the domain types, validators, and parsers that open
 (authenticated API, inbound email, Dioxus server-side rendering); `webapp` is the Dioxus client bundle; `neon` is the
 brand binary that publishes the public face; `server` runs the integration tests against the mounted app; `cli` is the
 lean `navigator` binary (Projects, Jujutsu repositories, `validate`) and the library that holds their rules; `deploy`
-builds `hudson`, the operator CLI (`dev`, `ops`, site, mail, notation); `scorpio` is the Ephemeris CLI; `views`,
+builds `hudson`, the operator CLI (`dev`, `ops`, Firm configuration); `scorpio` is the Ephemeris CLI; `views`,
 `workflows`, `workflows-service`, `billing`, `cloud`, and `archives` round out the surfaces the docs name. `Cargo.toml`
 is the authoritative member list.
 
@@ -35,12 +35,20 @@ current constraint once, at its source.
 Test observable behavior and meaningful boundaries. Remove tests that only preserve retired copy, mirror constants or
 fixtures, or duplicate another check. Keep coverage for authorization, isolation, durability, and active migrations.
 
+## navigator or hudson
+
+A command that works on a Project's matter (its documents, mail, notations, pages, or glossary terms) belongs in
+`navigator`, the toolchain a Project repository names and Homebrew installs. A command that deploys Navigator or
+configures the Firm (letterheads, social accounts, OAuth clients, secrets) belongs in `hudson`. `hudson preview`,
+`hudson notation`, and `hudson mail` still link the web renderer, Typst, or the store, so they wait in `hudson` until
+their reads go through the site API.
+
 ## Find the term first
 
-Before naming a table, field, state, or UI concept, search the glossary. Run `hudson glossary list` for term titles and
-plain-language descriptions. Then run `hudson glossary show "<Term>"` for a term's full definition. Use the glossary's
-term when one fits; when none fits, add a glossary entry in `docs/glossary/` in the same change rather than inventing a
-synonym.
+Before naming a table, field, state, or UI concept, search the glossary. Run `navigator glossary list` for term titles
+and plain-language descriptions. Then run `navigator glossary show "<Term>"` for a term's full definition. Use the
+glossary's term when one fits; when none fits, add a glossary entry in `docs/glossary/` in the same change rather than
+inventing a synonym.
 
 ## The omnichannel inbox and the Person CRM
 
@@ -72,8 +80,8 @@ helpers into the sanctioned seams, and name a test before the change that satisf
 ### Reading the ontology
 
 ```bash
-cargo run -p hudson -- glossary list
-cargo run -p hudson -- glossary show "Lawyer Review"
+cargo run -p cli -- glossary list
+cargo run -p cli -- glossary show "Lawyer Review"
 ```
 
 ### Reading the Project Skill catalog

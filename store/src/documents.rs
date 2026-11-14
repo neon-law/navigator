@@ -114,7 +114,7 @@ pub fn upload_form_limit_message() -> String {
     format!(
         "Nothing was uploaded. One upload can carry at most {files} files and {batch} in total. \
          Send the files in smaller groups. A single file over {batch}, up to {streaming}, can be \
-         filed with `hudson site document upload`; for anything larger, arrange another way \
+         filed with `navigator site document upload`; for anything larger, arrange another way \
          to receive it."
     )
 }
@@ -136,7 +136,7 @@ pub fn upload_limits_markdown_table() -> String {
         "| Path | Per file | Per batch | Per matter |\n\
          | --- | --- | --- | --- |\n\
          | Upload form on the matter's Documents tab | {form_bytes} | {form_files} files, {form_bytes} in total | no limit |\n\
-         | `hudson site document upload` | {streaming} | one file per run | no limit |\n\
+         | `navigator site document upload` | {streaming} | one file per run | no limit |\n\
          | `navigator project sync` | {streaming} | no limit; each staged file is its own upload | no limit |\n\
          | `POST /app/api/projects/{{id}}/documents` | {buffered}; {transcript} for kind `transcript` | one file per request | no limit |\n\
          | Upload session (`.../documents/upload-session`) | {streaming} | one file per session | no limit |\n\
@@ -1627,7 +1627,7 @@ mod tests {
         assert!(message.contains(&MAX_DOCUMENT_UPLOAD_BYTES.to_string()));
         assert!(message.contains("30000000"));
         assert!(message.contains(&human_bytes(MAX_STREAMING_UPLOAD_BYTES)));
-        assert!(message.contains("hudson site document upload"));
+        assert!(message.contains("navigator site document upload"));
         let message = document_upload_size_message_for_kind("transcript", 200_000_000);
         assert!(message.contains(&MAX_MEDIA_DOCUMENT_UPLOAD_BYTES.to_string()));
     }
@@ -1646,7 +1646,7 @@ mod tests {
         assert!(message.contains(&format!("{MAX_UPLOAD_FORM_FILES} files")));
         assert!(message.contains(&human_bytes(MAX_UPLOAD_FORM_BYTES)));
         assert!(message.contains(&human_bytes(MAX_STREAMING_UPLOAD_BYTES)));
-        assert!(message.contains("hudson site document upload"));
+        assert!(message.contains("navigator site document upload"));
     }
 
     #[test]

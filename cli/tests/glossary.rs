@@ -1,4 +1,4 @@
-//! End-to-end tests for `hudson glossary ...`.
+//! End-to-end tests for `navigator glossary ...`.
 
 use std::process::Command;
 
@@ -42,7 +42,7 @@ fn the_glossary_names_the_physical_schema() {
 /// whole glossary sees, for assertions about its prose.
 fn glossary_text() -> String {
     use std::fmt::Write as _;
-    store::glossary::terms()
+    model::glossary::terms()
         .iter()
         .fold(String::new(), |mut text, term| {
             let _ = write!(text, "## {}\n\n{}\n\n", term.title, term.body);
@@ -51,7 +51,7 @@ fn glossary_text() -> String {
 }
 
 fn navigator(args: &[&str]) -> std::process::Output {
-    Command::new(cargo_bin("hudson"))
+    Command::new(cargo_bin("navigator"))
         .args(args)
         .output()
         .unwrap_or_else(|error| panic!("run navigator {args:?}: {error}"))
@@ -63,7 +63,7 @@ fn glossary_requires_a_subcommand() {
     assert!(!out.status.success(), "expected non-zero exit");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("Usage: hudson glossary <COMMAND>"),
+        stderr.contains("Usage: navigator glossary <COMMAND>"),
         "expected glossary subcommand usage, got: {stderr}",
     );
 }
@@ -74,7 +74,7 @@ fn glossary_list_prints_every_term_as_title_and_description() {
     assert!(out.status.success(), "exit status: {:?}", out.status);
     let stdout = String::from_utf8_lossy(&out.stdout);
     let lines: Vec<&str> = stdout.lines().collect();
-    let terms = store::glossary::terms();
+    let terms = model::glossary::terms();
     assert_eq!(lines.len(), terms.len(), "one line per term: {stdout}");
     let mut titles: Vec<_> = terms.iter().map(|term| term.title.as_str()).collect();
     titles.sort_unstable();
@@ -356,11 +356,11 @@ fn glossary_show_unknown_term_exits_non_zero_with_helpful_stderr() {
         "expected `unknown term` in stderr, got: {stderr}",
     );
     assert!(
-        stderr.contains("Run `hudson glossary list`"),
+        stderr.contains("Run `navigator glossary list`"),
         "expected hint in stderr, got: {stderr}",
     );
     assert!(
-        stderr.contains("hudson glossary show \"<Term>\""),
+        stderr.contains("navigator glossary show \"<Term>\""),
         "expected quoted title lookup hint, got: {stderr}"
     );
 }

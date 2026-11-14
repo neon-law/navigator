@@ -11,7 +11,7 @@ The two copies are not peers:
 - **[`docs/glossary/`](../../../docs/glossary/README.md) is the source of truth.** One file per term, with a
   one-sentence plain-text `description:` in frontmatter, reviewed in pull requests, embedded in the binary through
   `store::glossary::GLOSSARY`, materialized into `glossary_term` rows on every boot, published at `/glossary`, and read
-  by `hudson glossary list` / `hudson glossary show <term>`. A definition is not real until it lands here.
+  by `navigator glossary list` / `navigator glossary show <term>`. A definition is not real until it lands here.
 - **The Notion page is the reading and proposing surface** for colleagues without a checkout. Find it with a Notion
   search for the page titled **Glossary**; its URL is a private firm coordinate and stays out of this repository. Every
   push rewrites it wholesale, so an edit made there is lost unless pulled into the repository first. Say so when handing

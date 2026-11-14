@@ -53,31 +53,31 @@ own persistence logic.
   `adverse_to` edge from the client to a party the Project references. Given `--person-name`, or `--entity-type` and
   `--jurisdiction`, it first references the party as `adverse_party`, creating it if new; an unreferenced party is a
   422.
-- **Document upload.** `hudson site document upload --project <code> --file <path> --kind <kind>` reads the
-  file locally and sends it with the same bearer to `POST /app/api/projects/{id}/documents`. `--kind` is required and
-  must be an asset-lane value — the same enum OpenAPI publishes on that operation. Run inside the matching Project
-  checkout, it writes the document's Pointer at `blobs/<slug>.yaml`; elsewhere it writes no local pointer. Either way it
-  prints the Pointer. When `documents/<slug>` already has a Pointer at `blobs/<slug>.yaml`, the upload files under that
-  pointer's slug and refuses a `--slug` that names another (LAW-102, see [Project
-  repositories](project-repositories.md)). From inside a Project checkout, `navigator project gate --check` writes the
-  missing `blobs/<slug>.yaml` for every row this login can see. `navigator project sync` uses this same upload door for
-  each staged file, then writes the pointer itself; it never calls object storage or writes the store directly. `hudson
-  site document slug` uses the scoped document `PATCH` door to set `slug` (and optionally `kind`) on a row whose slug is
-  null, `hudson site document kind` sends `kind` alone to replace a legacy kind the asset lane rejects, `hudson site
-  document reclassify` posts to `POST /app/api/projects/{id}/documents/{asset_id}/reclassify` to change a chain from one
-  accepted kind to another, and `hudson site document reslug` sends `slug` with `reslug: true` to move a document
-  identity to another slug valid for its filename, across the row's whole chain, then moves the checkout's `blobs/`
-  pointer and `documents/` bytes under `--dir` to follow it; a target equal to the current slug, or one that already
-  names a chain, is refused. It checks local destinations before the live update, resolves an interrupted response from
-  the live inventory, and attempts to restore the old slug if the local move fails. `hudson site document retire` posts
-  `manual: true` to `.../delete` after `--yes-retire` for a mistaken chain with no pointer-removal commit; `--dry-run`
-  reports its slug and revision count. It preserves the chain for 180 days and leaves local files for the caller to
-  remove. `navigator site document repair` posts to `POST /app/api/projects/{id}/documents/{asset_id}/storage`, an admin
-  door that restores a missing object from a same-hash sibling in the matter. `hudson site document restore` posts to
-  `POST /app/api/projects/{id}/documents/{asset_id}/restore` to bring back a soft-deleted document with its revision
-  history, and `hudson site document hold` posts to `.../hold` to place or release a Legal Hold. `navigator project
-  sync` posts to `.../delete` only after a per-document confirmation. `project sync --only <path>`, below `documents/`
-  or `blobs/`, limits uploads, downloads, pointer reconciliation, and deletion detection to that file or directory. A
+- **Document upload.** `navigator site document upload --project <code> --file <path> --kind <kind>` reads the file
+  locally and sends it with the same bearer to `POST /app/api/projects/{id}/documents`. `--kind` is required and must be
+  an asset-lane value — the same enum OpenAPI publishes on that operation. Run inside the matching Project checkout, it
+  writes the document's Pointer at `blobs/<slug>.yaml`; elsewhere it writes no local pointer. Either way it prints the
+  Pointer. When `documents/<slug>` already has a Pointer at `blobs/<slug>.yaml`, the upload files under that pointer's
+  slug and refuses a `--slug` that names another (LAW-102, see [Project repositories](project-repositories.md)). From
+  inside a Project checkout, `navigator project gate --check` writes the missing `blobs/<slug>.yaml` for every row this
+  login can see. `navigator project sync` uses this same upload door for each staged file, then writes the pointer
+  itself; it never calls object storage or writes the store directly. `navigator site document slug` uses the scoped
+  document `PATCH` door to set `slug` (and optionally `kind`) on a row whose slug is null, `navigator site document
+  kind` sends `kind` alone to replace a legacy kind the asset lane rejects, `navigator site document reclassify` posts
+  to `POST /app/api/projects/{id}/documents/{asset_id}/reclassify` to change a chain from one accepted kind to another,
+  and `navigator site document reslug` sends `slug` with `reslug: true` to move a document identity to another slug
+  valid for its filename, across the row's whole chain, then moves the checkout's `blobs/` pointer and `documents/`
+  bytes under `--dir` to follow it; a target equal to the current slug, or one that already names a chain, is refused.
+  It checks local destinations before the live update, resolves an interrupted response from the live inventory, and
+  attempts to restore the old slug if the local move fails. `navigator site document retire` posts `manual: true` to
+  `.../delete` after `--yes-retire` for a mistaken chain with no pointer-removal commit; `--dry-run` reports its slug
+  and revision count. It preserves the chain for 180 days and leaves local files for the caller to remove. `navigator
+  site document repair` posts to `POST /app/api/projects/{id}/documents/{asset_id}/storage`, an admin door that restores
+  a missing object from a same-hash sibling in the matter. `navigator site document restore` posts to `POST
+  /app/api/projects/{id}/documents/{asset_id}/restore` to bring back a soft-deleted document with its revision history,
+  and `navigator site document hold` posts to `.../hold` to place or release a Legal Hold. `navigator project sync`
+  posts to `.../delete` only after a per-document confirmation. `project sync --only <path>`, below `documents/` or
+  `blobs/`, limits uploads, downloads, pointer reconciliation, and deletion detection to that file or directory. A
   staged Authority sidecar is consumed after its pointer is written; only the pointer belongs in Git. `navigator
   validate` always checks pointer shape offline. In a Project checkout with pointers and a current stored session for
   the exact `navigator.yaml` host, it also reads each live revision chain and fails on missing or drifted pointers. An

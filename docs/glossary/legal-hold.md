@@ -13,4 +13,4 @@ is pending still protects the chain, and it protects the chain's archived copies
 the hold lets the next purge run take it.
 
 - Write boundary: [`store::assets::set_legal_hold`](../../store/src/assets.rs) via
-  `POST /app/api/projects/{id}/documents/{asset_id}/hold` and `hudson site document hold`
+  `POST /app/api/projects/{id}/documents/{asset_id}/hold` and `navigator site document hold`

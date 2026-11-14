@@ -11,7 +11,7 @@ Before naming a table, field, state, or UI concept, follow the **Find the term f
 the term itself:
 
 ```bash
-hudson glossary show "Document"
+navigator glossary show "Document"
 ```
 
 Some matter files sit behind the attorney's login on a third-party site, such as a stamped filing on an e-filing
@@ -59,14 +59,14 @@ The download lands outside the repository; never commit it. File it from the mat
 is written there:
 
 ```bash
-hudson site document upload --project <code> --file <download> --kind filing --slug <name>.pdf
+navigator site document upload --project <code> --file <download> --kind filing --slug <name>.pdf
 ```
 
 Use `--description` to record which site the copy came from and when it was downloaded. Then read the pointer back and
 confirm the new revision is the operative row, marked `*`:
 
 ```bash
-hudson site document log blobs/<name>.pdf.yaml
+navigator site document log blobs/<name>.pdf.yaml
 ```
 
 That table, not the upload's exit code, is the proof the file landed. Commit only the Pointer under `blobs/`.

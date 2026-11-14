@@ -34,13 +34,13 @@ error before checking or fixing content. Remove the cached executable and retry 
 `--check` compares committed document pointers with the live record. The host and Project code come from
 `navigator.yaml`. It moves a legacy layout's pointers from `documents/` to `blobs/` (rule `Y014`), rewrites a drifted
 pointer, and writes a missing pointer under `blobs/`. It never writes to the live site. A missing or corrupt object
-needs a person: `hudson site document repair` restores a missing object from a same-hash sibling in the matter. A live
-row with no slug needs a person: `hudson site document slug` sets the slug and, when passed, the kind. A kind the asset
-lane rejects needs a person: `hudson site document kind` replaces it. `--deep` re-hashes each object, and offline hashes
-the Git-ignored bytes each pointer names under `documents/` against its `sha256` and `size_bytes`: each pointer is
-reported `match`, `modified locally` (fails the run), or `missing locally` (passes, since a checkout need not hold the
-bytes). Under `--ci` any fix this would make fails the job and the output names the fix. Without `--check`, `project
-gate` makes no document request.
+needs a person: `navigator site document repair` restores a missing object from a same-hash sibling in the matter. A
+live row with no slug needs a person: `navigator site document slug` sets the slug and, when passed, the kind. A kind
+the asset lane rejects needs a person: `navigator site document kind` replaces it. `--deep` re-hashes each object, and
+offline hashes the Git-ignored bytes each pointer names under `documents/` against its `sha256` and `size_bytes`: each
+pointer is reported `match`, `modified locally` (fails the run), or `missing locally` (passes, since a checkout need not
+hold the bytes). Under `--ci` any fix this would make fails the job and the output names the fix. Without `--check`,
+`project gate` makes no document request.
 
 A directory that is neither of those shapes — no `Cargo.toml`, no `navigator.yaml`, no assumption about the surrounding
 repository — still has the same rule set through `navigator validate [DIR]`. The directory defaults to `.`. `--fix`

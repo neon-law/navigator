@@ -145,8 +145,8 @@ Firm uses. Moving a Project names the target Firm and Brand together. Membership
 `person_project_role`.
 
 Every table's scope is declared in `store/postgres/ownership.json` and enforced in queries, not by row-level security
-alone. Look up each term with `cargo run -p hudson -- glossary show "Firm"`.
-[`postgres-tenancy.md`](postgres-tenancy.md) has the per-table matrix.
+alone. Look up each term with `cargo run -p cli -- glossary show "Firm"`. [`postgres-tenancy.md`](postgres-tenancy.md)
+has the per-table matrix.
 
 A self-hosted deployment brands itself through a brand bundle, not by editing views. See
 [`oss-install.md`](oss-install.md#brand-bundle).

@@ -186,7 +186,7 @@ failure. A file staged under `documents/invoices/` must match the filename patte
 
 **An executed document can record how it was signed.** The optional pointer block `signing: { method: wet_ink |
 docusign, signed_on: YYYY-MM-DD }` says whether a filed original was signed in wet ink or through DocuSign, and when.
-`hudson site document upload --signing-method <method> --signed-on <date>` records it on the filed revision (the two
+`navigator site document upload --signing-method <method> --signed-on <date>` records it on the filed revision (the two
 flags travel together), and the server writes it into the returned pointer. `navigator project gate --check` and
 `navigator project sync` write the live revision's record into the pointer, and keep a block recorded by hand on the
 committed pointer while the live revision has none. No gate requires it, including on a `_signed` filename.
@@ -353,18 +353,18 @@ the sync writes its pointer instead. Each deletion asks yes or no on its own, sh
 revision count, the date it stops being restorable, and, for a client-visible document, that the client will stop seeing
 it. `a` is not offered for deletions, `--yes` does not answer one, and a deletion needs a terminal or its own
 `--yes-delete` flag. Declining leaves the live document untouched, and the next run asks again. A `closed_repository`
-archive, and a pointer that only moved to another path (use `hudson site document reslug`), are never offered for
+archive, and a pointer that only moved to another path (use `navigator site document reslug`), are never offered for
 deletion. Bytes left behind by a removed pointer are reported, never uploaded as a new document.
 
 A mistaken chain that never had a Pointer has no removal commit for `project sync` to act on. Retire it with `navigator
 site document retire <asset_id> --project <code> --yes-retire`; `--dry-run` reports its slug and revision count. This
-applies the same 180-day soft deletion and can be undone with `hudson site document restore`. Remove the local pointer
-and byte copy for that slug before the next project sync.
+applies the same 180-day soft deletion and can be undone with `navigator site document restore`. Remove the local
+pointer and byte copy for that slug before the next project sync.
 
 An inbound email thread files each attachment under `mail/<message id>/<YYYY.MM.DD>_<name>-<part>.<ext>`, skips
 signature logos and inline images, and does not file bytes the matter already holds. Rows it filed without a slug fail
-the gate with "live row has no slug"; `hudson site document slugless --project <code> --dry-run` lists what it would do
-with each: retire the inline images and repeated bytes (the same 180-day soft deletion), slug the rest under
+the gate with "live row has no slug"; `navigator site document slugless --project <code> --dry-run` lists what it would
+do with each: retire the inline images and repeated bytes (the same 180-day soft deletion), slug the rest under
 `mail/<asset id>/`, and leave rows from other channels alone. `--yes` applies the plan; run `navigator project sync`
 afterwards to write the new pointers.
 
@@ -372,12 +372,12 @@ A confirmed deletion calls `POST /app/api/projects/{id}/documents/{asset_id}/del
 pointer. The server stamps every revision of the slug chain with `deleted_at`, `purge_after` (180 days later), the
 deleting person, and that commit. Direct retirement records the deleting person without a source commit. A soft-deleted
 document leaves the matter page and the default lists; a lawyer can still read it with the `include_deleted=true` option
-or `hudson site document log`. `hudson site document restore <asset_id> --project <code>` clears the stamps and returns
-the document with its whole revision history; the next `project sync` writes the pointer again without asking about the
-deletion a second time. The retention purge, `POST /app/api/documents/purge` (admin), runs the governed expunge with the
-`retention` category on every chain past `purge_after`. It skips a chain under a Legal Hold (`hudson site document
-hold`, `--release` to lift it) and a Project that is closed but has no `closed_repository` archive yet, and a purged
-document cannot be restored. `navigator project gate --check` never deletes.
+or `navigator site document log`. `navigator site document restore <asset_id> --project <code>` clears the stamps and
+returns the document with its whole revision history; the next `project sync` writes the pointer again without asking
+about the deletion a second time. The retention purge, `POST /app/api/documents/purge` (admin), runs the governed
+expunge with the `retention` category on every chain past `purge_after`. It skips a chain under a Legal Hold (`navigator
+site document hold`, `--release` to lift it) and a Project that is closed but has no `closed_repository` archive yet,
+and a purged document cannot be restored. `navigator project gate --check` never deletes.
 
 Authority captures hydrate the same way. `project sync` also reads every committed pointer under `blobs/cases/` and
 `blobs/rules/` that carries an `authority_id` and fetches its bytes from the Authority archive door, `GET
@@ -386,7 +386,7 @@ Authority captures hydrate the same way. `project sync` also reads every committ
 the copies it would fetch as `would fetch <path>`. The archived object sits at the object-storage key `blobs/<sha256>`,
 unrelated to the repository's `blobs/` folder.
 
-`hudson site document get <pointer> --out <path>` takes the Pointer path (`blobs/<name>.yaml`) or the bytes path
+`navigator site document get <pointer> --out <path>` takes the Pointer path (`blobs/<name>.yaml`) or the bytes path
 (`documents/<name>`) and writes outside both folders, with one exception: `--out` may name the pointer's own
 sync-managed copy (`documents/<name>` for `blobs/<name>.yaml`) when Git ignores it and the fetched revision is the
 pointer's current one. That refreshes a single copy; every other destination below `documents/`, and any destination
@@ -423,15 +423,15 @@ same authorized API that already audits the actor and operation. A button on the
 rejected: sharing a privileged document with a client is the exact failure this design is shaped to prevent, and a
 one-click, one-confirm control removes the second reader a pull request review gives it.
 
-**A slugless row receives its slug in place.** `hudson site document slug` sets `slug`, and optionally `kind`, on a row
-whose slug is null. The server refuses a row that already has a slug, and a slug that already names a revision chain, so
-the write never merges two documents. `sha256`, the storage key, and the bytes stay unchanged. Moving a slug that
-already exists is `hudson site document reslug`, not this command. A missing storage object is `navigator site document
-repair`, which copies bytes from a same-hash sibling in the matter onto the content-addressed key, or re-points the row
-at that key, then verifies the sha256. It does not expunge the document.
+**A slugless row receives its slug in place.** `navigator site document slug` sets `slug`, and optionally `kind`, on a
+row whose slug is null. The server refuses a row that already has a slug, and a slug that already names a revision
+chain, so the write never merges two documents. `sha256`, the storage key, and the bytes stay unchanged. Moving a slug
+that already exists is `navigator site document reslug`, not this command. A missing storage object is `navigator site
+document repair`, which copies bytes from a same-hash sibling in the matter onto the content-addressed key, or re-points
+the row at that key, then verifies the sha256. It does not expunge the document.
 
 **A re-upload creates a Document revision.** A pointer has no slug field; its path below `blobs/` is the slug. When
-`hudson site document upload --file documents/drafts/n.md` finds `blobs/drafts/n.md.yaml`, the upload files a new
+`navigator site document upload --file documents/drafts/n.md` finds `blobs/drafts/n.md.yaml`, the upload files a new
 revision of `drafts/n.md` and prints that slug, wherever the command was typed: the checkout is the nearest directory
 above the file whose `navigator.yaml` names the Project. A `--slug` that differs from the pointer's, a pointer that
 cannot be parsed, a retired `.yml` pointer, and `.yaml` and `.yml` side by side are each refused before anything is
@@ -443,7 +443,7 @@ its pointer to `blobs/` in the file's own checkout rather than the working direc
 carried their extension (a chain filed as `summons`, pointed at by `blobs/summons.pdf.yaml`) is named by its path, as
 `project sync` and the gate already name it; `reslug` makes the chain's slug match.
 
-**Upload a directory as a batch.** `hudson site document upload --project acme --dir exhibits --kind exhibit` files
+**Upload a directory as a batch.** `navigator site document upload --project acme --dir exhibits --kind exhibit` files
 regular files in filename order without recursing or following file symlinks. Choose exactly one of `--dir` and
 `--file`; `--slug` applies only to `--file`. Each file uses the same Pointer resolver, folder, visibility, and extension
 rules as a single upload. SHA-256 matches within a batch are skipped only after the first copy is successfully filed.
@@ -456,7 +456,7 @@ with the remaining files. Only a definite authentication refusal permits retryin
 or an unreadable success receipt requires reconciliation with `navigator project gate --check` before retrying; the CLI
 never silently repeats that write. `--description` applies the same optional description to every file.
 
-**A document identity moves with its chain.** `hudson site document reslug <asset_id> --project <code> --slug <slug>`
+**A document identity moves with its chain.** `navigator site document reslug <asset_id> --project <code> --slug <slug>`
 moves a document to another slug valid for its filename, such as `notes/a.pdf` to `filed/forms/a.pdf`. Every revision
 moves together, in the same order, with `sha256`, the storage key, byte size, and kind unchanged. The server refuses a
 target equal to the current slug and a target that already names a chain, so two documents never merge. `--dry-run`
@@ -468,17 +468,17 @@ fails after the live change, it attempts to restore the old live slug. `navigato
 pointer when that recovery cannot complete.
 
 **A legacy kind is replaced in place.** A row can carry a free-text kind from before the closed asset-lane list, and the
-gate rejects its pointer. Pass `--kind` to `hudson site document slug` while the row is slugless; once it has a slug, a
-revision cannot change its kind, so `hudson site document kind` replaces it on the row and every revision of its chain.
-The server refuses a row whose kind is already accepted, so it never turns one valid classification into another.
+gate rejects its pointer. Pass `--kind` to `navigator site document slug` while the row is slugless; once it has a slug,
+a revision cannot change its kind, so `navigator site document kind` replaces it on the row and every revision of its
+chain. The server refuses a row whose kind is already accepted, so it never turns one valid classification into another.
 `sha256`, the storage key, and the slug stay unchanged.
 
 **A wrong accepted kind is corrected in place.** A document filed under an accepted kind that is still the wrong one — a
-lawyer-review draft filed as `memo` that belongs under `unclassified` — is corrected with `hudson site document
+lawyer-review draft filed as `memo` that belongs under `unclassified` — is corrected with `navigator site document
 reclassify <asset_id> --project <code> --kind <kind>`. It rewrites the kind on the row and every revision of its slug
 chain, and leaves `sha256`, the storage key, byte size, and the slug unchanged. The server refuses a target equal to the
-current kind, and a row whose kind is not accepted, which is `hudson site document kind`'s case. `--dry-run` reports the
-write without making it. Lawyer or Admin only; the API audit records the actor and operation. After it succeeds,
+current kind, and a row whose kind is not accepted, which is `navigator site document kind`'s case. `--dry-run` reports
+the write without making it. Lawyer or Admin only; the API audit records the actor and operation. After it succeeds,
 `navigator project gate --check` rewrites the pointer's `kind`.
 
 **An EFSP status email records an E-Filing Transaction.** `navigator project efiling record <email.eml>` reads a status
@@ -523,7 +523,7 @@ this page and that function disagree.
 | Path | Per file | Per batch | Per matter |
 | --- | --- | --- | --- |
 | Upload form on the matter's Documents tab | 500 MiB | 50 files, 500 MiB in total | no limit |
-| `hudson site document upload` | 1 GiB | one file per run | no limit |
+| `navigator site document upload` | 1 GiB | one file per run | no limit |
 | `navigator project sync` | 1 GiB | no limit; each staged file is its own upload | no limit |
 | `POST /app/api/projects/{id}/documents` | 25 MiB; 100 MiB for kind `transcript` | one file per request | no limit |
 | Upload session (`.../documents/upload-session`) | 1 GiB | one file per session | no limit |
@@ -532,19 +532,19 @@ this page and that function disagree.
 No path limits a matter's total. Every path accepts any file type: `kind` classifies the document, and only passive
 types (PDF and raster images) are ever served inline.
 
-`hudson site document upload` and `navigator project sync` send a file within the buffered door's limit in one request
-and stream a larger one through an [Upload Session](glossary/upload-session.md), so a 54 MB scan syncs without
+`navigator site document upload` and `navigator project sync` send a file within the buffered door's limit in one
+request and stream a larger one through an [Upload Session](glossary/upload-session.md), so a 54 MB scan syncs without
 complaint. Above 1 GiB both refuse the file before sending a byte and say it must be split.
 
 The upload form is lawyer-only; a client has no upload door in the app. A client sends files into the matter's [Client
 Submissions](glossary/client-submissions.md) folder, or to their lawyer some other way, and the lawyer files them. The
 Drive dropbox import refuses a whole pass that holds a file or a total over its limits, so a lawyer files an oversized
-client file with `hudson site document upload` instead.
+client file with `navigator site document upload` instead.
 
 The form checks a batch in the browser before sending it. A batch over a limit is refused with a message that says
-nothing was uploaded, names both limits, and points a single file over the batch limit to `hudson site document upload`.
-The server answers the same message with `413 Payload Too Large` when an oversized submission reaches it. The web
-ingress's `proxy-body-size` sits above the batch limit, so the app, not the proxy, answers.
+nothing was uploaded, names both limits, and points a single file over the batch limit to `navigator site document
+upload`. The server answers the same message with `413 Payload Too Large` when an oversized submission reaches it. The
+web ingress's `proxy-body-size` sits above the batch limit, so the app, not the proxy, answers.
 
 ## Court notices
 

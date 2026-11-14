@@ -1,18 +1,44 @@
-//! `hudson glossary ...` — the ontology from the command line.
+//! `navigator glossary ...` — the ontology from the command line.
 //!
 //! The glossary is one Markdown file per term under `docs/glossary/`,
-//! embedded in the binary by [`store::glossary::GLOSSARY`]. The website
+//! embedded in the binary by [`model::glossary::GLOSSARY`]. The website
 //! publishes the same terms on one page at `/glossary`, so the CLI and the
 //! page read one source and cannot drift.
 
 use std::io::IsTerminal;
 use std::process::ExitCode;
 
-use store::glossary::{link_target, terms, LinkTarget, Term, GLOSSARY_LABEL};
+use model::glossary::{link_target, terms, LinkTarget, Term, GLOSSARY_LABEL};
 
 use crate::palette;
 
-/// `hudson glossary list`: one reader-facing title and summary per term.
+/// The glossary verbs.
+#[derive(clap::Subcommand)]
+pub enum GlossaryCmd {
+    /// List every term by its title and one-sentence description.
+    List,
+    /// Print one term's definition. Accepts its title in any case.
+    Show {
+        /// Term title, e.g. `"Lawyer Review"`.
+        term: String,
+    },
+    /// Print the glossary as one Markdown page Notion can hold: every
+    /// repository-relative link resolved to a public GitHub URL and
+    /// sibling-term links unlinked. The push half of the Notion round trip.
+    Notion,
+}
+
+/// Run one glossary verb.
+#[must_use]
+pub fn run(action: GlossaryCmd) -> ExitCode {
+    match action {
+        GlossaryCmd::List => list(),
+        GlossaryCmd::Show { term } => show(&term),
+        GlossaryCmd::Notion => notion(),
+    }
+}
+
+/// `navigator glossary list`: one reader-facing title and summary per term.
 #[must_use]
 pub fn list() -> ExitCode {
     let mut entries: Vec<_> = terms().iter().collect();
@@ -40,10 +66,10 @@ pub fn list() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// `hudson glossary show <term>`: the one term its title names.
+/// `navigator glossary show <term>`: the one term its title names.
 #[must_use]
 pub fn show(needle: &str) -> ExitCode {
-    if let Some(term) = store::glossary::find(needle) {
+    if let Some(term) = model::glossary::find(needle) {
         print_term(term);
         ExitCode::SUCCESS
     } else {
@@ -52,8 +78,8 @@ pub fn show(needle: &str) -> ExitCode {
         // reader already has the term they typed on screen.
         eprintln!("navigator: glossary show: unknown term");
         eprintln!(
-            "Run `hudson glossary list` to list every term, then \
-                  `hudson glossary show \"<Term>\"` to read its definition."
+            "Run `navigator glossary list` to list every term, then \
+                  `navigator glossary show \"<Term>\"` to read its definition."
         );
         ExitCode::from(1)
     }
@@ -66,7 +92,7 @@ fn print_term(term: &Term) {
     println!();
 }
 
-/// `hudson glossary notion`: the glossary as one Markdown page a Notion
+/// `navigator glossary notion`: the glossary as one Markdown page a Notion
 /// page can hold.
 ///
 /// Notion has no notion of this repository's working directory, so the
@@ -77,7 +103,7 @@ fn print_term(term: &Term) {
 /// point it at.
 #[must_use]
 pub fn notion() -> ExitCode {
-    print!("{}", notion_markdown(store::glossary::preamble(), terms()));
+    print!("{}", notion_markdown(model::glossary::preamble(), terms()));
     ExitCode::SUCCESS
 }
 
@@ -87,10 +113,10 @@ pub fn notion() -> ExitCode {
 fn notion_preface() -> String {
     format!(
         "> Generated from [`{GLOSSARY_LABEL}/`]({url}) by \
-         `hudson glossary notion`. The repository is the source of truth: an edit made \
+         `navigator glossary notion`. The repository is the source of truth: an edit made \
          here reaches the product only once it lands in that directory through a pull request. \
          Links between terms are dropped because Notion cannot resolve them.\n\n",
-        url = store::glossary::github_source_url(&format!("{GLOSSARY_LABEL}/"), None)
+        url = model::glossary::github_source_url(&format!("{GLOSSARY_LABEL}/"), None)
     )
 }
 
@@ -228,7 +254,7 @@ fn notion_link(dest: &str) -> Option<String> {
     match link_target(dest) {
         LinkTarget::Term(_) => None,
         LinkTarget::Repository { path, anchor } => {
-            Some(store::glossary::github_source_url(&path, anchor))
+            Some(model::glossary::github_source_url(&path, anchor))
         }
         LinkTarget::Verbatim => Some(site_url(dest)),
     }
@@ -245,7 +271,7 @@ fn site_url(dest: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use store::glossary::{preamble, terms};
+    use model::glossary::{preamble, terms};
 
     #[test]
     fn notion_markdown_resolves_every_link_shape() {
@@ -279,7 +305,7 @@ mod tests {
             );
         }
         let version = env!("CARGO_PKG_VERSION");
-        let repo = cloud::workspace::NAVIGATOR_REPOSITORY_URL;
+        let repo = model::workspace::NAVIGATOR_REPOSITORY_URL;
         assert!(rendered.contains(&format!("({repo}/blob/{version}/store/src/persons.rs)")));
         assert!(rendered.contains(&format!("({repo}/tree/{version}/store)")));
         assert!(
@@ -293,7 +319,7 @@ mod tests {
     fn notion_markdown_preserves_title_fields_inside_fenced_yaml() {
         let example =
             "```yaml\ntitle: Synthetic argument\npoint: |\n  First line.\n  Second line.\n```";
-        let term = store::glossary::Term {
+        let term = model::glossary::Term {
             slug: "synthetic-example".into(),
             title: "Synthetic Example".into(),
             description: "A synthetic export example.".into(),
@@ -333,7 +359,7 @@ mod tests {
     fn a_repository_link_resolves_to_github() {
         let expected = format!(
             "{}/blob/{}/docs/notation.md#template",
-            cloud::workspace::NAVIGATOR_REPOSITORY_URL,
+            model::workspace::NAVIGATOR_REPOSITORY_URL,
             env!("CARGO_PKG_VERSION")
         );
         assert_eq!(

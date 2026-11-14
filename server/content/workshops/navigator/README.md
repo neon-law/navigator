@@ -166,10 +166,10 @@ The CLI seeds both letters. This workshop still binds the retainer through Navig
 the matter with the offboarding letter. Do not bind two onboardings on one Project:
 
 ```bash
-hudson site notation create onboarding__letter \
+navigator site notation create onboarding__letter \
   --project sample-litigation \
   --client-email client@neonlaw.com
-hudson site notation create offboarding__letter \
+navigator site notation create offboarding__letter \
   --project sample-litigation \
   --client-email client@neonlaw.com
 ```

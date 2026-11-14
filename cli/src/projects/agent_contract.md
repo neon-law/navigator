@@ -19,8 +19,8 @@ states a fact about a named entity, such as a conversion, a shareholding, or a s
 
 ## Find the term first
 
-Before naming a table, field, state, or UI concept, run `hudson glossary list` to find a term and its plain-language
-description, then `hudson glossary show "<Term>"` for its full definition. Use the glossary's term when one fits; if
+Before naming a table, field, state, or UI concept, run `navigator glossary list` to find a term and its plain-language
+description, then `navigator glossary show "<Term>"` for its full definition. Use the glossary's term when one fits; if
 none fits, add a term under `docs/glossary/` in the same Navigator change rather than inventing a synonym.
 
 ## The loop

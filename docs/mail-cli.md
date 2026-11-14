@@ -1,5 +1,10 @@
 # Mail CLI
 
+Matter work belongs in `navigator` and deployment or Firm configuration in `hudson`. Filing an inbound email's
+attachments is `navigator site mail file`. The Gmail workflow below is matter work too, but it stays `hudson mail` for
+now: its draft signature reads the deployment's stores directly and its packet render links Typst, both of which the
+lean `navigator` leaves out.
+
 `hudson mail setup|login|search|read|draft|file|parse|save|attachments` is a local Gmail workflow. Search and read use
 Gmail's read endpoints; draft creates or updates an unsent Gmail draft. The CLI has no message-send, reply-send, or
 forward operation. Filing records each message as a Project-scoped Communication. `file` refuses a thread that carries
@@ -277,7 +282,7 @@ hudson mail attachments "https://mail.google.com/mail/u/0/#inbox/18fa3bc2d4e5f6a
   is written as one `.eml` file.
 
 Point `--dir` at a git-ignored folder such as `mail/`. Legal files never belong in Git. This verb uploads nothing. To
-file an attachment, use `hudson site document upload`.
+file an attachment, use `navigator site document upload`.
 
 ## Save a Navigator inbox message's attachments
 
