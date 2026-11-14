@@ -471,8 +471,8 @@ fn regorus_matches_every_checked_in_policy_decision() {
     //   on both doors; and the method/path-shape boundary — DELETE on the
     //   collection, a bare task read, an unknown verb segment, and a deeper
     //   path are denied to Lawyer.
-    // + 3 for the Legal Sandbox doors (`/app/nautilus` and
-    //   `/app/nautilus/messages`): the client tier admitted on page read and
+    // + 3 for the Legal Sandbox doors (`/app/sandbox` and
+    //   `/app/sandbox/messages`): the client tier admitted on page read and
     //   message post, every other firm tier and anonymous denied, and the
     //   exact path/method boundary pinned (a POST to the page, a GET to the
     //   messages route, and a deeper path are denied even to the client).

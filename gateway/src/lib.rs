@@ -1,6 +1,6 @@
 //! Model-provider seam for the [Legal Sandbox](https://www.neonlaw.com/glossary/legal-sandbox).
 //!
-//! The sandbox owes every Nautilus subscriber $5 of metered model usage a
+//! The sandbox owes every Same Day Legal subscriber $5 of metered model usage a
 //! month, priced à la carte beyond the credit. Metering that honestly
 //! needs one contract every backend answers, regardless of who serves the
 //! tokens — that is [`ModelProvider`]. The shipped backends:

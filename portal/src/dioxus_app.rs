@@ -170,35 +170,35 @@ fn bundle_assets_router(dir: &std::path::Path) -> Router {
     router
 }
 
-/// The environment variable naming the staged Nautilus web-preview bundle —
-/// the `nautilus-preview` crate's client bundle that `navigator dev
-/// build-nautilus` stages at `server/public/nautilus` in a Navigator
+/// The environment variable naming the staged Same Day Legal web-preview bundle —
+/// the `same-day-preview` crate's client bundle that `navigator dev
+/// build-same-day` stages at `server/public/same-day` in a Navigator
 /// checkout. The override points a server running anywhere else (and every
 /// test) at a bundle built anywhere at all.
-const NAUTILUS_PUBLIC_PATH_ENV: &str = "NAUTILUS_DIOXUS_PUBLIC_PATH";
+const SAME_DAY_PUBLIC_PATH_ENV: &str = "SAME_DAY_DIOXUS_PUBLIC_PATH";
 
-/// The Nautilus mobile-shell preview's single path: the root of the dedicated
-/// `navigator nautilus preview` server, where the shell *is* the page. A
+/// The Same Day Legal mobile-shell preview's single path: the root of the dedicated
+/// `hudson same-day preview` server, where the shell *is* the page. A
 /// deployment mounting this router picks its own admission path by nesting it.
-pub const NAUTILUS_PREVIEW_PATH: &str = "/";
+pub const SAME_DAY_PREVIEW_PATH: &str = "/";
 
-/// The staged Nautilus web bundle, or `None` when it is unset or has no
+/// The staged Same Day Legal web bundle, or `None` when it is unset or has no
 /// `index.html` — the degraded, SSR-only mode the preview server reports
 /// honestly rather than an error to surface.
-fn nautilus_bundle_dir() -> Option<PathBuf> {
-    let dir = PathBuf::from(std::env::var_os(NAUTILUS_PUBLIC_PATH_ENV)?);
+fn same_day_bundle_dir() -> Option<PathBuf> {
+    let dir = PathBuf::from(std::env::var_os(SAME_DAY_PUBLIC_PATH_ENV)?);
     dir.join("index.html").is_file().then_some(dir)
 }
 
 /// `ServeConfig::new` reads the staged bundle's document from this path.
 const DIOXUS_PUBLIC_PATH_ENV: &str = "DIOXUS_PUBLIC_PATH";
 
-/// The Nautilus preview's browser-visible provenance notice. The terminal
+/// The Same Day Legal preview's browser-visible provenance notice. The terminal
 /// banner cannot reach a browser tab, and the served page itself must say it
 /// is a local render — with or without a staged bundle, and across the
 /// shell's client-side navigation, which is why the notice sits outside the
 /// hydrated root.
-const NAUTILUS_PREVIEW_BANNER: &str = "<div data-nautilus-preview-banner style=\"position:fixed;bottom:0;left:0;right:0;z-index:2147483647;padding:6px 12px;background:#101020;color:#e8e8f0;font:500 12px/1.4 sans-serif;text-align:center\">Nautilus preview — a local render, not the Project's portal.</div>";
+const SAME_DAY_PREVIEW_BANNER: &str = "<div data-same-day-preview-banner style=\"position:fixed;bottom:0;left:0;right:0;z-index:2147483647;padding:6px 12px;background:#101020;color:#e8e8f0;font:500 12px/1.4 sans-serif;text-align:center\">Same Day Legal preview — a local render, not the Project's portal.</div>";
 
 /// Layers the provenance notice onto the preview's HTML responses, outside
 /// [`dioxus_document_head`] so it marks the document after every other
@@ -219,28 +219,28 @@ pub(crate) async fn preview_provenance_notice(req: Request, next: Next) -> Respo
     let Ok(bytes) = axum::body::to_bytes(body, MAX_RENDER_BYTES).await else {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
-    let html = open_with_banner(&String::from_utf8_lossy(&bytes), NAUTILUS_PREVIEW_BANNER);
+    let html = open_with_banner(&String::from_utf8_lossy(&bytes), SAME_DAY_PREVIEW_BANNER);
     // The body length changed; drop any stale content-length so axum recomputes.
     parts.headers.remove(header::CONTENT_LENGTH);
     Response::from_parts(parts, Body::from(html))
 }
 
-/// The Nautilus mobile-shell preview router — the hydration mechanics for
-/// `navigator nautilus preview`, owned here as for every other Dioxus page:
+/// The Same Day Legal mobile-shell preview router — the hydration mechanics for
+/// `hudson same-day preview`, owned here as for every other Dioxus page:
 /// a server-side render of [`webapp::mobile::MobileApp`] at
-/// [`NAUTILUS_PREVIEW_PATH`], the payload the wasm client binds to on load.
+/// [`SAME_DAY_PREVIEW_PATH`], the payload the wasm client binds to on load.
 ///
 /// The SSR shell always mounts — a page with no staged bundle is the
 /// designed degraded mode, not a refusal — and a staged bundle's wasm and
 /// glue are served alongside it, layered on with the same
 /// [`bundle_assets_router`] shape the `/dioxus-demo` mount uses.
-pub fn nautilus_preview_router() -> Router {
+pub fn same_day_preview_router() -> Router {
     // One bundle root drives both the hydration template and the assets:
     // the documented override reaches dioxus-server's template knob here,
-    // at the router, so pointing `NAUTILUS_DIOXUS_PUBLIC_PATH` at a staged
+    // at the router, so pointing `SAME_DAY_DIOXUS_PUBLIC_PATH` at a staged
     // bundle is the whole contract — callers need not know dioxus-server's
     // internals to serve a hydrated page.
-    let bundle = nautilus_bundle_dir();
+    let bundle = same_day_bundle_dir();
     let config = if let Some(dir) = &bundle {
         // Safe on this edition, and read once below at `ServeConfig::new`:
         // one server process builds one preview router.
@@ -257,7 +257,7 @@ pub fn nautilus_preview_router() -> Router {
     };
     let mut router = Router::<FullstackState>::new()
         .route(
-            NAUTILUS_PREVIEW_PATH,
+            SAME_DAY_PREVIEW_PATH,
             get(render_handler)
                 .layer(from_fn(dioxus_document_head))
                 .layer(from_fn(preview_provenance_notice)),
@@ -637,6 +637,25 @@ fn bucket_font_head(family: &str, dir_and_stem: &str) -> String {
 static GUIEB_SHOOK_HEAD: std::sync::LazyLock<String> =
     std::sync::LazyLock::new(|| bucket_font_head("EB Garamond", "eb-garamond/EBGaramond"));
 
+static LEX_TECNICA_HEAD: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "{}{}",
+        bucket_font_head("Cormorant SC", "cormorant-sc/CormorantSC"),
+        font_head_fragment(
+            "Tinos",
+            "/public/fonts/tinos/Tinos-Regular.woff2",
+            "/public/fonts/tinos/Tinos-Bold.woff2",
+        ),
+    )
+});
+
+static SAME_DAY_LEGAL_HEAD: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    two_face_head(
+        ("Cormorant SC", "cormorant-sc/CormorantSC"),
+        ("Nunito Sans", "nunito-sans/NunitoSans"),
+    )
+});
+
 static VESTA_HEAD: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
     two_face_head(
         ("EB Garamond", "eb-garamond/EBGaramond"),
@@ -683,9 +702,9 @@ pub fn font_head(key: views::brand::BrandKey) -> &'static str {
     match key {
         views::brand::BrandKey::Neon => &GORP_HEAD,
         views::brand::BrandKey::DeleteYourData => &PLUS_JAKARTA_SANS_HEAD,
-        views::brand::BrandKey::GuiebShook | views::brand::BrandKey::LexTecnica => {
-            &GUIEB_SHOOK_HEAD
-        }
+        views::brand::BrandKey::GuiebShook => &GUIEB_SHOOK_HEAD,
+        views::brand::BrandKey::LexTecnica => &LEX_TECNICA_HEAD,
+        views::brand::BrandKey::SameDayLegal => &SAME_DAY_LEGAL_HEAD,
         views::brand::BrandKey::Vesta => &VESTA_HEAD,
         views::brand::BrandKey::Abhaya => &ABHAYA_HEAD,
         views::brand::BrandKey::DeleteYourDebt => &DELETE_YOUR_DEBT_HEAD,

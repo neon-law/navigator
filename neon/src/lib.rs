@@ -61,9 +61,8 @@ pub const PUBLIC_PATHS: &[&str] = &[
     "/purchases",
     "/purchases/{offering}",
     "/disputes",
-    // Answers a 301 to the home at `/`, like `/personal` above: the business
-    // counsel page is retired and its formation and template work is part of
-    // the Nautilus subscription.
+    // Answers a 301 to `/`, like `/personal` above: the business counsel
+    // page is retired.
     "/business",
     "/navigator",
     "/legal-aid",
@@ -74,8 +73,9 @@ pub const PUBLIC_PATHS: &[&str] = &[
     // The Neon-hosted gateway to the DeleteYourData.com practice. Same
     // Neon-only shape as `/delete-your-debt` above.
     "/delete-your-data",
-    // Neon Law Nautilus, the DeleteYourData.com subscription. Same Neon-only
-    // shape as `/delete-your-debt` above.
+    // 301s to Same Day Legal's own host; `/nautilus` is the retired path.
+    // Same Neon-only shape as `/delete-your-debt` above.
+    "/same-day-legal",
     "/nautilus",
     // The Neon-hosted gateway to the Abhaya Immigration practice. Same
     // Neon-only shape as `/delete-your-debt` above.
@@ -189,6 +189,7 @@ pub fn sitemap_paths(state: &AppState, key: BrandKey) -> std::collections::BTree
             .collect(),
         // Lex Tecnica publishes its home, services, and contact pages: the
         // band-built home's CTA links `/contact` (`#572`).
+        BrandKey::SameDayLegal => std::iter::once("/".to_string()).collect(),
         BrandKey::LexTecnica => ["/", "/services", "/contact"]
             .iter()
             .map(|path| (*path).to_string())
@@ -204,7 +205,6 @@ pub fn sitemap_paths(state: &AppState, key: BrandKey) -> std::collections::BTree
                 "/legal-aid",
                 "/delete-your-debt",
                 "/delete-your-data",
-                "/nautilus",
                 "/immigration",
                 "/immigration/family-green-cards",
                 "/immigration/citizenship",
@@ -306,6 +306,7 @@ pub fn llms_txt(state: &AppState, key: BrandKey) -> portal::LlmsTxt {
         | BrandKey::Groundwork
         | BrandKey::CyberInjuryLaw
         | BrandKey::LexTecnica
+        | BrandKey::SameDayLegal
         | BrandKey::IepDefenders) => practice_brand_llms_txt(key),
         BrandKey::GuiebShook => {
             let mut index = practice_brand_llms_txt(BrandKey::GuiebShook);
@@ -399,16 +400,6 @@ fn indexed_pages(mark: &str) -> Vec<portal::LlmsTxtLink> {
              the destination for data-removal and privacy-protection work: data removal \
              and non-legal privacy protection for $29/mo or $290/year prepaid, with basic form filings such as forming an LLC included. Government fees are separate. Credit monitoring is available as an opt-in. It \
              does not promise every piece of personal information can be removed.",
-        ),
-        indexed_page(
-            "Nautilus",
-            "/nautilus",
-            "Nautilus, one subscription of privacy and paperwork checks for $29/mo or \
-             $290/year prepaid, cancel anytime: data removal, privacy protection, credit \
-             monitoring, dark web monitoring, identity theft insurance, unclaimed property, estate \
-             planning, contract templates, and basic form filings such as forming an LLC. \
-             Government fees are separate. Legal fees are excluded and must be prepaid; a lawyer \
-             review starts at $20. Coming to iPhone and Android.",
         ),
     ];
     pages.extend(immigration_indexed_pages());

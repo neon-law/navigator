@@ -1,6 +1,6 @@
-//! The Nautilus Legal Sandbox.
+//! The Same Day Legal sandbox.
 //!
-//! `/app/nautilus` is the subscriber's private workspace promised by the
+//! `/app/sandbox` is the subscriber's private workspace promised by the
 //! [Legal Sandbox](https://www.neonlaw.com/glossary/legal-sandbox) glossary
 //! entry: a session with the AI assistant backed by the subscription's $5 a
 //! month of model usage. The page rides the same session boundary every other
@@ -14,7 +14,7 @@
 //! deployment with an enforced OIDC verifier — by the [`AuthClaims`] a raw
 //! bearer JWT carries. Either way the identity resolves to a `persons` row,
 //! and the caller's Xero-backed Purchases answer the question: an active
-//! Purchase of a Nautilus offering opens the composer, anything else sees the
+//! Purchase of a Same Day Legal offering opens the composer, anything else sees the
 //! preview. The decision itself is pure: [`access_for`] over the caller's
 //! Purchases.
 //!
@@ -51,18 +51,18 @@ use webapp::sandbox::SandboxView;
 use crate::{gated, AppState, AuthClaims, SessionData};
 
 /// The Legal Sandbox page.
-pub const NAUTILUS_PATH: &str = "/app/nautilus";
+pub const SANDBOX_PATH: &str = "/app/sandbox";
 
 /// The message route the sandbox composer's native POST lands on. The page's
-/// form posts here; the handler redirects back to [`NAUTILUS_PATH`] (PRG), so
+/// form posts here; the handler redirects back to [`SANDBOX_PATH`] (PRG), so
 /// a reload never re-submits an exchange.
-pub const MESSAGES_PATH: &str = "/app/nautilus/messages";
+pub const MESSAGES_PATH: &str = "/app/sandbox/messages";
 
-/// The offerings whose active Purchase is a Nautilus subscription. Neon sells
-/// the one subscription under two names — DeleteYourData.com and Nautilus —
+/// The offerings whose active Purchase is a Same Day Legal subscription. Neon sells
+/// the one subscription under two names — DeleteYourData.com and Same Day Legal —
 /// and the services catalog records both as offerings of the same price pair,
 /// so a gate keyed on either name would drift when a third name is published.
-pub const NAUTILUS_OFFERINGS: [&str; 2] = ["delete-your-data-monthly", "delete-your-data-annual"];
+pub const SAME_DAY_LEGAL_OFFERINGS: [&str; 2] = ["delete-your-data-monthly", "delete-your-data-annual"];
 
 /// The bounded number of tool passes one exchange may spend before the loop
 /// stops and says so. A search that keeps asking for more searches is a loop,
@@ -74,7 +74,7 @@ const MAX_TOOL_PASSES: usize = 3;
 /// the request extension this middleware inserts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SandboxAccess {
-    /// An active Nautilus subscription backs this caller: the composer renders.
+    /// An active Same Day Legal subscription backs this caller: the composer renders.
     Subscribed,
     /// Authenticated without an active subscription: the preview renders —
     /// a read-only description of the sandbox, no composer, no credit.
@@ -84,23 +84,23 @@ pub enum SandboxAccess {
 /// The person the gate resolved, inserted beside the [`SandboxAccess`].
 /// `None` when the identity names nobody the store knows — a preview caller.
 #[derive(Debug, Clone, Copy)]
-pub struct NautilusPerson(pub Option<uuid::Uuid>);
+pub struct SandboxPerson(pub Option<uuid::Uuid>);
 
-/// Whether an offering id is one of the Nautilus subscription's own.
+/// Whether an offering id is one of the Same Day Legal subscription's own.
 #[must_use]
-pub fn is_nautilus_offering(offering: &str) -> bool {
-    NAUTILUS_OFFERINGS.contains(&offering)
+pub fn is_same_day_offering(offering: &str) -> bool {
+    SAME_DAY_LEGAL_OFFERINGS.contains(&offering)
 }
 
 /// The gate's decision over a caller's Purchases: the active Purchase of a
-/// Nautilus offering is the whole test. An `invoiced`-but-unpaid subscription
+/// Same Day Legal offering is the whole test. An `invoiced`-but-unpaid subscription
 /// is not yet in force — the Purchase ledger turns it `active` only when Xero
 /// reports the invoice paid — so it previews, like no subscription at all.
 #[must_use]
 pub fn access_for(purchases: &[Purchase]) -> SandboxAccess {
     if purchases
         .iter()
-        .any(|p| p.state == PurchaseState::Active && is_nautilus_offering(&p.offering))
+        .any(|p| p.state == PurchaseState::Active && is_same_day_offering(&p.offering))
     {
         SandboxAccess::Subscribed
     } else {
@@ -112,7 +112,7 @@ pub fn access_for(purchases: &[Purchase]) -> SandboxAccess {
 /// the transcript, the ledger, and the backends behind a session. Cheap to
 /// clone.
 #[derive(Clone)]
-pub struct NautilusGateState {
+pub struct SandboxGateState {
     surreal: SurrealDb,
     /// A Postgres handle for the Purchase ledger. When absent, the layer
     /// resolves one from the environment per request — the same lazy posture
@@ -144,7 +144,7 @@ pub struct SandboxBackends {
 
 impl SandboxBackends {
     /// The production posture: search backends from the environment, the
-    /// model backend lazy (see [`NautilusGateState`]).
+    /// model backend lazy (see [`SandboxGateState`]).
     #[must_use]
     pub fn from_env() -> Self {
         Self {
@@ -165,7 +165,7 @@ pub fn routes(state: &AppState) -> Router {
 /// pool passes it here, and a test injects its isolated fixture and stub
 /// backends.
 pub fn routes_with(state: &AppState, pg: Option<PostgresDb>, backends: SandboxBackends) -> Router {
-    let gate = NautilusGateState {
+    let gate = SandboxGateState {
         surreal: state.surreal.clone(),
         pg,
         model: backends.model,
@@ -174,7 +174,7 @@ pub fn routes_with(state: &AppState, pg: Option<PostgresDb>, backends: SandboxBa
     gated(
         state,
         Router::new()
-            .route(NAUTILUS_PATH, get(sandbox_page))
+            .route(SANDBOX_PATH, get(sandbox_page))
             .route(MESSAGES_PATH, post(sandbox_message))
             // Listed first, so it runs last: by the time the token check
             // reads the cookie, the subscription layer has already resolved
@@ -188,7 +188,7 @@ pub fn routes_with(state: &AppState, pg: Option<PostgresDb>, backends: SandboxBa
             // runs, and the handlers read the result from the extensions.
             .route_layer(axum::middleware::from_fn_with_state(
                 gate.clone(),
-                require_nautilus_subscription,
+                require_same_day_subscription,
             ))
             .with_state(gate),
     )
@@ -196,14 +196,14 @@ pub fn routes_with(state: &AppState, pg: Option<PostgresDb>, backends: SandboxBa
 
 /// The subscription layer: resolve the caller to a `persons` row, ask the
 /// Purchase ledger what that row holds, and insert the [`SandboxAccess`] and
-/// [`NautilusPerson`] the handlers render and complete against.
+/// [`SandboxPerson`] the handlers render and complete against.
 ///
 /// It runs after [`crate::auth::require_session`] has resolved the session,
 /// so an anonymous request never reaches it. Should one misroute here anyway,
 /// it answers with the same login door the boundary uses rather than
 /// rendering a state for a caller it cannot name.
-pub async fn require_nautilus_subscription(
-    State(state): State<NautilusGateState>,
+pub async fn require_same_day_subscription(
+    State(state): State<SandboxGateState>,
     mut req: Request,
     next: Next,
 ) -> Response {
@@ -213,7 +213,7 @@ pub async fn require_nautilus_subscription(
     };
     let (access, person) = access_for_caller(&state, &identity).await;
     req.extensions_mut().insert(access);
-    req.extensions_mut().insert(NautilusPerson(person));
+    req.extensions_mut().insert(SandboxPerson(person));
     next.run(req).await
 }
 
@@ -275,19 +275,19 @@ impl Caller {
 /// The gate's decision plus the person it decided for.
 type Access = (SandboxAccess, Option<uuid::Uuid>);
 
-async fn access_for_caller(state: &NautilusGateState, caller: &Caller) -> Access {
+async fn access_for_caller(state: &SandboxGateState, caller: &Caller) -> Access {
     let Some(person) = caller.person(&state.surreal).await else {
         return (SandboxAccess::Preview, None);
     };
     let person_id = person.id;
     let Some(pg) = ledger(state).await else {
-        tracing::warn!(person = %person_id, "nautilus gate: no Purchase ledger configured; rendering the preview");
+        tracing::warn!(person = %person_id, "sandbox gate: no Purchase ledger configured; rendering the preview");
         return (SandboxAccess::Preview, Some(person_id));
     };
     match purchases::for_person(&pg, person_id).await {
         Ok(purchases) => (access_for(&purchases), Some(person_id)),
         Err(e) => {
-            tracing::warn!(person = %person_id, error = %e, "nautilus gate: Purchase ledger unreadable; rendering the preview");
+            tracing::warn!(person = %person_id, error = %e, "sandbox gate: Purchase ledger unreadable; rendering the preview");
             (SandboxAccess::Preview, Some(person_id))
         }
     }
@@ -295,7 +295,7 @@ async fn access_for_caller(state: &NautilusGateState, caller: &Caller) -> Access
 
 /// The Purchase ledger for this request: the injected handle when there is
 /// one, else the environment's.
-async fn ledger(state: &NautilusGateState) -> Option<PostgresDb> {
+async fn ledger(state: &SandboxGateState) -> Option<PostgresDb> {
     if let Some(pg) = &state.pg {
         return Some(pg.clone());
     }
@@ -318,14 +318,14 @@ fn login_door(req: &Request) -> Response {
     .into_response()
 }
 
-/// `GET /app/nautilus`: the page, rendered from the caller's access, credit
+/// `GET /app/sandbox`: the page, rendered from the caller's access, credit
 /// ledger row, and transcript. A preview caller sees the sandbox's
 /// description and no composer; a subscriber sees their conversation and
 /// their meter.
 async fn sandbox_page(
-    State(state): State<NautilusGateState>,
+    State(state): State<SandboxGateState>,
     Extension(access): Extension<SandboxAccess>,
-    Extension(person): Extension<NautilusPerson>,
+    Extension(person): Extension<SandboxPerson>,
     session: Option<Extension<SessionData>>,
     query: RawQuery,
 ) -> Response {
@@ -335,7 +335,7 @@ async fn sandbox_page(
             // A transcript read that fails renders an empty conversation —
             // the page is the session's front door, not the place for a 500.
             Err(e) => {
-                tracing::warn!(error = %e, "nautilus: transcript unreadable; rendering an empty chat");
+                tracing::warn!(error = %e, "sandbox: transcript unreadable; rendering an empty chat");
                 Vec::new()
             }
         },
@@ -385,14 +385,14 @@ fn sandbox_turn(turn: &assistant_turns::AssistantTurn) -> webapp::sandbox::Sandb
 /// seam the monthly reset uses — so the meter reads a real row. A read
 /// failure renders no meter rather than failing the page.
 async fn credit_view(
-    state: &NautilusGateState,
+    state: &SandboxGateState,
     person_id: uuid::Uuid,
 ) -> Option<webapp::sandbox::SandboxCredit> {
     let period = current_period();
     let usage = match store::sandbox_usage::grant(&state.surreal, person_id, &period).await {
         Ok(usage) => usage,
         Err(e) => {
-            tracing::warn!(person = %person_id, error = %e, "nautilus: credit row unprovisionable; rendering no meter");
+            tracing::warn!(person = %person_id, error = %e, "sandbox: credit row unprovisionable; rendering no meter");
             return None;
         }
     };
@@ -418,9 +418,9 @@ struct PromptForm {
 }
 
 async fn sandbox_message(
-    State(state): State<NautilusGateState>,
+    State(state): State<SandboxGateState>,
     Extension(access): Extension<SandboxAccess>,
-    Extension(person): Extension<NautilusPerson>,
+    Extension(person): Extension<SandboxPerson>,
     Form(form): Form<PromptForm>,
 ) -> Response {
     // A preview caller has nothing to spend: land them back on the page
@@ -441,15 +441,15 @@ async fn sandbox_message(
         Err(e) => {
             // The ask is already in the transcript; nothing was charged.
             // The redirect flags the page to say so.
-            tracing::warn!(person = %person_id, error = %e, "nautilus: exchange failed; nothing was charged");
-            Redirect::to(&format!("{NAUTILUS_PATH}?error=completion")).into_response()
+            tracing::warn!(person = %person_id, error = %e, "sandbox: exchange failed; nothing was charged");
+            Redirect::to(&format!("{SANDBOX_PATH}?error=completion")).into_response()
         }
     }
 }
 
 /// The PRG redirect back to the page after a handled exchange.
 fn redirect_home() -> Response {
-    Redirect::to(NAUTILUS_PATH).into_response()
+    Redirect::to(SANDBOX_PATH).into_response()
 }
 
 /// One exchange failed. Nothing was charged — every arm below is a path the
@@ -471,7 +471,7 @@ enum SandboxExchangeError {
 }
 
 async fn run_exchange(
-    state: &NautilusGateState,
+    state: &SandboxGateState,
     person_id: uuid::Uuid,
     prompt: &str,
 ) -> Result<(), SandboxExchangeError> {
@@ -597,7 +597,7 @@ async fn append_turn(
 /// from the environment and memoized — Application Default Credentials need
 /// an async first token, and boot must not block on GCP.
 async fn model_backend(
-    state: &NautilusGateState,
+    state: &SandboxGateState,
 ) -> Result<Arc<dyn ModelProvider>, SandboxExchangeError> {
     static VERTEX: tokio::sync::OnceCell<Option<Arc<dyn ModelProvider>>> =
         tokio::sync::OnceCell::const_new();
@@ -725,8 +725,8 @@ async fn execute_tool(search: &SearchBackends, call: &gateway::ToolCall) -> Stri
 
 #[cfg(test)]
 mod tests {
-    use super::{access_for, is_nautilus_offering, request_messages, NAUTILUS_OFFERINGS};
-    use crate::nautilus::SandboxAccess;
+    use super::{access_for, is_same_day_offering, request_messages, SAME_DAY_LEGAL_OFFERINGS};
+    use crate::legal_sandbox::SandboxAccess;
     use gateway::Role;
     use store::assistant_turns::{AssistantTurn, TurnKind};
     use store::purchases::{Cadence, Purchase, PurchaseState};
@@ -756,14 +756,14 @@ mod tests {
     #[test]
     fn the_published_subscription_offerings_are_the_gate() {
         assert_eq!(
-            NAUTILUS_OFFERINGS,
+            SAME_DAY_LEGAL_OFFERINGS,
             ["delete-your-data-monthly", "delete-your-data-annual"]
         );
-        assert!(is_nautilus_offering("delete-your-data-monthly"));
-        assert!(is_nautilus_offering("delete-your-data-annual"));
+        assert!(is_same_day_offering("delete-your-data-monthly"));
+        assert!(is_same_day_offering("delete-your-data-annual"));
         // A lookalike id, and an unrelated offering, are not the subscription.
-        assert!(!is_nautilus_offering("delete-your-data"));
-        assert!(!is_nautilus_offering("consultation"));
+        assert!(!is_same_day_offering("delete-your-data"));
+        assert!(!is_same_day_offering("consultation"));
     }
 
     #[test]

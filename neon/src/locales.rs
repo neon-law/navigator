@@ -43,8 +43,6 @@ const NEON_GATEWAY_DELETE_YOUR_DEBT_YAML: &str =
 /// practice. Same family as [`NEON_GATEWAY_DELETE_YOUR_DEBT_YAML`].
 const NEON_GATEWAY_DELETE_YOUR_DATA_YAML: &str =
     include_str!("../locales/en/neon/gateway-delete-your-data.yaml");
-/// Nautilus subscription and optional Vesta Death Check.
-const NEON_NAUTILUS_YAML: &str = include_str!("../locales/en/neon/nautilus.yaml");
 /// Neon's home: Navigator, open source software for agentic lawyering.
 const NEON_HOME_MARKETING_YAML: &str = include_str!("../locales/en/neon/home-marketing.yaml");
 /// `/immigration` — Neon's own gateway to the Abhaya Immigration practice.
@@ -200,8 +198,7 @@ pub fn catalog_yaml(key: BrandKey, page: &str) -> Option<&'static str> {
         (BrandKey::Neon, "notations") => Some(NEON_NOTATIONS_YAML),
         (BrandKey::Neon, "navigator") => Some(NEON_NAVIGATOR_YAML),
         (BrandKey::Neon, "legal-aid") => Some(NEON_LEGAL_AID_YAML),
-        (BrandKey::Neon, "nautilus") => Some(NEON_NAUTILUS_YAML),
-        (BrandKey::Neon, "home-marketing") => Some(NEON_HOME_MARKETING_YAML),
+                (BrandKey::Neon, "home-marketing") => Some(NEON_HOME_MARKETING_YAML),
         (BrandKey::Neon, "gateway-delete-your-debt") => Some(NEON_GATEWAY_DELETE_YOUR_DEBT_YAML),
         (BrandKey::Neon, "gateway-delete-your-data") => Some(NEON_GATEWAY_DELETE_YOUR_DATA_YAML),
         (BrandKey::Neon, "gateway-immigration") => Some(NEON_GATEWAY_IMMIGRATION_YAML),
@@ -245,6 +242,9 @@ fn lex_tecnica_catalog_yaml(key: BrandKey, page: &str) -> Option<&'static str> {
         (BrandKey::LexTecnica, "services") => {
             Some(include_str!("../locales/en/lex-tecnica/services.yaml"))
         }
+        (BrandKey::SameDayLegal, "home-marketing") => Some(include_str!(
+            "../locales/en/same-day-legal/home-marketing.yaml"
+        )),
         _ => None,
     }
 }
@@ -450,7 +450,7 @@ fn page_skin(skin: PageSkin) -> webapp::marketing_page::PageSkin {
     match skin {
         PageSkin::Marketing => webapp::marketing_page::PageSkin::Marketing,
         PageSkin::Practice => webapp::marketing_page::PageSkin::Practice,
-        PageSkin::Nautilus => webapp::marketing_page::PageSkin::Nautilus,
+        PageSkin::SameDayLegal => webapp::marketing_page::PageSkin::SameDayLegal,
         PageSkin::Home => webapp::marketing_page::PageSkin::Home,
     }
 }
@@ -1605,9 +1605,19 @@ pub fn iep_home(branding: &views::brand::Branding, _deployment_host: Option<&str
     marketing_page(load_page(branding, "home-marketing"), None, branding)
 }
 
-/// Nautilus uses the same prices and billing periods as `DeleteYourData`.
-pub fn nautilus(branding: &views::brand::Branding, _deployment_host: Option<&str>) -> PageContent {
-    subscription_page(branding, "nautilus")
+/// Same Day Legal's home sells the subscription at the same prices and
+/// billing periods as `DeleteYourData`.
+pub fn same_day_legal_home(
+    branding: &views::brand::Branding,
+    _deployment_host: Option<&str>,
+) -> PageContent {
+    subscription_page(branding, "home-marketing")
+}
+
+/// Same Day Legal's home in the deployment named by `deployment_host`, the
+/// target of Neon's `/same-day-legal` and retired `/nautilus` redirects.
+pub fn same_day_legal_href(deployment_host: Option<&str>) -> String {
+    views::brand::BrandKey::SameDayLegal.public_home_href_for(deployment_host)
 }
 
 /// Neon's home is the Navigator page, from `home-marketing.yaml`.
@@ -1834,11 +1844,16 @@ mod tests {
     /// pipe, then the page: `{site_name} | Home`.
     #[test]
     fn every_brand_home_carries_the_account_invitation() {
-        // Lex Tecnica and IEP Defenders have band-built marketing-page
+        // Lex Tecnica, IEP Defenders, and Same Day Legal have band-built marketing-page
         // homes, not the legacy home schema this invariant polices.
         for key in views::brand::BrandKey::ALL
             .iter()
-            .filter(|key| !matches!(key, BrandKey::IepDefenders | BrandKey::LexTecnica))
+            .filter(|key| {
+                !matches!(
+                    key,
+                    BrandKey::IepDefenders | BrandKey::LexTecnica | BrandKey::SameDayLegal
+                )
+            })
         {
             let content = home(key.resolve_branding(&views::brand::DEFAULT_BRANDING));
             assert!(content.signup.is_some(), "{}", key.as_str());
@@ -2570,7 +2585,10 @@ mod tests {
                 "gateway",
                 include_str!("../locales/en/neon/gateway-delete-your-data.yaml"),
             ),
-            ("Nautilus", include_str!("../locales/en/neon/nautilus.yaml")),
+            (
+                "Same Day Legal",
+                include_str!("../locales/en/same-day-legal/home-marketing.yaml"),
+            ),
             ("Vesta", include_str!("../locales/en/vesta/home.yaml")),
             (
                 "Cyber Injury Law",
@@ -2591,12 +2609,6 @@ mod tests {
                 "{name}"
             );
             for retired in ["$30", "$300", "$20", "$200", "additional member"] {
-                // Nautilus prices a lawyer review "From $20"; the retired
-                // $20 offer was a subscription price, which carries a cadence.
-                if name == "Nautilus" && retired == "$20" {
-                    assert!(!text.contains("$20/"), "{name}: retired offer {retired}");
-                    continue;
-                }
                 assert!(!text.contains(retired), "{name}: retired offer {retired}");
             }
         }
@@ -2637,7 +2649,7 @@ mod tests {
                 "{host:?}"
             );
             assert!(death_check.body.contains("triggers"), "{host:?}");
-            assert!(death_check.body.contains("Neon Law Nautilus"), "{host:?}");
+            assert!(death_check.body.contains("Same Day Legal"), "{host:?}");
             assert!(!death_check.body.contains("guarantee"), "{host:?}");
             // The life-insurance note carries a linked source for each claim.
             assert!(death_check.note.contains("life insurer"), "{host:?}");
@@ -2672,14 +2684,15 @@ mod tests {
         }
     }
 
-    /// Nautilus starts intake on the current Neon deployment.
+    /// Same Day Legal's home starts intake on its own host in each deployment.
     #[test]
-    fn nautilus_page_prices_the_subscription_and_resolves_the_cta_per_deployment() {
+    fn same_day_legal_home_prices_the_subscription_and_the_single_review() {
         for (host, expected) in [
-            ("www.neonlaw.com", "#enrollment"),
-            ("staging.neonlaw.com", "#enrollment"),
+            ("sameday.neonlaw.com", "#enrollment"),
+            ("staging-sameday.neonlaw.com", "#enrollment"),
         ] {
-            let content = nautilus(&views::brand::DEFAULT_BRANDING, Some(host));
+            let content =
+                same_day_legal_home(&views::brand::SAME_DAY_LEGAL_BRANDING, Some(host));
             assert_eq!(
                 content.hero_cta.as_ref().expect("hero CTA").href,
                 expected,
@@ -2697,28 +2710,34 @@ mod tests {
                 "Identity theft insurance",
                 "Unclaimed property",
                 "Estate planning",
-                "From $20",
-                "Lex Tecnica",
+                "Vesta Estate Planning",
+                "$50",
+                "Lex Tecnica, Ltd.",
                 "App Store",
                 "Google Play",
-                "legal fees are excluded",
-                "must be prepaid",
+                "https://github.com/neon-law/navigator",
+                "written engagement",
             ] {
                 assert!(text.contains(required), "{host}: missing {required}");
             }
-            // One product name, plainly: no themed card names, and no sibling
-            // brand drawing attention to a single check.
-            for retired in [
-                "Neon Law Nautilus",
-                "The Reef",
-                "The Cove",
-                "Vesta",
-                "DeleteYourData",
-            ] {
+            for retired in ["Nautilus", "DeleteYourData", "From $20", "non-legal"] {
                 assert!(!text.contains(retired), "{host}: {retired} survives");
             }
-            assert!(!text.contains("$50"), "{host}: the retired price survives");
         }
+    }
+
+    /// Neon's `/same-day-legal` and retired `/nautilus` redirect to Same Day
+    /// Legal's host in the rendering deployment.
+    #[test]
+    fn same_day_legal_href_follows_the_deployment() {
+        assert_eq!(
+            same_day_legal_href(Some("www.neonlaw.com")),
+            "https://sameday.neonlaw.com"
+        );
+        assert_eq!(
+            same_day_legal_href(Some("staging.neonlaw.com")),
+            "https://staging-sameday.neonlaw.com"
+        );
     }
 
     /// The home is the Navigator page: it gives Notation its own band, links
@@ -2764,11 +2783,11 @@ mod tests {
     }
 
     #[test]
-    fn nautilus_prices_and_billing_periods_match_delete_your_data() {
+    fn same_day_legal_prices_and_billing_periods_match_delete_your_data() {
         let privacy = home(&views::brand::DELETE_YOUR_DATA_BRANDING)
             .privacy
             .expect("privacy");
-        let content = nautilus(&views::brand::DEFAULT_BRANDING, None);
+        let content = same_day_legal_home(&views::brand::SAME_DAY_LEGAL_BRANDING, None);
         let cards = content
             .bands
             .iter()
@@ -2803,16 +2822,15 @@ mod tests {
         assert_eq!(listing_price, &privacy.price);
         let text = serde_yaml::to_string(&content).expect("serialize");
         assert!(text.contains("does not") || text.contains("do not"));
-        assert!(text.contains("non-legal service"));
+        assert!(text.contains("Lex Tecnica, Ltd."));
         assert!(text.contains("attorney-client privilege"));
     }
 
     /// Vesta Estate Planning links back to DeleteYourData.com and Cyber
-    /// Injury Law links to the Nautilus plan (the same privacy product under
-    /// its current name), each resolved for the rendering deployment, so the
+    /// Injury Law links to Same Day Legal through Neon's redirect, each resolved for the rendering deployment, so the
     /// referrals run both ways.
     #[test]
-    fn vesta_links_to_delete_your_data_and_cyber_injury_to_nautilus_per_deployment() {
+    fn vesta_links_to_delete_your_data_and_cyber_injury_to_same_day_legal_per_deployment() {
         for (host, prefix) in [
             ("www.example.test", "https://www"),
             ("staging.example.test", "https://staging"),
@@ -2840,10 +2858,10 @@ mod tests {
             assert_eq!(cyber.len(), 1, "cyber-injury-law on {host}");
             assert_eq!(
                 cyber[0].href,
-                format!("{prefix}.neonlaw.com/nautilus"),
+                format!("{prefix}.neonlaw.com/same-day-legal"),
                 "{host}"
             );
-            assert_eq!(cyber[0].cta_label, "Visit the Nautilus plan", "{host}");
+            assert_eq!(cyber[0].cta_label, "Visit Same Day Legal", "{host}");
             assert!(cyber[0].body.contains("$29/mo"), "{host}");
             assert!(cyber[0].body.contains("$290/year"), "{host}");
             assert!(!cyber[0].body.contains("additional member"), "{host}");

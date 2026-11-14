@@ -1286,6 +1286,7 @@ const FIRM_CERTIFICATE_ONLY: &[BrandKey] = &[
     // Born on the Firm certificate: they never had one of their own.
     BrandKey::LexTecnica,
     BrandKey::IepDefenders,
+    BrandKey::SameDayLegal,
 ];
 
 fn has_own_certificate(key: BrandKey) -> bool {
@@ -8424,6 +8425,7 @@ mod tests {
                 "navigator-web-guieb-shook",
                 "navigator-web-lex-tecnica",
                 "navigator-web-iep-defenders",
+                "navigator-web-same-day-legal",
             ]
         );
         for name in &retired {
@@ -8617,6 +8619,7 @@ mod tests {
                 "www.guiebshook.com",
                 "lex-tecnica.neonlaw.com",
                 "iep.neonlaw.com",
+                "sameday.neonlaw.com",
             ],
             "a production public host pulls in every other registered brand's production host — \
              ENG-808: the full registry, not only the launched ones"
@@ -8637,6 +8640,7 @@ mod tests {
                 "staging.guiebshook.com",
                 "staging-lex-tecnica.neonlaw.com",
                 "staging-iep.neonlaw.com",
+                "staging-sameday.neonlaw.com",
             ],
             "a staging public host pulls in only the other brands' staging hosts"
         );

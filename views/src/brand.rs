@@ -145,11 +145,11 @@ const FIRM_NAV: &[NavLink] = &[
     NavLink::leaf("Book Consultation", SHOOK_CONSULTATION_URL),
 ];
 
-/// Neon's header names its three products: Nautilus, the subscription at
-/// `/nautilus`; Navigator, the engine; and Notations, the document format. The shared
+/// Neon's header names its three products: Same Day Legal, the subscription
+/// `/same-day-legal` redirects to; Navigator, the engine; and Notations, the document format. The shared
 /// footer row still links Navigator and Notations for every brand.
 const NEON_NAV: &[NavLink] = &[
-    NavLink::leaf("Nautilus", "/nautilus"),
+    NavLink::leaf("Same Day Legal", "/same-day-legal"),
     NavLink::leaf("Navigator", "/navigator"),
     NavLink::leaf("Notations", "/notations"),
 ];
@@ -664,6 +664,45 @@ pub static LEX_TECNICA_BRANDING: Branding = Branding {
     brand_key: BrandKey::LexTecnica,
 };
 
+/// Same Day Legal, at `sameday.neonlaw.com`: Lex Tecnica, Ltd.'s flat-fee
+/// subscription. It wears the Lex Tecnica brand kit and names the same legal
+/// entity, terms, and family.
+pub static SAME_DAY_LEGAL_BRANDING: Branding = Branding {
+    firm: SiteBrand {
+        site_name: "Same Day Legal",
+        home_href: "/",
+        tagline: "Privacy, paperwork, and a lawyer, for one monthly fee.",
+        postal_address: "",
+        logo_href: "/public/brand/same-day-legal/logo.svg",
+        social_image: "",
+        nav: &[
+            NavLink::leaf("What you get", "/#included"),
+            NavLink::leaf("Pricing", "/#pricing"),
+            NavLink::leaf("Get started", "/#enrollment"),
+        ],
+        is_law_firm: true,
+        legal_entity: LEX_TECNICA_LEGAL_ENTITY,
+    },
+    firm_email: "SameDayLegal@LexTecnica.com",
+    support_domain: "lextecnica.com",
+    firm_phone: "+1 725 239 8413",
+    firm_offices: &[],
+    firm_attorneys: &[],
+    firm_memberships: &[],
+    firm_social: &[],
+    firm_family: BrandKey::LEX_TECNICA_FAMILY,
+    consultation_url: LEX_TECNICA_CONTACT_URL,
+    terms_url: LEX_TECNICA_TERMS_URL,
+    privacy_url: "",
+    base_url: "",
+    primary_domain: "sameday.neonlaw.com",
+    firm_disclaimer: "Attorney advertisement. Same Day Legal is a service of Lex Tecnica, Ltd. Subscribing does not by itself create an attorney-client relationship; legal work begins under a written engagement. Data removal does not guarantee compliance or prevent a future leak.",
+    mission_description: "Same Day Legal is one subscription from Lex Tecnica, Ltd. for privacy, paperwork, and lawyer help: data removal, privacy protection and monitoring, identity theft insurance, unclaimed property, basic form filings such as forming an LLC, attorney review, and limited changes to an estate plan made with Vesta Estate Planning, for $29/mo or $290/year. A single attorney review without a subscription is $50.",
+    service_description: "Same Day Legal from Lex Tecnica, Ltd.: $29/mo or $290/year for privacy protection, monitoring, form filings, attorney review, and limited estate plan changes, or $50 for a single attorney review. Government fees are separate.",
+    portal_only: false,
+    brand_key: BrandKey::SameDayLegal,
+};
+
 /// Lex Tecnica's legal name, as its terms page publishes it.
 pub const LEX_TECNICA_LEGAL_ENTITY: &str = "Lex Tecnica, Ltd.";
 
@@ -1064,6 +1103,9 @@ pub enum BrandKey {
     IepDefenders,
     /// Lex Tecnica, Ltd.'s own site, the second brand its firm wears.
     LexTecnica,
+    /// Same Day Legal — Lex Tecnica, Ltd.'s flat-fee subscription for privacy,
+    /// paperwork, and lawyer help.
+    SameDayLegal,
 }
 
 impl BrandKey {
@@ -1083,6 +1125,7 @@ impl BrandKey {
         Self::GuiebShook,
         Self::LexTecnica,
         Self::IepDefenders,
+        Self::SameDayLegal,
     ];
 
     /// The brands Guieb & Shook PC trades under.
@@ -1105,6 +1148,7 @@ impl BrandKey {
         Self::Groundwork,
         Self::LexTecnica,
         Self::IepDefenders,
+        Self::SameDayLegal,
     ];
 
     /// The compiled keys whose hosts currently serve a public site. The
@@ -1125,6 +1169,7 @@ impl BrandKey {
         Self::GuiebShook,
         Self::LexTecnica,
         Self::IepDefenders,
+        Self::SameDayLegal,
     ];
 
     /// Whether Guieb & Shook PC is the firm behind this key. Lex Tecnica's
@@ -1152,6 +1197,7 @@ impl BrandKey {
             Self::CyberInjuryLaw => "cyber-injury-law",
             Self::LexTecnica => "lex-tecnica",
             Self::IepDefenders => "iep-defenders",
+            Self::SameDayLegal => "same-day-legal",
         }
     }
 
@@ -1240,6 +1286,8 @@ impl BrandKey {
             // marketing-page band sequences (`home-marketing`), not the
             // legacy home schema.
             Self::IepDefenders | Self::LexTecnica => &["home-marketing", "services"],
+            // Same Day Legal is one band-built page: the subscription.
+            Self::SameDayLegal => &["home-marketing"],
             Self::GuiebShook => &["home", "services", "team"],
             Self::DeleteYourData
             | Self::Misericordia
@@ -1252,7 +1300,7 @@ impl BrandKey {
 
     /// Firm marketing paths this key answers on its own hosts.
     ///
-    /// Neon answers Nautilus at `/` and its fee schedule at `/services`;
+    /// Neon answers its home at `/` and its fee schedule at `/services`;
     /// `/business` answers a redirect to `/`, and `/disputes` returns 404. DeleteYourData
     /// answers only the pages it has a catalog for (plus `/contact`, which is
     /// addresses rather than a YAML stem). Every brand answers `/contact/sent`
@@ -1340,6 +1388,7 @@ impl BrandKey {
             // contact page its band-built home CTA links to (`#572`): the
             // brand's contact copy is served on its own host.
             Self::LexTecnica => matches!(path, "/" | "/services" | "/contact"),
+            Self::SameDayLegal => path == "/",
         }
     }
 
@@ -1408,7 +1457,7 @@ impl BrandKey {
             Self::CyberInjuryLaw => "cyberinjurylaw.com",
             // Served on `neonlaw.com` subdomains, so there is no naked domain
             // of their own to redirect.
-            Self::LexTecnica | Self::IepDefenders => return None,
+            Self::LexTecnica | Self::IepDefenders | Self::SameDayLegal => return None,
         })
     }
 
@@ -1475,6 +1524,7 @@ impl BrandKey {
             Self::GuiebShook => &["www.guiebshook.com", "staging.guiebshook.com"],
             Self::LexTecnica => &["lex-tecnica.neonlaw.com", "staging-lex-tecnica.neonlaw.com"],
             Self::IepDefenders => &["iep.neonlaw.com", "staging-iep.neonlaw.com"],
+            Self::SameDayLegal => &["sameday.neonlaw.com", "staging-sameday.neonlaw.com"],
         }
     }
 
@@ -1500,6 +1550,7 @@ impl BrandKey {
             Self::CyberInjuryLaw => &CYBER_INJURY_BRANDING,
             Self::LexTecnica => &LEX_TECNICA_BRANDING,
             Self::IepDefenders => &IEP_DEFENDERS_BRANDING,
+            Self::SameDayLegal => &SAME_DAY_LEGAL_BRANDING,
         }
     }
 
@@ -1535,6 +1586,7 @@ impl BrandKey {
             Self::LexTecnica => Some("NAVIGATOR_LOCAL_LEX_TECNICA_PORT"),
             Self::IepDefenders => Some("NAVIGATOR_LOCAL_IEP_DEFENDERS_PORT"),
             Self::CyberInjuryLaw => Some("NAVIGATOR_LOCAL_CYBER_INJURY_LAW_PORT"),
+            Self::SameDayLegal => Some("NAVIGATOR_LOCAL_SAME_DAY_LEGAL_PORT"),
         }
     }
 }
@@ -3011,7 +3063,7 @@ mod tests {
         assert_eq!(
             nav,
             [
-                ("Nautilus", "/nautilus"),
+                ("Same Day Legal", "/same-day-legal"),
                 ("Navigator", "/navigator"),
                 ("Notations", "/notations"),
             ]

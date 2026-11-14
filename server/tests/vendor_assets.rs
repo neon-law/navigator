@@ -1022,12 +1022,12 @@ fn the_services_package_badge_clears_wcag_aa_on_its_tinted_panel() {
     }
 }
 
-/// `/nautilus` paints the iPhone's store-listing Get pill in Apple's ink on
+/// Same Day Legal's app preview paints the iPhone's store-listing Get pill in Apple's ink on
 /// white. Apple's `#007aff` is 4.02:1 against `#fff` — under the 4.5:1
 /// floor for the 13.6px label — and axe failed the `26.10.26` cut on
 /// `.fm-phone__install`. This reads the pill and does the arithmetic.
 #[test]
-fn the_nautilus_phone_install_pill_clears_wcag_aa() {
+fn the_app_preview_install_pill_clears_wcag_aa() {
     let css = std::fs::read_to_string(public_dir().join("css/marketing-page.css"))
         .expect("read the marketing-page stylesheet");
     let selector = ".fm-phone[data-phone=\"ios\"] .fm-phone__install";

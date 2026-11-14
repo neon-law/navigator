@@ -1126,159 +1126,63 @@
 
 .fm-card__logo { object-fit: contain; object-position: left center; margin-bottom: 1rem; }
 
-/* Nautilus keeps the shared practice layout and controls, with an ocean palette
-   that fills the viewport. The shell's column cap, its padding, and the
-   header's own surface step aside, so the water runs edge to edge from the top
-   of the page down to the light enrollment band; the footer follows that band
-   without the shell's usual gap. */
-:root:has(.fm-page--nautilus),
-:root:has(.fm-page--nautilus) body { background: #061f2b; }
-.public-shell:has(.fm-page--nautilus) { background: #061f2b; }
-.public-shell__main:has(.fm-page--nautilus) { width: 100%; padding: 0; }
-.public-shell:has(.fm-page--nautilus) > .site-header {
-  background: transparent;
-  border-bottom: 0;
-  color: #effff9;
-  --nav-color-text: #effff9;
-  --nav-color-border: #2e5966;
+/* Same Day Legal wears the Lex Tecnica brand kit: a light-grey page, black and
+   white panels, Cormorant SC small capitals for display, and widely tracked
+   Avenir (Nunito Sans) overlines. Every colour comes from the brand tokens, so
+   the dark scheme inverts to white on black without a second rule set. */
+.public-shell__main:has(.fm-page--same-day-legal) { width: 100%; padding: 0; }
+.public-shell:has(.fm-page--same-day-legal) > .site-footer { margin-top: 0; }
+.fm-page--same-day-legal {
+  background: var(--nav-color-bg);
+  color: var(--nav-color-text);
 }
-.public-shell:has(.fm-page--nautilus) .site-header__link { color: #c6e5e5; }
-.public-shell:has(.fm-page--nautilus) .site-header__link:hover,
-.public-shell:has(.fm-page--nautilus) .site-header__link:focus-visible { color: #effff9; }
-.public-shell:has(.fm-page--nautilus) .site-header__link--active { background: rgb(255 255 255 / .1); }
-.public-shell:has(.fm-page--nautilus) > .site-footer { margin-top: 0; }
-
-.fm-page--nautilus {
-  background: #061f2b;
-  color: #e6faf7;
-  --nav-color-text: #e6faf7;
-  --nav-color-text-muted: #b6d4d6;
-  --nav-color-surface: #103544;
-  --nav-color-border: #47727b;
+.fm-page--same-day-legal .fm-hero {
+  padding-block: clamp(4rem, 9vw, 7rem) clamp(2.5rem, 5vw, 4rem);
+  border-bottom: 1px solid var(--nav-color-text);
 }
-
-/* The opening screen: a full-height sea with the shell swimming through it.
-   Three layers, all pseudo-elements or the hero's own glow element, so the
-   markup stays the shared practice hero. `::before` is the light moving
-   through the water, `.fm-hero__glow` (hidden on every other shell page) is
-   the bubbles, and `::after` is the shell. */
-.fm-page--nautilus .fm-hero {
-  min-height: min(56rem, calc(100svh - 4.5rem));
-  padding-block: clamp(4rem, 10vw, 8rem) clamp(3rem, 6vw, 5rem);
-  background: radial-gradient(ellipse at 85% 40%, #125062 0, transparent 60%), #061f2b;
-  position: relative;
-  overflow: hidden;
-  isolation: isolate;
+.fm-page--same-day-legal .fm-hero__inner { margin-inline: auto; max-width: 60rem; text-align: center; }
+.fm-page--same-day-legal .fm-hero__title {
+  font-family: var(--brand-font-display);
+  font-size: clamp(3rem, 8vw, 6.5rem);
+  font-weight: 400;
+  line-height: 1;
+  letter-spacing: 0;
 }
-.fm-page--nautilus .fm-hero::before {
-  content: "";
-  position: absolute;
-  inset: -20% -10%;
-  z-index: 0;
-  pointer-events: none;
-  background:
-    radial-gradient(40rem 22rem at 20% 30%, rgb(16 201 206 / .16), transparent 70%),
-    radial-gradient(34rem 18rem at 75% 70%, rgb(122 227 213 / .12), transparent 70%),
-    radial-gradient(26rem 26rem at 55% 10%, rgb(255 240 204 / .07), transparent 70%);
-  animation: nautilus-light 28s ease-in-out infinite alternate;
-}
-.public-shell .fm-page--nautilus .fm-hero__glow {
-  display: block;
-  inset: 0;
-  height: auto;
-  z-index: 0;
-  background:
-    radial-gradient(.35rem .35rem at 12% 95%, rgb(230 250 247 / .55) 45%, transparent 50%),
-    radial-gradient(.25rem .25rem at 28% 92%, rgb(230 250 247 / .45) 45%, transparent 50%),
-    radial-gradient(.45rem .45rem at 41% 98%, rgb(230 250 247 / .4) 45%, transparent 50%),
-    radial-gradient(.3rem .3rem at 63% 94%, rgb(230 250 247 / .5) 45%, transparent 50%),
-    radial-gradient(.2rem .2rem at 80% 97%, rgb(230 250 247 / .45) 45%, transparent 50%),
-    radial-gradient(.4rem .4rem at 92% 91%, rgb(230 250 247 / .35) 45%, transparent 50%);
-  background-repeat: no-repeat;
-  animation: nautilus-rise 22s linear infinite;
-}
-.fm-page--nautilus .fm-hero::after {
-  content: "";
-  position: absolute;
-  inset: 2rem -3rem 0 45%;
-  z-index: 0;
-  background: url('/public/images/nautilus-shell.svg') center / contain no-repeat;
-  pointer-events: none;
-  transform-origin: 50% 55%;
-  animation: nautilus-swim 18s ease-in-out infinite alternate;
-}
-@keyframes nautilus-swim {
-  0% { transform: translate(0, 0) rotate(-2deg); }
-  50% { transform: translate(-3%, 3%) rotate(1deg); }
-  100% { transform: translate(-6%, -2%) rotate(3deg); }
-}
-@keyframes nautilus-light {
-  from { transform: translate(0, 0) scale(1); }
-  to { transform: translate(6%, 4%) scale(1.08); }
-}
-@keyframes nautilus-rise {
-  from { transform: translateY(0); opacity: 0; }
-  10% { opacity: 1; }
-  90% { opacity: .8; }
-  to { transform: translateY(-110%); opacity: 0; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .fm-page--nautilus .fm-hero::before,
-  .fm-page--nautilus .fm-hero::after,
-  .fm-page--nautilus .fm-hero__glow { animation: none; }
-  .public-shell .fm-page--nautilus .fm-hero__glow { display: none; }
-}
-.fm-page--nautilus .fm-hero__inner {
-  position: relative;
-  z-index: 1;
-  margin-left: clamp(1.5rem, 5vw, 5rem);
-  margin-right: 0;
-  max-width: 52rem;
-  text-align: left;
-}
-.fm-page--nautilus .fm-hero__title {
-  font-size: clamp(3.5rem, 7.5vw, 8rem);
+.fm-page--same-day-legal .fm-hero__lead { max-width: 40rem; margin-inline: auto; font-size: clamp(1.0625rem, 1.5vw, 1.25rem); }
+.fm-page--same-day-legal .fm-hero__mark { display: none; }
+.fm-page--same-day-legal .firm-eyebrow,
+.fm-page--same-day-legal .fm-overline {
+  font-family: var(--brand-font-body);
+  text-transform: uppercase;
+  letter-spacing: .35em;
   font-weight: 700;
-  max-width: 11ch;
-  line-height: .94;
-  letter-spacing: -.02em;
-  color: #effff9;
+  color: var(--nav-color-text);
 }
-.fm-page--nautilus .fm-hero__lead { max-width: 38rem; font-size: clamp(1.125rem, 1.6vw, 1.375rem); color: #c6e5e5; }
-.fm-page--nautilus .firm-eyebrow,
-.fm-page--nautilus .fm-overline { color: #7ae3d5; }
-.fm-page--nautilus .fm-band { border-color: #2e5966; padding-inline: clamp(1.5rem, 5vw, 5rem); }
-.fm-page--nautilus .fm-band__inner { max-width: 76rem; margin-inline: auto; }
-.fm-page--nautilus .fm-band__title,
-.fm-page--nautilus .fm-statement__lead { color: #effff9; }
-.fm-page--nautilus .fm-card { background: #103544; border-color: #47727b; color: #e6faf7; }
-.fm-page--nautilus .fm-card__title { color: #effff9; }
-.fm-page--nautilus .fm-card__body,
-.fm-page--nautilus .fm-band__description { color: #c6e5e5; }
-.fm-page--nautilus .fm-band--enrollment {
-  background: #e6f5ef;
-  color: #102f39;
-  --nav-color-surface: #ffffff;
-  --nav-color-text: #102f39;
-  --nav-color-text-muted: #38515a;
-  --nav-color-border: #6a868b;
+.fm-page--same-day-legal .fm-band { padding-inline: clamp(1.5rem, 5vw, 5rem); }
+.fm-page--same-day-legal .fm-band__inner { max-width: 76rem; margin-inline: auto; }
+.fm-page--same-day-legal .fm-band__title,
+.fm-page--same-day-legal .fm-card__title,
+.fm-page--same-day-legal .fm-statement__lead { font-family: var(--brand-font-display); font-weight: 400; }
+.fm-page--same-day-legal .fm-card {
+  background: var(--nav-color-surface);
+  border: 1px solid var(--nav-color-text);
+  border-radius: 0;
 }
-.fm-page--nautilus .fm-band--enrollment .fm-band__title { color: #102f39; }
-.fm-page--nautilus [data-nautilus-intake] { max-width: 42rem; margin: 2rem auto 0; }
-.fm-page--nautilus [data-nautilus-intake] form > button + button { margin-left: .5rem; }
-.fm-page--nautilus progress { width: 100%; accent-color: #126a70; }
-.fm-page--nautilus [hidden] { display: none !important; }
-.fm-page--nautilus dt { font-weight: 700; margin-top: 1rem; }
-.fm-page--nautilus dd { margin: .4rem 0 1rem; overflow-wrap: anywhere; }
-.fm-page--nautilus .fm-hero__mark { display: none; }
-.fm-page--nautilus a:not(.nav-btn) { color: #8be9df; }
-.fm-page--nautilus .fm-band--enrollment a:not(.nav-btn) { color: #1b6670; }
-@media (max-width: 760px) {
-  .fm-page--nautilus .fm-hero { min-height: 0; padding-bottom: 16rem; }
-  .fm-page--nautilus .fm-hero::after { inset: auto -3rem -6rem 20%; height: 26rem; opacity: .6; }
-  .fm-page--nautilus .fm-hero__inner { margin: 0 1.5rem; }
-  .fm-page--nautilus .fm-hero__title { font-size: clamp(2.75rem, 13vw, 4rem); }
+.fm-page--same-day-legal .fm-band--enrollment {
+  background: var(--nav-color-primary);
+  color: var(--nav-color-on-primary);
+  --nav-color-surface: var(--nav-color-primary);
+  --nav-color-text: var(--nav-color-on-primary);
+  --nav-color-text-muted: var(--nav-color-on-primary);
+  --nav-color-border: var(--nav-color-on-primary);
 }
+.fm-page--same-day-legal [data-enrollment-intake] { max-width: 42rem; margin: 2rem auto 0; }
+.fm-page--same-day-legal [data-enrollment-intake] form > button + button { margin-left: .5rem; }
+.fm-page--same-day-legal progress { width: 100%; accent-color: var(--nav-color-text); }
+.fm-page--same-day-legal [hidden] { display: none !important; }
+.fm-page--same-day-legal dt { font-weight: 700; margin-top: 1rem; }
+.fm-page--same-day-legal dd { margin: .4rem 0 1rem; overflow-wrap: anywhere; }
+.fm-page--same-day-legal .fm-band--enrollment a:not(.nav-btn) { color: inherit; }
 
 /* Neon's home keeps the shared practice layout and controls on the same light
    surface as the Notations index. The hero is short on purpose: it asks the
@@ -1301,8 +1205,8 @@
   border-radius: var(--nav-radius-lg, 1rem);
   padding-inline: clamp(1.25rem, 4vw, 3rem);
 }
-.fm-page--home [data-nautilus-intake] { max-width: 42rem; margin: 2rem auto 0; }
-.fm-page--home [data-nautilus-intake] form > button + button { margin-left: .5rem; }
+.fm-page--home [data-enrollment-intake] { max-width: 42rem; margin: 2rem auto 0; }
+.fm-page--home [data-enrollment-intake] form > button + button { margin-left: .5rem; }
 .fm-page--home progress { width: 100%; accent-color: var(--nav-color-primary); }
 .fm-page--home [hidden] { display: none !important; }
 .fm-page--home dt { font-weight: 700; margin-top: 1rem; }

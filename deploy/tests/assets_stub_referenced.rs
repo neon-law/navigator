@@ -15,7 +15,7 @@ fn expected_gallery_placeholders() -> usize {
 /// because `cli` ships no library target an integration test could read the
 /// table from; the in-crate `published_asset_refs_names_both_faces_of_every_font_family`
 /// holds the table itself to this same number.
-const EXPECTED_FONT_PLACEHOLDERS: usize = 21;
+const EXPECTED_FONT_PLACEHOLDERS: usize = 25;
 
 /// Eight fixed house-brand media files, including the canonical Aster board and the Guieb & Shook
 /// home-page photograph and membership badge, plus Vesta videos and photos, the Navigator page's Matter Page

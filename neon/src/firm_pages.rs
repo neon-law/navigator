@@ -1568,9 +1568,7 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
         dioxus_app::FIRM_RETIRED_PERSONAL_PATH,
         dioxus_app::FIRM_RETIRED_PERSONAL_TARGET,
     ));
-    // The retired business-counsel page. Company formation and contract
-    // templates are part of the Nautilus subscription, so its published links
-    // land on the home at `/`.
+    // The retired business-counsel page answers a 301 to the home.
     routers.push(moved_permanently(FIRM_RETIRED_BUSINESS_PATH, "/"));
     routers.push(dioxus_app::marketing_page_router(
         dioxus_app::FIRM_NAVIGATOR_PATH,
@@ -1684,15 +1682,11 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
         state.sessions.clone(),
         portal::secure_cookies(state),
     ));
-    // `/nautilus` — Neon Law Nautilus, the DeleteYourData.com subscription
-    // and its optional death check. Same admission shape as
-    // `/delete-your-debt` above.
-    routers.push(dioxus_app::marketing_page_router(
-        "/nautilus",
-        firm_copy::nautilus(branding, deployment_host),
-        state.sessions.clone(),
-        portal::secure_cookies(state),
-    ));
+    // Same Day Legal lives on its own host. Neon's `/same-day-legal` link and
+    // the retired `/nautilus` page answer a 301 to it in this deployment.
+    let same_day_legal = locales::same_day_legal_href(deployment_host);
+    routers.push(moved_permanently_to(FIRM_SAME_DAY_LEGAL_PATH, same_day_legal.clone()));
+    routers.push(moved_permanently_to(FIRM_RETIRED_NAUTILUS_PATH, same_day_legal));
     // `/immigration` — Neon's own gateway to the Abhaya Immigration
     // practice. Same admission shape as `/delete-your-debt` above.
     routers.push(dioxus_app::marketing_page_router(
@@ -1947,7 +1941,7 @@ fn resolve_firm_contact_content(
             "Reach {firm_name}, attorneys at law. Attorney advertisement. Nothing here is legal \
              advice without a signed retainer for an active project."
         ),
-        BrandKey::LexTecnica => format!(
+        BrandKey::LexTecnica | BrandKey::SameDayLegal => format!(
             "Reach {firm_name}, a brand of Lex Tecnica, Ltd., about legal services. Attorney \
              advertisement. Contacting the firm does not create an attorney-client relationship."
         ),
@@ -2019,6 +2013,16 @@ pub(crate) fn resolve_firm_home_content(
         // `home-marketing` catalog), not the legacy home schema.
         BrandKey::LexTecnica => {
             let page = locales::lex_tecnica_home(branding, deployment_host);
+            webapp::home::HomeContent {
+                head_title: page.head_title.clone(),
+                meta_description: page.meta_description.clone(),
+                heading: page.tagline.clone(),
+                marketing_page: Some(page),
+                ..Default::default()
+            }
+        }
+        BrandKey::SameDayLegal => {
+            let page = locales::same_day_legal_home(branding, deployment_host);
             webapp::home::HomeContent {
                 head_title: page.head_title.clone(),
                 meta_description: page.meta_description.clone(),
@@ -2209,8 +2213,30 @@ pub(crate) fn resolve_litigation_content(
     locales::litigation(branding)
 }
 
-/// The retired business-counsel path; it answers a 301 to the home at `/`.
+/// The retired business-counsel path; it answers a 301 to `/`.
 const FIRM_RETIRED_BUSINESS_PATH: &str = "/business";
+
+/// Neon's link to Same Day Legal, which lives on its own host.
+const FIRM_SAME_DAY_LEGAL_PATH: &str = "/same-day-legal";
+
+/// The retired subscription page, now Same Day Legal on its own host.
+const FIRM_RETIRED_NAUTILUS_PATH: &str = "/nautilus";
+
+/// A permanent `301` to a target resolved per deployment.
+fn moved_permanently_to(path: &'static str, target: String) -> Router {
+    Router::new().route(
+        path,
+        axum::routing::get(move || {
+            let target = target.clone();
+            async move {
+                (
+                    StatusCode::MOVED_PERMANENTLY,
+                    [(axum::http::header::LOCATION, target)],
+                )
+            }
+        }),
+    )
+}
 
 /// A permanent `301` from a retired marketing path to where its readers go now.
 fn moved_permanently(path: &'static str, target: &'static str) -> Router {

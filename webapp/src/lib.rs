@@ -107,7 +107,7 @@ pub mod marketing_page;
 pub mod matter_directory;
 pub mod matter_surface;
 pub mod notations_about;
-// The Nautilus subscription shell. `nautilus-mobile/` launches it natively;
+// The Same Day Legal subscription shell. `same-day-mobile/` launches it natively;
 // it lives here so the workspace suite renders and tests it.
 pub mod mobile;
 pub mod notation_demo;

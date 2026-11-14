@@ -49,7 +49,7 @@ async fn privacy_home_publishes_both_plans_with_referrals_and_shared_footer() {
         "An optional death check.",
         "Vesta Estate Planning",
         "Visit Vesta Estate Planning",
-        "Neon Law Nautilus",
+        "Same Day Legal",
         "sibling-practice__sources",
         "Nev. Rev. Stat. § 688A.140",
         r#"href="https://www.vestaestateplanning.com""#,
