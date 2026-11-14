@@ -520,7 +520,7 @@ impl CalendarService for GoogleCalendar {
         loop {
             let token = self.token().await?;
             let mut query = vec![
-                ("privateExtendedProperty", format!("{key}:{value}")),
+                ("privateExtendedProperty", format!("{key}={value}")),
                 ("maxResults", "250".to_string()),
             ];
             if let Some(page) = &page_token {
@@ -1336,7 +1336,7 @@ mod tests {
             .and(path(format!("/calendars/{calendar_id}/events")))
             .and(query_param(
                 "privateExtendedProperty",
-                "navigator_mirror:deadline",
+                "navigator_mirror=deadline",
             ))
             .and(query_param("pageToken", "next"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -1350,7 +1350,7 @@ mod tests {
             .and(path(format!("/calendars/{calendar_id}/events")))
             .and(query_param(
                 "privateExtendedProperty",
-                "navigator_mirror:deadline",
+                "navigator_mirror=deadline",
             ))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "items": [
