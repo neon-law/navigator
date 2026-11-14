@@ -317,11 +317,7 @@ pub(super) fn register(dbos: &DBOS, context: Context) -> dbos::Result<Workflow> 
             let source = context.clone();
             let text = dbos::step_with::<String, DigestError, _, _>("read", retry(), move || {
                 let source = source.clone();
-                async move {
-                    dbos::Result::<String, DigestError>::Ok(
-                        source.read().await.map_err(dbos::Error::Application)?,
-                    )
-                }
+                async move { source.read().await.map_err(dbos::Error::Application) }
             })
             .await?;
             dbos::step_with::<(), DigestError, _, _>("post", retry(), move || {
