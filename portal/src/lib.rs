@@ -2760,54 +2760,12 @@ async fn inject_resolved_firm_context(
         chrono::Utc::now().year()
     })
     .await;
-    let mark = match project_code_in_path(request.uri().path()) {
-        Some(code) => match store::projects::find_by_code(&surreal, code).await {
-            Ok(Some(project)) => {
-                webapp::app_chrome::resolve_project_brand_mark(
-                    &surreal,
-                    current,
-                    &project.brand,
-                    std::env::var("NAVIGATOR_PUBLIC_HOST").ok().as_deref(),
-                )
-                .await
-            }
-            _ => webapp::app_chrome::resolve_app_brand_mark(&surreal, current).await,
-        },
-        None => webapp::app_chrome::resolve_app_brand_mark(&surreal, current).await,
-    };
+    // One theme per Firm: every `/app` page, a matter's included, wears the
+    // brand the request's host resolves to, never the matter's own brand.
+    let mark = webapp::app_chrome::resolve_app_brand_mark(&surreal, current).await;
     request.extensions_mut().insert(model);
     request.extensions_mut().insert(mark);
     next.run(request).await
-}
-
-/// The Project code in `/app/projects/<code>[/...]`, or `None` for any other
-/// path. A reserved segment such as `new` or `closed` is not a code, but a
-/// lookup for it simply finds nothing and falls back to the host's brand.
-fn project_code_in_path(path: &str) -> Option<&str> {
-    path.strip_prefix("/app/projects/")?
-        .split('/')
-        .next()
-        .filter(|code| !code.is_empty())
-}
-
-#[cfg(test)]
-mod project_path_tests {
-    use super::project_code_in_path;
-
-    #[test]
-    fn the_project_code_is_the_segment_after_projects() {
-        assert_eq!(
-            project_code_in_path("/app/projects/sample-estate"),
-            Some("sample-estate")
-        );
-        assert_eq!(
-            project_code_in_path("/app/projects/sample-estate/portal/x"),
-            Some("sample-estate")
-        );
-        assert_eq!(project_code_in_path("/app/projects"), None);
-        assert_eq!(project_code_in_path("/app/projects/"), None);
-        assert_eq!(project_code_in_path("/app/team"), None);
-    }
 }
 
 #[cfg(test)]
