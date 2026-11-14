@@ -223,6 +223,10 @@ pub struct InboxThreadPage {
     pub provider_thread_ref: Option<String>,
     pub channel: String,
     pub assignee: String,
+    /// The assigned Project's page; absent while the conversation is
+    /// unassigned.
+    #[serde(default)]
+    pub project_href: Option<String>,
     pub unread: bool,
     pub delivery: String,
     pub next_action: String,
@@ -1132,6 +1136,13 @@ async fn firm_thread_page(conversation_id: uuid::Uuid) -> Result<InboxThreadPage
                 .map_or_else(|| "Assigned".into(), |project| project.name.clone()),
             None => "Unassigned".into(),
         },
+        project_href: detail.conversation.project_id.and_then(|project_id| {
+            detail
+                .projects
+                .iter()
+                .find(|project| project.id == project_id)
+                .map(|project| format!("/app/projects/{}", project.code))
+        }),
         unread: detail.conversation.unread,
         delivery: detail
             .messages
@@ -1387,6 +1398,7 @@ async fn project_thread_page(
         provider_thread_ref: thread.conversation.provider_thread_ref.clone(),
         channel: thread.conversation.channel,
         assignee: thread.assignee,
+        project_href: Some(format!("/app/projects/{project_code}")),
         unread: thread.conversation.unread,
         delivery: thread.delivery,
         next_action: thread.next_action,
@@ -1466,17 +1478,15 @@ pub fn ProjectInboxThread() -> Element {
 }
 
 /// The inbox workspace, laid out like a mail client: the folder rail on the
-/// left, and to its right the conversation list with the reading pane
-/// beneath it at the list's full width. Selection is a client signal — the
-/// deep-link thread route stays for mobile and for clients without
-/// hydration.
+/// left, and to its right the conversation list. Selecting a row opens the
+/// conversation in a modal dialog. Selection is a client signal — the
+/// deep-link thread route stays for clients without hydration.
 #[component]
 fn InboxWorkspace(page: InboxPage) -> Element {
     let selected = use_signal(|| None::<String>);
     // Filter links navigate to a new workspace, so these handles track the
     // filtered rows in their rendered order for the lifetime of this page.
     let rows = use_signal(|| vec![None::<Rc<MountedData>>; page.rows.len()]);
-    let pane_title = use_signal(|| None::<Rc<MountedData>>);
     let opener = use_signal(|| None::<usize>);
     rsx! {
         document::Title { "{page.firm_name} | {page.title}" }
@@ -1490,12 +1500,11 @@ fn InboxWorkspace(page: InboxPage) -> Element {
         main { id: "inbox", class: "nav-theme",
             { inbox_rail(&page) }
             div { class: "inbox-main",
-                { inbox_list(&page, selected, rows, pane_title, opener) }
+                { inbox_list(&page, selected, rows, opener) }
                 InboxPane {
                     selected,
                     project_code: page.project_code.clone(),
-                    pane_title,
-                    on_escape: move |()| {
+                    on_close: move |()| {
                         if let Some(index) = opener() {
                             focus_element(rows.peek().get(index).cloned().flatten());
                         }
@@ -1580,7 +1589,6 @@ fn inbox_list(
     page: &InboxPage,
     selected: Signal<Option<String>>,
     rows: Signal<Vec<Option<Rc<MountedData>>>>,
-    pane_title: Signal<Option<Rc<MountedData>>>,
     opener: Signal<Option<usize>>,
 ) -> Element {
     let folder = if page.trash_only {
@@ -1667,7 +1675,6 @@ fn inbox_list(
                             event.prevent_default();
                             selected.set(Some(row_id.clone()));
                             opener.set(Some(index));
-                            focus_element(pane_title.peek().clone());
                         },
                         "{row.subject}"
                     }
@@ -1941,41 +1948,71 @@ fn inbox_rail(page: &InboxPage) -> Element {
     }
 }
 
-/// The reading pane: always present beneath the list, so focus has a stable
-/// target. Its content fetches per selection.
+/// The reading dialog's element id.
+const PANE_DIALOG_ID: &str = "inbox-pane";
+
+/// The reading dialog: a modal `<dialog>` that opens when a row is selected
+/// and fetches that conversation. Escape, the close button, and a click on
+/// the backdrop close it and hand focus back through `on_close`.
 #[component]
 fn InboxPane(
-    selected: ReadSignal<Option<String>>,
+    mut selected: Signal<Option<String>>,
     project_code: Option<String>,
-    mut pane_title: Signal<Option<Rc<MountedData>>>,
-    on_escape: EventHandler<()>,
+    on_close: EventHandler<()>,
 ) -> Element {
+    use_effect(move || {
+        if selected().is_some() {
+            document::eval(&format!(
+                "const d = document.getElementById('{PANE_DIALOG_ID}'); if (d && !d.open) d.showModal();"
+            ));
+        }
+    });
+    let mut close = move || {
+        if selected.peek().is_none() {
+            return;
+        }
+        selected.set(None);
+        document::eval(&format!(
+            "document.getElementById('{PANE_DIALOG_ID}')?.close();"
+        ));
+        on_close.call(());
+    };
     rsx! {
-        section { id: "inbox-pane", class: "inbox-pane",
-            "aria-label": "Conversation reading pane",
+        dialog { id: PANE_DIALOG_ID, class: "inbox-pane",
+            "aria-labelledby": "{PANE_DIALOG_ID}-title",
+            // A backdrop click lands on the dialog itself; the body below
+            // stops its own clicks from reaching here.
+            onclick: move |_| close(),
             onkeydown: move |event| {
-                if event.key() == Key::Escape && selected.peek().is_some() {
-                    on_escape.call(());
+                if event.key() == Key::Escape {
+                    close();
                 }
             },
-            h2 { id: "inbox-pane-title", class: "inbox-pane__title", tabindex: "-1",
-                onmounted: move |event| pane_title.set(Some(event.data())),
-                "Reading pane"
-            }
-            if let Some(conversation_id) = selected().clone() {
-                InboxPaneThread {
-                    key: "{conversation_id}",
-                    conversation_id,
-                    project_code,
+            div { class: "inbox-pane__body",
+                onclick: move |event| event.stop_propagation(),
+                div { class: "inbox-pane__header",
+                    h2 { id: "{PANE_DIALOG_ID}-title", class: "inbox-pane__title", "Conversation" }
+                    button {
+                        class: "nav-btn nav-btn--secondary inbox-compose__close",
+                        r#type: "button",
+                        "aria-label": "Close",
+                        onclick: move |_| close(),
+                        span { "aria-hidden": "true", "×" }
+                    }
                 }
-            } else {
-                p { class: "inbox-pane__empty", "Select a conversation to read it here." }
+                if let Some(conversation_id) = selected().clone() {
+                    InboxPaneThread {
+                        key: "{conversation_id}",
+                        conversation_id,
+                        project_code,
+                    }
+                }
             }
         }
     }
 }
 
-/// One conversation's transcript in the reading pane — the same fetch the
+/// One conversation's transcript in the reading dialog — the same fetch the
 /// thread route answers, remounted per selection through the `key`.
 #[component]
 fn InboxPaneThread(conversation_id: String, project_code: Option<String>) -> Element {
@@ -2036,7 +2073,17 @@ pub fn inbox_pane_body(page: &InboxThreadPage, href: &str) -> Element {
                     "{channel_name(&page.channel)}"
                 }
                 li { class: "inbox-chip", "{brand}" }
-                li { class: "inbox-chip", "Project: {page.assignee}" }
+                li { class: "inbox-chip",
+                    if let Some(project_href) = page.project_href.as_ref() {
+                        // One inline box, so the chip's flex layout keeps the space.
+                        span {
+                            "Project: "
+                            a { class: "nav-link", href: "{project_href}", "{page.assignee}" }
+                        }
+                    } else {
+                        "Project: {page.assignee}"
+                    }
+                }
             }
             { facts_list(page) }
             { assign_control(page, true) }
@@ -2718,6 +2765,7 @@ mod tests {
             role: ViewerRole::Owner,
             title: "Question".into(),
             project_code: None,
+            project_href: None,
             brand_key: Some("neon".into()),
             provider_account: "support@example.com".into(),
             source_page: Some("support@example.com".into()),
@@ -2832,6 +2880,36 @@ mod tests {
 
         view.sent_only = true;
         assert!(list_html(&view).contains("Conversations someone at the firm wrote in"));
+    }
+
+    #[test]
+    fn the_reading_dialog_is_a_closed_modal_until_a_row_is_selected() {
+        let html = list_html(&page(ViewerRole::Owner, Vec::new()));
+        let dialog = &html[html
+            .find("<dialog id=\"inbox-pane\"")
+            .expect("a reading dialog")..];
+        assert!(
+            !dialog[..dialog.find('>').unwrap()].contains(" open"),
+            "{dialog}"
+        );
+        assert!(dialog.contains(r#"aria-label="Close""#), "{dialog}");
+        assert!(!dialog.contains("inbox-pane__thread"), "{dialog}");
+    }
+
+    #[test]
+    fn the_reading_dialog_links_an_assigned_conversation_to_its_project() {
+        let mut assigned = base_thread();
+        assigned.assignee = "Alpha".into();
+        assigned.project_href = Some("/app/projects/alpha".into());
+        let html = dioxus_ssr::render_element(inbox_pane_body(&assigned, "/app/inbox/c1"));
+        assert!(
+            html.contains(r#"href="/app/projects/alpha">Alpha</a>"#),
+            "{html}"
+        );
+
+        let html = dioxus_ssr::render_element(inbox_pane_body(&base_thread(), "/app/inbox/c1"));
+        assert!(!html.contains("/app/projects/"), "{html}");
+        assert!(html.contains("Unassigned"), "{html}");
     }
 
     #[test]
