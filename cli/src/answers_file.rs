@@ -93,7 +93,7 @@ pub fn load_answers_file(path: &Path) -> Result<SavedAnswers> {
     Ok(saved)
 }
 
-/// Flatten saved scalars and filed Answer envelopes into PDF placeholders.
+/// Read scalars, record properties, and people rows for PDF rendering.
 pub fn pdf_answers(path: &Path, overrides: Vec<(String, String)>) -> Result<Vec<(String, String)>> {
     let mut fields = pdf_fields(load_answers_file(path)?)?;
     for (field, value) in overrides {
@@ -143,10 +143,36 @@ pub fn pdf_fields(saved: SavedAnswers) -> Result<BTreeMap<String, String>> {
     let mut fields = BTreeMap::new();
     for (state, saved) in saved {
         let value = saved.get("value").unwrap_or(&saved);
-        fields.insert(
-            state.clone(),
-            saved_scalar(value).with_context(|| format!("read saved Answer for `{state}`"))?,
-        );
+        match value {
+            serde_yaml::Value::Mapping(properties) => {
+                fields.extend(
+                    pdf_record(&state, properties)?
+                        .into_iter()
+                        .map(|(key, text)| (format!("{state}.{key}"), text)),
+                );
+            }
+            serde_yaml::Value::Sequence(rows) => {
+                let rows = rows
+                    .iter()
+                    .enumerate()
+                    .map(|(index, row)| {
+                        let path = format!("{state}.{index}");
+                        let properties = row.as_mapping().with_context(|| {
+                            format!("PDF answer `{path}` needs a map of scalar properties")
+                        })?;
+                        pdf_record(&path, properties)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                fields.insert(state.clone(), serde_json::to_string(&rows)?);
+            }
+            _ => {
+                fields.insert(
+                    state.clone(),
+                    saved_scalar(value)
+                        .with_context(|| format!("read saved Answer for `{state}`"))?,
+                );
+            }
+        }
         for property in ["id", "name"] {
             if let Some(value) = saved.get(property) {
                 fields.insert(format!("{state}.{property}"), saved_scalar(value)?);
@@ -154,6 +180,23 @@ pub fn pdf_fields(saved: SavedAnswers) -> Result<BTreeMap<String, String>> {
         }
     }
     Ok(fields)
+}
+
+fn pdf_record<'a>(
+    path: &str,
+    properties: &'a serde_yaml::Mapping,
+) -> Result<BTreeMap<&'a str, String>> {
+    properties
+        .iter()
+        .map(|(key, value)| {
+            let key = key
+                .as_str()
+                .with_context(|| format!("PDF answer `{path}` needs text property names"))?;
+            let text =
+                saved_scalar(value).with_context(|| format!("read PDF answer `{path}.{key}`"))?;
+            Ok((key, text))
+        })
+        .collect()
 }
 
 /// The scalar text of a saved answer, as the step route's `value` field

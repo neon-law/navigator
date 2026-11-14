@@ -462,8 +462,8 @@ fn canonical_target(question: &str, states: &BTreeSet<&str>) -> Option<String> {
 
 /// Fill values for a re-authored blank: every `/T` name *is* its data
 /// path, so resolution needs no map — `<state>.<row>.<part>` indexes a
-/// people-list answer, any other dotted or bare name is an exact answer
-/// key, and [`UNMAPPED_PREFIX`] names are skipped (payment pages and
+/// people-list answer unless an exact answer overrides that field. Other names use exact answer
+/// keys, and [`UNMAPPED_PREFIX`] names are skipped (payment pages and
 /// lawyer-side artifacts never fill). Missing or empty answers skip their
 /// fields, mirroring the mapped `resolve`.
 ///
@@ -486,6 +486,12 @@ pub(crate) fn resolve_reauthored_with_title_defaults(
     let mut out = BTreeMap::new();
     for name in field_names {
         if name.starts_with(UNMAPPED_PREFIX) {
+            continue;
+        }
+        if let Some(value) = answers.get(name) {
+            if !value.is_empty() {
+                out.insert(name.clone(), value.clone());
+            }
             continue;
         }
         let segments: Vec<&str> = name.split('.').collect();
@@ -512,11 +518,7 @@ pub(crate) fn resolve_reauthored_with_title_defaults(
                         }
                     }
                 }
-                continue;
             }
-        }
-        if let Some(value) = answers.get(name).filter(|a| !a.is_empty()) {
-            out.insert(name.clone(), value.clone());
         }
     }
     Ok(out)
