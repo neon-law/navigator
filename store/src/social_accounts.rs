@@ -705,7 +705,9 @@ pub async fn resolve_tokens(
     kms: &dyn RuntimeKms,
 ) -> Result<ResolvedSocialTokens, SocialAccountError> {
     let key = account_key(brand_key, provider, provider_account_id);
-    let row = sealed(db, &key).await?.ok_or(SocialAccountError::NotFound)?;
+    let row = sealed(db, &key)
+        .await?
+        .ok_or(SocialAccountError::NotFound)?;
     let firm_id = row.firm_id;
     let brand = crate::brands::find_by_key(db, brand_key)
         .await
@@ -747,7 +749,9 @@ pub async fn update_refreshed_tokens(
         return Err(SocialAccountError::MissingCredential);
     }
     let key = account_key(input.brand_key, input.provider, input.provider_account_id);
-    let row = sealed(db, &key).await?.ok_or(SocialAccountError::NotFound)?;
+    let row = sealed(db, &key)
+        .await?
+        .ok_or(SocialAccountError::NotFound)?;
     let firm_id = row.firm_id;
     let context = kms_context(firm_id, &key);
     if context.aad() != row.kms_context {

@@ -3,9 +3,9 @@ use uuid::Uuid;
 
 use super::*;
 use crate::persons::Role;
-use crate::posts::{self, AccountAlias, ImportChange, SocialLink, SourceCaptions, SourcePost};
 use crate::postgres_mirror::tests::{connect, fresh_schema};
 use crate::postgres_mirror::{MirrorKey, Mirrored};
+use crate::posts::{self, AccountAlias, ImportChange, SocialLink, SourceCaptions, SourcePost};
 use crate::social_accounts::{
     self, ConnectSocialAccount, RefreshSocialAccount, SocialAccountError, SocialProvider,
 };
@@ -191,12 +191,26 @@ async fn social_accounts_live_in_postgres() {
             let (first, second) = tokio::join!(
                 social_accounts::connect(
                     &surreal,
-                    connection(admin, &brand, SocialProvider::Facebook, "page-1", &scopes, "a"),
+                    connection(
+                        admin,
+                        &brand,
+                        SocialProvider::Facebook,
+                        "page-1",
+                        &scopes,
+                        "a"
+                    ),
                     &kms
                 ),
                 social_accounts::connect(
                     &surreal,
-                    connection(admin, &brand, SocialProvider::Facebook, "page-1", &scopes, "b"),
+                    connection(
+                        admin,
+                        &brand,
+                        SocialProvider::Facebook,
+                        "page-1",
+                        &scopes,
+                        "b"
+                    ),
                     &kms
                 )
             );
@@ -233,10 +247,13 @@ async fn social_accounts_live_in_postgres() {
                     .unwrap(),
                 vec![account.clone()]
             );
-            let identity =
-                social_accounts::for_provider_identity(&surreal, SocialProvider::Facebook, "page-1")
-                    .await
-                    .unwrap();
+            let identity = social_accounts::for_provider_identity(
+                &surreal,
+                SocialProvider::Facebook,
+                "page-1",
+            )
+            .await
+            .unwrap();
             assert_eq!(identity, vec![account.clone()]);
             assert!(social_accounts::for_provider_identity(
                 &surreal,
@@ -367,7 +384,14 @@ async fn social_accounts_live_in_postgres() {
             // Reconnecting restores the connection under the same key.
             let again = social_accounts::connect(
                 &surreal,
-                connection(admin, &brand, SocialProvider::Facebook, "page-1", &scopes, "c"),
+                connection(
+                    admin,
+                    &brand,
+                    SocialProvider::Facebook,
+                    "page-1",
+                    &scopes,
+                    "c",
+                ),
                 &kms,
             )
             .await
@@ -441,9 +465,11 @@ async fn posts_handles_and_videos_live_in_postgres() {
                 Some(video)
             );
             // One upload registers once.
-            assert!(posts::record_video(&surreal, &brand, "videos/a.mp4", 10, 10)
-                .await
-                .is_err());
+            assert!(
+                posts::record_video(&surreal, &brand, "videos/a.mp4", 10, 10)
+                    .await
+                    .is_err()
+            );
             assert!(posts::find_video(&surreal, "videos/missing.mp4")
                 .await
                 .unwrap()
@@ -469,7 +495,10 @@ async fn posts_handles_and_videos_live_in_postgres() {
                 .await
                 .unwrap()
                 .unwrap();
-            assert_eq!((post.slug.as_str(), post.status.as_str()), ("first", "draft"));
+            assert_eq!(
+                (post.slug.as_str(), post.status.as_str()),
+                ("first", "draft")
+            );
             assert!(posts::find_by_id(&surreal, Uuid::now_v7())
                 .await
                 .unwrap()
@@ -649,9 +678,11 @@ async fn social_publications_live_in_postgres() {
             assert!(publications::begin_provider_write(&surreal, post, "tiktok")
                 .await
                 .unwrap());
-            assert!(!publications::begin_provider_write(&surreal, post, "tiktok")
-                .await
-                .unwrap());
+            assert!(
+                !publications::begin_provider_write(&surreal, post, "tiktok")
+                    .await
+                    .unwrap()
+            );
             publications::record_provider_task(&surreal, post, "tiktok", "task-1")
                 .await
                 .unwrap();
@@ -716,7 +747,9 @@ async fn social_publications_live_in_postgres() {
             );
 
             // A known failure retries; an ambiguous one waits.
-            publications::admit(&surreal, other, "youtube").await.unwrap();
+            publications::admit(&surreal, other, "youtube")
+                .await
+                .unwrap();
             publications::mark_failed(&surreal, other, "youtube", "temporary")
                 .await
                 .unwrap();
@@ -728,7 +761,9 @@ async fn social_publications_live_in_postgres() {
                 .await
                 .unwrap();
             assert!(matches!(
-                publications::admit(&surreal, other, "youtube").await.unwrap(),
+                publications::admit(&surreal, other, "youtube")
+                    .await
+                    .unwrap(),
                 Admission::ReconciliationRequired(_)
             ));
             assert!(
@@ -749,7 +784,10 @@ async fn social_publications_live_in_postgres() {
                 .await
                 .unwrap();
             assert_eq!(all.len(), 3);
-            assert!(publications::for_posts(&surreal, &[]).await.unwrap().is_empty());
+            assert!(publications::for_posts(&surreal, &[])
+                .await
+                .unwrap()
+                .is_empty());
             assert_eq!(
                 publications::find(&surreal, post, "TIKTOK").await.unwrap(),
                 Some(linked)

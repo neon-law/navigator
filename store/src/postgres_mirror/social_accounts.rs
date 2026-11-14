@@ -226,7 +226,11 @@ pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport
     if !super::social_compared(pg).await? {
         return Ok(ParityReport { tables: Vec::new() });
     }
-    let table = compare("social_account", &source(surreal).await?, &target(pg).await?);
+    let table = compare(
+        "social_account",
+        &source(surreal).await?,
+        &target(pg).await?,
+    );
     Ok(ParityReport {
         tables: vec![super::social_table(pg, table).await?],
     })

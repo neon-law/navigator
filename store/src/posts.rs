@@ -261,10 +261,9 @@ pub async fn cancel(
         return Err(PostError::InvalidStatus);
     }
     if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(
-            "UPDATE post SET status = 'cancelled', updated_at = now() WHERE id = $1",
-        )
-        .bind(post_id);
+        let query =
+            sqlx::query("UPDATE post SET status = 'cancelled', updated_at = now() WHERE id = $1")
+                .bind(post_id);
         authority::execute(&pg, query).await?;
         return Ok(());
     }
@@ -599,8 +598,9 @@ async fn record_video_in_surreal(
 /// The registered upload behind a video asset key, from any Brand.
 pub async fn find_video(db: &SurrealDb, object_key: &str) -> Result<Option<BlogVideo>, PostError> {
     if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query("SELECT to_jsonb(v) AS row FROM blog_video v WHERE v.object_key = $1")
-            .bind(object_key.to_owned());
+        let query =
+            sqlx::query("SELECT to_jsonb(v) AS row FROM blog_video v WHERE v.object_key = $1")
+                .bind(object_key.to_owned());
         return Ok(authority::maybe(&pg, query).await?);
     }
     let mut response = db
@@ -935,11 +935,10 @@ pub async fn encode_social_link(
 /// Replace a Post's social links: display data, never a send.
 async fn set_links(db: &SurrealDb, post_id: Uuid, links: Vec<SocialLink>) -> Result<(), PostError> {
     if let Some(pg) = authority::authority().await? {
-        let query = sqlx::query(
-            "UPDATE post SET social_links = $2, updated_at = now() WHERE id = $1",
-        )
-        .bind(post_id)
-        .bind(sqlx::types::Json(links));
+        let query =
+            sqlx::query("UPDATE post SET social_links = $2, updated_at = now() WHERE id = $1")
+                .bind(post_id)
+                .bind(sqlx::types::Json(links));
         authority::execute(&pg, query).await?;
         return Ok(());
     }

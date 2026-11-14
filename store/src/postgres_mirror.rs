@@ -756,7 +756,9 @@ pub async fn mirror(
         key @ MirrorKey::ProjectReference { .. } => {
             project_references::mirror(surreal, pg, key).await
         }
-        MirrorKey::Post(_) | MirrorKey::SocialHandle { .. } | MirrorKey::SocialPublication { .. }
+        MirrorKey::Post(_)
+        | MirrorKey::SocialHandle { .. }
+        | MirrorKey::SocialPublication { .. }
             if social_held() =>
         {
             Ok(Mirrored::Unchanged)

@@ -114,7 +114,6 @@ fn social_account_selection_is_a_measured_mirror_with_a_private_stable_key() {
     assert!(mirrors.contains(&"social_account_selections"));
 }
 
-
 pub(super) fn source<'a>(slug: &'a str, title: &'a str) -> SourcePost<'a> {
     SourcePost {
         brand_key: BRAND,
