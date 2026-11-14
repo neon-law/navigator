@@ -20,9 +20,6 @@ pub use model::estate_assets::{FUNDING_STATES, PASSES_BY};
 const TABLE: &str = "estate_asset";
 const LINE_INDEX: &str = "estate_asset_line";
 
-#[cfg(test)]
-mod mirror_tests;
-
 /// One stored Estate Asset.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EstateAsset {

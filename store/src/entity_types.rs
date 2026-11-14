@@ -4,8 +4,8 @@
 //!
 //! # Where this table lives
 //!
-//! SurrealDB holds it by default; `NAVIGATOR_POSTGRES_CATALOG_AUTHORITY`
-//! moves every read and write here to PostgreSQL
+//! PostgreSQL holds it wherever it is configured: every read and write
+//! here goes to PostgreSQL
 //! ([`crate::postgres::catalog`]).
 //!
 //! `entity_types` is a leaf lookup table — one `name` column, no

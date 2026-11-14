@@ -157,7 +157,6 @@ fn email_writers_follow_the_postgres_host() {
                 "--nocapture",
             ])
             .env("NAVIGATOR_EMAIL_MIRROR_TEST_CASE", case)
-            .env(crate::postgres_mirror::MIRROR_ENV, "1")
             .env("NAVIGATOR_POSTGRES_HOST", "127.0.0.1")
             .env(
                 "NAVIGATOR_POSTGRES_PORT",

@@ -132,6 +132,8 @@ jobs:
           KUBECONFIG: /tmp/postgres-kind.config
           NAVIGATOR_TEST_POSTGRES_PORT: '25432'
           NAV_REQUIRE_POSTGRES: '1'
+          # The embedded SurrealDB engine needs the ci lane's larger test-thread stack.
+          RUST_MIN_STACK: '8388608'
         run: |
           kubectl -n navigator port-forward service/postgres-spike 25432:5432 > /tmp/journal-port-forward.log 2>&1 &
           forward_pid=$!

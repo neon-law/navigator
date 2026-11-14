@@ -23,9 +23,10 @@
 //!
 //! Reports name rows by key only.
 //!
-//! Under `NAVIGATOR_POSTGRES_CATALOG_AUTHORITY` PostgreSQL holds these rows,
-//! so a SurrealDB row (or its absence) is no evidence about them: the
-//! mirror writes nothing and [`parity`] compares no table.
+//! PostgreSQL holds these rows authoritatively ([`crate::postgres::catalog`]).
+//! Only the first Mirror Backfill copies SurrealDB rows into it; until one
+//! has completed [`parity`] reports each SurrealDB row PostgreSQL lacks, and
+//! after it compares no table (see [`super::compares_authoritative`]).
 
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
@@ -725,7 +726,7 @@ pub(super) async fn mirror(
     pg: &PostgresDb,
     key: &MirrorKey,
 ) -> Result<Mirrored, MirrorError> {
-    if crate::postgres::catalog::configured() {
+    if !super::initial_copy() {
         return Ok(Mirrored::Unchanged);
     }
     match key {
@@ -781,19 +782,21 @@ async fn table<C: Catalog>(
 ///
 /// Either store could not be read.
 pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
-    if crate::postgres::catalog::configured() {
+    if !super::compares_authoritative(pg).await? {
         return Ok(ParityReport { tables: Vec::new() });
     }
-    Ok(ParityReport {
-        tables: vec![
-            table::<AuthorityImage>(surreal, pg).await?,
-            table::<GlossaryTermImage>(surreal, pg).await?,
-            table::<QuestionImage>(surreal, pg).await?,
-            table::<NotationPackageImage>(surreal, pg).await?,
-            table::<PackageTemplateImage>(surreal, pg).await?,
-            table::<NotationRateImage>(surreal, pg).await?,
-        ],
-    })
+    let mut tables = Vec::with_capacity(6);
+    for table in [
+        table::<AuthorityImage>(surreal, pg).await?,
+        table::<GlossaryTermImage>(surreal, pg).await?,
+        table::<QuestionImage>(surreal, pg).await?,
+        table::<NotationPackageImage>(surreal, pg).await?,
+        table::<PackageTemplateImage>(surreal, pg).await?,
+        table::<NotationRateImage>(surreal, pg).await?,
+    ] {
+        tables.push(super::only_missing(pg, table).await?);
+    }
+    Ok(ParityReport { tables })
 }
 
 /// Re-mirror every divergent catalog row from SurrealDB, then compare

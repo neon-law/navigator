@@ -5,14 +5,14 @@ use sqlx::postgres::{PgConnectOptions, PgSslMode};
 use sqlx::Row;
 use store::persons::{NewPerson, Role};
 use store::postgres::PostgresDb;
-use store::postgres_mirror::{mirror, MirrorKey, MIRROR_ENV};
+use store::postgres_mirror::{mirror, MirrorKey};
 use store::surreal::SurrealDb;
 use uuid::Uuid;
 
 /// The write hook caches a process-wide pool and reads environment flags.
 /// Isolate the enabled-mirror scenario in a child rather than changing another test's store.
 #[tokio::test]
-async fn source_brand_move_converges_owner_and_seat_when_target_was_never_mirrored() {
+async fn source_brand_move_converges_owner_and_seat() {
     let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
         assert_ne!(std::env::var("NAV_REQUIRE_POSTGRES").as_deref(), Ok("1"));
         return;
@@ -43,7 +43,6 @@ async fn source_brand_move_converges_owner_and_seat_when_target_was_never_mirror
     let output = Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "brand_move_mirror_probe", "--nocapture"])
         .env("NAVIGATOR_BRAND_MOVE_MIRROR_PROBE", "1")
-        .env_remove(MIRROR_ENV)
         .env("NAVIGATOR_POSTGRES_TENANCY_AUTHORITY", "false")
         .env("NAVIGATOR_POSTGRES_PEOPLE_AUTHORITY", "false")
         .env("NAVIGATOR_POSTGRES_HOST", "127.0.0.1")
@@ -191,18 +190,6 @@ async fn brand_move_mirror_probe() {
     ] {
         mirror(&source, &pg, &key).await.unwrap();
     }
-    let target_exists: bool =
-        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM firm WHERE id = $1)")
-            .bind(target.id)
-            .fetch_one(pg.pool())
-            .await
-            .unwrap();
-    assert!(
-        !target_exists,
-        "the later target was created while mirroring was off"
-    );
-
-    std::env::set_var(MIRROR_ENV, "1");
     store::firms::move_brand(&source, Role::Owner, None, "neon", target.id)
         .await
         .unwrap();

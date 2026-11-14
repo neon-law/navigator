@@ -30,8 +30,8 @@
 //! than relying on the engine to refuse a duplicate — the same shape
 //! `store::attestations::record` uses for the same reason.
 //!
-//! `NAVIGATOR_POSTGRES_CATALOG_AUTHORITY` moves the global `authority` rows
-//! to PostgreSQL ([`crate::postgres::catalog`]); a matter's uses and
+//! PostgreSQL holds the global `authority` rows wherever it is configured
+//! ([`crate::postgres::catalog`]); a matter's uses and
 //! citations stay in SurrealDB and link to them by id.
 //!
 //! A matter delete reaches

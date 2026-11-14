@@ -6,8 +6,8 @@
 //! audit trail. The package holds a starting price, never an invoice or a
 //! promise to perform unquoted work. Xero remains the invoicing record.
 //!
-//! SurrealDB holds the catalog by default; `NAVIGATOR_POSTGRES_CATALOG_AUTHORITY`
-//! moves every read and write here to PostgreSQL
+//! PostgreSQL holds the catalog wherever it is configured: every read and
+//! write here goes to PostgreSQL
 //! ([`crate::postgres::catalog`]), where a package template must name a
 //! Template version PostgreSQL already holds.
 

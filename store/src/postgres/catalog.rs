@@ -2,10 +2,12 @@
 //! Entity Types, Glossary Terms, Jurisdictions, Notation packages and their
 //! templates, Notation rates, and Questions.
 //!
-//! These rows belong to no Firm or Project. `NAVIGATOR_POSTGRES_CATALOG_AUTHORITY`
-//! is opt-in; once on, each owning module reads and writes PostgreSQL only,
-//! a configured PostgreSQL failure is returned rather than falling back, and
-//! the catalog mirror stops copying SurrealDB rows over the authoritative ones.
+//! These rows belong to no Firm or Project. Wherever PostgreSQL is configured
+//! (`NAVIGATOR_POSTGRES_HOST`), each owning module reads and writes PostgreSQL
+//! only, a PostgreSQL failure is returned rather than falling back, and the
+//! catalog mirror copies SurrealDB rows only during the first Mirror Backfill
+//! (see [`crate::postgres_mirror::initial_copy`]). SurrealDB serves a process
+//! without PostgreSQL, which today means only the SurrealDB test harness.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -13,9 +15,6 @@ use std::pin::Pin;
 use sqlx::postgres::PgRow;
 
 use crate::postgres::{PostgresDb, PostgresError};
-
-/// When `1` or `true`, the catalog modules use PostgreSQL.
-pub const AUTHORITY_ENV: &str = "NAVIGATOR_POSTGRES_CATALOG_AUTHORITY";
 
 #[cfg(test)]
 tokio::task_local! {
@@ -25,8 +24,6 @@ tokio::task_local! {
 /// Why the PostgreSQL catalog could not serve a call.
 #[derive(Debug, thiserror::Error)]
 pub enum CatalogError {
-    #[error("NAVIGATOR_POSTGRES_CATALOG_AUTHORITY must be one of 0, 1, false, or true")]
-    Configuration,
     #[error("PostgreSQL is unavailable for the catalog authority")]
     Unavailable(#[from] PostgresError),
     #[error("PostgreSQL catalog operation failed: {0}")]
@@ -41,22 +38,6 @@ impl CatalogError {
     }
 }
 
-fn enabled_from(setting: Option<&str>) -> Result<bool, CatalogError> {
-    match setting {
-        None | Some("0" | "false") => Ok(false),
-        Some("1" | "true") => Ok(true),
-        Some(_) => Err(CatalogError::Configuration),
-    }
-}
-
-fn setting() -> Result<Option<String>, CatalogError> {
-    match std::env::var(AUTHORITY_ENV) {
-        Ok(value) => Ok(Some(value)),
-        Err(std::env::VarError::NotPresent) => Ok(None),
-        Err(std::env::VarError::NotUnicode(_)) => Err(CatalogError::Configuration),
-    }
-}
-
 /// A boxed catalog future. Every catalog call sits inside long request
 /// futures, so its PostgreSQL state lives on the heap rather than inflating
 /// each caller's stack frame.
@@ -64,30 +45,19 @@ pub(crate) type Boxed<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 type Query<'q> = sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>;
 
-/// The pool to serve the catalog from, or `None` when SurrealDB still holds it.
+/// The pool to serve the catalog from, or `None` in a process without
+/// PostgreSQL and for the mirror reading its SurrealDB source.
 pub(crate) fn authority() -> Boxed<'static, Result<Option<PostgresDb>, CatalogError>> {
     Box::pin(async {
+        if crate::postgres_mirror::reading_source() {
+            return Ok(None);
+        }
         #[cfg(test)]
         if let Ok(pg) = TEST_CATALOG_DB.try_with(Clone::clone) {
             return Ok(Some(pg));
         }
-        if !enabled_from(setting()?.as_deref())? {
-            return Ok(None);
-        }
-        Ok(Some(PostgresDb::from_env().await?))
+        Ok(PostgresDb::configured().await?)
     })
-}
-
-/// Whether the catalog mirror must leave PostgreSQL alone. An unreadable
-/// setting protects PostgreSQL too, until [`authority`] fails the caller.
-pub(crate) fn configured() -> bool {
-    #[cfg(test)]
-    if TEST_CATALOG_DB.try_with(|_| ()).is_ok() {
-        return true;
-    }
-    setting()
-        .and_then(|value| enabled_from(value.as_deref()))
-        .unwrap_or(true)
 }
 
 /// A catalog row decoded from PostgreSQL.

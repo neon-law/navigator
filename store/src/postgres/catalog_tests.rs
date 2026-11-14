@@ -10,19 +10,6 @@ use crate::test_support::mem_surreal;
 use crate::{entity_types, entity_types::EntityTypeError};
 use uuid::Uuid;
 
-#[test]
-fn the_switch_parses_strictly() {
-    assert!(!enabled_from(None).unwrap());
-    assert!(!enabled_from(Some("0")).unwrap());
-    assert!(!enabled_from(Some("false")).unwrap());
-    assert!(enabled_from(Some("1")).unwrap());
-    assert!(enabled_from(Some("true")).unwrap());
-    assert!(matches!(
-        enabled_from(Some("yes")),
-        Err(CatalogError::Configuration)
-    ));
-}
-
 async fn database() -> Option<PostgresDb> {
     let (options, database) = fresh_schema().await?;
     Some(connect(&options, &database).await)
@@ -243,8 +230,8 @@ async fn glossary_and_questions_converge_in_postgres() {
             .await
             .unwrap();
         assert!(
-            report.tables.is_empty(),
-            "no SurrealDB row is parity evidence"
+            report.is_clean(),
+            "only a SurrealDB row PostgreSQL lacks is parity evidence"
         );
     })
     .await;

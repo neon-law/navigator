@@ -6,8 +6,11 @@ use crate::postgres_mirror::tests::{connect, fresh_schema};
 use crate::questions::NewQuestion;
 use crate::test_support::mem_surreal;
 
+/// Mirror `key` as the first Mirror Backfill, the only copy into the catalog.
 async fn mirrored(surreal: &SurrealDb, pg: &PostgresDb, key: &MirrorKey) -> Mirrored {
-    super::super::mirror(surreal, pg, key).await.unwrap()
+    super::super::during_initial_copy(super::super::mirror(surreal, pg, key))
+        .await
+        .unwrap()
 }
 
 fn rows(report: &ParityReport) -> Vec<usize> {
@@ -257,8 +260,12 @@ async fn catalog_rows_converge_through_their_lifecycle() {
     assert_eq!(rows(&report), [1, 1, 1, 1, 0, 0]);
 }
 
+/// PostgreSQL holds the catalog. Outside the first Mirror Backfill the mirror
+/// copies nothing into it, and until a backfill has completed parity names
+/// each SurrealDB row PostgreSQL lacks, so reconcile, and with it `ops ship`,
+/// stays unclean. A row PostgreSQL changed is its own, never drift.
 #[tokio::test]
-async fn parity_names_divergent_catalog_keys_and_reconcile_repairs_them() {
+async fn only_the_first_backfill_copies_the_catalog_and_reconcile_stays_unclean_until_it() {
     let Some((options, database)) = fresh_schema().await else {
         return;
     };
@@ -268,86 +275,80 @@ async fn parity_names_divergent_catalog_keys_and_reconcile_repairs_them() {
     let authority = crate::authorities::record(&surreal, &new_authority("2 Synth. 2 (2026)"))
         .await
         .unwrap();
-    crate::glossary::materialize(&surreal, &[term("synthetic-reconciled", "Body.")])
+    crate::glossary::materialize(&surreal, &[term("synthetic-gated", "Body.")])
         .await
         .unwrap();
-    let glossary = crate::glossary::by_slug(&surreal, "synthetic-reconciled")
+    let glossary = crate::glossary::by_slug(&surreal, "synthetic-gated")
         .await
         .unwrap()
         .unwrap();
-    let question = crate::questions::create(
-        &surreal,
-        &NewQuestion::new("synthetic_reconciled", "Synthetic?", "string"),
-    )
-    .await
-    .unwrap();
-    let rate = rate(&surreal, "synthetic_reconciled_rate").await;
-    for key in [
+    let rate = rate(&surreal, "synthetic_gated_rate").await;
+    let keys = [
         MirrorKey::Authority(authority.id),
-        MirrorKey::Question(question.id),
-    ] {
-        mirrored(&surreal, &pg, &key).await;
+        MirrorKey::GlossaryTerm(glossary.id),
+        MirrorKey::NotationRate(rate),
+    ];
+    for key in &keys {
+        assert_eq!(
+            super::super::mirror(&surreal, &pg, key).await.unwrap(),
+            Mirrored::Unchanged
+        );
     }
 
-    // PostgreSQL drifts: a differing Authority, a stale Question SurrealDB
-    // never held, and a stale Glossary Term holding the live slug under
-    // another id. The live term and the rate never arrived.
-    sqlx::query("UPDATE authority SET title = 'Drifted' WHERE id = $1")
+    let unclean = reconcile(&surreal, &pg).await.unwrap();
+    let mut divergent: Vec<_> = unclean.divergent().cloned().collect();
+    divergent.sort();
+    let mut expected = keys.to_vec();
+    expected.sort();
+    assert_eq!(divergent, expected, "reconcile never repairs the catalog");
+    assert!(!format!("{unclean:?}").contains("Synthetic v. Fixture"));
+
+    let copied = super::super::during_initial_copy(reconcile(&surreal, &pg))
+        .await
+        .unwrap();
+    assert!(copied.is_clean(), "{copied:?}");
+    assert_eq!(rows(&copied), [1, 1, 0, 0, 0, 1]);
+
+    // PostgreSQL's own edits and rows are not drift.
+    sqlx::query("UPDATE authority SET title = 'Edited in PostgreSQL' WHERE id = $1")
         .bind(authority.id)
         .execute(&pg.0)
         .await
         .unwrap();
-    let stale_question = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO question (id, code, prompt, answer_type) \
-         VALUES ($1, 'synthetic_stale', 'Stale?', 'string')",
+         VALUES ($1, 'synthetic_postgres_only', 'Only here?', 'string')",
     )
-    .bind(stale_question)
+    .bind(Uuid::new_v4())
     .execute(&pg.0)
     .await
     .unwrap();
-    let stale_term = Uuid::new_v4();
+    assert!(parity(&surreal, &pg).await.unwrap().is_clean());
+
+    // After a completed backfill SurrealDB is no evidence: a row deleted in
+    // PostgreSQL stays deleted.
     sqlx::query(
-        "INSERT INTO glossary_term (id, slug, title, body) \
-         VALUES ($1, 'synthetic-reconciled', 'Stale', 'Stale.')",
+        "INSERT INTO mirror_backfill_run (id, batch_size, status, completed_at) \
+         VALUES ($1, 1, 'completed', now())",
     )
-    .bind(stale_term)
+    .bind(Uuid::new_v4())
     .execute(&pg.0)
     .await
     .unwrap();
-
-    // The live term collides with the stale slug until reconcile runs.
-    let refused = super::super::mirror(&surreal, &pg, &MirrorKey::GlossaryTerm(glossary.id))
-        .await
-        .unwrap_err();
-    assert!(matches!(refused, MirrorError::Target(ref code) if code == "23505"));
-
-    let report = parity(&surreal, &pg).await.unwrap();
-    let mut divergent: Vec<_> = report.divergent().cloned().collect();
-    divergent.sort();
-    let mut expected = vec![
-        MirrorKey::Authority(authority.id),
-        MirrorKey::GlossaryTerm(glossary.id),
-        MirrorKey::GlossaryTerm(stale_term),
-        MirrorKey::Question(stale_question),
-        MirrorKey::NotationRate(rate),
-    ];
-    expected.sort();
-    assert_eq!(divergent, expected);
-    // The report carries keys and counts, never a title or a body.
-    assert!(!format!("{report:?}").contains("Drifted"));
-
-    let repaired = reconcile(&surreal, &pg).await.unwrap();
-    assert!(repaired.is_clean(), "{repaired:?}");
-    assert_eq!(rows(&repaired), [1, 1, 1, 0, 0, 1]);
-    let replay = reconcile(&surreal, &pg).await.unwrap();
-    assert_eq!(replay, repaired);
-    let title: String = sqlx::query_scalar("SELECT title FROM authority WHERE id = $1")
-        .bind(authority.id)
-        .fetch_one(&pg.0)
+    sqlx::query("DELETE FROM glossary_term WHERE id = $1")
+        .bind(glossary.id)
+        .execute(&pg.0)
         .await
         .unwrap();
-    assert_eq!(title, "Synthetic v. Fixture");
+    assert!(parity(&surreal, &pg).await.unwrap().tables.is_empty());
+    assert!(reconcile(&surreal, &pg).await.unwrap().is_clean());
+    let held: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM glossary_term WHERE id = $1)")
+            .bind(glossary.id)
+            .fetch_one(&pg.0)
+            .await
+            .unwrap();
+    assert!(!held);
 }
 
 #[tokio::test]
@@ -368,7 +369,9 @@ async fn the_canonical_seed_mirrors_once_and_a_reseed_changes_nothing() {
         .await
         .unwrap();
 
-    let seeded = reconcile(&surreal, &pg).await.unwrap();
+    let seeded = super::super::during_initial_copy(reconcile(&surreal, &pg))
+        .await
+        .unwrap();
     assert!(seeded.is_clean(), "{seeded:?}");
     let glossary_terms = seeded.tables[1].target_rows;
     let questions = seeded.tables[2].target_rows;
@@ -398,9 +401,13 @@ async fn an_authority_naming_an_asset_postgres_lacks_is_refused_and_reported() {
     .await
     .unwrap();
     let key = MirrorKey::Authority(authority.id);
-    let error = super::super::mirror(&surreal, &pg, &key).await.unwrap_err();
+    let error = super::super::during_initial_copy(super::super::mirror(&surreal, &pg, &key))
+        .await
+        .unwrap_err();
     assert!(matches!(error, MirrorError::Target(ref code) if code == "23503"));
-    let report = reconcile(&surreal, &pg).await.unwrap();
+    let report = super::super::during_initial_copy(reconcile(&surreal, &pg))
+        .await
+        .unwrap();
     assert_eq!(report.tables[0].divergent, [key]);
     assert_eq!(report.tables[0].target_rows, 0);
 }

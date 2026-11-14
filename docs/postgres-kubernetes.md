@@ -110,15 +110,14 @@ and the `navigator_archive` login follow the same rule with `NAVIGATOR_POSTGRES_
 
 None of these values enters the `envFrom` deployment Secret. A pod mounts only its own login, plus the CA bundle.
 
-### `web` opt-in
+### `web` connection
 
-Set `NAVIGATOR_POSTGRES_ENABLED = "true"` in a deployment's `config.toml` to opt in. `ops ship` then adds
+Every deployment's `web` connects to PostgreSQL. `ops ship` adds
 `examples/deploy/k8s/gke/postgres/web/web-postgres.yaml` after `web-env.yaml`. It gives `web` the
 `NAVIGATOR_POSTGRES_HOST`, `PORT`, `DATABASE`, `SSLMODE` (`verify-full`), `ROOT_CERT`, and `USER` (`navigator_app`)
 values inline, the password from `navigator-postgres-app`, a read-only mount of only that Secret's `ca.crt`, and the
-client label. An absent or `false` value renders nothing; any other value refuses the ship. With the variables present,
-`web` imports the legacy journal before serving and logs `legacy journal import completed`
-([`firm-journal.md`](firm-journal.md)).
+client label. With the variables present, `web` imports the legacy journal before serving and logs `legacy journal
+import completed` ([`firm-journal.md`](firm-journal.md)).
 
 ### DBOS opt-in
 
@@ -131,8 +130,8 @@ durability](dbos-durability.md) has the operator steps.
 
 ### Archives opt-in
 
-Set `NAVIGATOR_DBOS_ARCHIVES_ENABLED = "true"` to run the Archives schedule on the DBOS executor in `web`. It needs both
-opt-ins above. `ops ship` adds `examples/deploy/k8s/gke/postgres/web/web-archives.yaml` and the reviewed
+Set `NAVIGATOR_DBOS_ARCHIVES_ENABLED = "true"` to run the Archives schedule on the DBOS executor in `web`. It needs the
+DBOS opt-in above. `ops ship` adds `examples/deploy/k8s/gke/postgres/web/web-archives.yaml` and the reviewed
 `navigator-archive-coverage` ConfigMap, then deletes the Restate `archives-trigger` CronJob. Each 05:55 and 17:55 UTC
 run exports the whole `navigator` and `forgejo` databases to Iceberg as `navigator_archive`. Add
 `NAVIGATOR_POSTGRES_ARCHIVE_PASSWORD` to the PostgreSQL service file, apply it with `hudson ops secrets apply --service
@@ -147,12 +146,12 @@ archive](iceberg-archive.md#where-it-runs).
 
 ### Mirror parity and reconcile
 
-With `NAVIGATOR_POSTGRES_ENABLED = "true"` and `NAVIGATOR_POSTGRES_MIRROR = "1"` in the deployment configuration, `ops
-ship` requires a clean initial reconciliation, enables bounded synchronous projection retries, and installs recurring
-recovery with a monitoring Rule. SurrealDB remains authoritative for mirrored domain rows. Recovery provides eventual
-convergence after failures; it does not commit the two databases atomically. The [mirror tooling
-guide](postgres-tooling.md#postgresql-mirror-tables-and-reconciliation) describes coverage and recovery limits. A missed
-write, or a row written before the mirror was on, leaves drift. The operator command measures and repairs that drift:
+`web` mirrors every SurrealDB write it still makes into PostgreSQL. `ops ship` runs the one-shot reconcile Job after the
+Forgejo step and before it applies the application, stops the ship unless the Job exits clean, and installs recurring
+recovery with a monitoring Rule. Recovery provides eventual convergence after failures; it does not commit the two
+databases atomically. The [mirror tooling guide](postgres-tooling.md#postgresql-mirror-tables-and-reconciliation)
+describes coverage and recovery limits. A missed write, or a row written before the mirror was on, leaves drift. The
+operator command measures and repairs that drift:
 
 ```bash
 hudson ops postgres mirror parity [--json]              # read only
@@ -160,10 +159,15 @@ hudson ops postgres mirror reconcile --dry-run [--json] # read only
 hudson ops postgres mirror reconcile [--json]           # re-mirror from SurrealDB
 ```
 
-`ops ship` renders configured People, Project lifecycle, Inbox, tenancy, and graph authority settings into the web
-Deployment's PostgreSQL patch. Selecting PostgreSQL authority explicitly requires both settings above. The four
-`NAVIGATOR_POSTGRES_*_AUTHORITY` switches accept `1`, `0`, `true`, or `false`. Each domain's runtime applies its own
-cutover prerequisites.
+PostgreSQL holds the shared catalogs and the matter records authoritatively, and the mirror never repairs them from
+SurrealDB. Until a [Mirror Backfill](postgres-tooling.md#mirror-backfill) has completed against a deployment's
+PostgreSQL, parity reports each catalog or matter-record row SurrealDB holds and PostgreSQL lacks, so reconcile stays
+unclean and the ship stops before `web` reads an empty table. Run `hudson ops postgres backfill` once; it is the one
+copy that writes those tables. After it completes, SurrealDB is no evidence for them and parity skips them.
+
+`ops ship` renders the People, Project lifecycle, and tenancy authority settings a deployment still sets into the web
+Deployment's PostgreSQL patch. The three `NAVIGATOR_POSTGRES_*_AUTHORITY` switches accept `1`, `0`, `true`, or `false`.
+Each domain's runtime applies its own cutover prerequisites.
 
 It reads the same `NAVIGATOR_SURREAL_*` and `NAVIGATOR_POSTGRES_*` variables `web` reads. Each table reports its
 SurrealDB and PostgreSQL row counts and its missing, extra, and differing rows. Divergent rows are named by UUID only. A
@@ -339,8 +343,9 @@ its environment's context, namespace, and deployment row.
 
    A Job's pod template is immutable, so the first line removes the completed Jobs a release leaves behind, as `ops
    ship` does.
-6. **`web` env.** Set `NAVIGATOR_POSTGRES_ENABLED = "true"` in `deployments/<name>/config.toml` through a pull
-   request. Then ship that release: `hudson ops ship --deployment <name> --tag <release>`.
+6. **Backfill, then ship.** Run `hudson ops postgres backfill` against the deployment until it completes, then ship the
+   release: `hudson ops ship --deployment <name> --tag <release>`. The ship's reconcile Job stays unclean, and stops the
+   ship before `web` is applied, until a backfill has completed.
 7. **Verify.** The `web` log shows the import and triage counts; then smoke the journal through the deployment's API:
 
    ```bash
@@ -348,8 +353,8 @@ its environment's context, namespace, and deployment row.
    hudson journal --firm <firm-id> --host <deployment-host> list
    ```
 
-To back out, set `NAVIGATOR_POSTGRES_ENABLED = "false"` and ship. `web` stops connecting to PostgreSQL. Journal entries
-already written there stay there, and the journal routes need PostgreSQL ([`firm-journal.md`](firm-journal.md)).
+There is no back-out to a `web` without PostgreSQL: PostgreSQL holds the catalogs and matter records, and the journal
+routes need it ([`firm-journal.md`](firm-journal.md)).
 
 ## Multiple service databases on the shared instance
 

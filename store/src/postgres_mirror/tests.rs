@@ -278,12 +278,10 @@ pub(crate) async fn connect(options: &PgConnectOptions, database: &str) -> Postg
 }
 
 #[test]
-fn the_mirror_needs_both_the_opt_in_and_a_host() {
-    assert!(enabled_by(Some("1"), Some("127.0.0.1")));
-    assert!(!enabled_by(None, Some("127.0.0.1")));
-    assert!(!enabled_by(Some("true"), Some("127.0.0.1")));
-    assert!(!enabled_by(Some("1"), None));
-    assert!(!enabled_by(Some("1"), Some(" ")));
+fn the_mirror_runs_wherever_postgres_is_configured() {
+    assert!(enabled_by(Some("127.0.0.1")));
+    assert!(!enabled_by(None));
+    assert!(!enabled_by(Some(" ")));
 }
 
 #[test]
@@ -328,7 +326,7 @@ fn the_write_hook_isolated() {
         runtime.block_on(fresh_database()).unwrap()
     });
     if database.is_some() {
-        cases.extend(["off", "mirrored"]);
+        cases.push("mirrored");
     }
     for case in cases {
         let mut child = Command::new(std::env::current_exe().unwrap());
@@ -339,7 +337,6 @@ fn the_write_hook_isolated() {
                 "--nocapture",
             ])
             .env("NAVIGATOR_POSTGRES_MIRROR_TEST_CASE", case)
-            .env(MIRROR_ENV, "1")
             .env("NAVIGATOR_POSTGRES_HOST", "127.0.0.1")
             .env("NAVIGATOR_POSTGRES_PORT", "1")
             .env("NAVIGATOR_POSTGRES_USER", "synthetic-writer")
@@ -351,10 +348,7 @@ fn the_write_hook_isolated() {
             "disabled" => {
                 child.env_remove("NAVIGATOR_POSTGRES_HOST");
             }
-            "off" | "mirrored" => {
-                if case == "off" {
-                    child.env_remove(MIRROR_ENV);
-                }
+            "mirrored" => {
                 let (_, name) = database.as_ref().unwrap();
                 child
                     .env(
@@ -377,8 +371,14 @@ fn the_write_hook_isolated() {
 }
 
 /// A synthetic Entity whose Entity Type and Jurisdiction exist in
-/// SurrealDB, so the identity mirror can supply all three.
+/// SurrealDB, so the identity mirror can supply all three. The catalog rows
+/// are written to SurrealDB even where PostgreSQL, which holds the catalog,
+/// is configured.
 pub(super) async fn synthetic_entity(surreal: &SurrealDb) -> Uuid {
+    super::from_source(surreal_entity(surreal)).await
+}
+
+async fn surreal_entity(surreal: &SurrealDb) -> Uuid {
     let suffix = Uuid::now_v7().simple().to_string();
     let jurisdiction = crate::jurisdictions::create(
         surreal,
@@ -635,33 +635,6 @@ async fn write_hook_probe() {
             // Up to 20 source-hook/replay mirror attempts occur in this
             // combined probe; each must stay within its per-write timeout.
             assert!(started.elapsed() < MIRROR_TIMEOUT * 20 + Duration::from_secs(5));
-        }
-        "off" => {
-            assert_eq!(replay, MirrorOutcome::Disabled);
-            let pg = PostgresDb::from_env().await.unwrap();
-            for table in ["person", "entity", "entity_type", "jurisdiction", "firm"] {
-                let rows: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-                    "SELECT count(*) FROM {table}"
-                )))
-                .fetch_one(&pg.0)
-                .await
-                .unwrap();
-                assert_eq!(rows, 0, "{table} written with the mirror off");
-            }
-            let social_rows: i64 = sqlx::query_scalar("SELECT count(*) FROM social_account")
-                .fetch_one(&pg.0)
-                .await
-                .unwrap();
-            assert_eq!(social_rows, 0, "social account written with mirror off");
-            for table in ["mailroom", "letter"] {
-                let rows: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-                    "SELECT count(*) FROM {table}"
-                )))
-                .fetch_one(&pg.0)
-                .await
-                .unwrap();
-                assert_eq!(rows, 0, "{table} written with mirror off");
-            }
         }
         "mirrored" => {
             assert_eq!(replay, MirrorOutcome::Mirrored(Mirrored::Unchanged));

@@ -424,7 +424,9 @@ async fn upsert_notation(
     }
     if let Some(package) = notation.package_id {
         if !present(pg, PACKAGE_PRESENT, package).await? {
-            super::catalog::mirror(surreal, pg, &MirrorKey::NotationPackage(package)).await?;
+            // A missing parent is copied even into the authoritative catalog.
+            let key = MirrorKey::NotationPackage(package);
+            super::during_initial_copy(super::catalog::mirror(surreal, pg, &key)).await?;
         }
     }
     ensure_template(surreal, pg, notation.template_id).await?;
@@ -538,7 +540,9 @@ async fn mirror_answer(
     };
     let answer = AnswerImage::from_source(&row)?;
     if !present(pg, QUESTION_PRESENT, answer.question_id).await? {
-        super::catalog::mirror(surreal, pg, &MirrorKey::Question(answer.question_id)).await?;
+        // A missing parent is copied even into the authoritative catalog.
+        let key = MirrorKey::Question(answer.question_id);
+        super::during_initial_copy(super::catalog::mirror(surreal, pg, &key)).await?;
     }
     if let Some(notation) = answer.notation_id {
         ensure_notation(surreal, pg, notation).await?;

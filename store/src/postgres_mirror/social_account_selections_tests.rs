@@ -369,7 +369,6 @@ async fn saved_selection_write_hook_uses_the_isolated_postgres_database() {
             "--nocapture",
         ])
         .env("NAVIGATOR_SELECTION_HOOK_TEST_CASE", "mirrored")
-        .env(crate::postgres_mirror::MIRROR_ENV, "1")
         .env("NAVIGATOR_POSTGRES_HOST", "127.0.0.1")
         .env("NAVIGATOR_POSTGRES_PORT", options.get_port().to_string())
         .env("NAVIGATOR_POSTGRES_USER", "postgres")

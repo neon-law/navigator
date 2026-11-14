@@ -41,13 +41,21 @@ transition to repair it. Keep lifecycle authority enabled once a deployment has 
 
 ## Matter records
 
-`NAVIGATOR_POSTGRES_MATTER_AUTHORITY=1` (or `true`) routes the owning modules of `statutory_deadline`, `notation_draft`,
-`estate_asset`, `cap_table_holding`, `fiduciary_role`, and `git_repository` to PostgreSQL through
-`store::postgres::matter`, a generic accessor over the records mirror's table registry. Writes land only in PostgreSQL.
-The records mirror then refuses to repair those tables from SurrealDB, because a missing SurrealDB row is not deletion
-evidence. Reference checks still read the Project, Person, Entity, and Notation from their own authorities, and the
-Project mirror supplies the parent rows. Run the records reconcile and resolve drift before enabling the switch. Keep it
-enabled once a deployment has written matter records.
+Wherever `NAVIGATOR_POSTGRES_HOST` is set, the owning modules of `statutory_deadline`, `notation_draft`, `estate_asset`,
+`cap_table_holding`, `fiduciary_role`, and `git_repository` read and write PostgreSQL through `store::postgres::matter`,
+a generic accessor over the records mirror's table registry. Writes land only in PostgreSQL. The records mirror refuses
+to repair those tables from SurrealDB, because a missing SurrealDB row is not deletion evidence; only the first [Mirror
+Backfill](postgres-tooling.md#mirror-backfill) copies SurrealDB's rows in. Reference checks still read the Project,
+Person, Entity, and Notation from their own authorities, and the Project mirror supplies the parent rows.
+
+## Catalogs
+
+Wherever `NAVIGATOR_POSTGRES_HOST` is set, the shared catalogs (Authorities, Entity Types, Glossary Terms,
+Jurisdictions, Notation packages and their templates, Notation rates, and Questions) are read and written in PostgreSQL
+through `store::postgres::catalog`, on the same terms as the matter records.
+
+Every deployment sets the host. A process without it, today only the SurrealDB test harness, still reads both from
+SurrealDB.
 
 ## Communications and email
 

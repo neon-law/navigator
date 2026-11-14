@@ -134,9 +134,9 @@ configuration; authority cutover takes precedence over the source mirror. The mi
   `notation_rate`. These are shared catalogs owned by no Firm or Project. The Authority, glossary, Question, and
   Notation package writers in `store::authorities`, `store::glossary`, `store::questions`, and
   `store::notation_packages` call the mirror; the canonical seed reaches it through those writers. Notation rates have
-  no SurrealDB writer and reach PostgreSQL only through `reconcile`. Setting `NAVIGATOR_POSTGRES_CATALOG_AUTHORITY=1`
-  routes these tables, with `jurisdiction` and `entity_type`, through PostgreSQL in their owning modules and stops the
-  mirror and parity for them; SurrealDB is no longer consulted.
+  no SurrealDB writer. Wherever PostgreSQL is configured these tables, with `jurisdiction` and `entity_type`, are read
+  and written in PostgreSQL by their owning modules; only the first [Mirror Backfill](#mirror-backfill) copies SurrealDB
+  rows into them.
 - **Identity detail:** what a Person or Entity holds beside its own row: `address`, `credential`, `email_token`,
   `entity_role`, `person_delegate`, `person_external_identity`, and `person_mailbox`. Their writers in
   `store::addresses`, `store::credentials`, `store::email_tokens`, `store::entity_roles`, `store::delegations`,
@@ -189,8 +189,8 @@ use insert-only semantics and are never overwritten or deleted by the mirror.
 
 | Setting | Effect |
 | --- | --- |
-| `NAVIGATOR_POSTGRES_MIRROR=1` and `NAVIGATOR_POSTGRES_HOST` set | Mirror each write through the shared pool |
-| Either missing | Do nothing; PostgreSQL is never contacted |
+| `NAVIGATOR_POSTGRES_HOST` set | Mirror each write through the shared pool |
+| Unset | Do nothing; PostgreSQL is never contacted |
 
 Each row has one identity in both stores. A Firm, Brand, Project, Project participation, asset, Notation, Notation
 Event, answer, and Post use their record UUID. A `firm_brand` row uses its Brand key. A Firm membership uses its Person
@@ -205,12 +205,15 @@ failures retry; invalid timestamps and integrity constraints stop immediately. R
 an external effect. A failed projection logs its table and sanitized error at error level and leaves the committed
 Surreal write intact. Returning a retryable request error after that commit could duplicate external effects.
 
-Deployment opt-in requires both `NAVIGATOR_POSTGRES_ENABLED = "true"` and `NAVIGATOR_POSTGRES_MIRROR = "1"` in the
-private deployment's `config.toml`. Ship requires a clean initial reconciliation before applying the application and
-installs a reconciliation CronJob every five minutes. It uses the existing CLI image, verify-full TLS, and the app
-login. Concurrent scheduled runs are forbidden; failed or overdue recovery raises a critical monitoring rule. Alert
-routing and kube-state metrics must be operational in the deployment. Disabling the flag stops web projections;
-explicitly remove the recovery CronJob and its monitoring Rule when retiring recovery.
+Every deployment mirrors. Ship requires a clean reconciliation before applying the application and installs a
+reconciliation CronJob every five minutes. It uses the existing CLI image, verify-full TLS, and the app login.
+Concurrent scheduled runs are forbidden; failed or overdue recovery raises a critical monitoring rule. Alert routing and
+kube-state metrics must be operational in the deployment.
+
+The tables PostgreSQL holds authoritatively (the catalogs above and the matter records in [storage
+models](storage-models.md)) are never repaired from SurrealDB. Until a Mirror Backfill has completed against the
+database, their parity names each SurrealDB row PostgreSQL lacks, so reconciliation stays unclean and a ship stops
+before `web` reads an empty table. After it, SurrealDB is no evidence for them and parity skips them.
 
 Durable source rows and target drift allow the recurring scan to rediscover missing, differing, and extra mutable rows
 after an application process exits. This is eventual convergence when both stores recover and writes settle, not a
@@ -308,6 +311,11 @@ before a deployment turned the mirror on, or a write whose projection failed and
 through the same per-row mirror the write hook and `reconcile` use, so a backfilled row is the row the mirror would have
 written. It never overwrites a differing row or deletes a PostgreSQL-only row; those stay with `ops postgres mirror
 reconcile`.
+
+The first backfill against a database, the one before any run has completed, is also the only copy into the tables
+PostgreSQL holds authoritatively: the catalogs and the matter records. It writes the SurrealDB rows those tables lack
+and leaves every row PostgreSQL holds. Its completion is what lets `ops ship` cut a deployment over; later runs leave
+those tables alone, so a row deleted in PostgreSQL is never restored from SurrealDB.
 
 ```bash
 hudson ops postgres backfill --dry-run --json          # the plan; writes nothing

@@ -600,9 +600,6 @@ async fn an_import_walks_the_postgres_ingest_idempotently() {
         .env("NAVIGATOR_POSTGRES_PASSWORD", "synthetic")
         .env("NAVIGATOR_POSTGRES_DATABASE", &database)
         .env("NAVIGATOR_POSTGRES_SSLMODE", "disable")
-        // The attachment filing mirrors the Surreal asset row into
-        // PostgreSQL; `set_attachment_asset`'s foreign key needs it there.
-        .env("NAVIGATOR_POSTGRES_MIRROR", "1")
         .output()
         .expect("spawn the postgres-backed child test");
     remove_isolated_database(&port, &database).await;
@@ -694,7 +691,7 @@ async fn run_lifecycle() {
     // The Surreal side: the lawyer, their Firm and membership, the matter.
     // Person, firm, membership, entity, project, and participation rows all
     // reach PostgreSQL through the mirror their Surreal writes fire
-    // (NAVIGATOR_POSTGRES_MIRROR=1 on the child) — seeding them again by
+    // (PostgreSQL is configured on the child) — seeding them again by
     // hand collides with the mirror's own rows.
     let db = mem_surreal().await;
     let (lawyer_id, project) = seed_practice(&db).await;

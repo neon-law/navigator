@@ -482,7 +482,6 @@ fn matter_sync_hooks_are_isolated_from_disabled_and_unreachable_postgres() {
                 "--nocapture",
             ])
             .env("NAVIGATOR_MATTER_HOOK_TEST_CASE", case)
-            .env(crate::postgres_mirror::MIRROR_ENV, "1")
             .env("NAVIGATOR_POSTGRES_HOST", "127.0.0.1")
             .env("NAVIGATOR_POSTGRES_PORT", "1")
             .env("NAVIGATOR_POSTGRES_USER", "postgres")
