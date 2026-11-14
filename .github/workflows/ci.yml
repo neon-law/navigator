@@ -923,8 +923,9 @@ jobs:
           NAV_REQUIRE_POSTGRES: "1"
           RUST_BACKTRACE: full
           # Coverage-instrumented routes and the embedded SurrealDB engine
-          # share a test thread. Keep the larger stack in this CI lane.
-          RUST_MIN_STACK: "8388608"
+          # share a test thread. 32 MiB holds store persons::create and portal
+          # inbox_transport under llvm-cov; 8 MiB does not.
+          RUST_MIN_STACK: "33554432"
         # Compile and run at the machine's full width.
         run: |
           set -uo pipefail
