@@ -4356,10 +4356,14 @@ pub async fn open_matter(
         .and_then(ProjectRow::into_project)
         .ok_or_else(|| OpenMatterError::Db("opening a matter returned no project".into()))?;
 
-    // The attestation and the matter it attests to land in one engine, so
-    // an opened matter cannot exist without the record that the conflict
-    // check was run and cleared — the record the firm's `@cleared`
-    // discipline rests on.
+    // The attestation is the record that the conflict check was run and
+    // cleared — the record the firm's `@cleared` discipline rests on. It
+    // lands where the graph lives: under the AGE engine its PostgreSQL row
+    // names the Project by foreign key, so the matter's PostgreSQL copy
+    // lands first. A failure of either is the caller's error.
+    mirror_project_with_participations(surreal, project_id)
+        .await
+        .map_err(|error| OpenMatterError::Db(error.to_string()))?;
     record_open_attestation(
         surreal,
         project_id,
@@ -4368,9 +4372,6 @@ pub async fn open_matter(
         &conflict.summary_lines(),
     )
     .await?;
-    mirror_project_with_participations(surreal, project_id)
-        .await
-        .map_err(|error| OpenMatterError::Db(error.to_string()))?;
 
     Ok(created)
 }

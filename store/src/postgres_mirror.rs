@@ -493,6 +493,8 @@ pub enum MirrorError {
     InboxAuthority,
     #[error("SurrealDB matter record repair is disabled while PostgreSQL matter authority is enabled or misconfigured")]
     MatterAuthority,
+    #[error("a graph row SurrealDB lacks is not deleted while PostgreSQL holds the graph tables or is configured but unreachable")]
+    GraphAuthority,
     #[error("the SurrealDB source row carries an unreadable timestamp")]
     SourceTimestamp,
     #[error("the SurrealDB source row carries an unreadable date")]
@@ -514,6 +516,7 @@ impl MirrorError {
             Self::At { cause, .. } => cause.retryable(),
             Self::InboxAuthority
             | Self::MatterAuthority
+            | Self::GraphAuthority
             | Self::SourceTimestamp
             | Self::SourceDate
             | Self::UnmappedSourceFields { .. } => false,

@@ -124,6 +124,11 @@ pub(super) async fn mirror(
     key: &MirrorKey,
 ) -> Result<Mirrored, MirrorError> {
     let Some(image) = source_rows(surreal, Some(key)).await?.pop() else {
+        // A reference SurrealDB lacks is no evidence once PostgreSQL holds
+        // the table: copy, never delete.
+        if crate::postgres_graph::holds("project_reference").await {
+            return Err(MirrorError::GraphAuthority);
+        }
         let MirrorKey::ProjectReference {
             project_id,
             party_kind,

@@ -702,10 +702,15 @@ async fn mirror_entity_role(
     entity_id: Uuid,
     role: &str,
 ) -> Result<Mirrored, MirrorError> {
-    let found = crate::entity_roles::find(surreal, person_id, entity_id, role)
+    let found = crate::entity_roles::find_in_surreal(surreal, person_id, entity_id, role)
         .await
         .map_err(source)?;
     let Some(tie) = found else {
+        // A tie SurrealDB lacks is no evidence once PostgreSQL holds the
+        // table: copy, never delete.
+        if crate::postgres_graph::holds("entity_role").await {
+            return Err(MirrorError::GraphAuthority);
+        }
         let deleted = sqlx::query(
             "DELETE FROM entity_role WHERE person_id = $1 AND entity_id = $2 AND role = $3",
         )
@@ -734,15 +739,16 @@ async fn compare_entity_roles(
     surreal: &SurrealDb,
     pg: &PostgresDb,
 ) -> Result<super::TableParity, MirrorError> {
-    let source: BTreeMap<MirrorKey, Option<EntityRoleImage>> = crate::entity_roles::all(surreal)
-        .await
-        .map_err(source)?
-        .into_iter()
-        .map(|tie| {
-            let image = EntityRoleImage::from_source(tie);
-            (image.key(), Some(image))
-        })
-        .collect();
+    let source: BTreeMap<MirrorKey, Option<EntityRoleImage>> =
+        crate::entity_roles::all_in_surreal(surreal)
+            .await
+            .map_err(source)?
+            .into_iter()
+            .map(|tie| {
+                let image = EntityRoleImage::from_source(tie);
+                (image.key(), Some(image))
+            })
+            .collect();
     let target: BTreeMap<MirrorKey, EntityRoleImage> =
         sqlx::query("SELECT person_id, entity_id, role, inserted_at, updated_at FROM entity_role")
             .fetch_all(&pg.0)

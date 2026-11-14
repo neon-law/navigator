@@ -31,7 +31,7 @@ use sqlx::Row;
 use uuid::Uuid;
 
 use crate::conflicts::{self, NodeRef, ParityEdge};
-use crate::postgres::{PostgresDb, PostgresError};
+use crate::postgres::PostgresDb;
 use crate::postgres_backfill::BackfillError;
 use crate::surreal::SurrealDb;
 
@@ -100,86 +100,65 @@ pub enum GraphError {
     SurrealTraversal,
 }
 
-/// Which store walks the relationship graph, read once per check from
-/// `NAVIGATOR_GRAPH_AUTHORITY`.
+/// The PostgreSQL pool the graph runs on: `Some` whenever the deployment
+/// has configured PostgreSQL, which then holds every table in
+/// [`AUTHORITATIVE_TABLES`] — rows in PostgreSQL, edges in the
+/// `navigator_graph` projection, the conflict walk in Apache AGE — and
+/// SurrealDB receives nothing.
 ///
-/// `age` is the default: the graph tables' authoritative copy is
-/// PostgreSQL's — the write path lands rows in `entity_role` and
-/// `relationship` and their edges in the `navigator_graph` projection —
-/// so the traversal reads the store that owns the data. `surreal` is the
-/// rollback path, and it is honest about its limit: the Surreal graph
-/// tables are retired from the write path, so they go stale the moment
-/// the process writes anything. Set the flag to `surreal` to compare an
-/// old answer or to finish an emergency rollback that also flips the
-/// writes back, not for day-to-day truth. The flag exists so a bad
-/// cutover is a one-line rollback, not a redeploy.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub(crate) enum GraphEngine {
-    /// The original SurrealQL traversal over `<->entity_role` and
-    /// `<->relationship`.
-    Surreal,
-    /// The `navigator_graph` projection in Apache AGE, in this module.
-    #[default]
-    Age,
-}
-
-/// The environment variable that selects the graph engine.
-pub(crate) const GRAPH_AUTHORITY_ENV: &str = "NAVIGATOR_GRAPH_AUTHORITY";
-
-/// Parse [`GRAPH_AUTHORITY_ENV`]'s value.
-///
-/// Accepts `surreal` and `age`, case-insensitively; anything else is an
-/// error naming the accepted values — a typo must fail a boot or a test
-/// loudly rather than silently run the wrong engine.
-pub(crate) fn parse_graph_engine(value: &str) -> Result<GraphEngine, String> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "surreal" => Ok(GraphEngine::Surreal),
-        "age" => Ok(GraphEngine::Age),
-        other => Err(format!(
-            "{GRAPH_AUTHORITY_ENV} must be `surreal` or `age`, got `{other}`"
-        )),
-    }
-}
-
-/// The engine this process runs the conflict graph on, resolved from the
-/// environment once per call.
-///
-/// No variable set means [`GraphEngine::Age`]. An unusable value is an
-/// error — see [`parse_graph_engine`].
-pub(crate) fn graph_engine_from_env() -> Result<GraphEngine, String> {
-    match std::env::var(GRAPH_AUTHORITY_ENV) {
-        Ok(value) => parse_graph_engine(&value),
-        Err(std::env::VarError::NotPresent) => Ok(GraphEngine::default()),
-        Err(error) => Err(format!("read {GRAPH_AUTHORITY_ENV}: {error}")),
-    }
-}
-
-/// The engine a graph read or write runs on: [`graph_engine_from_env`],
-/// refined by the deployment's own shape.
-///
-/// A deployment that has not configured PostgreSQL at all runs the
-/// Surreal engine — the same opt-in posture that keeps its whole web off
-/// PostgreSQL until its configuration says otherwise, and the shape
-/// every Surreal-only fixture boot has. When [`GraphEngine::Age`] is
-/// selected and PostgreSQL is configured but unreachable, the call
-/// fails: a graph write may not silently vanish, and a check may not
+/// `None` is the one remaining Surreal graph path: a deployment that has
+/// not configured PostgreSQL at all, the shape every Surreal-only fixture
+/// boot has, keeps the graph tables in SurrealDB and walks them with the
+/// SurrealQL traversal. When PostgreSQL is configured but unreachable the
+/// call fails: a graph write may not silently vanish, and a read may not
 /// silently answer from a stale copy.
 ///
 /// # Errors
 ///
-/// [`GRAPH_AUTHORITY_ENV`]'s value is unusable, or the AGE engine needs
-/// PostgreSQL and the connection fails.
-pub(crate) async fn graph_engine() -> Result<GraphEngine, String> {
-    match graph_engine_from_env()? {
-        GraphEngine::Surreal => Ok(GraphEngine::Surreal),
-        GraphEngine::Age => match PostgresDb::from_env().await {
-            Ok(_) => Ok(GraphEngine::Age),
-            Err(PostgresError::Configuration) => Ok(GraphEngine::Surreal),
-            Err(error) => Err(format!(
-                "the AGE graph engine needs PostgreSQL and it is unusable: {error}"
-            )),
-        },
+/// PostgreSQL is configured and the connection fails.
+pub(crate) async fn graph_authority() -> Result<Option<PostgresDb>, String> {
+    #[cfg(test)]
+    if let Ok(selected) = TEST_GRAPH_AUTHORITY.try_with(Clone::clone) {
+        return Ok(selected);
     }
+    PostgresDb::configured()
+        .await
+        .map_err(|error| format!("the AGE graph needs PostgreSQL and it is unusable: {error}"))
+}
+
+/// The tables PostgreSQL holds wherever it is configured: the two edge tables
+/// the conflict walk traverses, and the graph's party and evidence rows.
+pub(crate) const AUTHORITATIVE_TABLES: &[&str] = &[
+    "entity_role",
+    "relationship",
+    "project_reference",
+    "disclosure",
+    "relationship_log",
+];
+
+/// Whether a SurrealDB row of `table` is no evidence for PostgreSQL: the
+/// table is in [`AUTHORITATIVE_TABLES`] and PostgreSQL holds it, or
+/// PostgreSQL is configured but unreachable. The mirror neither writes nor
+/// deletes such a row, so a missing Surreal row cannot delete an
+/// authoritative one.
+pub(crate) async fn holds(table: &str) -> bool {
+    AUTHORITATIVE_TABLES.contains(&table) && graph_authority().await.map_or(true, |pg| pg.is_some())
+}
+
+#[cfg(test)]
+tokio::task_local! {
+    static TEST_GRAPH_AUTHORITY: Option<PostgresDb>;
+}
+
+/// Run `future` as a deployment whose graph resolves to `selected`:
+/// `Some(pg)` holds it in PostgreSQL on `pg`, `None` is a deployment
+/// without PostgreSQL.
+#[cfg(test)]
+pub(crate) async fn with_test_authority<T>(
+    selected: Option<PostgresDb>,
+    future: impl std::future::Future<Output = T>,
+) -> T {
+    TEST_GRAPH_AUTHORITY.scope(selected, future).await
 }
 
 /// The runtime write path's vertex ensure: the graph gains the vertices

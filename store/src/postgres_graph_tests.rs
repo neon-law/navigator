@@ -349,36 +349,6 @@ async fn advance_records_a_clean_graph_arm() {
     assert_eq!(again, 0, "the arm resumes to nothing");
 }
 
-mod flag_parsing {
-    use super::super::{parse_graph_engine, GraphEngine};
-
-    #[test]
-    fn the_authority_flag_parses_case_insensitively_with_padding() {
-        assert!(matches!(parse_graph_engine("age"), Ok(GraphEngine::Age)));
-        assert!(matches!(
-            parse_graph_engine("SURREAL"),
-            Ok(GraphEngine::Surreal)
-        ));
-        assert!(matches!(
-            parse_graph_engine("  Age  "),
-            Ok(GraphEngine::Age)
-        ));
-    }
-
-    #[test]
-    fn an_unknown_authority_names_the_flag_and_the_accepted_values() {
-        let rejected = parse_graph_engine("neo4j").unwrap_err();
-        assert!(
-            rejected.contains("NAVIGATOR_GRAPH_AUTHORITY"),
-            "the error names the flag: {rejected}"
-        );
-        assert!(
-            rejected.contains("`surreal`") && rejected.contains("`age`"),
-            "the error names the accepted values: {rejected}"
-        );
-    }
-}
-
 mod walk_row_normalization {
     use super::super::{normalize_age_edge, normalized_kind};
     use serde_json::json;

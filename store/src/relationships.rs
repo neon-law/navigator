@@ -30,7 +30,7 @@ use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
 use crate::postgres::PostgresDb;
-use crate::postgres_graph::{ensure_vertices, graph_engine, load_edge, GraphEngine};
+use crate::postgres_graph::{ensure_vertices, graph_authority, load_edge};
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 
 const TABLE: &str = "relationship";
@@ -171,8 +171,8 @@ pub enum RelationshipError {
     /// share the one check.
     #[error("{0}")]
     Invalid(String),
-    /// The engine flag could not be read or parsed. A record under an
-    /// unusable flag fails rather than guessing an engine.
+    /// PostgreSQL is configured but unreachable. A record fails rather
+    /// than guessing a store.
     #[error("{0}")]
     Engine(String),
     /// The authoritative PostgreSQL store refused the write.
@@ -186,10 +186,9 @@ pub enum RelationshipError {
     Graph(#[from] crate::postgres_graph::GraphError),
 }
 
-/// Record one typed edge, on the engine [`GRAPH_AUTHORITY_ENV`]
-/// selects: PostgreSQL authoritatively (the relational row, then the
-/// graph's `RELATIONSHIP` edge), or SurrealDB as the rollback path's
-/// write.
+/// Record one typed edge: in PostgreSQL (the relational row, then the
+/// graph's `RELATIONSHIP` edge) wherever it is configured, else in
+/// SurrealDB ([`graph_authority`]).
 ///
 /// The shared validation carries the Surreal schema's rules — the
 /// endpoint kinds the relation admits, the 0–100 confidence ASSERT, the
@@ -202,16 +201,20 @@ pub enum RelationshipError {
 /// refuses, [`RelationshipError::Db`] if the Surreal write fails,
 /// [`RelationshipError::Postgres`] or [`RelationshipError::Sqlx`] if the
 /// authoritative PostgreSQL write fails, or
-/// [`RelationshipError::Engine`] if the flag itself is unusable.
+/// [`RelationshipError::Engine`] if PostgreSQL is configured but unreachable.
 pub async fn record(
     db: &SurrealDb,
     input: &NewRelationship,
 ) -> Result<Relationship, RelationshipError> {
     validate_new_relationship(input)?;
-    match graph_engine().await.map_err(RelationshipError::Engine)? {
-        GraphEngine::Surreal => record_in_surreal(db, input).await,
-        GraphEngine::Age => record_in_postgres(db, input).await,
+    match authority().await? {
+        None => record_in_surreal(db, input).await,
+        Some(postgres) => record_in_postgres(db, &postgres, input).await,
     }
+}
+
+async fn authority() -> Result<Option<PostgresDb>, RelationshipError> {
+    graph_authority().await.map_err(RelationshipError::Engine)
 }
 
 /// The rules the Surreal schema enforced on every `relationship` row:
@@ -238,7 +241,7 @@ fn validate_new_relationship(input: &NewRelationship) -> Result<(), Relationship
     Ok(())
 }
 
-/// The SurrealDB write the check has always used: the rollback engine's
+/// The SurrealDB write for a deployment without PostgreSQL: its only
 /// write path, and the seam the fixtures seed the Surreal graph with.
 pub(crate) async fn record_in_surreal(
     db: &SurrealDb,
@@ -290,16 +293,6 @@ pub(crate) async fn record_in_surreal(
 /// persons and entities; the vertex-ensure function falls back to the
 /// relational row's own name for a `None`.
 async fn record_in_postgres(
-    db: &SurrealDb,
-    input: &NewRelationship,
-) -> Result<Relationship, RelationshipError> {
-    let postgres = PostgresDb::from_env().await?;
-    record_in_postgres_with(db, &postgres, input).await
-}
-
-/// The write path against one pool — the shape the fixture tests drive
-/// without `from_env`'s process-wide pool.
-async fn record_in_postgres_with(
     db: &SurrealDb,
     postgres: &PostgresDb,
     input: &NewRelationship,
@@ -401,12 +394,16 @@ async fn endpoint_name(
     Ok(name)
 }
 
-/// Every typed edge, oldest first.
+/// Every typed edge, oldest first, from the store the graph engine names.
 ///
 /// # Errors
 ///
-/// [`RelationshipError::Db`] if the lookup fails.
+/// [`RelationshipError::Db`] or [`RelationshipError::Sqlx`] if the lookup
+/// fails.
 pub async fn all(db: &SurrealDb) -> Result<Vec<Relationship>, RelationshipError> {
+    if let Some(postgres) = authority().await? {
+        return all_in_postgres(&postgres).await;
+    }
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} ORDER BY inserted_at ASC"
@@ -418,6 +415,57 @@ pub async fn all(db: &SurrealDb) -> Result<Vec<Relationship>, RelationshipError>
         .into_iter()
         .filter_map(RelationshipRow::into_relationship)
         .collect())
+}
+
+/// Every typed edge PostgreSQL holds, oldest first. The endpoint columns
+/// are the JSONB record links the write path and the mirror both store;
+/// `source_id` is a bare UUID string from the write path or a record link
+/// from the mirror. A row whose link this module cannot read is skipped,
+/// as the Surreal read skips one.
+async fn all_in_postgres(postgres: &PostgresDb) -> Result<Vec<Relationship>, RelationshipError> {
+    let rows = sqlx::query(
+        "SELECT \"in\"->>'tb' AS from_table, \"in\"->'id'->>'Uuid' AS from_id, \
+         \"out\"->>'tb' AS to_table, \"out\"->'id'->>'Uuid' AS to_id, kind, confidence_pct, \
+         source_kind, COALESCE(source_id->'id'->>'Uuid', source_id #>> '{}') AS source_id, \
+         detail, inserted_at, updated_at \
+         FROM \"relationship\" ORDER BY inserted_at ASC, id ASC",
+    )
+    .fetch_all(&postgres.0)
+    .await?;
+    let mut edges = Vec::with_capacity(rows.len());
+    for row in rows {
+        let endpoint = |table: &str, id: &str| -> Result<Option<(Endpoint, Uuid)>, sqlx::Error> {
+            let table: Option<String> = row.try_get(table)?;
+            let id: Option<String> = row.try_get(id)?;
+            Ok(table
+                .as_deref()
+                .and_then(Endpoint::from_table)
+                .zip(id.as_deref().and_then(|id| Uuid::parse_str(id).ok())))
+        };
+        let (Some((from, from_id)), Some((to, to_id))) = (
+            endpoint("from_table", "from_id")?,
+            endpoint("to_table", "to_id")?,
+        ) else {
+            continue;
+        };
+        let source_id: Option<String> = row.try_get("source_id")?;
+        edges.push(Relationship {
+            from,
+            from_id,
+            to,
+            to_id,
+            kind: row.try_get("kind")?,
+            confidence_pct: i32::try_from(row.try_get::<i64, _>("confidence_pct")?).map_err(
+                |_| RelationshipError::Invalid("confidence_pct is outside 0-100".into()),
+            )?,
+            source_kind: row.try_get("source_kind")?,
+            source_id: source_id.as_deref().and_then(|id| Uuid::parse_str(id).ok()),
+            detail: row.try_get("detail")?,
+            inserted_at: row.try_get("inserted_at")?,
+            updated_at: row.try_get("updated_at")?,
+        });
+    }
+    Ok(edges)
 }
 
 #[cfg(test)]
@@ -572,7 +620,7 @@ mod tests {
         let alice = person(&db, "Libra Tidewell").await;
         let acme = entity(&db, "Acme Age LLC").await;
 
-        let written = super::record_in_postgres_with(
+        let written = super::record_in_postgres(
             &db,
             &postgres,
             &edge(Endpoint::Person, alice, Endpoint::Entity, acme),

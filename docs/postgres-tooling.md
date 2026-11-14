@@ -141,9 +141,8 @@ configuration; authority cutover takes precedence over the source mirror. The mi
   `entity_role`, `person_delegate`, `person_external_identity`, and `person_mailbox`. Their writers in
   `store::addresses`, `store::credentials`, `store::email_tokens`, `store::entity_roles`, `store::delegations`,
   `store::external_identities`, and `store::persons` (mailbox claims) call the mirror. The `entity_role` writer is the
-  cutover exception: when `NAVIGATOR_GRAPH_AUTHORITY` selects `age`, the tie lands in PostgreSQL first (row, then its
-  `HAS_ROLE` graph edge) and the Surreal graph table receives nothing, so there is no Surreal write to mirror; the
-  `surreal` engine keeps the original write-then-mirror pair.
+  exception: wherever PostgreSQL is configured the tie lands there (row, then its `HAS_ROLE` graph edge), SurrealDB
+  receives nothing, and the mirror copies Surreal-era ties without ever deleting one.
 - **Communications:** `summary_sender_approval` and its append-only
   `summary_sender_approval_event`. The approval and audit writers call the mirror after their SurrealDB writes.
 - **Inbox:** `inbox_conversation`, `message`, `inbox_ingress`, `inbox_assignment`, and

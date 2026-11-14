@@ -18,7 +18,7 @@
 //! `postgres_mirror::tests`), and need the AGE-enabled image; CI's
 //! coverage job arms both.
 
-use super::{build_graph_with_engines, ConflictReport, GraphEngine, Reason, Severity};
+use super::{build_graph_with_engines, ConflictReport, Reason, Severity};
 use crate::postgres_mirror::tests::{connect, fresh_schema};
 use crate::relationships::{Endpoint, NewRelationship, KIND_ADVERSE_TO, SOURCE_MANUAL};
 use crate::test_support::{mem_surreal, SEED_ENTITY_JURISDICTION_ID, SEED_ENTITY_TYPE_ID};
@@ -233,10 +233,8 @@ async fn both_reports(
     entity_id: uuid::Uuid,
 ) -> (ConflictReport, ConflictReport) {
     crate::postgres_graph::project_graph(pg).await.unwrap();
-    let surreal_engine = build_graph_with_engines(surreal, GraphEngine::Surreal, None)
-        .await
-        .unwrap();
-    let age_engine = build_graph_with_engines(surreal, GraphEngine::Age, Some(pg.clone()))
+    let surreal_engine = build_graph_with_engines(surreal, None).await.unwrap();
+    let age_engine = build_graph_with_engines(surreal, Some(pg.clone()))
         .await
         .unwrap();
     let surreal_report = surreal_engine.check(client_id, entity_id).await.unwrap();
@@ -428,10 +426,8 @@ async fn dashboard_scan_agrees_across_engines() {
     role_both(&surreal, &pg, second_client, entity, "beneficiary").await;
 
     crate::postgres_graph::project_graph(&pg).await.unwrap();
-    let surreal_engine = build_graph_with_engines(&surreal, GraphEngine::Surreal, None)
-        .await
-        .unwrap();
-    let age_engine = build_graph_with_engines(&surreal, GraphEngine::Age, Some(pg.clone()))
+    let surreal_engine = build_graph_with_engines(&surreal, None).await.unwrap();
+    let age_engine = build_graph_with_engines(&surreal, Some(pg.clone()))
         .await
         .unwrap();
     let surreal_findings = surreal_engine
@@ -449,14 +445,4 @@ async fn dashboard_scan_agrees_across_engines() {
             .any(|f| f.reason == Reason::SharedParty && f.counterparty == "Second Client"),
         "the second client's tie surfaces as a shared-party review: {age_findings:?}"
     );
-}
-
-#[test]
-fn the_engine_flag_parses_its_two_values() {
-    use crate::postgres_graph::parse_graph_engine;
-    assert_eq!(parse_graph_engine("surreal"), Ok(GraphEngine::Surreal));
-    assert_eq!(parse_graph_engine("AGE"), Ok(GraphEngine::Age));
-    assert_eq!(parse_graph_engine(" age "), Ok(GraphEngine::Age));
-    assert!(parse_graph_engine("postgres").is_err());
-    assert!(parse_graph_engine("").is_err());
 }
