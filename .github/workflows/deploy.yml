@@ -1125,7 +1125,7 @@ jobs:
         run: |
           docker run -d --rm --name interop-surreal \
             -p 28000:8000 \
-            surrealdb/surrealdb:v3.2.3 \
+            surrealdb/surrealdb:v4.0.1 \
             start --bind 0.0.0.0:8000 --no-banner \
             --user root --pass root memory
           for i in 1 2 3 4 5 6 7 8 9 10; do

@@ -325,13 +325,17 @@ jobs:
     # before any label goes here.
     runs-on: blacksmith-4vcpu-ubuntu-2404
     # A wedge detector, not a duration budget. This job had no cap at all while
-    # it ran ~30 min; at ~40 min GitHub's 6-hour default means a hung build
-    # holds a metered runner for most of a working day and blocks the PR behind
-    # an in-progress required check the whole time. The covered run now
-    # measures ~1h50 end to end (2026-11-12: ~25 min build, ~60 min nextest,
-    # then cucumber, doctests, the coverage report, and the cache save), so
-    # 180 leaves headroom over that while still catching a genuine wedge.
-    timeout-minutes: 180
+    # it ran ~30 min; a cap well under GitHub's 6-hour default means a hung
+    # build cannot hold a metered runner for most of a working day and block
+    # the PR behind an in-progress required check the whole time. The covered
+    # run measured ~1h50 end to end on SurrealDB 3 (2026-11-12: ~25 min build,
+    # ~60 min nextest, then cucumber, doctests, the coverage report, and the
+    # cache save). Under SurrealDB 4 the same run is ~2.5x slower end to end:
+    # run 43457613469 was cancelled at the old 180-minute cap with nextest at
+    # 10,841/15,093 tests, still passing steadily with no failures. The real
+    # duration is ~4-5h, so 330 keeps ~1h of headroom over the measured pace
+    # while still catching a genuine wedge below the 6-hour ceiling.
+    timeout-minutes: 330
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
@@ -564,7 +568,7 @@ jobs:
         run: |
           docker run -d --name test-surreal \
             -p 8000:8000 \
-            surrealdb/surrealdb:v3.2.3 \
+            surrealdb/surrealdb:v4.0.1 \
             start --bind 0.0.0.0:8000 --user root --pass root --no-banner memory
           for i in $(seq 1 30); do
               if curl -sS http://127.0.0.1:8000/health >/dev/null 2>&1; then
@@ -918,8 +922,10 @@ jobs:
           NAVIGATOR_TEST_POSTGRES_PORT: "25432"
           NAV_REQUIRE_POSTGRES: "1"
           RUST_BACKTRACE: full
-        # Compile at the machine's full width. Test execution uses Rust and
-        # nextest defaults — neither libtest nor nextest gets an extra cap.
+          # Coverage-instrumented routes and the embedded SurrealDB engine
+          # share a test thread. Keep the larger stack in this CI lane.
+          RUST_MIN_STACK: "8388608"
+        # Compile and run at the machine's full width.
         run: |
           set -uo pipefail
           ulimit -n "$(ulimit -Hn)" || true

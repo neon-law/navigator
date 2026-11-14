@@ -411,6 +411,17 @@ pub async fn ensure_person(
 /// never a value already stored, so a row written before this line shipped
 /// keeps reading — it is only ever reported, never rewritten.
 ///
+/// The write-and-restore only models a real migration on a database at
+/// SurrealDB compatibility level 3 — which is what every database a 3.x
+/// datastore created stays at after an upgrade. At level 4 a definition
+/// change that existing rows may not satisfy is refused outright unless a
+/// `MIGRATE EXISTING ROWS` clause rewrites them, which is precisely the
+/// "legacy row keeps reading" behavior this fixture exists to reproduce.
+/// The database is therefore pinned to level 3 before the field is loosened
+/// (probed 2026-11-12: `ALTER DATABASE COMPATIBILITY 3` succeeds on a
+/// level-4 test database; the level-4 restore of a tightened `ASSERT` is
+/// refused without a value-rewriting `FALLBACK`).
+///
 /// # Panics
 ///
 /// If loosening the field, writing the row, or restoring the schema fails.
@@ -420,6 +431,11 @@ pub async fn seed_legacy_participation(
     person_id: Uuid,
     participation: &str,
 ) {
+    surreal
+        .query("ALTER DATABASE COMPATIBILITY 3;")
+        .await
+        .and_then(surrealdb::IndexedResults::check)
+        .expect("downgrade the test database to compatibility level 3");
     surreal
         .query("DEFINE FIELD OVERWRITE participation ON person_project_role TYPE string;")
         .await

@@ -542,6 +542,19 @@ async fn undated_hearings_are_reported_and_never_backfilled() {
         .await
         .expect("case");
 
+    // The loosening below reproduces the schema a pre-ASSERT row was written
+    // under, and the `schema::apply` at the bottom restores the write-time
+    // ASSERT. That restore is a definition change over a populated table,
+    // which SurrealDB 4 refuses at compatibility level 4 unless a
+    // `MIGRATE EXISTING ROWS` clause rewrites the rows — the rewrite this
+    // test exists to prove does not happen. Production databases upgraded
+    // from 3.x sit at compatibility level 3, where the restore is legal and
+    // the legacy row keeps reading, so pin the test database there.
+    db.query("ALTER DATABASE COMPATIBILITY 3;")
+        .await
+        .unwrap()
+        .check()
+        .expect("downgrade the test database to compatibility level 3");
     db.query(
         "DEFINE FIELD OVERWRITE kind ON case_docket_entry TYPE string \
          ASSERT $value IN ['pleading', 'motion', 'opposition', 'reply', 'order', 'notice', \

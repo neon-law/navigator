@@ -26,6 +26,18 @@ async fn a_project_with_no_brand_value_is_backfilled_and_stays_writable() {
     // schema's tightened `DEFINE FIELD`, against a `SCHEMAFULL` table — would
     // itself be refused as referencing a field that does not exist, which
     // does not reproduce the real historical shape of this field.
+    // This test reproduces the pre-ENG-587 world: a database whose `brand`
+    // field is still `option<string>` and whose rows may hold no value. That
+    // is compatibility-level-3 shape — every database a 3.x datastore created
+    // stays at level 3 after an upgrade — and the guarded backfill only sees
+    // it there. At level 4 the schema's required `TYPE string` definition
+    // would be refused over the populated table instead of backfilling
+    // (`MIGRATE EXISTING ROWS` would demand a value-rewriting clause), so pin
+    // the database to level 3 before reproducing the historical field.
+    db.query("ALTER DATABASE COMPATIBILITY 3;")
+        .await
+        .and_then(surrealdb::IndexedResults::check)
+        .expect("downgrade the test database to compatibility level 3");
     db.query("DEFINE FIELD OVERWRITE brand ON project TYPE option<string>")
         .await
         .and_then(surrealdb::IndexedResults::check)
@@ -112,6 +124,16 @@ async fn a_missing_default_brand_is_reported_without_backfilling_historical_proj
         .await
         .and_then(surrealdb::IndexedResults::check)
         .expect("reproduce the historical optional brand field");
+    // The loosened field and the row below reproduce a pre-ENG-587 database,
+    // which in SurrealDB 4 terms is compatibility level 3 — where every
+    // 3.x-created database stays after an upgrade. At level 4 the schema's
+    // required `TYPE string` would be refused over the populated table before
+    // `backfill_project_brand` could report the missing default, so pin the
+    // database to level 3 for the same reason as the test above.
+    db.query("ALTER DATABASE COMPATIBILITY 3;")
+        .await
+        .and_then(surrealdb::IndexedResults::check)
+        .expect("downgrade the test database to compatibility level 3");
     let entity_id = uuid::Uuid::now_v7();
     db.query(
         "CREATE $id SET code = 'missing-default-brand', name = 'Missing default brand',

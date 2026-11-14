@@ -84,7 +84,7 @@ RUN rustup target add wasm32-unknown-unknown \
 # tarball carries `package/bin/esbuild` — the same artifact dioxus-cli fetches.
 # The three `--version` calls at the end prove every tool resolves while this
 # layer is still cheap, so a bad pin fails here instead of 20 minutes in.
-ARG WASM_BINDGEN_VERSION=0.2.126
+ARG WASM_BINDGEN_VERSION=0.2.130
 ARG BINARYEN_VERSION=127
 ARG ESBUILD_VERSION=0.27.3
 ENV PATH=/opt/binaryen/bin:/opt/esbuild/bin:$PATH

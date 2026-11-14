@@ -2140,7 +2140,7 @@ mod tests {
     #[tokio::test]
     async fn a_historical_text_only_post_backfills_vertical_video_false_on_every_apply() {
         let db = test_support::mem_surreal().await;
-        db.query("REMOVE FIELD vertical_video ON post")
+        db.query("ALTER DATABASE COMPATIBILITY 3; REMOVE FIELD vertical_video ON post")
             .await
             .unwrap()
             .check()

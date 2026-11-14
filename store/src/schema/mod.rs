@@ -32,7 +32,7 @@ use crate::surreal::SurrealDb;
 /// The version this build applies. Bump it for schema definitions or
 /// versioned data repairs so a database still needing an upgrade reports
 /// as drifted instead of silently disagreeing.
-pub const SCHEMA_VERSION: u32 = 117;
+pub const SCHEMA_VERSION: u32 = 118;
 
 /// The table holding the applied version.
 const VERSION_TABLE: &str = "schema_version";
@@ -525,7 +525,20 @@ async fn backfill_firm_slugs(db: &SurrealDb) -> Result<(), SchemaError> {
     Ok(())
 }
 
-async fn backfill_project_brand(db: &SurrealDb) -> Result<(), SchemaError> {
+/// Validate `project.brand` against the live `brand` rows without writing.
+///
+/// Runs *before* the schema definitions are applied so a deployment whose
+/// default brand row is missing — or whose stored brand keys dangle — fails
+/// the boot before any definition changes. That ordering is what keeps a
+/// failed migration from leaving `brand` required while historical rows
+/// still hold no value: under the pre-4.0 two-phase definition the field
+/// stayed `option<string>` until the backfill tightened it, and the
+/// definitions now declare the required type directly (compatibility level 4
+/// refuses re-narrowing a populated `SCHEMAFULL` table, so the tighten step
+/// cannot come second anymore), which means the validation has to come
+/// first instead. Only meaningful once a schema is installed: a fresh
+/// database has no `project` rows to validate.
+async fn validate_project_brand(db: &SurrealDb) -> Result<(), SchemaError> {
     let mut response = db
         .query("SELECT VALUE id FROM project WHERE brand IS NONE")
         .await
@@ -549,6 +562,10 @@ async fn backfill_project_brand(db: &SurrealDb) -> Result<(), SchemaError> {
             "neon".to_string(),
         ));
     }
+    Ok(())
+}
+
+async fn backfill_project_brand(db: &SurrealDb) -> Result<(), SchemaError> {
     db.query(PROJECT_BRAND_BACKFILL)
         .await
         .and_then(surrealdb::IndexedResults::check)
@@ -783,6 +800,14 @@ async fn converge_derived_tables(db: &SurrealDb) -> Result<(), SchemaError> {
 /// without checking [`state`] first.
 pub async fn apply(db: &SurrealDb) -> Result<(), SchemaError> {
     let installed = installed_version(db).await?;
+    // Before any definition changes: on a database that predates ENG-587
+    // (or whose brand rows were removed since), the required `brand`
+    // definition below must not take effect while historical rows still hold
+    // no value — the boot fails here instead, leaving the field optional and
+    // the data untouched for operator repair.
+    if installed.is_some() {
+        validate_project_brand(db).await?;
+    }
     migrate_inbox_message_table(db).await?;
     move_blog_post_rows_to_post(db).await?;
     merge_duplicate_visitor_buckets(db).await?;
@@ -1153,6 +1178,16 @@ mod tests {
     /// `designating_a_dri_on_a_project_written_before_brand_was_defined`
     /// does for `project.brand`.
     async fn historical_orphan_brand(db: &crate::surreal::SurrealDb, key: &str) -> Uuid {
+        // The loosened field models a pre-ENG-659 row, which only exists on
+        // a database created by a 3.x datastore — those stay at
+        // compatibility level 3 through an upgrade, and only at level 3 is
+        // re-narrowing `firm_id` over rows that may not satisfy the
+        // definition accepted. Pin the database before loosening (probed
+        // 2026-11-12; see `seed_legacy_participation` for the full note).
+        db.query("ALTER DATABASE COMPATIBILITY 3;")
+            .await
+            .and_then(surrealdb::IndexedResults::check)
+            .expect("downgrade the test database to compatibility level 3");
         db.query("DEFINE FIELD OVERWRITE firm_id ON brand TYPE option<record<firm>>")
             .await
             .unwrap()
@@ -1759,6 +1794,16 @@ mod tests {
     #[tokio::test]
     async fn renaming_blog_post_to_post_keeps_the_rows_and_their_publications() {
         let db = unmigrated().await;
+        // The legacy `blog_post` rows model a pre-4.0 datastore: only a
+        // database created by SurrealDB 3.x carries them, and those stay at
+        // compatibility level 3 through an upgrade. Only at level 3 does
+        // re-applying the schema accept the rename migration's field
+        // redefinitions over populated tables (probed 2026-11-12; see
+        // `historical_orphan_brand`).
+        db.query("ALTER DATABASE COMPATIBILITY 3;")
+            .await
+            .and_then(surrealdb::IndexedResults::check)
+            .expect("downgrade the test database to compatibility level 3");
         let post = Uuid::now_v7();
         let key = crate::social_publications::publication_key(post, "x");
         db.query(
@@ -1839,6 +1884,16 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     async fn renaming_inbox_message_preserves_transcript_and_relationships() {
         let db = unmigrated().await;
+        // The legacy `inbox_message` rows model a pre-4.0 datastore: only a
+        // database created by SurrealDB 3.x carries them, and those stay at
+        // compatibility level 3 through an upgrade. Only at level 3 does
+        // re-applying the schema accept the rename migration's field
+        // redefinitions over populated tables (probed 2026-11-12; see
+        // `historical_orphan_brand`).
+        db.query("ALTER DATABASE COMPATIBILITY 3;")
+            .await
+            .and_then(surrealdb::IndexedResults::check)
+            .expect("downgrade the test database to compatibility level 3");
         db.query(
             "DEFINE TABLE inbox_message SCHEMAFULL PERMISSIONS NONE; \
                   DEFINE FIELD conversation_id ON inbox_message TYPE record<inbox_conversation>; \
@@ -1952,6 +2007,16 @@ mod tests {
     #[tokio::test]
     async fn project_scoped_summary_approval_migration_revokes_unscoped_approval() {
         let db = unmigrated().await;
+        // The unscoped-approval row models a pre-4.0 datastore: only a
+        // database created by SurrealDB 3.x carries one, and those stay at
+        // compatibility level 3 through an upgrade. Only at level 3 does the
+        // migration's redefinition of the populated `summary_sender_approval`
+        // fields still apply (probed 2026-11-12; see
+        // `historical_orphan_brand`).
+        db.query("ALTER DATABASE COMPATIBILITY 3;")
+            .await
+            .and_then(surrealdb::IndexedResults::check)
+            .expect("downgrade the test database to compatibility level 3");
         apply(&db).await.unwrap();
         let entity_id = crate::test_support::seed_entity(&db).await;
         let admin = crate::persons::create(

@@ -143,7 +143,11 @@ word = { workspace = true, optional = true }
 web-sys = { workspace = true, features = ["Storage", "Location", "Element", "Event", "EventTarget", "AbortController", "AbortSignal", "HtmlElement", "HtmlInputElement", "HtmlSelectElement", "NodeList", "PageTransitionEvent", "RequestCache", "RequestCredentials", "RequestMode", "RequestRedirect", "ReferrerPolicy"] }
 # Reuse the already-locked browser Fetch wrapper and bindings; no new version or framework.
 gloo-net = { version = "=0.7.0", default-features = false, features = ["http", "json"] }
-wasm-bindgen = "=0.2.126"
+# Exact pin raised from 0.2.126 to 0.2.130: surrealdb 4.0 requires
+# wasm-bindgen ^0.2.129, and cargo resolves versions workspace-wide even for
+# wasm32-only dependencies, so the old exact pin conflicts with it. Still an
+# exact pin so the client bundle's bindings stay reproducible.
+wasm-bindgen = "=0.2.130"
 uuid = { workspace = true, features = ["js"] }
 
 [dev-dependencies]

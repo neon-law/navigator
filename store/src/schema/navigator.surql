@@ -60,15 +60,21 @@ DEFINE FIELD OVERWRITE name ON project TYPE string;
 DEFINE FIELD OVERWRITE status ON project TYPE string;
 -- Which house brand's storefront this matter was opened through, written by
 -- the server from the resolved request `Host:`, never accepted from a
--- client-submitted form (see `docs/glossary/project.md`). Required after the
--- guarded backfill near the `brand` table: this first definition remains
--- optional until `store::schema::apply` validates historical rows and supplies
--- the established default before it tightens this field. Validated
+-- client-submitted form (see `docs/glossary/project.md`). Required: the
+-- guarded backfill near the `brand` table still supplies the established
+-- default for a historical row before anything reads it, but the definition
+-- itself states the required type. Declaring `option<string>` here and
+-- tightening it in the backfill — the pre-4.0 shape — made every apply
+-- oscillate the field between two definitions, and SurrealDB 4 compatibility
+-- level 4 refuses re-narrowing a field on a populated `SCHEMAFULL` table,
+-- so the second boot of any deployment with matters would fail. Databases
+-- upgraded from SurrealDB 3.x stay at compatibility level 3, where the same
+-- statements apply without a row check. Validated
 -- against live `brand` rows in `store::projects::create`
 -- (`store::firms::brand_key_exists`, the same check `attach_brand` uses)
 -- rather than restated here as a second closed list: a runtime-created brand
 -- key must be as usable here as one of the three compiled ones.
-DEFINE FIELD OVERWRITE brand ON project TYPE option<string>;
+DEFINE FIELD OVERWRITE brand ON project TYPE string;
 DEFINE FIELD OVERWRITE entity_id ON project TYPE record<entity>;
 -- Owning practice. Optional until the one-shot backfill points existing
 -- rows at a `firm` record: `DEFAULT` is write-time only and does not
@@ -971,8 +977,9 @@ DEFINE INDEX OVERWRITE firm_entity ON firm FIELDS entity_id UNIQUE;
 -- `option<string>` here only so a row written before the field existed still
 -- applies: `store::schema::apply` backfills every missing slug, failing the
 -- boot on an invalid or colliding one, then tightens the field to
--- `string READONLY`, so a rename, or any direct write, can never move it.
-DEFINE FIELD OVERWRITE slug ON firm TYPE option<string>;
+-- `string READONLY`. The guard preserves the tightened definition on repeat
+-- applies, so a rename or direct write cannot move the slug.
+DEFINE FIELD IF NOT EXISTS slug ON firm TYPE option<string>;
 DEFINE INDEX OVERWRITE firm_slug ON firm FIELDS slug UNIQUE;
 
 -- `firm_integration_secret`: one encrypted, versioned credential per Firm,
@@ -1029,7 +1036,15 @@ DEFINE INDEX OVERWRITE firm_brand_key ON firm_brand FIELDS brand_key UNIQUE;
 DEFINE TABLE IF NOT EXISTS brand SCHEMAFULL PERMISSIONS NONE;
 DEFINE FIELD OVERWRITE name ON brand TYPE string;
 DEFINE FIELD OVERWRITE brand_key ON brand TYPE string;
-DEFINE FIELD OVERWRITE firm_id ON brand TYPE option<record<firm>>;
+-- `firm_id` is required here, not `option<record<firm>>`: the definitions
+-- must declare the state a database reaches after
+-- `backfill_brand_firm_ids` resolves its orphans and narrows the field
+-- (`store/src/schema/mod.rs`). Under compatibility level 4 a restored
+-- database carries the narrowed definition from its export, and re-applying
+-- the pre-narrowing `option<record<firm>>` over populated rows is refused —
+-- every brand row already carries a Firm (`brands::create` refuses
+-- `firm_id: None`), so the required type is the truthful final state.
+DEFINE FIELD OVERWRITE firm_id ON brand TYPE record<firm>;
 -- A validated `#rrggbb` hex (ENG-586), not a closed palette id. `store::brands`
 -- validates the format and gates it behind a WCAG AA 4.5:1 contrast check
 -- against its own derived on-primary colour before writing; the schema places

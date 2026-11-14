@@ -694,7 +694,7 @@
       "brand": {
         "accent_color": "option<string>",
         "brand_key": "string",
-        "firm_id": "option<record<firm>>",
+        "firm_id": "record<firm>",
         "font_family": "option<string>",
         "font_licence": "option<string>",
         "font_object_key": "option<string>",
@@ -1683,7 +1683,7 @@
       "project": {
         "benefit_code": "option<string>",
         "booking_url": "option<string>",
-        "brand": "option<string>",
+        "brand": "string",
         "calendar_id": "option<string>",
         "client_dri_person_id": "option<record<person>>",
         "closed_at": "option<string>",

@@ -3824,11 +3824,15 @@ mod tests {
     #[tokio::test]
     async fn apply_backfills_a_historical_firm_and_then_holds_it() {
         let db = mem_surreal().await;
-        db.query("REMOVE INDEX firm_slug ON firm; REMOVE FIELD slug ON firm;")
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
+        // This fixture represents a database created before SurrealDB 4.
+        db.query(
+            "ALTER DATABASE COMPATIBILITY 3; REMOVE INDEX firm_slug ON firm; \
+             REMOVE FIELD slug ON firm;",
+        )
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
         let (first, second) = (Uuid::now_v7(), Uuid::now_v7());
         for (id, name) in [(first, "Historical Practice"), (second, "Ünïcode Practice")] {
             db.query(
@@ -3879,11 +3883,15 @@ mod tests {
     #[tokio::test]
     async fn apply_fails_loudly_on_a_slug_collision() {
         let db = mem_surreal().await;
-        db.query("REMOVE INDEX firm_slug ON firm; REMOVE FIELD slug ON firm;")
-            .await
-            .unwrap()
-            .check()
-            .unwrap();
+        // This fixture represents a database created before SurrealDB 4.
+        db.query(
+            "ALTER DATABASE COMPATIBILITY 3; REMOVE INDEX firm_slug ON firm; \
+             REMOVE FIELD slug ON firm;",
+        )
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
         for name in ["Example Law PC", "Example Law, PC"] {
             db.query(
                 "CREATE $id SET name = $name, status = 'active', \

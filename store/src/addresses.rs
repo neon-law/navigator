@@ -420,16 +420,14 @@ pub async fn count(db: &SurrealDb) -> Result<i64, AddressError> {
         );
     }
     let mut response = db
-        .query(format!("SELECT VALUE count() FROM {TABLE} GROUP ALL"))
+        .query(format!("SELECT count() AS count FROM {TABLE} GROUP ALL"))
         .await
         .and_then(surrealdb::IndexedResults::check)?;
-    // `count()` under `GROUP ALL` yields a `{ count: n }` object, so it
-    // cannot be taken as a bare integer the way `math::sum` can.
     let counts: Vec<CountRow> = response.take(0)?;
     Ok(counts.first().map_or(0, |c| c.count))
 }
 
-/// The one-field shape `SELECT VALUE count() ... GROUP ALL` returns.
+/// The one-field shape `SELECT count() AS count ... GROUP ALL` returns.
 #[derive(SurrealValue)]
 struct CountRow {
     count: i64,

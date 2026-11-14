@@ -2990,19 +2990,37 @@ mod tests {
             .is_none());
     }
 
+    // The current CREATE projection references both fields. Insert the row
+    // directly into the historical schema before restoring its definitions.
+    async fn historical_person(db: &SurrealDb, email: &str) -> Uuid {
+        let id = Uuid::now_v7();
+        db.query("CREATE $id SET name = 'Ada', email = $email, role = 'client'")
+            .bind(("id", record_id(super::TABLE, id)))
+            .bind(("email", email.to_owned()))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        id
+    }
+
     #[tokio::test]
     async fn a_person_written_before_admission_was_defined_reads_as_admitted() {
         let db = mem().await;
-        db.query("REMOVE FIELD is_admitted ON person")
+        db.query("ALTER DATABASE COMPATIBILITY 3; REMOVE FIELD is_admitted ON person")
             .await
+            .unwrap()
+            .check()
             .unwrap();
-        let row = person(&db, "Ada", "ada-admission@example.com").await;
+        let id = historical_person(&db, "ada-admission@example.com").await;
         db.query("DEFINE FIELD OVERWRITE is_admitted ON person TYPE bool DEFAULT true")
             .await
+            .unwrap()
+            .check()
             .unwrap();
 
         assert!(
-            is_admitted(&db, row.id).await.unwrap(),
+            is_admitted(&db, id).await.unwrap(),
             "a legacy row with no admission value remains admitted"
         );
     }
@@ -3021,29 +3039,26 @@ mod tests {
         // row's absent value absent. A bare `bool` on the row struct fails here
         // with `Expected bool, got none`, on a boot path, which is why a green
         // suite of fresh-engine tests said nothing about it.
-        db.query("REMOVE FIELD email_confirmed ON person")
+        db.query("ALTER DATABASE COMPATIBILITY 3; REMOVE FIELD email_confirmed ON person")
             .await
+            .unwrap()
+            .check()
             .unwrap();
-        let row = person(&db, "Ada", "ada@example.com").await;
+        let id = historical_person(&db, "ada@example.com").await;
         db.query("DEFINE FIELD OVERWRITE email_confirmed ON person TYPE bool DEFAULT false")
             .await
+            .unwrap()
+            .check()
             .unwrap();
 
         assert!(
-            !find_by_id(&db, row.id)
-                .await
-                .unwrap()
-                .unwrap()
-                .email_confirmed,
+            !find_by_id(&db, id).await.unwrap().unwrap().email_confirmed,
             "an absent value reads as the default the schema would have written"
         );
 
         // And the row is still writable afterwards, so a backfill is a cleanup
         // rather than the thing standing between the deployment and a boot.
-        let confirmed = set_email_confirmed(&db, row.id, true)
-            .await
-            .unwrap()
-            .unwrap();
+        let confirmed = set_email_confirmed(&db, id, true).await.unwrap().unwrap();
         assert!(confirmed.email_confirmed);
     }
 
@@ -3056,32 +3071,39 @@ mod tests {
         // in a deployment that has run since before either field existed:
         // both are absent, not merely defaulted, because `DEFAULT` only ever
         // fires on a write the field definition can see.
-        db.query("REMOVE FIELD email_confirmed ON person")
+        db.query("ALTER DATABASE COMPATIBILITY 3; REMOVE FIELD email_confirmed ON person")
             .await
+            .unwrap()
+            .check()
             .unwrap();
         db.query("REMOVE FIELD is_admitted ON person")
             .await
+            .unwrap()
+            .check()
             .unwrap();
-        let row = person(&db, "Ada", "ada-avatar@example.com").await;
+        let id = historical_person(&db, "ada-avatar@example.com").await;
         db.query("DEFINE FIELD OVERWRITE email_confirmed ON person TYPE bool DEFAULT false")
             .await
+            .unwrap()
+            .check()
             .unwrap();
         db.query("DEFINE FIELD OVERWRITE is_admitted ON person TYPE bool DEFAULT true")
             .await
+            .unwrap()
+            .check()
             .unwrap();
 
-        let existed =
-            set_profile_image_url(&db, row.id, Some("people/legacy/avatars/a.png".into()))
-                .await
-                .unwrap();
+        let existed = set_profile_image_url(&db, id, Some("people/legacy/avatars/a.png".into()))
+            .await
+            .unwrap();
         assert!(existed);
 
-        let updated = find_by_id(&db, row.id).await.unwrap().unwrap();
+        let updated = find_by_id(&db, id).await.unwrap().unwrap();
         assert_eq!(
             updated.profile_image_url.as_deref(),
             Some("people/legacy/avatars/a.png")
         );
-        assert!(is_admitted(&db, row.id).await.unwrap());
+        assert!(is_admitted(&db, id).await.unwrap());
     }
 
     #[tokio::test]
