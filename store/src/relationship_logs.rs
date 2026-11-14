@@ -153,6 +153,32 @@ pub enum RelationshipLogError {
     Engine(String),
 }
 
+/// Append one entry to PostgreSQL's trail on the caller's connection, so
+/// a write that sources an edge to the entry can share its transaction.
+///
+/// # Errors
+///
+/// [`RelationshipLogError::Postgres`] if the write fails.
+pub(crate) async fn record_in_postgres(
+    conn: &mut sqlx::PgConnection,
+    input: &NewRelationshipLog,
+) -> Result<RelationshipLog, RelationshipLogError> {
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "INSERT INTO relationship_log (id, actor_person_id, subject_type, subject_id, \
+         action, detail, project_id) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING {SELECT}"
+    )))
+    .bind(Uuid::now_v7())
+    .bind(input.actor_person_id)
+    .bind(&input.subject_type)
+    .bind(input.subject_id)
+    .bind(&input.action)
+    .bind(&input.detail)
+    .bind(input.project_id)
+    .fetch_one(conn)
+    .await?;
+    Ok(from_pg(&row)?)
+}
+
 /// Append one entry to the trail.
 ///
 /// # Errors
@@ -164,23 +190,11 @@ pub async fn record(
     db: &SurrealDb,
     input: &NewRelationshipLog,
 ) -> Result<RelationshipLog, RelationshipLogError> {
-    let id = Uuid::now_v7();
     if let Some(pg) = authority().await? {
-        let row = sqlx::query(sqlx::AssertSqlSafe(format!(
-            "INSERT INTO relationship_log (id, actor_person_id, subject_type, subject_id, \
-             action, detail, project_id) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING {SELECT}"
-        )))
-        .bind(id)
-        .bind(input.actor_person_id)
-        .bind(&input.subject_type)
-        .bind(input.subject_id)
-        .bind(&input.action)
-        .bind(&input.detail)
-        .bind(input.project_id)
-        .fetch_one(&pg.0)
-        .await?;
-        return Ok(from_pg(&row)?);
+        let mut conn = pg.0.acquire().await?;
+        return record_in_postgres(&mut conn, input).await;
     }
+    let id = Uuid::now_v7();
     let mut response = retry::writing(|| {
         db.query(format!(
             "CREATE $id SET actor_person_id = $actor, subject_type = $subject_type, \

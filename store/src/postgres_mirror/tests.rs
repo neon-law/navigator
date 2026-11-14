@@ -229,7 +229,7 @@ async fn insert_brand(pool: &sqlx::PgPool, brand_key: &str) {
 /// references exist in no SurrealDB, so the identity mirror cannot supply an
 /// Entity that names them; a tenancy test that uses `seed_entity` supplies
 /// the rows here instead. A row already held is left alone.
-pub(super) async fn mirror_identity(pg: &PostgresDb, entities: &[Uuid], people: &[Uuid]) {
+pub(crate) async fn mirror_identity(pg: &PostgresDb, entities: &[Uuid], people: &[Uuid]) {
     sqlx::query(
         "INSERT INTO entity_type (id, name) VALUES ($1, 'Synthetic Entity Type') \
          ON CONFLICT DO NOTHING",
@@ -275,6 +275,31 @@ pub(crate) async fn connect(options: &PgConnectOptions, database: &str) -> Postg
     PostgresDb::connect(options.clone().database(database))
         .await
         .unwrap()
+}
+
+/// A pool on a fresh schema whose sessions run as a non-superuser role
+/// holding exactly the runtime login's grants: `navigator_app`'s from
+/// `k8s/postgres/access/roles.sql` and the graph migrations' guarded
+/// re-grants. The fixtures otherwise connect as the superuser, which no
+/// permission check ever refuses. The role is per test, because roles are
+/// cluster-wide and the fixtures run in parallel.
+pub(crate) async fn connect_as_runtime(options: &PgConnectOptions, database: &str) -> PostgresDb {
+    let role = format!("runtime_test_{}", Uuid::now_v7().simple());
+    let setup = connect(options, database).await;
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "CREATE ROLE {role} NOLOGIN;
+         GRANT USAGE ON SCHEMA public, ag_catalog, navigator_graph TO {role};
+         GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {role};
+         GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO {role};
+         GRANT SELECT ON ALL TABLES IN SCHEMA navigator_graph TO {role};
+         GRANT EXECUTE ON FUNCTION graph_conflict_frontier(text), graph_conflict_edges(text),
+             graph_load_edges(text, text), graph_ensure_vertices(text, text) TO {role};"
+    )))
+    .execute(&setup.0)
+    .await
+    .unwrap();
+    setup.0.close().await;
+    connect(&options.clone().options([("role", role)]), database).await
 }
 
 #[test]

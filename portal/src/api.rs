@@ -9848,11 +9848,17 @@ impl IntoResponse for ApiError {
                 })),
             )
                 .into_response(),
+            // The log carries the whole source chain — the store layer's
+            // Display names only the half that failed, never the engine's
+            // reason — and the caller gets a fixed sentence.
             Self::Adversity(e) => {
-                tracing::error!(error = %e, "record adversity failed");
+                tracing::error!(error = %e, chain = ?e, "record adversity failed");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": "internal", "message": e.to_string() })),
+                    Json(serde_json::json!({
+                        "error": "internal",
+                        "message": "the adversity could not be recorded"
+                    })),
                 )
                     .into_response()
             }

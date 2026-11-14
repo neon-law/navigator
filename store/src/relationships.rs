@@ -180,8 +180,9 @@ pub enum RelationshipError {
     Postgres(#[from] crate::postgres::PostgresError),
     #[error("PostgreSQL: {0}")]
     Sqlx(#[from] sqlx::Error),
-    /// The graph half of an authoritative write failed after the
-    /// relational row landed — see [`crate::postgres_graph`].
+    /// The graph half of an authoritative write failed, and its
+    /// transaction rolled the relational row back — see
+    /// [`crate::postgres_graph`].
     #[error("the graph projection could not take the write")]
     Graph(#[from] crate::postgres_graph::GraphError),
 }
@@ -209,7 +210,12 @@ pub async fn record(
     validate_new_relationship(input)?;
     match authority().await? {
         None => record_in_surreal(db, input).await,
-        Some(postgres) => record_in_postgres(db, &postgres, input).await,
+        Some(postgres) => {
+            let mut tx = postgres.0.begin().await?;
+            let relationship = record_in_postgres(db, &mut tx, input).await?;
+            tx.commit().await?;
+            Ok(relationship)
+        }
     }
 }
 
@@ -282,58 +288,93 @@ pub(crate) async fn record_in_surreal(
         .ok_or(RelationshipError::WriteReturnedNothing)
 }
 
-/// The authoritative write: the relational row first (the store of
-/// record), then the graph's `RELATIONSHIP` edge, whose vertices the
-/// write ensures before loading. The id is a fresh UUID string — the
-/// relational table's text key, in the shape the fixtures and the
-/// parity pass read. The Surreal graph table is retired from this path:
-/// under the `age` engine it receives nothing, which is the retirement.
+/// The authoritative write, on the caller's transaction: the relational
+/// row (the store of record), then the graph's `RELATIONSHIP` edge, whose
+/// vertices the write ensures before loading. Both land in the one
+/// transaction, so a refused graph write leaves no relational row behind.
+/// The id is a fresh UUID string — the relational table's text key, in
+/// the shape the fixtures and the parity pass read. The Surreal graph
+/// table is retired from this path: it receives nothing.
+///
+/// Idempotent per edge: the same endpoints, kind, and provenance
+/// (`source_kind`, `source_id`) return the row already landed and write
+/// no second row and no second edge. A transaction-scoped advisory lock on
+/// that key serializes concurrent writers of one edge; the table carries no
+/// unique index, because rows the mirror copied from SurrealDB, whose
+/// `RELATE` never refused a twin, may already repeat a key.
 ///
 /// The display names travel from SurrealDB, the store that still mints
 /// persons and entities; the vertex-ensure function falls back to the
 /// relational row's own name for a `None`.
-async fn record_in_postgres(
+pub(crate) async fn record_in_postgres(
     db: &SurrealDb,
-    postgres: &PostgresDb,
+    conn: &mut sqlx::PgConnection,
     input: &NewRelationship,
 ) -> Result<Relationship, RelationshipError> {
-    let inserted = sqlx::query(
-        "INSERT INTO \"relationship\" (id, \"in\", \"out\", kind, confidence_pct, \
-         source_kind, source_id, detail, inserted_at, updated_at) \
-         VALUES ($1, $2::jsonb, $3::jsonb, $4, $5, $6, $7::jsonb, $8, now(), now()) \
-         RETURNING inserted_at, updated_at",
+    let from = record_link_json(input.from.table(), input.from_id).to_string();
+    let to = record_link_json(input.to.table(), input.to_id).to_string();
+    let source_id = input
+        .source_id
+        .map(|id| serde_json::json!(id.to_string()).to_string());
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 2083))")
+        .bind(format!(
+            "relationship:{from}:{to}:{}:{}:{}",
+            input.kind,
+            input.source_kind,
+            source_id.as_deref().unwrap_or_default()
+        ))
+        .execute(&mut *conn)
+        .await?;
+    let landed = sqlx::query(
+        "SELECT confidence_pct, detail, inserted_at, updated_at FROM \"relationship\" \
+         WHERE \"in\" = $1::jsonb AND \"out\" = $2::jsonb AND kind = $3 \
+           AND source_kind = $4 AND source_id IS NOT DISTINCT FROM $5::jsonb \
+         ORDER BY inserted_at ASC, id ASC LIMIT 1",
     )
-    .bind(Uuid::now_v7().to_string())
-    .bind(record_link_json(input.from.table(), input.from_id).to_string())
-    .bind(record_link_json(input.to.table(), input.to_id).to_string())
+    .bind(&from)
+    .bind(&to)
     .bind(&input.kind)
-    .bind(i64::from(input.confidence_pct))
     .bind(&input.source_kind)
-    .bind(
-        input
-            .source_id
-            .map(|id| serde_json::json!(id.to_string()).to_string()),
-    )
-    .bind(&input.detail)
-    .fetch_one(&postgres.0)
+    .bind(&source_id)
+    .fetch_optional(&mut *conn)
     .await?;
+    let row = if let Some(row) = landed {
+        row
+    } else {
+        let row = sqlx::query(
+            "INSERT INTO \"relationship\" (id, \"in\", \"out\", kind, confidence_pct, \
+                 source_kind, source_id, detail, inserted_at, updated_at) \
+                 VALUES ($1, $2::jsonb, $3::jsonb, $4, $5, $6, $7::jsonb, $8, now(), now()) \
+                 RETURNING confidence_pct, detail, inserted_at, updated_at",
+        )
+        .bind(Uuid::now_v7().to_string())
+        .bind(&from)
+        .bind(&to)
+        .bind(&input.kind)
+        .bind(i64::from(input.confidence_pct))
+        .bind(&input.source_kind)
+        .bind(&source_id)
+        .bind(&input.detail)
+        .fetch_one(&mut *conn)
+        .await?;
+        write_edge_with_names(db, conn, input).await?;
+        row
+    };
 
-    let relationship = Relationship {
+    Ok(Relationship {
         from: input.from,
         from_id: input.from_id,
         to: input.to,
         to_id: input.to_id,
         kind: input.kind.clone(),
-        confidence_pct: input.confidence_pct,
+        confidence_pct: i32::try_from(row.try_get::<i64, _>("confidence_pct")?)
+            .map_err(|_| RelationshipError::WriteReturnedNothing)?,
         source_kind: input.source_kind.clone(),
         source_id: input.source_id,
-        detail: input.detail.clone(),
-        inserted_at: inserted.try_get("inserted_at")?,
-        updated_at: inserted.try_get("updated_at")?,
-    };
-
-    write_edge_with_names(db, postgres, input).await?;
-    Ok(relationship)
+        detail: row.try_get("detail")?,
+        inserted_at: row.try_get("inserted_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
 }
 
 /// The JSONB record link the mirror normalized — `{"tb": ..., "id":
@@ -344,20 +385,19 @@ fn record_link_json(table: &str, id: Uuid) -> serde_json::Value {
 }
 
 /// Resolve the endpoints' display names from SurrealDB and land the
-/// edge. A name lookup that fails fails the write: the row above is
-/// not yet visible to the graph when this runs, so a retry re-walks
-/// the whole path and lands one row, one edge.
+/// edge on the write's transaction. A name lookup that fails fails the
+/// write, and the transaction takes the relational row with it.
 async fn write_edge_with_names(
     db: &SurrealDb,
-    postgres: &PostgresDb,
+    conn: &mut sqlx::PgConnection,
     input: &NewRelationship,
 ) -> Result<(), RelationshipError> {
     let from_name = endpoint_name(db, input.from, input.from_id).await?;
     let to_name = endpoint_name(db, input.to, input.to_id).await?;
-    ensure_vertices(postgres, input.from.table(), &[(input.from_id, from_name)]).await?;
-    ensure_vertices(postgres, input.to.table(), &[(input.to_id, to_name)]).await?;
+    ensure_vertices(conn, input.from.table(), &[(input.from_id, from_name)]).await?;
+    ensure_vertices(conn, input.to.table(), &[(input.to_id, to_name)]).await?;
     load_edge(
-        postgres,
+        conn,
         "relationship",
         serde_json::json!({
             "from_id": input.from_id.to_string(),
@@ -604,6 +644,48 @@ mod tests {
         );
     }
 
+    /// The write as the runtime login, whose grants the superuser fixtures
+    /// never exercise: endpoints missing from the graph are minted and the
+    /// edge lands. A retry of the same edge — same endpoints, kind, and
+    /// provenance — lands no second row and no second edge. Skips without
+    /// the Postgres fixture; the covered CI lane provides one.
+    #[tokio::test]
+    async fn a_runtime_login_write_lands_once_however_often_it_is_retried() {
+        use crate::postgres_graph::with_test_authority;
+        use crate::postgres_mirror::tests::{connect, connect_as_runtime, fresh_schema};
+        use sqlx::Row;
+        let Some((options, database)) = fresh_schema().await else {
+            return;
+        };
+        let owner = connect(&options, &database).await;
+        let runtime = connect_as_runtime(&options, &database).await;
+        let db = mem().await;
+        let alice = person(&db, "Libra Tidewell").await;
+        let acme = entity(&db, "Acme Age LLC").await;
+        let input = NewRelationship {
+            source_id: Some(Uuid::now_v7()),
+            ..edge(Endpoint::Person, alice, Endpoint::Entity, acme)
+        };
+
+        with_test_authority(Some(runtime), async {
+            record(&db, &input).await.unwrap();
+            record(&db, &input).await.unwrap();
+        })
+        .await;
+
+        let landed = sqlx::query("SELECT count(*) AS n FROM \"relationship\"")
+            .fetch_one(&owner.0)
+            .await
+            .unwrap();
+        assert_eq!(landed.get::<i64, _>("n"), 1, "one relational row");
+        let edges = sqlx::query("SELECT t.v::text FROM graph_conflict_edges($1) AS t(v)")
+            .bind(serde_json::json!([alice.to_string()]).to_string())
+            .fetch_all(&owner.0)
+            .await
+            .unwrap();
+        assert_eq!(edges.len(), 1, "one graph edge");
+    }
+
     /// The AGE-engine write: the relational row lands, the endpoints'
     /// display names resolve from SurrealDB, and the graph takes the
     /// RELATIONSHIP edge with the payload. Skips without the Postgres
@@ -620,9 +702,10 @@ mod tests {
         let alice = person(&db, "Libra Tidewell").await;
         let acme = entity(&db, "Acme Age LLC").await;
 
+        let mut conn = postgres.0.acquire().await.unwrap();
         let written = super::record_in_postgres(
             &db,
-            &postgres,
+            &mut conn,
             &edge(Endpoint::Person, alice, Endpoint::Entity, acme),
         )
         .await

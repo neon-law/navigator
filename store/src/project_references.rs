@@ -473,39 +473,44 @@ pub async fn record_adversity(
             .map(|row| Party::person(row.person_id))
             .ok_or(AdversityError::NoClientDri)?,
     };
-    let log = crate::relationship_logs::record(
-        db,
-        &crate::relationship_logs::NewRelationshipLog {
-            actor_person_id: command.actor_person_id,
-            subject_type: PROJECT_TABLE.to_string(),
-            subject_id: project.id,
-            action: ADVERSITY_RECORDED_ACTION.to_string(),
-            detail: format!(
-                "{}:{} adverse_to {}:{}",
-                from.kind.table(),
-                from.id,
-                command.party.kind.table(),
-                command.party.id
-            ),
-            project_id: Some(project.id),
-        },
-    )
-    .await?;
-    Ok(crate::relationships::record(
-        db,
-        &NewRelationship {
-            from: from.kind,
-            from_id: from.id,
-            to: command.party.kind,
-            to_id: command.party.id,
-            kind: crate::relationships::KIND_ADVERSE_TO.to_string(),
-            confidence_pct: 100,
-            source_kind: crate::relationships::SOURCE_MANUAL.to_string(),
-            source_id: Some(log.id),
-            detail: Some(format!("recorded on project {}", project.code)),
-        },
-    )
-    .await?)
+    let entry = crate::relationship_logs::NewRelationshipLog {
+        actor_person_id: command.actor_person_id,
+        subject_type: PROJECT_TABLE.to_string(),
+        subject_id: project.id,
+        action: ADVERSITY_RECORDED_ACTION.to_string(),
+        detail: format!(
+            "{}:{} adverse_to {}:{}",
+            from.kind.table(),
+            from.id,
+            command.party.kind.table(),
+            command.party.id
+        ),
+        project_id: Some(project.id),
+    };
+    let edge = |log_id| NewRelationship {
+        from: from.kind,
+        from_id: from.id,
+        to: command.party.kind,
+        to_id: command.party.id,
+        kind: crate::relationships::KIND_ADVERSE_TO.to_string(),
+        confidence_pct: 100,
+        source_kind: crate::relationships::SOURCE_MANUAL.to_string(),
+        source_id: Some(log_id),
+        detail: Some(format!("recorded on project {}", project.code)),
+    };
+    if let Some(postgres) = authority().await? {
+        // The log row and the edge it sources commit together: a refused
+        // graph write leaves no entry claiming the adversity was recorded.
+        let sqlx = crate::relationships::RelationshipError::Sqlx;
+        let mut tx = postgres.0.begin().await.map_err(sqlx)?;
+        let log = crate::relationship_logs::record_in_postgres(&mut tx, &entry).await?;
+        let relationship =
+            crate::relationships::record_in_postgres(db, &mut tx, &edge(log.id)).await?;
+        tx.commit().await.map_err(sqlx)?;
+        return Ok(relationship);
+    }
+    let log = crate::relationship_logs::record(db, &entry).await?;
+    Ok(crate::relationships::record(db, &edge(log.id)).await?)
 }
 
 #[cfg(test)]
@@ -675,6 +680,107 @@ mod tests {
         let edge = record_adversity(&surreal, &command).await.unwrap();
         assert_eq!(edge.from, Endpoint::Person);
         assert_eq!(edge.from_id, client);
+    }
+
+    /// The production shape: PostgreSQL holds the graph and the write runs
+    /// as the runtime login, not the superuser the fixtures own. A graph
+    /// write that fails leaves neither a log row nor a relational row
+    /// behind, and the retry lands exactly one of each plus one edge.
+    /// Skips without the Postgres fixture; the covered CI lane provides one.
+    #[tokio::test]
+    async fn adversity_as_the_runtime_login_lands_whole_or_not_at_all() {
+        use crate::postgres_graph::with_test_authority;
+        use crate::postgres_mirror::tests::{
+            connect, connect_as_runtime, fresh_schema, mirror_identity,
+        };
+        use sqlx::Row;
+        let Some((options, database)) = fresh_schema().await else {
+            return;
+        };
+        let owner = connect(&options, &database).await;
+        let runtime = connect_as_runtime(&options, &database).await;
+        let surreal = mem_surreal().await;
+        let project = seed_project(&surreal, "Widget matter").await;
+        let opponent = Party::entity(seed_entity(&surreal).await);
+        mirror_identity(&owner, &[project.entity_id, opponent.id], &[]).await;
+        sqlx::query(
+            "INSERT INTO project (id, code, name, status, entity_id) \
+             VALUES ($1, $2, 'Synthetic Matter', 'open', $3)",
+        )
+        .bind(project.id)
+        .bind(&project.code)
+        .bind(project.entity_id)
+        .execute(&owner.0)
+        .await
+        .unwrap();
+        let command = RecordAdversityCommand {
+            project_id: project.id,
+            party: opponent,
+            subject: AdversitySubject::Entity,
+            actor_person_id: None,
+        };
+        let count = |table: &'static str| {
+            let owner = &owner;
+            async move {
+                sqlx::query(sqlx::AssertSqlSafe(format!(
+                    "SELECT count(*) AS n FROM \"{table}\""
+                )))
+                .fetch_one(&owner.0)
+                .await
+                .unwrap()
+                .get::<i64, _>("n")
+            }
+        };
+
+        with_test_authority(Some(runtime), async {
+            reference(&surreal, project.id, opponent, REASON_COUNTERPARTY_ENTITY)
+                .await
+                .unwrap();
+
+            // The graph refuses the edge: nothing of the write survives.
+            sqlx::raw_sql(
+                "ALTER FUNCTION graph_load_edges(text, text) RENAME TO graph_load_edges_away",
+            )
+            .execute(&owner.0)
+            .await
+            .unwrap();
+            let refused = record_adversity(&surreal, &command)
+                .await
+                .expect_err("the graph write failed");
+            assert!(
+                matches!(refused, AdversityError::Relationship(_)),
+                "{refused:?}"
+            );
+            assert_eq!(
+                count("relationship_log").await,
+                0,
+                "a failed write logs nothing"
+            );
+            assert_eq!(
+                count("relationship").await,
+                0,
+                "a failed write leaves no row"
+            );
+
+            sqlx::raw_sql(
+                "ALTER FUNCTION graph_load_edges_away(text, text) RENAME TO graph_load_edges",
+            )
+            .execute(&owner.0)
+            .await
+            .unwrap();
+            let edge = record_adversity(&surreal, &command).await.unwrap();
+            assert_eq!(edge.to_id, opponent.id);
+        })
+        .await;
+
+        assert_eq!(count("relationship_log").await, 1);
+        assert_eq!(count("relationship").await, 1);
+        let edges = sqlx::query("SELECT t.v::text FROM graph_conflict_edges($1) AS t(v)")
+            .bind(serde_json::json!([opponent.id.to_string()]).to_string())
+            .fetch_all(&owner.0)
+            .await
+            .unwrap();
+        assert_eq!(edges.len(), 1, "the graph took one edge");
     }
 
     #[tokio::test]

@@ -100,8 +100,9 @@ pub enum EntityRoleError {
     Postgres(#[from] crate::postgres::PostgresError),
     #[error("PostgreSQL: {0}")]
     Sqlx(#[from] sqlx::Error),
-    /// The graph half of an authoritative write failed after the
-    /// relational row landed — see [`crate::postgres_graph`].
+    /// The graph half of an authoritative write failed, and its
+    /// transaction rolled the relational row back — see
+    /// [`crate::postgres_graph`].
     #[error("the graph projection could not take the write")]
     Graph(#[from] crate::postgres_graph::GraphError),
 }
@@ -208,9 +209,10 @@ pub(crate) async fn grant_in_surreal(
 /// The authoritative write: the relational row first (the store of
 /// record), then the graph's `HAS_ROLE` edge, whose vertices the write
 /// ensures before loading — the projection may not have rebuilt since
-/// the person or entity was minted. The Surreal graph table is retired
-/// from this path: under the `age` engine it receives nothing, which is
-/// the retirement.
+/// the person or entity was minted. Both land in one transaction, so a
+/// refused graph write leaves no tie behind for a retry to mistake for a
+/// whole one. The Surreal graph table is retired from this path: it
+/// receives nothing.
 ///
 /// The display names travel from SurrealDB, the store that still mints
 /// persons and entities; the vertex-ensure function falls back to the
@@ -226,6 +228,7 @@ async fn grant_in_postgres(
         return Ok(existing);
     }
 
+    let mut tx = postgres.0.begin().await?;
     let written = sqlx::query(
         "INSERT INTO entity_role (person_id, entity_id, role) \
          VALUES ($1, $2, $3) \
@@ -235,13 +238,14 @@ async fn grant_in_postgres(
     .bind(person_id)
     .bind(entity_id)
     .bind(role)
-    .fetch_optional(&postgres.0)
+    .fetch_optional(&mut *tx)
     .await?;
 
     let Some(row) = written else {
         // Another writer minted the same tie between the read above and
         // this write. Its row is the answer — the same loser-rereads
         // contract the Surreal path's unique index provides.
+        tx.rollback().await?;
         return find_in_postgres(postgres, person_id, entity_id, role)
             .await?
             .ok_or(EntityRoleError::WriteReturnedNothing);
@@ -254,17 +258,17 @@ async fn grant_in_postgres(
         updated_at: row.try_get("updated_at")?,
     };
 
-    write_edge_with_names(db, postgres, person_id, entity_id, role).await?;
+    write_edge_with_names(db, &mut tx, person_id, entity_id, role).await?;
+    tx.commit().await?;
     Ok(tie)
 }
 
 /// Resolve the endpoints' display names from SurrealDB and land the
-/// tie's graph edge. A name lookup that fails fails the write: the edge
-/// is not yet written anywhere when this runs, so a retry re-walks the
-/// whole path and lands one row, one edge.
+/// tie's graph edge on the write's transaction. A name lookup that fails
+/// fails the write, and the transaction takes the tie with it.
 async fn write_edge_with_names(
     db: &SurrealDb,
-    postgres: &PostgresDb,
+    conn: &mut sqlx::PgConnection,
     person_id: Uuid,
     entity_id: Uuid,
     role: &str,
@@ -275,20 +279,10 @@ async fn write_edge_with_names(
     let entity = crate::entities::find_by_id(db, entity_id)
         .await
         .map_err(|error| EntityRoleError::Engine(format!("read the tie's entity: {error}")))?;
-    ensure_vertices(
-        postgres,
-        PERSON_TABLE,
-        &[(person_id, person.map(|p| p.name))],
-    )
-    .await?;
-    ensure_vertices(
-        postgres,
-        ENTITY_TABLE,
-        &[(entity_id, entity.map(|e| e.name))],
-    )
-    .await?;
+    ensure_vertices(conn, PERSON_TABLE, &[(person_id, person.map(|p| p.name))]).await?;
+    ensure_vertices(conn, ENTITY_TABLE, &[(entity_id, entity.map(|e| e.name))]).await?;
     load_edge(
-        postgres,
+        conn,
         "has_role",
         serde_json::json!({
             "from_id": person_id.to_string(),

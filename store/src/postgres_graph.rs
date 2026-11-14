@@ -173,11 +173,14 @@ pub(crate) async fn with_test_authority<T>(
 /// that compile them from [`crate::relationships::Endpoint`], never from
 /// input.
 ///
+/// It runs on the caller's connection, so the relational row and its
+/// edge commit or roll back in the caller's one transaction.
+///
 /// # Errors
 ///
 /// [`GraphError::Store`] if the ensure fails.
 pub(crate) async fn ensure_vertices(
-    pg: &PostgresDb,
+    conn: &mut sqlx::PgConnection,
     table: &str,
     rows: &[(Uuid, Option<String>)],
 ) -> Result<(), GraphError> {
@@ -189,29 +192,28 @@ pub(crate) async fn ensure_vertices(
     sqlx::query(ENSURE_VERTICES_SQL)
         .bind(table)
         .bind(&payload)
-        .execute(&pg.0)
+        .execute(conn)
         .await?;
     Ok(())
 }
 
-/// The runtime write path's one-edge load. The Surreal write this
-/// mirrors was one `RELATE`, so one `CREATE` is the same semantics; the
-/// next wholesale projection rebuild is the deduplicator of last
-/// resort, and the conflict check reads edges by id, which a rebuild
-/// renumbers anyway.
+/// The runtime write path's one-edge load, on the caller's connection
+/// and inside its transaction. One `CREATE` per call: the caller writes
+/// the edge only beside a relational row it has just inserted, so a
+/// retried write lands no second edge.
 ///
 /// # Errors
 ///
 /// [`GraphError::Store`] if the load fails.
 pub(crate) async fn load_edge(
-    pg: &PostgresDb,
+    conn: &mut sqlx::PgConnection,
     edge_kind: &str,
     payload: Value,
 ) -> Result<(), GraphError> {
     sqlx::query(LOAD_EDGES_SQL)
         .bind(edge_kind)
         .bind(json!({"rows": [payload]}).to_string())
-        .execute(&pg.0)
+        .execute(conn)
         .await?;
     Ok(())
 }
