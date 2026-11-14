@@ -2,12 +2,14 @@
 //! generic records mirror carries, read and written in PostgreSQL by their
 //! owning `store` modules.
 //!
-//! Opt-in per deployment through `NAVIGATOR_POSTGRES_MATTER_AUTHORITY`. When
-//! enabled, each module in [`TABLES`] dispatches its reads and writes here
-//! instead of SurrealDB, writes no SurrealDB row, and the records mirror
-//! refuses to overwrite or delete these tables from SurrealDB (a missing
-//! SurrealDB row is not deletion evidence after cutover). Parent rows the
-//! modules check — the Project, Person, Entity, and Notation — stay on their
+//! Wherever PostgreSQL is configured (`NAVIGATOR_POSTGRES_HOST`), each
+//! module in [`TABLES`] dispatches its reads and writes here instead of
+//! SurrealDB and writes no SurrealDB row, and the records mirror refuses to
+//! overwrite or delete these tables from SurrealDB (a missing SurrealDB row
+//! is not deletion evidence) outside the first Mirror Backfill (see
+//! [`crate::postgres_mirror::initial_copy`]). SurrealDB serves a process
+//! without PostgreSQL, which today means only the SurrealDB test harness.
+//! Parent rows the modules check — the Project, Person, Entity, and Notation — stay on their
 //! own authorities.
 //!
 //! The accessor is generic over the records mirror's table registry: a row
@@ -23,10 +25,7 @@ use uuid::Uuid;
 
 use crate::postgres::PostgresDb;
 
-/// Opt-in switch for the PostgreSQL-authoritative matter records.
-pub const AUTHORITY_ENV: &str = "NAVIGATOR_POSTGRES_MATTER_AUTHORITY";
-
-/// The tables whose owning module dispatches here when the switch is on.
+/// The tables whose owning module dispatches here.
 pub(crate) const TABLES: &[&str] = &[
     "cap_table_holding",
     "estate_asset",
@@ -45,8 +44,6 @@ tokio::task_local! {
 /// values.
 #[derive(Debug, thiserror::Error)]
 pub enum MatterAuthorityError {
-    #[error("PostgreSQL matter authority setting must be one of 0, 1, false, or true")]
-    Configuration,
     #[error("PostgreSQL is unavailable for matter authority")]
     Unavailable,
     /// The write collided with the named unique index.
@@ -73,37 +70,13 @@ impl From<sqlx::Error> for MatterAuthorityError {
     }
 }
 
-/// Strict parse, matching the other authority switches' accepted values.
-pub(crate) fn enabled_from(setting: Option<&str>) -> Result<bool, MatterAuthorityError> {
-    match setting {
-        None | Some("0" | "false") => Ok(false),
-        Some("1" | "true") => Ok(true),
-        Some(_) => Err(MatterAuthorityError::Configuration),
-    }
-}
-
-/// Whether this process selected matter authority. A misconfigured switch
-/// is an error, so a mirror guard fails closed.
-pub(crate) fn selected() -> Result<bool, MatterAuthorityError> {
-    #[cfg(test)]
-    if TEST_MATTER_DB.try_with(|_| ()).is_ok() {
-        return Ok(true);
-    }
-    let setting = match std::env::var(AUTHORITY_ENV) {
-        Ok(setting) => Some(setting),
-        Err(std::env::VarError::NotPresent) => None,
-        Err(std::env::VarError::NotUnicode(_)) => return Err(MatterAuthorityError::Configuration),
-    };
-    enabled_from(setting.as_deref())
-}
-
 /// A matter-record operation. Boxed so every owning module that awaits one
 /// keeps a small future instead of embedding the PostgreSQL client's.
 pub(crate) type Op<'a, T> = std::pin::Pin<
     Box<dyn std::future::Future<Output = Result<T, MatterAuthorityError>> + Send + 'a>,
 >;
 
-/// The pool to dispatch to, or `None` when the deployment keeps SurrealDB.
+/// The pool to dispatch to, or `None` in a process without PostgreSQL.
 pub(crate) fn authority() -> Op<'static, Option<PostgresDb>> {
     Box::pin(authority_now())
 }
@@ -113,12 +86,8 @@ async fn authority_now() -> Result<Option<PostgresDb>, MatterAuthorityError> {
     if let Ok(pg) = TEST_MATTER_DB.try_with(Clone::clone) {
         return Ok(Some(pg));
     }
-    if !selected()? {
-        return Ok(None);
-    }
-    PostgresDb::from_env()
+    PostgresDb::configured()
         .await
-        .map(Some)
         .map_err(|_| MatterAuthorityError::Unavailable)
 }
 

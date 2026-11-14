@@ -434,16 +434,16 @@ where
     substitutions.extend(forgejo_coordinate_substitutions(deployment, &get)?);
     substitutions.extend(optional_release_substitutions(deployment, &get));
     substitutions.extend(capability_env_substitutions(deployment, &get)?);
-    substitutions.push(web_patch_substitution(
-        deployment,
-        &get,
-        &POSTGRES_WEB_PATCH,
-    )?);
+    substitutions.push(Substitution {
+        token: POSTGRES_WEB_PATCH_TOKEN,
+        env: "NAVIGATOR_POSTGRES_HOST",
+        value: web_patch_entry(POSTGRES_WEB_PATCH_PATH),
+    });
     substitutions.push(web_patch_substitution(deployment, &get, &DBOS_WEB_PATCH)?);
     substitutions.extend(dbos_schedule_substitutions(deployment, &get)?);
     substitutions.extend(archives_substitutions(&get));
     substitutions.extend(replica_substitutions(deployment, &get)?);
-    substitutions.extend(mirror_substitutions(&get)?);
+    substitutions.push(mirror_recovery_substitution());
     substitutions.push(authority_substitution(&get)?);
     // Not in PLAINTEXT_SUBSTITUTIONS and not read from `get` at all: the additional brand
     // hosts this deployment's environment serves come from the compiled
@@ -519,90 +519,45 @@ where
     .collect())
 }
 
-/// The deployment coordinate that opts `web` into its PostgreSQL connection.
-const NAVIGATOR_POSTGRES_ENABLED: &str = "NAVIGATOR_POSTGRES_ENABLED";
-
 const MIRROR_RESOURCE_TOKEN: &str = "  # NAVIGATOR_POSTGRES_MIRROR_RESOURCE\n";
-const MIRROR_ENV_TOKEN: &str = "            # NAVIGATOR_POSTGRES_MIRROR_ENV\n";
 const AUTHORITY_ENV_TOKEN: &str = "            # NAVIGATOR_POSTGRES_AUTHORITY_ENV\n";
+/// The domain switches still read at runtime; every other domain is
+/// PostgreSQL-authoritative wherever `web` has PostgreSQL, which is every
+/// deployment.
 const BOOLEAN_AUTHORITY_KEYS: &[&str] = &[
     store::persons::POSTGRES_PEOPLE_AUTHORITY_ENV,
     "NAVIGATOR_POSTGRES_PROJECT_LIFECYCLE_AUTHORITY",
-    "NAVIGATOR_POSTGRES_INBOX_AUTHORITY",
     "NAVIGATOR_POSTGRES_TENANCY_AUTHORITY",
-    store::postgres::matter::AUTHORITY_ENV,
-    store::postgres::catalog::AUTHORITY_ENV,
 ];
-const GRAPH_AUTHORITY_KEY: &str = "NAVIGATOR_GRAPH_AUTHORITY";
-
 fn authority_substitution(get: &impl Fn(&str) -> Option<String>) -> Result<Substitution> {
-    let postgres = non_empty_env(NAVIGATOR_POSTGRES_ENABLED, get).as_deref() == Some("true");
-    let mirror = non_empty_env(store::postgres_mirror::MIRROR_ENV, get).as_deref() == Some("1");
+    use std::fmt::Write as _;
     let mut value = String::new();
-    for &key in BOOLEAN_AUTHORITY_KEYS.iter().chain([&GRAPH_AUTHORITY_KEY]) {
+    for &key in BOOLEAN_AUTHORITY_KEYS {
         let Some(setting) = get(key) else { continue };
-        let setting = if key == GRAPH_AUTHORITY_KEY {
-            setting.trim().to_ascii_lowercase()
-        } else {
-            setting
-        };
-        let enabled = match (key, setting.as_str()) {
-            (GRAPH_AUTHORITY_KEY, "age") => true,
-            (GRAPH_AUTHORITY_KEY, "surreal") => false,
-            (GRAPH_AUTHORITY_KEY, _) => bail!("{key} must be age or surreal"),
-            (_, "1" | "true") => true,
-            (_, "0" | "false") => false,
-            _ => bail!("{key} must be 0, 1, false, or true"),
-        };
         ensure!(
-            !enabled || (postgres && mirror),
-            "{key} requires NAVIGATOR_POSTGRES_ENABLED=true and NAVIGATOR_POSTGRES_MIRROR=1"
+            matches!(setting.as_str(), "1" | "true" | "0" | "false"),
+            "{key} must be 0, 1, false, or true"
         );
-        if postgres {
-            use std::fmt::Write as _;
-            writeln!(
-                value,
-                "            - name: {key}\n              value: \"{setting}\""
-            )?;
-        }
+        writeln!(
+            value,
+            "            - name: {key}\n              value: \"{setting}\""
+        )?;
     }
     Ok(Substitution {
         token: AUTHORITY_ENV_TOKEN,
-        env: NAVIGATOR_POSTGRES_ENABLED,
+        env: "NAVIGATOR_POSTGRES_HOST",
         value,
     })
 }
 
-fn mirror_substitutions(get: &impl Fn(&str) -> Option<String>) -> Result<Vec<Substitution>> {
-    let enabled = match non_empty_env(store::postgres_mirror::MIRROR_ENV, get).as_deref() {
-        None | Some("0") => false,
-        Some("1") => true,
-        Some(_) => bail!("NAVIGATOR_POSTGRES_MIRROR must be \"1\" or \"0\""),
-    };
-    ensure!(
-        !enabled || non_empty_env(NAVIGATOR_POSTGRES_ENABLED, get).as_deref() == Some("true"),
-        "NAVIGATOR_POSTGRES_MIRROR=1 requires NAVIGATOR_POSTGRES_ENABLED=true"
-    );
-    Ok(vec![
-        Substitution {
-            token: MIRROR_RESOURCE_TOKEN,
-            env: store::postgres_mirror::MIRROR_ENV,
-            value: if enabled {
-                "  - ../../../../k8s/postgres/mirror/recovery\n".into()
-            } else {
-                String::new()
-            },
-        },
-        Substitution {
-            token: MIRROR_ENV_TOKEN,
-            env: store::postgres_mirror::MIRROR_ENV,
-            value: if enabled {
-                "            - name: NAVIGATOR_POSTGRES_MIRROR\n              value: \"1\"\n".into()
-            } else {
-                String::new()
-            },
-        },
-    ])
+/// The recurring mirror recovery every deployment runs: `web` mirrors
+/// wherever it has PostgreSQL, which is every deployment.
+fn mirror_recovery_substitution() -> Substitution {
+    Substitution {
+        token: MIRROR_RESOURCE_TOKEN,
+        env: "NAVIGATOR_POSTGRES_HOST",
+        value: "  - ../../../../k8s/postgres/mirror/recovery\n".into(),
+    }
 }
 
 /// The whole-line placeholder in `kustomization.yaml` that becomes the
@@ -626,11 +581,8 @@ struct WebPatch {
     path: &'static str,
 }
 
-const POSTGRES_WEB_PATCH: WebPatch = WebPatch {
-    env: NAVIGATOR_POSTGRES_ENABLED,
-    token: POSTGRES_WEB_PATCH_TOKEN,
-    path: "postgres/web/web-postgres.yaml",
-};
+/// `web`'s PostgreSQL connection, rendered for every deployment.
+const POSTGRES_WEB_PATCH_PATH: &str = "postgres/web/web-postgres.yaml";
 
 const DBOS_WEB_PATCH: WebPatch = WebPatch {
     env: NAVIGATOR_DBOS_ENABLED,
@@ -641,13 +593,11 @@ const DBOS_WEB_PATCH: WebPatch = WebPatch {
 /// A daily workflow the DBOS executor in `web` hosts: its `config.toml`
 /// switch, the Restate trigger `CronJob` it retires (none for a workflow born
 /// on DBOS), the `config.toml` coordinates rendered into `web` beside the
-/// switch, the row secret `web` refuses to boot without, whether an absent
-/// switch means on wherever the executor runs, and whether the workflow reads
-/// PostgreSQL from `web`.
+/// switch, the row secret `web` refuses to boot without, and whether an
+/// absent switch means on wherever the executor runs.
 struct DbosSchedule {
     env: &'static str,
     default_on: bool,
-    needs_postgres: bool,
     retires: Option<RetiredCronJob>,
     coordinates: &'static [&'static str],
     secret: Option<&'static str>,
@@ -670,7 +620,6 @@ const DBOS_SCHEDULES: [DbosSchedule; 5] = [
     DbosSchedule {
         env: "NAVIGATOR_DBOS_GENERAL_NAG_ENABLED",
         default_on: true,
-        needs_postgres: false,
         retires: Some(retired("general-nag", "  - cron-general-nag.yaml\n")),
         coordinates: &["SLACK_GENERAL_CHANNEL_ID"],
         secret: Some("SLACK_BOT_TOKEN"),
@@ -678,7 +627,6 @@ const DBOS_SCHEDULES: [DbosSchedule; 5] = [
     DbosSchedule {
         env: "NAVIGATOR_DBOS_DRI_DIGEST_ENABLED",
         default_on: false,
-        needs_postgres: false,
         retires: Some(retired(
             "dri-digest-trigger",
             "  - cron-dri-digest-trigger.yaml\n",
@@ -689,7 +637,6 @@ const DBOS_SCHEDULES: [DbosSchedule; 5] = [
     DbosSchedule {
         env: "NAVIGATOR_DBOS_BILLING_DIGEST_ENABLED",
         default_on: false,
-        needs_postgres: false,
         retires: Some(retired(
             "billing-digest-trigger",
             "  - cron-billing-digest-trigger.yaml\n",
@@ -700,7 +647,6 @@ const DBOS_SCHEDULES: [DbosSchedule; 5] = [
     DbosSchedule {
         env: "NAVIGATOR_DBOS_NOTATION_RESET_ENABLED",
         default_on: false,
-        needs_postgres: false,
         retires: Some(retired(
             "notation-reset-trigger",
             "  - cron-notation-reset-trigger.yaml\n",
@@ -716,7 +662,6 @@ const DBOS_SCHEDULES: [DbosSchedule; 5] = [
     DbosSchedule {
         env: ARCHIVES_SCHEDULE_ENV,
         default_on: false,
-        needs_postgres: true,
         retires: Some(retired(
             "archives-trigger",
             "  - cron-archives-trigger.yaml\n",
@@ -802,19 +747,17 @@ const SLACK_WEBHOOK_URL: &str = "SLACK_WEBHOOK_URL";
 /// Each schedule's switch, read as `"true"` or `"false"`, in
 /// [`DBOS_SCHEDULES`] order. An absent switch is off, except that a
 /// `default_on` schedule is on wherever `NAVIGATOR_DBOS_ENABLED = "true"` and
-/// `web` has everything it reads. A schedule on DBOS needs the executor, and
-/// a `needs_postgres` one needs `NAVIGATOR_POSTGRES_ENABLED = "true"`, so an
-/// explicit `"true"` without them is refused at ship rather than at boot.
+/// `web` has everything it reads. A schedule on DBOS needs the executor, so
+/// an explicit `"true"` without it is refused at ship rather than at boot.
 fn dbos_schedule_flags<F>(deployment: &str, get: &F) -> Result<Vec<bool>>
 where
     F: Fn(&str) -> Option<String>,
 {
     let dbos_on = non_empty_env(NAVIGATOR_DBOS_ENABLED, get).as_deref() == Some("true");
-    let postgres_on = non_empty_env(NAVIGATOR_POSTGRES_ENABLED, get).as_deref() == Some("true");
     let mut flags = Vec::with_capacity(DBOS_SCHEDULES.len());
     for schedule in &DBOS_SCHEDULES {
         let flag = match non_empty_env(schedule.env, get).as_deref() {
-            None => schedule.default_on && dbos_on && (postgres_on || !schedule.needs_postgres),
+            None => schedule.default_on && dbos_on,
             Some("false") => false,
             Some("true") => true,
             Some(_) => bail!(
@@ -825,12 +768,6 @@ where
         ensure!(
             !flag || dbos_on,
             "{} requires {NAVIGATOR_DBOS_ENABLED} = \"true\" in deployments/{deployment}/config.toml",
-            schedule.env
-        );
-        ensure!(
-            !flag || postgres_on || !schedule.needs_postgres,
-            "{} requires {NAVIGATOR_POSTGRES_ENABLED} = \"true\" in \
-             deployments/{deployment}/config.toml: it reads PostgreSQL from web",
             schedule.env
         );
         flags.push(flag);
@@ -883,14 +820,13 @@ where
         }
     }
     if non_empty_env(NAVIGATOR_DBOS_ENABLED, get).as_deref() == Some("true") {
-        let postgres = non_empty_env(NAVIGATOR_POSTGRES_ENABLED, get).as_deref() == Some("true");
         for key in [
             "SLACK_MESSAGES_CHANNEL_ID",
             "SLACK_STAGING_MESSAGES_CHANNEL_ID",
             LINEAR_BACKLOG_CHANNEL,
             "NAVIGATOR_ARCHIVE_SOURCE",
         ] {
-            if rendered.contains(&key) || (!postgres && key != LINEAR_BACKLOG_CHANNEL) {
+            if rendered.contains(&key) {
                 continue;
             }
             if let Some(value) = non_empty_env(key, get) {
@@ -1003,10 +939,7 @@ where
 {
     let value = match non_empty_env(patch.env, get).as_deref() {
         None | Some("false") => String::new(),
-        Some("true") => format!(
-            "  - path: {}\n    target:\n      kind: Deployment\n      name: navigator-web\n",
-            patch.path
-        ),
+        Some("true") => web_patch_entry(patch.path),
         Some(_) => bail!(
             "{} in deployments/{deployment}/config.toml must be \"true\" or \"false\"",
             patch.env
@@ -1017,6 +950,11 @@ where
         env: patch.env,
         value,
     })
+}
+
+/// One `kustomization.yaml` `patches:` entry applying `path` to `web`.
+fn web_patch_entry(path: &str) -> String {
+    format!("  - path: {path}\n    target:\n      kind: Deployment\n      name: navigator-web\n")
 }
 
 /// The whole-line placeholder in the GKE `kustomization.yaml` `patches:` list
@@ -1620,7 +1558,6 @@ fn render_manifests_with(subs: &[Substitution]) -> Result<TempDir> {
 struct RenderedReleasePlan {
     application: TempDir,
     collector: String,
-    mirror_enabled: bool,
 }
 
 fn render_release_plan(
@@ -1631,16 +1568,13 @@ fn render_release_plan(
     Ok(RenderedReleasePlan {
         application: render_manifests_with(subs)?,
         collector: super::observability::render_collector_for_ship(cfg, deployment)?,
-        mirror_enabled: deployment
-            .coordinates
-            .get(store::postgres_mirror::MIRROR_ENV)
-            .is_some_and(|value| value.trim() == "1"),
     })
 }
 
 /// Service overlays are applied individually so PostgreSQL readiness and
-/// database convergence can gate Navigator migrations, Forgejo, and finally
-/// the application. They remain outside the ordinary application kustomization.
+/// database convergence can gate Navigator migrations, Forgejo, the mirror
+/// reconciliation, and finally the application. They remain outside the
+/// ordinary application kustomization.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReleaseStep {
     Postgres,
@@ -1648,6 +1582,12 @@ enum ReleaseStep {
     NavigatorMigrations,
     ForgejoDatabase,
     Forgejo,
+    /// `web` reads PostgreSQL authoritatively, so the application waits for
+    /// a clean `ops postgres mirror reconcile`: it is clean only once a
+    /// Mirror Backfill has completed, so a deployment whose PostgreSQL does
+    /// not yet hold `SurrealDB`'s history stops here instead of cutting over to
+    /// an empty database.
+    MirrorReconcile,
     Application,
 }
 
@@ -1657,6 +1597,7 @@ const ORDERED_RELEASE_STEPS: &[ReleaseStep] = &[
     ReleaseStep::NavigatorMigrations,
     ReleaseStep::ForgejoDatabase,
     ReleaseStep::Forgejo,
+    ReleaseStep::MirrorReconcile,
     ReleaseStep::Application,
 ];
 
@@ -3046,17 +2987,14 @@ fn ship_permissions(
             &cfg.namespace,
         )?);
         permissions.extend(manifest_permissions(&rendered.collector, &cfg.namespace)?);
-        let mut services = vec![
+        for service in [
             "postgres",
             "postgres/access",
             "postgres/migrate",
             "forgejo/database",
             "forgejo",
-        ];
-        if rendered.mirror_enabled {
-            services.push("postgres/mirror");
-        }
-        for service in services {
+            "postgres/mirror",
+        ] {
             let path = render_service_overlay(&rendered.application, cfg, service)?;
             permissions.extend(manifest_permissions(
                 &kustomize_build(&path)?,
@@ -3424,12 +3362,11 @@ fn offline_ship_plan(
                 ReleaseStep::NavigatorMigrations => "run Navigator migrations Job".to_owned(),
                 ReleaseStep::ForgejoDatabase => "run Forgejo database Job".to_owned(),
                 ReleaseStep::Forgejo => "reconcile Forgejo StatefulSet".to_owned(),
+                ReleaseStep::MirrorReconcile => {
+                    "run PostgreSQL mirror reconcile Job; stop unless clean".to_owned()
+                }
                 ReleaseStep::Application => {
-                    if rendered.mirror_enabled {
-                        "require clean mirror reconciliation; apply web, workflows, and recurring mirror recovery".to_owned()
-                    } else {
-                        "reconcile Navigator web and workflow Deployments".to_owned()
-                    }
+                    "apply web, workflows, and recurring mirror recovery".to_owned()
                 }
             }));
             for cronjob in retired_cronjobs(deployment)? {
@@ -4161,26 +4098,25 @@ fn reconcile_ordered_services(
             reconcile_manifests(cfg, dry_run, &service)?;
             wait_statefulset(cfg, dry_run, "navigator-forgejo", ROLLOUT_TIMEOUT)
         }
+        ReleaseStep::MirrorReconcile => {
+            let service = render_service_overlay(&rendered.application, cfg, "postgres/mirror")?;
+            pin_service_images(
+                &rendered.application,
+                &service,
+                cfg,
+                tag,
+                opts.image_digests.as_deref(),
+                dry_run,
+            )?;
+            run_job_overlay(
+                cfg,
+                dry_run,
+                &service,
+                "navigator-postgres-mirror-reconcile",
+                "30m",
+            )
+        }
         ReleaseStep::Application => {
-            if rendered.mirror_enabled {
-                let service =
-                    render_service_overlay(&rendered.application, cfg, "postgres/mirror")?;
-                pin_service_images(
-                    &rendered.application,
-                    &service,
-                    cfg,
-                    tag,
-                    opts.image_digests.as_deref(),
-                    dry_run,
-                )?;
-                run_job_overlay(
-                    cfg,
-                    dry_run,
-                    &service,
-                    "navigator-postgres-mirror-reconcile",
-                    "30m",
-                )?;
-            }
             reconcile_manifests(cfg, dry_run, target)?;
             wait_rollouts(cfg, dry_run, ROLLOUT_TIMEOUT, rollout_wait_deployments())
         }
@@ -6408,6 +6344,7 @@ mod tests {
                 ReleaseStep::NavigatorMigrations,
                 ReleaseStep::ForgejoDatabase,
                 ReleaseStep::Forgejo,
+                ReleaseStep::MirrorReconcile,
                 ReleaseStep::Application,
             ]
         );
@@ -6442,6 +6379,42 @@ mod tests {
                 ReleaseStep::ForgejoDatabase,
             ]
         );
+    }
+
+    /// A PostgreSQL that does not yet hold `SurrealDB`'s history (no completed
+    /// Mirror Backfill) makes the reconcile Job exit unclean. Every ship runs
+    /// that Job, whatever the deployment row says, and a failed one leaves the
+    /// application unapplied rather than cutting `web` over to an empty
+    /// database.
+    #[test]
+    fn an_unclean_mirror_reconcile_stops_every_ship_before_the_application() {
+        let mut observed = Vec::new();
+        let error = run_ordered_release(|step| {
+            observed.push(step);
+            if step == ReleaseStep::MirrorReconcile {
+                bail!("synthetic reconcile drift: no completed Mirror Backfill");
+            }
+            Ok(())
+        })
+        .expect_err("an unclean reconcile aborts the release");
+        assert!(error.to_string().contains("MirrorReconcile"));
+        assert_eq!(observed.last(), Some(&ReleaseStep::MirrorReconcile));
+        assert!(!observed.contains(&ReleaseStep::Application));
+
+        // A row naming no PostgreSQL or mirror setting still renders the Job.
+        let substitutions =
+            resolve_substitutions_for_deployment("synthetic", "26.9.16", env_getter(FULL_ENV))
+                .unwrap();
+        let rendered = render_manifests_with(&substitutions).unwrap();
+        let mirror = kustomize_build(
+            &rendered
+                .path()
+                .join(GKE_KUSTOMIZE_SUBPATH)
+                .join("postgres/mirror/production"),
+        )
+        .unwrap();
+        assert!(mirror.contains("kind: Job"));
+        assert!(mirror.contains("name: navigator-postgres-mirror-reconcile"));
     }
 
     #[test]
@@ -7610,68 +7583,23 @@ mod tests {
         assert_eq!(web_env_value(&undeclared, ACCOUNT).as_deref(), Some(""));
     }
 
-    fn with_postgres(value: Option<&'static str>) -> impl Fn(&str) -> Option<String> {
-        move |key| {
-            if key == NAVIGATOR_POSTGRES_ENABLED {
-                value.map(str::to_owned)
-            } else {
-                env_getter(FULL_ENV)(key)
-            }
-        }
-    }
-
     #[test]
-    fn web_without_postgres_opt_in_renders_no_postgres_wiring() {
-        for value in [None, Some("false")] {
-            let deployment = rendered_web_deployment(with_postgres(value));
-            let text = serde_yaml::to_string(&deployment).expect("deployment serializes");
-            assert!(
-                !text.contains("NAVIGATOR_POSTGRES_") && !text.contains("postgres"),
-                "{value:?} must leave web untouched by PostgreSQL wiring"
-            );
-        }
-        let disabled = resolve_substitutions_for_deployment(
-            "synthetic-deployment",
-            "26.9.16",
-            with_postgres(None),
-        )
-        .expect("synthetic environment resolves");
-        let rendered = render_manifests_with(&disabled).expect("render succeeds");
+    fn every_deployment_renders_web_postgres_and_recurring_mirror_recovery() {
+        let substitutions =
+            resolve_substitutions_for_deployment("synthetic", "26.9.16", env_getter(FULL_ENV))
+                .unwrap();
+        let rendered = render_manifests_with(&substitutions).unwrap();
         let kustomization = fs::read_to_string(
             rendered
                 .path()
                 .join(GKE_KUSTOMIZE_SUBPATH)
                 .join("kustomization.yaml"),
         )
-        .expect("rendered kustomization");
-        assert!(!kustomization.contains("web-postgres.yaml"));
-    }
-
-    #[test]
-    fn mirror_opt_in_requires_postgres_and_installs_recovery_with_the_web_flag() {
-        for postgres in [None, Some("false")] {
-            let get = |key: &str| match key {
-                store::postgres_mirror::MIRROR_ENV => Some("1".into()),
-                NAVIGATOR_POSTGRES_ENABLED => postgres.map(str::to_owned),
-                _ => env_getter(FULL_ENV)(key),
-            };
-            assert!(
-                resolve_substitutions_for_deployment("synthetic", "26.9.16", get)
-                    .unwrap_err()
-                    .to_string()
-                    .contains("requires")
-            );
-        }
-        let get = |key: &str| match key {
-            store::postgres_mirror::MIRROR_ENV => Some("1".into()),
-            NAVIGATOR_POSTGRES_ENABLED => Some("true".into()),
-            _ => env_getter(FULL_ENV)(key),
-        };
-        let substitutions =
-            resolve_substitutions_for_deployment("synthetic", "26.9.16", get).unwrap();
-        let rendered = render_manifests_with(&substitutions).unwrap();
+        .unwrap();
+        assert!(kustomization.contains("web-postgres.yaml"));
         let manifest = kustomize_build(&rendered.path().join(GKE_KUSTOMIZE_SUBPATH)).unwrap();
-        assert!(manifest.contains("name: NAVIGATOR_POSTGRES_MIRROR"));
+        assert!(manifest.contains("name: NAVIGATOR_POSTGRES_HOST"));
+        assert!(!manifest.contains("NAVIGATOR_POSTGRES_MIRROR"));
         assert!(manifest.contains("name: navigator-postgres-mirror-recovery"));
         assert!(manifest.contains("concurrencyPolicy: Forbid"));
         assert!(manifest.contains("PostgresMirrorRecoveryIncomplete"));
@@ -7684,65 +7612,33 @@ mod tests {
     }
 
     #[test]
-    fn authority_switches_render_on_web_and_require_postgres_and_mirroring() {
+    fn remaining_authority_switches_render_on_web_and_refuse_typos() {
         let switches = [
             ("NAVIGATOR_POSTGRES_PEOPLE_AUTHORITY", "1"),
-            ("NAVIGATOR_GRAPH_AUTHORITY", "age"),
             ("NAVIGATOR_POSTGRES_PROJECT_LIFECYCLE_AUTHORITY", "true"),
-            ("NAVIGATOR_POSTGRES_INBOX_AUTHORITY", "1"),
             ("NAVIGATOR_POSTGRES_TENANCY_AUTHORITY", "true"),
-            ("NAVIGATOR_POSTGRES_MATTER_AUTHORITY", "1"),
-            ("NAVIGATOR_POSTGRES_CATALOG_AUTHORITY", "1"),
         ];
-        for (postgres, mirror) in [
-            (None, None),
-            (Some("true"), None),
-            (Some("true"), Some("1")),
-        ] {
-            let get = |key: &str| match key {
-                NAVIGATOR_POSTGRES_ENABLED => postgres.map(str::to_owned),
-                store::postgres_mirror::MIRROR_ENV => mirror.map(str::to_owned),
-                key => switches
-                    .iter()
-                    .find(|(name, _)| *name == key)
-                    .map(|(_, value)| (*value).to_owned())
-                    .or_else(|| env_getter(FULL_ENV)(key)),
-            };
-            if mirror.is_none() {
-                let error = resolve_substitutions_for_deployment("synthetic", "26.9.16", get)
-                    .unwrap_err()
-                    .to_string();
-                assert!(
-                    error.contains("AUTHORITY") && error.contains("requires"),
-                    "{error}"
-                );
-                continue;
-            }
-            let env = rendered_web_env_entries(get);
-            for (name, value) in switches {
-                assert!(
-                    env.iter()
-                        .any(|entry| entry["name"] == name && entry["value"] == value),
-                    "{name}={value} missing from rendered web environment"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn mirror_flag_refuses_typos_and_preserves_disabled_render() {
-        assert!(mirror_substitutions(&|_| Some("true".into())).is_err());
-        for flag in [None, Some("0")] {
-            let get = |key: &str| {
-                (key == store::postgres_mirror::MIRROR_ENV)
-                    .then(|| flag.map(str::to_owned))
-                    .flatten()
-            };
-            assert!(mirror_substitutions(&get)
-                .unwrap()
+        let get = |key: &str| {
+            switches
                 .iter()
-                .all(|s| s.value.is_empty()));
+                .find(|(name, _)| *name == key)
+                .map(|(_, value)| (*value).to_owned())
+                .or_else(|| env_getter(FULL_ENV)(key))
+        };
+        let env = rendered_web_env_entries(get);
+        for (name, value) in switches {
+            assert!(
+                env.iter()
+                    .any(|entry| entry["name"] == name && entry["value"] == value),
+                "{name}={value} missing from rendered web environment"
+            );
         }
+        let typo = |key: &str| {
+            (key == "NAVIGATOR_POSTGRES_TENANCY_AUTHORITY")
+                .then(|| "yes".to_owned())
+                .or_else(|| env_getter(FULL_ENV)(key))
+        };
+        assert!(resolve_substitutions_for_deployment("synthetic", "26.9.16", typo).is_err());
     }
 
     #[test]
@@ -7795,8 +7691,8 @@ mod tests {
     }
 
     #[test]
-    fn web_postgres_opt_in_adds_verify_full_app_login_from_its_own_secret() {
-        let deployment = rendered_web_deployment(with_postgres(Some("true")));
+    fn web_postgres_adds_verify_full_app_login_from_its_own_secret() {
+        let deployment = rendered_web_deployment(env_getter(FULL_ENV));
         let namespace = deployment["metadata"]["namespace"]
             .as_str()
             .expect("namespaced web")
@@ -7873,17 +7769,6 @@ mod tests {
             "only the CA bundle is mounted, never the password"
         );
         assert_eq!(items[0]["key"].as_str(), Some("ca.crt"));
-    }
-
-    #[test]
-    fn web_postgres_opt_in_refuses_an_ambiguous_value() {
-        let error = resolve_substitutions_for_deployment(
-            "synthetic-deployment",
-            "26.9.16",
-            with_postgres(Some("yes")),
-        )
-        .unwrap_err();
-        assert!(error.to_string().contains(NAVIGATOR_POSTGRES_ENABLED));
     }
 
     fn with_dbos(value: Option<&'static str>) -> impl Fn(&str) -> Option<String> {
@@ -8088,9 +7973,7 @@ mod tests {
     #[test]
     fn archives_moves_to_web_with_its_login_and_coverage_manifest() {
         let switched = |key: &str| match key {
-            NAVIGATOR_DBOS_ENABLED | NAVIGATOR_POSTGRES_ENABLED | ARCHIVES_SCHEDULE_ENV => {
-                Some("true".to_owned())
-            }
+            NAVIGATOR_DBOS_ENABLED | ARCHIVES_SCHEDULE_ENV => Some("true".to_owned()),
             _ => env_getter(FULL_ENV)(key),
         };
         let manifests = rendered_manifests(switched);
@@ -8148,29 +8031,10 @@ mod tests {
         assert!(!manifests.contains("navigator-archive-coverage"));
         assert!(!manifests.contains("NAVIGATOR_ARCHIVE_POSTGRES_USER"));
 
-        let without_postgres = |key: &str| match key {
-            NAVIGATOR_DBOS_ENABLED | ARCHIVES_SCHEDULE_ENV => Some("true".to_owned()),
-            _ => env_getter(FULL_ENV)(key),
-        };
-        let error = resolve_substitutions_for_deployment(
-            "synthetic-deployment",
-            "26.9.16",
-            without_postgres,
-        )
-        .unwrap_err();
-        assert!(
-            error.to_string().contains(NAVIGATOR_POSTGRES_ENABLED),
-            "{error}"
-        );
-
         let mut deployment =
             super::super::deployments::Deployment::load(&fixture_tree(), "example-deployment")
                 .expect("fixture row loads");
-        for key in [
-            NAVIGATOR_DBOS_ENABLED,
-            NAVIGATOR_POSTGRES_ENABLED,
-            ARCHIVES_SCHEDULE_ENV,
-        ] {
+        for key in [NAVIGATOR_DBOS_ENABLED, ARCHIVES_SCHEDULE_ENV] {
             deployment.coordinates.insert(key.into(), "true".into());
         }
         // General Nag is on wherever the executor runs, so it retires too.
@@ -8287,9 +8151,9 @@ mod tests {
     }
 
     #[test]
-    fn dbos_with_postgres_renders_digest_destinations_and_retires_nothing() {
+    fn dbos_renders_digest_destinations_and_retires_nothing() {
         let switched = |key: &str| match key {
-            NAVIGATOR_DBOS_ENABLED | NAVIGATOR_POSTGRES_ENABLED => Some("true".to_owned()),
+            NAVIGATOR_DBOS_ENABLED => Some("true".to_owned()),
             "SLACK_LINEAR_BACKLOG_CHANNEL_ID" => Some("C012BACKLOG".into()),
             "NAVIGATOR_DBOS_GENERAL_NAG_ENABLED" => Some("false".to_owned()),
             _ => env_getter(FULL_ENV)(key),
@@ -12981,18 +12845,6 @@ spec:
         deployment
     }
 
-    /// [`shippable_deployment`] with the PostgreSQL mirror switched on.
-    fn mirrored_deployment() -> super::super::deployments::Deployment {
-        let mut deployment = shippable_deployment();
-        for (key, value) in [
-            (NAVIGATOR_POSTGRES_ENABLED, "true"),
-            (store::postgres_mirror::MIRROR_ENV, "1"),
-        ] {
-            deployment.coordinates.insert(key.into(), value.into());
-        }
-        deployment
-    }
-
     fn offline_opts(tag: Option<&str>) -> ShipOpts {
         ShipOpts {
             deployment: "example-prod".into(),
@@ -13045,8 +12897,12 @@ spec:
         )
         .expect("a quiet offline plan prints only its verdict");
 
-        run_selected_ship(root, &mirrored_deployment(), &offline_opts(Some("26.8.17")))
-            .expect("an offline roll plan covers the mirror reconciliation");
+        run_selected_ship(
+            root,
+            &shippable_deployment(),
+            &offline_opts(Some("26.8.17")),
+        )
+        .expect("an offline roll plan covers the mirror reconciliation");
     }
 
     #[test]
@@ -13220,15 +13076,9 @@ spec:
     fn roll_permissions_cover_every_service_overlay_and_the_cleanup_verbs() {
         // The fixture row, because a roll also renders the per-row Secret
         // Manager catalog, which needs the row's encrypted key names.
-        let mut deployment =
+        let deployment =
             super::super::deployments::Deployment::load(&fixture_tree(), "example-deployment")
                 .expect("fixture row loads");
-        for (key, value) in [
-            (NAVIGATOR_POSTGRES_ENABLED, "true"),
-            (store::postgres_mirror::MIRROR_ENV, "1"),
-        ] {
-            deployment.coordinates.insert(key.into(), value.into());
-        }
         let cfg = ShipConfig::from_deployment(&deployment).expect("fixture row resolves");
         let permissions = ship_permissions(
             &cfg,

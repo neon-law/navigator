@@ -998,8 +998,6 @@ rollback, follow the workflow's runbook so the old scheduler resumes without a d
 | Switch | What the operator controls |
 | --- | --- |
 | `OIDC_DISABLED` | `true` or `1` bypasses bearer verification. Deployment validation rejects both values. |
-| `NAVIGATOR_POSTGRES_ENABLED` | `true` selects the PostgreSQL deployment wiring at ship time. |
-| `NAVIGATOR_POSTGRES_MIRROR` | `1` opts into the mirror lane. Ship requires PostgreSQL wiring. |
 | `NAVIGATOR_SUMMARY_ENABLED` | Enables the durable summary lane independently of its engine. |
 | `NAVIGATOR_TRIAGE_ENABLED` | Enables configured inbound triage providers. Unset leaves rules-only triage. |
 | `NAVIGATOR_GITHUB_AUTOMATION_HOME` | Grants the deployment the GitHub automation receiver and worker bindings. |

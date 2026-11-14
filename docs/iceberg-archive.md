@@ -259,8 +259,8 @@ catalog choice does not change the bytes on GCS — only how BigQuery is pointed
 
 The PostgreSQL coverage generation runs on the **DBOS executor inside `web`**. That is the process `ops ship` already
 gives the PostgreSQL connection and the DBOS login, and it moves the schedule off Restate. Set
-`NAVIGATOR_DBOS_ARCHIVES_ENABLED = "true"` in the deployment's `config.toml`, beside `NAVIGATOR_POSTGRES_ENABLED` and
-`NAVIGATOR_DBOS_ENABLED`. `ops ship` then:
+`NAVIGATOR_DBOS_ARCHIVES_ENABLED = "true"` in the deployment's `config.toml`, beside `NAVIGATOR_DBOS_ENABLED`. `ops
+ship` then:
 
 1. Renders the switch, `NAVIGATOR_ARCHIVES_BUCKET`, and the messages channels into `web`.
 2. Adds `examples/deploy/k8s/gke/postgres/web/web-archives.yaml`. It gives `web` the read-only `navigator_archive` login
@@ -268,11 +268,11 @@ gives the PostgreSQL connection and the DBOS login, and it moves the schedule of
 3. Adds the `navigator-archive-coverage` ConfigMap from `k8s/postgres/archive`, read as `NAVIGATOR_ARCHIVE_COVERAGE`.
 4. Drops the Restate `archives-trigger` CronJob from the render and deletes the live one after the roll.
 
-`ops ship` refuses the switch without `NAVIGATOR_POSTGRES_ENABLED` and `NAVIGATOR_DBOS_ENABLED`, and refuses to apply
-without `NAVIGATOR_POSTGRES_ARCHIVE_PASSWORD` in the PostgreSQL service file and its Secret in the namespace. `web`
-refuses to boot with the switch on and any coverage setting or the Slack bot missing. The run keeps the Restate
-workflow's slots, `Archives:<UTC slot>` workflow ids, and step names (`snapshot`, `cost`, `iceberg_telemetry`, `email`).
-Each successful slot publishes `postgres/_paired/<generation>.json` last.
+`ops ship` refuses the switch without `NAVIGATOR_DBOS_ENABLED`, and refuses to apply without
+`NAVIGATOR_POSTGRES_ARCHIVE_PASSWORD` in the PostgreSQL service file and its Secret in the namespace. `web` refuses to
+boot with the switch on and any coverage setting or the Slack bot missing. The run keeps the Restate workflow's slots,
+`Archives:<UTC slot>` workflow ids, and step names (`snapshot`, `cost`, `iceberg_telemetry`, `email`). Each successful
+slot publishes `postgres/_paired/<generation>.json` last.
 
 With the switch off, the `archives-trigger` CronJob still starts the Restate workflow on `workflows-service`. That pod
 has no PostgreSQL login, so it exports SurrealDB and telemetry only.

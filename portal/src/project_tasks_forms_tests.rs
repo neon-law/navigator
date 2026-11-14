@@ -133,13 +133,14 @@ async fn source_project(db: &store::surreal::SurrealDb, name: &str) -> store::pr
 }
 
 async fn cross_matter_actions() {
+    // PostgreSQL holds the catalog the fixture writes, so migrate it first.
+    let pg = store::postgres::PostgresDb::from_env().await.unwrap();
+    pg.migrate_embedded(None).await.unwrap();
     let db = store::test_support::mem_surreal().await;
     let own = source_project(&db, "Synthetic allowed matter").await;
     let foreign = source_project(&db, "Synthetic other matter").await;
     let actor = participant(&db, own.id).await;
     let other = participant(&db, foreign.id).await;
-    let pg = store::postgres::PostgresDb::from_env().await.unwrap();
-    pg.migrate_embedded(None).await.unwrap();
     crate::project_tasks_api::prepared_store(&db, "create", foreign.id, None)
         .await
         .unwrap();

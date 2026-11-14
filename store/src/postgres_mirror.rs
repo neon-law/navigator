@@ -8,9 +8,16 @@
 //! SurrealDB is the source of truth for every read and for every write's
 //! outcome. After a Surreal write succeeds, [`after_write`] reads the row back
 //! from SurrealDB by its key and upserts it into PostgreSQL, or deletes the
-//! PostgreSQL row when SurrealDB no longer has it. The mirror is opt-in
-//! ([`MIRROR_ENV`] set to `1` and `NAVIGATOR_POSTGRES_HOST` configured), bounded
-//! by [`MIRROR_TIMEOUT`], including retries, and never returns an error to the writer.
+//! PostgreSQL row when SurrealDB no longer has it. The mirror runs wherever
+//! `NAVIGATOR_POSTGRES_HOST` is configured, bounded by [`MIRROR_TIMEOUT`],
+//! including retries, and never returns an error to the writer.
+//!
+//! A table PostgreSQL holds authoritatively (the catalog in
+//! [`crate::postgres::catalog`], the matter records in
+//! [`crate::postgres::matter`]) is copied only by the first Mirror Backfill
+//! ([`initial_copy`]). Until a backfill has completed, its parity reports
+//! every SurrealDB row PostgreSQL lacks, so `reconcile` stays unclean and
+//! `ops ship` stops before the application cuts over to an empty table.
 //!
 //! Each row keeps one stable identity in both stores: a Firm, Brand, Project,
 //! Project participation, or Post by its record UUID, a `firm_brand` row by its
@@ -94,9 +101,6 @@ pub mod social_accounts;
 pub mod templates;
 pub mod tenancy;
 pub mod workflow;
-
-/// Set to `1`, together with `NAVIGATOR_POSTGRES_HOST`, to mirror writes.
-pub const MIRROR_ENV: &str = "NAVIGATOR_POSTGRES_MIRROR";
 
 /// The total synchronous projection budget after a committed Surreal write.
 pub const MIRROR_TIMEOUT: Duration = Duration::from_secs(15);
@@ -491,7 +495,7 @@ pub enum MirrorError {
     },
     #[error("SurrealDB Inbox repair is disabled while PostgreSQL holds the Inbox")]
     InboxAuthority,
-    #[error("SurrealDB matter record repair is disabled while PostgreSQL matter authority is enabled or misconfigured")]
+    #[error("PostgreSQL holds the matter records; only the first Mirror Backfill copies them from SurrealDB")]
     MatterAuthority,
     #[error("a graph row SurrealDB lacks is not deleted while PostgreSQL holds the graph tables or is configured but unreachable")]
     GraphAuthority,
@@ -569,17 +573,82 @@ impl From<sqlx::Error> for MirrorError {
     }
 }
 
-/// Whether the environment opts this process into the mirror.
+/// Whether this process mirrors: wherever PostgreSQL is configured.
 #[must_use]
 pub fn enabled() -> bool {
-    enabled_by(
-        std::env::var(MIRROR_ENV).ok().as_deref(),
-        std::env::var("NAVIGATOR_POSTGRES_HOST").ok().as_deref(),
-    )
+    enabled_by(std::env::var("NAVIGATOR_POSTGRES_HOST").ok().as_deref())
 }
 
-fn enabled_by(flag: Option<&str>, host: Option<&str>) -> bool {
-    flag == Some("1") && host.is_some_and(|host| !host.trim().is_empty())
+fn enabled_by(host: Option<&str>) -> bool {
+    host.is_some_and(|host| !host.trim().is_empty())
+}
+
+tokio::task_local! {
+    static INITIAL_COPY: ();
+    static READING_SOURCE: ();
+}
+
+/// Whether this task reads the catalog modules as the mirror's SurrealDB
+/// source rather than through their PostgreSQL authority.
+pub(crate) fn reading_source() -> bool {
+    READING_SOURCE.try_with(|()| ()).is_ok()
+}
+
+/// Run `future` reading the catalog modules from SurrealDB, the mirror's
+/// source; see [`reading_source`].
+pub(crate) async fn from_source<T>(future: impl std::future::Future<Output = T>) -> T {
+    READING_SOURCE.scope((), future).await
+}
+
+/// Whether this task is the first Mirror Backfill, the one copy that may
+/// write SurrealDB rows into the tables PostgreSQL holds authoritatively.
+/// Everywhere else the mirror leaves those tables alone.
+pub(crate) fn initial_copy() -> bool {
+    INITIAL_COPY.try_with(|()| ()).is_ok()
+}
+
+/// Run `future` as the first Mirror Backfill; see [`initial_copy`].
+pub(crate) async fn during_initial_copy<T>(future: impl std::future::Future<Output = T>) -> T {
+    INITIAL_COPY.scope((), future).await
+}
+
+/// Whether a Mirror Backfill has completed against this PostgreSQL: the
+/// evidence that its authoritative tables hold SurrealDB's history.
+///
+/// # Errors
+///
+/// PostgreSQL could not be read.
+pub async fn backfilled(pg: &PostgresDb) -> Result<bool, MirrorError> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM mirror_backfill_run WHERE status = 'completed')",
+    )
+    .fetch_one(&pg.0)
+    .await?)
+}
+
+/// Whether parity compares the tables PostgreSQL holds authoritatively.
+/// After a completed backfill SurrealDB is no evidence for them; before
+/// it, and during the first backfill, it is.
+///
+/// # Errors
+///
+/// PostgreSQL could not be read.
+pub(crate) async fn compares_authoritative(pg: &PostgresDb) -> Result<bool, MirrorError> {
+    Ok(initial_copy() || !backfilled(pg).await?)
+}
+
+/// Keep only the SurrealDB rows PostgreSQL lacks as divergent in an
+/// authoritative table: a row written or changed in PostgreSQL is its own.
+///
+/// # Errors
+///
+/// PostgreSQL could not be read.
+pub(crate) async fn only_missing(
+    pg: &PostgresDb,
+    mut table: TableParity,
+) -> Result<TableParity, MirrorError> {
+    table.divergent = missing(pg, &table).await?;
+    Ok(table)
 }
 
 /// Mirror one row after its Surreal write succeeded.

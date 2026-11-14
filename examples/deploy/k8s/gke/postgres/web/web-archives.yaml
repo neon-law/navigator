@@ -2,7 +2,7 @@
 #
 # `ops ship` adds this patch only for a deployment whose `config.toml` sets
 # `NAVIGATOR_DBOS_ARCHIVES_ENABLED = "true"`, which also requires
-# `NAVIGATOR_POSTGRES_ENABLED` and `NAVIGATOR_DBOS_ENABLED`. The same render
+# `NAVIGATOR_DBOS_ENABLED`. The same render
 # drops the Restate `archives-trigger` CronJob and deletes the live one, and
 # adds the `navigator-archive-coverage` ConfigMap from
 # `k8s/postgres/archive`. It must follow `web-postgres.yaml`, whose

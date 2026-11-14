@@ -1072,12 +1072,15 @@ pub(crate) fn columns(name: &str) -> Option<&'static [&'static str]> {
     table(name).ok().map(|table| table.columns)
 }
 
-/// After matter authority cutover, a SurrealDB row is no evidence for a
-/// PostgreSQL-authoritative table: the mirror neither writes nor deletes it.
+fn authoritative(table: &Table) -> bool {
+    crate::postgres::matter::TABLES.contains(&table.name)
+}
+
+/// PostgreSQL holds the matter records authoritatively, so a SurrealDB row
+/// is no evidence for them: outside the first Mirror Backfill the mirror
+/// neither writes nor deletes one.
 fn require_source_authority(table: &Table) -> Result<(), MirrorError> {
-    if crate::postgres::matter::TABLES.contains(&table.name)
-        && crate::postgres::matter::selected().unwrap_or(true)
-    {
+    if authoritative(table) && !super::initial_copy() {
         Err(MirrorError::MatterAuthority)
     } else {
         Ok(())
@@ -1463,7 +1466,10 @@ async fn ensure_parents(
         .fetch_one(&pg.0)
         .await?;
         if !held {
-            Box::pin(super::mirror(surreal, pg, &parent(parent_table, id)?)).await?;
+            // A parent PostgreSQL lacks is copied even into a table it holds
+            // authoritatively: an insert can overwrite or delete nothing.
+            let key = parent(parent_table, id)?;
+            Box::pin(super::during_initial_copy(super::mirror(surreal, pg, &key))).await?;
         }
     }
     Ok(())
@@ -1577,8 +1583,18 @@ pub async fn parity(
     group: &str,
 ) -> Result<ParityReport, MirrorError> {
     let mut reports = Vec::new();
+    let mut compares_authoritative = None;
     for table in tables(group) {
-        reports.push(super::compare(
+        let authoritative = authoritative(table);
+        if authoritative {
+            if compares_authoritative.is_none() {
+                compares_authoritative = Some(super::compares_authoritative(pg).await?);
+            }
+            if compares_authoritative == Some(false) {
+                continue;
+            }
+        }
+        let report = super::compare(
             table.name,
             &comparable(
                 source(surreal, table)
@@ -1590,7 +1606,12 @@ pub async fn parity(
                     .await
                     .map_err(|error| error.at(format!("table {}", table.name)))?,
             ),
-        ));
+        );
+        reports.push(if authoritative {
+            super::only_missing(pg, report).await?
+        } else {
+            report
+        });
     }
     Ok(ParityReport { tables: reports })
 }

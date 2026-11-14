@@ -478,9 +478,9 @@
     "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
     "runtime_tests": [
       {
-        "file": "store/src/estate_assets/mirror_tests.rs",
-        "function": "estate_asset_write_hook_probe",
-        "proves": "Actual Estate Asset writes mirror complete rows and timestamps; updates, replay, single and Project-wide deletions converge, including deletion of rows missing a current schedule field, while refused cross-Project writes leave the target untouched."
+        "file": "store/src/postgres/matter_tests.rs",
+        "function": "matter_records_are_read_and_written_in_postgres_under_authority",
+        "proves": "Estate Asset writes and reads land in PostgreSQL only, and the records mirror refuses to repair the table from SurrealDB."
       }
     ],
     "remaining": [
