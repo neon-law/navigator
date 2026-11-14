@@ -1,5 +1,5 @@
 //! JSON doors over Firm and Brand administration, so the CLI can rename a
-//! Firm, move a Brand between Firms, detach a Brand, and delete an unworn
+//! Firm, set its Portal Theme Brand, move a Brand between Firms, detach a Brand, and delete an unworn
 //! Brand or an empty Firm without the owner console.
 //!
 //! Every handler is a thin seam over one `store::firms` or `store::brands`
@@ -35,9 +35,9 @@ fn firm_refusal(error: &FirmError) -> Response {
         | FirmError::NoSuchFirm(_)
         | FirmError::UnknownBrand(_)
         | FirmError::BrandHasNoFirm(_) => ApiError::NotFound.into_response(),
-        FirmError::FirmOwnsProjects(_) | FirmError::FirmOwnsBrands(_) => {
-            conflict(&error.user_message())
-        }
+        FirmError::FirmOwnsProjects(_)
+        | FirmError::FirmOwnsBrands(_)
+        | FirmError::ThemeBrandNotOwned(_, _) => conflict(&error.user_message()),
         _ => {
             tracing::error!(%error, "api: firm administration failed");
             ApiError::Db(error.to_string()).into_response()
@@ -59,27 +59,47 @@ fn brand_refusal(error: &BrandError) -> Response {
 }
 
 #[derive(Deserialize)]
-pub(crate) struct RenameFirm {
-    name: String,
+pub(crate) struct EditFirm {
+    #[serde(default)]
+    name: Option<String>,
+    /// Absent leaves the Portal Theme Brand alone; `null` clears it.
+    #[expect(clippy::option_option, reason = "absent and null mean different edits")]
+    #[serde(default, deserialize_with = "present")]
+    portal_theme_brand_key: Option<Option<String>>,
 }
 
-/// `PATCH /app/api/firms/{id}` — rename a Firm. Its slug, and so its Forgejo
-/// organization, is unchanged.
-pub(crate) async fn rename(
+/// A field that is present, even as `null`, is `Some`.
+#[expect(clippy::option_option, reason = "absent and null mean different edits")]
+fn present<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
+}
+
+/// `PATCH /app/api/firms/{id}` — rename a Firm, or set or clear its Portal
+/// Theme Brand. A rename leaves its slug, and so its Forgejo organization,
+/// unchanged.
+pub(crate) async fn update(
     State(state): State<ApiState>,
     AdminSession(session): AdminSession,
     Path(firm_id): Path<Uuid>,
-    Json(input): Json<RenameFirm>,
+    Json(input): Json<EditFirm>,
 ) -> Response {
     if session.scope.is_some() {
         return ApiError::Forbidden.into_response();
     }
-    let name = input.name.trim();
-    if name.is_empty() {
+    let name = input.name.as_deref().map(str::trim);
+    if name.is_some_and(str::is_empty) {
         return ApiError::MalformedBody("name must not be empty".into()).into_response();
     }
+    if name.is_none() && input.portal_theme_brand_key.is_none() {
+        return ApiError::MalformedBody("name or portal_theme_brand_key is required".into())
+            .into_response();
+    }
     let edit = store::firms::FirmEdit {
-        name: Some(name.to_string()),
+        name: name.map(str::to_string),
+        portal_theme_brand_key: input.portal_theme_brand_key,
         ..store::firms::FirmEdit::default()
     };
     match store::firms::update(
@@ -95,6 +115,7 @@ pub(crate) async fn rename(
             "id": firm.id,
             "name": firm.name,
             "slug": firm.slug,
+            "portal_theme_brand_key": firm.portal_theme_brand_key,
         }))
         .into_response(),
         Err(error) => firm_refusal(&error),
@@ -379,6 +400,58 @@ mod tests {
         let renamed: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(renamed["name"], "Example Survivor PC");
         assert_eq!(renamed["slug"], "example-survivor", "the slug is immutable");
+    }
+
+    /// The Portal Theme Brand door: the Firm's own Admin sets it to a Brand
+    /// the Firm owns and clears it; another Firm's Admin finds no Firm, and a
+    /// Brand the Firm does not own is a conflict naming the rule.
+    #[tokio::test]
+    async fn a_firm_admin_sets_and_clears_the_portal_theme() {
+        let db = store::test_support::mem_surreal().await;
+        let admin = person(&db, "theme-api-admin@example.com", Role::Admin).await;
+        let outsider = person(&db, "theme-api-outsider@example.com", Role::Admin).await;
+        let themed = firm(&db, "Example Themed", admin).await;
+        let elsewhere = firm(&db, "Example Elsewhere", outsider).await;
+        worn_brand(&db, admin, themed, "example-house").await;
+        worn_brand(&db, outsider, elsewhere, "example-other").await;
+        let app = crate::router(crate::test_support::app_state(db.clone()).await);
+        let admin = bearer(admin, Role::Admin);
+        let outsider = bearer(outsider, Role::Admin);
+        let route = format!("/app/api/firms/{themed}");
+        let theme = |key: Option<&str>| Some(serde_json::json!({ "portal_theme_brand_key": key }));
+
+        let (status, _) = send(
+            &app,
+            "PATCH",
+            &route,
+            &outsider,
+            theme(Some("example-house")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "another Firm's Admin");
+        let (status, body) =
+            send(&app, "PATCH", &route, &admin, theme(Some("example-other"))).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert!(body.contains("one of this firm's own brands"), "{body}");
+
+        let (status, body) =
+            send(&app, "PATCH", &route, &admin, theme(Some("example-house"))).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let firm: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(firm["portal_theme_brand_key"], "example-house");
+        assert_eq!(firm["name"], "Example Themed", "the name is untouched");
+
+        let (status, body) = send(&app, "PATCH", &route, &admin, theme(None)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(store::firms::find_by_id(&db, themed)
+            .await
+            .unwrap()
+            .unwrap()
+            .portal_theme_brand_key
+            .is_none());
+
+        let (status, _) = send(&app, "PATCH", &route, &admin, Some(serde_json::json!({}))).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "an edit naming nothing");
     }
 
     /// A Brand is deleted only once no Firm wears it.

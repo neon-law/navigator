@@ -824,11 +824,24 @@ async fn firm_membership_wrappers_authorize_and_guard_tenancy() {
                     name: Some("Wrapper Practice Renamed".into()),
                     status: None,
                     entity_id: None,
+                    portal_theme_brand_key: None,
                 },
             )
             .await
             .unwrap();
             assert_eq!(renamed.name, "Wrapper Practice Renamed");
+            let unowned_theme = tenancy::update_firm(
+                crate::persons::Role::Owner,
+                None,
+                firm.id,
+                &crate::firms::FirmEdit {
+                    portal_theme_brand_key: Some(Some("no-such-brand".into())),
+                    ..crate::firms::FirmEdit::default()
+                },
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(unowned_theme, FirmError::ThemeBrandNotOwned(_, _)));
             let denied_rename = tenancy::update_firm(
                 crate::persons::Role::Lawyer,
                 None,
@@ -837,6 +850,7 @@ async fn firm_membership_wrappers_authorize_and_guard_tenancy() {
                     name: Some("Nope".into()),
                     status: None,
                     entity_id: None,
+                    portal_theme_brand_key: None,
                 },
             )
             .await
@@ -850,6 +864,7 @@ async fn firm_membership_wrappers_authorize_and_guard_tenancy() {
                     name: Some("Ghost".into()),
                     status: None,
                     entity_id: None,
+                    portal_theme_brand_key: None,
                 },
             )
             .await

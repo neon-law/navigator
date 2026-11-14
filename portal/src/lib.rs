@@ -2736,7 +2736,8 @@ fn is_probe_path(path: &str) -> bool {
 /// request's brand: the [`webapp::firm_footer::FirmFooterModel`] every
 /// footer (`/app`'s and the public chrome's) draws from, and the
 /// [`webapp::app_chrome::AppBrandMark`] the `/app` navbar draws from (ENG-590:
-/// preferring an uploaded brand logo over the compiled one). Runs inside
+/// preferring an uploaded brand logo over the compiled one). When that Firm
+/// names a Portal Theme Brand, the mark is that Brand's on every path. Runs inside
 /// `host_layer` so the resolved [`views::brand::BrandKey`] is already on the
 /// request, and wraps the whole merged router once rather than per route, so
 /// every per-route layer that reads either extension — `inject_app_brand_mark`
@@ -2761,8 +2762,20 @@ async fn inject_resolved_firm_context(
     })
     .await;
     // One theme per Firm: every `/app` page, a matter's included, wears the
-    // brand the request's host resolves to, never the matter's own brand.
-    let mark = webapp::app_chrome::resolve_app_brand_mark(&surreal, current).await;
+    // Firm's Portal Theme Brand when it names one, else the brand the
+    // request's host resolves to — never the matter's own brand.
+    let mark = match webapp::app_chrome::firm_portal_theme_brand(&surreal, current).await {
+        Some(theme) => {
+            webapp::app_chrome::resolve_theme_brand_mark(
+                &surreal,
+                current,
+                theme,
+                std::env::var("NAVIGATOR_PUBLIC_HOST").ok().as_deref(),
+            )
+            .await
+        }
+        None => webapp::app_chrome::resolve_app_brand_mark(&surreal, current).await,
+    };
     request.extensions_mut().insert(model);
     request.extensions_mut().insert(mark);
     next.run(request).await

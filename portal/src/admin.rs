@@ -2819,6 +2819,10 @@ struct FirmUpdateInput {
     /// the current Admin DRI.
     #[serde(default, deserialize_with = "empty_string_as_none")]
     admin_dri_person_id: Option<Uuid>,
+    /// The Portal Theme Brand key; an empty value clears it, an absent field
+    /// leaves it untouched.
+    #[serde(default)]
+    portal_theme_brand_key: Option<String>,
 }
 
 /// `POST /app/admin/firms/{id}/edit` — a descriptive edit on
@@ -2843,6 +2847,10 @@ async fn firms_update(
         name: Some(input.name.clone()),
         status: Some(input.status.clone()),
         entity_id: input.entity_id,
+        portal_theme_brand_key: input
+            .portal_theme_brand_key
+            .as_deref()
+            .map(|key| Some(key.trim().to_string()).filter(|key| !key.is_empty())),
     };
     let result = match store::firms::update(
         &state.surreal,
@@ -6574,6 +6582,7 @@ mod tests {
                 status: status.into(),
                 entity_id: None,
                 admin_dri_person_id: admin,
+                portal_theme_brand_key: None,
             })
         };
 

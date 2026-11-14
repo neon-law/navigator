@@ -23551,16 +23551,18 @@ async fn the_app_navbar_prefers_an_uploaded_logo_over_the_compiled_one() {
     store::seed::seed_canonical(&surreal, &state.storage)
         .await
         .unwrap();
+    // The seeded practice dresses `/app` in its Portal Theme Brand, so that
+    // Brand's uploaded logo is the one the navbar draws.
     store::brands::set_logo(
         &surreal,
         store::persons::Role::Owner,
         None,
-        store::brands::find_by_key(&surreal, "neon")
+        store::brands::find_by_key(&surreal, store::seed::PRACTICE_PORTAL_THEME)
             .await
             .unwrap()
             .unwrap()
             .id,
-        "brands/neon/logo.svg",
+        "brands/theme/logo.svg",
         "image/svg+xml",
     )
     .await
@@ -23571,7 +23573,7 @@ async fn the_app_navbar_prefers_an_uploaded_logo_over_the_compiled_one() {
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_string(resp).await;
     assert!(
-        body.contains(r#"src="/assets/brands/neon/logo.svg""#),
+        body.contains(r#"src="/assets/brands/theme/logo.svg""#),
         "the uploaded logo takes precedence over the compiled one: {body}"
     );
 }

@@ -34,6 +34,7 @@ const FIRM_COLUMNS: &[&str] = &[
     "slug",
     "status",
     "entity_id",
+    "portal_theme_brand_key",
     "inserted_at",
     "updated_at",
 ];
@@ -259,6 +260,7 @@ struct FirmImage {
     slug: String,
     status: String,
     entity_id: Option<Uuid>,
+    portal_theme_brand_key: Option<String>,
     inserted_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -271,6 +273,7 @@ impl FirmImage {
             slug: firm.slug.clone(),
             status: firm.status.clone(),
             entity_id: firm.entity_id,
+            portal_theme_brand_key: firm.portal_theme_brand_key.clone(),
             inserted_at: timestamp(&firm.inserted_at)?,
             updated_at: timestamp(&firm.updated_at)?,
         })
@@ -283,6 +286,7 @@ impl FirmImage {
             slug: row.try_get("slug")?,
             status: row.try_get("status")?,
             entity_id: row.try_get("entity_id")?,
+            portal_theme_brand_key: row.try_get("portal_theme_brand_key")?,
             inserted_at: row.try_get("inserted_at")?,
             updated_at: row.try_get("updated_at")?,
         })
@@ -722,6 +726,7 @@ async fn upsert_firm(pg: &PostgresDb, firm: &FirmImage) -> Result<Mirrored, Mirr
         .bind(&firm.slug)
         .bind(&firm.status)
         .bind(firm.entity_id)
+        .bind(&firm.portal_theme_brand_key)
         .bind(firm.inserted_at)
         .bind(firm.updated_at)
         .execute(&mut *tx)

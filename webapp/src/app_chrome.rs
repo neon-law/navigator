@@ -231,6 +231,69 @@ pub async fn resolve_app_brand_mark(
     }
 }
 
+/// The [Portal Theme Brand](../../docs/glossary/portal-theme-brand.md) of the
+/// Firm wearing `host`: the compiled Brand that Firm picked for its `/app`
+/// pages, re-checked as one the Firm still owns (`brand.firm_id`). `None` when
+/// no Firm wears `host`, the Firm names no theme, the named Brand has moved to
+/// another Firm, it is a runtime-only Brand, or a store read fails — and the
+/// caller then keeps the host's own Brand.
+#[cfg(feature = "server")]
+pub async fn firm_portal_theme_brand(
+    surreal: &store::surreal::SurrealDb,
+    host: views::brand::BrandKey,
+) -> Option<views::brand::BrandKey> {
+    let firm_id = store::firms::firm_id_for_brand_key(surreal, host.as_str())
+        .await
+        .ok()??;
+    let theme = store::firms::find_by_id(surreal, firm_id)
+        .await
+        .ok()??
+        .portal_theme_brand_key?;
+    let owner = store::brands::find_by_key(surreal, &theme)
+        .await
+        .ok()??
+        .firm_id;
+    if owner != Some(firm_id) {
+        return None;
+    }
+    views::brand::BrandKey::parse(&theme)
+}
+
+/// The navbar's mark in `theme`'s look — its logo, name, and tokens — on a
+/// request the `host` brand answers: what every `/app` page wears when the
+/// host's Firm names `theme` as its Portal Theme Brand. The logo links to
+/// `theme`'s own home, an absolute URL because the portal's host is not that
+/// brand's. When the two brands are the same this is
+/// [`resolve_app_brand_mark`] unchanged.
+#[cfg(feature = "server")]
+pub async fn resolve_theme_brand_mark(
+    surreal: &store::surreal::SurrealDb,
+    host: views::brand::BrandKey,
+    key: views::brand::BrandKey,
+    deployment_host: Option<&str>,
+) -> AppBrandMark {
+    if key == host {
+        return resolve_app_brand_mark(surreal, host).await;
+    }
+    let firm = &key.resolve_branding(&views::brand::DEFAULT_BRANDING).firm;
+    let uploaded = store::brands::find_by_key(surreal, key.as_str())
+        .await
+        .ok()
+        .flatten()
+        .and_then(|brand| brand.logo_object_key)
+        .map(|object_key| format!("/assets/{object_key}"));
+    let src = uploaded.unwrap_or_else(|| firm.logo_href.to_string());
+    AppBrandMark {
+        logo: (!src.is_empty()).then(|| AppLogo {
+            src,
+            href: key.public_home_href_for(deployment_host),
+            brand_name: firm.site_name.to_string(),
+        }),
+        firm_name: firm.site_name.to_string(),
+        tokens_href: crate::brand_style::brand_tokens_href(key.as_str()),
+    }
+}
+
 /// Resolve the navbar's brand mark for the current request.
 ///
 /// Prefers the mark the portal pre-layer (`inject_app_brand_mark`) resolved on
@@ -714,5 +777,112 @@ mod tests {
         assert_eq!(logo.brand_name, compiled.firm_name);
         assert_eq!(mark.firm_name, compiled.firm_name);
         assert_eq!(mark.tokens_href, compiled.tokens_href);
+    }
+
+    /// A Firm's Portal Theme Brand themes the hosts of every Brand it wears,
+    /// and the host keeps its own Brand when the Firm names none, when the
+    /// theme Brand has moved to another Firm, or when no Firm wears the host.
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn the_firm_s_portal_theme_brand_dresses_its_hosts_else_the_host_brand() {
+        use store::persons::Role;
+        use views::brand::BrandKey;
+
+        let surreal = store::surreal::test_support::mem().await;
+        let admin = store::persons::create(
+            &surreal,
+            &store::persons::NewPerson::with_role(
+                "Theme Admin DRI",
+                "theme-admin-dri@example.com",
+                Role::Admin,
+            ),
+        )
+        .await
+        .unwrap();
+        let mut firms = Vec::new();
+        for name in ["Theme Practice", "Elsewhere Practice"] {
+            let entity_id = store::test_support::seed_entity(&surreal).await;
+            firms.push(
+                store::firms::create(
+                    &surreal,
+                    &store::firms::NewFirm {
+                        name: name.to_string(),
+                        status: "active".to_string(),
+                        entity_id,
+                        admin_dri_person_id: admin.id,
+                    },
+                )
+                .await
+                .unwrap(),
+            );
+        }
+        let (firm, elsewhere) = (&firms[0], &firms[1]);
+        // `mem` scopes every compiled Brand to a placeholder firm id; hand
+        // `neon` and `guieb-shook` to the real Firm, which wears `neon`.
+        let own = |key: &'static str, firm_id: uuid::Uuid| {
+            let surreal = surreal.clone();
+            async move {
+                surreal
+                    .query("UPDATE brand SET firm_id = $firm_id WHERE brand_key = $key")
+                    .bind(("key", key))
+                    .bind(("firm_id", store::surreal::record_id("firm", firm_id)))
+                    .await
+                    .unwrap()
+                    .check()
+                    .unwrap();
+            }
+        };
+        own("neon", firm.id).await;
+        own("guieb-shook", firm.id).await;
+        store::firms::ensure_brand(&surreal, firm.id, "neon")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            firm_portal_theme_brand(&surreal, BrandKey::Neon).await,
+            None,
+            "no theme named: the host keeps its own brand"
+        );
+        store::firms::update(
+            &surreal,
+            Role::Owner,
+            None,
+            firm.id,
+            &store::firms::FirmEdit {
+                portal_theme_brand_key: Some(Some("guieb-shook".to_string())),
+                ..store::firms::FirmEdit::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            firm_portal_theme_brand(&surreal, BrandKey::Neon).await,
+            Some(BrandKey::GuiebShook)
+        );
+        let mark =
+            resolve_theme_brand_mark(&surreal, BrandKey::Neon, BrandKey::GuiebShook, None).await;
+        assert_eq!(mark.tokens_href, "/public/css/brand-guieb-shook-tokens.css");
+        assert_eq!(
+            mark.firm_name,
+            mark.logo.expect("the theme brand ships a logo").brand_name
+        );
+        assert_ne!(mark.firm_name, firm_brand_mark().firm_name);
+        assert_eq!(
+            resolve_theme_brand_mark(&surreal, BrandKey::Neon, BrandKey::Neon, None).await,
+            firm_brand_mark(),
+            "a theme equal to the host is the host's own mark"
+        );
+        assert_eq!(
+            firm_portal_theme_brand(&surreal, BrandKey::DeleteYourData).await,
+            None,
+            "a host no Firm wears keeps its own brand"
+        );
+
+        own("guieb-shook", elsewhere.id).await;
+        assert_eq!(
+            firm_portal_theme_brand(&surreal, BrandKey::Neon).await,
+            None,
+            "a theme brand moved to another Firm no longer themes this one"
+        );
     }
 }
