@@ -1203,7 +1203,7 @@ async fn dbos_schedules(
     };
     let profit_digest = profit_digest_context(rt, host_dbos, lookup).await?;
     let ceo_digest = ceo_digest_schedule(rt, host_dbos, lookup).await?;
-    let linear_backlog = if host_dbos && dbos_engine::enabled(&lookup)? {
+    let linear_backlog = if host_dbos && dbos_engine::enabled(lookup)? {
         dbos_engine::linear_backlog::Context::from_lookup(lookup)?
     } else {
         None
@@ -1309,12 +1309,12 @@ async fn profit_digest_context(
     lookup: impl Fn(&str) -> Option<String> + Copy,
 ) -> anyhow::Result<Option<workflows::dbos_engine::profit_digest::Context>> {
     use workflows::dbos_engine::profit_digest;
-    if !host_dbos || !dbos_engine::enabled(&lookup)? {
+    if !host_dbos || !dbos_engine::enabled(lookup)? {
         return Ok(None);
     }
     let simulated = store::sample_matters(rt.config.environment)
         .context("resolve simulated-matters deployment")?;
-    if !profit_digest::configured(simulated, &lookup) {
+    if !profit_digest::configured(simulated, lookup) {
         return Ok(None);
     }
     let pg = store::postgres::PostgresDb::from_env()
