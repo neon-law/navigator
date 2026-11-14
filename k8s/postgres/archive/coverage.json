@@ -1171,6 +1171,13 @@
       {
         "action": "export",
         "schema": "public",
+        "name": "plan_intake",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
         "name": "playbook",
         "kind": "table",
         "accessible": true

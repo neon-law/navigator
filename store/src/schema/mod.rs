@@ -236,20 +236,6 @@ pub fn base_table_names() -> Vec<String> {
         .collect()
 }
 
-/// Tables authored in SurrealDB with no PostgreSQL mirror yet.
-///
-/// `plan_intake` is pre-matter intake state authored in SurrealDB (see the
-/// staged-assignment glossary entry); its PostgreSQL cutover is planned
-/// debt tracked by its `runtime-parity.json` entry, not drift. The parity
-/// coverage report keeps these tables out of its unmapped set and names
-/// them in its own `surrealdb_only_tables` field instead, so an
-/// *undeclared* table with no PostgreSQL counterpart still fails the
-/// report.
-#[must_use]
-pub fn surrealdb_only_tables() -> Vec<&'static str> {
-    vec!["plan_intake"]
-}
-
 /// An operational `SurrealQL` export with every derived table's definition
 /// and rows removed.
 ///

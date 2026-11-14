@@ -447,22 +447,7 @@ pub async fn advance(
     pg: &PostgresDb,
     run_id: Uuid,
 ) -> Result<usize, BackfillError> {
-    sqlx::query(
-        "INSERT INTO mirror_backfill_checkpoint (run_id, mirror) VALUES ($1, $2) \
-         ON CONFLICT (run_id, mirror) DO NOTHING",
-    )
-    .bind(run_id)
-    .bind(GRAPH_MIRROR)
-    .execute(&pg.0)
-    .await?;
-    let done: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
-        "SELECT completed_at FROM mirror_backfill_checkpoint WHERE run_id = $1 AND mirror = $2",
-    )
-    .bind(run_id)
-    .bind(GRAPH_MIRROR)
-    .fetch_one(&pg.0)
-    .await?;
-    if done.is_some() {
+    if crate::postgres_backfill::open_checkpoint(pg, run_id, GRAPH_MIRROR).await? {
         return Ok(0);
     }
 
@@ -471,7 +456,8 @@ pub async fn advance(
     // Surreal changes applies nothing and does not rewrite the graph.
     let mut failures: Vec<(&'static str, Option<String>, String)> = Vec::new();
     if graph_is_current(surreal, pg, &mut failures).await {
-        complete_checkpoint(pg, run_id, 0, 0, failures).await?;
+        crate::postgres_backfill::complete_checkpoint(pg, run_id, GRAPH_MIRROR, 0, 0, failures)
+            .await?;
         return Ok(0);
     }
     // The pre-check's staleness findings are superseded by the rebuild's own
@@ -535,7 +521,15 @@ pub async fn advance(
         )),
     }
 
-    complete_checkpoint(pg, run_id, batches, applied, failures).await?;
+    crate::postgres_backfill::complete_checkpoint(
+        pg,
+        run_id,
+        GRAPH_MIRROR,
+        batches,
+        applied,
+        failures,
+    )
+    .await?;
     Ok(batches)
 }
 
@@ -641,51 +635,6 @@ async fn graph_is_current(
         }
     }
     current
-}
-
-/// Record the arm's outcome in its checkpoint and failure rows, in one
-/// transaction — the same shape `complete_group` leaves relational groups in.
-async fn complete_checkpoint(
-    pg: &PostgresDb,
-    run_id: Uuid,
-    batches: usize,
-    applied: usize,
-    failures: Vec<(&'static str, Option<String>, String)>,
-) -> Result<(), BackfillError> {
-    let mut tx = pg.0.begin().await?;
-    sqlx::query("DELETE FROM mirror_backfill_failure WHERE run_id = $1 AND mirror = $2")
-        .bind(run_id)
-        .bind(GRAPH_MIRROR)
-        .execute(&mut *tx)
-        .await?;
-    for (table, row_id, reason) in &failures {
-        sqlx::query(
-            "INSERT INTO mirror_backfill_failure (id, run_id, mirror, row_table, row_id, reason) \
-             VALUES ($1, $2, $3, $4, $5, $6)",
-        )
-        .bind(Uuid::new_v4())
-        .bind(run_id)
-        .bind(GRAPH_MIRROR)
-        .bind(table)
-        .bind(row_id)
-        .bind(reason)
-        .execute(&mut *tx)
-        .await?;
-    }
-    sqlx::query(
-        "UPDATE mirror_backfill_checkpoint SET batches = batches + $3, applied = applied + $4, \
-         failed = $5, completed_at = now(), updated_at = now() \
-         WHERE run_id = $1 AND mirror = $2",
-    )
-    .bind(run_id)
-    .bind(GRAPH_MIRROR)
-    .bind(i32::try_from(batches).unwrap_or(i32::MAX))
-    .bind(i64::try_from(applied).unwrap_or(i64::MAX))
-    .bind(i32::try_from(failures.len()).unwrap_or(i32::MAX))
-    .execute(&mut *tx)
-    .await?;
-    tx.commit().await?;
-    Ok(())
 }
 
 /// The loader wrappers, called by literal name. sqlx's `SqlSafeStr` gate

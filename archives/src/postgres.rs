@@ -213,6 +213,7 @@ pub const POSTGRES_TABLES: &[&str] = &[
     "xero_invoice",
     "assistant_turn",
     "sandbox_usage",
+    "plan_intake",
 ];
 
 /// Rows read per cursor fetch and written per Parquet row group.

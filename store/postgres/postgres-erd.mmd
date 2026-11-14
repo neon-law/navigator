@@ -407,6 +407,7 @@ erDiagram
         string description
         string expires_at
         string filename
+        string folder
         string id
         string kind
         string metadata
@@ -1369,6 +1370,41 @@ erDiagram
         string state
         int supplemental_flat_cents
         int supplemental_hourly_cents
+    }
+    plan_intake {
+        uuid accepted_by
+        datetime assigned_at
+        string benefit_code
+        boolean conflict_blocking
+        boolean conflict_checked
+        string conflict_summary
+        uuid conversation_id
+        datetime decided_at
+        string decline_reason
+        string fee_covered_benefit
+        datetime fee_effective_on
+        int fee_plan_fee_cents
+        int fee_supplemental_flat_cents
+        int fee_supplemental_hourly_cents
+        uuid firm_id
+        uuid id
+        datetime inserted_at
+        uuid legal_plan_id
+        string legal_plan_name
+        string member_email
+        uuid member_entity_id
+        string member_name
+        uuid member_person_id
+        string plan_matter_type
+        string plan_member_id
+        string plan_number
+        boolean plan_portal_only
+        string plan_state
+        uuid project_id
+        string provider
+        uuid source_message_id
+        string status
+        datetime updated_at
     }
     playbook {
         boolean active

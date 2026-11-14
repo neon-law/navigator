@@ -1580,6 +1580,12 @@ mod tests {
                     "../postgres/migrations/20261114170000_catalog_authority_jurisdiction_constraints.sql"
                 ),
             ),
+            (
+                "20261114180000_create_plan_intake_and_upload_session_folder.sql",
+                include_str!(
+                    "../postgres/migrations/20261114180000_create_plan_intake_and_upload_session_folder.sql"
+                ),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

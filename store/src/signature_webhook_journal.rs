@@ -25,14 +25,24 @@
 //! provider_id, status)` is unique, and a racing insert loses the index
 //! and re-reads the winner's row — the same idempotent-write pattern
 //! [`crate::signatures`] uses for `(provider, provider_id)`.
+//!
+//! PostgreSQL holds the journal whenever `NAVIGATOR_POSTGRES_HOST` is set
+//! ([`PostgresDb::configured`]); without a PostgreSQL host the same calls use
+//! the SurrealDB table. Receipts SurrealDB still holds reach PostgreSQL
+//! through the Mirror Backfill's born-in-PostgreSQL arm.
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::postgres::PostgresDb;
 use crate::signatures::SignatureProvider;
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
+
+pub(crate) mod postgres;
+#[cfg(test)]
+mod postgres_tests;
 
 /// The table these rows live in.
 pub(crate) const TABLE: &str = "esignature_webhook_journal";
@@ -119,6 +129,12 @@ const SELECT: &str = "id, provider, provider_id, status, payload, consumed_at, a
 pub enum ReceiptError {
     #[error("database: {0}")]
     Db(#[from] surrealdb::Error),
+    /// The configured PostgreSQL server could not be reached.
+    #[error("PostgreSQL: {0}")]
+    Postgres(#[from] crate::postgres::PostgresError),
+    /// A PostgreSQL statement failed.
+    #[error("PostgreSQL query: {0}")]
+    Sql(#[from] sqlx::Error),
     /// A write reported success but returned no row, or returned one this
     /// module could not read back.
     #[error("writing a webhook receipt returned no usable row")]
@@ -163,6 +179,9 @@ pub async fn by_event(
     provider_id: &str,
     status: &str,
 ) -> Result<Option<WebhookReceipt>, ReceiptError> {
+    if let Some(pg) = PostgresDb::configured().await? {
+        return Box::pin(postgres::by_event(&pg, provider, provider_id, status)).await;
+    }
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE provider = $provider AND provider_id = $provider_id \
@@ -196,6 +215,16 @@ pub async fn journal_verified_receipt(
     status: &str,
     payload: &str,
 ) -> Result<WebhookReceipt, ReceiptError> {
+    if let Some(pg) = PostgresDb::configured().await? {
+        return Box::pin(postgres::journal_verified_receipt(
+            &pg,
+            provider,
+            provider_id,
+            status,
+            payload,
+        ))
+        .await;
+    }
     let id = Uuid::now_v7();
     match writing(|| {
         db.query(format!(
@@ -235,6 +264,9 @@ pub async fn pending_receipts(
     db: &SurrealDb,
     limit: i64,
 ) -> Result<Vec<WebhookReceipt>, ReceiptError> {
+    if let Some(pg) = PostgresDb::configured().await? {
+        return Box::pin(postgres::pending_receipts(&pg, limit)).await;
+    }
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE consumed_at IS NONE \
@@ -259,6 +291,9 @@ pub async fn pending_receipts(
 ///
 /// [`ReceiptError::Db`] if the write fails.
 pub async fn mark_consumed(db: &SurrealDb, receipt_id: Uuid) -> Result<(), ReceiptError> {
+    if let Some(pg) = PostgresDb::configured().await? {
+        return Box::pin(postgres::mark_consumed(&pg, receipt_id)).await;
+    }
     writing(|| {
         db.query(format!(
             "UPDATE $id SET consumed_at = time::now(), updated_at = time::now(), \
@@ -284,6 +319,9 @@ pub async fn record_attempt_failure(
     receipt_id: Uuid,
     error: &str,
 ) -> Result<(), ReceiptError> {
+    if let Some(pg) = PostgresDb::configured().await? {
+        return Box::pin(postgres::record_attempt_failure(&pg, receipt_id, error)).await;
+    }
     writing(|| {
         db.query(format!(
             "UPDATE $id SET attempts += 1, last_error = $error, updated_at = time::now() \

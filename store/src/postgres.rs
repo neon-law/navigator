@@ -167,6 +167,16 @@ impl PostgresDb {
         static POOL: tokio::sync::OnceCell<PostgresDb> = tokio::sync::OnceCell::const_new();
         POOL.get_or_try_init(Self::connect_env).await.cloned()
     }
+    /// The process's PostgreSQL store when `NAVIGATOR_POSTGRES_HOST` is set,
+    /// for the tables born in PostgreSQL. `None` selects their SurrealDB
+    /// fallback; a configured but unreachable server is an error, never a
+    /// silent fall back.
+    pub async fn configured() -> Result<Option<Self>, PostgresError> {
+        if std::env::var_os("NAVIGATOR_POSTGRES_HOST").is_none() {
+            return Ok(None);
+        }
+        Self::from_env().await.map(Some)
+    }
     async fn connect_env() -> Result<Self, PostgresError> {
         let get = |key: &str| std::env::var(key).map_err(|_| PostgresError::Configuration);
         let host = get("NAVIGATOR_POSTGRES_HOST")?;

@@ -321,9 +321,10 @@ hudson ops postgres backfill --resume <run-id> --json  # continue a run from its
   UUID), the batches they need, and the differing and PostgreSQL-only rows it would leave. It writes nothing, not even a
   run record. The same stores give the same plan.
 - **Source tables.** The dry-run report includes every live source table, its row count, and its disposition:
-  `mirrored`, `derived`, `recreated_metadata`, or `unsupported`. Empty unsupported tables stay visible. Populated
-  unsupported tables block both planning and import. Derived tables rebuild from canonical rows, and `schema_version` is
-  recreated by target migrations. Missing inventory metadata fails closed; an empty inventory must be explicit.
+  `mirrored`, `born_in_postgres`, `derived`, `recreated_metadata`, or `unsupported`. Empty unsupported tables stay
+  visible. Populated unsupported tables block both planning and import. Derived tables rebuild from canonical rows, and
+  `schema_version` is recreated by target migrations. Missing inventory metadata fails closed; an empty inventory must
+  be explicit.
 - **Source fields.** Whole-row record mirrors refuse source fields without a declared preservation mapping, including
   explicit nulls and empty values. The error gives the registered table and field count only. Declared JSON content is
   preserved recursively; absent optional fields retain their null mapping. Consumed source-key metadata supplies the row
@@ -339,6 +340,11 @@ hudson ops postgres backfill --resume <run-id> --json  # continue a run from its
   up to 50 divergent UUID keys per table. Other key forms and excess UUIDs are counted without being printed. Exit
   status 0 requires all mirrored tables to have zero drift and no failed rows; status 1 reports a completed run whose
   imported data still needs reconciliation. A paused run keeps status 3 and can be resumed.
+- **Born in PostgreSQL.** `assistant_turn`, `document_upload_session`, `esignature_webhook_journal`, `plan_intake`,
+  and `sandbox_usage` have no write mirror: whenever `NAVIGATOR_POSTGRES_HOST` is set the application reads and writes
+  them in PostgreSQL only. After the mirror groups, the `born_in_postgres` arm copies the rows SurrealDB held before
+  that switch, keeping each row's identity, and never touches a row PostgreSQL already holds. Run it when a deployment
+  first sets the host, before traffic writes a period PostgreSQL would then keep in place of SurrealDB's.
 - **One at a time.** A run holds a PostgreSQL advisory lock while it writes; a second invocation exits as busy.
 
 Exit status is 0 when the post-run parity report is clean, 1 when a plan has rows to write or a completed run has

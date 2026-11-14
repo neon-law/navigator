@@ -356,10 +356,6 @@ fn coverage(report: &Report) -> serde_json::Value {
             .map(|table| table.name),
     );
     let eligible: BTreeSet<_> = source.difference(&excluded).cloned().collect();
-    let surrealdb_only: BTreeSet<_> = store::schema::surrealdb_only_tables()
-        .into_iter()
-        .map(str::to_owned)
-        .collect();
     let target: BTreeSet<String> = include_str!("../../store/postgres/schema.sql")
         .lines()
         .filter_map(|line| line.strip_prefix("CREATE TABLE "))
@@ -378,22 +374,18 @@ fn coverage(report: &Report) -> serde_json::Value {
         .filter(|&table| !measured.contains(table.as_str()))
         .cloned()
         .collect();
-    // SurrealDB-authored tables have no PostgreSQL counterpart to map or
-    // measure; only an undeclared table without one is drift.
-    let verifiable: BTreeSet<_> = eligible.difference(&surrealdb_only).cloned().collect();
-    let unmapped: Vec<_> = verifiable.difference(&target).cloned().collect();
-    let unmeasured: Vec<_> = verifiable.difference(&measured).cloned().collect();
+    let unmapped: Vec<_> = eligible.difference(&target).cloned().collect();
+    let unmeasured: Vec<_> = eligible.difference(&measured).cloned().collect();
     json!({
         "source_tables": source.len(),
         "eligible_source_tables": eligible.len(),
         "excluded_source_tables": excluded.intersection(&source).cloned().collect::<Vec<_>>(),
-        "surrealdb_only_tables": surrealdb_only.intersection(&source).cloned().collect::<Vec<_>>(),
         "sql_target_tables": mapped,
         "sql_targets_unmeasured": sql_targets_unmeasured,
         "unmapped_tables": unmapped,
         "unmeasured_tables": unmeasured,
         "measured_tables": measured.len(),
-        "complete": verifiable.is_subset(&measured),
+        "complete": eligible.is_subset(&measured),
         "basis": "compiled schema declarations; runtime parity covers only reported tables",
     })
 }
@@ -575,22 +567,13 @@ mod tests {
         let source: BTreeSet<_> = store::schema::table_names().into_iter().collect();
         let excluded = BTreeSet::from(["draft".to_owned(), "schema_version".to_owned()]);
         let eligible: BTreeSet<_> = source.difference(&excluded).cloned().collect();
-        let surrealdb_only: BTreeSet<_> = store::schema::surrealdb_only_tables()
-            .into_iter()
-            .map(str::to_owned)
-            .collect();
         assert_eq!(json["coverage"]["source_tables"], source.len());
         assert_eq!(json["coverage"]["eligible_source_tables"], eligible.len());
         assert_eq!(
             json["coverage"]["excluded_source_tables"],
             json!(["draft", "schema_version"])
         );
-        assert_eq!(
-            json["coverage"]["surrealdb_only_tables"],
-            json!(["plan_intake"])
-        );
-        let verifiable: BTreeSet<_> = eligible.difference(&surrealdb_only).cloned().collect();
-        assert_eq!(json["coverage"]["sql_target_tables"], json!(verifiable));
+        assert_eq!(json["coverage"]["sql_target_tables"], json!(eligible));
         assert_eq!(
             json["coverage"]["unmapped_tables"]
                 .as_array()
