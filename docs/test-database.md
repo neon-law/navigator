@@ -1,20 +1,36 @@
-# Test database — one engine per test, inside the test process
+# Test database — PostgreSQL fixture first, embedded SurrealDB deprecated
 
-> **`cargo test` needs no external database or container.** Each test opens its own embedded, memory-backed SurrealDB
-> and applies the schema to it. The checked-in `.cargo/config.toml` caps ordinary libtest at four workers because the
-> embedded client is not safe to tear down at higher concurrency.
+> **New tests run against the PostgreSQL fixture.** The embedded SurrealDB harness is deprecated: its call sites only go
+> down, and `cli/tests/embedded_surreal_ratchet.rs` fails a change that adds one.
 
 The local KIND lifecycle resets staging by deleting its guarded namespace, never by truncating tables; old workflow
 journals cannot survive.
 
-## The pattern
+## The PostgreSQL fixture
 
-`store::test_support::mem_surreal()` starts an embedded `kv-mem` engine **inside the test process** with the `DEFINE`
-schema applied. No container, no port, no shared server, nothing to reclaim: the database dies with the test's own
-memory, so two tests cannot collide and the whole suite runs in parallel with no isolation machinery.
+PostgreSQL is the storage authority, so tests exercise it directly. The fixture is one disposable container of the
+pinned `navigator/postgres` image on loopback port 25432, with `store/postgres/schema.sql` applied. Tests read the port
+from `NAVIGATOR_TEST_POSTGRES_PORT` and self-skip without it. `NAV_REQUIRE_POSTGRES=1` turns that skip into a failure.
+Start the fixture locally the way CI does (the `start PostgreSQL for covered journal tests` step in
+`.github/workflows/ci.yml`):
 
-That is the whole contract. There is no external environment variable to set, no server to start, and nothing left
-behind on disk when a run ends.
+```bash
+docker run -d --name test-postgres --shm-size=256m -p 127.0.0.1:25432:5432 \
+  -e POSTGRES_PASSWORD=synthetic -e POSTGRES_DB=smoke \
+  ghcr.io/neon-law/navigator/postgres@sha256:a3f6db0888d3d68c0ccadf936784768ecda4131b58fba30d631d69ff58337a8e
+docker exec -i test-postgres psql -U postgres -d smoke -v ON_ERROR_STOP=1 < store/postgres/schema.sql
+```
+
+## The embedded SurrealDB harness (deprecated)
+
+`store::test_support::mem_surreal()` (and `store::surreal::test_support::mem()`, and `features::shared_surreal()`)
+starts an embedded `kv-mem` SurrealDB engine inside the test process. It costs about a second per test, it is most of
+the workspace suite's time, and the embedded SurrealDB 4 engine intermittently hangs. The CI nextest profile kills any
+test after five minutes so its retries run it again.
+
+The existing call sites move to the PostgreSQL fixture crate by crate as each domain's PostgreSQL authority lands
+(ENG-1356). The ratchet holds each crate's count: a port that removes call sites lowers that crate's `BASELINE` entry in
+the same change.
 
 ## The one exception — a test that spawns `navigator`
 
@@ -30,12 +46,11 @@ endpoint with no namespace) always panics: that is a mistake, not an opt-out.
 
 ## Test tiers
 
-- **Tier 1 — `cargo test` and BDD:** the store is embedded; embedded Rego, Rauthy, Restate, storage, vendors, and agent
-  routing use their in-process test seams.
+- **Tier 1 — `cargo test` and BDD:** the PostgreSQL fixture, plus the embedded store where it remains; embedded Rego,
+  Rauthy, Restate, storage, vendors, and agent routing use their in-process test seams.
 - **Tier 2 — KIND e2e:** Rauthy, embedded Rego, Restate, SeaweedFS, browser, and accessibility use the real topology.
 
-Do not pull sidecars into tier 1. Its trait seams are the contract boundary, and tier 1 has no external dependency at
-all — that is the contributor floor, and it should stay there.
+Do not pull other sidecars into tier 1. Its trait seams are the contract boundary.
 
 ## How a contributor runs tests
 
@@ -43,8 +58,8 @@ all — that is the contributor floor, and it should stay there.
 cargo nextest run --workspace && cargo test -p features
 ```
 
-Nothing to install, nothing to reclaim. The cucumber BDD suites in `features` keep `cargo test`; their custom harness
-does not speak nextest's protocol, so the workspace nextest profile excludes that package.
+Without the PostgreSQL fixture running, its tests skip. The cucumber BDD suites in `features` keep `cargo test`; their
+custom harness does not speak nextest's protocol, so the workspace nextest profile excludes that package.
 
 A package-filtered `webapp` run needs the crate's `server` feature. A workspace nextest invocation already compiles
 `webapp` through dependents that enable it; running the crate alone does not:
@@ -63,6 +78,6 @@ NAV_REQUIRE_SURREAL=1 cargo nextest run --workspace
 
 ## How CI runs them
 
-The test job starts one SurrealDB container for the server-mode lane and sets `NAV_REQUIRE_SURREAL=1` so a broken engine
-is a red build rather than a silently absent test. Every other test runs against its own embedded engine. KIND e2e
-covers the real stack, browser, and accessibility.
+The test job starts the PostgreSQL fixture and sets `NAVIGATOR_TEST_POSTGRES_PORT`. It also starts one SurrealDB
+container for the server-mode lane and sets `NAV_REQUIRE_SURREAL=1`, so a broken engine is a red build rather than a
+silently absent test. KIND e2e covers the real stack, browser, and accessibility.

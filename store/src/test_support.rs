@@ -90,6 +90,10 @@ pub async fn seed_unpinned_project_template(
 
 /// A private embedded SurrealDB with the `DEFINE` schema applied — one
 /// engine per test, inside the test process.
+///
+/// Deprecated: new tests use the PostgreSQL fixture, and
+/// `cli/tests/embedded_surreal_ratchet.rs` fails a change that adds a call
+/// site. See `docs/test-database.md`.
 pub async fn mem_surreal() -> crate::surreal::SurrealDb {
     crate::surreal::test_support::mem().await
 }
