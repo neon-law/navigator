@@ -31,6 +31,7 @@ pub mod deadline_mirror;
 pub mod dri_digest;
 pub mod general_nag;
 pub mod heartbeat;
+pub mod linear_backlog;
 pub mod notation_reset;
 pub mod profit_digest;
 pub mod project_recovery;
@@ -202,6 +203,7 @@ fn valid_executor_id(value: &str) -> bool {
 /// The optional schedules a host enables beside the always-on Heartbeat.
 #[derive(Default)]
 pub struct Schedules {
+    pub linear_backlog: Option<linear_backlog::Context>,
     pub general_nag: Option<general_nag::Context>,
     pub dri_digest: Option<dri_digest::Context>,
     pub project_recovery: Option<project_recovery::Context>,
@@ -413,11 +415,19 @@ impl Executor {
         let profit_digest =
             register_optional(&dbos, schedules.profit_digest, profit_digest::register)?;
         let ceo_digest = register_optional(&dbos, schedules.ceo_digest, ceo_digest::register)?;
+        let linear_backlog =
+            register_optional(&dbos, schedules.linear_backlog, linear_backlog::register)?;
         let external_schedules = register_external(&dbos)?;
         dbos.launch().await?;
         tracing::info!(app_name = APP_NAME, "DBOS launched");
         let stop = dbos::CancellationToken::new();
         let mut loops = vec![tokio::spawn(heartbeat::schedule(beat, clock, stop.clone()))];
+        if let Some(linear_backlog) = linear_backlog {
+            loops.push(tokio::spawn(linear_backlog::schedule(
+                linear_backlog,
+                stop.clone(),
+            )));
+        }
         if let Some(billing_digest) = billing_digest {
             loops.push(tokio::spawn(billing_digest::schedule(
                 billing_digest,

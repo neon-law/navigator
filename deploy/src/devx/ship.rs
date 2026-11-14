@@ -666,7 +666,7 @@ const fn retired(cronjob: &'static str, resource: &'static str) -> RetiredCronJo
     RetiredCronJob { cronjob, resource }
 }
 
-const DBOS_SCHEDULES: [DbosSchedule; 6] = [
+const DBOS_SCHEDULES: [DbosSchedule; 5] = [
     DbosSchedule {
         env: "NAVIGATOR_DBOS_GENERAL_NAG_ENABLED",
         default_on: true,
@@ -705,17 +705,6 @@ const DBOS_SCHEDULES: [DbosSchedule; 6] = [
             "notation-reset-trigger",
             "  - cron-notation-reset-trigger.yaml\n",
         )),
-        coordinates: &[
-            "SLACK_MESSAGES_CHANNEL_ID",
-            "SLACK_STAGING_MESSAGES_CHANNEL_ID",
-        ],
-        secret: None,
-    },
-    DbosSchedule {
-        env: "NAVIGATOR_DBOS_PROFIT_DIGEST_ENABLED",
-        default_on: true,
-        needs_postgres: true,
-        retires: None,
         coordinates: &[
             "SLACK_MESSAGES_CHANNEL_ID",
             "SLACK_STAGING_MESSAGES_CHANNEL_ID",
@@ -805,6 +794,7 @@ where
 /// The whole-line placeholder in `web-dbos.yaml` that becomes the schedule
 /// switches and the coordinates switched-on schedules read.
 const DBOS_SCHEDULE_ENV_TOKEN: &str = "            # NAVIGATOR_DBOS_SCHEDULE_ENV\n";
+const LINEAR_BACKLOG_CHANNEL: &str = "SLACK_LINEAR_BACKLOG_CHANNEL_ID";
 
 /// The incoming webhook `DriDigest` on DBOS refuses to boot without.
 const SLACK_WEBHOOK_URL: &str = "SLACK_WEBHOOK_URL";
@@ -892,6 +882,26 @@ where
             }
         }
     }
+    if non_empty_env(NAVIGATOR_DBOS_ENABLED, get).as_deref() == Some("true") {
+        let postgres = non_empty_env(NAVIGATOR_POSTGRES_ENABLED, get).as_deref() == Some("true");
+        for key in [
+            "SLACK_MESSAGES_CHANNEL_ID",
+            "SLACK_STAGING_MESSAGES_CHANNEL_ID",
+            LINEAR_BACKLOG_CHANNEL,
+            "NAVIGATOR_ARCHIVE_SOURCE",
+        ] {
+            if rendered.contains(&key) || (!postgres && key != LINEAR_BACKLOG_CHANNEL) {
+                continue;
+            }
+            if let Some(value) = non_empty_env(key, get) {
+                let quoted = serde_json::to_string(&value)?;
+                let _ = write!(
+                    env,
+                    "            - name: {key}\n              value: {quoted}\n"
+                );
+            }
+        }
+    }
     substitutions.push(Substitution {
         token: DBOS_SCHEDULE_ENV_TOKEN,
         env: NAVIGATOR_DBOS_ENABLED,
@@ -902,6 +912,26 @@ where
 
 /// The secret each switched-on schedule needs before `web` can boot with it.
 fn require_dbos_schedule_prerequisites(deployment: &super::deployments::Deployment) -> Result<()> {
+    if deployment
+        .coordinates
+        .get(LINEAR_BACKLOG_CHANNEL)
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        ensure!(
+            deployment
+                .coordinates
+                .get(NAVIGATOR_DBOS_ENABLED)
+                .map(String::as_str)
+                == Some("true"),
+            "{LINEAR_BACKLOG_CHANNEL} requires {NAVIGATOR_DBOS_ENABLED}"
+        );
+        for key in ["LINEAR_BACKLOG_READ_KEY", "SLACK_BOT_TOKEN"] {
+            ensure!(
+                deployment.encrypted_keys.contains(key),
+                "{LINEAR_BACKLOG_CHANNEL} requires {key} in the deployment secret"
+            );
+        }
+    }
     let flags = dbos_schedule_flags(&deployment.name, &|key: &str| {
         deployment.coordinates.get(key).cloned()
     })?;
@@ -8257,89 +8287,17 @@ mod tests {
     }
 
     #[test]
-    fn profit_digest_is_on_by_default_wherever_dbos_runs_with_postgres() {
-        let dbos_on = |key: &str| match key {
-            NAVIGATOR_DBOS_ENABLED | NAVIGATOR_POSTGRES_ENABLED => Some("true".to_owned()),
-            "NAVIGATOR_DBOS_PROFIT_DIGEST_ENABLED" => None,
-            _ => env_getter(FULL_ENV)(key),
-        };
-        let web = manifest_doc(&rendered_manifests(dbos_on), "Deployment", WEB_DEPLOYMENT);
-        for (name, value) in [
-            ("NAVIGATOR_DBOS_PROFIT_DIGEST_ENABLED", "true"),
-            ("SLACK_MESSAGES_CHANNEL_ID", "C012MESSAGES"),
-            ("SLACK_STAGING_MESSAGES_CHANNEL_ID", "C012STAGING"),
-        ] {
-            assert_eq!(web_env_value(&web, name).as_deref(), Some(value), "{name}");
-        }
-    }
-
-    #[test]
-    fn profit_digest_stays_off_when_a_deployment_opts_out_or_runs_no_dbos() {
-        let opted_out = |key: &str| match key {
-            NAVIGATOR_DBOS_ENABLED => Some("true".to_owned()),
-            "NAVIGATOR_DBOS_PROFIT_DIGEST_ENABLED" => Some("false".to_owned()),
-            _ => env_getter(FULL_ENV)(key),
-        };
-        let web = manifest_doc(&rendered_manifests(opted_out), "Deployment", WEB_DEPLOYMENT);
-        assert_eq!(
-            web_env_value(&web, "NAVIGATOR_DBOS_PROFIT_DIGEST_ENABLED").as_deref(),
-            Some("false")
-        );
-        let no_dbos = |key: &str| match key {
-            NAVIGATOR_DBOS_ENABLED | "NAVIGATOR_DBOS_PROFIT_DIGEST_ENABLED" => None,
-            _ => env_getter(FULL_ENV)(key),
-        };
-        assert_eq!(
-            dbos_schedule_flags("synthetic-deployment", &no_dbos).unwrap(),
-            vec![false; DBOS_SCHEDULES.len()]
-        );
-    }
-
-    /// The 26.11.9 production roll: DBOS on, `web` without PostgreSQL. The
-    /// digest must default off there, and an explicit opt-in must fail the
-    /// ship instead of crash-looping `web` at boot.
-    #[test]
-    fn profit_digest_needs_web_postgres() {
-        let dbos_without_postgres = |key: &str| match key {
-            NAVIGATOR_DBOS_ENABLED => Some("true".to_owned()),
-            _ => env_getter(FULL_ENV)(key),
-        };
-        let web = manifest_doc(
-            &rendered_manifests(dbos_without_postgres),
-            "Deployment",
-            WEB_DEPLOYMENT,
-        );
-        assert_eq!(
-            web_env_value(&web, "NAVIGATOR_DBOS_PROFIT_DIGEST_ENABLED").as_deref(),
-            Some("false")
-        );
-        let opted_in_without_postgres = |key: &str| match key {
-            NAVIGATOR_DBOS_ENABLED | "NAVIGATOR_DBOS_PROFIT_DIGEST_ENABLED" => {
-                Some("true".to_owned())
-            }
-            _ => env_getter(FULL_ENV)(key),
-        };
-        let error =
-            dbos_schedule_flags("synthetic-deployment", &opted_in_without_postgres).unwrap_err();
-        assert!(
-            error.to_string().contains(NAVIGATOR_POSTGRES_ENABLED),
-            "{error}"
-        );
-    }
-
-    #[test]
-    fn profit_digest_reaches_web_with_both_messages_channels_and_retires_nothing() {
+    fn dbos_with_postgres_renders_digest_destinations_and_retires_nothing() {
         let switched = |key: &str| match key {
-            NAVIGATOR_DBOS_ENABLED
-            | NAVIGATOR_POSTGRES_ENABLED
-            | "NAVIGATOR_DBOS_PROFIT_DIGEST_ENABLED" => Some("true".to_owned()),
+            NAVIGATOR_DBOS_ENABLED | NAVIGATOR_POSTGRES_ENABLED => Some("true".to_owned()),
+            "SLACK_LINEAR_BACKLOG_CHANNEL_ID" => Some("C012BACKLOG".into()),
             "NAVIGATOR_DBOS_GENERAL_NAG_ENABLED" => Some("false".to_owned()),
             _ => env_getter(FULL_ENV)(key),
         };
         let manifests = rendered_manifests(switched);
         let web = manifest_doc(&manifests, "Deployment", WEB_DEPLOYMENT);
         for (name, value) in [
-            ("NAVIGATOR_DBOS_PROFIT_DIGEST_ENABLED", "true"),
+            ("SLACK_LINEAR_BACKLOG_CHANNEL_ID", "C012BACKLOG"),
             ("SLACK_MESSAGES_CHANNEL_ID", "C012MESSAGES"),
             ("SLACK_STAGING_MESSAGES_CHANNEL_ID", "C012STAGING"),
         ] {
@@ -11294,6 +11252,7 @@ spec:
         "DOCUSIGN_USER_ID",
         "DOCUSIGN_WEBHOOK_SECRET",
         "HCAPTCHA_SECRET",
+        "LINEAR_BACKLOG_READ_KEY",
         "NAVIGATOR_CREDENTIAL_ENVIRONMENT",
         "NAVIGATOR_ENVIRONMENT",
         "NAVIGATOR_FORGEJO_PROVISIONER_TOKEN",

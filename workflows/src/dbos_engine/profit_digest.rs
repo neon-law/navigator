@@ -33,8 +33,6 @@ use super::daily::{self, LateStart};
 use crate::SlackBot;
 
 pub const WORKFLOW: &str = "ProfitDigest";
-/// Off unless literally `true`, and only beside `NAVIGATOR_DBOS_ENABLED`.
-pub const ENABLED_ENV: &str = "NAVIGATOR_DBOS_PROFIT_DIGEST_ENABLED";
 /// The base URL the Firm page link is built on, `https://<public host>`.
 pub const BASE_URL_ENV: &str = "NAV_BASE_URL";
 /// The Firm show page's path; `webapp::firm_show::FIRM_SHOW_PATH`.
@@ -212,18 +210,17 @@ impl Context {
     }
 }
 
-/// Whether this schedule is enabled. Only literal `true` opts in; `ops ship`
-/// renders `true` into every deployed `web` that runs DBOS unless the row opts out.
-///
-/// # Errors
-///
-/// Refuses any value other than `true` or `false`.
-pub fn enabled(lookup: impl Fn(&str) -> Option<String>) -> Result<bool, super::SettingsError> {
-    match lookup(ENABLED_ENV).as_deref().map(str::trim) {
-        None | Some("" | "false") => Ok(false),
-        Some("true") => Ok(true),
-        Some(_) => Err(super::SettingsError::Invalid(ENABLED_ENV)),
-    }
+/// ProfitDigest follows the application's PostgreSQL connection and Slack destination.
+#[must_use]
+pub fn configured(simulated: bool, lookup: impl Fn(&str) -> Option<String>) -> bool {
+    let channel = if simulated {
+        "SLACK_STAGING_MESSAGES_CHANNEL_ID"
+    } else {
+        "SLACK_MESSAGES_CHANNEL_ID"
+    };
+    ["NAVIGATOR_POSTGRES_HOST", channel]
+        .into_iter()
+        .all(|key| lookup(key).is_some_and(|value| !value.trim().is_empty()))
 }
 
 #[must_use]
@@ -498,8 +495,8 @@ pub async fn schedule(workflow: ProfitDigestWorkflow, clock: Clock, stop: Cancel
 #[cfg(test)]
 mod tests {
     use super::{
-        contingent_matters, enabled, render, usd, workflow_id, Context, FirmProfit, ProfitSource,
-        Totals, ENABLED_ENV,
+        configured, contingent_matters, render, usd, workflow_id, Context, FirmProfit,
+        ProfitSource, Totals,
     };
     use crate::dbos_engine::SettingsError;
     use chrono::{NaiveDate, TimeZone, Utc};
@@ -654,14 +651,16 @@ mod tests {
     }
 
     #[test]
-    fn the_schedule_is_off_unless_true_and_keyed_by_utc_date() {
-        assert!(!enabled(|_| None).unwrap());
-        assert!(!enabled(|_| Some("false".into())).unwrap());
-        assert!(enabled(|_| Some("true".into())).unwrap());
-        assert_eq!(
-            enabled(|_| Some("yes".into())).unwrap_err(),
-            SettingsError::Invalid(ENABLED_ENV)
-        );
+    fn the_schedule_needs_postgres_and_its_own_channel_and_is_keyed_by_utc_date() {
+        let lookup = |key| match key {
+            "NAVIGATOR_POSTGRES_HOST" | "SLACK_MESSAGES_CHANNEL_ID" => {
+                Some("configured".to_owned())
+            }
+            _ => None,
+        };
+        assert!(configured(false, lookup));
+        assert!(!configured(true, lookup));
+        assert!(!configured(false, |_| None));
         let late = Utc.with_ymd_and_hms(2026, 11, 7, 23, 59, 0).unwrap();
         assert_eq!(workflow_id(late), "ProfitDigest-2026-11-07");
     }

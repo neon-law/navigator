@@ -40,11 +40,11 @@ databases must export successfully before a paired completion manifest is writte
 Missing inventory, inaccessible relations, schema drift, or failed Iceberg metadata publication records a PostgreSQL
 failure in the digest. The SurrealDB snapshot has its own outcome. See PostgreSQL coverage below.
 
-`NAVIGATOR_ARCHIVE_SOURCE=postgres` selects PostgreSQL-only extraction without opening a SurrealDB connection. It
-requires `NAVIGATOR_POSTGRES_HOST`; paired coverage, reader credentials and TLS configuration remain mandatory. The
-default, or `all`, retains SurrealDB extraction and any configured PostgreSQL export. Other values fail. Select
-PostgreSQL-only extraction only after reconciling the authoritative data; it does not export rows still held solely in
-SurrealDB. The combined Restate worker still needs SurrealDB for its other services.
+DBOS Archives requires PostgreSQL coverage. Set `NAVIGATOR_ARCHIVE_SOURCE=postgres` to extract only PostgreSQL without
+opening a SurrealDB connection. This mode requires `NAVIGATOR_POSTGRES_HOST`; paired coverage, reader credentials and
+TLS configuration remain mandatory. The default, or `all`, retains SurrealDB extraction and any configured PostgreSQL
+export. Other values fail. Select PostgreSQL-only extraction only after reconciling the authoritative data; it does not
+export rows still held solely in SurrealDB. The combined Restate worker still needs SurrealDB for its other services.
 
 A PostgreSQL failure is journaled for digest delivery and terminates that invocation. Repair its configuration or source
 and start a new invocation; replay retains the failed extraction outcome.

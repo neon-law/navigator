@@ -154,7 +154,12 @@ impl ArchivesDbosPhases for ProductionDbosPhases {
             storage.as_ref(),
             scheduled_for,
         )
-        .await;
+        .await
+        .or_else(|| {
+            Some(PostgresExport::Failed {
+                error: "DBOS Archives requires configured PostgreSQL coverage".into(),
+            })
+        });
         Ok(summary)
     }
 

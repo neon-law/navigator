@@ -205,8 +205,8 @@ async fn main() -> anyhow::Result<()> {
             .context("read NAVIGATOR_DBOS_DRI_DIGEST_ENABLED")?;
         let notation_reset_enabled = workflows::dbos_engine::notation_reset::enabled(lookup)
             .context("read NAVIGATOR_DBOS_NOTATION_RESET_ENABLED")?;
-        let profit_digest_enabled = workflows::dbos_engine::profit_digest::enabled(lookup)
-            .context("read NAVIGATOR_DBOS_PROFIT_DIGEST_ENABLED")?;
+        let profit_digest_enabled =
+            workflows::dbos_engine::profit_digest::configured(simulated_matters, lookup);
         let archives_enabled = archives::workflow::dbos_enabled(lookup)
             .map_err(anyhow::Error::msg)
             .context("read NAVIGATOR_DBOS_ARCHIVES_ENABLED")?;
