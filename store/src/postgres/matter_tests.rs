@@ -13,19 +13,6 @@ use crate::test_support::{mem_surreal, seed_entity, seed_project_surreal};
 use chrono::NaiveDate;
 
 #[test]
-fn the_switch_accepts_only_the_strict_values() {
-    assert!(!enabled_from(None).unwrap());
-    assert!(!enabled_from(Some("0")).unwrap());
-    assert!(!enabled_from(Some("false")).unwrap());
-    assert!(enabled_from(Some("1")).unwrap());
-    assert!(enabled_from(Some("true")).unwrap());
-    assert!(matches!(
-        enabled_from(Some("yes")),
-        Err(MatterAuthorityError::Configuration)
-    ));
-}
-
-#[test]
 fn every_authoritative_table_is_a_registered_record_table() {
     for table in TABLES {
         assert!(

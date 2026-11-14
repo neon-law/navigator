@@ -635,15 +635,43 @@ pub async fn plan(
     if batch_size == 0 {
         return Err(BackfillError::BatchSize);
     }
+    let first = !crate::postgres_mirror::backfilled(pg).await?;
+    let tables = first_copy(first, plan_tables(surreal, pg, batch_size)).await?;
+    let covered = mirror_coverage(surreal, pg).await?;
+    let source_tables = ensure_source_coverage(surreal, &covered).await?;
+    let unresolved_references =
+        crate::postgres_mirror::records::unresolved_references(surreal, pg).await?;
+    Ok(Plan {
+        batch_size,
+        tables,
+        source_tables,
+        unresolved_references,
+    })
+}
+
+/// Run `work` as the first Mirror Backfill when `first`; see
+/// [`crate::postgres_mirror::initial_copy`].
+async fn first_copy<T>(first: bool, work: impl Future<Output = T>) -> T {
+    if first {
+        crate::postgres_mirror::during_initial_copy(work).await
+    } else {
+        work.await
+    }
+}
+
+/// Each table's plan, in [`MIRRORS`] order.
+async fn plan_tables(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+    batch_size: usize,
+) -> Result<Vec<TablePlan>, BackfillError> {
     let mut tables = Vec::new();
-    let mut covered = BTreeSet::new();
     for group in MIRRORS {
         let report = group
             .parity(surreal, pg)
             .await
             .map_err(|error| error.at(format!("mirror {}", group.name)))?;
         for table in &report.tables {
-            covered.insert(table.table);
             let drift = crate::postgres_mirror::drift(pg, table).await?;
             let keys = missing(pg, table).await?;
             let mut missing_ids: Vec<String> =
@@ -663,31 +691,27 @@ pub async fn plan(
             });
         }
     }
-    let source_tables = ensure_source_coverage(surreal, &covered).await?;
-    let unresolved_references =
-        crate::postgres_mirror::records::unresolved_references(surreal, pg).await?;
-    Ok(Plan {
-        batch_size,
-        tables,
-        source_tables,
-        unresolved_references,
-    })
+    Ok(tables)
 }
 
-/// Names the source tables each registered mirror handles.
+/// Names the source tables each registered mirror handles, the tables
+/// PostgreSQL holds authoritatively included.
 async fn mirror_coverage(
     surreal: &SurrealDb,
     pg: &PostgresDb,
 ) -> Result<BTreeSet<&'static str>, BackfillError> {
-    let mut covered = BTreeSet::new();
-    for group in MIRRORS {
-        let report = group
-            .parity(surreal, pg)
-            .await
-            .map_err(|error| error.at(format!("mirror {}", group.name)))?;
-        covered.extend(report.tables.iter().map(|table| table.table));
-    }
-    Ok(covered)
+    crate::postgres_mirror::during_initial_copy(async {
+        let mut covered = BTreeSet::new();
+        for group in MIRRORS {
+            let report = group
+                .parity(surreal, pg)
+                .await
+                .map_err(|error| error.at(format!("mirror {}", group.name)))?;
+            covered.extend(report.tables.iter().map(|table| table.table));
+        }
+        Ok(covered)
+    })
+    .await
 }
 
 /// Fail closed if a live source table contains rows outside mirror coverage.
@@ -936,7 +960,8 @@ async fn locked(
     if !held {
         return Err(BackfillError::Busy);
     }
-    let advanced = async {
+    let first = !crate::postgres_mirror::backfilled(pg).await?;
+    let advanced = first_copy(first, async {
         let covered = mirror_coverage(surreal, pg).await?;
         ensure_source_coverage(surreal, &covered).await?;
         let batches = work.await?;
@@ -944,7 +969,7 @@ async fn locked(
         let unresolved_references =
             crate::postgres_mirror::records::unresolved_references(surreal, pg).await?;
         Ok::<_, BackfillError>((batches, parity, unresolved_references))
-    }
+    })
     .await;
     let released = sqlx::query("SELECT pg_advisory_unlock($1)")
         .bind(LOCK)

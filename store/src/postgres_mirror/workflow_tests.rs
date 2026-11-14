@@ -546,9 +546,14 @@ async fn parity_names_divergent_workflow_rows_and_reconcile_repairs_them() {
     // Held only by PostgreSQL: extra.
     let stale = Uuid::new_v4();
     let stale_question = question(&surreal).await;
-    super::super::mirror(&surreal, &pg, &MirrorKey::Question(stale_question))
-        .await
-        .unwrap();
+    // PostgreSQL holds the catalog; only the first backfill copies a Question.
+    super::super::during_initial_copy(super::super::mirror(
+        &surreal,
+        &pg,
+        &MirrorKey::Question(stale_question),
+    ))
+    .await
+    .unwrap();
     sqlx::query(
         "INSERT INTO answer (id, question_id, person_id, notation_id, value) \
          VALUES ($1, $2, $3, $4, '\"Stale\"')",

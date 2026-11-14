@@ -132,8 +132,7 @@ cargo run -p store --bin navigator-migrate -- --through <version>   # pending mi
 
 Locally, `cargo run -p hudson -- dev forgejo up` adds PostgreSQL, its roles, and Forgejo to the tier, forwarded on
 `NAVIGATOR_KIND_POSTGRES_PORT` (default `15432`). In a cluster, run the Job in `k8s/postgres/migrate/` with a migration
-role, and start services only after it completes. `web` connects to PostgreSQL only when
-`NAVIGATOR_POSTGRES_ENABLED=true`.
+role, and start services only after it completes. `ops ship` gives every deployment's `web` its PostgreSQL connection.
 
 [`postgres-tooling.md`](postgres-tooling.md) covers adoption of a `schema.sql` install and staged migrations;
 [`postgres-kubernetes.md`](postgres-kubernetes.md) covers roles, TLS, and storage.

@@ -60,7 +60,6 @@ async fn native_authority_routes_the_public_inbox_lifecycle_to_postgres() {
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", &name, "--nocapture"])
             .env(CHILD, "1")
-            .env_remove("NAVIGATOR_POSTGRES_MIRROR")
             .output()
             .unwrap();
         assert!(
@@ -830,7 +829,7 @@ async fn seed_project(
     .unwrap()
     .id;
     sqlx::query(
-        "INSERT INTO project (id,code,name,status,entity_id,firm_id) VALUES ($1,$2,$3,'open',$4,$5)",
+        "INSERT INTO project (id,code,name,status,entity_id,firm_id) VALUES ($1,$2,$3,'open',$4,$5) ON CONFLICT (id) DO NOTHING",
     )
     .bind(project)
     .bind(code)
@@ -2448,7 +2447,6 @@ async fn legacy_inbox_repair_cannot_replace_native_authority() {
             ])
             .env(CHILD, "1")
             .env_remove("NAVIGATOR_POSTGRES_HOST")
-            .env_remove("NAVIGATOR_POSTGRES_MIRROR")
             .output()
             .unwrap();
         assert!(
@@ -2735,7 +2733,6 @@ async fn native_triage_public_doors_preserve_canonical_inbox_authority() {
             let output = std::process::Command::new(std::env::current_exe().unwrap())
                 .args(["--exact", &name, "--nocapture"])
                 .env(CHILD, case)
-                .env_remove("NAVIGATOR_POSTGRES_MIRROR")
                 .output()
                 .unwrap();
             assert!(
@@ -2860,7 +2857,7 @@ async fn native_triage_admin_assignment(f: &Fixture, one: crate::inbox::Ingested
     .await
     .unwrap();
     // Match fixture()'s canonical identity rows for the additional actor.
-    sqlx::query("INSERT INTO person (id,name,email,role) VALUES ($1,'Triage Admin','triage-admin@example.test','admin')")
+    sqlx::query("INSERT INTO person (id,name,email,role) VALUES ($1,'Triage Admin','triage-admin@example.test','admin') ON CONFLICT (id) DO NOTHING")
         .bind(admin.id).execute(f.pg.pool()).await.unwrap();
     assert!(matches!(
         crate::inbox::assign(&f.db, admin.id, one.conversation_id, f.project).await,
@@ -3411,7 +3408,7 @@ async fn assert_public_native_call_and_fi_triage_coordination(f: &Fixture) {
     .await
     .unwrap()
     .id;
-    sqlx::query("INSERT INTO person (id,name,email,role) VALUES ($1,'Review Admin','voice-review-admin@example.test','admin')")
+    sqlx::query("INSERT INTO person (id,name,email,role) VALUES ($1,'Review Admin','voice-review-admin@example.test','admin') ON CONFLICT (id) DO NOTHING")
         .bind(admin).execute(f.pg.pool()).await.unwrap();
     firms::ensure_membership(
         &f.db,
@@ -3601,7 +3598,7 @@ async fn voice_reply_fixture() -> Option<(Fixture, Uuid, Uuid)> {
     )
     .await
     .unwrap();
-    sqlx::query("INSERT INTO person(id,name,email,role) VALUES($1,'Voice Clerk','voice-clerk@example.com','clerk')").bind(clerk).execute(f.pg.pool()).await.unwrap();
+    sqlx::query("INSERT INTO person(id,name,email,role) VALUES($1,'Voice Clerk','voice-clerk@example.com','clerk') ON CONFLICT (id) DO NOTHING").bind(clerk).execute(f.pg.pool()).await.unwrap();
     let mut input = inbound(
         f.firm,
         channel::VOICE,
@@ -3750,7 +3747,6 @@ async fn fi_project_destination_is_reserved_before_any_history_commit() {
             let output = std::process::Command::new(std::env::current_exe().unwrap())
                 .args(["--exact", &name, "--nocapture"])
                 .env(CHILD, case)
-                .env_remove("NAVIGATOR_POSTGRES_MIRROR")
                 .output()
                 .unwrap();
             assert!(

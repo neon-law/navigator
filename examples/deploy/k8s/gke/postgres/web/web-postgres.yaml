@@ -1,9 +1,8 @@
-# Opt-in PostgreSQL connection for `web`.
+# The PostgreSQL connection for `web`.
 #
-# `ops ship` adds this patch only for a deployment whose `config.toml` sets
-# `NAVIGATOR_POSTGRES_ENABLED = "true"`; every other deployment renders
-# without it and boots exactly as before. It must follow `web-env.yaml`,
-# whose `$patch: replace` rebuilds the env list.
+# `ops ship` adds this patch for every deployment: PostgreSQL is the
+# authority wherever `web` runs. It must follow `web-env.yaml`, whose
+# `$patch: replace` rebuilds the env list.
 #
 # `web` connects as the `navigator_app` runtime login with verify-full TLS.
 # The password and the CA bundle come from the `navigator-postgres-app`
@@ -24,7 +23,6 @@ spec:
       containers:
         - name: web
           env:
-            # NAVIGATOR_POSTGRES_MIRROR_ENV
             # NAVIGATOR_POSTGRES_AUTHORITY_ENV
             - name: NAVIGATOR_POSTGRES_HOST
               value: navigator-postgres.navigator.svc.cluster.local

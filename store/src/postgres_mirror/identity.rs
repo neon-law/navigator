@@ -378,6 +378,11 @@ async fn mirror_inner(
     key: &MirrorKey,
 ) -> Result<Mirrored, MirrorError> {
     match key {
+        // PostgreSQL holds the catalog authoritatively; see `catalog`. Only
+        // a reference row an Entity names and PostgreSQL lacks is copied.
+        MirrorKey::Jurisdiction(_) | MirrorKey::EntityType(_) if !super::initial_copy() => {
+            Ok(Mirrored::Unchanged)
+        }
         MirrorKey::Jurisdiction(id) => mirror_jurisdiction(surreal, pg, *id).await,
         MirrorKey::EntityType(id) => mirror_entity_type(surreal, pg, *id).await,
         MirrorKey::Entity(id) => {
@@ -420,7 +425,8 @@ pub(super) async fn ensure(
         _ => return Ok(()),
     };
     if !present(pg, sql, id).await? {
-        mirror(surreal, pg, &key).await?;
+        // A missing parent is copied even into the authoritative catalog.
+        super::during_initial_copy(mirror(surreal, pg, &key)).await?;
     }
     Ok(())
 }
@@ -446,11 +452,7 @@ async fn mirror_jurisdiction(
     pg: &PostgresDb,
     id: Uuid,
 ) -> Result<Mirrored, MirrorError> {
-    // PostgreSQL holds the catalog under its authority; see `catalog`.
-    if crate::postgres::catalog::configured() {
-        return Ok(Mirrored::Unchanged);
-    }
-    let source = crate::jurisdictions::find_by_id(surreal, id)
+    let source = super::from_source(crate::jurisdictions::find_by_id(surreal, id))
         .await
         .map_err(source)?;
     let Some(row) = source else {
@@ -474,11 +476,7 @@ async fn mirror_entity_type(
     pg: &PostgresDb,
     id: Uuid,
 ) -> Result<Mirrored, MirrorError> {
-    // PostgreSQL holds the catalog under its authority; see `catalog`.
-    if crate::postgres::catalog::configured() {
-        return Ok(Mirrored::Unchanged);
-    }
-    let source = crate::entity_types::find_by_id(surreal, id)
+    let source = super::from_source(crate::entity_types::find_by_id(surreal, id))
         .await
         .map_err(source)?;
     let Some(row) = source else {
@@ -551,12 +549,22 @@ fn infallible<S, I>(image: impl Fn(&S) -> I) -> impl Fn(&S) -> Result<I, MirrorE
 ///
 /// Either store could not be read.
 pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
-    let jurisdictions = crate::jurisdictions::list_all(surreal)
-        .await
-        .map_err(source)?;
-    let entity_types = crate::entity_types::list(surreal, &[])
-        .await
-        .map_err(source)?;
+    let authoritative = super::compares_authoritative(pg).await?;
+    let (jurisdictions, entity_types) = if authoritative {
+        super::from_source(async {
+            Ok::<_, MirrorError>((
+                crate::jurisdictions::list_all(surreal)
+                    .await
+                    .map_err(source)?,
+                crate::entity_types::list(surreal, &[])
+                    .await
+                    .map_err(source)?,
+            ))
+        })
+        .await?
+    } else {
+        (Vec::new(), Vec::new())
+    };
     let entities = crate::entities::all(surreal).await.map_err(source)?;
     let people = source_people(surreal).await?;
     let people: BTreeMap<MirrorKey, Option<PersonImage>> = people
@@ -564,7 +572,7 @@ pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport
         .map(|person| (MirrorKey::Person(person.id), Some(person)))
         .collect();
 
-    let tables = vec![
+    let catalog = [
         compare(
             "jurisdiction",
             &images(
@@ -595,6 +603,14 @@ pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport
             )
             .await?,
         ),
+    ];
+    let mut tables = Vec::with_capacity(4);
+    if authoritative {
+        for table in catalog {
+            tables.push(super::only_missing(pg, table).await?);
+        }
+    }
+    tables.extend([
         compare(
             "entity",
             &images(
@@ -615,7 +631,7 @@ pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport
             })
             .await?,
         ),
-    ];
+    ]);
     Ok(ParityReport { tables })
 }
 

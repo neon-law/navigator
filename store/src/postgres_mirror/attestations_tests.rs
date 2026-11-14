@@ -376,7 +376,6 @@ fn source_reset_hook_and_global_reconcile_are_isolated() {
             "--nocapture",
         ])
         .env("NAV_ATTESTATION_RESET_HOOK_PROBE", "1")
-        .env(crate::postgres_mirror::MIRROR_ENV, "1")
         .env("NAVIGATOR_POSTGRES_HOST", "127.0.0.1")
         .env("NAVIGATOR_POSTGRES_PORT", options.get_port().to_string())
         .env("NAVIGATOR_POSTGRES_USER", "postgres")

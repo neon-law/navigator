@@ -557,7 +557,6 @@ fn identity_detail_write_hooks_isolated() {
             "--nocapture",
         ])
         .env("NAVIGATOR_POSTGRES_MIRROR_DETAIL_PROBE", "1")
-        .env(super::super::MIRROR_ENV, "1")
         .env("NAVIGATOR_POSTGRES_HOST", "127.0.0.1")
         .env(
             "NAVIGATOR_POSTGRES_PORT",

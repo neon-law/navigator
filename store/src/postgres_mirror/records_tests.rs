@@ -411,10 +411,12 @@ async fn project_records_mirror_replay_reconcile_and_remove() {
         ]
     );
     assert_eq!(before.divergent().count(), 4);
-    assert!(reconcile(&surreal, &pg, "project_records")
-        .await
-        .unwrap()
-        .is_clean());
+    assert!(
+        super::super::during_initial_copy(reconcile(&surreal, &pg, "project_records"))
+            .await
+            .unwrap()
+            .is_clean()
+    );
     for table in [
         "project_module",
         "statutory_deadline",
@@ -901,13 +903,15 @@ async fn notation_inputs_mirror_and_follow_their_notation() {
             .count(),
         3
     );
-    assert!(reconcile(&surreal, &pg, "notation_inputs")
-        .await
-        .unwrap()
-        .is_clean());
+    assert!(
+        super::super::during_initial_copy(reconcile(&surreal, &pg, "notation_inputs"))
+            .await
+            .unwrap()
+            .is_clean()
+    );
     assert_eq!(count(&pg, "notation_source").await, 2);
     assert_eq!(
-        mirror(&surreal, &pg, "notation_draft", draft.id)
+        super::super::during_initial_copy(mirror(&surreal, &pg, "notation_draft", draft.id))
             .await
             .unwrap(),
         Mirrored::Unchanged
@@ -937,7 +941,7 @@ async fn notation_inputs_mirror_and_follow_their_notation() {
         .unwrap()
         .check()
         .unwrap();
-    mirror(&surreal, &pg, "notation_draft", draft.id)
+    super::super::during_initial_copy(mirror(&surreal, &pg, "notation_draft", draft.id))
         .await
         .unwrap();
     let linked: Option<Uuid> =
@@ -959,7 +963,7 @@ async fn notation_inputs_mirror_and_follow_their_notation() {
             .unwrap();
     assert_eq!(order, ["synthetic__first", "synthetic__second"]);
 
-    // Changed target rows are repaired from SurrealDB.
+    // PostgreSQL holds the drafts: its own edit is not drift.
     sqlx::query("UPDATE notation_draft SET title = 'drifted'")
         .execute(&pg.0)
         .await
@@ -974,7 +978,7 @@ async fn notation_inputs_mirror_and_follow_their_notation() {
         .await
         .unwrap();
     assert_eq!(
-        mirror(&surreal, &pg, "notation_draft", draft.id)
+        super::super::during_initial_copy(mirror(&surreal, &pg, "notation_draft", draft.id))
             .await
             .unwrap(),
         Mirrored::Deleted
@@ -1040,13 +1044,15 @@ async fn git_access_mirrors_hashes_only_and_follows_revocation() {
     .await
     .unwrap();
 
-    assert!(reconcile(&surreal, &pg, "git_access")
-        .await
-        .unwrap()
-        .is_clean());
+    assert!(
+        super::super::during_initial_copy(reconcile(&surreal, &pg, "git_access"))
+            .await
+            .unwrap()
+            .is_clean()
+    );
     assert_eq!(count(&pg, "git_access_token").await, 2);
     assert_eq!(
-        mirror(&surreal, &pg, "git_repository", repository.id)
+        super::super::during_initial_copy(mirror(&surreal, &pg, "git_repository", repository.id))
             .await
             .unwrap(),
         Mirrored::Unchanged
