@@ -3300,13 +3300,14 @@ enum DocumentAction {
         #[command(flatten)]
         execution: ExecutionArgs,
     },
-    /// OCR a PDF revision into a linked transcript document, without sending
-    /// the source bytes to an OCR provider. Requires local Poppler (`pdftoppm`)
-    /// and Tesseract with English and orientation data installed.
+    /// OCR a PDF revision locally or file a reviewed transcript.
     #[command(after_long_help = DOCUMENT_TRANSCRIBE_HELP)]
     Transcribe {
         /// Source document pointer under `blobs/`, or its bytes under `documents/`.
         pointer: PathBuf,
+        /// File a UTF-8 transcript already reviewed against this source PDF.
+        #[arg(long)]
+        text_file: Option<PathBuf>,
     },
     /// Set `slug` on a live row that has none
     /// (`PATCH /app/api/projects/{id}/documents/{asset_id}`).
@@ -4519,7 +4520,9 @@ async fn run_document(action: DocumentAction) -> ExitCode {
             )
             .await
         }
-        DocumentAction::Transcribe { pointer } => remote::document_transcribe(&pointer).await,
+        DocumentAction::Transcribe { pointer, text_file } => {
+            remote::document_transcribe(&pointer, text_file.as_deref()).await
+        }
         DocumentAction::Slug {
             host,
             project,

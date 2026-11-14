@@ -63,6 +63,11 @@ fn transcribe_pdf_with(bytes: &[u8], pdftoppm: &OsStr, tesseract: &OsStr) -> Res
             rotations = vec![0, 90, 180, 270];
             best = best_orientation_with(&image, &rotations, scratch.path(), tesseract)?;
         }
+        if best.recognized_words < 3 {
+            eprintln!(
+                "Page {page_number} has fewer than three high-confidence words. Ask for a full-resolution original before relying on the transcript."
+            );
+        }
         let _ = writeln!(transcript, "## Page {page_number}\n");
         if best.text.trim().is_empty() {
             transcript.push_str("[No text recognized on this page.]\n\n");

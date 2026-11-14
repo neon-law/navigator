@@ -2981,11 +2981,25 @@ where
 
 /// `hudson site document transcribe <pointer>` — locally OCR the current
 /// source revision and file its linked transcript under a stable Project slug.
-pub async fn document_transcribe(pointer_path: &Path) -> ExitCode {
-    document_transcribe_from(Path::new("."), pointer_path).await
+pub async fn document_transcribe(pointer_path: &Path, text_file: Option<&Path>) -> ExitCode {
+    document_transcribe_from(Path::new("."), pointer_path, text_file).await
 }
 
-async fn document_transcribe_from(root: &Path, pointer_path: &Path) -> ExitCode {
+fn read_reviewed_transcript(path: &Path) -> Result<String> {
+    validate_document_upload_size("transcript", path)?;
+    let transcript = std::fs::read_to_string(path)
+        .with_context(|| format!("read reviewed UTF-8 transcript {}", path.display()))?;
+    if transcript.trim().is_empty() {
+        return Err(anyhow!("the reviewed transcript is empty"));
+    }
+    Ok(transcript)
+}
+
+async fn document_transcribe_from(
+    root: &Path,
+    pointer_path: &Path,
+    text_file: Option<&Path>,
+) -> ExitCode {
     run(async {
         let manifest = crate::projects::manifest::read(root)
             .ok_or_else(|| anyhow!("no navigator.yaml in the current directory"))?;
@@ -3012,48 +3026,76 @@ async fn document_transcribe_from(root: &Path, pointer_path: &Path) -> ExitCode 
         if !source_slug.to_ascii_lowercase().ends_with(".pdf") {
             return Err(anyhow!("transcribe requires a PDF document pointer"));
         }
+        let reviewed = text_file.map(read_reviewed_transcript).transpose()?;
         let client = DocumentClient::connect(Some(host), project).await?;
         let revisions = client.list_revisions(&source_slug).await?;
         let source = source_revision(&pointer.current_version, &revisions.revisions)?;
-        let bytes = client.download_revision(source.asset_id).await?;
-        let digest = model::documents::sha256_hex(&bytes);
-        if digest != source.sha256 {
-            return Err(anyhow!(
-                "downloaded source bytes do not match the pointer SHA-256"
-            ));
-        }
-        let transcript = crate::document_ocr::transcribe_pdf(&bytes)?;
-        let stem = Path::new(&source_slug)
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .filter(|stem| !stem.is_empty())
-            .ok_or_else(|| anyhow!("source document slug has no filename stem"))?;
-        let filename = format!("{stem}.transcript.md");
-        let transcript_slug = format!("transcripts/{filename}");
-        let derived_from = serde_json::json!({
-            "document_id": source.asset_id,
-            "version": source.version,
-            "sha256": source.sha256,
-        });
-        let filed = client
-            .upload_bytes_with_details(
-                &filename,
-                transcript.as_bytes(),
-                "transcript",
-                Some("internal"),
-                Some("Machine-generated OCR; verify quotations against the source scan."),
-                Some("text/markdown; charset=utf-8"),
-                Some(&transcript_slug),
-                None,
-                Some(derived_from),
-                Some("machine"),
-                &DocumentExecution::default(),
+        let (transcript, quality, description) = if let Some(transcript) = reviewed {
+            (transcript, "proofread", "Reviewed against the source scan.")
+        } else {
+            let bytes = client.download_revision(source.asset_id).await?;
+            let digest = model::documents::sha256_hex(&bytes);
+            if digest != source.sha256 {
+                return Err(anyhow!(
+                    "downloaded source bytes do not match the pointer SHA-256"
+                ));
+            }
+            (
+                crate::document_ocr::transcribe_pdf(&bytes)?,
+                "machine",
+                "Machine-generated OCR; verify quotations against the source scan.",
             )
-            .await?;
+        };
+        let filed = upload_transcript(
+            &client,
+            &source_slug,
+            source,
+            &transcript,
+            quality,
+            description,
+        )
+        .await?;
         print!("{}", filed.to_yaml()?);
         Ok(())
     })
     .await
+}
+
+async fn upload_transcript(
+    client: &DocumentClient,
+    source_slug: &str,
+    source: &RevisionSummary,
+    transcript: &str,
+    quality: &str,
+    description: &str,
+) -> Result<model::document_pointers::DocumentPointer> {
+    let stem = Path::new(source_slug)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.is_empty())
+        .ok_or_else(|| anyhow!("source document slug has no filename stem"))?;
+    let filename = format!("{stem}.transcript.md");
+    let transcript_slug = format!("transcripts/{filename}");
+    let derived_from = serde_json::json!({
+        "document_id": source.asset_id,
+        "version": source.version,
+        "sha256": source.sha256,
+    });
+    client
+        .upload_bytes_with_details(
+            &filename,
+            transcript.as_bytes(),
+            "transcript",
+            Some("internal"),
+            Some(description),
+            Some("text/markdown; charset=utf-8"),
+            Some(&transcript_slug),
+            None,
+            Some(derived_from),
+            Some(quality),
+            &DocumentExecution::default(),
+        )
+        .await
 }
 
 fn source_revision<'a>(
@@ -6114,9 +6156,10 @@ mod tests {
         document_visibility, fetch_status, mail_file, matter_close, notation_answers,
         notation_approve, notation_create, notation_document, notation_list,
         notation_request_changes, notation_send, notation_status, notation_update,
-        picker_selection_fields, project_code_exists, projects_create, projects_create_named, seed,
-        seed_directory, select_candidate, source_revision, DocumentClient, DocumentExecution,
-        PublishedDraft, RevisionSummary, SeedCredential, SeedOptions, StepResponse,
+        picker_selection_fields, project_code_exists, projects_create, projects_create_named,
+        read_reviewed_transcript, seed, seed_directory, select_candidate, source_revision,
+        DocumentClient, DocumentExecution, PublishedDraft, RevisionSummary, SeedCredential,
+        SeedOptions, StepResponse,
     };
     use super::{
         exit_code_for, fetch_step, first_line, integrity_failure, mint_refusal_annotation,
@@ -8367,6 +8410,20 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_reviewed_transcript_requires_nonempty_utf8_and_keeps_the_reviewed_text() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), "  ").unwrap();
+        assert!(read_reviewed_transcript(file.path()).is_err());
+        std::fs::write(file.path(), [0xff]).unwrap();
+        assert!(read_reviewed_transcript(file.path()).is_err());
+        std::fs::write(file.path(), "# Page 1\n\nReviewed text.\n").unwrap();
+        assert_eq!(
+            read_reviewed_transcript(file.path()).unwrap(),
+            "# Page 1\n\nReviewed text.\n"
+        );
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn document_transcribe_rejects_a_non_pdf_pointer_before_connecting() {
         let root = tempfile::tempdir().unwrap();
@@ -8404,7 +8461,7 @@ mod tests {
         std::fs::write(&pointer_path, pointer.to_yaml().unwrap()).unwrap();
 
         assert_eq!(
-            document_transcribe_from(root.path(), &pointer_path).await,
+            document_transcribe_from(root.path(), &pointer_path, None).await,
             ExitCode::from(2)
         );
     }
@@ -8414,7 +8471,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let pointer = std::path::Path::new("blobs/cases/order.pdf.yml");
         assert_eq!(
-            document_transcribe_from(root.path(), pointer).await,
+            document_transcribe_from(root.path(), pointer, None).await,
             ExitCode::from(2)
         );
 
@@ -8424,7 +8481,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            document_transcribe_from(root.path(), pointer).await,
+            document_transcribe_from(root.path(), pointer, None).await,
             ExitCode::from(2)
         );
 
@@ -8434,7 +8491,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            document_transcribe_from(root.path(), pointer).await,
+            document_transcribe_from(root.path(), pointer, None).await,
             ExitCode::from(2)
         );
 
@@ -8444,7 +8501,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            document_transcribe_from(root.path(), pointer).await,
+            document_transcribe_from(root.path(), pointer, None).await,
             ExitCode::from(2)
         );
     }
@@ -11291,6 +11348,47 @@ mod tests {
                 "size_bytes": bytes.len()
             }
         })
+    }
+
+    #[tokio::test]
+    async fn reviewed_text_is_filed_as_proofread_with_the_exact_source_revision() {
+        let server = MockServer::start().await;
+        let project_id = Uuid::now_v7();
+        let asset_id = Uuid::now_v7();
+        let source: RevisionSummary = serde_json::from_value(serde_json::json!({
+            "asset_id": asset_id, "version": 3, "sha256": "a".repeat(64),
+            "created_at": "2026-10-30T12:00:00Z", "size_bytes": 12,
+            "filename": "order.pdf", "operative": true
+        }))
+        .unwrap();
+        let text = "Reviewed transcription.";
+        let route = format!("/app/api/projects/{project_id}/documents");
+        Mock::given(method("POST"))
+            .and(path(&route))
+            .respond_with(ResponseTemplate::new(201).set_body_json(pointer_json(text.as_bytes())))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        super::upload_transcript(
+            &DocumentClient::for_check_tests(server.uri(), project_id),
+            "filings/order.pdf",
+            &source,
+            text,
+            "proofread",
+            "Reviewed against the source scan.",
+        )
+        .await
+        .unwrap();
+
+        let request = only_body(&server, &route).await;
+        assert_eq!(request["kind"], "transcript");
+        assert_eq!(request["visibility"], "internal");
+        assert_eq!(request["slug"], "transcripts/order.transcript.md");
+        assert_eq!(request["transcript_quality"], "proofread");
+        assert_eq!(request["derived_from"]["document_id"], asset_id.to_string());
+        assert_eq!(request["derived_from"]["version"], 3);
+        assert_eq!(request["derived_from"]["sha256"], "a".repeat(64));
     }
 
     fn session_json(session_id: Uuid, chunk_size: u64, received: u64) -> serde_json::Value {
