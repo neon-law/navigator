@@ -2582,9 +2582,9 @@ mod tests {
     /// The firm's affiliations stay with the firm: a bundle that
     /// renames the firm publishes no association affiliation and lists no
     /// house-brand family, because both are Guieb & Shook PC's; a bundle that
-    /// changes anything else keeps them. Every house brand carries the same
-    /// two, since the affiliated organization and the family are the firm, not
-    /// the brand.
+    /// changes anything else keeps them. Guieb & Shook's own brand carries
+    /// that family. DeleteYourData carries Lex Tecnica's family, and both
+    /// brands publish the same offices, memberships, and shared profiles.
     #[tokio::test]
     async fn a_renamed_firm_claims_no_membership_and_lists_no_family() {
         let renamed: BrandManifest =
@@ -2603,11 +2603,17 @@ mod tests {
             assert_eq!(super::firm_social(), DEFAULT_BRANDING.firm_social);
         })
         .await;
+        assert_eq!(
+            DELETE_YOUR_DATA_BRANDING.firm_family,
+            BrandKey::LEX_TECNICA_FAMILY
+        );
+        assert_eq!(
+            super::GUIEB_SHOOK_BRANDING.firm_family,
+            BrandKey::GUIEB_SHOOK_FAMILY
+        );
         for branding in [&DELETE_YOUR_DATA_BRANDING, &super::GUIEB_SHOOK_BRANDING] {
             assert_eq!(branding.firm_memberships, DEFAULT_BRANDING.firm_memberships);
-            assert_eq!(branding.firm_family, BrandKey::GUIEB_SHOOK_FAMILY);
             assert_eq!(branding.firm_social, super::SHARED_SOCIAL);
-            // Every house brand publishes the same firm offices.
             assert_eq!(branding.firm_offices, DEFAULT_BRANDING.firm_offices);
         }
     }
