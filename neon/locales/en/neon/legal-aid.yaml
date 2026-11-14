@@ -14,7 +14,7 @@ bands:
     pricing_style: true
     items:
       - title: Legal aid organizations
-        chips: ["$10"]
+        chips: ["$20"]
         cadence: / user / month, plus model tokens
         body:
           - - text: Hosted Navigator for your organization, under your own brand name.
