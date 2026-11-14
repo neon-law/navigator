@@ -2910,11 +2910,9 @@ a.nav-link:hover {
 }
 
 /* Inbox grid (desktop): the folder rail, then one column holding the
- * conversation list with the reading pane beneath it at the list's full
- * width — a mail client's horizontal split. The pane is always rendered —
- * before a row is selected it explains itself — so the heading is a stable
- * focus target. Below 60rem the rail stacks above the list, and the thread
- * remains its own navigable page for deep links. */
+ * conversation list. A selected conversation opens in the reading dialog.
+ * Below 60rem the rail stacks above the list, and the thread remains its
+ * own navigable page for deep links. */
 @media (min-width: 60rem) {
   #inbox {
     display: grid;
@@ -3282,30 +3280,39 @@ a.nav-link:hover {
   align-items: center;
 }
 
-/* The reading pane card sits under the list at its full width. */
-#inbox .inbox-pane {
-  margin-top: 1rem;
+/* The reading dialog: a wide centred modal over a dimmed page. The dialog
+ * carries no padding, so a click outside the body is a backdrop click. */
+.inbox-pane {
+  width: min(64rem, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2rem);
+  padding: 0;
   border: 1px solid var(--nav-color-border);
-  border-radius: 0.5rem;
+  border-radius: 0.75rem;
   background: var(--nav-color-surface);
-  padding: 0.75rem 1rem;
-  scroll-margin-top: 1rem;
+  color: var(--nav-color-text);
+}
+
+.inbox-pane::backdrop {
+  background: rgb(0 0 0 / 0.4);
+}
+
+.inbox-pane__body {
+  padding: 0.75rem 1rem 1rem;
+}
+
+.inbox-pane__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .inbox-pane__title {
-  margin: 0 0 0.5rem;
+  margin: 0;
   color: var(--nav-color-text-muted);
   font-size: 0.75rem;
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-}
-
-/* The outline is drawn only for keyboard focus, never for the programmatic
- * move that follows a click — WCAG 2.4.7 without the double cue. */
-.inbox-pane__title:focus-visible {
-  outline: 2px solid var(--nav-color-primary);
-  outline-offset: 2px;
 }
 
 .inbox-pane__empty {
@@ -3582,11 +3589,12 @@ a.nav-link:hover {
     display: none !important;
   }
 
-  #inbox .inbox-pane {
-    margin-inline: -0.75rem;
-    border-inline: 0;
-    border-radius: 0;
-    padding-inline: 0.75rem;
+  .inbox-pane {
+    width: 100vw;
+    max-width: 100vw;
+    max-height: 100dvh;
+    margin: auto 0 0;
+    border-radius: 1rem 1rem 0 0;
   }
 
   .inbox-message {
