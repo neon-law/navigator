@@ -5194,7 +5194,8 @@ fn canonical_document(base: &str) -> Value {
                     "filename": { "type": "string", "description": "Stored filename, when present, in the Lawyer lens." },
                     "revision": { "type": "object", "description": "Revision summary in the same format as the revisions route, available in the Lawyer lens." },
                     "sha256_matches": { "type": "boolean" },
-                    "docket_name_matches": { "type": "boolean", "description": "Whether exactly one linked Docket Entry gives this document its current DKT filename; no docket content is returned." }
+                    "matter_folder": { "type": "string", "description": "Effective live Matter Folder in the Lawyer lens." },
+                    "docket_name_matches": { "type": "boolean", "description": "Whether exactly one linked Docket Entry gives a document in Docket Filings its current DKT filename. Omitted for other folders." }
                   } } },
                   "integrations": { "type": "array", "items": { "type": "object", "required": ["asset_id", "integration", "outcome", "detail"], "properties": {
                     "asset_id": { "type": "string", "format": "uuid" },

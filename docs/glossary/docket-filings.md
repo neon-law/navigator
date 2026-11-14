@@ -7,6 +7,10 @@ The [Matter Folder](matter-folder.md) at `documents/Docket Filings/` for court p
 `kind: pleading`, `filing`, or `order` land here by default; an explicit `folder: Docket Filings` selects it for another
 kind. Docket ingest records this folder when filing a downloaded document.
 
+The live naming check uses the stored Matter Folder. Work Product requires no Docket Entry name.
+
+Run `navigator project sync` to reconcile the live placement with the Pointer before running the live gate.
+
 This folder holds Git-ignored bytes. Each document's tracked [Pointer](pointer.md) lives at `blobs/<slug>.yaml`, where
 the slug is the path below the Matter Folder. A [Docket Entry](docket-entry.md) links a court record to its Document;
 the [Case Timeline](case-timeline.md) presents those records with the Project's open Deadlines.

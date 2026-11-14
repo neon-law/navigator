@@ -1114,6 +1114,8 @@ pub struct IntegrityAsset {
     pub sha256_matches: Option<bool>,
     #[serde(default)]
     pub docket_name_matches: Option<bool>,
+    #[serde(default)]
+    pub matter_folder: Option<model::document_pointers::MatterFolder>,
 }
 
 /// One server-side external-id finding. Empty until a pointer carries an

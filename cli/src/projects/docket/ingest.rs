@@ -1936,11 +1936,13 @@ mod tests {
             integrity
                 .assets
                 .iter()
-                .all(|asset| asset.docket_name_matches == Some(true)),
+                .all(|asset| asset.docket_name_matches == Some(true)
+                    && asset.matter_folder
+                        == Some(model::document_pointers::MatterFolder::DocketFilings)),
             "{:#?}",
             integrity.assets
         );
-        let metadata:Vec<_> = integrity.assets.iter().map(|asset| serde_json::json!({"asset_id":asset.asset_id,"slug":asset.slug,"docket_name_matches":asset.docket_name_matches})).collect();
+        let metadata:Vec<_> = integrity.assets.iter().map(|asset| serde_json::json!({"asset_id":asset.asset_id,"slug":asset.slug,"docket_name_matches":asset.docket_name_matches,"matter_folder":asset.matter_folder})).collect();
         super::super::renumber::validate_checkout(dir.path(), &metadata).unwrap();
         assert!(!dir
             .path()
@@ -1979,8 +1981,10 @@ mod tests {
         assert!(after
             .assets
             .iter()
-            .all(|asset| asset.docket_name_matches == Some(true)));
-        let metadata:Vec<_> = after.assets.iter().map(|asset| serde_json::json!({"asset_id":asset.asset_id,"slug":asset.slug,"docket_name_matches":asset.docket_name_matches})).collect();
+            .all(|asset| asset.docket_name_matches == Some(true)
+                && asset.matter_folder
+                    == Some(model::document_pointers::MatterFolder::DocketFilings)));
+        let metadata:Vec<_> = after.assets.iter().map(|asset| serde_json::json!({"asset_id":asset.asset_id,"slug":asset.slug,"docket_name_matches":asset.docket_name_matches,"matter_folder":asset.matter_folder})).collect();
         super::super::renumber::validate_checkout(dir.path(), &metadata).unwrap();
         server.abort();
     }
