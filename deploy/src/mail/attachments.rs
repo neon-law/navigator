@@ -4,7 +4,7 @@
 //! The message is read with `format=raw` — the same read `mail save` makes
 //! — and walked with the MIME parser, so the bytes written are exactly the
 //! transfer-decoded parts. Nothing is uploaded; filing stays with
-//! `hudson site document upload`.
+//! `navigator site document upload`.
 
 use std::fmt::Write as _;
 use std::io::Write as _;

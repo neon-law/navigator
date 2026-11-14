@@ -18,7 +18,7 @@ Read `navigator.yaml` and stay in this Project checkout. Preserve the Project's 
 Sign in with `navigator site login` to use the local MCP bridge. It reads the saved session from `~/.navigator.json`.
 Keep credentials out of tool arguments, chat, and repository files.
 
-Use `hudson glossary list` and `hudson glossary show "<Term>"` for terminology.
+Use `navigator glossary list` and `navigator glossary show "<Term>"` for terminology.
 
 ## Jujutsu workflow
 

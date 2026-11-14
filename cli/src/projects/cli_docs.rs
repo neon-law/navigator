@@ -91,7 +91,6 @@ pub const HUDSON_VERBS: &[&str] = &[
     "drafts",
     "ephemeris",
     "forms",
-    "glossary",
     "inbox",
     "journal",
     "legal-plans",

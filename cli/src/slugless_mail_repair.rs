@@ -1,4 +1,4 @@
-//! `hudson site document slugless` — repair the live rows an inbound email
+//! `navigator site document slugless` — repair the live rows an inbound email
 //! thread filed without a slug.
 //!
 //! `project gate --check` fails a Project on every live row with no slug.
@@ -82,7 +82,7 @@ pub fn plan(documents: &[LiveDocumentSummary]) -> Vec<Step> {
             steps.push(step(
                 Action::Skip,
                 None,
-                "not filed from inbound email; slug it with `hudson site document slug`".into(),
+                "not filed from inbound email; slug it with `navigator site document slug`".into(),
             ));
             continue;
         }

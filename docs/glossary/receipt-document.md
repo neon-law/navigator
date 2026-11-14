@@ -8,5 +8,5 @@ default. Uploads default to internal visibility.
 
 The optional `receipt` block on its [Pointer](pointer.md) records `amount_cents`, `currency`, `payee`, `category`, and
 one of `journal_entry_id` or `transaction_id`. The category is an [Expense Category](expense-category.md). To supply the
-block, pass its YAML file to `hudson site document upload --kind receipt --receipt <yaml>`. Filing the Document
+block, pass its YAML file to `navigator site document upload --kind receipt --receipt <yaml>`. Filing the Document
 preserves the evidence without posting a [Project Cost](project-cost.md).

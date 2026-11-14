@@ -27,7 +27,8 @@ deliberately repo-local and not part of `SYNCED_SKILLS`.
 ## Governing terms
 
 Name these from the glossary before introducing a synonym: Inbox, Inbox Ingress, Inbox Triage, Inbox Assignment,
-Message, Conversation, Person, Relationship Edge, Relationship Log. Run `hudson glossary show "<Term>"` for definitions.
+Message, Conversation, Person, Relationship Edge, Relationship Log. Run `navigator glossary show "<Term>"` for
+definitions.
 
 ## Invariants
 

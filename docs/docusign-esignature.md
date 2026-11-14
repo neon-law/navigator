@@ -231,7 +231,7 @@ regardless of `delivery`.
   that signer opens the link from their own inbox instead.
 - **`emailed`** — DocuSign emails the client a signing link. From the Project checkout, start the notation with
   `navigator project onboard --delivery emailed`. Complete intake, render the letter, and review the PDF. Dispatch the
-  reviewed letter with `hudson site notation send <notation-id>`. The command prints the workflow state and provider
+  reviewed letter with `navigator site notation send <notation-id>`. The command prints the workflow state and provider
   request ID. Retrying a notation with an existing envelope returns its existing request ID.
 
 ## Completion webhook + HMAC

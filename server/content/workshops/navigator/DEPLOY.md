@@ -1992,10 +1992,10 @@ from the CLI using the matter code:
 ```bash
 navigator site login --host www.your-domain.example    # opens the browser → ~8h token, stored 0600 (~/.navigator.json)
 navigator site whoami                                  # "you@example.com (admin) — expires in 7h52m"
-hudson site notation create onboarding__letter \
+navigator site notation create onboarding__letter \
   --project estate-of-doe --client-email jane@example.com
-hudson site notation approve 00000000-0000-4000-8000-000000000001  # renders + parks the retainer PDF
-hudson site notation status 00000000-0000-4000-8000-000000000001   # state + signature request id + document_ready
+navigator site notation approve 00000000-0000-4000-8000-000000000001  # renders + parks the retainer PDF
+navigator site notation status 00000000-0000-4000-8000-000000000001   # state + signature request id + document_ready
 navigator site logout
 ```
 

@@ -60,10 +60,10 @@ offboarding notation; later work uses other kinds. The shared catalog codes are 
 `offboarding__letter` to close:
 
 ```bash
-hudson site notation create onboarding__letter \
+navigator site notation create onboarding__letter \
   --project <project-code> \
   --client-email <client@example.com>
-hudson site notation create offboarding__letter \
+navigator site notation create offboarding__letter \
   --project <project-code> \
   --client-email <client@example.com>
 ```
@@ -72,8 +72,8 @@ Before opening another instrument, inspect the matter's private notation invento
 answers and their source provenance for a particular Notation:
 
 ```bash
-hudson site notation list --project <project-code>
-hudson site notation answers <notation-uuid>
+navigator site notation list --project <project-code>
+navigator site notation answers <notation-uuid>
 ```
 
 Both read matter content, so both require a firm-side participation row on the matter — of every tier, Owner and Admin

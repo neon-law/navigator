@@ -89,12 +89,12 @@ fn agent_instructions_point_to_glossary_lookup_commands() {
         let instructions =
             fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
         assert!(
-            instructions.contains("hudson glossary list"),
+            instructions.contains("navigator glossary list"),
             "{} must show how to list glossary terms",
             path.display()
         );
         assert!(
-            instructions.contains("hudson glossary show \"<Term>\""),
+            instructions.contains("navigator glossary show \"<Term>\""),
             "{} must show how to inspect a glossary term",
             path.display()
         );

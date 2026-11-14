@@ -398,7 +398,7 @@ pub fn strip_pointer_extension(slug: &str) -> Option<&str> {
 }
 
 /// Read and validate `<root>/navigator.yaml` — the one manifest every
-/// document command (`project sync`, and the read verbs under `hudson site document`)
+/// document command (`project sync`, and the read verbs under `navigator site document`)
 /// resolves its Project and login host from. Returns `(project, host)`.
 ///
 /// Routes through [`crate::projects::manifest::parse`], the one reader that
@@ -1232,7 +1232,7 @@ fn project_sync_plans_scoped(
         }
         if moved_to.is_some() {
             decision = Decision::CouldNotReconcile(
-                "its pointer moved to another path; use `hudson site document reslug` to move the live document too",
+                "its pointer moved to another path; use `navigator site document reslug` to move the live document too",
             );
         }
         // A live row with no slug has no identity a new revision could join.
@@ -2458,7 +2458,7 @@ pub async fn reconcile_project(root: &Path, client: &DocumentClient, mode: SyncM
     }
     if tally.deleted > 0 {
         println!(
-            "{} soft-deleted; restore with `hudson site document restore` within {RETENTION_DAYS} days",
+            "{} soft-deleted; restore with `navigator site document restore` within {RETENTION_DAYS} days",
             tally.deleted
         );
     }

@@ -12,5 +12,5 @@ belongs to a Firm, and can be attributed to a [Project](project.md); an Assistan
 never attributed to a Project.
 
 While it answers, the assistant may call read-only tools from the [Navigator MCP](navigator-mcp.md) catalog, such as the
-glossary lookups `hudson glossary list` and `hudson glossary show` offer on the command line. It is never offered a tool
-that writes.
+glossary lookups `navigator glossary list` and `navigator glossary show` offer on the command line. It is never offered
+a tool that writes.

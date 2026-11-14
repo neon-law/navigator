@@ -58,7 +58,7 @@ brief.
 - Hand sessions issue text, not Linear access, unless the user has granted a session the Linear connector.
 - Public safety: bare `ENG-NN` only, no `linear.app` URLs or project names, no client data. Read
   [`docs/public-contributor-safety.md`](../../../docs/public-contributor-safety.md) first.
-- Find the glossary term before naming anything (`hudson glossary list`); add an entry in `docs/glossary/`
+- Find the glossary term before naming anything (`navigator glossary list`); add an entry in `docs/glossary/`
   when none fits.
 - Schema changes edit `navigator.surql` and bump `SCHEMA_VERSION` together; diff against `origin/main` first, since two
   PRs can collide silently.
