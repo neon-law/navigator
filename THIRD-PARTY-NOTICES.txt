@@ -21,19 +21,17 @@ public API is first-party work under the licence above. A provider's own SDKs,
 documentation, assets, and terms are not part of this project, are not reproduced in it,
 and stay under that provider's terms.
 
-Guieb & Shook PC brands. Guieb & Shook PC trades under these names: DeleteYourData.com,
-DeleteYourDebt.com, and Guieb & Shook. Whatever rights Guieb & Shook PC or its
-affiliates hold in those names are reserved, and this project grants none. NEON LAW is
-addressed in NOTICE.
-
-Lex Tecnica, Ltd. brands. [Draft — pending review by counsel.] Vesta Estate Planning,
-Misericordia Injury Law, Abhaya Immigration, Summons Defense, Daybridge Divorce Law,
-CyberInjuryLaw, Aegis Criminal Defense, Groundwork Real Estate Law, Lex Tecnica, and IEP
-Defenders material belongs to Lex Tecnica, Ltd.: the page copy under
-neon/locales/en/vesta/, neon/locales/en/misericordia/, neon/locales/en/abhaya/,
-neon/locales/en/summons/, neon/locales/en/daybridge/, neon/locales/en/cyber-injury-law/,
-neon/locales/en/aegis/, neon/locales/en/groundwork/, neon/locales/en/lex-tecnica/, and
-neon/locales/en/iep-defenders/, the logos under server/public/brand/vesta.svg,
+Lex Tecnica, Ltd. brands. [Draft — pending review by counsel.] DeleteYourData.com,
+DeleteYourDebt.com, Vesta Estate Planning, Misericordia Injury Law, Abhaya Immigration,
+Summons Defense, Daybridge Divorce Law, CyberInjuryLaw, Aegis Criminal Defense,
+Groundwork Real Estate Law, Lex Tecnica, and IEP Defenders material belongs to Lex
+Tecnica, Ltd.: the page copy under neon/locales/en/delete-your-data/,
+neon/locales/en/delete-your-debt/, neon/locales/en/vesta/,
+neon/locales/en/misericordia/, neon/locales/en/abhaya/, neon/locales/en/summons/,
+neon/locales/en/daybridge/, neon/locales/en/cyber-injury-law/, neon/locales/en/aegis/,
+neon/locales/en/groundwork/, neon/locales/en/lex-tecnica/, and
+neon/locales/en/iep-defenders/, the logos under server/public/brand/delete-your-data/,
+server/public/brand/delete-your-debt/, server/public/brand/vesta.svg,
 server/public/brand/misericordia/, server/public/brand/abhaya/,
 server/public/brand/summons/, server/public/brand/daybridge/,
 server/public/brand/cyber-injury-law.svg, server/public/brand/aegis/,
@@ -41,10 +39,15 @@ server/public/brand/groundwork/, server/public/brand/lex-tecnica/, and
 server/public/brand/iep-defenders/, and the names, marks, contact details, disclaimers,
 and brand presentation for those brands in views/src/brand.rs and
 views/src/brand_presentation.rs. The licence above does not cover that material and
-grants no right to copy or use it, or the names VESTA ESTATE PLANNING, MISERICORDIA
-INJURY LAW, ABHAYA IMMIGRATION, SUMMONS DEFENSE, DAYBRIDGE DIVORCE LAW, CYBERINJURYLAW,
-AEGIS CRIMINAL DEFENSE, GROUNDWORK REAL ESTATE LAW, LEX TECNICA, or IEP DEFENDERS.
-Permission must come from Lex Tecnica, Ltd. in writing.
+grants no right to copy or use it, or the names DELETEYOURDATA.COM, DELETEYOURDEBT.COM,
+VESTA ESTATE PLANNING, MISERICORDIA INJURY LAW, ABHAYA IMMIGRATION, SUMMONS DEFENSE,
+DAYBRIDGE DIVORCE LAW, CYBERINJURYLAW, AEGIS CRIMINAL DEFENSE, GROUNDWORK REAL ESTATE
+LAW, LEX TECNICA, or IEP DEFENDERS. Permission must come from Lex Tecnica, Ltd. in
+writing.
+
+Guieb & Shook PC brands. Guieb & Shook PC trades under these names: Guieb & Shook.
+Whatever rights Guieb & Shook PC or its affiliates hold in those names are reserved, and
+this project grants none. NEON LAW is addressed in NOTICE.
 
 Other organizations. Justice Technology Association appears as a membership badge, and
 PandA Law as a firm to which DeleteYourDebt.com refers visitors. Both names belong to

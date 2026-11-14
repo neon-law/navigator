@@ -3343,13 +3343,18 @@ fn sitemap_paths(
     if state.portal_only.enabled() {
         return paths;
     }
-    // The three documents this table and its Dioxus twin publish identically
-    // on every host, so they are the sitemap's shared half.
-    paths.extend([
-        "/privacy".to_string(),
-        "/terms".to_string(),
-        "/llms.txt".to_string(),
-    ]);
+    // Privacy and terms are shared only when this host publishes them. A
+    // brand that sends the reader to another firm's page must not advertise
+    // the local path: that answer is a redirect, and a sitemap entry
+    // pointing at one is worse than no entry.
+    let branding = key.resolve_branding(&views::brand::DEFAULT_BRANDING);
+    if branding.privacy_url == "/privacy" {
+        paths.insert("/privacy".to_string());
+    }
+    if branding.terms_url == "/terms" {
+        paths.insert("/terms".to_string());
+    }
+    paths.insert("/llms.txt".to_string());
     paths.extend(brand_paths(state, key));
     paths
 }

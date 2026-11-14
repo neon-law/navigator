@@ -357,12 +357,16 @@ async fn the_delete_your_data_sitemap_lists_only_that_brands_pages_under_its_hos
             path.to_string()
         })
         .collect();
-    for required in ["/", "/contact", "/privacy", "/terms", "/llms.txt"] {
+    for required in ["/", "/contact", "/privacy", "/llms.txt"] {
         assert!(
             paths.iter().any(|path| path == required),
             "missing {required}: {paths:?}"
         );
     }
+    assert!(
+        !paths.iter().any(|path| path == "/terms"),
+        "terms are published on Lex Tecnica's own site: {paths:?}"
+    );
     assert!(
         !paths.iter().any(|path| path == "/disputes"),
         "house-brand sitemap must not advertise Neon practice pages: {paths:?}"
