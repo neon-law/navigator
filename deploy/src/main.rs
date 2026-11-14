@@ -1211,6 +1211,21 @@ enum SiteFirmCmd {
         #[command(flatten)]
         host: HostOpt,
     },
+    /// Set the Firm's Portal Theme Brand: the Brand it owns whose colours,
+    /// logo, and name every signed-in `/app` page reached through the
+    /// Firm's hosts wears. Owner, or an Admin of the Firm.
+    #[command(group(clap::ArgGroup::new("theme").required(true).args(["key", "clear"])))]
+    Theme {
+        /// The Firm's slug, as `hudson site firm list` prints it.
+        slug: String,
+        /// The key of a Brand this Firm owns.
+        key: Option<String>,
+        /// Clear the theme, so each host keeps its own Brand's look.
+        #[arg(long)]
+        clear: bool,
+        #[command(flatten)]
+        host: HostOpt,
+    },
     /// Delete a Firm and its memberships. Refused while the Firm owns any
     /// Project or Brand: move each Brand with `hudson site brand move`
     /// first. Owner, or an Admin of the Firm.
@@ -3848,6 +3863,18 @@ fn run() -> ExitCode {
                     firm_admin::Action::Rename {
                         slug: &slug,
                         name: &name,
+                    },
+                )),
+                SiteFirmCmd::Theme {
+                    slug,
+                    key,
+                    clear: _,
+                    host,
+                } => runtime().block_on(firm_admin::run(
+                    host.host.as_deref(),
+                    firm_admin::Action::Theme {
+                        slug: &slug,
+                        key: key.as_deref(),
                     },
                 )),
                 SiteFirmCmd::Delete { slug, host } => runtime().block_on(firm_admin::run(

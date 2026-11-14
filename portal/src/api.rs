@@ -204,7 +204,7 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
         (
             "PATCH",
             "/app/api/firms/{id}",
-            patch(crate::firm_admin_api::rename),
+            patch(crate::firm_admin_api::update),
         ),
         (
             "DELETE",

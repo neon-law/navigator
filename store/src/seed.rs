@@ -3267,6 +3267,7 @@ async fn seed_practice(surreal: &SurrealDb) -> anyhow::Result<()> {
             Err(error) => return Err(error.into()),
         }
     }
+    seed_portal_theme(surreal, &firm, PRACTICE_PORTAL_THEME).await?;
     // The whole point of brand mobility is that the same key could wear
     // either firm at runtime, so the seed proves both shapes exist.
     let lex = ensure_lex_firm(surreal).await?;
@@ -3277,7 +3278,37 @@ async fn seed_practice(surreal: &SurrealDb) -> anyhow::Result<()> {
             Err(error) => return Err(error.into()),
         }
     }
+    seed_portal_theme(surreal, &lex, LEX_PORTAL_THEME).await?;
     Ok(())
+}
+
+/// The canonical practice's Portal Theme Brand: Guieb & Shook's look on
+/// every host the practice wears, Neon Law's included.
+pub const PRACTICE_PORTAL_THEME: &str = "guieb-shook";
+
+/// The Lex firm's Portal Theme Brand: Lex Tecnica's look across its
+/// practice brands' hosts.
+pub const LEX_PORTAL_THEME: &str = "lex-tecnica";
+
+/// Give a seeded Firm its Portal Theme Brand when it has none. A theme an
+/// Admin already chose stays, and a deployment where the Firm no longer owns
+/// that Brand keeps each host's own look rather than failing the seed.
+async fn seed_portal_theme(
+    surreal: &SurrealDb,
+    firm: &crate::firms::Firm,
+    key: &str,
+) -> anyhow::Result<()> {
+    if firm.portal_theme_brand_key.is_some() {
+        return Ok(());
+    }
+    let edit = crate::firms::FirmEdit {
+        portal_theme_brand_key: Some(Some(key.to_string())),
+        ..crate::firms::FirmEdit::default()
+    };
+    match crate::firms::update(surreal, crate::persons::Role::Owner, None, firm.id, &edit).await {
+        Ok(_) | Err(crate::firms::FirmError::ThemeBrandNotOwned(_, _)) => Ok(()),
+        Err(error) => Err(error.into()),
+    }
 }
 
 /// Grant `person_firm_role` to every Admin, Lawyer, and Clerk against the

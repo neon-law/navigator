@@ -1,4 +1,4 @@
-//! `hudson site firm list|rename|delete` and `hudson site brand
+//! `hudson site firm list|rename|theme|delete` and `hudson site brand
 //! move|detach|delete`: administer Firms and the Brands they wear on a
 //! deployment.
 //!
@@ -28,11 +28,28 @@ struct Firm {
 /// One administrative action against a deployment.
 pub enum Action<'a> {
     List,
-    Rename { slug: &'a str, name: &'a str },
-    Delete { slug: &'a str },
-    MoveBrand { key: &'a str, to: &'a str },
-    DetachBrand { key: &'a str },
-    DeleteBrand { key: &'a str },
+    Rename {
+        slug: &'a str,
+        name: &'a str,
+    },
+    /// Set the Firm's Portal Theme Brand, or clear it with `None`.
+    Theme {
+        slug: &'a str,
+        key: Option<&'a str>,
+    },
+    Delete {
+        slug: &'a str,
+    },
+    MoveBrand {
+        key: &'a str,
+        to: &'a str,
+    },
+    DetachBrand {
+        key: &'a str,
+    },
+    DeleteBrand {
+        key: &'a str,
+    },
 }
 
 struct Site {
@@ -136,6 +153,17 @@ async fn run_at(base: &str, token: &str, action: Action<'_>) -> Result<String> {
                 "{}: renamed {:?} to {name:?}",
                 firm.slug, firm.name
             ))
+        }
+        Action::Theme { slug, key } => {
+            let firm = site.firm(slug).await?;
+            let body = serde_json::json!({ "portal_theme_brand_key": key });
+            let path = format!("/app/api/firms/{}", firm.id);
+            site.send(Method::PATCH, &path, &body, "set portal theme")
+                .await?;
+            Ok(match key {
+                Some(key) => format!("{}: portal theme is now {key}", firm.slug),
+                None => format!("{}: portal theme cleared", firm.slug),
+            })
         }
         Action::Delete { slug } => {
             let firm = site.firm(slug).await?;
@@ -271,6 +299,44 @@ mod tests {
             name: "Example Survivor PC",
         };
         run_at(&base, "t", renamed).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn theme_sets_or_clears_the_firm_s_portal_theme_brand() {
+        let server = directory().await;
+        Mock::given(method("PATCH"))
+            .and(path(format!("/app/api/firms/{SOURCE}")))
+            .and(body_json(
+                json!({ "portal_theme_brand_key": "example-brand" }),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("PATCH"))
+            .and(path(format!("/app/api/firms/{SOURCE}")))
+            .and(body_json(json!({ "portal_theme_brand_key": null })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let base = server.uri();
+        let set = Action::Theme {
+            slug: "example-duplicate",
+            key: Some("example-brand"),
+        };
+        assert_eq!(
+            run_at(&base, "t", set).await.unwrap(),
+            "example-duplicate: portal theme is now example-brand"
+        );
+        let cleared = Action::Theme {
+            slug: "example-duplicate",
+            key: None,
+        };
+        assert_eq!(
+            run_at(&base, "t", cleared).await.unwrap(),
+            "example-duplicate: portal theme cleared"
+        );
     }
 
     #[tokio::test]
