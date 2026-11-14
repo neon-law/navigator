@@ -3452,6 +3452,27 @@ enum DocumentAction {
         #[arg(long)]
         yes_retire: bool,
     },
+    /// Slug or retire the live rows an inbound email thread filed without a
+    /// slug, which `project gate --check` fails a Project on.
+    ///
+    /// Signature logos, inline images, and rows whose bytes another live row
+    /// already holds are retired (soft-deleted, recoverable for 180 days);
+    /// every other emailed row is slugged `mail/<asset id>/<YYYY.MM.DD>_<name>-0.<ext>`.
+    /// Rows from other channels are listed and left alone. Run `--dry-run`
+    /// first: it validates every slug against the server and writes nothing.
+    Slugless {
+        #[command(flatten)]
+        host: HostOpt,
+        /// Matter code (human-facing). Resolved against the matters this login can see.
+        #[arg(long)]
+        project: String,
+        /// Report the plan and validate each slug without changing anything.
+        #[arg(long)]
+        dry_run: bool,
+        /// Confirm the slugs and soft-deletions the dry run reported.
+        #[arg(long)]
+        yes: bool,
+    },
     /// Restore a soft-deleted document with its whole revision history
     /// (`POST /app/api/projects/{id}/documents/{asset_id}/restore`).
     ///
@@ -4600,6 +4621,12 @@ async fn run_document(action: DocumentAction) -> ExitCode {
             )
             .await
         }
+        DocumentAction::Slugless {
+            host,
+            project,
+            dry_run,
+            yes,
+        } => remote::document_slugless(host.host.as_deref(), &project, dry_run, yes).await,
         DocumentAction::Restore {
             host,
             project,

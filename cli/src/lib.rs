@@ -29,6 +29,7 @@ pub mod projects;
 pub mod release;
 pub mod remote;
 pub mod scraper_config;
+pub mod slugless_mail_repair;
 pub mod snapshot_audit;
 pub mod upload_slug;
 

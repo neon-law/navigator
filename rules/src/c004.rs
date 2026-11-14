@@ -138,7 +138,8 @@ fn embedded_date(stem: &str) -> Option<(String, NaiveDate)> {
 /// lowercased, every run of other characters becomes one hyphen, and the
 /// result is trimmed and capped at 64 characters — the same shape the
 /// saved-mail name derives from its subject. `None` when nothing survives.
-fn name_slug(stem: &str) -> Option<String> {
+#[must_use]
+pub fn name_slug(stem: &str) -> Option<String> {
     let mut slug = String::new();
     let mut trailing_separator = true;
     for character in stem.chars() {

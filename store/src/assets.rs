@@ -646,6 +646,32 @@ pub async fn find_filed_copy(
     one(response)
 }
 
+/// The oldest live asset on `project_id` holding exactly `sha256_hex`,
+/// whatever its name — the probe the inbound-mail filer uses so a file
+/// already on the matter is not filed again under a second identity.
+///
+/// # Errors
+/// [`AssetError::Db`] if the lookup fails.
+pub async fn find_live_by_sha256(
+    db: &SurrealDb,
+    project_id: Uuid,
+    sha256_hex: &str,
+) -> Result<Option<Asset>, AssetError> {
+    let response = db
+        .query(format!(
+            "SELECT {SELECT} FROM {TABLE} WHERE project_id = $project \
+             AND sha256_hex = $sha AND {LIVE} ORDER BY id ASC LIMIT 1"
+        ))
+        .bind((
+            "project",
+            record_id(crate::projects::PROJECT_TABLE, project_id),
+        ))
+        .bind(("sha", sha256_hex.to_string()))
+        .await
+        .and_then(surrealdb::IndexedResults::check)?;
+    one(response)
+}
+
 /// Set `visibility` on **every** row this matter holds for
 /// `(filename, sha256_hex)`, and report how many rows changed.
 ///

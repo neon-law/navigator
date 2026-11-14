@@ -1162,6 +1162,9 @@ pub struct LiveDocumentSummary {
     pub visibility: String,
     pub slug: Option<String>,
     pub inserted_at: String,
+    /// The inbound channel that filed the row (`email`, `upload`, …).
+    #[serde(default)]
+    pub source: Option<String>,
     #[serde(default)]
     pub signing: Option<model::documents::Signing>,
     #[serde(default)]
@@ -3324,6 +3327,26 @@ pub async fn document_retire(
                     "remove the local pointer blobs/{slug}.yaml and byte copy documents/{slug} before the next project sync"
                 );
             }
+        }
+        Ok(())
+    })
+    .await
+}
+
+/// `hudson site document slugless --project <code> --dry-run` — slug or
+/// retire the live rows an inbound email thread filed without a slug.
+pub async fn document_slugless(
+    host: Option<&str>,
+    project_code: &str,
+    dry_run: bool,
+    yes: bool,
+) -> ExitCode {
+    run(async {
+        let client = DocumentClient::connect(host, project_code).await?;
+        let body = crate::slugless_mail_repair::repair(&client, dry_run, yes).await?;
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        if !dry_run {
+            eprintln!("run `navigator project sync` in the checkout to write the new pointers");
         }
         Ok(())
     })

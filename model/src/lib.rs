@@ -16,6 +16,7 @@ pub mod estate_assets;
 pub mod fiduciary_roles;
 pub mod forge;
 pub mod forgejo_governance;
+pub mod mail_attachments;
 pub mod matter_record_links;
 pub mod nef;
 pub mod person_phones;
