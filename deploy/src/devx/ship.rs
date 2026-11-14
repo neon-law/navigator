@@ -8313,6 +8313,27 @@ mod tests {
     }
 
     #[test]
+    fn a_backlog_destination_requires_dbos_and_both_delivery_credentials() {
+        let mut deployment = ordered_deployment();
+        deployment
+            .coordinates
+            .insert(LINEAR_BACKLOG_CHANNEL.into(), "C012BACKLOG".into());
+
+        let error = require_dbos_schedule_prerequisites(&deployment).unwrap_err();
+        assert!(error.to_string().contains(NAVIGATOR_DBOS_ENABLED));
+
+        deployment
+            .coordinates
+            .insert(NAVIGATOR_DBOS_ENABLED.into(), "true".into());
+        for key in ["LINEAR_BACKLOG_READ_KEY", "SLACK_BOT_TOKEN"] {
+            let error = require_dbos_schedule_prerequisites(&deployment).unwrap_err();
+            assert!(error.to_string().contains(key), "{error}");
+            deployment.encrypted_keys.insert(key.into());
+        }
+        require_dbos_schedule_prerequisites(&deployment).unwrap();
+    }
+
+    #[test]
     fn a_schedule_switch_refuses_typos_and_a_missing_executor() {
         for (dbos, general_nag, dri_digest, named) in [
             (
