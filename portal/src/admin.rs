@@ -4469,7 +4469,25 @@ async fn projects_update_brand(
     {
         return Err(ApiError::NotFound);
     }
-    store::projects::change_brand(&surreal, project.id, firm_id, input.brand).await?;
+    // An Owner holds every Firm capability, so a Brand worn by another Firm
+    // moves the Project to that Firm. Everyone else changes the Brand inside
+    // the Project's current Firm, where `change_brand` refuses a foreign key.
+    let target_firm = store::firms::firm_id_for_brand_key(&surreal, input.brand.trim())
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))?;
+    match target_firm {
+        Some(target) if target != firm_id && session.role == store::persons::Role::Owner => {
+            let command = store::projects::UpdateProjectCommand {
+                firm_id: Some(target),
+                brand: Some(input.brand),
+                ..Default::default()
+            };
+            store::projects::update_project(&surreal, project.id, &command).await?;
+        }
+        _ => {
+            store::projects::change_brand(&surreal, project.id, firm_id, input.brand).await?;
+        }
+    }
     Ok(Redirect::to(&format!("/app/projects/{code}/edit")))
 }
 

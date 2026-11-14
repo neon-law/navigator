@@ -2191,7 +2191,7 @@ async fn g_m_goes_to_the_matters_page_from_a_signed_in_page() {
 }
 
 #[tokio::test]
-async fn project_brand_tabs_fit_and_preserve_firm_scope() {
+async fn project_status_filter_fits_and_toggles_closed() {
     let Some(c) = new_client_or_skip().await else {
         return;
     };
@@ -2200,53 +2200,36 @@ async fn project_brand_tabs_fit_and_preserve_firm_scope() {
         .await
         .unwrap();
 
-    let scope = r#"nav[aria-label="Project scope"]"#;
-    let active = c
-        .find(Locator::Css(&format!("{scope} .is-active")))
-        .await
-        .unwrap();
-    assert_ne!(active.text().await.unwrap(), "Firm");
+    let filter = r#"nav[aria-label="Project status"]"#;
     for width in [390, 1200] {
         set_practice_viewport(&c, width, 844).await;
         let fits = c
             .execute(
                 "const tabs = document.querySelector(arguments[0]); \
                  return tabs.scrollWidth <= tabs.clientWidth;",
-                vec![serde_json::json!(scope)],
+                vec![serde_json::json!(filter)],
             )
             .await
             .unwrap();
         assert_eq!(
             fits,
             serde_json::json!(true),
-            "Brand tabs overflow at {width}px"
+            "Status filter overflows at {width}px"
         );
     }
-    scroll_and_js_click(&c, &format!(r#"{scope} a[href*="firm=true"]"#)).await;
+    scroll_and_js_click(&c, &format!(r#"{filter} a[data-status="closed"]"#)).await;
     c.wait()
         .at_most(Duration::from_secs(10))
         .for_element(Locator::Css(&format!(
-            r#"{scope} a.is-active[href*="firm=true"]"#
+            r#"{filter} a.is-active[data-status="closed"]"#
         )))
         .await
         .unwrap();
-    scroll_and_js_click(
-        &c,
-        r#"nav[aria-label="Project status"] a[href^="/app/projects/closed"]"#,
-    )
-    .await;
-    c.wait()
-        .at_most(Duration::from_secs(10))
-        .for_element(Locator::Css(
-            r#"nav[aria-label="Project status"] a.is-active[href^="/app/projects/closed"]"#,
-        ))
-        .await
-        .unwrap();
     let url = c.current_url().await.unwrap();
-    assert_eq!(url.path(), "/app/projects/closed");
+    assert_eq!(url.path(), "/app/projects");
     assert!(url
         .query_pairs()
-        .any(|(key, value)| key == "firm" && value == "true"));
+        .any(|(key, value)| key == "status" && value == "pitch,active,closed"));
     c.close().await.unwrap();
 }
 

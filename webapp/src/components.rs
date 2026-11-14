@@ -82,6 +82,7 @@ pub mod tabs;
 pub mod testimonial;
 pub mod toast;
 pub mod toggle_group;
+pub mod utc_time;
 
 pub use accordion::Accordion;
 pub use action_list::{ActionItem, ActionList};
@@ -155,6 +156,7 @@ pub(crate) use social_mark::SocialMarkGlyph;
 pub use stat_band::{StatEntry, StatGrid};
 pub use status_strip::{StatusCell, StatusStrip};
 pub use toggle_group::{ToggleGroup, ToggleOption};
+pub use utc_time::{utc_label, UtcTime};
 // `pub(crate)`, not `pub`: these two are reused by `crate::litigation_page`
 // for the same channel links outside the footer, but they are not part of
 // this crate's public component API.
