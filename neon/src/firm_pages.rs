@@ -1919,19 +1919,15 @@ fn resolve_firm_contact_content(
 
     let page_title = "Contact";
     let meta_description = match branding.brand_key {
+        // These practices belong to Lex Tecnica, Ltd. DeleteYourData keeps
+        // the data-deletion sentence; the others name legal services.
         BrandKey::DeleteYourData => format!(
-            "Reach {firm_name}, a practice of Guieb & Shook PC, about a data-deletion request. \
+            "Reach {firm_name}, a practice of Lex Tecnica, Ltd., about a data-deletion request. \
              Attorney advertisement. Nothing here is legal advice without a signed retainer for \
              an active project."
         ),
-        BrandKey::DeleteYourDebt => format!(
-            "Reach {firm_name}, a practice of Guieb & Shook PC, about legal services. \
-             Attorney advertisement. Nothing here is legal advice without a signed retainer for \
-             an active project."
-        ),
-        // These practices belong to the second firm, so their contact pages
-        // name Lex Tecnica, Ltd. — never Guieb & Shook PC.
-        BrandKey::Vesta
+        BrandKey::DeleteYourDebt
+        | BrandKey::Vesta
         | BrandKey::Misericordia
         | BrandKey::Abhaya
         | BrandKey::Summons

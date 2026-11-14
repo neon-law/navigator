@@ -595,8 +595,8 @@ mod firm_copy_tests {
             "the gateway names the destination by its proper name: {text}"
         );
         assert!(
-            text.contains("Guieb & Shook PC"),
-            "the gateway names Guieb & Shook PC as the firm behind the destination: {text}"
+            text.contains("Lex Tecnica, Ltd."),
+            "the gateway names Lex Tecnica, Ltd. as the firm behind the destination: {text}"
         );
         let cta = content
             .hero_cta

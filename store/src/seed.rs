@@ -2916,8 +2916,7 @@ async fn seed_firm_ein(surreal: &SurrealDb) -> anyhow::Result<()> {
 /// Which canonical Firm a compiled brand is seeded onto.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SeedFirm {
-    /// [`FIRM_ENTITY_NAME`]'s practice: Neon Law, Guieb & Shook, and the
-    /// two DeleteYour* brands.
+    /// [`FIRM_ENTITY_NAME`]'s practice: Neon Law and the firm's own site.
     Practice,
     /// [`LEX_FIRM_ENTITY_NAME`]'s `Lex` firm: Lex Tecnica and its practices.
     Lex,
@@ -2959,11 +2958,11 @@ struct CompiledBrand {
 /// did not. `compiled_brands_cover_every_closed_brand_key` holds them
 /// together now.
 ///
-/// Each row names the Firm that wears it on a fresh database: the practice
-/// keeps Neon Law, Guieb & Shook, and the DeleteYour* brands; Lex Tecnica,
-/// Ltd. owns the rest. The seed never re-homes a brand an existing database
-/// already seats, so moving an already-seated brand is the Owner's `hudson
-/// site brand move`. The `iep-defenders` and `lex-tecnica` website URLs are
+/// Each row names the Firm that wears it. Guieb & Shook PC keeps Neon Law
+/// and its own site; Lex Tecnica, Ltd. owns every other compiled brand. A
+/// boot moves a brand that is still seated on the other of those two firms.
+/// A seat on any other firm stays, because that firm is an Owner's. The
+/// `iep-defenders` and `lex-tecnica` website URLs are
 /// the firm's own public sites rather than the `neonlaw.com` hosts they are
 /// served on: the URL is what approves an email domain for account
 /// admission ([`crate::brand_domains`]), separate from host routing.
@@ -2978,7 +2977,7 @@ const COMPILED_BRANDS: &[CompiledBrand] = &[
     },
     CompiledBrand {
         key: "delete-your-data",
-        firm: SeedFirm::Practice,
+        firm: SeedFirm::Lex,
         website_url: "https://www.deleteyourdata.com",
         name: "DeleteYourData.com",
         typeface: "plus-jakarta-sans",
@@ -2986,7 +2985,7 @@ const COMPILED_BRANDS: &[CompiledBrand] = &[
     },
     CompiledBrand {
         key: "delete-your-debt",
-        firm: SeedFirm::Practice,
+        firm: SeedFirm::Lex,
         website_url: "https://www.deleteyourdebt.com",
         name: "DeleteYourDebt.com",
         typeface: "public-sans",
@@ -3276,6 +3275,39 @@ async fn seed_practice(surreal: &SurrealDb) -> anyhow::Result<()> {
             Ok(()) | Err(crate::firms::FirmError::DuplicateBrand) => {}
             Err(error) => return Err(error.into()),
         }
+    }
+    align_canonical_brand_seats(surreal, firm.id, lex.id).await?;
+    Ok(())
+}
+
+/// Return a compiled brand to the canonical firm [`COMPILED_BRANDS`] names
+/// when it is seated on the other of the two canonical firms. A seat on any
+/// other firm stays.
+async fn align_canonical_brand_seats(
+    surreal: &SurrealDb,
+    practice_id: Uuid,
+    lex_id: Uuid,
+) -> anyhow::Result<()> {
+    for brand in COMPILED_BRANDS {
+        let target = match brand.firm {
+            SeedFirm::Practice => practice_id,
+            SeedFirm::Lex => lex_id,
+        };
+        let Some(current) = crate::firms::firm_id_for_brand_key(surreal, brand.key).await? else {
+            continue;
+        };
+        if current == target || (current != practice_id && current != lex_id) {
+            continue;
+        }
+        crate::firms::move_brand(
+            surreal,
+            crate::persons::Role::Owner,
+            None,
+            brand.key,
+            target,
+        )
+        .await
+        .map_err(anyhow::Error::from)?;
     }
     Ok(())
 }
@@ -7316,26 +7348,20 @@ records:
             .expect("lex firm");
         assert_ne!(neon.id, lex.id);
 
-        // The practice firm keeps Neon Law, its DeleteYour* brands, and
-        // Guieb & Shook; Lex Tecnica, Ltd. owns every other practice brand.
+        // Guieb & Shook PC keeps Neon Law and its own site. Lex Tecnica, Ltd.
+        // owns every other compiled brand.
         let neon_keys = crate::firms::brand_keys_for_firm(&surreal, neon.id)
             .await
             .unwrap();
-        assert_eq!(
-            neon_keys,
-            [
-                "neon",
-                "delete-your-data",
-                "delete-your-debt",
-                "guieb-shook"
-            ]
-        );
+        assert_eq!(neon_keys, ["neon", "guieb-shook"]);
         let lex_keys = crate::firms::brand_keys_for_firm(&surreal, lex.id)
             .await
             .unwrap();
         assert_eq!(
             lex_keys,
             [
+                "delete-your-data",
+                "delete-your-debt",
                 "vesta",
                 "misericordia",
                 "abhaya",
@@ -7589,7 +7615,7 @@ records:
         assert!(require_firm_domain("aries@mail.example.org", Role::Admin).is_err());
     }
     #[tokio::test]
-    async fn full_canonical_reseeds_preserve_owner_brand_moves_in_both_directions() {
+    async fn full_canonical_reseeds_return_brands_to_their_canonical_firms() {
         let db = crate::test_support::mem_surreal().await;
         let storage: std::sync::Arc<dyn cloud::StorageService> =
             std::sync::Arc::new(crate::test_support::MemoryStorage::default());
@@ -7615,22 +7641,26 @@ records:
         )
         .await
         .unwrap();
-        for _ in 0..2 {
-            super::seed_canonical(&db, &storage).await.unwrap();
-            for (key, owner) in [("neon", lex), ("iep-defenders", neon)] {
-                assert_eq!(
-                    crate::brands::find_by_key(&db, key)
-                        .await
-                        .unwrap()
-                        .unwrap()
-                        .firm_id,
-                    Some(owner)
-                );
-                assert_eq!(
-                    crate::firms::firm_id_for_brand_key(&db, key).await.unwrap(),
-                    Some(owner)
-                );
-            }
-        }
+        super::seed_canonical(&db, &storage).await.unwrap();
+        assert_eq!(
+            crate::firms::firm_id_for_brand_key(&db, "neon")
+                .await
+                .unwrap(),
+            Some(neon)
+        );
+        assert_eq!(
+            crate::firms::firm_id_for_brand_key(&db, "iep-defenders")
+                .await
+                .unwrap(),
+            Some(lex)
+        );
+        assert_eq!(
+            crate::brands::find_by_key(&db, "daybridge")
+                .await
+                .unwrap()
+                .unwrap()
+                .firm_id,
+            Some(lex)
+        );
     }
 }

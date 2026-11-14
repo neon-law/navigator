@@ -332,7 +332,7 @@ pub fn llms_txt(state: &AppState, key: BrandKey) -> portal::LlmsTxt {
                         title: "Contact".to_string(),
                         path: "/contact".to_string(),
                         description: format!(
-                            "How to reach {mark}, a practice of Guieb & Shook PC, about a \
+                            "How to reach {mark}, a practice of Lex Tecnica, Ltd., about a \
                              data-deletion request."
                         ),
                     },

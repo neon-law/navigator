@@ -1331,7 +1331,11 @@ a.nav-pagination__link:hover {
   height: 2.5rem;
 }
 
+/* One face on every brand. The wordmark names the firm, and a brand body
+   face changes the width of that same name — Vesta's EB Garamond is the
+   measure the other brands match. */
 .site-footer__wordmark {
+  font-family: "EB Garamond", Garamond, Georgia, serif;
   font-size: 1.2rem;
   letter-spacing: -0.015em;
   white-space: nowrap;
