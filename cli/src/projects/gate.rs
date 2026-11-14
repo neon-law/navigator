@@ -369,6 +369,7 @@ async fn check_live_handles(dir: &Path, base: &str, token: &str) -> Result<()> {
         let integrity = client.integrity(false).await?;
         let metadata: Vec<_> = integrity.assets.iter().map(|asset| serde_json::json!({
             "asset_id": asset.asset_id, "slug": asset.slug, "docket_name_matches": asset.docket_name_matches,
+            "matter_folder": asset.matter_folder,
         })).collect();
         super::docket::renumber::validate_checkout(dir, &metadata)?;
     }

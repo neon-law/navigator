@@ -13,6 +13,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
+use model::document_pointers::MatterFolder;
 use serde_json::Value;
 
 use super::{case_timeline, entries, ingest};
@@ -105,12 +106,16 @@ pub fn validate_filing(slug: &str, asset_id: &str, entries: &[Value]) -> Result<
         "{slug}: expected exactly one live document integrity result"
     );
     let row = matches[0];
+    anyhow::ensure!(
+        row["matter_folder"].as_str().is_none_or(|folder| folder == MatterFolder::DocketFilings.as_str()),
+        "{slug}: the live document is outside Docket Filings; reconcile its Matter Folder with project sync"
+    );
     anyhow::ensure!(row["slug"].as_str() == Some(slug) && row["docket_name_matches"].as_bool() == Some(true),
         "{slug}: linked Docket Entry naming is missing or disagrees; run navigator project docket renumber --apply");
     Ok(())
 }
 
-/// Whether this checkout has court filings requiring live verification.
+/// Whether the checkout has court papers that need live folder and naming verification.
 pub fn has_filings(root: &Path) -> Result<bool> {
     crate::document_sync::ensure_documents_tree_is_safe(&root.join("documents"))?;
     for file in walkdir::WalkDir::new(root.join("documents/Docket Filings")).follow_links(false) {
@@ -133,7 +138,8 @@ pub fn has_filings(root: &Path) -> Result<bool> {
     }
     for path in crate::document_read::discover_pointers(root)? {
         if crate::document_sync::read_pointer(&root.join(path))?.is_some_and(|pointer| {
-            pointer.matter_folder() == model::document_pointers::MatterFolder::DocketFilings
+            pointer.matter_folder() == MatterFolder::DocketFilings
+                || MatterFolder::for_kind(&pointer.kind) == MatterFolder::DocketFilings
         }) {
             return Ok(true);
         }
@@ -141,7 +147,7 @@ pub fn has_filings(root: &Path) -> Result<bool> {
     Ok(false)
 }
 
-/// Check only pointers selecting Docket Filings. No document bytes are read.
+/// Check Docket Filings names and agreement with the live Matter Folder.
 pub fn validate_checkout(root: &Path, entries: &[Value]) -> Result<()> {
     let folder = root.join("documents/Docket Filings");
     crate::document_sync::ensure_documents_tree_is_safe(&root.join("documents"))?;
@@ -170,7 +176,15 @@ pub fn validate_checkout(root: &Path, entries: &[Value]) -> Result<()> {
         let Some(pointer) = crate::document_sync::read_pointer(&root.join(&path))? else {
             continue;
         };
-        if pointer.matter_folder() != model::document_pointers::MatterFolder::DocketFilings {
+        let id = pointer.current_version.asset_id.to_string();
+        let local_is_filing = pointer.matter_folder() == MatterFolder::DocketFilings;
+        let live_is_filing = entries.iter().any(|row| {
+            row["asset_id"]
+                .as_str()
+                .is_some_and(|asset| asset.eq_ignore_ascii_case(&id))
+                && row["matter_folder"].as_str() == Some(MatterFolder::DocketFilings.as_str())
+        });
+        if !local_is_filing && !live_is_filing {
             continue;
         }
         let slash = crate::document_sync::slash_path(&path)?;
@@ -178,7 +192,11 @@ pub fn validate_checkout(root: &Path, entries: &[Value]) -> Result<()> {
             .strip_prefix("blobs/")
             .and_then(crate::document_sync::strip_pointer_extension)
             .context("invalid Pointer path")?;
-        validate_filing(slug, &pointer.current_version.asset_id.to_string(), entries)?;
+        anyhow::ensure!(
+            local_is_filing,
+            "{slug}: the live document is in Docket Filings; reconcile its Matter Folder with project sync"
+        );
+        validate_filing(slug, &id, entries)?;
     }
     Ok(())
 }
@@ -203,6 +221,13 @@ pub async fn name_linked_document(
         .iter()
         .find(|doc| doc.id.to_string() == asset)
         .context("linked document is absent from Project")?;
+    if document
+        .folder
+        .as_deref()
+        .is_some_and(|folder| folder != MatterFolder::DocketFilings.as_str())
+    {
+        return Ok(());
+    }
     let slug = document
         .slug
         .as_deref()
@@ -224,6 +249,14 @@ pub async fn name_linked_document(
         } else {
             client.reslug(document.id, &target, false).await?;
         }
+    }
+    if document.folder.is_none()
+        && MatterFolder::for_kind(document.kind.as_deref().unwrap_or_default())
+            != MatterFolder::DocketFilings
+    {
+        client
+            .set_folder(document.id, Some(MatterFolder::DocketFilings.as_str()))
+            .await?;
     }
     if !matching_checkout {
         return Ok(());
@@ -249,10 +282,8 @@ pub async fn name_linked_document(
                 std::fs::create_dir_all(destination.parent().context("filing has no parent")?)?;
                 std::fs::rename(&source, &destination)?;
             }
-            pointer.folder = crate::document_layout::recorded_folder(
-                &pointer.kind,
-                model::document_pointers::MatterFolder::DocketFilings,
-            );
+            pointer.folder =
+                crate::document_layout::recorded_folder(&pointer.kind, MatterFolder::DocketFilings);
             if let Err(error) =
                 crate::document_sync::write_pointer_atomically(&path, &pointer.to_yaml()?)
             {
@@ -280,8 +311,8 @@ pub fn filings(root: &Path) -> Result<Vec<Filing>> {
         };
         let filename = slug.rsplit('/').next().unwrap_or(slug);
         if let Some(pointer) = crate::document_sync::read_pointer(&root.join(&relative))? {
-            if pointer.matter_folder() == model::document_pointers::MatterFolder::DocketFilings
-                || ingest::docket_key(filename).is_some()
+            if pointer.matter_folder() == MatterFolder::DocketFilings
+                || (pointer.folder.is_none() && ingest::docket_key(filename).is_some())
             {
                 filings.push(Filing {
                     slug: slug.to_string(),
@@ -594,6 +625,30 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("documents/Docket Filings")).unwrap();
         assert!(!has_filings(dir.path()).unwrap());
+    }
+
+    #[test]
+    fn a_refiled_pleading_needs_folder_agreement_but_no_docket_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let docs = dir.path().join("blobs");
+        std::fs::create_dir_all(&docs).unwrap();
+        let asset_id = uuid::Uuid::now_v7();
+        let slug = "di-4-lodged-order.pdf";
+        std::fs::write(docs.join(format!("{slug}.yaml")), format!(
+            "kind: pleading\nvisibility: internal\nfolder: Work Product\ncurrent_version:\n  version: 1\n  asset_id: {asset_id}\n  created_at: 2026-11-13T00:00:00Z\n  sha256: {}\n  size_bytes: 9\n",
+            "a".repeat(64)
+        )).unwrap();
+        let mut rows =
+            [json!({"asset_id": asset_id, "slug": slug, "matter_folder": "Work Product"})];
+        assert!(has_filings(dir.path()).unwrap(), "check live placement");
+        assert!(validate_checkout(dir.path(), &rows).is_ok());
+        assert!(
+            filings(dir.path()).unwrap().is_empty(),
+            "respect explicit refile"
+        );
+        rows[0]["matter_folder"] = json!("Docket Filings");
+        let error = validate_checkout(dir.path(), &rows).unwrap_err();
+        assert!(error.to_string().contains("reconcile its Matter Folder"));
     }
 
     #[test]

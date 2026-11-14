@@ -7356,6 +7356,9 @@ struct IntegrityAsset {
     /// row's sha256.
     #[serde(skip_serializing_if = "Option::is_none")]
     sha256_matches: Option<bool>,
+    /// Effective live placement. Present for the lawyer gate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    matter_folder: Option<store::document_pointers::MatterFolder>,
     /// Only a validation result, never docket content. Present for the lawyer gate.
     #[serde(skip_serializing_if = "Option::is_none")]
     docket_name_matches: Option<bool>,
@@ -7531,10 +7534,20 @@ async fn populate_docket_name_checks(
     id: Uuid,
     rows: &mut [IntegrityAsset],
 ) -> Result<(), ApiError> {
+    use store::document_pointers::MatterFolder;
+    if !rows
+        .iter()
+        .any(|row| row.matter_folder == Some(MatterFolder::DocketFilings))
+    {
+        return Ok(());
+    }
     let entries = store::cases::docket_for_project(&state.surreal, id)
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?;
-    for row in rows {
+    for row in rows
+        .iter_mut()
+        .filter(|row| row.matter_folder == Some(MatterFolder::DocketFilings))
+    {
         let linked: Vec<_> = entries
             .iter()
             .filter(|entry| entry.document_asset_id == Some(row.asset_id))
@@ -7608,6 +7621,16 @@ async fn integrity_row(
         size_bytes: stored_size,
         recorded_size: asset.byte_size,
         sha256_matches,
+        matter_folder: lawyer.then(|| {
+            use store::document_pointers::MatterFolder;
+            asset
+                .folder
+                .as_deref()
+                .and_then(MatterFolder::parse)
+                .unwrap_or_else(|| {
+                    MatterFolder::for_kind(asset.kind.as_deref().unwrap_or_default())
+                })
+        }),
         docket_name_matches: None,
     })
 }

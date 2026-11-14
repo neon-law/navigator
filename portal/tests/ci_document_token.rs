@@ -952,6 +952,7 @@ async fn the_scoped_integrity_projection_checks_docket_names_without_returning_d
         (4, "DKT 0004 - Order.pdf", 0, fixture.project_id),
         (5, "DKT 0005 - Order.pdf", 2, fixture.project_id),
         (6, "DKT 0006 - Order.pdf", 1, fixture.other_project_id),
+        (10, "lodged-order.pdf", 0, fixture.project_id),
     ] {
         let document = store::assets::file_revision(
             db,
@@ -968,6 +969,7 @@ async fn the_scoped_integrity_projection_checks_docket_names_without_returning_d
             },
             &store::documents::DocumentIdentity {
                 slug: Some(slug),
+                folder: (index == 10).then_some("Work Product"),
                 ..Default::default()
             },
             format!("synthetic {index}").as_bytes(),
@@ -1002,7 +1004,10 @@ async fn the_scoped_integrity_projection_checks_docket_names_without_returning_d
             .unwrap();
         }
         if project == fixture.project_id {
-            expected.push((document_id, matches!(index, 2 | 7 | 8)));
+            expected.push((
+                document_id,
+                (index != 10).then_some(matches!(index, 2 | 7 | 8)),
+            ));
         }
     }
     let (_, minted) = mint(&fixture.app).await;
@@ -1028,11 +1033,22 @@ async fn the_scoped_integrity_projection_checks_docket_names_without_returning_d
                 .iter()
                 .find(|asset| asset["asset_id"] == id.to_string())
                 .unwrap();
-            assert_eq!(asset["docket_name_matches"], *valid);
+            assert_eq!(
+                asset
+                    .get("docket_name_matches")
+                    .and_then(serde_json::Value::as_bool),
+                *valid
+            );
+            let folder = if valid.is_some() {
+                "Docket Filings"
+            } else {
+                "Work Product"
+            };
+            assert_eq!(asset["matter_folder"], folder);
         }
         assert_eq!(
             assets.len(),
-            8,
+            9,
             "the foreign Project's document must not be projected"
         );
         for asset in assets {
