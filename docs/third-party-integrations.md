@@ -64,6 +64,20 @@ a Project in a Firm that has connected Slack needs no further Slack step; a Proj
 reports `credential_missing`, and the worker refuses to post rather than borrowing another token. The deployment-wide
 `SLACK_BOT_TOKEN` serves only the deployment's own channels (`#general`, `#finance`, the messages channels).
 
+### Deployment Slack app
+
+In [Slack Your Apps](https://api.slack.com/apps), open the workspace app used by the deployment. Under **OAuth &
+Permissions**, add scopes to **Bot Token Scopes**. Reinstall the app in its workspace to grant the updated scopes. If
+Slack issues a different bot token, update `SLACK_BOT_TOKEN` through the deployment secret workflow.
+
+Invite the bot only to the channels its jobs use. The [Linear backlog digest](dbos-durability.md#linear-backlog) uses
+`chat:write` to post and `groups:history` to look up delivery receipts in its private channel. Slack grants that history
+scope for private channels the bot belongs to. Verify the deployed token with `auth.test` and `conversations.history`
+against the destination. Record only the result, without storing the token or messages.
+
+See [Slack's private channel history scope](https://docs.slack.dev/reference/scopes/groups.history/) and [deployment
+secret management](deployment-secrets.md#the-published-record).
+
 The runtime KMS coordinate is `NAVIGATOR_RUNTIME_KMS_KEY`. It must name a dedicated runtime key, never the deployment
 configuration key. Staging manifests and operator documentation may describe the workload permission; this repository
 does not apply IAM or write cloud state. Provider clients receive a resolved credential through an injected trait and
