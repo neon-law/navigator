@@ -2571,6 +2571,7 @@
       "store/src/postgres_mirror/catalog.rs",
       "store/src/postgres_mirror/catalog_tests.rs",
       "store/src/postgres_mirror/records.rs",
+      "store/src/postgres_mirror/tests.rs",
       "store/src/project_deadlines.rs",
       "store/src/seed/sample_records.rs",
       "store/src/verifications.rs",
