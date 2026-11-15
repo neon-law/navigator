@@ -320,12 +320,8 @@ where
     substitutions
 }
 
-/// The Workspace user the Drive service account acts as, and that account's
-/// email. A row that names no delegated user renders both blank, which the
-/// runtime reads as "no Workspace"; one that does gets the account derived
-/// from its own project, so no key and no second coordinate exist
-/// (`cloud::delegation`).
-fn workspace_delegation_substitutions<F>(get: &F) -> [Substitution; 2]
+/// Render each Workspace subject and the deployment's shared keyless signing account.
+fn workspace_delegation_substitutions<F>(get: &F) -> [Substitution; 3]
 where
     F: Fn(&str) -> Option<String>,
 {
@@ -333,12 +329,19 @@ where
         NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER, NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT,
     };
     let delegated_user = non_empty_env(NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER, get);
+    let calendar_owner = non_empty_env(cloud::calendar::CALENDAR_OWNER_ENV, get);
     let service_account = delegated_user
         .as_ref()
+        .or(calendar_owner.as_ref())
         .and(non_empty_env("NAVIGATOR_DRIVE_GCP_SERVICE_ACCOUNT_ID", get))
         .zip(non_empty_env("NAVIGATOR_GCP_PROJECT_ID", get))
         .map(|(account, project)| format!("{account}@{project}.iam.gserviceaccount.com"));
     [
+        Substitution {
+            token: "YOUR_CALENDAR_OWNER",
+            env: cloud::calendar::CALENDAR_OWNER_ENV,
+            value: calendar_owner.unwrap_or_default(),
+        },
         Substitution {
             token: "YOUR_DRIVE_DELEGATED_USER",
             env: NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER,
@@ -6986,6 +6989,7 @@ mod tests {
         "YOUR_SUMMARY_ENVELOPE_RECIPIENTS",
         "YOUR_SMS_NUMBER",
         "YOUR_DRIVE_DELEGATED_USER",
+        "YOUR_CALENDAR_OWNER",
         "YOUR_DRIVE_SERVICE_ACCOUNT",
         "YOUR_OAUTH_MICROSOFT_CLIENT_ID",
         "YOUR_OAUTH_MICROSOFT_ALLOWED_TENANTS",
@@ -7582,6 +7586,28 @@ mod tests {
         });
         assert_eq!(web_env_value(&undeclared, USER).as_deref(), Some(""));
         assert_eq!(web_env_value(&undeclared, ACCOUNT).as_deref(), Some(""));
+    }
+
+    #[test]
+    fn calendar_owner_renders_separately_from_drive_user() {
+        use cloud::calendar::CALENDAR_OWNER_ENV;
+        let web = rendered_web_deployment(|key| match key {
+            CALENDAR_OWNER_ENV => Some("calendar@example.test".into()),
+            "NAVIGATOR_DRIVE_GCP_SERVICE_ACCOUNT_ID" => Some("example-drive".into()),
+            _ => env_getter(FULL_ENV)(key),
+        });
+        assert_eq!(
+            web_env_value(&web, CALENDAR_OWNER_ENV).as_deref(),
+            Some("calendar@example.test")
+        );
+        assert_eq!(
+            web_env_value(&web, "NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER").as_deref(),
+            Some("")
+        );
+        assert_eq!(
+            web_env_value(&web, "NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT").as_deref(),
+            Some("example-drive@example-production-project.iam.gserviceaccount.com")
+        );
     }
 
     #[test]

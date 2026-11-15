@@ -89,6 +89,24 @@ fn map_deadline(error: store::project_deadlines::DeadlineError) -> ApiError {
     }
 }
 
+/// The stored Deadline remains authoritative when Google needs a retry.
+async fn mirror_after_write(state: &ApiState, project_id: Uuid) {
+    match store::projects::find_by_id(&state.surreal, project_id).await {
+        Ok(Some(project)) => {
+            let result = crate::integrations_api::mirror_one(state, &project, false).await;
+            if !matches!(
+                result.outcome,
+                "mirrored" | "skipped_closed" | "runtime_not_configured"
+            ) {
+                tracing::warn!(%project_id, outcome = result.outcome, "Deadline Calendar reconcile pending");
+            }
+        }
+        Ok(None) | Err(_) => {
+            tracing::warn!(%project_id, "Could not resolve Project for Deadline Calendar reconcile")
+        }
+    }
+}
+
 /// `GET /app/api/projects/{id}/deadlines`
 pub(crate) async fn list_deadlines(
     State(state): State<ApiState>,
@@ -131,6 +149,7 @@ pub(crate) async fn create_deadline(
     )
     .await
     .map_err(map_deadline)?;
+    mirror_after_write(&state, id).await;
     Ok((StatusCode::CREATED, Json(row)).into_response())
 }
 
@@ -165,6 +184,7 @@ pub(crate) async fn update_deadline(
     )
     .await
     .map_err(map_deadline)?;
+    mirror_after_write(&state, id).await;
     Ok(Json(row).into_response())
 }
 
@@ -178,6 +198,7 @@ pub(crate) async fn complete_deadline(
     let row = store::project_deadlines::complete(&state.surreal, id, deadline_id)
         .await
         .map_err(map_deadline)?;
+    mirror_after_write(&state, id).await;
     Ok(Json(row).into_response())
 }
 
@@ -191,6 +212,7 @@ pub(crate) async fn cancel_deadline(
     let row = store::project_deadlines::cancel(&state.surreal, id, deadline_id)
         .await
         .map_err(map_deadline)?;
+    mirror_after_write(&state, id).await;
     Ok(Json(row).into_response())
 }
 
@@ -204,5 +226,6 @@ pub(crate) async fn reopen_deadline(
     let row = store::project_deadlines::reopen(&state.surreal, id, deadline_id)
         .await
         .map_err(map_deadline)?;
+    mirror_after_write(&state, id).await;
     Ok(Json(row).into_response())
 }

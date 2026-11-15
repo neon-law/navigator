@@ -127,7 +127,7 @@ fn calendar_gap(missing: &str) -> String {
     format!(
         "{missing} unset; the Project calendar acts as a Workspace user through the \
          deployment's Drive service account, with no key: set \
-         NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER on the row (`navigator ops deployments set`), \
+         NAVIGATOR_CALENDAR_NEON_LAW_OWNER on the row (`hudson ops deployments set`), \
          authorize the Drive account's client id for https://www.googleapis.com/auth/calendar \
          under domain-wide delegation, then `navigator ops ship` renders both keys \
          (see {RUNTIME_DOC})"
@@ -183,18 +183,30 @@ pub trait IntegrationProviders: Send + Sync {
         project_id: Uuid,
     ) -> Result<Arc<dyn cloud::SlackService>, IntegrationError>;
 
-    /// The Workspace calendar a Project's shared calendar lives on.
-    ///
-    /// Unlike Notion and Slack this is not a per-Firm credential: the calendar
-    /// is owned by the deployment's Workspace service account, the one Drive
-    /// already uses, so every resolver reads the same deployment
-    /// configuration. A deployment with none of it set is `NotConfigured`.
+    /// Use the Calendar owner selected by the Project's Firm.
     async fn calendar(
         &self,
-        _surreal: &SurrealDb,
-        _project_id: Uuid,
+        surreal: &SurrealDb,
+        project_id: Uuid,
     ) -> Result<Arc<dyn cloud::CalendarService>, IntegrationError> {
-        calendar_from_resolution(store::project_calendar::calendar_from_env().await)
+        let firm_id = store::projects::find_by_id(surreal, project_id)
+            .await
+            .map_err(|_| IntegrationError::CredentialUnusable)?
+            .and_then(|project| project.firm_id);
+        let Some(firm_id) = firm_id else {
+            return Err(IntegrationError::NotConfigured(
+                "The Project has no owning Firm".into(),
+            ));
+        };
+        let owner = store::firms::calendar_owner(surreal, firm_id)
+            .await
+            .map_err(|_| IntegrationError::CredentialUnusable)?;
+        let Some(owner) = owner else {
+            return Err(IntegrationError::NotConfigured(
+                "Choose a Google Workspace calendar owner in Firm Settings".into(),
+            ));
+        };
+        calendar_from_resolution(cloud::GoogleCalendar::for_owner(&owner).await.map(Some))
     }
 
     /// The firm members' own Google Contacts, opened through the same
@@ -546,7 +558,7 @@ mod tests {
         assert_eq!(error.slug(), "runtime_not_configured");
         let detail = error.detail().unwrap();
         assert!(detail.starts_with(
-            "NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER and \
+            "NAVIGATOR_CALENDAR_NEON_LAW_OWNER and \
              NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT unset"
         ));
 

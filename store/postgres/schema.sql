@@ -44,6 +44,11 @@ CREATE TABLE firm (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE firm_calendar_settings (
+    firm_id uuid PRIMARY KEY REFERENCES firm(id) ON DELETE CASCADE,
+    google_workspace_owner text
+);
+
 CREATE TABLE brand (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name TEXT NOT NULL,

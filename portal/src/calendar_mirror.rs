@@ -47,6 +47,9 @@ impl MirrorSource for ScheduledMirror {
             .calendar(&self.surreal, project_id)
             .await
             .map_err(|error| error.to_string())?;
+        let _guard = crate::integrations_api::calendar_lock(project_id)
+            .await
+            .map_err(|()| "Calendar reconcile lock unavailable")?;
         store::deadline_calendar::reconcile(
             &self.surreal,
             calendar.as_ref(),

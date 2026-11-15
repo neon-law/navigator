@@ -150,10 +150,9 @@ spec:
             # compiled number.
             - name: NAVIGATOR_VOICE_NUMBERS
               value: "YOUR_VOICE_NUMBERS"
-            # The Workspace user Drive, Calendar, and Contacts act as, and the
-            # Drive service account the pod signs delegation tokens as — no key
-            # (cloud::delegation). Both render blank on a row that names no
-            # delegated user, which keeps the Workspace off.
+            # Workspace subjects and the keyless service account used to sign delegation tokens.
+            - name: NAVIGATOR_CALENDAR_NEON_LAW_OWNER
+              value: "YOUR_CALENDAR_OWNER"
             - name: NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER
               value: "YOUR_DRIVE_DELEGATED_USER"
             - name: NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT

@@ -276,6 +276,10 @@ pub enum FirmError {
     Entity(#[from] crate::entities::EntityError),
     #[error("writing a firm returned no usable row")]
     WriteReturnedNothing,
+    #[error("Firm Calendar settings storage is unavailable")]
+    CalendarSettingsUnavailable,
+    #[error("Enter a valid Google Workspace mailbox address.")]
+    InvalidCalendarOwner,
     #[error("no person {0}")]
     NoSuchPerson(Uuid),
     #[error("person {0} is a client and cannot hold a firm membership")]
@@ -398,6 +402,7 @@ impl FirmError {
             Self::ThemeBrandNotOwned(_, _) => {
                 "The portal theme must be one of this firm's own brands.".to_string()
             }
+            Self::CalendarSettingsUnavailable | Self::InvalidCalendarOwner => self.to_string(),
             Self::Db(_)
             | Self::Postgres(_)
             | Self::PostgresSql(_)
@@ -602,6 +607,92 @@ async fn authorize_manage_firm(
         FirmCapabilityDecision::FirmNotFound => Err(FirmError::NoSuchFirm(firm_id)),
         FirmCapabilityDecision::Forbidden => Err(FirmError::NotAuthorized),
     }
+}
+
+/// Resolve the Firm's Google Workspace Calendar owner, including the deployment bootstrap
+/// for Guieb & Shook until an Owner saves a Firm-level choice.
+pub async fn calendar_owner(
+    surreal: &SurrealDb,
+    firm_id: Uuid,
+) -> Result<Option<String>, FirmError> {
+    if let Some(db) = crate::postgres::PostgresDb::configured()
+        .await
+        .map_err(|_| FirmError::CalendarSettingsUnavailable)?
+    {
+        let stored = sqlx::query_scalar::<_, Option<String>>(
+            "SELECT google_workspace_owner FROM firm_calendar_settings WHERE firm_id = $1",
+        )
+        .bind(firm_id)
+        .fetch_optional(db.pool())
+        .await?;
+        if let Some(owner) = stored {
+            return Ok(owner);
+        }
+    }
+    let bootstrap = std::env::var(cloud::calendar::CALENDAR_OWNER_ENV)
+        .ok()
+        .filter(|owner| !owner.trim().is_empty());
+    let Some(owner) = bootstrap else {
+        return Ok(None);
+    };
+    let name = crate::seed::FIRM_ENTITY_NAME;
+    let Some(anchor) = crate::entity_commands::firm_anchor_key(name, name) else {
+        return Ok(None);
+    };
+    let Some(entity) = crate::entities::firm_anchor_holder(surreal, &anchor).await? else {
+        return Ok(None);
+    };
+    Ok(find_by_entity_id(surreal, entity)
+        .await?
+        .filter(|firm| firm.id == firm_id)
+        .map(|_| owner))
+}
+
+/// Save the Owner's Google Workspace mailbox choice. A blank choice disables Calendar
+/// for the Firm and suppresses the deployment bootstrap.
+pub async fn set_calendar_owner(
+    surreal: &SurrealDb,
+    actor_role: Role,
+    actor_person_id: Option<Uuid>,
+    firm_id: Uuid,
+    value: &str,
+) -> Result<(), FirmError> {
+    if actor_role != Role::Owner {
+        return Err(FirmError::NotAuthorized);
+    }
+    authorize_manage_firm(surreal, actor_role, actor_person_id, firm_id).await?;
+    let value = value.trim();
+    let owner = if value.is_empty() {
+        None
+    } else {
+        let valid = value.split_once('@').is_some_and(|(mailbox, domain)| {
+            !mailbox.is_empty()
+                && !domain.contains('@')
+                && domain.split('.').count() > 1
+                && domain.split('.').all(|part| {
+                    !part.is_empty() && part.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                })
+                && mailbox
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b".+_-".contains(&b))
+        });
+        if !valid || value.len() > 254 {
+            return Err(FirmError::InvalidCalendarOwner);
+        }
+        Some(value)
+    };
+    let db = crate::postgres::PostgresDb::from_env()
+        .await
+        .map_err(|_| FirmError::CalendarSettingsUnavailable)?;
+    sqlx::query(
+        "INSERT INTO firm_calendar_settings (firm_id, google_workspace_owner) VALUES ($1, $2)
+         ON CONFLICT (firm_id) DO UPDATE SET google_workspace_owner = EXCLUDED.google_workspace_owner",
+    )
+    .bind(firm_id)
+    .bind(owner)
+    .execute(db.pool())
+    .await?;
+    Ok(())
 }
 
 /// Gate an Owner-only brand-seat write through the capability resolver —
