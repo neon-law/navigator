@@ -3974,10 +3974,9 @@ fn canonical_document(base: &str) -> Value {
               "The attorney approves a notation parked at `lawyer_review`: re-assembles the reviewed \
                document (template + custom clauses, or a filled government AcroForm) and fires the \
                `approved` transition so the worker renders and persists its PDF, parking at the \
-               generate-PDF step. The deliberate signature dispatch is a separate door. Idempotent: \
-               if the PDF is already rendered (a prior approve, or a clean machine-only intake that \
-               walked straight through), approving again is a no-op that reports the current state. \
-               Returns the notation's workflow state after the action. Same command the lawyer \
+               generate-PDF step. Signature dispatch is a separate action. DBOS returns 202 when the \
+               approval for the current review revision is queued. A repeated approval reconciles a stale \
+               Notation state with the workflow when the PDF is available. Same command the lawyer \
                review screen drives. Authorization: the caller's `persons.role` must be lawyer \
                `lawyer` or `admin` (anonymous, `client`, and non-lawyer `clerk` callers are \
                rejected), and the caller must additionally participate in the notation's matter — \
@@ -3990,6 +3989,9 @@ fn canonical_document(base: &str) -> Value {
               "200": { "description": "The notation's workflow state after approval", "content": { "application/json": {
                 "schema": { "$ref": "#/components/schemas/NotationLifecycleResponse" }
               } } },
+              "202": { "description": "The approval run is queued or rendering", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/NotationLifecycleResponse" }
+              } } },
               "401": { "description": "No authenticated session", "content": { "application/json": {
                 "schema": { "$ref": "#/components/schemas/ApiError" }
               } } },
@@ -3997,6 +3999,9 @@ fn canonical_document(base: &str) -> Value {
                 "schema": { "$ref": "#/components/schemas/ApiError" }
               } } },
               "404": { "description": "No such notation, or it is outside the caller's scope", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } },
+              "409": { "description": "The workflow is outside Lawyer Review or its approval run requires recovery", "content": { "application/json": {
                 "schema": { "$ref": "#/components/schemas/ApiError" }
               } } },
               "422": { "description": "A government form could not be prepared (missing blank, pin mismatch, or mis-mapped field)", "content": { "application/json": {
@@ -4012,12 +4017,9 @@ fn canonical_document(base: &str) -> Value {
           "post": {
             "summary": "Dispatch a notation's document for signature",
             "description":
-              "Sends the notation's rendered document out for signature: fires `pdf_persisted` and \
-               dispatches exactly one envelope through the signature provider (the client signs \
-               first, the firm countersigns). Requires the document PDF to have been rendered by a \
-               prior approval — if the worker has not persisted it yet, returns `409 \
-               document_not_ready` (retry) rather than sending a missing document. Idempotent: a \
-               notation that already has an envelope out reuses its request id and sends nothing. \
+              "Requires an approved, rendered PDF. Pass `prepare: true` to record a provider draft. \
+               Dispatch records the draft ID, fires `pdf_persisted`, and sends that envelope. \
+               A dispatch retry reconciles the recorded envelope with its provider by ID. \
                Returns the workflow state and the provider's signature request id (which the \
                inbound completion webhook correlates back to this notation). Same command the \
                lawyer form drives. Authorization: the caller's `persons.role` must be `lawyer` \
@@ -4041,7 +4043,7 @@ fn canonical_document(base: &str) -> Value {
               "404": { "description": "No such notation, or it is outside the caller's scope", "content": { "application/json": {
                 "schema": { "$ref": "#/components/schemas/ApiError" }
               } } },
-              "409": { "description": "The document PDF has not been rendered yet — approve first, then retry", "content": { "application/json": {
+              "409": { "description": "The approved PDF is unavailable or the workflow requires recovery", "content": { "application/json": {
                 "schema": { "$ref": "#/components/schemas/ApiError" }
               } } },
               "500": { "description": "The envelope could not be dispatched (provider, storage, or database error)", "content": { "application/json": {
