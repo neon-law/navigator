@@ -14,6 +14,15 @@ traverses their `navigator_graph` projection when graph authority is `age`. The 
 [`store::entity_roles`](../../store/src/entity_roles.rs) and [`store::relationships`](../../store/src/relationships.rs).
 Authority selection and cutover verification live in the [AGE graph runbook](../age-graph-runbook.md).
 
+A `relationship` edge's `kind` comes from the closed [Relationship Edge Kind](relationship-edge-kind.md) vocabulary, and
+an `entity_role` tie's `role` is a [Person–Entity Role](personentity-role.md) noun such as `manager` or `owner`.
+
+In the target design, every [Relationship Edge](relationship-edge.md) and [Relationship Log](relationship-log.md) row
+carries three anchors: the Project it was learned in (optional), the attorney who recorded it (resolved from the
+session, never a flag), and the Firm. Each appears in the Project, attorney, and Firm conflict graphs. Scope records
+where a fact was learned and never hides it from a broader scope. Code does not yet do this: today edges carry no
+anchors and a log row carries a single `graph_scope`.
+
 A matter writes into the graph through a [Project Reference](project-reference.md): it first references the counterparty
 it verified, then records adversity against that referenced party with `POST
 /app/api/projects/{id}/relationships/adverse` — a `manual` `adverse_to` edge at full confidence, sourced to the
