@@ -209,3 +209,61 @@ async fn admin_bypasses_scope_and_approves() {
     let resp = post_approval(&h.app, Some(&admin), notation_id).await;
     assert_eq!(resp.status(), StatusCode::OK);
 }
+
+#[tokio::test]
+async fn approval_reconciles_a_rendered_pdf_after_the_workflow_advanced() {
+    let h = build_app().await;
+    let project = open_project(&h.surreal).await;
+    let notation_id = seed_lawyer_review_notation(&h, project.id).await;
+    let lawyer = bearer_new_person(
+        &h.surreal,
+        "reviewer@example.com",
+        Role::Lawyer,
+        Some((project.id, "lawyer")),
+    )
+    .await;
+
+    // The workflow and renderer completed, but the request ended before its
+    // final Notation state write.
+    let parked = h
+        .runtime
+        .signal(
+            workflows::MachineKind::Workflow,
+            notation_id,
+            "approved",
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(parked.prefix(), "generate_pdf");
+    h.storage
+        .put(
+            &store::notations::document_pdf_storage_key(notation_id),
+            b"%PDF-1.7",
+            "application/pdf",
+        )
+        .await
+        .unwrap();
+
+    for _ in 0..2 {
+        let resp = post_approval(&h.app, Some(&lawyer), notation_id).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["state"], parked.as_str());
+        let notation = store::notations::find_by_id(&h.surreal, notation_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(notation.state, parked.as_str());
+    }
+    assert_eq!(
+        h.runtime
+            .events(workflows::MachineKind::Workflow, notation_id)
+            .await
+            .iter()
+            .filter(|event| event.condition == "approved")
+            .count(),
+        1
+    );
+}

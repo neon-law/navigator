@@ -118,6 +118,29 @@ pub trait StateMachineRuntime: Send + Sync {
         context: SignalContext,
     ) -> Result<StateName, WorkflowRuntimeError>;
 
+    /// Submit the approval for this review revision. A durable worker may
+    /// acknowledge the submission before rendering completes.
+    async fn approve(
+        &self,
+        notation_id: Uuid,
+        _review_revision: i64,
+        payload: &str,
+        actor: Option<SignalContext>,
+    ) -> Result<Option<StateName>, WorkflowRuntimeError> {
+        let kind = MachineKind::Workflow;
+        let state = match actor {
+            Some(actor) => {
+                self.signal_with_context(kind, notation_id, "approved", Some(payload), actor)
+                    .await?
+            }
+            None => {
+                self.signal(kind, notation_id, "approved", Some(payload))
+                    .await?
+            }
+        };
+        Ok(Some(state))
+    }
+
     /// Move one question back while retaining the append-only transition log.
     /// Returns the current state unchanged when the questionnaire is already
     /// at its first question.

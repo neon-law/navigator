@@ -5646,7 +5646,7 @@ pub async fn notation_approve(host: Option<&str>, notation_id: Uuid) -> ExitCode
         let st = fetch_status(&base, &token, notation_id).await?;
         println!(
             "{} {} — state {} (document_ready {})",
-            palette::dim("approved — notation"),
+            palette::dim("approval submitted — notation"),
             palette::highlight(notation_id.to_string()),
             palette::highlight(&st.state),
             st.document_ready,

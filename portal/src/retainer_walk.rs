@@ -1612,6 +1612,8 @@ pub enum WorkflowDriveError {
     DocumentNotReady(Uuid),
     #[error("notation is at `{state}`. Complete the questionnaire and reach lawyer review before approving.")]
     ApprovalNotReady { state: String },
+    #[error("the workflow advanced without a recorded envelope. Check DocuSign before attempting recovery.")]
+    DispatchNeedsReconciliation,
 
     /// The template carries the custom-clause slot and the notation has no
     /// clauses, so its fee terms were never written. Refused before the
@@ -1955,8 +1957,23 @@ pub(crate) async fn render_and_park(
     let current_state = runtime
         .current_state(MachineKind::Workflow, notation_id)
         .await
-        .unwrap_or_else(|| StateName::from(notation_row.state.as_str()));
+        .ok_or(workflows::WorkflowRuntimeError::UnknownNotation(
+            notation_id,
+        ))?;
     if current_state.prefix() != "lawyer_review" {
+        let document_ready = document_pdf_ready(deps.storage.as_ref(), notation_id).await?;
+        if current_state.prefix() == "generate_pdf" || document_ready {
+            if notation_row.state == "lawyer_review" && document_ready {
+                store::notations::reconcile_state(
+                    deps.surreal,
+                    notation_id,
+                    &notation_row.state,
+                    current_state.as_str(),
+                )
+                .await?;
+            }
+            return Ok(current_state);
+        }
         return Err(WorkflowDriveError::ApprovalNotReady {
             state: current_state.0,
         });
@@ -1965,6 +1982,7 @@ pub(crate) async fn render_and_park(
         .await?
         .ok_or(WorkflowDriveError::TemplateMissing(notation_id))?;
 
+    let assembly_started = std::time::Instant::now();
     // Re-assemble the body — template + custom clauses — so the PDF
     // reflects the latest reviewed content.
     let raw_template_body =
@@ -2013,16 +2031,28 @@ pub(crate) async fn render_and_park(
     // `generate_pdf__retainer_pdf`. We do NOT advance past it — the send
     // is a separate, deliberate command that first confirms the PDF
     // landed.
-    let s = signal_workflow(
-        runtime,
-        notation_id,
-        "approved",
-        Some(&document_payload),
-        acting,
-    )
-    .await?;
-    sync_notation_state(deps.surreal, notation_id, s.as_str()).await?;
-    Ok(s)
+    tracing::info!(%notation_id, elapsed_ms = assembly_started.elapsed().as_millis(), "approval document assembled");
+    let submitted_at = std::time::Instant::now();
+    let accepted = runtime
+        .approve(
+            notation_id,
+            notation_row.updated_at.timestamp_micros(),
+            &document_payload,
+            acting.map(|acting_person_id| SignalContext { acting_person_id }),
+        )
+        .await?;
+    tracing::info!(
+        %notation_id,
+        elapsed_ms = submitted_at.elapsed().as_millis(),
+        queued = accepted.is_none(),
+        "approval submitted",
+    );
+    if let Some(next) = accepted {
+        sync_notation_state(deps.surreal, notation_id, next.as_str()).await?;
+        Ok(next)
+    } else {
+        Ok(current_state)
+    }
 }
 
 /// Build the `DocumentPayload::Acroform` JSON for a template with a
@@ -2117,22 +2147,6 @@ pub async fn approve_send_post(
         return (StatusCode::NOT_FOUND, "notation not found").into_response();
     }
 
-    // Idempotent approve: if the worker has already rendered + persisted
-    // this notation's PDF — a prior approve, or the auto-approve a clean
-    // machine-only intake takes when it walks straight through to
-    // signature (`drive_post_questionnaire_workflow`) — approving again is
-    // a no-op success. The bytes the attorney would approve already exist,
-    // and re-firing `approved` from a state with no such edge (e.g.
-    // `sent_for_signature__pending`) would otherwise 500 with NoTransition.
-    // The matter-open retainer path parks at `lawyer_review` with no PDF
-    // yet, so this guard never short-circuits a genuine first approve.
-    if document_pdf_ready(state.storage.as_ref(), notation_id)
-        .await
-        .unwrap_or(false)
-    {
-        return back_to_review(notation_id);
-    }
-
     // The attorney approving owns the `approved` transition — attribute it
     // to their session Person, not the notation's client (#252).
     let deps = RenderDeps {
@@ -2147,8 +2161,8 @@ pub async fn approve_send_post(
         // for signature" action for the parked document.
         Ok(final_state) => {
             tracing::info!(
-                %notation_id, final_state = %final_state.as_str(), outcome = "parked",
-                "approve_send: rendered and parked",
+                %notation_id, final_state = %final_state.as_str(),
+                "approve_send: approval accepted",
             );
             back_to_review(notation_id)
         }
@@ -2202,6 +2216,9 @@ pub async fn send_post(
                 "send: envelope dispatched",
             );
             back_to_review(notation_id)
+        }
+        Err(e @ WorkflowDriveError::DispatchNeedsReconciliation) => {
+            (StatusCode::CONFLICT, e.to_string()).into_response()
         }
         Err(WorkflowDriveError::DocumentNotReady(_)) => {
             tracing::info!(%notation_id, "send: document not ready yet");
@@ -2322,14 +2339,10 @@ pub(crate) async fn resolve_intake_review(
             .ok()
             .flatten();
 
+    let document_ready = document_pdf_ready(state.storage.as_ref(), notation_id)
+        .await
+        .unwrap_or(false);
     if format == Some("json") {
-        // Per-matter pipeline state: a `StorageService` existence probe on the
-        // document PDF key. A storage error here is non-fatal to the status
-        // read — report `document_ready:false` and let the operator retry
-        // rather than 500 the status call.
-        let document_ready = document_pdf_ready(state.storage.as_ref(), notation_id)
-            .await
-            .unwrap_or(false);
         return Err(axum::Json(serde_json::json!({
             "notation_id": notation_id,
             "state": notation_row.state,
@@ -2397,12 +2410,13 @@ pub(crate) async fn resolve_intake_review(
     Ok(webapp::intake_review::IntakeReviewData {
         notation_id: notation_id.to_string(),
         workflow_state: notation_row.state,
+        document_ready,
         signature_request_id,
         rendered_html,
         governing_law_defaulted,
         reask_questions,
         envelope,
-        approve_send_label: "Approve and send for signature".to_string(),
+        approve_send_label: "Approve and render PDF".to_string(),
     })
 }
 

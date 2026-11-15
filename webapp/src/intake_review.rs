@@ -66,6 +66,8 @@ pub struct EnvelopeCard {
 pub struct IntakeReviewData {
     pub notation_id: String,
     pub workflow_state: String,
+    #[serde(default)]
+    pub document_ready: bool,
     /// Present once an envelope has gone out. Its presence is half of the
     /// phase decision, so it is never inferred from the state alone.
     pub signature_request_id: Option<String>,
@@ -184,7 +186,7 @@ impl Phase {
     fn heading(self) -> &'static str {
         match self {
             Self::AwaitingReview => "Awaiting attorney review",
-            Self::ReadyToSend => "Document rendering — ready to send",
+            Self::ReadyToSend => "Approved for signature",
             Self::SentBack => "Sent back for changes",
             Self::Started => "Retainer intake started",
         }
@@ -233,14 +235,11 @@ fn review_body(view: &IntakeReviewView) -> Element {
                 p { class: "nav-muted",
                     "Intake is complete and the matter parks here for an attorney — no "
                     "document is generated until a person approves. The exact document "
-                    "below is what gets signed: review it, then approve and send."
+                    "below is what gets signed. Review it before approving the PDF."
                 }
             }
-            if phase == Phase::ReadyToSend {
-                p { class: "nav-muted",
-                    "Approved. The document is rendering for signature. Once it is ready, "
-                    "send it — the binding envelope goes out only on this deliberate step."
-                }
+            if phase == Phase::ReadyToSend && !data.document_ready {
+                p { role: "status", "The PDF is rendering. Refresh to check its status." }
             }
             dl { class: "detail-dl",
                 dt { "Notation id" }
@@ -274,7 +273,7 @@ fn review_body(view: &IntakeReviewView) -> Element {
                     {request_changes_panel(&request_changes, &csrf, &data.reask_questions)}
                 }
             }
-            if phase == Phase::ReadyToSend {
+            if phase == Phase::ReadyToSend && data.document_ready {
                 form { method: "post", action: "{send}", "aria-label": "Send for signature",
                     input { r#type: "hidden", name: "_csrf", value: "{csrf}" }
                     button { class: "nav-btn nav-btn--primary", r#type: "submit",
@@ -417,6 +416,7 @@ mod tests {
             data: IntakeReviewData {
                 notation_id: NOTATION.to_string(),
                 workflow_state: state.to_string(),
+                document_ready: true,
                 signature_request_id: signature.map(str::to_string),
                 rendered_html: "<article class=\"notation\"><p>body</p></article>".to_string(),
                 governing_law_defaulted: false,
@@ -424,7 +424,7 @@ mod tests {
                     code: "person__client".to_string(),
                     label: "Client name".to_string(),
                 }],
-                approve_send_label: "Approve and send for signature".to_string(),
+                approve_send_label: "Approve and render PDF".to_string(),
                 envelope: None,
             },
             csrf_token: "TOK".to_string(),
@@ -532,10 +532,7 @@ mod tests {
     #[test]
     fn only_the_rendering_phase_offers_the_send_that_dispatches_the_envelope() {
         let html = render(&view("generate_pdf__retainer_pdf", None));
-        assert!(
-            html.contains("Document rendering — ready to send"),
-            "{html}"
-        );
+        assert!(html.contains("Approved for signature"), "{html}");
         assert!(
             html.contains(&format!("action=\"/app/lawyer/notations/{NOTATION}/send\"")),
             "{html}"
@@ -547,6 +544,15 @@ mod tests {
             )),
             "{html}"
         );
+    }
+
+    #[test]
+    fn approved_notation_waits_for_its_pdf_before_offering_send() {
+        let mut review = view("generate_pdf__retainer_pdf", None);
+        review.data.document_ready = false;
+        let html = render(&review);
+        assert!(html.contains("The PDF is rendering."));
+        assert!(!html.contains(&format!("action=\"/app/lawyer/notations/{NOTATION}/send\"")));
     }
 
     #[test]

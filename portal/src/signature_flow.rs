@@ -41,26 +41,10 @@ pub struct SendFlowContext<'a> {
 /// declared signer set, and creates exactly one envelope, persisting the
 /// `signature_request_id`.
 ///
-/// The mode splits the workflow posture: [`SendMode::Prepare`] creates a
-/// draft envelope without advancing the workflow — no `pdf_persisted`
-/// fires, the notation parks where it is, and the draft sits on the
-/// provider until an explicit send. [`SendMode::Send`] dispatches: it
-/// fires `pdf_persisted` (→ `sent_for_signature__pending`) and promotes
-/// any prepared envelope rather than creating a second one — the provider
-/// seam keys one envelope per notation off its idempotency, whatever the
-/// order of prepare and send calls.
-///
-/// Idempotent (find-or-create keyed on `notation_id`): a notation that
-/// already carries a `signature_request_id` for an already-dispatched
-/// envelope reuses it and neither re-fires the transition nor re-sends.
-/// When the PDF isn't present yet (the worker hasn't rendered, or its
-/// storage is misconfigured), returns
-/// [`WorkflowDriveError::DocumentNotReady`] so the caller can answer
-/// "not yet — retry" (a `409`) instead of looping or 500-ing. The
-/// provider ALSO sends an X-DocuSign-Idempotency-Key so a concurrent
-/// double-send dedupes at DocuSign, not just on the id check here.
-/// Validation runs identically on both modes: a draft with an unfinished
-/// placeholder or an unresolved signer is refused before it exists.
+/// Preparation records the provider's draft ID before advancing the
+/// workflow. Dispatch advances to the signing state and sends that draft
+/// by ID. A retry in the signing state checks the same envelope rather than
+/// creating a new one.
 pub(crate) async fn send_notation_for_signature(
     ctx: &SendFlowContext<'_>,
     notation_id: Uuid,
@@ -70,32 +54,41 @@ pub(crate) async fn send_notation_for_signature(
     let notation_row = store::notations::find_by_id(ctx.surreal, notation_id)
         .await?
         .ok_or(WorkflowDriveError::TemplateMissing(notation_id))?;
-    let current_state = StateName::from(notation_row.state.as_str());
+    let current_state = ctx
+        .runtime
+        .current_state(workflows::MachineKind::Workflow, notation_id)
+        .await
+        .ok_or(workflows::WorkflowRuntimeError::UnknownNotation(
+            notation_id,
+        ))?;
+    let existing = store::signatures::request_id_for_notation(ctx.surreal, notation_id)
+        .await?
+        .map(crate::signature::SignatureRequestId);
 
-    // Idempotency: this notation already has an envelope out.
-    // Prepare always reuses it — the answer to "give me the envelope" is
-    // the envelope, dispatched or not. Send reuses it only when the
-    // workflow already dispatched (the state sits at or past
-    // `sent_for_signature`); a request id on a not-yet-dispatched notation
-    // is a draft a previous prepare persisted, and the full path below
-    // promotes it instead of stopping at it.
-    if let Some(existing) =
-        store::signatures::request_id_for_notation(ctx.surreal, notation_id).await?
-    {
-        let dispatched = notation_row.state.starts_with("sent_for_signature");
-        if mode == SendMode::Prepare || dispatched {
-            return Ok((
-                current_state,
-                crate::signature::SignatureRequestId(existing),
-            ));
+    if mode == SendMode::Prepare {
+        if let Some(id) = existing {
+            return Ok((current_state, id));
         }
+    } else if current_state.prefix() == "sent_for_signature" {
+        // A prior send may have reached DocuSign before the HTTP response
+        // was lost. Reconcile the recorded envelope by ID.
+        let id = existing.ok_or(WorkflowDriveError::DispatchNeedsReconciliation)?;
+        if notation_row.state == "lawyer_review" || notation_row.state.starts_with("generate_pdf") {
+            store::notations::reconcile_state(
+                ctx.surreal,
+                notation_id,
+                &notation_row.state,
+                current_state.as_str(),
+            )
+            .await?;
+        }
+        provider.dispatch_prepared(&id).await?;
+        return Ok((current_state, id));
     }
 
-    // Readiness gate: the worker durably renders + persists the PDF on
-    // entering `generate_pdf__*`. Confirm it landed before advancing —
-    // against real Restate Cloud that render is a separate invocation, so
-    // "approved fired" does not imply "PDF written."
-    if !document_pdf_ready(ctx.storage.as_ref(), notation_id).await? {
+    if current_state.prefix() != "generate_pdf"
+        || !document_pdf_ready(ctx.storage.as_ref(), notation_id).await?
+    {
         return Err(WorkflowDriveError::DocumentNotReady(notation_id));
     }
 
@@ -142,25 +135,6 @@ pub(crate) async fn send_notation_for_signature(
         ));
     }
 
-    // Only a send advances the workflow: `pdf_persisted` moves the
-    // notation to `sent_for_signature__pending`. A prepare parks where it
-    // is — the draft exists, but nothing has been dispatched, so the
-    // lawyer's screen keeps saying review, not signing.
-    let s = if mode == SendMode::Send {
-        let s = crate::retainer_walk::signal_workflow(
-            ctx.runtime,
-            notation_id,
-            "pdf_persisted",
-            None,
-            ctx.acting,
-        )
-        .await?;
-        crate::retainer_walk::sync_notation_state(ctx.surreal, notation_id, s.as_str()).await?;
-        s
-    } else {
-        current_state
-    };
-
     // Fire the signature seam. Recipients follow the template's declared
     // signer set in order.
     // The captive client's identity comes from the questionnaire answers
@@ -199,15 +173,26 @@ pub(crate) async fn send_notation_for_signature(
         &template_row.code,
         &raw_template_body,
     )?;
-    let id = provider
-        .send_for_signature(notation_id, &pdf_bytes, &manifest, mode)
-        .await?;
-    // Persist the request id so the inbound completion webhook
-    // (`crate::esignature_webhook`) can resolve its callback back to this
-    // notation — and so a later send finds (and promotes) the prepared
-    // envelope instead of creating a second one.
-    persist_signature_request_id(ctx.surreal, notation_id, &id.0).await?;
+    let id = if let Some(id) = existing {
+        id
+    } else {
+        let id = provider
+            .send_for_signature(notation_id, &pdf_bytes, &manifest, SendMode::Prepare)
+            .await?;
+        persist_signature_request_id(ctx.surreal, notation_id, &id.0).await?;
+        id
+    };
     if mode == SendMode::Send {
+        let next = crate::retainer_walk::signal_workflow(
+            ctx.runtime,
+            notation_id,
+            "pdf_persisted",
+            None,
+            ctx.acting,
+        )
+        .await?;
+        crate::retainer_walk::sync_notation_state(ctx.surreal, notation_id, next.as_str()).await?;
+        provider.dispatch_prepared(&id).await?;
         let notation_id = notation_id.to_string();
         let project_id = notation_row.project_id.to_string();
         telemetry::record_funnel_event(telemetry::FunnelEvent::Sent {
@@ -215,9 +200,10 @@ pub(crate) async fn send_notation_for_signature(
             project_id: &project_id,
             channel: telemetry::FunnelChannel::Signature,
         });
+        return Ok((next, id));
     }
 
-    Ok((s, id))
+    Ok((current_state, id))
 }
 
 /// Whether the worker has rendered + persisted the notation's document

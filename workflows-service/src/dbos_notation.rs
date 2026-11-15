@@ -680,13 +680,21 @@ async fn signal(
                 let value = value.clone();
                 async move {
                     let deps = StepDeps::new(email, storage).with_surreal(surreal);
-                    dispatch_step(&deps, notation_id, &state, value.as_deref())
-                        .await
-                        .map_err(|error| {
-                            dbos::Error::Application(NotationTransitionError::Store(format!(
-                                "dispatch: {error}"
-                            )))
-                        })
+                    let started = std::time::Instant::now();
+                    let result = dispatch_step(&deps, notation_id, &state, value.as_deref()).await;
+                    if state.prefix() == "generate_pdf" {
+                        tracing::info!(
+                            %notation_id,
+                            elapsed_ms = started.elapsed().as_millis(),
+                            rendered = result.is_ok(),
+                            "approval render completed",
+                        );
+                    }
+                    result.map_err(|error| {
+                        dbos::Error::Application(NotationTransitionError::Store(format!(
+                            "dispatch: {error}"
+                        )))
+                    })
                 }
             })
             .await?
@@ -797,6 +805,30 @@ async fn signal(
             })
             .await?;
         }
+    }
+
+    if !ephemeral
+        && kind == MachineKind::Workflow
+        && condition == "approved"
+        && next.prefix() == "generate_pdf"
+    {
+        // Keep the Lawyer Review projection recoverable even after the caller
+        // disconnects. Publish the new state after the render and journal.
+        let surreal = context.surreal.clone();
+        let approved_state = next.as_str().to_owned();
+        dbos::step_with("publish-approval-state", retryable_steps(), move || {
+            let surreal = surreal.clone();
+            let approved_state = approved_state.clone();
+            async move {
+                store::notations::update_state(&surreal, notation_id, &approved_state)
+                    .await
+                    .map(|_| ())
+                    .map_err(|error| {
+                        dbos::Error::Application(NotationTransitionError::Store(error.to_string()))
+                    })
+            }
+        })
+        .await?;
     }
 
     Ok(TransitionReport {

@@ -4886,9 +4886,8 @@ struct NotationLifecycleResponse {
 /// `approved` transition so the worker renders + persists its PDF, parking at
 /// `generate_pdf__*` (the deliberate signature dispatch is a separate door).
 /// Lawyer-tier only (embedded Rego policy) *and* matter-scoped (admin bypasses); an out-of-scope
-/// or unknown notation is 404. Idempotent: if the PDF is already rendered
-/// (a prior approve, or a clean machine-only intake that walked straight
-/// through), approving again is a no-op success reporting the current state.
+/// or unknown notation is 404. A repeated approval reports the authoritative
+/// workflow state and reconciles a stale Lawyer Review projection.
 /// This drives the same command core (`render_and_park`) as the lawyer form.
 async fn approve_notation(
     State(state): State<ApiState>,
@@ -4913,24 +4912,6 @@ async fn approve_notation(
         return Err(ApiError::NotFound);
     }
 
-    // Idempotent approve: if the worker already rendered + persisted this
-    // notation's PDF, re-firing `approved` from a state with no such edge
-    // would error — so treat a repeat approve as a no-op success. The lawyer
-    // form applies the same guard.
-    if crate::signature_flow::document_pdf_ready(state.storage.as_ref(), id)
-        .await
-        .unwrap_or(false)
-    {
-        return Ok((
-            StatusCode::OK,
-            Json(NotationLifecycleResponse {
-                notation_id: id,
-                state: notation.state,
-            }),
-        )
-            .into_response());
-    }
-
     let deps = crate::retainer_walk::RenderDeps {
         surreal: &state.surreal,
         runtime: state.workflow_runtime.as_ref(),
@@ -4940,7 +4921,11 @@ async fn approve_notation(
     };
     let final_state = crate::retainer_walk::render_and_park(&deps, id, lawyer.0.person_id).await?;
     Ok((
-        StatusCode::OK,
+        if final_state.prefix() == "lawyer_review" {
+            StatusCode::ACCEPTED
+        } else {
+            StatusCode::OK
+        },
         Json(NotationLifecycleResponse {
             notation_id: id,
             state: final_state.as_str().to_string(),
@@ -8961,6 +8946,14 @@ fn workflow_drive_error(e: crate::retainer_walk::WorkflowDriveError) -> Response
             StatusCode::CONFLICT,
             Json(serde_json::json!({
                 "error": "approval_not_ready",
+                "reason": e.to_string(),
+            })),
+        )
+            .into_response(),
+        e @ E::DispatchNeedsReconciliation => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "dispatch_needs_reconciliation",
                 "reason": e.to_string(),
             })),
         )

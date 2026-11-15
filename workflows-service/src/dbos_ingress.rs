@@ -628,6 +628,11 @@ fn add_notation_routes(router: Router, notation: &NotationIngress) -> Router {
                 .with_state(notation.route_state(workflows::MachineKind::Workflow)),
         )
         .route(
+            "/notation/{notation_id}/workflow_approve",
+            post(notation_approve)
+                .with_state(notation.route_state(workflows::MachineKind::Workflow)),
+        )
+        .route(
             "/notation/{notation_id}/workflow_current_state",
             post(notation_current_state)
                 .with_state(notation.route_state(workflows::MachineKind::Workflow)),
@@ -1072,6 +1077,50 @@ async fn notation_signal(
         },
     )
     .await
+}
+
+#[derive(Deserialize)]
+struct NotationApprovalBody {
+    review_revision: i64,
+    value: String,
+    acting_person_id: Option<uuid::Uuid>,
+}
+
+async fn notation_approve(
+    State(state): State<NotationRouteState>,
+    axum::extract::Path(notation_id): axum::extract::Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<StatusCode, StatusCode> {
+    if !authorized(&headers, &state.inner.token) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    let notation_id = notation_id_for(&notation_id)?;
+    let body: NotationApprovalBody =
+        serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let workflow_id = format!("NotationApproval:{notation_id}:{}", body.review_revision);
+    state
+        .inner
+        .workflow
+        .start_with(
+            crate::dbos_notation::TransitionRequest {
+                kind: state.kind,
+                notation_id,
+                operation: crate::dbos_notation::Operation::Signal {
+                    condition: "approved".into(),
+                    value: Some(body.value),
+                    acting_person_id: body.acting_person_id,
+                    ephemeral: false,
+                },
+            },
+            dbos::StartOptions {
+                workflow_id: Some(&workflow_id),
+                ..Default::default()
+            },
+        )
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    Ok(StatusCode::ACCEPTED)
 }
 
 async fn notation_back(

@@ -163,6 +163,29 @@ impl StateMachineRuntime for DbosNotationRuntime {
             .await
     }
 
+    async fn approve(
+        &self,
+        notation_id: Uuid,
+        review_revision: i64,
+        payload: &str,
+        actor: Option<SignalContext>,
+    ) -> Result<Option<StateName>, WorkflowRuntimeError> {
+        let url = self
+            .inner
+            .handler_url(MachineKind::Workflow, notation_id, "approve");
+        self.inner
+            .post_json_no_response(
+                &url,
+                &serde_json::json!({
+                    "review_revision": review_revision,
+                    "value": payload,
+                    "acting_person_id": actor.map(|actor| actor.acting_person_id),
+                }),
+            )
+            .await?;
+        Ok(None)
+    }
+
     async fn back(
         &self,
         kind: MachineKind,
