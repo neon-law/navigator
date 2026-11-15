@@ -1468,3 +1468,64 @@ async fn absent_source_rows_delete_nothing_from_an_empty_target() {
     }
     pg.0.close().await;
 }
+
+/// A saved Deployment Secret Change carries its request's UUID as its record
+/// key, so the reconcile gate reads, mirrors, and then reports it clean.
+#[tokio::test]
+async fn saved_deployment_secret_changes_reconcile_to_clean_parity() {
+    let Some((options, database)) = fresh_schema().await else {
+        return;
+    };
+    let pg = connect(&options, &database).await;
+    let surreal = mem_surreal().await;
+    let fields = BTreeMap::from([
+        (
+            "NAVIGATOR_META_APP_SECRET".to_string(),
+            "synthetic-secret".to_string(),
+        ),
+        (
+            "NAVIGATOR_X_CLIENT_ID".to_string(),
+            "synthetic-client".to_string(),
+        ),
+    ]);
+    crate::deployment_secret_changes::save(
+        &surreal,
+        &cloud::FakeKms::new("production-runtime-key"),
+        crate::persons::Role::Owner,
+        crate::DeploymentEnvironment::Production,
+        Uuid::now_v7(),
+        &fields,
+    )
+    .await
+    .unwrap();
+    let report = |parity: ParityReport| {
+        parity
+            .tables
+            .into_iter()
+            .find(|report| report.table == "deployment_secret_change")
+            .unwrap()
+    };
+    let before = report(
+        parity(&surreal, &pg, "source_domain_records")
+            .await
+            .unwrap(),
+    );
+    assert_eq!((before.source_rows, before.divergent.len()), (2, 2));
+    let after = report(
+        reconcile(&surreal, &pg, "source_domain_records")
+            .await
+            .unwrap(),
+    );
+    assert_eq!(
+        (after.source_rows, after.target_rows, after.divergent.len()),
+        (2, 2, 0)
+    );
+    let mirrored: Vec<String> = sqlx::query_scalar(
+        "SELECT request_id FROM deployment_secret_change WHERE id::text = request_id",
+    )
+    .fetch_all(&pg.0)
+    .await
+    .unwrap();
+    assert_eq!(mirrored.len(), 2, "PostgreSQL keys each row by its request");
+    pg.0.close().await;
+}

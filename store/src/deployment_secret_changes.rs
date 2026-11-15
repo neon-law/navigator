@@ -1,12 +1,14 @@
 //! Owner-authored encrypted changes awaiting operator entry into SOPS.
 //! Values never leave the store as plaintext; export carries only envelopes.
-use crate::{persons::Role, surreal::SurrealDb, DeploymentEnvironment};
+use crate::{persons::Role, postgres_mirror::records, surreal::SurrealDb, DeploymentEnvironment};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use cloud::{KmsContext, RuntimeKms, WrappedDataKey};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
+
+const TABLE: &str = "deployment_secret_change";
 
 /// A preset field in the production social application configuration.
 #[derive(Clone, Copy, Debug)]
@@ -151,10 +153,13 @@ pub async fn save(
 ) -> Result<usize, ChangeError> {
     authorize(role, environment)?;
     let selected = replacements(fields)?;
-    let mut encrypted = Vec::new();
+    let mut encrypted = Vec::with_capacity(selected.len());
+    let mut ids = Vec::with_capacity(selected.len());
     for (key, value) in selected {
+        let request_id = Uuid::now_v7();
+        ids.push(request_id);
         let mut change = EncryptedChange {
-            request_id: Uuid::now_v7().to_string(),
+            request_id: request_id.to_string(),
             actor_id: actor_id.to_string(),
             key: key.into(),
             ciphertext: String::new(),
@@ -180,12 +185,22 @@ pub async fn save(
     if count == 0 {
         return Ok(0);
     }
-    db.query("INSERT INTO deployment_secret_change $changes")
-        .bind(("changes", encrypted))
-        .await
-        .map_err(|_| ChangeError::Store)?
-        .check()
-        .map_err(|_| ChangeError::Store)?;
+    // The mirror locates each encrypted change by its request UUID.
+    // Commit the entire batch before publishing any mirror writes.
+    db.query(
+        "BEGIN; FOR $change IN $changes { \
+         CREATE type::record($table, <uuid> $change.request_id) CONTENT $change; \
+         }; COMMIT;",
+    )
+    .bind(("table", TABLE))
+    .bind(("changes", encrypted))
+    .await
+    .map_err(|_| ChangeError::Store)?
+    .check()
+    .map_err(|_| ChangeError::Store)?;
+    for id in ids {
+        records::after_write(db, TABLE, id).await;
+    }
     Ok(count)
 }
 
@@ -266,13 +281,32 @@ mod tests {
         assert!(authorize(Role::Owner, DeploymentEnvironment::Dev).is_err());
     }
     #[tokio::test]
-    async fn stores_only_ciphertext_and_denies_wrong_context() {
+    async fn stores_only_ciphertext_keyed_by_request_and_denies_wrong_context() {
         let db = crate::test_support::mem_surreal().await;
-        let kms = cloud::FakeKms::new("production-runtime-key");
         let fields = BTreeMap::from([(
             "NAVIGATOR_META_APP_SECRET".into(),
             "synthetic-secret".into(),
         )]);
+        assert!(
+            matches!(
+                save(
+                    &db,
+                    &cloud::NoRuntimeKms,
+                    Role::Owner,
+                    DeploymentEnvironment::Production,
+                    Uuid::nil(),
+                    &fields
+                )
+                .await,
+                Err(ChangeError::Encryption)
+            ),
+            "No KMS never reports saved"
+        );
+        assert!(latest(&db, Role::Owner, DeploymentEnvironment::Production)
+            .await
+            .unwrap()
+            .is_empty());
+        let kms = cloud::FakeKms::new("production-runtime-key");
         assert_eq!(
             save(
                 &db,
@@ -289,6 +323,20 @@ mod tests {
         let mut rows = latest(&db, Role::Owner, DeploymentEnvironment::Production)
             .await
             .unwrap();
+        let ids: Vec<surrealdb::types::RecordId> = db
+            .query("SELECT VALUE id FROM deployment_secret_change")
+            .await
+            .unwrap()
+            .take(0)
+            .unwrap();
+        assert_eq!(
+            ids,
+            vec![crate::surreal::record_id(
+                TABLE,
+                Uuid::parse_str(&rows[0].request_id).unwrap()
+            )],
+            "The record key is the request's UUID, which the PostgreSQL mirror requires"
+        );
         assert!(!serde_json::to_string(&rows)
             .unwrap()
             .contains("synthetic-secret"));
@@ -313,29 +361,5 @@ mod tests {
         assert!(latest(&db, Role::Admin, DeploymentEnvironment::Production)
             .await
             .is_err());
-    }
-    #[tokio::test]
-    async fn no_kms_never_reports_saved() {
-        let db = crate::test_support::mem_surreal().await;
-        let fields = BTreeMap::from([(
-            "NAVIGATOR_META_APP_SECRET".into(),
-            "synthetic-secret".into(),
-        )]);
-        assert!(matches!(
-            save(
-                &db,
-                &cloud::NoRuntimeKms,
-                Role::Owner,
-                DeploymentEnvironment::Production,
-                Uuid::nil(),
-                &fields
-            )
-            .await,
-            Err(ChangeError::Encryption)
-        ));
-        assert!(latest(&db, Role::Owner, DeploymentEnvironment::Production)
-            .await
-            .unwrap()
-            .is_empty());
     }
 }
