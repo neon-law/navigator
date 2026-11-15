@@ -1,19 +1,9 @@
 -- Manual entries have an owning Firm and a view scope. Other audit writers
 -- retain their existing contract. The original Firm id survives Firm deletion.
-ALTER TABLE relationship_log
-    ADD COLUMN firm_id UUID,
-    ADD COLUMN graph_scope TEXT,
-    ADD CONSTRAINT relationship_log_graph_scope CHECK (
-        (graph_scope IS NULL AND firm_id IS NULL)
-        OR (
-            graph_scope IS NOT NULL AND firm_id IS NOT NULL AND actor_person_id IS NOT NULL
-            AND subject_type IN ('person', 'entity')
-            AND (
-                (graph_scope = 'project' AND project_id IS NOT NULL)
-                OR (graph_scope IN ('attorney', 'firm') AND project_id IS NULL)
-            )
-        )
-    );
+ALTER TABLE relationship_log ADD COLUMN firm_id UUID;
+ALTER TABLE relationship_log ADD COLUMN graph_scope TEXT;
+ALTER TABLE relationship_log ADD CONSTRAINT relationship_log_firm_scope CHECK ((graph_scope IS NULL) = (firm_id IS NULL));
+ALTER TABLE relationship_log ADD CONSTRAINT relationship_log_graph_scope CHECK (graph_scope IS NULL OR (actor_person_id IS NOT NULL AND subject_type IN ('person', 'entity') AND ((graph_scope = 'project' AND project_id IS NOT NULL) OR (graph_scope IN ('attorney', 'firm') AND project_id IS NULL))));
 
 CREATE INDEX relationship_log_graph_firm
     ON relationship_log (firm_id, inserted_at DESC, id DESC)
