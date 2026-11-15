@@ -489,10 +489,9 @@ mod tests {
         );
     }
 
-    /// The full matrix: every role, both Firms, both capabilities. Owner is
-    /// allowed everywhere with no membership row; Client is refused
-    /// everywhere; Admin/Lawyer/Clerk are allowed only inside their own
-    /// Firm, and only `ViewDirectory` admits a non-Admin membership.
+    /// Firm capability decisions across both Firms and every system role.
+    /// The matrix includes the explicit membership requirement for Relationship
+    /// Log observations and the Owner bypass for deployment-wide capabilities.
     #[tokio::test]
     #[allow(clippy::too_many_lines)]
     async fn two_firm_matrix_proves_membership_scoped_isolation() {
@@ -517,6 +516,28 @@ mod tests {
         member(&db, lawyer_a.id, firm_a.id, FirmMembership::Lawyer).await;
         let clerk_a = person(&db, "clerk-a", Role::Clerk).await;
         member(&db, clerk_a.id, firm_a.id, FirmMembership::Clerk).await;
+        let observation_access = FirmCapability::AccessRelationshipObservations;
+        for (actor, expected) in [
+            (&owner, FirmCapabilityDecision::Forbidden),
+            (&clerk_a, FirmCapabilityDecision::Forbidden),
+            (&lawyer_a, FirmCapabilityDecision::Allowed),
+            (&admin_a, FirmCapabilityDecision::Allowed),
+        ] {
+            assert_decision(
+                &db,
+                actor.role,
+                actor.id,
+                firm_a.id,
+                observation_access,
+                expected,
+            )
+            .await;
+            let ids = allowed_firm_ids(&db, actor.role, Some(actor.id), observation_access)
+                .await
+                .unwrap();
+            assert_eq!(ids.contains(&firm_a.id), expected.is_allowed());
+            assert!(!ids.contains(&firm_b.id));
+        }
         for capability in [
             FirmCapability::ViewDirectory,
             FirmCapability::ManageMembership,
@@ -780,29 +801,6 @@ mod tests {
             FirmCapabilityDecision::Forbidden,
             "the Firm's own Admin member does not thereby appoint its DRI"
         );
-    }
-
-    #[tokio::test]
-    async fn relationship_observations_require_membership_even_for_owner() {
-        let db = mem_surreal().await;
-        let firm = practice(&db, "Observation Practice").await;
-        let owner = person(&db, "owner-observations", Role::Owner).await;
-        let lawyer = person(&db, "lawyer-observations", Role::Lawyer).await;
-        let clerk = person(&db, "clerk-observations", Role::Clerk).await;
-        member(&db, lawyer.id, firm.id, FirmMembership::Lawyer).await;
-        member(&db, clerk.id, firm.id, FirmMembership::Clerk).await;
-        let capability = FirmCapability::AccessRelationshipObservations;
-        for (actor, decision) in [
-            (&owner, FirmCapabilityDecision::Forbidden),
-            (&clerk, FirmCapabilityDecision::Forbidden),
-            (&lawyer, FirmCapabilityDecision::Allowed),
-        ] {
-            assert_decision(&db, actor.role, actor.id, firm.id, capability, decision).await;
-            let ids = allowed_firm_ids(&db, actor.role, Some(actor.id), capability)
-                .await
-                .unwrap();
-            assert_eq!(ids.contains(&firm.id), decision.is_allowed());
-        }
     }
 
     /// `ManageFirmAssumptions` is the Firm's economics in words: Owner
