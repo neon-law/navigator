@@ -1590,12 +1590,13 @@
 {"file":"store/src/delegations.rs","line":780,"function":"rows_where","operation":"query","sql_operations":["SELECT"],"tables":[],"transaction":false}
 {"file":"store/src/delegations.rs","line":905,"function":"find_live_for_pair","operation":"bind","sql_operations":[],"tables":["person"],"transaction":false}
 {"file":"store/src/delegations.rs","line":905,"function":"find_live_for_pair","operation":"query","sql_operations":["SELECT"],"tables":[],"transaction":false}
-{"file":"store/src/deployment_secret_changes.rs","line":183,"function":"save","operation":"query","sql_operations":["INSERT"],"tables":["deployment_secret_change"],"transaction":false}
-{"file":"store/src/deployment_secret_changes.rs","line":199,"function":"latest","operation":"query","sql_operations":["SELECT"],"tables":["deployment_secret_change"],"transaction":false}
-{"file":"store/src/deployment_secret_changes.rs","line":204,"function":"latest","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"store/src/deployment_secret_changes.rs","line":244,"function":"production_scope_requires_real_matters_and_production_credentials","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"store/src/deployment_secret_changes.rs","line":248,"function":"production_scope_requires_real_matters_and_production_credentials","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"store/src/deployment_secret_changes.rs","line":249,"function":"production_scope_requires_real_matters_and_production_credentials","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"store/src/deployment_secret_changes.rs","line":190,"function":"save","operation":"query","sql_operations":["CREATE"],"tables":[],"transaction":true}
+{"file":"store/src/deployment_secret_changes.rs","line":214,"function":"latest","operation":"query","sql_operations":["SELECT"],"tables":["deployment_secret_change"],"transaction":false}
+{"file":"store/src/deployment_secret_changes.rs","line":219,"function":"latest","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"store/src/deployment_secret_changes.rs","line":259,"function":"production_scope_requires_real_matters_and_production_credentials","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"store/src/deployment_secret_changes.rs","line":263,"function":"production_scope_requires_real_matters_and_production_credentials","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"store/src/deployment_secret_changes.rs","line":264,"function":"production_scope_requires_real_matters_and_production_credentials","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"store/src/deployment_secret_changes.rs","line":326,"function":"stores_only_ciphertext_keyed_by_request_and_denies_wrong_context","operation":"query","sql_operations":["SELECT"],"tables":["deployment_secret_change"],"transaction":false}
 {"file":"store/src/disclosures.rs","line":126,"function":"record","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
 {"file":"store/src/disclosures.rs","line":126,"function":"record","operation":"query","sql_operations":["INSERT"],"tables":["disclosure"],"transaction":false}
 {"file":"store/src/disclosures.rs","line":139,"function":"record","operation":"bind","sql_operations":[],"tables":[],"transaction":false}
@@ -4365,6 +4366,7 @@
 {"file":"store/src/postgres_mirror/records_tests.rs","line":1327,"function":"mixed_and_string_keyed_source_rows_fail_closed_on_foreign_key_shapes","operation":"query","sql_operations":["CREATE"],"tables":["firm_anchor"],"transaction":false}
 {"file":"store/src/postgres_mirror/records_tests.rs","line":1415,"function":"natural_and_record_references_count_orphans_without_naming_them","operation":"bind","sql_operations":[],"tables":["project"],"transaction":false}
 {"file":"store/src/postgres_mirror/records_tests.rs","line":1415,"function":"natural_and_record_references_count_orphans_without_naming_them","operation":"query","sql_operations":["CREATE"],"tables":["iolta_allocation"],"transaction":false}
+{"file":"store/src/postgres_mirror/records_tests.rs","line":1523,"function":"saved_deployment_secret_changes_reconcile_to_clean_parity","operation":"query_scalar","sql_operations":["SELECT"],"tables":["deployment_secret_change"],"transaction":false}
 {"file":"store/src/postgres_mirror/sent_emails.rs","line":79,"function":"purged_days","operation":"query_scalar","sql_operations":["SELECT"],"tables":[],"transaction":false}
 {"file":"store/src/postgres_mirror/sent_emails.rs","line":101,"function":"source","operation":"query","sql_operations":["SELECT"],"tables":["sent_email"],"transaction":false}
 {"file":"store/src/postgres_mirror/sent_emails.rs","line":119,"function":"source_one","operation":"bind","sql_operations":[],"tables":["sent_email"],"transaction":false}
