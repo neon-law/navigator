@@ -208,22 +208,30 @@ impl Registry {
     }
 
     async fn upload(&self, version: &str, file: &str, bytes: Vec<u8>) -> Result<()> {
+        let expected = Sha256::digest(&bytes);
+        let url = self.package_url(version, file);
         let response = self
             .client
-            .put(self.package_url(version, file))
+            .put(&url)
             .bearer_auth(&self.token)
             .body(bytes)
             .send()
             .await
             .with_context(|| format!("upload {file}"))?;
-        // 409: an earlier, interrupted mirror already uploaded this file. The
-        // registry never replaces a package file, so the digest check on the
-        // runner is what proves it.
+        if response.status() == StatusCode::CONFLICT {
+            let mut existing = self.client.get(url).send().await?.error_for_status()?;
+            let mut actual = Sha256::new();
+            while let Some(chunk) = existing.chunk().await? {
+                actual.update(chunk);
+            }
+            ensure!(
+                actual.finalize() == expected,
+                "the Forgejo registry already contains different bytes for {file}"
+            );
+            return Ok(());
+        }
         ensure!(
-            matches!(
-                response.status(),
-                StatusCode::CREATED | StatusCode::CONFLICT
-            ),
+            response.status() == StatusCode::CREATED,
             "the package registry refused {file} ({})",
             response.status()
         );
@@ -398,6 +406,38 @@ mod tests {
             .unwrap()
             .with_source(&github.uri());
         assert_eq!(registry.ensure(VERSION).await.unwrap(), Mirrored::Uploaded);
+    }
+
+    #[tokio::test]
+    async fn an_upload_conflict_requires_matching_anonymous_readback() {
+        let forgejo = MockServer::start().await;
+        let file = asset_names(VERSION).0;
+        Mock::given(method("PUT"))
+            .and(path(package(&file)))
+            .respond_with(ResponseTemplate::new(409))
+            .expect(2)
+            .mount(&forgejo)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(package(&file)))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(ARCHIVE))
+            .expect(2)
+            .mount(&forgejo)
+            .await;
+        let registry = Registry::new(&forgejo.uri(), "operator".into()).unwrap();
+        registry
+            .upload(VERSION, &file, ARCHIVE.to_vec())
+            .await
+            .unwrap();
+        assert!(registry.upload(VERSION, &file, vec![0]).await.is_err());
+        assert!(forgejo
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .all(|request| {
+                request.method != "GET" || !request.headers.contains_key("authorization")
+            }));
     }
 
     #[tokio::test]
