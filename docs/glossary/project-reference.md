@@ -27,6 +27,18 @@ client — the Project's Entity, or its client DRI — to the party, sourced to 
 row the write appends on the Project. Given what a reference needs, the verb records the `adverse_party` reference
 first.
 
+Each `reason` maps to the [Relationship Edge Kind](relationship-edge-kind.md) that describes the tie it records:
+
+- `adverse_party` → [`adverse_to`](adverse-to-edge.md), from the client to the party.
+- `counterparty_officer` → [`employs`](employs-edge.md), from the counterparty Entity to its officer.
+- `counterparty_entity` → the edge kind that describes the specific tie, such as `retains`, `vendor_of`, or
+  `adverse_to`. The reason is a placeholder until that kind is recorded.
+- `registered_agent` → [`agent_of`](agent-of-edge.md), from the agent to the Entity it serves.
+- `signatory` → [`agent_of`](agent-of-edge.md), from the signatory to the party it signs for.
+
+Only `adverse_party` writes its edge today, through `navigator project adverse add`; the other reasons record the
+reference alone.
+
 - Schema and commands: [`store::project_references`](../../store/src/project_references.rs) — Lives in the
   `project_reference` relation
 

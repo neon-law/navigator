@@ -30,7 +30,9 @@ the same observation without appending it twice.
 
 The Project graph shows the Project's observations, the lawyer's own graph shows their Project and attorney
 observations, and the Firm graph shows its Project and Firm observations to Firm members. Graph views show the subject
-and type. The audit entry holds the detail. A logged observation grants no participation.
+and type. The audit entry holds the detail. A logged observation grants no participation. The target design gives every
+row all three anchors — the Project (optional), the recording attorney, and the Firm — so each row appears in all three
+graphs; see [Relationship Edge](relationship-edge.md).
 
 - Schema and queries: [`store::relationship_logs`](../../store/src/relationship_logs.rs) — Lives
   in: `relationship_log` table
