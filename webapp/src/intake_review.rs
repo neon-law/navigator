@@ -68,6 +68,10 @@ pub struct IntakeReviewData {
     pub workflow_state: String,
     #[serde(default)]
     pub document_ready: bool,
+    #[serde(default)]
+    pub approval_pending: bool,
+    #[serde(default)]
+    pub approval_failed: bool,
     /// Present once an envelope has gone out. Its presence is half of the
     /// phase decision, so it is never inferred from the state alone.
     pub signature_request_id: Option<String>,
@@ -208,6 +212,8 @@ fn review_body(view: &IntakeReviewView) -> Element {
     let signature = data.signature_request_id.clone().unwrap_or("—".to_string());
     let approve_label = data.approve_send_label.clone();
     let offers_reask = !data.reask_questions.is_empty();
+    let can_approve =
+        phase == Phase::AwaitingReview && !data.approval_pending && !data.approval_failed;
 
     rsx! {
         document::Title { "{view.firm_name} | Lawyer | Notations | Review" }
@@ -231,12 +237,18 @@ fn review_body(view: &IntakeReviewView) -> Element {
         }
         main { id: "intake-review", class: "nav-theme",
             h1 { {phase.heading()} }
-            if phase == Phase::AwaitingReview {
+            if can_approve {
                 p { class: "nav-muted",
                     "Intake is complete and the matter parks here for an attorney — no "
                     "document is generated until a person approves. The exact document "
                     "below is what gets signed. Review it before approving the PDF."
                 }
+            }
+            if data.approval_pending {
+                p { role: "status", "Approval submitted. Refresh to check whether the PDF is ready." }
+            }
+            if data.approval_failed {
+                p { role: "alert", "The approval run failed. An operator can recover the run before dispatch." }
             }
             if phase == Phase::ReadyToSend && !data.document_ready {
                 p { role: "status", "The PDF is rendering. Refresh to check its status." }
@@ -264,7 +276,7 @@ fn review_body(view: &IntakeReviewView) -> Element {
                     }
                 }
             }
-            if phase == Phase::AwaitingReview {
+            if can_approve {
                 form { method: "post", action: "{approve_send}", "aria-label": "{approve_label}",
                     input { r#type: "hidden", name: "_csrf", value: "{csrf}" }
                     button { class: "nav-btn nav-btn--primary", r#type: "submit", "{approve_label}" }
@@ -417,6 +429,8 @@ mod tests {
                 notation_id: NOTATION.to_string(),
                 workflow_state: state.to_string(),
                 document_ready: true,
+                approval_pending: false,
+                approval_failed: false,
                 signature_request_id: signature.map(str::to_string),
                 rendered_html: "<article class=\"notation\"><p>body</p></article>".to_string(),
                 governing_law_defaulted: false,
@@ -553,6 +567,21 @@ mod tests {
         let html = render(&review);
         assert!(html.contains("The PDF is rendering."));
         assert!(!html.contains(&format!("action=\"/app/lawyer/notations/{NOTATION}/send\"")));
+    }
+
+    #[test]
+    fn queued_and_failed_approvals_report_progress_without_offering_another_approval() {
+        let mut review = view("lawyer_review", None);
+        review.data.approval_pending = true;
+        let queued = render(&review);
+        assert!(queued.contains("Approval submitted."));
+        assert!(!queued.contains("/approve-send"));
+
+        review.data.approval_pending = false;
+        review.data.approval_failed = true;
+        let failed = render(&review);
+        assert!(failed.contains("The approval run failed."));
+        assert!(!failed.contains("/approve-send"));
     }
 
     #[test]

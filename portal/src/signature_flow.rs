@@ -54,6 +54,21 @@ pub(crate) async fn send_notation_for_signature(
     let notation_row = store::notations::find_by_id(ctx.surreal, notation_id)
         .await?
         .ok_or(WorkflowDriveError::TemplateMissing(notation_id))?;
+    if notation_row.state == "lawyer_review" {
+        match ctx
+            .runtime
+            .approval_progress(notation_id, notation_row.updated_at.timestamp_micros())
+            .await?
+        {
+            Some(workflows::ApprovalProgress::Pending) => {
+                return Err(WorkflowDriveError::DocumentNotReady(notation_id));
+            }
+            Some(workflows::ApprovalProgress::Failed) => {
+                return Err(WorkflowDriveError::ApprovalRunFailed);
+            }
+            _ => {}
+        }
+    }
     let current_state = ctx
         .runtime
         .current_state(workflows::MachineKind::Workflow, notation_id)

@@ -1612,6 +1612,8 @@ pub enum WorkflowDriveError {
     DocumentNotReady(Uuid),
     #[error("notation is at `{state}`. Complete the questionnaire and reach lawyer review before approving.")]
     ApprovalNotReady { state: String },
+    #[error("the approval run failed. Recover the original workflow before dispatch.")]
+    ApprovalRunFailed,
     #[error("the workflow advanced without a recorded envelope. Check DocuSign before attempting recovery.")]
     DispatchNeedsReconciliation,
 
@@ -1954,6 +1956,20 @@ pub(crate) async fn render_and_park(
     let notation_row = store::notations::find_by_id(deps.surreal, notation_id)
         .await?
         .ok_or(WorkflowDriveError::TemplateMissing(notation_id))?;
+    if notation_row.state == "lawyer_review" {
+        match runtime
+            .approval_progress(notation_id, notation_row.updated_at.timestamp_micros())
+            .await?
+        {
+            Some(workflows::ApprovalProgress::Pending) => {
+                return Ok(StateName::from("lawyer_review"));
+            }
+            Some(workflows::ApprovalProgress::Failed) => {
+                return Err(WorkflowDriveError::ApprovalRunFailed);
+            }
+            _ => {}
+        }
+    }
     let current_state = runtime
         .current_state(MachineKind::Workflow, notation_id)
         .await
@@ -2166,9 +2182,10 @@ pub async fn approve_send_post(
             );
             back_to_review(notation_id)
         }
-        Err(e @ WorkflowDriveError::ApprovalNotReady { .. }) => {
-            (StatusCode::CONFLICT, e.to_string()).into_response()
-        }
+        Err(
+            e @ (WorkflowDriveError::ApprovalNotReady { .. }
+            | WorkflowDriveError::ApprovalRunFailed),
+        ) => (StatusCode::CONFLICT, e.to_string()).into_response(),
         Err(e) => {
             tracing::error!(error = %e, %notation_id, "approve_send: render_and_park failed");
             (StatusCode::INTERNAL_SERVER_ERROR, "approve failed").into_response()
@@ -2217,9 +2234,10 @@ pub async fn send_post(
             );
             back_to_review(notation_id)
         }
-        Err(e @ WorkflowDriveError::DispatchNeedsReconciliation) => {
-            (StatusCode::CONFLICT, e.to_string()).into_response()
-        }
+        Err(
+            e @ (WorkflowDriveError::DispatchNeedsReconciliation
+            | WorkflowDriveError::ApprovalRunFailed),
+        ) => (StatusCode::CONFLICT, e.to_string()).into_response(),
         Err(WorkflowDriveError::DocumentNotReady(_)) => {
             tracing::info!(%notation_id, "send: document not ready yet");
             (
@@ -2342,6 +2360,20 @@ pub(crate) async fn resolve_intake_review(
     let document_ready = document_pdf_ready(state.storage.as_ref(), notation_id)
         .await
         .unwrap_or(false);
+    let approval_progress = if notation_row.state == "lawyer_review" {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            state
+                .workflow_runtime
+                .approval_progress(notation_id, notation_row.updated_at.timestamp_micros()),
+        )
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .flatten()
+    } else {
+        None
+    };
     if format == Some("json") {
         return Err(axum::Json(serde_json::json!({
             "notation_id": notation_id,
@@ -2349,6 +2381,7 @@ pub(crate) async fn resolve_intake_review(
             "signature_request_id": signature_request_id,
             "delivery": notation_row.delivery,
             "document_ready": document_ready,
+            "approval_progress": approval_progress,
         }))
         .into_response());
     }
@@ -2411,6 +2444,8 @@ pub(crate) async fn resolve_intake_review(
         notation_id: notation_id.to_string(),
         workflow_state: notation_row.state,
         document_ready,
+        approval_pending: approval_progress == Some(workflows::ApprovalProgress::Pending),
+        approval_failed: approval_progress == Some(workflows::ApprovalProgress::Failed),
         signature_request_id,
         rendered_html,
         governing_law_defaulted,

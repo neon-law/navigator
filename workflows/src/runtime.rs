@@ -71,6 +71,15 @@ pub enum WorkflowRuntimeError {
     Transport(String),
 }
 
+/// Progress of a durable Lawyer Review approval.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalProgress {
+    Pending,
+    Ready,
+    Failed,
+}
+
 /// Generalized durable runtime keyed by `(MachineKind,
 /// notation_id)`. One service can host both the questionnaire
 /// walker and the workflow runner per Notation; the [`MachineKind`]
@@ -139,6 +148,15 @@ pub trait StateMachineRuntime: Send + Sync {
             }
         };
         Ok(Some(state))
+    }
+
+    /// Report the submitted approval for this review revision, if any.
+    async fn approval_progress(
+        &self,
+        _notation_id: Uuid,
+        _review_revision: i64,
+    ) -> Result<Option<ApprovalProgress>, WorkflowRuntimeError> {
+        Ok(None)
     }
 
     /// Move one question back while retaining the append-only transition log.

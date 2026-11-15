@@ -8950,6 +8950,14 @@ fn workflow_drive_error(e: crate::retainer_walk::WorkflowDriveError) -> Response
             })),
         )
             .into_response(),
+        e @ E::ApprovalRunFailed => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "approval_run_failed",
+                "reason": e.to_string(),
+            })),
+        )
+            .into_response(),
         e @ E::DispatchNeedsReconciliation => (
             StatusCode::CONFLICT,
             Json(serde_json::json!({

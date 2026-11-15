@@ -20,11 +20,9 @@
 //!   are reused. Effects remain at least once when a process dies after a
 //!   send or journal append but before its checkpoint commits.
 //!
-//! One DBOS workflow carries exactly one transition (`start`, `signal`, or
-//! `back`) and gets a fresh workflow id per call — the parity for Restate
-//! giving every POST its own invocation. The caller-facing wire shapes stay
-//! the property of the worker ingress (`crate::dbos_ingress`), which speaks
-//! the same paths and bodies the Restate ingress did.
+//! One DBOS workflow carries exactly one transition. Start, signal, and back
+//! run synchronously through the worker ingress. Approval uses a stable
+//! workflow ID for the submitted review revision and returns after submission.
 //!
 //! Store/transport failures are retried by the steps that hit them
 //! (`retryable_steps` below); deterministic outcomes — a bad spec, no
@@ -143,6 +141,12 @@ pub enum Operation {
         acting_person_id: Option<uuid::Uuid>,
         #[serde(default)]
         ephemeral: bool,
+    },
+    /// Approve the specific Lawyer Review revision submitted by the caller.
+    Approve {
+        review_revision: i64,
+        value: String,
+        acting_person_id: Option<uuid::Uuid>,
     },
     /// `questionnaire_back` — move back one answerable question, appending
     /// the immutable `back` journal transition.
@@ -382,6 +386,22 @@ async fn transition(
             )
             .await
         }
+        Operation::Approve {
+            value,
+            acting_person_id,
+            ..
+        } => {
+            signal(
+                &context,
+                MachineKind::Workflow,
+                notation_id,
+                "approved",
+                Some(value),
+                acting_person_id,
+                false,
+            )
+            .await
+        }
         Operation::Back { acting_person_id } => {
             back(
                 &context,
@@ -446,7 +466,26 @@ async fn preflight(
         })
     })?;
     let spec = parse_spec(kind, &machine.spec_yaml).map_err(dbos::Error::Application)?;
-    if let Operation::Signal { condition, .. } = &request.operation {
+    let condition = match &request.operation {
+        Operation::Signal { condition, .. } => Some(condition.as_str()),
+        Operation::Approve {
+            review_revision, ..
+        } => {
+            let notation = store::notations::find_by_id(&context.surreal, request.notation_id)
+                .await
+                .map_err(|error| {
+                    dbos::Error::Application(NotationTransitionError::Store(error.to_string()))
+                })?;
+            if !notation.is_some_and(|row| row.updated_at.timestamp_micros() == *review_revision) {
+                return Err(dbos::Error::Application(NotationTransitionError::Terminal(
+                    "Lawyer Review changed after the approval was submitted".into(),
+                )));
+            }
+            Some("approved")
+        }
+        _ => None,
+    };
+    if let Some(condition) = condition {
         advance(
             spec.inner(),
             &StateName::from(machine.current_state.as_str()),

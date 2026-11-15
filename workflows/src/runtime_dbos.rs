@@ -186,6 +186,22 @@ impl StateMachineRuntime for DbosNotationRuntime {
         Ok(None)
     }
 
+    async fn approval_progress(
+        &self,
+        notation_id: Uuid,
+        review_revision: i64,
+    ) -> Result<Option<crate::ApprovalProgress>, WorkflowRuntimeError> {
+        let url = self
+            .inner
+            .handler_url(MachineKind::Workflow, notation_id, "approval_progress");
+        self.inner
+            .post_json(
+                &url,
+                &serde_json::json!({ "review_revision": review_revision }),
+            )
+            .await
+    }
+
     async fn back(
         &self,
         kind: MachineKind,

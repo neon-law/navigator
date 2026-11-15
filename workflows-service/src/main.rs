@@ -912,7 +912,7 @@ async fn main() -> anyhow::Result<()> {
                         if let Some(token) = dbos_ingress_token.clone() {
                             registered_ingress.notation = Some(
                                 workflows_service::dbos_ingress::NotationIngress::new(
-                                    token, surreal, postgres, workflow,
+                                    token, dbos.clone(), surreal, postgres, workflow,
                                 ),
                             );
                         }

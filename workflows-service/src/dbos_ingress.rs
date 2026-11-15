@@ -282,6 +282,7 @@ impl SocialReconcilerIngress {
 #[derive(Clone)]
 pub struct NotationIngress {
     token: Arc<str>,
+    dbos: dbos::DBOS,
     surreal: SurrealDb,
     postgres: store::postgres::PostgresDb,
     workflow: crate::dbos_notation::NotationTransitionWorkflow,
@@ -293,12 +294,14 @@ impl NotationIngress {
     #[must_use]
     pub fn new(
         token: String,
+        dbos: dbos::DBOS,
         surreal: SurrealDb,
         postgres: store::postgres::PostgresDb,
         workflow: crate::dbos_notation::NotationTransitionWorkflow,
     ) -> Self {
         Self {
             token: Arc::from(token),
+            dbos,
             surreal,
             postgres,
             workflow,
@@ -630,6 +633,11 @@ fn add_notation_routes(router: Router, notation: &NotationIngress) -> Router {
         .route(
             "/notation/{notation_id}/workflow_approve",
             post(notation_approve)
+                .with_state(notation.route_state(workflows::MachineKind::Workflow)),
+        )
+        .route(
+            "/notation/{notation_id}/workflow_approval_progress",
+            post(notation_approval_progress)
                 .with_state(notation.route_state(workflows::MachineKind::Workflow)),
         )
         .route(
@@ -1098,7 +1106,7 @@ async fn notation_approve(
     let notation_id = notation_id_for(&notation_id)?;
     let body: NotationApprovalBody =
         serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
-    let workflow_id = format!("NotationApproval:{notation_id}:{}", body.review_revision);
+    let workflow_id = notation_approval_id(notation_id, body.review_revision);
     state
         .inner
         .workflow
@@ -1106,11 +1114,10 @@ async fn notation_approve(
             crate::dbos_notation::TransitionRequest {
                 kind: state.kind,
                 notation_id,
-                operation: crate::dbos_notation::Operation::Signal {
-                    condition: "approved".into(),
-                    value: Some(body.value),
+                operation: crate::dbos_notation::Operation::Approve {
+                    review_revision: body.review_revision,
+                    value: body.value,
                     acting_person_id: body.acting_person_id,
-                    ephemeral: false,
                 },
             },
             dbos::StartOptions {
@@ -1121,6 +1128,50 @@ async fn notation_approve(
         .await
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     Ok(StatusCode::ACCEPTED)
+}
+
+fn notation_approval_id(notation_id: uuid::Uuid, review_revision: i64) -> String {
+    format!("NotationApproval:{notation_id}:{review_revision}")
+}
+
+#[derive(Deserialize)]
+struct ApprovalProgressRequest {
+    review_revision: i64,
+}
+
+async fn notation_approval_progress(
+    State(state): State<NotationRouteState>,
+    axum::extract::Path(notation_id): axum::extract::Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<Option<workflows::ApprovalProgress>>, StatusCode> {
+    use workflows::ApprovalProgress;
+
+    if !authorized(&headers, &state.inner.token) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    let notation_id = notation_id_for(&notation_id)?;
+    let body: ApprovalProgressRequest =
+        serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let workflow_id = notation_approval_id(notation_id, body.review_revision);
+    let handle = state
+        .inner
+        .dbos
+        .retrieve_workflow::<
+            crate::dbos_notation::TransitionReport,
+            crate::dbos_notation::NotationTransitionError,
+        >(&workflow_id)
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let progress = match handle.status().await {
+        Ok(status) => match status.as_str() {
+            "PENDING" | "ENQUEUED" | "DELAYED" => ApprovalProgress::Pending,
+            "SUCCESS" => ApprovalProgress::Ready,
+            _ => ApprovalProgress::Failed,
+        },
+        Err(dbos::Error::WorkflowNotFound { .. }) => return Ok(Json(None)),
+        Err(_) => return Err(StatusCode::SERVICE_UNAVAILABLE),
+    };
+    Ok(Json(Some(progress)))
 }
 
 async fn notation_back(

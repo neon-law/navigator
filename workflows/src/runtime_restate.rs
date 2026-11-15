@@ -149,7 +149,7 @@ impl RestateRuntime {
         )
     }
 
-    async fn post_json<I: Serialize, O: for<'de> Deserialize<'de>>(
+    pub(crate) async fn post_json<I: Serialize, O: for<'de> Deserialize<'de>>(
         &self,
         url: &str,
         body: &I,

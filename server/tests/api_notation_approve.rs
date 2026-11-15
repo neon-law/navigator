@@ -267,3 +267,28 @@ async fn approval_reconciles_a_rendered_pdf_after_the_workflow_advanced() {
         1
     );
 }
+
+#[tokio::test]
+async fn a_preexisting_pdf_does_not_skip_lawyer_approval() {
+    let h = build_app().await;
+    let project = open_project(&h.surreal).await;
+    let notation_id = seed_lawyer_review_notation(&h, project.id).await;
+    let admin = bearer_new_person(&h.surreal, "admin@example.com", Role::Admin, None).await;
+    h.storage
+        .put(
+            &store::notations::document_pdf_storage_key(notation_id),
+            b"%PDF-1.7",
+            "application/pdf",
+        )
+        .await
+        .unwrap();
+
+    let response = post_approval(&h.app, Some(&admin), notation_id).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let current = h
+        .runtime
+        .current_state(workflows::MachineKind::Workflow, notation_id)
+        .await
+        .unwrap();
+    assert_eq!(current.prefix(), "generate_pdf");
+}

@@ -366,7 +366,8 @@ the worker requires the same token and its PostgreSQL configuration. The switch 
 The DBOS worker acknowledges a Lawyer Review approval after starting a durable transition for that review revision. The
 worker renders and journals the approved PDF before publishing the Notation state. A repeat approval reconciles a
 Notation that still shows Lawyer Review after its Workflow advanced and the PDF was persisted. Envelope dispatch records
-the draft ID before entering the signing state and checks that ID with the provider on retry.
+the draft ID before entering the signing state and checks that ID with the provider on retry. The review screen reports
+a queued or failed run while the Notation still shows Lawyer Review.
 
 The worker stores both machines in `notation_machine_state` and serializes transitions with one PostgreSQL advisory lane
 per Notation. A target-only `notation_transition` pending row retains ownership across failure, cancellation, and

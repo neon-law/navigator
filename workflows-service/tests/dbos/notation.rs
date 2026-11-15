@@ -66,6 +66,7 @@ async fn the_authenticated_caller_keeps_both_notation_machines_independent() {
         WorkerIngress {
             notation: Some(NotationIngress::new(
                 "synthetic-worker-token".into(),
+                worker.clone(),
                 surreal,
                 postgres,
                 workflow,
@@ -1145,6 +1146,7 @@ async fn dbos_approval_accepts_a_retry_and_publishes_the_rendered_state_once() {
         WorkerIngress {
             notation: Some(NotationIngress::new(
                 "synthetic-worker-token".into(),
+                fixture.worker.clone(),
                 fixture.surreal.clone(),
                 postgres.clone(),
                 fixture.workflow.clone(),
@@ -1170,6 +1172,26 @@ async fn dbos_approval_accepts_a_retry_and_publishes_the_rendered_state_once() {
     let actor = workflows::SignalContext {
         acting_person_id: fixture.actor,
     };
+    let stale_revision = review_revision - 1;
+    runtime
+        .approve(fixture.id, stale_revision, &payload, Some(actor))
+        .await
+        .unwrap();
+    let stale_run = format!("NotationApproval:{}:{stale_revision}", fixture.id);
+    let stale_handle = fixture.worker
+        .retrieve_workflow::<dbos_notation::TransitionReport, dbos_notation::NotationTransitionError>(&stale_run)
+        .unwrap();
+    assert!(tokio::time::timeout(DEADLINE, stale_handle.result())
+        .await
+        .unwrap()
+        .is_err());
+    assert_eq!(
+        runtime
+            .approval_progress(fixture.id, stale_revision)
+            .await
+            .unwrap(),
+        Some(workflows::ApprovalProgress::Failed)
+    );
     let lane = store::notation_machine_state::acquire_lane(&postgres, fixture.id)
         .await
         .unwrap();
@@ -1185,6 +1207,13 @@ async fn dbos_approval_accepts_a_retry_and_publishes_the_rendered_state_once() {
             None
         );
     }
+    assert_eq!(
+        runtime
+            .approval_progress(fixture.id, review_revision)
+            .await
+            .unwrap(),
+        Some(workflows::ApprovalProgress::Pending)
+    );
     drop(lane);
     let run_id = format!("NotationApproval:{}:{review_revision}", fixture.id);
     let handle = fixture.worker
@@ -1197,6 +1226,13 @@ async fn dbos_approval_accepts_a_retry_and_publishes_the_rendered_state_once() {
             .unwrap()
             .next_state,
         "generate_pdf__letter"
+    );
+    assert_eq!(
+        runtime
+            .approval_progress(fixture.id, review_revision)
+            .await
+            .unwrap(),
+        Some(workflows::ApprovalProgress::Ready)
     );
     let persisted = store::notations::find_by_id(&fixture.surreal, fixture.id)
         .await
