@@ -1596,6 +1596,10 @@ mod tests {
                 "20261114210000_scope_manual_relationship_logs.sql",
                 include_str!("../postgres/migrations/20261114210000_scope_manual_relationship_logs.sql"),
             ),
+            (
+                "20261115150000_create_product_catalog_history.sql",
+                include_str!("../postgres/migrations/20261115150000_create_product_catalog_history.sql"),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

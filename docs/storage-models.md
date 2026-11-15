@@ -62,10 +62,11 @@ SurrealDB.
 Whenever `NAVIGATOR_POSTGRES_HOST` is set, `store::communications`, `store::email_conversations`,
 `store::email_receipts`, and `store::email_deliveries` read and write PostgreSQL only: the `communication`,
 `email_conversation`, `email_conversation_message`, `email_receipt`, `email_delivery`, and `email_delivery_attempt`
-tables. The mirror neither copies nor compares those tables. Without a host, SurrealDB is the fallback. The unique
-indexes decide replay races, and a delivery's reservation commits with its attempt. Parent rows (Project, Person, Firm,
-Notation, Asset) must exist in PostgreSQL. A retention purge refuses while an Inbox Message or a Notation source still
-names a Communication it would delete. The Inbox tables follow the same rule.
+tables. The first [Mirror Backfill](postgres-tooling.md#mirror-backfill) inserts missing history. Parity skips those
+tables after the first completed run. Without a host, SurrealDB is the fallback. The unique indexes decide replay races,
+and a delivery's reservation commits with its attempt. Parent rows (Project, Person, Firm, Notation, Asset) must exist
+in PostgreSQL. A retention purge refuses while an Inbox Message or a Notation source still names a Communication it
+would delete. The Inbox tables follow the same rule.
 
 ## Brand and social content
 

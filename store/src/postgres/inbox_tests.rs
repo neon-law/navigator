@@ -2510,11 +2510,13 @@ async fn legacy_inbox_repair_cannot_replace_native_authority() {
         repair.is_err(),
         "a stale Source row cannot overwrite the native Inbox"
     );
-    assert!(crate::postgres_mirror::inbox::reconcile(&f.db, &f.pg)
+    // Before any backfill, parity names only the Source rows PostgreSQL
+    // lacks; the native row it holds is never divergent and never rewritten.
+    assert!(!crate::postgres_mirror::inbox::reconcile(&f.db, &f.pg)
         .await
         .unwrap()
-        .tables
-        .is_empty());
+        .divergent()
+        .any(|key| *key == crate::postgres_mirror::MirrorKey::InboxMessage(source.message_id)));
     let body: String = sqlx::query_scalar("SELECT body FROM message WHERE id=$1")
         .bind(source.message_id)
         .fetch_one(f.pg.pool())
@@ -2933,8 +2935,7 @@ async fn native_triage_mirror_preserves_native_parent(
     assert!(crate::postgres_mirror::inbox::reconcile(&f.db, &f.pg)
         .await
         .unwrap()
-        .tables
-        .is_empty());
+        .is_clean());
 }
 
 async fn seed_triage_mirror_catalogs(f: &Fixture) {

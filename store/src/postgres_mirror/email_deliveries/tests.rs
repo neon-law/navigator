@@ -53,6 +53,20 @@ async fn receipt_delivery_attempt_mirror_replays_reconciles_and_cascades() {
         MirrorKey::EmailDelivery(delivery.id),
         MirrorKey::EmailDeliveryAttempt(attempt_id),
     ];
+    crate::postgres::communications::with_test_db(
+        pg.clone(),
+        Box::pin(async {
+            assert_eq!(
+                reconcile(&surreal, &pg).await.unwrap().divergent().count(),
+                3
+            );
+            assert!(super::super::during_initial_copy(reconcile(&surreal, &pg))
+                .await
+                .unwrap()
+                .is_clean());
+        }),
+    )
+    .await;
     for key in &keys {
         mirror(&surreal, &pg, key).await.unwrap();
     }
@@ -208,11 +222,7 @@ async fn email_write_hook_probe() {
     assert_eq!(surreal_rows.len(), usize::from(case == "disabled"));
     if case == "postgres" {
         let pg = PostgresDb::from_env().await.unwrap();
-        assert!(super::parity(&surreal, &pg)
-            .await
-            .unwrap()
-            .tables
-            .is_empty());
+        assert!(super::parity(&surreal, &pg).await.unwrap().is_clean());
         assert_eq!(
             mirror(&surreal, &pg, &MirrorKey::EmailReceipt(receipt_id))
                 .await

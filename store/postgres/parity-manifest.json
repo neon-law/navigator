@@ -429,6 +429,13 @@
     },
     {
       "extra_column": null,
+      "extra_table": "product",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "project_archive_generation",
       "missing_column": null,
       "missing_table": null,
@@ -2037,7 +2044,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 167,
+    "table_count": 168,
     "tables": {
       "address": {
         "columns": {
@@ -4882,6 +4889,27 @@
         "references": [
           "brand"
         ]
+      },
+      "product": {
+        "columns": {
+          "account_code": "TEXT",
+          "active": "BOOLEAN",
+          "billing_kind": "TEXT",
+          "cadence": "TEXT",
+          "code": "TEXT",
+          "currency": "TEXT",
+          "display_name": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "list_price_cents": "BIGINT",
+          "matter_close_template_code": "TEXT",
+          "retainer_template_code": "TEXT",
+          "updated_at": "TIMESTAMPTZ",
+          "xero_item_code": "TEXT"
+        },
+        "foreign_keys": [],
+        "name": "product",
+        "references": []
       },
       "project": {
         "columns": {

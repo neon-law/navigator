@@ -1,8 +1,12 @@
 //! PostgreSQL projections for privileged Communications and email threads.
 //!
 //! Whenever `NAVIGATOR_POSTGRES_HOST` is set PostgreSQL holds these rows, so a
-//! SurrealDB row (or its absence) is no evidence about them: the mirror writes
-//! nothing and parity compares no table.
+//! SurrealDB row (or its absence) is no evidence about them. Only the first
+//! Mirror Backfill copies SurrealDB rows in then, inserting each row
+//! PostgreSQL lacks under its own id and never overwriting or deleting one
+//! it holds; until a backfill has completed, parity reports each SurrealDB row
+//! PostgreSQL lacks, and after it compares no table (see
+//! [`super::held_compared`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -71,7 +75,7 @@ pub(super) struct MessageImage {
 }
 
 #[derive(SurrealValue)]
-struct CommRow {
+pub(super) struct CommRow {
     id: RecordId,
     project_id: RecordId,
     channel: String,
@@ -133,7 +137,7 @@ fn date(value: &str) -> Result<DateTime<Utc>, MirrorError> {
         .map(|d| micros(d.with_timezone(&Utc)))
         .map_err(|_| MirrorError::Source)
 }
-fn source_image(row: CommRow) -> Result<CommunicationImage, MirrorError> {
+pub(super) fn source_image(row: CommRow) -> Result<CommunicationImage, MirrorError> {
     Ok(CommunicationImage {
         id: uuid(&row.id)?,
         project_id: uuid(&row.project_id)?,
@@ -314,29 +318,33 @@ async fn source_all(
     Ok((c, v, m))
 }
 
-async fn upsert_communication(
-    pg: &PostgresDb,
+pub(super) async fn upsert_communication<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
     i: &CommunicationImage,
+    insert_only: bool,
 ) -> Result<Mirrored, MirrorError> {
-    let r=sqlx::query("INSERT INTO communication (id,project_id,channel,direction,author_person_id,counterparty,subject,body,source_ref,asset_id,occurred_at,call,agreements,inserted_at,updated_at,counterparty_role,acknowledges) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) ON CONFLICT (id) DO UPDATE SET project_id=EXCLUDED.project_id,channel=EXCLUDED.channel,direction=EXCLUDED.direction,author_person_id=EXCLUDED.author_person_id,counterparty=EXCLUDED.counterparty,subject=EXCLUDED.subject,body=EXCLUDED.body,counterparty_role=EXCLUDED.counterparty_role,acknowledges=EXCLUDED.acknowledges,source_ref=EXCLUDED.source_ref,asset_id=EXCLUDED.asset_id,occurred_at=EXCLUDED.occurred_at,call=EXCLUDED.call,agreements=EXCLUDED.agreements,inserted_at=EXCLUDED.inserted_at,updated_at=EXCLUDED.updated_at WHERE (communication.project_id,communication.channel,communication.direction,communication.author_person_id,communication.counterparty,communication.subject,communication.body,communication.source_ref,communication.counterparty_role,communication.acknowledges,communication.asset_id,communication.occurred_at,communication.call,communication.agreements,communication.inserted_at,communication.updated_at) IS DISTINCT FROM (EXCLUDED.project_id,EXCLUDED.channel,EXCLUDED.direction,EXCLUDED.author_person_id,EXCLUDED.counterparty,EXCLUDED.subject,EXCLUDED.body,EXCLUDED.source_ref,EXCLUDED.counterparty_role,EXCLUDED.acknowledges,EXCLUDED.asset_id,EXCLUDED.occurred_at,EXCLUDED.call,EXCLUDED.agreements,EXCLUDED.inserted_at,EXCLUDED.updated_at)")
-      .bind(i.id).bind(i.project_id).bind(&i.channel).bind(&i.direction).bind(i.author_person_id).bind(&i.counterparty).bind(&i.subject).bind(&i.body).bind(&i.source_ref).bind(i.asset_id).bind(i.occurred_at).bind(&i.call).bind(&i.agreements).bind(i.inserted_at).bind(i.updated_at).bind(&i.counterparty_role).bind(i.acknowledges).execute(&pg.0).await?;
+    let r=sqlx::query(super::held_write(insert_only, "INSERT INTO communication (id,project_id,channel,direction,author_person_id,counterparty,subject,body,source_ref,asset_id,occurred_at,call,agreements,inserted_at,updated_at,counterparty_role,acknowledges) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) ON CONFLICT (id) DO UPDATE SET project_id=EXCLUDED.project_id,channel=EXCLUDED.channel,direction=EXCLUDED.direction,author_person_id=EXCLUDED.author_person_id,counterparty=EXCLUDED.counterparty,subject=EXCLUDED.subject,body=EXCLUDED.body,counterparty_role=EXCLUDED.counterparty_role,acknowledges=EXCLUDED.acknowledges,source_ref=EXCLUDED.source_ref,asset_id=EXCLUDED.asset_id,occurred_at=EXCLUDED.occurred_at,call=EXCLUDED.call,agreements=EXCLUDED.agreements,inserted_at=EXCLUDED.inserted_at,updated_at=EXCLUDED.updated_at WHERE (communication.project_id,communication.channel,communication.direction,communication.author_person_id,communication.counterparty,communication.subject,communication.body,communication.source_ref,communication.counterparty_role,communication.acknowledges,communication.asset_id,communication.occurred_at,communication.call,communication.agreements,communication.inserted_at,communication.updated_at) IS DISTINCT FROM (EXCLUDED.project_id,EXCLUDED.channel,EXCLUDED.direction,EXCLUDED.author_person_id,EXCLUDED.counterparty,EXCLUDED.subject,EXCLUDED.body,EXCLUDED.source_ref,EXCLUDED.counterparty_role,EXCLUDED.acknowledges,EXCLUDED.asset_id,EXCLUDED.occurred_at,EXCLUDED.call,EXCLUDED.agreements,EXCLUDED.inserted_at,EXCLUDED.updated_at)"))
+      .bind(i.id).bind(i.project_id).bind(&i.channel).bind(&i.direction).bind(i.author_person_id).bind(&i.counterparty).bind(&i.subject).bind(&i.body).bind(&i.source_ref).bind(i.asset_id).bind(i.occurred_at).bind(&i.call).bind(&i.agreements).bind(i.inserted_at).bind(i.updated_at).bind(&i.counterparty_role).bind(i.acknowledges).execute(executor).await?;
     Ok(changed(r.rows_affected(), Mirrored::Written))
 }
 async fn upsert_conversation(
     pg: &PostgresDb,
     i: &ConversationImage,
 ) -> Result<Mirrored, MirrorError> {
-    let r=sqlx::query("INSERT INTO email_conversation (id,token,external_email,external_name,person_id,subject,status,notation_id,firm_id,project_id,inserted_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT (id) DO UPDATE SET token=EXCLUDED.token,external_email=EXCLUDED.external_email,external_name=EXCLUDED.external_name,person_id=EXCLUDED.person_id,subject=EXCLUDED.subject,status=EXCLUDED.status,notation_id=EXCLUDED.notation_id,firm_id=EXCLUDED.firm_id,project_id=EXCLUDED.project_id,inserted_at=EXCLUDED.inserted_at,updated_at=EXCLUDED.updated_at WHERE (email_conversation.token,email_conversation.external_email,email_conversation.external_name,email_conversation.person_id,email_conversation.subject,email_conversation.status,email_conversation.notation_id,email_conversation.firm_id,email_conversation.project_id,email_conversation.inserted_at,email_conversation.updated_at) IS DISTINCT FROM (EXCLUDED.token,EXCLUDED.external_email,EXCLUDED.external_name,EXCLUDED.person_id,EXCLUDED.subject,EXCLUDED.status,EXCLUDED.notation_id,EXCLUDED.firm_id,EXCLUDED.project_id,EXCLUDED.inserted_at,EXCLUDED.updated_at)")
+    let r=sqlx::query(super::held_write(held(), "INSERT INTO email_conversation (id,token,external_email,external_name,person_id,subject,status,notation_id,firm_id,project_id,inserted_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT (id) DO UPDATE SET token=EXCLUDED.token,external_email=EXCLUDED.external_email,external_name=EXCLUDED.external_name,person_id=EXCLUDED.person_id,subject=EXCLUDED.subject,status=EXCLUDED.status,notation_id=EXCLUDED.notation_id,firm_id=EXCLUDED.firm_id,project_id=EXCLUDED.project_id,inserted_at=EXCLUDED.inserted_at,updated_at=EXCLUDED.updated_at WHERE (email_conversation.token,email_conversation.external_email,email_conversation.external_name,email_conversation.person_id,email_conversation.subject,email_conversation.status,email_conversation.notation_id,email_conversation.firm_id,email_conversation.project_id,email_conversation.inserted_at,email_conversation.updated_at) IS DISTINCT FROM (EXCLUDED.token,EXCLUDED.external_email,EXCLUDED.external_name,EXCLUDED.person_id,EXCLUDED.subject,EXCLUDED.status,EXCLUDED.notation_id,EXCLUDED.firm_id,EXCLUDED.project_id,EXCLUDED.inserted_at,EXCLUDED.updated_at)"))
       .bind(i.id).bind(&i.token).bind(&i.external_email).bind(&i.external_name).bind(i.person_id).bind(&i.subject).bind(&i.status).bind(i.notation_id).bind(i.firm_id).bind(i.project_id).bind(i.inserted_at).bind(i.updated_at).execute(&pg.0).await?;
     Ok(changed(r.rows_affected(), Mirrored::Written))
 }
 async fn upsert_message(pg: &PostgresDb, i: &MessageImage) -> Result<Mirrored, MirrorError> {
-    let r=sqlx::query("INSERT INTO email_conversation_message (id,conversation_id,direction,from_addr,to_addr,subject,body_text,raw_storage_key,provider_message_id,in_reply_to,command_payload,inserted_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT (id) DO UPDATE SET conversation_id=EXCLUDED.conversation_id,direction=EXCLUDED.direction,from_addr=EXCLUDED.from_addr,to_addr=EXCLUDED.to_addr,subject=EXCLUDED.subject,body_text=EXCLUDED.body_text,raw_storage_key=EXCLUDED.raw_storage_key,provider_message_id=EXCLUDED.provider_message_id,in_reply_to=EXCLUDED.in_reply_to,command_payload=EXCLUDED.command_payload,inserted_at=EXCLUDED.inserted_at,updated_at=EXCLUDED.updated_at WHERE (email_conversation_message.conversation_id,email_conversation_message.direction,email_conversation_message.from_addr,email_conversation_message.to_addr,email_conversation_message.subject,email_conversation_message.body_text,email_conversation_message.raw_storage_key,email_conversation_message.provider_message_id,email_conversation_message.in_reply_to,email_conversation_message.command_payload,email_conversation_message.inserted_at,email_conversation_message.updated_at) IS DISTINCT FROM (EXCLUDED.conversation_id,EXCLUDED.direction,EXCLUDED.from_addr,EXCLUDED.to_addr,EXCLUDED.subject,EXCLUDED.body_text,EXCLUDED.raw_storage_key,EXCLUDED.provider_message_id,EXCLUDED.in_reply_to,EXCLUDED.command_payload,EXCLUDED.inserted_at,EXCLUDED.updated_at)")
+    let r=sqlx::query(super::held_write(held(), "INSERT INTO email_conversation_message (id,conversation_id,direction,from_addr,to_addr,subject,body_text,raw_storage_key,provider_message_id,in_reply_to,command_payload,inserted_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT (id) DO UPDATE SET conversation_id=EXCLUDED.conversation_id,direction=EXCLUDED.direction,from_addr=EXCLUDED.from_addr,to_addr=EXCLUDED.to_addr,subject=EXCLUDED.subject,body_text=EXCLUDED.body_text,raw_storage_key=EXCLUDED.raw_storage_key,provider_message_id=EXCLUDED.provider_message_id,in_reply_to=EXCLUDED.in_reply_to,command_payload=EXCLUDED.command_payload,inserted_at=EXCLUDED.inserted_at,updated_at=EXCLUDED.updated_at WHERE (email_conversation_message.conversation_id,email_conversation_message.direction,email_conversation_message.from_addr,email_conversation_message.to_addr,email_conversation_message.subject,email_conversation_message.body_text,email_conversation_message.raw_storage_key,email_conversation_message.provider_message_id,email_conversation_message.in_reply_to,email_conversation_message.command_payload,email_conversation_message.inserted_at,email_conversation_message.updated_at) IS DISTINCT FROM (EXCLUDED.conversation_id,EXCLUDED.direction,EXCLUDED.from_addr,EXCLUDED.to_addr,EXCLUDED.subject,EXCLUDED.body_text,EXCLUDED.raw_storage_key,EXCLUDED.provider_message_id,EXCLUDED.in_reply_to,EXCLUDED.command_payload,EXCLUDED.inserted_at,EXCLUDED.updated_at)"))
       .bind(i.id).bind(i.conversation_id).bind(&i.direction).bind(&i.from_addr).bind(&i.to_addr).bind(&i.subject).bind(&i.body_text).bind(&i.raw_storage_key).bind(&i.provider_message_id).bind(&i.in_reply_to).bind(&i.command_payload).bind(i.inserted_at).bind(i.updated_at).execute(&pg.0).await?;
     Ok(changed(r.rows_affected(), Mirrored::Written))
 }
 
 async fn ensure_parent(s: &SurrealDb, pg: &PostgresDb, key: MirrorKey) -> Result<(), MirrorError> {
+    if held() && super::held_by_target(pg, &key).await? {
+        return Ok(());
+    }
     match key {
         MirrorKey::Project(_) | MirrorKey::Firm(_) => super::tenancy::mirror(s, pg, &key).await?,
         MirrorKey::Person(_) => super::identity::mirror(s, pg, &key).await?,
@@ -367,6 +375,9 @@ async fn mirror_communication(
             if !images.is_empty() {
                 return Err(MirrorError::Source);
             }
+            if held() {
+                return Ok(Mirrored::Unchanged);
+            }
             return Ok(changed(
                 sqlx::query("DELETE FROM communication WHERE id=$1")
                     .bind(id)
@@ -396,9 +407,14 @@ async fn mirror_communication(
         if let Some(id) = image.asset_id {
             ensure_parent(s, pg, MirrorKey::Asset(id)).await?;
         }
-        result = upsert_communication(pg, &image).await?;
+        result = upsert_communication(&pg.0, &image, held()).await?;
     }
     Ok(result)
+}
+
+/// Whether PostgreSQL holds these tables: whenever a host is configured.
+fn held() -> bool {
+    crate::postgres::communications::configured()
 }
 
 pub async fn mirror(
@@ -406,7 +422,7 @@ pub async fn mirror(
     pg: &PostgresDb,
     key: &MirrorKey,
 ) -> Result<Mirrored, MirrorError> {
-    if crate::postgres::communications::configured() {
+    if held() && !super::initial_copy() {
         return Ok(Mirrored::Unchanged);
     }
     match key {
@@ -417,6 +433,9 @@ pub async fn mirror(
                 .and_then(surrealdb::IndexedResults::check).map_err(|_| MirrorError::Source)?
                 .take(0).map_err(|_| MirrorError::Source)?;
             let Some(row) = rows.into_iter().next() else {
+                if held() {
+                    return Ok(Mirrored::Unchanged);
+                }
                 return Ok(changed(
                     sqlx::query("DELETE FROM email_conversation WHERE id=$1")
                         .bind(id)
@@ -447,6 +466,9 @@ pub async fn mirror(
                 .and_then(surrealdb::IndexedResults::check).map_err(|_| MirrorError::Source)?
                 .take(0).map_err(|_| MirrorError::Source)?;
             let Some(row) = rows.into_iter().next() else {
+                if held() {
+                    return Ok(Mirrored::Unchanged);
+                }
                 return Ok(changed(
                     sqlx::query("DELETE FROM email_conversation_message WHERE id=$1")
                         .bind(id)
@@ -484,21 +506,28 @@ pub async fn mirror(
     }
 }
 pub async fn parity(s: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
-    if crate::postgres::communications::configured() {
+    let held = held();
+    if !super::held_compared(pg, held).await? {
         return Ok(ParityReport { tables: Vec::new() });
     }
     let (a, b, c) = source_all(s).await?;
-    Ok(ParityReport {
-        tables: vec![
-            super::compare("communication", &a, &target_comms(pg).await?),
-            super::compare("email_conversation", &b, &target_convs(pg).await?),
-            super::compare("email_conversation_message", &c, &target_msgs(pg).await?),
-        ],
-    })
+    let tables = vec![
+        super::compare("communication", &a, &target_comms(pg).await?),
+        super::compare("email_conversation", &b, &target_convs(pg).await?),
+        super::compare("email_conversation_message", &c, &target_msgs(pg).await?),
+    ];
+    super::held_parity(pg, held, tables).await
 }
 pub async fn reconcile(s: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
-    if crate::postgres::communications::configured() {
-        return Ok(ParityReport { tables: Vec::new() });
+    if held() {
+        // Only the first Mirror Backfill writes; elsewhere the mirror leaves
+        // every row PostgreSQL holds.
+        let before = parity(s, pg).await?;
+        if super::initial_copy() {
+            super::tenancy::remirror(s, pg, &before).await;
+            return parity(s, pg).await;
+        }
+        return Ok(before);
     }
     let (a, b, c) = source_all(s).await?;
     for (src, tgt) in [

@@ -41,6 +41,28 @@ pub(super) struct Table {
 
 pub(super) const TABLES: &[Table] = &[
     Table {
+        name: "product",
+        group: "source_domain_records",
+        columns: &[
+            "id",
+            "account_code",
+            "active",
+            "billing_kind",
+            "cadence",
+            "code",
+            "currency",
+            "display_name",
+            "inserted_at",
+            "list_price_cents",
+            "matter_close_template_code",
+            "retainer_template_code",
+            "updated_at",
+            "xero_item_code",
+        ],
+        references: &[],
+        timestamps: &["inserted_at", "updated_at"],
+    },
+    Table {
         name: "authority_use",
         group: "source_domain_records",
         columns: &[
@@ -1073,7 +1095,7 @@ pub(crate) fn columns(name: &str) -> Option<&'static [&'static str]> {
 }
 
 fn authoritative(table: &Table) -> bool {
-    crate::postgres::matter::TABLES.contains(&table.name)
+    table.name == "product" || crate::postgres::matter::TABLES.contains(&table.name)
 }
 
 /// PostgreSQL holds the matter records authoritatively, so a SurrealDB row
@@ -1143,7 +1165,7 @@ fn string_key_in(value: &Value) -> Option<String> {
     }
 }
 
-fn normalize_surreal(
+pub(super) fn normalize_surreal(
     table: &'static Table,
     row: surrealdb::types::Value,
 ) -> Result<(MirrorKey, Value), MirrorError> {
@@ -1475,6 +1497,20 @@ async fn ensure_parents(
     Ok(())
 }
 
+pub(super) async fn insert_product<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    row: Value,
+) -> Result<Mirrored, MirrorError> {
+    let result = sqlx::query(
+        "INSERT INTO product SELECT * FROM jsonb_populate_record(NULL::product, $1::jsonb) \
+             ON CONFLICT (id) DO NOTHING",
+    )
+    .bind(row)
+    .execute(executor)
+    .await?;
+    Ok(changed(result.rows_affected(), Mirrored::Written))
+}
+
 /// Make PostgreSQL's copy of one row match SurrealDB's.
 ///
 /// # Errors
@@ -1487,6 +1523,15 @@ pub async fn mirror(
     id: Uuid,
 ) -> Result<Mirrored, MirrorError> {
     let table = table(table_name)?;
+    if table.name == "product" {
+        if !super::initial_copy() {
+            return Ok(Mirrored::Unchanged);
+        }
+        let Some(row) = source_one(surreal, table, id).await? else {
+            return Ok(Mirrored::Unchanged);
+        };
+        return insert_product(&pg.0, row).await;
+    }
     if (MirrorKey::Record {
         table: table.name,
         id,
@@ -1631,7 +1676,11 @@ pub async fn reconcile(
     let before = parity(surreal, pg, group).await?;
     for removing in [true, false] {
         for report in &before.tables {
-            let held = source(surreal, table(report.table)?).await?;
+            let table = table(report.table)?;
+            if table.name == "product" && !super::initial_copy() {
+                continue;
+            }
+            let held = source(surreal, table).await?;
             for key in &report.divergent {
                 let (table, id, string_id) = match key {
                     MirrorKey::Record { table, id } => (*table, Some(*id), None),

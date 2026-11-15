@@ -1529,3 +1529,54 @@ async fn saved_deployment_secret_changes_reconcile_to_clean_parity() {
     assert_eq!(mirrored.len(), 2, "PostgreSQL keys each row by its request");
     pg.0.close().await;
 }
+
+#[tokio::test]
+async fn first_backfill_preserves_product_catalog_rows() {
+    let Some((options, database)) = fresh_schema().await else {
+        return;
+    };
+    let pg = connect(&options, &database).await;
+    let surreal = mem_surreal().await;
+    let id = Uuid::now_v7();
+    surreal
+        .query(
+            "DEFINE TABLE product SCHEMALESS; \
+             CREATE $id SET account_code = 'synthetic-account', active = false, \
+             billing_kind = 'synthetic-kind', cadence = 'synthetic-cadence', \
+             code = 'synthetic-product', currency = 'USD', display_name = 'Synthetic Product', \
+             inserted_at = d'2026-01-01T00:00:00Z', list_price_cents = 2500, \
+             retainer_template_code = 'synthetic-template', updated_at = d'2026-01-02T00:00:00Z';",
+        )
+        .bind(("id", crate::surreal::record_id("product", id)))
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
+    let before = reconcile(&surreal, &pg, "source_domain_records")
+        .await
+        .unwrap();
+    assert!(before
+        .divergent()
+        .any(|key| *key == super::key("product", id).unwrap()));
+    assert_eq!(
+        super::super::during_initial_copy(mirror(&surreal, &pg, "product", id))
+            .await
+            .unwrap(),
+        Mirrored::Written
+    );
+    let values: (i64, Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT list_price_cents, retainer_template_code, xero_item_code FROM product WHERE id=$1",
+    )
+    .bind(id)
+    .fetch_one(pg.pool())
+    .await
+    .unwrap();
+    assert_eq!(values, (2500, Some("synthetic-template".into()), None));
+    assert_eq!(
+        super::super::during_initial_copy(mirror(&surreal, &pg, "product", id))
+            .await
+            .unwrap(),
+        Mirrored::Unchanged
+    );
+    pg.0.close().await;
+}

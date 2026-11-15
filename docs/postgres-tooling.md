@@ -153,14 +153,14 @@ configuration; authority cutover takes precedence over the source mirror. The mi
   and repairs mutable rows; ingress, assignment, and delivery-attempt evidence remains insert-only, with any changed or
   extra target row reported as drift. Firm and Project references remain explicit, and internal notes keep their
   recorded direction and visibility. Whenever `NAVIGATOR_POSTGRES_HOST` is set, Inbox reads, writes, alerts, and
-  historical file imports go through PostgreSQL, and the inbox mirror refuses to repair these tables from SurrealDB.
-  Identity, tenancy, Document Assets, and the Communication projection keep their own store seams. Native tests are
-  recorded in `store/postgres/runtime-parity.json`.
+  historical file imports go through PostgreSQL. The first [Mirror Backfill](#mirror-backfill) inserts missing history,
+  including attachment links and triage. Identity, tenancy, Document Assets, and Communications keep their own seams.
+  Native tests are recorded in `store/postgres/runtime-parity.json`.
 - **Inbound email delivery:** `email_receipt`, `email_delivery`, and `email_delivery_attempt`. The receipt and Slack
   delivery writers mirror each successful write. Reconciliation restores parents before children; receipt deletion
   cascades through the delivery and attempt records. Whenever `NAVIGATOR_POSTGRES_HOST` is set, PostgreSQL holds these
-  tables and `communication`, `email_conversation`, and `email_conversation_message`; the mirror then writes and
-  compares nothing for them (see [storage models](storage-models.md#communications-and-email)).
+  tables and `communication`, `email_conversation`, and `email_conversation_message`. The first Mirror Backfill inserts
+  missing history. Parity skips those tables after the first completed run.
 - **Outbound email audit:** `sent_email`. Its writer in `store::sent_emails` mirrors each recorded attempt.
   Reconciliation inserts missing rows; changed or extra audit rows remain drift for review. No audit history is
   overwritten or deleted. The optional Project foreign key preserves matter scope.
@@ -315,9 +315,10 @@ written. It never overwrites a differing row or deletes a PostgreSQL-only row; t
 reconcile`.
 
 The first backfill against a database, the one before any run has completed, is also the only copy into the tables
-PostgreSQL holds authoritatively: the catalogs, the matter records, and the Brand and social content. It writes the
-SurrealDB rows those tables lack and leaves every row PostgreSQL holds. Its completion is what lets `ops ship` cut a
-deployment over; later runs leave those tables alone, so a row deleted in PostgreSQL is never restored from SurrealDB.
+PostgreSQL holds authoritatively: catalogs, matter records, Brand and social content, communications, Inbox and email
+history, and the historical Product catalog. It writes the SurrealDB rows those tables lack and leaves every row
+PostgreSQL holds. Its completion lets `ops ship` cut a deployment over. Later runs leave those tables alone, so a row
+deleted in PostgreSQL stays deleted.
 
 ```bash
 hudson ops postgres backfill --dry-run --json          # the plan; writes nothing

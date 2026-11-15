@@ -1,10 +1,22 @@
 //! Whole-row Inbox mirror, compared at PostgreSQL's timestamp precision.
+//!
+//! Whenever `NAVIGATOR_POSTGRES_HOST` is set PostgreSQL holds the Inbox, and
+//! repairing it from SurrealDB is refused ([`MirrorError::InboxAuthority`]).
+//! Only the first Mirror Backfill copies SurrealDB rows in then, a
+//! Conversation before its Messages and a Message before its ingress,
+//! attachments, delivery attempts, and triage, inserting each row PostgreSQL
+//! lacks under its own id and never overwriting or deleting one it holds.
+//! Until a backfill has completed, parity reports each SurrealDB row
+//! PostgreSQL lacks, and after it compares no table (see
+//! [`super::held_compared`]). Triage is still written to SurrealDB and
+//! projected row by row whenever a host is set.
 
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde_json::Value;
 use sqlx::Row;
+use surrealdb::types::Value as SurrealValue;
 use uuid::Uuid;
 
 use super::{changed, micros, MirrorError, MirrorKey, Mirrored, ParityReport, TableParity};
@@ -12,7 +24,7 @@ use crate::postgres::PostgresDb;
 use crate::postgres_shadow::{compare_row, Comparison, ShadowKey};
 use crate::surreal::SurrealDb;
 
-struct Table {
+pub(super) struct Table {
     name: &'static str,
     columns: &'static str,
     references: &'static str,
@@ -67,7 +79,7 @@ const TABLES: &[Table] = &[
     },
 ];
 
-fn table(name: &str) -> Result<&'static Table, MirrorError> {
+pub(super) fn table(name: &str) -> Result<&'static Table, MirrorError> {
     TABLES
         .iter()
         .find(|table| table.name == name)
@@ -100,6 +112,26 @@ fn key(name: &str, id: Uuid) -> Result<MirrorKey, MirrorError> {
         "inbox_triage" => MirrorKey::InboxTriage(id),
         _ => return Err(MirrorError::Source),
     })
+}
+
+pub(super) fn normalize_source(
+    table: &Table,
+    row: SurrealValue,
+) -> Result<(MirrorKey, Value), MirrorError> {
+    let SurrealValue::Object(fields) = row else {
+        return Err(MirrorError::Source);
+    };
+    let row = fields
+        .into_iter()
+        .map(|(name, value)| {
+            let value = match value {
+                SurrealValue::None | SurrealValue::Null => Value::Null,
+                value => value.into_json_value(),
+            };
+            (name, value)
+        })
+        .collect();
+    normalize(table, Value::Object(row))
 }
 
 fn normalize(table: &Table, row: Value) -> Result<(MirrorKey, Value), MirrorError> {
@@ -137,7 +169,7 @@ async fn source(
     let rows =
         super::select_table(surreal, table.name, format!("SELECT * FROM {}", table.name)).await?;
     rows.into_iter()
-        .map(|row| normalize(table, row.into_json_value()))
+        .map(|row| normalize_source(table, row))
         .collect()
 }
 
@@ -154,7 +186,7 @@ async fn source_one(
         .map_err(|_| MirrorError::Source)?
         .take(0)
         .map_err(|_| MirrorError::Source)?;
-    row.map(|row| normalize(table, row.into_json_value()).map(|(_, value)| value))
+    row.map(|row| normalize_source(table, row).map(|(_, value)| value))
         .transpose()
 }
 
@@ -173,8 +205,8 @@ async fn target(pg: &PostgresDb, table: &Table) -> Result<BTreeMap<MirrorKey, Va
         .collect()
 }
 
-fn upsert_sql(table: &Table) -> String {
-    if table.immutable {
+fn upsert_sql(table: &Table, first_copy: bool) -> String {
+    if table.immutable || first_copy {
         return format!("INSERT INTO {} SELECT * FROM jsonb_populate_record(NULL::{}, $1::jsonb) ON CONFLICT (id) DO NOTHING", table.name, table.name);
     }
     let columns: Vec<&str> = table.columns.split(',').collect();
@@ -218,18 +250,22 @@ fn parent(column: &str, id: Uuid) -> Option<MirrorKey> {
 // PostgreSQL holds the Inbox whenever a host is configured, so no Source row
 // is deletion or overwrite evidence then.
 fn native_inbox_authority_selected() -> bool {
-    std::env::var_os("NAVIGATOR_POSTGRES_HOST").is_some()
+    crate::postgres::communications::configured()
 }
 
-fn require_source_authority() -> Result<(), MirrorError> {
-    if native_inbox_authority_selected() {
-        Err(MirrorError::InboxAuthority)
+/// Whether this write is the first Mirror Backfill's copy into the Inbox
+/// PostgreSQL holds; any other repair from SurrealDB is refused then.
+fn require_source_authority() -> Result<bool, MirrorError> {
+    if !native_inbox_authority_selected() {
+        Ok(false)
+    } else if super::initial_copy() {
+        Ok(true)
     } else {
-        Ok(())
+        Err(MirrorError::InboxAuthority)
     }
 }
 
-async fn require_native_triage_parent(pg: &PostgresDb, row: &Value) -> Result<(), MirrorError> {
+async fn require_message_firm(pg: &PostgresDb, row: &Value) -> Result<(), MirrorError> {
     let message = row
         .get("message_id")
         .and_then(uuid_in)
@@ -253,6 +289,19 @@ async fn require_native_triage_parent(pg: &PostgresDb, row: &Value) -> Result<()
     }
 }
 
+pub(super) async fn write_row<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    table: &Table,
+    row: Value,
+    insert_only: bool,
+) -> Result<Mirrored, MirrorError> {
+    let result = sqlx::query(sqlx::AssertSqlSafe(upsert_sql(table, insert_only)))
+        .bind(row)
+        .execute(executor)
+        .await?;
+    Ok(changed(result.rows_affected(), Mirrored::Written))
+}
+
 /// Match one source Inbox row in PostgreSQL. Missing mutable rows remove their
 /// projection; audit rows remain as drift for review.
 pub async fn mirror(
@@ -269,11 +318,13 @@ async fn mirror_inner(
     pg: &PostgresDb,
     key: &MirrorKey,
 ) -> Result<Mirrored, MirrorError> {
-    let native_triage = if matches!(key, MirrorKey::InboxTriage(_)) {
-        native_inbox_authority_selected()
-    } else {
-        require_source_authority()?;
+    let native_triage = matches!(key, MirrorKey::InboxTriage(_))
+        && native_inbox_authority_selected()
+        && !super::initial_copy();
+    let first_copy = if native_triage {
         false
+    } else {
+        require_source_authority()?
     };
     let table = table(key.table())?;
     let id = match key {
@@ -287,20 +338,28 @@ async fn mirror_inner(
         _ => return Err(MirrorError::Source),
     };
     if let Some(row) = source_one(surreal, table, id).await? {
-        if native_triage {
-            require_native_triage_parent(pg, &row).await?;
-        }
         for column in table.references.split(',').filter(|column| *column != "id") {
             if let Some(parent) = row
                 .get(column)
                 .and_then(uuid_in)
                 .and_then(|id| parent(column, id))
             {
-                if native_triage && matches!(parent, MirrorKey::InboxMessage(_)) {
+                if (native_triage && matches!(parent, MirrorKey::InboxMessage(_)))
+                    || (first_copy && super::held_by_target(pg, &parent).await?)
+                {
                     continue;
                 }
                 Box::pin(super::mirror(surreal, pg, &parent)).await?;
             }
+        }
+        if native_triage
+            || first_copy
+                && matches!(
+                    key,
+                    MirrorKey::InboxTriage(_) | MirrorKey::InboxMessageAsset(_)
+                )
+        {
+            require_message_firm(pg, &row).await?;
         }
         if matches!(key, MirrorKey::InboxMessageAsset(_)) {
             let message_id = row
@@ -319,19 +378,22 @@ async fn mirror_inner(
                 .get("sha256")
                 .and_then(Value::as_str)
                 .ok_or(MirrorError::Source)?;
-            let message = crate::inbox::message_by_id(surreal, message_id)
-                .await
-                .map_err(|_| MirrorError::Source)?
+            // The Source rows themselves: once PostgreSQL holds the Inbox
+            // the accessors read it, not SurrealDB.
+            let conversation_id = source_one(surreal, self::table("message")?, message_id)
+                .await?
+                .and_then(|message| message.get("conversation_id").and_then(uuid_in))
                 .ok_or(MirrorError::Source)?;
-            let conversation = crate::inbox::conversation_by_id(surreal, message.conversation_id)
-                .await
-                .map_err(|_| MirrorError::Source)?
-                .ok_or(MirrorError::Source)?;
+            let conversation_firm =
+                source_one(surreal, self::table("inbox_conversation")?, conversation_id)
+                    .await?
+                    .and_then(|conversation| conversation.get("firm_id").and_then(uuid_in))
+                    .ok_or(MirrorError::Source)?;
             let asset = crate::assets::find_by_id(surreal, asset_id)
                 .await
                 .map_err(|_| MirrorError::Source)?
                 .ok_or(MirrorError::Source)?;
-            if conversation.firm_id != firm_id || asset.sha256_hex != sha {
+            if conversation_firm != firm_id || asset.sha256_hex != sha {
                 return Err(MirrorError::Source);
             }
             if asset.project_id.is_none() {
@@ -340,13 +402,9 @@ async fn mirror_inner(
                     .map_err(|_| MirrorError::Source)?;
             }
         }
-        let result = sqlx::query(sqlx::AssertSqlSafe(upsert_sql(table)))
-            .bind(row)
-            .execute(&pg.0)
-            .await?;
-        Ok(changed(result.rows_affected(), Mirrored::Written))
+        write_row(&pg.0, table, row, first_copy).await
     } else {
-        if table.immutable {
+        if table.immutable || first_copy {
             return Ok(Mirrored::Unchanged);
         }
         let result = sqlx::query(sqlx::AssertSqlSafe(format!(
@@ -360,10 +418,12 @@ async fn mirror_inner(
     }
 }
 
-/// Compare the complete Inbox transcript and its audit rows. Once PostgreSQL
-/// holds the Inbox there is no SurrealDB image to compare.
+/// Compare the complete Inbox transcript and its audit rows. Where
+/// PostgreSQL holds the Inbox, only the SurrealDB rows it lacks diverge, and
+/// only until a Mirror Backfill completes.
 pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
-    if native_inbox_authority_selected() {
+    let held = native_inbox_authority_selected();
+    if !super::held_compared(pg, held).await? {
         return Ok(ParityReport { tables: Vec::new() });
     }
     let mut tables = Vec::with_capacity(TABLES.len());
@@ -382,12 +442,22 @@ pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport
                 .collect(),
         ));
     }
-    Ok(ParityReport { tables })
+    super::held_parity(pg, held, tables).await
 }
 
 /// Repair mutable projections and insert missing audit rows. Changed or extra
 /// audit rows remain drift; mutable target-only rows delete in reverse order.
+/// Where PostgreSQL holds the Inbox only the first Mirror Backfill writes, and
+/// only the rows PostgreSQL lacks.
 pub async fn reconcile(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
+    if native_inbox_authority_selected() {
+        let before = parity(surreal, pg).await?;
+        if super::initial_copy() {
+            super::tenancy::remirror(surreal, pg, &before).await;
+            return parity(surreal, pg).await;
+        }
+        return Ok(before);
+    }
     let report = parity(surreal, pg).await?;
     let mut deletes: Vec<&TableParity> = Vec::new();
     for table_report in &report.tables {
@@ -677,9 +747,11 @@ mod tests {
 
     #[test]
     fn upsert_is_idempotent_at_every_column() {
-        let sql = upsert_sql(table("inbox_ingress").unwrap());
+        let sql = upsert_sql(table("inbox_ingress").unwrap(), false);
         assert!(sql.contains("ON CONFLICT (id) DO NOTHING"));
-        let sql = upsert_sql(table("message").unwrap());
+        let first_copy = upsert_sql(table("message").unwrap(), true);
+        assert!(first_copy.ends_with("ON CONFLICT (id) DO NOTHING"));
+        let sql = upsert_sql(table("message").unwrap(), false);
         assert!(sql.contains("ON CONFLICT (id) DO UPDATE"));
         assert!(sql.contains("ROW(message.conversation_id"));
         assert!(sql.contains("IS DISTINCT FROM"));
@@ -989,6 +1061,59 @@ mod tests {
             .await
             .unwrap()
             .is_clean());
+        pg.0.close().await;
+    }
+
+    #[tokio::test]
+    async fn first_backfill_copies_native_inbox_history_only_once() {
+        use super::{mirror, parity, reconcile, Mirrored};
+        use crate::postgres_mirror::{self, MirrorKey};
+
+        let Some((options, database)) = postgres_mirror::tests::fresh_schema().await else {
+            return;
+        };
+        let pg = postgres_mirror::tests::connect(&options, &database).await;
+        let fixture = Box::pin(seed_inbox_image_fixture(&pg)).await;
+        let message = MirrorKey::InboxMessage(fixture.saved.message_id);
+        crate::postgres::communications::with_test_db(
+            pg.clone(),
+            Box::pin(async {
+                let before = reconcile(&fixture.db, &pg).await.unwrap();
+                assert!(before.divergent().any(|key| *key == message));
+                assert_eq!(before.divergent().count(), 8);
+                assert!(postgres_mirror::during_initial_copy(reconcile(&fixture.db, &pg))
+                    .await
+                    .unwrap()
+                    .is_clean());
+                assert_inbox_image_rows(&pg, &fixture.assets).await;
+
+                sqlx::query("UPDATE message SET body='native body' WHERE id=$1")
+                    .bind(fixture.saved.message_id)
+                    .execute(pg.pool())
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    postgres_mirror::during_initial_copy(mirror(&fixture.db, &pg, &message))
+                        .await
+                        .unwrap(),
+                    Mirrored::Unchanged
+                );
+                let body: String = sqlx::query_scalar("SELECT body FROM message WHERE id=$1")
+                    .bind(fixture.saved.message_id)
+                    .fetch_one(pg.pool())
+                    .await
+                    .unwrap();
+                assert_eq!(body, "native body");
+
+                sqlx::query("INSERT INTO mirror_backfill_run (id, batch_size, status, completed_at) VALUES ($1, 1, 'completed', now())")
+                    .bind(Uuid::now_v7())
+                    .execute(pg.pool())
+                    .await
+                    .unwrap();
+                assert!(parity(&fixture.db, &pg).await.unwrap().tables.is_empty());
+            }),
+        )
+        .await;
         pg.0.close().await;
     }
 
