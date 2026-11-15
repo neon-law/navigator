@@ -1201,7 +1201,13 @@ async fn dbos_approval_accepts_a_retry_and_publishes_the_rendered_state_once() {
         .unwrap()
         .unwrap();
     assert_eq!(persisted.state, "generate_pdf__letter");
-    assert!(fixture.directory.path().join(storage_key).is_file());
+    let storage = cloud::FsStorage::new(fixture.directory.path())
+        .await
+        .unwrap();
+    let document = cloud::StorageService::get(&storage, &storage_key)
+        .await
+        .unwrap();
+    assert!(document.bytes.starts_with(b"%PDF-"));
     assert_eq!(
         fixture
             .events()

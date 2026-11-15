@@ -74,14 +74,32 @@ struct SentLoop {
 
 #[allow(clippy::too_many_lines)]
 async fn sent_loop() -> SentLoop {
-    // 1. Mock DocuSign's envelope-create + document-download endpoints.
+    // Exercise the real provider's draft, status read and dispatch calls.
     let docusign = MockServer::start().await;
+    let envelope_path = format!("/v2.1/accounts/acct-guid/envelopes/{ENVELOPE_ID}");
+    let draft = serde_json::json!({"envelopeId": ENVELOPE_ID, "status": "created"});
     Mock::given(method("POST"))
         .and(path("/v2.1/accounts/acct-guid/envelopes"))
-        .respond_with(
-            ResponseTemplate::new(201)
-                .set_body_json(serde_json::json!({"envelopeId": ENVELOPE_ID, "status": "sent"})),
-        )
+        .and(wiremock::matchers::body_string_contains(
+            r#""status":"created""#,
+        ))
+        .respond_with(ResponseTemplate::new(201).set_body_json(&draft))
+        .expect(1)
+        .mount(&docusign)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(envelope_path.clone()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(draft))
+        .expect(1)
+        .mount(&docusign)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path(envelope_path))
+        .and(wiremock::matchers::body_json(
+            serde_json::json!({"status": "sent"}),
+        ))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
         .mount(&docusign)
         .await;
     // The completion webhook downloads the signed PDF + Certificate of

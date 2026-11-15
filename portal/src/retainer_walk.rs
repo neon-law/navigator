@@ -1970,12 +1970,18 @@ pub(crate) async fn render_and_park(
             _ => {}
         }
     }
-    let current_state = runtime
+    let current_state = match runtime
         .current_state(MachineKind::Workflow, notation_id)
         .await
-        .ok_or(workflows::WorkflowRuntimeError::UnknownNotation(
-            notation_id,
-        ))?;
+    {
+        Some(state) => state,
+        None if notation_row.state == StateName::BEGIN => {
+            return Err(WorkflowDriveError::ApprovalNotReady {
+                state: notation_row.state,
+            });
+        }
+        None => return Err(workflows::WorkflowRuntimeError::UnknownNotation(notation_id).into()),
+    };
     if current_state.prefix() != "lawyer_review" {
         let document_ready = document_pdf_ready(deps.storage.as_ref(), notation_id).await?;
         if current_state.prefix() == "generate_pdf" || document_ready {
