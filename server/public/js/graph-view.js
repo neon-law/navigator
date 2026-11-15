@@ -54,6 +54,9 @@
         edgeType: "arrow",
       };
     }
+    if (type === "RELATIONSHIP_LOG") {
+      return { color: TIE_COLOR, size: 2, edgeType: "arrow" };
+    }
     return { color: TIE_COLOR, size: 1, edgeType: "line" };
   }
 
@@ -91,7 +94,7 @@
       include(entry.source, entry.source_name, entry.source_kind);
       include(entry.subject_id, entry.subject_name, entry.subject_kind);
       edges.push({
-        source: entry.source, target: entry.subject_id, type: "RELATIONSHIP_LOG",
+        id: entry.id, source: entry.source, target: entry.subject_id, type: "RELATIONSHIP_LOG",
         kind: entry.action,
       });
     });
@@ -109,15 +112,20 @@
     for (var j = 0; j < edges.length; j++) {
       var edge = edges[j];
       if (!graph.hasNode(edge.source) || !graph.hasNode(edge.target)) continue;
-      if (graph.hasEdge(edge.source, edge.target)) continue;
+      var observation = edge.type === "RELATIONSHIP_LOG";
+      if (!observation && graph.hasEdge(edge.source, edge.target)) continue;
+      var key = observation ? "relationship-log:" + edge.id : edge.source + "\u2192" + edge.target;
       var style = edgeStyle(edge);
-      graph.addEdgeWithKey(edge.source + "\u2192" + edge.target, edge.source, edge.target, {
+      var tooltip = edgeTooltip(edge);
+      graph.addEdgeWithKey(key, edge.source, edge.target, {
         color: style.color,
         size: style.size,
         type: style.edgeType,
         relKind: edge.kind || "",
-        tooltip: edgeTooltip(edge),
-        hoverLabel: edgeTooltip(edge),
+        label: observation ? tooltip : undefined,
+        forceLabel: observation,
+        tooltip: tooltip,
+        hoverLabel: tooltip,
       });
     }
     return graph;
@@ -282,12 +290,15 @@
     });
 
     var selectedNode = null;
+    var themeLabelColor = { color: getComputedStyle(mount).color };
 
     var renderer = new Sigma(graph, mount, {
       allowInvalidContainer: true,
       defaultEdgeType: "line",
-      edgeProgramClasses: { arrow: Sigma.EdgeArrowProgram || Sigma.EdgeLineProgram },
+      renderEdgeLabels: true,
       labelRenderedSizeThreshold: 0.1,
+      labelColor: themeLabelColor,
+      edgeLabelColor: themeLabelColor,
       nodeReducer: function (node, data) {
         var rendered = Object.assign({}, data);
         if (selectedNode && selectedNode !== node) {
@@ -390,6 +401,12 @@
       renderer.refresh();
     });
 
+    var observations = payload.relationship_logs || [];
+    if (observations.length) {
+      mount.setAttribute("aria-description", observations.map(function (entry) {
+        return "Relationship Log · " + entry.action + " · " + entry.subject_name;
+      }).join(". "));
+    }
     setStatus(mount, "");
   }
 
