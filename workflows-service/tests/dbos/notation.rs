@@ -1142,26 +1142,7 @@ async fn dbos_approval_accepts_a_retry_and_publishes_the_rendered_state_once() {
         .await
         .unwrap();
     let postgres = fixture.database.store().await;
-    let router = workflows_service::health::router_with_dbos_ingress(
-        WorkerIngress {
-            notation: Some(NotationIngress::new(
-                "synthetic-worker-token".into(),
-                fixture.worker.clone(),
-                fixture.surreal.clone(),
-                postgres.clone(),
-                fixture.workflow.clone(),
-            )),
-            ..WorkerIngress::default()
-        },
-        None,
-    );
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
-        .await
-        .unwrap();
-    let origin = format!("http://{}", listener.local_addr().unwrap());
-    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-    let runtime =
-        workflows::DbosNotationRuntime::new(origin, Some("synthetic-worker-token".into()));
+    let (runtime, server) = approval_runtime(&fixture, postgres.clone()).await;
     let storage_key = store::notations::document_pdf_storage_key(fixture.id);
     let payload = serde_json::to_string(&workflows::DocumentPayload::Typst {
         storage_key: storage_key.clone(),
@@ -1172,26 +1153,7 @@ async fn dbos_approval_accepts_a_retry_and_publishes_the_rendered_state_once() {
     let actor = workflows::SignalContext {
         acting_person_id: fixture.actor,
     };
-    let stale_revision = review_revision - 1;
-    runtime
-        .approve(fixture.id, stale_revision, &payload, Some(actor))
-        .await
-        .unwrap();
-    let stale_run = format!("NotationApproval:{}:{stale_revision}", fixture.id);
-    let stale_handle = fixture.worker
-        .retrieve_workflow::<dbos_notation::TransitionReport, dbos_notation::NotationTransitionError>(&stale_run)
-        .unwrap();
-    assert!(tokio::time::timeout(DEADLINE, stale_handle.result())
-        .await
-        .unwrap()
-        .is_err());
-    assert_eq!(
-        runtime
-            .approval_progress(fixture.id, stale_revision)
-            .await
-            .unwrap(),
-        Some(workflows::ApprovalProgress::Failed)
-    );
+    assert_stale_approval_fails(&fixture, &runtime, review_revision, &payload, actor).await;
     let lane = store::notation_machine_state::acquire_lane(&postgres, fixture.id)
         .await
         .unwrap();
@@ -1251,4 +1213,60 @@ async fn dbos_approval_accepts_a_retry_and_publishes_the_rendered_state_once() {
     );
     fixture.worker.shutdown().await;
     server.abort();
+}
+
+async fn assert_stale_approval_fails(
+    fixture: &PersistedNotation,
+    runtime: &workflows::DbosNotationRuntime,
+    review_revision: i64,
+    payload: &str,
+    actor: workflows::SignalContext,
+) {
+    let stale_revision = review_revision - 1;
+    runtime
+        .approve(fixture.id, stale_revision, payload, Some(actor))
+        .await
+        .unwrap();
+    let stale_run = format!("NotationApproval:{}:{stale_revision}", fixture.id);
+    let stale_handle = fixture.worker
+        .retrieve_workflow::<dbos_notation::TransitionReport, dbos_notation::NotationTransitionError>(&stale_run)
+        .unwrap();
+    assert!(tokio::time::timeout(DEADLINE, stale_handle.result())
+        .await
+        .unwrap()
+        .is_err());
+    assert_eq!(
+        runtime
+            .approval_progress(fixture.id, stale_revision)
+            .await
+            .unwrap(),
+        Some(workflows::ApprovalProgress::Failed)
+    );
+}
+
+async fn approval_runtime(
+    fixture: &PersistedNotation,
+    postgres: store::postgres::PostgresDb,
+) -> (workflows::DbosNotationRuntime, tokio::task::JoinHandle<()>) {
+    let router = workflows_service::health::router_with_dbos_ingress(
+        WorkerIngress {
+            notation: Some(NotationIngress::new(
+                "synthetic-worker-token".into(),
+                fixture.worker.clone(),
+                fixture.surreal.clone(),
+                postgres,
+                fixture.workflow.clone(),
+            )),
+            ..WorkerIngress::default()
+        },
+        None,
+    );
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let runtime =
+        workflows::DbosNotationRuntime::new(origin, Some("synthetic-worker-token".into()));
+    (runtime, server)
 }

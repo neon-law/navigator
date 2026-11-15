@@ -364,11 +364,26 @@ async fn transition(
             .await
             .map_err(|error| operation_error(error, notation_id))?;
     }
-    let report = match request.operation {
+    let report = execute_operation(&context, request).await?;
+    let result = serde_json::to_value(&report).map_err(|error| {
+        dbos::Error::Application(NotationTransitionError::Store(error.to_string()))
+    })?;
+    operations::complete(&context.postgres, operation_id, &result)
+        .await
+        .map_err(|error| operation_error(error, notation_id))?;
+    Ok(report)
+}
+
+async fn execute_operation(
+    context: &Context,
+    request: TransitionRequest,
+) -> dbos::Result<TransitionReport, NotationTransitionError> {
+    let notation_id = request.notation_id;
+    match request.operation {
         Operation::Start {
             spec_yaml,
             ephemeral,
-        } => start_machine(&context, request.kind, notation_id, &spec_yaml, ephemeral).await,
+        } => start_machine(context, request.kind, notation_id, &spec_yaml, ephemeral).await,
         Operation::Signal {
             condition,
             value,
@@ -376,7 +391,7 @@ async fn transition(
             ephemeral,
         } => {
             signal(
-                &context,
+                context,
                 request.kind,
                 notation_id,
                 &condition,
@@ -392,7 +407,7 @@ async fn transition(
             ..
         } => {
             signal(
-                &context,
+                context,
                 MachineKind::Workflow,
                 notation_id,
                 "approved",
@@ -404,21 +419,14 @@ async fn transition(
         }
         Operation::Back { acting_person_id } => {
             back(
-                &context,
+                context,
                 notation_id,
                 kind_token(request.kind),
                 acting_person_id,
             )
             .await
         }
-    }?;
-    let result = serde_json::to_value(&report).map_err(|error| {
-        dbos::Error::Application(NotationTransitionError::Store(error.to_string()))
-    })?;
-    operations::complete(&context.postgres, operation_id, &result)
-        .await
-        .map_err(|error| operation_error(error, notation_id))?;
-    Ok(report)
+    }
 }
 
 fn operation_error(
@@ -476,7 +484,7 @@ async fn preflight(
                 .map_err(|error| {
                     dbos::Error::Application(NotationTransitionError::Store(error.to_string()))
                 })?;
-            if !notation.is_some_and(|row| row.updated_at.timestamp_micros() == *review_revision) {
+            if notation.is_none_or(|row| row.updated_at.timestamp_micros() != *review_revision) {
                 return Err(dbos::Error::Application(NotationTransitionError::Terminal(
                     "Lawyer Review changed after the approval was submitted".into(),
                 )));

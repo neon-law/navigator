@@ -1994,54 +1994,9 @@ pub(crate) async fn render_and_park(
             state: current_state.0,
         });
     }
-    let template_row = store::templates::find_by_id(deps.surreal, notation_row.template_id)
-        .await?
-        .ok_or(WorkflowDriveError::TemplateMissing(notation_id))?;
-
     let assembly_started = std::time::Instant::now();
-    // Re-assemble the body — template + custom clauses — so the PDF
-    // reflects the latest reviewed content.
-    let raw_template_body =
-        store::templates::body(deps.surreal, deps.storage, &template_row).await?;
-    let clauses = store::notation_clauses::for_notation(deps.surreal, notation_id)
-        .await
-        .map_err(|error| WorkflowDriveError::Db(error.to_string()))?;
-    let template_body = store::notation_clauses::splice(&raw_template_body, &clauses);
-
-    // Two rendering paths, declared by the template: a `form:` binding
-    // fills the vendored government packet's AcroForm from the answers
-    // (the artifact the SoS receives is the state's own form); without
-    // one, the body renders through Typst as before. The AcroForm fill
-    // reads the raw choice *keys* (a form radio selects by key); the Typst
-    // body reads the human *labels*.
-    let (keys, labels) =
-        build_answer_context(deps.surreal, Some(deps.storage), notation_id).await?;
-    let document_payload = if let Some(form_code) = template_row.form_code.as_deref() {
-        // The body is not a discarded cover sheet: the packet the client
-        // signs has to carry the engagement terms and the signature
-        // blocks the e-signature fields anchor to — without it the send
-        // is a form nobody can sign. Expand signatures exactly as the
-        // Typst fork does, so the anchors rendered into the addendum are
-        // the same deterministic fields the send path manifests.
-        let (expanded_body, signature_fields) = crate::signature_render::expand_signatures(
-            &typst_body_from_template(&template_body, &keys, &labels, template_row.kind.as_deref()),
-        );
-        let addendum_typst = (!signature_fields.is_empty()).then_some(expanded_body);
-        acroform_payload(deps, notation_id, form_code, &keys, addendum_typst).await?
-    } else {
-        // Convert the Markdown body to Typst, then expand signature
-        // placeholders into anchored Typst blocks. Only the Typst source
-        // matters here; the placed fields are rebuilt at send time from the
-        // same deterministic expansion over the same conversion.
-        let (typst_source, _signature_fields) = crate::signature_render::expand_signatures(
-            &typst_body_from_template(&template_body, &keys, &labels, template_row.kind.as_deref()),
-        );
-        serde_json::to_string(&workflows::DocumentPayload::Typst {
-            storage_key: document_pdf_storage_key(notation_id),
-            typst_source,
-        })
-        .map_err(WorkflowDriveError::Payload)?
-    };
+    let document_payload =
+        approval_document_payload(deps, notation_id, notation_row.template_id).await?;
 
     // Fire `approved`: the worker renders + persists the PDF on entering
     // `generate_pdf__retainer_pdf`. We do NOT advance past it — the send
@@ -2068,6 +2023,37 @@ pub(crate) async fn render_and_park(
         Ok(next)
     } else {
         Ok(current_state)
+    }
+}
+
+async fn approval_document_payload(
+    deps: &RenderDeps<'_>,
+    notation_id: Uuid,
+    template_id: Uuid,
+) -> Result<String, WorkflowDriveError> {
+    let template = store::templates::find_by_id(deps.surreal, template_id)
+        .await?
+        .ok_or(WorkflowDriveError::TemplateMissing(notation_id))?;
+    let source = store::templates::body(deps.surreal, deps.storage, &template).await?;
+    let clauses = store::notation_clauses::for_notation(deps.surreal, notation_id)
+        .await
+        .map_err(|error| WorkflowDriveError::Db(error.to_string()))?;
+    let body = store::notation_clauses::splice(&source, &clauses);
+    let (keys, labels) =
+        build_answer_context(deps.surreal, Some(deps.storage), notation_id).await?;
+    let (typst_source, fields) = crate::signature_render::expand_signatures(
+        &typst_body_from_template(&body, &keys, &labels, template.kind.as_deref()),
+    );
+
+    if let Some(form_code) = template.form_code.as_deref() {
+        let addendum = (!fields.is_empty()).then_some(typst_source);
+        acroform_payload(deps, notation_id, form_code, &keys, addendum).await
+    } else {
+        serde_json::to_string(&workflows::DocumentPayload::Typst {
+            storage_key: document_pdf_storage_key(notation_id),
+            typst_source,
+        })
+        .map_err(WorkflowDriveError::Payload)
     }
 }
 
@@ -2357,23 +2343,7 @@ pub(crate) async fn resolve_intake_review(
             .ok()
             .flatten();
 
-    let document_ready = document_pdf_ready(state.storage.as_ref(), notation_id)
-        .await
-        .unwrap_or(false);
-    let approval_progress = if notation_row.state == "lawyer_review" {
-        tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            state
-                .workflow_runtime
-                .approval_progress(notation_id, notation_row.updated_at.timestamp_micros()),
-        )
-        .await
-        .ok()
-        .and_then(Result::ok)
-        .flatten()
-    } else {
-        None
-    };
+    let (document_ready, approval_progress) = review_document_status(state, &notation_row).await;
     if format == Some("json") {
         return Err(axum::Json(serde_json::json!({
             "notation_id": notation_id,
@@ -2444,8 +2414,15 @@ pub(crate) async fn resolve_intake_review(
         notation_id: notation_id.to_string(),
         workflow_state: notation_row.state,
         document_ready,
-        approval_pending: approval_progress == Some(workflows::ApprovalProgress::Pending),
-        approval_failed: approval_progress == Some(workflows::ApprovalProgress::Failed),
+        approval_notice: match approval_progress {
+            Some(workflows::ApprovalProgress::Pending) => {
+                Some(webapp::intake_review::ApprovalNotice::Pending)
+            }
+            Some(workflows::ApprovalProgress::Failed) => {
+                Some(webapp::intake_review::ApprovalNotice::Failed)
+            }
+            _ => None,
+        },
         signature_request_id,
         rendered_html,
         governing_law_defaulted,
@@ -2471,6 +2448,31 @@ pub(crate) fn back_to_review(notation_id: Uuid) -> Response {
 /// the seeded question rows, falling back to the code. Best-effort: a read
 /// failure yields an empty list, so the review page still renders (just
 /// without the request-changes panel).
+async fn review_document_status(
+    state: &AdminState,
+    notation: &store::notations::Notation,
+) -> (bool, Option<workflows::ApprovalProgress>) {
+    let notation_id = notation.id;
+    let document_ready = document_pdf_ready(state.storage.as_ref(), notation_id)
+        .await
+        .unwrap_or(false);
+    let approval_progress = if notation.state == "lawyer_review" {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            state
+                .workflow_runtime
+                .approval_progress(notation_id, notation.updated_at.timestamp_micros()),
+        )
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .flatten()
+    } else {
+        None
+    };
+    (document_ready, approval_progress)
+}
+
 async fn questionnaire_questions(state: &AdminState, notation_id: Uuid) -> Vec<(String, String)> {
     let codes = notation_session::questionnaire_chain_for_reask(
         &state.surreal,

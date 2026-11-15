@@ -107,6 +107,38 @@ pub(crate) async fn send_notation_for_signature(
         return Err(WorkflowDriveError::DocumentNotReady(notation_id));
     }
 
+    let id = record_signature_draft(ctx, &notation_row, provider, existing).await?;
+    if mode == SendMode::Send {
+        let next = crate::retainer_walk::signal_workflow(
+            ctx.runtime,
+            notation_id,
+            "pdf_persisted",
+            None,
+            ctx.acting,
+        )
+        .await?;
+        crate::retainer_walk::sync_notation_state(ctx.surreal, notation_id, next.as_str()).await?;
+        provider.dispatch_prepared(&id).await?;
+        let notation_id = notation_id.to_string();
+        let project_id = notation_row.project_id.to_string();
+        telemetry::record_funnel_event(telemetry::FunnelEvent::Sent {
+            notation_id: &notation_id,
+            project_id: &project_id,
+            channel: telemetry::FunnelChannel::Signature,
+        });
+        return Ok((next, id));
+    }
+
+    Ok((current_state, id))
+}
+
+async fn record_signature_draft(
+    ctx: &SendFlowContext<'_>,
+    notation_row: &store::notations::Notation,
+    provider: &dyn crate::signature::SignatureProvider,
+    existing: Option<crate::signature::SignatureRequestId>,
+) -> Result<crate::signature::SignatureRequestId, WorkflowDriveError> {
+    let notation_id = notation_row.id;
     // Resolve the template + its clauses before advancing. The manifest's
     // recipients and placed signature fields are built from them below, and
     // the fee-clause gate reads them here: the walk parks at
@@ -188,37 +220,14 @@ pub(crate) async fn send_notation_for_signature(
         &template_row.code,
         &raw_template_body,
     )?;
-    let id = if let Some(id) = existing {
-        id
-    } else {
-        let id = provider
-            .send_for_signature(notation_id, &pdf_bytes, &manifest, SendMode::Prepare)
-            .await?;
-        persist_signature_request_id(ctx.surreal, notation_id, &id.0).await?;
-        id
-    };
-    if mode == SendMode::Send {
-        let next = crate::retainer_walk::signal_workflow(
-            ctx.runtime,
-            notation_id,
-            "pdf_persisted",
-            None,
-            ctx.acting,
-        )
-        .await?;
-        crate::retainer_walk::sync_notation_state(ctx.surreal, notation_id, next.as_str()).await?;
-        provider.dispatch_prepared(&id).await?;
-        let notation_id = notation_id.to_string();
-        let project_id = notation_row.project_id.to_string();
-        telemetry::record_funnel_event(telemetry::FunnelEvent::Sent {
-            notation_id: &notation_id,
-            project_id: &project_id,
-            channel: telemetry::FunnelChannel::Signature,
-        });
-        return Ok((next, id));
+    if let Some(id) = existing {
+        return Ok(id);
     }
-
-    Ok((current_state, id))
+    let id = provider
+        .send_for_signature(notation_id, &pdf_bytes, &manifest, SendMode::Prepare)
+        .await?;
+    persist_signature_request_id(ctx.surreal, notation_id, &id.0).await?;
+    Ok(id)
 }
 
 /// Whether the worker has rendered + persisted the notation's document
