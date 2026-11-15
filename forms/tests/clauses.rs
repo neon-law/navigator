@@ -14,10 +14,6 @@ fn clause_extraction_preserves_the_existing_body_bytes() {
             "6e9fe493afc9080af2388b56f1251aaf7653acf44f7e5c49f12c5559d1143875",
         ),
         (
-            include_str!("../../templates/notations/neon_law/mutual_nda.md"),
-            "cb7b8825fea7f170a55074d819ef8c1d6fff2e6f8dac3f50e3c47c21e2d11cdc",
-        ),
-        (
             include_str!("../../templates/notations/neon_law/one_way_nda.md"),
             "db1d29e6d5e5f44aa34ad2a2d545cdb93edb410d08defc980d95636269ff19ec",
         ),
@@ -69,7 +65,7 @@ fn remaining_agreement_clauses_preserve_the_compiled_body_bytes() {
 }
 
 #[test]
-fn nda_signature_party_inputs_render_independently_and_remain_required() {
+fn mutual_nda_renders_both_parties_and_email_notices() {
     let source = include_str!("../../templates/notations/neon_law/mutual_nda.md");
     let snapshot = rules::clauses::compile(source).unwrap();
     let (_, body) = rules::frontmatter::split(&snapshot).unwrap();
@@ -84,10 +80,20 @@ fn nda_signature_party_inputs_render_independently_and_remain_required() {
                 "entity__other_party.name".to_string(),
                 "Second Entity LLC".to_string(),
             ),
+            (
+                "people__notices".to_string(),
+                serde_json::json!([
+                    {"name": "First Contact", "email": "first@example.com"},
+                    {"name": "Second Contact", "email": "second@example.com"}
+                ])
+                .to_string(),
+            ),
         ]),
     );
-    assert!(rendered.contains("| First Entity LLC |"));
-    assert!(rendered.contains("| Second Entity LLC |"));
+    assert!(rendered.contains("__For First Entity LLC__\n\n{{company_signer.signature}}"));
+    assert!(rendered.contains("First Contact (first@example.com)"));
+    assert!(rendered.contains("Second Contact (second@example.com)"));
+    assert!(rendered.contains("__For Second Entity LLC__\n\n{{other_party_signer.signature}}"));
     assert!(!rules::final_document::scan(&rendered)
         .iter()
         .any(|finding| {
@@ -105,7 +111,7 @@ fn nda_signature_party_inputs_render_independently_and_remain_required() {
             "First Entity LLC".to_string(),
         )]),
     );
-    assert!(incomplete.contains("| First Entity LLC |"));
+    assert!(incomplete.contains("__For First Entity LLC__"));
     assert!(incomplete.contains("{{entity__other_party.name}}"));
 }
 

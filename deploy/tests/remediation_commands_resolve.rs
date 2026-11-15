@@ -599,12 +599,8 @@ fn the_guard_rejects_a_command_that_does_not_exist() {
     let shallow = subcommand_path("cli notation create").expect("an invocation");
     resolve(&mut cache, &shallow).expect_err("`notation` is nested under `site`");
 
-    let retired = subcommand_path("navigator site notation create").expect("an invocation");
-    let why = resolve(&mut cache, &retired).expect_err("the retired command is hidden");
-    assert!(
-        why.contains("`create` is not a subcommand of `hudson site notation`"),
-        "the retired command must not appear as a visible CLI verb: {why}"
-    );
+    let create = subcommand_path("navigator site notation create").expect("an invocation");
+    resolve(&mut cache, &create).expect("headless Notation creation is a visible CLI command");
 }
 
 /// `notation` carries visible clap aliases (`drafts`, `templates`; see
