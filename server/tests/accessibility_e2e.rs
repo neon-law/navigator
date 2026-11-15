@@ -86,8 +86,8 @@ use std::time::{Duration, Instant};
 
 use fantoccini::{Client, Locator};
 use features::webdriver::{
-    ColorScheme, assert_color_scheme, base_url, login_as_lawyer, login_as_owner,
-    new_client_or_skip_in_scheme,
+    assert_color_scheme, base_url, login_as_lawyer, login_as_owner, new_client_or_skip_in_scheme,
+    ColorScheme,
 };
 
 /// axe-core, injected into the page at test time only.
