@@ -215,7 +215,7 @@ async fn a_pending_notation_start_recovers_after_the_executor_stops() {
 
 struct PersistedNotation {
     database: crate::support::TestDatabase,
-    _directory: tempfile::TempDir,
+    directory: tempfile::TempDir,
     worker: dbos::DBOS,
     workflow: dbos_notation::NotationTransitionWorkflow,
     surreal: store::surreal::SurrealDb,
@@ -251,7 +251,7 @@ impl PersistedNotation {
         worker.launch().await.unwrap();
         Some(Self {
             database,
-            _directory: directory,
+            directory,
             worker,
             workflow,
             surreal,
@@ -1201,7 +1201,7 @@ async fn dbos_approval_accepts_a_retry_and_publishes_the_rendered_state_once() {
         .unwrap()
         .unwrap();
     assert_eq!(persisted.state, "generate_pdf__letter");
-    assert!(fixture._directory.path().join(storage_key).is_file());
+    assert!(fixture.directory.path().join(storage_key).is_file());
     assert_eq!(
         fixture
             .events()
