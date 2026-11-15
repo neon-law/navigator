@@ -328,6 +328,42 @@ async fn the_age_engine_holds_the_graph_tables_and_the_mirror_stands_down() {
             log
         );
         assert_eq!(crate::relationship_logs::all(&surreal).await.unwrap(), log);
+
+        let check_reports = |reports: [ParityReport; 3], expected: bool| {
+            for (report, table) in
+                reports
+                    .into_iter()
+                    .zip(["project_reference", "entity_role", "relationship"])
+            {
+                assert_eq!(report.tables.iter().any(|row| row.table == table), expected);
+                assert!(report
+                    .tables
+                    .iter()
+                    .find(|row| row.table == table)
+                    .is_none_or(|row| row.divergent.is_empty()));
+            }
+        };
+        let graph_reports = || async {
+            [
+                parity(&surreal, &pg).await.unwrap(),
+                crate::postgres_mirror::identity_detail::parity(&surreal, &pg)
+                    .await
+                    .unwrap(),
+                crate::postgres_mirror::records::parity(&surreal, &pg, "source_domain_records")
+                    .await
+                    .unwrap(),
+            ]
+        };
+        check_reports(graph_reports().await, true);
+        sqlx::query(
+            "INSERT INTO mirror_backfill_run (id, batch_size, status, completed_at)
+             VALUES ($1, 500, 'completed', now())",
+        )
+        .bind(Uuid::now_v7())
+        .execute(&pg.0)
+        .await
+        .unwrap();
+        check_reports(graph_reports().await, false);
     })
     .await;
 

@@ -1585,7 +1585,7 @@ pub async fn parity(
     let mut reports = Vec::new();
     let mut compares_authoritative = None;
     for table in tables(group) {
-        let authoritative = authoritative(table);
+        let authoritative = authoritative(table) || crate::postgres_graph::holds(table.name).await;
         if authoritative {
             if compares_authoritative.is_none() {
                 compares_authoritative = Some(super::compares_authoritative(pg).await?);
