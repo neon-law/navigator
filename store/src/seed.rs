@@ -1767,7 +1767,6 @@ async fn seed_sample_portfolio_into(
     seed_answers(surreal, r).await?;
     seed_person_project_roles(surreal, r).await?;
     seed_project_firm_ownership(surreal).await?;
-    // Fixture Admins, Lawyers, and Clerks can exercise both Firm scopes.
     let lex = ensure_lex_firm(surreal).await?;
     seed_member_roles(surreal, lex.id).await?;
     seed_sample_invoices(surreal).await?;
