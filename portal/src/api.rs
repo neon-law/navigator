@@ -8187,6 +8187,8 @@ async fn delete_document_door(
             "provide either the 7 to 64 hexadecimal digit pointer-removal commit_sha or manual: true.",
         ));
     }
+    let started = std::time::Instant::now();
+    tracing::info!(%project_id, %asset_id, "document delete started");
     match store::assets::soft_delete(
         &state.surreal,
         project_id,
@@ -8197,7 +8199,17 @@ async fn delete_document_door(
     )
     .await
     {
-        Ok(deletion) => Ok(Json(deletion).into_response()),
+        Ok(deletion) => {
+            tracing::info!(
+                %project_id,
+                %asset_id,
+                elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                changed = deletion.changed,
+                revisions = deletion.revisions,
+                "document delete finished"
+            );
+            Ok(Json(deletion).into_response())
+        }
         Err(store::assets::SoftDeleteError::NotOnProject) => Err(ApiError::NotFound),
         Err(store::assets::SoftDeleteError::ClosedRepository) => Ok(conflict(
             "closed_repository_protected",
