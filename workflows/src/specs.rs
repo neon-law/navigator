@@ -427,6 +427,34 @@ mod tests {
     const GOVERNING_LAW_PROMPT: &str = "Which state's law governs this engagement? Nevada, unless the Firm has agreed otherwise; California and Washington are the alternatives available.";
 
     #[test]
+    fn mutual_nda_renders_after_lawyer_review_and_waits_for_signatures() {
+        let template = include_str!("../../templates/notations/neon_law/mutual_nda.md");
+        let catalog = bundled_spec_yaml("mutual_nda").expect("bundled mutual NDA");
+        let template_workflow = workflow_spec_from_template(template).expect("template workflow");
+        let catalog_workflow = workflow_spec_from_yaml(catalog).expect("catalog workflow");
+        for workflow in [template_workflow, catalog_workflow] {
+            for (state, event, expected) in [
+                ("lawyer_review", "approved", "generate_pdf__mutual_nda_pdf"),
+                (
+                    "generate_pdf__mutual_nda_pdf",
+                    "pdf_persisted",
+                    "sent_for_signature__pending",
+                ),
+                ("sent_for_signature__pending", "signature_received", "END"),
+                ("sent_for_signature__pending", "signature_declined", "END"),
+            ] {
+                assert_eq!(
+                    workflow
+                        .transitions_from(&StateName::from(state))
+                        .and_then(|transitions| transitions.lookup(event))
+                        .map(StateName::as_str),
+                    Some(expected)
+                );
+            }
+        }
+    }
+
+    #[test]
     fn a_linear_list_becomes_the_runtime_chain() {
         let spec = questionnaire_spec_from_yaml(
             "questionnaire:\n  - entity__company\n  - person__client\n",

@@ -174,7 +174,23 @@ fn every_signing_template_pairs_signers_questionnaire_and_anchors() {
             // the same carve-out N115 makes — so there is no `{state}`
             // question to pair.
             if set.explicit && role != "firm" {
-                let state = format!("person__{role}");
+                let name = signer
+                    .name
+                    .as_deref()
+                    .and_then(rules::f107::people_signer_binding);
+                let email = signer
+                    .email
+                    .as_deref()
+                    .and_then(rules::f107::people_signer_binding);
+                let state = match (name, email) {
+                    (
+                        Some((name_state, name_row, "name")),
+                        Some((email_state, email_row, "email")),
+                    ) if role != "client" && name_state == email_state && name_row == email_row => {
+                        name_state.to_owned()
+                    }
+                    _ => format!("person__{role}"),
+                };
                 assert!(
                     questionnaire
                         .0
@@ -189,12 +205,13 @@ fn every_signing_template_pairs_signers_questionnaire_and_anchors() {
                     .into_iter()
                     .flatten()
                 {
+                    let binding_state = binding.split_once('.').map_or(binding, |(state, _)| state);
                     assert!(
                         questionnaire
                             .0
                             .states
                             .keys()
-                            .any(|name| name.as_str() == binding),
+                            .any(|name| name.as_str() == binding_state),
                         "`{code}`: signer role `{role}` binds `{binding}` but the bundled questionnaire has no such question"
                     );
                 }

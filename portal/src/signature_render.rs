@@ -70,6 +70,7 @@ fn render_block(signer: &str, kind: SignatureFieldKind, anchor: &str) -> String 
         SignatureFieldKind::Signature => "3in",
     };
     let label = block_label(signer, kind);
+    let anchor = anchor.replace('_', "\\_");
     format!(
         "#box(stroke: (bottom: 0.5pt), width: {width}, height: 1.4em)\
          [#text(fill: white, size: 4pt)[{anchor}]] \\\n#text(size: 9pt)[{label}]"
@@ -100,20 +101,24 @@ pub fn expand_signatures(body: &str) -> (String, Vec<SignatureField>) {
             continue; // leave unknown tokens in place
         };
 
+        // Markdown-to-Typst escapes underscores; the manifest and anchor use
+        // the declared role's spelling.
+        let signer = ph.signer.replace("\\_", "_");
+
         // Emit everything between the previous token and this one.
         out.push_str(&body[cursor..ph.offset]);
 
         let n = {
             let c = counters
-                .entry((ph.signer.clone(), ph.field.clone()))
+                .entry((signer.clone(), ph.field.clone()))
                 .or_insert(0);
             *c += 1;
             *c
         };
-        let anchor = anchor_string(&ph.signer, &ph.field, n);
-        out.push_str(&render_block(&ph.signer, kind, &anchor));
+        let anchor = anchor_string(&signer, &ph.field, n);
+        out.push_str(&render_block(&signer, kind, &anchor));
         fields.push(SignatureField {
-            recipient_role: ph.signer.clone(),
+            recipient_role: signer,
             kind,
             anchor,
         });

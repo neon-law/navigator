@@ -358,6 +358,17 @@ fn answer_binding(
     Ok(Some(key.to_string()))
 }
 
+/// An explicit signer binding can point to a field in an ordered People answer.
+#[must_use]
+pub fn people_signer_binding(key: &str) -> Option<(&str, usize, &str)> {
+    let (state, path) = key.split_once('.')?;
+    let (row, field) = path.split_once('.')?;
+    if !state.starts_with("people__") || !matches!(field, "name" | "email") {
+        return None;
+    }
+    Some((state, row.parse().ok()?, field))
+}
+
 fn first_duplicate_role(signers: &[SignerRole]) -> Option<String> {
     for (i, signer) in signers.iter().enumerate() {
         if signers[..i].iter().any(|s| s.role == signer.role) {

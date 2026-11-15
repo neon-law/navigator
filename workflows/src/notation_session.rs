@@ -437,7 +437,8 @@ async fn persist_from_firm_library(
 /// The engagement-first gate shared by every door that opens a real
 /// notation run: the first notation on a matter must normally be the
 /// engagement that makes it official — a retainer, or the intake-driven
-/// onboarding that opens a bundle of instruments. An open Project with no
+/// onboarding that opens a bundle of instruments. A filed onboarding document
+/// also establishes the engagement. An open Project with no
 /// notations may instead start with an offboarding letter so a pitch can
 /// be closed.
 ///
@@ -504,6 +505,14 @@ async fn enforce_engagement_first_resolved(
         false
     };
     if opens || is_offboarding_pitch {
+        return Ok(());
+    }
+    if store::assets::kinds_by_projects(surreal, &[project_id])
+        .await
+        .map_err(|error| NotationSessionError::Db(error.to_string()))?
+        .iter()
+        .any(|(_, kind)| store::projects::template_opens_a_matter(kind.as_deref()))
+    {
         return Ok(());
     }
     Err(NotationSessionError::EngagementMustBeFirst {
@@ -2749,6 +2758,42 @@ It has been our privilege to do this work alongside you. A future engagement req
             pinned.source_commit_sha.as_deref(),
             Some("0123456789abcdef0123456789abcdef01234567")
         );
+    }
+
+    #[tokio::test]
+    async fn mutual_nda_can_follow_a_filed_onboarding_document_without_an_opening_notation() {
+        let surreal = db().await;
+        let project_id =
+            store::test_support::seed_project_surreal(&surreal, "Example Project").await;
+        seed_template(&surreal, "mutual_nda", "Mutual NDA").await;
+        assert!(matches!(
+            super::enforce_engagement_first(&surreal, project_id, "mutual_nda").await,
+            Err(super::NotationSessionError::EngagementMustBeFirst { .. })
+        ));
+        let temp = tempfile::tempdir().unwrap();
+        let storage: Arc<dyn StorageService> =
+            Arc::new(cloud::FsStorage::new(temp.path()).await.unwrap());
+        store::assets::file_revision(
+            &surreal,
+            &storage,
+            &store::documents::IngestArgs {
+                project_id,
+                source: "upload",
+                filename: "onboarding.pdf",
+                kind: "onboarding",
+                content_type: "application/pdf",
+                description: None,
+                visibility: "internal",
+                secondary_storage_key: None,
+            },
+            &store::documents::DocumentIdentity::default(),
+            b"%PDF-1.7 test document",
+        )
+        .await
+        .unwrap();
+        super::enforce_engagement_first(&surreal, project_id, "mutual_nda")
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
