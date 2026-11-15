@@ -188,15 +188,11 @@ fn plan(path: &str) -> AuditPlan {
     if path == "/consultation" {
         return AuditPlan::Skip("an external booking redirect, not an HTML page");
     }
-    // firm_routes covers this path's 301 contract. Its external destination
-    // is outside the local application's HTML accessibility surface.
-    if path == "/personal" {
+    // firm_routes covers these paths' 301 contracts. Chrome follows an
+    // absolute Location onto another host, which is outside this origin's
+    // HTML surface.
+    if matches!(path, "/personal" | "/same-day-legal" | "/nautilus") {
         return AuditPlan::Skip("an external practice redirect, not an HTML page");
-    }
-    // Both 301 to Same Day Legal's own host, which the KIND browser cannot
-    // resolve; firm_routes covers the redirect.
-    if matches!(path, "/same-day-legal" | "/nautilus") {
-        return AuditPlan::Skip("a redirect to Same Day Legal's own host, not an HTML page");
     }
     // The certificate request itself is a `POST` handler; the page a reader
     // lands on afterwards is `…/certificate/sent`, which is audited.
@@ -656,7 +652,21 @@ fn every_declared_public_path_is_classified() {
 fn a_retired_external_redirect_is_not_treated_as_an_html_page() {
     let routes = audit_urls(neon::PUBLIC_PATHS);
     assert!(routes.contains(&"/".to_string()));
-    assert!(!routes.contains(&"/personal".to_string()));
+    for path in ["/personal", "/same-day-legal", "/nautilus"] {
+        assert_eq!(
+            plan(path),
+            AuditPlan::Skip("an external practice redirect, not an HTML page"),
+            "`{path}` 301s off this host; Chrome must not follow it during axe"
+        );
+        assert!(
+            neon::PUBLIC_PATHS.contains(&path),
+            "`{path}` left the declared public surface — drop its arm in `plan` too"
+        );
+        assert!(
+            !routes.contains(&path.to_string()),
+            "`{path}` is back in the audited set"
+        );
+    }
 }
 
 #[test]
@@ -1041,12 +1051,11 @@ async fn the_error_pages_pass_axe_wcag_a_and_aa() {
     }
 }
 
-/// The public surface's two interactive image affordances: the home page's call
-/// to action, and the blog collage's lightbox dialog.
+/// The public surface's two interactive affordances on the Neon host: the
+/// home hero's call to action, and the blog collage's lightbox dialog.
 ///
+/// Same Day Legal's enrollment CTA is on its own host; Neon 301s there.
 /// The directory publishes on Guieb & Shook, so this Neon audit skips it.
-/// This test stays scoped to the two interactive image affordances its name
-/// promises.
 #[tokio::test]
 async fn public_navigation_images_and_collage_dialog_are_accessible() {
     let site_base_url = base_url();

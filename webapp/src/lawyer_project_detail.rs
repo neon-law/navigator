@@ -178,6 +178,19 @@ pub struct LawyerDetailView {
     pub brand: String,
     pub entity_id: Option<String>,
     pub entity_name: Option<String>,
+    /// `store::projects::Project::inserted_at` (RFC 3339): when the matter
+    /// was opened.
+    #[serde(default)]
+    pub opened_at: String,
+    /// The committer date (RFC 3339) of the tip commit on the matter's
+    /// repository, read live from the deployment's GitHub organization.
+    /// `None` when the matter has no repository there or the read failed.
+    #[serde(default)]
+    pub last_committed_at: Option<String>,
+    /// A `closed` matter with no offboarding letter on file
+    /// (`store::projects::matter_flags`), shown as a warning badge.
+    #[serde(default)]
+    pub missing_offboarding_letter: bool,
     /// Everyone accountable on each side, by name. Empty on the lawyer side is
     /// the unassigned matter the oversight lens exists to flag.
     pub lawyer_dris: Vec<String>,
@@ -353,6 +366,24 @@ async fn dri_names(
     Ok(names)
 }
 
+/// The matter repository's tip commit date, best-effort: `None` when the
+/// matter has no `repository_url`, when that URL is not this deployment's own
+/// GitHub organization (the configured token cannot reach another forge), or
+/// when the live read fails. A forge fault degrades this one fact, not the
+/// page.
+#[cfg(feature = "server")]
+async fn last_committed_at(project: &store::projects::Project) -> Option<String> {
+    use cloud::forge::ForgeService;
+
+    let forge = cloud::forge::GitHubForge::from_env().ok()?;
+    let workspace = cloud::workspace::WorkspaceConfig::from_env().ok()?;
+    let repository_url = project.repository_url.as_deref()?;
+    if repository_url != workspace.expected_repository_url(&project.code) {
+        return None;
+    }
+    forge.head_commit_committed_at(&project.code).await.ok()?
+}
+
 /// Fetch the lawyer-lens workbench for one matter. Refuses a non-lawyer caller and
 /// a lawyer not on the matter with `404`; a query failure is a `500`.
 #[server]
@@ -462,6 +493,16 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         .map_err(server_error)?;
     let entity_id = entity.as_ref().map(|entity| entity.id.to_string());
     let entity_name = entity.map(|entity| entity.name);
+    let last_committed_at = last_committed_at(&project).await;
+    let (has_engagement, has_closing) =
+        store::projects::matter_lifecycle_sets(&surreal, std::slice::from_ref(&project))
+            .await
+            .map_err(server_error)?;
+    let (_, missing_offboarding_letter) = store::projects::matter_flags(
+        has_engagement.contains(&id),
+        &project.status,
+        has_closing.contains(&id),
+    );
 
     // The matter's most recently raised Xero invoice — a matter may carry
     // several over time, and `for_projects` orders newest first. Absent
@@ -742,6 +783,9 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         brand: project.brand,
         entity_id,
         entity_name,
+        opened_at: project.inserted_at,
+        last_committed_at,
+        missing_offboarding_letter,
         lawyer_dris,
         client_dris,
         viewer_is_lawyer_dri,
@@ -926,6 +970,21 @@ pub fn LawyerProjectDetail() -> Element {
                     " · Entity: {entity_disp}"
                     " · Lawyer DRI: {lawyer_dri_disp}"
                     " · Client DRI: {client_dri_disp}"
+                    " · Opened: "
+                    crate::components::UtcTime { at: view.opened_at.clone() }
+                    " · Last commit: "
+                    if let Some(at) = view.last_committed_at.clone() {
+                        crate::components::UtcTime { at }
+                    } else {
+                        "—"
+                    }
+                    if view.missing_offboarding_letter {
+                        " "
+                        span { class: "matter-flag",
+                            title: "This closed project has no offboarding letter on file.",
+                            "no offboarding letter"
+                        }
+                    }
                 }
                 // Every action on the matter in one bar, apart from the facts
                 // above it: a reader scanning the facts never has to pick the

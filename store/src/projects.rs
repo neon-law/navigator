@@ -5325,8 +5325,8 @@ mod surreal_read_tests {
     }
 
     /// `closed` is well-formed and still refused, in Rust *and* in the engine —
-    /// the same reasoning as `new`, for `/app/projects/closed` (the
-    /// closed-matters tab) instead of the matter-open form.
+    /// the same reasoning as `new`, for `/app/projects/closed` (links to the
+    /// retired closed-matters tab) instead of the matter-open form.
     #[tokio::test]
     async fn the_project_code_closed_is_refused_in_rust_and_in_the_engine() {
         assert!(

@@ -181,9 +181,9 @@ pub const PORTAL_MOUNT_SEGMENT: &str = "portal";
 /// Navigator itself. A Project is never Navigator, and this is where that stops
 /// being a convention.
 ///
-/// `closed` guards the same segment for the same reason as `new`:
-/// `/app/projects/closed` is the closed-matters tab, so a Project whose code is
-/// `closed` would collide with it.
+/// `closed` guards the same segment: `/app/projects/closed` was a literal
+/// route, and links to it still exist, so it must never open a matter coded
+/// `closed`.
 ///
 /// `library` is reserved for the repository reason too: a Firm's Firm
 /// Library is the repository `<firm-slug>/library` in the same organization as
@@ -1028,7 +1028,7 @@ mod tests {
         );
         assert!(
             RESERVED_PROJECT_CODES.contains(&"closed"),
-            "`/app/projects/closed` is a literal route, so `closed` cannot be a Project code"
+            "links to `/app/projects/closed` must never open a matter, so `closed` cannot be a Project code"
         );
         assert!(
             RESERVED_PROJECT_CODES.contains(&"library"),

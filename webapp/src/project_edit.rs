@@ -152,6 +152,9 @@ async fn project_brand_options(
     if !decision.is_allowed() {
         return Ok(Vec::new());
     }
+    if store_role == store::persons::Role::Owner {
+        return owner_brand_options(surreal).await;
+    }
     let keys = store::firms::brand_keys_for_firm(surreal, firm_id)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
@@ -165,6 +168,37 @@ async fn project_brand_options(
     .flatten()
     .map(|brand| (brand.key, brand.name))
     .collect())
+}
+
+/// Every Firm's Brands, each labelled with the Firm that wears it: an Owner
+/// may move a Project to any Firm by choosing one of that Firm's Brands.
+#[cfg(feature = "server")]
+async fn owner_brand_options(
+    surreal: &store::surreal::SurrealDb,
+) -> Result<Vec<(String, String)>, ServerFnError> {
+    let error = |e: &dyn std::fmt::Display| ServerFnError::new(e.to_string());
+    let mut brands = store::brands::system_wide(surreal)
+        .await
+        .map_err(|e| error(&e))?;
+    brands.extend(
+        store::brands::all_firm_scoped(surreal)
+            .await
+            .map_err(|e| error(&e))?,
+    );
+    let mut options = Vec::new();
+    for firm in store::firms::all(surreal).await.map_err(|e| error(&e))? {
+        for key in store::firms::brand_keys_for_firm(surreal, firm.id)
+            .await
+            .map_err(|e| error(&e))?
+        {
+            let name = brands
+                .iter()
+                .find(|brand| brand.key == key)
+                .map_or(key.as_str(), |brand| brand.name.as_str());
+            options.push((key.clone(), format!("{name} — {}", firm.name)));
+        }
+    }
+    Ok(options)
 }
 
 /// Load the "edit project" form for the `{id}` in the request path.
@@ -554,6 +588,11 @@ fn brand_change_form(view: &ProjectEditView) -> Element {
         .iter()
         .map(|(key, name)| Choice::new(key.clone(), name.clone()))
         .collect();
+    let help = if view.role == ViewerRole::Owner {
+        "Choosing another Firm's Brand moves the Project to that Firm. For a Project with a repository, update its navigator.yaml to match before generating new drafts."
+    } else {
+        "For a Project with a repository, update its navigator.yaml to match before generating new drafts."
+    };
     rsx! {
         if view.brands.iter().any(|(key, _)| key != &view.brand) {
             FormCard {
@@ -565,7 +604,7 @@ fn brand_change_form(view: &ProjectEditView) -> Element {
                 fields: vec![
                     Field::select("Brand", "brand", brand_choices, Some(view.brand.clone()))
                         .required()
-                        .help("For a Project with a repository, update its navigator.yaml to match before generating new drafts.")
+                        .help(help)
                 ],
             }
         }

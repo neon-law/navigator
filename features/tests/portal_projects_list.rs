@@ -236,7 +236,7 @@ async fn open_list(world: &mut ListWorld, email: String) {
 
 #[when(regex = r#"^"([^"]+)" opens the closed projects list$"#)]
 async fn open_closed_list(world: &mut ListWorld, email: String) {
-    open_list_at(world, email, "/app/projects/closed").await;
+    open_list_at(world, email, "/app/projects?status=closed").await;
 }
 
 async fn open_list_at(world: &mut ListWorld, email: String, uri: &str) {

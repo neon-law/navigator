@@ -802,9 +802,8 @@ async fn projects_list_flags_the_lifecycle_gaps_and_nothing_else() {
     walk_that_produced_an_instrument(&surreal, d, person.id, "onboarding__letter").await;
     walk_that_produced_an_instrument(&surreal, d, person.id, "offboarding__letter").await;
 
-    // The matters list is participation-scoped for every tier since ENG-81,
-    // so the acting admin is put on each seeded matter rather than relying on
-    // a bypass to see the whole portfolio.
+    // The acting admin is put on each seeded matter, so the show pages open
+    // for them too.
     let admin_person = participating_admin(&surreal, &[a, b, c, d]).await;
     let mut admin = SessionData::fresh("admin-sub", Role::Admin);
     admin.person_id = Some(admin_person);
@@ -812,37 +811,46 @@ async fn projects_list_flags_the_lifecycle_gaps_and_nothing_else() {
         "{SESSION_COOKIE_NAME}={}",
         SessionStore::new(SESSION_KEY).encode(&admin)
     );
-    let open_resp = app
+    let list_resp = app
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/app/projects")
+                .uri("/app/projects?status=pitch,active,closed")
                 .header("cookie", cookie.clone())
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(open_resp.status(), StatusCode::OK);
-    // The Open tab hides `closed` matters by default (ENG-81 follow-up), so
-    // the two closed fixtures (C, D) render only on the Closed tab — the html
-    // this test scans is both tabs' rows combined, not one page's.
-    let closed_resp = app
-        .oneshot(
-            Request::builder()
-                .uri("/app/projects/closed")
-                .header("cookie", cookie)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(closed_resp.status(), StatusCode::OK);
-    let html = format!(
-        "{}{}",
-        body_string(open_resp).await,
-        body_string(closed_resp).await
-    );
+    assert_eq!(list_resp.status(), StatusCode::OK);
+    let html = body_string(list_resp).await;
+    // The offboarding-letter badge lives on the matter's show page, not in
+    // the list row.
+    let show_page = |id: uuid::Uuid| {
+        let app = app.clone();
+        let surreal = surreal.clone();
+        let cookie = cookie.clone();
+        async move {
+            let code = store::projects::find_by_id(&surreal, id)
+                .await
+                .unwrap()
+                .unwrap()
+                .code;
+            let resp = app
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/app/projects/{code}"))
+                        .header("cookie", cookie)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+            body_string(resp).await
+        }
+    };
+    let (b_show, c_show, d_show) = (show_page(b).await, show_page(c).await, show_page(d).await);
 
     // Scope each check to the matter's own table row (the canonical seed
     // also carries projects without onboarding notations, so a global
@@ -864,22 +872,21 @@ async fn projects_list_flags_the_lifecycle_gaps_and_nothing_else() {
     // open).
     let b = row_for("Bare open matter");
     assert!(&b.contains("pitch"));
-    absent(&b, "no offboarding letter");
+    absent(&b_show, "no offboarding letter");
 
     // C — closed without a letter — is flagged for the offboarding letter
     // only (its onboarding letter produced an instrument, so the pill itself
     // reads "closed" rather than the onboarding-missing "pitch" state).
     let c = row_for("Closed no letter");
-    assert!(&c.contains("no offboarding letter"));
+    assert!(&c_show.contains("no offboarding letter"));
     absent(&c, "pitch");
 
     // A and D are clean — no offboarding badge and no "pitch" pill.
     let a = row_for("Has retainer open");
     assert!(&a.contains("active"));
-    absent(&a, "no offboarding letter");
     let d = row_for("Closed with letter");
     absent(&d, "pitch");
-    absent(&d, "no offboarding letter");
+    absent(&d_show, "no offboarding letter");
 
     // The badge vocabulary is the codebase's, not the conversational one: the
     // row says "pitch"/"no offboarding letter", never "no retainer".
@@ -918,36 +925,18 @@ async fn projects_list_renders_each_lifecycle_state_with_its_own_class() {
         "{SESSION_COOKIE_NAME}={}",
         SessionStore::new(SESSION_KEY).encode(&admin)
     );
-    let open_resp = app
-        .clone()
+    let list_resp = app
         .oneshot(
             Request::builder()
-                .uri("/app/projects")
-                .header("cookie", cookie.clone())
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(open_resp.status(), StatusCode::OK);
-    // "Red lifecycle matter" is closed, so the Open tab (which hides closed
-    // matters by default) never renders it — combine both tabs' rows.
-    let closed_resp = app
-        .oneshot(
-            Request::builder()
-                .uri("/app/projects/closed")
+                .uri("/app/projects?status=pitch,active,closed")
                 .header("cookie", cookie)
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(closed_resp.status(), StatusCode::OK);
-    let html = format!(
-        "{}{}",
-        body_string(open_resp).await,
-        body_string(closed_resp).await
-    );
+    assert_eq!(list_resp.status(), StatusCode::OK);
+    let html = body_string(list_resp).await;
     let row_for = |name: &str| -> String {
         html.split("<tr")
             .find(|frag| frag.contains(name))
