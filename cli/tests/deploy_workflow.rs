@@ -341,27 +341,42 @@ fn a_prerelease_publishes_as_a_prerelease() {
     );
 }
 
-/// A LANDED VERSION BUMP IS THE ONLY WAY TO PUBLISH, and that is what makes an
-/// image's version trustworthy.
-///
-/// Three triggers have owned this workflow. The clock and the dispatch both
-/// derived a version from `date`, so the name an image carried stood behind no
-/// Git ref: `Cargo.toml` sat at one version while published images marched on
-/// under another. The pushed tag fixed that but paid in ceremony — four
-/// validations existed to re-establish facts a bare ref cannot carry, each of
-/// which spent an immutable name when it failed late.
-///
-/// Reading the version out of the merged manifest answers all four by
-/// construction. All three retired triggers are asserted absent rather than
-/// merely unused: any of them surviving would publish under a version this
-/// repository's source does not name, and would go green doing it.
+/// Publishing requires a version bump merged to main. The nightly trigger
+/// admits the same build and KIND jobs used to verify a release, and it exits
+/// the release decision before the checker can run.
 #[test]
 fn deploy_workflow_publishes_only_from_a_landed_version_bump() {
-    assert!(
-        !has_trigger("schedule"),
-        "deploy.yml must not publish on a clock: a cron can only derive a version, which is \
-         exactly the drift that made the manifest and the published images disagree"
+    let workflow: serde_yaml::Value =
+        serde_yaml::from_str(&deploy_workflow()).expect("deploy.yml parses as YAML");
+    let jobs = &workflow["jobs"];
+    let version = jobs["release-version"]["steps"]
+        .as_sequence()
+        .expect("release-version declares steps")
+        .iter()
+        .find(|step| step["id"].as_str() == Some("version"))
+        .expect("release-version declares a decision step");
+    assert!(has_trigger("schedule"));
+    assert_eq!(
+        version["env"]["EVENT_NAME"].as_str(),
+        Some("${{ github.event_name }}")
     );
+    let scheduled_decision = version["run"]
+        .as_str()
+        .expect("release decision runs a script")
+        .split_once(r#"if [ "${EVENT_NAME}" = "schedule" ]"#)
+        .expect("the scheduled event has an early decision")
+        .1
+        .split_once("\nfi")
+        .expect("the early decision has a complete conditional")
+        .0;
+    assert!(scheduled_decision.contains(r#"echo "publishable=false""#));
+    assert!(scheduled_decision.contains("exit 0"));
+    for job in ["build", "integration"] {
+        assert!(jobs[job]["if"]
+            .as_str()
+            .expect("build and integration declare conditions")
+            .contains("github.event_name == 'schedule'"));
+    }
     assert!(
         !has_trigger("workflow_dispatch"),
         "deploy.yml must not publish on demand: a dispatch would publish a version nobody \
@@ -1277,9 +1292,8 @@ fn a_duplicate_trigger_for_the_same_commit_is_refused_before_any_real_work() {
     let dedup = &steps[dedup_index];
     assert_eq!(
         dedup["if"].as_str(),
-        Some("github.ref_name == 'main'"),
-        "the dedup check only makes sense on `main`; a `kind-ci/**` iteration already \
-         reports publishable=false without it"
+        Some("github.event_name == 'push' && github.ref_name == 'main'"),
+        "only a push to main can repeat the release decision"
     );
     let script = dedup["run"].as_str().expect("the dedup step runs a script");
     assert!(
@@ -1327,8 +1341,10 @@ fn a_duplicate_trigger_for_the_same_commit_is_refused_before_any_real_work() {
     );
     assert_eq!(
         steps[checker_index]["if"].as_str(),
-        Some("github.ref_name == 'main' && steps.dedup.outputs.duplicate != 'true'"),
-        "the checker step must skip on a duplicate trigger, not just on a non-`main` ref"
+        Some(
+            "github.event_name == 'push' && github.ref_name == 'main' && steps.dedup.outputs.duplicate != 'true'"
+        ),
+        "the checker runs only for a unique push to main"
     );
 
     let toolchain = steps
@@ -1653,7 +1669,10 @@ fn image_publishers_require_signed_digest_verified_ghcr_mirrors() {
             "::error::GHCR mirror of ${target}:${RELEASE_TAG} failed after retries",
             "exit 1",
         ] {
-            assert!(script.contains(required), "{job} mirror must contain {required}");
+            assert!(
+                script.contains(required),
+                "{job} mirror must contain {required}"
+            );
         }
         let text = job_text(&workflow, job);
         if job != "publish-cli-image" {
@@ -1692,8 +1711,7 @@ fn every_standalone_signature_retries_through_the_wrapper() {
     assert!(alias.contains("scripts/cosign-sign.sh \"${registry}/${{ matrix.alias }}@"));
 }
 
-const DIGEST_REF: &str =
-    "registry.example/navigator-billing-digest-trigger@sha256:8475ff4278c29e70c1f1db536a2a4399c2e7910c680d506bdd8f0c8df7790e18";
+const DIGEST_REF: &str = "registry.example/navigator-billing-digest-trigger@sha256:8475ff4278c29e70c1f1db536a2a4399c2e7910c680d506bdd8f0c8df7790e18";
 
 /// Runs `scripts/cosign-sign.sh` against a fake `cosign` that fails its first
 /// `failures` calls with the 26.10.29 Rekor conflict. Returns the exit status
