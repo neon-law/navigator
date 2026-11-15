@@ -721,20 +721,37 @@ mod tests {
         BTreeMap::from([
             ("entity__company.name".into(), "Example Research LLC".into()),
             ("entity__other_party.name".into(), "Jordan Example".into()),
-            ("custom_datetime__effective_date".into(), "2026-01-01".into()),
-            ("custom_text__business_purpose".into(), "a software prototype".into()),
+            (
+                "custom_datetime__effective_date".into(),
+                "2026-01-01".into(),
+            ),
+            (
+                "custom_text__business_purpose".into(),
+                "a software prototype".into(),
+            ),
             ("custom_text__business_term".into(), "one year".into()),
-            ("custom_text__business_survival".into(), "three years".into()),
+            (
+                "custom_text__business_survival".into(),
+                "three years".into(),
+            ),
             ("jurisdiction__law".into(), "Nevada".into()),
             ("jurisdiction__seat".into(), "Reno, Nevada".into()),
-            ("people__notices".into(), serde_json::json!([
-                {"name": "Avery Example", "email": "avery@example.com", "title": "Manager",
-                 "street": "1 Example Way", "city": "Reno", "state": "NV", "zip": "89501", "country": "US"},
-            ]).to_string()),
-            ("people__signatories".into(), serde_json::json!([
-                {"name": "Avery Example", "email": "avery@example.com"},
-                {"name": "Jordan Example", "email": "jordan@example.com"},
-            ]).to_string()),
+            (
+                "people__notices".into(),
+                serde_json::json!([
+                    {"name": "Avery Example", "email": "avery@example.com"},
+                    {"name": "Jordan Example", "email": "jordan@example.com"},
+                ])
+                .to_string(),
+            ),
+            (
+                "people__signatories".into(),
+                serde_json::json!([
+                    {"name": "Avery Example", "email": "avery@example.com"},
+                    {"name": "Jordan Example", "email": "jordan@example.com"},
+                ])
+                .to_string(),
+            ),
         ])
     }
 

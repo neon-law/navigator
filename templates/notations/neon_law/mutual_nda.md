@@ -31,7 +31,7 @@ prompts:
     How long do confidentiality duties continue after termination (trade secrets remain protected while legally
     qualifying)?
   law: "Which state’s law governs?"
-  notices: "Who receives notices for each party? Include name, role, business email, and postal address."
+  notices: "Who receives notices for each party? Enter each contact’s name and notice email."
   signatories: "Enter the name and signing email for each party, company signer first and other party signer second."
   seat: "Where is the arbitration seated?"
 audiences:
@@ -138,9 +138,15 @@ threatened or actual breach, subject to the court’s requirements.
 
 ## VI. Administration
 
-{{> dispute}} Notices:
-{{#for n in people__notices}} {{n.name}} ({{n.title}}): {{n.email}}; {{n.street}}, {{n.city}}, {{n.state}}
-{{n.zip}}, {{n.country}}. {{/for}}
+{{> dispute}}
+
+The parties agree to give notices under this agreement by email to the contacts below. Either party may update its
+notice contact or email address by giving notice to the other party.
+
+{{#for n in people__notices}}
+{{n.name}} ({{n.email}})
+
+{{/for}}
 
 {{> administration}}
 
