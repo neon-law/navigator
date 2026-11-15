@@ -39,13 +39,13 @@ pub(super) struct Add {
     /// ID of an existing Entity.
     #[arg(long)]
     entity: Option<Uuid>,
-    /// Relationship type in lower snake_case, such as witness or co_counsel.
+    /// Relationship type in lower `snake_case`, such as `witness` or `co_counsel`.
     #[arg(long = "type")]
     action: String,
     /// Audit detail.
     #[arg(long)]
     detail: String,
-    /// Reuse this ID when retrying the same observation after a connection failure.
+    /// Reuse this ID to retry an observation.
     #[arg(long)]
     request_id: Option<Uuid>,
     #[command(flatten)]
@@ -53,7 +53,7 @@ pub(super) struct Add {
 }
 
 #[derive(Serialize)]
-struct Request<'a> {
+struct ObservationInput<'a> {
     request_id: Uuid,
     scope: Scope,
     firm_id: Option<Uuid>,
@@ -109,7 +109,7 @@ async fn add(args: Add) -> Result<Receipt> {
         Some(code) => Some(projects::surfaces::resolve_project_id(&base, &token, &code).await?),
         None => None,
     };
-    let request = Request {
+    let request = ObservationInput {
         request_id: args.request_id.unwrap_or_else(Uuid::now_v7),
         scope: args.scope,
         firm_id: args.firm,
@@ -122,7 +122,7 @@ async fn add(args: Add) -> Result<Receipt> {
     send(&base, &token, &request).await
 }
 
-async fn send(base: &str, token: &str, request: &Request<'_>) -> Result<Receipt> {
+async fn send(base: &str, token: &str, request: &ObservationInput<'_>) -> Result<Receipt> {
     let response = reqwest::Client::new()
         .post(format!("{base}/app/api/graph/relationship-log"))
         .timeout(Duration::from_secs(30))
@@ -155,7 +155,7 @@ mod tests {
     #[tokio::test]
     async fn add_posts_scope_and_subject_without_an_actor() {
         let server = MockServer::start().await;
-        let request = Request {
+        let request = ObservationInput {
             request_id: Uuid::now_v7(),
             scope: Scope::Project,
             firm_id: None,

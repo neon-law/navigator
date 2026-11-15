@@ -18,6 +18,7 @@ fn person_id(bearer_header: &str) -> Uuid {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // One authenticated fixture exercises all observation scopes.
 fn project_observation_reaches_all_three_authorized_graph_endpoints() {
     lane().block_on(async {
         if stage_store().await.is_none() {
