@@ -3220,7 +3220,7 @@ async fn llms_txt_indexes_the_markdown_corpus_with_absolute_urls() {
     assert!(body.contains("estate plans tailored to each person"));
     assert!(body.contains("Nevada asset protection planning"));
     assert!(body.contains("fee for a mutual split"));
-    assert!(body.contains("Navigator, exacting agentic lawyering"));
+    assert!(body.contains("Explore legal services for starting a business"));
     assert!(!body.contains("from $50/day") && !body.contains("example.com/business"));
     assert!(!body.contains("$500 setup fee") && !body.contains("$5,000 per trial day"));
     // The firm's own marketing surface. The workshops catalog is public
@@ -10546,7 +10546,7 @@ const LIVE_HOME_CONTRACTS: &[(views::brand::BrandKey, LiveHomeContract)] = &[
         views::brand::BrandKey::Neon,
         LiveHomeContract {
             title: "<title>Neon Law | Home</title>",
-            copy: "Exacting agentic lawyering.",
+            copy: "What is your legal need?",
         },
     ),
     (
@@ -10921,7 +10921,7 @@ async fn the_delete_your_data_host_renders_its_own_home_catalog() {
     assert_eq!(neon_resp.status(), StatusCode::OK);
     let neon_body = body_string(neon_resp).await;
     assert!(
-        neon_body.contains("Exacting agentic lawyering."),
+        neon_body.contains("What is your legal need?"),
         "{neon_body}"
     );
     assert!(
@@ -10955,7 +10955,7 @@ async fn the_delete_your_data_host_renders_its_own_home_catalog() {
         "{delete_your_data_body}"
     );
     assert!(
-        !delete_your_data_body.contains("Exacting agentic lawyering."),
+        !delete_your_data_body.contains("What is your legal need?"),
         "{delete_your_data_body}"
     );
     assert!(!delete_your_data_body.contains("data-enrollment-intake"));
@@ -11360,12 +11360,8 @@ async fn assert_brand_home_lead_capture(
     db: &store::surreal::SurrealDb,
     brand: views::brand::BrandKey,
 ) {
-    // The band-built IEP Defenders and Lex Tecnica homes close on a
-    // Contact Us link to `/contact` — their published CTA shape — and the
-    // Neon home's only call to action stars the Navigator repository, so
-    // none carries an inline lead form. Their lead-capture path runs through
-    // the contact page on the brand's own host, which serves the one lead
-    // form.
+    // These homes send visitors to the brand's contact page, which serves
+    // one lead form.
     if matches!(
         brand,
         views::brand::BrandKey::IepDefenders

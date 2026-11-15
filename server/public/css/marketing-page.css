@@ -1137,10 +1137,16 @@
   color: var(--nav-color-text);
 }
 .fm-page--same-day-legal .fm-hero {
-  padding-block: clamp(4rem, 9vw, 7rem) clamp(2.5rem, 5vw, 4rem);
+  display: block;
+  padding: clamp(4rem, 9vw, 7rem) 1.5rem clamp(2.5rem, 5vw, 4rem);
   border-bottom: 1px solid var(--nav-color-text);
 }
-.fm-page--same-day-legal .fm-hero__inner { margin-inline: auto; max-width: 60rem; text-align: center; }
+.fm-page--same-day-legal .fm-hero__inner {
+  align-items: center;
+  margin-inline: auto;
+  max-width: 60rem;
+  text-align: center;
+}
 .fm-page--same-day-legal .fm-hero__title {
   font-family: var(--brand-font-display);
   font-size: clamp(3rem, 8vw, 6.5rem);
@@ -1188,7 +1194,7 @@
    surface as the Notations index. The hero is short on purpose: it asks the
    question and the needs cards answer it inside the first screen. */
 .public-shell:has(.fm-page--home) > .site-footer { margin-top: 0; }
-.fm-page--home .fm-hero { padding-block: clamp(2rem, 5vw, 3.5rem) 0; }
+.fm-page--home .fm-hero { display: block; padding-block: clamp(2rem, 5vw, 3.5rem) 0; }
 .fm-page--home .fm-hero__inner { margin-inline: 0; max-width: 48rem; text-align: left; }
 .fm-page--home .fm-hero__title {
   font-size: clamp(2.5rem, 5.5vw, 4.25rem);

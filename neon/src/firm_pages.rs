@@ -1986,7 +1986,7 @@ fn resolve_world_content(branding: &views::brand::Branding) -> webapp::world_pag
 /// Brand-safe like [`resolve_firm_contact_content`]: the `<title>` names the
 /// mounted brand, resolved at router-build time.
 ///
-/// Neon's home is the Navigator page, built from the shared marketing bands.
+/// Neon's home uses the shared marketing bands for legal services and attorney contact.
 /// Other house brands resolve their own home catalogs.
 pub(crate) fn resolve_firm_home_content(
     branding: &views::brand::Branding,

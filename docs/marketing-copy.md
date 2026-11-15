@@ -25,7 +25,7 @@ Neon Law (`neon/`):
 
 | File | Page |
 | --- | --- |
-| `neon/locales/en/neon/home-marketing.yaml` | `/` — Navigator, open source software for agentic lawyering |
+| `neon/locales/en/neon/home-marketing.yaml` | `/` — Legal services and attorney contact |
 | `neon/locales/en/neon/litigation.yaml` | `/disputes` |
 | `neon/locales/en/neon/fractional-gc.yaml` | unpublished; `/business` answers a 301 to `/` |
 | `neon/locales/en/neon/personal-plan.yaml` | `/personal` |
@@ -292,21 +292,15 @@ contact intake before sign-in; the signed-in page exposes the configured enrollm
 under a written engagement with Lex Tecnica, Ltd. Neon's `/same-day-legal` and retired `/nautilus` paths answer a 301 to
 the Same Day Legal host.
 
-Neon's home at `/` reads `neon/locales/en/neon/home-marketing.yaml` and presents Navigator under the tagline "Exacting
-agentic lawyering.": what Navigator does, a Notation band linking `/notations/about` and `/notations`, and a pointer to
-Legal Aid. It carries no subscription or services content. Its only call to action is "Star the repo", linking
-[neon-law/navigator](https://github.com/neon-law/navigator) from the hero and the closing band.
+Neon's home at `/` reads `neon/locales/en/neon/home-marketing.yaml` . It asks “What is your legal need?” and lists
+common legal services without prices. The hero and closing section link to `/contact` so visitors can reach an attorney.
 
-Hosted Navigator is offered only to legal aid organizations, at `/legal-aid`: one price per user per month plus model
-tokens at the provider's cost, with the organization's own brand name and Forgejo instance included. The price appears
-only in the pricing card in `legal-aid.yaml`; `/` and `/navigator` link there without restating it. The page links the
+The header links to Navigator at `/navigator` , Notations at `/notations` , and Legal Aid at `/legal-aid` . Hosted
+Navigator is offered only to legal aid organizations. Its price appears on the Legal Aid page, which also links the
 Using and Operating Navigator workshops.
 
-Neon's header names its three pages: Navigator at `/navigator`, Notations at `/notations`, and Legal Aid at
-`/legal-aid`. Its fee schedule stays at `/services`. Business counsel is not sold separately: `/business` answers a 301
-to `/`, because formation and the contract templates are part of the Same Day Legal subscription. The `/disputes` route
-returns a 404. Other brands retain their own home layouts. The business template inventory is documented in [business
-notations](business-notations.md).
+The `/services` and `/business` paths redirect permanently to `/` . The `/disputes` route returns 404. The business
+template inventory is documented in [business notations](business-notations.md).
 
 ## A copy-only pull request
 
