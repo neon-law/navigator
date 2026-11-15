@@ -212,6 +212,10 @@ async fn target_rows(pg: &PostgresDb) -> Result<Vec<ReferenceImage>, MirrorError
 
 /// Compare every Project Reference in both stores. Reports name keys only.
 pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
+    let graph_authoritative = crate::postgres_graph::holds("project_reference").await;
+    if graph_authoritative && !super::compares_authoritative(pg).await? {
+        return Ok(ParityReport { tables: Vec::new() });
+    }
     let source: BTreeMap<_, _> = source_rows(surreal, None)
         .await?
         .into_iter()
@@ -234,13 +238,19 @@ pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport
         )
         .collect();
     divergent.sort();
+    let table = TableParity {
+        table: "project_reference",
+        source_rows: source.len(),
+        target_rows: target.len(),
+        divergent,
+    };
+    let table = if graph_authoritative {
+        super::only_missing(pg, table).await?
+    } else {
+        table
+    };
     Ok(ParityReport {
-        tables: vec![TableParity {
-            table: "project_reference",
-            source_rows: source.len(),
-            target_rows: target.len(),
-            divergent,
-        }],
+        tables: vec![table],
     })
 }
 

@@ -94,8 +94,9 @@ hudson ops postgres mirror parity                      # must be clean before yo
 
 The graph arm rebuilds the projection wholesale — vertices keyed by the Surreal record UUIDs, so `source_id` provenance
 chains stay traceable — then validates counts and endpoint existence and reports them in the run's JSON. A clean run
-reports the graph validation alongside the relational parity counts. Exit status 0 requires zero drift; a failed row
-list is in `mirror_backfill_failure` by table and UUID, never by name.
+reports graph validation alongside the relational parity counts. After the first backfill completes, parity skips
+PostgreSQL-authoritative graph tables and validates the AGE projection against PostgreSQL. Exit status 0 requires zero
+drift. The failed row list in `mirror_backfill_failure` gives table names and UUIDs.
 
 ## 4. Staging soak, then production cutover
 

@@ -433,8 +433,9 @@ pub async fn advance(
     // A projection that still matches its sources is left standing: the
     // same drift contract the mirror groups follow, so a rerun with no
     // Surreal changes applies nothing and does not rewrite the graph.
+    let compare_surreal = crate::postgres_mirror::compares_authoritative(pg).await?;
     let mut failures: Vec<(&'static str, Option<String>, String)> = Vec::new();
-    if graph_is_current(surreal, pg, &mut failures).await {
+    if graph_is_current(surreal, pg, compare_surreal, &mut failures).await {
         crate::postgres_backfill::complete_checkpoint(pg, run_id, GRAPH_MIRROR, 0, 0, failures)
             .await?;
         return Ok(0);
@@ -475,29 +476,31 @@ pub async fn advance(
         )),
     }
 
-    match compare_traversal(surreal, pg).await {
-        Ok(parity) if parity.is_clean() => batches += 1,
-        Ok(parity) => {
-            batches += 1;
-            failures.push((
+    if compare_surreal {
+        match compare_traversal(surreal, pg).await {
+            Ok(parity) if parity.is_clean() => batches += 1,
+            Ok(parity) => {
+                batches += 1;
+                failures.push((
+                    "graph_parity",
+                    None,
+                    format!(
+                        "the AGE and Surreal conflict traversals disagree on {} anchors: \
+                     {} AGE edges, {} Surreal edges, {} only in AGE, {} only in Surreal",
+                        parity.anchors,
+                        parity.age_edges,
+                        parity.surreal_edges,
+                        parity.age_only,
+                        parity.surreal_only
+                    ),
+                ));
+            }
+            Err(error) => failures.push((
                 "graph_parity",
                 None,
-                format!(
-                    "the AGE and Surreal conflict traversals disagree on {} anchors: \
-                     {} AGE edges, {} Surreal edges, {} only in AGE, {} only in Surreal",
-                    parity.anchors,
-                    parity.age_edges,
-                    parity.surreal_edges,
-                    parity.age_only,
-                    parity.surreal_only
-                ),
-            ));
+                format!("the AGE graph traversal could not be compared: {error}"),
+            )),
         }
-        Err(error) => failures.push((
-            "graph_parity",
-            None,
-            format!("the AGE graph traversal could not be compared: {error}"),
-        )),
     }
 
     crate::postgres_backfill::complete_checkpoint(
@@ -565,6 +568,7 @@ fn validation_failures(
 async fn graph_is_current(
     surreal: &SurrealDb,
     pg: &PostgresDb,
+    compare_surreal: bool,
     failures: &mut Vec<(&'static str, Option<String>, String)>,
 ) -> bool {
     let mut current = true;
@@ -585,6 +589,9 @@ async fn graph_is_current(
                 ),
             ));
         }
+    }
+    if !compare_surreal {
+        return current;
     }
     match compare_traversal(surreal, pg).await {
         Ok(parity) if parity.is_clean() => {}

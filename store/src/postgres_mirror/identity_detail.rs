@@ -909,17 +909,26 @@ pub(super) async fn mirror(
 ///
 /// Either store could not be read.
 pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
-    Ok(ParityReport {
-        tables: vec![
-            compare_detail::<AddressImage>(surreal, pg).await?,
-            compare_detail::<CredentialImage>(surreal, pg).await?,
-            compare_detail::<EmailTokenImage>(surreal, pg).await?,
-            compare_entity_roles(surreal, pg).await?,
-            compare_detail::<DelegateImage>(surreal, pg).await?,
-            compare_detail::<ExternalIdentityImage>(surreal, pg).await?,
-            compare_mailboxes(surreal, pg).await?,
-        ],
-    })
+    let mut tables = vec![
+        compare_detail::<AddressImage>(surreal, pg).await?,
+        compare_detail::<CredentialImage>(surreal, pg).await?,
+        compare_detail::<EmailTokenImage>(surreal, pg).await?,
+    ];
+    let graph_authoritative = crate::postgres_graph::holds("entity_role").await;
+    if !graph_authoritative || super::compares_authoritative(pg).await? {
+        let entity_roles = compare_entity_roles(surreal, pg).await?;
+        tables.push(if graph_authoritative {
+            super::only_missing(pg, entity_roles).await?
+        } else {
+            entity_roles
+        });
+    }
+    tables.extend([
+        compare_detail::<DelegateImage>(surreal, pg).await?,
+        compare_detail::<ExternalIdentityImage>(surreal, pg).await?,
+        compare_mailboxes(surreal, pg).await?,
+    ]);
+    Ok(ParityReport { tables })
 }
 
 /// Re-mirror every divergent identity-detail row from SurrealDB, then
