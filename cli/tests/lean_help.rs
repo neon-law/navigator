@@ -1,8 +1,7 @@
 //! The lean `navigator` carries Projects, their Jujutsu repositories, the
-//! offline `validate` gate, the notation envelope verbs, the glossary, the
-//! Calendar read, the site session plus `seeds/` import a Project repository's
-//! CI runs, and the
-//! matter-work `site` verbs (documents, mail filing, notations). Deployment
+//! offline `validate` gate, notation envelope verbs, the glossary, Calendar reads,
+//! Relationship Log observations, a site session, and the `seeds/` import a Project's CI runs.
+//! Matter-work `site` verbs handle documents, mail filing, and notations. Deployment
 //! and Firm configuration live in `hudson`; Ephemeris in `scorpio`.
 
 use assert_cmd::Command;
@@ -33,13 +32,27 @@ fn help(args: &[&str]) -> String {
 fn the_lean_navigator_names_only_its_own_verbs() {
     assert_eq!(
         command_names(&help(&["--help"])),
-        ["calendar", "glossary", "notation", "project", "site", "sync", "validate", "help"]
-            .map(String::from)
+        [
+            "calendar",
+            "glossary",
+            "notation",
+            "project",
+            "relationship",
+            "site",
+            "sync",
+            "validate",
+            "help"
+        ]
+        .map(String::from)
     );
     assert_eq!(
         command_names(&help(&["site", "--help"])),
         ["document", "import", "login", "logout", "mail", "notation", "whoami", "help"]
             .map(String::from)
+    );
+    assert_eq!(
+        command_names(&help(&["relationship", "--help"])),
+        ["add", "help"].map(String::from)
     );
     assert_eq!(
         command_names(&help(&["notation", "envelope", "--help"])),

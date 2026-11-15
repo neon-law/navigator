@@ -1592,6 +1592,10 @@ mod tests {
                     "../postgres/migrations/20261114190000_add_firm_portal_theme_brand.sql"
                 ),
             ),
+            (
+                "20261114210000_scope_manual_relationship_logs.sql",
+                include_str!("../postgres/migrations/20261114210000_scope_manual_relationship_logs.sql"),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

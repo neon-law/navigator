@@ -79,6 +79,18 @@ route_allow if {
     is_lawyer(input.session)
 }
 
+ci_matter_content_denied if {
+    input.session.source == "ci"
+    input.path == ["app", "api", "graph", "relationship-log"]
+}
+
+# A signed-in lawyer records observations in a Firm or its Project.
+route_allow if {
+    input.path == ["app", "api", "graph", "relationship-log"]
+    input.method == "POST"
+    is_lawyer(input.session)
+}
+
 # Owner and Admin are supersets of Lawyer: either privileged tier
 # passes every lawyer-work gate. Clerk is deliberately absent; adding
 # a non-lawyer role must not inherit legal authority by accident.

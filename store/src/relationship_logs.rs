@@ -35,6 +35,9 @@ use crate::postgres::PostgresDb;
 use crate::postgres_graph::graph_authority;
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 
+#[path = "scoped_relationship_logs.rs"]
+pub mod scoped;
+
 const TABLE: &str = "relationship_log";
 const PERSON_TABLE: &str = "person";
 const PROJECT_TABLE: &str = "project";
