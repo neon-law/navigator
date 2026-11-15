@@ -338,6 +338,9 @@ async fn mirror_inner(
         _ => return Err(MirrorError::Source),
     };
     if let Some(row) = source_one(surreal, table, id).await? {
+        if native_triage {
+            require_message_firm(pg, &row).await?;
+        }
         for column in table.references.split(',').filter(|column| *column != "id") {
             if let Some(parent) = row
                 .get(column)
@@ -352,12 +355,11 @@ async fn mirror_inner(
                 Box::pin(super::mirror(surreal, pg, &parent)).await?;
             }
         }
-        if native_triage
-            || first_copy
-                && matches!(
-                    key,
-                    MirrorKey::InboxTriage(_) | MirrorKey::InboxMessageAsset(_)
-                )
+        if first_copy
+            && matches!(
+                key,
+                MirrorKey::InboxTriage(_) | MirrorKey::InboxMessageAsset(_)
+            )
         {
             require_message_firm(pg, &row).await?;
         }

@@ -92,6 +92,32 @@ async fn first_backfill_copies_communication_history() {
     )
     .await
     .unwrap();
+    let acknowledged = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO communication (id, project_id, channel, direction, body, occurred_at, \
+         inserted_at, updated_at) VALUES ($1, $2, $3, $4, 'Synthetic original', now(), now(), now())",
+    )
+    .bind(acknowledged)
+    .bind(matter)
+    .bind(channel::EMAIL_INBOUND)
+    .bind(direction::INBOUND)
+    .execute(pg.pool())
+    .await
+    .unwrap();
+    surreal
+        .query("UPDATE $id SET acknowledges = $acknowledged")
+        .bind((
+            "id",
+            crate::surreal::record_id("communication", source.communication_id),
+        ))
+        .bind((
+            "acknowledged",
+            crate::surreal::record_id("communication", acknowledged),
+        ))
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
     with_test_db(
         pg.clone(),
         Box::pin(async {
@@ -106,12 +132,14 @@ async fn first_backfill_copies_communication_history() {
                 .await
                 .unwrap()
                 .is_clean());
-            let body: String = sqlx::query_scalar("SELECT body FROM communication WHERE id=$1")
-                .bind(source.communication_id)
-                .fetch_one(pg.pool())
-                .await
-                .unwrap();
+            let (body, parent): (String, Uuid) =
+                sqlx::query_as("SELECT body, acknowledges FROM communication WHERE id=$1")
+                    .bind(source.communication_id)
+                    .fetch_one(pg.pool())
+                    .await
+                    .unwrap();
             assert_eq!(body, "Synthetic history");
+            assert_eq!(parent, acknowledged);
         }),
     )
     .await;

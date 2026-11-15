@@ -393,6 +393,9 @@ async fn mirror_communication(
         let Some(ancestor) = ancestor else {
             break;
         };
+        if held() && super::held_by_target(pg, &MirrorKey::Communication(ancestor)).await? {
+            break;
+        }
         current = ancestor;
     }
 
