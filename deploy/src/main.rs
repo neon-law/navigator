@@ -2428,6 +2428,9 @@ See docs/forgejo-deployment.md."
         /// Public HTTPS Forgejo origin.
         #[arg(long)]
         url: String,
+        /// Limit launches, observation and recovery to one private owner/repository.
+        #[arg(long)]
+        repository: Option<String>,
         /// Existing dedicated runner namespace.
         #[arg(long)]
         runner_namespace: String,

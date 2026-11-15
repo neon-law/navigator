@@ -417,6 +417,11 @@ accounts and NetworkPolicies, plus pod logs. Its ClusterRole reads that one name
 in the controller and never enters a job pod. `--once` runs one tick, waits for its runners and exits. `--context`
 drives a cluster through `kubectl` from an operator host instead.
 
+For a production canary, add `--repository <owner/repository>` to the controller arguments. The controller verifies the
+exact private repository and retains its numeric identity. It launches and observes only that repository and recovers
+only Jobs and registrations attributed to it. Registrations without repository metadata require explicit operator
+cleanup. Omit the flag for installation-wide operation.
+
 Forgejo 15.0.9 has no API to re-run a run (the endpoint returns 404). To re-run a failed job, push a new commit; the
 controller picks it up within one tick.
 
