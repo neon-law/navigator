@@ -14,7 +14,10 @@
 //!   date), or one another channel filed, for an operator to slug by hand.
 //!
 //! The dry run validates every planned slug against the server and writes
-//! nothing.
+//! nothing. A real run retries one delete once when the edge answers `502`
+//! or `504`. If that retry fails, the command stops and names how many rows
+//! it already retired or slugged; rows already retired stay hidden, so the
+//! next `--yes` continues with what is still live.
 
 use std::collections::HashMap;
 
@@ -152,15 +155,30 @@ pub async fn repair(
         ));
     }
     let steps = plan(&client.list_documents().await?);
+    let mut retired = 0usize;
+    let mut slugged = 0usize;
     for step in &steps {
+        let failed = |error: anyhow::Error| {
+            anyhow!(
+                "retired {retired} rows and slugged {slugged} before the failure on {}: {error:#}",
+                step.asset_id
+            )
+        };
         match (step.action, step.slug.as_deref()) {
             (Action::Slug, Some(slug)) => {
                 client
                     .assign_slug(step.asset_id, slug, None, dry_run)
-                    .await?;
+                    .await
+                    .map_err(failed)?;
+                if !dry_run {
+                    slugged += 1;
+                }
             }
             (Action::Retire, _) if !dry_run => {
-                client.retire(step.asset_id).await?;
+                retire_with_one_gateway_retry(client, step.asset_id)
+                    .await
+                    .map_err(failed)?;
+                retired += 1;
             }
             _ => {}
         }
@@ -173,6 +191,24 @@ pub async fn repair(
         "skipped": count(Action::Skip),
         "steps": steps,
     }))
+}
+
+/// One extra attempt when the edge itself failed the delete. A `500` from
+/// the door is the door's answer and is not retried.
+async fn retire_with_one_gateway_retry(
+    client: &DocumentClient,
+    asset_id: Uuid,
+) -> Result<serde_json::Value> {
+    match client.retire(asset_id).await {
+        Ok(body) => Ok(body),
+        Err(error) if gateway_timeout(&error) => client.retire(asset_id).await,
+        Err(error) => Err(error),
+    }
+}
+
+fn gateway_timeout(error: &anyhow::Error) -> bool {
+    let text = format!("{error:#}");
+    text.contains("failed: 502 ") || text.contains("failed: 504 ")
 }
 
 #[cfg(test)]
@@ -242,5 +278,115 @@ mod tests {
         document.inserted_at = "yesterday".into();
         let steps = plan(&[document]);
         assert_eq!(steps[0].action, Action::Skip);
+    }
+
+    fn live(id: Uuid, sha: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "byte_size": 120,
+            "sha256_hex": sha,
+            "filename": "image.png",
+            "kind": "unclassified",
+            "visibility": "internal",
+            "inserted_at": "2026-11-12T23:20:05.123Z",
+            "source": "email",
+        })
+    }
+
+    async fn mount_inventory(
+        server: &wiremock::MockServer,
+        project_id: Uuid,
+        documents: serde_json::Value,
+    ) {
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path(format!(
+                "/app/api/projects/{project_id}/documents"
+            )))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(documents))
+            .mount(server)
+            .await;
+    }
+
+    async fn mount_delete(
+        server: &wiremock::MockServer,
+        project_id: Uuid,
+        asset_id: Uuid,
+        status: u16,
+        times: u64,
+        once: bool,
+    ) {
+        let mut mock = wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path(format!(
+                "/app/api/projects/{project_id}/documents/{asset_id}/delete"
+            )))
+            .and(wiremock::matchers::body_json(
+                serde_json::json!({ "manual": true }),
+            ))
+            .respond_with(
+                wiremock::ResponseTemplate::new(status)
+                    .set_body_json(serde_json::json!({ "changed": status == 200 })),
+            )
+            .expect(times);
+        // A lower priority number wins, and `up_to_n_times` stops matching
+        // after that many hits so the standing success mock can answer the retry.
+        mock = if once {
+            mock.with_priority(1).up_to_n_times(times)
+        } else {
+            mock.with_priority(2)
+        };
+        mock.mount(server).await;
+    }
+
+    #[tokio::test]
+    async fn a_gateway_failure_is_retried_once_and_the_repair_continues() {
+        let server = wiremock::MockServer::start().await;
+        let project_id = Uuid::from_u128(9);
+        let first = Uuid::from_u128(1);
+        let second = Uuid::from_u128(2);
+        mount_inventory(
+            &server,
+            project_id,
+            serde_json::json!([live(first, "aa"), live(second, "bb")]),
+        )
+        .await;
+        mount_delete(&server, project_id, first, 200, 1, false).await;
+        mount_delete(&server, project_id, first, 502, 1, true).await;
+        mount_delete(&server, project_id, second, 200, 1, false).await;
+
+        let client = crate::remote::DocumentClient::for_check_tests(server.uri(), project_id);
+        let body = super::repair(&client, false, true).await.unwrap();
+
+        assert_eq!(body["retired"], 2);
+        let deletes = server
+            .received_requests()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|request| request.url.path().ends_with("/delete"))
+            .count();
+        assert_eq!(deletes, 3);
+    }
+
+    #[tokio::test]
+    async fn a_second_gateway_failure_reports_how_many_rows_were_retired() {
+        let server = wiremock::MockServer::start().await;
+        let project_id = Uuid::from_u128(9);
+        let first = Uuid::from_u128(1);
+        let second = Uuid::from_u128(2);
+        mount_inventory(
+            &server,
+            project_id,
+            serde_json::json!([live(first, "aa"), live(second, "bb")]),
+        )
+        .await;
+        mount_delete(&server, project_id, first, 200, 1, false).await;
+        mount_delete(&server, project_id, second, 502, 2, false).await;
+
+        let client = crate::remote::DocumentClient::for_check_tests(server.uri(), project_id);
+        let error = super::repair(&client, false, true).await.unwrap_err();
+
+        let message = format!("{error:#}");
+        assert!(message.contains("retired 1 rows"), "{message}");
+        assert!(message.contains(&second.to_string()), "{message}");
     }
 }

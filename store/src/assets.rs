@@ -1329,9 +1329,13 @@ pub enum SoftDeleteError {
 }
 
 /// Every revision of the document identity `asset` belongs to — its slug
-/// chain, or the row alone when it has no slug — soft-deleted or not.
+/// chain, or the row alone when it has no slug. A blank slug is not an
+/// identity: rows that share it stay independent.
 async fn chain_of(db: &SurrealDb, asset: &Asset) -> Result<Vec<Asset>, AssetError> {
-    let (Some(project_id), Some(slug)) = (asset.project_id, asset.slug.as_deref()) else {
+    let Some(project_id) = asset.project_id else {
+        return Ok(vec![asset.clone()]);
+    };
+    let Some(slug) = asset.slug.as_deref().filter(|slug| !slug.is_empty()) else {
         return Ok(vec![asset.clone()]);
     };
     let mut chain = revisions(db, project_id, slug).await?;
@@ -1339,6 +1343,42 @@ async fn chain_of(db: &SurrealDb, asset: &Asset) -> Result<Vec<Asset>, AssetErro
         chain.push(asset.clone());
     }
     Ok(chain)
+}
+
+/// How long the stamp statement may run. The public edge closes a request
+/// that has not answered in about 30 seconds, and the PostgreSQL mirror still
+/// runs after the stamp, so the statement stops with that remaining.
+const STAMP_TIMEOUT: &str = "8s";
+
+/// Fields the stamp needs. The full asset projection includes `any` values
+/// the stamp does not read; the delete door stays on this narrower read.
+const STAMP_TARGET: &str = "project_id, slug, kind, deleted_at, purge_after";
+
+#[derive(surrealdb::types::SurrealValue)]
+struct StampTarget {
+    project_id: Option<surrealdb::types::RecordId>,
+    slug: Option<String>,
+    kind: Option<String>,
+    deleted_at: Option<surrealdb::types::Datetime>,
+    purge_after: Option<surrealdb::types::Datetime>,
+}
+
+struct StampMember {
+    id: Uuid,
+    deleted_at: Option<DateTime<Utc>>,
+    purge_after: Option<DateTime<Utc>>,
+}
+
+async fn read_stamp_target(
+    db: &SurrealDb,
+    asset_id: Uuid,
+) -> Result<Option<StampTarget>, AssetError> {
+    let mut response = db
+        .query(format!("SELECT {STAMP_TARGET} FROM ONLY $id LIMIT 1"))
+        .bind(("id", record_id(TABLE, asset_id)))
+        .await
+        .and_then(surrealdb::IndexedResults::check)?;
+    Ok(response.take(0)?)
 }
 
 /// Soft-delete the document identity `asset_id` belongs to: every revision
@@ -1361,67 +1401,122 @@ pub async fn soft_delete(
     commit_sha: Option<&str>,
     now: DateTime<Utc>,
 ) -> Result<SoftDeletion, SoftDeleteError> {
-    let Some(asset) = find_by_id(db, asset_id)
-        .await?
-        .filter(|asset| asset.project_id == Some(project_id))
-    else {
+    let Some(target) = read_stamp_target(db, asset_id).await? else {
         return Err(SoftDeleteError::NotOnProject);
     };
-    if asset.kind.as_deref() == Some(rules::kind::Kind::ClosedRepository.as_str()) {
+    if target.project_id.as_ref().and_then(record_uuid) != Some(project_id) {
+        return Err(SoftDeleteError::NotOnProject);
+    }
+    if target.kind.as_deref() == Some(rules::kind::Kind::ClosedRepository.as_str()) {
         return Err(SoftDeleteError::ClosedRepository);
     }
-    let chain = chain_of(db, &asset).await?;
-    if let Some((deleted_at, purge_after)) = chain
+    let slug = target
+        .slug
+        .as_deref()
+        .filter(|slug| !slug.is_empty())
+        .map(str::to_string);
+    let members = stamp_members(db, project_id, asset_id, &target, slug.as_deref()).await?;
+    if let Some((deleted_at, purge_after)) = members
         .iter()
         .all(|row| row.deleted_at.is_some())
         .then(|| {
-            chain
+            members
                 .iter()
                 .find_map(|row| row.deleted_at.zip(row.purge_after))
         })
         .flatten()
     {
         return Ok(SoftDeletion {
-            slug: asset.slug,
-            revisions: chain.len(),
+            slug,
+            revisions: members.len(),
             deleted_at,
             purge_after,
             changed: false,
         });
     }
     let purge_after = now + chrono::Duration::days(RETENTION_DAYS);
-    for row in chain.iter().filter(|row| row.deleted_at.is_none()) {
-        let response = writing(|| {
-            db.query(
-                "UPDATE $id SET deleted_at = $deleted_at, purge_after = $purge_after, \
-                 deleted_by_person_id = $person, deleted_commit_sha = $sha, \
-                 updated_at = time::now()",
-            )
-            .bind(("id", record_id(TABLE, row.id)))
-            .bind(("deleted_at", surrealdb::types::Datetime::from(now)))
-            .bind(("purge_after", surrealdb::types::Datetime::from(purge_after)))
-            .bind(("person", record_id("person", deleted_by)))
-            .bind(("sha", commit_sha.map(str::to_string)))
-        })
-        .await
-        .map_err(AssetError::from)?;
-        if one(response)?.is_none() {
-            return Err(AssetError::WriteReturnedNothing.into());
-        }
+    for row in members.iter().filter(|row| row.deleted_at.is_none()) {
+        stamp_row(db, row.id, deleted_by, commit_sha, now, purge_after).await?;
     }
-    let stamped: Vec<Uuid> = chain
+    let stamped: Vec<Uuid> = members
         .iter()
         .filter(|row| row.deleted_at.is_none())
         .map(|row| row.id)
         .collect();
     mirror_writes(db, &stamped).await;
     Ok(SoftDeletion {
-        slug: asset.slug,
-        revisions: chain.len(),
+        slug,
+        revisions: members.len(),
         deleted_at: now,
         purge_after,
         changed: true,
     })
+}
+
+async fn stamp_members(
+    db: &SurrealDb,
+    project_id: Uuid,
+    asset_id: Uuid,
+    target: &StampTarget,
+    slug: Option<&str>,
+) -> Result<Vec<StampMember>, AssetError> {
+    let Some(slug) = slug else {
+        return Ok(vec![member_from_target(asset_id, target)]);
+    };
+    let chain = revisions(db, project_id, slug).await?;
+    let mut members: Vec<StampMember> = chain
+        .into_iter()
+        .map(|row| StampMember {
+            id: row.id,
+            deleted_at: row.deleted_at,
+            purge_after: row.purge_after,
+        })
+        .collect();
+    if !members.iter().any(|row| row.id == asset_id) {
+        members.push(member_from_target(asset_id, target));
+    }
+    Ok(members)
+}
+
+fn member_from_target(asset_id: Uuid, target: &StampTarget) -> StampMember {
+    StampMember {
+        id: asset_id,
+        deleted_at: target.deleted_at.map(Into::into),
+        purge_after: target.purge_after.map(Into::into),
+    }
+}
+
+async fn stamp_row(
+    db: &SurrealDb,
+    asset_id: Uuid,
+    deleted_by: Uuid,
+    commit_sha: Option<&str>,
+    now: DateTime<Utc>,
+    purge_after: DateTime<Utc>,
+) -> Result<(), AssetError> {
+    writing(|| {
+        db.query(format!(
+            "UPDATE $id SET deleted_at = $deleted_at, purge_after = $purge_after, \
+             deleted_by_person_id = $person, deleted_commit_sha = $sha, \
+             updated_at = time::now() RETURN NONE TIMEOUT {STAMP_TIMEOUT}"
+        ))
+        .bind(("id", record_id(TABLE, asset_id)))
+        .bind(("deleted_at", surrealdb::types::Datetime::from(now)))
+        .bind(("purge_after", surrealdb::types::Datetime::from(purge_after)))
+        .bind(("person", record_id("person", deleted_by)))
+        .bind(("sha", commit_sha.map(str::to_string)))
+    })
+    .await?;
+    let mut response = db
+        .query("SELECT VALUE deleted_at IS NOT NONE FROM ONLY $id LIMIT 1")
+        .bind(("id", record_id(TABLE, asset_id)))
+        .await
+        .and_then(surrealdb::IndexedResults::check)?;
+    let stamped: Option<bool> = response.take(0)?;
+    if stamped != Some(true) {
+        return Err(AssetError::WriteReturnedNothing);
+    }
+    Ok(())
 }
 
 /// What [`restore`] brought back.
@@ -4328,6 +4423,53 @@ mod tests {
             assert!(row.deleted_commit_sha.is_none());
         }
         assert!(for_project(&db, project).await.unwrap().is_empty());
+    }
+
+    /// A blank slug is not a document identity, so retiring one such row
+    /// leaves every other blank-slug row on the matter live.
+    #[tokio::test]
+    async fn a_blank_slug_retires_that_row_alone() {
+        let (db, storage, _tmp) = fixtures().await;
+        let project = crate::test_support::seed_project_surreal(&db, "matter").await;
+        let first = ingest_named(
+            &db,
+            &storage,
+            project,
+            "image001.png",
+            "unclassified",
+            Some(""),
+            b"one",
+        )
+        .await;
+        let second = ingest_named(
+            &db,
+            &storage,
+            project,
+            "image002.png",
+            "unclassified",
+            Some(""),
+            b"two",
+        )
+        .await;
+        let person = lawyer(&db).await;
+
+        let deletion = soft_delete(&db, project, first.id, person, None, at(2))
+            .await
+            .unwrap();
+
+        assert!(deletion.changed);
+        assert_eq!(deletion.revisions, 1);
+        assert!(deletion.slug.is_none());
+        assert!(find_by_id(&db, first.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .deleted_at
+            .is_some());
+        let other = find_by_id(&db, second.id).await.unwrap().unwrap();
+        assert!(other.slug.as_deref().is_none_or(str::is_empty));
+        assert!(other.deleted_at.is_none());
+        assert_eq!(for_project(&db, project).await.unwrap().len(), 1);
     }
 
     #[tokio::test]
