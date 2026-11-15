@@ -425,6 +425,31 @@ fn check_declared_signer_backing(
             // questionnaire state.
             continue;
         }
+        if role != "client" {
+            let name = signer
+                .name
+                .as_deref()
+                .and_then(crate::f107::people_signer_binding);
+            let email = signer
+                .email
+                .as_deref()
+                .and_then(crate::f107::people_signer_binding);
+            if let (Some((name_state, name_row, "name")), Some((email_state, email_row, "email"))) =
+                (name, email)
+            {
+                if name_state == email_state
+                    && name_row == email_row
+                    && state_type.get(name_state) == Some(&"people")
+                {
+                    continue;
+                }
+                violations.push(violation(
+                    file,
+                    format!("declared signer role `{role}` must take its name and email from the same People row"),
+                ));
+                continue;
+            }
+        }
         let state = format!("person__{role}");
         let Some(&ty) = state_type.get(state.as_str()) else {
             violations.push(violation(
@@ -872,6 +897,27 @@ mod tests {
             "client and confirming_assignor are person states with name and email: {:?}",
             F115PathResolution.lint(&file(&body)),
         );
+    }
+
+    #[test]
+    fn mutual_nda_signer_bindings_are_valid_and_read_by_the_envelope() {
+        let source = include_str!("../../templates/notations/neon_law/mutual_nda.md");
+        let compiled = crate::clauses::compile(source).expect("NDA clauses resolve");
+        let valid = file(&compiled);
+        assert!(F115PathResolution.lint(&valid).is_empty());
+        assert!(crate::f122::F122QuestionnaireStateIsRead
+            .lint(&valid)
+            .is_empty());
+        let mismatched =
+            compiled.replace("people__signatories.0.email", "people__signatories.1.email");
+        assert!(F115PathResolution
+            .lint(&file(&mismatched))
+            .iter()
+            .any(|finding| {
+                finding
+                    .message
+                    .contains("its name and email from the same People row")
+            }));
     }
 
     #[test]

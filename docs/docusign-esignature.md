@@ -100,11 +100,33 @@ After preparing a draft, open the sender-view URL printed by the CLI to review t
 
 Signed templates today:
 
+- **`mutual_nda`** — both parties sign. The shared template takes two ordered People rows for signer names and
+  emails, independent of the Notation's bound Project client.
 - **`onboarding__letter`** — the firm's engagement agreement; client signs, firm countersigns.
 - **`wa__benton_county_declaration`** — the client's own declaration (Benton County Superior Court); the
   client signs, before or after a case number is assigned.
 
 `offboarding__letter` is firm correspondence (firm signature only).
+
+## Prepare a mutual NDA from the CLI
+
+From the Project checkout, with a Navigator session already available for its deployment:
+
+```bash
+navigator site notation create mutual_nda --host "$host" --project "$project" \
+  --client-email "$project_client_email" --answers-from "$answers_file"
+navigator site notation approve --host "$host" "$notation_id"
+navigator notation envelope prepare "$notation_id"
+```
+
+An existing opening Notation or a filed onboarding document satisfies the engagement-first check. Use an existing
+Project client's email for the Notation. Put both signers in the private answers file under `people__signatories`, as
+two YAML rows with `name` and `email`, company signer first. Put the notice contacts under `people__notices` and fill
+the remaining states in the shared template. If filling stops after creation, fix the file and resume with `navigator
+site notation fill`, passing the Notation ID, host, and `--answers-from`. Use the Notation ID printed by creation for
+the final commands. After approval, check `navigator site notation status` for `document_ready true`. Use `navigator
+site notation document` to download the PDF for review. Preparation creates the unsent provider draft. The CLI opens the
+sender view only with `--open`.
 
 ## Authentication: JWT grant
 

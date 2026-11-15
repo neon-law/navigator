@@ -4,6 +4,15 @@ title: Mutual Non-Disclosure Agreement
 jurisdiction: US
 respondent_type: person_and_entity
 confidential: false
+signers:
+  - role: company_signer
+    delivery: emailed
+    name: people__signatories.0.name
+    email: people__signatories.0.email
+  - role: other_party_signer
+    delivery: emailed
+    name: people__signatories.1.name
+    email: people__signatories.1.email
 clauses:
   dispute:
     source: dispute_resolution@1
@@ -12,14 +21,9 @@ clauses:
       seat: jurisdiction__seat
   administration:
     source: nda_administration@1
-  signatures:
-    source: nda_signatures@1
-    inputs:
-      first_party: entity__company
-      second_party: entity__other_party
 prompts:
   company: "What is the company’s full legal name and entity type?"
-  other_party: "What is the other party’s full legal name and entity type?"
+  other_party: "What is the other party’s full legal name and entity type, if any?"
   effective_date: "What date does this agreement take effect?"
   business_purpose: "What specific business purpose permits use of the information?"
   business_term: "How long may the parties disclose information under this agreement?"
@@ -28,6 +32,7 @@ prompts:
     qualifying)?
   law: "Which state’s law governs?"
   notices: "Who receives notices for each party? Include name, role, business email, and postal address."
+  signatories: "Enter the name and signing email for each party, company signer first and other party signer second."
   seat: "Where is the arbitration seated?"
 audiences:
   effective_date: lawyer
@@ -54,16 +59,23 @@ questionnaire:
   jurisdiction__seat:
     _: people__notices
   people__notices:
+    _: people__signatories
+  people__signatories:
     _: END
   END: {}
 workflow:
   BEGIN:
     _: lawyer_review
   lawyer_review:
-    approved: END
+    approved: generate_pdf__mutual_nda_pdf
     changes_requested: reask__draft
   reask__draft:
     resubmitted: lawyer_review
+  generate_pdf__mutual_nda_pdf:
+    pdf_persisted: sent_for_signature__pending
+  sent_for_signature__pending:
+    signature_received: END
+    signature_declined: END
   END: {}
 ---
 
@@ -134,4 +146,14 @@ threatened or actual breach, subject to the court’s requirements.
 
 ## Signatures
 
-{{> signatures}}
+__For {{entity__company.name}}__
+
+{{company_signer.signature}}
+
+Date: {{company_signer.date}}
+
+__For {{entity__other_party.name}}__
+
+{{other_party_signer.signature}}
+
+Date: {{other_party_signer.date}}

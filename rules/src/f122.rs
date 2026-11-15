@@ -180,7 +180,18 @@ impl Rule for F122QuestionnaireStateIsRead {
             crate::clauses::compile(&file.contents).unwrap_or_else(|_| file.contents.clone());
         // Only the composed body carries render placeholders.
         let body = crate::frontmatter::split(&compiled).map_or(compiled.as_str(), |(_, body)| body);
-        let read = states_read(body);
+        let mut read = states_read(body);
+        if let Ok(signers) = crate::f107::signer_set(&compiled) {
+            for signer in signers.signers {
+                if !matches!(signer.role.as_str(), "client" | "firm") {
+                    for binding in [signer.name, signer.email].into_iter().flatten() {
+                        if let Some((state, _, _)) = crate::f107::people_signer_binding(&binding) {
+                            read.insert(state.to_owned());
+                        }
+                    }
+                }
+            }
+        }
 
         questionnaire
             .keys()

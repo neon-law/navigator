@@ -464,23 +464,22 @@ pub enum NotationAction {
         json: bool,
     },
     /// Create a questionnaire-driven notation on an existing matter and
-    /// leave its questionnaire ready for the site intake flow.
+    /// leave its questionnaire ready or fill it from an answers file.
     ///
     /// Every notation hangs on an already-existing Project, so `--project`
     /// (the matter code) is required — open the matter first with
     /// `navigator project create`. The template is read from that
     /// Project's git repo when authored there, else from the bundled firm
     /// catalog; the notation opens pinned to it
-    /// (`POST /app/projects/<id>/notations/new`).
-    #[command(hide = true)]
+    /// (`POST /app/api/projects/<id>/notations`).
     Create {
         /// Template code, e.g. `onboarding__letter`,
         /// `offboarding__letter`, or `nv__llc_formation`.
         template_code: String,
         #[command(flatten)]
         host: HostOpt,
-        /// Client email — the notation's bound client (signer). Must be an
-        /// existing client on the matter.
+        /// Existing Project client to bind the Notation to. Signer identities
+        /// may be collected separately by the template.
         #[arg(long)]
         client_email: String,
         /// Matter **code** (human-facing, from `project create`) to open the
@@ -496,6 +495,15 @@ pub enum NotationAction {
         /// create — prefill is whole, never partial.
         #[arg(long = "answers-from", alias = "answers-file")]
         answers_from: Option<PathBuf>,
+    },
+    /// Resume filling a Notation's questionnaire from a saved answers file.
+    Fill {
+        /// Notation UUID.
+        notation_id: uuid::Uuid,
+        #[command(flatten)]
+        host: HostOpt,
+        #[arg(long)]
+        answers_from: PathBuf,
     },
     /// Print a notation's workflow state + signature request id
     /// (`GET …/review?format=json`).
@@ -590,37 +598,42 @@ pub async fn run_notation(action: NotationAction) -> ExitCode {
         NotationAction::Create {
             template_code,
             host,
-            client_email: _,
-            project: _,
+            client_email,
+            project,
             answers_from,
-        } => {
-            if answers_from.is_some() && !template_code.starts_with("onboarding") {
-                eprintln!(
-                    "navigator site notation create: --answers-from prefills an onboarding; offboarding and other templates take no answers file"
-                );
-                return ExitCode::FAILURE;
+        } => match template_code.as_str() {
+            "onboarding" | "onboarding__letter" => {
+                projects::lifecycle::onboard(
+                    host.host.as_deref(),
+                    Path::new("."),
+                    answers_from.as_deref(),
+                    None,
+                )
+                .await
             }
-            match template_code.as_str() {
-                "onboarding" | "onboarding__letter" => {
-                    projects::lifecycle::onboard(
-                        host.host.as_deref(),
-                        Path::new("."),
-                        answers_from.as_deref(),
-                        None,
-                    )
-                    .await
+            "offboarding" | "offboarding__letter" => {
+                if answers_from.is_some() {
+                    eprintln!("navigator site notation create: offboarding takes no answers file");
+                    return ExitCode::FAILURE;
                 }
-                "offboarding" | "offboarding__letter" => {
-                    projects::lifecycle::offboard(host.host.as_deref(), Path::new("."), None).await
-                }
-                _ => {
-                    eprintln!(
-                        "navigator site notation create: use `navigator project onboard` or `navigator project offboard`"
-                    );
-                    ExitCode::FAILURE
-                }
+                projects::lifecycle::offboard(host.host.as_deref(), Path::new("."), None).await
             }
-        }
+            _ => {
+                remote::notation_create_on_project(
+                    host.host.as_deref(),
+                    &template_code,
+                    &client_email,
+                    &project,
+                    answers_from.as_deref(),
+                )
+                .await
+            }
+        },
+        NotationAction::Fill {
+            notation_id,
+            host,
+            answers_from,
+        } => remote::notation_fill(host.host.as_deref(), notation_id, &answers_from).await,
         NotationAction::Status {
             notation_id,
             host,

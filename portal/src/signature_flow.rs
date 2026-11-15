@@ -243,9 +243,9 @@ pub(crate) async fn document_pdf_ready(
 /// questionnaire answers or the bound Person; `firm` from
 /// `DOCUSIGN_SIGNER_*`; any other role from its declared `name`/`email`
 /// answer-key bindings, falling back to `person__<role>.name` /
-/// `.email`. Empty fields → empty manifest (the provider's
-/// single-signer fallback). A declared role that lacks a resolved name
-/// and email refuses the send.
+/// `.email`. Templates with no declared signers and no fields use the
+/// provider's single-signer fallback. Explicit signers require placed fields
+/// and resolved identities.
 ///
 /// Resolve the signer set for a template from the bytes the send path
 /// loads.
@@ -287,11 +287,11 @@ pub(crate) fn build_signature_manifest(
     template_source: &str,
 ) -> Result<crate::signature::SignatureManifest, WorkflowDriveError> {
     use crate::signature::{SignatureManifest, SignatureRecipient};
-    if fields.is_empty() {
-        return Ok(SignatureManifest::default());
-    }
     let set = signer_set_for_template(template_code, template_source)
         .map_err(|message| WorkflowDriveError::UnresolvedSigner { role: message })?;
+    if fields.is_empty() && !set.explicit {
+        return Ok(SignatureManifest::default());
+    }
     let role_present = |role: &str| fields.iter().any(|f| f.recipient_role == role);
     let env = |k: &str, default: &str| {
         std::env::var(k)
@@ -299,7 +299,7 @@ pub(crate) fn build_signature_manifest(
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| default.to_string())
     };
-    let answered = |key: &str| ctx.get(key).filter(|s| !s.is_empty()).cloned();
+    let answered = |key: &str| signer_answer(ctx, key);
 
     let mut recipients = Vec::new();
     for signer in &set.signers {
@@ -363,6 +363,17 @@ pub(crate) fn build_signature_manifest(
         recipients,
         fields: fields.to_vec(),
     })
+}
+
+/// Resolve a scalar binding or a field in an ordered People answer.
+fn signer_answer(ctx: &BTreeMap<String, String>, key: &str) -> Option<String> {
+    if let Some(value) = ctx.get(key) {
+        return (!value.trim().is_empty()).then(|| value.trim().to_owned());
+    }
+    let (state, row, field) = rules::f107::people_signer_binding(key)?;
+    let rows: serde_json::Value = serde_json::from_str(ctx.get(state)?).ok()?;
+    let value = rows.get(row)?.get(field)?.as_str()?.trim();
+    (!value.is_empty()).then(|| value.to_owned())
 }
 
 /// Record the e-signature provider's request id in `signatures` so a
@@ -702,6 +713,119 @@ mod tests {
         assert_eq!(manifest.recipients[0].client_user_id, None);
         // Embedded notation: the client keeps the captive ceremony.
         assert!(manifest.recipients[1].client_user_id.is_some());
+    }
+
+    #[tokio::test]
+    async fn shared_mutual_nda_prepares_two_signers_without_dispatch() {
+        let template =
+            store::seed::seeded_template_markdown("mutual_nda").expect("shared template");
+        let composed = rules::clauses::compile(template).expect("shared clauses resolve");
+        let answers = BTreeMap::from([
+            ("entity__company.name".into(), "Example Research LLC".into()),
+            ("entity__other_party.name".into(), "Jordan Example".into()),
+            ("custom_datetime__effective_date".into(), "2026-01-01".into()),
+            ("custom_text__business_purpose".into(), "a software prototype".into()),
+            ("custom_text__business_term".into(), "one year".into()),
+            ("custom_text__business_survival".into(), "three years".into()),
+            ("jurisdiction__law".into(), "Nevada".into()),
+            ("jurisdiction__seat".into(), "Reno, Nevada".into()),
+            ("people__notices".into(), serde_json::json!([
+                {"name": "Avery Example", "email": "avery@example.com", "title": "Manager",
+                 "street": "1 Example Way", "city": "Reno", "state": "NV", "zip": "89501", "country": "US"},
+            ]).to_string()),
+            ("people__signatories".into(), serde_json::json!([
+                {"name": "Avery Example", "email": "avery@example.com"},
+                {"name": "Jordan Example", "email": "jordan@example.com"},
+            ]).to_string()),
+        ]);
+        let typst = crate::retainer_walk::typst_body_from_template(
+            &composed,
+            &answers,
+            &answers,
+            Some("agreement"),
+        );
+        let (typst, fields) = crate::signature_render::expand_signatures(&typst);
+        assert!(!typst.contains("{{"), "all NDA placeholders are filled");
+        let pdf = pdf::render(&typst).expect("the NDA renders");
+        let manifest = build_signature_manifest(
+            Uuid::now_v7(),
+            &fields,
+            &answers,
+            None,
+            true,
+            "mutual_nda",
+            "",
+        )
+        .expect("both named signers resolve without Project participation");
+
+        assert!(build_signature_manifest(
+            Uuid::now_v7(),
+            &fields,
+            &BTreeMap::new(),
+            None,
+            true,
+            "mutual_nda",
+            "",
+        )
+        .is_err());
+        assert!(build_signature_manifest(
+            Uuid::now_v7(),
+            &[],
+            &answers,
+            None,
+            true,
+            "mutual_nda",
+            "",
+        )
+        .is_err());
+        use wiremock::matchers::{header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v2.1/accounts/example/envelopes"))
+            .and(header("authorization", "Bearer test-token"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "envelopeId": "draft-nda",
+                "status": "created"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let provider = crate::signature::DocuSignSignatureProvider::new(
+            server.uri(),
+            "example",
+            "test-token",
+            "sender@example.com",
+            "Sender",
+        );
+        let id = crate::signature::SignatureProvider::send_for_signature(
+            &provider,
+            Uuid::now_v7(),
+            &pdf,
+            &manifest,
+            super::SendMode::Prepare,
+        )
+        .await
+        .expect("DocuSign draft prepares");
+        assert_eq!(id.0, "draft-nda");
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(body["status"], "created");
+        let signers = body["recipients"]["signers"].as_array().unwrap();
+        assert_eq!(signers.len(), 2);
+        for (email, signer) in ["avery@example.com", "jordan@example.com"]
+            .into_iter()
+            .zip(signers)
+        {
+            assert_eq!(signer["email"], email);
+            assert!(signer["clientUserId"].is_null());
+            assert_eq!(signer["tabs"]["signHereTabs"].as_array().unwrap().len(), 1);
+            assert_eq!(
+                signer["tabs"]["dateSignedTabs"].as_array().unwrap().len(),
+                1
+            );
+        }
     }
 
     /// The client's embedded posture is the notation's, not the manifest

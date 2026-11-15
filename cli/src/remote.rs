@@ -4725,6 +4725,51 @@ pub async fn notation_create(
     .await
 }
 
+/// Open a catalog or Project notation through the lawyer-scoped JSON API.
+pub async fn notation_create_on_project(
+    host: Option<&str>,
+    template_code: &str,
+    client_email: &str,
+    project_code: &str,
+    answers_from: Option<&Path>,
+) -> ExitCode {
+    run(async {
+        let saved = answers_from.map(crate::answers_file::load_answers_file).transpose()?;
+        let (base, token) = resolve(host)?;
+        let project_id = crate::projects::surfaces::resolve_project_id(&base, &token, project_code).await?;
+        let client = authenticated_client_builder(&base)?.build()?;
+        let response = client
+            .post(format!("{base}/app/api/projects/{project_id}/notations"))
+            .bearer_auth(&token)
+            .json(&serde_json::json!({ "template_code": template_code, "client_email": client_email }))
+            .send()
+            .await
+            .context("POST Project notation")?;
+        let status = response.status();
+        if status != reqwest::StatusCode::CREATED {
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow!("notation create failed: {}", server_error(status, &body)));
+        }
+        #[derive(serde::Deserialize)]
+        struct CreatedNotation {
+            notation_id: Uuid,
+        }
+        let CreatedNotation { notation_id } = response.json().await.context("parse created notation")?;
+        println!("created notation {notation_id}");
+        if let Some(saved) = saved {
+            prefill_from_saved_answers(&client, &base, &token, notation_id, &saved)
+                .await
+                .with_context(|| format!("resume notation {notation_id} with site notation fill"))?;
+        }
+        Ok(())
+    })
+    .await
+}
+
+pub async fn notation_fill(host: Option<&str>, notation_id: Uuid, path: &Path) -> ExitCode {
+    run(notation_prefill(host, notation_id, path)).await
+}
+
 /// Resume an existing notation's questionnaire with the saved answers.
 pub(crate) async fn notation_prefill(
     host: Option<&str>,
@@ -4740,11 +4785,8 @@ pub(crate) async fn notation_prefill(
 /// Answer a notation's questionnaire entirely from a saved answers file:
 /// walk the same `/app/lawyer/notations/:id/step` route the intake walker
 /// uses, posting each question's saved `state: value` as the answer.
-/// Scalar saved answers post as the `value` field; a candidate-backed
-/// question accepts its saved list number or row id. Aggregate questions
-/// (`people_list`, schedules) have no single scalar and are refused — they
-/// are answered interactively. A question the file does not answer fails
-/// the walk, so a prefilled notation is always whole.
+/// Scalars and record selections use the same form fields as the walker.
+/// People answers use its ordered row fields.
 async fn prefill_from_saved_answers(
     client: &reqwest::Client,
     base: &str,
@@ -4779,22 +4821,8 @@ async fn prefill_from_saved_answers(
                 question.code,
             ));
         };
-        let mut fields =
-            if model::question_registry::answer_type_is_aggregate(&question.answer_type) {
-                return Err(anyhow!(
-                "question `{}` is an aggregate ({}); a saved answer cannot fill it — answer it \
-                 interactively",
-                question.code,
-                question.answer_type,
-            ));
-            } else if question.has_candidates() {
-                picker_selection_fields(&question, &crate::answers_file::saved_scalar(value)?)?
-            } else {
-                vec![(
-                    "value".to_string(),
-                    crate::answers_file::saved_scalar(value)?,
-                )]
-            };
+        let mut fields = saved_step_fields(&question, value)
+            .with_context(|| format!("read saved answer for `{}`", question.code))?;
         fields.push(("_nav_question_code".to_string(), question.code.clone()));
         let resp = client
             .post(format!("{base}/app/lawyer/notations/{notation_id}/step"))
@@ -4820,6 +4848,44 @@ async fn prefill_from_saved_answers(
         previous_question = Some(question.code);
         answered += 1;
     }
+}
+
+fn saved_step_fields(
+    question: &StepQuestion,
+    answer: &serde_yaml::Value,
+) -> Result<Vec<(String, String)>> {
+    let value = answer.get("value").unwrap_or(answer);
+    if model::question_registry::answer_type_is_aggregate(&question.answer_type) {
+        let rows: Vec<std::collections::BTreeMap<String, serde_yaml::Value>> = match value.as_str()
+        {
+            Some(json) => serde_json::from_str(json).context("parse saved People rows")?,
+            None => serde_yaml::from_value(value.clone()).context("read People rows")?,
+        };
+        let mut fields = Vec::new();
+        for (index, row) in rows.iter().enumerate() {
+            for (part, value) in row {
+                anyhow::ensure!(
+                    model::question_registry::PERSON_ROW_PARTS.contains(&part.as_str()),
+                    "unknown People row field `{part}`"
+                );
+                fields.push((
+                    format!("p{index}_{part}"),
+                    crate::answers_file::saved_scalar(value)?,
+                ));
+            }
+        }
+        return Ok(fields);
+    }
+    if let Some(id) = answer.get("id") {
+        return picker_selection_fields(question, &crate::answers_file::saved_scalar(id)?);
+    }
+    let raw = crate::answers_file::saved_scalar(value)?;
+    if question.has_candidates()
+        && (raw.trim().parse::<usize>().is_ok() || raw.trim().parse::<Uuid>().is_ok())
+    {
+        return picker_selection_fields(question, &raw);
+    }
+    Ok(vec![("value".to_string(), raw)])
 }
 
 /// Server response to a notation-draft POST: the draft's path on the
@@ -9645,6 +9711,94 @@ mod tests {
                 .state,
             "lawyer_review"
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mutual_nda_cli_creates_and_fills_people_rows() {
+        let _lock = CREDENTIALS_ENV_LOCK.lock().await;
+        let server = MockServer::start().await;
+        let uri = server.uri();
+        let _env = CredentialsEnv::new(&uri);
+        let project = Uuid::new_v4();
+        let notation = Uuid::new_v4();
+        let step_path = format!("/app/lawyer/notations/{notation}/step");
+        Mock::given(method("GET"))
+            .and(path("/app/api/projects"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"id": project, "code": "sample-project"}
+            ])))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(format!("/app/api/projects/{project}/notations")))
+            .and(header("authorization", "Bearer test-token"))
+            .and(body_json(serde_json::json!({
+                "template_code": "mutual_nda",
+                "client_email": "client@example.com"
+            })))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "notation_id": notation
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(&step_path))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "question": {
+                    "code": "people__signatories",
+                    "answer_type": "people_list",
+                    "prompt": "Who signs?"
+                }
+            })))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(&step_path))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(&step_path))
+            .respond_with(ResponseTemplate::new(303))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let answers = dir.path().join("answers.yaml");
+        std::fs::write(
+            &answers,
+            concat!(
+                "people__signatories:\n",
+                "  - {name: Avery Example, email: avery@example.com}\n",
+                "  - {name: Jordan Example, email: jordan@example.com}\n",
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            crate::matter_site::run_notation(crate::matter_site::NotationAction::Create {
+                host: crate::commands::HostOpt { host: Some(uri) },
+                template_code: "mutual_nda".into(),
+                client_email: "client@example.com".into(),
+                project: "sample-project".into(),
+                answers_from: Some(answers),
+            })
+            .await,
+            ExitCode::SUCCESS,
+        );
+        let requests = server.received_requests().await.unwrap();
+        let answer = requests
+            .iter()
+            .find(|r| r.method == "POST" && r.url.path() == step_path)
+            .unwrap();
+        let fields: std::collections::BTreeMap<_, _> = url::form_urlencoded::parse(&answer.body)
+            .into_owned()
+            .collect();
+        assert_eq!(fields["p0_name"], "Avery Example");
+        assert_eq!(fields["p1_email"], "jordan@example.com");
+        assert_eq!(fields["_nav_question_code"], "people__signatories");
     }
 
     /// The answer round trip: save a notation's filed answers with
