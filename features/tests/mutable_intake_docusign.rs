@@ -25,6 +25,7 @@ struct MutableWorld {
     project_code: Option<String>,
     client: Option<store::persons::Person>,
     last_body: String,
+    draft_id: Option<String>,
 }
 
 impl std::fmt::Debug for MutableWorld {
@@ -237,6 +238,7 @@ async fn envelope_is_draft(world: &mut MutableWorld) {
         portal::signature::EnvelopeStatus::Prepared,
         "the prepared envelope must not have been dispatched"
     );
+    world.draft_id = Some(envelopes[0].id.clone());
     // Preparing never advances the workflow: the document stays parked at
     // its rendered state, reachable again for the real send.
     let state = StateMachineRuntime::current_state(
@@ -273,28 +275,17 @@ async fn lawyer_sends_envelope(world: &mut MutableWorld) {
 
 #[then("the sent envelope was promoted, not duplicated")]
 async fn envelope_promoted(world: &mut MutableWorld) {
-    let calls = world.journey().signature.calls();
-    assert_eq!(
-        calls.len(),
-        2,
-        "expected one prepare then one send, got {calls:?}"
-    );
-    assert_eq!(
-        calls[0].mode,
-        portal::signature::SendMode::Prepare,
-        "the first call is the draft"
-    );
-    assert_eq!(
-        calls[1].mode,
-        portal::signature::SendMode::Send,
-        "the second call is the dispatch"
-    );
     let envelopes = world
         .journey()
         .signature
         .envelopes()
         .expect("read the fake provider's envelopes");
     assert_eq!(envelopes.len(), 1, "the send promotes the draft in place");
+    assert_eq!(
+        Some(envelopes[0].id.as_str()),
+        world.draft_id.as_deref(),
+        "dispatch must use the same envelope ID as prepare"
+    );
     assert_eq!(
         envelopes[0].status,
         portal::signature::EnvelopeStatus::Sent,
