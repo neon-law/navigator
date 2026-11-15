@@ -11,9 +11,9 @@
 //! command adds its own variant rather than reusing an existing one or
 //! falling back to a blanket "is admin" boolean. Owner is system-wide and
 //! holds every capability on every Firm without a `person_firm_role` row
-//! (`docs/access-model.md`'s Owner-governance carve-out) — except
-//! `ManageIntegrationSecrets`, which it holds only on a Firm whose Admin DRI
-//! it is; Admin, Lawyer, and
+//! (`docs/access-model.md`'s Owner-governance carve-out). Integration secrets
+//! and Relationship Log observations require Firm membership at the applicable
+//! tier. Admin, Lawyer, and
 //! Clerk are constrained to the Firms they hold a membership row on, and
 //! which capabilities that membership tier admits; Client holds no Firm
 //! capability at all.
@@ -45,6 +45,8 @@ use uuid::Uuid;
 pub enum FirmCapability {
     /// Read the Firm's scoped people and matter directories.
     ViewDirectory,
+    /// Record and read scoped Relationship Log observations as a Firm member.
+    AccessRelationshipObservations,
     /// Read and post the Firm-owned accounting journal.
     ManageJournal,
     /// Add or change a person's membership at the Firm.
@@ -111,6 +113,9 @@ impl FirmCapability {
     fn admits(self, membership: FirmMembership) -> bool {
         match self {
             Self::ViewDirectory => true,
+            Self::AccessRelationshipObservations => {
+                matches!(membership, FirmMembership::Admin | FirmMembership::Lawyer)
+            }
             Self::ManageJournal
             | Self::ManageMembership
             | Self::ManageIntegrationSecrets
@@ -137,6 +142,7 @@ impl FirmCapability {
     fn telemetry_name(self) -> &'static str {
         match self {
             Self::ViewDirectory => "view_directory",
+            Self::AccessRelationshipObservations => "access_relationship_observations",
             Self::ManageJournal => "manage_journal",
             Self::ManageMembership => "manage_membership",
             Self::ManageAdminDri => "manage_admin_dri",
@@ -277,7 +283,7 @@ async fn resolve_inner(
     if firms::find_by_id(surreal, target_firm_id).await?.is_none() {
         return Ok((FirmCapabilityDecision::FirmNotFound, "firm_not_found"));
     }
-    if actor_role == Role::Owner {
+    if actor_role == Role::Owner && capability != FirmCapability::AccessRelationshipObservations {
         if capability != FirmCapability::ManageIntegrationSecrets {
             return Ok((FirmCapabilityDecision::Allowed, "owner_bypass"));
         }
@@ -292,6 +298,13 @@ async fn resolve_inner(
         } else {
             (FirmCapabilityDecision::Forbidden, "owner_not_secret_writer")
         });
+    }
+    if capability == FirmCapability::AccessRelationshipObservations && !actor_role.is_lawyer_tier()
+    {
+        return Ok((
+            FirmCapabilityDecision::Forbidden,
+            "relationship_observations_require_lawyer",
+        ));
     }
     if capability == FirmCapability::ViewCommunications && actor_role != Role::Admin {
         return Ok((
@@ -353,21 +366,30 @@ async fn resolve_inner(
 ///
 /// The batch counterpart to [`resolve`], for a directory listing that scopes
 /// itself to every Firm the caller may act on rather than asking about one.
-/// Owner holds `capability` on every existing Firm — except
-/// `ManageIntegrationSecrets`, which Owner holds only where it is the Admin
-/// DRI; Client holds it on none.
+/// Owner holds deployment-wide capabilities on every existing Firm. Integration
+/// secrets and Relationship Log observations require Firm membership.
 pub async fn allowed_firm_ids(
     surreal: &SurrealDb,
     actor_role: Role,
     actor_person_id: Option<Uuid>,
     capability: FirmCapability,
 ) -> Result<Vec<Uuid>, FirmError> {
-    if actor_role == Role::Owner && capability != FirmCapability::ManageIntegrationSecrets {
+    if actor_role == Role::Owner
+        && !matches!(
+            capability,
+            FirmCapability::ManageIntegrationSecrets
+                | FirmCapability::AccessRelationshipObservations
+        )
+    {
         return Ok(firms::all(surreal)
             .await?
             .into_iter()
             .map(|f| f.id)
             .collect());
+    }
+    if capability == FirmCapability::AccessRelationshipObservations && !actor_role.is_lawyer_tier()
+    {
+        return Ok(Vec::new());
     }
     if capability == FirmCapability::ViewCommunications && actor_role != Role::Admin {
         return Ok(Vec::new());
@@ -467,10 +489,9 @@ mod tests {
         );
     }
 
-    /// The full matrix: every role, both Firms, both capabilities. Owner is
-    /// allowed everywhere with no membership row; Client is refused
-    /// everywhere; Admin/Lawyer/Clerk are allowed only inside their own
-    /// Firm, and only `ViewDirectory` admits a non-Admin membership.
+    /// Firm capability decisions across both Firms and every system role.
+    /// The matrix includes the explicit membership requirement for Relationship
+    /// Log observations and the Owner bypass for deployment-wide capabilities.
     #[tokio::test]
     #[allow(clippy::too_many_lines)]
     async fn two_firm_matrix_proves_membership_scoped_isolation() {
@@ -495,6 +516,28 @@ mod tests {
         member(&db, lawyer_a.id, firm_a.id, FirmMembership::Lawyer).await;
         let clerk_a = person(&db, "clerk-a", Role::Clerk).await;
         member(&db, clerk_a.id, firm_a.id, FirmMembership::Clerk).await;
+        let observation_access = FirmCapability::AccessRelationshipObservations;
+        for (actor, expected) in [
+            (&owner, FirmCapabilityDecision::Forbidden),
+            (&clerk_a, FirmCapabilityDecision::Forbidden),
+            (&lawyer_a, FirmCapabilityDecision::Allowed),
+            (&admin_a, FirmCapabilityDecision::Allowed),
+        ] {
+            assert_decision(
+                &db,
+                actor.role,
+                actor.id,
+                firm_a.id,
+                observation_access,
+                expected,
+            )
+            .await;
+            let ids = allowed_firm_ids(&db, actor.role, Some(actor.id), observation_access)
+                .await
+                .unwrap();
+            assert_eq!(ids.contains(&firm_a.id), expected.is_allowed());
+            assert!(!ids.contains(&firm_b.id));
+        }
         for capability in [
             FirmCapability::ViewDirectory,
             FirmCapability::ManageMembership,

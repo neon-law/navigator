@@ -33,6 +33,8 @@ mod bearer_common;
 use bearer_common::bearer;
 #[path = "api_project_stages/contingency.rs"]
 mod contingency;
+#[path = "api_project_stages/relationship_logs.rs"]
+mod relationship_logs;
 
 static DATABASE: tokio::sync::OnceCell<Option<String>> = tokio::sync::OnceCell::const_new();
 

@@ -22,6 +22,16 @@ A row may name the [Project](project.md) whose work produced it in `project_id`,
 rows newest first. The Project scopes the row; it grants no role on it. A Project-scoped seed session stamps its own
 Project and refuses a row naming another; `docket ingest` stamps the checkout's Project.
 
+A signed-in lawyer can record an observation about an existing Person or Entity with `navigator relationship add`.
+Project scope uses `--project <code>` or the current Project checkout. Attorney and Firm scopes require `--firm <id>`.
+Supply `--person <id>` or `--entity <id>`, a type such as `witness` with `--type`, and `--detail <text>`. The site
+records the signed-in author and checks Firm membership and Project participation. Use `--request-id <uuid>` to retry
+the same observation without appending it twice.
+
+The Project graph shows the Project's observations, the lawyer's own graph shows their Project and attorney
+observations, and the Firm graph shows its Project and Firm observations to Firm members. Graph views show the subject
+and type. The audit entry holds the detail. A logged observation grants no participation.
+
 - Schema and queries: [`store::relationship_logs`](../../store/src/relationship_logs.rs) — Lives
   in: `relationship_log` table
 

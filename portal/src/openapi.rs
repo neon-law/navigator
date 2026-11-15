@@ -100,6 +100,7 @@ pub fn document_with_base(base: &str) -> Value {
     add_journal_operations(&mut document);
     add_blog_operations(&mut document);
     add_graph_operations(&mut document);
+    add_relationship_log_operation(&mut document);
     add_upload_session_operations(&mut document);
     add_inbox_import_operation(&mut document);
     add_fi_import_operation(&mut document);
@@ -278,6 +279,18 @@ fn add_graph_operations(document: &mut Value) {
             "source_kind":{"type":"string","description":"Edge provenance: manual, disclosure, relationship_log, or llm."}
         }
     });
+    let observation_schema = json!({
+        "type":"object","additionalProperties":false,
+        "required":["id","source","source_name","source_kind","subject_id","subject_name","subject_kind","action"],
+        "properties":{
+            "id":{"type":"string","format":"uuid"},
+            "source":{"type":"string","format":"uuid"},
+            "source_name":{"type":"string"},"source_kind":{"type":"string"},
+            "subject_id":{"type":"string","format":"uuid"},
+            "subject_name":{"type":"string"},"subject_kind":{"type":"string"},
+            "action":{"type":"string"}
+        }
+    });
     let depth_parameter = |description: &str| {
         json!({"name":"depth","in":"query","required":false,
             "schema":{"type":"integer","minimum":1,"maximum":3,"default":2},
@@ -314,8 +327,8 @@ fn add_graph_operations(document: &mut Value) {
             "parameters":parameters,
             "responses":{
                 "200":{"description":"The {nodes, edges} neighborhood","content":{"application/json":{"schema":{
-                    "type":"object","additionalProperties":false,"required":["nodes","edges"],
-                    "properties":{"nodes":{"type":"array","items":node_schema},"edges":{"type":"array","items":edge_schema}}
+                    "type":"object","additionalProperties":false,"required":["nodes","edges","relationship_logs"],
+                    "properties":{"nodes":{"type":"array","items":node_schema},"edges":{"type":"array","items":edge_schema}, "relationship_logs":{"type":"array","items":observation_schema}}
                 }}}},
                 "400":{"description":"A depth outside 1–3 (or non-numeric)"},
                 "401":{"description":"Unauthenticated"},
@@ -325,6 +338,39 @@ fn add_graph_operations(document: &mut Value) {
             }
         });
     }
+}
+
+fn add_relationship_log_operation(document: &mut Value) {
+    document["paths"]["/app/api/graph/relationship-log"]["post"] = json!({
+        "operationId":"recordRelationshipLog","tags":["Graph"],
+        "summary":"Record a Relationship Log observation",
+        "description":"The session supplies the author. Project scope takes a Project id; attorney and Firm scopes take a Firm id.",
+        "requestBody":{"required":true,"content":{"application/json":{"schema":{
+            "type":"object","additionalProperties":false,
+            "required":["request_id","scope","subject","subject_id","action","detail"],
+            "properties":{
+                "request_id":{"type":"string","format":"uuid"},
+                "scope":{"type":"string","enum":["project","attorney","firm"]},
+                "firm_id":{"type":["string","null"],"format":"uuid"},
+                "project_id":{"type":["string","null"],"format":"uuid"},
+                "subject":{"type":"string","enum":["person","entity"]},
+                "subject_id":{"type":"string","format":"uuid"},
+                "action":{"type":"string","maxLength":48},
+                "detail":{"type":"string","maxLength":8192}
+            }
+        }}}},
+        "responses":{
+            "201":{"description":"The observation was recorded","content":{"application/json":{"schema":{
+                "type":"object","required":["id"],"properties":{"id":{"type":"string","format":"uuid"}}
+            }}}},
+            "400":{"description":"Invalid scope, relationship type, or detail"},
+            "401":{"description":"Unauthenticated"},
+            "403":{"description":"No interactive lawyer session"},
+            "404":{"description":"The scope or subject is unavailable"},
+            "409":{"description":"The request id already identifies a different observation"},
+            "503":{"description":"The PostgreSQL graph store is not configured"}
+        }
+    });
 }
 
 fn record_post_schema() -> Value {

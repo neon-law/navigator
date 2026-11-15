@@ -162,6 +162,20 @@
       "table": "relationship"
     },
     {
+      "extra_column": "firm_id",
+      "extra_table": null,
+      "missing_column": null,
+      "missing_table": null,
+      "table": "relationship_log"
+    },
+    {
+      "extra_column": "graph_scope",
+      "extra_table": null,
+      "missing_column": null,
+      "missing_table": null,
+      "table": "relationship_log"
+    },
+    {
       "extra_column": "person_id",
       "extra_table": null,
       "missing_column": null,
@@ -5413,6 +5427,8 @@
           "action": "TEXT",
           "actor_person_id": "UUID",
           "detail": "TEXT",
+          "firm_id": "UUID",
+          "graph_scope": "TEXT",
           "id": "UUID",
           "inserted_at": "TIMESTAMPTZ",
           "project_id": "UUID",

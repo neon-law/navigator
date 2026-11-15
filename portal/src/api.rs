@@ -6,6 +6,8 @@ mod firm_assumptions_api;
 mod firm_journal_api;
 #[path = "legal_plans_api.rs"]
 mod legal_plans_api;
+#[path = "relationship_log_api.rs"]
+mod relationship_log_api;
 
 use std::sync::Arc;
 
@@ -20,11 +22,16 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::MethodRouter;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
+use store::relationship_logs::scoped as graph_logs;
 use uuid::Uuid;
 
 use crate::people_commands::{PeopleCommandError, UpdateContext};
 use crate::session::SessionScope;
 use crate::SessionData;
+use relationship_log_api::{
+    graph_with_observations, has_relationship_log_membership, may_view_firm_graph,
+    record_relationship_observation,
+};
 
 /// Client-safe Project payload. Firm-private integration coordinates never
 /// cross the client API boundary, even when a client may see the Project.
@@ -920,6 +927,7 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             "/app/api/projects/{id}/relationships/adverse",
             post(record_adversity),
         ),
+        ("POST", "/app/api/graph/relationship-log", post(record_relationship_observation)),
         ("GET", "/app/api/graph/project/{id}", get(project_graph)),
         ("GET", "/app/api/graph/lawyer/{id}", get(lawyer_graph)),
         ("GET", "/app/api/graph/firm/{id}", get(firm_graph)),
@@ -4009,7 +4017,28 @@ async fn project_graph(
     let view = store::postgres_graph_views::project_view(&pg, id, depth)
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?;
-    Ok(Json(view).into_response())
+    let viewer = lawyer.0.person_id.filter(|_| lawyer.0.scope.is_none());
+    let observe = if viewer.is_some() {
+        let project = store::projects::find_by_id(&state.surreal, id)
+            .await
+            .map_err(|e| ApiError::Db(e.to_string()))?;
+        if let Some(firm_id) = project.and_then(|project| project.firm_id) {
+            participates_as_firm(&state, &lawyer, id).await
+                && has_relationship_log_membership(&state, &lawyer, firm_id).await
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    graph_with_observations(
+        &pg,
+        graph_logs::Scope::Project,
+        id,
+        viewer.filter(|_| observe),
+        view,
+    )
+    .await
 }
 
 /// `GET /app/api/graph/lawyer/{id}?depth=2` — one person's working
@@ -4037,7 +4066,17 @@ async fn lawyer_graph(
     let view = store::postgres_graph_views::lawyer_view(&pg, id, depth)
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?;
-    Ok(Json(view).into_response())
+    graph_with_observations(
+        &pg,
+        graph_logs::Scope::Attorney,
+        id,
+        lawyer
+            .0
+            .person_id
+            .filter(|viewer| lawyer.0.scope.is_none() && *viewer == id),
+        view,
+    )
+    .await
 }
 
 /// `GET /app/api/graph/firm/{id}` — firm-to-firm ties aggregated up from
@@ -4054,11 +4093,7 @@ async fn firm_graph(
     if let Err(response) = graph_depth(&query) {
         return Ok(response);
     }
-    let allowed = store::firm_capability::FirmCapability::ViewDirectory
-        .resolve(&state.surreal, lawyer.0.role, lawyer.0.person_id, id)
-        .await
-        .is_ok_and(store::firm_capability::FirmCapabilityDecision::is_allowed);
-    if !allowed {
+    if !may_view_firm_graph(&state, &lawyer, id).await {
         return Err(ApiError::NotFound);
     }
     let pg = match graph_store().await {
@@ -4068,7 +4103,20 @@ async fn firm_graph(
     let view = store::postgres_graph_views::firm_view(&pg, id)
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?;
-    Ok(Json(view).into_response())
+    let viewer = lawyer.0.person_id.filter(|_| lawyer.0.scope.is_none());
+    let observe = if viewer.is_some() {
+        has_relationship_log_membership(&state, &lawyer, id).await
+    } else {
+        false
+    };
+    graph_with_observations(
+        &pg,
+        graph_logs::Scope::Firm,
+        id,
+        viewer.filter(|_| observe),
+        view,
+    )
+    .await
 }
 
 /// Request body for `PATCH /app/api/projects/{id}/participants/{role_id}` — re-point

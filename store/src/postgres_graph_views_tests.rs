@@ -492,3 +492,205 @@ async fn views_render_an_empty_neighborhood_for_an_unprojected_seed() {
     assert_eq!(firm.nodes.len(), 0);
     assert_eq!(firm.edges.len(), 0);
 }
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One fixture checks visibility, replay and ownership changes end to end.
+async fn manual_relationship_log_follows_its_project_author_and_firm() {
+    use crate::relationship_logs::scoped::{
+        append, for_graph, Append, AppendResult, Scope, Subject,
+    };
+    use uuid::Uuid;
+
+    let Some((options, database)) = fresh_schema().await else {
+        return;
+    };
+    let pg = connect(&options, &database).await;
+    let f = seed(&pg).await;
+    sqlx::query("UPDATE project SET firm_id = $1 WHERE id = $2")
+        .bind(f.firm_a)
+        .bind(f.matter_one)
+        .execute(&pg.0)
+        .await
+        .unwrap();
+    let input = Append {
+        request_id: Uuid::now_v7(),
+        scope: Scope::Project,
+        firm_id: f.firm_a,
+        project_id: Some(f.matter_one),
+        actor_id: f.lead,
+        subject: Subject::Entity,
+        subject_id: f.entity,
+        action: "witness",
+        detail: "Observed the signing",
+    };
+    for _ in 0..2 {
+        assert_eq!(append(&pg, &input).await.unwrap(), AppendResult::Recorded);
+    }
+    let wrong_payload = Append {
+        action: "vendor",
+        ..input
+    };
+    assert_eq!(
+        append(&pg, &wrong_payload).await.unwrap(),
+        AppendResult::RequestIdInUse
+    );
+    let nonmember = Append {
+        actor_id: f.opposing,
+        request_id: Uuid::now_v7(),
+        ..input
+    };
+    assert_eq!(
+        append(&pg, &nonmember).await.unwrap(),
+        AppendResult::ScopeOrSubjectUnavailable
+    );
+    let wrong_firm = Append {
+        firm_id: f.firm_b,
+        request_id: Uuid::now_v7(),
+        ..input
+    };
+    assert_eq!(
+        append(&pg, &wrong_firm).await.unwrap(),
+        AppendResult::ScopeOrSubjectUnavailable
+    );
+
+    for (scope, id) in [
+        (Scope::Project, f.matter_one),
+        (Scope::Attorney, f.lead),
+        (Scope::Firm, f.firm_a),
+    ] {
+        let rows = for_graph(&pg, scope, id, f.lead).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, input.request_id);
+        assert_eq!(rows[0].source, id);
+        assert_eq!(rows[0].subject_id, f.entity);
+        assert_eq!(rows[0].action, "witness");
+        assert!(!serde_json::to_value(&rows[0])
+            .unwrap()
+            .to_string()
+            .contains(input.detail));
+    }
+    for (scope, id) in [
+        (Scope::Project, f.matter_two),
+        (Scope::Attorney, f.counsel),
+        (Scope::Firm, f.firm_b),
+    ] {
+        assert!(for_graph(&pg, scope, id, f.lead).await.unwrap().is_empty());
+    }
+
+    assert!(for_graph(&pg, Scope::Project, f.matter_one, f.opposing)
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(for_graph(&pg, Scope::Attorney, f.lead, f.counsel)
+        .await
+        .unwrap()
+        .is_empty());
+    sqlx::query("DELETE FROM person_firm_role WHERE person_id = $1 AND firm_id = $2")
+        .bind(f.lead)
+        .bind(f.firm_a)
+        .execute(&pg.0)
+        .await
+        .unwrap();
+    assert!(for_graph(&pg, Scope::Project, f.matter_one, f.lead)
+        .await
+        .unwrap()
+        .is_empty());
+    sqlx::query(
+        "INSERT INTO person_firm_role (person_id, firm_id, membership) VALUES ($1, $2, 'lawyer')",
+    )
+    .bind(f.lead)
+    .bind(f.firm_a)
+    .execute(&pg.0)
+    .await
+    .unwrap();
+
+    let private = Append {
+        request_id: Uuid::now_v7(),
+        scope: Scope::Attorney,
+        project_id: None,
+        subject: Subject::Person,
+        subject_id: f.client,
+        action: "referral_source",
+        ..input
+    };
+    assert_eq!(append(&pg, &private).await.unwrap(), AppendResult::Recorded);
+    let rows = for_graph(&pg, Scope::Attorney, f.lead, f.lead)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 2);
+    assert!(rows
+        .iter()
+        .any(|row| row.id == private.request_id && row.subject_id == f.client));
+    assert_eq!(
+        for_graph(&pg, Scope::Firm, f.firm_a, f.lead)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        for_graph(&pg, Scope::Project, f.matter_one, f.lead)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let firm = Append {
+        request_id: Uuid::now_v7(),
+        scope: Scope::Firm,
+        ..private
+    };
+    assert_eq!(append(&pg, &firm).await.unwrap(), AppendResult::Recorded);
+    assert_eq!(
+        for_graph(&pg, Scope::Firm, f.firm_a, f.lead)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        for_graph(&pg, Scope::Attorney, f.lead, f.lead)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+
+    sqlx::query("UPDATE project SET firm_id = $1 WHERE id = $2")
+        .bind(f.firm_b)
+        .bind(f.matter_one)
+        .execute(&pg.0)
+        .await
+        .unwrap();
+    assert!(for_graph(&pg, Scope::Project, f.matter_one, f.lead)
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(for_graph(&pg, Scope::Firm, f.firm_b, f.lead)
+        .await
+        .unwrap()
+        .is_empty());
+
+    sqlx::query("DELETE FROM person_firm_role WHERE firm_id = $1")
+        .bind(f.firm_a)
+        .execute(&pg.0)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM firm WHERE id = $1")
+        .bind(f.firm_a)
+        .execute(&pg.0)
+        .await
+        .unwrap();
+    let historical_owner: Uuid =
+        sqlx::query_scalar("SELECT firm_id FROM relationship_log WHERE id = $1")
+            .bind(firm.request_id)
+            .fetch_one(&pg.0)
+            .await
+            .unwrap();
+    assert_eq!(historical_owner, f.firm_a);
+    assert!(for_graph(&pg, Scope::Attorney, f.lead, f.lead)
+        .await
+        .unwrap()
+        .is_empty());
+}

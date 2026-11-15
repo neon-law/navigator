@@ -3190,6 +3190,17 @@ test_graph_views_are_read_only_and_shape_bound if {
     not authz.allow with input as {"path": ["app", "api", "graph", "matter", "seed-1"], "method": "GET", "session": lawyer_session}
 }
 
+test_relationship_log_write_requires_interactive_lawyer_tier if {
+    path := ["app", "api", "graph", "relationship-log"]
+    every session in [owner_session, admin_session, lawyer_session] {
+        authz.allow with input as {"path": path, "method": "POST", "session": session}
+    }
+    every session in [clerk_session, client_session, null, object.union(owner_session, {"source": "ci"})] {
+        not authz.allow with input as {"path": path, "method": "POST", "session": session}
+    }
+    not authz.allow with input as {"path": path, "method": "GET", "session": lawyer_session}
+}
+
 # ---------- The CLI's letterhead row door ----------
 # The CLI's `notation` render reads a Brand's letterhead through
 # GET /app/api/brands/{key}/letterhead with the site-login bearer (LAW-341):

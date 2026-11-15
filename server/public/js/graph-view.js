@@ -54,6 +54,9 @@
         edgeType: "arrow",
       };
     }
+    if (type === "RELATIONSHIP_LOG") {
+      return { color: TIE_COLOR, size: 2, edgeType: "arrow" };
+    }
     return { color: TIE_COLOR, size: 1, edgeType: "line" };
   }
 
@@ -67,6 +70,7 @@
     if (typeof edge.confidence_pct === "number") {
       parts.push("confidence " + edge.confidence_pct + "%");
     }
+    if (edge.type === "RELATIONSHIP_LOG") parts.push("Relationship Log");
     if (edge.source_kind) parts.push("source: " + edge.source_kind);
     return parts.join(" · ");
   }
@@ -76,7 +80,24 @@
   // back rather than asking the renderer to draw into the void.
   function buildGraph(Graph, payload) {
     var graph = new Graph({ multi: true, type: "directed", allowSelfLoops: true });
-    var nodes = (payload && payload.nodes) || [];
+    var nodes = ((payload && payload.nodes) || []).slice();
+    var edges = ((payload && payload.edges) || []).slice();
+    var seen = new Set(nodes.map(function (node) { return node.id; }));
+    var observations = (payload && payload.relationship_logs) || [];
+    function include(id, name, kind) {
+      if (!seen.has(id)) {
+        seen.add(id);
+        nodes.push({ id: id, name: name, kind: kind });
+      }
+    }
+    observations.forEach(function (entry) {
+      include(entry.source, entry.source_name, entry.source_kind);
+      include(entry.subject_id, entry.subject_name, entry.subject_kind);
+      edges.push({
+        id: entry.id, source: entry.source, target: entry.subject_id, type: "RELATIONSHIP_LOG",
+        kind: entry.action,
+      });
+    });
     for (var i = 0; i < nodes.length; i++) {
       var node = nodes[i];
       graph.addNode(node.id, {
@@ -88,19 +109,23 @@
         color: nodeColor(node.kind),
       });
     }
-    var edges = (payload && payload.edges) || [];
     for (var j = 0; j < edges.length; j++) {
       var edge = edges[j];
       if (!graph.hasNode(edge.source) || !graph.hasNode(edge.target)) continue;
-      if (graph.hasEdge(edge.source, edge.target)) continue;
+      var observation = edge.type === "RELATIONSHIP_LOG";
+      if (!observation && graph.hasEdge(edge.source, edge.target)) continue;
+      var key = observation ? "relationship-log:" + edge.id : edge.source + "\u2192" + edge.target;
       var style = edgeStyle(edge);
-      graph.addEdgeWithKey(edge.source + "\u2192" + edge.target, edge.source, edge.target, {
+      var tooltip = edgeTooltip(edge);
+      graph.addEdgeWithKey(key, edge.source, edge.target, {
         color: style.color,
         size: style.size,
         type: style.edgeType,
         relKind: edge.kind || "",
-        tooltip: edgeTooltip(edge),
-        hoverLabel: edgeTooltip(edge),
+        label: observation ? tooltip : undefined,
+        forceLabel: observation,
+        tooltip: tooltip,
+        hoverLabel: tooltip,
       });
     }
     return graph;
@@ -250,12 +275,13 @@
       setStatus(mount, "The graph could not be loaded. Try again.", true);
       return;
     }
-    if (!payload.nodes || payload.nodes.length === 0) {
+    var graph = buildGraph(Graph, payload);
+    if (graph.order === 0) {
       setStatus(mount, "No relationships recorded yet.");
       return;
     }
 
-    var graph = layout(buildGraph(Graph, payload));
+    layout(graph);
 
     // Degree drives node size after the fact: hubs — the conflict-relevant
     // counterparts — read bigger without any server round trip.
@@ -264,12 +290,15 @@
     });
 
     var selectedNode = null;
+    var themeLabelColor = { color: getComputedStyle(mount).color };
 
     var renderer = new Sigma(graph, mount, {
       allowInvalidContainer: true,
       defaultEdgeType: "line",
-      edgeProgramClasses: { arrow: Sigma.EdgeArrowProgram || Sigma.EdgeLineProgram },
+      renderEdgeLabels: true,
       labelRenderedSizeThreshold: 0.1,
+      labelColor: themeLabelColor,
+      edgeLabelColor: themeLabelColor,
       nodeReducer: function (node, data) {
         var rendered = Object.assign({}, data);
         if (selectedNode && selectedNode !== node) {
@@ -372,6 +401,12 @@
       renderer.refresh();
     });
 
+    var observations = payload.relationship_logs || [];
+    if (observations.length) {
+      mount.setAttribute("aria-description", observations.map(function (entry) {
+        return "Relationship Log · " + entry.action + " · " + entry.subject_name;
+      }).join(". "));
+    }
     setStatus(mount, "");
   }
 

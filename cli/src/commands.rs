@@ -18,6 +18,9 @@ use crate::{
     closing_trailer, document_layout, document_sync, legal_plans, login, palette, projects, remote,
 };
 
+#[path = "relationship_log.rs"]
+mod relationship_log;
+
 /// The version `build.rs` baked into this build, with no runtime override:
 /// the version whose bytes (skills, templates) this binary carries.
 pub const CLI_BUILD_VERSION: &str = env!("NAVIGATOR_CLI_VERSION");
@@ -123,6 +126,11 @@ enum Command {
     Notation {
         #[command(subcommand)]
         action: NotationCmd,
+    },
+    /// Record a Relationship Log observation on the site.
+    Relationship {
+        #[command(subcommand)]
+        action: relationship_log::Command,
     },
     /// Read the Neon Law Navigator glossary — the ontology, one term per
     /// file under `docs/glossary/`, embedded in this binary.
@@ -371,6 +379,7 @@ fn run() -> ExitCode {
                 runtime().block_on(remote::notation_envelope_status(notation_id))
             }
         },
+        Command::Relationship { action } => runtime().block_on(relationship_log::run(action)),
         Command::Glossary { action } => crate::glossary::run(action),
         Command::Site { action } => run_site(action),
         Command::Calendar {
@@ -5008,6 +5017,39 @@ pub fn print_error_recap(errors: &[GateError]) {
 mod gate_helpers_tests {
     use super::*;
     use std::fmt::Write as _;
+
+    #[test]
+    fn relationship_add_requires_a_scope_and_an_existing_subject() {
+        let args = [
+            "navigator",
+            "relationship",
+            "add",
+            "--scope",
+            "firm",
+            "--firm",
+            "00000000-0000-0000-0000-000000000001",
+            "--person",
+            "00000000-0000-0000-0000-000000000002",
+            "--type",
+            "witness",
+            "--detail",
+            "Observed the signing",
+        ];
+        assert!(Cli::try_parse_from(args).is_ok());
+        assert!(Cli::try_parse_from(
+            args.into_iter()
+                .enumerate()
+                .filter_map(|(i, arg)| { (!(3..=4).contains(&i)).then_some(arg) })
+        )
+        .is_err());
+        assert!(Cli::try_parse_from(
+            args.into_iter()
+                .enumerate()
+                .filter_map(|(i, arg)| { (!(7..=8).contains(&i)).then_some(arg) })
+        )
+        .is_err());
+        assert!(Cli::try_parse_from(args.into_iter().chain(["--actor", args[8]])).is_err());
+    }
 
     // ------------------------------------------------------------------
     // Pure argument parsers
