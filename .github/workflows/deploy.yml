@@ -98,21 +98,8 @@ name: deploy
 # version + run URL — the "identifiers and counts, never content" rule binds
 # here too. A missing webhook cannot turn one failed release into two failures.
 #
-# NOTHING ON A CLOCK PROVES THIS PATH. A nightly cron exercised the whole
-# pipeline whether or not anything changed, so a defect introduced today
-# surfaced the next morning; a defect introduced today is now invisible until
-# someone next bumps the version. The cron was never a reliable signal even
-# while it ran — a silent nightly failure went unnoticed for four consecutive
-# nights — so the honest statement is that this pipeline has no automatic
-# breakage detection, not that it has a weaker one. Push a `kind-ci/**` branch
-# to exercise it without publishing; that is the periodic check the cron used to
-# be, and it is a habit rather than a trigger. See docs/gitops.md § "What
-# detects a broken pipeline".
-#
-# One thing did get cheaper here: the gate on every push to `main` runs
-# `release-check`, so the FIRST job of this workflow is now exercised on every
-# merge rather than only on a release. A break in the trigger itself surfaces at
-# the next merge instead of at the next release.
+# The nightly run builds and verifies main in KIND. Publishing and shipping
+# run only for release pushes. See docs/gitops.md "What detects a broken pipeline".
 #
 # And running underneath every stage: every forward-path step opens with a
 # `./.github/actions/slack-progress` post to #navigator, so the channel watches
@@ -141,23 +128,8 @@ name: deploy
 
 # ONE WAY TO PUBLISH: land a version bump on `main`. Deliberately no second.
 #
-# The clock, the `workflow_dispatch`, and the manual tag push have all been
-# triggers here, and all three are gone. The first two could only DERIVE a
-# version, which is how the manifest drifted from the published images. The tag
-# push fixed the drift but paid for it in ceremony: four validations existed
-# purely to re-establish facts a tag cannot carry — is this shape right, is this
-# the right day, does it match the manifest, did it come from `main` — and every
-# one of them, discovered late, spent an immutable name.
-#
-# Reading the version out of the merged manifest answers all four by
-# construction. The shape is whatever `semver` parses, the day does not matter,
-# the manifest IS the tag, and a push to `main` is provenance. What remains is
-# the one question none of them asked: is this version newer than the last one
-# published?
-#
-# A TAG PUSHED BY `GITHUB_TOKEN` STARTS NO WORKFLOW RUN, which is why the tag is
-# created inside this run rather than by a job that hands off to a second
-# workflow. One workflow, two triggers.
+# A push to main can publish a version bump. Branch iterations and the nightly
+# schedule verify KIND through the same build and integration jobs.
 #
 # The distinction worth holding: "publish an image" and "deploy to a cluster"
 # are different powers. Publishing costs a registry push; deploying is what put
@@ -185,6 +157,8 @@ on:
       # shipping the edit untested. Not a second workflow — same deploy.yml,
       # just an extra trigger on the one job that needs pre-publish iteration.
       - "kind-ci/**"
+  schedule:
+    - cron: "17 8 * * *"
 
 permissions:
   contents: read
@@ -223,7 +197,7 @@ concurrency:
   # it did while a person pushed the tag: EVERY merge starts a run now, so two
   # merges landing close together would otherwise overlap, and the second one's
   # release decision would read a tag list the first one is still writing to.
-  group: deploy-release
+  group: ${{ github.event_name == 'schedule' && 'deploy-nightly-kind' || 'deploy-release' }}
   cancel-in-progress: false
 
 jobs:
@@ -298,7 +272,7 @@ jobs:
       - name: refuse a duplicate trigger for this commit
         timeout-minutes: 90
         id: dedup
-        if: github.ref_name == 'main'
+        if: github.event_name == 'push' && github.ref_name == 'main'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -354,7 +328,7 @@ jobs:
         # ref name without consulting a checker at all, so it fetches nothing.
         # A duplicate trigger for this commit answers `publishable=false` too,
         # from the `dedup` step above, without installing anything.
-        if: github.ref_name == 'main' && steps.dedup.outputs.duplicate != 'true'
+        if: github.event_name == 'push' && github.ref_name == 'main' && steps.dedup.outputs.duplicate != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -454,7 +428,7 @@ jobs:
       - name: install rust toolchain
         timeout-minutes: 90
         if: >-
-          github.ref_name == 'main' && steps.dedup.outputs.duplicate != 'true'
+          github.event_name == 'push' && github.ref_name == 'main' && steps.dedup.outputs.duplicate != 'true'
           && steps.checker.outputs.ready != 'true'
         uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
@@ -486,17 +460,18 @@ jobs:
         id: version
         env:
           REF_NAME: ${{ github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
           CHECKER_READY: ${{ steps.checker.outputs.ready }}
           DUPLICATE: ${{ steps.dedup.outputs.duplicate }}
         run: |
           set -euo pipefail
-          if [ "${REF_NAME}" != "main" ]; then
+          if [ "${EVENT_NAME}" = "schedule" ] || [ "${REF_NAME}" != "main" ]; then
               {
                   echo "tag=${REF_NAME}"
                   echo "publishable=false"
                   echo "prerelease=false"
               } >> "$GITHUB_OUTPUT"
-              echo "branch iteration ${REF_NAME}: integration only, nothing publishes"
+              echo "${EVENT_NAME} on ${REF_NAME}: KIND integration"
               exit 0
           fi
 
@@ -593,6 +568,7 @@ jobs:
     # set or every merge to `main` runs this matrix and still publishes nothing.
     if: >-
       needs.release-version.outputs.publishable == 'true'
+      || github.event_name == 'schedule'
       || startsWith(github.ref_name, 'kind-ci/')
       || (vars.DEPLOY_EXPECTED_REPOSITORY != '' && github.repository != vars.DEPLOY_EXPECTED_REPOSITORY)
     # Every leg runs on a Blacksmith four-vCPU runner. Runner capacity and disk
@@ -879,6 +855,7 @@ jobs:
     # publisher coordinate is not a fork.
     if: >-
       needs.release-version.outputs.publishable == 'true'
+      || github.event_name == 'schedule'
       || startsWith(github.ref_name, 'kind-ci/')
       || (vars.DEPLOY_EXPECTED_REPOSITORY != '' && github.repository != vars.DEPLOY_EXPECTED_REPOSITORY)
     runs-on: blacksmith-4vcpu-ubuntu-2404
@@ -4354,7 +4331,7 @@ jobs:
     # This is the automatic Slack signal that a release broke when the optional
     # webhook is configured. GitHub's run conclusion remains the source of truth
     # either way; see docs/gitops.md § "What detects a broken pipeline".
-    if: failure() && github.ref_name == 'main'
+    if: failure() && github.event_name == 'push' && github.ref_name == 'main'
     runs-on: ubuntu-24.04
     # A single webhook POST — cap it so a hung request can't keep the run open.
     timeout-minutes: 10
