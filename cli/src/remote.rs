@@ -4725,6 +4725,11 @@ pub async fn notation_create(
     .await
 }
 
+#[derive(serde::Deserialize)]
+struct CreatedNotation {
+    notation_id: Uuid,
+}
+
 /// Open a catalog or Project notation through the lawyer-scoped JSON API.
 pub async fn notation_create_on_project(
     host: Option<&str>,
@@ -4749,10 +4754,6 @@ pub async fn notation_create_on_project(
         if status != reqwest::StatusCode::CREATED {
             let body = response.text().await.unwrap_or_default();
             return Err(anyhow!("notation create failed: {}", server_error(status, &body)));
-        }
-        #[derive(serde::Deserialize)]
-        struct CreatedNotation {
-            notation_id: Uuid,
         }
         let CreatedNotation { notation_id } = response.json().await.context("parse created notation")?;
         println!("created notation {notation_id}");

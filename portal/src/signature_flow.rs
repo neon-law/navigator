@@ -397,6 +397,8 @@ async fn persist_signature_request_id(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     /// A bound Person carrying a distinct name/email, so a fixture can tell
     /// the answered value apart from the Person-row fallback.
@@ -715,12 +717,8 @@ mod tests {
         assert!(manifest.recipients[1].client_user_id.is_some());
     }
 
-    #[tokio::test]
-    async fn shared_mutual_nda_prepares_two_signers_without_dispatch() {
-        let template =
-            store::seed::seeded_template_markdown("mutual_nda").expect("shared template");
-        let composed = rules::clauses::compile(template).expect("shared clauses resolve");
-        let answers = BTreeMap::from([
+    fn mutual_nda_answers() -> BTreeMap<String, String> {
+        BTreeMap::from([
             ("entity__company.name".into(), "Example Research LLC".into()),
             ("entity__other_party.name".into(), "Jordan Example".into()),
             ("custom_datetime__effective_date".into(), "2026-01-01".into()),
@@ -737,7 +735,15 @@ mod tests {
                 {"name": "Avery Example", "email": "avery@example.com"},
                 {"name": "Jordan Example", "email": "jordan@example.com"},
             ]).to_string()),
-        ]);
+        ])
+    }
+
+    #[tokio::test]
+    async fn shared_mutual_nda_prepares_two_signers_without_dispatch() {
+        let template =
+            store::seed::seeded_template_markdown("mutual_nda").expect("shared template");
+        let composed = rules::clauses::compile(template).expect("shared clauses resolve");
+        let answers = mutual_nda_answers();
         let typst = crate::retainer_walk::typst_body_from_template(
             &composed,
             &answers,
@@ -778,8 +784,6 @@ mod tests {
             "",
         )
         .is_err());
-        use wiremock::matchers::{header, method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/v2.1/accounts/example/envelopes"))
