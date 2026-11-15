@@ -10,6 +10,9 @@
 //! yet, and an Owner sees every matter (see [`accessible_projects`]). No Brand
 //! or Firm tab narrows the list.
 //!
+//! Listing a matter is not opening it. Every firm tier needs a firm-side
+//! participation row to open the matter surface at `/app/projects/{code}`.
+//!
 //! Status is the matter-lifecycle pill (`store::projects::matter_lifecycle`):
 //! `pitch`, `active`, or `closed`, with an archived matter reading `closed`.
 //! The `?status=` filter is a multi-select over those three, comma-separated;
@@ -212,8 +215,8 @@ fn project_row(
 }
 
 /// The matters the reader may reach from this list. An Owner holds every Firm
-/// capability, so every matter. An Admin also staffs matters nobody is on yet,
-/// so every matter in a Firm whose membership they administer, and every
+/// capability, so every matter. An Admin also assigns people to matters
+/// nobody is on yet, so every matter in a Firm whose membership they administer, and every
 /// matter no Firm owns. Everyone else sees the matters they participate in
 /// firm-side.
 #[cfg(feature = "server")]
