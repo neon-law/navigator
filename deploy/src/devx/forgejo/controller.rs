@@ -42,6 +42,7 @@ const ORPHAN_GRACE: Duration = Duration::from_mins(2);
 /// How the controller is started.
 pub(in crate::devx) struct Options {
     pub(in crate::devx) url: String,
+    pub(in crate::devx) repository: Option<String>,
     pub(in crate::devx) runner_namespace: String,
     /// `None` in-cluster: the pod's own service account.
     pub(in crate::devx) context: Option<String>,
@@ -63,6 +64,8 @@ struct WaitingJob {
 #[derive(Debug, Deserialize)]
 struct AdminRunner {
     id: u64,
+    #[serde(default)]
+    repo_id: u64,
     #[serde(default)]
     name: String,
 }
@@ -112,7 +115,7 @@ impl Forgejo {
     }
 
     /// Repository id → count of jobs waiting for a `self-hosted` runner.
-    async fn waiting(&self) -> Result<BTreeMap<u64, usize>> {
+    async fn waiting(&self, repository_id: Option<u64>) -> Result<BTreeMap<u64, usize>> {
         let jobs: Vec<WaitingJob> = serde_json::from_value(
             self.get(&format!(
                 "/admin/actions/runners/jobs?labels={RUNNER_LABEL}"
@@ -122,13 +125,29 @@ impl Forgejo {
         )
         .context("read waiting Actions jobs")?;
         let mut waiting = BTreeMap::new();
-        for job in jobs
-            .into_iter()
-            .filter(|job| job.status.is_empty() || job.status == "waiting")
-        {
+        for job in jobs.into_iter().filter(|job| {
+            (job.status.is_empty() || job.status == "waiting")
+                && repository_id.is_none_or(|id| job.repo_id == id)
+        }) {
             *waiting.entry(job.repo_id).or_default() += 1;
         }
         Ok(waiting)
+    }
+
+    async fn private_repository_id(&self, name: &str) -> Result<u64> {
+        runner::repository_scope(name)?;
+        let repository = self
+            .get(&format!("/repos/{name}"))
+            .await?
+            .context("the selected Forgejo repository is unavailable")?;
+        ensure!(
+            repository["private"] == true && repository["full_name"].as_str() == Some(name),
+            "the selected Forgejo repository must match its exact private owner/name"
+        );
+        repository["id"]
+            .as_u64()
+            .filter(|id| *id > 0)
+            .context("the selected Forgejo repository has no valid id")
     }
 
     /// `owner/name` of repository `id`.
@@ -294,6 +313,7 @@ pub(in crate::devx) struct Controller {
     egress_ip: Vec<String>,
     dns: Ipv4Addr,
     max_runners: usize,
+    repository_scope: Option<(u64, String)>,
     in_flight: Arc<Mutex<InFlight>>,
     repositories: HashMap<u64, String>,
     mirrored: HashSet<String>,
@@ -454,6 +474,13 @@ impl Controller {
                 .as_str()
                 .and_then(|id| id.parse::<u64>().ok());
             let repository = annotations[REPOSITORY_ANNOTATION].as_str();
+            if self
+                .repository_scope
+                .as_ref()
+                .is_some_and(|(_, name)| repository != Some(name.as_str()))
+            {
+                continue;
+            }
             if let (Some(id), Some(repository)) = (registration, repository) {
                 let api = RunnerApi::new(&self.origin, repository, self.token.clone())?;
                 runner::cleanup(self.cluster.as_ref(), &api, &self.runtime, name, id)?;
@@ -470,6 +497,10 @@ impl Controller {
         let mut unowned = BTreeSet::new();
         for registration in registrations {
             if is_runner_job_name(&registration.name)
+                && self
+                    .repository_scope
+                    .as_ref()
+                    .is_none_or(|(id, _)| registration.repo_id == *id)
                 && !job_names.contains(&registration.name)
                 && !owned.contains(&registration.name)
             {
@@ -548,7 +579,12 @@ impl Controller {
             return;
         }
         self.observer.last_refresh = Some(Instant::now());
-        for page in 1..=5 {
+        let discovery_pages = if self.repository_scope.is_some() {
+            0
+        } else {
+            5
+        };
+        for page in 1..=discovery_pages {
             let Ok(Some(found)) = self.runtime.block_on(
                 self.forgejo
                     .get(&format!("/repos/search?limit=50&page={page}")),
@@ -670,16 +706,29 @@ impl Controller {
 
     /// One pass: recover, read the queue, mirror, launch.
     pub(in crate::devx) fn tick(&mut self) -> Result<TickReport> {
+        if let Some((id, name)) = &self.repository_scope {
+            ensure!(
+                self.runtime
+                    .block_on(self.forgejo.private_repository_id(name))?
+                    == *id,
+                "the selected Forgejo repository changed identity"
+            );
+        }
         // Recovery never blocks launching: a leftover costs a slot, a missed
         // launch costs a pull request.
         let orphans_cleaned = self.recover().unwrap_or_else(|error| {
             tracing::warn!(target: "forgejo", event = "forgejo.runner.recovery_failed", error = %error, "runner recovery failed this tick");
             0
         });
-        let by_id = self.runtime.block_on(self.forgejo.waiting())?;
+        let scope = self.repository_scope.as_ref();
+        let by_id = self
+            .runtime
+            .block_on(self.forgejo.waiting(scope.map(|(id, _)| *id)))?;
         let mut waiting = BTreeMap::new();
         for (id, count) in by_id {
-            let repository = if let Some(name) = self.repositories.get(&id) {
+            let repository = if let Some((_, name)) = scope {
+                name.clone()
+            } else if let Some(name) = self.repositories.get(&id) {
                 name.clone()
             } else {
                 let name = self.runtime.block_on(self.forgejo.repository(id))?;
@@ -839,9 +888,26 @@ pub(in crate::devx) fn run(options: &Options) -> Result<()> {
     };
     // Validates the origin the same way `runner-once` does.
     RunnerApi::new(&options.url, "validate/origin", token.clone())?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let forgejo = Forgejo::new(&options.url, token.clone())?;
+    let repository_scope = options
+        .repository
+        .as_ref()
+        .map(|name| {
+            runtime
+                .block_on(forgejo.private_repository_id(name))
+                .map(|id| (id, name.clone()))
+        })
+        .transpose()?;
+    let mut observer = Observer::new();
+    if let Some((_, name)) = &repository_scope {
+        observer.watched.insert(name.clone());
+    }
     let mut controller = Controller {
         cluster,
-        forgejo: Forgejo::new(&options.url, token.clone())?,
+        forgejo,
         registry: Registry::new(&options.url, token.clone())?,
         origin: options.url.clone(),
         token,
@@ -849,14 +915,13 @@ pub(in crate::devx) fn run(options: &Options) -> Result<()> {
         egress_ip: options.egress_ip.clone(),
         dns: runner::dns_address(&options.dns_ip)?,
         max_runners: options.max_runners,
+        repository_scope,
         in_flight: Arc::default(),
         repositories: HashMap::new(),
         mirrored: HashSet::new(),
         unowned_registrations: BTreeSet::new(),
-        observer: Observer::new(),
-        runtime: tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?,
+        observer,
+        runtime,
     };
     telemetry::register_forgejo_controller();
     serve(&mut controller, options.once, options.interval)
@@ -1160,6 +1225,7 @@ mod tests {
             egress_ip: Vec::new(),
             dns: Ipv4Addr::new(169, 254, 20, 10),
             max_runners: 4,
+            repository_scope: None,
             in_flight: Arc::default(),
             repositories: HashMap::new(),
             mirrored: HashSet::new(),
@@ -1353,6 +1419,7 @@ mod tests {
             egress_ip: vec!["8.8.8.8".into()],
             dns: Ipv4Addr::new(169, 254, 20, 10),
             max_runners: 4,
+            repository_scope: None,
             in_flight: Arc::default(),
             repositories: HashMap::new(),
             mirrored: HashSet::new(),
@@ -1435,6 +1502,7 @@ mod tests {
             egress_ip: vec!["8.8.8.8".into()],
             dns: Ipv4Addr::new(169, 254, 20, 10),
             max_runners: 4,
+            repository_scope: None,
             in_flight: Arc::default(),
             repositories: HashMap::new(),
             mirrored: HashSet::new(),
@@ -1464,6 +1532,7 @@ mod tests {
             egress_ip: vec!["8.8.8.8".into()],
             dns: Ipv4Addr::new(169, 254, 20, 10),
             max_runners: 4,
+            repository_scope: None,
             in_flight: Arc::default(),
             repositories: HashMap::new(),
             mirrored: HashSet::new(),
@@ -1474,6 +1543,52 @@ mod tests {
                 .build()
                 .unwrap(),
         }
+    }
+
+    #[test]
+    fn scoped_controller_ignores_other_repositories_and_unidentified_orphans() {
+        use serde_json::json;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server_runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = server_runtime.block_on(async {
+            let server = MockServer::start().await;
+            for (url, body) in [
+                ("/api/v1/repos/o/canary", json!({"id": 7, "private": true, "full_name": "o/canary"})),
+                ("/api/v1/admin/actions/runners/jobs", json!([{"repo_id": 8, "status": "waiting"}])),
+                ("/api/v1/admin/actions/runners", json!([
+                    {"id": 11, "name": "forgejo-job-0123456789abcdef0123456789abcdef", "repo_id": 8},
+                    {"id": 12, "name": "forgejo-job-abcdef0123456789abcdef0123456789"}
+                ])),
+                ("/api/v1/repos/o/canary/actions/runs", json!({"workflow_runs": []})),
+            ] {
+                Mock::given(method("GET"))
+                    .and(path(url))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(body))
+                    .mount(&server)
+                    .await;
+            }
+            for url in ["/api/v1/repositories/8", "/api/v1/repos/search"] {
+                Mock::given(path(url))
+                    .respond_with(ResponseTemplate::new(500))
+                    .expect(0)
+                    .mount(&server)
+                    .await;
+            }
+            Mock::given(method("DELETE"))
+                .respond_with(ResponseTemplate::new(204))
+                .expect(0)
+                .mount(&server)
+                .await;
+            server
+        });
+        let mut controller = idle_controller(&server.uri());
+        controller.repository_scope = Some((7, "o/canary".into()));
+        controller.observer.watched.insert("o/canary".into());
+        assert_eq!(controller.tick().unwrap(), TickReport::default());
+        assert_eq!(controller.tick().unwrap(), TickReport::default());
+        assert!(controller.unowned_registrations.is_empty());
     }
 
     /// `--once` is one whole pass: an empty queue succeeds, an unreadable

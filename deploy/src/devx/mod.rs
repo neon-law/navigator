@@ -1061,6 +1061,7 @@ fn dispatch_with_dns_provider(
         crate::Command::Ops(crate::OpsCmd::Forgejo(
             crate::ForgejoPolicyCmd::RunnerController {
                 url,
+                repository,
                 runner_namespace,
                 context,
                 egress_host,
@@ -1072,6 +1073,7 @@ fn dispatch_with_dns_provider(
             },
         )) => forgejo::controller::run(&forgejo::controller::Options {
             url,
+            repository,
             runner_namespace,
             context,
             egress_host,
