@@ -123,6 +123,23 @@ async fn enrollment_intake_preserves_answers_and_reviews_before_sign_in() {
     assert_eq!(preserved, serde_json::json!("visitor@example.com"));
     for width in [390, 1280] {
         set_practice_viewport(&c, width, 844).await;
+        let centered = c
+            .execute(
+                "const hero = document.querySelector('.fm-hero');
+                 const { left, right } = hero.getBoundingClientRect();
+                 return [...hero.querySelectorAll('h1, .fm-hero__cta')].every(element => {
+                     const rect = element.getBoundingClientRect();
+                     return Math.abs(rect.left + rect.right - left - right) <= 2;
+                 });",
+                vec![],
+            )
+            .await
+            .expect("hero alignment");
+        assert_eq!(
+            centered,
+            serde_json::json!(true),
+            "Same Day Legal hero is off center at {width}px"
+        );
         let fits = c
             .execute(
                 "return document.documentElement.scrollWidth <= window.innerWidth",

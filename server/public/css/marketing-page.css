@@ -1137,10 +1137,16 @@
   color: var(--nav-color-text);
 }
 .fm-page--same-day-legal .fm-hero {
-  padding-block: clamp(4rem, 9vw, 7rem) clamp(2.5rem, 5vw, 4rem);
+  display: block;
+  padding: clamp(4rem, 9vw, 7rem) 1.5rem clamp(2.5rem, 5vw, 4rem);
   border-bottom: 1px solid var(--nav-color-text);
 }
-.fm-page--same-day-legal .fm-hero__inner { margin-inline: auto; max-width: 60rem; text-align: center; }
+.fm-page--same-day-legal .fm-hero__inner {
+  align-items: center;
+  margin-inline: auto;
+  max-width: 60rem;
+  text-align: center;
+}
 .fm-page--same-day-legal .fm-hero__title {
   font-family: var(--brand-font-display);
   font-size: clamp(3rem, 8vw, 6.5rem);
