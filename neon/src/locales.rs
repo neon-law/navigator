@@ -1620,7 +1620,7 @@ pub fn same_day_legal_href(deployment_host: Option<&str>) -> String {
     views::brand::BrandKey::SameDayLegal.public_home_href_for(deployment_host)
 }
 
-/// Neon's home is the Navigator page, from `home-marketing.yaml`.
+/// Neon's home lists legal services and offers attorney contact.
 pub fn neon_home(branding: &views::brand::Branding, _deployment_host: Option<&str>) -> PageContent {
     marketing_page(load_page(branding, "home-marketing"), None, branding)
 }
@@ -2736,46 +2736,26 @@ mod tests {
         );
     }
 
-    /// The home is the Navigator page: it gives Notation its own band, links
-    /// the Legal Aid offer, and its only call to action stars the repository.
     #[test]
-    fn neon_home_presents_navigator_and_asks_only_for_a_star() {
-        const REPO: &str = "https://github.com/neon-law/navigator";
+    fn neon_home_lists_services_without_pricing_and_links_to_contact() {
         let content = neon_home(&views::brand::DEFAULT_BRANDING, None);
-        assert_eq!(content.tagline, "Exacting agentic lawyering.");
         let hero = content.hero_cta.as_ref().expect("hero action");
-        assert_eq!(
-            (hero.href.as_str(), hero.label.as_str()),
-            (REPO, "Star the repo")
-        );
-        let mut anchors = Vec::new();
-        for band in &content.bands {
-            match band {
-                Band::Cta { action, .. } => {
-                    let action = action.as_ref().expect("the closing band stars the repo");
-                    assert_eq!(action.href, REPO);
-                }
-                Band::Cards { anchor, .. } | Band::Steps { anchor, .. } => {
-                    anchors.push(anchor.as_str());
-                }
-                Band::Statement { .. } => {}
-                _ => panic!("the home publishes only steps, cards, statements, and the closing call to action"),
-            }
-        }
-        assert!(anchors.contains(&"notation"), "{anchors:?}");
-        let text = serde_yaml::to_string(&content).expect("home serializes");
-        assert!(text.contains("/legal-aid"));
-        assert!(!text.contains("open source"));
-        for retired in [
-            "/nautilus",
-            "Nautilus",
-            "#enrollment",
-            "$29",
-            "consultation",
-            "Book",
-        ] {
-            assert!(!text.contains(retired), "the home publishes {retired}");
-        }
+        assert_eq!(hero.href, "/contact");
+
+        let [Band::Cards {
+            items,
+            pricing_style,
+            ..
+        }, Band::Cta { action, .. }] = content.bands.as_slice()
+        else {
+            panic!("the home lists services before offering attorney contact");
+        };
+        assert!(!pricing_style);
+        assert!(items.len() >= 6);
+        assert!(items
+            .iter()
+            .all(|item| item.cadence.is_none() && item.day_rate.is_none()));
+        assert_eq!(action.as_ref().expect("closing action").href, "/contact");
     }
 
     #[test]

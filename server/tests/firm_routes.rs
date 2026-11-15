@@ -214,16 +214,19 @@ async fn no_firm_page_still_markets_the_retired_consumer_plan() {
 }
 
 #[tokio::test]
-async fn the_home_presents_navigator_and_asks_for_a_star() {
+async fn the_home_lists_legal_services_and_offers_attorney_contact() {
     let app = site_app().await;
     let body = body_string(anon_get(&app, "/").await).await;
     assert_eq!(body.matches("<h1").count(), 1);
     for text in [
-        "Exacting agentic lawyering.",
-        "Star the repo",
-        r#"href="https://github.com/neon-law/navigator""#,
-        r#"href="/notations/about""#,
-        r#"href="/legal-aid""#,
+        "What is your legal need?",
+        "Start an LLC",
+        "Write a will",
+        "Change your name",
+        "File in small claims",
+        "Review a contract",
+        "Talk to an attorney",
+        r#"href="/contact""#,
     ] {
         assert!(body.contains(text), "missing {text}: {body}");
     }
@@ -231,10 +234,13 @@ async fn the_home_presents_navigator_and_asks_for_a_star() {
         r#"href="/business""#,
         "company-pricing",
         "data-enrollment-intake",
-        "What is your legal need?",
+        "Star the repo",
+        "$29",
+        "$290",
     ] {
         assert!(!body.contains(retired), "{retired} survives: {body}");
     }
+    assert_eq!(anon_get(&app, "/contact").await.status(), StatusCode::OK);
     assert_eq!(
         anon_get(&app, "/disputes").await.status(),
         StatusCode::NOT_FOUND

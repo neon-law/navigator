@@ -674,7 +674,9 @@ pub fn MarketingPage(
                                     class: "fm-hero__mark commitment-hero__mark".to_string(),
                                 }
                             }
-                            p { class: "firm-eyebrow", "{content.title}" }
+                            if content.skin != PageSkin::Home {
+                                p { class: "firm-eyebrow", "{content.title}" }
+                            }
                             h1 { class: "fm-hero__title commitment-hero__heading",
                                 if content.hero_lines.is_empty() {
                                     "{content.tagline}"
