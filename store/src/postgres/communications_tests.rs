@@ -67,16 +67,10 @@ fn receipt(digest: &str) -> NewEmailReceipt<'_> {
     }
 }
 
-#[tokio::test]
-async fn first_backfill_copies_communication_history() {
-    let Some((options, database)) = fresh_schema().await else {
-        return;
-    };
-    let pg = connect(&options, &database).await;
-    let surreal = mem_surreal().await;
-    let matter = project(&pg, "synthetic-backfill").await;
+async fn first_backfill_copies_communication_history(surreal: &SurrealDb, pg: &PostgresDb) {
+    let matter = project(pg, "synthetic-backfill").await;
     let source = communications::ingest(
-        &surreal,
+        surreal,
         &IngestArgs {
             project_id: matter,
             channel: channel::EMAIL_INBOUND,
@@ -123,12 +117,12 @@ async fn first_backfill_copies_communication_history() {
         Box::pin(async {
             use crate::postgres_mirror::{conversations, during_initial_copy};
 
-            let before = conversations::reconcile(&surreal, &pg).await.unwrap();
+            let before = conversations::reconcile(surreal, pg).await.unwrap();
             assert_eq!(
                 before.divergent().collect::<Vec<_>>(),
                 vec![&MirrorKey::Communication(source.communication_id)]
             );
-            assert!(during_initial_copy(conversations::reconcile(&surreal, &pg))
+            assert!(during_initial_copy(conversations::reconcile(surreal, pg))
                 .await
                 .unwrap()
                 .is_clean());
@@ -143,7 +137,6 @@ async fn first_backfill_copies_communication_history() {
         }),
     )
     .await;
-    pg.0.close().await;
 }
 
 #[tokio::test]
@@ -614,4 +607,5 @@ async fn communications_live_in_postgres() {
         }),
     )
     .await;
+    first_backfill_copies_communication_history(&surreal, &pg).await;
 }

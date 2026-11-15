@@ -57,6 +57,7 @@ pub const POSTGRES_TABLES: &[&str] = &[
     "journal_reconciliation_signal",
     "post",
     "blog_video",
+    "product",
     "social_handle",
     "social_publication",
     "social_account",
