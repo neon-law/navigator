@@ -1322,6 +1322,13 @@ erDiagram
         uuid subject_person_id
         datetime updated_at
     }
+    person_calendar {
+        string calendar_id
+        uuid id
+        datetime inserted_at
+        string kind
+        uuid person_id
+    }
     person_external_identity {
         string external_id
         string handle
@@ -2158,6 +2165,7 @@ erDiagram
     notation }o--|| notation_source : references
     person }o--|| outcome_estimate : references
     project }o--|| outcome_estimate : references
+    person }o--|| person_calendar : references
     person }o--|| person_delegate : references
     person }o--|| person_external_identity : references
     firm }o--|| person_firm_role : references

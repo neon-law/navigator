@@ -16,7 +16,7 @@
 //! calendars, and the account's domain-wide delegation must also grant the
 //! calendar scope.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -25,6 +25,10 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 const CALENDAR_SCOPE: &str = "https://www.googleapis.com/auth/calendar";
+/// Busy time for calendars the Firm may read. Event details stay out of this scope.
+pub const CALENDAR_FREEBUSY_SCOPE: &str = "https://www.googleapis.com/auth/calendar.freebusy";
+/// Event details for the signed-in attorney's own calendar.
+pub const CALENDAR_EVENTS_SCOPE: &str = "https://www.googleapis.com/auth/calendar.readonly";
 const CALENDAR_BASE_URL: &str = "https://www.googleapis.com/calendar/v3";
 
 /// Workspace mailbox that owns Guieb & Shook's Project Calendars.
@@ -1188,6 +1192,482 @@ impl CalendarService for FakeCalendar {
     }
 }
 
+/// Why a calendar cannot be read. A gap is never an empty busy list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CalendarGap {
+    /// The calendar is outside the sharing arrangement.
+    Share,
+    /// The Workspace grant does not include the scope this read needs.
+    Scope,
+}
+
+/// One busy interval on a calendar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FreeBusyBlock {
+    pub start: DateTime<FixedOffset>,
+    pub end: DateTime<FixedOffset>,
+}
+
+/// Free/busy for one calendar in a window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CalendarWindow {
+    pub calendar_id: String,
+    pub busy: Vec<FreeBusyBlock>,
+    pub gap: Option<CalendarGap>,
+}
+
+/// The signed-in attorney's events, or the gap that blocked the read.
+#[derive(Debug)]
+pub enum EventRead {
+    Events(Vec<ProjectCalendarEvent>),
+    Gap(CalendarGap),
+}
+
+/// Read attorney calendars through Workspace delegation.
+///
+/// Free/busy uses [`CALENDAR_FREEBUSY_SCOPE`] and returns no event details.
+/// Event details use [`CALENDAR_EVENTS_SCOPE`] and only for the attorney the
+/// caller names, which the portal limits to the signed-in Person.
+#[async_trait]
+pub trait AttorneyCalendars: Send + Sync {
+    async fn free_busy(
+        &self,
+        attorney_email: &str,
+        calendar_ids: &[String],
+        start: DateTime<FixedOffset>,
+        end: DateTime<FixedOffset>,
+    ) -> Result<Vec<CalendarWindow>, CalendarError>;
+
+    async fn events(
+        &self,
+        attorney_email: &str,
+        calendar_id: &str,
+        start: DateTime<FixedOffset>,
+        end: DateTime<FixedOffset>,
+    ) -> Result<EventRead, CalendarError>;
+}
+
+/// Calendar v3 free/busy and event reads, acting as one Workspace user at a time.
+pub struct GoogleAttorneyCalendars {
+    service_account: String,
+    base_url: String,
+}
+
+impl GoogleAttorneyCalendars {
+    /// Build from the Workspace delegation keys.
+    ///
+    /// # Errors
+    /// [`CalendarError::MissingConfig`] when a key is absent.
+    pub fn from_env() -> Result<Self, CalendarError> {
+        match crate::delegation::WorkspaceDelegation::from_lookup(|key| std::env::var(key).ok()) {
+            Ok(delegation) => Ok(Self {
+                service_account: delegation.service_account,
+                base_url: CALENDAR_BASE_URL.to_string(),
+            }),
+            Err(crate::delegation::DelegationError::MissingConfig(missing)) => {
+                Err(CalendarError::MissingConfig(missing))
+            }
+            Err(crate::delegation::DelegationError::Authentication) => {
+                Err(CalendarError::Authentication)
+            }
+        }
+    }
+
+    async fn token(&self, attorney_email: &str, scope: &str) -> Result<String, CalendarError> {
+        let delegation = crate::delegation::WorkspaceDelegation {
+            service_account: self.service_account.clone(),
+            delegated_user: attorney_email.to_string(),
+        };
+        let source = delegation
+            .token_source(&[scope])
+            .await
+            .map_err(|_| CalendarError::Authentication)?;
+        let raw = source
+            .token()
+            .await
+            .map_err(|_| CalendarError::Authentication)?;
+        Ok(raw.strip_prefix("Bearer ").unwrap_or(&raw).to_string())
+    }
+}
+
+#[async_trait]
+impl AttorneyCalendars for GoogleAttorneyCalendars {
+    async fn free_busy(
+        &self,
+        attorney_email: &str,
+        calendar_ids: &[String],
+        start: DateTime<FixedOffset>,
+        end: DateTime<FixedOffset>,
+    ) -> Result<Vec<CalendarWindow>, CalendarError> {
+        if calendar_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let token = match self.token(attorney_email, CALENDAR_FREEBUSY_SCOPE).await {
+            Ok(token) => token,
+            Err(CalendarError::Authentication) => {
+                return Ok(scope_gaps(calendar_ids));
+            }
+            Err(error) => return Err(error),
+        };
+        let action = "reading free/busy";
+        let response = reqwest::Client::new()
+            .post(format!(
+                "{}/freeBusy",
+                self.base_url.trim_end_matches('/')
+            ))
+            .bearer_auth(token)
+            .json(&serde_json::json!({
+                "timeMin": start.to_rfc3339(),
+                "timeMax": end.to_rfc3339(),
+                "items": calendar_ids.iter().map(|id| serde_json::json!({"id": id})).collect::<Vec<_>>(),
+            }))
+            .send()
+            .await
+            .map_err(|source| CalendarError::Request { action, source })?;
+        let status = response.status().as_u16();
+        if matches!(status, 401 | 403) {
+            return Ok(scope_gaps(calendar_ids));
+        }
+        if !(200..300).contains(&status) {
+            return Err(CalendarError::Api { action, status });
+        }
+        let body = response
+            .text()
+            .await
+            .map_err(|source| CalendarError::Response { action, source })?;
+        parse_free_busy(&body, calendar_ids)
+    }
+
+    async fn events(
+        &self,
+        attorney_email: &str,
+        calendar_id: &str,
+        start: DateTime<FixedOffset>,
+        end: DateTime<FixedOffset>,
+    ) -> Result<EventRead, CalendarError> {
+        let token = match self.token(attorney_email, CALENDAR_EVENTS_SCOPE).await {
+            Ok(token) => token,
+            Err(CalendarError::Authentication) => return Ok(EventRead::Gap(CalendarGap::Scope)),
+            Err(error) => return Err(error),
+        };
+        let action = "listing attorney events";
+        let start_text = start.to_rfc3339();
+        let end_text = end.to_rfc3339();
+        let url = format!(
+            "{}/calendars/{}/events",
+            self.base_url.trim_end_matches('/'),
+            urlencoding_path(calendar_id)
+        );
+        let mut page_token = None;
+        let mut items = Vec::new();
+        loop {
+            let mut query = vec![
+                ("timeMin", start_text.as_str()),
+                ("timeMax", end_text.as_str()),
+                ("singleEvents", "true"),
+                ("orderBy", "startTime"),
+                ("fields", "nextPageToken,items(id,summary,start,end)"),
+            ];
+            if let Some(page) = page_token.as_deref() {
+                query.push(("pageToken", page));
+            }
+            let response = reqwest::Client::new()
+                .get(&url)
+                .bearer_auth(&token)
+                .query(&query)
+                .send()
+                .await
+                .map_err(|source| CalendarError::Request { action, source })?;
+            let status = response.status().as_u16();
+            if matches!(status, 401 | 403) {
+                return Ok(EventRead::Gap(CalendarGap::Scope));
+            }
+            if matches!(status, 404 | 410) {
+                return Ok(EventRead::Gap(CalendarGap::Share));
+            }
+            if !(200..300).contains(&status) {
+                return Err(CalendarError::Api { action, status });
+            }
+            let page = response
+                .json::<EventPage<ProjectCalendarEvent>>()
+                .await
+                .map_err(|source| CalendarError::Response { action, source })?;
+            items.extend(page.items);
+            page_token = page.next_page_token;
+            if page_token.is_none() {
+                break;
+            }
+        }
+        Ok(EventRead::Events(items))
+    }
+}
+
+fn scope_gaps(calendar_ids: &[String]) -> Vec<CalendarWindow> {
+    calendar_ids
+        .iter()
+        .map(|calendar_id| CalendarWindow {
+            calendar_id: calendar_id.clone(),
+            busy: Vec::new(),
+            gap: Some(CalendarGap::Scope),
+        })
+        .collect()
+}
+
+fn urlencoding_path(segment: &str) -> String {
+    let mut url = url::Url::parse("https://calendar.example/").expect("base parses");
+    url.path_segments_mut()
+        .expect("base has a path")
+        .push(segment);
+    url.path().trim_start_matches('/').to_string()
+}
+
+/// Parse a Calendar API freeBusy body. A calendar with an error is a gap.
+///
+/// # Errors
+/// [`CalendarError::Response`] when the body is not the freeBusy document.
+pub fn parse_free_busy(
+    body: &str,
+    requested: &[String],
+) -> Result<Vec<CalendarWindow>, CalendarError> {
+    let parsed: FreeBusyResponse = serde_json::from_str(body).map_err(|_| CalendarError::Api {
+        action: "reading free/busy",
+        status: 200,
+    })?;
+    Ok(requested
+        .iter()
+        .map(|calendar_id| {
+            let Some(entry) = parsed.calendars.get(calendar_id) else {
+                return CalendarWindow {
+                    calendar_id: calendar_id.clone(),
+                    busy: Vec::new(),
+                    gap: Some(CalendarGap::Share),
+                };
+            };
+            if !entry.errors.is_empty() {
+                let scope = entry.errors.iter().any(|error| {
+                    matches!(
+                        error.reason.as_deref(),
+                        Some("forbidden" | "insufficientPermissions" | "authError")
+                    )
+                });
+                return CalendarWindow {
+                    calendar_id: calendar_id.clone(),
+                    busy: Vec::new(),
+                    gap: Some(if scope {
+                        CalendarGap::Scope
+                    } else {
+                        CalendarGap::Share
+                    }),
+                };
+            }
+            let busy = entry
+                .busy
+                .iter()
+                .filter_map(|block| {
+                    Some(FreeBusyBlock {
+                        start: DateTime::parse_from_rfc3339(&block.start).ok()?,
+                        end: DateTime::parse_from_rfc3339(&block.end).ok()?,
+                    })
+                })
+                .collect();
+            CalendarWindow {
+                calendar_id: calendar_id.clone(),
+                busy,
+                gap: None,
+            }
+        })
+        .collect())
+}
+
+#[derive(Deserialize)]
+struct FreeBusyResponse {
+    #[serde(default)]
+    calendars: BTreeMap<String, FreeBusyEntry>,
+}
+
+#[derive(Deserialize)]
+struct FreeBusyEntry {
+    #[serde(default)]
+    busy: Vec<FreeBusyInstant>,
+    #[serde(default)]
+    errors: Vec<FreeBusyReason>,
+}
+
+#[derive(Deserialize)]
+struct FreeBusyInstant {
+    start: String,
+    end: String,
+}
+
+#[derive(Deserialize)]
+struct FreeBusyReason {
+    reason: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct SyntheticBusy {
+    calendar_id: String,
+    start: DateTime<FixedOffset>,
+    end: DateTime<FixedOffset>,
+    summary: Option<String>,
+}
+
+/// In-memory attorney calendars for tests. A hidden calendar is a missing
+/// share. An email on the scope-denied set fails every read for that person.
+#[derive(Clone, Debug, Default)]
+pub struct FakeAttorneyCalendars {
+    rows: Arc<Mutex<Vec<SyntheticBusy>>>,
+    hidden: Arc<Mutex<BTreeSet<String>>>,
+    scope_denied: Arc<Mutex<BTreeSet<String>>>,
+}
+
+impl FakeAttorneyCalendars {
+    /// Record a busy interval. `summary` is returned only by [`AttorneyCalendars::events`].
+    pub fn record(
+        &self,
+        calendar_id: impl Into<String>,
+        start: DateTime<FixedOffset>,
+        end: DateTime<FixedOffset>,
+        summary: Option<&str>,
+    ) {
+        self.rows
+            .lock()
+            .expect("fake attorney calendars poisoned")
+            .push(SyntheticBusy {
+                calendar_id: calendar_id.into(),
+                start,
+                end,
+                summary: summary.map(str::to_string),
+            });
+    }
+
+    /// The calendar is outside the sharing arrangement.
+    pub fn hide(&self, calendar_id: impl Into<String>) {
+        self.hidden
+            .lock()
+            .expect("fake attorney calendars poisoned")
+            .insert(calendar_id.into());
+    }
+
+    /// Delegation for this attorney lacks the calendar scope.
+    pub fn deny_scope(&self, email: impl Into<String>) {
+        self.scope_denied
+            .lock()
+            .expect("fake attorney calendars poisoned")
+            .insert(email.into().to_ascii_lowercase());
+    }
+
+    fn denied(&self, email: &str) -> bool {
+        self.scope_denied
+            .lock()
+            .expect("fake attorney calendars poisoned")
+            .contains(&email.to_ascii_lowercase())
+    }
+
+    fn hidden_id(&self, calendar_id: &str) -> bool {
+        self.hidden
+            .lock()
+            .expect("fake attorney calendars poisoned")
+            .contains(calendar_id)
+    }
+}
+
+#[async_trait]
+impl AttorneyCalendars for FakeAttorneyCalendars {
+    async fn free_busy(
+        &self,
+        attorney_email: &str,
+        calendar_ids: &[String],
+        start: DateTime<FixedOffset>,
+        end: DateTime<FixedOffset>,
+    ) -> Result<Vec<CalendarWindow>, CalendarError> {
+        let rows = self.rows.lock().expect("fake attorney calendars poisoned");
+        Ok(calendar_ids
+            .iter()
+            .map(|calendar_id| {
+                if self.denied(attorney_email) {
+                    return CalendarWindow {
+                        calendar_id: calendar_id.clone(),
+                        busy: Vec::new(),
+                        gap: Some(CalendarGap::Scope),
+                    };
+                }
+                if self.hidden_id(calendar_id) {
+                    return CalendarWindow {
+                        calendar_id: calendar_id.clone(),
+                        busy: Vec::new(),
+                        gap: Some(CalendarGap::Share),
+                    };
+                }
+                let busy = rows
+                    .iter()
+                    .filter(|row| {
+                        row.calendar_id == *calendar_id && overlaps(row.start, row.end, start, end)
+                    })
+                    .map(|row| FreeBusyBlock {
+                        start: row.start,
+                        end: row.end,
+                    })
+                    .collect();
+                CalendarWindow {
+                    calendar_id: calendar_id.clone(),
+                    busy,
+                    gap: None,
+                }
+            })
+            .collect())
+    }
+
+    async fn events(
+        &self,
+        attorney_email: &str,
+        calendar_id: &str,
+        start: DateTime<FixedOffset>,
+        end: DateTime<FixedOffset>,
+    ) -> Result<EventRead, CalendarError> {
+        if self.denied(attorney_email) {
+            return Ok(EventRead::Gap(CalendarGap::Scope));
+        }
+        if self.hidden_id(calendar_id) {
+            return Ok(EventRead::Gap(CalendarGap::Share));
+        }
+        let rows = self.rows.lock().expect("fake attorney calendars poisoned");
+        let events = rows
+            .iter()
+            .filter(|row| {
+                row.calendar_id == calendar_id && overlaps(row.start, row.end, start, end)
+            })
+            .enumerate()
+            .map(|(index, row)| ProjectCalendarEvent {
+                id: format!("synthetic-{index}"),
+                summary: row.summary.clone(),
+                start: ProjectCalendarEventTime {
+                    date: None,
+                    date_time: Some(row.start.to_rfc3339()),
+                },
+                end: ProjectCalendarEventTime {
+                    date: None,
+                    date_time: Some(row.end.to_rfc3339()),
+                },
+            })
+            .collect();
+        Ok(EventRead::Events(events))
+    }
+}
+
+fn overlaps(
+    start: DateTime<FixedOffset>,
+    end: DateTime<FixedOffset>,
+    window_start: DateTime<FixedOffset>,
+    window_end: DateTime<FixedOffset>,
+) -> bool {
+    if end <= start {
+        window_start <= start && start < window_end
+    } else {
+        start < window_end && window_start < end
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::DateTime;
@@ -1199,8 +1679,8 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::{
-        event_body, CalendarError, CalendarEvent, CalendarRole, CalendarService, FakeCalendar,
-        GoogleCalendar, StoredEvent,
+        event_body, AttorneyCalendars, CalendarError, CalendarEvent, CalendarRole, CalendarService,
+        FakeCalendar, GoogleCalendar, StoredEvent,
     };
 
     #[derive(Debug)]
@@ -1832,5 +2312,66 @@ mod tests {
             .is_err());
         calendar.put_event(&created.id, &inserted.id, moved);
         assert_eq!(calendar.events(&created.id).len(), 1);
+    }
+
+    #[test]
+    fn freebusy_errors_are_gaps_and_never_an_empty_busy_list() {
+        let body = r#"{
+            "calendars": {
+                "ada@example.com": {"busy": [{"start": "2026-11-01T15:00:00Z", "end": "2026-11-01T16:00:00Z"}]},
+                "personal@example.com": {"errors": [{"reason": "notFound"}]},
+                "closed@example.com": {"errors": [{"reason": "forbidden"}]}
+            }
+        }"#;
+        let windows = super::parse_free_busy(
+            body,
+            &[
+                "ada@example.com".into(),
+                "personal@example.com".into(),
+                "closed@example.com".into(),
+                "missing@example.com".into(),
+            ],
+        )
+        .unwrap();
+        assert!(windows[0].gap.is_none());
+        assert_eq!(windows[0].busy.len(), 1);
+        assert_eq!(windows[1].gap, Some(super::CalendarGap::Share));
+        assert!(windows[1].busy.is_empty());
+        assert_eq!(windows[2].gap, Some(super::CalendarGap::Scope));
+        assert_eq!(windows[3].gap, Some(super::CalendarGap::Share));
+    }
+
+    #[tokio::test]
+    async fn a_hidden_calendar_is_a_missing_share() {
+        let calendars = super::FakeAttorneyCalendars::default();
+        let start = DateTime::parse_from_rfc3339("2026-11-01T15:00:00Z").unwrap();
+        let end = DateTime::parse_from_rfc3339("2026-11-01T16:00:00Z").unwrap();
+        calendars.record("ada@example.com", start, end, Some("Call"));
+        calendars.hide("personal@example.com");
+        calendars.deny_scope("blocked@example.com");
+        let window_end = DateTime::parse_from_rfc3339("2026-11-01T18:00:00Z").unwrap();
+        let windows = calendars
+            .free_busy(
+                "ada@example.com",
+                &["ada@example.com".into(), "personal@example.com".into()],
+                start,
+                window_end,
+            )
+            .await
+            .unwrap();
+        assert!(windows[0].gap.is_none());
+        assert_eq!(windows[0].busy.len(), 1);
+        assert_eq!(windows[1].gap, Some(super::CalendarGap::Share));
+        let denied = calendars
+            .free_busy(
+                "blocked@example.com",
+                &["blocked@example.com".into()],
+                start,
+                window_end,
+            )
+            .await
+            .unwrap();
+        assert_eq!(denied[0].gap, Some(super::CalendarGap::Scope));
+        assert!(denied[0].busy.is_empty());
     }
 }

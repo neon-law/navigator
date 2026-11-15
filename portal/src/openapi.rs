@@ -1864,6 +1864,41 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/calendars/freebusy": {
+            "post": {
+                "summary": "Read merged attorney free/busy",
+                "description": "Busy blocks for every lawyer-tier firm-side participant on the Project, or for the caller's Firms when project_code is omitted. An unreadable calendar is reported and is never an empty busy list. Event details are not included. Authorization: lawyer tier, plus read_attorney_calendars on the owning Firm.",
+                "responses": { "200": { "description": "Busy blocks and any unreadable calendars" }, "401": { "description": "No authenticated session" }, "403": { "description": "Lawyer tier required" }, "404": { "description": "The Project or Firm is outside the caller's scope" } }
+            }
+        },
+        "/app/api/calendars/events": {
+            "post": {
+                "summary": "Read the signed-in attorney's events",
+                "description": "Event details for the signed-in Person's primary Attorney Calendar only. Authorization: lawyer tier, plus read_attorney_calendars on a Firm the caller belongs to.",
+                "responses": { "200": { "description": "Events, or an unreadable calendar" }, "401": { "description": "No authenticated session" }, "403": { "description": "Lawyer tier required" }, "404": { "description": "The caller is outside the Firm" } }
+            }
+        },
+        "/app/api/calendars/check": {
+            "post": {
+                "summary": "Check a window for conflicts and duplicate titles",
+                "description": "clear is false when a required calendar is unreadable, when busy time or a Deadline overlaps the window, or when the signed-in attorney's events repeat a title.",
+                "responses": { "200": { "description": "The check result" }, "401": { "description": "No authenticated session" }, "403": { "description": "Lawyer tier required" }, "404": { "description": "The Project or Firm is outside the caller's scope" } }
+            }
+        },
+        "/app/api/calendars/access": {
+            "post": {
+                "summary": "Report whether each attorney calendar can be read",
+                "description": "Names each attorney and whether free/busy can be read. A missing share or scope is not reported as readable.",
+                "responses": { "200": { "description": "Per-attorney calendar access" }, "401": { "description": "No authenticated session" }, "403": { "description": "Lawyer tier required" }, "404": { "description": "The Project or Firm is outside the caller's scope" } }
+            }
+        },
+        "/app/api/calendars/register": {
+            "post": {
+                "summary": "Record the signed-in attorney's calendar",
+                "description": "Records a primary calendar or an opt-in free/busy calendar on the signed-in Person. A Google OIDC subject is not accepted as a calendar id.",
+                "responses": { "200": { "description": "The recorded calendar" }, "400": { "description": "The calendar id is not valid" }, "401": { "description": "No authenticated session" }, "403": { "description": "Lawyer tier required" }, "404": { "description": "The caller is outside the Firm" } }
+            }
+        },
         "/app/api/integrations/calendar/events": {
             "post": {
                 "summary": "Read events from an authorized synthetic Project Calendar on staging",

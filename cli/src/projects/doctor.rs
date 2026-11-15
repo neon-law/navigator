@@ -168,6 +168,7 @@ pub fn diagnose(probe: &Probe<'_>) -> Diagnosis {
 
     let drive = workspace.drive_setup(|k| (probe.env)(k));
     checks.push(drive_check(&workspace, &drive));
+    checks.push(calendar_delegation_check(probe));
     checks.push(site_login_check(probe));
 
     if let Some(code) = probe.project_code {
@@ -208,6 +209,47 @@ fn drive_check(workspace: &WorkspaceConfig, drive: &DriveSetup) -> Check {
                 coordinates.expected_projects_root_name
             ),
         ),
+    }
+}
+
+/// The Workspace delegation Attorney Calendars and the Project Calendar share.
+/// Absent keys are a warning, the same way an unused Drive ingest is. A
+/// partial pair is a failure. The live per-attorney grant is `navigator
+/// calendar access`; this check only sees the keys the scope rides on.
+fn calendar_delegation_check(probe: &Probe<'_>) -> Check {
+    let present = |key| (probe.env)(key).is_some_and(|value| !value.trim().is_empty());
+    let user = model::workspace::NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER;
+    let account = model::workspace::NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT;
+    let scope = "https://www.googleapis.com/auth/calendar.freebusy and https://www.googleapis.com/auth/calendar.readonly";
+    match (present(user), present(account)) {
+        (true, true) => Check::ok(
+            "calendar delegation",
+            format!(
+                "Workspace delegation is set. Grant {scope}. `navigator calendar access` reports each attorney; a missing grant is never free time"
+            ),
+        ),
+        (false, false) => Check::warn(
+            "calendar delegation",
+            format!(
+                "optional until scheduling: {user} and {account} are unset. Grant {scope} after they are set"
+            ),
+        ),
+        (user_set, account_set) => {
+            let missing = [
+                (!user_set).then_some(user),
+                (!account_set).then_some(account),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(", ");
+            Check::fail(
+                "calendar delegation",
+                format!(
+                    "partially configured; set {missing}. Scheduling cannot treat a missing grant as free time"
+                ),
+            )
+        }
     }
 }
 
@@ -637,6 +679,53 @@ mod tests {
             diagnosis.check("project folder").unwrap().status,
             Status::Fail
         );
+    }
+
+    #[test]
+    fn calendar_delegation_follows_the_workspace_keys() {
+        let creds = Credentials::default();
+        let bare = diagnose(&Probe {
+            env: &env(&without_drive("neon-law")),
+            credentials: &creds,
+            now: 0,
+            host: None,
+            project_code: None,
+        });
+        assert!(bare.is_healthy(), "{:?}", bare.checks);
+        let calendar = bare.check("calendar delegation").unwrap();
+        assert_eq!(calendar.status, Status::Warn);
+        assert!(calendar
+            .detail
+            .contains("https://www.googleapis.com/auth/calendar.freebusy"));
+
+        let ready = diagnose(&Probe {
+            env: &env(&deployment("neon-law")),
+            credentials: &creds,
+            now: 0,
+            host: None,
+            project_code: None,
+        });
+        assert_eq!(
+            ready.check("calendar delegation").unwrap().status,
+            Status::Ok
+        );
+
+        let mut partial = deployment("neon-law");
+        partial
+            .retain(|(key, _)| *key != cloud::workspace::NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT);
+        let diagnosis = diagnose(&Probe {
+            env: &env(&partial),
+            credentials: &creds,
+            now: 0,
+            host: None,
+            project_code: None,
+        });
+        assert!(!diagnosis.is_healthy());
+        let calendar = diagnosis.check("calendar delegation").unwrap();
+        assert_eq!(calendar.status, Status::Fail);
+        assert!(calendar
+            .detail
+            .contains(cloud::workspace::NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT));
     }
 
     #[test]

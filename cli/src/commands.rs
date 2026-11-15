@@ -114,7 +114,7 @@ enum Command {
         #[command(subcommand)]
         action: SiteCmd,
     },
-    /// Read an authorized synthetic Project Calendar on staging.
+    /// Read a Project Calendar, attorney free/busy, or the signed-in attorney's events.
     Calendar {
         #[command(subcommand)]
         action: CalendarCmd,
@@ -153,20 +153,78 @@ pub enum NotationCmd {
 
 #[derive(Subcommand)]
 enum CalendarCmd {
-    /// List Project Calendar events as JSON.
+    /// List events as JSON. With `--project`, the synthetic Project Calendar on
+    /// staging. Without it, the signed-in attorney's primary calendar.
     Events {
-        /// Synthetic Project code.
+        /// Synthetic Project code. Omit to read the signed-in attorney's events.
         #[arg(long)]
-        project: String,
+        project: Option<String>,
         /// Start of the window in RFC 3339 format.
         #[arg(long)]
         start: chrono::DateTime<chrono::FixedOffset>,
         /// End of the window in RFC 3339 format.
         #[arg(long)]
         end: chrono::DateTime<chrono::FixedOffset>,
-        /// Navigator staging host.
+        /// Navigator host.
         #[arg(long)]
         host: String,
+    },
+    /// Busy blocks for firm attorneys, the Project Calendar, and Deadlines.
+    Freebusy {
+        /// Project code. Omit for every attorney on the caller's Firms.
+        #[arg(long)]
+        project: Option<String>,
+        /// Start of the window in RFC 3339 format.
+        #[arg(long)]
+        start: chrono::DateTime<chrono::FixedOffset>,
+        /// End of the window in RFC 3339 format.
+        #[arg(long)]
+        end: chrono::DateTime<chrono::FixedOffset>,
+        /// Navigator host.
+        #[arg(long)]
+        host: String,
+        /// Limit the read to these attorney addresses. Repeat the flag to name more than one.
+        #[arg(long = "attorney")]
+        attorneys: Vec<String>,
+    },
+    /// Exit non-zero when the window overlaps busy time or a required calendar is unreadable.
+    Check {
+        /// Project code. Omit to check the caller's Firms.
+        #[arg(long)]
+        project: Option<String>,
+        /// Start of the window in RFC 3339 format.
+        #[arg(long)]
+        start: chrono::DateTime<chrono::FixedOffset>,
+        /// End of the window in RFC 3339 format.
+        #[arg(long)]
+        end: chrono::DateTime<chrono::FixedOffset>,
+        /// Navigator host.
+        #[arg(long)]
+        host: String,
+        /// Limit the check to these attorney addresses.
+        #[arg(long = "attorney")]
+        attorneys: Vec<String>,
+    },
+    /// Report whether each attorney calendar can be read.
+    Access {
+        /// Project code. Omit for every attorney on the caller's Firms.
+        #[arg(long)]
+        project: Option<String>,
+        /// Navigator host.
+        #[arg(long)]
+        host: String,
+    },
+    /// Record the signed-in attorney's primary calendar, or an extra free/busy calendar.
+    Register {
+        /// Navigator host.
+        #[arg(long)]
+        host: String,
+        /// Calendar id. Omit to record the signed-in address as the primary calendar.
+        #[arg(long)]
+        calendar: Option<String>,
+        /// Record an extra free/busy calendar instead of the primary calendar.
+        #[arg(long)]
+        freebusy: bool,
     },
 }
 
@@ -382,17 +440,57 @@ fn run() -> ExitCode {
         Command::Relationship { action } => runtime().block_on(relationship_log::run(action)),
         Command::Glossary { action } => crate::glossary::run(action),
         Command::Site { action } => run_site(action),
-        Command::Calendar {
-            action:
-                CalendarCmd::Events {
-                    project,
-                    start,
-                    end,
-                    host,
-                },
-        } => runtime().block_on(crate::projects::calendar::events(
-            &host, &project, start, end,
-        )),
+        Command::Calendar { action } => match action {
+            CalendarCmd::Events {
+                project,
+                start,
+                end,
+                host,
+            } => runtime().block_on(crate::projects::calendar::events(
+                &host,
+                project.as_deref(),
+                start,
+                end,
+            )),
+            CalendarCmd::Freebusy {
+                project,
+                start,
+                end,
+                host,
+                attorneys,
+            } => runtime().block_on(crate::projects::calendar::freebusy(
+                &host,
+                project.as_deref(),
+                start,
+                end,
+                &attorneys,
+            )),
+            CalendarCmd::Check {
+                project,
+                start,
+                end,
+                host,
+                attorneys,
+            } => runtime().block_on(crate::projects::calendar::check(
+                &host,
+                project.as_deref(),
+                start,
+                end,
+                &attorneys,
+            )),
+            CalendarCmd::Access { project, host } => {
+                runtime().block_on(crate::projects::calendar::access(&host, project.as_deref()))
+            }
+            CalendarCmd::Register {
+                host,
+                calendar,
+                freebusy,
+            } => runtime().block_on(crate::projects::calendar::register(
+                &host,
+                calendar.as_deref(),
+                freebusy,
+            )),
+        },
     }
 }
 

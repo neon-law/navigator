@@ -2810,6 +2810,18 @@ async fn complete_sign_in(
     // the session cookie below.
     let landing = post_login_landing(role, return_to);
 
+    if role.is_lawyer_tier() {
+        if let Some(email) = claims.email.as_deref() {
+            if let Err(error) = store::attorney_calendars::record_sign_in(person_id, email).await {
+                tracing::warn!(
+                    error = %error,
+                    person_id = %person_id,
+                    "attorney calendar was not recorded"
+                );
+            }
+        }
+    }
+
     let mut session = SessionData::fresh(claims.sub, role);
     session.email = claims.email;
     session.person_id = Some(person_id);

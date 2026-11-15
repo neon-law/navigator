@@ -427,6 +427,31 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
         ),
         (
             "POST",
+            "/app/api/calendars/freebusy",
+            post(crate::attorney_calendars_api::freebusy_door),
+        ),
+        (
+            "POST",
+            "/app/api/calendars/events",
+            post(crate::attorney_calendars_api::events_door),
+        ),
+        (
+            "POST",
+            "/app/api/calendars/check",
+            post(crate::attorney_calendars_api::check_door),
+        ),
+        (
+            "POST",
+            "/app/api/calendars/access",
+            post(crate::attorney_calendars_api::access_door),
+        ),
+        (
+            "POST",
+            "/app/api/calendars/register",
+            post(crate::attorney_calendars_api::register_door),
+        ),
+        (
+            "POST",
             "/app/api/integrations/calendar/ensure",
             post(crate::integrations_api::calendar_ensure_door),
         ),
