@@ -4794,6 +4794,32 @@ async fn owner_nav_collapses_firm_and_brands_into_one_link() {
 }
 
 #[tokio::test]
+async fn owner_can_find_a_brand_by_its_website() {
+    let Some(c) = new_client_or_skip().await else {
+        return;
+    };
+    login_as_owner(&c).await;
+    c.goto(&format!("{}/app/owner/firms/move-brand", base_url()))
+        .await
+        .unwrap();
+
+    let search = c
+        .wait()
+        .for_element(Locator::Id("move-brand-search"))
+        .await
+        .unwrap();
+    search.send_keys("VESTAESTATEPLANNING.COM").await.unwrap();
+    c.wait()
+        .at_most(Duration::from_secs(10))
+        .for_element(Locator::Css(
+            "select[name=brand_key]:has(option[value=vesta]):not(:has(option[value=neon]))",
+        ))
+        .await
+        .expect("the picker includes Vesta and filters out other Brands");
+    c.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn a_client_sees_profile_but_never_the_owner_only_firm_link() {
     let Some(c) = new_client_or_skip().await else {
         return;
