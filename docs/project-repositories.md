@@ -56,11 +56,11 @@ to two codes; one separator keeps the mapping an equality check rather than a no
 folder (per-matter Drive folders are being retired; see [the glossary](glossary/project.md)), and
 `project.repository_url` itself remains a stored URL Navigator never composes from the code (above).
 
-`new` and `closed` are refused as Project codes. `/app/projects/new` is Navigator's matter-open form and
-`/app/projects/closed` is the closed-matters tab, so a Project coded `new` or `closed` would collide with one of those
-literal routes. Which side of a genuine collision wins depends on route registration order, so the code is refused
-rather than the precedence reasoned about — in `store::projects::is_valid_code` and in an `ASSERT` on `project.code`,
-because a Rust check only guards the write paths that call it.
+`new` and `closed` are refused as Project codes. `/app/projects/new` is Navigator's matter-open form, and links to
+`/app/projects/closed` (once the closed-matters tab) must never open a matter, so a Project coded `new` or `closed`
+would collide with one of those paths. Which side of a genuine collision wins depends on route registration order, so
+the code is refused rather than the precedence reasoned about — in `store::projects::is_valid_code` and in an `ASSERT`
+on `project.code`, because a Rust check only guards the write paths that call it.
 
 `navigator` is refused too, for a different reason: not a route collision but a repository one. Because the repository
 name *is* the code, a matter coded `navigator` in the Firm's own organization would name Navigator's own source rather

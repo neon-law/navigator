@@ -1,8 +1,9 @@
 Feature: /app/projects — the matter list, scoped per tier
 
-  The firm-side list opens on the current Brand and offers a Firm view.
-  Owners and Admins can see unassigned matters in that scope. Lawyers see
-  matters on their participation ledger.
+  The firm-side list shows every matter the reader may reach. Owners see
+  every matter, Admins see unassigned matters in the Firms they administer,
+  and Lawyers see matters on their participation ledger. A status filter
+  shows pitch and active matters by default.
 
   The status pill folds the "missing onboarding" signal in
   (`store::projects::matter_lifecycle`) rather than carrying a second,
@@ -41,7 +42,7 @@ Feature: /app/projects — the matter list, scoped per tier
     Then the response status is 200
     And the response body contains "active"
 
-  Scenario: A closed matter shows the closed pill and moves off the open tab
+  Scenario: A closed matter is off the default status filter
     Given a seeded person "nick@neonlaw.com" with role "admin"
     And a project "Wrapped Up Ventures LLC" with an onboarding document
     And a project "Wrapped Up Ventures LLC" is closed
@@ -49,7 +50,7 @@ Feature: /app/projects — the matter list, scoped per tier
     Then the response status is 200
     And the response body does not contain "Wrapped Up Ventures LLC"
 
-  Scenario: The closed tab shows a closed matter and the open tab hides it
+  Scenario: The closed status filter shows a closed matter
     Given a seeded person "nick@neonlaw.com" with role "admin"
     And a project "Concluded Matter LLC" with an onboarding document
     And a project "Concluded Matter LLC" is closed
@@ -58,7 +59,7 @@ Feature: /app/projects — the matter list, scoped per tier
     And the response body contains "Concluded Matter LLC"
     And the response body contains "closed"
 
-  Scenario: An archived matter stays off the open tab and stays on the closed tab
+  Scenario: An archived matter is off the default status filter
     Given a seeded person "nick@neonlaw.com" with role "admin"
     And a project "Retired Matter LLC" with an onboarding document
     And a project "Retired Matter LLC" is closed
@@ -67,7 +68,7 @@ Feature: /app/projects — the matter list, scoped per tier
     Then the response status is 200
     And the response body does not contain "Retired Matter LLC"
 
-  Scenario: The closed tab also carries an archived matter
+  Scenario: The closed status filter also carries an archived matter
     Given a seeded person "nick@neonlaw.com" with role "admin"
     And a project "Shelved Matter LLC" with an onboarding document
     And a project "Shelved Matter LLC" is closed

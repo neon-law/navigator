@@ -1,26 +1,22 @@
-//! Lawyer projects list as a Dioxus component (#641 Phase 3, projects cluster) —
-//! the lawyer workbench matter directory.
+//! The firm-side projects list at `/app/projects`: every matter the reader
+//! may reach, as code, name, Brand, and status.
 //!
-//! The successor to the `projects_index` render. A sortable table of matters,
-//! each row carrying its resolved entity name and the matter-lifecycle status
-//! pill (`store::projects::matter_lifecycle`, which itself folds in
-//! `store::projects::matter_flags`'s missing-onboarding signal — the pill is
-//! the one place that flag surfaces now; see [`get_project_list`]).
+//! The list carries only what a reader scans for. Entity, dates, and the last
+//! commit live on the matter's show page at `/app/projects/{code}`, which is
+//! where every row links.
 //!
-//! The active Brand or Firm narrows the directory after its role and
-//! participation checks. Every firm tier needs a firm-side participation row
-//! to open the matter surface at `/app/projects/{code}`.
-//! The resolved entity-name column and the pill are computed server-side, so
-//! all five sort columns (`code` / `name` / `status` / `entity_name` /
-//! `created_at`) sort in one in-memory composite comparator. The "Add project"
-//! control links to the `/app/projects/new` create page, which remains an
-//! Axum form route. A `Last commit` column is fixed (not sortable) and reads
-//! live from GitHub via [`last_committed_at`] — best-effort, degrading to an
-//! em dash rather than blocking the render.
+//! A Lawyer sees the matters they participate in firm-side. An Admin also
+//! sees every matter in a Firm they administer, including one nobody is on
+//! yet, and an Owner sees every matter (see [`accessible_projects`]). No Brand
+//! or Firm tab narrows the list.
 //!
-//! Two tabs, one list: `/app/projects` (Open, the default) and
-//! `/app/projects/closed` filter the same query by [`ProjectListScope`] —
-//! see `portal::dioxus_app::projects_router` / `projects_closed_router`.
+//! Listing a matter is not opening it. Every firm tier needs a firm-side
+//! participation row to open the matter surface at `/app/projects/{code}`.
+//!
+//! Status is the matter-lifecycle pill (`store::projects::matter_lifecycle`):
+//! `pitch`, `active`, or `closed`, with an archived matter reading `closed`.
+//! The `?status=` filter is a multi-select over those three, comma-separated;
+//! with no `?status=` the list shows `pitch` and `active`.
 
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -30,119 +26,118 @@ use crate::people::ViewerRole;
 #[cfg(feature = "server")]
 use crate::portal_project_list::PersonId;
 
-/// Which lifecycle lens the projects list renders: the open matters (the
-/// default, `/app/projects`) or the closed ones (`/app/projects/closed`).
-/// Set once per route mount via `Extension` — see
-/// `portal::dioxus_app::projects_router` / `projects_closed_router` — not
-/// derived from the URL inside the loader, so a direct hit on the generated
-/// `#[server]` endpoint still defaults to Open.
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ProjectListScope {
-    #[default]
-    Open,
-    Closed,
-}
+/// Every status the filter offers, in lifecycle order.
+pub const PROJECT_STATUSES: [&str; 3] = ["pitch", "active", "closed"];
 
-/// One matter row, in a wasm-safe shape (plain fields — no `store`/`SeaORM`
-/// types cross to the client build).
+/// The statuses selected when the request names none.
+pub const DEFAULT_PROJECT_STATUSES: [&str; 2] = ["pitch", "active"];
+
+/// The `?status=` value that selects no status. Any value the filter does
+/// not offer selects nothing, so this one only needs to be stable.
+const NO_STATUS: &str = "none";
+
+/// One matter row, in a wasm-safe shape (plain fields — no `store` types cross
+/// to the client build).
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct ProjectRow {
-    pub id: String,
     pub code: String,
     pub name: String,
-    pub status: String,
-    /// The resolved entity (matter owner) name; `?` when the FK does not resolve.
-    pub entity_name: String,
-    /// The house brand's storefront this matter was opened through, resolved
-    /// from `store::brands` to its display name — the raw key
-    /// (`store::projects::Project::brand`) when no live `brand` row matches,
-    /// which is the same defensive fallback `entity_name`'s `?` gives a
-    /// dangling FK rather than panicking the whole list over one row.
+    /// The Brand's display name, or the raw key when no `brand` row matches.
     pub brand_name: String,
-    /// `store::projects::Project::inserted_at` (RFC 3339) — when the matter
-    /// was opened.
-    pub created_at: String,
-    /// The committer date (RFC 3339) of the tip commit on the Project's
-    /// GitHub-hosted repository's default branch, fetched live from
-    /// `cloud::forge::ForgeService::head_commit_committed_at` on every
-    /// render. `None` when the matter has no repository, its repository is
-    /// not under this deployment's configured GitHub organization, or the
-    /// live fetch failed — a missing value is not distinguished from an
-    /// unreachable one, since neither is actionable from this list.
-    pub last_committed_at: Option<String>,
-    /// A `closed` matter with no offboarding letter on file — surfaced as a
-    /// warning badge. (The matching "missing onboarding" signal already has a
-    /// home: the `lifecycle_*` fields below fold it into the status pill
-    /// instead of a second badge, since an open matter missing onboarding
-    /// and an open matter needing onboarding were always the same fact.)
-    pub missing_offboarding_letter: bool,
-    /// `store::projects::MatterLifecycle::class()` for this row — the
-    /// yellow/green/red indicator's CSS class. Computed server-side since
-    /// `MatterLifecycle` is not a wasm-safe type.
+    /// `store::projects::MatterLifecycle::class()` — the pill's CSS class.
     pub lifecycle_class: String,
-    /// `store::projects::MatterLifecycle::label()` for this row — the text
-    /// label that accompanies the colour, so the state never rests on colour
-    /// alone.
+    /// `store::projects::MatterLifecycle::label()` — the status the filter
+    /// matches and the pill's text, so the state never rests on colour alone.
     pub lifecycle_label: String,
-    /// `store::projects::MatterLifecycle::title()` for this row — the hover
-    /// and assistive text stating what the indicator did and did not verify.
+    /// `store::projects::MatterLifecycle::title()` — the hover and assistive
+    /// text stating what the pill did and did not verify.
     pub lifecycle_title: String,
 }
 
-/// The rendered lawyer projects list: the rows, the active `?sort=`, and the
-/// viewer's tier (for the nav chrome).
+/// The rendered projects list.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
 pub struct ProjectListView {
     pub rows: Vec<ProjectRow>,
     pub sort: String,
     pub role: ViewerRole,
-    /// Which tab this render answers — Open (`/app/projects`) or Closed
-    /// (`/app/projects/closed`) — so the page highlights the active tab and
-    /// keeps sort links on the same tab.
-    #[serde(default)]
-    pub scope: ProjectListScope,
-    /// The deploy's brand mark for the navbar. `None` when the mounted brand
-    /// configures none.
+    /// The selected statuses, in [`PROJECT_STATUSES`] order.
+    pub statuses: Vec<String>,
+    /// The deploy's brand mark for the navbar.
     #[serde(default)]
     pub logo: Option<crate::components::AppLogo>,
-    /// The resolved brand's tokens stylesheet href, so the page wears
-    /// its own palette rather than the firm's on a non-default host.
+    /// The resolved brand's tokens stylesheet href.
     #[serde(default)]
     pub tokens_href: String,
-    /// The `?error=` flash surfaced above the table — set when a matter delete
-    /// or a participation removal is refused (dependents still reference the
-    /// matter, or the lawyer-DRI lockout) and the handler redirects back here.
-    /// `None` on a plain visit.
+    /// The `?error=` flash a refused matter delete redirects back with.
     #[serde(default)]
     pub error: Option<String>,
-    /// The deploy's firm name, for the document title. Resolved from the
-    /// request-scoped branding rather than written into the copy, so a
-    /// white-label deploy's tab reads its own name.
+    /// The deploy's firm name, for the document title.
     #[serde(default)]
     pub firm_name: String,
-    pub brand: Option<String>,
-    pub host_brand: String,
-    pub brands: Vec<(String, String)>,
 }
 
-/// The projects list `?sort=` query, plus the `?error=` flash a refused delete
-/// redirects back with.
+/// The projects list query.
 #[derive(Deserialize, Default)]
 pub struct ProjectListQuery {
     #[serde(default)]
     pub sort: Option<String>,
-    pub brand: Option<String>,
-    pub firm: Option<bool>,
+    #[serde(default)]
+    pub status: Option<String>,
     #[serde(default)]
     pub error: Option<String>,
 }
 
-/// Turn a loader query failure into a `ServerFnError`, committing a real `500`
-/// first so an unavailable matter directory is reported as a server error
-/// rather than a `200` with an error body — the explicit server error the
-/// retired `projects_index` handler returned. `use_server_future` still
-/// renders the error branch, now under the committed status (the status commits
-/// before the initial chunk, exactly as the `person_show`/`entity_edit` 404s do).
+/// The statuses a `?status=` value selects, in [`PROJECT_STATUSES`] order.
+#[must_use]
+pub fn selected_statuses(raw: Option<&str>) -> Vec<String> {
+    let Some(raw) = raw else {
+        return DEFAULT_PROJECT_STATUSES.map(str::to_string).to_vec();
+    };
+    PROJECT_STATUSES
+        .iter()
+        .filter(|status| {
+            raw.split(',')
+                .any(|value| value.trim().eq_ignore_ascii_case(status))
+        })
+        .map(|status| (*status).to_string())
+        .collect()
+}
+
+/// `selected` with `status` added or removed, in [`PROJECT_STATUSES`] order.
+fn toggle_status(selected: &[String], status: &str) -> Vec<String> {
+    PROJECT_STATUSES
+        .iter()
+        .filter(|candidate| (**candidate == status) != selected.iter().any(|s| s == *candidate))
+        .map(|candidate| (*candidate).to_string())
+        .collect()
+}
+
+/// The query pairs that carry `selected`: none for the default selection.
+fn status_query(selected: &[String]) -> Vec<(String, String)> {
+    if selected
+        .iter()
+        .map(String::as_str)
+        .eq(DEFAULT_PROJECT_STATUSES)
+    {
+        Vec::new()
+    } else if selected.is_empty() {
+        vec![("status".to_string(), NO_STATUS.to_string())]
+    } else {
+        vec![("status".to_string(), selected.join(","))]
+    }
+}
+
+/// The list's href for `query`, keeping the current sort.
+fn list_href(sort: &str, query: &[(String, String)]) -> String {
+    if query.is_empty() && sort.is_empty() {
+        "/app/projects".to_string()
+    } else {
+        crate::components::data_table::sort_href("/app/projects", sort, query)
+    }
+}
+
+/// Commit a `500` before failing the loader, so an unavailable directory is a
+/// server error rather than a `200` with an error body.
 #[cfg(feature = "server")]
 fn loader_error(e: impl std::fmt::Display) -> ServerFnError {
     dioxus_fullstack_core::FullstackContext::commit_http_status(
@@ -152,7 +147,7 @@ fn loader_error(e: impl std::fmt::Display) -> ServerFnError {
     ServerFnError::new(e.to_string())
 }
 
-/// Parse a JSON:API `sort` value into `(key, descending)` pairs. Server-only.
+/// Parse a JSON:API `sort` value into `(key, descending)` pairs.
 #[cfg(feature = "server")]
 fn parse_sort(raw: &str) -> Vec<(String, bool)> {
     raw.split(',')
@@ -165,90 +160,11 @@ fn parse_sort(raw: &str) -> Vec<(String, bool)> {
         .collect()
 }
 
-/// Build one rendered row from a matter and its lifecycle facts: the two
-/// diligence flags ([`store::projects::matter_flags`]) plus the yellow/green/red
-/// indicator ([`store::projects::matter_lifecycle`]) they feed.
+/// One composite comparator: the first requested `?sort=` field is primary
+/// and later fields only break ties (the JSON:API `SortSpec` contract).
 #[cfg(feature = "server")]
-fn project_row(
-    entity_name: String,
-    brand_name: String,
-    m: store::projects::Project,
-    has_engagement: bool,
-    has_closing: bool,
-    last_committed_at: Option<String>,
-) -> ProjectRow {
-    let (missing_onboarding, missing_offboarding_letter) =
-        store::projects::matter_flags(has_engagement, &m.status, has_closing);
-    let lifecycle = store::projects::matter_lifecycle(
-        &m.status,
-        missing_onboarding,
-        missing_offboarding_letter,
-    );
-    ProjectRow {
-        entity_name,
-        brand_name,
-        id: m.id.to_string(),
-        code: m.code,
-        name: m.name,
-        created_at: m.inserted_at,
-        last_committed_at,
-        status: m.status,
-        missing_offboarding_letter,
-        lifecycle_class: lifecycle.class().to_string(),
-        lifecycle_label: lifecycle.label().to_string(),
-        lifecycle_title: lifecycle.title().to_string(),
-    }
-}
-
-/// Read the injected [`ProjectListScope`] extension, defaulting to Open when
-/// the request carried none (a direct hit on the generated `#[server]`
-/// endpoint need not run behind either route mount's layer).
-#[cfg(feature = "server")]
-async fn injected_projects_scope() -> ProjectListScope {
-    dioxus_fullstack_core::FullstackContext::extract::<axum::Extension<ProjectListScope>, _>()
-        .await
-        .map(|axum::Extension(scope)| scope)
-        .unwrap_or_default()
-}
-
-/// Every brand key a Project may carry, system-wide and Firm-scoped alike —
-/// unscoped by viewer role, unlike `store::brands::visible_for_actor`: a
-/// Lawyer reading the projects list is already authorized to see the matter,
-/// and a brand's name here is display data, not the `/app/admin/brands`
-/// management surface that access check guards.
-#[cfg(feature = "server")]
-async fn all_brands_for_display(
-    surreal: &store::surreal::SurrealDb,
-) -> Result<Vec<store::brands::Brand>, store::brands::BrandError> {
-    let mut brands = store::brands::system_wide(surreal).await?;
-    brands.extend(store::brands::all_firm_scoped(surreal).await?);
-    Ok(brands)
-}
-
-/// Resolve a Project's raw brand key to its display name, falling back to the
-/// key itself on drift — the same defensive posture `entity_name`'s `?` takes
-/// for a dangling FK, kept as a plain function (rather than a closure built in
-/// `get_project_list`) so that function stays under clippy's line budget.
-#[cfg(feature = "server")]
-fn resolve_brand_name(brands: &[store::brands::Brand], key: &str) -> String {
-    brands
-        .iter()
-        .find(|b| b.key == key)
-        .map_or(key, |b| b.name.as_str())
-        .to_string()
-}
-
-/// One composite comparator so the first requested `?sort=` field is primary
-/// and later fields only break ties (the JSON:API `SortSpec` precedence
-/// contract).
-#[cfg(feature = "server")]
-fn sort_matters(
-    matters: &mut [store::projects::Project],
-    parsed: &[(String, bool)],
-    by_entity: impl Fn(uuid::Uuid) -> String,
-    by_brand: impl Fn(&str) -> String,
-) {
-    matters.sort_by(|a, b| {
+fn sort_rows(rows: &mut [ProjectRow], parsed: &[(String, bool)]) {
+    rows.sort_by(|a, b| {
         parsed
             .iter()
             .fold(std::cmp::Ordering::Equal, |acc, (key, descending)| {
@@ -256,10 +172,8 @@ fn sort_matters(
                     let ordering = match key.as_str() {
                         "code" => a.code.cmp(&b.code),
                         "name" => a.name.cmp(&b.name),
-                        "status" => a.status.cmp(&b.status),
-                        "entity_name" => by_entity(a.entity_id).cmp(&by_entity(b.entity_id)),
-                        "brand" => by_brand(&a.brand).cmp(&by_brand(&b.brand)),
-                        "created_at" => a.inserted_at.cmp(&b.inserted_at),
+                        "status" => a.lifecycle_label.cmp(&b.lifecycle_label),
+                        "brand" => a.brand_name.cmp(&b.brand_name),
                         _ => std::cmp::Ordering::Equal,
                     };
                     if *descending {
@@ -272,117 +186,88 @@ fn sort_matters(
     });
 }
 
-/// Every matter's live [`last_committed_at`], fetched concurrently so N rows
-/// cost one round trip's latency, not N. Missing forge configuration is a
-/// skip, not an error — the same rule `project_surfaces::reconcile_from_env`
-/// applies to the same forge.
+/// Build one row. An archived matter is as finished as a closed one, so it
+/// reads `closed`.
 #[cfg(feature = "server")]
-async fn fetch_last_committed_ats(matters: &[store::projects::Project]) -> Vec<Option<String>> {
-    let forge = cloud::forge::GitHubForge::from_env().ok();
-    let workspace = cloud::workspace::WorkspaceConfig::from_env().ok();
-    futures::future::join_all(matters.iter().map(|m| {
-        let forge = forge.as_ref();
-        let workspace = workspace.as_ref();
-        async move { last_committed_at(forge, workspace, m).await }
-    }))
-    .await
-}
-
-/// The Project's live HEAD commit's committer date, best-effort: `None` when
-/// the matter has no `repository_url`, when that URL is not this
-/// deployment's own GitHub organization (an external or manually-entered
-/// forge is not reachable through the deployment's configured token), or when
-/// the live fetch itself fails. A per-row forge fault degrades the column,
-/// not the whole list.
-#[cfg(feature = "server")]
-async fn last_committed_at(
-    forge: Option<&cloud::forge::GitHubForge>,
-    workspace: Option<&cloud::workspace::WorkspaceConfig>,
-    project: &store::projects::Project,
-) -> Option<String> {
-    use cloud::forge::ForgeService;
-
-    let forge = forge?;
-    let workspace = workspace?;
-    let repository_url = project.repository_url.as_deref()?;
-    if repository_url != workspace.expected_repository_url(&project.code) {
-        return None;
-    }
-    forge.head_commit_committed_at(&project.code).await.ok()?
-}
-
-#[cfg(feature = "server")]
-struct ProjectBrandScope {
-    host_brand: String,
-    brand: Option<String>,
-    firm_keys: Vec<String>,
-}
-
-#[cfg(feature = "server")]
-impl ProjectBrandScope {
-    fn choices(&self, brands: &[store::brands::Brand]) -> Vec<(String, String)> {
-        self.firm_keys
-            .iter()
-            .map(|key| (key.clone(), resolve_brand_name(brands, key)))
-            .collect()
+fn project_row(
+    brand_name: String,
+    m: store::projects::Project,
+    has_engagement: bool,
+    has_closing: bool,
+) -> ProjectRow {
+    let status = if m.status.eq_ignore_ascii_case("archived") {
+        "closed"
+    } else {
+        m.status.as_str()
+    };
+    let (missing_onboarding, missing_offboarding_letter) =
+        store::projects::matter_flags(has_engagement, status, has_closing);
+    let lifecycle =
+        store::projects::matter_lifecycle(status, missing_onboarding, missing_offboarding_letter);
+    ProjectRow {
+        brand_name,
+        code: m.code,
+        name: m.name,
+        lifecycle_class: lifecycle.class().to_string(),
+        lifecycle_label: lifecycle.label().to_string(),
+        lifecycle_title: lifecycle.title().to_string(),
     }
 }
 
+/// The matters the reader may reach from this list. An Owner holds every Firm
+/// capability, so every matter. An Admin also assigns people to matters
+/// nobody is on yet, so every matter in a Firm whose membership they administer, and every
+/// matter no Firm owns. Everyone else sees the matters they participate in
+/// firm-side.
 #[cfg(feature = "server")]
-async fn scope_project_list(
+async fn accessible_projects(
     surreal: &store::surreal::SurrealDb,
-    matters: &mut Vec<store::projects::Project>,
-    requested_brand: Option<String>,
-    firm: Option<bool>,
-) -> Result<ProjectBrandScope, ServerFnError> {
-    let host_brand = crate::app_chrome::request_brand().await;
-    let host_key = host_brand.as_str();
-    let firm_id = store::firms::firm_id_for_brand_key(surreal, host_key)
+    person_id: Option<uuid::Uuid>,
+    role: store::persons::Role,
+) -> Result<Vec<store::projects::Project>, ServerFnError> {
+    use store::persons::Role;
+
+    if role == Role::Owner {
+        return store::projects::all(surreal).await.map_err(loader_error);
+    }
+    let mut matters = store::access::visible_projects_as_lawyer(surreal, person_id, role)
         .await
         .map_err(loader_error)?;
-    let firm_keys = if let Some(id) = firm_id {
-        store::firms::brand_keys_for_firm(surreal, id)
+    if role != Role::Admin {
+        return Ok(matters);
+    }
+    let mut administered = std::collections::HashMap::new();
+    for project in store::projects::all(surreal).await.map_err(loader_error)? {
+        if matters.iter().any(|m| m.id == project.id) {
+            continue;
+        }
+        let Some(firm_id) = project.firm_id else {
+            matters.push(project);
+            continue;
+        };
+        if let std::collections::hash_map::Entry::Vacant(entry) = administered.entry(firm_id) {
+            let decision = store::firm_capability::resolve(
+                surreal,
+                role,
+                person_id,
+                firm_id,
+                store::firm_capability::FirmCapability::ManageMembership,
+            )
             .await
-            .map_err(loader_error)?
-    } else {
-        vec![host_key.to_string()]
-    };
-    let brand = if firm == Some(true) {
-        None
-    } else {
-        Some(
-            requested_brand
-                .filter(|key| firm_keys.contains(key))
-                .unwrap_or_else(|| host_key.to_string()),
-        )
-    };
-    matters.retain(|project| {
-        let in_firm = project.firm_id.map_or_else(
-            || firm_keys.contains(&project.brand),
-            |id| Some(id) == firm_id,
-        );
-        in_firm && brand.as_ref().is_none_or(|key| &project.brand == key)
-    });
-    Ok(ProjectBrandScope {
-        host_brand: host_key.to_string(),
-        brand,
-        firm_keys,
-    })
+            .map_err(loader_error)?;
+            entry.insert(decision.is_allowed());
+        }
+        if administered[&firm_id] {
+            matters.push(project);
+        }
+    }
+    Ok(matters)
 }
 
-/// Fetch the lawyer projects list for the current request: refuse non-lawyer,
-/// resolve each matter's entity name and lifecycle badge, and sort in memory
-/// (one composite comparator so the first requested `?sort=` field is
-/// primary). The lifecycle lookup errors propagate rather than badging every
-/// matter as missing its onboarding.
-///
+/// Fetch the projects list for the current request. A non-firm caller gets a
+/// `404`: the directory is hidden from them, not merely refused.
 #[server]
 pub async fn get_project_list() -> Result<ProjectListView, ServerFnError> {
-    // A non-lawyer caller (client / clerk) gets the `projects_index` handler's
-    // 404, not the generated `#[server]` endpoint's default 200 error state — the
-    // lawyer workbench is hidden from them, not merely refused. `require_lawyer`
-    // returns `Err` without a status, so gate here and commit the 404 explicitly
-    // (exactly as `loader_error` commits its 500).
     let role = dioxus_fullstack_core::FullstackContext::extract::<axum::Extension<ViewerRole>, _>()
         .await
         .map(|axum::Extension(role)| role)
@@ -400,17 +285,13 @@ pub async fn get_project_list() -> Result<ProjectListView, ServerFnError> {
             .map(|axum::Extension(id)| id)
             .unwrap_or_default();
     let person_id = person_id.and_then(|raw| raw.parse::<uuid::Uuid>().ok());
-    let scope = injected_projects_scope().await;
     let axum::extract::Query(query) = dioxus_fullstack_core::FullstackContext::extract::<
         axum::extract::Query<ProjectListQuery>,
         _,
     >()
     .await?;
     let sort = query.sort.unwrap_or_default();
-    let parsed = parse_sort(&sort);
-
-    // The scoped lawyer-lens read below takes a store role; map the injected
-    // wasm-safe tier back to it.
+    let statuses = selected_statuses(query.status.as_deref());
     let store_role = match role {
         ViewerRole::Owner => store::persons::Role::Owner,
         ViewerRole::Admin => store::persons::Role::Admin,
@@ -420,93 +301,51 @@ pub async fn get_project_list() -> Result<ProjectListView, ServerFnError> {
     };
 
     let surreal = consume_context::<store::surreal::SurrealDb>();
-    let mut matters = if role.is_admin_tier() {
-        store::projects::all(&surreal).await.map_err(loader_error)?
-    } else {
-        store::access::visible_projects_as_lawyer(&surreal, person_id, store_role)
-            .await
-            .map_err(loader_error)?
-    };
-
-    let brand_scope = scope_project_list(&surreal, &mut matters, query.brand, query.firm).await?;
-
-    // The tab is the filter: Open hides every terminal matter (the common
-    // case — a firm tier working the docket does not want every inactive
-    // matter of the deployment's history in the way), Closed shows only
-    // them. "Terminal" is both lifecycle end states `store::projects`
-    // documents (`open` → `closed` → `archived`, reachable via
-    // `store::projects::Transition`), not just `closed` — an archived
-    // matter is exactly as inactive as a closed one, so it belongs on the
-    // same tab rather than being invisible from both.
-    matters.retain(|m| {
-        let is_terminal =
-            m.status.eq_ignore_ascii_case("closed") || m.status.eq_ignore_ascii_case("archived");
-        match scope {
-            ProjectListScope::Open => !is_terminal,
-            ProjectListScope::Closed => is_terminal,
-        }
-    });
-
-    let entities = store::entities::all(&surreal).await.map_err(loader_error)?;
-    let by_entity = |id: uuid::Uuid| {
-        entities
-            .iter()
-            .find(|e| e.id == id)
-            .map_or("?", |e| e.name.as_str())
-            .to_string()
-    };
-
-    let brands = all_brands_for_display(&surreal)
+    let matters = accessible_projects(&surreal, person_id, store_role).await?;
+    let mut brands = store::brands::system_wide(&surreal)
         .await
         .map_err(loader_error)?;
-    let by_brand = |key: &str| resolve_brand_name(&brands, key);
-
-    // Lifecycle badges: two batched queries. A failed lookup propagates rather
-    // than collapsing to "no engagement" and badging every matter falsely.
+    brands.extend(
+        store::brands::all_firm_scoped(&surreal)
+            .await
+            .map_err(loader_error)?,
+    );
+    // A failed lifecycle lookup propagates rather than badging every matter
+    // as a pitch.
     let (has_engagement, has_closing) = store::projects::matter_lifecycle_sets(&surreal, &matters)
         .await
         .map_err(loader_error)?;
 
-    sort_matters(&mut matters, &parsed, by_entity, by_brand);
-    let last_committed_ats = fetch_last_committed_ats(&matters).await;
-
-    let rows = matters
+    let mut rows: Vec<ProjectRow> = matters
         .into_iter()
-        .zip(last_committed_ats)
-        .map(|(m, last_committed_at)| {
-            let entity_name = by_entity(m.entity_id);
-            let brand_name = by_brand(&m.brand);
+        .map(|m| {
+            let brand_name = brands
+                .iter()
+                .find(|b| b.key == m.brand)
+                .map_or(m.brand.as_str(), |b| b.name.as_str())
+                .to_string();
             let has_eng = has_engagement.contains(&m.id);
             let has_close = has_closing.contains(&m.id);
-            project_row(
-                entity_name,
-                brand_name,
-                m,
-                has_eng,
-                has_close,
-                last_committed_at,
-            )
+            project_row(brand_name, m, has_eng, has_close)
         })
+        .filter(|row| statuses.contains(&row.lifecycle_label))
         .collect();
+    sort_rows(&mut rows, &parse_sort(&sort));
 
     Ok(ProjectListView {
         firm_name: crate::app_chrome::firm_name_from_context().await,
         rows,
-        brands: brand_scope.choices(&brands),
-        brand: brand_scope.brand,
-        host_brand: brand_scope.host_brand,
         sort,
         role,
-        scope,
+        statuses,
         logo: crate::app_chrome::app_logo_from_context().await,
         tokens_href: crate::app_chrome::app_tokens_href_from_context().await,
         error: query.error.filter(|message| !message.is_empty()),
     })
 }
 
-/// The lawyer projects list. Server-side rendered with the sorted rows already in
-/// the markup; the sort headers are real anchors, each row links to the matter
-/// detail, and the lifecycle warnings render as badges.
+/// The firm-side projects list: server-rendered rows, sort headers and status
+/// toggles as real anchors, each row linking to the matter's show page.
 #[component]
 pub fn LawyerProjects() -> Element {
     let resource = use_server_future(get_project_list)?;
@@ -526,51 +365,23 @@ pub fn LawyerProjects() -> Element {
     };
 
     let sort = SortState::parse(Some(&view.sort));
-    let is_closed_tab = view.scope == ProjectListScope::Closed;
-    let base_path = if is_closed_tab {
-        "/app/projects/closed"
-    } else {
-        "/app/projects"
-    };
-    let scope_query = |brand: Option<&str>| match brand {
-        Some(key) if key == view.host_brand => Vec::new(),
-        Some(key) => vec![("brand".to_string(), key.to_string())],
-        None => vec![("firm".to_string(), "true".to_string())],
-    };
-    let extra_query = scope_query(view.brand.as_deref());
-    let list_href = |path: &str, query: &[(String, String)]| {
-        if query.is_empty() && view.sort.is_empty() {
-            path.to_string()
-        } else {
-            crate::components::data_table::sort_href(path, &view.sort, query)
-        }
-    };
-    let open_href = list_href("/app/projects", &extra_query);
-    let closed_href = list_href("/app/projects/closed", &extra_query);
-    let firm_href = list_href(base_path, &scope_query(None));
-    let open_tab_class = if is_closed_tab {
-        "nav-tab"
-    } else {
-        "nav-tab is-active"
-    };
-    let closed_tab_class = if is_closed_tab {
-        "nav-tab is-active"
-    } else {
-        "nav-tab"
-    };
-    let empty_message = if is_closed_tab {
-        "No closed projects."
-    } else {
-        "No projects yet."
-    };
+    let extra_query = status_query(&view.statuses);
+    let toggles: Vec<(&str, bool, String)> = PROJECT_STATUSES
+        .iter()
+        .map(|status| {
+            let selected = view.statuses.iter().any(|s| s == status);
+            let href = list_href(
+                &view.sort,
+                &status_query(&toggle_status(&view.statuses, status)),
+            );
+            (*status, selected, href)
+        })
+        .collect();
     let columns = vec![
         Column::sortable("code", "Code"),
         Column::sortable("name", "Name"),
-        Column::sortable("status", "Status"),
-        Column::sortable("entity_name", "Entity"),
         Column::sortable("brand", "Brand"),
-        Column::sortable("created_at", "Created"),
-        Column::fixed("last_committed_at", "Last commit"),
+        Column::sortable("status", "Status"),
     ];
     let error = view.error.clone();
     let is_empty = view.rows.is_empty();
@@ -588,36 +399,30 @@ pub fn LawyerProjects() -> Element {
                 h1 { "Projects" }
                 p { a { class: "nav-btn nav-btn--primary", href: "/app/projects/new", "Add project" } }
             }
-            nav { class: "nav-tabs", aria_label: "Project scope",
-                a { class: if view.brand.is_none() { "nav-tab is-active" } else { "nav-tab" },
-                    href: "{firm_href}", "Firm" }
-                for (key, name) in &view.brands {
-                    a { key: "{key}",
-                        class: if view.brand.as_ref() == Some(key) { "nav-tab is-active" } else { "nav-tab" },
-                        href: list_href(base_path, &scope_query(Some(key))),
-                        "{name}"
+            nav { class: "nav-tabs", aria_label: "Project status",
+                for (status, selected, href) in toggles {
+                    a { key: "{status}",
+                        class: if selected { "nav-tab is-active" } else { "nav-tab" },
+                        href: "{href}",
+                        "data-status": "{status}",
+                        "aria-current": if selected { "true" } else { "false" },
+                        "{status}"
                     }
                 }
-            }
-            nav { class: "nav-tabs", aria_label: "Project status",
-                a { class: "{open_tab_class}", href: "{open_href}", "Open" }
-                a { class: "{closed_tab_class}", href: "{closed_href}", "Closed" }
             }
             if let Some(error) = error.as_ref() {
                 p { class: "nav-form-error", role: "alert", "{error}" }
             }
             if is_empty {
                 p { class: "projects-empty",
-                    "{empty_message} "
-                    if !is_closed_tab {
-                        a { href: "/app/projects/new", "Add the first." }
-                    }
+                    "No projects match. "
+                    a { href: "/app/projects/new", "Add a project." }
                 }
             } else {
                 DataTable {
                     columns,
                     sort,
-                    base_path: base_path.to_string(),
+                    base_path: "/app/projects".to_string(),
                     extra_query,
                     for row in view.rows.iter() {
                         tr { class: "project-row",
@@ -630,16 +435,8 @@ pub fn LawyerProjects() -> Element {
                                     "{row.code}"
                                 }
                             }
-                            td { class: "project-name",
-                                "{row.name}"
-                                if row.missing_offboarding_letter {
-                                    " "
-                                    span { class: "matter-flag",
-                                        title: "This closed project has no offboarding letter on file.",
-                                        "no offboarding letter"
-                                    }
-                                }
-                            }
+                            td { class: "project-name", "{row.name}" }
+                            td { class: "project-brand", "{row.brand_name}" }
                             td { class: "project-status",
                                 span {
                                     class: "{row.lifecycle_class}",
@@ -647,16 +444,47 @@ pub fn LawyerProjects() -> Element {
                                     "{row.lifecycle_label}"
                                 }
                             }
-                            td { class: "project-entity", "{row.entity_name}" }
-                            td { class: "project-brand", "{row.brand_name}" }
-                            td { class: "project-created-at", "{row.created_at}" }
-                            td { class: "project-last-committed-at",
-                                {row.last_committed_at.clone().unwrap_or_else(|| "—".to_string())}
-                            }
                         }
                     }
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn owned(statuses: &[&str]) -> Vec<String> {
+        statuses.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn no_status_query_selects_pitch_and_active() {
+        assert_eq!(selected_statuses(None), owned(&["pitch", "active"]));
+    }
+
+    #[test]
+    fn status_query_is_case_insensitive_canonically_ordered_and_ignores_unknowns() {
+        assert_eq!(
+            selected_statuses(Some("Closed, pitch,bogus")),
+            owned(&["pitch", "closed"])
+        );
+        assert!(selected_statuses(Some(NO_STATUS)).is_empty());
+    }
+
+    #[test]
+    fn toggling_round_trips_through_the_query() {
+        let default = selected_statuses(None);
+        let with_closed = toggle_status(&default, "closed");
+        assert_eq!(with_closed, owned(&["pitch", "active", "closed"]));
+        assert_eq!(
+            status_query(&with_closed),
+            vec![("status".to_string(), "pitch,active,closed".to_string())]
+        );
+        assert!(status_query(&toggle_status(&with_closed, "closed")).is_empty());
+        let none = toggle_status(&owned(&["active"]), "active");
+        assert_eq!(selected_statuses(Some(&status_query(&none)[0].1)), none);
     }
 }

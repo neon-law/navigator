@@ -9230,28 +9230,33 @@ async fn lawyer_projects_list_links_each_row_to_detail_page() {
     );
 }
 
-/// `/app/projects` defaults to the Open tab and hides closed matters; the
-/// `/app/projects/closed` sibling shows only them. Two tabs of one list, not
-/// two separate surfaces — see `webapp::project_list::ProjectListScope`.
+/// `/app/projects` shows pitch and active matters by default. The status
+/// filter is a multi-select: `?status=closed` shows only the finished matters,
+/// and an archived matter reads `closed`.
 #[tokio::test]
-async fn lawyer_projects_list_hides_closed_by_default_and_the_closed_tab_shows_them() {
+async fn lawyer_projects_list_defaults_to_pitch_and_active_and_filters_by_status() {
     let (state, surreal) = state_with_engines().await;
     let (open_id, lawyer, cookie, _csrf) = lawyer_project_fixture(&surreal).await;
-    let closed_project = store::projects::create(
-        &surreal,
-        &store::projects::NewProject {
-            code: format!("closed-fixture-{}", uuid::Uuid::now_v7()),
-            name: "Estate of a Retired Matter".into(),
-            status: "closed".into(),
-            entity_id: store::test_support::seed_entity(&surreal).await,
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-    store::projects::add_participation(&surreal, closed_project.id, lawyer.id, "lawyer")
+    for (status, name) in [
+        ("closed", "Estate of a Retired Matter"),
+        ("archived", "Wound-Down Matter"),
+    ] {
+        let project = store::projects::create(
+            &surreal,
+            &store::projects::NewProject {
+                code: format!("{status}-fixture-{}", uuid::Uuid::now_v7()),
+                name: name.into(),
+                status: status.into(),
+                entity_id: store::test_support::seed_entity(&surreal).await,
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
+        store::projects::add_participation(&surreal, project.id, lawyer.id, "lawyer")
+            .await
+            .unwrap();
+    }
     let open_name = store::projects::find_by_id(&surreal, open_id)
         .await
         .unwrap()
@@ -9259,144 +9264,79 @@ async fn lawyer_projects_list_hides_closed_by_default_and_the_closed_tab_shows_t
         .name;
 
     let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
-
-    let open_tab = app
-        .clone()
-        .oneshot(
+    let get = |uri: &'static str| {
+        app.clone().oneshot(
             Request::builder()
-                .uri("/app/projects")
+                .uri(uri)
                 .header(header::COOKIE, cookie.clone())
                 .body(Body::empty())
                 .unwrap(),
         )
-        .await
-        .unwrap();
-    assert_eq!(open_tab.status(), StatusCode::OK);
-    let open_body = body_string(open_tab).await;
-    assert!(open_body.contains(&open_name), "{open_body}");
+    };
+
+    let default = get("/app/projects").await.unwrap();
+    assert_eq!(default.status(), StatusCode::OK);
+    let body = body_string(default).await;
+    assert!(body.contains(&open_name), "{body}");
+    assert!(!body.contains("Estate of a Retired Matter"), "{body}");
+    assert!(!body.contains("Wound-Down Matter"), "{body}");
+    for (status, selected) in [("pitch", true), ("active", true), ("closed", false)] {
+        assert!(
+            body.contains(&format!(
+                r#"data-status="{status}" aria-current="{selected}" "#
+            )),
+            "{status} selected: {selected}: {body}"
+        );
+    }
     assert!(
-        !open_body.contains("Estate of a Retired Matter"),
-        "the Open tab must hide a closed matter by default: {open_body}"
-    );
-    assert!(
-        open_body.contains(r#"href="/app/projects/closed""#),
-        "the Open tab must link to the Closed tab: {open_body}"
+        body.contains(r#"href="/app/projects?status=pitch,active,closed"#),
+        "the closed toggle adds closed to the selection: {body}"
     );
 
-    let closed_tab = app
-        .oneshot(
-            Request::builder()
-                .uri("/app/projects/closed")
-                .header(header::COOKIE, cookie)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(closed_tab.status(), StatusCode::OK);
-    let closed_body = body_string(closed_tab).await;
-    assert!(
-        closed_body.contains("Estate of a Retired Matter"),
-        "{closed_body}"
-    );
-    assert!(
-        !closed_body.contains(&open_name),
-        "the Closed tab must not show an open matter: {closed_body}"
-    );
-    assert!(closed_body.contains("nav-tab is-active"), "{closed_body}");
+    let closed = get("/app/projects?status=closed").await.unwrap();
+    assert_eq!(closed.status(), StatusCode::OK);
+    let body = body_string(closed).await;
+    assert!(body.contains("Estate of a Retired Matter"), "{body}");
+    assert!(body.contains("Wound-Down Matter"), "{body}");
+    assert!(!body.contains(&open_name), "{body}");
 }
 
-/// `archived` is the lifecycle's second terminal state
-/// (`store::projects::Transition::Archive`), reached from `closed` rather
-/// than from `open` — as inactive as a closed matter, so it must land on the
-/// Closed tab too rather than sitting invisibly in neither tab.
+/// The list carries code, name, Brand, and status only; the matter's show
+/// page carries when it was opened and its last commit, labelled in UTC. The
+/// last commit degrades to an em dash when no GitHub forge is configured (the
+/// case in every test process).
 #[tokio::test]
-async fn lawyer_projects_list_treats_an_archived_matter_as_closed() {
+async fn lawyer_project_show_page_carries_opened_and_last_commit_in_utc() {
     let (state, surreal) = state_with_engines().await;
-    let (_open_id, lawyer, cookie, _csrf) = lawyer_project_fixture(&surreal).await;
-    let archived_project = store::projects::create(
-        &surreal,
-        &store::projects::NewProject {
-            code: format!("archived-fixture-{}", uuid::Uuid::now_v7()),
-            name: "Wound-Down Matter".into(),
-            status: "archived".into(),
-            entity_id: store::test_support::seed_entity(&surreal).await,
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-    store::projects::add_participation(&surreal, archived_project.id, lawyer.id, "lawyer")
+    let (project_id, _lawyer, cookie, _csrf) = lawyer_project_fixture(&surreal).await;
+    let code = store::projects::find_by_id(&surreal, project_id)
         .await
-        .unwrap();
+        .unwrap()
+        .expect("fixture project")
+        .code;
 
     let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
-
-    let open_tab = app
-        .clone()
-        .oneshot(
+    let get = |uri: String| {
+        app.clone().oneshot(
             Request::builder()
-                .uri("/app/projects")
+                .uri(uri)
                 .header(header::COOKIE, cookie.clone())
                 .body(Body::empty())
                 .unwrap(),
         )
-        .await
-        .unwrap();
-    assert_eq!(open_tab.status(), StatusCode::OK);
-    let open_body = body_string(open_tab).await;
-    assert!(
-        !open_body.contains("Wound-Down Matter"),
-        "an archived matter must not render on the Open tab: {open_body}"
-    );
+    };
 
-    let closed_tab = app
-        .oneshot(
-            Request::builder()
-                .uri("/app/projects/closed")
-                .header(header::COOKIE, cookie)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(closed_tab.status(), StatusCode::OK);
-    let closed_body = body_string(closed_tab).await;
-    assert!(
-        closed_body.contains("Wound-Down Matter"),
-        "an archived matter must render on the Closed tab: {closed_body}"
-    );
-}
+    let list = body_string(get("/app/projects".to_string()).await.unwrap()).await;
+    for retired in ["project-entity", "project-created-at", "Last commit"] {
+        assert!(!list.contains(retired), "{retired} left the list: {list}");
+    }
 
-/// The `Created` and `Last commit` columns render on both tabs — `created_at`
-/// always has a value; `last_committed_at` degrades to an em dash when no
-/// GitHub forge is configured (the case in every test process).
-#[tokio::test]
-async fn lawyer_projects_list_renders_created_and_last_commit_columns() {
-    let (state, surreal) = state_with_engines().await;
-    let (_project_id, _lawyer, cookie, _csrf) = lawyer_project_fixture(&surreal).await;
-
-    let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .uri("/app/projects")
-                .header(header::COOKIE, cookie)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body = body_string(resp).await;
-    assert!(body.contains("Created"), "{body}");
-    assert!(body.contains("Last commit"), "{body}");
-    assert!(body.contains(r#"class="project-created-at""#), "{body}");
-    assert!(
-        body.contains(r#"class="project-last-committed-at""#) && body.contains('—'),
-        "no forge is configured in tests, so the column degrades to an em dash: {body}"
-    );
+    let show = get(format!("/app/projects/{code}")).await.unwrap();
+    assert_eq!(show.status(), StatusCode::OK);
+    let body = body_string(show).await;
+    assert!(body.contains("Opened: <time datetime="), "{body}");
+    assert!(body.contains(" UTC<!--#--></time>"), "{body}");
+    assert!(body.contains("Last commit: <!--node-id"), "{body}");
 }
 
 /// Every Project already carries a required `brand` (ENG-587); the lawyer
@@ -9507,8 +9447,12 @@ async fn seed_project_brand_scope(
     (firm.id, admin)
 }
 
+/// The list shows every matter the reader participates in, whichever Brand
+/// or Firm it sits under; an Admin's Brand change stays inside the Project's
+/// Firm.
 #[tokio::test]
-async fn project_brand_scope_and_reassignment_stay_inside_the_firm() {
+async fn project_list_shows_every_participated_matter_and_admin_reassignment_stays_inside_the_firm()
+{
     let (state, surreal) = state_with_engines().await;
     let (firm_id, admin) = seed_project_brand_scope(&surreal).await;
     let (cookie, csrf) = session_cookie_and_csrf_for_person(&admin);
@@ -9522,20 +9466,15 @@ async fn project_brand_scope_and_reassignment_stay_inside_the_firm() {
                 .unwrap(),
         )
     };
-    for (uri, primary, sibling) in [
-        ("/app/projects", true, false),
-        ("/app/projects?firm=true", true, true),
-        ("/app/projects?brand=sibling-brand", false, true),
-        ("/app/projects?brand=outside-brand", true, false),
-        ("/app/lawyer?brand=sibling-brand", true, true),
-    ] {
-        let response = get(uri).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK, "{uri}");
-        let body = body_string(response).await;
-        assert_eq!(body.contains("primary-matter"), primary, "{uri}");
-        assert_eq!(body.contains("sibling-matter"), sibling, "{uri}");
-        assert!(!body.contains("outside-matter"), "{uri}");
+    let list = body_string(get("/app/projects").await.unwrap()).await;
+    for code in ["primary-matter", "sibling-matter", "outside-matter"] {
+        assert!(list.contains(code), "{code}: {list}");
     }
+    assert!(!list.contains(r#"aria-label="Project scope""#), "{list}");
+    let dashboard = body_string(get("/app/lawyer?brand=sibling-brand").await.unwrap()).await;
+    assert!(dashboard.contains("primary-matter"), "{dashboard}");
+    assert!(dashboard.contains("sibling-matter"), "{dashboard}");
+    assert!(!dashboard.contains("outside-matter"), "{dashboard}");
 
     let edit = get("/app/projects/primary-matter/edit").await.unwrap();
     assert_eq!(edit.status(), StatusCode::OK);
@@ -9569,12 +9508,72 @@ async fn project_brand_scope_and_reassignment_stay_inside_the_firm() {
         .unwrap();
     assert_eq!(project.brand, "sibling-brand");
     assert_eq!(project.firm_id, Some(firm_id));
-    assert!(!body_string(get("/app/projects").await.unwrap())
+}
+
+/// An Owner holds every Firm capability without a membership, so the edit
+/// page offers every Firm's Brands and choosing one moves the Project to the
+/// Firm that wears it.
+#[tokio::test]
+async fn owner_moves_a_project_to_another_firms_brand() {
+    use store::persons::{NewPerson, Role};
+
+    let (state, surreal) = state_with_engines().await;
+    let _ = seed_project_brand_scope(&surreal).await;
+    let owner = store::persons::create(
+        &surreal,
+        &NewPerson::with_role("owner", "owner@example.com", Role::Owner),
+    )
+    .await
+    .unwrap();
+    let project = store::projects::find_by_code(&surreal, "primary-matter")
         .await
-        .contains("primary-matter"));
-    assert!(body_string(get("/app/projects?firm=true").await.unwrap())
+        .unwrap()
+        .unwrap();
+    store::projects::add_participation(&surreal, project.id, owner.id, "lawyer")
         .await
-        .contains("primary-matter"));
+        .unwrap();
+    let outside_firm = store::firms::firm_id_for_brand_key(&surreal, "outside-brand")
+        .await
+        .unwrap()
+        .expect("outside-brand is worn by the second Firm");
+    let (cookie, csrf) = session_cookie_and_csrf_for_person(&owner);
+    let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
+
+    let edit = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/app/projects/primary-matter/edit")
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(edit.status(), StatusCode::OK);
+    let body = body_string(edit).await;
+    assert!(body.contains("outside-brand — second practice"), "{body}");
+    assert!(body.contains("moves the Project to that Firm"), "{body}");
+
+    let moved = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/app/projects/primary-matter/brand")
+                .header(header::COOKIE, &cookie)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!("brand=outside-brand&_csrf={csrf}")))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(moved.status(), StatusCode::SEE_OTHER);
+    let project = store::projects::find_by_code(&surreal, "primary-matter")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(project.brand, "outside-brand");
+    assert_eq!(project.firm_id, Some(outside_firm));
 }
 
 #[tokio::test]

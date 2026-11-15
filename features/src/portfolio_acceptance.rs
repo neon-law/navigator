@@ -49,7 +49,7 @@ pub const SCENARIOS: &[Scenario] = &[
         id: "firm.closed-lifecycle-list",
         lens: Lens::Firm,
         actor_email: "lawyer@neonlaw.com",
-        route: "/app/projects/closed",
+        route: "/app/projects?status=closed",
         status: 200,
         present: &[
             "Fixture Ashworth Logistics — Closed Engagement",

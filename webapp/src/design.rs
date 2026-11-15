@@ -47,7 +47,7 @@ use crate::components::{
     SignatureSeal, SignatureSealData, SiteFooterLegal, SiteHeader, SiteNavLink, SocialMeta,
     SortState, Stage, StageWidth, StatEntry, StatGrid, StatusCell, StatusStrip, StepMeta, Stepper,
     StepperPanel, Tab, Tabs, TestimonialCard, TestimonialCards, TestimonialSection, Toast,
-    ToastTone, ToggleGroup, ToggleOption, THEME_STYLESHEET_HREF,
+    ToastTone, ToggleGroup, ToggleOption, UtcTime, THEME_STYLESHEET_HREF,
 };
 // The vendor marks come from their own module rather than the theme root: they
 // are the one component whose colours are a third party's rather than the
@@ -1943,6 +1943,7 @@ fn MatterPrimitivesShowcase() -> Element {
                     ],
                 }
                 Feed { aria_label: "Matter history".to_string(), posts: feed_posts }
+                p { "Opened: " UtcTime { at: "2026-11-06T14:29:11-08:00".to_string() } }
             }
             div { class: "nav-panel__actions",
                 span { "Toolbar" }

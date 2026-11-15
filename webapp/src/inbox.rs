@@ -776,7 +776,7 @@ fn message_view(message: &store::inbox::Message) -> InboxMessageView {
         delivery: message.delivery_state.clone(),
         internal: message.direction == store::inbox::direction::INTERNAL,
         visibility: message.visibility.clone(),
-        occurred_label: occurred_label(&message.occurred_at),
+        occurred_label: crate::components::utc_label(&message.occurred_at),
         automated: message.direction == store::inbox::direction::OUTBOUND
             && message.author_person_id.is_none(),
         occurred_at: message.occurred_at.clone(),
@@ -786,19 +786,6 @@ fn message_view(message: &store::inbox::Message) -> InboxMessageView {
             .or_else(|| message.provider_ref.clone()),
         attachments: Vec::new(),
     }
-}
-
-/// A stored RFC 3339 instant as the transcript shows it, in UTC.
-#[cfg(any(feature = "server", test))]
-fn occurred_label(occurred_at: &str) -> String {
-    chrono::DateTime::parse_from_rfc3339(occurred_at).map_or_else(
-        |_| occurred_at.to_string(),
-        |at| {
-            at.with_timezone(&chrono::Utc)
-                .format("%b %-d, %Y, %H:%M UTC")
-                .to_string()
-        },
-    )
 }
 
 /// The attachments one transcript Message renders, as the thread page
@@ -2984,7 +2971,8 @@ mod tests {
     #[test]
     fn a_message_card_names_its_parties_and_draws_images_full_width() {
         let mut page = base_thread();
-        page.messages[0].occurred_label = occurred_label("2026-11-06T22:29:11.5+00:00");
+        page.messages[0].occurred_label =
+            crate::components::utc_label("2026-11-06T22:29:11.5+00:00");
         page.messages[0].attachments = vec![
             InboxAttachmentView {
                 filename: Some("photo.jpg".into()),
@@ -3073,7 +3061,6 @@ mod tests {
             "a.png",
             Some("application/pdf")
         )));
-        assert_eq!(occurred_label("not a time"), "not a time");
     }
 
     #[test]
