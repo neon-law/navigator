@@ -79,8 +79,12 @@ WHERE proname IN ('graph_load_vertices', 'graph_load_edges',
 
 ## 3. Backfill and parity
 
-The graph projects from the relational mirrors, so the relational tables must be whole first. The mirror backfill runs
-the graph arm last, after every source group is converged:
+The graph projects from the relational mirrors, so the relational tables must be whole first. The Mirror Backfill runs
+the graph arm last, after every source group converges.
+
+Run the backfill with `NAVIGATOR_POSTGRES_USER=navigator_owner` and the migration login's credentials from the
+[PostgreSQL access runbook](postgres-kubernetes.md#mirror-parity-and-reconcile). The graph arm calls
+`graph_clear_navigator()` and `graph_load_vertices()`, which require the migration login. Run parity as `navigator_app`.
 
 ```bash
 hudson ops postgres backfill --dry-run --json          # the plan; writes nothing

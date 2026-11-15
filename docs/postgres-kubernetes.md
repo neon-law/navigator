@@ -75,7 +75,7 @@ that signs in as the bootstrap superuser.
 
 | Login | Used by | May |
 | --- | --- | --- |
-| `navigator_owner` | `navigator-migrate` Job | Own the `navigator` database and `public` schema; run DDL |
+| `navigator_owner` | Migration Job, Mirror Backfill | Own the database and schema, run DDL, rebuild the graph |
 | `navigator_app` | `web`, mirror Job | Connect; `SELECT`, `INSERT`, `UPDATE`, `DELETE` rows and use sequences |
 | `navigator_backup` | WAL archive, base backups | `REPLICATION` only; no database privileges |
 | `navigator_dbos` | `web` with DBOS on | Own `dbos`; database `CONNECT` and `CREATE`; nothing on `public` |
@@ -145,6 +145,11 @@ archive](iceberg-archive.md#where-it-runs).
 `navigator-migrate`, pinned to the release at apply time. A failure is not retried. The command lives only in that file.
 
 ### Mirror parity and reconcile
+
+Run `hudson ops postgres backfill` as `navigator_owner`. In a one-off Job, use the PostgreSQL connection settings from
+`k8s/postgres/migrate/migrate-job.yaml`, including the password and CA from `navigator-postgres-migrator`. The graph arm
+calls `graph_clear_navigator()`, which requires the migration login. Parity and routine reconcile use `navigator_app`.
+See the [graph backfill runbook](age-graph-runbook.md#3-backfill-and-parity).
 
 `web` mirrors every SurrealDB write it still makes into PostgreSQL. `ops ship` runs the one-shot reconcile Job after the
 Forgejo step and before it applies the application, stops the ship unless the Job exits clean, and installs recurring
