@@ -3220,7 +3220,7 @@ async fn llms_txt_indexes_the_markdown_corpus_with_absolute_urls() {
     assert!(body.contains("estate plans tailored to each person"));
     assert!(body.contains("Nevada asset protection planning"));
     assert!(body.contains("fee for a mutual split"));
-    assert!(body.contains("Navigator, exacting agentic lawyering"));
+    assert!(body.contains("Explore legal services for starting a business"));
     assert!(!body.contains("from $50/day") && !body.contains("example.com/business"));
     assert!(!body.contains("$500 setup fee") && !body.contains("$5,000 per trial day"));
     // The firm's own marketing surface. The workshops catalog is public
@@ -11360,12 +11360,8 @@ async fn assert_brand_home_lead_capture(
     db: &store::surreal::SurrealDb,
     brand: views::brand::BrandKey,
 ) {
-    // The band-built IEP Defenders and Lex Tecnica homes close on a
-    // Contact Us link to `/contact` — their published CTA shape — and the
-    // Neon home's only call to action stars the Navigator repository, so
-    // none carries an inline lead form. Their lead-capture path runs through
-    // the contact page on the brand's own host, which serves the one lead
-    // form.
+    // These homes send visitors to the brand's contact page, which serves
+    // one lead form.
     if matches!(
         brand,
         views::brand::BrandKey::IepDefenders

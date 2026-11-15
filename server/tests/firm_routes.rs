@@ -875,11 +875,11 @@ async fn home_publishes_no_amount_in_controversy_and_no_co_counsel_claim() {
 }
 
 #[tokio::test]
-async fn home_metadata_describes_navigator_at_the_root_url() {
+async fn home_metadata_describes_legal_services_at_the_root_url() {
     let app = site_app().await;
     let body = body_string(anon_get(&app, "/").await).await;
     assert!(
-        body.contains("Navigator, exacting agentic lawyering"),
+        body.contains("Explore legal services for starting a business"),
         "{body}"
     );
     assert!(

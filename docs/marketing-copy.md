@@ -25,7 +25,7 @@ Neon Law (`neon/`):
 
 | File | Page |
 | --- | --- |
-| `neon/locales/en/neon/home-marketing.yaml` | `/` — Navigator, open source software for agentic lawyering |
+| `neon/locales/en/neon/home-marketing.yaml` | `/` — Legal services and attorney contact |
 | `neon/locales/en/neon/litigation.yaml` | `/disputes` |
 | `neon/locales/en/neon/fractional-gc.yaml` | unpublished; `/business` answers a 301 to `/` |
 | `neon/locales/en/neon/personal-plan.yaml` | `/personal` |

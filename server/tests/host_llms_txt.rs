@@ -128,7 +128,7 @@ async fn the_index_omits_retired_pages() {
     assert!(!body.contains("/nautilus)"));
     assert!(!body.contains("/disputes)") && !body.contains("/business)"));
     assert!(!body.contains("/services)"));
-    assert!(body.contains("Navigator, exacting agentic lawyering"));
+    assert!(body.contains("Explore legal services for starting a business"));
     assert!(!body.contains("from $50/day"));
     assert!(!body.contains("starts at $100/day"));
     assert!(!body.contains("express review"));
