@@ -1403,7 +1403,9 @@ jobs:
       # nextest.toml): up to two exponential-backoff retries, so an
       # intermittent click race is classified FLAKY in junit.xml instead of
       # reddening the deploy, while a genuine failure (all retries exhausted)
-      # still exits non-zero. `--no-capture` streams each test's own stdout
+      # still exits non-zero. `--no-fail-fast` runs every test past the first
+      # failure: this gate runs only on release commits, so one run has to
+      # report everything that broke since the last release. `--no-capture` streams each test's own stdout
       # so the self-skip line still reaches the tee'd log for the guard below
       # (nextest otherwise swallows a passing test's output); it also forces
       # serial execution, preserving the single-threaded invariant these
@@ -1450,7 +1452,7 @@ jobs:
           for value in "${NAVIGATOR_STORAGE_ACCESS_KEY}" "${NAVIGATOR_STORAGE_SECRET_KEY}"; do
             echo "::add-mask::${value}"
           done
-          cargo nextest run -p server --profile ci \
+          cargo nextest run -p server --profile ci --no-fail-fast \
               --test browser_e2e --test accessibility_e2e --test notation_preview_layout \
               --no-capture 2>&1 \
             | awk 'BEGIN { n = split("NAVIGATOR_STORAGE_ACCESS_KEY NAVIGATOR_STORAGE_SECRET_KEY", names, " ") }

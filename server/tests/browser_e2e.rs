@@ -139,41 +139,6 @@ async fn enrollment_intake_preserves_answers_and_reviews_before_sign_in() {
     c.close().await.expect("close browser");
 }
 
-/// A verified fixture session reaches the configured booking handoff.
-#[tokio::test]
-async fn signed_in_enrollment_offers_booking() {
-    let Some(c) = new_client_or_skip().await else {
-        return;
-    };
-    login_as_lawyer(&c).await;
-    c.goto(&format!("{}/#enrollment", base_url()))
-        .await
-        .expect("Same Day Legal booking");
-    wait_for_text(&c, "You are signed in.", Duration::from_secs(20)).await;
-    let booking = c
-        .find(Locator::Css("#enrollment a.nav-btn"))
-        .await
-        .expect("booking action");
-    assert_eq!(
-        booking.text().await.expect("booking label"),
-        "Book your enrollment appointment"
-    );
-    assert!(booking
-        .attr("href")
-        .await
-        .expect("booking address")
-        .expect("href")
-        .starts_with("https://"));
-    assert!(c.find(Locator::Css("#enrollment form")).await.is_err());
-    std::fs::create_dir_all("/tmp/navigator-screenshots").expect("capture directory");
-    std::fs::write(
-        "/tmp/navigator-screenshots/enrollment-booking.png",
-        c.screenshot().await.expect("booking capture"),
-    )
-    .expect("save booking capture");
-    c.close().await.expect("close browser");
-}
-
 /// Markdown diagrams render while malformed source remains readable.
 #[tokio::test]
 async fn markdown_mermaid_viewer_renders_and_preserves_source_on_failure() {

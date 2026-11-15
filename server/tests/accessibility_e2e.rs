@@ -1051,8 +1051,8 @@ async fn the_error_pages_pass_axe_wcag_a_and_aa() {
     }
 }
 
-/// The blog collage's lightbox dialog — the public surface's interactive
-/// image affordance on the Neon host.
+/// The public surface's two interactive affordances on the Neon host: the
+/// home hero's call to action, and the blog collage's lightbox dialog.
 ///
 /// Same Day Legal's enrollment CTA is on its own host; Neon 301s there.
 /// The directory publishes on Guieb & Shook, so this Neon audit skips it.
@@ -1064,6 +1064,19 @@ async fn public_navigation_images_and_collage_dialog_are_accessible() {
     };
 
     assert_public_shell(&c).await;
+    let cta = c
+        .find(Locator::Css(".fm-hero__cta:not(.home-call)"))
+        .await
+        .expect("the Neon home has its hero call to action");
+    let href = cta
+        .attr("href")
+        .await
+        .expect("the home call to action has an href")
+        .expect("the home call to action has an href");
+    assert_eq!(
+        href, "https://github.com/neon-law/navigator",
+        "the Neon home's call to action stars the repository"
+    );
 
     c.goto(&format!("{site_base_url}/blog/thanks-apple"))
         .await
