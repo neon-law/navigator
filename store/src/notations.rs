@@ -701,6 +701,30 @@ pub async fn update_state(
     Ok(notation)
 }
 
+/// Reconcile a Notation projection if it still has the observed state.
+pub async fn reconcile_state(
+    db: &SurrealDb,
+    id: Uuid,
+    observed_state: &str,
+    current_state: &str,
+) -> Result<(), NotationError> {
+    let mut response = writing(|| {
+        db.query(format!(
+            "UPDATE $id SET state = $current, updated_at = time::now() WHERE state = $observed RETURN {SELECT}"
+        ))
+            .bind(("id", record_id(TABLE, id)))
+            .bind(("observed", observed_state.to_owned()))
+            .bind(("current", current_state.to_owned()))
+    })
+    .await?;
+    let updated: Option<NotationRow> = response.take(0)?;
+    if updated.is_some() {
+        crate::postgres_mirror::after_write(db, crate::postgres_mirror::MirrorKey::Notation(id))
+            .await;
+    }
+    Ok(())
+}
+
 /// Overwrite the frozen questionnaire snapshot. Production never calls
 /// this after creation — it exists for the test that proves resolution
 /// reads the snapshot, not the template.

@@ -61,11 +61,23 @@ pub struct EnvelopeCard {
     pub sender_view_href: String,
 }
 
+/// A submitted review whose PDF is still pending or whose worker run failed.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalNotice {
+    Pending,
+    Failed,
+}
+
 /// The review screen, resolved by the portal pre-layer.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
 pub struct IntakeReviewData {
     pub notation_id: String,
     pub workflow_state: String,
+    #[serde(default)]
+    pub document_ready: bool,
+    #[serde(default)]
+    pub approval_notice: Option<ApprovalNotice>,
     /// Present once an envelope has gone out. Its presence is half of the
     /// phase decision, so it is never inferred from the state alone.
     pub signature_request_id: Option<String>,
@@ -184,7 +196,7 @@ impl Phase {
     fn heading(self) -> &'static str {
         match self {
             Self::AwaitingReview => "Awaiting attorney review",
-            Self::ReadyToSend => "Document rendering — ready to send",
+            Self::ReadyToSend => "Approved for signature",
             Self::SentBack => "Sent back for changes",
             Self::Started => "Retainer intake started",
         }
@@ -206,6 +218,7 @@ fn review_body(view: &IntakeReviewView) -> Element {
     let signature = data.signature_request_id.clone().unwrap_or("—".to_string());
     let approve_label = data.approve_send_label.clone();
     let offers_reask = !data.reask_questions.is_empty();
+    let can_approve = phase == Phase::AwaitingReview && data.approval_notice.is_none();
 
     rsx! {
         document::Title { "{view.firm_name} | Lawyer | Notations | Review" }
@@ -229,18 +242,16 @@ fn review_body(view: &IntakeReviewView) -> Element {
         }
         main { id: "intake-review", class: "nav-theme",
             h1 { {phase.heading()} }
-            if phase == Phase::AwaitingReview {
+            if can_approve {
                 p { class: "nav-muted",
                     "Intake is complete and the matter parks here for an attorney — no "
                     "document is generated until a person approves. The exact document "
-                    "below is what gets signed: review it, then approve and send."
+                    "below is what gets signed. Review it before approving the PDF."
                 }
             }
-            if phase == Phase::ReadyToSend {
-                p { class: "nav-muted",
-                    "Approved. The document is rendering for signature. Once it is ready, "
-                    "send it — the binding envelope goes out only on this deliberate step."
-                }
+            { approval_notice(data.approval_notice) }
+            if phase == Phase::ReadyToSend && !data.document_ready {
+                p { role: "status", "The PDF is rendering. Refresh to check its status." }
             }
             dl { class: "detail-dl",
                 dt { "Notation id" }
@@ -265,7 +276,7 @@ fn review_body(view: &IntakeReviewView) -> Element {
                     }
                 }
             }
-            if phase == Phase::AwaitingReview {
+            if can_approve {
                 form { method: "post", action: "{approve_send}", "aria-label": "{approve_label}",
                     input { r#type: "hidden", name: "_csrf", value: "{csrf}" }
                     button { class: "nav-btn nav-btn--primary", r#type: "submit", "{approve_label}" }
@@ -274,7 +285,7 @@ fn review_body(view: &IntakeReviewView) -> Element {
                     {request_changes_panel(&request_changes, &csrf, &data.reask_questions)}
                 }
             }
-            if phase == Phase::ReadyToSend {
+            if phase == Phase::ReadyToSend && data.document_ready {
                 form { method: "post", action: "{send}", "aria-label": "Send for signature",
                     input { r#type: "hidden", name: "_csrf", value: "{csrf}" }
                     button { class: "nav-btn nav-btn--primary", r#type: "submit",
@@ -404,6 +415,18 @@ fn request_changes_panel(action: &str, csrf: &str, questions: &[ReaskQuestion]) 
     }
 }
 
+fn approval_notice(notice: Option<ApprovalNotice>) -> Element {
+    match notice {
+        Some(ApprovalNotice::Pending) => rsx! {
+            p { role: "status", "Approval submitted. Refresh to check whether the PDF is ready." }
+        },
+        Some(ApprovalNotice::Failed) => rsx! {
+            p { role: "alert", "The approval run failed. An operator can recover the run before dispatch." }
+        },
+        None => rsx! {},
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -417,6 +440,8 @@ mod tests {
             data: IntakeReviewData {
                 notation_id: NOTATION.to_string(),
                 workflow_state: state.to_string(),
+                document_ready: true,
+                approval_notice: None,
                 signature_request_id: signature.map(str::to_string),
                 rendered_html: "<article class=\"notation\"><p>body</p></article>".to_string(),
                 governing_law_defaulted: false,
@@ -424,7 +449,7 @@ mod tests {
                     code: "person__client".to_string(),
                     label: "Client name".to_string(),
                 }],
-                approve_send_label: "Approve and send for signature".to_string(),
+                approve_send_label: "Approve and render PDF".to_string(),
                 envelope: None,
             },
             csrf_token: "TOK".to_string(),
@@ -532,10 +557,7 @@ mod tests {
     #[test]
     fn only_the_rendering_phase_offers_the_send_that_dispatches_the_envelope() {
         let html = render(&view("generate_pdf__retainer_pdf", None));
-        assert!(
-            html.contains("Document rendering — ready to send"),
-            "{html}"
-        );
+        assert!(html.contains("Approved for signature"), "{html}");
         assert!(
             html.contains(&format!("action=\"/app/lawyer/notations/{NOTATION}/send\"")),
             "{html}"
@@ -547,6 +569,29 @@ mod tests {
             )),
             "{html}"
         );
+    }
+
+    #[test]
+    fn approved_notation_waits_for_its_pdf_before_offering_send() {
+        let mut review = view("generate_pdf__retainer_pdf", None);
+        review.data.document_ready = false;
+        let html = render(&review);
+        assert!(html.contains("The PDF is rendering."));
+        assert!(!html.contains(&format!("action=\"/app/lawyer/notations/{NOTATION}/send\"")));
+    }
+
+    #[test]
+    fn queued_and_failed_approvals_report_progress_without_offering_another_approval() {
+        let mut review = view("lawyer_review", None);
+        review.data.approval_notice = Some(ApprovalNotice::Pending);
+        let queued = render(&review);
+        assert!(queued.contains("Approval submitted."));
+        assert!(!queued.contains("/approve-send"));
+
+        review.data.approval_notice = Some(ApprovalNotice::Failed);
+        let failed = render(&review);
+        assert!(failed.contains("The approval run failed."));
+        assert!(!failed.contains("/approve-send"));
     }
 
     #[test]

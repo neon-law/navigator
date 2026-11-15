@@ -295,6 +295,12 @@ pub trait SignatureProvider: Send + Sync {
         mode: SendMode,
     ) -> Result<SignatureRequestId, SignatureError>;
 
+    /// Dispatch a recorded draft, or confirm it has already been sent.
+    async fn dispatch_prepared(
+        &self,
+        request_id: &SignatureRequestId,
+    ) -> Result<(), SignatureError>;
+
     /// Request a short-lived, single-use **recipient-view URL** for a captive
     /// recipient of an already-created envelope. DocuSign suppresses the
     /// signing email for a captive recipient, so this URL is the only way in:
@@ -1283,6 +1289,27 @@ impl SignatureProvider for FakeSignatureProvider {
         Ok(SignatureRequestId(id))
     }
 
+    async fn dispatch_prepared(
+        &self,
+        request_id: &SignatureRequestId,
+    ) -> Result<(), SignatureError> {
+        let _guard = self.calls.lock().expect("fake provider lock");
+        let mut envelope = self
+            .envelope(request_id)?
+            .ok_or_else(|| SignatureError::Provider("draft envelope is missing".into()))?;
+        if envelope.status == EnvelopeStatus::Prepared {
+            if self.faults.armed(Fault::Send) {
+                return Err(SignatureError::Provider("injected send failure".into()));
+            }
+            for recipient in &envelope.recipients {
+                self.write_signing_page(&envelope, &recipient.email)?;
+            }
+            envelope.status = EnvelopeStatus::Sent;
+            self.persist(&envelope)?;
+        }
+        Ok(())
+    }
+
     async fn create_recipient_view(
         &self,
         request_id: &SignatureRequestId,
@@ -1778,6 +1805,34 @@ impl SignatureProvider for DocuSignSignatureProvider {
             self.dispatch_envelope(&summary.envelope_id).await?;
         }
         Ok(SignatureRequestId(summary.envelope_id))
+    }
+
+    async fn dispatch_prepared(
+        &self,
+        request_id: &SignatureRequestId,
+    ) -> Result<(), SignatureError> {
+        let url = self.request_url(&format!(
+            "v2.1/accounts/{}/envelopes/{}",
+            self.account_id, request_id.0
+        ))?;
+        let summary = self
+            .http
+            .get(url)
+            .bearer_auth(self.bearer_token().await?)
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .map_err(|error| SignatureError::Provider(error.to_string()))?
+            .json::<EnvelopeSummary>()
+            .await
+            .map_err(|error| SignatureError::Provider(error.to_string()))?;
+        match summary.status.as_deref() {
+            Some("created") => self.dispatch_envelope(&request_id.0).await,
+            Some("sent" | "delivered" | "signed" | "completed" | "declined" | "voided") => Ok(()),
+            _ => Err(SignatureError::Provider(
+                "DocuSign has not confirmed the envelope's dispatch state".into(),
+            )),
+        }
     }
 
     async fn create_recipient_view(
@@ -3005,6 +3060,32 @@ mod tests {
             .await
             .expect("send succeeds");
         assert_eq!(id, SignatureRequestId("env-anchored".into()));
+    }
+
+    #[tokio::test]
+    async fn docusign_retry_confirms_a_sent_draft_by_id() {
+        let server = MockServer::start().await;
+        let endpoint = "/v2.1/accounts/acct-guid/envelopes/env-recorded";
+        Mock::given(method("GET"))
+            .and(path(endpoint))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "envelopeId": "env-recorded",
+                "status": "sent",
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        for verb in ["POST", "PUT"] {
+            Mock::given(method(verb))
+                .respond_with(ResponseTemplate::new(500))
+                .expect(0)
+                .mount(&server)
+                .await;
+        }
+        docusign(server.uri())
+            .dispatch_prepared(&SignatureRequestId("env-recorded".into()))
+            .await
+            .unwrap();
     }
 
     #[tokio::test]

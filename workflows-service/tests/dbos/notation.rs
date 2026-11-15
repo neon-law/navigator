@@ -66,6 +66,7 @@ async fn the_authenticated_caller_keeps_both_notation_machines_independent() {
         WorkerIngress {
             notation: Some(NotationIngress::new(
                 "synthetic-worker-token".into(),
+                worker.clone(),
                 surreal,
                 postgres,
                 workflow,
@@ -214,7 +215,7 @@ async fn a_pending_notation_start_recovers_after_the_executor_stops() {
 
 struct PersistedNotation {
     database: crate::support::TestDatabase,
-    _directory: tempfile::TempDir,
+    directory: tempfile::TempDir,
     worker: dbos::DBOS,
     workflow: dbos_notation::NotationTransitionWorkflow,
     surreal: store::surreal::SurrealDb,
@@ -250,7 +251,7 @@ impl PersistedNotation {
         worker.launch().await.unwrap();
         Some(Self {
             database,
-            _directory: directory,
+            directory,
             worker,
             workflow,
             surreal,
@@ -1120,4 +1121,158 @@ async fn back_keeps_begin_and_completed_questionnaires_in_place() {
     );
     assert_eq!(fixture.events().await.len(), 3);
     fixture.worker.shutdown().await;
+}
+
+#[tokio::test]
+async fn dbos_approval_accepts_a_retry_and_publishes_the_rendered_state_once() {
+    let Some(fixture) = PersistedNotation::new().await else {
+        return;
+    };
+    fixture
+        .start(
+            MachineKind::Workflow,
+            "BEGIN:\n  _: lawyer_review\nlawyer_review:\n  approved: generate_pdf__letter\ngenerate_pdf__letter:\n  pdf_persisted: END\nEND: {}\n",
+        )
+        .await;
+    assert_eq!(
+        fixture.signal(MachineKind::Workflow, "_", None).await,
+        "lawyer_review"
+    );
+    let notation = store::notations::update_state(&fixture.surreal, fixture.id, "lawyer_review")
+        .await
+        .unwrap();
+    let postgres = fixture.database.store().await;
+    let (runtime, server) = approval_runtime(&fixture, postgres.clone()).await;
+    let storage_key = store::notations::document_pdf_storage_key(fixture.id);
+    let payload = serde_json::to_string(&workflows::DocumentPayload::Typst {
+        storage_key: storage_key.clone(),
+        typst_source: "Reviewed synthetic document".into(),
+    })
+    .unwrap();
+    let review_revision = notation.updated_at.timestamp_micros();
+    let actor = workflows::SignalContext {
+        acting_person_id: fixture.actor,
+    };
+    assert_stale_approval_fails(&fixture, &runtime, review_revision, &payload, actor).await;
+    let lane = store::notation_machine_state::acquire_lane(&postgres, fixture.id)
+        .await
+        .unwrap();
+    for _ in 0..2 {
+        assert_eq!(
+            tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                runtime.approve(fixture.id, review_revision, &payload, Some(actor)),
+            )
+            .await
+            .expect("submission responds while the transition lane is held")
+            .unwrap(),
+            None
+        );
+    }
+    assert_eq!(
+        runtime
+            .approval_progress(fixture.id, review_revision)
+            .await
+            .unwrap(),
+        Some(workflows::ApprovalProgress::Pending)
+    );
+    drop(lane);
+    let run_id = format!("NotationApproval:{}:{review_revision}", fixture.id);
+    let handle = fixture.worker
+        .retrieve_workflow::<dbos_notation::TransitionReport, dbos_notation::NotationTransitionError>(&run_id)
+        .unwrap();
+    assert_eq!(
+        tokio::time::timeout(DEADLINE, handle.result())
+            .await
+            .unwrap()
+            .unwrap()
+            .next_state,
+        "generate_pdf__letter"
+    );
+    assert_eq!(
+        runtime
+            .approval_progress(fixture.id, review_revision)
+            .await
+            .unwrap(),
+        Some(workflows::ApprovalProgress::Ready)
+    );
+    let persisted = store::notations::find_by_id(&fixture.surreal, fixture.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(persisted.state, "generate_pdf__letter");
+    let storage = cloud::FsStorage::new(fixture.directory.path())
+        .await
+        .unwrap();
+    let document = cloud::StorageService::get(&storage, &storage_key)
+        .await
+        .unwrap();
+    assert!(document.bytes.starts_with(b"%PDF-"));
+    assert_eq!(
+        fixture
+            .events()
+            .await
+            .iter()
+            .filter(|event| event.condition == "approved")
+            .count(),
+        1
+    );
+    fixture.worker.shutdown().await;
+    server.abort();
+}
+
+async fn assert_stale_approval_fails(
+    fixture: &PersistedNotation,
+    runtime: &workflows::DbosNotationRuntime,
+    review_revision: i64,
+    payload: &str,
+    actor: workflows::SignalContext,
+) {
+    let stale_revision = review_revision - 1;
+    runtime
+        .approve(fixture.id, stale_revision, payload, Some(actor))
+        .await
+        .unwrap();
+    let stale_run = format!("NotationApproval:{}:{stale_revision}", fixture.id);
+    let stale_handle = fixture.worker
+        .retrieve_workflow::<dbos_notation::TransitionReport, dbos_notation::NotationTransitionError>(&stale_run)
+        .unwrap();
+    assert!(tokio::time::timeout(DEADLINE, stale_handle.result())
+        .await
+        .unwrap()
+        .is_err());
+    assert_eq!(
+        runtime
+            .approval_progress(fixture.id, stale_revision)
+            .await
+            .unwrap(),
+        Some(workflows::ApprovalProgress::Failed)
+    );
+}
+
+async fn approval_runtime(
+    fixture: &PersistedNotation,
+    postgres: store::postgres::PostgresDb,
+) -> (workflows::DbosNotationRuntime, tokio::task::JoinHandle<()>) {
+    let router = workflows_service::health::router_with_dbos_ingress(
+        WorkerIngress {
+            notation: Some(NotationIngress::new(
+                "synthetic-worker-token".into(),
+                fixture.worker.clone(),
+                fixture.surreal.clone(),
+                postgres,
+                fixture.workflow.clone(),
+            )),
+            ..WorkerIngress::default()
+        },
+        None,
+    );
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let runtime =
+        workflows::DbosNotationRuntime::new(origin, Some("synthetic-worker-token".into()));
+    (runtime, server)
 }

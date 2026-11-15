@@ -133,7 +133,12 @@ impl RestateRuntime {
         req
     }
 
-    fn handler_url(&self, kind: MachineKind, notation_id: Uuid, handler: &str) -> String {
+    pub(crate) fn handler_url(
+        &self,
+        kind: MachineKind,
+        notation_id: Uuid,
+        handler: &str,
+    ) -> String {
         format!(
             "{}/{}/{}/{}_{}",
             self.broker_url.trim_end_matches('/'),
@@ -144,7 +149,7 @@ impl RestateRuntime {
         )
     }
 
-    async fn post_json<I: Serialize, O: for<'de> Deserialize<'de>>(
+    pub(crate) async fn post_json<I: Serialize, O: for<'de> Deserialize<'de>>(
         &self,
         url: &str,
         body: &I,
@@ -192,7 +197,7 @@ impl RestateRuntime {
             .map_err(|e| WorkflowRuntimeError::Transport(e.to_string()))
     }
 
-    async fn post_json_no_response<I: Serialize>(
+    pub(crate) async fn post_json_no_response<I: Serialize>(
         &self,
         url: &str,
         body: &I,

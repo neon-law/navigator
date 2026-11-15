@@ -634,3 +634,64 @@ async fn status_reports_the_sent_envelope_and_the_webhooks_receipts() {
     assert_eq!(completed["signers"][1]["role"], "firm");
     assert_eq!(completed["signers"][1]["signed"], true);
 }
+
+#[tokio::test]
+async fn send_recovers_a_recorded_draft_after_the_workflow_advanced() {
+    let h = build_app().await;
+    let project = open_project(&h.surreal).await;
+    let notation_id = seed_lawyer_review_notation(&h, project.id).await;
+    let lawyer = bearer_new_person(
+        &h.surreal,
+        "reviewer@example.com",
+        Role::Lawyer,
+        Some((project.id, "lawyer")),
+    )
+    .await;
+    assert_eq!(
+        post(&h.app, Some(&lawyer), notation_id, "approval")
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    let draft = Request::builder()
+        .method("POST")
+        .uri(format!("/app/api/notations/{notation_id}/signature"))
+        .header("authorization", &lawyer)
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"prepare":true}"#))
+        .unwrap();
+    assert_eq!(
+        h.app.clone().oneshot(draft).await.unwrap().status(),
+        StatusCode::OK
+    );
+    let drafts = h.signature_provider.envelopes().unwrap();
+    let [draft] = drafts.as_slice() else {
+        panic!("one recorded envelope");
+    };
+    assert_eq!(draft.status, portal::signature::EnvelopeStatus::Prepared);
+
+    // Interrupt the dispatch just after the durable signal completes.
+    h.workflow_runtime
+        .signal(
+            workflows::MachineKind::Workflow,
+            notation_id,
+            "pdf_persisted",
+            None,
+        )
+        .await
+        .unwrap();
+    for _ in 0..2 {
+        assert_eq!(
+            post(&h.app, Some(&lawyer), notation_id, "signature")
+                .await
+                .status(),
+            StatusCode::OK
+        );
+    }
+    let envelopes = h.signature_provider.envelopes().unwrap();
+    let [sent] = envelopes.as_slice() else {
+        panic!("retry must reuse the recorded envelope");
+    };
+    assert_eq!(sent.id, draft.id);
+    assert_eq!(sent.status, portal::signature::EnvelopeStatus::Sent);
+}

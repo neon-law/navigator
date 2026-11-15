@@ -1612,6 +1612,10 @@ pub enum WorkflowDriveError {
     DocumentNotReady(Uuid),
     #[error("notation is at `{state}`. Complete the questionnaire and reach lawyer review before approving.")]
     ApprovalNotReady { state: String },
+    #[error("the approval run failed. Recover the original workflow before dispatch.")]
+    ApprovalRunFailed,
+    #[error("the workflow advanced without a recorded envelope. Check DocuSign before attempting recovery.")]
+    DispatchNeedsReconciliation,
 
     /// The template carries the custom-clause slot and the notation has no
     /// clauses, so its fee terms were never written. Refused before the
@@ -1952,77 +1956,111 @@ pub(crate) async fn render_and_park(
     let notation_row = store::notations::find_by_id(deps.surreal, notation_id)
         .await?
         .ok_or(WorkflowDriveError::TemplateMissing(notation_id))?;
-    let current_state = runtime
+    if notation_row.state == "lawyer_review" {
+        match runtime
+            .approval_progress(notation_id, notation_row.updated_at.timestamp_micros())
+            .await?
+        {
+            Some(workflows::ApprovalProgress::Pending) => {
+                return Ok(StateName::from("lawyer_review"));
+            }
+            Some(workflows::ApprovalProgress::Failed) => {
+                return Err(WorkflowDriveError::ApprovalRunFailed);
+            }
+            _ => {}
+        }
+    }
+    let current_state = match runtime
         .current_state(MachineKind::Workflow, notation_id)
         .await
-        .unwrap_or_else(|| StateName::from(notation_row.state.as_str()));
+    {
+        Some(state) => state,
+        None if notation_row.state == StateName::BEGIN => {
+            return Err(WorkflowDriveError::ApprovalNotReady {
+                state: notation_row.state,
+            });
+        }
+        None => return Err(workflows::WorkflowRuntimeError::UnknownNotation(notation_id).into()),
+    };
     if current_state.prefix() != "lawyer_review" {
+        let document_ready = document_pdf_ready(deps.storage.as_ref(), notation_id).await?;
+        if current_state.prefix() == "generate_pdf" || document_ready {
+            if notation_row.state == "lawyer_review" && document_ready {
+                store::notations::reconcile_state(
+                    deps.surreal,
+                    notation_id,
+                    &notation_row.state,
+                    current_state.as_str(),
+                )
+                .await?;
+            }
+            return Ok(current_state);
+        }
         return Err(WorkflowDriveError::ApprovalNotReady {
             state: current_state.0,
         });
     }
-    let template_row = store::templates::find_by_id(deps.surreal, notation_row.template_id)
-        .await?
-        .ok_or(WorkflowDriveError::TemplateMissing(notation_id))?;
-
-    // Re-assemble the body — template + custom clauses — so the PDF
-    // reflects the latest reviewed content.
-    let raw_template_body =
-        store::templates::body(deps.surreal, deps.storage, &template_row).await?;
-    let clauses = store::notation_clauses::for_notation(deps.surreal, notation_id)
-        .await
-        .map_err(|error| WorkflowDriveError::Db(error.to_string()))?;
-    let template_body = store::notation_clauses::splice(&raw_template_body, &clauses);
-
-    // Two rendering paths, declared by the template: a `form:` binding
-    // fills the vendored government packet's AcroForm from the answers
-    // (the artifact the SoS receives is the state's own form); without
-    // one, the body renders through Typst as before. The AcroForm fill
-    // reads the raw choice *keys* (a form radio selects by key); the Typst
-    // body reads the human *labels*.
-    let (keys, labels) =
-        build_answer_context(deps.surreal, Some(deps.storage), notation_id).await?;
-    let document_payload = if let Some(form_code) = template_row.form_code.as_deref() {
-        // The body is not a discarded cover sheet: the packet the client
-        // signs has to carry the engagement terms and the signature
-        // blocks the e-signature fields anchor to — without it the send
-        // is a form nobody can sign. Expand signatures exactly as the
-        // Typst fork does, so the anchors rendered into the addendum are
-        // the same deterministic fields the send path manifests.
-        let (expanded_body, signature_fields) = crate::signature_render::expand_signatures(
-            &typst_body_from_template(&template_body, &keys, &labels, template_row.kind.as_deref()),
-        );
-        let addendum_typst = (!signature_fields.is_empty()).then_some(expanded_body);
-        acroform_payload(deps, notation_id, form_code, &keys, addendum_typst).await?
-    } else {
-        // Convert the Markdown body to Typst, then expand signature
-        // placeholders into anchored Typst blocks. Only the Typst source
-        // matters here; the placed fields are rebuilt at send time from the
-        // same deterministic expansion over the same conversion.
-        let (typst_source, _signature_fields) = crate::signature_render::expand_signatures(
-            &typst_body_from_template(&template_body, &keys, &labels, template_row.kind.as_deref()),
-        );
-        serde_json::to_string(&workflows::DocumentPayload::Typst {
-            storage_key: document_pdf_storage_key(notation_id),
-            typst_source,
-        })
-        .map_err(WorkflowDriveError::Payload)?
-    };
+    let assembly_started = std::time::Instant::now();
+    let document_payload =
+        approval_document_payload(deps, notation_id, notation_row.template_id).await?;
 
     // Fire `approved`: the worker renders + persists the PDF on entering
     // `generate_pdf__retainer_pdf`. We do NOT advance past it — the send
     // is a separate, deliberate command that first confirms the PDF
     // landed.
-    let s = signal_workflow(
-        runtime,
-        notation_id,
-        "approved",
-        Some(&document_payload),
-        acting,
-    )
-    .await?;
-    sync_notation_state(deps.surreal, notation_id, s.as_str()).await?;
-    Ok(s)
+    tracing::info!(%notation_id, elapsed_ms = assembly_started.elapsed().as_millis(), "approval document assembled");
+    let submitted_at = std::time::Instant::now();
+    let accepted = runtime
+        .approve(
+            notation_id,
+            notation_row.updated_at.timestamp_micros(),
+            &document_payload,
+            acting.map(|acting_person_id| SignalContext { acting_person_id }),
+        )
+        .await?;
+    tracing::info!(
+        %notation_id,
+        elapsed_ms = submitted_at.elapsed().as_millis(),
+        queued = accepted.is_none(),
+        "approval submitted",
+    );
+    if let Some(next) = accepted {
+        sync_notation_state(deps.surreal, notation_id, next.as_str()).await?;
+        Ok(next)
+    } else {
+        Ok(current_state)
+    }
+}
+
+async fn approval_document_payload(
+    deps: &RenderDeps<'_>,
+    notation_id: Uuid,
+    template_id: Uuid,
+) -> Result<String, WorkflowDriveError> {
+    let template = store::templates::find_by_id(deps.surreal, template_id)
+        .await?
+        .ok_or(WorkflowDriveError::TemplateMissing(notation_id))?;
+    let source = store::templates::body(deps.surreal, deps.storage, &template).await?;
+    let clauses = store::notation_clauses::for_notation(deps.surreal, notation_id)
+        .await
+        .map_err(|error| WorkflowDriveError::Db(error.to_string()))?;
+    let body = store::notation_clauses::splice(&source, &clauses);
+    let (keys, labels) =
+        build_answer_context(deps.surreal, Some(deps.storage), notation_id).await?;
+    let (typst_source, fields) = crate::signature_render::expand_signatures(
+        &typst_body_from_template(&body, &keys, &labels, template.kind.as_deref()),
+    );
+
+    if let Some(form_code) = template.form_code.as_deref() {
+        let addendum = (!fields.is_empty()).then_some(typst_source);
+        acroform_payload(deps, notation_id, form_code, &keys, addendum).await
+    } else {
+        serde_json::to_string(&workflows::DocumentPayload::Typst {
+            storage_key: document_pdf_storage_key(notation_id),
+            typst_source,
+        })
+        .map_err(WorkflowDriveError::Payload)
+    }
 }
 
 /// Build the `DocumentPayload::Acroform` JSON for a template with a
@@ -2117,22 +2155,6 @@ pub async fn approve_send_post(
         return (StatusCode::NOT_FOUND, "notation not found").into_response();
     }
 
-    // Idempotent approve: if the worker has already rendered + persisted
-    // this notation's PDF — a prior approve, or the auto-approve a clean
-    // machine-only intake takes when it walks straight through to
-    // signature (`drive_post_questionnaire_workflow`) — approving again is
-    // a no-op success. The bytes the attorney would approve already exist,
-    // and re-firing `approved` from a state with no such edge (e.g.
-    // `sent_for_signature__pending`) would otherwise 500 with NoTransition.
-    // The matter-open retainer path parks at `lawyer_review` with no PDF
-    // yet, so this guard never short-circuits a genuine first approve.
-    if document_pdf_ready(state.storage.as_ref(), notation_id)
-        .await
-        .unwrap_or(false)
-    {
-        return back_to_review(notation_id);
-    }
-
     // The attorney approving owns the `approved` transition — attribute it
     // to their session Person, not the notation's client (#252).
     let deps = RenderDeps {
@@ -2147,14 +2169,15 @@ pub async fn approve_send_post(
         // for signature" action for the parked document.
         Ok(final_state) => {
             tracing::info!(
-                %notation_id, final_state = %final_state.as_str(), outcome = "parked",
-                "approve_send: rendered and parked",
+                %notation_id, final_state = %final_state.as_str(),
+                "approve_send: approval accepted",
             );
             back_to_review(notation_id)
         }
-        Err(e @ WorkflowDriveError::ApprovalNotReady { .. }) => {
-            (StatusCode::CONFLICT, e.to_string()).into_response()
-        }
+        Err(
+            e @ (WorkflowDriveError::ApprovalNotReady { .. }
+            | WorkflowDriveError::ApprovalRunFailed),
+        ) => (StatusCode::CONFLICT, e.to_string()).into_response(),
         Err(e) => {
             tracing::error!(error = %e, %notation_id, "approve_send: render_and_park failed");
             (StatusCode::INTERNAL_SERVER_ERROR, "approve failed").into_response()
@@ -2203,6 +2226,10 @@ pub async fn send_post(
             );
             back_to_review(notation_id)
         }
+        Err(
+            e @ (WorkflowDriveError::DispatchNeedsReconciliation
+            | WorkflowDriveError::ApprovalRunFailed),
+        ) => (StatusCode::CONFLICT, e.to_string()).into_response(),
         Err(WorkflowDriveError::DocumentNotReady(_)) => {
             tracing::info!(%notation_id, "send: document not ready yet");
             (
@@ -2322,20 +2349,15 @@ pub(crate) async fn resolve_intake_review(
             .ok()
             .flatten();
 
+    let (document_ready, approval_progress) = review_document_status(state, &notation_row).await;
     if format == Some("json") {
-        // Per-matter pipeline state: a `StorageService` existence probe on the
-        // document PDF key. A storage error here is non-fatal to the status
-        // read — report `document_ready:false` and let the operator retry
-        // rather than 500 the status call.
-        let document_ready = document_pdf_ready(state.storage.as_ref(), notation_id)
-            .await
-            .unwrap_or(false);
         return Err(axum::Json(serde_json::json!({
             "notation_id": notation_id,
             "state": notation_row.state,
             "signature_request_id": signature_request_id,
             "delivery": notation_row.delivery,
             "document_ready": document_ready,
+            "approval_progress": approval_progress,
         }))
         .into_response());
     }
@@ -2397,12 +2419,22 @@ pub(crate) async fn resolve_intake_review(
     Ok(webapp::intake_review::IntakeReviewData {
         notation_id: notation_id.to_string(),
         workflow_state: notation_row.state,
+        document_ready,
+        approval_notice: match approval_progress {
+            Some(workflows::ApprovalProgress::Pending) => {
+                Some(webapp::intake_review::ApprovalNotice::Pending)
+            }
+            Some(workflows::ApprovalProgress::Failed) => {
+                Some(webapp::intake_review::ApprovalNotice::Failed)
+            }
+            _ => None,
+        },
         signature_request_id,
         rendered_html,
         governing_law_defaulted,
         reask_questions,
         envelope,
-        approve_send_label: "Approve and send for signature".to_string(),
+        approve_send_label: "Approve and render PDF".to_string(),
     })
 }
 
@@ -2422,6 +2454,31 @@ pub(crate) fn back_to_review(notation_id: Uuid) -> Response {
 /// the seeded question rows, falling back to the code. Best-effort: a read
 /// failure yields an empty list, so the review page still renders (just
 /// without the request-changes panel).
+async fn review_document_status(
+    state: &AdminState,
+    notation: &store::notations::Notation,
+) -> (bool, Option<workflows::ApprovalProgress>) {
+    let notation_id = notation.id;
+    let document_ready = document_pdf_ready(state.storage.as_ref(), notation_id)
+        .await
+        .unwrap_or(false);
+    let approval_progress = if notation.state == "lawyer_review" {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            state
+                .workflow_runtime
+                .approval_progress(notation_id, notation.updated_at.timestamp_micros()),
+        )
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .flatten()
+    } else {
+        None
+    };
+    (document_ready, approval_progress)
+}
+
 async fn questionnaire_questions(state: &AdminState, notation_id: Uuid) -> Vec<(String, String)> {
     let codes = notation_session::questionnaire_chain_for_reask(
         &state.surreal,

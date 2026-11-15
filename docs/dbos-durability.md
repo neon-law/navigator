@@ -363,6 +363,12 @@ carries — and the door and the CLI verb accept `dry-run` to rehearse without t
 `NAVIGATOR_WORKFLOW_ENGINE=dbos`. The caller requires `NAVIGATOR_DBOS_INGRESS_URL` and `NAVIGATOR_DBOS_INGRESS_TOKEN`;
 the worker requires the same token and its PostgreSQL configuration. The switch defaults off.
 
+The DBOS worker acknowledges a Lawyer Review approval after starting a durable transition for that review revision. The
+worker renders and journals the approved PDF before publishing the Notation state. A repeat approval reconciles a
+Notation that still shows Lawyer Review after its Workflow advanced and the PDF was persisted. Envelope dispatch records
+the draft ID before entering the signing state and checks that ID with the provider on retry. The review screen reports
+a queued or failed run while the Notation still shows Lawyer Review.
+
 The worker stores both machines in `notation_machine_state` and serializes transitions with one PostgreSQL advisory lane
 per Notation. A target-only `notation_transition` pending row retains ownership across failure, cancellation, and
 executor loss. The first DBOS checkpoint records its logical UUID. A second pure anchor commits before admission. To
@@ -375,7 +381,7 @@ changing traffic: its own lane does not coordinate with the DBOS lane.
 
 Completed DBOS checkpoints are reused on recovery. A crash after an email, artifact write, journal append, or funnel
 record succeeds but before its checkpoint commits can repeat that effect. These effects are at least once; the state
-compare-and-set does not make them exactly once. This PR does not enable the switch in a deployment.
+compare-and-set does not make them exactly once.
 
 ## Social publishing in the worker
 

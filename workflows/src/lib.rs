@@ -111,7 +111,8 @@ pub use notify::{
 };
 pub use post_questionnaire::{PostQuestionnaireDrive, PostQuestionnaireError};
 pub use runtime::{
-    InMemoryRuntime, SignalContext, StateMachineRuntime, WorkflowEvent, WorkflowRuntimeError,
+    ApprovalProgress, InMemoryRuntime, SignalContext, StateMachineRuntime, WorkflowEvent,
+    WorkflowRuntimeError,
 };
 #[cfg(feature = "dbos")]
 pub use runtime_dbos::{enabled as dbos_notation_enabled, DbosNotationRuntime, RuntimeConfigError};

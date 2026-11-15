@@ -20,11 +20,9 @@
 //!   are reused. Effects remain at least once when a process dies after a
 //!   send or journal append but before its checkpoint commits.
 //!
-//! One DBOS workflow carries exactly one transition (`start`, `signal`, or
-//! `back`) and gets a fresh workflow id per call — the parity for Restate
-//! giving every POST its own invocation. The caller-facing wire shapes stay
-//! the property of the worker ingress (`crate::dbos_ingress`), which speaks
-//! the same paths and bodies the Restate ingress did.
+//! One DBOS workflow carries exactly one transition. Start, signal, and back
+//! run synchronously through the worker ingress. Approval uses a stable
+//! workflow ID for the submitted review revision and returns after submission.
 //!
 //! Store/transport failures are retried by the steps that hit them
 //! (`retryable_steps` below); deterministic outcomes — a bad spec, no
@@ -143,6 +141,12 @@ pub enum Operation {
         acting_person_id: Option<uuid::Uuid>,
         #[serde(default)]
         ephemeral: bool,
+    },
+    /// Approve the specific Lawyer Review revision submitted by the caller.
+    Approve {
+        review_revision: i64,
+        value: String,
+        acting_person_id: Option<uuid::Uuid>,
     },
     /// `questionnaire_back` — move back one answerable question, appending
     /// the immutable `back` journal transition.
@@ -360,11 +364,26 @@ async fn transition(
             .await
             .map_err(|error| operation_error(error, notation_id))?;
     }
-    let report = match request.operation {
+    let report = execute_operation(&context, request).await?;
+    let result = serde_json::to_value(&report).map_err(|error| {
+        dbos::Error::Application(NotationTransitionError::Store(error.to_string()))
+    })?;
+    operations::complete(&context.postgres, operation_id, &result)
+        .await
+        .map_err(|error| operation_error(error, notation_id))?;
+    Ok(report)
+}
+
+async fn execute_operation(
+    context: &Context,
+    request: TransitionRequest,
+) -> dbos::Result<TransitionReport, NotationTransitionError> {
+    let notation_id = request.notation_id;
+    match request.operation {
         Operation::Start {
             spec_yaml,
             ephemeral,
-        } => start_machine(&context, request.kind, notation_id, &spec_yaml, ephemeral).await,
+        } => start_machine(context, request.kind, notation_id, &spec_yaml, ephemeral).await,
         Operation::Signal {
             condition,
             value,
@@ -372,7 +391,7 @@ async fn transition(
             ephemeral,
         } => {
             signal(
-                &context,
+                context,
                 request.kind,
                 notation_id,
                 &condition,
@@ -382,23 +401,32 @@ async fn transition(
             )
             .await
         }
+        Operation::Approve {
+            value,
+            acting_person_id,
+            ..
+        } => {
+            signal(
+                context,
+                MachineKind::Workflow,
+                notation_id,
+                "approved",
+                Some(value),
+                acting_person_id,
+                false,
+            )
+            .await
+        }
         Operation::Back { acting_person_id } => {
             back(
-                &context,
+                context,
                 notation_id,
                 kind_token(request.kind),
                 acting_person_id,
             )
             .await
         }
-    }?;
-    let result = serde_json::to_value(&report).map_err(|error| {
-        dbos::Error::Application(NotationTransitionError::Store(error.to_string()))
-    })?;
-    operations::complete(&context.postgres, operation_id, &result)
-        .await
-        .map_err(|error| operation_error(error, notation_id))?;
-    Ok(report)
+    }
 }
 
 fn operation_error(
@@ -446,7 +474,26 @@ async fn preflight(
         })
     })?;
     let spec = parse_spec(kind, &machine.spec_yaml).map_err(dbos::Error::Application)?;
-    if let Operation::Signal { condition, .. } = &request.operation {
+    let condition = match &request.operation {
+        Operation::Signal { condition, .. } => Some(condition.as_str()),
+        Operation::Approve {
+            review_revision, ..
+        } => {
+            let notation = store::notations::find_by_id(&context.surreal, request.notation_id)
+                .await
+                .map_err(|error| {
+                    dbos::Error::Application(NotationTransitionError::Store(error.to_string()))
+                })?;
+            if notation.is_none_or(|row| row.updated_at.timestamp_micros() != *review_revision) {
+                return Err(dbos::Error::Application(NotationTransitionError::Terminal(
+                    "Lawyer Review changed after the approval was submitted".into(),
+                )));
+            }
+            Some("approved")
+        }
+        _ => None,
+    };
+    if let Some(condition) = condition {
         advance(
             spec.inner(),
             &StateName::from(machine.current_state.as_str()),
@@ -680,13 +727,21 @@ async fn signal(
                 let value = value.clone();
                 async move {
                     let deps = StepDeps::new(email, storage).with_surreal(surreal);
-                    dispatch_step(&deps, notation_id, &state, value.as_deref())
-                        .await
-                        .map_err(|error| {
-                            dbos::Error::Application(NotationTransitionError::Store(format!(
-                                "dispatch: {error}"
-                            )))
-                        })
+                    let started = std::time::Instant::now();
+                    let result = dispatch_step(&deps, notation_id, &state, value.as_deref()).await;
+                    if state.prefix() == "generate_pdf" {
+                        tracing::info!(
+                            %notation_id,
+                            elapsed_ms = started.elapsed().as_millis(),
+                            rendered = result.is_ok(),
+                            "approval render completed",
+                        );
+                    }
+                    result.map_err(|error| {
+                        dbos::Error::Application(NotationTransitionError::Store(format!(
+                            "dispatch: {error}"
+                        )))
+                    })
                 }
             })
             .await?
@@ -797,6 +852,30 @@ async fn signal(
             })
             .await?;
         }
+    }
+
+    if !ephemeral
+        && kind == MachineKind::Workflow
+        && condition == "approved"
+        && next.prefix() == "generate_pdf"
+    {
+        // Keep the Lawyer Review projection recoverable even after the caller
+        // disconnects. Publish the new state after the render and journal.
+        let surreal = context.surreal.clone();
+        let approved_state = next.as_str().to_owned();
+        dbos::step_with("publish-approval-state", retryable_steps(), move || {
+            let surreal = surreal.clone();
+            let approved_state = approved_state.clone();
+            async move {
+                store::notations::update_state(&surreal, notation_id, &approved_state)
+                    .await
+                    .map(|_| ())
+                    .map_err(|error| {
+                        dbos::Error::Application(NotationTransitionError::Store(error.to_string()))
+                    })
+            }
+        })
+        .await?;
     }
 
     Ok(TransitionReport {
