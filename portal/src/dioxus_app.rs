@@ -5252,6 +5252,7 @@ pub fn firm_show_router(
             FIRM_SHOW_PATH,
             get(render_handler)
                 .layer(from_fn(dioxus_document_head))
+                .layer(from_fn(inject_csrf_token))
                 .layer(from_fn(inject_viewer_role))
                 .layer(from_fn(inject_person_id))
                 .layer(from_fn(inject_app_brand_mark)),

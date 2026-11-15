@@ -39,6 +39,7 @@ struct Fixture {
     app: axum::Router,
     surreal: store::surreal::SurrealDb,
     firm_id: Uuid,
+    dri_id: Uuid,
     dri: String,
     other_admin: String,
     owner: String,
@@ -98,6 +99,7 @@ async fn build_fixture() -> Fixture {
         app: server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR)),
         surreal,
         firm_id: firm.id,
+        dri_id,
         dri: bearer(dri_id, Role::Admin),
         other_admin: bearer(other_admin_id, Role::Admin),
         owner: bearer(owner_id, Role::Owner),
@@ -152,6 +154,41 @@ async fn get_show(app: &axum::Router, path: &str, token: &str) -> String {
         .unwrap();
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     String::from_utf8_lossy(&bytes).to_string()
+}
+
+#[tokio::test]
+async fn the_firm_secret_form_embeds_the_signed_in_dris_csrf_token() {
+    let fx = build_fixture().await;
+    let mut session = portal::SessionData::fresh("dri@example.com", Role::Admin);
+    session.person_id = Some(fx.dri_id);
+    let cookie = format!(
+        "{}={}",
+        portal::session::SESSION_COOKIE_NAME,
+        SessionStore::new(KEY).encode(&session)
+    );
+    let path = format!("/app/admin/firms/{}", fx.firm_id);
+    let page = fx
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(&path)
+                .header("cookie", cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(page.status(), StatusCode::OK);
+    let bytes = page.into_body().collect().await.unwrap().to_bytes();
+    let html = String::from_utf8_lossy(&bytes);
+    let action = format!("action=\"{path}/secrets\"");
+    let form = html
+        .split_once(&action)
+        .and_then(|(_, rest)| rest.split_once("</form>"))
+        .expect("the Admin DRI can open the integration secret form")
+        .0;
+    assert!(form.contains(&format!("name=\"_csrf\" value=\"{}\"", session.csrf_token)));
 }
 
 #[tokio::test]
