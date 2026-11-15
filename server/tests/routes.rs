@@ -17832,7 +17832,7 @@ async fn project_detail_page_renders_documents_and_upload_form() {
 }
 
 #[tokio::test]
-async fn project_document_detail_page_shows_provenance_and_download_link() {
+async fn project_document_detail_page_starts_pdf_preview_and_offers_download() {
     let (state, surreal) = state_with_engines().await;
 
     let __dri = store::test_support::dri_person(&surreal).await;
@@ -17844,15 +17844,15 @@ async fn project_document_detail_page_shows_provenance_and_download_link() {
         source: "upload",
         filename: "engagement-letter.pdf",
         kind: "onboarding",
-        content_type: "application/pdf",
+        content_type: "application/octet-stream",
         description: Some("Initial upload"),
         secondary_storage_key: None,
         visibility: store::documents::visibility::INTERNAL,
     };
-    let ingested =
-        store::documents::ingest_bytes(&state.surreal, &state.storage, &args, b"hello world")
-            .await
-            .unwrap();
+    let pdf = include_bytes!("../../cli/testdata/synthetic-initial-case-assessment.pdf");
+    let ingested = store::documents::ingest_bytes(&state.surreal, &state.storage, &args, pdf)
+        .await
+        .unwrap();
 
     let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
     let resp = app
@@ -17879,12 +17879,25 @@ async fn project_document_detail_page_shows_provenance_and_download_link() {
     assert!(body.contains("upload"));
     assert!(!body.contains("Source revision"));
     assert!(body.contains("Initial upload"));
-    assert!(body.contains("application/pdf"));
+    assert!(body.contains("application/octet-stream"));
     assert!(body.contains(&ingested.sha256_hex));
-    assert!(body.contains(&format!(
-        "/app/projects/{project_code}/documents/{}/download",
+    assert!(body.contains(r#"src="/public/js/pdf-viewer.js""#));
+    let html = Html::parse_document(&body);
+    let preview = Selector::parse("[data-pdf-src]").unwrap();
+    let download = Selector::parse(".document-actions a").unwrap();
+    let src = html
+        .select(&preview)
+        .next()
+        .unwrap()
+        .attr("data-pdf-src")
+        .unwrap();
+    let download = html.select(&download).next().unwrap();
+    assert!(src.starts_with(&format!(
+        "/app/projects/{project_code}/documents/{}/download?fp=",
         ingested.asset_id
     )));
+    assert_eq!(download.attr("href"), Some(src));
+    assert_eq!(download.text().collect::<String>(), "Download");
 }
 
 #[tokio::test]
