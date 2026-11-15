@@ -1812,6 +1812,28 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/integrations/calendar/events": {
+            "post": {
+                "summary": "Read events from an authorized synthetic Project Calendar on staging",
+                "requestBody": { "required": true, "content": { "application/json": { "schema": {
+                    "type": "object",
+                    "required": ["project_code", "start", "end"],
+                    "properties": {
+                        "project_code": { "type": "string" },
+                        "start": { "type": "string", "format": "date-time" },
+                        "end": { "type": "string", "format": "date-time" }
+                    }
+                } } } },
+                "responses": {
+                    "200": { "description": "Calendar event list" },
+                    "400": { "description": "Invalid event window" },
+                    "401": { "description": "No authenticated session" },
+                    "403": { "description": "Administrator access required" },
+                    "404": { "description": "Project Calendar outside the authorized staging scope" },
+                    "502": { "description": "Calendar provider unavailable" }
+                }
+            }
+        },
         "/app/api/integrations/calendar/ensure": {
           "post": {
             "summary": "Create or adopt each Project's shared Google Calendar (admin)",

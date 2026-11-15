@@ -630,3 +630,60 @@ async fn deadline_sync_fails_when_the_report_is_not_an_array() {
         .stderr(predicates::str::contains("mirror report is not an array"));
     server.verify().await;
 }
+
+#[tokio::test]
+async fn calendar_events_reads_the_synthetic_project_window() {
+    let server = MockServer::start().await;
+    let root = TempDir::new().unwrap();
+    let host = server.uri();
+    let credentials = root.path().join("credentials.json");
+    std::fs::write(
+        &credentials,
+        json!({"hosts":{host.clone():{
+            "token":"test-token", "person_email":"admin@example.com", "role":"admin",
+            "expires_at":i64::MAX
+        }}})
+        .to_string(),
+    )
+    .unwrap();
+    let events = json!([{
+        "id": "evt_1", "summary": "Synthetic call",
+        "start": {"dateTime": "2026-11-01T13:00:00Z"},
+        "end": {"dateTime": "2026-11-01T14:00:00Z"}
+    }]);
+    Mock::given(method("POST"))
+        .and(path("/app/api/integrations/calendar/events"))
+        .and(header("authorization", "Bearer test-token"))
+        .and(body_json(json!({
+            "project_code": "sample-litigation",
+            "start": "2026-11-01T00:00:00Z",
+            "end": "2026-11-02T00:00:00Z"
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&events))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = Command::cargo_bin("navigator")
+        .unwrap()
+        .current_dir(root.path())
+        .env("NAVIGATOR_CREDENTIALS_FILE", &credentials)
+        .args([
+            "calendar",
+            "events",
+            "--project",
+            "sample-litigation",
+            "--host",
+            &host,
+            "--start",
+            "2026-11-01T00:00:00Z",
+            "--end",
+            "2026-11-02T00:00:00Z",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(serde_json::from_slice::<Value>(&output).unwrap(), events);
+}

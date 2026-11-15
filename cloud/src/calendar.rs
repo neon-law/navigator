@@ -114,6 +114,25 @@ pub struct StoredEvent {
     pub private_properties: BTreeMap<String, String>,
 }
 
+/// An event returned by an authorized Project Calendar read.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ProjectCalendarEvent {
+    pub id: String,
+    pub summary: Option<String>,
+    pub start: ProjectCalendarEventTime,
+    pub end: ProjectCalendarEventTime,
+}
+
+/// Google Calendar uses a civil date for all-day events and RFC 3339 for timed events.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectCalendarEventTime {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub date: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub date_time: Option<String>,
+}
+
 #[derive(Debug, Error)]
 pub enum CalendarError {
     #[error("missing required Calendar configuration: {0}")]
@@ -161,6 +180,32 @@ pub trait CalendarService: Send + Sync {
         email: &str,
         role: CalendarRole,
     ) -> Result<(), CalendarError>;
+
+    /// Read a Project Calendar only when its recorded id agrees with the
+    /// unique calendar the deployment owns under the Project code.
+    async fn project_events(
+        &self,
+        project_code: &str,
+        recorded_id: &str,
+        start: DateTime<FixedOffset>,
+        end: DateTime<FixedOffset>,
+    ) -> Result<Option<Vec<ProjectCalendarEvent>>, CalendarError> {
+        let owned = self.find_calendar(project_code).await?;
+        if owned.is_none_or(|calendar| calendar.id != recorded_id) {
+            return Ok(None);
+        }
+        self.events_in_window(recorded_id, start, end)
+            .await
+            .map(Some)
+    }
+
+    /// List the events overlapping the bounded half-open window.
+    async fn events_in_window(
+        &self,
+        calendar_id: &str,
+        start: DateTime<FixedOffset>,
+        end: DateTime<FixedOffset>,
+    ) -> Result<Vec<ProjectCalendarEvent>, CalendarError>;
 
     /// Insert the event and read back its stored identity.
     async fn insert_event(
@@ -281,10 +326,65 @@ impl GoogleCalendar {
             })
         }
     }
+
+    async fn list_events<T: serde::de::DeserializeOwned>(
+        &self,
+        calendar_id: &str,
+        action: &'static str,
+        options: &[(&str, &str)],
+    ) -> Result<Vec<T>, CalendarError> {
+        let mut events = Vec::new();
+        let mut page_token: Option<String> = None;
+        loop {
+            let token = self.token().await?;
+            let mut query = options.to_vec();
+            if let Some(page) = &page_token {
+                query.push(("pageToken", page));
+            }
+            let page = Self::checked(
+                self.http
+                    .get(self.url(&["calendars", calendar_id, "events"]))
+                    .bearer_auth(token)
+                    .query(&query)
+                    .send()
+                    .await,
+                action,
+            )?
+            .json::<EventPage<T>>()
+            .await
+            .map_err(|source| CalendarError::Response { action, source })?;
+            events.extend(page.items);
+            page_token = page.next_page_token;
+            if page_token.is_none() {
+                return Ok(events);
+            }
+        }
+    }
 }
 
 #[async_trait]
 impl CalendarService for GoogleCalendar {
+    async fn events_in_window(
+        &self,
+        calendar_id: &str,
+        start: DateTime<FixedOffset>,
+        end: DateTime<FixedOffset>,
+    ) -> Result<Vec<ProjectCalendarEvent>, CalendarError> {
+        let start = start.to_rfc3339();
+        let end = end.to_rfc3339();
+        self.list_events(
+            calendar_id,
+            "listing project calendar events",
+            &[
+                ("timeMin", &start),
+                ("timeMax", &end),
+                ("singleEvents", "true"),
+                ("orderBy", "startTime"),
+                ("fields", "nextPageToken,items(id,summary,start,end)"),
+            ],
+        )
+        .await
+    }
     async fn find_calendar(&self, summary: &str) -> Result<Option<ProjectCalendar>, CalendarError> {
         let action = "listing calendars";
         let mut found = Vec::new();
@@ -514,39 +614,16 @@ impl CalendarService for GoogleCalendar {
         key: &str,
         value: &str,
     ) -> Result<Vec<StoredEvent>, CalendarError> {
-        let action = "listing mirrored events";
-        let mut found = Vec::new();
-        let mut page_token: Option<String> = None;
-        loop {
-            let token = self.token().await?;
-            let mut query = vec![
-                ("privateExtendedProperty", format!("{key}={value}")),
-                ("maxResults", "250".to_string()),
-            ];
-            if let Some(page) = &page_token {
-                query.push(("pageToken", page.clone()));
-            }
-            let page = Self::checked(
-                self.http
-                    .get(self.url(&["calendars", calendar_id, "events"]))
-                    .bearer_auth(token)
-                    .query(&query)
-                    .send()
-                    .await,
-                action,
-            )?
-            .json::<EventPage>()
-            .await
-            .map_err(|source| CalendarError::Response { action, source })?;
-            for event in &page.items {
-                found.push(stored_event(event)?);
-            }
-            page_token = page.next_page_token;
-            if page_token.is_none() {
-                break;
-            }
-        }
-        Ok(found)
+        let filter = format!("{key}={value}");
+        self.list_events::<EventResource>(
+            calendar_id,
+            "listing mirrored events",
+            &[("privateExtendedProperty", &filter), ("maxResults", "250")],
+        )
+        .await?
+        .iter()
+        .map(stored_event)
+        .collect()
     }
 }
 
@@ -592,10 +669,10 @@ struct AclScope {
 
 /// One page of a filtered events read.
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct EventPage {
+#[serde(rename_all = "camelCase", bound(deserialize = "T: Deserialize<'de>"))]
+struct EventPage<T> {
     #[serde(default)]
-    items: Vec<EventResource>,
+    items: Vec<T>,
     next_page_token: Option<String>,
 }
 
@@ -810,6 +887,42 @@ impl FakeCalendar {
 
 #[async_trait]
 impl CalendarService for FakeCalendar {
+    async fn events_in_window(
+        &self,
+        calendar_id: &str,
+        start: DateTime<FixedOffset>,
+        end: DateTime<FixedOffset>,
+    ) -> Result<Vec<ProjectCalendarEvent>, CalendarError> {
+        let state = self.state.lock().expect("fake calendar mutex poisoned");
+        let mut events: Vec<_> = state
+            .events
+            .get(calendar_id)
+            .into_iter()
+            .flatten()
+            .filter(|(_, event)| !event.cancelled && start < event.start && event.start < end)
+            .map(|(id, event)| (event.start, id, &event.summary))
+            .collect();
+        events.sort_unstable();
+        Ok(events
+            .into_iter()
+            .map(|(start, id, summary)| {
+                let instant = start.to_rfc3339();
+                ProjectCalendarEvent {
+                    id: id.clone(),
+                    summary: Some(summary.clone()),
+                    start: ProjectCalendarEventTime {
+                        date: None,
+                        date_time: Some(instant.clone()),
+                    },
+                    end: ProjectCalendarEventTime {
+                        date: None,
+                        date_time: Some(instant),
+                    },
+                }
+            })
+            .collect())
+    }
+
     async fn find_calendar(&self, summary: &str) -> Result<Option<ProjectCalendar>, CalendarError> {
         let state = self.state.lock().expect("fake calendar mutex poisoned");
         let found: Vec<_> = state
@@ -1326,6 +1439,55 @@ mod tests {
         let calendar = google(&server);
         calendar.delete_event(calendar_id, "evt_1").await.unwrap();
         calendar.delete_event(calendar_id, "evt_1").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn project_events_only_read_the_verified_owned_calendar() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/users/me/calendarList"))
+            .and(query_param("minAccessRole", "owner"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "items": [{"id": "owned", "summary": "sample-litigation"}]
+            })))
+            .expect(2)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/calendars/different/events"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/calendars/owned/events"))
+            .and(query_param("timeMin", "2026-11-01T00:00:00+00:00"))
+            .and(query_param("timeMax", "2026-11-02T00:00:00+00:00"))
+            .and(query_param("singleEvents", "true"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "items": [{
+                    "id": "evt_1", "summary": "Synthetic call",
+                    "start": {"dateTime": "2026-11-01T13:00:00Z"},
+                    "end": {"dateTime": "2026-11-01T14:00:00Z"}
+                }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let calendar = google(&server);
+        let start = DateTime::parse_from_rfc3339("2026-11-01T00:00:00Z").unwrap();
+        let end = DateTime::parse_from_rfc3339("2026-11-02T00:00:00Z").unwrap();
+        assert!(calendar
+            .project_events("sample-litigation", "different", start, end)
+            .await
+            .unwrap()
+            .is_none());
+        let events = calendar
+            .project_events("sample-litigation", "owned", start, end)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(events[0].summary.as_deref(), Some("Synthetic call"));
     }
 
     #[tokio::test]

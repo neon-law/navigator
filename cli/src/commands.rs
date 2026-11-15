@@ -111,6 +111,11 @@ enum Command {
         #[command(subcommand)]
         action: SiteCmd,
     },
+    /// Read an authorized synthetic Project Calendar on staging.
+    Calendar {
+        #[command(subcommand)]
+        action: CalendarCmd,
+    },
     /// Prepare or send a Notation's rendered document envelope on the
     /// deployment. The Project — host and code — comes from the
     /// `navigator.yaml` in the current checkout.
@@ -135,6 +140,25 @@ pub enum NotationCmd {
     Envelope {
         #[command(subcommand)]
         action: EnvelopeCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum CalendarCmd {
+    /// List Project Calendar events as JSON.
+    Events {
+        /// Synthetic Project code.
+        #[arg(long)]
+        project: String,
+        /// Start of the window in RFC 3339 format.
+        #[arg(long)]
+        start: chrono::DateTime<chrono::FixedOffset>,
+        /// End of the window in RFC 3339 format.
+        #[arg(long)]
+        end: chrono::DateTime<chrono::FixedOffset>,
+        /// Navigator staging host.
+        #[arg(long)]
+        host: String,
     },
 }
 
@@ -349,6 +373,17 @@ fn run() -> ExitCode {
         },
         Command::Glossary { action } => crate::glossary::run(action),
         Command::Site { action } => run_site(action),
+        Command::Calendar {
+            action:
+                CalendarCmd::Events {
+                    project,
+                    start,
+                    end,
+                    host,
+                },
+        } => runtime().block_on(crate::projects::calendar::events(
+            &host, &project, start, end,
+        )),
     }
 }
 

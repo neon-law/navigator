@@ -30,6 +30,11 @@ ci_matter_content_denied if {
     not own_section_counts
 }
 
+ci_matter_content_denied if {
+    input.session.source == "ci"
+    input.path == ["app", "api", "integrations", "calendar", "events"]
+}
+
 own_section_counts if {
     count(input.path) == 5
     input.path[3] == input.session.scope.project_id

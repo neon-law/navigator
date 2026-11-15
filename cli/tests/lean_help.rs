@@ -1,6 +1,7 @@
 //! The lean `navigator` carries Projects, their Jujutsu repositories, the
-//! offline `validate` gate, the notation envelope verbs, the glossary, the site
-//! session plus `seeds/` import a Project repository's CI runs, and the
+//! offline `validate` gate, the notation envelope verbs, the glossary, the
+//! Calendar read, the site session plus `seeds/` import a Project repository's
+//! CI runs, and the
 //! matter-work `site` verbs (documents, mail filing, notations). Deployment
 //! and Firm configuration live in `hudson`; Ephemeris in `scorpio`.
 
@@ -32,7 +33,8 @@ fn help(args: &[&str]) -> String {
 fn the_lean_navigator_names_only_its_own_verbs() {
     assert_eq!(
         command_names(&help(&["--help"])),
-        ["glossary", "notation", "project", "site", "sync", "validate", "help"].map(String::from)
+        ["calendar", "glossary", "notation", "project", "site", "sync", "validate", "help"]
+            .map(String::from)
     );
     assert_eq!(
         command_names(&help(&["site", "--help"])),

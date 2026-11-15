@@ -19,9 +19,17 @@ Closing the Project makes every writer a reader and clears the [Booking Link](bo
 events are kept as part of the matter's record. The matter page links the calendar to the firm side only, as a
 [Resource](resource.md).
 
-The calendar is a place for events, not a second store of them. Navigator does not yet write events to it: scheduled
-calls and mirrored [Deadlines](deadline.md) are separate work, and the [Nightly Project
-Update](nightly-project-update.md) `calendar` tag concerns Deadline rows, not this calendar.
+Navigator mirrors stored [Deadlines](deadline.md) into the Project Calendar. The mirror reads its own events to
+reconcile changes and preserves unrelated events.
+
+On staging, an authorized Firm administrator can inspect a synthetic Project Calendar.
+
+```bash
+navigator calendar events --project <code> --start <RFC3339> --end <RFC3339> --host <staging-host>
+```
+
+The command returns event IDs, summaries, and start and end times as JSON for a window of up to 31 days. The stored
+Calendar ID must match the single calendar the deployment owns with the Project code as its name.
 
 - Provider: [`cloud::calendar`](../../cloud/src/calendar.rs) · setup and close:
   [`store::project_calendar`](../../store/src/project_calendar.rs)

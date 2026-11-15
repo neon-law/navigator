@@ -1155,12 +1155,16 @@ test_admin_can_ensure_a_firm_private_notion_page if {
 	authz.allow with input as {"path": ["app", "api", "integrations", "notion", "ensure"], "method": "POST", "session": admin_session}
 }
 
-test_admin_can_ensure_a_project_calendar if {
+test_admin_can_ensure_and_read_a_project_calendar if {
 	authz.allow with input as {"path": ["app", "api", "integrations", "calendar", "ensure"], "method": "POST", "session": admin_session}
+	authz.allow with input as {"path": ["app", "api", "integrations", "calendar", "events"], "method": "POST", "session": admin_session}
 }
 
-test_a_client_cannot_ensure_a_project_calendar if {
+test_calendar_integrations_deny_clients_and_ci_reads if {
 	not authz.allow with input as {"path": ["app", "api", "integrations", "calendar", "ensure"], "method": "POST", "session": client_session}
+	not authz.allow with input as {"path": ["app", "api", "integrations", "calendar", "events"], "method": "POST", "session": client_session}
+	session := object.union(owner_session, {"source": "ci", "scope": {"project_id": "synthetic"}})
+	not authz.allow with input as {"path": ["app", "api", "integrations", "calendar", "events"], "method": "POST", "session": session}
 }
 
 test_owner_can_ensure_a_firm_private_slack_channel if {
