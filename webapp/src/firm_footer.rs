@@ -252,7 +252,7 @@ mod tests {
             views::brand::BrandKey::GuiebShook.public_home_href(),
             "the compiled fallback resolves the compiled firm brand's production home"
         );
-        let other = compiled_firm_footer_model(views::brand::BrandKey::DeleteYourData, 2026);
+        let other = compiled_firm_footer_model(views::brand::BrandKey::LexTecnica, 2026);
         assert_eq!(other.legal_entity, "Lex Tecnica, Ltd.");
         assert_eq!(
             other.firm_home_href, "",

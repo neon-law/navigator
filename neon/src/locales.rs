@@ -2798,7 +2798,7 @@ mod tests {
         assert_eq!(listing_price, &privacy.price);
         let text = serde_yaml::to_string(&content).expect("serialize");
         assert!(text.contains("does not") || text.contains("do not"));
-        assert!(text.contains("Lex Tecnica, Ltd."));
+        assert!(text.contains("Guieb & Shook PC"));
         assert!(text.contains("attorney-client privilege"));
     }
 

@@ -8,10 +8,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::people::ViewerRole;
 
-/// The `<meta description>` for the owner listing.
-const DESCRIPTION: &str =
-    "Every practice on this Navigator deployment, and the house brands each one wears.";
-
 /// One practice on the listing, with the entity it is and the brand keys it wears.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct FirmCard {
@@ -120,7 +116,6 @@ pub fn owner_home_body(view: &OwnerHomeView) -> Element {
 
     rsx! {
         document::Title { "{firm_name} | Owner" }
-        document::Meta { name: "description", content: DESCRIPTION }
         document::Stylesheet { href: crate::components::THEME_STYLESHEET_HREF }
         document::Stylesheet { href: "{view.tokens_href}" }
         crate::components::AppNavbar {
@@ -130,16 +125,11 @@ pub fn owner_home_body(view: &OwnerHomeView) -> Element {
         main { id: "owner-home", class: "nav-theme",
             header { class: "page-header",
                 h1 { "Firms" }
-                p { class: "page-subtitle",
-                    "Every practice on this deployment, and the house brands each one wears."
-                }
                 p {
                     a { class: "nav-btn nav-btn--primary", href: "/app/owner/firms/new", "New firm" }
                     " "
                     a { class: "nav-btn", href: "/app/owner/firms/move-brand", "Move brand" }
                 }
-                p { a { class: "nav-btn", href: "/app/owner/inbox", "Inbox" } }
-                p { a { class: "nav-btn", href: "/app/owner/keys", "Social app keys" } }
             }
             div { class: "team-home__cards", "aria-label": "Firms",
                 if view.firms.is_empty() {
@@ -188,7 +178,7 @@ mod tests {
     #[test]
     fn empty_inventory_still_renders_the_heading() {
         let html = render(Vec::new());
-        assert!(html.contains("Every practice on this deployment"), "{html}");
+        assert!(html.contains("<h1>Firms</h1>"), "{html}");
         assert!(
             html.contains("No practices are recorded on this deployment."),
             "{html}"
@@ -206,6 +196,7 @@ mod tests {
             html.contains(r#"href="/app/owner/firms/move-brand""#),
             "{html}"
         );
-        assert!(html.contains(r#"href="/app/owner/inbox""#), "{html}");
+        assert!(!html.contains(r#"href="/app/owner/inbox""#), "{html}");
+        assert!(!html.contains(r#"href="/app/owner/keys""#), "{html}");
     }
 }

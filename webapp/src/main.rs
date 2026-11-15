@@ -1,9 +1,8 @@
 //! Client entry point for the wasm bundle.
 //!
 //! `dx` compiles this binary to `wasm32-unknown-unknown` with the `web`
-//! feature; the design gallery and campaign launch their matching server-rendered
-//! roots. Private Matter Pages and the inbox workspaces launch their dedicated
-//! roots; other routes retain [`webapp::App`]. Navigator's server is the `web`
+//! feature. Interactive design, campaign, Matter, inbox, and brand move pages
+//! launch their server-rendered roots. Other routes retain [`webapp::App`]. Navigator's server is the `web`
 //! crate, not this binary — `web` links `webapp` as a library — so with no
 //! platform feature selected (the workspace default) `main` is intentionally
 //! empty and `cargo build --workspace` stays green.
@@ -19,6 +18,10 @@ fn main() {
         let is_cyber_home = web_sys::window()
             .and_then(|window| window.document())
             .and_then(|document| document.get_element_by_id("cyber-main"))
+            .is_some();
+        let is_firm_move = web_sys::window()
+            .and_then(|window| window.document())
+            .and_then(|document| document.get_element_by_id("firm-move"))
             .is_some();
         let is_matter_page = web_sys::window().is_some_and(|window| {
             let path = window.location().pathname().unwrap_or_default();
@@ -39,6 +42,8 @@ fn main() {
             webapp::design::DesignGallery
         } else if is_cyber_home {
             webapp::home::HomePageEntry
+        } else if is_firm_move {
+            webapp::firm_move::MoveBrand
         } else if is_matter_page {
             webapp::sections::page::MatterPage
         } else if inbox == Some(InboxRoot::Firm) {

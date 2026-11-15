@@ -557,7 +557,7 @@ pub static DELETE_YOUR_DATA_BRANDING: Branding = Branding {
         social_image: "/public/brand/delete-your-data/logo.png",
         nav: &[],
         is_law_firm: true,
-        legal_entity: LEX_TECNICA_LEGAL_ENTITY,
+        legal_entity: DEFAULT_BRANDING.firm.legal_entity,
     },
     firm_email: "contact@deleteyourdata.com",
     support_domain: "deleteyourdata.com",
@@ -567,9 +567,9 @@ pub static DELETE_YOUR_DATA_BRANDING: Branding = Branding {
     firm_attorneys: &[],
     firm_memberships: FIRM_MEMBERSHIPS,
     firm_social: SHARED_SOCIAL,
-    firm_family: BrandKey::LEX_TECNICA_FAMILY,
+    firm_family: BrandKey::GUIEB_SHOOK_FAMILY,
     consultation_url: SHOOK_CONSULTATION_URL,
-    terms_url: LEX_TECNICA_TERMS_URL,
+    terms_url: "/terms",
     privacy_url: "/privacy",
     base_url: "",
     primary_domain: "deleteyourdata.com",
@@ -727,7 +727,7 @@ pub static VESTA_BRANDING: Branding = Branding {
             NavLink::leaf("Probate", "/probate"),
         ],
         is_law_firm: true,
-        legal_entity: LEX_TECNICA_LEGAL_ENTITY,
+        legal_entity: DEFAULT_BRANDING.firm.legal_entity,
     },
     firm_email: "contact@vestaestateplanning.com",
     support_domain: "vestaestateplanning.com",
@@ -736,15 +736,15 @@ pub static VESTA_BRANDING: Branding = Branding {
     firm_attorneys: &[],
     firm_memberships: FIRM_MEMBERSHIPS,
     firm_social: VESTA_SOCIAL,
-    firm_family: BrandKey::LEX_TECNICA_FAMILY,
+    firm_family: BrandKey::GUIEB_SHOOK_FAMILY,
     consultation_url: SHOOK_CONSULTATION_URL,
-    terms_url: LEX_TECNICA_TERMS_URL,
+    terms_url: "/terms",
     privacy_url: "/privacy",
     base_url: "",
     primary_domain: "vestaestateplanning.com",
     firm_disclaimer: "Attorney advertisement. Nothing here is legal advice without a signed retainer for an active project. Past results do not guarantee future outcomes.",
-    mission_description: "Vesta Estate Planning is a practice of Lex Tecnica, Ltd. We create estate plans tailored to your life and assess whether Nevada asset protection planning fits. A licensed attorney prepares and reviews the work. Trust administration has separate written terms. Attorney advertisement.",
-    service_description: "Estate planning tailored to you from Vesta Estate Planning, a practice of Lex Tecnica, Ltd. We assess whether a Nevada asset protection trust fits your circumstances and applicable law. Contact us for trust administration; scope and fees are agreed separately in writing.",
+    mission_description: "Vesta Estate Planning is a practice of Guieb & Shook PC We create estate plans tailored to your life and assess whether Nevada asset protection planning fits. A licensed attorney prepares and reviews the work. Trust administration has separate written terms. Attorney advertisement.",
+    service_description: "Estate planning tailored to you from Vesta Estate Planning, a practice of Guieb & Shook PC We assess whether a Nevada asset protection trust fits your circumstances and applicable law. Contact us for trust administration; scope and fees are agreed separately in writing.",
     portal_only: false,
     brand_key: BrandKey::Vesta,
 };
@@ -763,7 +763,7 @@ pub static MISERICORDIA_BRANDING: Branding = Branding {
         social_image: "",
         nav: &[],
         is_law_firm: true,
-        legal_entity: LEX_TECNICA_LEGAL_ENTITY,
+        legal_entity: DEFAULT_BRANDING.firm.legal_entity,
     },
     firm_email: "contact@misericordialaw.com",
     support_domain: "misericordialaw.com",
@@ -772,15 +772,15 @@ pub static MISERICORDIA_BRANDING: Branding = Branding {
     firm_attorneys: &[],
     firm_memberships: FIRM_MEMBERSHIPS,
     firm_social: SHARED_SOCIAL,
-    firm_family: BrandKey::LEX_TECNICA_FAMILY,
+    firm_family: BrandKey::GUIEB_SHOOK_FAMILY,
     consultation_url: SHOOK_CONSULTATION_URL,
-    terms_url: LEX_TECNICA_TERMS_URL,
+    terms_url: "/terms",
     privacy_url: "/privacy",
     base_url: "",
     primary_domain: "misericordialaw.com",
     firm_disclaimer: "Attorney advertisement. Nothing here is legal advice without a signed retainer for an active project. Past results do not guarantee future outcomes.",
-    mission_description: "Misericordia Injury Law is a practice of Lex Tecnica, Ltd. A licensed attorney handles car, truck, motorcycle, pedestrian, premises, and wrongful death claims. The first conversation is free, and the fee is a percentage of what is recovered, agreed in writing beforehand. This is an attorney advertisement, not a promise about a result.",
-    service_description: "Injury claims from Misericordia Injury Law, a practice of Lex Tecnica, Ltd. Free consultation, contingency fee agreed in writing before work begins.",
+    mission_description: "Misericordia Injury Law is a practice of Guieb & Shook PC A licensed attorney handles car, truck, motorcycle, pedestrian, premises, and wrongful death claims. The first conversation is free, and the fee is a percentage of what is recovered, agreed in writing beforehand. This is an attorney advertisement, not a promise about a result.",
+    service_description: "Injury claims from Misericordia Injury Law, a practice of Guieb & Shook PC Free consultation, contingency fee agreed in writing before work begins.",
     portal_only: false,
     brand_key: BrandKey::Misericordia,
 };
@@ -799,7 +799,7 @@ pub static ABHAYA_BRANDING: Branding = Branding {
         social_image: "",
         nav: FIRM_NAV,
         is_law_firm: true,
-        legal_entity: LEX_TECNICA_LEGAL_ENTITY,
+        legal_entity: DEFAULT_BRANDING.firm.legal_entity,
     },
     firm_email: "contact@abhayaimmigration.com",
     support_domain: "abhayaimmigration.com",
@@ -808,15 +808,15 @@ pub static ABHAYA_BRANDING: Branding = Branding {
     firm_attorneys: &[],
     firm_memberships: FIRM_MEMBERSHIPS,
     firm_social: SHARED_SOCIAL,
-    firm_family: BrandKey::LEX_TECNICA_FAMILY,
+    firm_family: BrandKey::GUIEB_SHOOK_FAMILY,
     consultation_url: SHOOK_CONSULTATION_URL,
-    terms_url: LEX_TECNICA_TERMS_URL,
+    terms_url: "/terms",
     privacy_url: "/privacy",
     base_url: "",
     primary_domain: "abhayaimmigration.com",
     firm_disclaimer: "Attorney advertisement. Nothing here is legal advice without a signed retainer for an active project. Past results do not guarantee future outcomes.",
-    mission_description: "Abhaya Immigration is a practice of Lex Tecnica, Ltd. A licensed attorney handles work visas, family petitions, green cards, naturalization, consular processing, employer sponsorship, and USCIS notice responses for a flat fee quoted before work begins. Government filing fees are separate. We cannot promise approval or a government timeline; the relevant agency decides. This is an attorney advertisement.",
-    service_description: "Immigration work from Abhaya Immigration, a practice of Lex Tecnica, Ltd. Flat fees quoted before work begins, with USCIS filing fees separate and government-set.",
+    mission_description: "Abhaya Immigration is a practice of Guieb & Shook PC A licensed attorney handles work visas, family petitions, green cards, naturalization, consular processing, employer sponsorship, and USCIS notice responses for a flat fee quoted before work begins. Government filing fees are separate. We cannot promise approval or a government timeline; the relevant agency decides. This is an attorney advertisement.",
+    service_description: "Immigration work from Abhaya Immigration, a practice of Guieb & Shook PC Flat fees quoted before work begins, with USCIS filing fees separate and government-set.",
     portal_only: false,
     brand_key: BrandKey::Abhaya,
 };
@@ -835,7 +835,7 @@ pub static DELETE_YOUR_DEBT_BRANDING: Branding = Branding {
         social_image: "",
         nav: &[NavLink::leaf("How it works", "/services"), NavLink::leaf("Talk to PandA Law", "https://www.pandalawfirm.com/contact/")],
         is_law_firm: true,
-        legal_entity: LEX_TECNICA_LEGAL_ENTITY,
+        legal_entity: DEFAULT_BRANDING.firm.legal_entity,
     },
     firm_email: "contact@deleteyourdebt.com",
     support_domain: "deleteyourdebt.com",
@@ -844,14 +844,14 @@ pub static DELETE_YOUR_DEBT_BRANDING: Branding = Branding {
     firm_attorneys: &[],
     firm_memberships: FIRM_MEMBERSHIPS,
     firm_social: SHARED_SOCIAL,
-    firm_family: BrandKey::LEX_TECNICA_FAMILY,
+    firm_family: BrandKey::GUIEB_SHOOK_FAMILY,
     consultation_url: "https://www.pandalawfirm.com/contact/",
-    terms_url: LEX_TECNICA_TERMS_URL,
+    terms_url: "/terms",
     privacy_url: "/privacy",
     base_url: "",
     primary_domain: "deleteyourdebt.com",
     firm_disclaimer: "Attorney advertisement. Legal services are provided by PandA Law Firm. Nothing here is legal advice without a signed engagement with PandA Law Firm. Past results do not guarantee future outcomes.",
-    mission_description: "DeleteYourDebt.com is operated by Lex Tecnica, Ltd.; legal services are provided by PandA Law Firm. It connects people with PandA Law for debt relief in Nevada, Washington, New York, and California. Our team works across the country, with in-person meetings in Brooklyn. Attorney advertisement. No result is promised.",
+    mission_description: "DeleteYourDebt.com is operated by Guieb & Shook PC; legal services are provided by PandA Law Firm. It connects people with PandA Law for debt relief in Nevada, Washington, New York, and California. Our team works across the country, with in-person meetings in Brooklyn. Attorney advertisement. No result is promised.",
     service_description: "Work with PandA Law on debt relief in Nevada, Washington, New York, and California. Remote conversations and in-person meetings in Brooklyn. Scope and fees are agreed in writing before representation begins.",
     portal_only: false,
     brand_key: BrandKey::DeleteYourDebt,
@@ -863,7 +863,7 @@ pub static DELETE_YOUR_DEBT_BRANDING: Branding = Branding {
 /// status is decided.
 ///
 /// The public masthead and domain use the Summons Defense brand. The legal
-/// entity is Lex Tecnica, Ltd. in the legal footer and required notices.
+/// entity is Guieb & Shook PC in the legal footer and required notices.
 pub static SUMMONS_BRANDING: Branding = Branding {
     firm: SiteBrand {
         site_name: "Summons Defense",
@@ -874,7 +874,7 @@ pub static SUMMONS_BRANDING: Branding = Branding {
         social_image: "",
         nav: &[],
         is_law_firm: true,
-        legal_entity: LEX_TECNICA_LEGAL_ENTITY,
+        legal_entity: DEFAULT_BRANDING.firm.legal_entity,
     },
     firm_email: "contact@summonsdefense.nyc",
     support_domain: "summonsdefense.nyc",
@@ -883,9 +883,9 @@ pub static SUMMONS_BRANDING: Branding = Branding {
     firm_attorneys: &[],
     firm_memberships: FIRM_MEMBERSHIPS,
     firm_social: SHARED_SOCIAL,
-    firm_family: BrandKey::LEX_TECNICA_FAMILY,
+    firm_family: BrandKey::GUIEB_SHOOK_FAMILY,
     consultation_url: SHOOK_CONSULTATION_URL,
-    terms_url: LEX_TECNICA_TERMS_URL,
+    terms_url: "/terms",
     privacy_url: "/privacy",
     base_url: "",
     primary_domain: "summonsdefense.nyc",
@@ -908,7 +908,7 @@ pub static DAYBRIDGE_BRANDING: Branding = Branding {
         social_image: "/public/brand/daybridge/logo.png",
         nav: &[],
         is_law_firm: true,
-        legal_entity: LEX_TECNICA_LEGAL_ENTITY,
+        legal_entity: DEFAULT_BRANDING.firm.legal_entity,
     },
     firm_email: "contact@daybridgedivorce.com",
     support_domain: "daybridgedivorce.com",
@@ -917,15 +917,15 @@ pub static DAYBRIDGE_BRANDING: Branding = Branding {
     firm_attorneys: &[],
     firm_memberships: FIRM_MEMBERSHIPS,
     firm_social: SHARED_SOCIAL,
-    firm_family: BrandKey::LEX_TECNICA_FAMILY,
+    firm_family: BrandKey::GUIEB_SHOOK_FAMILY,
     consultation_url: SHOOK_CONSULTATION_URL,
-    terms_url: LEX_TECNICA_TERMS_URL,
+    terms_url: "/terms",
     privacy_url: "/privacy",
     base_url: "",
     primary_domain: "daybridgedivorce.com",
     firm_disclaimer: "Attorney advertisement. Nothing here is legal advice without a signed retainer for an active project. Past results do not guarantee future outcomes.",
-    mission_description: "Daybridge Divorce Law is operated by Lex Tecnica, Ltd. for couples who agree. Joint representation is subject to applicable rules, conflict review, and informed written consent. A one-time $333 fee covers a mutual split within the written retainer. Contested work is outside the joint engagement. Attorney advertisement; no result is promised.",
-    service_description: "Agreed divorce for couples through Daybridge Divorce Law, operated by Lex Tecnica, Ltd. Joint representation where permitted after conflict review and informed written consent. A one-time $333 fee for a mutual split. The written retainer defines the work.",
+    mission_description: "Daybridge Divorce Law is operated by Guieb & Shook PC for couples who agree. Joint representation is subject to applicable rules, conflict review, and informed written consent. A one-time $333 fee covers a mutual split within the written retainer. Contested work is outside the joint engagement. Attorney advertisement; no result is promised.",
+    service_description: "Agreed divorce for couples through Daybridge Divorce Law, operated by Guieb & Shook PC Joint representation where permitted after conflict review and informed written consent. A one-time $333 fee for a mutual split. The written retainer defines the work.",
     portal_only: false,
     brand_key: BrandKey::Daybridge,
 };
@@ -937,7 +937,7 @@ pub const CYBER_INJURY_BRANDING: Branding = Branding {
         tagline: "We use AI to put more money in your pocket.",
         logo_href: "/public/brand/cyber-injury-law.svg",
         social_image: "/assets/img/cyber-injury-law/canal-street-ad-f9faa356.png",
-        legal_entity: LEX_TECNICA_LEGAL_ENTITY,
+        legal_entity: DEFAULT_BRANDING.firm.legal_entity,
         ..DEFAULT_BRANDING.firm
     },
     primary_domain: "cyberinjurylaw.com",
@@ -946,8 +946,8 @@ pub const CYBER_INJURY_BRANDING: Branding = Branding {
     firm_email: "support@cyberinjurylaw.com",
     brand_key: BrandKey::CyberInjuryLaw,
     firm_social: SHARED_SOCIAL,
-    firm_family: BrandKey::LEX_TECNICA_FAMILY,
-    terms_url: LEX_TECNICA_TERMS_URL,
+    firm_family: BrandKey::GUIEB_SHOOK_FAMILY,
+    terms_url: "/terms",
     privacy_url: "/privacy",
     ..DEFAULT_BRANDING
 };
@@ -959,7 +959,7 @@ pub const AEGIS_BRANDING: Branding = Branding {
         tagline: "Your rights. Your defense. Your next step.",
         logo_href: "/public/brand/aegis/mark.svg",
         social_image: "",
-        legal_entity: LEX_TECNICA_LEGAL_ENTITY,
+        legal_entity: DEFAULT_BRANDING.firm.legal_entity,
         nav: &[
             NavLink::leaf("Services", "/services"),
             NavLink::leaf("Explainers", "/explainers/first-steps"),
@@ -969,11 +969,11 @@ pub const AEGIS_BRANDING: Branding = Branding {
     },
     primary_domain: "aegiscriminaldefense.com",
     support_domain: "aegiscriminaldefense.com",
-    mission_description: "Aegis Criminal Defense is a practice of Lex Tecnica, Ltd. Criminal defense. Scope, fees, and jurisdiction are confirmed before an engagement.",
+    mission_description: "Aegis Criminal Defense is a practice of Guieb & Shook PC Criminal defense. Scope, fees, and jurisdiction are confirmed before an engagement.",
     service_description: "Criminal defense. Scope, fees, and jurisdiction are confirmed before an engagement.",
     firm_social: SHARED_SOCIAL,
-    firm_family: BrandKey::LEX_TECNICA_FAMILY,
-    terms_url: LEX_TECNICA_TERMS_URL,
+    firm_family: BrandKey::GUIEB_SHOOK_FAMILY,
+    terms_url: "/terms",
     privacy_url: "/privacy",
     brand_key: BrandKey::Aegis,
     ..DEFAULT_BRANDING
@@ -986,7 +986,7 @@ pub const GROUNDWORK_BRANDING: Branding = Branding {
         tagline: "Clear counsel for your next property move.",
         logo_href: "/public/brand/groundwork/mark.svg",
         social_image: "",
-        legal_entity: LEX_TECNICA_LEGAL_ENTITY,
+        legal_entity: DEFAULT_BRANDING.firm.legal_entity,
         nav: &[
             NavLink::leaf("Services", "/services"),
             NavLink::leaf("Explainers", "/explainers/first-steps"),
@@ -996,11 +996,11 @@ pub const GROUNDWORK_BRANDING: Branding = Branding {
     },
     primary_domain: "groundworkrealestatelaw.com",
     support_domain: "groundworkrealestatelaw.com",
-    mission_description: "Groundwork Real Estate Law is a practice of Lex Tecnica, Ltd. Real estate legal services. Scope, fees, and jurisdiction are confirmed before an engagement.",
+    mission_description: "Groundwork Real Estate Law is a practice of Guieb & Shook PC Real estate legal services. Scope, fees, and jurisdiction are confirmed before an engagement.",
     service_description: "Real estate legal services. Scope, fees, and jurisdiction are confirmed before an engagement.",
     firm_social: SHARED_SOCIAL,
-    firm_family: BrandKey::LEX_TECNICA_FAMILY,
-    terms_url: LEX_TECNICA_TERMS_URL,
+    firm_family: BrandKey::GUIEB_SHOOK_FAMILY,
+    terms_url: "/terms",
     privacy_url: "/privacy",
     brand_key: BrandKey::Groundwork,
     ..DEFAULT_BRANDING
@@ -1124,11 +1124,10 @@ impl BrandKey {
         Self::SameDayLegal,
     ];
 
-    /// The brands Guieb & Shook PC trades under: Neon Law and the firm's own site.
-    pub const GUIEB_SHOOK_FAMILY: &'static [Self] = &[Self::Neon, Self::GuiebShook];
-
-    /// The brands Lex Tecnica, Ltd. trades under.
-    pub const LEX_TECNICA_FAMILY: &'static [Self] = &[
+    /// The brands Guieb & Shook PC trades under.
+    pub const GUIEB_SHOOK_FAMILY: &'static [Self] = &[
+        Self::Neon,
+        Self::GuiebShook,
         Self::DeleteYourData,
         Self::DeleteYourDebt,
         Self::Vesta,
@@ -1139,10 +1138,11 @@ impl BrandKey {
         Self::CyberInjuryLaw,
         Self::Aegis,
         Self::Groundwork,
-        Self::LexTecnica,
-        Self::IepDefenders,
-        Self::SameDayLegal,
     ];
+
+    /// The brands Lex Tecnica, Ltd. trades under.
+    pub const LEX_TECNICA_FAMILY: &'static [Self] =
+        &[Self::LexTecnica, Self::IepDefenders, Self::SameDayLegal];
 
     /// The compiled keys whose hosts currently serve a public site. The
     /// remaining registered keys are built and staged, but intentionally stay
@@ -2635,8 +2635,7 @@ mod tests {
     /// renames the firm publishes no association affiliation and lists no
     /// house-brand family, because both are Guieb & Shook PC's; a bundle that
     /// changes anything else keeps them. Guieb & Shook's own brand carries
-    /// that family. DeleteYourData carries Lex Tecnica's family, and both
-    /// brands publish the same offices, memberships, and shared profiles.
+    /// that family, as does DeleteYourData.
     #[tokio::test]
     async fn a_renamed_firm_claims_no_membership_and_lists_no_family() {
         let renamed: BrandManifest =
@@ -2657,7 +2656,7 @@ mod tests {
         .await;
         assert_eq!(
             DELETE_YOUR_DATA_BRANDING.firm_family,
-            BrandKey::LEX_TECNICA_FAMILY
+            BrandKey::GUIEB_SHOOK_FAMILY
         );
         assert_eq!(
             super::GUIEB_SHOOK_BRANDING.firm_family,

@@ -38,9 +38,9 @@ use fantoccini::key::Key;
 use fantoccini::{Client, Locator};
 use features::portfolio_acceptance::{self, Lens};
 use features::webdriver::{
-    base_url, click_and_reach, login_as_admin, login_as_clerk, login_as_client, login_as_lawyer,
-    login_as_owner, new_client_or_skip, require_harness, scroll_and_js_click, wait_for_path,
-    wait_for_text, wait_for_text_reloading,
+    base_url, click_and_reach, fill_text_field, login_as_admin, login_as_clerk, login_as_client,
+    login_as_lawyer, login_as_owner, new_client_or_skip, require_harness, scroll_and_js_click,
+    wait_for_path, wait_for_text, wait_for_text_reloading,
 };
 use uuid::Uuid;
 
@@ -4790,6 +4790,33 @@ async fn owner_nav_collapses_firm_and_brands_into_one_link() {
         "the row must also carry the new Profile link"
     );
 
+    c.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn owner_can_find_a_brand_by_its_website() {
+    let Some(c) = new_client_or_skip().await else {
+        return;
+    };
+    login_as_owner(&c).await;
+    c.goto(&format!("{}/app/owner/firms/move-brand", base_url()))
+        .await
+        .unwrap();
+
+    let search = "#move-brand-search:enabled";
+    c.wait()
+        .at_most(Duration::from_secs(20))
+        .for_element(Locator::Css(search))
+        .await
+        .expect("the hydrated search is ready");
+    fill_text_field(&c, search, "VESTAESTATEPLANNING.COM").await;
+    c.wait()
+        .at_most(Duration::from_secs(10))
+        .for_element(Locator::Css(
+            "select[name=brand_key]:has(option[value=vesta]):not(:has(option[value=neon]))",
+        ))
+        .await
+        .expect("the picker includes Vesta and filters out other Brands");
     c.close().await.unwrap();
 }
 

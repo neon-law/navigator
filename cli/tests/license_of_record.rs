@@ -493,16 +493,19 @@ fn the_firm_entity_of_record_is_one_string_across_brand_seed_and_entity_row() {
         "the firm entity of record must be named"
     );
 
-    // Lex Tecnica's brands are another firm's and name Lex Tecnica, Ltd.
-    for key in views::brand::BrandKey::GUIEB_SHOOK_FAMILY {
+    let practice_brands = store::seed::practice_worn_brand_keys();
+    for key in views::brand::BrandKey::ALL {
         let branding = key.resolve_branding(&views::brand::DEFAULT_BRANDING);
-        assert!(
-            store::seed::FIRM_ENTITY_NAMES.contains(&branding.firm.legal_entity),
-            "brand `{}` names legal entity `{}`, which no firm-anchor Entity ships; \
-             the footer, the retainer, and the delete-guarded Entity rows must name a \
-             legal person the seed actually creates",
-            key.as_str(),
-            branding.firm.legal_entity
+        let expected = if practice_brands.contains(&key.as_str()) {
+            firm
+        } else {
+            store::seed::LEX_FIRM_ENTITY_NAME
+        };
+        assert_eq!(
+            branding.firm.legal_entity,
+            expected,
+            "brand `{}` must name the Entity that owns it at boot",
+            key.as_str()
         );
     }
 

@@ -91,7 +91,11 @@ pub async fn get_move_brand_form() -> Result<MoveBrandView, ServerFnError> {
         .map_err(|e| ServerFnError::new(e.to_string()))?
         .into_iter()
         .map(|b| IdChoice {
-            label: format!("{} ({})", b.name, b.key),
+            label: format!(
+                "{} — {}",
+                b.name,
+                crate::brand_website::BrandWebsite::from_key(&b.key).attached_line()
+            ),
             id: b.key,
         })
         .collect();
@@ -119,11 +123,11 @@ pub async fn get_move_brand_form() -> Result<MoveBrandView, ServerFnError> {
 }
 
 /// Build a picker's options from `choices`, leading with `blank`.
-fn picker_options(blank: &str, choices: &[IdChoice]) -> Vec<Choice> {
+fn picker_options<'a>(blank: &str, choices: impl IntoIterator<Item = &'a IdChoice>) -> Vec<Choice> {
     let mut options = vec![Choice::new("", blank)];
     options.extend(
         choices
-            .iter()
+            .into_iter()
             .map(|c| Choice::new(c.id.clone(), c.label.clone())),
     );
     options
@@ -132,20 +136,29 @@ fn picker_options(blank: &str, choices: &[IdChoice]) -> Vec<Choice> {
 /// The move-brand form: two pickers and the confirmation checkbox. The
 /// confirmation is a server-enforced gate (`portal/src/admin.rs`), not
 /// decoration — moving a brand rewrites the public copyright.
-fn move_brand_form(view: &MoveBrandView) -> Element {
+#[component]
+fn MoveBrandForm(view: MoveBrandView) -> Element {
+    let mut search = use_signal(String::new);
+    let mut ready = use_signal(|| false);
+    use_effect(move || ready.set(true));
+    let query = search.read().trim().to_lowercase();
+    let matching_brands = view
+        .brands
+        .iter()
+        .filter(|brand| brand.label.to_lowercase().contains(&query));
     let q = &view.query;
     let fields = vec![
         Field::select(
             "Brand",
             "brand_key",
-            picker_options("— pick the brand to move —", &view.brands),
+            picker_options("Select a brand", matching_brands),
             q.brand_key.clone().filter(|v| !v.is_empty()),
         )
         .required(),
         Field::select(
             "Target firm",
             "target_firm_id",
-            picker_options("— pick the firm —", &view.firms),
+            picker_options("Select a firm", &view.firms),
             q.target_firm_id.clone().filter(|v| !v.is_empty()),
         )
         .required(),
@@ -164,6 +177,17 @@ fn move_brand_form(view: &MoveBrandView) -> Element {
         }
         if let Some(moved) = q.moved.as_ref() {
             p { role: "status", "Moved {moved}. Its public pages now name {q.firm.clone().unwrap_or_default()}'s legal entity." }
+        }
+        div { class: "nav-field",
+            label { class: "nav-label", r#for: "move-brand-search", "Search brands" }
+            input {
+                class: "nav-input",
+                id: "move-brand-search",
+                r#type: "search",
+                disabled: !ready(),
+                value: "{search}",
+                oninput: move |event| search.set(event.value()),
+            }
         }
         FormCard {
             title: "Move brand".to_string(),
@@ -188,7 +212,7 @@ fn move_body(view: &MoveBrandView) -> Element {
             "Moving to another firm clears the previous firm's contact details and "
             "professional credentials from the public footer."
         }
-        {move_brand_form(view)}
+        MoveBrandForm { view: view.clone() }
         p { class: "project-form-cancel",
             a { class: "nav-btn nav-btn--secondary", href: "/app/owner", "Cancel" }
         }
@@ -276,6 +300,7 @@ mod tests {
             html.contains(r#"name="_csrf" value="CSRF-TOKEN""#),
             "{html}"
         );
+        assert!(html.contains(r#"for="move-brand-search""#), "{html}");
         assert!(html.contains(r#"name="brand_key""#), "{html}");
         assert!(html.contains(r#"name="target_firm_id""#), "{html}");
         assert!(html.contains(r#"name="confirm""#), "{html}");

@@ -136,7 +136,7 @@ fn destinations_for(role: ViewerRole) -> Vec<Destination> {
         cards.push(Destination {
             id: "team-card-owner",
             title: "Owner",
-            description: "Every practice on this deployment, and the house brands each one wears.",
+            description: "Manage firms and move brands.",
             href: APP_OWNER_HREF,
             download: None,
         });

@@ -92,7 +92,7 @@ async fn daybridge_home_leads_with_pace_and_keeps_the_fee_and_limits() {
             "/public/brand/daybridge/logo.svg",
             "/public/css/daybridge.css",
             "Attorney advertisement",
-            "Lex Tecnica, Ltd.",
+            "Guieb &#38; Shook PC",
         ] {
             assert!(html.contains(expected), "{host} missing {expected:?}");
         }
@@ -100,21 +100,9 @@ async fn daybridge_home_leads_with_pace_and_keeps_the_fee_and_limits() {
             html.contains(r#"href="https://www.vestaestateplanning.com""#),
             "{host} must link Vesta for the estate-plan review"
         );
-        // A Lex Tecnica, Ltd. practice never links Guieb & Shook's site,
-        // and lists no brand family.
         let footer = html.split("<footer").nth(1).expect("shared footer");
-        assert!(
-            !footer.contains("site-footer__family"),
-            "{host} lists no brand family: {footer}"
-        );
-        assert!(
-            !footer.contains(r#"href="https://www.guiebshook.com""#),
-            "{host} the practice footer's copyright names Lex Tecnica, Ltd.: {footer}"
-        );
-        assert!(
-            !html.contains("A practice of Guieb &#38; Shook PC"),
-            "{host} {html}"
-        );
+        assert!(footer.contains("www.guiebshook.com"), "{host}: {footer}");
+        assert!(!footer.contains("Lex Tecnica"), "{host}: {footer}");
         let lower = html.to_lowercase();
         for forbidden in [
             "guaranteed result",

@@ -350,24 +350,30 @@ pub fn render(notices: &Notices) -> String {
 /// The column the hand-written header wraps at; generated paragraphs match it.
 const WRAP_WIDTH: usize = 88;
 
-/// One paragraph per firm the brand registry encodes, in registry order. They
-/// are derived from `views::brand` rather than written here so that a firm
-/// added to the registry is named in the next regenerated file instead of
-/// depending on someone remembering this one. The deployment's own firm — the
-/// legal entity behind [`DEFAULT_BRANDING`] — licenses its site copy and
-/// templates under the licence above and reserves only its names. Every other
-/// organization's material is outside the grant entirely, which is what NOTICE
-/// states for it; the two paragraphs say the same thing in the same words.
+/// One paragraph per rights holder, in brand registry order. The operating
+/// Firm can change independently of the licence grant for the brand material.
 fn firm_paragraphs() -> Vec<String> {
     let house = DEFAULT_BRANDING.firm.legal_entity;
     let mut firms: Vec<(&'static str, Vec<BrandKey>)> = Vec::new();
     for key in BrandKey::ALL {
-        // NEON LAW is the registered mark NOTICE addresses on its own; the
-        // brand paragraphs cover the trading names around it.
-        if *key == BrandKey::Neon {
-            continue;
-        }
-        let entity = key.resolve_branding(&DEFAULT_BRANDING).firm.legal_entity;
+        let entity = match key {
+            // NOTICE addresses the registered NEON LAW mark.
+            BrandKey::Neon => continue,
+            BrandKey::GuiebShook => house,
+            BrandKey::DeleteYourData
+            | BrandKey::DeleteYourDebt
+            | BrandKey::Vesta
+            | BrandKey::Misericordia
+            | BrandKey::Abhaya
+            | BrandKey::Summons
+            | BrandKey::Daybridge
+            | BrandKey::CyberInjuryLaw
+            | BrandKey::Aegis
+            | BrandKey::Groundwork
+            | BrandKey::LexTecnica
+            | BrandKey::IepDefenders
+            | BrandKey::SameDayLegal => views::brand::LEX_TECNICA_LEGAL_ENTITY,
+        };
         match firms.iter_mut().find(|(known, _)| *known == entity) {
             Some((_, keys)) => keys.push(*key),
             None => firms.push((entity, vec![*key])),

@@ -341,26 +341,51 @@ fn a_prerelease_publishes_as_a_prerelease() {
     );
 }
 
-/// A LANDED VERSION BUMP IS THE ONLY WAY TO PUBLISH, and that is what makes an
-/// image's version trustworthy.
-///
-/// Three triggers have owned this workflow. The clock and the dispatch both
-/// derived a version from `date`, so the name an image carried stood behind no
-/// Git ref: `Cargo.toml` sat at one version while published images marched on
-/// under another. The pushed tag fixed that but paid in ceremony — four
-/// validations existed to re-establish facts a bare ref cannot carry, each of
-/// which spent an immutable name when it failed late.
-///
-/// Reading the version out of the merged manifest answers all four by
-/// construction. All three retired triggers are asserted absent rather than
-/// merely unused: any of them surviving would publish under a version this
-/// repository's source does not name, and would go green doing it.
+/// A landed version bump is the only publishing path. The nightly run
+/// exercises KIND using the version decision's integration-only branch.
 #[test]
 fn deploy_workflow_publishes_only_from_a_landed_version_bump() {
     assert!(
-        !has_trigger("schedule"),
-        "deploy.yml must not publish on a clock: a cron can only derive a version, which is \
-         exactly the drift that made the manifest and the published images disagree"
+        has_trigger("schedule"),
+        "nightly KIND verification is scheduled"
+    );
+    let workflow: serde_yaml::Value =
+        serde_yaml::from_str(&deploy_workflow()).expect("deploy.yml parses as YAML");
+    let step = workflow["jobs"]["release-version"]["steps"]
+        .as_sequence()
+        .expect("release-version declares steps")
+        .iter()
+        .find(|step| step["id"].as_str() == Some("version"))
+        .expect("release-version has a version decision");
+    assert_eq!(
+        step["env"]["EVENT_NAME"].as_str(),
+        Some("${{ github.event_name }}")
+    );
+
+    let output_file = tempfile::NamedTempFile::new().expect("temporary workflow output");
+    let result = std::process::Command::new("/bin/bash")
+        .arg("-c")
+        .arg(
+            step["run"]
+                .as_str()
+                .expect("version decision runs a script"),
+        )
+        .env_clear()
+        .env("EVENT_NAME", "schedule")
+        .env("REF_NAME", "main")
+        // The scheduled path uses Bash builtins only.
+        .env("PATH", "")
+        .env("GITHUB_OUTPUT", output_file.path())
+        .output()
+        .expect("run the scheduled version decision");
+    assert!(
+        result.status.success(),
+        "scheduled integration stops before invoking the release checker: {result:?}"
+    );
+    let output = std::fs::read_to_string(output_file.path()).expect("read version outputs");
+    assert_eq!(
+        output, "tag=main\npublishable=false\nprerelease=false\n",
+        "the nightly job must report an integration-only run"
     );
     assert!(
         !has_trigger("workflow_dispatch"),
@@ -1277,9 +1302,8 @@ fn a_duplicate_trigger_for_the_same_commit_is_refused_before_any_real_work() {
     let dedup = &steps[dedup_index];
     assert_eq!(
         dedup["if"].as_str(),
-        Some("github.ref_name == 'main'"),
-        "the dedup check only makes sense on `main`; a `kind-ci/**` iteration already \
-         reports publishable=false without it"
+        Some("github.event_name == 'push' && github.ref_name == 'main'"),
+        "only a push to main needs release deduplication"
     );
     let script = dedup["run"].as_str().expect("the dedup step runs a script");
     assert!(
@@ -1327,8 +1351,10 @@ fn a_duplicate_trigger_for_the_same_commit_is_refused_before_any_real_work() {
     );
     assert_eq!(
         steps[checker_index]["if"].as_str(),
-        Some("github.ref_name == 'main' && steps.dedup.outputs.duplicate != 'true'"),
-        "the checker step must skip on a duplicate trigger, not just on a non-`main` ref"
+        Some(
+            "github.event_name == 'push' && github.ref_name == 'main' && steps.dedup.outputs.duplicate != 'true'"
+        ),
+        "the checker runs for a distinct push to main"
     );
 
     let toolchain = steps
@@ -1339,7 +1365,8 @@ fn a_duplicate_trigger_for_the_same_commit_is_refused_before_any_real_work() {
         .as_str()
         .expect("the toolchain step must be conditional");
     assert!(
-        toolchain_guard.contains("steps.dedup.outputs.duplicate != 'true'"),
+        toolchain_guard.contains("github.event_name == 'push' && github.ref_name == 'main'")
+            && toolchain_guard.contains("steps.dedup.outputs.duplicate != 'true'"),
         "the fallback toolchain must not install on a duplicate trigger either — a skipped \
          `checker` step's `ready` output is empty, which without this guard reads as \
          `!= 'true'` and installs the toolchain anyway: {toolchain_guard}"
