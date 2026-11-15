@@ -176,10 +176,10 @@ fn MoveBrandForm(view: MoveBrandView) -> Element {
         if let Some(moved) = q.moved.as_ref() {
             p { role: "status", "Moved {moved}. Its public pages now name {q.firm.clone().unwrap_or_default()}'s legal entity." }
         }
-        p {
-            label { r#for: "move-brand-search", "Search brands" }
-            " "
+        div { class: "nav-field",
+            label { class: "nav-label", r#for: "move-brand-search", "Search brands" }
             input {
+                class: "nav-input",
                 id: "move-brand-search",
                 r#type: "search",
                 value: "{search}",
