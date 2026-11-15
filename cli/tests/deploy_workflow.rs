@@ -1807,3 +1807,25 @@ fn publish_service_pushes_on_a_token_minted_after_the_compile() {
         );
     }
 }
+
+#[test]
+fn the_release_browser_gate_reports_every_failure_in_one_run() {
+    let workflow: serde_yaml::Value =
+        serde_yaml::from_str(&deploy_workflow()).expect("deploy.yml parses as YAML");
+    let run = workflow["jobs"]["integration"]["steps"]
+        .as_sequence()
+        .expect("integration declares steps")
+        .iter()
+        .find(|step| {
+            step["name"].as_str() == Some("browser + accessibility e2e (nextest, retry-classified)")
+        })
+        .expect("integration runs the browser + accessibility e2e step")["run"]
+        .as_str()
+        .expect("the browser step has a run script")
+        .to_string();
+    assert!(
+        run.contains("cargo nextest run -p server --profile ci --no-fail-fast"),
+        "the browser gate runs only on release commits, so it must not stop at the first \
+         failure and hide the rest until the next release"
+    );
+}

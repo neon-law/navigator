@@ -193,6 +193,11 @@ fn plan(path: &str) -> AuditPlan {
     if path == "/personal" {
         return AuditPlan::Skip("an external practice redirect, not an HTML page");
     }
+    // Both 301 to Same Day Legal's own host, which the KIND browser cannot
+    // resolve; firm_routes covers the redirect.
+    if matches!(path, "/same-day-legal" | "/nautilus") {
+        return AuditPlan::Skip("a redirect to Same Day Legal's own host, not an HTML page");
+    }
     // The certificate request itself is a `POST` handler; the page a reader
     // lands on afterwards is `…/certificate/sent`, which is audited.
     if path.ends_with("/certificate") {
@@ -1051,17 +1056,17 @@ async fn public_navigation_images_and_collage_dialog_are_accessible() {
 
     assert_public_shell(&c).await;
     let cta = c
-        .find(Locator::Css(".commitment-hero__cta"))
+        .find(Locator::Css(".fm-hero__cta:not(.home-call)"))
         .await
-        .expect("the subscription home has its enrollment call to action");
+        .expect("the Neon home has its hero call to action");
     let href = cta
         .attr("href")
         .await
         .expect("the home call to action has an href")
         .expect("the home call to action has an href");
     assert_eq!(
-        href, "#enrollment",
-        "the home call to action reaches Same Day Legal enrollment"
+        href, "https://github.com/neon-law/navigator",
+        "the Neon home's call to action stars the repository"
     );
 
     c.goto(&format!("{site_base_url}/blog/thanks-apple"))

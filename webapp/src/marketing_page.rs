@@ -740,8 +740,22 @@ pub fn MarketingPage(
                             }
                             h1 { class: "fm-hero__title", "{content.title}" }
                             p { class: "fm-hero__tagline", "{content.tagline}" }
+                            if !content.hero_lead.is_empty() {
+                                p { class: "fm-hero__lead", "{content.hero_lead}" }
+                            }
                             if hero_calls {
                                 a { class: "nav-btn nav-btn--primary fm-hero__cta home-call", href: "{hero_tel}", "Call {hero_phone}" }
+                            }
+                            if let Some(cta) = content.hero_cta.as_ref() {
+                                a {
+                                    class: if hero_calls {
+                                        "nav-btn nav-btn--secondary fm-hero__cta"
+                                    } else {
+                                        "nav-btn nav-btn--primary fm-hero__cta"
+                                    },
+                                    href: "{cta.href}",
+                                    "{cta.label}"
+                                }
                             }
                         }
                     }
@@ -2302,13 +2316,16 @@ mod tests {
     }
 
     #[test]
-    fn a_marketing_page_renders_its_title_and_bands_without_a_badge() {
+    fn a_marketing_page_renders_its_title_lead_action_and_bands_without_a_badge() {
         fn app() -> Element {
             let content = PageContent {
                 hero_lines: Vec::new(),
-                hero_lead: String::new(),
+                hero_lead: "Counsel for the company, not the deal.".to_string(),
                 hero_lead_runs: Vec::new(),
-                hero_cta: None,
+                hero_cta: Some(HeroCta {
+                    href: "https://github.com/neon-law/navigator".to_string(),
+                    label: "Star the repo".to_string(),
+                }),
                 head_title: "Fractional General Counsel — Neon Law".to_string(),
                 meta_description: "Company counsel on a flat monthly fee.".to_string(),
                 og_description: None,
@@ -2337,6 +2354,16 @@ mod tests {
         assert!(out.contains("Fractional General Counsel"), "title: {out}");
         assert!(out.contains("Work that arrives scoped."), "tagline: {out}");
         assert!(out.contains("Tell us about the company."), "cta: {out}");
+        assert!(
+            out.contains(r#"<p class="fm-hero__lead">Counsel for the company, not the deal.</p>"#),
+            "the marketing hero renders its lead: {out}"
+        );
+        assert!(
+            out.contains(
+                r#"class="nav-btn nav-btn--primary fm-hero__cta" href="https://github.com/neon-law/navigator">Star the repo</a>"#
+            ),
+            "the marketing hero renders its call to action: {out}"
+        );
         assert!(
             !out.contains("fm-badge"),
             "a marketing page opens on its argument, and no page carries a badge \
