@@ -352,7 +352,7 @@ Obvious autobuild pushes unsigned commits, so the check blocked every armed auto
 | Workflow | Trigger | Job |
 | --- | --- | --- |
 | `.github/workflows/ci.yml` | `pull_request` → `main` | Rust quality gate |
-| `.github/workflows/deploy.yml` | a push to `main`, or a `kind-ci/**` branch | prove + tag + publish, then dispatch |
+| `.github/workflows/deploy.yml` | `main` or `kind-ci/**` push, 08:17 UTC daily | KIND and release verification |
 | `.github/workflows/release-cut.yml` | 09:00 UTC daily | open the scheduled version-bump PR (disabled) |
 | `.github/workflows/release-deploy.yml` | `workflow_dispatch` with a `tag` | ship staging, then production |
 
@@ -820,35 +820,14 @@ registry. [`cli/tests/zed_extension_dispatch.rs`](../cli/tests/zed_extension_dis
 
 ### What detects a broken pipeline
 
-**Nothing on a clock does.** The nightly train doubled as a daily liveness check on the whole release path: images still
-build, KIND still stands up, `ops ship` still authenticates. A defect in the publishing stages is invisible until
-someone next bumps the version. And the cron was never a reliable signal even while it ran — a silent nightly failure
-went unnoticed for four consecutive nights — so the honest statement is that this pipeline has no automatic breakage
-detection, not that it has a weaker one.
+The nightly `deploy.yml` run builds the current default branch and runs the KIND integration suite, including browser
+and accessibility checks. GitHub records the result. Tagging, publishing, and shipping require a release push to `main`.
 
-One part of it did get cheaper. `deploy.yml`'s first job now runs on **every** merge to `main`, so a break in the
-release trigger itself — the manifest read, the tag comparison, the guard binary — surfaces at the next merge rather
-than at the next release. The build, KIND, tag, and publish stages still wait for a real bump.
+A `kind-ci/<topic>` push runs the same build and KIND integration jobs on demand. The release decision runs on every
+push to `main`. When `SLACK_WEBHOOK_URL` is configured, `notify-failure` reports failed pushes to `main`. `ci.yml`
+validates YAML and Markdown on every PR and runs the Rust and release preflight checks for Rust changes.
 
-What remains, and what each does not cover:
-
-- When `SLACK_WEBHOOK_URL` is configured, `notify-failure` pages `#navigator` when a release fails, reading the trigger
-  ref rather than a job output, so a failure anywhere — including the release decision — still pages. Reading the ref
-  costs nothing in false positives: a merge carrying no bump has nothing to fail, because the decision job succeeds,
-  reports `publishable=false`, and every other job skips. It can only fire on a run that happened; without the optional
-  webhook, the GitHub run conclusion is the signal.
-- `kind-ci/**` proves a release-workflow change on demand: push a `kind-ci/<topic>` branch to run the KIND integration
-  job alone, creating no tag, publishing nothing and shipping nothing. On demand, not on a schedule.
-- `ci.yml` always validates YAML and Markdown. It proves the Rust workspace, plus the three release preflight checks —
-  `ops release check`, `ops notices --check`, and `cargo metadata --locked` — when the PR touches Rust. It still says
-  nothing about images, KIND, or shipping.
-
-Two consequences to plan around rather than discover:
-
-- A `kind-ci/**` push is the cheapest way to exercise the pipeline without releasing. No cron runs it, so run it as a
-  habit. - **Image expiry does not depend on release cadence, and that cuts the other way**: the registry deletes every
-  image 7 days after push, so a quiet week leaves no pullable release. See [Keyless pushes to Artifact
-  Registry](#keyless-pushes-to-artifact-registry).
+See [registry image retention](#keyless-pushes-to-artifact-registry) for the seven-day expiry.
 
 ### Recovering a failed release
 
