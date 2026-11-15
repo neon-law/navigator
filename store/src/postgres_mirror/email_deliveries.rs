@@ -1,7 +1,11 @@
 //! PostgreSQL mirror for inbound Email Receipts and their Slack delivery records.
 //!
-//! Whenever `NAVIGATOR_POSTGRES_HOST` is set PostgreSQL holds these rows, and
-//! the mirror writes and compares nothing. The receipt identity preserves
+//! Whenever `NAVIGATOR_POSTGRES_HOST` is set PostgreSQL holds these rows. Only
+//! the first Mirror Backfill copies SurrealDB rows in then, a receipt before
+//! its delivery before its attempts, inserting each row PostgreSQL lacks under
+//! its own id and never overwriting or deleting one it holds; until a backfill
+//! has completed, parity reports each SurrealDB row PostgreSQL lacks, and
+//! after it compares no table (see [`super::held_compared`]). The receipt identity preserves
 //! inbound deduplication, while delivery and attempt rows keep the durable dispatch
 //! state and provider outcomes. Mirror errors identify rows only by UUID.
 
@@ -65,7 +69,7 @@ pub(super) struct AttemptImage {
 }
 
 #[derive(SurrealValue)]
-struct ReceiptSource {
+pub(super) struct ReceiptSource {
     id: RecordId,
     receiving_mailbox: String,
     deployment: String,
@@ -83,7 +87,7 @@ struct ReceiptSource {
 }
 
 #[derive(SurrealValue)]
-struct DeliverySource {
+pub(super) struct DeliverySource {
     id: RecordId,
     receipt_id: RecordId,
     channel_id: String,
@@ -99,7 +103,7 @@ struct DeliverySource {
 }
 
 #[derive(SurrealValue)]
-struct AttemptSource {
+pub(super) struct AttemptSource {
     id: RecordId,
     delivery_id: RecordId,
     correlation_id: String,
@@ -325,10 +329,15 @@ async fn target(pg: &PostgresDb) -> Result<BTreeMap<MirrorKey, Columns>, MirrorE
     Ok(rows)
 }
 
-async fn upsert_receipt(pg: &PostgresDb, row: &ReceiptImage) -> Result<Mirrored, MirrorError> {
-    let result = sqlx::query(
+pub(super) async fn upsert_receipt<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    row: &ReceiptImage,
+    insert_only: bool,
+) -> Result<Mirrored, MirrorError> {
+    let result = sqlx::query(super::held_write(
+        insert_only,
         "INSERT INTO email_receipt (id, receiving_mailbox, deployment, firm_id, provider_account, sender_authenticated, raw_digest, source_message_id, archive_key, letter_id, processing_state, delivery_state, inserted_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT (id) DO UPDATE SET receiving_mailbox=EXCLUDED.receiving_mailbox, deployment=EXCLUDED.deployment, firm_id=EXCLUDED.firm_id, provider_account=EXCLUDED.provider_account, sender_authenticated=EXCLUDED.sender_authenticated, raw_digest=EXCLUDED.raw_digest, source_message_id=EXCLUDED.source_message_id, archive_key=EXCLUDED.archive_key, letter_id=EXCLUDED.letter_id, processing_state=EXCLUDED.processing_state, delivery_state=EXCLUDED.delivery_state, inserted_at=EXCLUDED.inserted_at, updated_at=EXCLUDED.updated_at WHERE (email_receipt.receiving_mailbox,email_receipt.deployment,email_receipt.firm_id,email_receipt.provider_account,email_receipt.sender_authenticated,email_receipt.raw_digest,email_receipt.source_message_id,email_receipt.archive_key,email_receipt.letter_id,email_receipt.processing_state,email_receipt.delivery_state,email_receipt.inserted_at,email_receipt.updated_at) IS DISTINCT FROM (EXCLUDED.receiving_mailbox,EXCLUDED.deployment,EXCLUDED.firm_id,EXCLUDED.provider_account,EXCLUDED.sender_authenticated,EXCLUDED.raw_digest,EXCLUDED.source_message_id,EXCLUDED.archive_key,EXCLUDED.letter_id,EXCLUDED.processing_state,EXCLUDED.delivery_state,EXCLUDED.inserted_at,EXCLUDED.updated_at)",
-    )
+    ))
     .bind(row.id)
     .bind(&row.receiving_mailbox)
     .bind(&row.deployment)
@@ -343,15 +352,20 @@ async fn upsert_receipt(pg: &PostgresDb, row: &ReceiptImage) -> Result<Mirrored,
     .bind(&row.delivery_state)
     .bind(micros(row.inserted_at))
     .bind(micros(row.updated_at))
-    .execute(&pg.0)
+    .execute(executor)
     .await?;
     Ok(changed(result.rows_affected(), Mirrored::Written))
 }
 
-async fn upsert_delivery(pg: &PostgresDb, row: &DeliveryImage) -> Result<Mirrored, MirrorError> {
-    let result = sqlx::query(
+pub(super) async fn upsert_delivery<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    row: &DeliveryImage,
+    insert_only: bool,
+) -> Result<Mirrored, MirrorError> {
+    let result = sqlx::query(super::held_write(
+        insert_only,
         "INSERT INTO email_delivery (id, receipt_id, channel_id, state, current_correlation_id, slack_timestamp, last_error, reconciled_by, reconciliation, reconciled_at, inserted_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT (id) DO UPDATE SET receipt_id=EXCLUDED.receipt_id, channel_id=EXCLUDED.channel_id, state=EXCLUDED.state, current_correlation_id=EXCLUDED.current_correlation_id, slack_timestamp=EXCLUDED.slack_timestamp, last_error=EXCLUDED.last_error, reconciled_by=EXCLUDED.reconciled_by, reconciliation=EXCLUDED.reconciliation, reconciled_at=EXCLUDED.reconciled_at, inserted_at=EXCLUDED.inserted_at, updated_at=EXCLUDED.updated_at WHERE (email_delivery.receipt_id,email_delivery.channel_id,email_delivery.state,email_delivery.current_correlation_id,email_delivery.slack_timestamp,email_delivery.last_error,email_delivery.reconciled_by,email_delivery.reconciliation,email_delivery.reconciled_at,email_delivery.inserted_at,email_delivery.updated_at) IS DISTINCT FROM (EXCLUDED.receipt_id,EXCLUDED.channel_id,EXCLUDED.state,EXCLUDED.current_correlation_id,EXCLUDED.slack_timestamp,EXCLUDED.last_error,EXCLUDED.reconciled_by,EXCLUDED.reconciliation,EXCLUDED.reconciled_at,EXCLUDED.inserted_at,EXCLUDED.updated_at)",
-    )
+    ))
     .bind(row.id)
     .bind(row.receipt_id)
     .bind(&row.channel_id)
@@ -364,15 +378,20 @@ async fn upsert_delivery(pg: &PostgresDb, row: &DeliveryImage) -> Result<Mirrore
     .bind(row.reconciled_at.map(micros))
     .bind(micros(row.inserted_at))
     .bind(micros(row.updated_at))
-    .execute(&pg.0)
+    .execute(executor)
     .await?;
     Ok(changed(result.rows_affected(), Mirrored::Written))
 }
 
-async fn upsert_attempt(pg: &PostgresDb, row: &AttemptImage) -> Result<Mirrored, MirrorError> {
-    let result = sqlx::query(
+pub(super) async fn upsert_attempt<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    row: &AttemptImage,
+    insert_only: bool,
+) -> Result<Mirrored, MirrorError> {
+    let result = sqlx::query(super::held_write(
+        insert_only,
         "INSERT INTO email_delivery_attempt (id, delivery_id, correlation_id, state, slack_timestamp, error, inserted_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (id) DO UPDATE SET delivery_id=EXCLUDED.delivery_id, correlation_id=EXCLUDED.correlation_id, state=EXCLUDED.state, slack_timestamp=EXCLUDED.slack_timestamp, error=EXCLUDED.error, inserted_at=EXCLUDED.inserted_at, updated_at=EXCLUDED.updated_at WHERE (email_delivery_attempt.delivery_id,email_delivery_attempt.correlation_id,email_delivery_attempt.state,email_delivery_attempt.slack_timestamp,email_delivery_attempt.error,email_delivery_attempt.inserted_at,email_delivery_attempt.updated_at) IS DISTINCT FROM (EXCLUDED.delivery_id,EXCLUDED.correlation_id,EXCLUDED.state,EXCLUDED.slack_timestamp,EXCLUDED.error,EXCLUDED.inserted_at,EXCLUDED.updated_at)",
-    )
+    ))
     .bind(row.id)
     .bind(row.delivery_id)
     .bind(&row.correlation_id)
@@ -381,7 +400,7 @@ async fn upsert_attempt(pg: &PostgresDb, row: &AttemptImage) -> Result<Mirrored,
     .bind(&row.error)
     .bind(micros(row.inserted_at))
     .bind(micros(row.updated_at))
-    .execute(&pg.0)
+    .execute(executor)
     .await?;
     Ok(changed(result.rows_affected(), Mirrored::Written))
 }
@@ -411,7 +430,7 @@ async fn ensure_receipt(surreal: &SurrealDb, pg: &PostgresDb, id: Uuid) -> Resul
             if let Some(firm_id) = image.firm_id {
                 ensure_firm(surreal, pg, firm_id).await?;
             }
-            upsert_receipt(pg, &image).await?;
+            upsert_receipt(&pg.0, &image, held()).await?;
         }
     }
     Ok(())
@@ -433,10 +452,15 @@ async fn ensure_delivery(
         {
             let image = DeliveryImage::try_from(row)?;
             ensure_receipt(surreal, pg, image.receipt_id).await?;
-            upsert_delivery(pg, &image).await?;
+            upsert_delivery(&pg.0, &image, held()).await?;
         }
     }
     Ok(())
+}
+
+/// Whether PostgreSQL holds these tables: whenever a host is configured.
+fn held() -> bool {
+    crate::postgres::communications::configured()
 }
 
 pub async fn mirror(
@@ -444,7 +468,7 @@ pub async fn mirror(
     pg: &PostgresDb,
     key: &MirrorKey,
 ) -> Result<Mirrored, MirrorError> {
-    if crate::postgres::communications::configured() {
+    if held() && !super::initial_copy() {
         return Ok(Mirrored::Unchanged);
     }
     match key {
@@ -452,6 +476,9 @@ pub async fn mirror(
             let Some(row) =
                 source_one::<ReceiptSource>(surreal, "email_receipt", RECEIPT_FIELDS, *id).await?
             else {
+                if held() {
+                    return Ok(Mirrored::Unchanged);
+                }
                 return Ok(changed(
                     sqlx::query("DELETE FROM email_receipt WHERE id=$1")
                         .bind(id)
@@ -465,13 +492,16 @@ pub async fn mirror(
             if let Some(firm_id) = image.firm_id {
                 ensure_firm(surreal, pg, firm_id).await?;
             }
-            upsert_receipt(pg, &image).await
+            upsert_receipt(&pg.0, &image, held()).await
         }
         MirrorKey::EmailDelivery(id) => {
             let Some(row) =
                 source_one::<DeliverySource>(surreal, "email_delivery", DELIVERY_FIELDS, *id)
                     .await?
             else {
+                if held() {
+                    return Ok(Mirrored::Unchanged);
+                }
                 return Ok(changed(
                     sqlx::query("DELETE FROM email_delivery WHERE id=$1")
                         .bind(id)
@@ -483,13 +513,16 @@ pub async fn mirror(
             };
             let image = DeliveryImage::try_from(row)?;
             ensure_receipt(surreal, pg, image.receipt_id).await?;
-            upsert_delivery(pg, &image).await
+            upsert_delivery(&pg.0, &image, held()).await
         }
         MirrorKey::EmailDeliveryAttempt(id) => {
             let Some(row) =
                 source_one::<AttemptSource>(surreal, "email_delivery_attempt", ATTEMPT_FIELDS, *id)
                     .await?
             else {
+                if held() {
+                    return Ok(Mirrored::Unchanged);
+                }
                 return Ok(changed(
                     sqlx::query("DELETE FROM email_delivery_attempt WHERE id=$1")
                         .bind(id)
@@ -501,30 +534,30 @@ pub async fn mirror(
             };
             let image = AttemptImage::try_from(row)?;
             ensure_delivery(surreal, pg, image.delivery_id).await?;
-            upsert_attempt(pg, &image).await
+            upsert_attempt(&pg.0, &image, held()).await
         }
         _ => Err(MirrorError::Source),
     }
 }
 
 pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
-    if crate::postgres::communications::configured() {
+    let held = held();
+    if !super::held_compared(pg, held).await? {
         return Ok(ParityReport { tables: Vec::new() });
     }
     let source = source(surreal).await?;
     let target = target(pg).await?;
-    Ok(ParityReport {
-        tables: ["email_receipt", "email_delivery", "email_delivery_attempt"]
-            .into_iter()
-            .map(|table| {
-                super::compare(
-                    table,
-                    &for_table(&source, table),
-                    &for_table(&target, table),
-                )
-            })
-            .collect(),
-    })
+    let tables = ["email_receipt", "email_delivery", "email_delivery_attempt"]
+        .into_iter()
+        .map(|table| {
+            super::compare(
+                table,
+                &for_table(&source, table),
+                &for_table(&target, table),
+            )
+        })
+        .collect();
+    super::held_parity(pg, held, tables).await
 }
 
 fn for_table(
@@ -539,6 +572,9 @@ fn for_table(
 
 pub async fn reconcile(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
     let before = parity(surreal, pg).await?;
+    if held() && !super::initial_copy() {
+        return Ok(before);
+    }
     for key in before.divergent() {
         if let Err(error) = mirror(surreal, pg, key).await {
             tracing::warn!(key = %key, error = %error, "PostgreSQL reconcile could not mirror the row");

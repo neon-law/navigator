@@ -67,6 +67,78 @@ fn receipt(digest: &str) -> NewEmailReceipt<'_> {
     }
 }
 
+async fn first_backfill_copies_communication_history(surreal: &SurrealDb, pg: &PostgresDb) {
+    let matter = project(pg, "synthetic-backfill").await;
+    let source = communications::ingest(
+        surreal,
+        &IngestArgs {
+            project_id: matter,
+            channel: channel::EMAIL_INBOUND,
+            direction: direction::INBOUND,
+            author_person_id: None,
+            counterparty: None,
+            subject: None,
+            body: "Synthetic history",
+            source_ref: None,
+            asset_id: None,
+            occurred_at: "2026-01-01T00:00:00Z",
+        },
+    )
+    .await
+    .unwrap();
+    let acknowledged = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO communication (id, project_id, channel, direction, body, occurred_at, \
+         inserted_at, updated_at) VALUES ($1, $2, $3, $4, 'Synthetic original', now(), now(), now())",
+    )
+    .bind(acknowledged)
+    .bind(matter)
+    .bind(channel::EMAIL_INBOUND)
+    .bind(direction::INBOUND)
+    .execute(pg.pool())
+    .await
+    .unwrap();
+    surreal
+        .query("UPDATE $id SET acknowledges = $acknowledged")
+        .bind((
+            "id",
+            crate::surreal::record_id("communication", source.communication_id),
+        ))
+        .bind((
+            "acknowledged",
+            crate::surreal::record_id("communication", acknowledged),
+        ))
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
+    with_test_db(
+        pg.clone(),
+        Box::pin(async {
+            use crate::postgres_mirror::{conversations, during_initial_copy};
+
+            let before = conversations::reconcile(surreal, pg).await.unwrap();
+            assert_eq!(
+                before.divergent().collect::<Vec<_>>(),
+                vec![&MirrorKey::Communication(source.communication_id)]
+            );
+            assert!(during_initial_copy(conversations::reconcile(surreal, pg))
+                .await
+                .unwrap()
+                .is_clean());
+            let (body, parent): (String, Uuid) =
+                sqlx::query_as("SELECT body, acknowledges FROM communication WHERE id=$1")
+                    .bind(source.communication_id)
+                    .fetch_one(pg.pool())
+                    .await
+                    .unwrap();
+            assert_eq!(body, "Synthetic history");
+            assert_eq!(parent, acknowledged);
+        }),
+    )
+    .await;
+}
+
 #[tokio::test]
 #[expect(
     clippy::too_many_lines,
@@ -190,8 +262,7 @@ async fn email_receipts_and_deliveries_live_in_postgres() {
                 crate::postgres_mirror::email_deliveries::reconcile(&surreal, &pg)
                     .await
                     .unwrap()
-                    .tables
-                    .is_empty()
+                    .is_clean()
             );
             assert_eq!(email_receipts::count(&surreal).await.unwrap(), 1);
         }),
@@ -510,13 +581,11 @@ async fn communications_live_in_postgres() {
             );
 
             assert_eq!(surreal_count(&surreal, "communication").await, 0);
-            assert_eq!(
+            assert!(
                 crate::postgres_mirror::conversations::reconcile(&surreal, &pg)
                     .await
                     .unwrap()
-                    .tables
-                    .len(),
-                0
+                    .is_clean()
             );
 
             let report = communications::purge_for_project(&surreal, &storage, matter)
@@ -538,4 +607,5 @@ async fn communications_live_in_postgres() {
         }),
     )
     .await;
+    first_backfill_copies_communication_history(&surreal, &pg).await;
 }

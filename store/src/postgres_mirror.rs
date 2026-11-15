@@ -652,6 +652,54 @@ pub(crate) async fn only_missing(
     Ok(table)
 }
 
+/// Whether parity compares a group of tables PostgreSQL holds whenever a host
+/// is configured (`held`): always without one, and otherwise only until a
+/// Mirror Backfill completes.
+///
+/// # Errors
+///
+/// PostgreSQL could not be read.
+pub(crate) async fn held_compared(pg: &PostgresDb, held: bool) -> Result<bool, MirrorError> {
+    Ok(!held || compares_authoritative(pg).await?)
+}
+
+/// A held group's comparison: where PostgreSQL holds the tables, only the
+/// SurrealDB rows it lacks are divergent.
+///
+/// # Errors
+///
+/// PostgreSQL could not be read.
+pub(crate) async fn held_parity(
+    pg: &PostgresDb,
+    held: bool,
+    tables: Vec<TableParity>,
+) -> Result<ParityReport, MirrorError> {
+    if !held {
+        return Ok(ParityReport { tables });
+    }
+    let mut kept = Vec::with_capacity(tables.len());
+    for table in tables {
+        kept.push(only_missing(pg, table).await?);
+    }
+    Ok(ParityReport { tables: kept })
+}
+
+/// The statement that writes one SurrealDB row into a held table: the
+/// mirror's own `upsert` (an `INSERT … ON CONFLICT (id) …`) without a host,
+/// and with one — reached only by the first Mirror Backfill — an insert that
+/// leaves the row PostgreSQL already holds under that id untouched.
+pub(crate) fn held_write(held: bool, upsert: &str) -> sqlx::AssertSqlSafe<String> {
+    let statement = if held {
+        let insert = upsert
+            .split_once(" ON CONFLICT (id)")
+            .map_or(upsert, |(insert, _)| insert);
+        format!("{insert} ON CONFLICT (id) DO NOTHING")
+    } else {
+        upsert.to_owned()
+    };
+    sqlx::AssertSqlSafe(statement)
+}
+
 /// Whether the mirror leaves the social content tables alone: PostgreSQL
 /// holds them ([`crate::postgres::social`]) and this is not the first
 /// Mirror Backfill.
