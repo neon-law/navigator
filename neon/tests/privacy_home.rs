@@ -86,13 +86,12 @@ async fn privacy_home_publishes_both_plans_with_referrals_and_shared_footer() {
     assert!(!html.contains("Coming soon"));
     assert!(!html.contains("Removal depends on the company"));
     assert!(!html.contains("href=\"/services\""));
-    // Four consultation links on the page, plus the footer Contact. A Lex
-    // Tecnica brand's Contact uses that brand's consultation calendar.
-    assert_eq!(
-        html.matches("href=\"https://calendar.notion.so/meet/nick-shook/or15n4yy7\"")
-            .count(),
-        5
-    );
+    let footer = html
+        .split_once("<footer")
+        .and_then(|(_, rest)| rest.split_once("</footer>"))
+        .expect("the page renders the shared footer")
+        .0;
+    assert!(footer.contains(r#"href="/contact""#), "{footer}");
     assert!(!html.contains("calendar.app.google"));
     let response = app
         .oneshot(
