@@ -1807,3 +1807,38 @@ fn publish_service_pushes_on_a_token_minted_after_the_compile() {
         );
     }
 }
+
+#[test]
+fn browser_e2e_gives_embedded_surreal_fixtures_the_ci_stack() {
+    let parse = |path: &str| -> serde_yaml::Value {
+        serde_yaml::from_str(&repo_file(path)).unwrap_or_else(|_| panic!("{path} parses"))
+    };
+    let step_env = |workflow: &serde_yaml::Value, job: &str, step: &str| {
+        workflow["jobs"][job]["steps"]
+            .as_sequence()
+            .unwrap_or_else(|| panic!("{job} declares steps"))
+            .iter()
+            .find(|candidate| candidate["name"].as_str() == Some(step))
+            .unwrap_or_else(|| panic!("{job} must have a `{step}` step"))["env"]["RUST_MIN_STACK"]
+            .clone()
+    };
+    let browser = step_env(
+        &parse(".github/workflows/deploy.yml"),
+        "integration",
+        "browser + accessibility e2e (nextest, retry-classified)",
+    );
+    let workspace = step_env(
+        &parse(".github/workflows/ci.yml"),
+        "rust",
+        "cargo test with coverage",
+    );
+    assert!(
+        browser.as_str().is_some(),
+        "the browser e2e step must set RUST_MIN_STACK: its fixtures start the embedded \
+         SurrealDB engine, which overflows the default stack (26.11.14 failed this way)"
+    );
+    assert_eq!(
+        browser, workspace,
+        "the browser e2e step must give tests the same stack as ci.yml's workspace step"
+    );
+}

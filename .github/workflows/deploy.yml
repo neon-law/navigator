@@ -1416,6 +1416,10 @@ jobs:
           WEBDRIVER_URL: http://localhost:9515
           SESSION_SECRET: change-me-32-bytes-of-random-data-x
           NAV_REQUIRE_HARNESS: "1"
+          # Fixtures such as the practice-brand preview start the embedded
+          # SurrealDB engine on the test thread, which overflows the default
+          # stack. Matches ci.yml's workspace test step.
+          RUST_MIN_STACK: "33554432"
           # Host-side fixtures connect to the same Surreal the in-cluster
           # `web` reads, through the port-forward opened above grant-lawyer.
           NAVIGATOR_SURREAL_ENDPOINT: ws://127.0.0.1:18000
