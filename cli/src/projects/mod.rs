@@ -12,6 +12,7 @@
 //! connection of its own, even against a local deployment: the site does
 //! that work and the CLI only ever holds a bearer token.
 
+pub(crate) mod calendar;
 pub mod cli_docs;
 pub mod communication;
 pub mod deadline;

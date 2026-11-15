@@ -410,6 +410,11 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
         ),
         (
             "POST",
+            "/app/api/integrations/calendar/events",
+            post(crate::integrations_api::calendar_events_door),
+        ),
+        (
+            "POST",
             "/app/api/integrations/calendar/ensure",
             post(crate::integrations_api::calendar_ensure_door),
         ),

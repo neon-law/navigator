@@ -368,7 +368,10 @@ fn provider_calls(providers: &FakeIntegrations, door: &str) -> usize {
 #[tokio::test]
 async fn every_door_is_admin_tier_and_needs_a_session() {
     let fx = build_fixture(true).await;
-    for door in ALL_DOORS {
+    for door in ALL_DOORS
+        .into_iter()
+        .chain(["/app/api/integrations/calendar/events"])
+    {
         for body in [
             serde_json::json!({ "project_code": fx.code }),
             serde_json::json!({ "not_a_field": true }),
@@ -394,6 +397,24 @@ async fn every_door_is_admin_tier_and_needs_a_session() {
             );
         }
     }
+}
+
+#[tokio::test]
+async fn calendar_events_refuses_non_fixture_projects_before_resolving_a_provider() {
+    let fx = build_fixture(true).await;
+    let response = post(
+        &fx,
+        "/app/api/integrations/calendar/events",
+        Some(&fx.admin),
+        serde_json::json!({
+            "project_code": fx.code,
+            "start": "2026-11-01T00:00:00Z",
+            "end": "2026-11-02T00:00:00Z"
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(fx.providers.calendar_calls(), 0);
 }
 
 /// Ensure is find-then-create, so the second run adopts. The distinction is

@@ -1,9 +1,8 @@
 //! The `/app/api/integrations/*` doors.
 //!
-//! Five operations, all admin-tier: ensure or reconcile a Project's
-//! Firm-private Notion page, ensure or notify its Firm-private Slack
-//! channel, and ensure its shared Google Calendar. They are the server half
-//! of `navigator project setup`.
+//! Admin-tier operations for a Project's Firm-private Notion page, Slack
+//! channel, and shared Google Calendar. The Calendar inspection door reads
+//! only a verified synthetic Project Calendar on staging.
 //!
 //! ## Why its own noun
 //!
@@ -37,19 +36,18 @@
 //!
 //! ## What the response carries
 //!
-//! An outcome slug per Project, and nothing else. No page id, no channel id,
-//! no provider URL. Those are the Firm-private coordinates the rest of this
-//! surface exists to keep on the firm side, and an operator running `ensure`
-//! needs to know what happened, not where it happened — the coordinate is
-//! already recorded on the Project row for the surfaces that may read it.
+//! Provisioning responses carry outcome slugs. The staging Calendar read
+//! carries event summaries and times. Provider coordinates stay on the
+//! Project row for the surfaces authorized to display them.
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, LazyLock, Mutex};
 
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use chrono::{DateTime, FixedOffset, TimeDelta};
 use serde::{Deserialize, Serialize};
 
 use crate::api::{AdminSession, ApiError, ApiState};
@@ -683,6 +681,64 @@ pub(crate) async fn slack_notify_door(
             project.code.clone(),
             "provider_unavailable",
         ))),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CalendarEventsRequest {
+    project_code: String,
+    start: DateTime<FixedOffset>,
+    end: DateTime<FixedOffset>,
+}
+
+/// List events on a synthetic Project Calendar on staging.
+pub(crate) async fn calendar_events_door(
+    State(state): State<ApiState>,
+    authed: AdminSession,
+    Json(request): Json<CalendarEventsRequest>,
+) -> Result<Response, ApiError> {
+    let environment = |key: &str| std::env::var(key).ok();
+    if store::config::staging_from(environment) != Ok(true)
+        || store::sample_matters_from(store::DeploymentEnvironment::Production, environment)
+            != Ok(true)
+        || !matches!(
+            request.project_code.as_str(),
+            store::seed::SAMPLE_LITIGATION_CODE
+                | store::seed::SAMPLE_TRANSACTIONAL_CODE
+                | store::seed::SAMPLE_ESTATE_CODE
+        )
+    {
+        return Err(ApiError::NotFound);
+    }
+    if request.start >= request.end || request.end - request.start > TimeDelta::days(31) {
+        return Err(ApiError::MalformedBody(
+            "provide a positive calendar window of at most 31 days".to_owned(),
+        ));
+    }
+    let visible =
+        store::access::visible_projects(&state.surreal, authed.0.person_id, authed.0.role)
+            .await
+            .map_err(ApiError::Db)?;
+    let project = one_target(&state, &authed, visible, &request.project_code).await?;
+    let stored_id = project.calendar_id.as_deref().ok_or(ApiError::NotFound)?;
+    let unavailable = || (StatusCode::BAD_GATEWAY, "Project Calendar unavailable").into_response();
+    let Ok(calendar) = state
+        .integration_providers
+        .calendar(&state.surreal, project.id)
+        .await
+    else {
+        return Ok(unavailable());
+    };
+    match calendar
+        .project_events(&project.code, stored_id, request.start, request.end)
+        .await
+    {
+        Ok(Some(events)) => {
+            Ok(([(header::CACHE_CONTROL, "no-store")], Json(events)).into_response())
+        }
+        Ok(None) => Err(ApiError::NotFound),
+        Err(_) => Ok(unavailable()),
     }
 }
 
