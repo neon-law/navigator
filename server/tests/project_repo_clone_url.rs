@@ -160,21 +160,11 @@ async fn lawyer_sees_the_external_repository_page() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let html = body_string(resp).await;
-    assert!(
-        html.contains("Integrations"),
-        "lawyer page must have the integrations section"
-    );
-    // The stored URL, verbatim and whole: nothing composes a host, an
-    // organization, or a suffix onto it.
-    assert!(
-        html.contains(REPOSITORY_URL),
-        "a lawyer must see the URL recorded on the matter"
-    );
-    assert!(
-        html.contains(&format!("{REPOSITORY_URL}\"")),
-        "the URL must end where the stored value ends — nothing appends a suffix"
-    );
-    assert!(html.contains("Source repository"));
+    let (_, after_label) = html.split_once(r#"aria-label="Project actions""#).unwrap();
+    let (actions, _) = after_label.split_once("</nav>").unwrap();
+    // Use the stored URL verbatim, without appending a suffix.
+    assert!(actions.contains(&format!(r#"href="{REPOSITORY_URL}""#)));
+    assert!(actions.contains(">Source repository<"));
     assert!(!html.contains("navigator git"));
 }
 

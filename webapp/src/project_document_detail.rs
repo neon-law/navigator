@@ -55,8 +55,7 @@ pub struct DocumentFacts {
     pub sha256_hex: String,
     /// The fingerprinted, one-hour Download link (`attachment`).
     pub download_href: String,
-    /// The same link asking for `inline` delivery, for the PDF.js viewer.
-    /// `None` unless the document is a PDF.
+    /// The byte URL for PDF.js. `None` unless the document is a PDF candidate.
     #[serde(default)]
     pub viewer_src: Option<String>,
     /// The matter this document is filed on.
@@ -212,20 +211,23 @@ async fn load() -> Result<DocumentDetailView, ServerFnError> {
     // session-gated path; the portal router always provides it.
     let signer = try_consume_context::<crate::document_link::DocumentLinkSigner>();
     let now = crate::document_link::now_unix();
-    let href = |extra: &str| match &signer {
-        Some(signer) => signer.href(
-            &download_path,
-            &project_code,
-            &doc_id_text,
-            &doc.sha256_hex,
-            now,
-            extra,
-        ),
-        None if extra.is_empty() => download_path.clone(),
-        None => format!("{download_path}?{extra}"),
-    };
-    let viewer_src = is_pdf(&doc.content_type).then(|| href("inline=1"));
-    let download_href = href("");
+    let download_href = signer.map_or_else(
+        || download_path.clone(),
+        |signer| {
+            signer.href(
+                &download_path,
+                &project_code,
+                &doc_id_text,
+                &doc.sha256_hex,
+                now,
+                "",
+            )
+        },
+    );
+    // PDF.js reads the same bytes as Download, even when the server delivers
+    // them as an attachment (including uploads with a generic content type).
+    let viewer_src =
+        is_pdf_candidate(&doc.content_type, doc.filename.as_deref()).then(|| download_href.clone());
     Ok(DocumentDetailView {
         firm_name,
         document: Some(DocumentFacts {
@@ -254,14 +256,14 @@ pub async fn get_project_document() -> Result<DocumentDetailView, ServerFnError>
     load().await
 }
 
-/// Whether a stored content type is a PDF the viewer should render. Parameters
-/// (`; charset=…`) and case are ignored.
 #[cfg(any(feature = "server", test))]
-fn is_pdf(content_type: &str) -> bool {
-    content_type
-        .split(';')
-        .next()
-        .is_some_and(|essence| essence.trim().eq_ignore_ascii_case("application/pdf"))
+fn is_pdf_candidate(content_type: &str, filename: Option<&str>) -> bool {
+    let essence = content_type.split(';').next().unwrap_or_default().trim();
+    essence.eq_ignore_ascii_case("application/pdf")
+        || (essence.eq_ignore_ascii_case("application/octet-stream")
+            && filename
+                .and_then(|name| name.rsplit_once('.'))
+                .is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("pdf")))
 }
 
 /// The vendored PDF.js entry points the viewer script imports. Same-origin under
@@ -455,14 +457,14 @@ mod tests {
     }
 
     #[test]
-    fn a_pdf_mounts_the_viewer_on_its_signed_inline_link() {
+    fn a_pdf_mounts_the_viewer_on_its_signed_download_link() {
         let mut facts = facts();
-        facts.viewer_src =
-            Some("/app/projects/X/documents/Y/download?fp=f&expires=1&sig=s&inline=1".to_string());
+        facts.download_href.push_str("?fp=f&expires=1&sig=s");
+        facts.viewer_src = Some(facts.download_href.clone());
         let html = dioxus_ssr::render_element(document_body(&facts, "Neon Law"));
         assert!(
             html.contains(
-                r#"data-pdf-src="/app/projects/X/documents/Y/download?fp=f&#38;expires=1&#38;sig=s&#38;inline=1""#
+                r#"data-pdf-src="/app/projects/X/documents/Y/download?fp=f&#38;expires=1&#38;sig=s""#
             ),
             "{html}"
         );
@@ -479,12 +481,20 @@ mod tests {
     }
 
     #[test]
-    fn only_a_pdf_content_type_gets_the_viewer() {
-        assert!(super::is_pdf("application/pdf"));
-        assert!(super::is_pdf("Application/PDF; charset=binary"));
-        assert!(!super::is_pdf("image/png"));
-        assert!(!super::is_pdf("application/pdfx"));
-        assert!(!super::is_pdf("text/html"));
+    fn previews_pdfs_even_if_the_upload_has_a_generic_content_type() {
+        assert!(super::is_pdf_candidate(
+            "Application/PDF; charset=binary",
+            None
+        ));
+        assert!(super::is_pdf_candidate(
+            "application/octet-stream",
+            Some("scan.PDF")
+        ));
+        assert!(!super::is_pdf_candidate(
+            "application/octet-stream",
+            Some("scan.png")
+        ));
+        assert!(!super::is_pdf_candidate("text/html", Some("scan.pdf")));
     }
 
     #[test]

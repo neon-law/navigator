@@ -992,6 +992,15 @@ pub fn LawyerProjectDetail() -> Element {
                 nav { class: "lawyer-detail__actions", "aria-label": "Project actions",
                     a { class: "nav-btn nav-btn--primary", href: "/app/projects/{view.code}/notations/new", "New notation" }
                     a { class: "nav-btn nav-btn--secondary", href: "/app/projects/{view.code}/edit", "Edit project" }
+                    if let Some(url) = view.repository_url.as_ref() {
+                        a {
+                            class: "nav-btn nav-btn--secondary",
+                            href: "{url}",
+                            target: "_blank",
+                            rel: "noopener noreferrer",
+                            "Source repository"
+                        }
+                    }
                     if let Some(entity_id) = view.entity_id.as_ref() {
                         a { class: "nav-btn nav-btn--secondary", href: "/app/admin/entities/{entity_id}/edit", "Edit entity" }
                     }
