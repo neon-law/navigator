@@ -2713,6 +2713,8 @@ mod tests {
                 "Google Play",
                 "https://github.com/neon-law/navigator",
                 "written engagement",
+                "You are signed in.",
+                "Book your enrollment appointment",
             ] {
                 assert!(text.contains(required), "{host}: missing {required}");
             }

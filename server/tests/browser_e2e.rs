@@ -56,15 +56,18 @@ mod private_chart;
 /// Same Day Legal's origin for the browser suite, e.g. `http://localhost:<port>`.
 const SAME_DAY_LEGAL_BASE_URL_ENV: &str = "NAV_SAME_DAY_LEGAL_BASE_URL";
 
+/// Enrollment lives on Same Day Legal's own host. KIND's Neon ingress does not
+/// serve it; Neon's `/same-day-legal` and `/nautilus` only redirect there.
+fn same_day_legal_origin() -> Option<String> {
+    env::var(SAME_DAY_LEGAL_BASE_URL_ENV)
+        .ok()
+        .filter(|url| !url.trim().is_empty())
+}
+
 /// The enrollment intake collects contact details before sign-in and keeps them when going Back.
 #[tokio::test]
 async fn enrollment_intake_preserves_answers_and_reviews_before_sign_in() {
-    // The intake lives on Same Day Legal's own host, which the harness does
-    // not serve under `base_url()`; Neon's `/nautilus` only redirects there.
-    let Some(origin) = env::var(SAME_DAY_LEGAL_BASE_URL_ENV)
-        .ok()
-        .filter(|url| !url.trim().is_empty())
-    else {
+    let Some(origin) = same_day_legal_origin() else {
         eprintln!("skipping the enrollment intake test: set {SAME_DAY_LEGAL_BASE_URL_ENV}");
         return;
     };
@@ -142,11 +145,17 @@ async fn enrollment_intake_preserves_answers_and_reviews_before_sign_in() {
 /// A verified fixture session reaches the configured booking handoff.
 #[tokio::test]
 async fn signed_in_enrollment_offers_booking() {
+    let Some(origin) = same_day_legal_origin() else {
+        eprintln!(
+            "skipping the signed-in enrollment booking test: set {SAME_DAY_LEGAL_BASE_URL_ENV}"
+        );
+        return;
+    };
     let Some(c) = new_client_or_skip().await else {
         return;
     };
     login_as_lawyer(&c).await;
-    c.goto(&format!("{}/#enrollment", base_url()))
+    c.goto(&format!("{origin}/#enrollment"))
         .await
         .expect("Same Day Legal booking");
     wait_for_text(&c, "You are signed in.", Duration::from_secs(20)).await;
