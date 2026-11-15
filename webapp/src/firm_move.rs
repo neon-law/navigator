@@ -139,6 +139,8 @@ fn picker_options<'a>(blank: &str, choices: impl IntoIterator<Item = &'a IdChoic
 #[component]
 fn MoveBrandForm(view: MoveBrandView) -> Element {
     let mut search = use_signal(String::new);
+    let mut ready = use_signal(|| false);
+    use_effect(move || ready.set(true));
     let query = search.read().trim().to_lowercase();
     let matching_brands = view
         .brands
@@ -182,6 +184,7 @@ fn MoveBrandForm(view: MoveBrandView) -> Element {
                 class: "nav-input",
                 id: "move-brand-search",
                 r#type: "search",
+                disabled: !ready(),
                 value: "{search}",
                 oninput: move |event| search.set(event.value()),
             }
