@@ -189,7 +189,7 @@ async fn vesta_shows_starting_price_and_shared_booking_calendar() {
         "trustee appointment",
         "https://calendar.notion.so/meet/nick-shook/or15n4yy7",
         "/public/brand/vesta.svg",
-        "Lex Tecnica, Ltd.",
+        "Guieb &#38; Shook PC",
         "site-footer",
     ] {
         assert!(html.contains(expected), "missing {expected}");
@@ -280,14 +280,12 @@ async fn vesta_services_describe_tailored_planning_with_a_starting_price() {
 }
 
 #[tokio::test]
-async fn vesta_footer_names_lex_tecnica_without_a_brand_family() {
+async fn vesta_footer_names_guieb_shook() {
     let html = preview(BrandKey::Vesta, "/").await;
     let footer = html.split("<footer").nth(1).expect("shared footer");
-    assert!(!footer.contains("https://www.guiebshook.com"), "{footer}");
-    assert!(footer.contains("Lex Tecnica, Ltd."), "{footer}");
-    assert!(!footer.contains("Everyone deserves access to justice."));
-    assert!(!footer.contains("Our Family"));
-    assert!(!footer.contains("common-law mark of Guieb &#38; Shook PC"));
+    assert!(footer.contains("https://www.guiebshook.com"), "{footer}");
+    assert!(footer.contains("Guieb &#38; Shook PC"), "{footer}");
+    assert!(!footer.contains("Lex Tecnica"), "{footer}");
 }
 
 #[tokio::test]

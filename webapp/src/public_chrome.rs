@@ -1025,6 +1025,8 @@ mod tests {
                 branding.firm.legal_entity
             );
             if branding.firm.legal_entity == views::brand::LEX_TECNICA_LEGAL_ENTITY {
+                assert!(!out.contains("guiebshook.com"), "{name}: {out}");
+                assert!(!out.contains("Guieb &#38; Shook PC"), "{name}: {out}");
                 assert!(
                     out.contains(r#"<strong class="site-footer__wordmark">Lex Tecnica</strong>"#),
                     "{name}'s footer wordmark is the shared firm name: {out}"

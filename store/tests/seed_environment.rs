@@ -55,11 +55,11 @@ async fn persistent_boot_registers_vesta_idempotently() {
         }
         brand_id = Some(vesta.id);
         let firms = store::firms::all(&surreal).await.unwrap();
-        let lex = firms
+        let practice = firms
             .iter()
-            .find(|firm| firm.name == store::seed::LEX_FIRM_NAME)
-            .expect("the Lex firm is seeded");
-        assert!(store::firms::brand_keys_for_firm(&surreal, lex.id)
+            .find(|firm| firm.name == store::seed::FIRM_ENTITY_NAME)
+            .expect("the practice firm is seeded");
+        assert!(store::firms::brand_keys_for_firm(&surreal, practice.id)
             .await
             .unwrap()
             .contains(&"vesta".to_string()));
@@ -767,21 +767,7 @@ async fn a_first_boot_registers_every_brand_key_the_practice_wears() {
         .unwrap();
     assert_eq!(
         lex_brands,
-        [
-            "delete-your-data",
-            "delete-your-debt",
-            "vesta",
-            "misericordia",
-            "abhaya",
-            "summons",
-            "daybridge",
-            "cyber-injury-law",
-            "aegis",
-            "groundwork",
-            "iep-defenders",
-            "lex-tecnica",
-            "same-day-legal",
-        ]
+        ["iep-defenders", "lex-tecnica", "same-day-legal",]
     );
 }
 

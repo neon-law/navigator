@@ -59,13 +59,13 @@ async fn privacy_home_publishes_both_plans_with_referrals_and_shared_footer() {
         r#"href="https://www.cyberinjurylaw.com""#,
         "privacy-cloak",
         "site-footer__legal",
-        "Lex Tecnica, Ltd.",
+        "Guieb &#38; Shook PC",
     ] {
         assert!(html.contains(required), "missing {required}");
     }
     assert!(
-        !html.contains("https://www.guiebshook.com"),
-        "DeleteYourData publishes Lex Tecnica's footer"
+        html.contains("https://www.guiebshook.com"),
+        "DeleteYourData links its operating firm"
     );
     for retired in [
         "$30",

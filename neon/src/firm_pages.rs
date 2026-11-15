@@ -1916,12 +1916,11 @@ fn resolve_firm_contact_content(
 ) -> webapp::contact_page::ContactContent {
     let firm_name = branding.firm.site_name;
 
+    let legal_entity = branding.firm.legal_entity;
     let page_title = "Contact";
     let meta_description = match branding.brand_key {
-        // These practices belong to Lex Tecnica, Ltd. DeleteYourData keeps
-        // the data-deletion sentence; the others name legal services.
         BrandKey::DeleteYourData => format!(
-            "Reach {firm_name}, a practice of Lex Tecnica, Ltd., about a data-deletion request. \
+            "Reach {firm_name}, a practice of {legal_entity}, about a data-deletion request. \
              Attorney advertisement. Nothing here is legal advice without a signed retainer for \
              an active project."
         ),
@@ -1935,7 +1934,7 @@ fn resolve_firm_contact_content(
         | BrandKey::Aegis
         | BrandKey::Groundwork
         | BrandKey::IepDefenders => format!(
-            "Reach {firm_name}, a practice of Lex Tecnica, Ltd., about legal services. \
+            "Reach {firm_name}, a practice of {legal_entity}, about legal services. \
              Attorney advertisement. Nothing here is legal advice without a signed retainer for \
              an active project."
         ),

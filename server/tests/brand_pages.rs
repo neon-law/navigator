@@ -70,7 +70,7 @@ async fn vesta_publishes_estate_planning_home_and_services() {
         "Your life is part of a larger story.",
         "Custom scope and fees",
         "/public/css/brand-vesta-tokens.css",
-        "Lex Tecnica, Ltd.",
+        "Guieb &#38; Shook PC",
     )
     .await;
 }
@@ -83,7 +83,7 @@ async fn misericordia_publishes_injury_home_and_services() {
         "You were hurt. We are here to listen.",
         "How we are paid",
         "/public/css/brand-misericordia-tokens.css",
-        "Lex Tecnica, Ltd.",
+        "Guieb &#38; Shook PC",
     )
     .await;
 }
@@ -96,7 +96,7 @@ async fn abhaya_publishes_immigration_home_and_services() {
         "Your next chapter, without fear.",
         "Immigration services",
         "/public/css/brand-abhaya-tokens.css",
-        "Lex Tecnica, Ltd.",
+        "Guieb &#38; Shook PC",
     )
     .await;
 }

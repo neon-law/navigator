@@ -320,6 +320,7 @@ pub fn llms_txt(state: &AppState, key: BrandKey) -> portal::LlmsTxt {
         BrandKey::DeleteYourData => {
             let branding = &views::brand::DELETE_YOUR_DATA_BRANDING;
             let mark = branding.firm.site_name;
+            let legal_entity = branding.firm.legal_entity;
             portal::LlmsTxt {
                 title: mark.to_string(),
                 summary: branding.mission_description.to_string(),
@@ -333,7 +334,7 @@ pub fn llms_txt(state: &AppState, key: BrandKey) -> portal::LlmsTxt {
                         title: "Contact".to_string(),
                         path: "/contact".to_string(),
                         description: format!(
-                            "How to reach {mark}, a practice of Lex Tecnica, Ltd., about a \
+                            "How to reach {mark}, a practice of {legal_entity}, about a \
                              data-deletion request."
                         ),
                     },
