@@ -23,10 +23,13 @@ documents.
 terms require completion. Disputes go to AAA arbitration. Model training requires separate authorization.
 
 **HIPAA.** Explicit safeguards, incident reporting, individual-rights assistance, subcontractor duties, HHS access, and
-return or destruction. Confirm any additional health-data laws.
+return or destruction. Confirm any additional health-data laws. Disputes go to AAA arbitration (`dispute_resolution@1`).
 
 **DPAs.** Actual processing, security, and subprocessor schedules must be completed. The global version requires
-executed transfer instruments and annexes; its summary is not a substitute for the SCCs or UK instrument.
+executed transfer instruments and annexes; its summary is not a substitute for the SCCs or UK instrument. Both addenda
+state the House dispute position under a reserved heading: the U.S. DPA restates `dispute_resolution@1`; the global
+version restates `dispute_resolution@2`, which resolves a transfer-instrument dispute, or one affecting a data subject's
+or supervisory authority's rights under such an instrument, as that instrument provides.
 
 **Privacy and cookies.** One policy with a cookie section. The U.S. state disclosures (`privacy_us_states@1`) and the
 GDPR supplement (`privacy_gdpr@1`) are Clauses, each included only when its yes/no answer is yes. Actual practices must
