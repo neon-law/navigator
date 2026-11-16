@@ -144,6 +144,7 @@ fn mail_help_exposes_only_draft_only_actions() {
             "attachments",
             "draft",
             "file",
+            "import-inbox",
             "inbox-preview",
             "ingest",
             "login",

@@ -260,6 +260,20 @@ pub enum MailAction {
         #[arg(long)]
         include_inline: bool,
     },
+    /// Import a single Gmail Message into the lawyer's Inbox for review.
+    ImportInbox {
+        /// Gmail message ID or a Gmail URL that identifies one message.
+        reference: String,
+        /// The expected verified canonical mailbox.
+        #[arg(long)]
+        mailbox: String,
+        /// Copy the message into the Navigator Inbox after verifying the mailbox.
+        #[arg(long)]
+        apply: bool,
+        /// Navigator host. Defaults to host in navigator.yaml.
+        #[arg(long)]
+        host: Option<String>,
+    },
     /// File a saved RFC 5322 message (.eml) into the matter inbox through
     /// the Navigator ingest door. Ingest-only: nothing is sent, and no
     /// Gmail OAuth setup is required. Re-running is safe — the door
@@ -540,6 +554,16 @@ impl GmailClient {
     async fn raw_message(&self, id: &str) -> Result<RawGmailMessage> {
         self.call(Operation::ReadMessage, Some(id), &[("format", "raw")], None)
             .await
+    }
+
+    async fn raw_message_bytes(&self, id: &str) -> Result<Vec<u8>> {
+        let field = self.raw_message(id).await?;
+        decode_gmail_raw(
+            field
+                .raw
+                .as_deref()
+                .ok_or_else(|| anyhow!("message {id} came back with no raw copy"))?,
+        )
     }
 
     async fn profile(&self) -> Result<GmailProfile> {
@@ -2115,6 +2139,22 @@ async fn run_inner(action: MailAction) -> Result<()> {
             dir,
             name,
         } => save_message_command(&reference, dir.as_deref(), name.as_deref()).await,
+        MailAction::ImportInbox {
+            reference,
+            mailbox,
+            apply,
+            host,
+        } => {
+            let id = import_inbox_message_id(&reference)?;
+            let gmail = client().await?;
+            let Some((account, raw)) =
+                gmail_inbox_import_source(&gmail, &id, &mailbox, apply).await?
+            else {
+                println!("Would import one Gmail Message into the Inbox.");
+                return Ok(());
+            };
+            crate::inbox_import::import_gmail_message(host.as_deref(), &account, &raw).await
+        }
         MailAction::Ingest {
             path,
             project,
@@ -2507,6 +2547,36 @@ fn print_thread(thread: &GmailThread) {
     }
 }
 
+fn import_inbox_message_id(reference: &str) -> Result<String> {
+    anyhow::ensure!(
+        !reference_names_conversation(reference),
+        "Gmail Inbox imports require a single message ID or a message-specific URL",
+    );
+    gmail_message_id(reference).ok_or_else(|| unresolved_reference(reference))
+}
+
+async fn gmail_inbox_import_source(
+    gmail: &GmailClient,
+    id: &str,
+    expected_mailbox: &str,
+    apply: bool,
+) -> Result<Option<(String, Vec<u8>)>> {
+    let profile = gmail.profile().await?;
+    anyhow::ensure!(
+        profile
+            .email_address
+            .eq_ignore_ascii_case(expected_mailbox.trim()),
+        "the authenticated Gmail account differs from the expected mailbox",
+    );
+    if !apply {
+        return Ok(None);
+    }
+    Ok(Some((
+        profile.email_address,
+        gmail.raw_message_bytes(id).await?,
+    )))
+}
+
 /// Files one saved RFC 5322 message into the matter inbox through the
 /// Navigator ingest door (`POST /app/api/projects/{id}/inbox-ingest`).
 /// Ingest-only: the door stores the message as an Inbox conversation
@@ -2653,13 +2723,7 @@ async fn file_raw_message(
     message_id: &str,
     kind: &str,
 ) -> Result<EmlFiled> {
-    let raw_field = gmail.raw_message(message_id).await?;
-    let raw = decode_gmail_raw(
-        raw_field
-            .raw
-            .as_deref()
-            .ok_or_else(|| anyhow!("message {message_id} came back with no raw copy"))?,
-    )?;
+    let raw = gmail.raw_message_bytes(message_id).await?;
     let filed = post_eml(
         target.base,
         target.navigator_token,
@@ -3125,6 +3189,61 @@ mod tests {
             "POST"
         );
         assert_eq!(endpoint_suffix(Operation::ModifyMessage), Some("modify"));
+    }
+
+    #[test]
+    fn direct_inbox_import_requires_an_individual_gmail_message() {
+        let id = "18fa3bc2d4e5f6a7";
+        assert_eq!(super::import_inbox_message_id(id).unwrap(), id);
+        let thread_url = format!("https://mail.google.com/mail/u/0/#inbox/{id}");
+        let error = super::import_inbox_message_id(&thread_url).unwrap_err();
+        assert!(error.to_string().contains("single message ID"));
+    }
+
+    #[tokio::test]
+    async fn direct_inbox_import_reads_raw_only_for_an_applied_verified_mailbox() {
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/users/me/profile"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "emailAddress": "lawyer@example.test"
+            })))
+            .expect(3)
+            .mount(&server)
+            .await;
+        let id = "18fa3bc2d4e5f6a7";
+        Mock::given(method("GET"))
+            .and(path(format!("/users/me/messages/{id}")))
+            .and(query_param("format", "raw"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "raw": "c3ludGhldGlj"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let gmail =
+            GmailClient::with_base_url("fixture".into(), Url::parse(&server.uri()).unwrap());
+        assert!(
+            super::gmail_inbox_import_source(&gmail, id, "other@example.test", true)
+                .await
+                .is_err()
+        );
+        assert!(
+            super::gmail_inbox_import_source(&gmail, id, "lawyer@example.test", false)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let (account, raw) =
+            super::gmail_inbox_import_source(&gmail, id, "LAWYER@example.test", true)
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(account, "lawyer@example.test");
+        assert_eq!(raw, b"synthetic");
+        server.verify().await;
     }
 
     #[test]
