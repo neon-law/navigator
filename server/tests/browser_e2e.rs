@@ -3168,7 +3168,10 @@ async fn a_client_is_refused_the_clause_library() {
     c.close().await.unwrap();
 }
 
-async fn seed_inbox_walkthrough(db: &store::surreal::SurrealDb) -> store::inbox::IngestedInbound {
+async fn seed_inbox_walkthrough(
+    db: &store::surreal::SurrealDb,
+    provider_account: &str,
+) -> store::inbox::IngestedInbound {
     let firm = store::firms::firm_id_for_brand_key(db, "neon")
         .await
         .unwrap()
@@ -3185,7 +3188,7 @@ async fn seed_inbox_walkthrough(db: &store::surreal::SurrealDb) -> store::inbox:
             parent_provider_message_id: None,
             visibility: Some("private"),
             channel: "sms",
-            provider_account: "synthetic-receiving-account",
+            provider_account,
             provider_message_id: &Uuid::now_v7().to_string(),
             provider_thread_ref: None,
             external_address: "synthetic-sender",
@@ -3233,13 +3236,133 @@ async fn activate_inbox_link(c: &Client, selector: &str) {
 }
 
 #[tokio::test]
+async fn a_lawyer_can_approve_one_inbox_message_for_internal_filing() {
+    // The rest of the browser suite also runs with a Restate-only fixture.
+    if std::env::var("NAVIGATOR_DBOS_INBOUND_TRIAGE_ENABLED").as_deref() != Ok("true") {
+        return;
+    }
+    let Some(c) = new_client_or_skip().await else {
+        return;
+    };
+    login_as_lawyer(&c).await;
+    let db = store::surreal::connect_from_env().await.unwrap();
+    let (project_id, review_id) = seed_inbox_filing_review(&db).await;
+
+    c.goto(&format!("{}/app/inbox/triage", base_url()))
+        .await
+        .unwrap();
+    c.set_window_size(1280, 900).await.unwrap();
+    let button = format!("#triage-row-{review_id} form[action$='/file/{project_id}'] button");
+    c.wait()
+        .at_most(Duration::from_secs(10))
+        .for_element(Locator::Css(&button))
+        .await
+        .unwrap();
+    assert!(store::communications::for_project(&db, project_id)
+        .await
+        .unwrap()
+        .is_empty());
+    let capture = std::path::Path::new("/tmp/navigator-screenshots/inbox-filing");
+    std::fs::create_dir_all(capture).unwrap();
+    capture_inbox_frames(&c, capture, 0..8).await;
+    activate_inbox_link(&c, &button).await;
+    c.wait()
+        .at_most(Duration::from_secs(10))
+        .for_element(Locator::Css("[role='status']"))
+        .await
+        .unwrap();
+    assert_eq!(
+        c.current_url().await.unwrap().query(),
+        Some("filing_queued=true")
+    );
+    capture_inbox_frames(&c, capture, 8..16).await;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let filed = store::communications::for_project(&db, project_id)
+                .await
+                .unwrap();
+            if !filed.is_empty() {
+                assert_eq!(filed.len(), 1);
+                assert_eq!(
+                    filed[0].direction,
+                    store::communications::direction::INTERNAL
+                );
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("the approved Message files internally");
+    c.close().await.unwrap();
+}
+
+async fn seed_inbox_filing_review(db: &store::surreal::SurrealDb) -> (Uuid, Uuid) {
+    use store::inbox_triage::{NewInboxTriage, PrivilegeLabel, TriageDisposition};
+
+    let firm_id = store::firms::firm_id_for_brand_key(db, "neon")
+        .await
+        .unwrap()
+        .unwrap();
+    let lawyer = store::persons::find_by_email_ci(db, "lawyer@neonlaw.com")
+        .await
+        .unwrap()
+        .unwrap();
+    if store::firms::membership_for_person(db, lawyer.id, firm_id)
+        .await
+        .unwrap()
+        .is_none()
+    {
+        store::firms::add_membership(
+            db,
+            &store::firms::NewPersonFirmRole {
+                person_id: lawyer.id,
+                firm_id,
+                membership: store::firms::FirmMembership::Lawyer,
+                is_dri: false,
+            },
+        )
+        .await
+        .unwrap();
+    }
+    let project =
+        store::test_support::seed_project_on_firm(db, Some(firm_id), "Synthetic Inbox Filing")
+            .await;
+    store::projects::add_participation(db, project.id, lawyer.id, "lawyer")
+        .await
+        .unwrap();
+    let saved = seed_inbox_walkthrough(db, "synthetic-filing-account").await;
+    let review = store::inbox_triage::record(
+        db,
+        &NewInboxTriage {
+            message_id: saved.message_id,
+            firm_id,
+            suggested_project_id: Some(project.id),
+            project_confidence: Some(0.95),
+            privilege: PrivilegeLabel::Uncertain,
+            privilege_confidence: None,
+            rationale: None,
+            model_id: None,
+            prompt_version: store::inbox_triage::RULES_ONLY_PROMPT.into(),
+            raw_output: None,
+            disposition: TriageDisposition::NeedsHuman,
+            labeled_example: false,
+        },
+    )
+    .await
+    .unwrap();
+
+    (project.id, review.id)
+}
+
+#[tokio::test]
 async fn lawyer_workbench_card_opens_the_unified_inbox() {
     let Some(c) = new_client_or_skip().await else {
         return;
     };
     login_as_lawyer(&c).await;
     let db = store::surreal::connect_from_env().await.unwrap();
-    let saved = seed_inbox_walkthrough(&db).await;
+    let saved = seed_inbox_walkthrough(&db, "synthetic-receiving-account").await;
     c.goto(&format!("{}/app/lawyers", base_url()))
         .await
         .unwrap();

@@ -42,9 +42,19 @@ pub struct TriageRowView {
     /// when the row names no suggestion.
     #[serde(default)]
     pub confirm_action: Option<String>,
+    #[serde(default)]
+    pub filing_action: Option<FilingActionView>,
     pub override_action: String,
     pub resolve_action: String,
     pub rerun_action: String,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FilingActionView {
+    pub action: String,
+    pub message_id: String,
+    pub review_revision: String,
+    pub assignment_id: Option<String>,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,6 +71,8 @@ pub struct TriageQueuePage {
     #[serde(default)]
     pub error: Option<String>,
     #[serde(default)]
+    pub filing_queued: bool,
+    #[serde(default)]
     pub csrf_token: String,
     #[serde(default)]
     pub logo: Option<AppLogo>,
@@ -75,6 +87,10 @@ pub struct TriageQueuePage {
 /// the store denies them again here.
 #[server]
 pub async fn triage_queue_page() -> Result<TriageQueuePage, ServerFnError> {
+    #[derive(Deserialize)]
+    struct FilingFlash {
+        filing_queued: Option<bool>,
+    }
     let role = crate::admin_listing::require_firm_person().await?;
     let surreal = consume_context::<store::surreal::SurrealDb>();
     let actor = crate::inbox::person_id()
@@ -83,6 +99,8 @@ pub async fn triage_queue_page() -> Result<TriageQueuePage, ServerFnError> {
     let rows = store::inbox_triage::list_for_review(&surreal, actor)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?;
+    let filing_enabled = std::env::var(workflows::trigger::INBOUND_TRIAGE_DBOS_ENABLED_ENV)
+        .is_ok_and(|value| value.trim() == "true");
     let mut views = Vec::with_capacity(rows.len());
     for row in rows {
         // Per-row project choices come from the row's Firm — an Owner sees
@@ -98,6 +116,22 @@ pub async fn triage_queue_page() -> Result<TriageQueuePage, ServerFnError> {
             })
             .collect();
         let href = format!("/app/inbox/{}", row.conversation_id);
+        let filing_action = if filing_enabled {
+            store::inbox_triage::filing_action_for_review(&surreal, actor, &row)
+                .await
+                .map_err(|_| ServerFnError::new("could not load the filing proposal"))?
+                .map(|approval| FilingActionView {
+                    action: format!(
+                        "{href}/triage/{}/file/{}",
+                        approval.triage_id, approval.project_id
+                    ),
+                    message_id: approval.message_id.to_string(),
+                    review_revision: approval.review_revision.to_rfc3339(),
+                    assignment_id: approval.assignment_id.map(|id| id.to_string()),
+                })
+        } else {
+            None
+        };
         views.push(TriageRowView {
             triage_id: row.triage.id.to_string(),
             conversation_href: href.clone(),
@@ -122,17 +156,25 @@ pub async fn triage_queue_page() -> Result<TriageQueuePage, ServerFnError> {
                 // action uses — so the form itself needs no hidden field.
                 format!("{href}/triage/{}/confirm/{}", row.triage.id, project_id)
             }),
+            filing_action,
             override_action: format!("{href}/triage/{}/override", row.triage.id),
             resolve_action: format!("{href}/triage/{}/resolve", row.triage.id),
             rerun_action: format!("{href}/triage/{}/rerun", row.triage.id),
         });
     }
+    let filing_queued =
+        dioxus_fullstack_core::FullstackContext::extract::<axum::extract::Query<FilingFlash>, _>()
+            .await
+            .ok()
+            .and_then(|axum::extract::Query(flash)| flash.filing_queued)
+            .unwrap_or(false);
     let (logo, tokens_href, firm_name) = crate::inbox::chrome().await;
     Ok(TriageQueuePage {
         role,
         title: "Triage review".into(),
         rows: views,
         error: crate::inbox::query_error().await,
+        filing_queued,
         csrf_token: crate::inbox::csrf_token().await,
         logo,
         tokens_href,
@@ -151,6 +193,26 @@ pub fn TriageQueue() -> Element {
         None => return rsx! { main { id: "triage", p { "Loading…" } } },
     };
     triage_queue_body(&page)
+}
+
+fn filing_form(filing: &FilingActionView, csrf: &str) -> Element {
+    rsx! {
+        FormCard {
+            title: "Approve internal filing".to_string(),
+            action: filing.action.clone(),
+            submit_label: "File this message internally".to_string(),
+            heading: Heading::Hidden,
+            csrf_token: Some(csrf.to_string()),
+            fields: vec![],
+            extra_fields: Some(rsx! {
+                input { r#type: "hidden", name: "message_id", value: "{filing.message_id}" }
+                input { r#type: "hidden", name: "review_revision", value: "{filing.review_revision}" }
+                if let Some(assignment_id) = &filing.assignment_id {
+                    input { r#type: "hidden", name: "assignment_id", value: "{assignment_id}" }
+                }
+            }),
+        }
+    }
 }
 
 /// One awaiting triage row and its four doors. Confirm is offered only when
@@ -203,6 +265,9 @@ fn triage_row(row: &TriageRowView, csrf: &str) -> Element {
                 p { class: "triage-review__rationale nav-muted", "{rationale}" }
             }
             {confirm}
+            if let Some(filing) = &row.filing_action {
+                {filing_form(filing, csrf)}
+            }
             FormCard {
                 title: "Assign a different project".to_string(),
                 action: row.override_action.clone(),
@@ -270,6 +335,9 @@ pub fn triage_queue_body(page: &TriageQueuePage) -> Element {
         }
         main { id: "triage", class: "nav-theme",
             h1 { "{page.title}" }
+            if page.filing_queued {
+                p { role: "status", "Filing queued." }
+            }
             if let Some(error) = page.error.as_ref() {
                 p { class: "nav-error", "{error}" }
             }
@@ -309,6 +377,12 @@ mod tests {
                 "/app/inbox/019a0000-0000-7000-8000-0000000000aa/triage/019a0000-0000-7000-8000-000000000001/confirm/019a0000-0000-7000-8000-0000000000bb"
                     .into(),
             ),
+            filing_action: Some(FilingActionView {
+                action: "/app/inbox/019a0000-0000-7000-8000-0000000000aa/triage/019a0000-0000-7000-8000-000000000001/file/019a0000-0000-7000-8000-0000000000bb".into(),
+                message_id: "019a0000-0000-7000-8000-000000000002".into(),
+                review_revision: "2026-11-16T00:00:00Z".into(),
+                assignment_id: None,
+            }),
             override_action: "/app/inbox/019a0000-0000-7000-8000-0000000000aa/triage/019a0000-0000-7000-8000-000000000001/override".into(),
             resolve_action: "/app/inbox/019a0000-0000-7000-8000-0000000000aa/triage/019a0000-0000-7000-8000-000000000001/resolve".into(),
             rerun_action: "/app/inbox/019a0000-0000-7000-8000-0000000000aa/triage/019a0000-0000-7000-8000-000000000001/rerun".into(),
@@ -321,6 +395,7 @@ mod tests {
             title: "Triage review".into(),
             rows,
             error: None,
+            filing_queued: false,
             csrf_token: "csrf-token-1".into(),
             logo: None,
             tokens_href: "/tokens.css".into(),
@@ -338,6 +413,10 @@ mod tests {
             "uncertain",
             "Suggested project: Synthetic Project · confidence 0.82",
             "The sender references an ongoing trust.",
+            "File this message internally",
+            r#"name="review_revision""#,
+            r#"name="message_id""#,
+            "/triage/019a0000-0000-7000-8000-000000000001/file/019a0000-0000-7000-8000-0000000000bb",
             "/triage/019a0000-0000-7000-8000-000000000001/confirm/019a0000-0000-7000-8000-0000000000bb",
             "/triage/019a0000-0000-7000-8000-000000000001/override",
             "/triage/019a0000-0000-7000-8000-000000000001/resolve",
@@ -352,8 +431,10 @@ mod tests {
         let mut view = row();
         view.suggested_project = None;
         view.confirm_action = None;
+        view.filing_action = None;
         let html = dioxus_ssr::render_element(triage_queue_body(&page(vec![view])));
         assert!(!html.contains("Confirm the suggestion"), "{html}");
+        assert!(!html.contains("File this message internally"), "{html}");
         assert!(html.contains("Assign a different project"), "{html}");
     }
 

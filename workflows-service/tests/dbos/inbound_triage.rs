@@ -12,12 +12,14 @@ use workflows::{InboundTriageReport, InboundTriageRequest};
 use workflows_service::dbos_ingress::{TriageIngress, WorkerIngress};
 use workflows_service::health::router_with_dbos_ingress;
 use workflows_service::inbound_triage::{
-    register_dbos, InboundTriageService, TriageError, TriageProviders,
+    filing_workflow_id, register_dbos, register_filing_dbos, FilingWorkflow, InboundTriageService,
+    TriageError, TriageProviders,
 };
 
 use crate::support::{database, APP_VERSION, DEADLINE};
 
 const ROUTE: &str = "/internal/dbos/inbound-triage";
+const FILING_ROUTE: &str = "/internal/dbos/approved-inbox-filing";
 
 async fn seed_message(surreal: &SurrealDb, firm_id: Uuid, provider_message_id: &str) -> Uuid {
     ingest_inbound(
@@ -65,12 +67,15 @@ async fn inbound_triage_preserves_replay_and_confines_classifier_evidence() {
     let dbos = dbos::DBOS::new(workflows::dbos_engine::config(&db.url, APP_VERSION));
     let workflow = register_dbos(&dbos, InboundTriageService::new(surreal.clone(), None))
         .expect("register triage");
+    let filing = register_filing_dbos(&dbos, InboundTriageService::new(surreal.clone(), None))
+        .expect("register filing");
     dbos.launch().await.expect("launch DBOS");
     let router = router_with_dbos_ingress(
         WorkerIngress {
             inbound_triage: Some(TriageIngress {
                 token: "synthetic-service-token".into(),
                 workflow: workflow.clone(),
+                filing: filing.clone(),
             }),
             ..Default::default()
         },
@@ -126,9 +131,139 @@ async fn inbound_triage_preserves_replay_and_confines_classifier_evidence() {
             .expect("read triage after recovery"),
         Some(original)
     );
+    assert_approved_filing(&router, &dbos, &filing, &surreal, firm_id).await;
     dbos.shutdown().await;
 
     assert_classifier_evidence_stays_in_the_inbox_audit_row(&db.url, &surreal, firm_id).await;
+}
+
+async fn assert_approved_filing(
+    router: &axum::Router,
+    dbos: &dbos::DBOS,
+    workflow: &FilingWorkflow,
+    surreal: &SurrealDb,
+    firm_id: Uuid,
+) {
+    use store::inbox_triage::FilingApproval;
+
+    let approval = seed_filing_approval(surreal, firm_id).await;
+    let project_id = approval.project_id;
+    let run = |approval| async move {
+        let id = filing_workflow_id(&approval);
+        workflow
+            .run_with(
+                approval,
+                dbos::RunOptions {
+                    workflow_id: Some(&id),
+                    ..Default::default()
+                },
+            )
+            .await
+    };
+    let refused = router
+        .clone()
+        .oneshot(Request::post(FILING_ROUTE).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), StatusCode::UNAUTHORIZED);
+    for _ in 0..2 {
+        let submitted = router
+            .clone()
+            .oneshot(
+                Request::post(FILING_ROUTE)
+                    .header("authorization", "Bearer synthetic-service-token")
+                    .body(Body::from(serde_json::to_vec(&approval).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(submitted.status(), StatusCode::ACCEPTED);
+    }
+    let handle = dbos
+        .retrieve_workflow::<Uuid, workflows_service::inbound_triage::FilingError>(
+            &filing_workflow_id(&approval),
+        )
+        .unwrap();
+    let first = tokio::time::timeout(DEADLINE, handle.result())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(run(approval).await.unwrap(), first);
+    let stale = FilingApproval {
+        assignment_id: Some(Uuid::now_v7()),
+        ..approval
+    };
+    let error = run(stale).await.unwrap_err();
+    assert!(matches!(
+        error,
+        dbos::Error::Application(workflows_service::inbound_triage::FilingError::ApprovalExpired)
+    ));
+    assert_eq!(
+        store::communications::for_project(surreal, project_id)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        store::communications::for_project_client_visible(surreal, project_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+async fn seed_filing_approval(
+    surreal: &SurrealDb,
+    firm_id: Uuid,
+) -> store::inbox_triage::FilingApproval {
+    use store::inbox_triage::{record, FilingApproval, NewInboxTriage, RULES_ONLY_PROMPT};
+    use store::persons::{self, NewPerson, Role};
+
+    let message_id = seed_message(surreal, firm_id, "triage-approved-filing").await;
+    let project =
+        store::test_support::seed_project_on_firm(surreal, Some(firm_id), "Synthetic Filing").await;
+    let owner = persons::create(
+        surreal,
+        &NewPerson::with_role("Synthetic Reviewer", "reviewer@example.test", Role::Owner),
+    )
+    .await
+    .unwrap();
+    store::projects::add_participation(
+        surreal,
+        project.id,
+        owner.id,
+        store::projects::participation_for_role(Role::Owner),
+    )
+    .await
+    .unwrap();
+    let review = record(
+        surreal,
+        &NewInboxTriage {
+            message_id,
+            firm_id,
+            suggested_project_id: Some(project.id),
+            project_confidence: None,
+            privilege: PrivilegeLabel::Uncertain,
+            privilege_confidence: None,
+            rationale: None,
+            model_id: None,
+            prompt_version: RULES_ONLY_PROMPT.into(),
+            raw_output: None,
+            disposition: TriageDisposition::NeedsHuman,
+            labeled_example: false,
+        },
+    )
+    .await
+    .unwrap();
+    FilingApproval {
+        triage_id: review.id,
+        message_id,
+        project_id: project.id,
+        approved_by: owner.id,
+        review_revision: review.updated_at,
+        assignment_id: None,
+    }
 }
 
 async fn assert_classifier_evidence_stays_in_the_inbox_audit_row(

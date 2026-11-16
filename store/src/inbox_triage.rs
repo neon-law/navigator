@@ -539,6 +539,159 @@ pub async fn find_by_id(
     Ok(rows.into_iter().find_map(TriageRow::into_triage))
 }
 
+/// Identity carried by one lawyer-approved Message filing. The workflow
+/// needs only these references to recheck the decision after a restart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FilingApproval {
+    pub triage_id: Uuid,
+    pub message_id: Uuid,
+    pub project_id: Uuid,
+    pub approved_by: Uuid,
+    pub review_revision: chrono::DateTime<chrono::Utc>,
+    pub assignment_id: Option<Uuid>,
+}
+
+async fn latest_assignment_id(
+    db: &SurrealDb,
+    conversation_id: Uuid,
+) -> Result<Option<Uuid>, InboxError> {
+    Ok(crate::inbox::assignments(db, conversation_id)
+        .await?
+        .into_iter()
+        .max_by_key(|assignment| (assignment.inserted_at, assignment.id))
+        .map(|assignment| assignment.id))
+}
+
+/// Prepare the exact Message and review revision to show a reviewer. The
+/// browser still has to submit approval and the worker rechecks authority.
+///
+/// # Errors
+///
+/// Propagates store errors. Returns no action for an inaccessible or stale proposal.
+pub async fn filing_action_for_review(
+    db: &SurrealDb,
+    actor_id: Uuid,
+    row: &TriageReviewRow,
+) -> Result<Option<FilingApproval>, InboxError> {
+    let Some(project_id) = row.triage.suggested_project_id else {
+        return Ok(None);
+    };
+    let approval = FilingApproval {
+        triage_id: row.triage.id,
+        message_id: row.triage.message_id,
+        project_id,
+        approved_by: actor_id,
+        review_revision: row.triage.updated_at,
+        assignment_id: latest_assignment_id(db, row.conversation_id).await?,
+    };
+    match verify_filing_approval(db, &approval).await {
+        Ok(()) => Ok(Some(approval)),
+        Err(InboxError::Denied | InboxError::NotFound) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+async fn approved_filing_context(
+    db: &SurrealDb,
+    approval: &FilingApproval,
+) -> Result<(crate::inbox::Conversation, crate::inbox::Message), InboxError> {
+    let actor = crate::inbox::load_person(db, approval.approved_by).await?;
+    if !crate::access::matter_viewer(db, Some(actor.id), actor.role, approval.project_id)
+        .await
+        .map_err(InboxError::Db)?
+        .is_some_and(crate::access::MatterViewer::is_firm_side)
+    {
+        return Err(InboxError::Denied);
+    }
+    let triage = find_by_id(db, approval.triage_id)
+        .await?
+        .filter(|triage| {
+            triage.message_id == approval.message_id
+                && triage.suggested_project_id == Some(approval.project_id)
+                && triage.updated_at == approval.review_revision
+        })
+        .ok_or(InboxError::NotFound)?;
+    if !crate::inbox::triage_reviewer_may_resolve(db, &actor, triage.firm_id).await? {
+        return Err(InboxError::Denied);
+    }
+    let project = crate::projects::find_by_id(db, approval.project_id)
+        .await?
+        .filter(|project| project.firm_id == Some(triage.firm_id) && project.status == "open")
+        .ok_or(InboxError::NotFound)?;
+    let message = crate::inbox::message_by_id(db, approval.message_id)
+        .await?
+        .filter(|message| message.direction == crate::inbox::direction::INBOUND)
+        .ok_or(InboxError::NotFound)?;
+    let conversation = crate::inbox::conversation_by_id(db, message.conversation_id)
+        .await?
+        .ok_or(InboxError::NotFound)?;
+    if conversation.firm_id != triage.firm_id
+        || conversation.trashed_at.is_some()
+        || conversation
+            .brand_key
+            .as_deref()
+            .is_some_and(|brand| brand != project.brand)
+        || conversation
+            .project_id
+            .is_some_and(|assigned| assigned != project.id)
+    {
+        return Err(InboxError::NotFound);
+    }
+    if latest_assignment_id(db, conversation.id).await? != approval.assignment_id {
+        return Err(InboxError::NotFound);
+    }
+    Ok((conversation, message))
+}
+
+/// Recheck a filing submitted by its authenticated reviewer before queuing it.
+///
+/// # Errors
+///
+/// Returns a denial, a stale-proposal error or a store error.
+pub async fn verify_filing_approval(
+    db: &SurrealDb,
+    approval: &FilingApproval,
+) -> Result<(), InboxError> {
+    approved_filing_context(db, approval).await.map(|_| ())
+}
+
+/// File the exact approved inbound Message as a firm-internal Communication.
+/// Recheck the review revision, assignment and approver's current Firm and
+/// Project access. The normal Inbox source reference makes replay idempotent.
+///
+/// # Errors
+///
+/// Denies an approver who lost access, or a stale approval. Propagates store
+/// failures and source references that already belong to another Project.
+pub async fn file_approved_message(
+    db: &SurrealDb,
+    approval: &FilingApproval,
+) -> Result<Uuid, InboxError> {
+    let (conversation, message) = approved_filing_context(db, approval).await?;
+    let channel = crate::inbox::spine_channel(&conversation.channel, &message.direction);
+    if channel.is_empty() {
+        return Err(InboxError::Denied);
+    }
+    let source_ref = format!("inbox:{}", message.id);
+    let result = crate::communications::ingest(
+        db,
+        &crate::communications::IngestArgs {
+            project_id: approval.project_id,
+            channel,
+            direction: crate::communications::direction::INTERNAL,
+            author_person_id: message.author_person_id,
+            counterparty: Some(&conversation.external_address),
+            subject: conversation.subject.as_deref(),
+            body: &message.body,
+            source_ref: Some(&source_ref),
+            asset_id: None,
+            occurred_at: &message.occurred_at,
+        },
+    )
+    .await?;
+    Ok(result.communication_id)
+}
+
 /// A person's decision on one triage row — what the review actions write.
 struct ReviewDecision {
     privilege: PrivilegeLabel,
@@ -1375,6 +1528,35 @@ mod tests {
         let (triage_id, message) =
             needs_human_with_suggestion(&db, firm, "confirm-owner", Some(project.id)).await;
 
+        participate(&db, owner, project.id).await;
+        let review = find_by_id(&db, triage_id).await.unwrap().unwrap();
+        let approval = super::FilingApproval {
+            triage_id,
+            message_id: message.message_id,
+            project_id: project.id,
+            approved_by: owner,
+            review_revision: review.updated_at,
+            assignment_id: None,
+        };
+        let communication = super::file_approved_message(&db, &approval).await.unwrap();
+        assert_eq!(
+            super::file_approved_message(&db, &approval).await.unwrap(),
+            communication
+        );
+        assert_eq!(
+            crate::communications::for_project(&db, project.id)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            crate::communications::for_project_client_visible(&db, project.id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
         let confirmed = confirm_project(&db, owner, triage_id, project.id)
             .await
             .unwrap();
@@ -1393,6 +1575,30 @@ mod tests {
                 .len(),
             1
         );
+        assert!(matches!(
+            super::file_approved_message(&db, &approval).await,
+            Err(InboxError::NotFound)
+        ));
+        let history = crate::inbox::assignments(&db, conversation.id)
+            .await
+            .unwrap();
+        let renewed = super::FilingApproval {
+            review_revision: confirmed.updated_at,
+            assignment_id: Some(history[0].id),
+            ..approval
+        };
+        assert_eq!(
+            super::file_approved_message(&db, &renewed).await.unwrap(),
+            communication
+        );
+        let wrong_message = super::FilingApproval {
+            message_id: Uuid::now_v7(),
+            ..renewed
+        };
+        assert!(matches!(
+            super::file_approved_message(&db, &wrong_message).await,
+            Err(InboxError::NotFound)
+        ));
         // The decision is recorded; a second confirm cannot rewrite it.
         let again = confirm_project(&db, owner, triage_id, project.id).await;
         assert!(matches!(again, Err(InboxError::Invalid(_))));
