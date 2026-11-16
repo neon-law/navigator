@@ -44,6 +44,13 @@ fn assumption_error(error: &FirmAssumptionError) -> Response {
             StatusCode::INTERNAL_SERVER_ERROR
         }
     };
+    if status.is_server_error() {
+        tracing::warn!(
+            event = "firm_assumption_operation_failed",
+            outcome = "store_error",
+            store_error = %error
+        );
+    }
     (
         status,
         Json(serde_json::json!({"error": "assumption_refused"})),
@@ -145,4 +152,94 @@ pub(super) async fn catalog() -> Response {
         })
         .collect();
     Json(keys).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::StatusCode;
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+    use tracing_subscriber::fmt::MakeWriter;
+
+    #[derive(Clone)]
+    struct Buffer(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for Buffer {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for Buffer {
+        type Writer = Buffer;
+        fn make_writer(&'a self) -> Buffer {
+            self.clone()
+        }
+    }
+
+    async fn body_error_code(response: Response) -> String {
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        body["error"].as_str().unwrap().to_owned()
+    }
+
+    #[tokio::test]
+    async fn assumption_errors_map_to_their_response_statuses() {
+        crate::test_tracing::ensure_callsite_interest();
+        let cases = [
+            (
+                FirmAssumptionError::Invalid("synthetic"),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                FirmAssumptionError::UnknownKey("synthetic.key".into()),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                FirmAssumptionError::TypeMismatch,
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                FirmAssumptionError::Catalog,
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ),
+            (
+                FirmAssumptionError::Database(sqlx::Error::PoolClosed),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ),
+        ];
+        for (error, status) in cases {
+            let output = Arc::new(Mutex::new(Vec::new()));
+            let subscriber = tracing_subscriber::fmt()
+                .with_ansi(false)
+                .with_max_level(tracing::Level::WARN)
+                .with_writer(Buffer(output.clone()))
+                .finish();
+            let response = {
+                let _guard = tracing::subscriber::set_default(subscriber);
+                assumption_error(&error)
+            };
+            assert_eq!(response.status(), status, "{error}");
+            assert_eq!(body_error_code(response).await, "assumption_refused");
+            let logged = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+            if status.is_server_error() {
+                assert!(
+                    logged.contains("firm_assumption_operation_failed"),
+                    "5xx must log: {error}; got {logged:?}"
+                );
+            } else {
+                assert!(
+                    !logged.contains("firm_assumption_operation_failed"),
+                    "4xx must not log: {error}; got {logged:?}"
+                );
+            }
+        }
+    }
 }
