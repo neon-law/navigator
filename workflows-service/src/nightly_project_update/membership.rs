@@ -2,9 +2,9 @@
 //! firm-side people in it.
 //!
 //! The channel is created, adopted when one of the expected name already
-//! exists, or replaced when the recorded channel has been deleted; the Lawyer
-//! DRI, participating Clerks, and owning-Firm Lawyers and Clerks with recorded
-//! Slack identities are invited. Channels are named `navigator-<code>`, or
+//! exists, or replaced when the recorded channel has been deleted. The
+//! Project's Firm-side participants are invited using their Slack identities
+//! or directory lookup. Channels are named `navigator-<code>`, or
 //! `staging-<code>` on a simulated-matters deployment, and every call goes
 //! through the owning Firm's own Slack bot (ENG-392).
 //!
@@ -444,10 +444,74 @@ mod tests {
         );
     }
 
+    async fn seed_reconciliation_participants(
+        surreal: &store::surreal::SurrealDb,
+        project_id: uuid::Uuid,
+        firm_id: uuid::Uuid,
+    ) {
+        let lawyer = person(surreal, "Lawyer DRI", "lawyer@example.com", Role::Lawyer).await;
+        let clerk_one = person(surreal, "Clerk One", "clerk-one@example.com", Role::Clerk).await;
+        let clerk_two = person(surreal, "Clerk Two", "clerk-two@example.com", Role::Clerk).await;
+        let unmatched = person(
+            surreal,
+            "Clerk Three",
+            "clerk-three@example.com",
+            Role::Clerk,
+        )
+        .await;
+        let client = person(surreal, "Client", "client@example.com", Role::Client).await;
+        let participant = person(surreal, "Project Lawyer", "team@example.com", Role::Lawyer).await;
+        let bystander = person(
+            surreal,
+            "Other Firm Lawyer",
+            "bystander@example.com",
+            Role::Lawyer,
+        )
+        .await;
+        store::firms::add_membership(
+            surreal,
+            &store::firms::NewPersonFirmRole {
+                person_id: bystander.id,
+                firm_id,
+                membership: store::firms::FirmMembership::Lawyer,
+                is_dri: false,
+            },
+        )
+        .await
+        .unwrap();
+        store::external_identities::link(
+            surreal,
+            bystander.id,
+            store::external_identities::ExternalSystem::Slack,
+            "U-BYSTANDER",
+            None,
+        )
+        .await
+        .unwrap();
+        for (person, participation) in [
+            (&lawyer, "lawyer"),
+            (&participant, "lawyer"),
+            (&clerk_one, "clerk"),
+            (&clerk_two, "clerk"),
+            (&unmatched, "clerk"),
+            (&client, "client"),
+        ] {
+            projects::add_participation(surreal, project_id, person.id, participation)
+                .await
+                .expect("add participation");
+        }
+        designate_dri_in_surreal(surreal, project_id, lawyer.id, DriSide::Lawyer)
+            .await
+            .expect("designate Lawyer DRI");
+    }
+
     #[tokio::test]
-    async fn reconciliation_invites_missing_lawyer_and_clerks_only() {
+    async fn reconciliation_invites_only_project_participants() {
         let surreal = mem_surreal().await;
-        let configured = project(&surreal, "sync-configured").await;
+        let firm_id = store::test_support::seed_firm_with_brand(&surreal, "neon").await;
+        let configured =
+            store::test_support::seed_project_on_firm(&surreal, Some(firm_id), "Sync Configured")
+                .await;
         set_internal_slack_channel_id(&surreal, configured.id, "CTEAM")
             .await
             .expect("set channel")
@@ -459,35 +523,12 @@ mod tests {
             .expect("Project exists");
         let _without_channel = project(&surreal, "sync-no-channel").await;
 
-        let lawyer = person(&surreal, "Lawyer DRI", "lawyer@example.com", Role::Lawyer).await;
-        let clerk_one = person(&surreal, "Clerk One", "clerk-one@example.com", Role::Clerk).await;
-        let clerk_two = person(&surreal, "Clerk Two", "clerk-two@example.com", Role::Clerk).await;
-        let unmatched = person(
-            &surreal,
-            "Clerk Three",
-            "clerk-three@example.com",
-            Role::Clerk,
-        )
-        .await;
-        let client = person(&surreal, "Client", "client@example.com", Role::Client).await;
-        for (person, participation) in [
-            (&lawyer, "lawyer"),
-            (&clerk_one, "clerk"),
-            (&clerk_two, "clerk"),
-            (&unmatched, "clerk"),
-            (&client, "client"),
-        ] {
-            projects::add_participation(&surreal, configured.id, person.id, participation)
-                .await
-                .expect("add participation");
-        }
-        designate_dri_in_surreal(&surreal, configured.id, lawyer.id, DriSide::Lawyer)
-            .await
-            .expect("designate Lawyer DRI");
+        seed_reconciliation_participants(&surreal, configured.id, firm_id).await;
 
         let slack = Arc::new(ReconciliationSlack::new(
             [
                 ("lawyer@example.com".to_string(), Some("U-NEW".to_string())),
+                ("team@example.com".to_string(), Some("U-TEAM".to_string())),
                 (
                     "clerk-one@example.com".to_string(),
                     Some("U-OLD".to_string()),
@@ -510,7 +551,7 @@ mod tests {
                 open_projects: 3,
                 channels: 3,
                 projects_without_channel: 0,
-                invited: 1,
+                invited: 2,
                 already_members: 1,
                 unmatched_assignments: 1,
                 channels_created: 1,
@@ -530,7 +571,8 @@ mod tests {
                 "clerk-one@example.com",
                 "clerk-three@example.com",
                 "clerk-two@example.com",
-                "lawyer@example.com"
+                "lawyer@example.com",
+                "team@example.com"
             ]
         );
         assert!(!slack
@@ -541,7 +583,10 @@ mod tests {
         assert_eq!(
             *slack.invitations.lock().expect("invitations lock"),
             [
-                ("CTEAM".to_string(), vec!["U-NEW".to_string()]),
+                (
+                    "CTEAM".to_string(),
+                    vec!["U-NEW".to_string(), "U-TEAM".to_string()]
+                ),
                 ("CEMPTY".to_string(), Vec::new()),
                 ("CNEW1".to_string(), Vec::new())
             ]

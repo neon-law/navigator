@@ -1258,7 +1258,7 @@ pub struct ProjectDriSummary {
     pub client_dris: Vec<String>,
 }
 
-/// An internal Project Slack channel and eligible participants or Firm Lawyers and Clerks.
+/// An internal Project Slack channel and its eligible Firm-side participants.
 /// Email fallbacks and recorded Slack identities stay in the sync operation;
 /// callers must not log or journal these addresses.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1280,12 +1280,9 @@ pub struct ProjectSlackMembershipTargets {
     pub targets: Vec<ProjectSlackMembershipTarget>,
 }
 
-/// Every Project and the firm-side people that should be in its internal
-/// Slack channel: every lawyer DRI plus every Clerk participating on the
-/// Project, and owning-Firm Lawyers and Clerks with recorded Slack identities.
-/// Recorded identities replace email lookup, never decide authority.
-/// No client participation is included. A Project without a channel
-/// is still a target, so the sync can create or adopt one.
+/// Every Project and the Firm-side participants eligible for its internal Slack
+/// channel. Recorded Slack identities replace email lookup. A Project without
+/// a channel is still a target, so the sync can create or adopt one.
 pub async fn slack_membership_targets(
     surreal: &SurrealDb,
 ) -> Result<ProjectSlackMembershipTargets, ProjectStoreError> {
@@ -1320,48 +1317,26 @@ async fn membership_target_for(
     let participations = participations_for_project(surreal, project.id).await?;
     let mut emails = std::collections::BTreeSet::new();
     let mut slack_ids = std::collections::BTreeSet::new();
-    for row in participations {
-        if !row.is_lawyer_dri && row.participation != "clerk" {
+    for row in participations
+        .into_iter()
+        .filter(crate::access::is_firm_participation)
+    {
+        let Some(person) = crate::persons::find_by_id(surreal, row.person_id).await? else {
+            continue;
+        };
+        if person.role == crate::persons::Role::Client {
             continue;
         }
-        if let Some(person) = crate::persons::find_by_id(surreal, row.person_id).await? {
-            if person.role == crate::persons::Role::Client {
-                continue;
-            }
-            if let Some(identity) = crate::external_identities::find_by_person_and_system(
-                surreal,
-                person.id,
-                crate::external_identities::ExternalSystem::Slack,
-            )
-            .await?
-            {
-                slack_ids.insert(identity.external_id);
-            } else {
-                emails.insert(person.email.to_ascii_lowercase());
-            }
-        }
-    }
-    if let Some(firm_id) = project.firm_id {
-        for membership in crate::firms::memberships_for_firm(surreal, firm_id).await? {
-            let Some(person) = crate::persons::find_by_id(surreal, membership.person_id).await?
-            else {
-                continue;
-            };
-            if !matches!(
-                person.role,
-                crate::persons::Role::Lawyer | crate::persons::Role::Clerk
-            ) {
-                continue;
-            }
-            if let Some(identity) = crate::external_identities::find_by_person_and_system(
-                surreal,
-                person.id,
-                crate::external_identities::ExternalSystem::Slack,
-            )
-            .await?
-            {
-                slack_ids.insert(identity.external_id);
-            }
+        if let Some(identity) = crate::external_identities::find_by_person_and_system(
+            surreal,
+            person.id,
+            crate::external_identities::ExternalSystem::Slack,
+        )
+        .await?
+        {
+            slack_ids.insert(identity.external_id);
+        } else {
+            emails.insert(person.email.to_ascii_lowercase());
         }
     }
     Ok(ProjectSlackMembershipTarget {

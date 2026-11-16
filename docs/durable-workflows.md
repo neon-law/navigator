@@ -76,9 +76,8 @@ continues with the next tag and Project. The children live in `workflows-service
    so the two never collide; the Project code is unique across the deployment, so the name is too. The channel is
    created, posted to, and reconciled with the owning Firm's own Slack bot (its `slack_bot_token` Firm credential),
    never a deployment-wide token;
-2. invites the Lawyer DRI and participating Clerks, preferring their recorded Slack identities and falling back to
-   directory email lookup. It also includes Lawyers and Clerks in the owning Firm who have recorded Slack identities,
-   skipping existing members. An identity supplies an address; role and Firm scope determine eligibility.
+2. invites missing Firm-side Project participants, preferring their recorded Slack identities and falling back to
+   directory email lookup. Project participation determines eligibility.
 
 The `slack` child, for every **open** Project with an internal channel, runs two journaled steps on that channel only.
 `upsert-canvas` writes the channel's one canvas: the synopsis (`Project.description`, else name, code, and status), the

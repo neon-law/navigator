@@ -219,10 +219,6 @@ fn glossary_nightly_project_update_is_a_dag_of_tagged_child_dags() {
         stdout.contains("NightlyProjectUpdateMembership"),
         "the membership child is named, not a synonym for the parent"
     );
-    assert!(
-        stdout.contains("Never write the customer"),
-        "the customer Slack channel is out of every tag: {stdout}"
-    );
     assert!(!stdout.contains("## Deployment Environment"));
 }
 

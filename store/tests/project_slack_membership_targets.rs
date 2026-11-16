@@ -1,4 +1,4 @@
-//! Project Slack reconciliation uses only Lawyer DRIs and participating Clerks.
+//! Project Slack reconciliation uses the Firm-side participation ledger.
 
 use store::persons::{self, NewPerson, Role};
 use store::projects::{
@@ -98,7 +98,7 @@ async fn targets_include_lawyer_dris_and_clerks_but_skip_clients_and_keep_unconf
 }
 
 #[tokio::test]
-async fn recorded_slack_ids_include_owning_firm_lawyers_and_clerks_without_assignment() {
+async fn recorded_slack_ids_are_used_for_firm_side_project_participants() {
     use store::external_identities::{link, ExternalSystem};
     use store::firms::{self, FirmMembership, NewFirm, NewPersonFirmRole};
     let db = mem_surreal().await;
@@ -133,11 +133,12 @@ async fn recorded_slack_ids_include_owning_firm_lawyers_and_clerks_without_assig
     )
     .await
     .unwrap();
-    for (name, role, member, slack_id) in [
-        ("lawyer", Role::Lawyer, true, "U-LAWYER"),
-        ("clerk", Role::Clerk, true, "U-CLERK"),
-        ("outside", Role::Lawyer, false, "U-OUTSIDE"),
-        ("client", Role::Client, false, "U-CLIENT"),
+    for (name, role, member, participates, slack_id) in [
+        ("lawyer", Role::Lawyer, true, true, "U-LAWYER"),
+        ("clerk", Role::Clerk, true, true, "U-CLERK"),
+        ("other-lawyer", Role::Lawyer, true, false, "U-OTHER"),
+        ("outside", Role::Lawyer, false, false, "U-OUTSIDE"),
+        ("client", Role::Client, false, true, "U-CLIENT"),
     ] {
         let person = persons::create(
             &db,
@@ -154,6 +155,16 @@ async fn recorded_slack_ids_include_owning_firm_lawyers_and_clerks_without_assig
                     membership: FirmMembership::for_role(role).unwrap(),
                     is_dri: false,
                 },
+            )
+            .await
+            .unwrap();
+        }
+        if participates {
+            projects::add_participation(
+                &db,
+                project.id,
+                person.id,
+                projects::participation_for_role(role),
             )
             .await
             .unwrap();
