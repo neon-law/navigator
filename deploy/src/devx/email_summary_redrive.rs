@@ -400,16 +400,14 @@ mod tests {
             .await
             .expect("mark confirmed");
 
-        // No mocks at all on either server: this test fails on an unexpected
-        // request if the refusal doesn't short-circuit before touching
-        // Restate.
-        let admin = MockServer::start().await;
-        let ingress = MockServer::start().await;
-        let config = test_config(&ingress.uri());
+        // Both Restate endpoints share one dedicated recorder. The refusal
+        // must happen before making any request.
+        let restate = MockServer::builder().start().await;
+        let config = test_config(&restate.uri());
 
         let error = redrive_with(
             &db,
-            &admin.uri(),
+            &restate.uri(),
             "admin-token",
             None,
             &config,
@@ -431,6 +429,7 @@ mod tests {
             .expect("receipt still readable")
             .expect("receipt still exists");
         assert_eq!(receipt.archive_key, "inbound/example.eml");
+        assert!(restate.received_requests().await.unwrap().is_empty());
     }
 
     async fn confirmed_delivery(db: &store::surreal::SurrealDb, receipt_id: Uuid) {
