@@ -102,7 +102,7 @@ async fn mirror_after_write(state: &ApiState, project_id: Uuid) {
             }
         }
         Ok(None) | Err(_) => {
-            tracing::warn!(%project_id, "Could not resolve Project for Deadline Calendar reconcile")
+            tracing::warn!(%project_id, "Could not resolve Project for Deadline Calendar reconcile");
         }
     }
 }
