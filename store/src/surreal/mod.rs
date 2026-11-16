@@ -53,6 +53,7 @@ use std::sync::{Arc, Once};
 
 use surrealdb::engine::any::Any;
 use surrealdb::opt::auth::{Database, Namespace, Root};
+use surrealdb::types::ConnectionError;
 use surrealdb::Surreal;
 use thiserror::Error;
 
@@ -99,7 +100,7 @@ pub enum SurrealError {
         #[source]
         source: surrealdb::Error,
     },
-    #[error("authenticate as root against SurrealDB at {endpoint}")]
+    #[error("authenticate against SurrealDB at {endpoint}")]
     Signin {
         endpoint: String,
         #[source]
@@ -112,6 +113,21 @@ pub enum SurrealError {
         #[source]
         source: surrealdb::Error,
     },
+}
+
+impl SurrealError {
+    /// Whether a fresh session may recover from a failed transport during setup.
+    #[must_use]
+    pub fn is_transport_failure(&self) -> bool {
+        match self {
+            Self::Connect { source, .. }
+            | Self::Signin { source, .. }
+            | Self::Select { source, .. } => {
+                source.connection_details() == Some(&ConnectionError::ConnectionFailed)
+            }
+            Self::Config(_) => false,
+        }
+    }
 }
 
 /// Connect using the process environment.
@@ -283,7 +299,27 @@ pub async fn connect(config: &SurrealConfig) -> Result<SurrealDb, SurrealError> 
 
 #[cfg(test)]
 mod tests {
+    use surrealdb::types::{AuthError, ConnectionError, NotAllowedError};
+
     use super::{connect, SurrealConfig, SurrealError};
+
+    #[test]
+    fn signin_retries_transport_failure_but_not_rejected_credentials() {
+        let signin = |source| SurrealError::Signin {
+            endpoint: "wss://example.invalid".into(),
+            source,
+        };
+        let reset = signin(surrealdb::Error::connection(
+            "Connection reset".into(),
+            ConnectionError::ConnectionFailed,
+        ));
+        let rejection = signin(surrealdb::Error::not_allowed(
+            "Authentication failed".into(),
+            NotAllowedError::Auth(AuthError::InvalidAuth),
+        ));
+        assert!(reset.is_transport_failure());
+        assert!(!rejection.is_transport_failure());
+    }
 
     fn embedded(namespace: &str, database: &str) -> SurrealConfig {
         SurrealConfig {

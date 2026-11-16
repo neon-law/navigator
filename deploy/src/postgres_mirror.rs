@@ -19,7 +19,9 @@
 
 use std::collections::BTreeSet;
 use std::process::ExitCode;
+use std::time::Duration;
 
+use anyhow::Context;
 use clap::Subcommand;
 use serde_json::json;
 use store::postgres::PostgresDb;
@@ -193,9 +195,7 @@ fn unavailable_json(mode: Mode, error: &anyhow::Error) -> serde_json::Value {
 }
 
 async fn measure(mode: Mode) -> anyhow::Result<Report> {
-    let surreal = store::surreal::connect_from_env()
-        .await
-        .map_err(|error| anyhow::anyhow!("SurrealDB is unavailable: {error}"))?;
+    let surreal = connect_surreal().await?;
     let pg = PostgresDb::from_env().await?;
     let before = store::postgres_mirror::parity_all(&surreal, &pg).await?;
     let before_rows = table_rows(&pg, &before).await?;
@@ -228,6 +228,26 @@ async fn measure(mode: Mode) -> anyhow::Result<Report> {
         comparison_available,
         before: (mode == Mode::Reconcile).then_some(before_rows),
     })
+}
+
+async fn connect_surreal() -> anyhow::Result<store::surreal::SurrealDb> {
+    // Only retry session setup. A failed reconcile may have already written
+    // to PostgreSQL and must report its outcome through the parity gate.
+    for delay in [Duration::from_secs(1), Duration::from_secs(2)] {
+        match store::surreal::connect_from_env().await {
+            Err(error) if error.is_transport_failure() => {
+                eprintln!(
+                    "navigator: retrying SurrealDB session setup after {:#}",
+                    anyhow::Error::new(error)
+                );
+                tokio::time::sleep(delay).await;
+            }
+            result => return result.context("SurrealDB is unavailable"),
+        }
+    }
+    store::surreal::connect_from_env()
+        .await
+        .context("SurrealDB is unavailable")
 }
 
 async fn table_rows(pg: &PostgresDb, mirrors: &[MirrorParity]) -> anyhow::Result<Vec<TableRow>> {
