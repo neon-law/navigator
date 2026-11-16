@@ -734,6 +734,23 @@ async fn tenancy_authority_routes_projects_participation_and_access_through_post
                 Some("synthetic-folder")
             );
 
+            // Folder ownership is readable even when the SurrealDB copy is unavailable.
+            let unavailable = crate::surreal::SurrealDb::uninitialized();
+            assert!(projects::drive_folder_recorded_elsewhere(
+                &unavailable,
+                Uuid::nil(),
+                "synthetic-folder"
+            )
+            .await
+            .unwrap());
+            assert!(!projects::drive_folder_recorded_elsewhere(
+                &unavailable,
+                created.id,
+                "synthetic-folder"
+            )
+            .await
+            .unwrap());
+
             let provisioned = projects::record_provisioned_repository(
                 &surreal,
                 created.id,

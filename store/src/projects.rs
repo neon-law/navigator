@@ -1755,6 +1755,15 @@ pub async fn drive_folder_recorded_elsewhere(
     project_id: Uuid,
     drive_folder_id: &str,
 ) -> Result<bool, ProjectStoreError> {
+    if let Some(pg) = authority().await? {
+        return crate::postgres::projects::drive_folder_recorded_elsewhere_on(
+            &pg,
+            project_id,
+            drive_folder_id,
+        )
+        .await
+        .map_err(ProjectStoreError::from);
+    }
     let mut response = surreal
         .query(format!(
             "SELECT id FROM {PROJECT_TABLE} WHERE drive_folder_id = $folder AND id != $id LIMIT 1"
