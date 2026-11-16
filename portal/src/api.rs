@@ -11739,8 +11739,8 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
         }
 
         let response = crate::inbox_api::assign_matches(
-            State(state),
-            LawyerSession(session),
+            State(state.clone()),
+            LawyerSession(session.clone()),
             Json(crate::inbox_api::AssignMatchesRequest {
                 apply: true,
                 after: None,
@@ -11772,72 +11772,54 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
                 assert_eq!(stored.project_id, None);
             }
         }
+
+        assert_jev_roster_is_confined_to_the_firm(state, session, local.id, other.id).await;
     }
 
-    /// The Jev tests' rig: a lawyer whose Firm membership is seeded —
-    /// the visibility `unprocessed_inbox` requires before it lists any
-    /// thread for assignment.
-    async fn jev_lawyer_state(
-        db: &store::surreal::SurrealDb,
-        firm: Uuid,
-        project_id: Uuid,
-    ) -> (ApiState, crate::SessionData) {
-        let (state, session) = eml_lawyer_state(db, project_id, "aries@neonlaw.com").await;
-        store::firms::add_membership(
-            db,
-            &store::firms::NewPersonFirmRole {
-                person_id: session.person_id.unwrap(),
-                firm_id: firm,
-                membership: store::firms::FirmMembership::Lawyer,
-                is_dri: false,
-            },
+    async fn assert_jev_roster_is_confined_to_the_firm(
+        mut state: ApiState,
+        session: crate::SessionData,
+        local: Uuid,
+        other: Uuid,
+    ) {
+        let provider = wiremock::MockServer::start().await;
+        state.jev = Some(typesafe::JevClient::new(&provider.uri(), "test-key"));
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/v1/systemone"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(jev_answer(&local.to_string(), 0.95)),
+            )
+            .expect(1)
+            .mount(&provider)
+            .await;
+        let response = crate::inbox_api::assign_matches(
+            State(state),
+            LawyerSession(session),
+            Json(crate::inbox_api::AssignMatchesRequest {
+                apply: true,
+                after: None,
+            }),
         )
         .await
         .unwrap();
-        (state, session)
-    }
-
-    /// An ingest whose sender matches nobody — the shape the address
-    /// match leaves unresolved, which is the Jev method's whole
-    /// jurisdiction.
-    async fn ingest_jev_fixture(
-        db: &store::surreal::SurrealDb,
-        firm: Uuid,
-        email: &str,
-        subject: &str,
-        body: &str,
-    ) -> Uuid {
-        let message = store::inbox::ingest_inbound(
-            db,
-            &store::inbox::IngestInbound {
-                firm_id: firm,
-                project_id: None,
-                brand_key: None,
-                interaction_type: None,
-                provider_post_id: None,
-                parent_provider_message_id: None,
-                visibility: None,
-                channel: store::inbox::channel::EMAIL,
-                provider_account: "test-inbox",
-                provider_message_id: email,
-                provider_thread_ref: None,
-                external_address: email,
-                external_name: None,
-                subject: Some(subject),
-                body,
-                source_page: None,
-                source_channel: None,
-                matter_consent: true,
-                promotional_opt_in: false,
-                email_conversation_id: None,
-                attachments: Vec::new(),
-                occurred_at: "2026-01-01T12:00:00Z",
-                raw_storage_key: None,
-            },
-        )
-        .await
-        .unwrap();
-        message.conversation_id
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let rows: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["decision"]["project_id"], serde_json::json!(local));
+        assert_eq!(rows[0]["applied"], true);
+        let requests = provider.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        let payload: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        let criteria = payload["questions"][typesafe::QUESTION_ID]["criteria"]
+            .as_object()
+            .unwrap();
+        assert_eq!(criteria.len(), 2);
+        assert!(criteria.contains_key(&local.to_string()));
+        assert!(criteria.contains_key(typesafe::NONE_OPTION));
+        assert!(!criteria.contains_key(&other.to_string()));
     }
 
     fn jev_answer(choice: &str, confidence: f64) -> serde_json::Value {
@@ -11853,389 +11835,6 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
                 },
             }}
         })
-    }
-
-    /// Collects the door's tracing output in memory: the decision log's
-    /// reserved Jev fields live there, not in the response body.
-    #[derive(Clone)]
-    struct LogBuf(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
-
-    impl std::io::Write for LogBuf {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(buf);
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogBuf {
-        type Writer = LogBuf;
-
-        fn make_writer(&'a self) -> LogBuf {
-            self.clone()
-        }
-    }
-
-    /// Installs the capturing subscriber as this thread's default. The
-    /// door runs on this thread — a current-thread test runtime — so the
-    /// guard must span the `assign_matches` call.
-    fn capture_jev_log(
-        buf: &std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
-    ) -> tracing::subscriber::DefaultGuard {
-        crate::test_tracing::ensure_callsite_interest();
-        let subscriber = tracing_subscriber::fmt()
-            .json()
-            .with_max_level(tracing::Level::INFO)
-            .with_writer(LogBuf(buf.clone()))
-            .finish();
-        tracing::subscriber::set_default(subscriber)
-    }
-
-    /// The assignment decisions the door logged during a captured call.
-    fn decision_entries(logged: &[u8]) -> Vec<serde_json::Value> {
-        String::from_utf8_lossy(logged)
-            .lines()
-            .filter(|line| line.contains("\"inbox assignment decision\""))
-            .map(|line| {
-                let outer: serde_json::Value = serde_json::from_str(line)
-                    .expect("the JSON subscriber writes one object per line");
-                let fields = outer.get("fields").unwrap_or(&outer);
-                let entry = fields["decision"]
-                    .as_str()
-                    .expect("the decision log rides one string field");
-                serde_json::from_str(entry).expect("the decision log entry serializes as JSON")
-            })
-            .collect()
-    }
-
-    /// Mount one System One mock keyed on the thread's subject — the
-    /// per-thread discriminator the band tests need. `times` bounds the
-    /// calls this answer serves (the below-threshold retry makes a second).
-    async fn mount_jev_answer(
-        server: &wiremock::MockServer,
-        subject: &str,
-        answer: serde_json::Value,
-        times: u64,
-    ) {
-        use wiremock::matchers::{body_partial_json, method, path};
-        use wiremock::{Mock, ResponseTemplate};
-        Mock::given(method("POST"))
-            .and(path("/v1/systemone"))
-            .and(body_partial_json(serde_json::json!({
-                "state": { "subject": subject },
-            })))
-            .respond_with(ResponseTemplate::new(200).set_body_json(answer))
-            .up_to_n_times(times)
-            .mount(server)
-            .await;
-    }
-
-    #[tokio::test]
-    async fn jev_bands_assign_propose_and_leave_the_unconfident() {
-        use wiremock::MockServer;
-        let db = store::surreal::test_support::mem().await;
-        let firm = store::test_support::seed_firm_with_brand(&db, "neon").await;
-        let high = store::test_support::seed_project_on_firm(&db, Some(firm), "High Matter").await;
-        let mid = store::test_support::seed_project_on_firm(&db, Some(firm), "Mid Matter").await;
-        let (mut state, session) = jev_lawyer_state(&db, firm, high.id).await;
-        let server = MockServer::start().await;
-        state.jev = Some(typesafe::JevClient::new(&server.uri(), "test-key"));
-
-        // Headers alone carry the high and mid bands; the low thread
-        // answers below threshold twice — the headers-only pass and the
-        // body-excerpt retry — and stays in the inbox either way.
-        mount_jev_answer(&server, "high", jev_answer(&high.id.to_string(), 0.95), 1).await;
-        mount_jev_answer(&server, "mid", jev_answer(&mid.id.to_string(), 0.7), 1).await;
-        mount_jev_answer(&server, "low", jev_answer(&high.id.to_string(), 0.4), 2).await;
-
-        let mut conversations = Vec::new();
-        for (subject, email) in [
-            ("high", "high@example.test"),
-            ("mid", "mid@example.test"),
-            ("low", "low@example.test"),
-        ] {
-            conversations.push(
-                ingest_jev_fixture(&db, firm, email, subject, "Please advise on the filing.").await,
-            );
-        }
-
-        let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let response = {
-            let _guard = capture_jev_log(&buf);
-            crate::inbox_api::assign_matches(
-                axum::extract::State(state),
-                LawyerSession(session),
-                axum::Json(crate::inbox_api::AssignMatchesRequest {
-                    apply: true,
-                    after: None,
-                }),
-            )
-            .await
-            .unwrap()
-        };
-        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let rows: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(rows.len(), 3);
-
-        let high_row = rows
-            .iter()
-            .find(|row| row["decision"]["decision"] == "assigned")
-            .unwrap();
-        assert_eq!(
-            high_row["decision"]["project_id"],
-            serde_json::json!(high.id)
-        );
-        let entries = decision_entries(&buf.lock().unwrap());
-        let high_entry = entries
-            .iter()
-            .find(|entry| entry["message"] == high_row["message"])
-            .unwrap();
-        assert_eq!(high_entry["model_id"], typesafe::MODEL_ID);
-        assert_eq!(
-            high_entry["probabilities"]["chosen"],
-            serde_json::json!(high.id.to_string())
-        );
-        assert_eq!(high_entry["probabilities"]["body_used"], false);
-        assert_eq!(high_row["applied"], true);
-        let stored = store::inbox::conversation_by_id(&db, conversations[0])
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(stored.project_id, Some(high.id));
-
-        let mid_row = rows
-            .iter()
-            .find(|row| row["decision"]["decision"] == "proposed")
-            .unwrap();
-        assert_eq!(mid_row["decision"]["project_id"], serde_json::json!(mid.id));
-        assert_eq!(mid_row["applied"], false);
-
-        let low_row = rows
-            .iter()
-            .find(|row| row["decision"]["decision"] == "left_in_inbox")
-            .unwrap();
-        assert_eq!(low_row["decision"]["reason"], "jev_below_threshold");
-        let low_entry = entries
-            .iter()
-            .find(|entry| entry["message"] == low_row["message"])
-            .unwrap();
-        assert_eq!(low_entry["probabilities"]["body_used"], true);
-        assert_eq!(low_row["applied"], false);
-    }
-
-    #[tokio::test]
-    async fn a_closed_jev_gate_keeps_the_address_match_reason_and_marks_the_fill() {
-        let db = store::surreal::test_support::mem().await;
-        let firm = store::test_support::seed_firm_with_brand(&db, "neon").await;
-        let project =
-            store::test_support::seed_project_on_firm(&db, Some(firm), "Any Matter").await;
-        let (mut state, session) = jev_lawyer_state(&db, firm, project.id).await;
-        // The gate is closed — no Jev client. No mock server exists: any
-        // outbound call would fail the test with a connection error.
-        state.jev = None;
-        let conversation = ingest_jev_fixture(&db, firm, "gate@example.test", "gate", "Body").await;
-
-        let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let response = {
-            let _guard = capture_jev_log(&buf);
-            crate::inbox_api::assign_matches(
-                axum::extract::State(state),
-                LawyerSession(session),
-                axum::Json(crate::inbox_api::AssignMatchesRequest {
-                    apply: true,
-                    after: None,
-                }),
-            )
-            .await
-            .unwrap()
-        };
-        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let rows: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["decision"]["reason"], "no_match");
-        assert_eq!(rows[0]["decision"]["model_id"], serde_json::Value::Null);
-        let entries = decision_entries(&buf.lock().unwrap());
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0]["model_id"], serde_json::Value::Null);
-        assert_eq!(
-            entries[0]["probabilities"],
-            serde_json::json!({ "jev": "gate_closed" })
-        );
-        assert_eq!(rows[0]["applied"], false);
-        let stored = store::inbox::conversation_by_id(&db, conversation)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(stored.project_id, None);
-    }
-
-    #[tokio::test]
-    async fn a_jev_failure_degrades_to_the_inbox_and_names_the_model() {
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-        let db = store::surreal::test_support::mem().await;
-        let firm = store::test_support::seed_firm_with_brand(&db, "neon").await;
-        let project =
-            store::test_support::seed_project_on_firm(&db, Some(firm), "Any Matter").await;
-        let (mut state, session) = jev_lawyer_state(&db, firm, project.id).await;
-        let server = MockServer::start().await;
-        state.jev = Some(typesafe::JevClient::new(&server.uri(), "test-key"));
-        Mock::given(method("POST"))
-            .and(path("/v1/systemone"))
-            .respond_with(ResponseTemplate::new(401))
-            .up_to_n_times(1)
-            .mount(&server)
-            .await;
-        // The retry (body included) fails too — the fallback must hold
-        // whichever call dies.
-        Mock::given(method("POST"))
-            .and(path("/v1/systemone"))
-            .respond_with(ResponseTemplate::new(500))
-            .mount(&server)
-            .await;
-        let conversation =
-            ingest_jev_fixture(&db, firm, "failure@example.test", "failure", "Body").await;
-
-        let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let response = {
-            let _guard = capture_jev_log(&buf);
-            crate::inbox_api::assign_matches(
-                axum::extract::State(state),
-                LawyerSession(session),
-                axum::Json(crate::inbox_api::AssignMatchesRequest {
-                    apply: true,
-                    after: None,
-                }),
-            )
-            .await
-            .unwrap()
-        };
-        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let rows: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["decision"]["decision"], "left_in_inbox");
-        assert_eq!(rows[0]["decision"]["reason"], "jev_unavailable");
-        let entries = decision_entries(&buf.lock().unwrap());
-        assert_eq!(entries[0]["model_id"], typesafe::MODEL_ID);
-        assert_eq!(
-            entries[0]["probabilities"],
-            serde_json::json!({ "jev": "unavailable" })
-        );
-        let stored = store::inbox::conversation_by_id(&db, conversation)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(stored.project_id, None);
-    }
-
-    #[tokio::test]
-    async fn jev_options_come_only_from_the_threads_own_firm() {
-        use wiremock::matchers::{header, method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-        let db = store::surreal::test_support::mem().await;
-        let firm = store::test_support::seed_firm_with_brand(&db, "neon").await;
-        let other_firm = store::test_support::seed_firm_with_brand(&db, "vesta").await;
-        let ours = store::test_support::seed_project_on_firm(&db, Some(firm), "Our Matter").await;
-        let theirs =
-            store::test_support::seed_project_on_firm(&db, Some(other_firm), "Their Matter").await;
-        let (mut state, session) = jev_lawyer_state(&db, firm, ours.id).await;
-        let server = MockServer::start().await;
-        state.jev = Some(typesafe::JevClient::new(&server.uri(), "test-key"));
-        Mock::given(method("POST"))
-            .and(path("/v1/systemone"))
-            .and(header("authorization", "Bearer test-key"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(jev_answer(&ours.id.to_string(), 0.95)),
-            )
-            .up_to_n_times(1)
-            .mount(&server)
-            .await;
-        ingest_jev_fixture(&db, firm, "isolation@example.test", "isolation", "Body").await;
-
-        let response = crate::inbox_api::assign_matches(
-            axum::extract::State(state),
-            LawyerSession(session),
-            axum::Json(crate::inbox_api::AssignMatchesRequest {
-                apply: true,
-                after: None,
-            }),
-        )
-        .await
-        .unwrap();
-        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let rows: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(rows[0]["decision"]["decision"], "assigned");
-        assert_eq!(
-            rows[0]["decision"]["project_id"],
-            serde_json::json!(ours.id)
-        );
-
-        // Every option the model saw is this Firm's Project — or `none`.
-        // The cross-firm Project never becomes an option.
-        let requests = server.received_requests().await.unwrap();
-        assert_eq!(requests.len(), 1);
-        let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
-        let option_ids: Vec<&str> = body["questions"]["assignment"]["criteria"]
-            .as_object()
-            .unwrap()
-            .keys()
-            .map(String::as_str)
-            .collect();
-        assert_eq!(option_ids, vec![ours.id.to_string().as_str(), "none"]);
-        assert!(!option_ids.contains(&theirs.id.to_string().as_str()));
-    }
-
-    #[tokio::test]
-    async fn an_option_roster_over_the_ceiling_never_reaches_the_model() {
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-        let db = store::surreal::test_support::mem().await;
-        let firm = store::test_support::seed_firm_with_brand(&db, "neon").await;
-        let project = store::test_support::seed_project_on_firm(&db, Some(firm), "Anchor").await;
-        for index in 0..255 {
-            store::test_support::seed_project_on_firm(&db, Some(firm), &format!("Filler {index}"))
-                .await;
-        }
-        let (mut state, session) = jev_lawyer_state(&db, firm, project.id).await;
-        let server = MockServer::start().await;
-        state.jev = Some(typesafe::JevClient::new(&server.uri(), "test-key"));
-        Mock::given(method("POST"))
-            .and(path("/v1/systemone"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(jev_answer(&project.id.to_string(), 0.95)),
-            )
-            .mount(&server)
-            .await;
-        ingest_jev_fixture(&db, firm, "ceiling@example.test", "ceiling", "Body").await;
-
-        let response = crate::inbox_api::assign_matches(
-            axum::extract::State(state),
-            LawyerSession(session),
-            axum::Json(crate::inbox_api::AssignMatchesRequest {
-                apply: true,
-                after: None,
-            }),
-        )
-        .await
-        .unwrap();
-        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let rows: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(rows[0]["decision"]["decision"], "left_in_inbox");
-        assert_eq!(rows[0]["decision"]["reason"], "jev_too_many_projects");
-        assert!(server.received_requests().await.unwrap().is_empty());
     }
 
     fn eml_request(

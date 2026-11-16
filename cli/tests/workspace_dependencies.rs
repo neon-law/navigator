@@ -144,6 +144,7 @@ const WORKSPACE_DEPENDENCIES: &[&str] = &[
     "tracing-core",
     "tracing-opentelemetry",
     "tracing-subscriber",
+    "typesafe",
     "typst",
     "unicode-normalization",
     "url",

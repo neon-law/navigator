@@ -256,6 +256,9 @@ impl JevAssigner for JevClient {
             .answers
             .get(QUESTION_ID)
             .ok_or(JevError::Malformed("missing answer"))?;
+        if !question.criteria.contains_key(&answer.choice) {
+            return Err(JevError::Malformed("unoffered answer choice"));
+        }
         Ok(JevAnswer {
             model: parsed.model,
             choice: answer.choice.clone(),
@@ -514,7 +517,10 @@ mod tests {
             .mount(&server)
             .await;
         let client = JevClient::new(&server.uri(), "test-key");
-        let question = ChoiceQuestion::new("Assign the thread.".to_owned(), BTreeMap::new());
+        let question = ChoiceQuestion::new(
+            "Assign the thread.".into(),
+            BTreeMap::from([("returns".into(), "Returns".into())]),
+        );
         let state = super::ThreadState {
             from: "client@example.test".to_owned(),
             to: Vec::new(),

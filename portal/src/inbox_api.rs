@@ -670,7 +670,8 @@ fn chosen_project(chosen: &str) -> Option<Uuid> {
 /// Returns the fill for the decision log's reserved fields, `None` when
 /// Jev never ran.
 async fn jev_step(
-    state: &ApiState,
+    jev: Option<&typesafe::JevClient>,
+    projects: impl std::future::Future<Output = Result<Vec<store::inbox::ProjectChoice>, ApiError>>,
     row: &store::inbox::UnprocessedRow,
     candidates: &[String],
     outcome: &mut store::inbox::assign_match::MatchOutcome,
@@ -681,7 +682,7 @@ async fn jev_step(
     ) {
         return Ok(None);
     }
-    let Some(jev) = state.jev.as_ref() else {
+    let Some(jev) = jev else {
         // Gate closed: the address-match reason stands; the fill alone
         // records that the model method was gated off.
         return Ok(Some(JevFill {
@@ -689,10 +690,7 @@ async fn jev_step(
             probabilities: Some(serde_json::json!({ "jev": "gate_closed" })),
         }));
     };
-    let projects = store::inbox::projects_in_firm(&state.surreal, row.firm_id)
-        .await
-        .map_err(map_inbox)?;
-    let Some(question) = choice_question(&projects) else {
+    let Some(question) = choice_question(&projects.await?) else {
         *outcome = store::inbox::assign_match::MatchOutcome::LeftInInbox {
             reason: store::inbox::assign_match::LeftReason::JevTooManyProjects,
         };
@@ -830,7 +828,19 @@ pub(crate) async fn assign_matches(
     let mut views = Vec::new();
     for row in rows {
         let (candidates, mut outcome) = decide_assign_match(&state, &row).await?;
-        let jev_fill = jev_step(&state, &row, &candidates, &mut outcome).await?;
+        let projects = async {
+            store::inbox::projects_in_firm(&state.surreal, row.firm_id)
+                .await
+                .map_err(map_inbox)
+        };
+        let jev_fill = jev_step(
+            state.jev.as_ref(),
+            projects,
+            &row,
+            &candidates,
+            &mut outcome,
+        )
+        .await?;
         log_assign_decision(row.id, &outcome, jev_fill.as_ref());
         let applied =
             if let (true, store::inbox::assign_match::MatchOutcome::Assigned { project_id }) =
@@ -871,6 +881,187 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     use uuid::Uuid;
+
+    use store::inbox::assign_match::{LeftReason, MatchOutcome};
+    use store::inbox::{ProjectChoice, UnprocessedRow};
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn preview_row() -> UnprocessedRow {
+        UnprocessedRow {
+            id: Uuid::from_u128(1),
+            conversation_id: Uuid::from_u128(2),
+            firm_id: Uuid::from_u128(3),
+            project_id: None,
+            channel: store::inbox::channel::EMAIL.into(),
+            provider_message_id: None,
+            external_address: "sender@example.test".into(),
+            external_name: None,
+            subject: Some("Synthetic inquiry".into()),
+            body: "Synthetic context".into(),
+            occurred_at: "2026-11-01T00:00:00Z".into(),
+            inserted_at: chrono::Utc::now(),
+        }
+    }
+
+    fn project(id: u128) -> ProjectChoice {
+        ProjectChoice {
+            id: Uuid::from_u128(id),
+            code: format!("synthetic-{id}"),
+            name: "Synthetic Matter".into(),
+            description: None,
+        }
+    }
+
+    fn left(reason: LeftReason) -> MatchOutcome {
+        MatchOutcome::LeftInInbox { reason }
+    }
+
+    #[tokio::test]
+    async fn jev_bands_assign_propose_and_leave_the_unconfident() {
+        let server = MockServer::start().await;
+        let client = typesafe::JevClient::new(&server.uri(), "test-key");
+        let offered = project(4);
+        let project_id = offered.id;
+        for (choice, confidence, expected, body_used) in [
+            (
+                project_id,
+                0.95,
+                MatchOutcome::Assigned { project_id },
+                false,
+            ),
+            (
+                project_id,
+                0.7,
+                MatchOutcome::Proposed { project_id },
+                false,
+            ),
+            (project_id, 0.4, left(LeftReason::JevBelowThreshold), true),
+            (
+                Uuid::from_u128(5),
+                0.95,
+                left(LeftReason::JevUnavailable),
+                false,
+            ),
+        ] {
+            let choice = choice.to_string();
+            Mock::given(method("POST"))
+                .and(path("/v1/systemone"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "model": typesafe::MODEL_ID,
+                    "answers": { typesafe::QUESTION_ID: {
+                        "type": "choice",
+                        "choice": choice,
+                        "confidence": confidence,
+                        "probabilities": { (choice.as_str()): confidence, "none": 1.0 - confidence },
+                    }}
+                })))
+                .expect(if body_used { 2 } else { 1 })
+                .mount(&server)
+                .await;
+            let mut outcome = left(LeftReason::NoMatch);
+            let fill = super::jev_step(
+                Some(&client),
+                std::future::ready(Ok(vec![offered.clone()])),
+                &preview_row(),
+                &[],
+                &mut outcome,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!(outcome, expected);
+            assert_eq!(fill.model_id.as_deref(), Some(typesafe::MODEL_ID));
+            let probabilities = fill.probabilities.unwrap();
+            if choice == project_id.to_string() {
+                assert_eq!(probabilities["chosen"], choice);
+                assert_eq!(probabilities["body_used"], body_used);
+            } else {
+                assert_eq!(probabilities, serde_json::json!({"jev": "unavailable"}));
+            }
+            let requests = server.received_requests().await.unwrap();
+            let first: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+            assert!(first["state"].get("body").is_none());
+            if body_used {
+                let retry: serde_json::Value = serde_json::from_slice(&requests[1].body).unwrap();
+                assert_eq!(retry["state"]["body"], "Synthetic context");
+            }
+            server.verify().await;
+            server.reset().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn a_closed_jev_gate_keeps_the_address_match_without_loading_projects() {
+        let mut outcome = left(LeftReason::NoMatch);
+        let fill = super::jev_step(
+            None,
+            std::future::poll_fn(|_| panic!("the closed gate must not load Projects")),
+            &preview_row(),
+            &[],
+            &mut outcome,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(outcome, left(LeftReason::NoMatch));
+        assert!(fill.model_id.is_none());
+        assert_eq!(
+            fill.probabilities,
+            Some(serde_json::json!({"jev": "gate_closed"}))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_jev_failure_degrades_to_the_inbox_and_names_the_model() {
+        let server = MockServer::start().await;
+        let client = typesafe::JevClient::new(&server.uri(), "test-key");
+        for status in [401, 500] {
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(status))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let mut outcome = left(LeftReason::NoMatch);
+            let fill = super::jev_step(
+                Some(&client),
+                std::future::ready(Ok(vec![project(4)])),
+                &preview_row(),
+                &[],
+                &mut outcome,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!(outcome, left(LeftReason::JevUnavailable));
+            assert_eq!(fill.model_id.as_deref(), Some(typesafe::MODEL_ID));
+            assert_eq!(
+                fill.probabilities,
+                Some(serde_json::json!({"jev": "unavailable"}))
+            );
+            server.verify().await;
+            server.reset().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn an_option_roster_over_the_ceiling_never_reaches_the_model() {
+        let server = MockServer::start().await;
+        let client = typesafe::JevClient::new(&server.uri(), "test-key");
+        let mut outcome = left(LeftReason::NoMatch);
+        let fill = super::jev_step(
+            Some(&client),
+            std::future::ready(Ok((1..=255).map(project).collect())),
+            &preview_row(),
+            &[],
+            &mut outcome,
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome, left(LeftReason::JevTooManyProjects));
+        assert!(fill.is_none());
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
 
     #[test]
     fn assignment_page_advances_past_unmatched_rows_at_the_same_time() {
