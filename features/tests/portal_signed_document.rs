@@ -269,6 +269,7 @@ async fn open_detail(world: &mut SignedDocumentWorld, email: String, project_nam
         source: portal::session::SessionSource::Browser,
         provider: None,
         viewing_as_dri: None,
+        email_verified: false,
         scope: None,
     };
     let cookie = format!(

@@ -2823,6 +2823,9 @@ async fn complete_sign_in(
     }
 
     let mut session = SessionData::fresh(claims.sub, role);
+    session.email_verified = !claims.foreign_tenant
+        && provider != Some(ProviderId::Microsoft)
+        && claims.email_verified == Some(true);
     session.email = claims.email;
     session.person_id = Some(person_id);
     // Which door this session came through, so sign-out reaches the provider

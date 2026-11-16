@@ -58,6 +58,7 @@ async fn journal_routes_refuse_an_unrelated_administrator_and_forged_actor() {
             source: SessionSource::Cli,
             provider: None,
             viewing_as_dri: None,
+            email_verified: false,
             scope: None,
         })
     };
@@ -185,6 +186,7 @@ async fn journal_routes_preview_post_deduplicate_and_report_balances() {
             source: SessionSource::Cli,
             provider: None,
             viewing_as_dri: None,
+            email_verified: false,
             scope: None,
         });
     let route = format!("/app/api/firms/{}/journal", firm.id);
@@ -373,6 +375,7 @@ async fn journal_routes_record_and_read_through_surreal_without_postgres() {
             source: SessionSource::Cli,
             provider: None,
             viewing_as_dri: None,
+            email_verified: false,
             scope: None,
         });
     let route = format!("/app/api/firms/{}/journal", firm.id);

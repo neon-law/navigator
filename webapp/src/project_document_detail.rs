@@ -55,6 +55,8 @@ pub struct DocumentFacts {
     pub sha256_hex: String,
     /// The fingerprinted, one-hour Download link (`attachment`).
     pub download_href: String,
+    #[serde(default)]
+    pub evidence_share_href: Option<String>,
     /// The byte URL for PDF.js. `None` unless the document is a PDF candidate.
     #[serde(default)]
     pub viewer_src: Option<String>,
@@ -228,6 +230,9 @@ async fn load() -> Result<DocumentDetailView, ServerFnError> {
     // them as an attachment (including uploads with a generic content type).
     let viewer_src =
         is_pdf_candidate(&doc.content_type, doc.filename.as_deref()).then(|| download_href.clone());
+    let evidence_share_href = (store_lens == store::access::ProjectLens::Lawyer
+        && store::evidence_shares::eligible(&doc))
+    .then(|| format!("{base}/{project_code}/documents/{doc_id}/evidence-shares"));
     Ok(DocumentDetailView {
         firm_name,
         document: Some(DocumentFacts {
@@ -240,6 +245,7 @@ async fn load() -> Result<DocumentDetailView, ServerFnError> {
             byte_size: doc.byte_size,
             sha256_hex: doc.sha256_hex,
             download_href,
+            evidence_share_href,
             viewer_src,
             back_href: format!("{base}/{project_code}"),
         }),
@@ -330,6 +336,9 @@ fn document_body(doc: &DocumentFacts, firm_name: &str) -> Element {
                 a { class: "nav-btn nav-btn--primary", href: "{doc.download_href}", "Download" }
                 " "
                 span { class: "muted", "(signed link valid for one hour)" }
+            }
+            if let Some(href) = doc.evidence_share_href.as_deref() {
+                p { a { href: "{href}", "Share WhatsApp timeline" } }
             }
         }
         if let Some(src) = doc.viewer_src.as_deref() {
@@ -428,6 +437,7 @@ mod tests {
             byte_size: 2_048,
             sha256_hex: "deadbeefcafe1234567890abcdef0000".to_string(),
             download_href: "/app/projects/X/documents/Y/download".to_string(),
+            evidence_share_href: None,
             viewer_src: None,
             back_href: "/app/projects/X".to_string(),
         }

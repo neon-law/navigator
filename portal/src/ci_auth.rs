@@ -192,6 +192,7 @@ async fn mint_inner(
         source: SessionSource::Ci,
         provider: None,
         viewing_as_dri: None,
+        email_verified: false,
         scope: Some(match kind {
             CiSessionKind::Seed => SessionScope::Seed(SeedScope {
                 endpoint: crate::api::SEED_ENDPOINT.to_string(),
@@ -266,6 +267,7 @@ async fn mint_forgejo_inner(
         source: SessionSource::Ci,
         provider: None,
         viewing_as_dri: None,
+        email_verified: false,
         scope: Some(match kind {
             CiSessionKind::Seed => SessionScope::Seed(SeedScope {
                 endpoint: crate::api::SEED_ENDPOINT.to_string(),

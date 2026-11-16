@@ -85,6 +85,13 @@ people at the seeded practice, so a lawyer or clerk created afterward was silent
 therefore from the Admin people directory. Owner and Admin membership is unaffected — it stays explicit — and a Client
 is never offered the write.
 
+## Evidence invitations
+
+An [Evidence Share](glossary/evidence-share.md) grants an invited address access to one filed revision through a
+separate route. A firm-side Project participant creates or revokes the invitation. The recipient must sign in with a
+provider that verifies the invited mailbox and accept the invitation's terms. The grant adds no Project participation
+and is checked again on every timeline and download request.
+
 ## The five stored tiers
 
 `person.role` is a `string` field with `ASSERT $value IN ['owner','admin','lawyer','clerk','client']`. Rust models it as

@@ -295,6 +295,20 @@
     "scope": "project",
     "through": "project_id -> Project.firm_id"
   },
+  "evidence_share": {
+    "migration_slice": "evidence-sharing",
+    "parity_scenario": "One verified recipient accepts the recorded terms for one document revision; revocation blocks further access",
+    "scope": "project",
+    "target_only": true,
+    "through": "project_id and asset_id checked against the active Document authority; exact recipient and acceptance at read"
+  },
+  "evidence_share_usage": {
+    "migration_slice": "evidence-sharing",
+    "parity_scenario": "Counts of authorized view and download requests grouped by UTC date",
+    "scope": "infrastructure",
+    "target_only": true,
+    "through": "No matter, firm or recipient identifiers; no request route reads the totals"
+  },
   "firm": {
     "migration_slice": "tenancy-storage",
     "parity_scenario": "same-Firm round trip; cross-Firm refusal",

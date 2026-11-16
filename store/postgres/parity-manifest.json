@@ -268,6 +268,20 @@
     },
     {
       "extra_column": null,
+      "extra_table": "evidence_share",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "evidence_share_usage",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "firm_assumption",
       "missing_column": null,
       "missing_table": null,
@@ -2072,7 +2086,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 172,
+    "table_count": 174,
     "tables": {
       "address": {
         "columns": {
@@ -3115,6 +3129,37 @@
         },
         "foreign_keys": [],
         "name": "estate_asset",
+        "references": []
+      },
+      "evidence_share": {
+        "columns": {
+          "accepted_at": "timestamptz",
+          "accepted_by": "uuid",
+          "asset_id": "uuid",
+          "created_at": "timestamptz",
+          "created_by": "uuid",
+          "downloads": "bigint",
+          "expires_at": "timestamptz",
+          "id": "uuid",
+          "opens": "bigint",
+          "project_id": "uuid",
+          "recipient_email": "text",
+          "revoked_at": "timestamptz",
+          "sha256": "text",
+          "terms": "text"
+        },
+        "foreign_keys": [],
+        "name": "evidence_share",
+        "references": []
+      },
+      "evidence_share_usage": {
+        "columns": {
+          "day": "date",
+          "downloads": "bigint",
+          "opens": "bigint"
+        },
+        "foreign_keys": [],
+        "name": "evidence_share_usage",
         "references": []
       },
       "expunge_record": {

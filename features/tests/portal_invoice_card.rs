@@ -325,6 +325,7 @@ async fn open_detail(world: &mut CardWorld, email: String, project_name: String)
         source: portal::session::SessionSource::Browser,
         provider: None,
         viewing_as_dri: None,
+        email_verified: false,
         scope: None,
     };
     let cookie = format!(

@@ -3461,3 +3461,17 @@ test_lawyer_can_adopt_external_envelope if {
 test_client_cannot_adopt_external_envelope if {
 	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "envelope-adoptions"], "method": "POST", "session": client_session}
 }
+
+test_evidence_invitation_admits_signed_in_recipient_to_grant_check if {
+    authz.allow with input as {"path": ["app", "evidence-shares", "opaque-id"], "method": "POST", "session": client_session}
+    authz.allow with input as {"path": ["app", "evidence-shares", "opaque-id", "download"], "method": "GET", "session": client_session}
+    not authz.allow with input as {"path": ["app", "evidence-shares", "opaque-id"], "method": "GET", "session": null}
+    not authz.allow with input as {"path": ["app", "evidence-shares", "opaque-id", "download"], "method": "GET", "session": {"role":"owner", "source":"ci"}}
+}
+
+test_evidence_invitation_management_requires_lawyer_tier if {
+    path := ["app", "projects", "synthetic", "documents", "asset", "evidence-shares"]
+    authz.allow with input as {"path": path, "method": "POST", "session": lawyer_session}
+    not authz.allow with input as {"path": path, "method": "GET", "session": client_session}
+    not authz.allow with input as {"path": path, "method": "POST", "session": clerk_session}
+}

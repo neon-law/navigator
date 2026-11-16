@@ -152,6 +152,7 @@ pub mod email_threads;
 pub mod eml_filing;
 pub mod esign_view;
 pub mod esignature_webhook;
+mod evidence_share;
 pub mod expunge;
 pub mod expunge_request_route;
 pub mod expunge_route;
@@ -225,6 +226,7 @@ pub mod tenant;
 /// use it; see the module docs.
 pub mod test_support;
 mod tiktok_comments;
+mod whatsapp_export;
 #[cfg(test)]
 pub(crate) use store::test_support::twilio as twilio_registry_harness;
 pub mod twilio_resolution;
@@ -1564,6 +1566,11 @@ pub fn bootstrap_with_forgejo_oidc(
                 .route_layer(axum::middleware::from_fn(
                     crate::api_audit::audit_api_request,
                 )),
+            &state.sessions,
+            &state.auth,
+        ))
+        .merge(session_boundary(
+            evidence_share::routes(&state),
             &state.sessions,
             &state.auth,
         ))

@@ -1613,6 +1613,10 @@ mod tests {
                 include_str!("../postgres/migrations/20261116080000_create_inbox_attachment_filing.sql"),
             ),
             (
+                "20261116190000_create_evidence_share.sql",
+                include_str!("../postgres/migrations/20261116190000_create_evidence_share.sql"),
+            ),
+            (
                 "20261116200000_add_task_handoff.sql",
                 include_str!("../postgres/migrations/20261116200000_add_task_handoff.sql"),
             ),

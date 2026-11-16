@@ -182,6 +182,7 @@ mod tests {
             source: crate::session::SessionSource::Cli,
             provider: None,
             viewing_as_dri: None,
+            email_verified: false,
             scope: None,
         }
     }

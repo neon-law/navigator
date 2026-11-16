@@ -567,6 +567,27 @@ erDiagram
         uuid project_id
         datetime updated_at
     }
+    evidence_share {
+        string accepted_at
+        string accepted_by
+        string asset_id
+        string created_at
+        string created_by
+        string downloads
+        string expires_at
+        string id
+        string opens
+        string project_id
+        string recipient_email
+        string revoked_at
+        string sha256
+        string terms
+    }
+    evidence_share_usage {
+        string day
+        string downloads
+        string opens
+    }
     expunge_record {
         uuid authorized_by_person_id
         string category
