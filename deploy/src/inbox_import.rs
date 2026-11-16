@@ -212,6 +212,25 @@ async fn submit_import(
     serde_json::from_str(&text).with_context(|| format!("parse import response: {RECONCILE}"))
 }
 
+/// Send one Gmail Message to the verified, unattributed import lane.
+pub(crate) async fn import_gmail_message(
+    host: Option<&str>,
+    mailbox: &str,
+    raw: &[u8],
+) -> Result<()> {
+    let (base, token) = remote::resolve(host)?;
+    let client = import_http_client(&base)?;
+    let body = request_body("gmail", mailbox, None, raw);
+    let imported = submit_import(&client, &base, &token, &body).await?;
+    for message in imported.imported {
+        println!(
+            "Message {} (conversation {}, deduped {})",
+            message.message_id, message.conversation_id, message.deduped,
+        );
+    }
+    Ok(())
+}
+
 pub(crate) async fn import(new: NewInboxImport) -> Result<()> {
     let source = new.source.trim();
     if !SOURCES.contains(&source) {

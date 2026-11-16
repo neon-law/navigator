@@ -41,6 +41,13 @@ deployment; HTTP is allowed for a local loopback fixture.
 
 ## Import Gmail messages for review
 
+Preview the direct import using a Message ID from `hudson mail inbox-preview`. The preview checks the configured Google
+account and prints the proposed operation. Pass `--apply` to copy that Message into the Navigator Inbox.
+
+```sh
+hudson mail import-inbox 18fa3bc2d4e5f6a7 --mailbox lawyer@example.test --apply
+```
+
 Save each Gmail Message with `hudson mail save`. Import its RFC 5322 file through the authenticated Inbox route.
 
 ```sh
