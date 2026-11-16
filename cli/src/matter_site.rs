@@ -496,7 +496,7 @@ pub enum NotationAction {
         #[arg(long = "answers-from", alias = "answers-file")]
         answers_from: Option<PathBuf>,
     },
-    /// Register an envelope sent from the Firm's DocuSign account.
+    /// Register an envelope sent from the Firm's `DocuSign` account.
     AdoptEnvelope {
         #[command(flatten)]
         host: HostOpt,
@@ -600,6 +600,7 @@ pub enum NotationAction {
     },
 }
 
+#[allow(clippy::too_many_lines)]
 pub async fn run_notation(action: NotationAction) -> ExitCode {
     match action {
         NotationAction::List {
