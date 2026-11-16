@@ -30,7 +30,7 @@ const TAP_REPO: &str = "neon-law/homebrew-navigator";
 
 /// The one file a bump changes, and the one the release reads back to prove the
 /// bump landed.
-const FORMULA_PATH: &str = "Formula/navigator.rb";
+const FORMULAS: &str = "navigator hudson scorpio";
 
 /// The CEILING on how long the release waits for the tap to publish the
 /// formula. The bump itself runs in under a minute, and a bump that FAILS is
@@ -71,7 +71,14 @@ fn job_needs(name: &str) -> Vec<String> {
 #[test]
 fn the_tap_is_told_only_after_the_archives_are_attached() {
     let needs = job_needs(JOB);
-    for required in ["release-cli-publish", "release-version"] {
+    let operator_needs = job_needs("release-operator-cli-publish");
+    assert!(
+        operator_needs
+            .iter()
+            .any(|entry| entry == "release-cli-publish"),
+        "the operator archives must attach to the GitHub Release created by release-cli-publish"
+    );
+    for required in ["release-operator-cli-publish", "release-version"] {
         assert!(
             needs.iter().any(|entry| entry == required),
             "`{JOB}` must not dispatch before the Release carries its archives, so it needs \
@@ -281,7 +288,8 @@ fn an_accepted_dispatch_is_not_proof_the_formula_moved() {
     let workflow = deploy_workflow();
 
     assert!(
-        workflow.contains(&format!("/repos/${{TAP_REPO}}/contents/{FORMULA_PATH}")),
+        workflow.contains(&format!("for formula in {FORMULAS}; do"))
+            && workflow.contains("/repos/${TAP_REPO}/contents/Formula/${formula}.rb"),
         "`{JOB}` must read the tap's formula back — a 204 from `POST /dispatches` only says \
          GitHub queued the event, not that the bump landed"
     );
@@ -468,7 +476,7 @@ fn only_the_formula_proves_the_bump_landed() {
         .nth(1)
         .expect("the job confirms the formula moved");
     let formula_check = confirm
-        .find(r#"[ "${published}" = "${TAG}" ]"#)
+        .find(r#"[ "${version}" = "${TAG}" ]"#)
         .expect("the confirmation compares the published formula version against this tag");
     let conclusion_read = confirm
         .find("bump.yml/runs")

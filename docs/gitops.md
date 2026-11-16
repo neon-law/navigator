@@ -749,12 +749,13 @@ Homebrew tap's Slack pitch (`cli/tests/homebrew_tap_dispatch.rs`) only in the re
 `.github/actions/navigator-install`, and `.github/actions/navigator-install/install.sh`'s default all read that Release,
 as does the formula's `url`. `cli/tests/public_distribution.rs` holds that contract.
 
-`release-homebrew-tap` is the formula hand-off: it needs `release-cli-publish` and sends a `repository_dispatch` naming
-the tag **and nothing else**. The tap computes every `sha256` itself by downloading the artifacts it will then tell
-readers to download, from this repository's Release. A payload carrying digests would let a malformed dispatch pin the
-formula to bytes nobody verified, and would leave the tap unable to repair a bad bump from a bare tag — which matters,
-because `YY.M.D` admits no second ordinary release the same UTC day, so a bump that went wrong cannot be fixed by
-re-cutting the release it came from. The tap covers that with a `workflow_dispatch` that re-runs any tag by hand.
+`release-homebrew-tap` waits for `release-operator-cli-publish` to attach the Hudson and Scorpio archives, then sends a
+`repository_dispatch` carrying the release tag. The workflow verifies that all three tap formulas name that tag. The tap
+computes every `sha256` itself by downloading the artifacts it will then tell readers to download, from this
+repository's Release. A payload carrying digests would let a malformed dispatch pin the formula to bytes nobody
+verified, and would leave the tap unable to repair a bad bump from a bare tag — which matters, because `YY.M.D` admits
+no second ordinary release the same UTC day, so a bump that went wrong cannot be fixed by re-cutting the release it came
+from. The tap covers that with a `workflow_dispatch` that re-runs any tag by hand.
 
 **The formula does not support Intel macOS or arm64 Linux.** No prebuilt archive exists for either, and the formula does
 not compile from source. It `odie`s on both with a message naming the supported alternatives, and the tap's
@@ -772,18 +773,9 @@ that silently stops updating serves a stale version to everyone who installed th
 red, which is the Project-CI 404 one channel over. `cli/tests/homebrew_tap_dispatch.rs` holds the contract, because the
 two repositories never reference each other.
 
-**The release then waits for the formula, and asks the tap's own run why it has not moved.** An accepted dispatch is not
-a completed bump: `POST /dispatches` answers 204 the moment GitHub queues the event and carries no run id, and three
-consecutive releases were told, all three bumps died, and all three stayed green here. So the job reads the formula back
-and fails unless it names this tag — **the formula is the proof, because a bump that goes green without committing is
-still a stale tap.**
-
-What the formula alone cannot say is *why* it has not moved. A bump that died thirty seconds ago and a bump still queued
-read identically as "not this tag yet", so a wait that can only see the formula spends its whole budget on a bump that
-already failed — which is how a 27-second answer cost 99 minutes. The job therefore also reads the tap's `bump` runs,
-narrowed to `event=repository_dispatch` and to runs created since this release dispatched, and **fails the moment that
-run's conclusion is anything but success.** The conclusion may only ever end the wait early: it never stands in for the
-formula, and a read that fails leaves the loop exactly the formula poll it was, bounded by the same ceiling.
+After dispatch, the release reads Navigator, Hudson, and Scorpio's formula versions from the tap. All three must match
+the release tag. A failed tap bump ends the wait early. The release uses the dispatch time and event type to identify
+the tap's bump run, and continues polling within the deadline if the run list is unavailable.
 
 Reading those runs widens nothing. **The tap is a public repository**, so its run list is public data and the run's own
 `GITHUB_TOKEN` reads it; `HOMEBREW_TAP_TOKEN` stays `contents: write` and never acquires `actions: read`. The tap's
