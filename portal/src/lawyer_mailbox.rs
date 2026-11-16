@@ -391,33 +391,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn redelivered_message_dedupes_on_the_provider_id() {
-        let db = mem_surreal().await;
-        let storage = storage().await;
-        let firm_id = seed_firm_with_brand(&db, "neon").await;
-        let config = config(&["nick@neonlaw.com"], firm_id);
-        let mut email = email("Client <client@example.com>", "Nick <nick@neonlaw.com>");
-        email.message_id = Some("repeat@example.com".into());
-        let first = ingest_for_config(&db, &storage, &email, Some(config.clone()))
-            .await
-            .unwrap()
-            .unwrap();
-        let second = ingest_for_config(&db, &storage, &email, Some(config))
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(!first.deduped);
-        assert!(second.deduped);
-        assert_eq!(first.message_id, second.message_id);
-        let conversation = store::inbox::conversation_by_id(&db, first.conversation_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(conversation.unread);
-    }
-
-    #[tokio::test]
-    async fn redelivery_keeps_the_firm_archive_and_original_message_time() {
+    async fn redelivery_dedupes_and_keeps_the_firm_archive_and_original_message_time() {
         let db = mem_surreal().await;
         let storage = storage().await;
         let firm_id = seed_firm_with_brand(&db, "neon").await;
@@ -436,8 +410,15 @@ Synthetic body"
             .await
             .unwrap()
             .unwrap();
+        assert!(!first.deduped);
         assert!(replay.deduped);
         assert_eq!(first.message_id, replay.message_id);
+
+        let conversation = store::inbox::conversation_by_id(&db, first.conversation_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(conversation.unread);
 
         let stored = store::inbox::message_by_id(&db, first.message_id)
             .await
