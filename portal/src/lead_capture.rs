@@ -193,10 +193,11 @@ async fn submit(
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     }
-    // Same Day Legal's enrollment continues to sign-in and its booking link.
-    if brand == BrandKey::SameDayLegal
-        && matches!(source_path.as_str(), "/" | SAME_DAY_LEGAL_APP_PATH)
-    {
+    accepted_redirect(brand, &source_path)
+}
+
+fn accepted_redirect(brand: BrandKey, source_path: &str) -> Response {
+    if brand == BrandKey::SameDayLegal && matches!(source_path, "/" | SAME_DAY_LEGAL_APP_PATH) {
         let return_to =
             crate::policy::percent_encode_path(&format!("{SAME_DAY_LEGAL_APP_PATH}#enrollment"));
         return Redirect::to(&format!("/auth/login?return_to={return_to}")).into_response();

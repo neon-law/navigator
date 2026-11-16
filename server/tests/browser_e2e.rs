@@ -135,8 +135,13 @@ async fn enrollment_intake_preserves_answers_and_reviews_before_sign_in() {
         .await
         .expect("preserved email");
     assert_eq!(preserved, serde_json::json!("visitor@example.com"));
+    assert_same_day_app_layout(&c).await;
+    c.close().await.expect("close browser");
+}
+
+async fn assert_same_day_app_layout(c: &Client) {
     for width in [390, 1280] {
-        set_practice_viewport(&c, width, 844).await;
+        set_practice_viewport(c, width, 844).await;
         let centered = c
             .execute(
                 "const hero = document.querySelector('.fm-hero');
@@ -167,7 +172,6 @@ async fn enrollment_intake_preserves_answers_and_reviews_before_sign_in() {
             "Same Day Legal overflows at {width}px"
         );
     }
-    c.close().await.expect("close browser");
 }
 
 /// Markdown diagrams render while malformed source remains readable.
