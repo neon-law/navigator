@@ -7,7 +7,8 @@ The [Matter Folder](matter-folder.md) at `documents/Docket Filings/` for court p
 `kind: pleading`, `filing`, or `order` land here by default; an explicit `folder: Docket Filings` selects it for another
 kind. Docket ingest records this folder when filing a downloaded document.
 
-The live naming check uses the stored Matter Folder. Work Product requires no Docket Entry name.
+The live naming check uses the stored Matter Folder. A document with an [Unresolved Docket
+Link](unresolved-docket-link.md) keeps its filed name. Work Product requires no Docket Entry name.
 
 Run `navigator project sync` to reconcile the live placement with the Pointer before running the live gate.
 

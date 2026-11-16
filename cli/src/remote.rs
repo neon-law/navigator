@@ -1114,6 +1114,9 @@ pub struct IntegrityAsset {
     pub sha256_matches: Option<bool>,
     #[serde(default)]
     pub docket_name_matches: Option<bool>,
+    /// Derived link state. Absent from a server that only reports the boolean.
+    #[serde(default)]
+    pub docket_link: Option<model::document_pointers::DocketLink>,
     #[serde(default)]
     pub matter_folder: Option<model::document_pointers::MatterFolder>,
 }

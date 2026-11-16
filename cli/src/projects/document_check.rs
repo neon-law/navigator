@@ -1558,6 +1558,7 @@ mod tests {
             recorded_size: 100,
             sha256_matches: None,
             docket_name_matches: None,
+            docket_link: None,
             matter_folder: None,
         };
         let source = IntegrityAsset {
@@ -1575,6 +1576,7 @@ mod tests {
             recorded_size: 200,
             sha256_matches: None,
             docket_name_matches: None,
+            docket_link: None,
             matter_folder: None,
         };
         let message = transcript_source_problem(&transcript, &[transcript.clone(), source])
@@ -1604,6 +1606,7 @@ mod tests {
             recorded_size: 100,
             sha256_matches: None,
             docket_name_matches: None,
+            docket_link: None,
             matter_folder: None,
         };
         let source = IntegrityAsset {
@@ -1621,6 +1624,7 @@ mod tests {
             recorded_size: 200,
             sha256_matches: None,
             docket_name_matches: None,
+            docket_link: None,
             matter_folder: None,
         };
         assert!(transcript_source_problem(&transcript, std::slice::from_ref(&source)).is_none());

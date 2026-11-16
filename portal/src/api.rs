@@ -7430,6 +7430,10 @@ struct IntegrityAsset {
     /// Only a validation result, never docket content. Present for the lawyer gate.
     #[serde(skip_serializing_if = "Option::is_none")]
     docket_name_matches: Option<bool>,
+    /// Derived link state for a Docket Filings document. Present for the lawyer gate.
+    /// Never an entry number.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    docket_link: Option<store::document_pointers::DocketLink>,
 }
 
 #[derive(Debug, Serialize)]
@@ -7620,8 +7624,8 @@ async fn populate_docket_name_checks(
             .iter()
             .filter(|entry| entry.document_asset_id == Some(row.asset_id))
             .collect();
-        row.docket_name_matches = Some(match linked.as_slice() {
-            [entry] => row.slug.as_deref().is_some_and(|slug| {
+        let name_matches = |entry: &store::cases::DocketEntry| {
+            row.slug.as_deref().is_some_and(|slug| {
                 let path = std::path::Path::new(slug);
                 let ext = path
                     .extension()
@@ -7633,9 +7637,17 @@ async fn populate_docket_name_checks(
                             .is_some_and(|name| name == expected.as_str())
                     },
                 )
-            }),
-            _ => false,
-        });
+            })
+        };
+        let (matches, link) = match linked.as_slice() {
+            [entry] if name_matches(entry) => {
+                (true, store::document_pointers::DocketLink::Verified)
+            }
+            [] => (false, store::document_pointers::DocketLink::Unresolved),
+            _ => (false, store::document_pointers::DocketLink::Disagrees),
+        };
+        row.docket_name_matches = Some(matches);
+        row.docket_link = Some(link);
     }
     Ok(())
 }
@@ -7689,6 +7701,7 @@ async fn integrity_row(
         size_bytes: stored_size,
         recorded_size: asset.byte_size,
         sha256_matches,
+        docket_link: None,
         matter_folder: lawyer.then(|| {
             use store::document_pointers::MatterFolder;
             asset

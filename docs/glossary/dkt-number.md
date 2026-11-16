@@ -18,9 +18,10 @@ numbers on disk skip it.
 
 `navigator project docket ingest` files every document under this name. It still recognises a filing made under the
 older `docket/<case>/di-<n>[-<att>]-<slug>.pdf` name, so nothing is filed twice. `navigator project docket renumber`
-lists each of those filings beside its DKT name. Pass `--apply` to reconcile linked filings; unresolved entries stop the
-operation. `docket add --slug` and `docket link-document` apply the linked entry's name. The Project gate checks Docket
-Filings against their linked entries.
+lists each of those filings beside its DKT name. Pass `--apply` to reconcile linked filings. An [Unresolved Docket
+Link](unresolved-docket-link.md) stops that rename and leaves the filed bytes in place. `docket add --slug` and `docket
+link-document` apply the linked entry's name. The Project gate requires the DKT name once one numbered entry links the
+document, and it accepts an unresolved link without inventing an entry number.
 
 A court whose register does not number its entries, such as a Nevada district court's register of actions, takes the
 number the Project gives each entry in register order (oldest first, from `1`); see [Docket Entry](docket-entry.md). The

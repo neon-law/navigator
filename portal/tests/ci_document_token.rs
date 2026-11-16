@@ -1004,9 +1004,19 @@ async fn the_scoped_integrity_projection_checks_docket_names_without_returning_d
             .unwrap();
         }
         if project == fixture.project_id {
+            let link = if index == 10 {
+                None
+            } else if matches!(index, 2 | 7 | 8) {
+                Some(store::document_pointers::DocketLink::Verified)
+            } else if index == 4 {
+                Some(store::document_pointers::DocketLink::Unresolved)
+            } else {
+                Some(store::document_pointers::DocketLink::Disagrees)
+            };
             expected.push((
                 document_id,
                 (index != 10).then_some(matches!(index, 2 | 7 | 8)),
+                link,
             ));
         }
     }
@@ -1028,7 +1038,7 @@ async fn the_scoped_integrity_projection_checks_docket_names_without_returning_d
         .await;
         assert_eq!(status, StatusCode::OK);
         let assets = integrity["assets"].as_array().unwrap();
-        for (id, valid) in &expected {
+        for (id, valid, link) in &expected {
             let asset = assets
                 .iter()
                 .find(|asset| asset["asset_id"] == id.to_string())
@@ -1038,6 +1048,10 @@ async fn the_scoped_integrity_projection_checks_docket_names_without_returning_d
                     .get("docket_name_matches")
                     .and_then(serde_json::Value::as_bool),
                 *valid
+            );
+            assert_eq!(
+                asset.get("docket_link").and_then(serde_json::Value::as_str),
+                link.map(store::document_pointers::DocketLink::as_str)
             );
             let folder = if valid.is_some() {
                 "Docket Filings"
@@ -1086,4 +1100,86 @@ async fn the_scoped_integrity_projection_checks_docket_names_without_returning_d
         .await;
         assert_eq!(status, StatusCode::FORBIDDEN);
     }
+}
+
+#[tokio::test]
+async fn an_unresolved_docket_link_preserves_the_filed_document() {
+    let fixture = fixture().await;
+    let db = &fixture.state.surreal;
+    let bytes = b"original bytes";
+    let filed = store::assets::file_revision(
+        db,
+        &fixture.state.storage,
+        &store::documents::IngestArgs {
+            project_id: fixture.project_id,
+            source: store::documents::source::UPLOAD,
+            filename: "receipt.pdf",
+            kind: "pleading",
+            content_type: "application/pdf",
+            description: None,
+            visibility: store::documents::visibility::INTERNAL,
+            secondary_storage_key: None,
+        },
+        &store::documents::DocumentIdentity {
+            slug: Some("receipt.pdf"),
+            folder: Some("Docket Filings"),
+            ..Default::default()
+        },
+        bytes,
+    )
+    .await
+    .unwrap();
+    let document_id = match filed {
+        store::assets::Filed::Revision(document) => document.asset_id,
+        store::assets::Filed::Unchanged { asset_id } => asset_id,
+    };
+    let before = store::assets::find_by_id(db, document_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let kind = before.kind.clone();
+    let visibility = before.visibility.clone();
+    let sha = before.sha256_hex.clone();
+    let size = before.byte_size;
+    let (_, minted) = mint(&fixture.app).await;
+    let token = minted["token"].as_str().unwrap();
+    let (status, integrity) = request(
+        &fixture.app,
+        "GET",
+        &format!(
+            "/app/api/projects/{}/documents/integrity",
+            fixture.project_id
+        ),
+        Some(&bearer(token)),
+        None,
+        Body::empty(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let asset = integrity["assets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|asset| asset["asset_id"] == document_id.to_string())
+        .unwrap();
+    assert_eq!(asset["docket_link"], "unresolved");
+    assert_eq!(asset["docket_name_matches"], false);
+    assert_eq!(asset["kind"], kind.as_deref().unwrap());
+    assert_eq!(asset["sha256"], sha);
+    assert!(asset.get("entry_number").is_none());
+    let after = store::assets::find_by_id(db, document_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.kind, kind);
+    assert_eq!(after.visibility, visibility);
+    assert_eq!(after.sha256_hex, sha);
+    assert_eq!(after.byte_size, size);
+    let linked = store::cases::docket_for_project(db, fixture.project_id)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|entry| entry.document_asset_id == Some(document_id))
+        .count();
+    assert_eq!(linked, 0);
 }

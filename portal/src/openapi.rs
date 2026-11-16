@@ -5307,7 +5307,8 @@ fn canonical_document(base: &str) -> Value {
                     "revision": { "type": "object", "description": "Revision summary in the same format as the revisions route, available in the Lawyer lens." },
                     "sha256_matches": { "type": "boolean" },
                     "matter_folder": { "type": "string", "description": "Effective live Matter Folder in the Lawyer lens." },
-                    "docket_name_matches": { "type": "boolean", "description": "Whether exactly one linked Docket Entry gives a document in Docket Filings its current DKT filename. Omitted for other folders." }
+                    "docket_name_matches": { "type": "boolean", "description": "Whether exactly one linked Docket Entry gives a document in Docket Filings its current DKT filename. False while the link is unresolved or disagrees. Omitted for other folders." },
+                    "docket_link": { "type": "string", "enum": ["unresolved", "verified", "disagrees"], "description": "Derived Docket Filings link state. unresolved keeps the filed document and invents no entry number. verified is one numbered entry whose DKT name matches. disagrees is a mismatched name or more than one link. Omitted for other folders." }
                   } } },
                   "integrations": { "type": "array", "items": { "type": "object", "required": ["asset_id", "integration", "outcome", "detail"], "properties": {
                     "asset_id": { "type": "string", "format": "uuid" },

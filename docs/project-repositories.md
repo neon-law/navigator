@@ -571,7 +571,8 @@ is skipped by its DKT identity or an existing Pointer matching the notice's orig
 keep distinct Document Identities even when their bytes match. Each numbered attachment gets its own linked
 Docket Entry.
 `docket add --slug` and `docket link-document` apply the linked entry's DKT name too. `docket renumber --apply`
-reconciles existing names; ambiguous links and colliding names stop it.
+reconciles existing names; ambiguous links and colliding names stop it. An unresolved docket link is left as filed: the
+command invents no entry number and does not rewrite those bytes.
 
 ## Existing Project setup
 
