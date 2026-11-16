@@ -769,6 +769,13 @@
       {
         "action": "export",
         "schema": "public",
+        "name": "inbox_attachment_filing",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
         "name": "inbox_conversation",
         "kind": "table",
         "accessible": true

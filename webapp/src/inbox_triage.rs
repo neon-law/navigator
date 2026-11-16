@@ -44,6 +44,8 @@ pub struct TriageRowView {
     pub confirm_action: Option<String>,
     #[serde(default)]
     pub filing_action: Option<FilingActionView>,
+    #[serde(default)]
+    pub attachment_filings: Vec<AttachmentFilingView>,
     pub override_action: String,
     pub resolve_action: String,
     pub rerun_action: String,
@@ -55,6 +57,16 @@ pub struct FilingActionView {
     pub message_id: String,
     pub review_revision: String,
     pub assignment_id: Option<String>,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttachmentFilingView {
+    pub action: String,
+    pub filename: String,
+    pub position: i64,
+    pub kinds: Vec<String>,
+    pub status: Option<String>,
+    pub retry_kind: Option<String>,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,15 +94,85 @@ pub struct TriageQueuePage {
     pub firm_name: String,
 }
 
+#[cfg(feature = "server")]
+fn filing_action_view(
+    href: &str,
+    approval: &store::inbox_triage::FilingApproval,
+) -> FilingActionView {
+    FilingActionView {
+        action: format!(
+            "{href}/triage/{}/file/{}",
+            approval.triage_id, approval.project_id
+        ),
+        message_id: approval.message_id.to_string(),
+        review_revision: approval.review_revision.to_rfc3339(),
+        assignment_id: approval.assignment_id.map(|id| id.to_string()),
+    }
+}
+
+#[cfg(feature = "server")]
+async fn attachment_filing_views(
+    db: &store::surreal::SurrealDb,
+    triage: &store::inbox_triage::InboxTriage,
+    filing: &FilingActionView,
+    approval: &store::inbox_triage::FilingApproval,
+) -> Result<Vec<AttachmentFilingView>, ServerFnError> {
+    let kinds = rules::kind::Kind::ALL
+        .iter()
+        .copied()
+        .filter(|kind| kind.valid_for(rules::kind::Lane::Asset))
+        .map(|kind| kind.as_str().to_owned())
+        .collect::<Vec<_>>();
+    let assets = store::inbox::message_assets(db, triage.firm_id, triage.message_id)
+        .await
+        .map_err(|_| ServerFnError::new("could not load attachment filing proposals"))?;
+    let statuses = store::inbox_triage::attachment_filing_statuses(db, approval)
+        .await
+        .map_err(|_| ServerFnError::new("could not load attachment filing status"))?;
+    Ok(assets
+        .into_iter()
+        .map(|asset| {
+            let outcome = statuses
+                .iter()
+                .find(|status| status.asset_id == asset.asset_id);
+            let retry_kind = outcome
+                .filter(|status| status.failure_code.as_deref() == Some("unavailable"))
+                .map(|status| status.kind.clone());
+            let status = outcome.map(|status| {
+                match status.failure_code.as_deref() {
+                    Some("approval_expired") => "Approval expired. Review the current proposal.",
+                    Some("oversized") => "The attachment is too large to scan.",
+                    Some("invalid_source") => "The archived attachment failed its integrity check.",
+                    Some("malware") => "The scanner rejected this attachment.",
+                    Some(_) => "Filing is temporarily unavailable.",
+                    None if status.state == "filed" => "Filed internally.",
+                    None => "Filing queued.",
+                }
+                .to_owned()
+            });
+            AttachmentFilingView {
+                action: format!("{}/attachment/{}", filing.action, asset.asset_id),
+                filename: asset.filename,
+                position: asset.position,
+                kinds: kinds.clone(),
+                status,
+                retry_kind,
+            }
+        })
+        .collect())
+}
+
+#[cfg(feature = "server")]
+#[derive(Deserialize)]
+struct FilingFlash {
+    filing_queued: Option<bool>,
+}
+
 /// The queue's rows for this viewer, firm-scoped exactly as the store
 /// decides. A Client never reaches the route (the Rego layer denies it) and
 /// the store denies them again here.
 #[server]
 pub async fn triage_queue_page() -> Result<TriageQueuePage, ServerFnError> {
-    #[derive(Deserialize)]
-    struct FilingFlash {
-        filing_queued: Option<bool>,
-    }
     let role = crate::admin_listing::require_firm_person().await?;
     let surreal = consume_context::<store::surreal::SurrealDb>();
     let actor = crate::inbox::person_id()
@@ -101,6 +183,7 @@ pub async fn triage_queue_page() -> Result<TriageQueuePage, ServerFnError> {
         .map_err(|error| ServerFnError::new(error.to_string()))?;
     let filing_enabled = std::env::var(workflows::trigger::INBOUND_TRIAGE_DBOS_ENABLED_ENV)
         .is_ok_and(|value| value.trim() == "true");
+    let attachment_filing_enabled = workflows::trigger::inbox_attachment_filing_enabled();
     let mut views = Vec::with_capacity(rows.len());
     for row in rows {
         // Per-row project choices come from the row's Firm — an Owner sees
@@ -116,21 +199,22 @@ pub async fn triage_queue_page() -> Result<TriageQueuePage, ServerFnError> {
             })
             .collect();
         let href = format!("/app/inbox/{}", row.conversation_id);
-        let filing_action = if filing_enabled {
+        let approval = if filing_enabled {
             store::inbox_triage::filing_action_for_review(&surreal, actor, &row)
                 .await
                 .map_err(|_| ServerFnError::new("could not load the filing proposal"))?
-                .map(|approval| FilingActionView {
-                    action: format!(
-                        "{href}/triage/{}/file/{}",
-                        approval.triage_id, approval.project_id
-                    ),
-                    message_id: approval.message_id.to_string(),
-                    review_revision: approval.review_revision.to_rfc3339(),
-                    assignment_id: approval.assignment_id.map(|id| id.to_string()),
-                })
         } else {
             None
+        };
+        let filing_action = approval.map(|approval| filing_action_view(&href, &approval));
+        let attachment_filings = if let Some((filing, approval)) = filing_action
+            .as_ref()
+            .zip(approval)
+            .filter(|_| attachment_filing_enabled)
+        {
+            attachment_filing_views(&surreal, &row.triage, filing, &approval).await?
+        } else {
+            Vec::new()
         };
         views.push(TriageRowView {
             triage_id: row.triage.id.to_string(),
@@ -161,6 +245,7 @@ pub async fn triage_queue_page() -> Result<TriageQueuePage, ServerFnError> {
                     format!("{href}/triage/{}/confirm/{}", row.triage.id, project_id)
                 }),
             filing_action,
+            attachment_filings,
             override_action: format!("{href}/triage/{}/override", row.triage.id),
             resolve_action: format!("{href}/triage/{}/resolve", row.triage.id),
             rerun_action: format!("{href}/triage/{}/rerun", row.triage.id),
@@ -219,17 +304,61 @@ fn filing_form(filing: &FilingActionView, csrf: &str) -> Element {
     }
 }
 
-/// One awaiting triage row and its four doors. Confirm is offered only when
-/// a suggestion still resolves; the override form carries the row's Firm's
-/// projects and requires a rationale; the resolve form settles an uncertain
-/// privilege label; re-run hands the row back to the rule layer.
-fn triage_row(row: &TriageRowView, csrf: &str) -> Element {
-    let project_confidence = row
-        .project_confidence
-        .clone()
-        .map(|confidence| format!(" · confidence {confidence}"))
-        .unwrap_or_default();
-    let confirm = row.confirm_action.clone().map(|action| {
+fn attachment_filing_form(
+    filing: &FilingActionView,
+    attachment: &AttachmentFilingView,
+    csrf: &str,
+) -> Element {
+    if let Some(status) = attachment
+        .status
+        .as_ref()
+        .filter(|_| attachment.retry_kind.is_none())
+    {
+        return rsx! { p { "{attachment.filename}: {status}" } };
+    }
+    let fields = if attachment.retry_kind.is_none() {
+        let kinds = std::iter::once(Choice::new("", "Select a document kind"))
+            .chain(
+                attachment
+                    .kinds
+                    .iter()
+                    .map(|kind| Choice::new(kind, kind.replace('-', " "))),
+            )
+            .collect();
+        vec![Field::select("Document kind", "kind", kinds, None).required()]
+    } else {
+        Vec::new()
+    };
+    rsx! {
+        FormCard {
+            title: attachment.filename.clone(),
+            action: attachment.action.clone(),
+            submit_label: if attachment.retry_kind.is_some() {
+                "Retry attachment filing".to_string()
+            } else {
+                "File this attachment internally".to_string()
+            },
+            csrf_token: Some(csrf.to_string()),
+            fields,
+            extra_fields: Some(rsx! {
+                if let Some(kind) = &attachment.retry_kind {
+                    p { "Filing is temporarily unavailable." }
+                    input { r#type: "hidden", name: "kind", value: "{kind}" }
+                    input { r#type: "hidden", name: "retry", value: "true" }
+                }
+                input { r#type: "hidden", name: "message_id", value: "{filing.message_id}" }
+                input { r#type: "hidden", name: "review_revision", value: "{filing.review_revision}" }
+                input { r#type: "hidden", name: "attachment_position", value: "{attachment.position}" }
+                if let Some(assignment_id) = &filing.assignment_id {
+                    input { r#type: "hidden", name: "assignment_id", value: "{assignment_id}" }
+                }
+            }),
+        }
+    }
+}
+
+fn confirm_suggestion(row: &TriageRowView, csrf: &str) -> Option<Element> {
+    row.confirm_action.clone().map(|action| {
         let project = row.suggested_project.clone().unwrap_or_default();
         rsx! {
             FormCard {
@@ -241,7 +370,19 @@ fn triage_row(row: &TriageRowView, csrf: &str) -> Element {
                 fields: vec![],
             }
         }
-    });
+    })
+}
+
+/// One awaiting triage row and its four doors. Confirm is offered only when
+/// a suggestion still resolves; the override form carries the row's Firm's
+/// projects and requires a rationale; the resolve form settles an uncertain
+/// privilege label; re-run hands the row back to the rule layer.
+fn triage_row(row: &TriageRowView, csrf: &str) -> Element {
+    let project_confidence = row
+        .project_confidence
+        .clone()
+        .map(|confidence| format!(" · confidence {confidence}"))
+        .unwrap_or_default();
     let override_choices = row
         .projects
         .iter()
@@ -268,9 +409,12 @@ fn triage_row(row: &TriageRowView, csrf: &str) -> Element {
             if let Some(rationale) = row.rationale.as_ref() {
                 p { class: "triage-review__rationale nav-muted", "{rationale}" }
             }
-            {confirm}
+            {confirm_suggestion(row, csrf)}
             if let Some(filing) = &row.filing_action {
                 {filing_form(filing, csrf)}
+                for attachment in &row.attachment_filings {
+                    {attachment_filing_form(filing, attachment, csrf)}
+                }
             }
             FormCard {
                 title: "Assign a different project".to_string(),
@@ -391,6 +535,7 @@ mod tests {
                 review_revision: "2026-11-16T00:00:00Z".into(),
                 assignment_id: None,
             }),
+            attachment_filings: vec![],
             override_action: "/app/inbox/019a0000-0000-7000-8000-0000000000aa/triage/019a0000-0000-7000-8000-000000000001/override".into(),
             resolve_action: "/app/inbox/019a0000-0000-7000-8000-0000000000aa/triage/019a0000-0000-7000-8000-000000000001/resolve".into(),
             rerun_action: "/app/inbox/019a0000-0000-7000-8000-0000000000aa/triage/019a0000-0000-7000-8000-000000000001/rerun".into(),

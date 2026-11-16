@@ -35,6 +35,7 @@ pub mod general_nag;
 pub mod health;
 pub mod inbound_message_alert;
 pub mod inbound_triage;
+pub mod inbox_attachment_filing;
 pub mod journal;
 pub mod nightly_project_update;
 pub(crate) mod notation_logic;

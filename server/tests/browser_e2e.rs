@@ -3337,6 +3337,94 @@ async fn a_lawyer_can_approve_one_inbox_message_for_internal_filing() {
     c.close().await.unwrap();
 }
 
+#[tokio::test]
+async fn a_lawyer_can_approve_one_inbox_attachment_with_an_explicit_kind() {
+    if !workflows::trigger::inbox_attachment_filing_enabled() {
+        return;
+    }
+    let Some(client) = new_client_or_skip().await else {
+        return;
+    };
+    login_as_lawyer(&client).await;
+    let db = store::surreal::connect_from_env().await.unwrap();
+    let (project_id, review_id) = seed_inbox_filing_review(&db).await;
+    let review = store::inbox_triage::find_by_id(&db, review_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let storage = cloud::from_env().await.unwrap();
+    let fixture = format!("Synthetic email attachment {}", Uuid::now_v7());
+    let attachment = store::inbox::ingest_attachment(
+        &db,
+        &storage,
+        review.firm_id,
+        None,
+        "test-attachment.txt",
+        "text/plain",
+        fixture.as_bytes(),
+    )
+    .await
+    .unwrap();
+    let asset_id = attachment.asset_id;
+    store::inbox::link_message_assets(&db, review.firm_id, review.message_id, &[attachment])
+        .await
+        .unwrap();
+    client
+        .goto(&format!("{}/app/inbox/triage", base_url()))
+        .await
+        .unwrap();
+    let form = format!("#triage-row-{review_id} form[action$='/attachment/{asset_id}']");
+    let kind = format!("{form} select[name='kind']");
+    client
+        .wait()
+        .at_most(Duration::from_secs(10))
+        .for_element(Locator::Css(&kind))
+        .await
+        .unwrap();
+    assert!(store::assets::for_project(&db, project_id)
+        .await
+        .unwrap()
+        .is_empty());
+    let select = client.find(Locator::Css(&kind)).await.unwrap();
+    assert_eq!(select.prop("value").await.unwrap().as_deref(), Some(""));
+    client
+        .execute(
+            "document.querySelector(arguments[0]).value = 'letter';",
+            vec![kind.into()],
+        )
+        .await
+        .unwrap();
+    activate_inbox_link(&client, &format!("{form} button[type='submit']")).await;
+    let timeout = tokio::time::timeout(Duration::from_secs(85), async {
+        loop {
+            let assets = store::assets::for_project(&db, project_id).await.unwrap();
+            if let [asset] = assets.as_slice() {
+                assert_eq!(asset.visibility, store::documents::visibility::INTERNAL);
+                assert_eq!(asset.kind.as_deref(), Some("letter"));
+                client
+                    .goto(&format!("{}/app/inbox/triage", base_url()))
+                    .await
+                    .unwrap();
+                let row = client
+                    .find(Locator::Id(&format!("triage-row-{review_id}")))
+                    .await
+                    .unwrap();
+                if row.text().await.unwrap().contains("Filed internally.") {
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    })
+    .await;
+    timeout.expect("the approved attachment files internally");
+    assert!(store::communications::for_project(&db, project_id)
+        .await
+        .unwrap()
+        .is_empty());
+    client.close().await.unwrap();
+}
+
 async fn seed_inbox_filing_review(db: &store::surreal::SurrealDb) -> (Uuid, Uuid) {
     use store::inbox_triage::{NewInboxTriage, PrivilegeLabel, TriageDisposition};
 
