@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use store::inbox::{ingest_inbound, IngestInbound};
@@ -5,17 +7,19 @@ use store::inbox_triage::{find_for_message, PrivilegeLabel, TriageDisposition};
 use store::surreal::SurrealDb;
 use tower::ServiceExt;
 use uuid::Uuid;
+use wiremock::{Mock, MockServer, ResponseTemplate};
 use workflows::{InboundTriageReport, InboundTriageRequest};
 use workflows_service::dbos_ingress::{TriageIngress, WorkerIngress};
 use workflows_service::health::router_with_dbos_ingress;
-use workflows_service::inbound_triage::{register_dbos, InboundTriageService, TriageError};
+use workflows_service::inbound_triage::{
+    register_dbos, InboundTriageService, TriageError, TriageProviders,
+};
 
 use crate::support::{database, APP_VERSION, DEADLINE};
 
 const ROUTE: &str = "/internal/dbos/inbound-triage";
 
-async fn seed_message(surreal: &SurrealDb) -> Uuid {
-    let firm_id = store::test_support::seed_firm_with_brand(surreal, "neon").await;
+async fn seed_message(surreal: &SurrealDb, firm_id: Uuid, provider_message_id: &str) -> Uuid {
     ingest_inbound(
         surreal,
         &IngestInbound {
@@ -27,7 +31,7 @@ async fn seed_message(surreal: &SurrealDb) -> Uuid {
             visibility: None,
             channel: "email",
             provider_account: "synthetic-account",
-            provider_message_id: "triage-replay",
+            provider_message_id,
             provider_thread_ref: None,
             external_address: "sender@example.com",
             external_name: None,
@@ -50,12 +54,13 @@ async fn seed_message(surreal: &SurrealDb) -> Uuid {
 }
 
 #[tokio::test]
-async fn a_replayed_inbound_message_keeps_one_rules_only_triage_row() {
+async fn inbound_triage_preserves_replay_and_confines_classifier_evidence() {
     let Some(db) = database().await else {
         return;
     };
     let surreal = store::test_support::mem_surreal().await;
-    let message_id = seed_message(&surreal).await;
+    let firm_id = store::test_support::seed_firm_with_brand(&surreal, "neon").await;
+    let message_id = seed_message(&surreal, firm_id, "triage-replay").await;
     let request = InboundTriageRequest { message_id };
     let dbos = dbos::DBOS::new(workflows::dbos_engine::config(&db.url, APP_VERSION));
     let workflow = register_dbos(&dbos, InboundTriageService::new(surreal.clone(), None))
@@ -121,5 +126,76 @@ async fn a_replayed_inbound_message_keeps_one_rules_only_triage_row() {
             .expect("read triage after recovery"),
         Some(original)
     );
+    dbos.shutdown().await;
+
+    assert_classifier_evidence_stays_in_the_inbox_audit_row(&db.url, &surreal, firm_id).await;
+}
+
+async fn assert_classifier_evidence_stays_in_the_inbox_audit_row(
+    postgres_url: &str,
+    surreal: &SurrealDb,
+    firm_id: Uuid,
+) {
+    let message_id = seed_message(surreal, firm_id, "triage-checkpoint").await;
+    let provider = MockServer::start().await;
+    let rationale = "Synthetic private evidence";
+    let verdict = serde_json::json!({
+        "suggested_project_id": null,
+        "project_confidence": 0.5,
+        "privileged": true,
+        "privilege_confidence": 0.9,
+        "rationale": rationale,
+    });
+    Mock::given(wiremock::matchers::method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "candidates": [{
+                "content": {"parts": [{"text": verdict.to_string()}]},
+                "finishReason": "STOP",
+            }],
+        })))
+        .expect(1)
+        .mount(&provider)
+        .await;
+
+    let token = Arc::new(cloud::StaticTokenSource::new("synthetic-token"));
+    let gemini = cloud::GeminiVertexAdapter::new(token)
+        .unwrap()
+        .with_base_url(provider.uri());
+    let service = InboundTriageService::new(
+        surreal.clone(),
+        Some(TriageProviders {
+            gemini,
+            project_id: "synthetic-project".into(),
+            model: "triage-model".into(),
+            location: "global".into(),
+        }),
+    );
+    let dbos = dbos::DBOS::new(workflows::dbos_engine::config(postgres_url, APP_VERSION));
+    let workflow = register_dbos(&dbos, service).unwrap();
+    dbos.launch().await.unwrap();
+    let workflow_id = format!("InboundTriage:{message_id}");
+    let report = workflow
+        .run_with(
+            InboundTriageRequest { message_id },
+            dbos::RunOptions {
+                workflow_id: Some(&workflow_id),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(report.message_id, message_id);
+    let row = find_for_message(surreal, message_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.privilege, PrivilegeLabel::Privileged);
+    assert_eq!(row.rationale.as_deref(), Some(rationale));
+    let steps = dbos.list_workflow_steps(&workflow_id).await.unwrap();
+    assert!(!steps
+        .iter()
+        .filter_map(|step| step.output.as_deref())
+        .any(|output| output.contains(rationale)));
+    provider.verify().await;
     dbos.shutdown().await;
 }
