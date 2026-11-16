@@ -13,7 +13,6 @@ fn canonical_contract_preserves_project_boundaries_and_current_tool_guidance() {
         "Use available MCP servers and the `navigator` CLI",
         "Document bytes, archived authorities, and answers go through Navigator and never into Git.",
         "Use placeholders for client data and matter facts",
-        "Gmail** — client instructions and correspondence. Read messages and create drafts only; never send, reply to,",
         "Google Drive** — meeting notes, transcripts, and large document intake.",
         "Keep client identities and matter facts out of",
         "notes/HANDOFF-<topic>.md.local",
