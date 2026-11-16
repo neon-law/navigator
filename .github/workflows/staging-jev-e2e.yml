@@ -154,6 +154,16 @@ jobs:
           scripts/staging-jev-e2e.sh import-threads
           scripts/staging-jev-e2e.sh run-assignment
 
+      # Server-side truth on failure: when a harness step dies, the response
+      # the harness saw may be a truncation or a panic the run log alone
+      # cannot explain (run 43885192582 cut off mid-body). The pod logs pin
+      # down which side broke. || true — log capture must never mask the
+      # original failure.
+      - name: capture server logs on harness failure
+        if: failure()
+        run: |
+          kubectl logs deploy/"$WEB_DEPLOYMENT" -n "$NAMESPACE" --tail=300 || true
+
       - uses: ./.github/actions/slack-progress
         if: always()
         with:

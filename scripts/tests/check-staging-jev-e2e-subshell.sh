@@ -70,6 +70,35 @@ x-navigator-next-cursor: [\"abc\"]'
   grep -q 'boom' <<<\"\$err_out\" || { echo \"api_json error lost the body: \$err_out\" >&2; exit 1; }
   grep -q 'unbound variable' <<<\"\$err_out\" && { echo 'api_json error hit the subshell trap' >&2; exit 1; } || true
   echo 'staging-jev-e2e: api_json reports a non-2xx with the status and body, no unbound variable.'
+
+  # The fifth staging dispatch (Actions run 43885192582) got a 2xx whose body
+  # was cut mid-string server-side; bare jq then failed with exit 5 and no
+  # diagnosis. api_json must validate the body itself and die with the
+  # method, path, status, content-length, and a visible excerpt.
+  api() {
+    printf '{\"data\":[{\"id\":\"per_'
+    API_STATUS=200
+    API_HEADERS='HTTP/2 200
+content-length: 4096'
+  }
+  err_out=\"\$(api_json GET '/app/api/people?filter[email]=synthetic' 2>&1)\" && rc=0 || rc=\$?
+  [[ \$rc -ne 0 ]] || { echo 'api_json accepted a truncated 200 body' >&2; exit 1; }
+  grep -q 'GET /app/api/people' <<<\"\$err_out\" || { echo \"diagnostic lost the method+path: \$err_out\" >&2; exit 1; }
+  grep -q 'HTTP 200' <<<\"\$err_out\" || { echo \"diagnostic lost the status: \$err_out\" >&2; exit 1; }
+  grep -q 'content-length: 4096' <<<\"\$err_out\" || { echo \"diagnostic lost the content-length: \$err_out\" >&2; exit 1; }
+  grep -q 'per_' <<<\"\$err_out\" || { echo \"diagnostic lost the excerpt: \$err_out\" >&2; exit 1; }
+  echo 'staging-jev-e2e: api_json diagnoses a truncated 200 body with status, headers, and excerpt.'
+
+  # A complete 2xx body still passes through untouched.
+  api() {
+    printf '{\"data\":[{\"id\":\"per_1\"}]}\n'
+    API_STATUS=200
+    API_HEADERS='HTTP/2 200'
+  }
+  out=\"\$(api_json GET /app/api/people)\" || { echo 'api_json rejected a complete body' >&2; exit 1; }
+  [[ \"\$out\" == *per_1* ]] || { echo 'complete-body passthrough failed' >&2; exit 1; }
+  echo 'staging-jev-e2e: api_json passes a complete 2xx body through.'
+
 "
 
 # The fourth staging dispatch (run 43877403907) died in seed with

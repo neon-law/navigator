@@ -69,17 +69,24 @@ api() {
   local method="$1" path="$2" body="${3:-}" file hdr
   file="$(mktemp)"
   hdr="$(mktemp)"
+  # GETs are idempotent, so a transient mid-body close (the fifth dispatch,
+  # Actions run 43885192582, saw the people-door body cut mid-string) can
+  # self-heal with a bounded retry. POSTs are not idempotent — never retry.
+  local retry_args=()
+  if [[ "$method" == "GET" ]]; then
+    retry_args=(--retry 2 --retry-all-errors)
+  fi
   if [[ -n "$body" ]]; then
     # --globoff: curl treats [ and ] as a URL glob range, which killed every
     # bracketed query (filter[email]=...) with exit 3 before any request was
     # made — staging dispatch 43877403907 died in seed exactly there.
-    API_STATUS="$(curl -sS --globoff -D "$hdr" -o "$file" -w '%{http_code}' -X "$method" \
+    API_STATUS="$(curl -sS --globoff "${retry_args[@]}" -D "$hdr" -o "$file" -w '%{http_code}' -X "$method" \
       -H "Authorization: Bearer ${NAVIGATOR_TOKEN}" \
       -H 'Content-Type: application/json' \
       --data "$body" \
       "${NAVIGATOR_HOST}${path}")"
   else
-    API_STATUS="$(curl -sS --globoff -D "$hdr" -o "$file" -w '%{http_code}' -X "$method" \
+    API_STATUS="$(curl -sS --globoff "${retry_args[@]}" -D "$hdr" -o "$file" -w '%{http_code}' -X "$method" \
       -H "Authorization: Bearer ${NAVIGATOR_TOKEN}" \
       "${NAVIGATOR_HOST}${path}")"
   fi
@@ -95,6 +102,21 @@ api_json() {
   rm -f "$API_BODY_FILE"
   if [[ "$API_STATUS" -lt 200 || "$API_STATUS" -ge 300 ]]; then
     die "$1 $2 -> HTTP $API_STATUS: $(head -c 400 <<<"$out")"
+  fi
+  # A 2xx with a truncated or non-JSON body (the fifth dispatch saw the
+  # people-door body cut mid-string, HTTP 200, no curl error) must die with a
+  # diagnosis instead of a bare jq parse error. Bare `jq empty` parses without
+  # emitting: exit 0 on any valid JSON, nonzero on a parse error. (`-e` would
+  # be wrong here — it exits 4 whenever the filter produces no output, which
+  # is every body.) cat -v renders binary or compressed garbage visibly; the
+  # excerpt plus the content-length pin down where the body ended relative to
+  # what the server claimed to send.
+  if ! jq empty >/dev/null 2>&1 <<<"$out"; then
+    local clen
+    clen="$(grep -i '^content-length:' <<<"$API_HEADERS" | tr -d '\r' | awk '{print $2}')"
+    die "$1 $2 -> HTTP $API_STATUS returned an unparseable body \
+(content-length: ${clen:-absent}); first 400 bytes:
+$(printf '%s' "$out" | head -c 400 | cat -v)"
   fi
   printf '%s' "$out"
 }
