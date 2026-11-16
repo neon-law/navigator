@@ -137,15 +137,15 @@ fn PromoteHandoff(code: String, csrf: String) -> Element {
                 disclosure: Some(false),
                 csrf_token: Some(csrf),
                 fields: vec![
-                    Field::text("Title", "title", "").required(),
-                    Field::textarea("Handoff for this Project", "body", "", 5).required(),
+                    Field::text("Title", "title", "").id("handoff-title").required(),
+                    Field::textarea("Handoff for this Project", "body", "", 5).id("handoff-body").required(),
                     Field::select("Responsible role", "responsible_role", vec![
                         Choice::new("lawyer", "Lawyer"),
                         Choice::new("clerk", "Clerk"),
                         Choice::new("admin", "Admin"),
                         Choice::new("owner", "Owner"),
                     ], None).required(),
-                    Field::input("Due date", "due_on", "", "date"),
+                    Field::input("Due date", "due_on", "", "date").id("handoff-due-on"),
                     Field::text("Retry on installed release (YY.M.D)", "retry_on_release", "")
                         .help("This condition is checked when someone reads the Project."),
                     Field::text("Internal note Communication ID", "communication_id", ""),
@@ -569,6 +569,7 @@ mod tests {
             }
         });
 
+        crate::components::assert_forms_accessible(&html, "Project Tasks and handoff forms");
         assert!(html.contains("No tasks on this matter yet"), "{html}");
         // The next action is the form itself, carried by the same section.
         assert!(

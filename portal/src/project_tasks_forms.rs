@@ -144,6 +144,16 @@ pub(crate) async fn create(
 fn handoff_from_form(
     input: TaskCreateForm,
 ) -> Result<Option<store::task_handoffs::Handoff>, &'static str> {
+    fn optional(raw: Option<String>) -> Option<String> {
+        raw.map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+    }
+    fn source_id(raw: Option<String>) -> Result<Option<Uuid>, &'static str> {
+        optional(raw)
+            .map(|id| id.parse().map_err(|_| "Enter a valid source ID."))
+            .transpose()
+    }
+
     let Some(role) = input.responsible_role else {
         return if input.reviewed_handoff.is_some() {
             Err("Choose the role responsible for this handoff.")
@@ -153,15 +163,6 @@ fn handoff_from_form(
     };
     if input.reviewed_handoff.as_deref() != Some("yes") {
         return Err("Review the handoff for this Project before saving it.");
-    }
-    fn optional(raw: Option<String>) -> Option<String> {
-        raw.map(|value| value.trim().to_owned())
-            .filter(|value| !value.is_empty())
-    }
-    fn source_id(raw: Option<String>) -> Result<Option<Uuid>, &'static str> {
-        optional(raw)
-            .map(|id| id.parse().map_err(|_| "Enter a valid source ID."))
-            .transpose()
     }
     Ok(Some(store::task_handoffs::Handoff {
         responsible_role: role,
