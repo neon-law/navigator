@@ -518,9 +518,11 @@ fn regorus_matches_every_checked_in_policy_decision() {
     // + 2 for Attorney Calendar reads: a lawyer may post the calendar verbs,
     //   and a client, a clerk, and a CI session may not.
     // 686 + 2 = 688.
+    // + 2 for envelope adoption: Lawyer admitted and Client denied.
+    // 688 + 2 = 690.
     assert_eq!(
         test_names.len(),
-        688,
+        690,
         "the policy decision inventory changed; review every new or removed rule"
     );
 
