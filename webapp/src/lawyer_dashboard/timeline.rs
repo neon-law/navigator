@@ -132,28 +132,38 @@ pub(super) async fn load(
                 deadline: true,
             });
         }
-        entries.extend(docket.into_iter().map(|row| {
-            Entry {
-                id: format!("docket-{}", row.id),
-                project: project.code.clone(),
-                title: format!("D.I. {} · {}", row.entry_number, row.title),
-                date: row
-                    .filed_or_served_on
-                    .as_deref()
-                    .and_then(Date::parse)
-                    .unwrap_or(Date::Unknown),
-                recorded: row.updated_at,
-                authority: String::new(),
-                notes: String::new(),
-                source: row.document_asset_id.map_or_else(
-                    || format!("/app/api/projects/{}/docket", project.id),
-                    |id| format!("{project_href}/documents/{id}"),
-                ),
-                deadline: false,
-            }
-        }));
+        entries.extend(docket_entries(project.id, &project.code, &docket));
     }
     Ok(entries)
+}
+
+#[cfg(feature = "server")]
+fn docket_entries<'a>(
+    project_id: uuid::Uuid,
+    project_code: &'a str,
+    docket: &'a [store::cases::DocketEntry],
+) -> impl Iterator<Item = Entry> + 'a {
+    store::cases::calendar_docket_entries(docket).map(move |row| {
+        let date = if row.is_appearance() {
+            row.scheduled_on.map(|at| Date::Instant(at.fixed_offset()))
+        } else {
+            row.filed_or_served_on.as_deref().and_then(Date::parse)
+        };
+        Entry {
+            id: format!("docket-{}", row.id),
+            project: project_code.to_string(),
+            title: format!("D.I. {} · {}", row.entry_number, row.title),
+            date: date.unwrap_or(Date::Unknown),
+            recorded: row.updated_at,
+            authority: String::new(),
+            notes: String::new(),
+            source: row.document_asset_id.map_or_else(
+                || format!("/app/api/projects/{project_id}/docket"),
+                |id| format!("/app/projects/{project_code}/documents/{id}"),
+            ),
+            deadline: false,
+        }
+    })
 }
 
 #[cfg(feature = "server")]
@@ -273,6 +283,118 @@ fn ics(entries: &[Entry]) -> String {
 #[cfg(all(test, feature = "server"))]
 mod tests {
     use super::*;
+
+    fn docket_row(
+        number: &str,
+        kind: &str,
+        title: &str,
+        scheduled_on: Option<&str>,
+        supersedes: Option<uuid::Uuid>,
+    ) -> store::cases::DocketEntry {
+        let recorded_at = "2028-04-01T12:00:00Z".parse().unwrap();
+        store::cases::DocketEntry {
+            id: uuid::Uuid::new_v4(),
+            case_id: uuid::Uuid::nil(),
+            entry_number: number.into(),
+            kind: kind.into(),
+            title: title.into(),
+            party: None,
+            filed_or_served_on: Some("2028-04-01".into()),
+            scheduled_on: scheduled_on.map(|value| value.parse().unwrap()),
+            supersedes,
+            document_asset_id: None,
+            notation_id: None,
+            stamp_case_number: None,
+            stamp_entry_number: None,
+            stamp_filed_on: None,
+            integrity_checked_at: None,
+            integrity_source_sha256_hex: None,
+            integrity_matched: None,
+            inserted_at: recorded_at,
+            updated_at: recorded_at,
+        }
+    }
+
+    #[test]
+    fn workbench_and_ics_use_current_appearance_dates_across_projects() {
+        let now = "2028-05-01T12:00:00Z".parse().unwrap();
+        let original = docket_row(
+            "1",
+            "hearing",
+            "Original hearing",
+            Some("2028-04-10T16:00:00Z"),
+            None,
+        );
+        let first_continuance = docket_row(
+            "2",
+            "hearing",
+            "First continuance",
+            Some("2028-04-12T16:00:00Z"),
+            Some(original.id),
+        );
+        let first_project = [
+            docket_row(
+                "3",
+                "hearing",
+                "Continued hearing",
+                Some("2028-05-03T16:00:00Z"),
+                Some(first_continuance.id),
+            ),
+            original,
+            first_continuance,
+        ];
+        let second_project = [
+            docket_row(
+                "1",
+                "trial",
+                "Scheduled trial",
+                Some("2028-05-04T17:30:00Z"),
+                None,
+            ),
+            docket_row("2", "hearing", "Undated hearing", None, None),
+            docket_row("3", "motion", "Filed motion", None, None),
+            docket_row(
+                "4",
+                "hearing",
+                "Scheduled hearing",
+                Some("2028-05-06T15:00:00Z"),
+                None,
+            ),
+        ];
+        let entries: Vec<_> =
+            docket_entries(uuid::Uuid::new_v4(), "synthetic-first", &first_project)
+                .chain(docket_entries(
+                    uuid::Uuid::new_v4(),
+                    "synthetic-second",
+                    &second_project,
+                ))
+                .collect();
+        let calendar = ics(&entries);
+        let html = dioxus_ssr::render_element(rsx! { WorkbenchTimeline { entries, now } });
+        for expected in [
+            "2028-05-03 16:00 +00:00",
+            "2028-05-04 17:30 +00:00",
+            "2028-05-06 15:00 +00:00",
+            "Date not recorded",
+            "synthetic-first",
+            "synthetic-second",
+        ] {
+            assert!(html.contains(expected), "missing {expected}");
+        }
+        for expected in [
+            "DTSTART:20280503T160000Z",
+            "DTSTART:20280504T173000Z",
+            "DTSTART:20280506T150000Z",
+            "DTSTART;VALUE=DATE:20280401",
+        ] {
+            assert!(calendar.contains(expected), "missing {expected}");
+        }
+        for superseded in ["Original hearing", "First continuance"] {
+            assert!(!html.contains(superseded));
+            assert!(!calendar.contains(superseded));
+        }
+        assert!(!calendar.contains("Undated hearing"));
+    }
 
     #[test]
     fn workbench_shows_the_recorded_condition_and_exports_the_same_dates() {
