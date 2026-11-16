@@ -400,16 +400,14 @@ mod tests {
             .await
             .expect("mark confirmed");
 
-        // No mocks at all on either server: this test fails on an unexpected
-        // request if the refusal doesn't short-circuit before touching
-        // Restate.
-        let admin = MockServer::start().await;
-        let ingress = MockServer::start().await;
-        let config = test_config(&ingress.uri());
+        // The refusal must precede either HTTP call: an unusable endpoint
+        // would return a transport failure if the code reached it.
+        let unavailable = "not-a-url";
+        let config = test_config(unavailable);
 
         let error = redrive_with(
             &db,
-            &admin.uri(),
+            unavailable,
             "admin-token",
             None,
             &config,
