@@ -1,5 +1,6 @@
 //! Gmail access for `hudson mail`.
 
+use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -80,6 +81,9 @@ pub enum MailAction {
         /// counterparty or claims-agent mail that names neither.
         #[arg(long)]
         unscoped: bool,
+        /// Follow Gmail pagination through every matching thread.
+        #[arg(long)]
+        all: bool,
     },
     /// Read a Gmail thread as plain text.
     Read { thread: String },
@@ -399,19 +403,37 @@ impl GmailClient {
         parse_response(response, "Gmail API").await
     }
 
-    async fn search(&self, query: &str) -> Result<Vec<ThreadSummary>> {
-        let response: ThreadList = self
-            .call(
-                Operation::SearchThreads,
-                None,
-                &[
-                    ("q", query),
-                    ("maxResults", &MAX_SEARCH_RESULTS.to_string()),
-                ],
-                None,
-            )
-            .await?;
-        Ok(response.threads.unwrap_or_default())
+    async fn search(&self, query: &str, all: bool) -> Result<Vec<ThreadSummary>> {
+        let page_size = MAX_SEARCH_RESULTS.to_string();
+        let mut page_token: Option<String> = None;
+        let mut seen_tokens = HashSet::new();
+        let mut seen_threads = HashSet::new();
+        let mut threads = Vec::new();
+        loop {
+            let mut parameters = vec![("q", query), ("maxResults", page_size.as_str())];
+            if let Some(token) = page_token.as_deref() {
+                parameters.push(("pageToken", token));
+            }
+            let page: ThreadList = self
+                .call(Operation::SearchThreads, None, &parameters, None)
+                .await?;
+            let page_threads = page.threads.unwrap_or_default();
+            if !all {
+                return Ok(page_threads);
+            }
+            threads.extend(
+                page_threads
+                    .into_iter()
+                    .filter(|thread| seen_threads.insert(thread.id.clone())),
+            );
+            let Some(next) = page.next_page_token.filter(|token| !token.is_empty()) else {
+                return Ok(threads);
+            };
+            if !seen_tokens.insert(next.clone()) {
+                return Err(anyhow!("Gmail repeated a thread search page token"));
+            }
+            page_token = Some(next);
+        }
     }
 
     async fn thread(&self, id: &str) -> Result<GmailThread> {
@@ -502,6 +524,8 @@ async fn parse_response<T: for<'de> Deserialize<'de>>(
 #[derive(Debug, Deserialize)]
 struct ThreadList {
     threads: Option<Vec<ThreadSummary>>,
+    #[serde(rename = "nextPageToken")]
+    next_page_token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1750,14 +1774,18 @@ pub async fn archive(reference: &str) -> Result<()> {
 #[allow(clippy::too_many_lines)] // one dispatch arm per verb; each arm delegates
 async fn run_inner(action: MailAction) -> Result<()> {
     match action {
-        MailAction::Search { query, unscoped } => {
+        MailAction::Search {
+            query,
+            unscoped,
+            all,
+        } => {
             let scope = if unscoped {
                 SearchScope::default()
             } else {
                 SearchScope::from_manifest()
             };
             let scoped = scoped_query(&query, &scope);
-            let threads = client().await?.search(&scoped).await?;
+            let threads = client().await?.search(&scoped, all).await?;
             if threads.is_empty() && scoped != query {
                 eprintln!(
                     "hudson mail: no threads matched within this Project's scope (its client \
@@ -3473,7 +3501,10 @@ MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n\
 
         let client =
             GmailClient::with_base_url("test-token".into(), Url::parse(&server.uri()).unwrap());
-        client.search("from:client@example.test").await.unwrap();
+        client
+            .search("from:client@example.test", false)
+            .await
+            .unwrap();
         client.thread("thread-1").await.unwrap();
         client.profile().await.unwrap();
         client
@@ -4695,7 +4726,7 @@ see docs/mail-cli.md#provision-gmail-for-hudson-mail."
         let parsed = Harness::try_parse_from(["mail", "search", "--unscoped", "from:ecf"]).unwrap();
         assert!(matches!(
             parsed.action,
-            MailAction::Search { unscoped: true, ref query } if query == "from:ecf"
+            MailAction::Search { unscoped: true, all: false, ref query } if query == "from:ecf"
         ));
     }
 
@@ -5597,12 +5628,64 @@ see docs/mail-cli.md#provision-gmail-for-hudson-mail."
             "token-from-test".into(),
             Url::parse(&server.uri()).unwrap(),
         );
-        let threads = client.search("from:client").await.unwrap();
+        let threads = client.search("from:client", false).await.unwrap();
         assert_eq!(threads.len(), 2);
         assert_eq!(threads[0].id, "th-1");
         assert_eq!(threads[0].snippet.as_deref(), Some("retainer question"));
         // A summary with no snippet field deserializes to None, not an error.
         assert_eq!(threads[1].snippet, None);
+    }
+
+    #[tokio::test]
+    async fn a_mailbox_search_follows_page_tokens_and_keeps_one_entry_per_thread() {
+        let server = wiremock::MockServer::start().await;
+        let page = || {
+            wiremock::Mock::given(wiremock::matchers::method("GET"))
+                .and(wiremock::matchers::path("/users/me/threads"))
+                .and(wiremock::matchers::query_param("q", "in:inbox"))
+        };
+        page()
+            .and(wiremock::matchers::query_param("pageToken", "page-two"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "threads": [{"id": "thread-1"}, {"id": "thread-2"}],
+                })),
+            )
+            .mount(&server)
+            .await;
+        page()
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "threads": [{"id": "thread-1"}],
+                    "nextPageToken": "page-two",
+                })),
+            )
+            .mount(&server)
+            .await;
+        let client = GmailClient::with_base_url("t".into(), Url::parse(&server.uri()).unwrap());
+        let threads = client.search("in:inbox", true).await.unwrap();
+        let ids: Vec<&str> = threads.iter().map(|thread| thread.id.as_str()).collect();
+        assert_eq!(ids, ["thread-1", "thread-2"]);
+    }
+
+    #[tokio::test]
+    async fn a_mailbox_search_rejects_repeated_page_tokens() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"nextPageToken": "same-page"})),
+            )
+            .expect(3)
+            .mount(&server)
+            .await;
+        let client = GmailClient::with_base_url("t".into(), Url::parse(&server.uri()).unwrap());
+        assert!(client.search("in:inbox", false).await.unwrap().is_empty());
+        let error = client.search("in:inbox", true).await.unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Gmail repeated a thread search page token"
+        );
     }
 
     #[tokio::test]
@@ -5613,7 +5696,7 @@ see docs/mail-cli.md#provision-gmail-for-hudson-mail."
             .mount(&server)
             .await;
         let client = GmailClient::with_base_url("t".into(), Url::parse(&server.uri()).unwrap());
-        assert!(client.search("anything").await.unwrap().is_empty());
+        assert!(client.search("anything", false).await.unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -5627,7 +5710,7 @@ see docs/mail-cli.md#provision-gmail-for-hudson-mail."
             .mount(&server)
             .await;
         let client = GmailClient::with_base_url("t".into(), Url::parse(&server.uri()).unwrap());
-        let error = client.search("from:client").await.unwrap_err();
+        let error = client.search("from:client", false).await.unwrap_err();
         let rendered = error.to_string();
         assert!(rendered.contains("Gmail API request failed"), "{rendered}");
         assert!(rendered.contains("429"), "{rendered}");

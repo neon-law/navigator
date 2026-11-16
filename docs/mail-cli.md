@@ -139,6 +139,8 @@ Gmail offers no narrower scope that creates drafts, and `gmail.compose` can send
 this CLI has no send verb and calls no send endpoint (a test pins the endpoint list). `inbox process --apply` archives
 through Gmail's modify endpoint. That endpoint needs `gmail.modify`, so a token from `hudson mail login` cannot archive.
 
+Use `--all` to follow Gmail pagination. By default, search returns the first page.
+
 Search adds the current Project client's email to the Gmail query when `navigator.yaml` provides `client_dri`. This is a
 search convenience, not an authorization boundary. Filing compares the message participants with that contact and warns
 when they do not match. The authenticated Navigator API still enforces Project participation. The message idempotency
