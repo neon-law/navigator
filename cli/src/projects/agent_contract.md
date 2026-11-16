@@ -154,9 +154,9 @@ substitute browser or native-app automation for a server that is available.
   notation preview drafts/<code>.md`. A direct upload from this checkout writes only its pointer under `blobs/`; review
   and commit that `.yaml` file.
 * **Notion** — writing: handbooks, guides, and intake notes.
-* **Gmail** — client instructions and correspondence. Review received mail and prepare outgoing mail as drafts.
-  When asked to archive a matter email, review the exact thread, file it or save a source-linked review in the approved
-  matter record, and verify the save before archiving. If filing is blocked, leave it in the inbox.
+* **Gmail** — review received mail and draft outgoing mail. Before an authorized archive, review the exact thread,
+  file it or save a source-linked review in the approved matter record, and verify the save. If filing is blocked,
+  leave the thread in the inbox.
 * **Google Calendar** — meetings and deadlines.
 * **Google Drive** — meeting notes, transcripts, and large document intake.
 * **Slack** — private channel for updates.
