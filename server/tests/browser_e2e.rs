@@ -3619,13 +3619,22 @@ async fn project_inbox_opens_a_full_email_thread_with_application_chrome() {
     let inbox = format!("/app/projects/{}/inbox", project.code);
     let thread = format!("{inbox}/{}", saved.conversation_id);
     c.goto(&format!("{}{inbox}", base_url())).await.unwrap();
-    activate_inbox_link(&c, &format!("#inbox-row-{} a", saved.conversation_id)).await;
-    let full_thread_link = format!("#inbox-pane a[href='{thread}']");
+    // Dioxus adds the event listener marker after hydrating the server link.
+    let row_link = format!("#inbox-row-{} a[data-dioxus-id]", saved.conversation_id);
     c.wait()
+        .at_most(Duration::from_secs(15))
+        .for_element(Locator::Css(&row_link))
+        .await
+        .expect("the Project inbox row is interactive");
+    activate_inbox_link(&c, &row_link).await;
+    let full_thread_link = format!("#inbox-pane[open] a[href='{thread}']");
+    let link = c
+        .wait()
         .at_most(Duration::from_secs(10))
         .for_element(Locator::Css(&full_thread_link))
         .await
-        .expect("the reading pane links to the Project thread");
+        .expect("the open reading dialog links to the Project thread");
+    assert!(link.is_displayed().await.unwrap());
     activate_inbox_link(&c, &full_thread_link).await;
 
     let body = c

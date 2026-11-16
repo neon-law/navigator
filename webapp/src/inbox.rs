@@ -1660,6 +1660,7 @@ fn inbox_list(
                             event.prevent_default();
                             selected.set(Some(row_id.clone()));
                             opener.set(Some(index));
+                            set_reading_dialog_open(true);
                         },
                         "{row.subject}"
                     }
@@ -1936,6 +1937,26 @@ fn inbox_rail(page: &InboxPage) -> Element {
 /// The reading dialog's element id.
 const PANE_DIALOG_ID: &str = "inbox-pane";
 
+fn set_reading_dialog_open(open: bool) {
+    #[cfg(all(feature = "web", target_arch = "wasm32"))]
+    {
+        use wasm_bindgen::JsCast;
+        let dialog = web_sys::window()
+            .and_then(|window| window.document())
+            .and_then(|document| document.get_element_by_id(PANE_DIALOG_ID))
+            .and_then(|element| element.dyn_into::<web_sys::HtmlDialogElement>().ok());
+        if let Some(dialog) = dialog {
+            if open && !dialog.open() {
+                let _ = dialog.show_modal();
+            } else if !open && dialog.open() {
+                dialog.close();
+            }
+        }
+    }
+    #[cfg(not(all(feature = "web", target_arch = "wasm32")))]
+    let _ = open;
+}
+
 /// The reading dialog: a modal `<dialog>` that opens when a row is selected
 /// and fetches that conversation. Escape, the close button, and a click on
 /// the backdrop close it and hand focus back through `on_close`.
@@ -1945,21 +1966,12 @@ fn InboxPane(
     project_code: Option<String>,
     on_close: EventHandler<()>,
 ) -> Element {
-    use_effect(move || {
-        if selected().is_some() {
-            document::eval(&format!(
-                "const d = document.getElementById('{PANE_DIALOG_ID}'); if (d && !d.open) d.showModal();"
-            ));
-        }
-    });
     let mut close = move || {
         if selected.peek().is_none() {
             return;
         }
         selected.set(None);
-        document::eval(&format!(
-            "document.getElementById('{PANE_DIALOG_ID}')?.close();"
-        ));
+        set_reading_dialog_open(false);
         on_close.call(());
     };
     rsx! {
@@ -2003,11 +2015,13 @@ fn InboxPane(
 fn InboxPaneThread(conversation_id: String, project_code: Option<String>) -> Element {
     let fetch_conversation_id = conversation_id.clone();
     let fetch_project_code = project_code.clone();
-    let resource = use_server_future(move || {
+    // This fetch starts after selection in the browser. Keep the dialog
+    // mounted while it loads so the browser retains its modal state.
+    let resource = use_resource(move || {
         let conversation_id = fetch_conversation_id.clone();
         let project_code = fetch_project_code.clone();
         async move { pane_conversation(project_code, conversation_id).await }
-    })?;
+    });
     let view = match &*resource.read() {
         Some(Ok(page)) => {
             let href = project_code.as_ref().map_or_else(
