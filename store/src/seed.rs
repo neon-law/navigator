@@ -124,13 +124,13 @@ pub const JURISDICTION_SEED_YAML: &str = canonical::JURISDICTION;
 pub const ENTITY_SEED_YAML: &str = canonical::ENTITY;
 
 /// The second firm Entity the canonical seed ships. `Lex Tecnica, Ltd.`
-/// anchors the `Lex` Firm, which wears Lex Tecnica, IEP Defenders, and
+/// anchors the Lex Tecnica Firm, which wears Lex Tecnica, IEP Defenders, and
 /// Same Day Legal.
 /// Its row joins [`FIRM_ENTITY_NAME`]'s anchor-key discipline, so the
 /// delete guard protects it identically.
 pub const LEX_FIRM_ENTITY_NAME: &str = "Lex Tecnica, Ltd.";
 /// The firm row's wordmark, distinct from the legal entity it wears.
-pub const LEX_FIRM_NAME: &str = "Lex";
+pub const LEX_FIRM_NAME: &str = "Lex Tecnica";
 
 /// Every firm-anchor Entity the canonical seed ships, in seed order.
 /// `seed_entities` and `is_firm_anchor` read this list, so a second firm
@@ -2915,7 +2915,7 @@ async fn seed_firm_ein(surreal: &SurrealDb) -> anyhow::Result<()> {
 enum SeedFirm {
     /// [`FIRM_ENTITY_NAME`]'s practice: Neon Law and the firm's own site.
     Practice,
-    /// [`LEX_FIRM_ENTITY_NAME`]'s `Lex` firm: Lex Tecnica and its practices.
+    /// [`LEX_FIRM_ENTITY_NAME`]'s Firm: Lex Tecnica and its practices.
     Lex,
 }
 
