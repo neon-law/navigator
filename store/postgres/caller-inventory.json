@@ -7268,6 +7268,7 @@
       "archives/src/postgres.rs",
       "portal/src/dioxus_app.rs",
       "portal/src/inbox.rs",
+      "portal/src/inbox_import_api.rs",
       "store/src/inbox.rs",
       "store/src/inbox_triage.rs",
       "store/src/lib.rs",
