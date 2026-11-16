@@ -395,7 +395,7 @@ async fn navigator_deadline_mutations_update_the_same_project_calendar_event() {
     );
 
     let mut previous = events[0].clone();
-    for action in ["complete", "reopen", "cancel"] {
+    for action in ["cancel", "reopen", "complete"] {
         let response = post(
             &fx,
             &format!("{path}/{id}/{action}"),
@@ -403,7 +403,7 @@ async fn navigator_deadline_mutations_update_the_same_project_calendar_event() {
             serde_json::json!({}),
         )
         .await;
-        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::OK, "{action} should succeed");
         let events = calendar.events(calendar_id);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].id, originally[0].id);
