@@ -41,14 +41,9 @@ pub enum InboxAction {
         #[command(flatten)]
         host: crate::HostOpt,
     },
-    /// Propose an assignment for every unattributed backlog thread by
-    /// matching its From/To/Cc addresses against the open Projects' Person
-    /// emails. A unique match assigns the thread; shared inboxes, no
-    /// matches, several matches, and senders with no Person row leave it
-    /// in the inbox for the lawyer.
+    /// Preview Project matches for unattributed email threads.
     AssignMatches {
-        /// Print the proposed assignment per thread without assigning,
-        /// filing, archiving, or recording anything.
+        /// Preview mode. It also applies when this flag is omitted.
         #[arg(long)]
         dry_run: bool,
         /// Navigator host. Defaults to host in navigator.yaml.
@@ -158,9 +153,7 @@ async fn run_inner(action: InboxAction) -> Result<()> {
             })
             .await
         }
-        InboxAction::AssignMatches { dry_run, host } => {
-            assign_matches(dry_run, host.as_deref()).await
-        }
+        InboxAction::AssignMatches { host, .. } => assign_matches(host.as_deref()).await,
         InboxAction::List { host } => list(host.as_deref()).await,
         InboxAction::Process {
             message,
@@ -211,16 +204,9 @@ fn attachment_request(base: &str) -> (Method, String) {
     (Method::POST, format!("{base}/app/api/inbox/attachment"))
 }
 
-/// The assign-matches door: one constant-path POST. The plan (apply:
-/// false) and the apply (apply: true) differ only in the request body.
+/// The assign-matches preview uses a constant-path POST.
 fn assign_matches_request(base: &str) -> (Method, String) {
     (Method::POST, format!("{base}/app/api/inbox/assign-matches"))
-}
-
-/// The body the assign-matches door reads: propose only, or propose and
-/// assign. No other knob exists — the door classifies server-side.
-fn assign_matches_body(apply: bool) -> serde_json::Value {
-    serde_json::json!({ "apply": apply })
 }
 
 /// The body the process door reads: which message, and whether to record.
@@ -366,17 +352,12 @@ async fn list(host: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// Propose — and without `--dry-run`, make — the address-match assignment
-/// for every unattributed backlog thread. The door classifies server-side
-/// from the same Person CRM the triage surface reads; each unique match
-/// goes through the existing `inbox assign` gates. Filing and archiving
-/// stay with `inbox process` entirely: this verb never files, never
-/// archives, and (dry run) never records.
-async fn assign_matches(dry_run: bool, host: Option<&str>) -> Result<()> {
+/// Preview the address and model matches for unattributed Inbox mail.
+async fn assign_matches(host: Option<&str>) -> Result<()> {
     let (base, token) = crate::remote::resolve(host)?;
     let (method, url) = assign_matches_request(&base);
     let client = reqwest::Client::new();
-    let mut body = assign_matches_body(!dry_run);
+    let mut body = serde_json::json!({ "apply": false });
     let mut printed = false;
     loop {
         let response = client
@@ -413,12 +394,10 @@ async fn assign_matches(dry_run: bool, host: Option<&str>) -> Result<()> {
         println!("Continuing with the next inbox batch.");
         body["after"] = next;
     }
-    if !printed {
-        println!("No unattributed inbox threads to assign.");
-    } else if dry_run {
-        println!(
-            "Dry run — nothing assigned, filed, archived, or recorded. Re-run without --dry-run to make these assignments."
-        );
+    if printed {
+        println!("Review each proposal and confirm the filing individually.");
+    } else {
+        println!("No unattributed inbox threads to review.");
     }
     Ok(())
 }
@@ -1111,14 +1090,7 @@ mod tests {
     }
 
     #[test]
-    fn the_assign_matches_body_and_view_read_as_the_door_serves_them() {
-        let body = super::assign_matches_body(true);
-        assert_eq!(body["apply"], serde_json::json!(true));
-        assert_eq!(
-            super::assign_matches_body(false)["apply"],
-            serde_json::json!(false)
-        );
-
+    fn the_assign_matches_view_reads_as_the_door_serves_it() {
         let (method, url) = super::assign_matches_request("https://navigator.example.test");
         assert_eq!(method, Method::POST);
         assert_eq!(
@@ -1189,7 +1161,7 @@ mod tests {
         let base = server.uri();
         stored_login(&base);
 
-        let result = super::assign_matches(true, Some(&base)).await;
+        let result = super::assign_matches(Some(&base)).await;
 
         restore_credentials(previous);
         result.unwrap();

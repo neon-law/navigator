@@ -11738,11 +11738,23 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
             conversations.push(ingest_address_match_fixture(&db, firm, email).await);
         }
 
-        let response = crate::inbox_api::assign_matches(
+        let rejected = crate::inbox_api::assign_matches(
             State(state.clone()),
             LawyerSession(session.clone()),
             Json(crate::inbox_api::AssignMatchesRequest {
                 apply: true,
+                after: None,
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+
+        let response = crate::inbox_api::assign_matches(
+            State(state.clone()),
+            LawyerSession(session.clone()),
+            Json(crate::inbox_api::AssignMatchesRequest {
+                apply: false,
                 after: None,
             }),
         )
@@ -11764,15 +11776,17 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
                 .unwrap();
             if index == 0 {
                 assert_eq!(row["decision"]["project_id"], serde_json::json!(local.id));
-                assert_eq!(row["applied"], true);
-                assert_eq!(stored.project_id, Some(local.id));
             } else {
                 assert_eq!(row["decision"]["reason"], "no_match");
-                assert_eq!(row["applied"], false);
-                assert_eq!(stored.project_id, None);
             }
+            assert_eq!(row["applied"], false);
+            assert_eq!(stored.project_id, None);
+            assert!(store::inbox::assignments(&db, id).await.unwrap().is_empty());
         }
 
+        assert!(!store::communications::exists_for_project(&db, local.id)
+            .await
+            .unwrap());
         assert_jev_roster_is_confined_to_the_firm(state, session, local.id, other.id).await;
     }
 
@@ -11797,7 +11811,7 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
             State(state),
             LawyerSession(session),
             Json(crate::inbox_api::AssignMatchesRequest {
-                apply: true,
+                apply: false,
                 after: None,
             }),
         )
@@ -11807,9 +11821,11 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
             .await
             .unwrap();
         let rows: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["decision"]["project_id"], serde_json::json!(local));
-        assert_eq!(rows[0]["applied"], true);
+        assert_eq!(rows.len(), 2);
+        for row in rows {
+            assert_eq!(row["decision"]["project_id"], serde_json::json!(local));
+            assert_eq!(row["applied"], false);
+        }
         let requests = provider.received_requests().await.unwrap();
         assert_eq!(requests.len(), 1);
         let payload: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();

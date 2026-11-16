@@ -478,18 +478,16 @@ async fn notify_inbox_routed(state: &ApiState, project_id: Uuid) -> SlackNotice 
     }
 }
 
-/// The body the assign-matches door reads: serve the proposals, or make them.
+/// The body the assign-matches preview reads.
 #[derive(Debug, Deserialize)]
 pub(crate) struct AssignMatchesRequest {
-    /// False lists what the address-match would assign; true assigns each
-    /// uniquely matched thread.
+    /// Explicitly reject a write requested by an older client.
     #[serde(default)]
     pub apply: bool,
     pub after: Option<(chrono::DateTime<Utc>, Uuid)>,
 }
 
-/// One thread's address-match proposal: a plan lists every candidate
-/// thread, an apply reports what it did.
+/// One thread's address-match proposal.
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct AssignMatchView {
     pub message: Uuid,
@@ -497,7 +495,7 @@ pub(crate) struct AssignMatchView {
     pub from: String,
     pub subject: Option<String>,
     pub decision: store::inbox::assign_match::MatchOutcome,
-    /// Whether this run assigned (apply: true) or only proposed (plan).
+    /// Always false. Retained for clients that display the proposal status.
     pub applied: bool,
 }
 
@@ -799,20 +797,21 @@ fn assignment_page(
 }
 
 /// `POST /app/api/inbox/assign-matches` — the LAW-347 address-match door
-/// behind `navigator inbox assign-matches`. Every unprocessed, unattributed
-/// email thread proposes an assignment from its From/To/Cc addresses
-/// (`store::inbox::assign_match`); apply: true makes each unique match
-/// through the same `inbox assign` door the triage surface uses, so the
-/// existing authorization, Firm, and billing gates all hold. Filing and
-/// archiving stay where they live — the process door's thresholds and
-/// confirmations — and nothing here touches them. Every decision logs
-/// server-side; unmatched and ambiguous threads stay in the inbox.
+/// Every unprocessed, unattributed email thread proposes a Project. An
+/// assignment can create Communications, so this batch door only previews.
+/// Applying a proposed filing requires per-Message lawyer confirmation.
 pub(crate) async fn assign_matches(
     State(state): State<ApiState>,
     LawyerSession(session): LawyerSession,
     Json(request): Json<AssignMatchesRequest>,
 ) -> Result<Response, ApiError> {
     let actor_id = actor_id(&session)?;
+    if request.apply {
+        return Ok(crate::api::bad_request(
+            "filing_confirmation_required",
+            "Review and confirm each proposed filing individually.",
+        ));
+    }
     let mut rows = assignment_page(
         store::inbox::unprocessed_inbox(&state.surreal, actor_id)
             .await
@@ -842,24 +841,13 @@ pub(crate) async fn assign_matches(
         )
         .await?;
         log_assign_decision(row.id, &outcome, jev_fill.as_ref());
-        let applied =
-            if let (true, store::inbox::assign_match::MatchOutcome::Assigned { project_id }) =
-                (request.apply, &outcome)
-            {
-                store::inbox::assign(&state.surreal, actor_id, row.conversation_id, *project_id)
-                    .await
-                    .map_err(map_inbox)?;
-                true
-            } else {
-                false
-            };
         views.push(AssignMatchView {
             message: row.id,
             conversation_id: row.conversation_id,
             from: row.external_address,
             subject: row.subject,
             decision: outcome,
-            applied,
+            applied: false,
         });
     }
     let mut response = Json(views).into_response();
