@@ -5899,9 +5899,9 @@
 {"file":"webapp/src/document_link.rs","line":93,"function":"from_secret","operation":"update","sql_operations":[],"tables":[],"transaction":false}
 {"file":"webapp/src/document_link.rs","line":145,"function":"verify","operation":"update","sql_operations":[],"tables":[],"transaction":false}
 {"file":"webapp/src/document_link.rs","line":161,"function":"sign","operation":"update","sql_operations":[],"tables":[],"transaction":false}
+{"file":"webapp/src/inbox.rs","line":4114,"function":"request_parts","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"webapp/src/inbox.rs","line":4116,"function":"request_parts","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"webapp/src/inbox.rs","line":4118,"function":"request_parts","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"webapp/src/inbox.rs","line":4122,"function":"request_parts","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"webapp/src/inbox.rs","line":4120,"function":"request_parts","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"webapp/src/lawyer_project_notations.rs","line":68,"function":"project_notation_board","operation":"insert","sql_operations":[],"tables":["template"],"transaction":false}
 {"file":"webapp/src/lawyer_project_notations.rs","line":87,"function":"project_notation_board","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"webapp/src/lawyer_project_notations.rs","line":105,"function":"project_notation_board","operation":"insert","sql_operations":[],"tables":["notation"],"transaction":false}

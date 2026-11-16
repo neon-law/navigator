@@ -799,7 +799,7 @@ fn thread_attachment_views(
     project_id: uuid::Uuid,
     conversation_id: uuid::Uuid,
     message_id: uuid::Uuid,
-    assets: Vec<store::assets::AttachmentMetadata>,
+    assets: &[store::assets::AttachmentMetadata],
     linked: Vec<store::inbox::MessageAttachment>,
 ) -> Vec<InboxAttachmentView> {
     attachment_views(assets, linked, |id, asset| {
@@ -815,7 +815,7 @@ fn thread_attachment_views(
 /// slot not already listed — each href built by `href`.
 #[cfg(feature = "server")]
 fn attachment_views(
-    assets: Vec<store::assets::AttachmentMetadata>,
+    assets: &[store::assets::AttachmentMetadata],
     linked: Vec<store::inbox::MessageAttachment>,
     href: impl Fn(uuid::Uuid, Option<&store::assets::AttachmentMetadata>) -> String,
 ) -> Vec<InboxAttachmentView> {
@@ -834,7 +834,7 @@ fn attachment_views(
             href: href(link.asset_id, asset),
         });
     }
-    for asset in &assets {
+    for asset in assets {
         if seen.contains(&asset.id) {
             continue;
         }
@@ -872,11 +872,9 @@ async fn firm_messages_with_attachments(
             .await
             .unwrap_or_default();
         let message_id = message.id;
-        view.attachments = attachment_views(
-            primary.into_iter().map(Into::into).collect(),
-            linked,
-            |id, _| format!("/app/inbox/{conversation_id}/messages/{message_id}/attachments/{id}"),
-        );
+        view.attachments = attachment_views(primary.map(Into::into).as_slice(), linked, |id, _| {
+            format!("/app/inbox/{conversation_id}/messages/{message_id}/attachments/{id}")
+        });
         views.push(view);
     }
     views
@@ -914,7 +912,7 @@ async fn thread_messages_with_attachments(
             project_id,
             conversation_id,
             message.id,
-            assets,
+            &assets,
             linked,
         );
         views.push(view);
@@ -3138,7 +3136,7 @@ mod tests {
             project_id,
             uuid::Uuid::from_u128(11),
             uuid::Uuid::from_u128(12),
-            vec![
+            &[
                 asset(primary_id, "exhibit-a.pdf"),
                 asset(primary_id, "exhibit-a.pdf"),
                 asset(filed_id, "exhibit-b.pdf"),
@@ -3177,7 +3175,7 @@ mod tests {
             project,
             conversation,
             message,
-            Vec::new(),
+            &[],
             links,
         );
         assert_eq!(views.len(), 2);
