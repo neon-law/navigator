@@ -50,6 +50,11 @@ jobs:
       RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
       STAGING_E2E_TOKEN: ${{ secrets.STAGING_E2E_TOKEN }}
       STAGING_GCP_PROJECT_ID: ${{ secrets.STAGING_GCP_PROJECT_ID }}
+      # The preflight loop reads every secret it drives from the environment;
+      # the ship identity's secrets are therefore exported here as well, not
+      # only passed to the auth step's `with:` (matching release-deploy.yml).
+      STAGING_SHIP_WIF_PROVIDER: ${{ secrets.STAGING_SHIP_WIF_PROVIDER }}
+      STAGING_SHIP_SERVICE_ACCOUNT: ${{ secrets.STAGING_SHIP_SERVICE_ACCOUNT }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -75,6 +80,12 @@ jobs:
         with:
           install_components: gke-gcloud-auth-plugin
 
+      - uses: ./.github/actions/slack-progress
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          stage: staging-e2e
+          step: "resolve the staging cluster"
+
       - name: resolve the staging cluster
         id: cluster
         run: |
@@ -91,6 +102,12 @@ jobs:
 
       - name: fetch cluster credentials
         run: gcloud container clusters get-credentials "${{ steps.cluster.outputs.name }}" --region "${{ steps.cluster.outputs.location }}" --project "$STAGING_GCP_PROJECT_ID"
+
+      - uses: ./.github/actions/slack-progress
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          stage: staging-e2e
+          step: "assert the gate starts closed"
 
       - name: assert the gate starts closed
         run: |
@@ -110,12 +127,24 @@ jobs:
           export NAVIGATOR_TOKEN="$STAGING_E2E_TOKEN" OUT_DIR=/tmp/e2e
           scripts/staging-jev-e2e.sh precheck
 
+      - uses: ./.github/actions/slack-progress
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          stage: staging-e2e
+          step: "open the gate for this run only"
+
       - name: open the gate for this run only
         run: |
           set -euo pipefail
           kubectl set env deploy/"$WEB_DEPLOYMENT" -n "$NAMESPACE" NAVIGATOR_TYPESAFE_ZDR_CONFIRMED=true
           kubectl rollout status deploy/"$WEB_DEPLOYMENT" -n "$NAMESPACE" --timeout=10m
           echo "GATE_OPEN_AT=$(date -u +%FT%TZ)" >> "$GITHUB_ENV"
+
+      - uses: ./.github/actions/slack-progress
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          stage: staging-e2e
+          step: "seed, import, and run the assignment preview"
 
       - name: seed, import, and run the assignment preview
         run: |
@@ -124,6 +153,13 @@ jobs:
           scripts/staging-jev-e2e.sh seed
           scripts/staging-jev-e2e.sh import-threads
           scripts/staging-jev-e2e.sh run-assignment
+
+      - uses: ./.github/actions/slack-progress
+        if: always()
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          stage: staging-e2e
+          step: "merge the decision log into the run log"
 
       # The decision-log pull reads the gated pod's logs, so this runs while
       # that pod still serves — before the close step rolls it.
@@ -136,6 +172,13 @@ jobs:
           if [ -n "${GATE_OPEN_AT:-}" ]; then
             echo "- Gate open at: ${GATE_OPEN_AT} UTC; closed by the step that follows" >> /tmp/e2e/run-log.md
           fi
+
+      - uses: ./.github/actions/slack-progress
+        if: always()
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          stage: staging-e2e
+          step: "close the gate again"
 
       - name: close the gate again
         if: always()
@@ -151,6 +194,13 @@ jobs:
             echo "::error::the gate flag survived the close step — residual gate-open state on ${WEB_DEPLOYMENT}"
             exit 1
           fi
+
+      - uses: ./.github/actions/slack-progress
+        if: always()
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          stage: staging-e2e
+          step: "delete the synthetic rows"
 
       - name: delete the synthetic rows
         if: always()
