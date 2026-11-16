@@ -159,7 +159,7 @@ async fn classifier_evidence_stays_in_the_inbox_audit_row() {
     let token = Arc::new(cloud::StaticTokenSource::new("synthetic-token"));
     let gemini = cloud::GeminiVertexAdapter::new(token)
         .unwrap()
-        .with_base_url(&provider.uri());
+        .with_base_url(provider.uri());
     let service = InboundTriageService::new(
         surreal.clone(),
         Some(TriageProviders {
