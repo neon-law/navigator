@@ -155,8 +155,8 @@ substitute browser or native-app automation for a server that is available.
   and commit that `.yaml` file.
 * **Notion** — writing: handbooks, guides, and intake notes.
 * **Gmail** — review received mail and draft outgoing mail. Before an authorized archive, review the exact thread,
-  file it or save a source-linked review in the approved matter record, and verify the save. If filing is blocked,
-  leave the thread in the inbox.
+  file it or save a source-linked review in the approved matter record, and verify the save. If filing is blocked, leave
+  the thread in the inbox.
 * **Google Calendar** — meetings and deadlines.
 * **Google Drive** — meeting notes, transcripts, and large document intake.
 * **Slack** — private channel for updates.
