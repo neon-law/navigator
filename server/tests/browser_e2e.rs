@@ -3172,6 +3172,7 @@ async fn seed_inbox_walkthrough(
     db: &store::surreal::SurrealDb,
     provider_account: &str,
     channel: &str,
+    project_id: Option<Uuid>,
 ) -> store::inbox::IngestedInbound {
     let firm = store::firms::firm_id_for_brand_key(db, "neon")
         .await
@@ -3181,7 +3182,7 @@ async fn seed_inbox_walkthrough(
         db,
         &store::inbox::IngestInbound {
             raw_storage_key: None,
-            project_id: None,
+            project_id,
             firm_id: firm,
             brand_key: Some("neon"),
             interaction_type: Some("message"),
@@ -3459,8 +3460,13 @@ async fn seed_inbox_filing_review(db: &store::surreal::SurrealDb) -> (Uuid, Uuid
     store::projects::add_participation(db, project.id, lawyer.id, "lawyer")
         .await
         .unwrap();
-    let saved =
-        seed_inbox_walkthrough(db, "synthetic-filing-account", store::inbox::channel::EMAIL).await;
+    let saved = seed_inbox_walkthrough(
+        db,
+        "synthetic-filing-account",
+        store::inbox::channel::EMAIL,
+        None,
+    )
+    .await;
     let review = store::inbox_triage::record(
         db,
         &NewInboxTriage {
@@ -3495,6 +3501,7 @@ async fn lawyer_workbench_card_opens_the_unified_inbox() {
         &db,
         "synthetic-receiving-account",
         store::inbox::channel::SMS,
+        None,
     )
     .await;
     c.goto(&format!("{}/app/lawyers", base_url()))
@@ -3579,6 +3586,72 @@ async fn lawyer_workbench_card_opens_the_unified_inbox() {
     .await
     .expect("the reading pane links to the full-width thread");
     capture_inbox_frames(&c, capture_dir, 24..32).await;
+    c.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn project_inbox_opens_a_full_email_thread_with_application_chrome() {
+    let Some(c) = new_client_or_skip().await else {
+        return;
+    };
+    login_as_lawyer(&c).await;
+    let db = store::surreal::connect_from_env().await.unwrap();
+    let firm = store::firms::firm_id_for_brand_key(&db, "neon")
+        .await
+        .unwrap()
+        .unwrap();
+    let lawyer = store::persons::find_by_email_ci(&db, "lawyer@neonlaw.com")
+        .await
+        .unwrap()
+        .unwrap();
+    let project =
+        store::test_support::seed_project_on_firm(&db, Some(firm), "Synthetic Email Thread").await;
+    store::projects::add_participation(&db, project.id, lawyer.id, "lawyer")
+        .await
+        .unwrap();
+    let saved = seed_inbox_walkthrough(
+        &db,
+        "synthetic-project-thread",
+        store::inbox::channel::EMAIL,
+        Some(project.id),
+    )
+    .await;
+    let inbox = format!("/app/projects/{}/inbox", project.code);
+    let thread = format!("{inbox}/{}", saved.conversation_id);
+    c.goto(&format!("{}{inbox}", base_url())).await.unwrap();
+    activate_inbox_link(&c, &format!("#inbox-row-{} a", saved.conversation_id)).await;
+    let full_thread_link = format!("#inbox-pane a[href='{thread}']");
+    c.wait()
+        .at_most(Duration::from_secs(10))
+        .for_element(Locator::Css(&full_thread_link))
+        .await
+        .expect("the reading pane links to the Project thread");
+    activate_inbox_link(&c, &full_thread_link).await;
+
+    let body = c
+        .wait()
+        .at_most(Duration::from_secs(10))
+        .for_element(Locator::Css("#inbox-thread .inbox-message__body"))
+        .await
+        .expect("the full Project thread renders the email");
+    assert_eq!(
+        body.text().await.unwrap(),
+        "Synthetic inquiry for the browser walkthrough."
+    );
+    assert_eq!(c.current_url().await.unwrap().path(), thread);
+    c.find(Locator::Css("nav[aria-label='Application']"))
+        .await
+        .expect("application navigation renders");
+    c.find(Locator::Css("footer.app-footer"))
+        .await
+        .expect("firm footer renders");
+    activate_inbox_link(&c, &format!("#inbox-thread a[href='{inbox}']")).await;
+    c.wait()
+        .at_most(Duration::from_secs(10))
+        .for_element(Locator::Css("#inbox"))
+        .await
+        .expect("the return link opens the Project inbox");
+    assert_eq!(c.current_url().await.unwrap().path(), inbox);
     c.close().await.unwrap();
 }
 
