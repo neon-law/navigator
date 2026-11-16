@@ -10,7 +10,6 @@ use axum::{
     Extension, Router,
 };
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
 use store::{assets::Asset, evidence_shares as shares, postgres::PostgresDb};
 use uuid::Uuid;
 use webapp::html_escape::escape_attr as escape;
@@ -138,7 +137,7 @@ async fn source(state: &AppState, asset: &Asset) -> Result<String, StatusCode> {
         .await
         .map_err(unavailable)?;
     if i64::try_from(object.bytes.len()).ok() != Some(asset.byte_size)
-        || format!("{:x}", Sha256::digest(&object.bytes)) != asset.sha256_hex
+        || store::assets::sha256_hex(&object.bytes) != asset.sha256_hex
     {
         return Err(StatusCode::SERVICE_UNAVAILABLE);
     }
