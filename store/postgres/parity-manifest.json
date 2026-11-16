@@ -429,6 +429,13 @@
     },
     {
       "extra_column": null,
+      "extra_table": "person_calendar",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "plan_fee_schedule",
       "missing_column": null,
       "missing_table": null,
@@ -2051,7 +2058,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 169,
+    "table_count": 170,
     "tables": {
       "address": {
         "columns": {
@@ -4642,6 +4649,25 @@
         "foreign_keys": [],
         "name": "person",
         "references": []
+      },
+      "person_calendar": {
+        "columns": {
+          "calendar_id": "TEXT",
+          "id": "UUID",
+          "inserted_at": "TIMESTAMPTZ",
+          "kind": "TEXT",
+          "person_id": "UUID"
+        },
+        "foreign_keys": [
+          [
+            "person_id",
+            "person"
+          ]
+        ],
+        "name": "person_calendar",
+        "references": [
+          "person"
+        ]
       },
       "person_delegate": {
         "columns": {

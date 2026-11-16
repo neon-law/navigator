@@ -413,7 +413,7 @@ mod tests {
             .unwrap();
         let person_id = uuid::Uuid::now_v7();
         sqlx::query(
-            "INSERT INTO person (id, name, email, role) VALUES ($1, 'Ada Lovelace', 'ada@example.com', 'lawyer')",
+            "INSERT INTO person (id, name, email, role) VALUES ($1, 'Synthetic Lawyer', 'ada@example.com', 'lawyer')",
         )
         .bind(person_id)
         .execute(pg.pool())

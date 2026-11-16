@@ -1307,6 +1307,13 @@ erDiagram
         datetime updated_at
         string xero_contact_id
     }
+    person_calendar {
+        string calendar_id
+        uuid id
+        datetime inserted_at
+        string kind
+        uuid person_id
+    }
     person_delegate {
         string basis
         uuid delegate_person_id
@@ -1321,13 +1328,6 @@ erDiagram
         string subject_notified_channel
         uuid subject_person_id
         datetime updated_at
-    }
-    person_calendar {
-        string calendar_id
-        uuid id
-        datetime inserted_at
-        string kind
-        uuid person_id
     }
     person_external_identity {
         string external_id

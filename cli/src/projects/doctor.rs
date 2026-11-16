@@ -225,7 +225,7 @@ fn calendar_delegation_check(probe: &Probe<'_>) -> Check {
         (true, true) => Check::ok(
             "calendar delegation",
             format!(
-                "Workspace delegation is set. Grant {scope}. `navigator calendar access` reports each attorney; a missing grant is never free time"
+                "Workspace delegation is set. Grant {scope}. navigator calendar access reports each attorney. A missing grant is never free time"
             ),
         ),
         (false, false) => Check::warn(
