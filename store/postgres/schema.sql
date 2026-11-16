@@ -4798,3 +4798,6 @@ CREATE TABLE inbox_attachment_filing (
 );
 CREATE INDEX inbox_attachment_filing_pending
     ON inbox_attachment_filing (inserted_at, id) WHERE state = 'pending';
+
+-- Migration: 20261116200000_add_task_handoff.sql
+ALTER TABLE project_task ADD COLUMN handoff JSONB;

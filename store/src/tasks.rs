@@ -179,6 +179,16 @@ pub async fn create(
     actor_id: Uuid,
     input: &NewProjectTask,
 ) -> Result<ProjectTask, ProjectTaskError> {
+    create_task(pg, project_id, actor_id, input, None).await
+}
+
+pub(crate) async fn create_task(
+    pg: &PostgresDb,
+    project_id: Uuid,
+    actor_id: Uuid,
+    input: &NewProjectTask,
+    handoff: Option<&crate::task_handoffs::Handoff>,
+) -> Result<ProjectTask, ProjectTaskError> {
     validate(input)?;
     let id = Uuid::new_v4();
     let now = Utc::now();
@@ -195,8 +205,8 @@ pub async fn create(
     }
     set_audit_context(&mut tx, actor_id, "created").await?;
     sqlx::query(
-        "INSERT INTO project_task(id,project_id,title,body,assignee_id,due_on,state,inserted_at,updated_at) \
-         VALUES($1,$2,$3,$4,$5,$6,'todo',$7,$7)",
+        "INSERT INTO project_task(id,project_id,title,body,assignee_id,due_on,state,inserted_at,updated_at,handoff) \
+         VALUES($1,$2,$3,$4,$5,$6,'todo',$7,$7,$8)",
     )
     .bind(id)
     .bind(project_id)
@@ -205,6 +215,7 @@ pub async fn create(
     .bind(input.assignee_id)
     .bind(input.due_on)
     .bind(now)
+    .bind(handoff.map(sqlx::types::Json))
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;

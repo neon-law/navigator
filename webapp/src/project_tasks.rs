@@ -39,6 +39,125 @@ pub struct TaskRow {
     pub due_on: Option<String>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HandoffRow {
+    title: String,
+    body: Option<String>,
+    author: Option<String>,
+    updated_at: String,
+    state: String,
+    responsible_role: String,
+    due_on: Option<String>,
+    retry_on_release: Option<String>,
+    sources: Vec<(String, String)>,
+}
+
+#[cfg(feature = "server")]
+impl From<store::task_handoffs::PendingHandoff> for HandoffRow {
+    fn from(row: store::task_handoffs::PendingHandoff) -> Self {
+        Self {
+            title: row.title,
+            body: row.body,
+            author: row.author,
+            updated_at: row.updated_at,
+            state: row.state.into(),
+            responsible_role: row.responsible_role,
+            due_on: row.due_on,
+            retry_on_release: row.retry_on_release,
+            sources: row
+                .sources
+                .into_iter()
+                .map(|source| (source.label, source.href))
+                .collect(),
+        }
+    }
+}
+
+#[component]
+pub fn PendingHandoffs(code: String, rows: Vec<HandoffRow>) -> Element {
+    rsx! {
+        section { class: "lawyer-detail__section", id: "pending-handoffs",
+            h2 { "Pending handoffs and follow-ups" }
+            if rows.iter().all(|row| row.state == "resolved") {
+                p { class: "nav-muted", "No pending handoffs." }
+            }
+            for row in rows.iter().filter(|row| row.state != "resolved") {
+                article { class: "detail-note",
+                    h3 { "{row.title}" }
+                    p {
+                        if row.state == "ready_to_retry" { strong { "Ready to retry" } }
+                        else { strong { "Pending" } }
+                        " · Responsible role: {row.responsible_role}"
+                        if let Some(author) = &row.author { " · By {author}" }
+                        " · Updated "
+                        crate::components::UtcTime { at: row.updated_at.clone() }
+                    }
+                    if let Some(body) = &row.body { p { "{body}" } }
+                    if let Some(due) = &row.due_on { p { "Due {due}" } }
+                    if let Some(release) = &row.retry_on_release {
+                        p { "Retry when release {release} or later is installed." }
+                    }
+                    ul {
+                        for (label, href) in &row.sources {
+                            li { a { href: "{href}", "{label}" } }
+                        }
+                    }
+                }
+            }
+            if rows.iter().any(|row| row.state == "resolved") {
+                details {
+                    summary { "Resolved handoffs" }
+                    ul {
+                        for row in rows.iter().filter(|row| row.state == "resolved") {
+                            li {
+                                "{row.title} · Resolved "
+                                crate::components::UtcTime { at: row.updated_at.clone() }
+                                if let Some((label, href)) = row.sources.first() {
+                                    " "
+                                    a { href: "{href}", "{label}" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            a { href: "/app/projects/{code}/tasks#promote-handoff", "Review and save a handoff" }
+        }
+    }
+}
+
+#[component]
+fn PromoteHandoff(code: String, csrf: String) -> Element {
+    rsx! {
+        div { id: "promote-handoff",
+            FormCard {
+                title: "Promote a reviewed handoff".to_string(),
+                action: "/app/projects/{code}/tasks",
+                submit_label: "Save handoff on this Project".to_string(),
+                disclosure: Some(false),
+                csrf_token: Some(csrf),
+                fields: vec![
+                    Field::text("Title", "title", "").required(),
+                    Field::textarea("Handoff for this Project", "body", "", 5).required(),
+                    Field::select("Responsible role", "responsible_role", vec![
+                        Choice::new("lawyer", "Lawyer"),
+                        Choice::new("clerk", "Clerk"),
+                        Choice::new("admin", "Admin"),
+                        Choice::new("owner", "Owner"),
+                    ], None).required(),
+                    Field::input("Due date", "due_on", "", "date"),
+                    Field::text("Retry on installed release (YY.M.D)", "retry_on_release", "")
+                        .help("This condition is checked when someone reads the Project."),
+                    Field::text("Internal note Communication ID", "communication_id", ""),
+                    Field::text("Deadline ID", "deadline_id", ""),
+                    Field::text("Engineering issue identifier", "issue", ""),
+                    Field::checkbox("I reviewed this note and verified it belongs to this Project.", "reviewed_handoff", "yes", false).required(),
+                ],
+            }
+        }
+    }
+}
+
 /// Commit the `404` the matter surface answers for a caller the matter does
 /// not exist for, and fail the server fn with it — hidden, never refused.
 #[cfg(feature = "server")]
@@ -241,7 +360,7 @@ pub fn TasksTab(
                         }
                         tbody {
                             for row in tasks.iter() {
-                                tr {
+                                tr { id: "task-{row.id}",
                                     td {
                                         "{row.title}"
                                         if let Some(body) = row.body.as_ref() {
@@ -298,6 +417,7 @@ pub fn TasksTab(
                     }
                 }
             }
+            PromoteHandoff { code: code.clone(), csrf: csrf.clone() }
             FormCard {
                 title: "Add a task".to_string(),
                 action: "/app/projects/{code}/tasks",
@@ -341,6 +461,39 @@ mod tests {
             inserted_at: DateTime::default(),
             updated_at: DateTime::default(),
         }
+    }
+
+    #[test]
+    fn the_handoff_panel_separates_ready_work_from_resolved_history() {
+        let rows = vec![
+            HandoffRow {
+                title: "Retry synthetic provisioning".into(),
+                body: Some("Confirm the Calendar ID".into()),
+                state: "ready_to_retry".into(),
+                responsible_role: "admin".into(),
+                updated_at: "2026-11-17T00:00:00Z".into(),
+                sources: vec![(
+                    "Deadline".into(),
+                    "/app/projects/synthetic#deadline-example".into(),
+                )],
+                ..Default::default()
+            },
+            HandoffRow {
+                title: "Completed synthetic review".into(),
+                state: "resolved".into(),
+                updated_at: "2026-11-17T00:00:00Z".into(),
+                ..Default::default()
+            },
+        ];
+        let html = dioxus_ssr::render_element(rsx! {
+            PendingHandoffs { code: "synthetic".to_string(), rows }
+        });
+        assert!(html.contains("Ready to retry"));
+        assert!(html.contains("Confirm the Calendar ID"));
+        assert!(html.contains("/app/projects/synthetic#deadline-example"));
+        let (pending, history) = html.split_once("Resolved handoffs").unwrap();
+        assert!(!pending.contains("Completed synthetic review"));
+        assert!(history.contains("Completed synthetic review"));
     }
 
     #[test]

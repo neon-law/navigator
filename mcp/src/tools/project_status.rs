@@ -29,7 +29,8 @@ pub fn descriptor() -> Value {
         "description": "The current state of one Project (matter) the signed-in caller \
                         participates in: its name/code/status, open and satisfied \
                         deadlines with their authority and source, the most recent \
-                        notation-workflow events, and the participation ledger (each \
+                        notation-workflow events, pending internal handoffs for firm-side callers, \
+                        and the participation ledger (each \
                         person's participation, whether they are the lawyer DRI, and \
                         whether they are the client DRI). A caller with no participation \
                         row on this Project receives the same not-found response as one \
@@ -65,28 +66,47 @@ pub async fn call(
     // The same predicate the matter surface itself gates on — checked
     // before the project row is ever read, so an unauthorized caller
     // never learns whether the id even exists.
-    let permitted = match scope {
+    let viewer = match scope {
         ReadScope::Membership { person_id, role } => {
-            store::access::can_see_project(surreal, Some(*person_id), *role, args.project_id)
+            store::access::matter_viewer(surreal, Some(*person_id), *role, args.project_id)
                 .await
                 .map_err(ToolError::Database)?
         }
         // The directory lens is metadata-only, and neither an unlinked
         // caller nor an unauthenticated one has a participation boundary
         // to check against. No scope here may reach matter contents.
-        ReadScope::Deployment | ReadScope::Directory { .. } | ReadScope::Unlinked => false,
+        ReadScope::Deployment | ReadScope::Directory { .. } | ReadScope::Unlinked => None,
     };
-    if !permitted {
+    let Some(viewer) = viewer else {
         return Err(ToolError::NotFound(format!(
             "project_id={}",
             args.project_id
         )));
-    }
+    };
 
     let project = store::projects::find_by_id(surreal, args.project_id)
         .await
         .map_err(|error| ToolError::Database(error.to_string()))?
         .ok_or_else(|| ToolError::NotFound(format!("project_id={}", args.project_id)))?;
+
+    let pending_handoffs = if viewer.is_firm_side() {
+        let pg = store::postgres::PostgresDb::configured()
+            .await
+            .map_err(|error| ToolError::Database(error.to_string()))?;
+        Some(
+            store::task_handoffs::for_project(
+                pg.as_ref(),
+                viewer,
+                project.id,
+                &project.code,
+                false,
+            )
+            .await
+            .map_err(|error| ToolError::Database(error.to_string()))?,
+        )
+    } else {
+        None
+    };
 
     let deadlines = store::statutory_deadlines::by_project(surreal, args.project_id)
         .await
@@ -139,7 +159,7 @@ pub async fn call(
     ]
     .join("\n");
 
-    Ok(json!({
+    let mut response = json!({
         "content": [{ "type": "text", "text": summary }],
         "structuredContent": {
             "project_id": project.id,
@@ -150,7 +170,11 @@ pub async fn call(
             "notation_events": event_rows,
             "participation": participation_rows,
         }
-    }))
+    });
+    if let Some(handoffs) = pending_handoffs {
+        response["structuredContent"]["pending_handoffs"] = json!(handoffs);
+    }
+    Ok(response)
 }
 
 fn deadline_rows(deadlines: &[store::statutory_deadlines::StatutoryDeadline]) -> Vec<Value> {

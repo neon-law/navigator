@@ -1612,6 +1612,10 @@ mod tests {
                 "20261116080000_create_inbox_attachment_filing.sql",
                 include_str!("../postgres/migrations/20261116080000_create_inbox_attachment_filing.sql"),
             ),
+            (
+                "20261116200000_add_task_handoff.sql",
+                include_str!("../postgres/migrations/20261116200000_add_task_handoff.sql"),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());
