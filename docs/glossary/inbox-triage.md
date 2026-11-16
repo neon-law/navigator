@@ -15,7 +15,9 @@ disposition.
 When DBOS Inbox triage is enabled, a Firm-side Project participant can approve filing one reviewed Message as an
 internal [Communication](communication.md). The approved filing names the Message, Project, review revision and current
 [Inbox Assignment](inbox-assignment.md). The worker rechecks that scope and the approver's access before it writes.
-Replaying the same filing reuses the Communication.
+
+Changing an email's suggested Project updates its proposal. Each Message requires separate filing approval. Replaying
+the same filing reuses the Communication.
 
 The table is `inbox_triage`.
 

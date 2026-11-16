@@ -522,9 +522,8 @@ async fn triage_path_matches(
 
 /// `POST /app/inbox/{conversation_id}/triage/{triage_id}/confirm/{project_id}`
 ///
-/// A person confirms the classifier's suggested Project. The store door
-/// re-checks the suggestion matches, runs the participation-checked
-/// assignment, and records the Confirmed disposition.
+/// A person confirms the classifier's suggested Project. Email proposals stay
+/// in the review queue until the lawyer explicitly approves a Message filing.
 pub async fn triage_confirm_post(
     State(db): State<store::surreal::SurrealDb>,
     session: Option<Extension<SessionData>>,
@@ -536,7 +535,9 @@ pub async fn triage_confirm_post(
     if !triage_path_matches(&db, conversation_id, triage_id).await {
         return StatusCode::NOT_FOUND.into_response();
     }
-    match store::inbox_triage::confirm_project(&db, actor_id, triage_id, project_id).await {
+    match store::inbox_triage::review_queue_project(&db, actor_id, triage_id, project_id, None)
+        .await
+    {
         Ok(_) => Redirect::to(TRIAGE_QUEUE).into_response(),
         Err(error) => redirect_error(TRIAGE_QUEUE, &error.to_string()),
     }
@@ -604,12 +605,12 @@ pub async fn triage_override_post(
     if !triage_path_matches(&db, conversation_id, triage_id).await {
         return StatusCode::NOT_FOUND.into_response();
     }
-    match store::inbox_triage::override_project(
+    match store::inbox_triage::review_queue_project(
         &db,
         actor_id,
         triage_id,
         form.project_id,
-        &form.rationale,
+        Some(&form.rationale),
     )
     .await
     {
@@ -2250,11 +2251,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_owner_confirms_a_suggestion_and_it_persists() {
+    async fn confirming_an_email_project_leaves_every_message_unfiled() {
         let db = store::test_support::mem_surreal().await;
         let (owner, _admin, firm, project) = inbox_matter(&db).await;
         let (triage_id, message) =
             triaged_email(&db, firm.id, "triage-owner-confirm", Some(project.id)).await;
+        let sibling = store::inbox::ingest_inbound(
+            &db,
+            &inbound(
+                firm.id,
+                store::inbox::channel::EMAIL,
+                "support",
+                "triage-unreviewed-sibling",
+                "reader@example.com",
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(sibling.conversation_id, message.conversation_id);
         let state = crate::test_support::app_state(db).await;
 
         let response = triage_confirm_post(
@@ -2275,14 +2289,25 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap();
-        assert_eq!(conversation.project_id, Some(project.id));
+        assert_eq!(conversation.project_id, None);
         let row = store::inbox_triage::find_by_id(&state.surreal, triage_id)
             .await
             .unwrap()
             .unwrap();
         assert_eq!(row.disposition, TriageDisposition::NeedsHuman);
         assert!(!row.labeled_example);
-        // Assignment is complete; uncertain privilege still waits for review.
+        assert!(
+            store::communications::for_project(&state.surreal, project.id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            store::inbox::assignments(&state.surreal, message.conversation_id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(
             store::inbox_triage::list_for_review(&state.surreal, owner.id)
                 .await
@@ -2343,7 +2368,7 @@ mod tests {
                 .unwrap();
         assert_eq!(conversation.project_id, None);
 
-        // With active participation the same action lands.
+        // Active participation admits the proposal confirmation.
         store::projects::add_participation(
             &state.surreal,
             project.id,
@@ -2368,8 +2393,8 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap();
-        assert_eq!(conversation.project_id, Some(project.id));
-        // The Owner's own door still works on another row: sanity in one.
+        assert_eq!(conversation.project_id, None);
+        assert_eq!(location(&confirmed).as_deref(), Some(TRIAGE_QUEUE));
         assert_eq!(
             store::inbox_triage::list_for_review(&state.surreal, owner.id)
                 .await
@@ -2409,12 +2434,19 @@ mod tests {
             .unwrap();
         assert_eq!(row.disposition, TriageDisposition::NeedsHuman);
         assert!(row.labeled_example);
+        assert_eq!(row.suggested_project_id, Some(project.id));
+        assert!(
+            store::communications::for_project(&state.surreal, project.id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
         let conversation =
             store::inbox::conversation_by_id(&state.surreal, message.conversation_id)
                 .await
                 .unwrap()
                 .unwrap();
-        assert_eq!(conversation.project_id, Some(project.id));
+        assert_eq!(conversation.project_id, None);
     }
 
     #[tokio::test]

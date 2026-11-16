@@ -136,7 +136,7 @@ pub async fn triage_queue_page() -> Result<TriageQueuePage, ServerFnError> {
             triage_id: row.triage.id.to_string(),
             conversation_href: href.clone(),
             sender: row.sender,
-            channel: row.channel,
+            channel: row.channel.clone(),
             brand: row.brand_key.unwrap_or_else(|| "unbranded".into()),
             privilege: row.triage.privilege.as_str().replace('_', " "),
             privilege_confidence: row
@@ -151,11 +151,15 @@ pub async fn triage_queue_page() -> Result<TriageQueuePage, ServerFnError> {
                 .map(|confidence| format!("{confidence:.2}")),
             rationale: row.triage.rationale,
             projects,
-            confirm_action: row.triage.suggested_project_id.map(|project_id| {
-                // The id rides the path — the same shape the assign form's
-                // action uses — so the form itself needs no hidden field.
-                format!("{href}/triage/{}/confirm/{}", row.triage.id, project_id)
-            }),
+            confirm_action: row
+                .triage
+                .suggested_project_id
+                .filter(|_| row.channel != store::inbox::channel::EMAIL)
+                .map(|project_id| {
+                    // The id rides the path — the same shape the assign form's
+                    // action uses — so the form itself needs no hidden field.
+                    format!("{href}/triage/{}/confirm/{}", row.triage.id, project_id)
+                }),
             filing_action,
             override_action: format!("{href}/triage/{}/override", row.triage.id),
             resolve_action: format!("{href}/triage/{}/resolve", row.triage.id),
@@ -271,7 +275,11 @@ fn triage_row(row: &TriageRowView, csrf: &str) -> Element {
             FormCard {
                 title: "Assign a different project".to_string(),
                 action: row.override_action.clone(),
-                submit_label: "Override".to_string(),
+                submit_label: if row.channel == "email" {
+                    "Update Project proposal".to_string()
+                } else {
+                    "Override".to_string()
+                },
                 heading: Heading::Hidden,
                 csrf_token: Some(csrf.to_string()),
                 fields: vec![
