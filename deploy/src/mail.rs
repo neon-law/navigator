@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::future::Future;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -84,6 +85,12 @@ pub enum MailAction {
         /// Follow Gmail pagination through every matching thread.
         #[arg(long)]
         all: bool,
+    },
+    /// List the Gmail Inbox's threads and pending messages, oldest first.
+    InboxPreview {
+        /// Print at most this many threads after ordering the whole Inbox.
+        #[arg(long)]
+        limit: Option<NonZeroUsize>,
     },
     /// Read a Gmail thread as plain text.
     Read { thread: String },
@@ -404,13 +411,27 @@ impl GmailClient {
     }
 
     async fn search(&self, query: &str, all: bool) -> Result<Vec<ThreadSummary>> {
+        self.list_threads(query, all, "threads(id,snippet),nextPageToken")
+            .await
+    }
+
+    async fn list_threads(
+        &self,
+        query: &str,
+        all: bool,
+        response_fields: &str,
+    ) -> Result<Vec<ThreadSummary>> {
         let page_size = MAX_SEARCH_RESULTS.to_string();
         let mut page_token: Option<String> = None;
         let mut seen_tokens = HashSet::new();
         let mut seen_threads = HashSet::new();
         let mut threads = Vec::new();
         loop {
-            let mut parameters = vec![("q", query), ("maxResults", page_size.as_str())];
+            let mut parameters = vec![
+                ("q", query),
+                ("maxResults", page_size.as_str()),
+                ("fields", response_fields),
+            ];
             if let Some(token) = page_token.as_deref() {
                 parameters.push(("pageToken", token));
             }
@@ -434,6 +455,67 @@ impl GmailClient {
             }
             page_token = Some(next);
         }
+    }
+
+    async fn inbox_preview(&self, limit: usize) -> Result<Vec<InboxPreviewThread>> {
+        let threads = self
+            .list_threads("in:inbox", true, "threads(id),nextPageToken")
+            .await?;
+        let mut previews = Vec::new();
+        for thread in threads {
+            let metadata: InboxThreadMetadata = self
+                .call(
+                    Operation::ReadThread,
+                    Some(&thread.id),
+                    &[
+                        ("format", "full"),
+                        ("fields", "messages(id,labelIds,internalDate)"),
+                    ],
+                    None,
+                )
+                .await?;
+            let mut messages = metadata
+                .messages
+                .into_iter()
+                .filter(|message| message.label_ids.iter().any(|label| label == "INBOX"))
+                .map(|message| {
+                    let millis = message
+                        .internal_date
+                        .as_deref()
+                        .context("Gmail Inbox message has no timestamp")?
+                        .parse::<i64>()
+                        .context("parse Gmail Inbox message timestamp")?;
+                    let received_at = chrono::DateTime::from_timestamp_millis(millis)
+                        .context("Gmail Inbox message timestamp is out of range")?;
+                    Ok(InboxPreviewMessage {
+                        id: message.id,
+                        received_at,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            messages.sort_unstable_by(|left, right| {
+                left.received_at
+                    .cmp(&right.received_at)
+                    .then(left.id.cmp(&right.id))
+            });
+            if let Some(oldest) = messages.first() {
+                previews.push((
+                    oldest.received_at,
+                    InboxPreviewThread {
+                        id: thread.id,
+                        messages,
+                    },
+                ));
+            }
+        }
+        previews.sort_unstable_by(|(left_date, left), (right_date, right)| {
+            left_date.cmp(right_date).then(left.id.cmp(&right.id))
+        });
+        Ok(previews
+            .into_iter()
+            .take(limit)
+            .map(|(_, thread)| thread)
+            .collect())
     }
 
     async fn thread(&self, id: &str) -> Result<GmailThread> {
@@ -532,6 +614,32 @@ struct ThreadList {
 struct ThreadSummary {
     id: String,
     snippet: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct InboxThreadMetadata {
+    messages: Vec<InboxMessageMetadata>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InboxMessageMetadata {
+    id: String,
+    #[serde(default)]
+    label_ids: Vec<String>,
+    internal_date: Option<String>,
+}
+
+#[derive(Serialize)]
+struct InboxPreviewThread {
+    id: String,
+    messages: Vec<InboxPreviewMessage>,
+}
+
+#[derive(Serialize)]
+struct InboxPreviewMessage {
+    id: String,
+    received_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1794,6 +1902,13 @@ async fn run_inner(action: MailAction) -> Result<()> {
             }
             for thread in threads {
                 println!("{}\t{}", thread.id, thread.snippet.unwrap_or_default());
+            }
+            Ok(())
+        }
+        MailAction::InboxPreview { limit } => {
+            let limit = limit.map_or(usize::MAX, NonZeroUsize::get);
+            for thread in client().await?.inbox_preview(limit).await? {
+                println!("{}", serde_json::to_string(&thread)?);
             }
             Ok(())
         }
@@ -5634,6 +5749,81 @@ see docs/mail-cli.md#provision-gmail-for-hudson-mail."
         assert_eq!(threads[0].snippet.as_deref(), Some("retainer question"));
         // A summary with no snippet field deserializes to None, not an error.
         assert_eq!(threads[1].snippet, None);
+    }
+
+    #[tokio::test]
+    async fn inbox_preview_reads_all_pages_and_orders_pending_messages() {
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let page = || {
+            Mock::given(method("GET"))
+                .and(path("/users/me/threads"))
+                .and(query_param("q", "in:inbox"))
+                .and(query_param("fields", "threads(id),nextPageToken"))
+        };
+        page()
+            .and(query_param("pageToken", "next"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "threads": [{"id": "old"}, {"id": "moved"}],
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        page()
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "threads": [{"id": "new"}], "nextPageToken": "next",
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        for (thread, messages) in [
+            (
+                "new",
+                serde_json::json!([
+                    {"id": "archived", "labelIds": [], "internalDate": "1000"},
+                    {"id": "newest", "labelIds": ["INBOX"], "internalDate": "4000"}
+                ]),
+            ),
+            (
+                "old",
+                serde_json::json!([
+                    {"id": "followup", "labelIds": ["INBOX"], "internalDate": "3000"},
+                    {"id": "original", "labelIds": ["INBOX"], "internalDate": "2000"}
+                ]),
+            ),
+            (
+                "moved",
+                serde_json::json!([
+                    {"id": "moved", "labelIds": [], "internalDate": "1500"}
+                ]),
+            ),
+        ] {
+            Mock::given(method("GET"))
+                .and(path(format!("/users/me/threads/{thread}")))
+                .and(query_param("format", "full"))
+                .and(query_param("fields", "messages(id,labelIds,internalDate)"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": thread, "messages": messages
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+
+        let client = GmailClient::with_base_url("t".into(), Url::parse(&server.uri()).unwrap());
+        let threads = client.inbox_preview(1).await.unwrap();
+        assert_eq!(threads.len(), 1);
+        assert_eq!(threads[0].id, "old");
+        let messages: Vec<_> = threads[0]
+            .messages
+            .iter()
+            .map(|row| row.id.as_str())
+            .collect();
+        assert_eq!(messages, ["original", "followup"]);
+        assert_eq!(server.received_requests().await.unwrap().len(), 5);
     }
 
     #[tokio::test]

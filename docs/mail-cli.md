@@ -141,6 +141,10 @@ through Gmail's modify endpoint. That endpoint needs `gmail.modify`, so a token 
 
 Use `--all` to follow Gmail pagination. By default, search returns the first page.
 
+`hudson mail inbox-preview [--limit <threads>]` lists all pending threads in the configured Gmail account's Inbox,
+oldest first. Each JSON record includes the IDs and Gmail timestamps of the messages still in that thread's Inbox. The
+limit applies after ordering. Preview reads IDs, timestamps and labels. The mailbox and Project records stay unchanged.
+
 Search adds the current Project client's email to the Gmail query when `navigator.yaml` provides `client_dri`. This is a
 search convenience, not an authorization boundary. Filing compares the message participants with that contact and warns
 when they do not match. The authenticated Navigator API still enforces Project participation. The message idempotency
