@@ -69,6 +69,7 @@ async fn fixture(code: &str) -> Fixture {
 
     let state = portal::test_support::app_state(db).await;
     let api_state = ApiState {
+        jev: None,
         surreal: state.surreal.clone(),
         email: state.email.clone(),
         bootstrap_owner_email: state.bootstrap_owner_email.clone(),

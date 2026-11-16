@@ -438,6 +438,13 @@ fn print_assignment_matches(views: &[AssignMatchView]) {
                     .as_ref()
                     .map_or_else(|| "with no served project id".to_owned(), Uuid::to_string,)
             ),
+            "proposed" => println!(
+                "Decision     propose assignment to matter {} (lawyer confirms)",
+                view.decision
+                    .project_id
+                    .as_ref()
+                    .map_or_else(|| "with no served project id".to_owned(), Uuid::to_string,)
+            ),
             "left_in_inbox" => match view.decision.reason.as_deref() {
                 Some(reason) => println!("Decision     left in the inbox ({reason})"),
                 None => println!("Decision     left in the inbox"),

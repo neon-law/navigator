@@ -71,6 +71,7 @@ async fn fixture_on(db: SurrealDb, storage: Option<Arc<dyn StorageService>>) -> 
     let state = portal::test_support::app_state(db).await;
     let storage = storage.unwrap_or_else(|| state.storage.clone());
     let api_state = ApiState {
+        jev: None,
         surreal: state.surreal.clone(),
         email: state.email.clone(),
         bootstrap_owner_email: state.bootstrap_owner_email.clone(),

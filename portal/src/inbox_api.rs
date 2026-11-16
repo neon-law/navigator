@@ -12,11 +12,13 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use uuid::Uuid;
 
 use crate::api::{ApiError, ApiState, LawyerSession};
 use crate::inbound_email::classify_inbound_facts;
 use crate::session::SessionData;
+use typesafe::{JevAssigner, JevOutcome};
 
 fn map_inbox(error: store::inbox::InboxError) -> ApiError {
     match error {
@@ -506,10 +508,12 @@ pub(crate) struct AssignMatchView {
 /// thread, `status = 'open'` — feed the pure matcher. Entities carry no
 /// email field in the schema, so the candidate set is Persons today; when
 /// Entities gain email storage they join `ResolvedAddress` unchanged.
+/// Returns the candidate set too: it is the Jev question's header state
+/// when the model method takes the thread.
 async fn decide_assign_match(
     state: &ApiState,
     row: &store::inbox::UnprocessedRow,
-) -> Result<store::inbox::assign_match::MatchOutcome, ApiError> {
+) -> Result<(Vec<String>, store::inbox::assign_match::MatchOutcome), ApiError> {
     let stored_from = row.external_address.trim().to_owned();
     let mut candidates = vec![stored_from.clone()];
     if let Some(raw) = crate::nef_pipeline::raw_source(state, row).await? {
@@ -561,16 +565,219 @@ async fn decide_assign_match(
             open_projects,
         });
     }
-    Ok(store::inbox::assign_match::decide(&stored_from, &resolved))
+    Ok((
+        candidates,
+        store::inbox::assign_match::decide(&stored_from, &resolved),
+    ))
+}
+
+/// What the Jev method recorded for one thread — filled into the decision
+/// log's reserved fields when it ran. A gate refusal carries neither: the
+/// model never saw the thread, so the address-match reason stands and the
+/// fill alone marks the refusal in the audit trail.
+#[derive(Debug, Clone, PartialEq)]
+struct JevFill {
+    model_id: Option<String>,
+    probabilities: Option<serde_json::Value>,
+}
+
+/// The Choice question's instruction — the Firm's model of the decision,
+/// constant across threads; the rows live in the criteria.
+const JEV_INSTRUCTIONS: &str = "Assign this thread to the open project the legal matter it belongs to is proceeding on; choose none if it is not matter mail.";
+
+/// How many characters of the message body the below-threshold retry
+/// carries — the body is context, never the whole mailbox.
+const JEV_BODY_EXCERPT_CHARS: usize = 2_000;
+
+/// One Choice option per open Project — descriptions generated from the
+/// Navigator rows (code, name, description), never literals — plus the
+/// final `none` option. `None` when the Firm's open Projects exceed the
+/// wire's 255-option ceiling; that thread degrades to the inbox.
+fn choice_question(projects: &[store::inbox::ProjectChoice]) -> Option<typesafe::ChoiceQuestion> {
+    if projects.len() > 254 {
+        return None;
+    }
+    let mut criteria = BTreeMap::new();
+    for project in projects {
+        let description = match project.description.as_deref() {
+            Some(description) if !description.trim().is_empty() => {
+                format!("{} — {}", project.name, description.trim())
+            }
+            _ => project.name.clone(),
+        };
+        criteria.insert(project.id.to_string(), description);
+    }
+    criteria.insert(
+        typesafe::NONE_OPTION.to_owned(),
+        "Not associated with any open project".to_owned(),
+    );
+    Some(typesafe::ChoiceQuestion::new(
+        JEV_INSTRUCTIONS.to_owned(),
+        criteria,
+    ))
+}
+
+/// The thread's header state for a Jev question: the envelope candidates
+/// other than the stored From ride as `to`. The body excerpt joins only
+/// on the below-threshold retry.
+fn thread_state(
+    row: &store::inbox::UnprocessedRow,
+    candidates: &[String],
+    body: Option<String>,
+) -> typesafe::ThreadState {
+    let from = row.external_address.trim().to_owned();
+    typesafe::ThreadState {
+        to: candidates
+            .iter()
+            .filter(|address| !address.eq_ignore_ascii_case(&from))
+            .cloned()
+            .collect(),
+        cc: Vec::new(),
+        subject: row.subject.clone(),
+        date: Some(row.occurred_at.clone()),
+        attachments: Vec::new(),
+        body,
+        from,
+    }
+}
+
+/// The body excerpt a below-threshold retry sends: quoted history and the
+/// signature stripped, capped at the excerpt length. Char-boundary safe.
+fn body_excerpt(body: &str) -> String {
+    crate::email_threads::strip_quoted(body)
+        .chars()
+        .take(JEV_BODY_EXCERPT_CHARS)
+        .collect()
+}
+
+/// Map a chosen option id back onto the Project it named. An id that is
+/// not `none` and not a Project uuid this run offered is a model echo the
+/// bands refuse — it degrades exactly like a failed call, never guesses.
+fn chosen_project(chosen: &str) -> Option<Uuid> {
+    if chosen == typesafe::NONE_OPTION {
+        return None;
+    }
+    Uuid::parse_str(chosen).ok()
+}
+
+/// The Jev method (LAW-347): for a thread the address-match left
+/// unresolved and the LAW-346 gate opened, ask one TypeSafe Choice
+/// question — headers first, the short body excerpt only when the
+/// headers-only answer could not even propose — and band the answer:
+/// ≥ 0.9 assigns, 0.6–0.9 proposes for lawyer confirmation, anything
+/// else stays in the inbox. Every failure degrades to the inbox with the
+/// reason logged; a Jev outage can never fail a run or mis-assign.
+/// Returns the fill for the decision log's reserved fields, `None` when
+/// Jev never ran.
+async fn jev_step(
+    state: &ApiState,
+    row: &store::inbox::UnprocessedRow,
+    candidates: &[String],
+    outcome: &mut store::inbox::assign_match::MatchOutcome,
+) -> Result<Option<JevFill>, ApiError> {
+    if !matches!(
+        outcome,
+        store::inbox::assign_match::MatchOutcome::LeftInInbox { .. }
+    ) {
+        return Ok(None);
+    }
+    let Some(jev) = state.jev.as_ref() else {
+        // Gate closed: the address-match reason stands; the fill alone
+        // records that the model method was gated off.
+        return Ok(Some(JevFill {
+            model_id: None,
+            probabilities: Some(serde_json::json!({ "jev": "gate_closed" })),
+        }));
+    };
+    let projects = store::inbox::projects_in_firm(&state.surreal, row.firm_id)
+        .await
+        .map_err(map_inbox)?;
+    let Some(question) = choice_question(&projects) else {
+        *outcome = store::inbox::assign_match::MatchOutcome::LeftInInbox {
+            reason: store::inbox::assign_match::LeftReason::JevTooManyProjects,
+        };
+        return Ok(None);
+    };
+    // Headers first; the body excerpt joins only when the headers-only
+    // answer could not even propose. At most one retry: the second
+    // answer's band decides whatever it says.
+    let mut question_state = thread_state(row, candidates, None);
+    let mut body_used = false;
+    let answer = loop {
+        match jev.choose(&question, &question_state).await {
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    message = %row.id,
+                    "Jev assignment call failed; the thread stays in the inbox"
+                );
+                *outcome = store::inbox::assign_match::MatchOutcome::LeftInInbox {
+                    reason: store::inbox::assign_match::LeftReason::JevUnavailable,
+                };
+                return Ok(Some(JevFill {
+                    model_id: Some(typesafe::MODEL_ID.to_owned()),
+                    probabilities: Some(serde_json::json!({ "jev": "unavailable" })),
+                }));
+            }
+            Ok(answer) if !body_used && matches!(typesafe::band(&answer), JevOutcome::Leave(_)) => {
+                question_state.body = Some(body_excerpt(&row.body));
+                body_used = true;
+            }
+            Ok(answer) => break answer,
+        }
+    };
+    let banded = typesafe::band(&answer);
+    let project_id = chosen_project(&answer.choice);
+    let left = |reason| store::inbox::assign_match::MatchOutcome::LeftInInbox { reason };
+    let store_reason = |reason| match reason {
+        typesafe::LeaveReason::NoProbabilities => {
+            store::inbox::assign_match::LeftReason::JevNoProbabilities
+        }
+        typesafe::LeaveReason::NoneChosen => store::inbox::assign_match::LeftReason::JevNotMatter,
+        typesafe::LeaveReason::BelowThreshold => {
+            store::inbox::assign_match::LeftReason::JevBelowThreshold
+        }
+        typesafe::LeaveReason::TwoProjectTie => store::inbox::assign_match::LeftReason::JevTied,
+    };
+    *outcome = match banded {
+        JevOutcome::AutoAssign(_) => match project_id {
+            Some(project_id) => store::inbox::assign_match::MatchOutcome::Assigned { project_id },
+            // The model echoed an option this run never offered — the
+            // bands refuse it exactly like a failed call.
+            None => left(store::inbox::assign_match::LeftReason::JevUnavailable),
+        },
+        JevOutcome::Propose(_) => match project_id {
+            Some(project_id) => store::inbox::assign_match::MatchOutcome::Proposed { project_id },
+            None => left(store::inbox::assign_match::LeftReason::JevUnavailable),
+        },
+        JevOutcome::Leave(reason) => left(store_reason(reason)),
+    };
+    Ok(Some(JevFill {
+        model_id: Some(answer.model),
+        probabilities: Some(serde_json::json!({
+            "chosen": answer.choice,
+            "confidence": answer.confidence,
+            "body_used": body_used,
+            "probabilities": answer.probabilities,
+        })),
+    }))
 }
 
 /// Every decision — assigned or left — logs the method, the Project it
 /// matched (or none), and that an unmatched thread stayed in the inbox.
-/// The entry's `model_id` and `probabilities` fields stay `None` here:
-/// they belong to the TypeSafe/Jev method, which is unreachable until the
-/// LAW-346 zero-data-retention gate confirms, and ride this same shape.
-fn log_assign_decision(message: Uuid, outcome: &store::inbox::assign_match::MatchOutcome) {
-    let entry = outcome.decision_log(message);
+/// The Jev fill rides the reserved `model_id` and `probabilities` fields
+/// the shape already carries: a gate refusal marks them without replacing
+/// the address-match reason, and a Jev decision fills both.
+fn log_assign_decision(
+    message: Uuid,
+    outcome: &store::inbox::assign_match::MatchOutcome,
+    jev: Option<&JevFill>,
+) {
+    let mut entry = outcome.decision_log(message);
+    if let Some(fill) = jev {
+        entry.model_id.clone_from(&fill.model_id);
+        entry.probabilities.clone_from(&fill.probabilities);
+    }
     tracing::info!(
         decision = %serde_json::to_string(&entry).expect("a decision log always serializes"),
         "inbox assignment decision"
@@ -622,8 +829,9 @@ pub(crate) async fn assign_matches(
     };
     let mut views = Vec::new();
     for row in rows {
-        let outcome = decide_assign_match(&state, &row).await?;
-        log_assign_decision(row.id, &outcome);
+        let (candidates, mut outcome) = decide_assign_match(&state, &row).await?;
+        let jev_fill = jev_step(&state, &row, &candidates, &mut outcome).await?;
+        log_assign_decision(row.id, &outcome, jev_fill.as_ref());
         let applied =
             if let (true, store::inbox::assign_match::MatchOutcome::Assigned { project_id }) =
                 (request.apply, &outcome)

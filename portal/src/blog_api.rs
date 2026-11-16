@@ -780,6 +780,7 @@ mod tests {
             integration_providers: app.integration_providers,
             billing_provider: app.billing_provider.clone(),
             canonical_base_url: None,
+            jev: None,
         };
         let actor = SessionData {
             person_id: Some(admin.id),

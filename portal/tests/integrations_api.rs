@@ -84,6 +84,7 @@ async fn fixture_with_integrations(
     .expect("add the synthetic admin as a participant");
     let state = portal::test_support::app_state(db).await;
     let app = portal::api::routes().with_state(ApiState {
+        jev: None,
         surreal: state.surreal.clone(),
         email: state.email.clone(),
         bootstrap_owner_email: state.bootstrap_owner_email.clone(),

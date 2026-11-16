@@ -72,6 +72,7 @@ async fn designate(
 async fn api_router(surreal: store::surreal::SurrealDb) -> Router {
     let state = portal::test_support::app_state(surreal).await;
     portal::api::routes().with_state(ApiState {
+        jev: None,
         surreal: state.surreal.clone(),
         email: state.email.clone(),
         bootstrap_owner_email: state.bootstrap_owner_email.clone(),

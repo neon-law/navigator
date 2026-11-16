@@ -31,6 +31,7 @@ members = [
     "sandbox-skills",
     "ephemeris",
     "telemetry",
+    "typesafe",
     "word",
     "geotime",
 ]
@@ -215,6 +216,7 @@ model = { path = "model" }
 rules = { path = "rules" }
 project-scaffold = { path = "project-scaffold" }
 store = { path = "store" }
+typesafe = { path = "typesafe" }
 # SurrealDB, the store the workspace is porting onto (#1093). `store`
 # is its only consumer;
 # stay load-bearing until cutover. The crate default (`protocol-ws` +
