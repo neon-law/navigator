@@ -277,6 +277,50 @@ struct ImportMailbox<'a> {
     gmail: bool,
 }
 
+/// Stage each imported inbound Message for individual lawyer review.
+async fn ensure_gmail_review(
+    state: &ApiState,
+    firm_id: Uuid,
+    message_id: Uuid,
+) -> Result<(), ApiError> {
+    use store::inbox_triage::{self, NewInboxTriage, PrivilegeLabel, TriageDisposition};
+
+    let existing = || inbox_triage::find_for_message(&state.surreal, message_id);
+    if existing()
+        .await
+        .map_err(|error| inbox_error(&error))?
+        .is_some()
+    {
+        return Ok(());
+    }
+    let review = NewInboxTriage {
+        message_id,
+        firm_id,
+        suggested_project_id: None,
+        project_confidence: None,
+        privilege: PrivilegeLabel::Uncertain,
+        privilege_confidence: None,
+        rationale: None,
+        model_id: None,
+        prompt_version: inbox_triage::RULES_ONLY_PROMPT.into(),
+        raw_output: None,
+        disposition: TriageDisposition::NeedsHuman,
+        labeled_example: false,
+    };
+    if let Err(error) = inbox_triage::record(&state.surreal, &review).await {
+        // The Message index settles concurrent imports. Only a committed
+        // review makes a failed create equivalent to success.
+        if existing()
+            .await
+            .map_err(|error| inbox_error(&error))?
+            .is_none()
+        {
+            return Err(inbox_error(&error));
+        }
+    }
+    Ok(())
+}
+
 /// Walk every parsed message through the direction-aware postgres ingest,
 /// then idempotently file email attachments (AC4,
 /// AC8). The importing actor is the mailbox owner: their own rows (From
@@ -353,6 +397,10 @@ async fn import_all(
         store::inbox::link_message_assets(&state.surreal, firm_id, ingested.message_id, &links)
             .await
             .map_err(|error| inbox_error(&error))?;
+
+        if mailbox.gmail && direction == store::inbox::direction::INBOUND {
+            ensure_gmail_review(state, firm_id, ingested.message_id).await?;
+        }
 
         imported.push(ImportedMessage {
             message_id: ingested.message_id,
