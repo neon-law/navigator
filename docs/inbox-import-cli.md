@@ -55,9 +55,9 @@ hudson inbox import --source gmail --mailbox lawyer@example.test --file mail/exa
 ```
 
 Sign in as the lawyer with the verified mailbox. The server checks Firm membership and the canonical mailbox setting.
-Replay reuses the provider Message-ID. The server scans Gmail attachments and stages clean files in the Firm Inbox.
-Confirm each proposed Project filing in Navigator after import. The Gmail adapter rejects `--project`. Its dry run
-reports the operation and skips payload output and network access.
+Replay reuses the provider Message-ID. The server scans Gmail attachments and stages clean files in the Firm Inbox. Open
+Navigator's Inbox triage queue to select a Project and confirm each filing. The Gmail adapter rejects `--project`. Its
+dry run reports the operation and skips payload output and network access.
 
 ## Server requirements
 

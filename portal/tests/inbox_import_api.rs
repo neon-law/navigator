@@ -782,6 +782,7 @@ async fn assert_gmail_import_lifecycle(
         .parse::<Uuid>()
         .unwrap();
     assert_eq!(first["imported"][0]["deduped"], false);
+    let review_id = assert_waiting_gmail_review(fixture, firm_id, message_id).await;
     let (status, replay) = post_json(&app, Some(&fixture.lawyer_session), body).await;
     assert_eq!(status, 201, "{replay}");
     assert_eq!(
@@ -792,6 +793,10 @@ async fn assert_gmail_import_lifecycle(
     assert_eq!(
         replay["imported"][0]["attachments"],
         first["imported"][0]["attachments"]
+    );
+    assert_eq!(
+        assert_waiting_gmail_review(fixture, firm_id, message_id).await,
+        review_id
     );
     assert_eq!(scanner.calls(), 2);
     let links = store::inbox::message_assets(&fixture.surreal, firm_id, message_id)
@@ -813,6 +818,26 @@ async fn assert_gmail_import_lifecycle(
     .await
     .unwrap();
     assert_eq!(scope, (firm_id, MAILBOX.into(), Some("email".into()), None));
+}
+
+async fn assert_waiting_gmail_review(fixture: &Fixture, firm_id: Uuid, message_id: Uuid) -> Uuid {
+    let review = store::inbox_triage::find_for_message(&fixture.surreal, message_id)
+        .await
+        .unwrap()
+        .expect("a Gmail import creates a lawyer review");
+    assert_eq!(review.firm_id, firm_id);
+    assert_eq!(
+        review.disposition,
+        store::inbox_triage::TriageDisposition::NeedsHuman
+    );
+    assert_eq!(
+        review.privilege,
+        store::inbox_triage::PrivilegeLabel::Uncertain
+    );
+    assert!(review.suggested_project_id.is_none());
+    assert!(review.model_id.is_none());
+
+    review.id
 }
 
 fn with_import_scanner(
