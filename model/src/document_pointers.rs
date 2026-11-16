@@ -11,6 +11,35 @@ use chrono::{DateTime, FixedOffset};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// Whether a Docket Filings document is linked to one numbered Docket Entry.
+///
+/// Derived from the entry's document link. `Unresolved` stores nothing and
+/// invents no entry number: the filed classification, bytes, visibility, and
+/// provenance stay as they are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DocketLink {
+    /// No Docket Entry links the document.
+    Unresolved,
+    /// One numbered entry links it, and the filename is that entry's DKT name.
+    Verified,
+    /// A linked entry's DKT name disagrees, or more than one entry links it.
+    Disagrees,
+}
+
+impl DocketLink {
+    /// The integrity value. The Project gate accepts [`Self::Unresolved`] and
+    /// requires a DKT name for every other value.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unresolved => "unresolved",
+            Self::Verified => "verified",
+            Self::Disagrees => "disagrees",
+        }
+    }
+}
+
 /// One committed declaration of a Project document's current revision.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -545,6 +574,17 @@ impl DocumentPointer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn docket_link_names_match_the_integrity_values() {
+        for link in [
+            DocketLink::Unresolved,
+            DocketLink::Verified,
+            DocketLink::Disagrees,
+        ] {
+            assert_eq!(serde_json::json!(link.as_str()), serde_json::json!(link));
+        }
+    }
 
     fn pointer() -> DocumentPointer {
         DocumentPointer {

@@ -91,6 +91,15 @@ pub fn manifest(filings: &[Filing], entries: &[Value]) -> Vec<Row> {
     rows
 }
 
+/// A live row passes the name check when its one numbered entry supplies the
+/// filename, or when no entry links it yet. A disagreement stays a failure.
+fn name_check_accepts(row: &Value, slug: &str) -> bool {
+    row["slug"].as_str() == Some(slug)
+        && (row["docket_name_matches"].as_bool() == Some(true)
+            || row["docket_link"].as_str()
+                == Some(model::document_pointers::DocketLink::Unresolved.as_str()))
+}
+
 /// Refuse a filing whose linked court entry does not supply its exact name.
 pub fn validate_filing(slug: &str, asset_id: &str, entries: &[Value]) -> Result<()> {
     let matches: Vec<_> = entries
@@ -110,7 +119,7 @@ pub fn validate_filing(slug: &str, asset_id: &str, entries: &[Value]) -> Result<
         row["matter_folder"].as_str().is_none_or(|folder| folder == MatterFolder::DocketFilings.as_str()),
         "{slug}: the live document is outside Docket Filings; reconcile its Matter Folder with project sync"
     );
-    anyhow::ensure!(row["slug"].as_str() == Some(slug) && row["docket_name_matches"].as_bool() == Some(true),
+    anyhow::ensure!(name_check_accepts(row, slug),
         "{slug}: linked Docket Entry naming is missing or disagrees; run navigator project docket renumber --apply");
     Ok(())
 }
@@ -161,10 +170,7 @@ pub fn validate_checkout(root: &Path, entries: &[Value]) -> Result<()> {
             let slug = crate::document_sync::slash_path(relative)?;
             let matches = entries
                 .iter()
-                .filter(|entry| {
-                    entry["slug"].as_str() == Some(slug.as_str())
-                        && entry["docket_name_matches"].as_bool() == Some(true)
-                })
+                .filter(|entry| name_check_accepts(entry, slug.as_str()))
                 .count();
             anyhow::ensure!(
                 matches == 1,
@@ -618,6 +624,33 @@ mod tests {
         )
         .unwrap();
         assert!(validate_checkout(dir.path(), &rows).is_err());
+    }
+
+    #[test]
+    fn an_unresolved_docket_link_keeps_the_filed_name_and_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("documents/Docket Filings");
+        std::fs::create_dir_all(&folder).unwrap();
+        let bytes = b"original bytes";
+        std::fs::write(folder.join("receipt.pdf"), bytes).unwrap();
+        let unresolved = json!({
+            "asset_id": "a",
+            "slug": "receipt.pdf",
+            "docket_name_matches": false,
+            "docket_link": "unresolved"
+        });
+        assert!(validate_checkout(dir.path(), std::slice::from_ref(&unresolved)).is_ok());
+        assert!(validate_filing("receipt.pdf", "a", std::slice::from_ref(&unresolved)).is_ok());
+        assert_eq!(std::fs::read(folder.join("receipt.pdf")).unwrap(), bytes);
+        let disagrees = json!({
+            "asset_id": "a",
+            "slug": "receipt.pdf",
+            "docket_name_matches": false,
+            "docket_link": "disagrees"
+        });
+        assert!(validate_checkout(dir.path(), std::slice::from_ref(&disagrees)).is_err());
+        assert!(validate_filing("receipt.pdf", "a", std::slice::from_ref(&disagrees)).is_err());
+        assert_eq!(std::fs::read(folder.join("receipt.pdf")).unwrap(), bytes);
     }
 
     #[test]
