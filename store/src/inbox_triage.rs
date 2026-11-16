@@ -755,6 +755,95 @@ fn require_open(row: &InboxTriage) -> Result<(), InboxError> {
     }
 }
 
+/// Record a Project choice made in the Inbox review queue. Email choices
+/// leave each Message available for its own explicit filing approval.
+///
+/// # Errors
+///
+/// Returns an error when the review or Project is out of scope, stale, or invalid.
+pub async fn review_queue_project(
+    db: &SurrealDb,
+    actor_id: Uuid,
+    triage_id: Uuid,
+    project_id: Uuid,
+    correction: Option<&str>,
+) -> Result<InboxTriage, InboxError> {
+    let row = find_by_id(db, triage_id)
+        .await?
+        .ok_or(InboxError::NotFound)?;
+    let conversation = crate::inbox::conversation_by_id(db, row_conversation_id(db, &row).await?)
+        .await?
+        .ok_or(InboxError::NotFound)?;
+    if conversation.channel != crate::inbox::channel::EMAIL {
+        return match correction {
+            Some(rationale) => {
+                override_project(db, actor_id, triage_id, project_id, rationale).await
+            }
+            None => confirm_project(db, actor_id, triage_id, project_id).await,
+        };
+    }
+    review_email_project(db, actor_id, &row, &conversation, project_id, correction).await
+}
+
+async fn review_email_project(
+    db: &SurrealDb,
+    actor_id: Uuid,
+    row: &InboxTriage,
+    conversation: &crate::inbox::Conversation,
+    project_id: Uuid,
+    correction: Option<&str>,
+) -> Result<InboxTriage, InboxError> {
+    require_open(row)?;
+    crate::inbox::require_triage_reviewer(db, actor_id, project_id).await?;
+    let project = crate::projects::find_by_id(db, project_id)
+        .await?
+        .filter(|project| project.status == "open")
+        .ok_or(InboxError::NotFound)?;
+    if project.firm_id != Some(row.firm_id) || conversation.firm_id != row.firm_id {
+        return Err(InboxError::CrossFirm);
+    }
+    if conversation.trashed_at.is_some()
+        || conversation
+            .brand_key
+            .as_deref()
+            .is_some_and(|brand| brand != project.brand)
+        || conversation
+            .project_id
+            .is_some_and(|assigned| assigned != project.id)
+    {
+        return Err(InboxError::NotFound);
+    }
+    let Some(rationale) = correction else {
+        return if row.suggested_project_id == Some(project.id) {
+            Ok(row.clone())
+        } else {
+            Err(InboxError::Invalid(
+                "choose the current Project proposal or enter a correction".into(),
+            ))
+        };
+    };
+    let rationale = rationale.trim();
+    if rationale.is_empty() {
+        return Err(InboxError::Invalid(
+            "a correction carries a rationale".into(),
+        ));
+    }
+    write_review_decision(
+        db,
+        row.id,
+        ReviewDecision {
+            privilege: row.privilege,
+            privilege_confidence: row.privilege_confidence,
+            suggested_project_id: Some(project.id),
+            project_confidence: None,
+            rationale: Some(format!("human override: {rationale}")),
+            disposition: TriageDisposition::NeedsHuman,
+            labeled_example: true,
+        },
+    )
+    .await
+}
+
 /// A person confirms the suggested Project: the conversation is attributed
 /// to it through the participation-checked assignment door, and the row's
 /// disposition records the confirmation. Confirm assigns the suggested

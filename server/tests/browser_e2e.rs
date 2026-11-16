@@ -3171,6 +3171,7 @@ async fn a_client_is_refused_the_clause_library() {
 async fn seed_inbox_walkthrough(
     db: &store::surreal::SurrealDb,
     provider_account: &str,
+    channel: &str,
 ) -> store::inbox::IngestedInbound {
     let firm = store::firms::firm_id_for_brand_key(db, "neon")
         .await
@@ -3187,16 +3188,20 @@ async fn seed_inbox_walkthrough(
             provider_post_id: None,
             parent_provider_message_id: None,
             visibility: Some("private"),
-            channel: "sms",
+            channel,
             provider_account,
             provider_message_id: &Uuid::now_v7().to_string(),
             provider_thread_ref: None,
-            external_address: "synthetic-sender",
+            external_address: if channel == store::inbox::channel::EMAIL {
+                "synthetic-sender@example.test"
+            } else {
+                "synthetic-sender"
+            },
             external_name: None,
             subject: Some("Synthetic Inbox walkthrough"),
             body: "Synthetic inquiry for the browser walkthrough.",
             source_page: None,
-            source_channel: Some("sms"),
+            source_channel: Some(channel),
             matter_consent: false,
             promotional_opt_in: false,
             email_conversation_id: None,
@@ -3233,6 +3238,41 @@ async fn activate_inbox_link(c: &Client, selector: &str) {
     )
     .await
     .unwrap();
+}
+
+#[tokio::test]
+async fn email_review_exposes_a_project_proposal_without_a_conversation_assignment() {
+    let Some(c) = new_client_or_skip().await else {
+        return;
+    };
+    login_as_lawyer(&c).await;
+    let db = store::surreal::connect_from_env().await.unwrap();
+    let (project_id, review_id) = seed_inbox_filing_review(&db).await;
+    c.goto(&format!("{}/app/inbox/triage", base_url()))
+        .await
+        .unwrap();
+    let proposal = format!("#triage-row-{review_id} form[action$='/override'] button");
+    c.wait()
+        .at_most(Duration::from_secs(10))
+        .for_element(Locator::Css(&proposal))
+        .await
+        .unwrap();
+    let confirm = format!("#triage-row-{review_id} form[action*='/confirm/']");
+    assert!(c.find_all(Locator::Css(&confirm)).await.unwrap().is_empty());
+    assert_eq!(
+        c.find(Locator::Css(&proposal))
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap(),
+        "Update Project proposal"
+    );
+    assert!(store::communications::for_project(&db, project_id)
+        .await
+        .unwrap()
+        .is_empty());
+    c.close().await.unwrap();
 }
 
 #[tokio::test]
@@ -3331,7 +3371,8 @@ async fn seed_inbox_filing_review(db: &store::surreal::SurrealDb) -> (Uuid, Uuid
     store::projects::add_participation(db, project.id, lawyer.id, "lawyer")
         .await
         .unwrap();
-    let saved = seed_inbox_walkthrough(db, "synthetic-filing-account").await;
+    let saved =
+        seed_inbox_walkthrough(db, "synthetic-filing-account", store::inbox::channel::EMAIL).await;
     let review = store::inbox_triage::record(
         db,
         &NewInboxTriage {
@@ -3362,7 +3403,12 @@ async fn lawyer_workbench_card_opens_the_unified_inbox() {
     };
     login_as_lawyer(&c).await;
     let db = store::surreal::connect_from_env().await.unwrap();
-    let saved = seed_inbox_walkthrough(&db, "synthetic-receiving-account").await;
+    let saved = seed_inbox_walkthrough(
+        &db,
+        "synthetic-receiving-account",
+        store::inbox::channel::SMS,
+    )
+    .await;
     c.goto(&format!("{}/app/lawyers", base_url()))
         .await
         .unwrap();
