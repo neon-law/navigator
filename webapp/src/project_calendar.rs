@@ -1,5 +1,5 @@
 //! The project calendar — the dated view of matter appearances, shared by the
-//! lawyer workbench (`/app/lawyer`, across every matter the caller can see) and
+//! lawyer workbench (`/app/lawyer`, across the caller's visible open matters) and
 //! the matter workbench (`/app/projects/{code}`, scoped to one).
 //!
 //! Rows come from docket appearances: a hearing or trial's current
@@ -14,9 +14,8 @@ use serde::{Deserialize, Serialize};
 /// One sortable column: its `?sort=` key and its header label.
 pub type CalendarColumn = (&'static str, &'static str);
 
-/// The lawyer workbench's columns, in render order. Every visible matter shares
-/// one calendar there, so an event is identified by the matter and the entity
-/// it belongs to.
+/// The lawyer workbench's columns, in render order. Visible open matters share
+/// one calendar, so each row identifies the matter and its entity.
 pub const WORKBENCH_COLUMNS: &[CalendarColumn] = &[
     ("date", "Date"),
     ("project", "Project"),

@@ -432,7 +432,7 @@ async fn current_states_for_projects(
         .collect())
 }
 
-/// Appearances on the caller's visible matters, labelled with project and
+/// Appearances on the caller's visible open matters, labelled with project and
 /// entity names. A query failure is a 500 — an empty calendar is only honest
 /// when the store answered.
 #[cfg(feature = "server")]
@@ -440,7 +440,11 @@ async fn calendar_events_for_projects(
     surreal: &store::surreal::SurrealDb,
     projects: &[store::projects::Project],
 ) -> Result<Vec<crate::project_calendar::CalendarEvent>, ServerFnError> {
-    let project_ids: Vec<uuid::Uuid> = projects.iter().map(|project| project.id).collect();
+    let project_ids: Vec<uuid::Uuid> = projects
+        .iter()
+        .filter(|project| project.status == "open")
+        .map(|project| project.id)
+        .collect();
     let appearances = store::cases::current_appearances_for_projects(surreal, &project_ids)
         .await
         .map_err(|e| {

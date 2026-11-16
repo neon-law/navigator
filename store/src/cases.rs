@@ -1037,6 +1037,26 @@ fn is_appearance_kind(kind: &str) -> bool {
     matches!(kind, "hearing" | "trial")
 }
 
+impl DocketEntry {
+    /// Whether this entry records a hearing or trial.
+    #[must_use]
+    pub fn is_appearance(&self) -> bool {
+        is_appearance_kind(&self.kind)
+    }
+}
+
+/// Docket entries for a calendar view, keeping only the latest entry on
+/// each continuance chain. Pass the complete docket so each replacement is visible.
+pub fn calendar_docket_entries(entries: &[DocketEntry]) -> impl Iterator<Item = &DocketEntry> {
+    let superseded: HashSet<Uuid> = entries
+        .iter()
+        .filter_map(|entry| entry.supersedes)
+        .collect();
+    entries
+        .iter()
+        .filter(move |entry| !entry.is_appearance() || !superseded.contains(&entry.id))
+}
+
 fn appearance_from_entry(entry: &DocketEntry, project_id: Uuid) -> Option<Appearance> {
     Some(Appearance {
         id: entry.id,
@@ -1060,15 +1080,9 @@ pub async fn current_appearances_for_case(
     project_id: Uuid,
 ) -> Result<Vec<Appearance>, CaseError> {
     let entries = docket(db, case_id).await?;
-    let superseded: HashSet<Uuid> = entries
-        .iter()
-        .filter_map(|entry| entry.supersedes)
-        .collect();
     let now = Utc::now();
-    let mut appearances: Vec<Appearance> = entries
-        .iter()
-        .filter(|entry| is_appearance_kind(&entry.kind))
-        .filter(|entry| !superseded.contains(&entry.id))
+    let mut appearances: Vec<Appearance> = calendar_docket_entries(&entries)
+        .filter(|entry| entry.is_appearance())
         .filter(|entry| entry.scheduled_on.is_some_and(|when| when >= now))
         .filter_map(|entry| appearance_from_entry(entry, project_id))
         .collect();
