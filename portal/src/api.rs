@@ -4496,7 +4496,6 @@ async fn adopt_envelope(
     JsonOrForm(input): JsonOrForm<AdoptEnvelopeRequest>,
 ) -> Result<Response, ApiError> {
     use crate::signature_adoption::{internal, lock, reconcile, validate};
-    use store::signatures::SignatureProvider::DocuSign;
 
     if !participates_as_firm(&state, &lawyer, id).await {
         return Err(ApiError::NotFound);
@@ -4534,67 +4533,13 @@ async fn adopt_envelope(
         ));
     }
 
-    let envelope_key = input.envelope_id.to_string();
-    let linked = store::signatures::by_provider(db, DocuSign, &envelope_key)
-        .await
-        .map_err(internal)?;
-    if let Some(signature) = &linked {
-        let notation = store::notations::find_by_id(db, signature.notation_id)
-            .await?
-            .filter(|notation| notation.project_id == id && notation.person_id == client);
-        if notation.is_none()
-            || crate::signature_adoption::evidence(state.storage.as_ref(), signature.notation_id)
-                .await?
-                .is_none()
-        {
-            return Err(ApiError::EnvelopeAdoption(
-                "This envelope is already linked to another Notation",
-            ));
-        }
-    }
-
-    let draft = store::template_source::persist_contents(
-        db,
-        &state.storage,
-        id,
-        &input.template_code,
-        input.source,
-        input.commit_sha,
-    )
-    .await
-    .map_err(|_| ApiError::EnvelopeAdoption("The Project Draft could not be saved"))?;
-    let notation = if let Some(signature) = linked {
-        store::notations::find_by_id(db, signature.notation_id)
-            .await?
-            .filter(|notation| notation.template_id == draft.template.id)
-            .ok_or(ApiError::EnvelopeAdoption(
-                "This envelope is already linked to another Draft version",
-            ))?
-    } else if let Some(existing) =
-        store::notations::find_by_project_template_person(db, id, draft.template.id, client).await?
-    {
-        if store::signatures::latest_for_notation(db, existing.id)
-            .await
-            .map_err(internal)?
-            .is_some()
-        {
-            return Err(ApiError::EnvelopeAdoption(
-                "This Notation already has a Signature",
-            ));
-        }
-        existing
-    } else {
-        let new = store::notations::NewNotation::new(draft.template.id, client, id, "END")
-            .with_entity(project.entity_id);
-        store::notations::create(db, &new).await?
-    };
-
+    let envelope_id = input.envelope_id;
+    let notation = resolve_adoption_notation(&state, &project, client, input).await?;
     reconcile(
         db,
         &state.storage,
         state.signature_provider.as_ref(),
         notation.id,
-        input.envelope_id,
         &envelope,
     )
     .await?;
@@ -4603,7 +4548,7 @@ async fn adopt_envelope(
         // Check again after registration so completion cannot fall into that gap.
         let latest = state
             .signature_provider
-            .read_external_envelope(input.envelope_id)
+            .read_external_envelope(envelope_id)
             .await
             .map_err(internal)?;
         reconcile(
@@ -4611,7 +4556,6 @@ async fn adopt_envelope(
             &state.storage,
             state.signature_provider.as_ref(),
             notation.id,
-            input.envelope_id,
             &latest,
         )
         .await?;
@@ -4623,6 +4567,78 @@ async fn adopt_envelope(
         "envelope": envelope,
     }))
     .into_response())
+}
+
+async fn resolve_adoption_notation(
+    state: &ApiState,
+    project: &store::projects::Project,
+    client: Uuid,
+    input: AdoptEnvelopeRequest,
+) -> Result<store::notations::Notation, ApiError> {
+    use crate::signature_adoption::internal;
+    use store::signatures::SignatureProvider::DocuSign;
+
+    let db = &state.surreal;
+    let id = project.id;
+    let envelope_key = input.envelope_id.to_string();
+    let linked = store::signatures::by_provider(db, DocuSign, &envelope_key)
+        .await
+        .map_err(internal)?;
+    let linked_notation = if let Some(signature) = linked {
+        let notation = store::notations::find_by_id(db, signature.notation_id)
+            .await?
+            .filter(|notation| notation.project_id == id && notation.person_id == client)
+            .ok_or(ApiError::EnvelopeAdoption(
+                "This envelope is already linked to another Notation",
+            ))?;
+        if crate::signature_adoption::evidence(state.storage.as_ref(), notation.id)
+            .await?
+            .is_none_or(|evidence| evidence.envelope_id != input.envelope_id)
+        {
+            return Err(ApiError::EnvelopeAdoption(
+                "This envelope is already linked to another Notation",
+            ));
+        }
+        Some(notation)
+    } else {
+        None
+    };
+
+    let draft = store::template_source::persist_contents(
+        db,
+        &state.storage,
+        id,
+        &input.template_code,
+        input.source,
+        input.commit_sha,
+    )
+    .await
+    .map_err(|_| ApiError::EnvelopeAdoption("The Project Draft could not be saved"))?;
+    if let Some(notation) = linked_notation {
+        if notation.template_id != draft.template.id {
+            return Err(ApiError::EnvelopeAdoption(
+                "This envelope is already linked to another Draft version",
+            ));
+        }
+        return Ok(notation);
+    }
+    if let Some(existing) =
+        store::notations::find_by_project_template_person(db, id, draft.template.id, client).await?
+    {
+        if store::signatures::latest_for_notation(db, existing.id)
+            .await
+            .map_err(internal)?
+            .is_some()
+        {
+            return Err(ApiError::EnvelopeAdoption(
+                "This Notation already has a Signature",
+            ));
+        }
+        return Ok(existing);
+    }
+    let new = store::notations::NewNotation::new(draft.template.id, client, id, "END")
+        .with_entity(project.entity_id);
+    Ok(store::notations::create(db, &new).await?)
 }
 
 /// Request body for `POST /app/api/notations/{id}/answers` — answer the

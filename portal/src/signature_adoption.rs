@@ -36,9 +36,9 @@ pub(crate) async fn reconcile(
     storage: &Arc<dyn StorageService>,
     provider: &dyn SignatureProvider,
     notation_id: Uuid,
-    envelope_id: Uuid,
     envelope: &ExternalEnvelope,
 ) -> Result<(), ApiError> {
+    let envelope_id = envelope.envelope_id;
     let request = SignatureRequestId(envelope_id.to_string());
     validate(envelope)?;
     let completed = envelope

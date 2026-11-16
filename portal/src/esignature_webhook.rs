@@ -253,14 +253,16 @@ pub async fn webhook(
 
     // Map the terminal envelope events to workflow conditions. A
     // completion executes the retainer; a decline/void ends the wait
-    // without an engagement. Everything else (sent / delivered /
-    // viewed / …) is acked so the provider stops retrying, but does not
-    // advance state.
+    // without an engagement. Progress deliveries update signer evidence.
     if let Some(recipient_id) = payload.completed_recipient() {
-        record_recipient_completion(&state, &payload.data.envelope_id, recipient_id).await?;
+        record_progress(&state, &payload.data.envelope_id, Some(recipient_id)).await?;
         return Ok(StatusCode::OK);
     }
     let Some(terminal_state) = payload.terminal_state() else {
+        if payload.event.as_deref() == Some("envelope-delivered") {
+            record_progress(&state, &payload.data.envelope_id, None).await?;
+            return Ok(StatusCode::OK);
+        }
         tracing::info!(
             envelope_id = %payload.data.envelope_id,
             event = ?payload.event,
@@ -268,12 +270,9 @@ pub async fn webhook(
         );
         return Ok(StatusCode::OK);
     };
-    // Resolve the envelope to its signature row first, unchanged: an
-    // unknown envelope id is a logged 200 no-op. This happens BEFORE the
-    // journal write on purpose — a receipt for an envelope the signature
-    // table has never named cannot be replayed (correlation is the
-    // signature row), so journaling it would be an unrecoverable row.
-    // A terminal event cannot precede the send that records that row.
+    // Correlate the envelope before journaling the receipt. Replay needs
+    // the Signature row to identify the Notation. The adoption command
+    // rechecks DocuSign after registration to cover earlier deliveries.
     let signature_provider = store::signatures::SignatureProvider::DocuSign;
     let Some(signature) = store::signatures::by_provider(
         &state.surreal,
@@ -387,37 +386,8 @@ async fn consume_receipt(
     let envelope_id = &signature.provider_id;
     let notation_id = signature.notation_id;
 
-    let adoption = crate::signature_adoption::evidence(state.storage.as_ref(), notation_id)
-        .await
-        .map_err(|_| ConsumeFailure("reading adopted envelope evidence".into()))?;
-    if let Some(adoption) = adoption {
-        let lane = crate::signature_adoption::lock()
-            .await
-            .map_err(|_| ConsumeFailure("opening adopted envelope lane".into()))?;
-        let envelope = state
-            .signature_provider
-            .read_external_envelope(adoption.envelope_id)
-            .await
-            .map_err(|e| ConsumeFailure(e.to_string()))?;
-        if envelope.status != terminal_state.as_str() {
-            return Err(ConsumeFailure(
-                "DocuSign has not confirmed the terminal event".into(),
-            ));
-        }
-        crate::signature_adoption::reconcile(
-            &state.surreal,
-            &state.storage,
-            state.signature_provider.as_ref(),
-            notation_id,
-            adoption.envelope_id,
-            &envelope,
-        )
-        .await
-        .map_err(|_| ConsumeFailure("reconciling adopted envelope".into()))?;
-        return lane
-            .commit()
-            .await
-            .map_err(|e| ConsumeFailure(e.to_string()));
+    if refresh_adoption(state, notation_id, Some(terminal_state)).await? {
+        return Ok(());
     }
 
     // Phase 1: the workflow wait, when the signature row still reads
@@ -510,6 +480,46 @@ async fn consume_receipt(
             .map_err(|e| ConsumeFailure(format!("archiving completed documents: {e}")))?;
     }
     Ok(())
+}
+
+async fn refresh_adoption(
+    state: &crate::AppState,
+    notation_id: uuid::Uuid,
+    terminal_state: Option<store::signatures::SignatureState>,
+) -> Result<bool, ConsumeFailure> {
+    let adoption = crate::signature_adoption::evidence(state.storage.as_ref(), notation_id)
+        .await
+        .map_err(|_| ConsumeFailure("reading adopted envelope evidence".into()))?;
+    if let Some(adoption) = adoption {
+        let lane = crate::signature_adoption::lock()
+            .await
+            .map_err(|_| ConsumeFailure("opening adopted envelope lane".into()))?;
+        let envelope = state
+            .signature_provider
+            .read_external_envelope(adoption.envelope_id)
+            .await
+            .map_err(|e| ConsumeFailure(e.to_string()))?;
+        if terminal_state.is_some_and(|expected| envelope.status != expected.as_str()) {
+            return Err(ConsumeFailure(
+                "DocuSign has not confirmed the terminal event".into(),
+            ));
+        }
+        crate::signature_adoption::reconcile(
+            &state.surreal,
+            &state.storage,
+            state.signature_provider.as_ref(),
+            notation_id,
+            &envelope,
+        )
+        .await
+        .map_err(|_| ConsumeFailure("reconciling adopted envelope".into()))?;
+        lane.commit()
+            .await
+            .map_err(|e| ConsumeFailure(e.to_string()))?;
+        return Ok(true);
+    }
+
+    Ok(false)
 }
 
 /// The boot-time replay sweep: drain the journal's pending receipts,
@@ -674,16 +684,12 @@ async fn record_replay_failure(
     }
 }
 
-/// Record which declared signer role finished its own step on a live
-/// envelope. The recipient id is the routing order the manifest sent, read
-/// back against the notation's template signer set
-/// ([`crate::retainer_walk::signer_role_for_recipient`]). An unknown
-/// envelope, a missing notation or template, or an id that names no
-/// declared role is a logged no-op, like every other unmatched callback.
-async fn record_recipient_completion(
+/// Refresh adopted envelope evidence or record the declared signer role
+/// that completed its step on an envelope sent by Navigator.
+async fn record_progress(
     state: &crate::AppState,
     envelope_id: &str,
-    recipient_id: &str,
+    recipient_id: Option<&str>,
 ) -> Result<(), WebhookError> {
     let provider = store::signatures::SignatureProvider::DocuSign;
     let db = |e: &dyn std::fmt::Display| WebhookError::Database(e.to_string());
@@ -692,6 +698,15 @@ async fn record_recipient_completion(
         .map_err(|e| db(&e))?
     else {
         tracing::warn!(%envelope_id, "esignature webhook: no signature for envelope id");
+        return Ok(());
+    };
+    if refresh_adoption(state, signature.notation_id, None)
+        .await
+        .map_err(|error| WebhookError::Runtime(error.to_string()))?
+    {
+        return Ok(());
+    }
+    let Some(recipient_id) = recipient_id else {
         return Ok(());
     };
     let Some(notation) = store::notations::find_by_id(&state.surreal, signature.notation_id)
