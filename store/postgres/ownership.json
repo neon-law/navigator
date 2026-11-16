@@ -357,6 +357,13 @@
     "target_only": true,
     "through": "firm_id; issued by actual-byte ingest or canonical Source attachment relation while Source-authoritative"
   },
+  "inbox_attachment_filing": {
+    "migration_slice": "communications-storage",
+    "parity_scenario": "One authorized Inbox Message Asset filing persists through a worker outage and retries against the same Project",
+    "scope": "project",
+    "target_only": true,
+    "through": "project_id and the source Message's Firm"
+  },
   "inbox_conversation": {
     "migration_slice": "communications-storage",
     "parity_scenario": "same-Firm assignment; Project reassignment history; participation revocation; internal visibility",

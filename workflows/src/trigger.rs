@@ -593,6 +593,21 @@ pub async fn start_dbos_sandbox_credit_reset(
 }
 
 pub const INBOUND_TRIAGE_DBOS_ENABLED_ENV: &str = "NAVIGATOR_DBOS_INBOUND_TRIAGE_ENABLED";
+/// Opt-in for explicitly approved Inbox attachment filings.
+pub const INBOX_ATTACHMENT_FILING_DBOS_ENABLED_ENV: &str =
+    "NAVIGATOR_DBOS_INBOX_ATTACHMENT_FILING_ENABLED";
+
+/// Read the shared Portal and worker attachment-filing switch.
+#[must_use]
+pub fn inbox_attachment_filing_enabled() -> bool {
+    crate::flags::flag_enabled(
+        INBOX_ATTACHMENT_FILING_DBOS_ENABLED_ENV,
+        std::env::var(INBOX_ATTACHMENT_FILING_DBOS_ENABLED_ENV)
+            .ok()
+            .as_deref(),
+    )
+    .unwrap_or(false)
+}
 
 /// Queue a reviewed Inbox filing on the DBOS lane.
 pub async fn start_approved_inbox_filing(

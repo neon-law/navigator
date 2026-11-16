@@ -60,6 +60,7 @@ async fn inbound_triage_preserves_replay_and_confines_classifier_evidence() {
     let Some(db) = database().await else {
         return;
     };
+    let _attachment_filing_store = db.store().await;
     let surreal = store::test_support::mem_surreal().await;
     let firm_id = store::test_support::seed_firm_with_brand(&surreal, "neon").await;
     let message_id = seed_message(&surreal, firm_id, "triage-replay").await;
@@ -210,6 +211,100 @@ async fn assert_approved_filing(
             .await
             .unwrap()
             .is_empty()
+    );
+    assert_attachment_filing_requires_its_exact_approval(surreal, firm_id, approval).await;
+}
+
+async fn assert_attachment_filing_requires_its_exact_approval(
+    db: &SurrealDb,
+    firm_id: Uuid,
+    filing: store::inbox_triage::FilingApproval,
+) {
+    use cloud::attachment_scanner::{AttachmentScanner, ScanError, ScanVerdict};
+    use store::inbox_triage::AttachmentFilingApproval;
+    use workflows_service::inbox_attachment_filing::{
+        file_approved_attachment, AttachmentFilingError,
+    };
+
+    struct Scanner(ScanVerdict);
+    #[async_trait::async_trait]
+    impl AttachmentScanner for Scanner {
+        async fn scan(&self, _: &[u8]) -> Result<ScanVerdict, ScanError> {
+            Ok(self.0.clone())
+        }
+    }
+
+    let directory = tempfile::tempdir().unwrap();
+    let storage: Arc<dyn cloud::StorageService> =
+        Arc::new(cloud::FsStorage::new(directory.path()).await.unwrap());
+    let bytes = b"synthetic attachment";
+    let asset_id = store::assets::ingest_content(db, &storage, bytes, "text/plain")
+        .await
+        .unwrap();
+    store::inbox::link_message_assets(
+        db,
+        firm_id,
+        filing.message_id,
+        &[store::inbox::IngestAttachment {
+            asset_id,
+            filename: "fixture.txt".into(),
+            sha256: store::documents::sha256_hex(bytes),
+        }],
+    )
+    .await
+    .unwrap();
+    let link = store::inbox::message_assets(db, firm_id, filing.message_id)
+        .await
+        .unwrap()
+        .remove(0);
+    let approval = AttachmentFilingApproval {
+        filing,
+        attachment_asset_id: asset_id,
+        attachment_position: link.position,
+        kind: "letter".into(),
+    };
+    let wrong = AttachmentFilingApproval {
+        attachment_position: link.position + 10,
+        ..approval.clone()
+    };
+    let clean = Scanner(ScanVerdict::Clean);
+    assert!(matches!(
+        file_approved_attachment(db, &storage, &clean, &wrong).await,
+        Err(AttachmentFilingError::ApprovalExpired),
+    ));
+    let malicious = Scanner(ScanVerdict::Found {
+        signature: "synthetic".into(),
+    });
+    assert!(matches!(
+        file_approved_attachment(db, &storage, &malicious, &approval).await,
+        Err(AttachmentFilingError::Malware),
+    ));
+    assert!(store::assets::for_project(db, filing.project_id)
+        .await
+        .unwrap()
+        .is_empty());
+    let first = file_approved_attachment(db, &storage, &clean, &approval)
+        .await
+        .unwrap();
+    let repeated = file_approved_attachment(db, &storage, &clean, &approval)
+        .await
+        .unwrap();
+    assert_eq!(first, repeated);
+    let project_assets = store::assets::for_project(db, filing.project_id)
+        .await
+        .unwrap();
+    assert_eq!(project_assets.len(), 1);
+    assert_eq!(
+        project_assets[0].slug.as_deref(),
+        Some(format!("mail/{}/2026.11.08_fixture-0.txt", filing.message_id).as_str())
+    );
+    assert_eq!(
+        project_assets[0].visibility,
+        store::documents::visibility::INTERNAL
+    );
+    assert_eq!(
+        project_assets[0].source_message_id.as_deref(),
+        Some(filing.message_id.to_string().as_str())
     );
 }
 

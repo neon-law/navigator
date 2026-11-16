@@ -188,6 +188,12 @@ async fn main() -> anyhow::Result<()> {
     let lookup = |key: &str| std::env::var(key).ok();
     let enabled = |flag| dbos_engine::flag_enabled(flag, lookup(flag).as_deref());
     let triage_dbos_enabled = enabled(workflows::trigger::INBOUND_TRIAGE_DBOS_ENABLED_ENV)?;
+    let inbox_attachment_dbos_enabled =
+        enabled(workflows::trigger::INBOX_ATTACHMENT_FILING_DBOS_ENABLED_ENV)?;
+    anyhow::ensure!(
+        !inbox_attachment_dbos_enabled || triage_dbos_enabled,
+        "Inbox attachment filing requires the DBOS Inbox triage workflow"
+    );
     let youtube_dbos_enabled = enabled(workflows::trigger::YOUTUBE_COMMENTS_DBOS_ENABLED_ENV)?;
     let sandbox_credit_reset_enabled =
         enabled(workflows::trigger::SANDBOX_CREDIT_RESET_DBOS_ENABLED_ENV)?;
@@ -642,6 +648,17 @@ async fn main() -> anyhow::Result<()> {
     let triage_providers = TriageProviders::from_env().context("configure triage providers")?;
     let inbound_triage = InboundTriageService::new(surreal.clone(), triage_providers);
     let triage_dbos = triage_dbos_enabled.then(|| inbound_triage.clone());
+    let inbox_attachment_dbos = if inbox_attachment_dbos_enabled {
+        let address = lookup("NAVIGATOR_CLAMD_ADDR")
+            .filter(|address| !address.trim().is_empty())
+            .context("NAVIGATOR_CLAMD_ADDR is required for Inbox attachment filing")?;
+        let scanner = Arc::new(cloud::attachment_scanner::ClamdAttachmentScanner::new(
+            address,
+        ));
+        Some((surreal.clone(), storage.clone(), scanner))
+    } else {
+        None
+    };
 
     let listen: SocketAddr = std::env::var("WORKFLOWS_SERVICE_LISTEN")
         .unwrap_or_else(|_| "0.0.0.0:9080".into())
@@ -990,6 +1007,14 @@ async fn main() -> anyhow::Result<()> {
                             workflow: workflows_service::inbound_triage::register_dbos(dbos, service.clone())?,
                             filing: workflows_service::inbound_triage::register_filing_dbos(dbos, service)?,
                         });
+                    }
+                    if let Some((db, storage, scanner)) = inbox_attachment_dbos {
+                        let workflow = workflows_service::inbox_attachment_filing::register_dbos(
+                            dbos, db, storage, scanner,
+                        )?;
+                        launchers.push(Box::new(move |stop| {
+                            tokio::spawn(workflows_service::inbox_attachment_filing::schedule(workflow, stop))
+                        }));
                     }
                     if let (Some((postgres, surreal)), Some(token)) = (sandbox_credit_reset_stores.clone(), dbos_ingress_token.as_ref()) {
                         registered_ingress.sandbox_credit_reset = Some(workflows_service::dbos_ingress::SandboxResetIngress {

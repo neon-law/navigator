@@ -592,6 +592,58 @@ pub async fn triage_file_post(
 }
 
 #[derive(Debug, Deserialize)]
+pub struct TriageAttachmentFilingForm {
+    message_id: Uuid,
+    review_revision: chrono::DateTime<chrono::Utc>,
+    assignment_id: Option<Uuid>,
+    attachment_position: i64,
+    kind: String,
+    retry: Option<bool>,
+}
+
+/// Approve one Inbox Message Asset for internal filing in the reviewed Project.
+pub async fn triage_file_attachment_post(
+    State(db): State<store::surreal::SurrealDb>,
+    session: Option<Extension<SessionData>>,
+    Path((conversation_id, triage_id, project_id, asset_id)): Path<(Uuid, Uuid, Uuid, Uuid)>,
+    axum::Form(form): axum::Form<TriageAttachmentFilingForm>,
+) -> Response {
+    let Some(actor_id) = actor_id(session) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if !workflows::trigger::inbox_attachment_filing_enabled()
+        || !triage_path_matches(&db, conversation_id, triage_id).await
+    {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let approval = store::inbox_triage::AttachmentFilingApproval {
+        filing: store::inbox_triage::FilingApproval {
+            triage_id,
+            message_id: form.message_id,
+            project_id,
+            approved_by: actor_id,
+            review_revision: form.review_revision,
+            assignment_id: form.assignment_id,
+        },
+        attachment_asset_id: asset_id,
+        attachment_position: form.attachment_position,
+        kind: form.kind,
+    };
+    match store::inbox_triage::queue_attachment_filing(&db, &approval, form.retry.unwrap_or(false))
+        .await
+    {
+        Ok(_) => Redirect::to("/app/inbox/triage?filing_queued=true").into_response(),
+        Err(store::inbox::InboxError::Denied | store::inbox::InboxError::NotFound) => {
+            StatusCode::NOT_FOUND.into_response()
+        }
+        Err(_) => redirect_error(
+            TRIAGE_QUEUE,
+            "The attachment filing workflow is unavailable.",
+        ),
+    }
+}
+
+#[derive(Debug, Deserialize)]
 pub struct TriageOverrideForm {
     #[serde(rename = "_csrf")]
     _csrf: Option<String>,

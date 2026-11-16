@@ -681,6 +681,226 @@ pub async fn verify_filing_approval(
     approved_filing_context(db, approval).await.map(|_| ())
 }
 
+/// The exact Inbox Message Asset and document kind shown before approval.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttachmentFilingApproval {
+    pub filing: FilingApproval,
+    pub attachment_asset_id: Uuid,
+    pub attachment_position: i64,
+    pub kind: String,
+}
+
+/// Metadata an attachment worker may load after rechecking the review.
+#[derive(Debug)]
+pub struct ApprovedAttachment {
+    pub source: crate::inbox::MessageAttachment,
+    pub sender: String,
+    pub subject: Option<String>,
+    pub occurred_at: String,
+}
+
+/// Resolve the exact attachment attached to the approved Message and validate
+/// the reviewer-selected document kind before any worker reads object bytes.
+///
+/// # Errors
+///
+/// Denies stale approvals, unrelated assets, and unsupported document kinds.
+pub async fn approved_attachment(
+    db: &SurrealDb,
+    approval: &AttachmentFilingApproval,
+) -> Result<ApprovedAttachment, InboxError> {
+    if !rules::kind::Kind::parse(&approval.kind)
+        .is_some_and(|kind| kind.valid_for(rules::kind::Lane::Asset))
+    {
+        return Err(InboxError::Denied);
+    }
+    let (conversation, message) = approved_filing_context(db, &approval.filing).await?;
+    let source = crate::inbox::message_assets(db, conversation.firm_id, message.id)
+        .await?
+        .into_iter()
+        .find(|source| {
+            source.asset_id == approval.attachment_asset_id
+                && source.position == approval.attachment_position
+        })
+        .ok_or(InboxError::NotFound)?;
+    Ok(ApprovedAttachment {
+        source,
+        sender: conversation.external_address,
+        subject: conversation.subject,
+        occurred_at: message.occurred_at,
+    })
+}
+
+/// Persist the one authorized attachment action before worker submission.
+///
+/// # Errors
+///
+/// Returns an error for stale approvals, missing PostgreSQL authority or storage errors.
+pub async fn queue_attachment_filing(
+    db: &SurrealDb,
+    approval: &AttachmentFilingApproval,
+    retry: bool,
+) -> Result<Uuid, InboxError> {
+    approved_attachment(db, approval).await?;
+    let pg = crate::inbox::inbox_authority()
+        .await?
+        .ok_or(InboxError::PostgresAuthorityRequired)?;
+    sqlx::query_scalar(
+        "INSERT INTO inbox_attachment_filing (id, message_id, project_id, attachment_asset_id, approval)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (approval) DO UPDATE SET
+             attempt = CASE WHEN $6 AND inbox_attachment_filing.failure_code = 'unavailable'
+                            THEN inbox_attachment_filing.attempt + 1 ELSE inbox_attachment_filing.attempt END,
+             state = CASE WHEN $6 AND inbox_attachment_filing.failure_code = 'unavailable'
+                          THEN 'pending' ELSE inbox_attachment_filing.state END,
+             failure_code = CASE WHEN $6 AND inbox_attachment_filing.failure_code = 'unavailable'
+                                 THEN NULL ELSE inbox_attachment_filing.failure_code END
+         RETURNING inbox_attachment_filing.id",
+    )
+    .bind(Uuid::now_v7())
+    .bind(approval.filing.message_id)
+    .bind(approval.filing.project_id)
+    .bind(approval.attachment_asset_id)
+    .bind(sqlx::types::Json(approval))
+    .bind(retry)
+    .fetch_one(pg.pool())
+    .await
+    .map_err(|error| InboxError::Db(error.to_string()))
+}
+
+/// The latest job outcome for one attachment under the current approval scope.
+#[derive(Debug)]
+pub struct AttachmentFilingStatus {
+    pub asset_id: Uuid,
+    pub kind: String,
+    pub state: String,
+    pub failure_code: Option<String>,
+}
+
+/// Look up this reviewer's own attachment outcomes for the current revision.
+///
+/// # Errors
+///
+/// Returns an error if the approval scope has changed or the database is unavailable.
+pub async fn attachment_filing_statuses(
+    db: &SurrealDb,
+    filing: &FilingApproval,
+) -> Result<Vec<AttachmentFilingStatus>, InboxError> {
+    verify_filing_approval(db, filing).await?;
+    let pg = crate::inbox::inbox_authority()
+        .await?
+        .ok_or(InboxError::PostgresAuthorityRequired)?;
+    let rows: Vec<(Uuid, String, String, Option<String>)> = sqlx::query_as(
+        "SELECT DISTINCT ON (attachment_asset_id) attachment_asset_id AS asset_id,
+                approval->>'kind' AS kind, state, failure_code
+         FROM inbox_attachment_filing WHERE message_id = $1 AND project_id = $2
+           AND approval->'filing' = $3
+         ORDER BY attachment_asset_id, inserted_at DESC, id DESC",
+    )
+    .bind(filing.message_id)
+    .bind(filing.project_id)
+    .bind(sqlx::types::Json(filing))
+    .fetch_all(pg.pool())
+    .await
+    .map_err(|error| InboxError::Db(error.to_string()))?;
+    Ok(rows
+        .into_iter()
+        .map(
+            |(asset_id, kind, state, failure_code)| AttachmentFilingStatus {
+                asset_id,
+                kind,
+                state,
+                failure_code,
+            },
+        )
+        .collect())
+}
+
+/// The current attempt on an approved attachment filing job.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttachmentFilingAttempt {
+    pub id: Uuid,
+    pub attempt: i32,
+}
+
+/// List the oldest pending attachment filing attempts for reconciliation.
+///
+/// # Errors
+///
+/// Returns an error if PostgreSQL is unavailable.
+pub async fn pending_attachment_filings(
+    limit: i64,
+) -> Result<Vec<AttachmentFilingAttempt>, InboxError> {
+    let pg = crate::inbox::inbox_authority()
+        .await?
+        .ok_or(InboxError::PostgresAuthorityRequired)?;
+    let rows: Vec<(Uuid, i32)> = sqlx::query_as(
+        "SELECT id, attempt FROM inbox_attachment_filing
+         WHERE state = 'pending' ORDER BY inserted_at, id LIMIT $1",
+    )
+    .bind(limit)
+    .fetch_all(pg.pool())
+    .await
+    .map_err(|error| InboxError::Db(error.to_string()))?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, attempt)| AttachmentFilingAttempt { id, attempt })
+        .collect())
+}
+
+/// Load only the opaque worker input for a pending attachment filing.
+///
+/// # Errors
+///
+/// Propagates PostgreSQL failures.
+pub async fn pending_attachment_filing(
+    job: AttachmentFilingAttempt,
+) -> Result<Option<AttachmentFilingApproval>, InboxError> {
+    let pg = crate::inbox::inbox_authority()
+        .await?
+        .ok_or(InboxError::PostgresAuthorityRequired)?;
+    let row: Option<sqlx::types::Json<AttachmentFilingApproval>> = sqlx::query_scalar(
+        "SELECT approval FROM inbox_attachment_filing WHERE id = $1 AND attempt = $2 AND state = 'pending'",
+    )
+    .bind(job.id)
+    .bind(job.attempt)
+    .fetch_optional(pg.pool())
+    .await
+    .map_err(|error| InboxError::Db(error.to_string()))?;
+    Ok(row.map(|json| json.0))
+}
+
+/// Record a terminal attachment filing outcome once.
+///
+/// # Errors
+///
+/// Propagates PostgreSQL failures.
+pub async fn finish_attachment_filing(
+    job: AttachmentFilingAttempt,
+    result: Result<Uuid, &'static str>,
+) -> Result<(), InboxError> {
+    let pg = crate::inbox::inbox_authority()
+        .await?
+        .ok_or(InboxError::PostgresAuthorityRequired)?;
+    let (state, asset, failure) = match result {
+        Ok(asset) => ("filed", Some(asset), None),
+        Err(code) => ("failed", None, Some(code)),
+    };
+    sqlx::query(
+        "UPDATE inbox_attachment_filing SET state = $3, result_asset_id = $4, failure_code = $5
+         WHERE id = $1 AND attempt = $2 AND state = 'pending'",
+    )
+    .bind(job.id)
+    .bind(job.attempt)
+    .bind(state)
+    .bind(asset)
+    .bind(failure)
+    .execute(pg.pool())
+    .await
+    .map_err(|error| InboxError::Db(error.to_string()))?;
+    Ok(())
+}
+
 /// File the exact approved inbound Message as a firm-internal Communication.
 /// Recheck the review revision, assignment and approver's current Firm and
 /// Project access. The normal Inbox source reference makes replay idempotent.

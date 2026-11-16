@@ -1608,6 +1608,10 @@ mod tests {
                 "20261115170000_add_firm_calendar_settings.sql",
                 include_str!("../postgres/migrations/20261115170000_add_firm_calendar_settings.sql"),
             ),
+            (
+                "20261116080000_create_inbox_attachment_filing.sql",
+                include_str!("../postgres/migrations/20261116080000_create_inbox_attachment_filing.sql"),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

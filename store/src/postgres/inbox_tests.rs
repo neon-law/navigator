@@ -93,6 +93,149 @@ async fn native_authority_routes_the_public_inbox_lifecycle_to_postgres() {
     assert_public_native_call_and_fi_triage_coordination(&f).await;
     assert_historical_email_filing(&f).await;
     assert_public_native_preview_and_person(&f).await;
+    assert_native_attachment_filing_retries_only_transient_failures(&f).await;
+}
+
+async fn seed_native_attachment_filing(
+    f: &Fixture,
+) -> crate::inbox_triage::AttachmentFilingApproval {
+    use crate::inbox_triage::{self, AttachmentFilingApproval, FilingApproval};
+    sqlx::query(
+        "INSERT INTO entity_type (id,name) VALUES ($1,'Synthetic Attachment Entity') ON CONFLICT DO NOTHING",
+    )
+    .bind(crate::test_support::SEED_ENTITY_TYPE_ID)
+    .execute(f.pg.pool())
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO jurisdiction (id,name,code) VALUES ($1,'Synthetic Attachment Jurisdiction','ATT') ON CONFLICT DO NOTHING")
+        .bind(crate::test_support::SEED_ENTITY_JURISDICTION_ID)
+        .execute(f.pg.pool()).await.unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let storage: std::sync::Arc<dyn cloud::StorageService> =
+        std::sync::Arc::new(cloud::FsStorage::new(directory.path()).await.unwrap());
+    let attachment = crate::inbox::ingest_attachment(
+        &f.db,
+        &storage,
+        f.firm,
+        None,
+        "fixture.txt",
+        "text/plain",
+        b"approved attachment",
+    )
+    .await
+    .unwrap();
+    let mut input = inbound(
+        f.firm,
+        channel::EMAIL,
+        "outbox-fixture",
+        "attachment-outbox",
+        "sender@example.test",
+    );
+    input.attachments = vec![attachment.clone()];
+    let saved = crate::inbox::ingest_inbound(&f.db, &input).await.unwrap();
+    let review = inbox_triage::record(
+        &f.db,
+        &inbox_triage::NewInboxTriage {
+            message_id: saved.message_id,
+            firm_id: f.firm,
+            suggested_project_id: Some(f.project),
+            project_confidence: None,
+            privilege: inbox_triage::PrivilegeLabel::Uncertain,
+            privilege_confidence: None,
+            rationale: None,
+            model_id: None,
+            prompt_version: inbox_triage::RULES_ONLY_PROMPT.into(),
+            raw_output: None,
+            disposition: inbox_triage::TriageDisposition::NeedsHuman,
+            labeled_example: false,
+        },
+    )
+    .await
+    .unwrap();
+    let link = crate::inbox::message_assets(&f.db, f.firm, saved.message_id)
+        .await
+        .unwrap()
+        .remove(0);
+    let filing = FilingApproval {
+        triage_id: review.id,
+        message_id: saved.message_id,
+        project_id: f.project,
+        approved_by: f.owner,
+        review_revision: review.updated_at,
+        assignment_id: None,
+    };
+    AttachmentFilingApproval {
+        filing,
+        attachment_asset_id: attachment.asset_id,
+        attachment_position: link.position,
+        kind: "letter".into(),
+    }
+}
+
+async fn assert_native_attachment_filing_retries_only_transient_failures(f: &Fixture) {
+    use crate::inbox_triage::{self, AttachmentFilingAttempt};
+    let approval = seed_native_attachment_filing(f).await;
+    let filing = approval.filing;
+    let id = inbox_triage::queue_attachment_filing(&f.db, &approval, false)
+        .await
+        .unwrap();
+    assert_eq!(
+        inbox_triage::queue_attachment_filing(&f.db, &approval, false)
+            .await
+            .unwrap(),
+        id
+    );
+    let first = AttachmentFilingAttempt { id, attempt: 1 };
+    assert_eq!(
+        inbox_triage::pending_attachment_filings(10).await.unwrap(),
+        vec![first]
+    );
+    assert_eq!(
+        inbox_triage::pending_attachment_filing(first)
+            .await
+            .unwrap(),
+        Some(approval.clone())
+    );
+    inbox_triage::finish_attachment_filing(first, Err("unavailable"))
+        .await
+        .unwrap();
+    let status = inbox_triage::attachment_filing_statuses(&f.db, &filing)
+        .await
+        .unwrap()
+        .remove(0);
+    assert_eq!(status.failure_code.as_deref(), Some("unavailable"));
+
+    assert_eq!(
+        inbox_triage::queue_attachment_filing(&f.db, &approval, true)
+            .await
+            .unwrap(),
+        id
+    );
+    let second = AttachmentFilingAttempt { id, attempt: 2 };
+    inbox_triage::finish_attachment_filing(first, Err("malware"))
+        .await
+        .unwrap();
+    assert!(!inbox_triage::pending_attachment_filings(10)
+        .await
+        .unwrap()
+        .contains(&first));
+    assert!(inbox_triage::pending_attachment_filings(10)
+        .await
+        .unwrap()
+        .contains(&second));
+    inbox_triage::finish_attachment_filing(second, Err("malware"))
+        .await
+        .unwrap();
+    assert_eq!(
+        inbox_triage::queue_attachment_filing(&f.db, &approval, true)
+            .await
+            .unwrap(),
+        id
+    );
+    assert!(inbox_triage::pending_attachment_filings(10)
+        .await
+        .unwrap()
+        .is_empty());
 }
 
 /// The native list carries the latest-message preview and the persisted

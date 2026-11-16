@@ -732,6 +732,18 @@ erDiagram
         datetime inserted_at
         uuid to_project_id
     }
+    inbox_attachment_filing {
+        json approval
+        uuid attachment_asset_id
+        int attempt
+        string failure_code
+        uuid id
+        datetime inserted_at
+        uuid message_id
+        uuid project_id
+        uuid result_asset_id
+        string state
+    }
     inbox_attachment_receipt {
         uuid asset_id
         uuid firm_id
@@ -2101,6 +2113,9 @@ erDiagram
     inbox_conversation }o--|| inbox_assignment : references
     person }o--|| inbox_assignment : references
     project }o--|| inbox_assignment : references
+    asset }o--|| inbox_attachment_filing : references
+    message }o--|| inbox_attachment_filing : references
+    project }o--|| inbox_attachment_filing : references
     asset }o--|| inbox_attachment_receipt : references
     firm }o--|| inbox_attachment_receipt : references
     email_conversation }o--|| inbox_conversation : references
