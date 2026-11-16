@@ -195,9 +195,7 @@ fn unavailable_json(mode: Mode, error: &anyhow::Error) -> serde_json::Value {
 }
 
 async fn measure(mode: Mode) -> anyhow::Result<Report> {
-    let surreal = connect_surreal()
-        .await
-        .context("SurrealDB is unavailable")?;
+    let surreal = connect_surreal().await?;
     let pg = PostgresDb::from_env().await?;
     let before = store::postgres_mirror::parity_all(&surreal, &pg).await?;
     let before_rows = table_rows(&pg, &before).await?;
@@ -232,7 +230,7 @@ async fn measure(mode: Mode) -> anyhow::Result<Report> {
     })
 }
 
-async fn connect_surreal() -> Result<store::surreal::SurrealDb, store::surreal::SurrealError> {
+async fn connect_surreal() -> anyhow::Result<store::surreal::SurrealDb> {
     // Only retry session setup. A failed reconcile may have already written
     // to PostgreSQL and must report its outcome through the parity gate.
     for delay in [Duration::from_secs(1), Duration::from_secs(2)] {
@@ -244,10 +242,12 @@ async fn connect_surreal() -> Result<store::surreal::SurrealDb, store::surreal::
                 );
                 tokio::time::sleep(delay).await;
             }
-            result => return result,
+            result => return result.context("SurrealDB is unavailable"),
         }
     }
-    store::surreal::connect_from_env().await
+    store::surreal::connect_from_env()
+        .await
+        .context("SurrealDB is unavailable")
 }
 
 async fn table_rows(pg: &PostgresDb, mirrors: &[MirrorParity]) -> anyhow::Result<Vec<TableRow>> {
