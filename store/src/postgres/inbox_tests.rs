@@ -333,9 +333,15 @@ async fn assert_project_inbox_reads_postgres_metadata(f: &Fixture) {
     let assets = crate::assets::project_inbox_attachments(&f.db, f.project, message, None, &[])
         .await
         .unwrap();
-    assert_eq!(assets.iter().map(|asset| asset.id).collect::<Vec<_>>(), expected);
+    assert_eq!(
+        assets.iter().map(|asset| asset.id).collect::<Vec<_>>(),
+        expected
+    );
     let first = assets[0].id;
-    assert!(crate::assets::find_by_id(&f.db, first).await.unwrap().is_none());
+    assert!(crate::assets::find_by_id(&f.db, first)
+        .await
+        .unwrap()
+        .is_none());
     let download = crate::assets::inbox_attachment_metadata(&f.db, first)
         .await
         .unwrap()
