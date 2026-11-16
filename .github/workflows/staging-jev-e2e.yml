@@ -1,0 +1,188 @@
+# The LAW-347 synthetic staging end-to-end run for the Jev flow. Manual only:
+# no push, schedule, or release hook lands here — every run starts with a
+# workflow_dispatch.
+#
+# One run:
+#   1. asserts the LAW-346 ZDR gate starts closed on the staging web
+#      deployment (a residual flag is an error, not a precondition),
+#   2. seeds synthetic clients, matters, and threads through Navigator's own
+#      doors (the ingest-only import path never sends mail),
+#   3. opens the gate for this run only — one operator env flag on the
+#      deployment; the TypeSafe key itself rides the deployment's own
+#      secret projection (#680) and is not reworked here,
+#   4. drives the assign-matches preview across its cursor and merges the
+#      server's decision log into a run log,
+#   5. closes the gate again and asserts it is closed,
+#   6. deletes the synthetic rows the doors allow and records what only a
+#      staging reset removes,
+#   7. uploads the run log, the decision dump, and the synthetic fixtures.
+#
+# A 401/403 from the TypeSafe tenant inside this run is a finding, not a
+# masked failure — the run log carries it. Nothing here touches production:
+# the workflow identity holds staging-project grants only.
+name: staging-jev-e2e
+
+on:
+  workflow_dispatch:
+    inputs:
+      host:
+        description: staging Navigator base URL
+        default: https://staging.neonlaw.com
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: staging-jev-e2e
+  # Two concurrent runs would race the gate flag; queue instead of cancel.
+  cancel-in-progress: false
+
+jobs:
+  e2e:
+    runs-on: ubuntu-24.04
+    environment: staging-deploy
+    timeout-minutes: 60
+    env:
+      NAMESPACE: neon-law-stg
+      WEB_DEPLOYMENT: navigator-web
+      NAVIGATOR_HOST: ${{ inputs.host || 'https://staging.neonlaw.com' }}
+      RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+      STAGING_E2E_TOKEN: ${{ secrets.STAGING_E2E_TOKEN }}
+      STAGING_GCP_PROJECT_ID: ${{ secrets.STAGING_GCP_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: require the secrets this run drives
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in STAGING_E2E_TOKEN STAGING_SHIP_WIF_PROVIDER STAGING_SHIP_SERVICE_ACCOUNT STAGING_GCP_PROJECT_ID; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::${name} is unset in the staging-deploy environment; add it and dispatch this workflow again"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - name: authenticate the ship identity (workload federation, no keys)
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ secrets.STAGING_SHIP_WIF_PROVIDER }}
+          service_account: ${{ secrets.STAGING_SHIP_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+        with:
+          install_components: gke-gcloud-auth-plugin
+
+      - name: resolve the staging cluster
+        id: cluster
+        run: |
+          set -euo pipefail
+          readarray -t rows < <(gcloud container clusters list --project "$STAGING_GCP_PROJECT_ID" --format='value(name,location)')
+          if [ "${#rows[@]}" -ne 1 ]; then
+            echo "::error::expected exactly one cluster in the staging project, found ${#rows[@]}"
+            exit 1
+          fi
+          name="${rows[0]%%	*}"
+          location="${rows[0]##*	}"
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
+          echo "location=${location}" >> "$GITHUB_OUTPUT"
+
+      - name: fetch cluster credentials
+        run: gcloud container clusters get-credentials "${{ steps.cluster.outputs.name }}" --region "${{ steps.cluster.outputs.location }}" --project "$STAGING_GCP_PROJECT_ID"
+
+      - name: assert the gate starts closed
+        run: |
+          set -euo pipefail
+          if kubectl get deploy "$WEB_DEPLOYMENT" -n "$NAMESPACE" -o json \
+             | jq -e '.spec.template.spec.containers[0].env | map(select(.name == "NAVIGATOR_TYPESAFE_ZDR_CONFIRMED")) | length == 0' >/dev/null; then
+            echo "gate closed: no operator flag on ${WEB_DEPLOYMENT}"
+          else
+            echo "::error::NAVIGATOR_TYPESAFE_ZDR_CONFIRMED is already on ${WEB_DEPLOYMENT} — residual gate-open state; clear it before running"
+            exit 1
+          fi
+
+      - name: run the harness precheck
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/e2e
+          export NAVIGATOR_TOKEN="$STAGING_E2E_TOKEN" OUT_DIR=/tmp/e2e
+          scripts/staging-jev-e2e.sh precheck
+
+      - name: open the gate for this run only
+        run: |
+          set -euo pipefail
+          kubectl set env deploy/"$WEB_DEPLOYMENT" -n "$NAMESPACE" NAVIGATOR_TYPESAFE_ZDR_CONFIRMED=true
+          kubectl rollout status deploy/"$WEB_DEPLOYMENT" -n "$NAMESPACE" --timeout=10m
+          echo "GATE_OPEN_AT=$(date -u +%FT%TZ)" >> "$GITHUB_ENV"
+
+      - name: seed, import, and run the assignment preview
+        run: |
+          set -euo pipefail
+          export NAVIGATOR_TOKEN="$STAGING_E2E_TOKEN" OUT_DIR=/tmp/e2e
+          scripts/staging-jev-e2e.sh seed
+          scripts/staging-jev-e2e.sh import-threads
+          scripts/staging-jev-e2e.sh run-assignment
+
+      # The decision-log pull reads the gated pod's logs, so this runs while
+      # that pod still serves — before the close step rolls it.
+      - name: merge the decision log into the run log
+        if: always()
+        run: |
+          set -euo pipefail
+          export NAVIGATOR_TOKEN="$STAGING_E2E_TOKEN" OUT_DIR=/tmp/e2e
+          scripts/staging-jev-e2e.sh merge-evidence
+          if [ -n "${GATE_OPEN_AT:-}" ]; then
+            echo "- Gate open at: ${GATE_OPEN_AT} UTC; closed by the step that follows" >> /tmp/e2e/run-log.md
+          fi
+
+      - name: close the gate again
+        if: always()
+        run: |
+          set -euo pipefail
+          kubectl set env deploy/"$WEB_DEPLOYMENT" -n "$NAMESPACE" NAVIGATOR_TYPESAFE_ZDR_CONFIRMED-
+          kubectl rollout status deploy/"$WEB_DEPLOYMENT" -n "$NAMESPACE" --timeout=10m
+          echo "GATE_CLOSED_AT=$(date -u +%FT%TZ)" >> "$GITHUB_ENV"
+          if kubectl get deploy "$WEB_DEPLOYMENT" -n "$NAMESPACE" -o json \
+             | jq -e '.spec.template.spec.containers[0].env | map(select(.name == "NAVIGATOR_TYPESAFE_ZDR_CONFIRMED")) | length == 0' >/dev/null; then
+            echo "gate verified closed"
+          else
+            echo "::error::the gate flag survived the close step — residual gate-open state on ${WEB_DEPLOYMENT}"
+            exit 1
+          fi
+
+      - name: delete the synthetic rows
+        if: always()
+        run: |
+          set -euo pipefail
+          export NAVIGATOR_TOKEN="$STAGING_E2E_TOKEN" OUT_DIR=/tmp/e2e
+          scripts/staging-jev-e2e.sh cleanup
+
+      - name: upload the run log and fixtures
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: staging-jev-e2e-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            /tmp/e2e/run-log.md
+            /tmp/e2e/run-log.json
+            /tmp/e2e/views.jsonl
+            /tmp/e2e/decisions.json
+            /tmp/e2e/state.json
+            /tmp/e2e/eml/
+          if-no-files-found: warn
+
+      - name: write the step summary
+        if: always()
+        run: |
+          set -euo pipefail
+          {
+            echo "Gate open at: ${GATE_OPEN_AT:-not recorded} · closed at: ${GATE_CLOSED_AT:-not recorded}"
+            echo
+            if [ -f /tmp/e2e/run-log.md ]; then
+              cat /tmp/e2e/run-log.md
+            else
+              echo "The run produced no run log — see the earlier failed step."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
