@@ -159,3 +159,41 @@ bash -euo pipefail -c "
 grep -F 'filter[email]=[synthetic-client-43877403907-1]' "${scratch}/requests.log" > /dev/null \
   || { echo 'the server never received the literal bracketed query' >&2; exit 1; }
 echo 'staging-jev-e2e: api passes bracketed queries literally (curl globbing is off).'
+
+
+# The sixth staging dispatch (runs 43885192582 and 43893047358) died in seed
+# with 'jq: parse error: Unfinished string at EOF at line 2, column 0',
+# exit 5. Root cause is harness shell, not the server: seed() iterated the
+# matter rows with an unquoted `for row in $(jq -c '.[]' ...)`, which
+# word-splits each compact JSON row on IFS whitespace — and every synthetic
+# matter name and description contains spaces ('Synthetic Estate Plan A (run
+# ...)'). The first iteration bound an unfinished fragment and jq died
+# parsing it from a herestring. json_array_rows() now does the split with
+# mapfile over a process substitution, one complete row per element. This
+# check runs the shipped helper verbatim and asserts rows with multi-word
+# names and parenthesized run ids iterate as complete JSON documents.
+
+awk '/^json_array_rows\(\) \{/,/^\}/' "$harness" > "${scratch}/rows-only.sh"
+grep -q 'mapfile -t' "${scratch}/rows-only.sh"
+
+bash -euo pipefail -c "
+  source '${scratch}/rows-only.sh'
+  # The same shape seed() builds: multi-word names, parenthesized run ids,
+  # and descriptions full of spaces and commas.
+  matters='[{\"code\":\"SYNJ0BA\",\"name\":\"Synthetic Estate Plan A (run 43885192582)\",\"description\":\"A synthetic revocable living-trust and pour-over will engagement for a married couple, funding two trusts (run 43885192582).\"},
+ {\"code\":\"SYNJ0BB\",\"name\":\"Synthetic Eviction Defense B (run 43885192582)\",\"description\":\"A synthetic residential eviction defense: answer, habitability defenses, rent escrow (run 43885192582).\"},
+ {\"code\":\"SYNJ0BC\",\"name\":\"Synthetic Contract Review C (run 43885192582)\",\"description\":\"A synthetic review of a commercial sublease, indemnification and termination limits (run 43885192582).\"}]'
+  matter_rows=()
+  json_array_rows matter_rows \"\$matters\"
+  [[ \${#matter_rows[@]} -eq 3 ]] || { echo 'row count wrong' >&2; exit 1; }
+  for row in \"\${matter_rows[@]}\"; do
+    # Every element must be a complete JSON document — the pre-fix loop
+    # bound fragments like '{\"code\":\"SYNJ0B\",\"name\":\"Synthetic' that
+    # died here with 'Unfinished string at EOF'.
+    jq -e '.code and .name and .description' >/dev/null 2>&1 <<<\"\$row\" \
+      || { echo \"row is not a complete JSON document: \$row\" >&2; exit 1; }
+  done
+  [[ \"\$(jq -r '.[0].name' <<<\"\$(printf '[%s]' \"\${matter_rows[1]}\")\")\" == 'Synthetic Eviction Defense B (run 43885192582)' ]] \
+    || { echo 'row content was mangled by the split' >&2; exit 1; }
+"
+echo 'staging-jev-e2e: json_array_rows iterates space-containing JSON rows whole.'

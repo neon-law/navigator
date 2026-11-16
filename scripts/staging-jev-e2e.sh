@@ -95,6 +95,17 @@ api() {
   rm -f "$file" "$hdr"
 }
 
+# Split a compact JSON array into one shell array element per row. Callers
+# re-parse each row with jq, so every element must be a complete JSON
+# document: an unquoted `for row in $(jq ...)` word-splits on the spaces in
+# the synthetic matter names, and the first fragment then dies in jq with
+# 'Unfinished string at EOF at line 2, column 0' (exit 5) — the sixth-staging
+# dispatch's signature (Actions run 43885192582, run 43893047358).
+json_array_rows() {
+  local -n rows_ref="$1"
+  mapfile -t rows_ref < <(jq -c '.[]' <<<"$2")
+}
+
 api_json() {
   api_capture "$1" "$2" "${3:-}"
   local out
@@ -226,7 +237,9 @@ records:
   ] | map(.client_id = $client)')"
 
   local row entity_name entity_yaml entity_report entity_json project_body project_row project_id
-  for row in $(jq -c '.[]' <<<"$matters"); do
+  local -a matter_rows=()
+  json_array_rows matter_rows "$matters"
+  for row in "${matter_rows[@]}"; do
     entity_name="Synthetic Entity ($(jq -r .code <<<"$row"))"
     entity_yaml="lookup_fields: [name, entity_type_id]
 records:
