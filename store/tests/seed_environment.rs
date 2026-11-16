@@ -788,7 +788,9 @@ async fn the_dev_boot_seeds_the_practice_once() {
     }
 
     let firms = store::firms::all(&surreal).await.unwrap();
-    assert_eq!(firms.len(), store::seed::FIRM_ENTITY_NAMES.len());
+    let mut names: Vec<_> = firms.iter().map(|firm| firm.name.as_str()).collect();
+    names.sort_unstable();
+    assert_eq!(names, ["Guieb & Shook PC", "Lex Tecnica"]);
     let firm = firms
         .iter()
         .find(|firm| firm.name == store::seed::FIRM_ENTITY_NAME)
