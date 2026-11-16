@@ -142,12 +142,16 @@ async fn ingest_for_config(
         }
     }
     let provider_message_id = crate::inbox::provider_message_id(email);
+    let raw_storage_key =
+        crate::inbox::archive_inbound_inbox_mail(storage, config.firm_id, &email.raw).await?;
+    let occurred_at = crate::inbound_email::date_from_raw(&email.raw)
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
     let attachments =
         crate::inbox::ingest_attachments(db, storage, email, config.firm_id, None).await?;
     store::inbox::ingest_inbound(
         db,
         &store::inbox::IngestInbound {
-            raw_storage_key: None,
+            raw_storage_key: raw_storage_key.as_deref(),
             project_id: None,
             firm_id: config.firm_id,
             brand_key: None,
@@ -169,7 +173,7 @@ async fn ingest_for_config(
             promotional_opt_in: false,
             email_conversation_id: None,
             attachments,
-            occurred_at: &chrono::Utc::now().to_rfc3339(),
+            occurred_at: &occurred_at,
         },
     )
     .await
@@ -387,29 +391,44 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn redelivered_message_dedupes_on_the_provider_id() {
+    async fn redelivery_dedupes_and_keeps_the_firm_archive_and_original_message_time() {
         let db = mem_surreal().await;
         let storage = storage().await;
         let firm_id = seed_firm_with_brand(&db, "neon").await;
         let config = config(&["nick@neonlaw.com"], firm_id);
         let mut email = email("Client <client@example.com>", "Nick <nick@neonlaw.com>");
-        email.message_id = Some("repeat@example.com".into());
+        email.message_id = Some("original@example.com".into());
+        email.raw = b"From: client@example.com\r\nTo: nick@neonlaw.com\r\n\
+Date: Mon, 16 Nov 2026 01:25:00 -0800\r\nMessage-ID: <original@example.com>\r\n\r\n\
+Synthetic body"
+            .to_vec();
         let first = ingest_for_config(&db, &storage, &email, Some(config.clone()))
             .await
             .unwrap()
             .unwrap();
-        let second = ingest_for_config(&db, &storage, &email, Some(config))
+        let replay = ingest_for_config(&db, &storage, &email, Some(config))
             .await
             .unwrap()
             .unwrap();
         assert!(!first.deduped);
-        assert!(second.deduped);
-        assert_eq!(first.message_id, second.message_id);
+        assert!(replay.deduped);
+        assert_eq!(first.message_id, replay.message_id);
+
         let conversation = store::inbox::conversation_by_id(&db, first.conversation_id)
             .await
             .unwrap()
             .unwrap();
         assert!(conversation.unread);
+
+        let stored = store::inbox::message_by_id(&db, first.message_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let timestamp = chrono::DateTime::parse_from_rfc3339(&stored.occurred_at).unwrap();
+        assert_eq!(timestamp.to_rfc3339(), "2026-11-16T09:25:00+00:00");
+        let key = stored.raw_storage_key.unwrap();
+        assert!(key.starts_with(&format!("inbound/inbox/{firm_id}/")));
+        assert_eq!(storage.get(&key).await.unwrap().bytes, email.raw);
     }
 
     #[tokio::test]
