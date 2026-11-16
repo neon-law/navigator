@@ -269,6 +269,10 @@ fn random_refactor_skill_grounds_a_file_against_stdlib_and_repo() {
         "M-STATIC-VERIFICATION",
         "M-UPSTREAM-GUIDELINES",
         "M-REGULAR-FN",
+        "M-LOG-STRUCTURED",
+        "Writing Automated Tests",
+        "instrument-coverage",
+        "coverage floor",
     ] {
         assert!(
             skill.contains(required),
@@ -281,7 +285,7 @@ fn random_refactor_skill_grounds_a_file_against_stdlib_and_repo() {
 /// a conscious choice made when the catalog owner decides that skill should
 /// grow. Add an entry here to put a new skill under the same policy instead
 /// of writing another bespoke size-gate test.
-const SKILL_DOCUMENTATION_SIZE_POLICIES: &[(&str, usize)] = &[("random-refactor", 73)];
+const SKILL_DOCUMENTATION_SIZE_POLICIES: &[(&str, usize)] = &[("random-refactor", 81)];
 
 /// Every skill named in [`SKILL_DOCUMENTATION_SIZE_POLICIES`] must stay at or
 /// under its ceiling. One shared test enforces every policy so the check
