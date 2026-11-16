@@ -620,11 +620,13 @@ async fn approved_filing_context(
         .ok_or(InboxError::NotFound)?;
     let message = crate::inbox::message_by_id(db, approval.message_id)
         .await?
-        .filter(|message| message.direction == crate::inbox::direction::INBOUND)
         .ok_or(InboxError::NotFound)?;
     let conversation = crate::inbox::conversation_by_id(db, message.conversation_id)
         .await?
         .ok_or(InboxError::NotFound)?;
+    if !filing_source_is_reviewable(&conversation, &message) {
+        return Err(InboxError::NotFound);
+    }
     if conversation.firm_id != triage.firm_id
         || conversation.trashed_at.is_some()
         || conversation
@@ -643,6 +645,30 @@ async fn approved_filing_context(
     Ok((conversation, message))
 }
 
+fn filing_source_is_reviewable(
+    conversation: &crate::inbox::Conversation,
+    message: &crate::inbox::Message,
+) -> bool {
+    if message.direction == crate::inbox::direction::INBOUND {
+        return true;
+    }
+    // Imported sent mail is already delivered. Inbox-created drafts and
+    // outbound sends have no historical archive and cannot enter this lane.
+    conversation.channel == crate::inbox::channel::EMAIL
+        && message.direction == crate::inbox::direction::OUTBOUND
+        && message.delivery_state == crate::inbox::delivery::RECEIVED
+        && message.author_person_id.is_some()
+        && message
+            .raw_storage_key
+            .as_deref()
+            .and_then(|key| key.strip_prefix("mail/")?.split_once('.'))
+            .is_some_and(|(digest, extension)| {
+                digest.len() == 64
+                    && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    && extension.eq_ignore_ascii_case("eml")
+            })
+}
+
 /// Recheck a filing submitted by its authenticated reviewer before queuing it.
 ///
 /// # Errors
@@ -658,6 +684,7 @@ pub async fn verify_filing_approval(
 /// File the exact approved inbound Message as a firm-internal Communication.
 /// Recheck the review revision, assignment and approver's current Firm and
 /// Project access. The normal Inbox source reference makes replay idempotent.
+/// The same approval also allows filing a historical copy of sent email.
 ///
 /// # Errors
 ///
