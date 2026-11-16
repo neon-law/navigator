@@ -33,11 +33,23 @@ missing attachment filings and attribution. The archive key stays the same for i
 mailbox. Original attachment names remain on the Message; filed document identities preserve extensions or use `.bin`
 when the provider supplied none.
 
-`--dry-run` prints the complete request JSON, including the base64 payload, and makes no request or login lookup.
-`--host` selects the deployment's stored session. `--project` supplies a visible Project code for attribution.
+For the email and LinkedIn sources, `--dry-run` prints the request JSON with its base64 payload and skips login and
+network access. `--host` selects the deployment's stored session. `--project` supplies a visible Project code.
 
 Remote deployments require HTTPS. The command refuses redirects to keep credentials and payloads on the selected
 deployment; HTTP is allowed for a local loopback fixture.
+
+## Import Gmail messages for review
+
+Save each Gmail Message with `hudson mail save`. Import its RFC 5322 file through the authenticated Inbox route.
+
+```sh
+hudson inbox import --source gmail --mailbox lawyer@example.test --file mail/example.eml
+```
+
+Sign in as the lawyer with the verified mailbox. The server checks Firm membership and the canonical mailbox setting.
+Replay reuses the provider Message-ID. Confirm each proposed Project filing in Navigator after import. The Gmail adapter
+rejects `--project`. Its dry run reports the operation and skips payload output and network access.
 
 ## Server requirements
 

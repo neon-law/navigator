@@ -715,11 +715,11 @@ fn add_inbox_import_operation(document: &mut Value) {
     });
     document["paths"]["/app/api/inbox/import"] = json!({"post": {
         "operationId": "importInboxMessages", "tags": ["Inbox"], "summary": "Import historical Messages without sending",
-        "description": "Requires lawyer-tier access; writing imports also requires the PostgreSQL Inbox authority. Imports RFC 5322 email or a LinkedIn messages.csv export. The mailbox identifies the importing account. Optional Project attribution requires access; filed content is internal by default. Retries reuse Messages and finish missing attachment filings. A dry run parses and previews without archiving or writing records.",
+        "description": "Requires lawyer-tier access; writing imports also requires the PostgreSQL Inbox authority. Imports RFC 5322 email or a LinkedIn messages.csv export. The mailbox identifies the importing account. Gmail imports require the caller’s verified canonical mailbox and current Firm membership. They leave messages in the Inbox for individual filing approval. Other imports may name a Project if the caller has access. Filed content is internal by default. Retries reuse Messages and finish missing attachment filings. A dry run parses and previews without archiving or writing records.",
         "requestBody": {"required": true, "content": {"application/json": {"schema": {
             "type": "object", "additionalProperties": false, "required": ["source", "mailbox", "payload_base64"],
             "properties": {
-                "source": {"type": "string", "enum": ["email", "linkedin"]},
+                "source": {"type": "string", "enum": ["email", "gmail", "linkedin"]},
                 "mailbox": {"type": "string", "minLength": 1, "description": "Mailbox address or LinkedIn profile URL."},
                 "payload_base64": {"type": "string", "contentEncoding": "base64", "description": "Verbatim .eml or CSV payload bytes."},
                 "project": project, "dry_run": {"type": "boolean", "default": false}
@@ -730,7 +730,7 @@ fn add_inbox_import_operation(document: &mut Value) {
             "201": {"description": "Imported or resumed Messages", "content": {"application/json": {"schema": imported}}},
             "400": {"description": "Invalid source, mailbox, payload, Project code, or ambiguous Firm"},
             "401": {"description": "No authenticated session"},
-            "403": {"description": "Lawyer-tier access required"},
+            "403": {"description": "Lawyer-tier access or verified Gmail mailbox scope required"},
             "404": {"description": "Project or Conversation outside the caller's scope"},
             "413": {"description": "Payload exceeds the request limit"},
             "500": {"description": "Database, storage, or Inbox authority unavailable"}

@@ -24,7 +24,7 @@ use crate::{remote, HostOpt};
 /// The sources the import door's adapters parse. Client-side validation
 /// fails fast; the door re-derives the adapter from `source` and remains the
 /// authority on unknown values.
-const SOURCES: [&str; 2] = ["email", "linkedin"];
+const SOURCES: [&str; 3] = ["email", "gmail", "linkedin"];
 
 /// What `hudson inbox import` imports.
 #[derive(Debug, Clone, Default)]
@@ -46,7 +46,7 @@ pub(crate) enum InboxCmd {
     /// same payload reports the existing ids as deduped. Ingest-only: there
     /// is no send verb.
     Import {
-        /// Which adapter parses each payload: `email` or `linkedin`.
+        /// Which adapter parses each payload: `email`, `gmail`, or `linkedin`.
         #[arg(long)]
         source: String,
         /// The importing account: the lawyer's mailbox address (email) or
@@ -189,6 +189,29 @@ fn import_http_client(base: &str) -> Result<reqwest::Client> {
         .context("build Inbox import client")
 }
 
+async fn submit_import(
+    client: &reqwest::Client,
+    base: &str,
+    token: &str,
+    body: &Value,
+) -> Result<InboxImportResponse> {
+    let url = format!("{base}/app/api/inbox/import");
+    let response = client
+        .post(&url)
+        .timeout(Duration::from_secs(30))
+        .bearer_auth(token)
+        .json(body)
+        .send()
+        .await
+        .with_context(|| format!("POST {url}: {RECONCILE}"))?;
+    let status = response.status();
+    let text = response.text().await.context("read import response")?;
+    if !status.is_success() {
+        return Err(anyhow!("import refused: {status} {}", first_line(&text)));
+    }
+    serde_json::from_str(&text).with_context(|| format!("parse import response: {RECONCILE}"))
+}
+
 pub(crate) async fn import(new: NewInboxImport) -> Result<()> {
     let source = new.source.trim();
     if !SOURCES.contains(&source) {
@@ -201,6 +224,11 @@ pub(crate) async fn import(new: NewInboxImport) -> Result<()> {
     if mailbox.is_empty() {
         return Err(anyhow!(
             "--mailbox is required: the importing account, e.g. --mailbox=lawyer@neonlaw.com"
+        ));
+    }
+    if source == "gmail" && new.project.is_some() {
+        return Err(anyhow!(
+            "import Gmail into the Inbox before confirming each Project filing"
         ));
     }
     let payloads = collect_payloads(&new.files, new.dir.as_deref())?;
@@ -221,29 +249,24 @@ pub(crate) async fn import(new: NewInboxImport) -> Result<()> {
         if bytes.is_empty() {
             return Err(anyhow!("{} is empty", payload.display()));
         }
+        if new.dry_run && source == "gmail" {
+            println!("Would import one Gmail Message into the Inbox.");
+            continue;
+        }
         let body = request_body(source, mailbox, new.project.as_deref(), &bytes);
         if new.dry_run {
             println!("{body}");
             continue;
         }
-        let url = format!("{base}/app/api/inbox/import");
-        let response = client
-            .as_ref()
-            .context("authenticated import client is unavailable")?
-            .post(&url)
-            .timeout(Duration::from_secs(30))
-            .bearer_auth(&token)
-            .json(&body)
-            .send()
-            .await
-            .with_context(|| format!("POST {url}: {RECONCILE}"))?;
-        let status = response.status();
-        let text = response.text().await.context("read import response")?;
-        if !status.is_success() {
-            return Err(anyhow!("import refused: {status} {}", first_line(&text)));
-        }
-        let imported: InboxImportResponse = serde_json::from_str(&text)
-            .with_context(|| format!("parse import response: {RECONCILE}"))?;
+        let imported = submit_import(
+            client
+                .as_ref()
+                .context("authenticated import client is unavailable")?,
+            &base,
+            &token,
+            &body,
+        )
+        .await?;
         print_imported(&payload, &imported);
     }
     Ok(())
