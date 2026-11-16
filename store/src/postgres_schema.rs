@@ -1601,6 +1601,10 @@ mod tests {
                 include_str!("../postgres/migrations/20261115150000_create_product_catalog_history.sql"),
             ),
             (
+                "20261115160000_create_person_calendar.sql",
+                include_str!("../postgres/migrations/20261115160000_create_person_calendar.sql"),
+            ),
+            (
                 "20261115170000_add_firm_calendar_settings.sql",
                 include_str!("../postgres/migrations/20261115170000_add_firm_calendar_settings.sql"),
             ),

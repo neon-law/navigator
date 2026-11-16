@@ -1171,6 +1171,23 @@ test_owner_can_ensure_a_firm_private_slack_channel if {
 	authz.allow with input as {"path": ["app", "api", "integrations", "slack", "ensure"], "method": "POST", "session": owner_session}
 }
 
+test_lawyer_can_read_attorney_calendars if {
+	authz.allow with input as {"path": ["app", "api", "calendars", "freebusy"], "method": "POST", "session": lawyer_session}
+	authz.allow with input as {"path": ["app", "api", "calendars", "events"], "method": "POST", "session": lawyer_session}
+	authz.allow with input as {"path": ["app", "api", "calendars", "check"], "method": "POST", "session": lawyer_session}
+	authz.allow with input as {"path": ["app", "api", "calendars", "access"], "method": "POST", "session": lawyer_session}
+	authz.allow with input as {"path": ["app", "api", "calendars", "register"], "method": "POST", "session": owner_session}
+}
+
+test_client_clerk_and_ci_cannot_read_attorney_calendars if {
+	not authz.allow with input as {"path": ["app", "api", "calendars", "freebusy"], "method": "POST", "session": client_session}
+	not authz.allow with input as {"path": ["app", "api", "calendars", "check"], "method": "POST", "session": clerk_session}
+	not authz.allow with input as {"path": ["app", "api", "calendars", "events"], "method": "GET", "session": lawyer_session}
+	not authz.allow with input as {"path": ["app", "api", "calendars", "events", "extra"], "method": "POST", "session": lawyer_session}
+	session := object.union(lawyer_session, {"source": "ci", "scope": {"project_id": "synthetic"}})
+	not authz.allow with input as {"path": ["app", "api", "calendars", "freebusy"], "method": "POST", "session": session}
+}
+
 test_lawyer_denied_integrations if {
 	not authz.allow with input as {"path": ["app", "api", "integrations", "notion", "ensure"], "method": "POST", "session": lawyer_session}
 	not authz.allow with input as {"path": ["app", "api", "integrations", "slack", "notify"], "method": "POST", "session": lawyer_session}

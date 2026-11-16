@@ -1119,6 +1119,13 @@
       {
         "action": "export",
         "schema": "public",
+        "name": "person_calendar",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
         "name": "person_delegate",
         "kind": "table",
         "accessible": true

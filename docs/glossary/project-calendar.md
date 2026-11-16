@@ -22,7 +22,8 @@ events are kept as part of the matter's record. The matter page links the calend
 Create, update, complete, and cancel [Deadlines](deadline.md) in Navigator. The mirror reads its own calendar events to
 reconcile changes and preserves unrelated events.
 
-On staging, an authorized Firm administrator can inspect a synthetic Project Calendar.
+On staging, an authorized Firm administrator can inspect a synthetic Project Calendar. Attorney free/busy and the
+signed-in attorney's own events are an [Attorney Calendar](attorney-calendar.md).
 
 ```bash
 navigator calendar events --project <code> --start <RFC3339> --end <RFC3339> --host <staging-host>

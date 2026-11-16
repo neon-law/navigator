@@ -515,9 +515,12 @@ fn regorus_matches_every_checked_in_policy_decision() {
     //   path, a bare key read, and a deeper path denied even to Lawyer.
     // 682 + 3 = 685.
     // + 1 for the Relationship Log write (interactive lawyer-tier, exact method).
+    // + 2 for Attorney Calendar reads: a lawyer may post the calendar verbs,
+    //   and a client, a clerk, and a CI session may not.
+    // 686 + 2 = 688.
     assert_eq!(
         test_names.len(),
-        686,
+        688,
         "the policy decision inventory changed; review every new or removed rule"
     );
 

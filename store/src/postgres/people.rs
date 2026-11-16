@@ -632,6 +632,7 @@ const MERGE_UNIQUE_LINKS: &[(&str, &[&str])] = &[
     ("testimonial", &["project_id", "quote"]),
     ("sandbox_usage", &["period"]),
     ("person_phone", &["e164"]),
+    ("person_calendar", &["calendar_id"]),
 ];
 
 /// Fold `drop_id` into `keep_id` in one transaction: every PostgreSQL row
@@ -639,6 +640,23 @@ const MERGE_UNIQUE_LINKS: &[(&str, &[&str])] = &[
 /// takes each provider subject it lacks and every mailbox claim, and the
 /// dropped row is deleted last. Links are read from the catalog's foreign
 /// keys, so a table added later moves without a list to update.
+async fn demote_merged_calendar_primary(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    keep_id: Uuid,
+    drop_id: Uuid,
+) -> Result<(), PersonError> {
+    sqlx::query(
+        "UPDATE person_calendar SET kind = 'freebusy' WHERE person_id = $2 AND kind = 'primary' \
+         AND EXISTS (SELECT 1 FROM person_calendar WHERE person_id = $1 AND kind = 'primary')",
+    )
+    .bind(keep_id)
+    .bind(drop_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(database)?;
+    Ok(())
+}
+
 pub(crate) async fn merge(
     pg: &PostgresDb,
     db: &SurrealDb,
@@ -666,6 +684,7 @@ pub(crate) async fn merge(
         .await
         .map_err(database)?;
     }
+    demote_merged_calendar_primary(&mut tx, keep_id, drop_id).await?;
     for (table, others) in MERGE_UNIQUE_LINKS {
         let same = others
             .iter()

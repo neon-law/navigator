@@ -47,8 +47,10 @@ pub use model::workspace;
 
 pub use audio::{decode_to_mono_pcm16, AudioError, DecodedAudio};
 pub use calendar::{
-    CalendarError, CalendarMember, CalendarRole, CalendarService, FakeCalendar, GoogleCalendar,
-    ProjectCalendar,
+    AttorneyCalendars, CalendarError, CalendarGap, CalendarMember, CalendarRole, CalendarService,
+    CalendarWindow, EventRead, FakeAttorneyCalendars, FakeCalendar, FreeBusyBlock, GoogleCalendar,
+    ProjectCalendar, ProjectCalendarEvent, ProjectCalendarEventTime, CALENDAR_EVENTS_SCOPE,
+    CALENDAR_FREEBUSY_SCOPE,
 };
 pub use contacts::{
     ContactBook, ContactBooks, ContactPhone, ContactsError, FakeContactBooks, GoogleContactBooks,

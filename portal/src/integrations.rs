@@ -225,6 +225,26 @@ pub trait IntegrationProviders: Send + Sync {
             Err(_) => Err(IntegrationError::CredentialUnusable),
         }
     }
+
+    /// Attorney free/busy and the signed-in attorney's events, through the
+    /// same Workspace delegation as the Project Calendar. Free/busy and event
+    /// details use different scopes.
+    async fn attorney_calendars(
+        &self,
+    ) -> Result<Arc<dyn cloud::AttorneyCalendars>, IntegrationError> {
+        let declared =
+            cloud::delegation::WorkspaceDelegation::declared(|key| std::env::var(key).ok());
+        match cloud::calendar::GoogleAttorneyCalendars::from_env() {
+            Ok(calendars) => Ok(Arc::new(calendars)),
+            Err(_) if !declared => Err(IntegrationError::NotConfigured(
+                "NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER and NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT unset; attorney calendars use the deployment Workspace delegation and need https://www.googleapis.com/auth/calendar.freebusy plus https://www.googleapis.com/auth/calendar.readonly".into(),
+            )),
+            Err(cloud::CalendarError::MissingConfig(missing)) => Err(IntegrationError::NotConfigured(format!(
+                "{missing} unset; attorney calendars use the deployment Workspace delegation and need https://www.googleapis.com/auth/calendar.freebusy plus https://www.googleapis.com/auth/calendar.readonly"
+            ))),
+            Err(_) => Err(IntegrationError::CredentialUnusable),
+        }
+    }
 }
 
 /// The detail for a contacts runtime missing `missing`.
@@ -427,6 +447,7 @@ pub struct FakeIntegrations {
     pub slack: cloud::FakeSlack,
     pub calendar: cloud::FakeCalendar,
     pub contacts: cloud::FakeContactBooks,
+    pub attorney_calendars: cloud::FakeAttorneyCalendars,
     notion_calls: Arc<AtomicUsize>,
     slack_calls: Arc<AtomicUsize>,
     calendar_calls: Arc<AtomicUsize>,
@@ -485,6 +506,12 @@ impl IntegrationProviders for FakeIntegrations {
 
     async fn contacts(&self) -> Result<Arc<dyn cloud::ContactBooks>, IntegrationError> {
         Ok(Arc::new(self.contacts.clone()))
+    }
+
+    async fn attorney_calendars(
+        &self,
+    ) -> Result<Arc<dyn cloud::AttorneyCalendars>, IntegrationError> {
+        Ok(Arc::new(self.attorney_calendars.clone()))
     }
 }
 

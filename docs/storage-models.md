@@ -22,6 +22,9 @@ The same switch moves identity detail to PostgreSQL through `store::postgres::id
 tokens, entities, Person delegates, external identities, and Person phones. Each committed write is projected into
 SurrealDB with any Firm anchor claim. Under the switch the legacy mirror never copies these rows back into PostgreSQL.
 
+An Attorney Calendar (`person_calendar`) is written in PostgreSQL whenever the host is set. A lawyer-tier sign-in
+records the Workspace address as the primary calendar when the Person row is already there and no primary is recorded.
+
 ## Relationship graph
 
 Wherever PostgreSQL is configured it holds the graph tables: `entity_role`, `relationship`, `project_reference`,

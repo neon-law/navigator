@@ -35,6 +35,13 @@ ci_matter_content_denied if {
     input.path == ["app", "api", "integrations", "calendar", "events"]
 }
 
+ci_matter_content_denied if {
+    input.session.source == "ci"
+    input.path[0] == "app"
+    input.path[1] == "api"
+    input.path[2] == "calendars"
+}
+
 own_section_counts if {
     count(input.path) == 5
     input.path[3] == input.session.scope.project_id
@@ -1575,6 +1582,19 @@ route_allow if {
 	count(input.path) == 5
 	input.method == "POST"
 	is_admin(input.session)
+}
+
+# Attorney Calendar reads and registration. Lawyer tier, on their own noun so
+# the projects rule cannot admit a client. The handler enforces Firm
+# membership before any Workspace delegation is spent. Four segments, POST.
+route_allow if {
+	input.path[0] == "app"
+	input.path[1] == "api"
+	input.path[2] == "calendars"
+	input.path[3] in {"freebusy", "events", "check", "access", "register"}
+	count(input.path) == 4
+	input.method == "POST"
+	is_lawyer(input.session)
 }
 
 # Reconcile every matter against the repository it records: GET

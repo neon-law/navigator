@@ -64,6 +64,11 @@ pub enum FirmCapability {
     /// capability system-wide; an Admin must hold a membership row on the
     /// target Firm.
     UseIntegrations,
+    /// Read Attorney Calendars through the Firm's Workspace delegation.
+    /// Owner may use this system-wide. An Admin or Lawyer membership on the
+    /// Firm admits it. A caller with no membership on that Firm cannot spend
+    /// the deployment's delegation.
+    ReadAttorneyCalendars,
     /// Create or replace a Firm's presentation and public brand assets. Only
     /// the Firm's Admin DRI holds this capability.
     ManageBrand,
@@ -113,7 +118,7 @@ impl FirmCapability {
     fn admits(self, membership: FirmMembership) -> bool {
         match self {
             Self::ViewDirectory => true,
-            Self::AccessRelationshipObservations => {
+            Self::AccessRelationshipObservations | Self::ReadAttorneyCalendars => {
                 matches!(membership, FirmMembership::Admin | FirmMembership::Lawyer)
             }
             Self::ManageJournal
@@ -149,6 +154,7 @@ impl FirmCapability {
             Self::ManageIntegrationSecrets => "manage_integration_secrets",
             Self::ViewIntegrationSecretMetadata => "view_integration_secret_metadata",
             Self::UseIntegrations => "use_integrations",
+            Self::ReadAttorneyCalendars => "read_attorney_calendars",
             Self::ManageBrand => "manage_brand",
             Self::ManageBrandContent => "manage_brand_content",
             Self::ManageSummaryApprovals => "manage_summary_approvals",
