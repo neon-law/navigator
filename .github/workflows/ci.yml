@@ -293,6 +293,8 @@ jobs:
       # tree is supplied by operators through NAVIGATOR_DEPLOYMENTS_DIR.
       - name: validate the SOPS key inventory
         run: ./scripts/tests/check-sops-inventory.sh
+      - name: check the staging e2e harness api capture pattern
+        run: ./scripts/tests/check-staging-jev-e2e-subshell.sh
       - name: check the deployment tree
         run: >-
           "${CARGO_TARGET_DIR:-target}/debug/hudson"
