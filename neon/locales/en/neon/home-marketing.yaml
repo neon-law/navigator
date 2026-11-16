@@ -1,54 +1,91 @@
 head_title: "{site_name} | Home"
 meta_description: >-
-  Explore legal services for starting a business, planning your estate, preparing
-  court papers, and reviewing contracts. Contact an attorney about your next step.
-title: Neon Law
-tagline: What is your legal need?
+  Navigator, exacting agentic lawyering: each matter is a Project repository,
+  each document is a Notation, and a lawyer reviews every step.
+title: Navigator
+hero_mark: helm
+tagline: Exacting agentic lawyering.
 hero_lead: >-
-  Explore common legal needs below, or tell an attorney what you're working on.
+  Navigator gives a lawyer and an AI agent one place to work a matter: the
+  facts, the documents, the deadlines, and the review.
 hero_cta:
-  href: /contact
-  label: Talk to an attorney
-skin: home
+  href: https://github.com/neon-law/navigator
+  label: Star the repo
+skin: marketing
 bands:
-  - kind: cards
-    anchor: needs
-    overline: ""
-    heading: Legal services
+  - kind: steps
+    anchor: what-it-does
+    overline: What Navigator does
+    heading: The agent drafts. The lawyer decides.
     items:
-      - title: Start an LLC
+      - title: One Project per matter
         body:
-          - - text: Prepare the paperwork to form your company.
-      - title: Write a will
+          - - text: "Each matter is a Project with its own Git repository. The agent reads the Project's "
+            - text: navigator.yaml
+              code: true
+            - text: " and its Project Skills before it does any work."
+      - title: Documents as Notations
         body:
-          - - text: Put your wishes in writing and decide who will carry them out.
-      - title: Change your name
+          - - text: >-
+                A Template plus a questionnaire becomes a Notation for one
+                Person in one Project, with its answers and history kept
+                together.
+      - title: A lawyer reviews every step
         body:
-          - - text: Prepare a petition for a legal name change.
-      - title: File in small claims
+          - - text: >-
+                Agents prepare drafts. Email stays a draft until a lawyer sends
+                it, and nothing reaches a client before Lawyer Review.
+      - title: Use the tools you already have
         body:
-          - - text: Prepare the papers to bring a small claims case.
-      - title: Review a contract
+          - - text: >-
+                The CLI and the MCP server give Claude Code, Codex, and Cursor
+                the same commands a lawyer runs.
+  - kind: cards
+    anchor: notation
+    overline: Notation
+    heading: A document format built for agents and lawyers.
+    description: >-
+      Notation is Markdown with Frontmatter. One file holds the document, the
+      questions that fill it, and the review it needs.
+    items:
+      - title: Plain text
         body:
-          - - text: Understand the terms and discuss changes before you sign.
-      - title: Prepare an NDA
+          - - text: >-
+                Drafts live in Git, so each revision is a reviewable change
+                instead of a new file.
+      - title: Questionnaires
         body:
-          - - text: Set out what stays confidential before you share information.
-      - title: Make a job offer
+          - - text: >-
+                Typed questions gather the answers a Template needs, from a
+                client or from the agent.
+      - title: Many outputs
         body:
-          - - text: Put the role, pay, and other employment terms in an offer letter.
-      - title: Publish a privacy policy
+          - - text: >-
+                Render to PDF, return edits to Word with tracked changes, or
+                fill a government form.
+        href: /notations/about
+        href_label: Read about Notation
+      - title: A public library
         body:
-          - - text: Explain how your business collects and uses personal information.
-      - title: Respond to a dispute
-        body:
-          - - text: Discuss what happened, any deadlines, and your options.
+          - - text: >-
+                Browse letters, agreements, and government forms written in
+                Notation.
+        href: /notations
+        href_label: Browse the Notations
+  - kind: statement
+    heading: Navigator for legal aid
+    lead: We host Navigator for legal aid organizations under their own brand name.
+    body:
+      - - text: >-
+            Each user pays one monthly price, plus model tokens. Your own
+            Forgejo instance is included, and we run the rest.
+      - - text: See the Legal Aid offer
+          href: /legal-aid
   - kind: cta
-    heading: Talk through your next step
+    heading: Star Navigator on GitHub.
     body: >-
-      Tell an attorney what you need help with. You can ask questions and find out
-      what working together would involve.
+      A star helps other lawyers find Navigator.
     email: "{firm_email}"
     action:
-      href: /contact
-      label: Talk to an attorney
+      href: https://github.com/neon-law/navigator
+      label: Star the repo

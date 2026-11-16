@@ -334,7 +334,9 @@ pub(crate) async fn dioxus_document_head(req: Request, next: Next) -> Response {
     // must stay within the document's first 1024 bytes, and a face block
     // carrying two absolute bucket URLs is large enough to push it out.
     let rendered = String::from_utf8_lossy(&bytes);
-    let navigator_favicon = if is_navigator_page(&path) {
+    let same_day_app = path == views::brand::SAME_DAY_LEGAL_APP_PATH
+        && views::brand::brand_key() == views::brand::BrandKey::SameDayLegal;
+    let navigator_favicon = if is_navigator_page(&path) && !same_day_app {
         navigator_favicon_fragment()
     } else {
         ""
@@ -347,17 +349,19 @@ pub(crate) async fn dioxus_document_head(req: Request, next: Next) -> Response {
     } else {
         format!("{brand_fonts}{}", GUIEB_SHOOK_HEAD.as_str())
     };
-    let html = stamp_document_title(
-        &stamp_html_lang(&rendered, lang),
-        &path,
-        views::brand::FIRM_BRAND.site_name,
-    )
-    .replace("<script>", &format!("<script nonce=\"{nonce}\">"))
-    .replacen(
-        "</head>",
-        &format!("{navigator_favicon}{font_head}</head>"),
-        1,
-    );
+    let html = stamp_html_lang(&rendered, lang);
+    let html = if same_day_app {
+        html
+    } else {
+        stamp_document_title(&html, &path, views::brand::FIRM_BRAND.site_name)
+    };
+    let html = html
+        .replace("<script>", &format!("<script nonce=\"{nonce}\">"))
+        .replacen(
+            "</head>",
+            &format!("{navigator_favicon}{font_head}</head>"),
+            1,
+        );
     let html = if *SAMPLE_MATTERS {
         open_with_banner(&html, &SAMPLE_MATTERS_BANNER)
     } else {

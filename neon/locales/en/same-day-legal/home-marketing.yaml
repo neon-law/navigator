@@ -1,228 +1,53 @@
 head_title: "{site_name} | Home"
 meta_description: >-
-  Same Day Legal is one subscription from Lex Tecnica, Ltd. for your privacy,
-  your paperwork, and a lawyer: data removal, privacy protection, credit and
-  dark web monitoring, identity theft insurance, unclaimed property, basic form
-  filings such as forming an LLC, attorney review, and limited changes to a
-  Vesta estate plan, for $29/mo or $290/year. A single attorney review is $50.
-  Coming to iPhone and Android. Attorney advertisement.
-title: Same Day Legal
-hero_mark: helm
-tagline: Privacy, paperwork, and a lawyer, for one monthly fee.
+  Explore legal services for starting a business, planning your estate, preparing
+  court papers, and reviewing contracts. Contact an attorney about your next step.
+title: ""
+tagline: What is your legal need?
 hero_lead: >-
-  Delete your data, watch your credit and the dark web, insure your identity,
-  form your LLC, and ask a lawyer when you need one. Everything for $29/mo, or
-  $290/year with two months free. Cancel anytime.
+  Explore common legal needs or tell us what you need help with.
 hero_cta:
-  href: "#enrollment"
-  label: Start for $29/mo
+  href: /app
+  label: Explore the app
 skin: same_day_legal
 bands:
-  - kind: app_preview
-    anchor: app
-    overline: Coming to iPhone and Android
-    heading: Every check. One app. One price.
-    description: >-
-      Download Same Day Legal from the App Store or Google Play and subscribe
-      for $29/mo through the store you already use. Each check runs for you and
-      reports back in the app, so you see what was requested, what was found,
-      and what was filed. Screens are illustrative.
-    app_name: Same Day Legal
-    app_subtitle: Privacy, paperwork, lawyers
-    install_label: Get
-    checks_heading: Your checks
-    checks:
-      - title: Data removal
-        detail: Requests that companies delete your personal data, with a record of each.
-      - title: Privacy protection
-        detail: Privacy monitoring you choose at enrollment.
-      - title: Credit monitoring
-        detail: Opt in at enrollment. We confirm coverage before activation.
-      - title: Dark web monitoring
-        detail: Availability and coverage are confirmed before activation.
-      - title: Identity theft insurance
-        detail: Policy terms and limits are confirmed before activation.
-      - title: Unclaimed property
-        detail: We search government databases and file claims for you.
-      - title: Estate planning
-        detail: Limited changes to the estate plan you made with Vesta Estate Planning.
-      - title: Basic form filings
-        detail: Simple filings, such as forming an LLC. Government fees are separate.
-    android_heading: Your paperwork
-    android_items:
-      - title: Form an LLC
-        detail: Answer a few questions. We prepare the filing for you.
-      - title: Contract templates
-        detail: NDAs, offer letters, and privacy notices, filled from your answers.
-      - title: Removal requests
-        detail: Each request and each reply, kept in one record.
-      - title: Unclaimed property
-        detail: Claims you can follow from search to filing.
-      - title: Ask a lawyer
-        detail: Attorney review of your work, included in your subscription.
-    app_store_label: App Store
-    play_store_label: Google Play
-    availability: Coming soon to
   - kind: cards
-    anchor: included
-    overline: What you get
-    heading: More than a privacy app. More than a legal-forms site.
-    description: >-
-      Privacy services and online legal-form sites each sell one piece at a
-      time. Same Day Legal runs all of it for one price, keeps the record of
-      every request, claim, and filing in one place, and puts a lawyer behind
-      it.
+    anchor: needs
+    overline: ""
+    heading: Legal services
     items:
-      - title: Your privacy, handled
-        chips: ["Included"]
+      - title: Start an LLC
         body:
-          - - text: >-
-                Data removal requests with a record of every reply, privacy
-                protection, credit monitoring, dark web monitoring, and
-                identity theft insurance. Coverage is confirmed before
-                activation.
-        href: "#enrollment"
-        href_label: Start for $29/mo
-      - title: Your paperwork, with a lawyer
-        chips: ["Included"]
+          - - text: Prepare the paperwork to form your company.
+      - title: Write a will
         body:
-          - - text: >-
-                Form an LLC from a few answers, fill NDAs, offer letters, and
-                privacy notices from the template library, and have an attorney
-                review what you prepared. Government fees are separate.
-        href: "#enrollment"
-        href_label: Start for $29/mo
-      - title: Your money and your plan
-        chips: ["Included"]
+          - - text: Put your wishes in writing and decide who will carry them out.
+      - title: Change your name
         body:
-          - - text: >-
-                We search government databases for unclaimed property and file
-                the claims for you. Limited changes to an estate plan you make
-                with Vesta Estate Planning, a practice of Guieb & Shook PC,
-                are included. The plan itself is a separate engagement with
-                Vesta.
-        href: "#enrollment"
-        href_label: Start for $29/mo
-  - kind: cards
-    anchor: pricing
-    overline: Pricing
-    heading: Subscribe, or pay for one review.
-    description: >-
-      Choose one: a subscription that includes everything above, or a single
-      attorney review paid once. Government fees are separate. Cancel the
-      subscription anytime from the same account.
-    pricing_style: true
-    items:
-      - title: Monthly
+          - - text: Prepare a petition for a legal name change.
+      - title: File in small claims
         body:
-          - - text: Everything included, billed each month. Cancel anytime.
-        href: "#enrollment"
-        href_label: Start monthly
-      - title: Annual
+          - - text: Prepare the papers to bring a small claims case.
+      - title: Review a contract
         body:
-          - - text: Everything included, prepaid for the year. Two months free.
-        href: "#enrollment"
-        href_label: Start annual
-  - kind: cards
-    anchor: one-time
-    overline: Without a subscription
-    heading: Do it yourself, or pay once for a lawyer.
-    items:
-      - title: Free
-        chips: ["$0"]
+          - - text: Understand the terms and discuss changes before you sign.
+      - title: Prepare an NDA
         body:
-          - - text: >-
-                Download Navigator, the free and open-source MCP tool, and
-                prepare your own filings, such as forming your own LLC. No
-                lawyer reviews free work.
-        href: "https://github.com/neon-law/navigator"
-        href_label: Get Navigator
-      - title: One attorney review
-        chips: ["$50"]
+          - - text: Set out what stays confidential before you share information.
+      - title: Make a job offer
         body:
-          - - text: >-
-                A licensed attorney reviews one document or question you
-                prepared, paid once before the review begins. A subscription
-                includes attorney review instead.
-        href: "#enrollment"
-        href_label: Request a review
-  - kind: steps
-    anchor: how-it-works
-    overline: How it works
-    heading: Download, subscribe, and we run the checks.
-    items:
-      - title: Download Same Day Legal
+          - - text: Put the role, pay, and other employment terms in an offer letter.
+      - title: Publish a privacy policy
         body:
-          - - text: Get the app from the App Store or Google Play.
-      - title: Subscribe in the app
+          - - text: Explain how your business collects and uses personal information.
+      - title: Respond to a dispute
         body:
-          - - text: >-
-                Pay $29/mo through your App Store or Google Play account, or
-                prepay $290 for the year. Cancel anytime from the same account.
-      - title: Your checks run
-        body:
-          - - text: >-
-                Data removal, monitoring, unclaimed property, and your
-                paperwork report back in the app as each one moves.
-      - title: Ask a lawyer
-        body:
-          - - text: >-
-                Send a document or question for attorney review from the app.
-                Reviews are included in your subscription.
-  - kind: cards
-    anchor: lawyer-review
-    overline: Your lawyer
-    heading: A lawyer reviews your work.
-    description: >-
-      Draft it yourself, then ask a lawyer to check it. Attorney review is
-      legal work under a written engagement with Lex Tecnica, Ltd.
-    items:
-      - title: Attorney review
-        chips: ["Included"]
-        body:
-          - - text: >-
-                A licensed attorney reviews a document or question you
-                prepared. Without a subscription, one review is $50.
-      - title: Private legal sandbox
-        chips: ["$5 of usage included monthly"]
-        body:
-          - - text: >-
-                Work with Claude Sonnet, a frontier model, in a private
-                sandbox. Your subscription includes $5 of model usage each
-                month. After that, usage is priced à la carte.
-  - kind: statement
-    heading: Privacy and legal advice
-    lead: Legal work begins under a written engagement.
-    body:
-      - - text: >-
-            Same Day Legal is a service of Lex Tecnica, Ltd. Subscribing, the
-            app, and the sandbox do not by themselves make us your attorney or
-            establish attorney-client privilege. Attorney review and estate
-            plan changes begin under a written engagement.
-      - - text: >-
-            Attorney advertisement. Data removal does not guarantee that a
-            company will comply or prevent a future leak. Monitoring and
-            insurance coverage are confirmed before activation. Form filing does
-            not promise that an agency will accept the papers, and an unclaimed
-            property search does not promise that property will be found.
-      - - text: >-
-            Do not put Social Security numbers, account passwords, financial
-            records, or confidential legal questions in this public intake. We
-            confirm the appropriate private channel before collecting sensitive
-            information.
-  - kind: enrollment
-    heading: Get started.
+          - - text: Discuss what happened, any deadlines, and your options.
+  - kind: cta
+    heading: Talk through your next step
     body: >-
-      Start here without an account. Share your contact details, choose whether
-      we may text you, and review before sending. Then sign in to open the booking
-      link for a quick enrollment appointment.
-    steps: [Your contact details, Your contact choices, Review and continue]
-    next_label: Continue
-    back_label: Back
-    submit_label: Send and continue to sign in
-    booking_label: Book your enrollment appointment
-    booking_body: >-
-      You are signed in. Book a quick enrollment appointment to confirm your
-      monitoring choices and subscription terms. We arrange the applicable DocuSign
-      paperwork after that review. Booking alone does not activate protection or
-      create an attorney-client relationship.
+      Email our team to ask about your legal need. We’ll help you find the next step.
+    email: "{firm_email}"
+    action:
+      href: "mailto:{firm_email}"
+      label: Email Same Day Legal

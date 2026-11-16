@@ -130,44 +130,6 @@ async fn the_gateway_is_404_on_every_non_neon_brand_host() {
     }
 }
 
-/// Same Day Legal's home on its own hosts describes the subscription: the
-/// checks it runs, drawn as one iPhone app listing, monthly and prepaid annual
-/// pricing, the free tool and the single attorney review, and the intake.
-#[tokio::test]
-async fn the_same_day_legal_home_renders_with_the_app_checks_and_pricing() {
-    let app = app(state().await);
-    for host in ["sameday.neonlaw.com", "staging-sameday.neonlaw.com"] {
-        let (status, body) = get_on_host(&app, "/", Some(host)).await;
-        assert_eq!(status, StatusCode::OK, "{host}: {body}");
-        for expected in [
-            "<title>Same Day Legal | Home</title>",
-            "fm-page--same-day-legal",
-            r#"data-phone="ios""#,
-            r#"data-store="ios""#,
-            r#"data-store="android""#,
-            "Identity theft insurance",
-            "Dark web monitoring",
-            "Vesta Estate Planning",
-            "$29/mo",
-            "$290/year",
-            "$50",
-            "forming an LLC",
-            "Lex Tecnica, Ltd.",
-            r##"href="#enrollment""##,
-            r#"action="/leads""#,
-            r#"data-enrollment-intake="true""#,
-            "Send and continue to sign in",
-            "Attorney advertisement.",
-            "site-footer",
-        ] {
-            assert!(body.contains(expected), "{host} is missing {expected:?}");
-        }
-        for retired in ["Nautilus", "From $20", "non-legal service"] {
-            assert!(!body.contains(retired), "{host} still carries {retired:?}");
-        }
-    }
-}
-
 /// Neon's `/same-day-legal` link and retired `/nautilus` page answer a 301 to
 /// Same Day Legal's host; every other brand host 404s both.
 #[tokio::test]

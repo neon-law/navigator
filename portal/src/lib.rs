@@ -947,7 +947,9 @@ pub fn bootstrap_with_forgejo_oidc(
     host_dioxus: Vec<Router>,
     forgejo_oidc: forgejo_oidc::ForgejoOidc,
 ) -> Result<Router, MountError> {
-    validate_host_paths(host_paths)?;
+    // The public Dioxus composition can publish the Same Day Legal landing
+    // at the bare root. All shared application routes below it are reserved.
+    validate_host_paths(host_paths, !host_dioxus.is_empty())?;
     let branding = state
         .brand_bundle
         .as_ref()
@@ -2643,8 +2645,11 @@ fn is_reserved_host_path(path: &str) -> bool {
     })
 }
 
-fn validate_host_paths(host_paths: &[&str]) -> Result<(), MountError> {
-    if let Some(host_path) = host_paths.iter().find(|path| is_reserved_host_path(path)) {
+fn validate_host_paths(host_paths: &[&str], has_public_dioxus: bool) -> Result<(), MountError> {
+    if let Some(host_path) = host_paths.iter().find(|&&path| {
+        is_reserved_host_path(path)
+            && !(has_public_dioxus && path == views::brand::SAME_DAY_LEGAL_APP_PATH)
+    }) {
         return Err(MountError {
             host_path: (*host_path).to_owned(),
         });
@@ -2660,7 +2665,7 @@ fn validate_host_paths(host_paths: &[&str]) -> Result<(), MountError> {
 /// inspection, and allowing its duplicate-route panic would turn a host
 /// configuration error into an opaque boot failure.
 pub fn mount(state: AppState, host: Router, host_paths: &[&str]) -> Result<Router, MountError> {
-    validate_host_paths(host_paths)?;
+    validate_host_paths(host_paths, false)?;
     Ok(host.merge(router(state)))
 }
 

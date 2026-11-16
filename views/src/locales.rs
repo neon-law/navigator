@@ -747,9 +747,8 @@ pub fn locale_page_kind(stem: &str) -> Option<LocalePageKind> {
         | "immigration-humanitarian-relief"
         | "immigration-removal-defense"
         | "immigration-uscis-notices"
-        // The IEP Defenders home, composed as a marketing-page band
-        // sequence rather than the legacy home schema.
-        | "home-marketing" => Some(LocalePageKind::Marketing),
+        | "home-marketing"
+        | "mobile-app" => Some(LocalePageKind::Marketing),
         shared::SHARED_CATALOG_STEM => Some(LocalePageKind::Shared),
         services::SERVICES_CATALOG_STEM => Some(LocalePageKind::ServicesCatalog),
         _ => None,

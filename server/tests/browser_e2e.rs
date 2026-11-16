@@ -71,9 +71,23 @@ async fn enrollment_intake_preserves_answers_and_reviews_before_sign_in() {
     let Some(c) = new_client_or_skip().await else {
         return;
     };
-    c.goto(&format!("{origin}/#enrollment"))
+    c.goto(&format!("{origin}/"))
         .await
-        .expect("Same Day Legal");
+        .expect("Same Day Legal home");
+    wait_for_text(&c, "What is your legal need?", Duration::from_secs(20)).await;
+    c.find(Locator::Css(".fm-hero a[href='/app']"))
+        .await
+        .expect("mobile app link")
+        .click()
+        .await
+        .unwrap();
+    assert_eq!(c.current_url().await.unwrap().path(), "/app");
+    c.find(Locator::Css(".fm-hero a[href='#enrollment']"))
+        .await
+        .expect("enrollment link")
+        .click()
+        .await
+        .unwrap();
     wait_for_text(&c, "Your contact details", Duration::from_secs(20)).await;
     let email = c
         .find(Locator::Css("[data-enrollment-intake] [name=email]"))
@@ -5876,23 +5890,16 @@ async fn every_sample_matter_page_renders_in_the_client_and_lawyer_lens() {
     c.close().await.unwrap();
 }
 
-/// The home offers attorney contact and keeps Navigator reachable from the header.
+/// The home presents Navigator; the header carries a reader to the
+/// Navigator page and back.
 #[tokio::test]
-async fn neon_home_links_to_the_navigator_page_and_back() {
+async fn navigator_home_links_to_the_navigator_page_and_back() {
     let Some(c) = new_client_or_skip().await else {
         return;
     };
     c.set_window_size(1280, 900).await.unwrap();
     c.goto(&format!("{}/", base_url())).await.unwrap();
-    wait_for_text(&c, "What is your legal need?", Duration::from_secs(10)).await;
-    c.find(Locator::Css(".fm-hero a[href='/contact']"))
-        .await
-        .expect("attorney contact link")
-        .click()
-        .await
-        .unwrap();
-    assert_eq!(c.current_url().await.unwrap().path(), "/contact");
-    c.goto(&format!("{}/", base_url())).await.unwrap();
+    wait_for_text(&c, "Star the repo", Duration::from_secs(10)).await;
     c.find(Locator::Css(".site-header a[href='/navigator']"))
         .await
         .expect("Navigator link")
@@ -5907,7 +5914,7 @@ async fn neon_home_links_to_the_navigator_page_and_back() {
         .click()
         .await
         .unwrap();
-    wait_for_text(&c, "What is your legal need?", Duration::from_secs(10)).await;
+    wait_for_text(&c, "Exacting agentic lawyering.", Duration::from_secs(10)).await;
     assert_eq!(c.current_url().await.unwrap().path(), "/");
     c.close().await.unwrap();
 }
