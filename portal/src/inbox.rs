@@ -77,6 +77,26 @@ pub async fn start_inbound_message_alert(message_id: Uuid) -> Result<(), String>
     }
 }
 
+/// Preserve raw provider bytes in the receiving Firm's Inbox archive.
+pub(crate) async fn archive_inbound_inbox_mail(
+    storage: &std::sync::Arc<dyn cloud::StorageService>,
+    firm_id: Uuid,
+    raw: &[u8],
+) -> Result<Option<String>, String> {
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    let key = format!(
+        "inbound/inbox/{firm_id}/{}.eml",
+        store::assets::sha256_hex(raw)
+    );
+    storage
+        .put(&key, raw, "message/rfc822")
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(Some(key))
+}
+
 /// Ingest a parsed inbound email's clean attachments as content-addressed
 /// Assets. Quarantined attachments never reach here: the scanner strips
 /// their bytes, and only their safe metadata survives on the email. The
@@ -210,19 +230,9 @@ async fn ingest_support_email_for_firm(
     let provider_message_id = provider_message_id(email);
     // Keep the source on this normalized message even without optional
     // threading or an RFC Message-ID. The content key also survives replay.
-    let raw_storage_key = if email.raw.is_empty() {
-        None
-    } else {
-        let key = format!(
-            "inbound/inbox/{firm_id}/{}.eml",
-            store::assets::sha256_hex(&email.raw)
-        );
-        storage
-            .put(&key, &email.raw, "message/rfc822")
-            .await
-            .map_err(|error| error.to_string())?;
-        Some(key)
-    };
+    let raw_storage_key = archive_inbound_inbox_mail(storage, firm_id, &email.raw).await?;
+    let occurred_at = crate::inbound_email::date_from_raw(&email.raw)
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
     let email_conversation_id = linked_email_conversation(db, email, &from).await?;
     let attachments = ingest_attachments(db, storage, email, firm_id, None).await?;
     let account = std::env::var("NAVIGATOR_EMAIL_PROVIDER_ACCOUNT")
@@ -253,7 +263,7 @@ async fn ingest_support_email_for_firm(
             promotional_opt_in: false,
             email_conversation_id,
             attachments,
-            occurred_at: &chrono::Utc::now().to_rfc3339(),
+            occurred_at: &occurred_at,
             raw_storage_key: raw_storage_key.as_deref(),
         },
     )
