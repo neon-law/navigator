@@ -94,6 +94,22 @@ api_json() {
   printf '%s' "$out"
 }
 
+# api() publishes API_STATUS/API_HEADERS in whatever shell runs it, so a call
+# inside a command substitution loses them — `$(api ...)` runs in a subshell,
+# and the first staging dispatch (Actions run 43855678952) died at precheck's
+# parent-shell `API_STATUS` read under `set -u` exactly there. Every caller
+# that needs the status or headers afterwards invokes api through this helper,
+# which runs it in the CURRENT shell and stages the body in a temp file;
+# API_BODY_FILE names the body, and the caller removes the file when done.
+api_capture() {
+  local method="$1" path="$2" body="${3:-}" tmp
+  tmp="$(mktemp)"
+  API_STATUS=""
+  API_HEADERS=""
+  api "$method" "$path" "$body" > "$tmp"
+  API_BODY_FILE="$tmp"
+}
+
 # Resolve a Person's id by a unique email fragment: the directory door is
 # paginated, so a bare listing can miss rows; `filter[email]` is a
 # case-insensitive substring match over the whole directory. The run id in
@@ -125,7 +141,8 @@ precheck() {
   fi
 
   local probe backlog
-  probe="$(api POST /app/api/inbox/assign-matches '{"apply":false,"after":null}')"
+  api_capture POST /app/api/inbox/assign-matches '{"apply":false,"after":null}'
+  probe="$(cat "$API_BODY_FILE")"; rm -f "$API_BODY_FILE"
   [[ "$API_STATUS" == 200 ]] || die "assign-matches precheck failed (HTTP $API_STATUS): $(head -c 300 <<<"$probe")"
   backlog="$(jq 'length' <<<"$probe")"
   note "precheck: door answered; backlog holds ${backlog} thread(s)"
@@ -275,7 +292,8 @@ run-assignment() {
   while :; do
     body="$(jq -nc --arg cursor "$cursor" \
       '{apply: false, after: (if $cursor == "" then null else ($cursor | fromjson) end)}')"
-    resp="$(api POST /app/api/inbox/assign-matches "$body")"
+    api_capture POST /app/api/inbox/assign-matches "$body"
+    resp="$(cat "$API_BODY_FILE")"; rm -f "$API_BODY_FILE"
     [[ "$API_STATUS" == 200 ]] || die "assign-matches failed (HTTP $API_STATUS): $(head -c 300 <<<"$resp")"
     jq -c '.[]' <<<"$resp" >> "$VIEWS"
     # The continuation rides the x-navigator-next-cursor header as a JSON
@@ -413,8 +431,9 @@ cleanup() {
 
   while IFS= read -r id; do
     [[ -n "$id" ]] || continue
-    api DELETE "/app/api/projects/${id}" >/dev/null || true
+    api_capture DELETE "/app/api/projects/${id}" || true
     status="$API_STATUS"
+    rm -f "$API_BODY_FILE"
     report+="- matter ${id}: HTTP ${status}"$'\n'
   done < <(jq -r '.projects[].id' "$STATE")
 
@@ -430,15 +449,17 @@ cleanup() {
       report+="- person ${person_email}: already gone"$'\n'
       continue
     fi
-    api DELETE "/app/api/people/${person_id}" >/dev/null || true
+    api_capture DELETE "/app/api/people/${person_id}" || true
     status="$API_STATUS"
+    rm -f "$API_BODY_FILE"
     report+="- person ${person_email} (${person_id}): HTTP ${status}"$'\n'
   done < <({ jq -r '.persons[].email' "$STATE"; jq -r '.messages[].from' "$STATE"; } | sort -u)
 
   while IFS= read -r id; do
     [[ -n "$id" ]] || continue
-    api DELETE "/app/api/entities/${id}" >/dev/null || true
+    api_capture DELETE "/app/api/entities/${id}" || true
     status="$API_STATUS"
+    rm -f "$API_BODY_FILE"
     report+="- entity ${id}: HTTP ${status}"$'\n'
   done < <(jq -r '.entities[].id' "$STATE")
 
