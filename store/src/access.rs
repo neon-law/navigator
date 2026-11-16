@@ -466,7 +466,7 @@ fn is_client_participation(row: &projects::PersonProjectRole) -> bool {
     projects::PARTICIPATION_CLIENT_SIDE.contains(&row.participation.as_str()) || row.is_client_dri
 }
 
-fn is_firm_participation(row: &projects::PersonProjectRole) -> bool {
+pub(crate) fn is_firm_participation(row: &projects::PersonProjectRole) -> bool {
     !projects::PARTICIPATION_CLIENT_SIDE.contains(&row.participation.as_str()) && !row.is_client_dri
 }
 

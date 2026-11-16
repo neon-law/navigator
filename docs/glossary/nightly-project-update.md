@@ -70,9 +70,8 @@ The tag set is closed. Adding a tag is a glossary change in the same PR as the c
 describe the children, including work not yet implemented.
 
 `membership` — create or adopt the **internal** Slack channel (`navigator-<code>`, or `staging-<code>` on a simulated
-deployment) with the owning Firm's Slack bot. Invite the Lawyer [DRI](directly-responsible-individual-dri.md),
-participating Clerks, and owning-Firm Lawyers and Clerks. Prefer recorded Slack identities. Never write the customer
-Slack channel. Never invite a client.
+deployment) with the owning Firm's Slack bot. Invite the Lawyer [DRI](directly-responsible-individual-dri.md) and the
+other Firm-side Project participants. Prefer recorded Slack identities. The reconciliation targets the internal channel.
 
 `slack` — upsert the internal channel's one canvas: synopsis, Client DRI emails, Lawyer DRIs, portal
 `/app/projects/{code}/portal/`, and basic handles (code, status, repository URL when recorded). A later run edits the
