@@ -15,6 +15,8 @@ prompts:
   incident_contacts: "Who are the primary and alternate contacts? Include name, title, email, and postal address."
   business_rights: "State procedures and deadlines for access, amendment, and accounting requests."
   business_cure_period: "State the cure period for a curable material violation."
+  law: "Which jurisdiction’s law governs this agreement?"
+  seat: "Where is the arbitration seated?"
 audiences:
   effective_date: lawyer
   business_customer_role: lawyer
@@ -45,6 +47,10 @@ questionnaire:
   custom_text__business_rights:
     _: custom_text__business_cure_period
   custom_text__business_cure_period:
+    _: jurisdiction__law
+  jurisdiction__law:
+    _: jurisdiction__seat
+  jurisdiction__seat:
     _: END
   END: {}
 workflow:

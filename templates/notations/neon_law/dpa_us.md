@@ -5,6 +5,11 @@ jurisdiction: US
 respondent_type: person_and_entity
 confidential: false
 clauses:
+  dispute:
+    source: dispute_resolution@1
+    inputs:
+      law: jurisdiction__law
+      seat: jurisdiction__seat
   administration:
     source: dpa_administration@1
   signatures:
@@ -24,6 +29,8 @@ prompts:
   business_subprocessors: "List each subprocessor, function, location, and change-notice channel."
   business_subprocessor_notice: "What advance notice period applies to subprocessor changes?"
   business_exit: "Specify return format, deletion deadline, backup expiration, and legally required retention."
+  law: "Which jurisdiction’s law governs this agreement?"
+  seat: "Where is the arbitration seated?"
 audiences:
   effective_date: lawyer
   business_agreement: lawyer
@@ -153,6 +160,12 @@ On service completion, Customer chooses return or deletion under {{custom_text__
 remaining copies unless law requires retention, document the legal basis, isolate retained data, and use it only for
 that required purpose. It will confirm completion on request and ensure subprocessors follow the same obligations.
 Protection continues until deletion.
+
+## VIII. Governing law and dispute resolution
+
+{{> dispute}}
+
+## IX. Administration
 
 {{> administration}}
 

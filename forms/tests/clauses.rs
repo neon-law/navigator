@@ -40,15 +40,15 @@ fn remaining_agreement_clauses_preserve_the_compiled_body_bytes() {
         ),
         (
             include_str!("../../templates/notations/neon_law/business_associate_agreement.md"),
-            "a564785aff8a785bd35fae4b818b355cd4c9596b8d78d6adda7b3294b42999a7",
+            "edbd0b230301246ea1adec69d26fb207044f9ec090870ac015053937b690d42e",
         ),
         (
             include_str!("../../templates/notations/neon_law/dpa_us.md"),
-            "9ea91cc7db340a09d2679cdc06a8d9849828bc7bbac9eaf1f39a948af6a51c83",
+            "7d9e91cdd88b040a16c4926e8abd34ed681f40882e3bd080be8f0fae04f0047a",
         ),
         (
             include_str!("../../templates/notations/neon_law/dpa_global.md"),
-            "392d811624ec8c21dde63a340c34fb048f18bf6c38f98a16b032206d2a1f68cc",
+            "356a25980d03bba4911d28b37279cd9475e11c6271ec6d0dc1d8daebdbd87795",
         ),
         (
             include_str!("../../templates/notations/neon_law/employee_offer_letter.md"),
