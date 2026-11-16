@@ -12,6 +12,11 @@ automated outcomes stay uncertain. A suggested Project is never applied on its o
 and the row remains in the review queue until privilege is settled too. The row records these decisions as an auditable
 disposition.
 
+When DBOS Inbox triage is enabled, a Firm-side Project participant can approve filing one reviewed Message as an
+internal [Communication](communication.md). The approved filing names the Message, Project, review revision and current
+[Inbox Assignment](inbox-assignment.md). The worker rechecks that scope and the approver's access before it writes.
+Replaying the same filing reuses the Communication.
+
 The table is `inbox_triage`.
 
 Schema: [`inbox_triage`](../../store/postgres/schema.sql).

@@ -277,6 +277,10 @@ pub fn routes(
             post(crate::inbox::triage_confirm_post),
         )
         .route(
+            "/app/inbox/{conversation_id}/triage/{triage_id}/file/{project_id}",
+            post(crate::inbox::triage_file_post),
+        )
+        .route(
             "/app/inbox/{conversation_id}/triage/{triage_id}/override",
             post(crate::inbox::triage_override_post),
         )

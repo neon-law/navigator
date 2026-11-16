@@ -594,6 +594,31 @@ pub async fn start_dbos_sandbox_credit_reset(
 
 pub const INBOUND_TRIAGE_DBOS_ENABLED_ENV: &str = "NAVIGATOR_DBOS_INBOUND_TRIAGE_ENABLED";
 
+/// Queue a reviewed Inbox filing on the DBOS lane.
+pub async fn start_approved_inbox_filing(
+    approval: &store::inbox_triage::FilingApproval,
+) -> Result<(), TriggerError> {
+    let target = service_target(
+        INBOUND_TRIAGE_DBOS_ENABLED_ENV,
+        std::env::var(INBOUND_TRIAGE_DBOS_ENABLED_ENV)
+            .ok()
+            .as_deref(),
+        std::env::var(DBOS_INGRESS_URL_ENV).ok(),
+        std::env::var(DBOS_INGRESS_TOKEN_ENV).ok(),
+    )
+    .map_err(|_| TriggerError::Transport)?;
+    let ServiceTarget::Dbos { ingress, token } = target else {
+        return Err(TriggerError::Transport);
+    };
+    start_dbos_at(
+        &ingress,
+        &token,
+        "/internal/dbos/approved-inbox-filing",
+        approval,
+    )
+    .await
+}
+
 /// Select one durable engine for a persisted inbound Message.
 pub async fn start_inbound_triage(message_id: uuid::Uuid) -> Result<(), String> {
     let request = crate::InboundTriageRequest { message_id };

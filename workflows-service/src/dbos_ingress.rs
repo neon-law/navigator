@@ -125,6 +125,7 @@ async fn start_sandbox_credit_reset(
 pub struct TriageIngress {
     pub token: Arc<str>,
     pub workflow: crate::inbound_triage::TriageWorkflow,
+    pub filing: crate::inbound_triage::FilingWorkflow,
 }
 
 async fn start_inbound_triage(
@@ -145,6 +146,33 @@ async fn start_inbound_triage(
         .workflow
         .start_with(
             request,
+            dbos::StartOptions {
+                workflow_id: Some(&workflow_id),
+                ..Default::default()
+            },
+        )
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    Ok((StatusCode::ACCEPTED, Json(Accepted { workflow_id })))
+}
+
+async fn start_approved_inbox_filing(
+    State(ingress): State<TriageIngress>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<(StatusCode, Json<Accepted>), StatusCode> {
+    if !authorized(&headers, &ingress.token) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    if body.len() > MAX_BODY_BYTES {
+        return Err(StatusCode::PAYLOAD_TOO_LARGE);
+    }
+    let approval = serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let workflow_id = crate::inbound_triage::filing_workflow_id(&approval);
+    ingress
+        .filing
+        .start_with(
+            approval,
             dbos::StartOptions {
                 workflow_id: Some(&workflow_id),
                 ..Default::default()
@@ -548,10 +576,15 @@ pub fn add_routes(router: Router, ingress: WorkerIngress) -> Router {
         router
     };
     let router = if let Some(triage) = ingress.inbound_triage {
-        router.route(
-            "/internal/dbos/inbound-triage",
-            post(start_inbound_triage).with_state(triage),
-        )
+        router
+            .route(
+                "/internal/dbos/inbound-triage",
+                post(start_inbound_triage).with_state(triage.clone()),
+            )
+            .route(
+                "/internal/dbos/approved-inbox-filing",
+                post(start_approved_inbox_filing).with_state(triage),
+            )
     } else {
         router
     };

@@ -987,7 +987,8 @@ async fn main() -> anyhow::Result<()> {
                     if let (Some(service), Some(token)) = (triage_dbos.clone(), dbos_ingress_token.as_ref()) {
                         registered_ingress.inbound_triage = Some(workflows_service::dbos_ingress::TriageIngress {
                             token: token.as_str().into(),
-                            workflow: workflows_service::inbound_triage::register_dbos(dbos, service)?,
+                            workflow: workflows_service::inbound_triage::register_dbos(dbos, service.clone())?,
+                            filing: workflows_service::inbound_triage::register_filing_dbos(dbos, service)?,
                         });
                     }
                     if let (Some((postgres, surreal)), Some(token)) = (sandbox_credit_reset_stores.clone(), dbos_ingress_token.as_ref()) {

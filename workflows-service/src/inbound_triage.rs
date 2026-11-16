@@ -567,6 +567,68 @@ async fn record_triage(
     Ok(triage_report(message_id, &recorded))
 }
 
+pub type FilingWorkflow = dbos::WorkflowRef<store::inbox_triage::FilingApproval, Uuid, FilingError>;
+
+#[derive(Debug, thiserror::Error, Serialize, Deserialize)]
+pub enum FilingError {
+    #[error("the filing approval is no longer current")]
+    ApprovalExpired,
+    #[error("the approved Inbox filing failed")]
+    Store,
+}
+
+#[must_use]
+pub fn filing_workflow_id(approval: &store::inbox_triage::FilingApproval) -> String {
+    let revision = format!(
+        "{}:{}:{}:{}:{}:{}",
+        approval.triage_id,
+        approval.message_id,
+        approval.project_id,
+        approval.approved_by,
+        approval.review_revision.to_rfc3339(),
+        approval.assignment_id.unwrap_or_default(),
+    );
+    format!(
+        "FileInboxMessage:{}",
+        store::assets::sha256_hex(revision.as_bytes())
+    )
+}
+
+pub fn register_filing_dbos(
+    dbos: &dbos::DBOS,
+    service: InboundTriageService,
+) -> dbos::Result<FilingWorkflow> {
+    let surreal = service.surreal;
+    dbos.register_workflow(
+        "FileInboxMessage",
+        move |approval: store::inbox_triage::FilingApproval| {
+            let surreal = surreal.clone();
+            async move {
+                let filed = dbos::step_with(
+                    "file-approved-message",
+                    dbos::StepOptions {
+                        max_attempts: 3,
+                        ..Default::default()
+                    },
+                    || async {
+                        match store::inbox_triage::file_approved_message(&surreal, &approval).await
+                        {
+                            Ok(id) => Ok(Some(id)),
+                            Err(
+                                store::inbox::InboxError::Denied
+                                | store::inbox::InboxError::NotFound,
+                            ) => Ok(None),
+                            Err(_) => Err(dbos::Error::Application(FilingError::Store)),
+                        }
+                    },
+                )
+                .await?;
+                filed.ok_or(dbos::Error::Application(FilingError::ApprovalExpired))
+            }
+        },
+    )
+}
+
 pub type TriageWorkflow = dbos::WorkflowRef<InboundTriageRequest, InboundTriageReport, TriageError>;
 
 #[derive(Debug, thiserror::Error, Serialize, Deserialize)]
