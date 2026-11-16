@@ -705,6 +705,77 @@ async fn run_lifecycle() {
     assert_interrupted_import_recovers_attachments(&fixture, project.firm_id.unwrap()).await;
     assert_extensionless_attachment_filing(&fixture).await;
     Box::pin(assert_fi_lifecycle(&fixture, &pg, project_id)).await;
+    assert_gmail_import_lifecycle(&fixture, &pg, lawyer_id, project.firm_id.unwrap()).await;
+}
+
+async fn assert_gmail_import_lifecycle(
+    fixture: &Fixture,
+    pg: &store::postgres::PostgresDb,
+    lawyer_id: Uuid,
+    firm_id: Uuid,
+) {
+    // This is the isolated lifecycle child, with a single test and a synthetic mailbox.
+    std::env::set_var("NAVIGATOR_INBOX_FIRM_ID", firm_id.to_string());
+    std::env::set_var("NAVIGATOR_LAWYER_MAILBOXES", MAILBOX);
+    let eml = String::from_utf8(INBOUND_EML.to_vec()).unwrap().replace(
+        "notice-1@opposing.example",
+        "gmail-adapter@opposing.example",
+    );
+    let body = email_body(eml.as_bytes(), &json!({"source": "gmail"}));
+
+    let (status, _) = post_json(&fixture.app, Some(&fixture.lawyer_session), body.clone()).await;
+    assert_eq!(status, 403, "an unverified mailbox cannot import Gmail");
+    store::persons::set_email_confirmed(&fixture.surreal, lawyer_id, true)
+        .await
+        .unwrap();
+
+    let (status, _) = post_json(
+        &fixture.app,
+        Some(&fixture.lawyer_session),
+        merge_extra(body.clone(), &json!({"mailbox": "another@example.test"})),
+    )
+    .await;
+    assert_eq!(
+        status, 403,
+        "only the configured mailbox can use Gmail intake"
+    );
+
+    let (status, _) = post_json(
+        &fixture.app,
+        Some(&fixture.lawyer_session),
+        merge_extra(body.clone(), &json!({"project": "alpha-matter"})),
+    )
+    .await;
+    assert_eq!(
+        status, 400,
+        "Gmail intake must leave attribution for lawyer confirmation"
+    );
+
+    let (status, first) =
+        post_json(&fixture.app, Some(&fixture.lawyer_session), body.clone()).await;
+    assert_eq!(status, 201, "{first}");
+    let message_id = first["imported"][0]["message_id"]
+        .as_str()
+        .unwrap()
+        .parse::<Uuid>()
+        .unwrap();
+    let (status, replay) = post_json(&fixture.app, Some(&fixture.lawyer_session), body).await;
+    assert_eq!(status, 201, "{replay}");
+    assert_eq!(
+        replay["imported"][0]["message_id"],
+        first["imported"][0]["message_id"]
+    );
+    assert_eq!(replay["imported"][0]["deduped"], true);
+
+    let scope: (Uuid, String, Option<String>, Option<Uuid>) = sqlx::query_as(
+        "SELECT c.firm_id, c.provider_account, c.source_channel, c.project_id
+         FROM message m JOIN inbox_conversation c ON c.id = m.conversation_id WHERE m.id = $1",
+    )
+    .bind(message_id)
+    .fetch_one(pg.pool())
+    .await
+    .unwrap();
+    assert_eq!(scope, (firm_id, MAILBOX.into(), Some("email".into()), None));
 }
 
 async fn assert_native_provider_attachment_ingest(

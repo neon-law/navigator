@@ -23,7 +23,7 @@ use crate::api::{ApiError, ApiState, LawyerSession};
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct InboxImportRequest {
-    /// Which adapter parses the payload (`email` | `linkedin`).
+    /// Which adapter parses the payload (`email` | `gmail` | `linkedin`).
     source: String,
     /// The importing account — the lawyer's mailbox address, or their
     /// LinkedIn profile URL. Becomes the Inbox `provider_account`.
@@ -150,6 +150,34 @@ fn decode_payload(encoded: &str) -> Result<Vec<u8>, Response> {
         .map_err(|_| bad_request("invalid_base64", "payload_base64 is not valid base64."))
 }
 
+/// The Gmail adapter may import only the actor's verified mailbox and must use
+/// the Firm's canonical lawyer-intake account so re-delivery keeps its identity.
+async fn gmail_import_firm(
+    state: &ApiState,
+    actor_id: Uuid,
+    mailbox: &str,
+) -> Result<(Uuid, String), ApiError> {
+    let config = crate::lawyer_mailbox::Config::from_env().ok_or(ApiError::Forbidden)?;
+    let person = store::persons::find_by_any_email(&state.surreal, mailbox)
+        .await
+        .map_err(ApiError::Person)?
+        .filter(|person| {
+            person.id == actor_id && person.email_confirmed && person.role.is_lawyer_tier()
+        })
+        .ok_or(ApiError::Forbidden)?;
+    let memberships = store::firms::memberships_for_person(&state.surreal, person.id)
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))?;
+    if !config.provider_account().eq_ignore_ascii_case(mailbox)
+        || !memberships
+            .iter()
+            .any(|membership| membership.firm_id == config.firm_id)
+    {
+        return Err(ApiError::Forbidden);
+    }
+    Ok((config.firm_id, config.provider_account().to_owned()))
+}
+
 /// The Firm the import lands in — the named matter's Firm when `project`
 /// is given, else the caller's own practice Firm. A named matter must be
 /// one the caller can see: a matter code is not an authorization grant.
@@ -196,6 +224,30 @@ async fn resolve_firm_and_project(
     Ok((project_firm, Some(project.id)))
 }
 
+async fn resolve_import_target(
+    state: &ApiState,
+    lawyer: &LawyerSession,
+    person_id: Uuid,
+    input: &InboxImportRequest,
+    mailbox: String,
+) -> Result<(Uuid, Option<Uuid>, String), Response> {
+    if input.source.trim() != "gmail" {
+        return resolve_firm_and_project(state, lawyer, person_id, input.project.as_deref())
+            .await
+            .map(|(firm, project)| (firm, project, mailbox));
+    }
+    if input.project.is_some() {
+        return Err(bad_request(
+            "project_confirmation_required",
+            "Import Gmail into the Inbox and confirm proposed Project filings individually.",
+        ));
+    }
+    gmail_import_firm(state, person_id, &mailbox)
+        .await
+        .map(|(firm, canonical)| (firm, None, canonical))
+        .map_err(IntoResponse::into_response)
+}
+
 /// Archive the verbatim payload (AC6): one key for the .eml, or the CSV
 /// once for the whole export — direction-neutral `mail/` prefix, recorded
 /// on every Message this import creates.
@@ -228,6 +280,11 @@ async fn archive_payload(
     Ok(archived_key)
 }
 
+struct ImportMailbox<'a> {
+    account: &'a str,
+    gmail: bool,
+}
+
 /// Walk every parsed message through the direction-aware postgres ingest,
 /// then idempotently file email attachments (AC4,
 /// AC8). The importing actor is the mailbox owner: their own rows (From
@@ -239,7 +296,7 @@ async fn import_all(
     firm_id: Uuid,
     project_id: Option<Uuid>,
     messages: &mut [store::inbox_import::ImportMessage],
-    mailbox: &str,
+    mailbox: &ImportMailbox<'_>,
     archived_key: &str,
 ) -> Result<Vec<ImportedMessage>, ApiError> {
     let mut imported = Vec::with_capacity(messages.len());
@@ -251,7 +308,11 @@ async fn import_all(
             }
             store::inbox_import::Direction::Inbound => (store::inbox::direction::INBOUND, None),
         };
-        let ingest = store::inbox_import::import_message_to_ingest(message, firm_id, mailbox);
+        let mut ingest =
+            store::inbox_import::import_message_to_ingest(message, firm_id, mailbox.account);
+        if mailbox.gmail {
+            ingest.source_channel = Some(store::inbox::channel::EMAIL);
+        }
         let ingested = store::inbox::ingest_imported(direction, author, &ingest)
             .await
             .map_err(|error| inbox_error(&error))?;
@@ -326,27 +387,22 @@ pub(crate) async fn inbox_import_door(
             "The importing account (`mailbox`) is required.",
         ));
     }
-    let adapter = match store::inbox_import::source_adapter(input.source.trim()) {
+    let source = input.source.trim();
+    let gmail = source == "gmail";
+    let adapter = match store::inbox_import::source_adapter(if gmail { "email" } else { source }) {
         Ok(adapter) => adapter,
         Err(error) => {
             return Ok(bad_request("unknown_source", &error.to_string()));
         }
     };
+
+    let (firm_id, project_id, mailbox) =
+        match resolve_import_target(&state, &lawyer, person_id, &input, mailbox).await {
+            Ok(target) => target,
+            Err(response) => return Ok(response),
+        };
     let bytes = match decode_payload(&input.payload_base64) {
         Ok(bytes) => bytes,
-        Err(response) => return Ok(response),
-    };
-
-    // The Firm the import lands in, and the matter it is attributed to.
-    let (firm_id, project_id) = match resolve_firm_and_project(
-        &state,
-        &lawyer,
-        person_id,
-        input.project.as_deref(),
-    )
-    .await
-    {
-        Ok(resolved) => resolved,
         Err(response) => return Ok(response),
     };
 
@@ -387,7 +443,10 @@ pub(crate) async fn inbox_import_door(
         firm_id,
         project_id,
         &mut messages,
-        &mailbox,
+        &ImportMailbox {
+            account: &mailbox,
+            gmail,
+        },
         &archived_key,
     )
     .await?;
