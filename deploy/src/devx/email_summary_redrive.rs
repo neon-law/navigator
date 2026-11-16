@@ -400,14 +400,14 @@ mod tests {
             .await
             .expect("mark confirmed");
 
-        // Both Restate endpoints share one dedicated recorder. The refusal
-        // must happen before making any request.
-        let restate = MockServer::builder().start().await;
-        let config = test_config(&restate.uri());
+        // The refusal must precede either HTTP call: an unusable endpoint
+        // would return a transport failure if the code reached it.
+        let unavailable = "not-a-url";
+        let config = test_config(unavailable);
 
         let error = redrive_with(
             &db,
-            &restate.uri(),
+            unavailable,
             "admin-token",
             None,
             &config,
@@ -429,7 +429,6 @@ mod tests {
             .expect("receipt still readable")
             .expect("receipt still exists");
         assert_eq!(receipt.archive_key, "inbound/example.eml");
-        assert!(restate.received_requests().await.unwrap().is_empty());
     }
 
     async fn confirmed_delivery(db: &store::surreal::SurrealDb, receipt_id: Uuid) {
