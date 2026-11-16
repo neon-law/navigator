@@ -8967,6 +8967,7 @@ dependencies = [
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
+ "typesafe",
  "url",
  "uuid",
  "views",
@@ -13663,6 +13664,19 @@ name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
+
+[[package]]
+name = "typesafe"
+version = "26.11.15"
+dependencies = [
+ "async-trait",
+ "reqwest 0.13.5",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "wiremock",
+]
 
 [[package]]
 name = "typetag"

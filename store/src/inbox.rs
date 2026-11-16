@@ -144,10 +144,9 @@ pub mod route {
 /// portal door resolves the addresses against the store and hands the
 /// results in, and the tests call the same shapes without a database.
 ///
-/// The TypeSafe/Jev method this slice deliberately omits (LAW-346's
-/// zero-data-retention gate) rides the same [`DecisionLog`] shape when it
-/// arrives: its model id and probabilities have fields here already, and
-/// the address-match method always leaves them absent.
+/// The TypeSafe/Jev method (LAW-347) rides the same [`DecisionLog`] shape:
+/// its model id and probabilities fill the fields the address-match method
+/// always leaves absent, and the method spelling marks who decided.
 pub mod assign_match {
     use serde::Serialize;
     use uuid::Uuid;
@@ -191,14 +190,34 @@ pub mod assign_match {
         NoMatch,
         /// More than one open Project matched; choosing is the lawyer's.
         Ambiguous,
+        /// The LAW-346 ZDR gate is closed — no operator flag or no key —
+        /// so the Jev method never ran.
+        JevGateClosed,
+        /// The Jev call failed (auth, status, timeout, unreadable answer);
+        /// the thread falls back to the lawyer.
+        JevUnavailable,
+        /// The Firm's open Projects exceed the wire's 255-option ceiling.
+        JevTooManyProjects,
+        /// Jev answered but carried no usable probability distribution.
+        JevNoProbabilities,
+        /// Jev's confidence sat under the proposal band.
+        JevBelowThreshold,
+        /// Jev chose the `none` option: not matter mail.
+        JevNotMatter,
+        /// Two Projects sat within a tie's distance of the choice.
+        JevTied,
     }
 
-    /// What the address-match method decided for one thread.
+    /// What the assignment method decided for one thread.
     #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
     #[serde(tag = "decision", rename_all = "snake_case")]
     pub enum MatchOutcome {
         /// Exactly one open Project matched; the thread assigns to it.
         Assigned { project_id: Uuid },
+        /// Jev proposes the Project in the middle confidence band; the
+        /// thread stays in the inbox and the lawyer confirms before
+        /// anything assigns.
+        Proposed { project_id: Uuid },
         /// The thread stays in the inbox for the lawyer.
         LeftInInbox { reason: LeftReason },
     }
@@ -218,7 +237,7 @@ pub mod assign_match {
         pub left_in_inbox: bool,
         /// Why an unmatched thread stayed, when it stayed.
         pub reason: Option<LeftReason>,
-        /// The Jev model id — the ZDR-gated later slice sets it.
+        /// The Jev model id — set when the Jev method decided the thread.
         pub model_id: Option<String>,
         /// The Jev probabilities ditto.
         pub probabilities: Option<serde_json::Value>,
@@ -230,6 +249,7 @@ pub mod assign_match {
         pub fn decision_log(&self, message: Uuid) -> DecisionLog {
             let (project_id, left_in_inbox, reason) = match self {
                 Self::Assigned { project_id } => (Some(*project_id), false, None),
+                Self::Proposed { project_id } => (Some(*project_id), true, None),
                 Self::LeftInInbox { reason } => (None, true, Some(*reason)),
             };
             DecisionLog {
@@ -439,6 +459,66 @@ pub mod assign_match {
             let json = serde_json::to_value(&left).unwrap();
             assert!(json.get("model_id").is_some());
             assert!(json.get("probabilities").is_some());
+        }
+
+        #[test]
+        fn a_jev_proposal_stays_in_the_inbox_and_names_the_project() {
+            let proposed = MatchOutcome::Proposed {
+                project_id: project(1),
+            }
+            .decision_log(Uuid::from_u128(9));
+            assert_eq!(proposed.project_id, Some(project(1)));
+            assert!(proposed.left_in_inbox);
+            assert_eq!(proposed.reason, None);
+        }
+
+        #[test]
+        fn the_jev_log_fills_the_reserved_fields_without_changing_their_shape() {
+            // The portal's Jev step fills the reserved fields in place —
+            // model id, and a free-form value carrying the confidence,
+            // the body flag, the chosen option, and the distribution.
+            let probabilities = serde_json::json!({
+                "chosen": "none",
+                "confidence": 0.72,
+                "body_used": true,
+                "probabilities": { "none": 0.72, "other": 0.28 },
+            });
+            let mut entry = MatchOutcome::LeftInInbox {
+                reason: LeftReason::JevNotMatter,
+            }
+            .decision_log(Uuid::from_u128(9));
+            entry.method = "jev";
+            entry.model_id = Some("jev-1.14.0".to_owned());
+            entry.probabilities = Some(probabilities.clone());
+            assert_eq!(entry.method, "jev");
+            assert_eq!(entry.model_id.as_deref(), Some("jev-1.14.0"));
+            assert_eq!(entry.probabilities, Some(probabilities));
+
+            // The reserved keys survive the fill without a migration.
+            let json = serde_json::to_value(&entry).unwrap();
+            assert!(json.get("model_id").is_some());
+            assert!(json.get("probabilities").is_some());
+        }
+
+        #[test]
+        fn the_jev_reasons_spell_out_why_the_model_did_not_decide() {
+            // The exact wire spellings — these strings land in the
+            // decision log and the operator CLI prints them.
+            let spellings = [
+                (LeftReason::JevGateClosed, "jev_gate_closed"),
+                (LeftReason::JevUnavailable, "jev_unavailable"),
+                (LeftReason::JevTooManyProjects, "jev_too_many_projects"),
+                (LeftReason::JevNoProbabilities, "jev_no_probabilities"),
+                (LeftReason::JevBelowThreshold, "jev_below_threshold"),
+                (LeftReason::JevNotMatter, "jev_not_matter"),
+                (LeftReason::JevTied, "jev_tied"),
+            ];
+            for (reason, spelling) in spellings {
+                assert_eq!(
+                    serde_json::to_value(reason).unwrap(),
+                    serde_json::json!(spelling)
+                );
+            }
         }
     }
 }
@@ -683,6 +763,9 @@ pub struct ProjectChoice {
     pub id: Uuid,
     pub code: String,
     pub name: String,
+    /// The matter's own description, when it carries one — the Jev option
+    /// generator's raw material, kept beside the name it renders with.
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -844,6 +927,7 @@ struct ProjectPick {
     id: surrealdb::types::RecordId,
     code: String,
     name: String,
+    description: Option<String>,
 }
 
 const CONVERSATION_SELECT: &str = "id, firm_id, brand_key, interaction_type, provider_post_id, project_id, channel, external_address, \
@@ -4504,7 +4588,7 @@ pub async fn projects_in_firm(
 ) -> Result<Vec<ProjectChoice>, InboxError> {
     let mut response = db
         .query(
-            "SELECT id, code, name FROM project \
+            "SELECT id, code, name, description FROM project \
              WHERE firm_id = $firm AND status != 'closed' ORDER BY name",
         )
         .bind(("firm", record_id(crate::firms::TABLE, firm_id)))
@@ -4518,6 +4602,7 @@ pub async fn projects_in_firm(
                 id: record_uuid(&row.id)?,
                 code: row.code,
                 name: row.name,
+                description: row.description,
             })
         })
         .collect())

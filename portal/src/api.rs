@@ -136,6 +136,11 @@ pub struct ApiState {
     /// The deployment's canonical host, for links rendered beside stored
     /// rows — the Deadline mirror's matter-page line. `None` locally.
     pub canonical_base_url: Option<String>,
+    /// The Jev assigner behind the LAW-346 zero-data-retention gate —
+    /// `None` whenever the gate is closed, so no code path can call the
+    /// model without both operator flags set. Tests inject a client whose
+    /// base URL points at a mock server.
+    pub jev: Option<typesafe::JevClient>,
 }
 
 impl FromRef<ApiState> for store::surreal::SurrealDb {
@@ -10117,6 +10122,7 @@ mod tests {
             surreal: app.surreal.clone(),
             email: app.email.clone(),
             canonical_base_url: None,
+            jev: None,
             bootstrap_owner_email: app.bootstrap_owner_email.clone(),
             bootstrap_company: "Test Firm".to_string(),
             questionnaire_runtime: app.questionnaire_runtime.clone(),
@@ -10498,6 +10504,7 @@ mod tests {
             surreal: app.surreal.clone(),
             email: app.email.clone(),
             canonical_base_url: None,
+            jev: None,
             bootstrap_owner_email: app.bootstrap_owner_email.clone(),
             bootstrap_company: "Test Firm".to_string(),
             questionnaire_runtime: app.questionnaire_runtime.clone(),
@@ -10943,6 +10950,7 @@ mod tests {
             surreal: app.surreal.clone(),
             email: app.email.clone(),
             canonical_base_url: None,
+            jev: None,
             bootstrap_owner_email: app.bootstrap_owner_email.clone(),
             bootstrap_company: "Test Firm".to_string(),
             questionnaire_runtime: app.questionnaire_runtime.clone(),
@@ -11002,6 +11010,7 @@ mod tests {
             surreal: app.surreal.clone(),
             email: app.email.clone(),
             canonical_base_url: None,
+            jev: None,
             bootstrap_owner_email: app.bootstrap_owner_email.clone(),
             bootstrap_company: "Test Firm".to_string(),
             questionnaire_runtime: app.questionnaire_runtime.clone(),
@@ -11094,6 +11103,7 @@ mod tests {
         let state = ApiState {
             surreal: app.surreal.clone(),
             canonical_base_url: None,
+            jev: None,
             email: app.email.clone(),
             bootstrap_owner_email: app.bootstrap_owner_email.clone(),
             bootstrap_company: "Test Firm".to_string(),
@@ -11422,6 +11432,7 @@ filename*=UTF-8''signed%20intake.pdf\r\nContent-Transfer-Encoding: base64\r\n\r\
             surreal: app.surreal.clone(),
             email: app.email.clone(),
             canonical_base_url: None,
+            jev: None,
             bootstrap_owner_email: app.bootstrap_owner_email.clone(),
             bootstrap_company: "Test Firm".to_string(),
             questionnaire_runtime: app.questionnaire_runtime.clone(),
@@ -11511,6 +11522,7 @@ filename*=UTF-8''signed%20intake.pdf\r\nContent-Transfer-Encoding: base64\r\n\r\
             surreal: app.surreal.clone(),
             email: app.email.clone(),
             canonical_base_url: None,
+            jev: None,
             bootstrap_owner_email: app.bootstrap_owner_email.clone(),
             bootstrap_company: "Test Firm".to_string(),
             questionnaire_runtime: app.questionnaire_runtime.clone(),
@@ -11621,6 +11633,7 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
             surreal: app.surreal.clone(),
             email: app.email.clone(),
             canonical_base_url: None,
+            jev: None,
             bootstrap_owner_email: app.bootstrap_owner_email.clone(),
             bootstrap_company: "Test Firm".to_string(),
             questionnaire_runtime: app.questionnaire_runtime.clone(),
@@ -11725,11 +11738,23 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
             conversations.push(ingest_address_match_fixture(&db, firm, email).await);
         }
 
-        let response = crate::inbox_api::assign_matches(
-            State(state),
-            LawyerSession(session),
+        let rejected = crate::inbox_api::assign_matches(
+            State(state.clone()),
+            LawyerSession(session.clone()),
             Json(crate::inbox_api::AssignMatchesRequest {
                 apply: true,
+                after: None,
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+
+        let response = crate::inbox_api::assign_matches(
+            State(state.clone()),
+            LawyerSession(session.clone()),
+            Json(crate::inbox_api::AssignMatchesRequest {
+                apply: false,
                 after: None,
             }),
         )
@@ -11751,14 +11776,81 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
                 .unwrap();
             if index == 0 {
                 assert_eq!(row["decision"]["project_id"], serde_json::json!(local.id));
-                assert_eq!(row["applied"], true);
-                assert_eq!(stored.project_id, Some(local.id));
             } else {
                 assert_eq!(row["decision"]["reason"], "no_match");
-                assert_eq!(row["applied"], false);
-                assert_eq!(stored.project_id, None);
             }
+            assert_eq!(row["applied"], false);
+            assert_eq!(stored.project_id, None);
+            assert!(store::inbox::assignments(&db, id).await.unwrap().is_empty());
         }
+
+        assert!(!store::communications::exists_for_project(&db, local.id)
+            .await
+            .unwrap());
+        assert_jev_roster_is_confined_to_the_firm(state, session, local.id, other.id).await;
+    }
+
+    async fn assert_jev_roster_is_confined_to_the_firm(
+        mut state: ApiState,
+        session: crate::SessionData,
+        local: Uuid,
+        other: Uuid,
+    ) {
+        let provider = wiremock::MockServer::start().await;
+        state.jev = Some(typesafe::JevClient::new(&provider.uri(), "test-key"));
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/v1/systemone"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(jev_answer(&local.to_string(), 0.95)),
+            )
+            .expect(1)
+            .mount(&provider)
+            .await;
+        let response = crate::inbox_api::assign_matches(
+            State(state),
+            LawyerSession(session),
+            Json(crate::inbox_api::AssignMatchesRequest {
+                apply: false,
+                after: None,
+            }),
+        )
+        .await
+        .unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let rows: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(rows.len(), 2);
+        for row in rows {
+            assert_eq!(row["decision"]["project_id"], serde_json::json!(local));
+            assert_eq!(row["applied"], false);
+        }
+        let requests = provider.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        let payload: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        let criteria = payload["questions"][typesafe::QUESTION_ID]["criteria"]
+            .as_object()
+            .unwrap();
+        assert_eq!(criteria.len(), 2);
+        assert!(criteria.contains_key(&local.to_string()));
+        assert!(criteria.contains_key(typesafe::NONE_OPTION));
+        assert!(!criteria.contains_key(&other.to_string()));
+    }
+
+    fn jev_answer(choice: &str, confidence: f64) -> serde_json::Value {
+        serde_json::json!({
+            "model": typesafe::MODEL_ID,
+            "answers": { typesafe::QUESTION_ID: {
+                "type": "choice",
+                "choice": choice,
+                "confidence": confidence,
+                "probabilities": {
+                    choice: confidence,
+                    typesafe::NONE_OPTION: 1.0 - confidence,
+                },
+            }}
+        })
     }
 
     fn eml_request(
@@ -13777,6 +13869,7 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
             surreal: app.surreal.clone(),
             email: app.email.clone(),
             canonical_base_url: None,
+            jev: None,
             bootstrap_owner_email: app.bootstrap_owner_email.clone(),
             bootstrap_company: "Test Firm".to_string(),
             questionnaire_runtime: app.questionnaire_runtime.clone(),

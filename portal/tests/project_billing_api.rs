@@ -188,6 +188,7 @@ async fn fixture() -> Fixture {
     *provider.available.lock().unwrap() = true;
     let state = portal::test_support::app_state(surreal).await;
     let app = portal::api::routes().with_state(ApiState {
+        jev: None,
         surreal: state.surreal.clone(),
         email: state.email.clone(),
         bootstrap_owner_email: state.bootstrap_owner_email.clone(),

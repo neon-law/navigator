@@ -988,6 +988,18 @@ pub fn bootstrap_with_forgejo_oidc(
                 integration_providers: state.integration_providers.clone(),
                 billing_provider: state.billing_provider.clone(),
                 canonical_base_url: state.canonical_host.host().map(str::to_string),
+                // The LAW-346 ZDR gate, read once at router build. Default
+                // closed: no flag, no key, no Jev client.
+                jev: match typesafe::gate_from_env() {
+                    Ok(client) => Some(client),
+                    Err(refusal) => {
+                        tracing::info!(
+                            %refusal,
+                            "Jev assignment gate is closed; model-assisted assignment is off"
+                        );
+                        None
+                    }
+                },
             })
             .layer(axum::middleware::from_fn_with_state(
                 (state.sessions.clone(), crate::csrf::CsrfMode::Strict),

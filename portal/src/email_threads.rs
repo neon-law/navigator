@@ -1475,7 +1475,10 @@ pub(crate) fn token_from_to(to: &str, parse_host: &str) -> Option<String> {
 /// Strip quoted history and signature from a lawyer reply so only the new
 /// prose is relayed. Heuristic: cut at the first Gmail-style attribution
 /// line, the first quoted (`>`) line, or the `-- ` signature delimiter.
-fn strip_quoted(body: &str) -> String {
+/// Strip quoted reply history and trailing signatures from a message
+/// body — `pub(crate)` because the Jev question's body excerpt (LAW-347)
+/// sends the sender's own words, never the quoted thread.
+pub(crate) fn strip_quoted(body: &str) -> String {
     let mut kept = Vec::new();
     for line in body.lines() {
         let trimmed = line.trim_start();

@@ -143,6 +143,7 @@ async fn build_app_with_storage(
     let state = portal::test_support::app_state(db).await;
     let storage = storage.unwrap_or_else(|| state.storage.clone());
     let api_state = ApiState {
+        jev: None,
         surreal: state.surreal.clone(),
         canonical_base_url: None,
         email: state.email.clone(),
