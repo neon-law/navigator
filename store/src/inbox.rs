@@ -3117,6 +3117,78 @@ fn parse_processed_at(stored: &str) -> Result<DateTime<Utc>, InboxError> {
         .map_err(|error| InboxError::Db(format!("invalid processed_at {stored:?}: {error}")))
 }
 
+/// The configured mailbox boundary for the scheduled inbox preview.
+pub struct MailboxPreviewScope {
+    pub firm_id: Uuid,
+    pub brand_key: String,
+    pub provider_account: String,
+    pub(crate) includes_unbranded_intake: bool,
+}
+
+impl MailboxPreviewScope {
+    /// Construct an approved preview scope. The last argument is the trusted
+    /// lawyer intake's exact Firm and canonical provider account, when configured.
+    #[must_use]
+    pub fn new(
+        firm_id: Uuid,
+        brand_key: String,
+        provider_account: String,
+        lawyer_intake: Option<(Uuid, &str)>,
+    ) -> Self {
+        Self {
+            firm_id,
+            brand_key,
+            includes_unbranded_intake: lawyer_intake == Some((firm_id, provider_account.as_str())),
+            provider_account,
+        }
+    }
+
+    /// Read one page from this mailbox using the PostgreSQL authority.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when PostgreSQL is unavailable or the query fails.
+    pub async fn unprocessed(
+        &self,
+        actor_id: Uuid,
+        after: Option<(DateTime<Utc>, Uuid)>,
+        limit: i64,
+    ) -> Result<Vec<UnprocessedRow>, InboxError> {
+        let pg = inbox_authority()
+            .await?
+            .ok_or(InboxError::PostgresAuthorityRequired)?;
+        let page = crate::postgres::inbox::MailboxPreviewPage {
+            actor_id,
+            firm_id: self.firm_id,
+            brand_key: &self.brand_key,
+            provider_account: &self.provider_account,
+            includes_unbranded_intake: self.includes_unbranded_intake,
+            after,
+            limit,
+        };
+        crate::postgres::inbox::unprocessed_inbox_scoped_on(&pg, None, Some(page)).await
+    }
+
+    /// Return the resolved Person's open Project IDs within this Firm and Brand.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when PostgreSQL is unavailable or the query fails.
+    pub async fn candidate_projects(&self, person_id: Uuid) -> Result<Vec<Uuid>, InboxError> {
+        let pg = inbox_authority()
+            .await?
+            .ok_or(InboxError::PostgresAuthorityRequired)?;
+        crate::postgres::projects::open_participating_projects_in_brand_on(
+            &pg,
+            person_id,
+            self.firm_id,
+            &self.brand_key,
+        )
+        .await
+        .map_err(|error| InboxError::Db(error.to_string()))
+    }
+}
+
 /// The Firm-inbox messages no process run has recorded yet, oldest first.
 /// The owner sees every firm's backlog; lawyers, clerks, and admins see
 /// their firms'; anyone else is denied. Each row carries the conversation

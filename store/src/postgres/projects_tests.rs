@@ -51,6 +51,61 @@ async fn fixture() -> Option<Fixture> {
 }
 
 #[tokio::test]
+async fn mailbox_preview_project_candidates_stay_in_the_brand_and_firm() {
+    use super::projects as records;
+    let Some(Fixture { pg, input }) = fixture().await else {
+        return;
+    };
+    let firm_id = input.firm_id.unwrap();
+    let other_firm = Uuid::now_v7();
+    let other_entity = Uuid::now_v7();
+    let contact = Uuid::now_v7();
+    sqlx::query("INSERT INTO entity (id, name, entity_type_id, jurisdiction_id) SELECT $1,'Other Entity',entity_type_id,jurisdiction_id FROM entity WHERE id=$2")
+        .bind(other_entity).bind(input.entity_id).execute(pg.pool()).await.unwrap();
+    sqlx::query("INSERT INTO firm (id, name, slug, status, entity_id) VALUES ($1,'Other Firm','other-firm','active',$2)")
+        .bind(other_firm).bind(other_entity).execute(pg.pool()).await.unwrap();
+    sqlx::query("INSERT INTO brand (name, brand_key) VALUES ('Other Brand','other-brand')")
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO person (id, name, email, role) VALUES ($1,'Inbox Contact','contact@example.test','client')")
+        .bind(contact).execute(pg.pool()).await.unwrap();
+
+    let mut within_scope = None;
+    for (code, firm, brand, status) in [
+        ("candidate-match", firm_id, input.brand.as_str(), "open"),
+        ("other-brand", firm_id, "other-brand", "open"),
+        ("other-firm", other_firm, input.brand.as_str(), "open"),
+        ("closed-project", firm_id, input.brand.as_str(), "closed"),
+    ] {
+        let project = records::create_on(
+            &pg,
+            &NewProject {
+                code: code.to_owned(),
+                firm_id: Some(firm),
+                brand: brand.to_owned(),
+                status: status.to_owned(),
+                ..input.clone()
+            },
+        )
+        .await
+        .unwrap();
+        super::participation::add_on(&pg, project.id, contact)
+            .await
+            .unwrap();
+        if code == "candidate-match" {
+            within_scope = Some(project.id);
+        }
+    }
+
+    let candidates =
+        records::open_participating_projects_in_brand_on(&pg, contact, firm_id, &input.brand)
+            .await
+            .unwrap();
+    assert_eq!(candidates, [within_scope.unwrap()]);
+}
+
+#[tokio::test]
 async fn project_code_is_immutable_in_postgres_even_for_direct_sql() {
     let Some(Fixture { pg, input }) = fixture().await else {
         return;

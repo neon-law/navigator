@@ -594,6 +594,8 @@ fn add_assign_matches_operation(document: &mut Value) {
     let decision = json!({"oneOf": [
         {"type": "object", "required": ["decision", "project_id"],
          "properties": {"decision": {"const": "assigned"}, "project_id": {"type": "string", "format": "uuid"}}},
+        {"type": "object", "required": ["decision", "project_id"],
+         "properties": {"decision": {"const": "proposed"}, "project_id": {"type": "string", "format": "uuid"}}},
         {"type": "object", "required": ["decision", "reason"],
          "properties": {"decision": {"const": "left_in_inbox"},
                         "reason": {"enum": ["no_sender_person", "no_match", "ambiguous"],
@@ -604,7 +606,7 @@ fn add_assign_matches_operation(document: &mut Value) {
         "properties": {
             "message": {"type": "string", "format": "uuid"},
             "conversation_id": {"type": "string", "format": "uuid"},
-            "from": {"type": "string", "description": "The thread's stored sender address."},
+            "from": {"type": "string", "description": "The stored sender address. Empty for scheduled previews."},
             "subject": {"type": ["string", "null"]},
             "decision": decision,
             "applied": {"const": false, "description": "The preview does not apply the proposal."}
@@ -613,10 +615,11 @@ fn add_assign_matches_operation(document: &mut Value) {
     document["paths"]["/app/api/inbox/assign-matches"] = json!({"post": {
         "operationId": "assignInboxMatches", "tags": ["Inbox"],
         "summary": "Preview Inbox Project matches",
-        "description": "Requires lawyer-tier access. Each page considers up to 50 unprocessed, unattributed email messages visible to the caller in oldest-first order and proposes assignments by matching its From/To/Cc addresses against the Person CRM and same-Firm open Project participations. Shared inboxes are non-identifying. The preview leaves the Inbox and Projects unchanged. Each proposed filing requires individual lawyer confirmation. The learned Jev method is unreachable until the zero-data-retention gate confirms.",
+        "description": "Requires lawyer-tier access. Each page considers up to 50 unprocessed, unattributed email messages visible to the caller in oldest-first order and proposes assignments by matching its From/To/Cc addresses against the Person CRM and same-Firm open Project participations. Shared inboxes are non-identifying. The preview leaves the Inbox and Projects unchanged. Each proposed filing requires individual lawyer confirmation. The learned Jev method is unreachable until the zero-data-retention gate confirms. Scheduled previews require the configured actor and use only address matches in the configured mailbox, Firm, and Brand. They omit sender and subject.",
         "requestBody": {"required": true, "content": {"application/json": {"schema": {
             "type": "object", "additionalProperties": false,
             "properties": {"apply": {"const": false, "default": false, "description": "An older client requesting true receives a confirmation-required error."},
+                "scheduled": {"type": "boolean", "default": false, "description": "Use the server-configured mailbox scope and return only identifiers and decisions."},
                 "after": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "string"}, "description": "Continuation cursor decoded from the preceding response header."}}
         }}}},
         "responses": {

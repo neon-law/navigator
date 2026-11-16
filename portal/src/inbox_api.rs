@@ -484,7 +484,39 @@ pub(crate) struct AssignMatchesRequest {
     /// Explicitly reject a write requested by an older client.
     #[serde(default)]
     pub apply: bool,
+    #[serde(default)]
+    pub scheduled: bool,
     pub after: Option<(chrono::DateTime<Utc>, Uuid)>,
+}
+
+fn scheduled_preview_scope(
+    actor_id: Uuid,
+    setting: impl Fn(&str) -> Option<String>,
+) -> Result<store::inbox::MailboxPreviewScope, ApiError> {
+    let required = |key| {
+        setting(key)
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+            .ok_or(ApiError::Forbidden)
+    };
+    let uuid = |key| {
+        Uuid::parse_str(&required(key)?)
+            .ok()
+            .filter(|value| !value.is_nil())
+            .ok_or(ApiError::Forbidden)
+    };
+    if uuid("NAVIGATOR_INBOX_PREVIEW_ACTOR_ID")? != actor_id {
+        return Err(ApiError::Forbidden);
+    }
+    let lawyer_intake = crate::lawyer_mailbox::Config::from_lookup(&setting);
+    Ok(store::inbox::MailboxPreviewScope::new(
+        uuid("NAVIGATOR_INBOX_PREVIEW_FIRM_ID")?,
+        required("NAVIGATOR_INBOX_PREVIEW_BRAND")?,
+        required("NAVIGATOR_INBOX_PREVIEW_PROVIDER_ACCOUNT")?,
+        lawyer_intake
+            .as_ref()
+            .map(|intake| (intake.firm_id, intake.provider_account())),
+    ))
 }
 
 /// One thread's address-match proposal.
@@ -511,6 +543,7 @@ pub(crate) struct AssignMatchView {
 async fn decide_assign_match(
     state: &ApiState,
     row: &store::inbox::UnprocessedRow,
+    scope: Option<&store::inbox::MailboxPreviewScope>,
 ) -> Result<(Vec<String>, store::inbox::assign_match::MatchOutcome), ApiError> {
     let stored_from = row.external_address.trim().to_owned();
     let mut candidates = vec![stored_from.clone()];
@@ -534,8 +567,12 @@ async fn decide_assign_match(
         let person = store::persons::find_by_any_email(&state.surreal, address)
             .await
             .map_err(ApiError::Person)?;
-        let open_projects = match &person {
-            Some(person) => {
+        let open_projects = match (&person, scope) {
+            (Some(person), Some(scope)) => scope
+                .candidate_projects(person.id)
+                .await
+                .map_err(map_inbox)?,
+            (Some(person), None) => {
                 let mut projects = Vec::new();
                 for participation in
                     store::projects::participations_for_person(&state.surreal, person.id)
@@ -555,7 +592,7 @@ async fn decide_assign_match(
                 }
                 projects
             }
-            None => Vec::new(),
+            (None, _) => Vec::new(),
         };
         resolved.push(store::inbox::assign_match::ResolvedAddress {
             address: address.clone(),
@@ -780,7 +817,7 @@ fn log_assign_decision(
     );
 }
 
-const MAX_ASSIGN_MATCH_THREADS: usize = 50;
+const MAX_ASSIGN_MATCH_THREADS: u16 = 50;
 
 fn assignment_page(
     mut rows: Vec<store::inbox::UnprocessedRow>,
@@ -792,7 +829,7 @@ fn assignment_page(
             && after.is_none_or(|cursor| (row.inserted_at, row.id) > cursor)
     });
     rows.sort_unstable_by_key(|row| (row.inserted_at, row.id));
-    rows.truncate(MAX_ASSIGN_MATCH_THREADS + 1);
+    rows.truncate(usize::from(MAX_ASSIGN_MATCH_THREADS) + 1);
     rows
 }
 
@@ -812,13 +849,28 @@ pub(crate) async fn assign_matches(
             "Review and confirm each proposed filing individually.",
         ));
     }
-    let mut rows = assignment_page(
-        store::inbox::unprocessed_inbox(&state.surreal, actor_id)
+    let scope = request
+        .scheduled
+        .then(|| scheduled_preview_scope(actor_id, |key| std::env::var(key).ok()))
+        .transpose()?;
+    let mut rows = if let Some(scope) = &scope {
+        scope
+            .unprocessed(
+                actor_id,
+                request.after,
+                i64::from(MAX_ASSIGN_MATCH_THREADS) + 1,
+            )
             .await
-            .map_err(map_inbox)?,
-        request.after,
-    );
-    let next = if rows.len() > MAX_ASSIGN_MATCH_THREADS {
+            .map_err(map_inbox)?
+    } else {
+        assignment_page(
+            store::inbox::unprocessed_inbox(&state.surreal, actor_id)
+                .await
+                .map_err(map_inbox)?,
+            request.after,
+        )
+    };
+    let next = if rows.len() > usize::from(MAX_ASSIGN_MATCH_THREADS) {
         rows.pop();
         rows.last().map(|row| (row.inserted_at, row.id))
     } else {
@@ -826,26 +878,37 @@ pub(crate) async fn assign_matches(
     };
     let mut views = Vec::new();
     for row in rows {
-        let (candidates, mut outcome) = decide_assign_match(&state, &row).await?;
-        let projects = async {
-            store::inbox::projects_in_firm(&state.surreal, row.firm_id)
-                .await
-                .map_err(map_inbox)
+        let (candidates, mut outcome) = decide_assign_match(&state, &row, scope.as_ref()).await?;
+        let jev_fill = if request.scheduled {
+            if let store::inbox::assign_match::MatchOutcome::Assigned { project_id } = outcome {
+                outcome = store::inbox::assign_match::MatchOutcome::Proposed { project_id };
+            }
+            None
+        } else {
+            let projects = async {
+                store::inbox::projects_in_firm(&state.surreal, row.firm_id)
+                    .await
+                    .map_err(map_inbox)
+            };
+            jev_step(
+                state.jev.as_ref(),
+                projects,
+                &row,
+                &candidates,
+                &mut outcome,
+            )
+            .await?
         };
-        let jev_fill = jev_step(
-            state.jev.as_ref(),
-            projects,
-            &row,
-            &candidates,
-            &mut outcome,
-        )
-        .await?;
         log_assign_decision(row.id, &outcome, jev_fill.as_ref());
         views.push(AssignMatchView {
             message: row.id,
             conversation_id: row.conversation_id,
-            from: row.external_address,
-            subject: row.subject,
+            from: if request.scheduled {
+                String::new()
+            } else {
+                row.external_address
+            },
+            subject: row.subject.filter(|_| !request.scheduled),
             decision: outcome,
             applied: false,
         });
@@ -866,6 +929,7 @@ pub(crate) async fn assign_matches(
 #[cfg(test)]
 mod tests {
     use super::{message_lock, ApplyLocks};
+
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     use uuid::Uuid;
@@ -874,6 +938,28 @@ mod tests {
     use store::inbox::{ProjectChoice, UnprocessedRow};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[test]
+    fn scheduled_preview_requires_complete_scope_and_the_configured_actor() {
+        let actor = Uuid::new_v4();
+        let firm = Uuid::new_v4();
+        let mut settings = HashMap::from([
+            ("NAVIGATOR_INBOX_PREVIEW_ACTOR_ID", actor.to_string()),
+            ("NAVIGATOR_INBOX_PREVIEW_FIRM_ID", firm.to_string()),
+            ("NAVIGATOR_INBOX_PREVIEW_BRAND", String::from("neon")),
+        ]);
+        assert!(super::scheduled_preview_scope(actor, |key| settings.get(key).cloned()).is_err());
+        settings.insert("NAVIGATOR_INBOX_PREVIEW_PROVIDER_ACCOUNT", "fixture".into());
+        assert!(
+            super::scheduled_preview_scope(Uuid::new_v4(), |key| settings.get(key).cloned())
+                .is_err()
+        );
+        let scope =
+            super::scheduled_preview_scope(actor, |key| settings.get(key).cloned()).unwrap();
+        assert_eq!(scope.firm_id, firm);
+        assert_eq!(scope.brand_key, "neon");
+        assert_eq!(scope.provider_account, "fixture");
+    }
 
     fn preview_row() -> UnprocessedRow {
         UnprocessedRow {

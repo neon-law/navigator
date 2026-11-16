@@ -46,6 +46,9 @@ pub enum InboxAction {
         /// Preview mode. It also applies when this flag is omitted.
         #[arg(long)]
         dry_run: bool,
+        /// Preview the configured mailbox and report only IDs and decisions.
+        #[arg(long)]
+        scheduled: bool,
         /// Navigator host. Defaults to host in navigator.yaml.
         #[arg(long)]
         host: Option<String>,
@@ -153,7 +156,9 @@ async fn run_inner(action: InboxAction) -> Result<()> {
             })
             .await
         }
-        InboxAction::AssignMatches { host, .. } => assign_matches(host.as_deref()).await,
+        InboxAction::AssignMatches {
+            host, scheduled, ..
+        } => assign_matches(host.as_deref(), scheduled).await,
         InboxAction::List { host } => list(host.as_deref()).await,
         InboxAction::Process {
             message,
@@ -353,11 +358,14 @@ async fn list(host: Option<&str>) -> Result<()> {
 }
 
 /// Preview the address and model matches for unattributed Inbox mail.
-async fn assign_matches(host: Option<&str>) -> Result<()> {
+async fn assign_matches(host: Option<&str>, scheduled: bool) -> Result<()> {
     let (base, token) = crate::remote::resolve(host)?;
     let (method, url) = assign_matches_request(&base);
     let client = reqwest::Client::new();
     let mut body = serde_json::json!({ "apply": false });
+    if scheduled {
+        body["scheduled"] = true.into();
+    }
     let mut printed = false;
     loop {
         let response = client
@@ -385,7 +393,7 @@ async fn assign_matches(host: Option<&str>) -> Result<()> {
         let views: Vec<AssignMatchView> =
             serde_json::from_str(&text).context("parse the assign-matches response")?;
         printed |= !views.is_empty();
-        print_assignment_matches(&views);
+        print_assignment_matches(&views, scheduled);
         let Some(next) = next else { break };
         anyhow::ensure!(
             body.get("after") != Some(&next),
@@ -402,12 +410,14 @@ async fn assign_matches(host: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn print_assignment_matches(views: &[AssignMatchView]) {
+fn print_assignment_matches(views: &[AssignMatchView], scheduled: bool) {
     for view in views {
         println!("Message      {}", view.message);
-        println!("From         {}", view.from);
-        if let Some(subject) = &view.subject {
-            println!("Subject      {subject}");
+        if !scheduled {
+            println!("From         {}", view.from);
+            if let Some(subject) = &view.subject {
+                println!("Subject      {subject}");
+            }
         }
         match view.decision.decision.as_str() {
             "assigned" => println!(
@@ -1140,7 +1150,9 @@ mod tests {
         let cursor = serde_json::json!(["2026-01-01T00:00:00Z", Uuid::nil()]);
         Mock::given(method("POST"))
             .and(path("/app/api/inbox/assign-matches"))
-            .and(body_json(serde_json::json!({"apply": false})))
+            .and(body_json(
+                serde_json::json!({"apply": false, "scheduled": true}),
+            ))
             .respond_with(
                 ResponseTemplate::new(200)
                     .insert_header("x-navigator-next-cursor", cursor.to_string())
@@ -1152,7 +1164,7 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/app/api/inbox/assign-matches"))
             .and(body_json(
-                serde_json::json!({"apply": false, "after": cursor}),
+                serde_json::json!({"apply": false, "scheduled": true, "after": cursor}),
             ))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
             .expect(1)
@@ -1161,7 +1173,7 @@ mod tests {
         let base = server.uri();
         stored_login(&base);
 
-        let result = super::assign_matches(Some(&base)).await;
+        let result = super::assign_matches(Some(&base), true).await;
 
         restore_credentials(previous);
         result.unwrap();
@@ -1202,6 +1214,7 @@ mod tests {
 
         let exit = run(InboxAction::AssignMatches {
             dry_run: true,
+            scheduled: false,
             host: Some(base),
         })
         .await;

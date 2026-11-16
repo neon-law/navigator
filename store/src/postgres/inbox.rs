@@ -2556,9 +2556,60 @@ pub(crate) async fn unprocessed_inbox_on(
     pg: &PostgresDb,
     visible_firms: Option<&[Uuid]>,
 ) -> Result<Vec<inbox::UnprocessedRow>, InboxError> {
+    unprocessed_inbox_scoped_on(pg, visible_firms, None).await
+}
+
+/// A single page of an admitted mailbox's preview, using the same cursor as
+/// the assignment proposal endpoint.
+pub(crate) struct MailboxPreviewPage<'a> {
+    pub actor_id: Uuid,
+    pub firm_id: Uuid,
+    pub brand_key: &'a str,
+    pub provider_account: &'a str,
+    pub includes_unbranded_intake: bool,
+    pub after: Option<(chrono::DateTime<chrono::Utc>, Uuid)>,
+    pub limit: i64,
+}
+
+/// Read the admitted Inbox scope. PostgreSQL filters the mailbox before any
+/// Message body is returned for review.
+pub(crate) async fn unprocessed_inbox_scoped_on(
+    pg: &PostgresDb,
+    visible_firms: Option<&[Uuid]>,
+    mailbox: Option<MailboxPreviewPage<'_>>,
+) -> Result<Vec<inbox::UnprocessedRow>, InboxError> {
     use sqlx::Row;
-    let rows = sqlx::query("SELECT m.id, m.conversation_id, c.firm_id, c.project_id, c.channel, m.provider_message_id, c.external_address, c.external_name, c.subject, m.body, m.occurred_at, m.inserted_at FROM message m JOIN inbox_conversation c ON c.id = m.conversation_id WHERE m.direction = 'inbound' AND (m.processed_at IS NULL OR m.nef_outcome IN ('no_project', 'not_a_notice', 'no_case_number')) AND ($1::uuid[] IS NULL OR c.firm_id = ANY($1)) ORDER BY m.inserted_at, m.id")
-        .bind(visible_firms).fetch_all(&pg.0).await.map_err(db_error)?;
+    let (after_time, after_id) = mailbox.as_ref().and_then(|page| page.after).unzip();
+    let rows = sqlx::query(
+        "SELECT m.id, m.conversation_id, c.firm_id, c.project_id, c.channel, \
+         m.provider_message_id, c.external_address, c.external_name, c.subject, m.body, \
+         m.occurred_at, m.inserted_at FROM message m JOIN inbox_conversation c \
+         ON c.id = m.conversation_id WHERE m.direction = 'inbound' \
+         AND (m.processed_at IS NULL OR m.nef_outcome IN ('no_project', 'not_a_notice', 'no_case_number')) \
+         AND ($1::uuid[] IS NULL OR c.firm_id = ANY($1)) \
+         AND ($2::uuid IS NULL OR (c.firm_id = $2 AND c.channel = 'email'
+             AND (c.brand_key = $3 OR ($9 AND c.brand_key IS NULL AND c.source_channel = 'email'))
+             AND c.provider_account = $4 AND c.project_id IS NULL AND c.trashed_at IS NULL
+             AND EXISTS (SELECT 1 FROM firm_brand fb WHERE fb.firm_id = $2 AND fb.brand_key = $3)
+             AND EXISTS (SELECT 1 FROM person actor WHERE actor.id = $8 AND
+                 (actor.role = 'owner' OR (actor.role IN ('admin', 'lawyer', 'clerk')
+                     AND EXISTS (SELECT 1 FROM person_firm_role pfr
+                                 WHERE pfr.person_id = actor.id AND pfr.firm_id = $2)))))) \
+         AND ($5::timestamptz IS NULL OR (m.inserted_at, m.id) > ($5, $6::uuid)) \
+         ORDER BY m.inserted_at, m.id LIMIT $7",
+    )
+    .bind(visible_firms)
+    .bind(mailbox.as_ref().map(|page| page.firm_id))
+    .bind(mailbox.as_ref().map(|page| page.brand_key))
+    .bind(mailbox.as_ref().map(|page| page.provider_account))
+    .bind(after_time)
+    .bind(after_id)
+    .bind(mailbox.as_ref().map(|page| page.limit))
+    .bind(mailbox.as_ref().map(|page| page.actor_id))
+    .bind(mailbox.is_some_and(|page| page.includes_unbranded_intake))
+    .fetch_all(&pg.0)
+    .await
+    .map_err(db_error)?;
     rows.iter()
         .map(|row| {
             Ok(inbox::UnprocessedRow {

@@ -875,6 +875,186 @@ fn inbound<'a>(
     }
 }
 
+async fn seed_mailbox_preview(f: &Fixture) -> (Vec<Uuid>, Option<Uuid>) {
+    sqlx::query(
+        "INSERT INTO brand (name,brand_key,firm_id) VALUES ('Preview Brand','preview-brand',$1)",
+    )
+    .bind(f.firm)
+    .execute(f.pg.pool())
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO firm_brand (firm_id,brand_key) VALUES ($1,'preview-brand')")
+        .bind(f.firm)
+        .execute(f.pg.pool())
+        .await
+        .unwrap();
+    let mut selected = Vec::new();
+    let mut unbranded = None;
+    for (message, brand, account, channel_name) in [
+        (
+            "first",
+            Some("preview-brand"),
+            "bound-mailbox",
+            channel::EMAIL,
+        ),
+        (
+            "second",
+            Some("preview-brand"),
+            "bound-mailbox",
+            channel::EMAIL,
+        ),
+        (
+            "trashed",
+            Some("preview-brand"),
+            "bound-mailbox",
+            channel::EMAIL,
+        ),
+        (
+            "other-mailbox",
+            Some("preview-brand"),
+            "other-mailbox",
+            channel::EMAIL,
+        ),
+        (
+            "other-brand",
+            Some("other-brand"),
+            "bound-mailbox",
+            channel::EMAIL,
+        ),
+        ("unknown-brand", None, "bound-mailbox", channel::EMAIL),
+        ("lawyer-intake", None, "bound-mailbox", channel::EMAIL),
+        (
+            "other-channel",
+            Some("preview-brand"),
+            "bound-mailbox",
+            channel::SMS,
+        ),
+    ] {
+        let address = format!("{message}@example.test");
+        let mut input = inbound(f.firm, channel_name, account, message, &address);
+        input.brand_key = brand;
+        if message == "unknown-brand" {
+            input.source_channel = None;
+        }
+        let ingested = pg_inbox::ingest_message_on(&f.pg, direction::INBOUND, None, None, &input)
+            .await
+            .unwrap();
+        match message {
+            "first" | "second" => selected.push(ingested.message_id),
+            "lawyer-intake" => unbranded = Some(ingested.message_id),
+            "trashed" => {
+                sqlx::query("UPDATE inbox_conversation SET trashed_at = now() WHERE id = $1")
+                    .bind(ingested.conversation_id)
+                    .execute(f.pg.pool())
+                    .await
+                    .unwrap();
+            }
+            _ => {}
+        }
+    }
+    sqlx::query("UPDATE message SET inserted_at = now() WHERE id = ANY($1)")
+        .bind(&selected)
+        .execute(f.pg.pool())
+        .await
+        .unwrap();
+    selected.sort_unstable();
+
+    (selected, unbranded)
+}
+
+#[tokio::test]
+async fn mailbox_preview_reads_only_its_configured_firm_brand_and_account() {
+    let Some(f) = fixture().await else { return };
+    let (selected, unbranded) = seed_mailbox_preview(&f).await;
+    let page = |actor_id, firm_id, after| {
+        pg_inbox::unprocessed_inbox_scoped_on(
+            &f.pg,
+            None,
+            Some(pg_inbox::MailboxPreviewPage {
+                actor_id,
+                firm_id,
+                brand_key: "preview-brand",
+                provider_account: "bound-mailbox",
+                includes_unbranded_intake: false,
+                after,
+                limit: 1,
+            }),
+        )
+    };
+    let first = page(f.owner, f.firm, None).await.unwrap();
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].id, selected[0]);
+    let second = page(f.owner, f.firm, Some((first[0].inserted_at, first[0].id)))
+        .await
+        .unwrap();
+    assert_eq!(second.len(), 1);
+    assert_eq!(second[0].id, selected[1]);
+    assert_eq!(first[0].inserted_at, second[0].inserted_at);
+    let last = page(f.owner, f.firm, Some((second[0].inserted_at, second[0].id)))
+        .await
+        .unwrap();
+    assert!(last.is_empty());
+    assert!(page(f.owner, Uuid::new_v4(), None)
+        .await
+        .unwrap()
+        .is_empty());
+
+    assert!(page(f.lawyer, f.firm, None).await.unwrap().is_empty());
+    sqlx::query(
+        "INSERT INTO person_firm_role (person_id,firm_id,membership) VALUES ($1,$2,'lawyer')",
+    )
+    .bind(f.lawyer)
+    .bind(f.firm)
+    .execute(f.pg.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        page(f.lawyer, f.firm, None).await.unwrap()[0].id,
+        selected[0]
+    );
+
+    sqlx::query("DELETE FROM firm_brand WHERE firm_id = $1 AND brand_key = 'preview-brand'")
+        .bind(f.firm)
+        .execute(f.pg.pool())
+        .await
+        .unwrap();
+    assert!(page(f.owner, f.firm, None).await.unwrap().is_empty());
+
+    sqlx::query("INSERT INTO firm_brand (firm_id,brand_key) VALUES ($1,'preview-brand')")
+        .bind(f.firm)
+        .execute(f.pg.pool())
+        .await
+        .unwrap();
+    let mailbox_scope = crate::inbox::MailboxPreviewScope::new(
+        f.firm,
+        "preview-brand".into(),
+        "bound-mailbox".into(),
+        Some((f.firm, "bound-mailbox")),
+    );
+    let linked_intake = pg_inbox::unprocessed_inbox_scoped_on(
+        &f.pg,
+        None,
+        Some(pg_inbox::MailboxPreviewPage {
+            actor_id: f.owner,
+            firm_id: mailbox_scope.firm_id,
+            brand_key: &mailbox_scope.brand_key,
+            provider_account: &mailbox_scope.provider_account,
+            includes_unbranded_intake: mailbox_scope.includes_unbranded_intake,
+            after: None,
+            limit: 10,
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(linked_intake.len(), 3);
+    assert!(linked_intake.iter().any(|row| Some(row.id) == unbranded));
+
+    let regular_queue = pg_inbox::unprocessed_inbox_on(&f.pg, Some(&[f.firm]))
+        .await
+        .unwrap();
+    assert_eq!(regular_queue.len(), 8);
+}
+
 fn inbound_with<'a>(
     base: &IngestInbound<'a>,
     thread_ref: Option<&'a str>,

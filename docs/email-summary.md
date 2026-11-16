@@ -32,6 +32,18 @@ reservation prevents duplicate acknowledgments on redelivery or concurrent reque
 verify the provider outcome before taking recovery action. This automatic acknowledgment confirms receipt only; it does
 not authorize a Clerk's substantive reply or grant matter or promotional consent.
 
+## Scheduled Inbox preview
+
+Run `hudson inbox assign-matches --scheduled --dry-run` under the approved Navigator identity. The Portal requires
+`NAVIGATOR_INBOX_PREVIEW_ACTOR_ID`, `NAVIGATOR_INBOX_PREVIEW_FIRM_ID`, `NAVIGATOR_INBOX_PREVIEW_BRAND`, and
+`NAVIGATOR_INBOX_PREVIEW_PROVIDER_ACCOUNT`. Use the integration's recorded provider account for the receiving mailbox.
+The current actor must have access to the configured Firm and the Firm must own the receiving Brand. The preview also
+accepts Firm-only mail when the configured Firm and provider account match the lawyer intake's canonical mailbox.
+
+The weekday pilot previews pending Navigator Inbox messages from that mailbox and only considers open Projects in the
+same Firm and Brand. Its report contains message IDs, proposed Project IDs, and reasons when there is no unique match.
+It leaves mail and Projects untouched. Review each proposal in Navigator and confirm each filing individually.
+
 ## End-to-end status
 
 The `hudson dev email-summary-e2e` command still exercises the real intake and durable workflow topology on a worktree
