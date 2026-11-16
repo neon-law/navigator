@@ -15,7 +15,12 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 harness="${repo_root}/scripts/staging-jev-e2e.sh"
 
 scratch="$(mktemp -d)"
-trap 'rm -rf "${scratch}"' EXIT
+server_pid=""
+cleanup() {
+  if [[ -n "$server_pid" ]]; then kill "$server_pid" 2>/dev/null || true; fi
+  rm -rf "${scratch}"
+}
+trap cleanup EXIT
 
 # Lift api(), api_capture(), and api_json() out of the harness verbatim (each
 # closes with a bare `}`), so the test exercises the shipped definitions, not
@@ -66,3 +71,62 @@ x-navigator-next-cursor: [\"abc\"]'
   grep -q 'unbound variable' <<<\"\$err_out\" && { echo 'api_json error hit the subshell trap' >&2; exit 1; } || true
   echo 'staging-jev-e2e: api_json reports a non-2xx with the status and body, no unbound variable.'
 "
+
+# The fourth staging dispatch (run 43877403907) died in seed with
+# `curl: (3) bad range in URL position 51`: curl treats [ and ] as a URL glob
+# range, so every bracketed query (filter[email]=...) failed client-side with
+# exit 3 and no request left the box. api() now passes --globoff. This check
+# runs the shipped api() verbatim against a throwaway local server and asserts
+# the server received the literal brackets — it fails against the pre-fix
+# api(), whose curl globbed the URL and never connected.
+
+awk '/^api\(\) \{/,/^\}/' "$harness" > "${scratch}/api-only.sh"
+grep -q -- '--globoff' "${scratch}/api-only.sh"
+
+cat > "${scratch}/server.py" <<'PY'
+import http.server
+import sys
+
+log_path, port_path = sys.argv[1], sys.argv[2]
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        with open(log_path, 'a') as fh:
+            fh.write(self.path + '\n')
+        body = b'{"ok":true}'
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+server = http.server.HTTPServer(('127.0.0.1', 0), Handler)
+with open(port_path, 'w') as fh:
+    fh.write(str(server.server_port))
+server.serve_forever()
+PY
+
+python3 "${scratch}/server.py" "${scratch}/requests.log" "${scratch}/port" &
+server_pid=$!
+
+for _ in $(seq 1 50); do
+  if [[ -s "${scratch}/port" ]]; then break; fi
+  sleep 0.1
+done
+port="$(cat "${scratch}/port")"
+
+bash -euo pipefail -c "
+  source '${scratch}/api-only.sh'
+  NAVIGATOR_HOST='http://127.0.0.1:${port}'
+  NAVIGATOR_TOKEN='test-token'
+  api GET '/app/api/people?filter[email]=[synthetic-client-43877403907-1]' >/dev/null
+  [[ \"\$API_STATUS\" == 200 ]] || { echo \"bracketed query failed with HTTP \$API_STATUS\" >&2; exit 1; }
+"
+
+grep -F 'filter[email]=[synthetic-client-43877403907-1]' "${scratch}/requests.log" > /dev/null \
+  || { echo 'the server never received the literal bracketed query' >&2; exit 1; }
+echo 'staging-jev-e2e: api passes bracketed queries literally (curl globbing is off).'
