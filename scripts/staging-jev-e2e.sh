@@ -123,6 +123,19 @@ matter_entity_yaml() {
     "$entity_name" "$entity_type"
 }
 
+# Project codes travel through open_matter, which normalizes a code to
+# lowercase (normalize_code: trim + to_ascii_lowercase) and refuses anything
+# outside lowercase letters, digits, and single hyphens (is_valid_code). The
+# eighth dispatch (run 43923428002) opened matters with uppercase codes —
+# accepted, stored lowercased — and then the person_project_role seed
+# referenced the original uppercase string, which find_by_code's exact
+# match cannot resolve. Emit the suffix already normalized so what the
+# harness sends matches what the server stores; the project door's
+# response is still the source of truth for the state record.
+matter_code_suffix() { # $1 = RUN_ID
+  printf 'synj%s' "$(tr -d ':-' <<<"$1")"
+}
+
 api_json() {
   api_capture "$1" "$2" "${3:-}"
   local out
@@ -242,14 +255,14 @@ records:
   [[ -n "$client_id" && -n "$party_id" ]] || die "the seeded persons did not resolve to ids on the people door"
 
   local code_suffix
-  code_suffix="SYNJ$(tr -d ':-' <<<"$RUN_ID")"
+  code_suffix="$(matter_code_suffix "$RUN_ID")"
   local matters
   matters="$(jq -n --arg client "$client_id" --arg suffix "$code_suffix" --arg run "$RUN_ID" '[
-    {code: ($suffix + "A"), name: ("Synthetic Estate Plan A (run " + $run + ")"),
+    {code: ($suffix + "a"), name: ("Synthetic Estate Plan A (run " + $run + ")"),
      description: ("A synthetic revocable living-trust and pour-over will engagement for a married couple, funding two trusts and naming successor trustees (run " + $run + ").")},
-    {code: ($suffix + "B"), name: ("Synthetic Eviction Defense B (run " + $run + ")"),
+    {code: ($suffix + "b"), name: ("Synthetic Eviction Defense B (run " + $run + ")"),
      description: ("A synthetic residential eviction defense: answer to an unlawful detainer complaint, habitability affirmative defenses, rent escrow (run " + $run + ").")},
-    {code: ($suffix + "C"), name: ("Synthetic Contract Review C (run " + $run + ")"),
+    {code: ($suffix + "c"), name: ("Synthetic Contract Review C (run " + $run + ")"),
      description: ("A synthetic review of a commercial sublease and services agreement, indemnification and termination limits (run " + $run + ").")}
   ] | map(.client_id = $client)')"
 
@@ -275,7 +288,10 @@ records:
     [[ -n "$project_id" ]] || die "open-matter $(jq -r .code <<<"$row") returned no id: $(head -c 300 <<<"$project_row")"
     note "seed: matter $(jq -r .code <<<"$row") opened (${project_id})"
     state_add entities "$(jq -nc --arg id "$(jq -r .id <<<"$entity_json")" --arg name "$entity_name" '{id: $id, name: $name}')"
-    state_add projects "$(jq -nc --arg id "$project_id" --arg code "$(jq -r .code <<<"$row")" '{id: $id, code: $code}')"
+    # The server's row is the truth for the code: open_matter normalizes
+    # (lowercases) whatever it accepts, and the role seed and cleanup must
+    # reference the code as stored, not as specified.
+    state_add projects "$(jq -nc --arg id "$project_id" --arg code "$(jq -r .code <<<"$project_row")" '{id: $id, code: $code}')"
   done
 
   # One seeded party participates in matter A, so one thread assigns through
