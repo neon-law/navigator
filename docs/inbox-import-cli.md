@@ -48,6 +48,16 @@ account and prints the proposed operation. Pass `--apply` to copy that Message i
 hudson mail import-inbox 18fa3bc2d4e5f6a7 --mailbox lawyer@example.test --apply
 ```
 
+Use `--thread` to copy all non-draft Messages from one thread in Gmail timestamp order.
+
+```sh
+hudson mail import-inbox 112210f47de98115 --thread --mailbox lawyer@example.test --apply
+```
+
+The command verifies the Gmail mailbox before reading the selected thread. Omit `--apply` to check the mailbox without
+reading the thread or writing records. If a Message fails to import, retry the same thread to finish it. Earlier
+Messages retain their Inbox IDs.
+
 Save each Gmail Message with `hudson mail save`. Import its RFC 5322 file through the authenticated Inbox route.
 
 ```sh

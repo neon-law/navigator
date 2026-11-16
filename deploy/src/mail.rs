@@ -260,14 +260,17 @@ pub enum MailAction {
         #[arg(long)]
         include_inline: bool,
     },
-    /// Import a single Gmail Message into the lawyer's Inbox for review.
+    /// Import Gmail Messages into the lawyer's Inbox for review.
     ImportInbox {
-        /// Gmail message ID or a Gmail URL that identifies one message.
+        /// Gmail Message ID or message URL. With --thread, pass a thread ID or URL.
         reference: String,
+        /// Import every non-draft Message in the selected thread, oldest first.
+        #[arg(long)]
+        thread: bool,
         /// The expected verified canonical mailbox.
         #[arg(long)]
         mailbox: String,
-        /// Copy the message into the Navigator Inbox after verifying the mailbox.
+        /// Copy the Messages into the Navigator Inbox after verifying the mailbox.
         #[arg(long)]
         apply: bool,
         /// Navigator host. Defaults to host in navigator.yaml.
@@ -471,47 +474,32 @@ impl GmailClient {
         }
     }
 
+    async fn inbox_thread_metadata(&self, thread_id: &str) -> Result<InboxThreadMetadata> {
+        self.call(
+            Operation::ReadThread,
+            Some(thread_id),
+            &[
+                ("format", "full"),
+                ("fields", "messages(id,labelIds,internalDate)"),
+            ],
+            None,
+        )
+        .await
+    }
+
     async fn inbox_preview(&self, limit: usize) -> Result<Vec<InboxPreviewThread>> {
         let threads = self
             .list_threads("in:inbox", true, "threads(id),nextPageToken")
             .await?;
         let mut previews = Vec::new();
         for thread in threads {
-            let metadata: InboxThreadMetadata = self
-                .call(
-                    Operation::ReadThread,
-                    Some(&thread.id),
-                    &[
-                        ("format", "full"),
-                        ("fields", "messages(id,labelIds,internalDate)"),
-                    ],
-                    None,
-                )
-                .await?;
-            let mut messages = metadata
-                .messages
-                .into_iter()
-                .filter(|message| message.label_ids.iter().any(|label| label == "INBOX"))
-                .map(|message| {
-                    let millis = message
-                        .internal_date
-                        .as_deref()
-                        .context("Gmail Inbox message has no timestamp")?
-                        .parse::<i64>()
-                        .context("parse Gmail Inbox message timestamp")?;
-                    let received_at = chrono::DateTime::from_timestamp_millis(millis)
-                        .context("Gmail Inbox message timestamp is out of range")?;
-                    Ok(InboxPreviewMessage {
-                        id: message.id,
-                        received_at,
-                    })
-                })
-                .collect::<Result<Vec<_>>>()?;
-            messages.sort_unstable_by(|left, right| {
-                left.received_at
-                    .cmp(&right.received_at)
-                    .then(left.id.cmp(&right.id))
-            });
+            let metadata = self.inbox_thread_metadata(&thread.id).await?;
+            let messages = ordered_gmail_messages(
+                metadata
+                    .messages
+                    .into_iter()
+                    .filter(|message| message.label_ids.iter().any(|label| label == "INBOX")),
+            )?;
             if let Some(oldest) = messages.first() {
                 previews.push((
                     oldest.received_at,
@@ -652,6 +640,35 @@ struct InboxMessageMetadata {
     #[serde(default)]
     label_ids: Vec<String>,
     internal_date: Option<String>,
+}
+
+fn ordered_gmail_messages(
+    messages: impl Iterator<Item = InboxMessageMetadata>,
+) -> Result<Vec<InboxPreviewMessage>> {
+    let mut messages = messages
+        .map(|message| {
+            let millis = message
+                .internal_date
+                .as_deref()
+                .context("Gmail Inbox message has no timestamp")?
+                .parse::<i64>()
+                .context("parse Gmail Inbox message timestamp")?;
+            let received_at = chrono::DateTime::from_timestamp_millis(millis)
+                .context("Gmail Inbox message timestamp is out of range")?;
+            Ok(InboxPreviewMessage {
+                id: message.id,
+                received_at,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    messages.sort_unstable_by(|left, right| {
+        left.received_at
+            .cmp(&right.received_at)
+            .then(left.id.cmp(&right.id))
+    });
+    let mut seen = HashSet::new();
+    messages.retain(|message| seen.insert(message.id.clone()));
+    Ok(messages)
 }
 
 #[derive(Serialize)]
@@ -2141,20 +2158,11 @@ async fn run_inner(action: MailAction) -> Result<()> {
         } => save_message_command(&reference, dir.as_deref(), name.as_deref()).await,
         MailAction::ImportInbox {
             reference,
+            thread,
             mailbox,
             apply,
             host,
-        } => {
-            let id = import_inbox_message_id(&reference)?;
-            let gmail = client().await?;
-            let Some((account, raw)) =
-                gmail_inbox_import_source(&gmail, &id, &mailbox, apply).await?
-            else {
-                println!("Would import one Gmail Message into the Inbox.");
-                return Ok(());
-            };
-            crate::inbox_import::import_gmail_message(host.as_deref(), &account, &raw).await
-        }
+        } => import_inbox(&reference, thread, &mailbox, apply, host.as_deref()).await,
         MailAction::Ingest {
             path,
             project,
@@ -2555,26 +2563,88 @@ fn import_inbox_message_id(reference: &str) -> Result<String> {
     gmail_message_id(reference).ok_or_else(|| unresolved_reference(reference))
 }
 
+async fn verify_gmail_import_mailbox(gmail: &GmailClient, expected: &str) -> Result<String> {
+    let profile = gmail.profile().await?;
+    anyhow::ensure!(
+        profile.email_address.eq_ignore_ascii_case(expected.trim()),
+        "the authenticated Gmail account differs from the expected mailbox",
+    );
+    Ok(profile.email_address)
+}
+
 async fn gmail_inbox_import_source(
     gmail: &GmailClient,
     id: &str,
     expected_mailbox: &str,
     apply: bool,
 ) -> Result<Option<(String, Vec<u8>)>> {
-    let profile = gmail.profile().await?;
-    anyhow::ensure!(
-        profile
-            .email_address
-            .eq_ignore_ascii_case(expected_mailbox.trim()),
-        "the authenticated Gmail account differs from the expected mailbox",
-    );
+    let account = verify_gmail_import_mailbox(gmail, expected_mailbox).await?;
     if !apply {
         return Ok(None);
     }
-    Ok(Some((
-        profile.email_address,
-        gmail.raw_message_bytes(id).await?,
-    )))
+    Ok(Some((account, gmail.raw_message_bytes(id).await?)))
+}
+
+fn import_inbox_thread_id(reference: &str) -> Result<String> {
+    anyhow::ensure!(
+        Url::parse(reference).is_err() || reference_names_conversation(reference),
+        "A message-specific Gmail URL does not identify a thread; pass a thread ID or URL",
+    );
+    gmail_message_id(reference).ok_or_else(|| unresolved_reference(reference))
+}
+
+async fn import_inbox_thread_messages(
+    gmail: &GmailClient,
+    thread_id: &str,
+) -> Result<Vec<InboxPreviewMessage>> {
+    let metadata = gmail.inbox_thread_metadata(thread_id).await?;
+    let messages = ordered_gmail_messages(
+        metadata
+            .messages
+            .into_iter()
+            .filter(|message| !message.label_ids.iter().any(|label| label == "DRAFT")),
+    )?;
+    anyhow::ensure!(
+        !messages.is_empty(),
+        "the Gmail thread has no non-draft Messages"
+    );
+    Ok(messages)
+}
+
+async fn import_inbox(
+    reference: &str,
+    thread: bool,
+    mailbox: &str,
+    apply: bool,
+    host: Option<&str>,
+) -> Result<()> {
+    if thread {
+        let id = import_inbox_thread_id(reference)?;
+        let gmail = client().await?;
+        let account = verify_gmail_import_mailbox(&gmail, mailbox).await?;
+        if !apply {
+            println!("Would import the Gmail thread into the Inbox for individual review.");
+            return Ok(());
+        }
+        let messages = import_inbox_thread_messages(&gmail, &id).await?;
+        for (index, message) in messages.iter().enumerate() {
+            let raw = gmail
+                .raw_message_bytes(&message.id)
+                .await
+                .with_context(|| format!("read Gmail thread Message {}", index + 1))?;
+            crate::inbox_import::import_gmail_message(host, &account, &raw)
+                .await
+                .with_context(|| format!("import Gmail thread Message {}", index + 1))?;
+        }
+        return Ok(());
+    }
+    let id = import_inbox_message_id(reference)?;
+    let gmail = client().await?;
+    let Some((account, raw)) = gmail_inbox_import_source(&gmail, &id, mailbox, apply).await? else {
+        println!("Would import one Gmail Message into the Inbox.");
+        return Ok(());
+    };
+    crate::inbox_import::import_gmail_message(host, &account, &raw).await
 }
 
 /// Files one saved RFC 5322 message into the matter inbox through the
@@ -3243,6 +3313,48 @@ mod tests {
                 .unwrap();
         assert_eq!(account, "lawyer@example.test");
         assert_eq!(raw, b"synthetic");
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn inbox_thread_import_orders_all_non_draft_messages() {
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let id = "112210f47de98115";
+        let thread_url = format!("https://mail.google.com/mail/u/0/#inbox/{id}");
+        assert_eq!(super::import_inbox_thread_id(&thread_url).unwrap(), id);
+        let message_url =
+            "https://mail.google.com/mail/u/0/#inbox/CXKnWZngLGgrlKSJsQCLdJqbQBNrBFBFHmpvwkg";
+        assert!(super::import_inbox_thread_id(message_url).is_err());
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(format!("/users/me/threads/{id}")))
+            .and(query_param("fields", "messages(id,labelIds,internalDate)"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({"messages": [
+                    {"id": "newer", "internalDate": "2000", "labelIds": ["INBOX"]},
+                    {"id": "draft", "labelIds": ["DRAFT"]},
+                    {"id": "older", "internalDate": "1000", "labelIds": ["SENT"]},
+                    {"id": "older", "internalDate": "1000"}
+                ]})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let gmail =
+            GmailClient::with_base_url("fixture".into(), Url::parse(&server.uri()).unwrap());
+        let ordered = super::import_inbox_thread_messages(&gmail, id)
+            .await
+            .unwrap();
+        assert_eq!(
+            ordered
+                .iter()
+                .map(|message| message.id.as_str())
+                .collect::<Vec<_>>(),
+            ["older", "newer"]
+        );
         server.verify().await;
     }
 
