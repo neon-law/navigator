@@ -70,13 +70,16 @@ api() {
   file="$(mktemp)"
   hdr="$(mktemp)"
   if [[ -n "$body" ]]; then
-    API_STATUS="$(curl -sS -D "$hdr" -o "$file" -w '%{http_code}' -X "$method" \
+    # --globoff: curl treats [ and ] as a URL glob range, which killed every
+    # bracketed query (filter[email]=...) with exit 3 before any request was
+    # made — staging dispatch 43877403907 died in seed exactly there.
+    API_STATUS="$(curl -sS --globoff -D "$hdr" -o "$file" -w '%{http_code}' -X "$method" \
       -H "Authorization: Bearer ${NAVIGATOR_TOKEN}" \
       -H 'Content-Type: application/json' \
       --data "$body" \
       "${NAVIGATOR_HOST}${path}")"
   else
-    API_STATUS="$(curl -sS -D "$hdr" -o "$file" -w '%{http_code}' -X "$method" \
+    API_STATUS="$(curl -sS --globoff -D "$hdr" -o "$file" -w '%{http_code}' -X "$method" \
       -H "Authorization: Bearer ${NAVIGATOR_TOKEN}" \
       "${NAVIGATOR_HOST}${path}")"
   fi
