@@ -20,6 +20,7 @@ use async_trait::async_trait;
 use thiserror::Error;
 
 pub mod archives_project;
+pub mod attachment_scanner;
 pub mod audio;
 pub mod calendar;
 pub mod contacts;
