@@ -59,6 +59,7 @@ COPY webapp            webapp
 COPY views             views
 COPY README.md         README.md
 COPY telemetry         telemetry
+COPY typesafe          typesafe
 COPY forms             forms
 COPY workflows         workflows
 COPY workflows-service workflows-service

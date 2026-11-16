@@ -50,6 +50,7 @@ COPY neon              neon
 COPY webapp            webapp
 COPY views             views
 COPY telemetry         telemetry
+COPY typesafe          typesafe
 COPY README.md         README.md
 COPY workflows         workflows
 COPY workflows-service workflows-service
