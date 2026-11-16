@@ -2121,3 +2121,15 @@ route_allow if {
     input.method == "POST"
     is_authenticated(input.session)
 }
+
+
+# Register an external DocuSign envelope on a Project.
+route_allow if {
+    count(input.path) == 5
+    input.path[0] == "app"
+    input.path[1] == "api"
+    input.path[2] == "projects"
+    input.path[4] == "envelope-adoptions"
+    input.method == "POST"
+    is_lawyer(input.session)
+}

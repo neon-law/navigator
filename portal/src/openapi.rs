@@ -2384,7 +2384,7 @@ fn canonical_document(base: &str) -> Value {
         "/app/api/projects/{id}/status": {
           "get": {
             "summary": "Read live matter lifecycle and onboarding evidence",
-            "description": "Lawyer-tier, firm-side participation required for every tier. Returns the workbench lifecycle label, current project_status, opened_at (Project creation), closed_at, ordered history, source_state, onboarding presence and document visibility, and missing onboarding work. Presence includes generated onboarding instruments and never verifies execution.",
+            "description": "Lawyer-tier, firm-side participation required for every tier. Returns the workbench lifecycle label, current project_status, opened_at (Project creation), closed_at, ordered history, source_state, onboarding presence and document visibility, recorded DocuSign envelope and signer status, and missing onboarding work. Execution is verified by the completed onboarding Signature.",
             "parameters": [
               { "name": "id", "in": "path", "required": true,
                 "schema": { "type": "string", "format": "uuid" } }
@@ -3597,6 +3597,32 @@ fn canonical_document(base: &str) -> Value {
               "500": { "description": "The marker could not be cleared (database error)", "content": { "application/json": {
                 "schema": { "$ref": "#/components/schemas/ApiError" }
               } } }
+            }
+          }
+        },
+        "/app/api/projects/{id}/envelope-adoptions": {
+          "post": {
+            "summary": "Adopt an envelope sent from the Firm's DocuSign account",
+            "description": "Requires firm-side Project participation and a Project client DRI who signed or is expected to sign. Files the executed PDF and Certificate of Completion once the envelope completes.",
+            "parameters": [
+              { "name": "id", "in": "path", "required": true,
+                "schema": { "type": "string", "format": "uuid" } }
+            ],
+            "requestBody": { "required": true, "content": { "application/json": {
+              "schema": { "type": "object", "required": ["envelope_id", "template_code", "source", "commit_sha"], "properties": {
+                "envelope_id": { "type": "string", "format": "uuid" },
+                "template_code": { "type": "string" },
+                "source": { "type": "string", "description": "Published Draft Markdown" },
+                "commit_sha": { "type": "string" }
+              } }
+            } } },
+            "responses": {
+              "200": { "description": "Notation ID and the current DocuSign envelope and signer status" },
+              "401": { "description": "No authenticated session" },
+              "403": { "description": "The caller is outside the lawyer tier" },
+              "404": { "description": "The Project does not exist or is outside the caller's scope" },
+              "422": { "description": "The Draft or envelope is ineligible for adoption" },
+              "500": { "description": "The adoption could not be saved or DocuSign could not be reached" }
             }
           }
         },

@@ -496,6 +496,18 @@ pub enum NotationAction {
         #[arg(long = "answers-from", alias = "answers-file")]
         answers_from: Option<PathBuf>,
     },
+    /// Register an envelope sent from the Firm's DocuSign account.
+    AdoptEnvelope {
+        #[command(flatten)]
+        host: HostOpt,
+        #[arg(long)]
+        project: String,
+        /// Published Draft path in this Project checkout.
+        #[arg(long)]
+        draft: String,
+        #[arg(long)]
+        envelope: uuid::Uuid,
+    },
     /// Resume filling a Notation's questionnaire from a saved answers file.
     Fill {
         /// Notation UUID.
@@ -629,6 +641,14 @@ pub async fn run_notation(action: NotationAction) -> ExitCode {
                 .await
             }
         },
+        NotationAction::AdoptEnvelope {
+            host,
+            project,
+            draft,
+            envelope,
+        } => {
+            remote::notation_adopt_envelope(host.host.as_deref(), &project, &draft, envelope).await
+        }
         NotationAction::Fill {
             notation_id,
             host,

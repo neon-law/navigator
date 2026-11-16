@@ -489,6 +489,10 @@ fn require_template_matches_main(root: &Path, kind: &str) -> Result<remote::Publ
     git(root, &["fetch", "origin", "main"])
         .context("fetch origin/main before opening the notation")?;
     let relative = template_relative(root, kind)?;
+    published_draft(root, &relative)
+}
+
+pub(crate) fn published_draft(root: &Path, relative: &str) -> Result<remote::PublishedDraft> {
     let exists = git(
         root,
         &["cat-file", "-e", &format!("origin/main:{relative}")],
@@ -498,7 +502,7 @@ fn require_template_matches_main(root: &Path, kind: &str) -> Result<remote::Publ
             "origin/main has no {relative}; publish the template before opening its notation"
         ));
     }
-    let diff = git(root, &["diff", "--quiet", "origin/main", "--", &relative])?;
+    let diff = git(root, &["diff", "--quiet", "origin/main", "--", relative])?;
     if !diff.status.success() {
         return Err(anyhow!(
             "local {relative} differs from origin/main; publish the template before opening its notation"

@@ -5723,6 +5723,63 @@ pub async fn notation_approve(host: Option<&str>, notation_id: Uuid) -> ExitCode
     .await
 }
 
+pub async fn notation_adopt_envelope(
+    host: Option<&str>,
+    project: &str,
+    draft: &str,
+    envelope_id: Uuid,
+) -> ExitCode {
+    run(async {
+        let root = std::path::Path::new(".");
+        let manifest =
+            crate::projects::manifest::read(root).context("read Project navigator.yaml")?;
+        if manifest.project.as_deref() != Some(project) {
+            return Err(anyhow!(
+                "run envelope adoption from the requested Project checkout"
+            ));
+        }
+        let template_code = draft
+            .strip_prefix("drafts/")
+            .and_then(|name| name.strip_suffix(".md"))
+            .filter(|code| {
+                !code.is_empty()
+                    && code
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+            })
+            .context("expected a Draft path such as drafts/onboarding__letter.md")?;
+        crate::projects::lifecycle::git_text(root, &["fetch", "origin", "main"])
+            .context("refresh the published Draft")?;
+        let published = crate::projects::lifecycle::published_draft(root, draft)?;
+        let (base, token) = resolve(host)?;
+        let project_id =
+            crate::projects::surfaces::resolve_project_id(&base, &token, project).await?;
+        let response = reqwest::Client::new()
+            .post(format!(
+                "{base}/app/api/projects/{project_id}/envelope-adoptions"
+            ))
+            .bearer_auth(token)
+            .json(&serde_json::json!({
+                "envelope_id": envelope_id,
+                "template_code": template_code,
+                "source": published.source,
+                "commit_sha": published.commit_sha,
+            }))
+            .send()
+            .await
+            .context("POST envelope adoption")?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow!("adoption failed: {}", server_error(status, &body)));
+        }
+        let result: serde_json::Value = response.json().await.context("read adopted envelope")?;
+        println!("{}", serde_json::to_string_pretty(&result)?);
+        Ok(())
+    })
+    .await
+}
+
 /// Dispatch the approved notation through the same command as the lawyer's send button.
 pub async fn notation_send(host: Option<&str>, notation_id: Uuid) -> ExitCode {
     run(async {

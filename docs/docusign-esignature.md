@@ -128,6 +128,21 @@ printed by creation for the final commands. After approval, check `navigator sit
 true`. Use `navigator site notation document` to download the PDF for review. Preparation creates the unsent provider
 draft. The CLI opens the sender view only with `--open`.
 
+## Adopt an envelope sent from DocuSign
+
+Run the command from the Project checkout after publishing the Draft used to prepare the envelope.
+
+```bash
+navigator site notation adopt-envelope --host "$host" --project "$project" \
+  --draft drafts/onboarding__letter.md --envelope "$envelope_id"
+```
+
+The Project's client DRI must be among the signers. Navigator links the envelope to the Draft's Notation and records the
+provider's signer status. Use `navigator project status <code>` to read the recorded status. A pending envelope keeps a
+pitch pending. On completion, Navigator files the signed PDF and Certificate of Completion with their DocuSign envelope
+ID and records the provider's completion date. A verified Connect completion updates the linked envelope, and rerunning
+the command refreshes it directly from DocuSign.
+
 ## Authentication: JWT grant
 
 The provider authenticates with **JWT grant** — it signs a short-lived RSA assertion with the firm's integration key and

@@ -387,6 +387,39 @@ async fn consume_receipt(
     let envelope_id = &signature.provider_id;
     let notation_id = signature.notation_id;
 
+    let adoption = crate::signature_adoption::evidence(state.storage.as_ref(), notation_id)
+        .await
+        .map_err(|_| ConsumeFailure("reading adopted envelope evidence".into()))?;
+    if let Some(adoption) = adoption {
+        let lane = crate::signature_adoption::lock()
+            .await
+            .map_err(|_| ConsumeFailure("opening adopted envelope lane".into()))?;
+        let envelope = state
+            .signature_provider
+            .read_external_envelope(adoption.envelope_id)
+            .await
+            .map_err(|e| ConsumeFailure(e.to_string()))?;
+        if envelope.status != terminal_state.as_str() {
+            return Err(ConsumeFailure(
+                "DocuSign has not confirmed the terminal event".into(),
+            ));
+        }
+        crate::signature_adoption::reconcile(
+            &state.surreal,
+            &state.storage,
+            state.signature_provider.as_ref(),
+            notation_id,
+            adoption.envelope_id,
+            &envelope,
+        )
+        .await
+        .map_err(|_| ConsumeFailure("reconciling adopted envelope".into()))?;
+        return lane
+            .commit()
+            .await
+            .map_err(|e| ConsumeFailure(e.to_string()));
+    }
+
     // Phase 1: the workflow wait, when the signature row still reads
     // `requested`. A gone instance (`UnknownNotation`) or one already
     // past the wait (`AlreadyTerminal`, `NoTransition` on one of these
@@ -701,16 +734,38 @@ async fn archive_completed_documents(
     envelope_id: &str,
     notation_id: uuid::Uuid,
 ) -> Result<(), crate::signature::SignatureError> {
-    use crate::signature::{SignatureError, SignatureRequestId};
+    use crate::signature::SignatureRequestId;
 
     let docs = state
         .signature_provider
         .fetch_completed_documents(&SignatureRequestId(envelope_id.to_string()))
         .await?;
 
+    file_completed_documents(
+        &state.surreal,
+        &state.storage,
+        envelope_id,
+        notation_id,
+        chrono::Utc::now().date_naive(),
+        None,
+        docs,
+    )
+    .await
+}
+
+pub(crate) async fn file_completed_documents(
+    db: &store::surreal::SurrealDb,
+    storage: &std::sync::Arc<dyn cloud::StorageService>,
+    envelope_id: &str,
+    notation_id: uuid::Uuid,
+    signed_on: chrono::NaiveDate,
+    filename_suffix: Option<&str>,
+    docs: crate::signature::CompletedDocuments,
+) -> Result<(), crate::signature::SignatureError> {
+    use crate::signature::SignatureError;
+
     let put = |key: String, bytes: Vec<u8>| async move {
-        state
-            .storage
+        storage
             .put(&key, &bytes, "application/pdf")
             .await
             .map_err(|e| SignatureError::Provider(e.to_string()))
@@ -726,7 +781,7 @@ async fn archive_completed_documents(
     // nothing. The envelope id rides in the asset metadata, where the
     // pointer composers recover it into the pointer's
     // `docusign_envelope_id` (ENG-859).
-    let notation = store::notations::find_by_id(&state.surreal, notation_id)
+    let notation = store::notations::find_by_id(db, notation_id)
         .await
         .map_err(|e| SignatureError::Provider(e.to_string()))?
         .ok_or_else(|| {
@@ -734,21 +789,24 @@ async fn archive_completed_documents(
                 "completed envelope {envelope_id} names missing notation {notation_id}"
             ))
         })?;
-    let template_kind = store::templates::find_by_id(&state.surreal, notation.template_id)
+    let template_kind = store::templates::find_by_id(db, notation.template_id)
         .await
         .map_err(|e| SignatureError::Provider(e.to_string()))?
         .and_then(|template| template.kind)
         .unwrap_or_else(|| "unclassified".to_string());
-    let signed_on = chrono::Utc::now().date_naive();
+    let filename_stem = filename_suffix.map_or_else(
+        || template_kind.clone(),
+        |suffix| format!("{template_kind}_{suffix}"),
+    );
     // The executed instrument is the client's own document; the certificate
     // of completion is the ESIGN record the firm keeps.
     file_signed_copy_back(
-        &state.surreal,
-        &state.storage,
+        db,
+        storage,
         notation.project_id,
         &template_kind,
         envelope_id,
-        &format!("{template_kind}_signed.pdf"),
+        &format!("{filename_stem}_signed.pdf"),
         store::documents::visibility::CLIENT,
         &signed_key,
         docs.signed_pdf,
@@ -759,12 +817,12 @@ async fn archive_completed_documents(
     )
     .await?;
     file_signed_copy_back(
-        &state.surreal,
-        &state.storage,
+        db,
+        storage,
         notation.project_id,
         &template_kind,
         envelope_id,
-        &format!("{template_kind}_certificate.pdf"),
+        &format!("{filename_stem}_certificate.pdf"),
         store::documents::visibility::INTERNAL,
         &certificate_key,
         docs.certificate_pdf,
