@@ -602,6 +602,15 @@ async fn run_dbos(
     let Some(context) = context else {
         return Ok(non_inbound_report(message_id));
     };
+    // Keep the legacy step sequence available to executions with that history.
+    if dbos::patch::<TriageError>("inbound-triage-private-evidence").await? {
+        return dbos::step("classify-and-record-inbound-triage", || {
+            let service = service.clone();
+            let context = context.clone();
+            async move { classify_and_record_dbos(service, message_id, context).await }
+        })
+        .await;
+    }
     let existing = dbos::step("find-existing-triage", || async {
         store::inbox_triage::find_for_message(&service.surreal, message_id)
             .await
@@ -655,18 +664,66 @@ async fn run_dbos(
             {
                 return Ok(triage_report(message_id, &row));
             }
-            match record_triage(&surreal, message_id, context, attempt.lane(), attempt).await {
-                Ok(report) => Ok(report),
-                Err(error) => store::inbox_triage::find_for_message(&surreal, message_id)
-                    .await
-                    .ok()
-                    .flatten()
-                    .map(|row| triage_report(message_id, &row))
-                    .ok_or_else(|| triage_step_error(error)),
-            }
+            record_or_load_dbos(&surreal, message_id, context, attempt).await
         }
     })
     .await
+}
+
+/// Consult the provider and persist its evidence inside one checkpoint. DBOS
+/// records only the identifiers and disposition in the report.
+async fn classify_and_record_dbos(
+    service: InboundTriageService,
+    message_id: Uuid,
+    context: TriageContext,
+) -> dbos::Result<InboundTriageReport, TriageError> {
+    let surreal = service.surreal;
+    if let Some(row) = store::inbox_triage::find_for_message(&surreal, message_id)
+        .await
+        .map_err(|_| dbos::Error::Application(TriageError::Store))?
+    {
+        return Ok(triage_report(message_id, &row));
+    }
+    let attempt = match context.classifier.clone() {
+        Some(invocation) => {
+            let menu = firm_menu(&surreal, context.firm_id)
+                .await
+                .map_err(triage_step_error)?;
+            classifier_attempt(
+                service.providers,
+                surreal.clone(),
+                message_id,
+                invocation,
+                context.channel.clone(),
+                menu,
+            )
+            .await
+            .map_err(triage_step_error)?
+        }
+        None => ClassifierAttempt {
+            output: None,
+            raw_output: None,
+            run_config: None,
+        },
+    };
+    record_or_load_dbos(&surreal, message_id, context, attempt).await
+}
+
+async fn record_or_load_dbos(
+    surreal: &SurrealDb,
+    message_id: Uuid,
+    context: TriageContext,
+    attempt: ClassifierAttempt,
+) -> dbos::Result<InboundTriageReport, TriageError> {
+    match record_triage(surreal, message_id, context, attempt.lane(), attempt).await {
+        Ok(report) => Ok(report),
+        Err(error) => store::inbox_triage::find_for_message(surreal, message_id)
+            .await
+            .ok()
+            .flatten()
+            .map(|row| triage_report(message_id, &row))
+            .ok_or_else(|| triage_step_error(error)),
+    }
 }
 
 /// The report shape of a triage row as it was recorded — the replay and
