@@ -72,7 +72,7 @@ applied to this one. To send something, prepare the draft and hand it to the law
 
 Write the least amount of code the behavior needs: delete dead code instead of annotating it, consolidate duplicated
 helpers into the sanctioned seams, and name a test before the change that satisfies it. CI holds the workspace at a
-92.2% line-coverage floor and that floor is never lowered — a subtraction lands only with coverage re-verified
+91.0% line-coverage floor and that floor is never lowered — a subtraction lands only with coverage re-verified
 (`docs/agent-workflows.md` explains the measurement).
 
 ## Helpful commands

@@ -1002,32 +1002,17 @@ jobs:
           # counter-file location into this shell only, so a later step would
           # not find the profile data.
           #
-          # The floor sits under what THIS command measures. Last published
-          # CI print before the 92.7 raise attempt: 92.44% line coverage
-          # (35732 missed of 472409) on 2026-11-03, from PR #358's workspace
-          # job. The latest published print — the increment that tried to move
-          # this floor to 92.7 and held instead (increment 5, PR #388, tenancy
-          # wrapper + people helper DB-harness tests, 278 missed lines
-          # converted) — is 92.40% line coverage (36385 missed of 478995) on
-          # 2026-11-04, from PR #388's workspace job. The 92.7 raise was then
-          # attempted again under the enlarged-batch plan (increment 6,
-          # PR #373: pure decision seams in cli/store) and its workspace job
-          # printed 92.36% line coverage (36312 missed of 475292) on
-          # 2026-11-03 — short of the floor — so the constants held at 92.2 and
-          # the campaign falls back to re-scoping the target. The protective
-          # attempt then landed portal DB-harness tests (increment 7, PR #415:
-          # time-tracking and integration-door scenarios) and its workspace job
-          # printed 92.25% line coverage (37833 missed of 488144) on
-          # 2026-11-05 — short of the floor, main's +12,852-line drift window
-          # outrunning the ~900 converted lines — so the constants held at 92.2
-          # again, and the margin on this floor is down to 0.05 points: one
-          # drift window with no net coverage gain fails every PR through this
-          # gate. The 92.2 floor is the merge gate from this change onward.
+          # The floor sits under what the `coverage floor` job measures from
+          # the merged shard LCOV. Latest published print: 91.40% line coverage
+          # (481824 of 527139) on 2026-11-16, from run 43851127830. The 91.0
+          # floor is the merge gate: 0.40pt of headroom so one drift window
+          # does not fail every PR.
           #
-          # Raising the floor means moving three constants together — here,
-          # `docs/agent-workflows.md`, and `docs/oss-install.md` — so raise it
-          # deliberately, in one change, never as a side effect of another. And
-          # never lower it to make a red build green.
+          # Raising the floor means moving four constants together — the
+          # `coverage` job `FLOOR`, `AGENTS.md`, `docs/agent-workflows.md`, and
+          # `docs/oss-install.md` — so raise it deliberately, in one change,
+          # never as a side effect of another. And never lower it to make a
+          # red build green.
           #
           # Do NOT compare this job's percentage against one measured over a
           # different denominator, and do not set a floor from a local run. The
@@ -1165,7 +1150,7 @@ jobs:
           merge-multiple: true
       - name: merge and hold the floor
         env:
-          FLOOR: "90.2"
+          FLOOR: "91.0"
         run: |
           python3 - <<'PYTHON'
           import collections, glob, os, sys

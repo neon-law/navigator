@@ -11,7 +11,7 @@ Read [`docs/public-contributor-safety.md`](../../../docs/public-contributor-safe
 [`docs/rust-programming.md`](../../../docs/rust-programming.md), and [`rust`](../rust/SKILL.md) first. Code is the
 source of truth; comments, docs, tests, Presentations, and Workshops describe today; git holds rejected alternatives.
 One pass over one file: not a sweep, and not a substitute for [`implement-issue`](../implement-issue/SKILL.md),
-[`review`](../review/SKILL.md), or [`author-docs`](../author-docs/SKILL.md). This file must not grow.
+[`review`](../review/SKILL.md), or [`author-docs`](../author-docs/SKILL.md). Keep this file short.
 
 ## 1. Choose the file
 
@@ -31,10 +31,12 @@ rustc, clippy, and rustfmt review first (`M-STATIC-VERIFICATION`): `cargo fmt --
 --all-targets -- -D warnings`. Grep std at `$(rustc --print sysroot)/lib/rustlib/src/rust/library/std` (`rustup
 component add rust-src`) before a local helper; never invent a std API. Read only the
 [Book](https://doc.rust-lang.org/book/) and [Rust by Example](https://doc.rust-lang.org/rust-by-example/) chapters the
-file uses (Foundation [learn catalog](https://www.rust-lang.org/learn); Klabnik/Nichols). Cite the [API
-Guidelines](https://rust-lang.github.io/api-guidelines/checklist.html) (C-CONV, C-GETTER, C-CTOR) or Microsoft's
-[Pragmatic Rust Guidelines](https://microsoft.github.io/rust-guidelines/) (`M-UPSTREAM-GUIDELINES`, `M-REGULAR-FN`) only
-for the finding that rests on them. A public item with no caller is unused.
+file uses (Foundation [learn catalog](https://www.rust-lang.org/learn); Klabnik/Nichols). When tests are the finding,
+read [Writing Automated Tests](https://doc.rust-lang.org/book/ch11-00-testing.html). Cite the [API
+Guidelines](https://rust-lang.github.io/api-guidelines/checklist.html) (C-CONV, C-GETTER, C-CTOR), the [Clippy lint
+index](https://rust-lang.github.io/rust-clippy/master/), or Microsoft's [Pragmatic Rust
+Guidelines](https://microsoft.github.io/rust-guidelines/) (`M-UPSTREAM-GUIDELINES`, `M-REGULAR-FN`, `M-LOG-STRUCTURED`)
+only for the finding that rests on them. A public item with no caller is unused.
 
 ## 3. Compare similar patterns
 
@@ -49,13 +51,14 @@ Each answer needs `path:line`. "Seems fine" is not an answer.
 
 - **Is this actually needed?** Delete the unused path and its seam, rather than documenting why it remains.
 - **Does it describe only the present?** Remove chronology. Keep only the why behind a live invariant.
-- **Is it tested?** Name the covering test, or the missing behavior. A compile is not a test.
+- **Is it tested?** Name the covering test, or the missing behavior. A compile is not a test (`M-TAUTOLOGICAL-TESTS`).
 - **Is it documented?** Module docs and `docs/` describe today. Do not doc a private helper whose name is the contract.
 - **If applicable, is it featured in our Presentations or Workshops?** Search `server/content/workshops/navigator/`
   (`RUST_IN_PEACE.md` is the presentations catalog). A cited code slide is the source: update it with the file. Leave
   spoken workshop words alone; see [`authoring-slides`](../authoring-slides/SKILL.md).
 
-No `unwrap` / `expect` / `panic!` outside `main()` and tests, no `unsafe`, Axum body extractors last.
+No `unwrap` / `expect` / `panic!` outside `main()` and tests, no `unsafe`, Axum body extractors last. `5xx` logs via
+`tracing` (`M-LOG-STRUCTURED`); `4xx` does not.
 
 ## 5. Write the report, then take one action
 
@@ -68,6 +71,10 @@ take exactly one action and keep the covering test green.
   covering test needs (a removal removes the whole seam, per `rust`), never a second finding. Covering test first,
   present tense. Run `cargo fmt`, the focused test, `rtk cargo clippy -p <crate> --all-targets -- -D warnings`, and
   `cargo run -p cli --quiet -- project gate`. A deletion lands only with coverage re-verified; the floor never drops.
+  The only number that may *raise* the floor is the latest CI `coverage floor` TOTAL print ([rustc
+  instrument-coverage](https://doc.rust-lang.org/rustc/instrument-coverage.html)): move `FLOOR`, `AGENTS.md`,
+  `docs/agent-workflows.md`, and `docs/oss-install.md` together when that print leaves at least 0.3pt of headroom after
+  the new floor. Never from a local `llvm-cov`.
 - **Teaching-surface drift only:** fix the doc, comment, or test. Do not rewrite workshop spoken words.
 
 Open the change through [`create-pr`](../create-pr/SKILL.md): the report, minus anything private, is the PR body.

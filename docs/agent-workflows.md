@@ -282,7 +282,7 @@ Implement only the defined fix:
 - Restart and click through UI or behavior changes. Embed requested captures through GitHub user attachments, never a
   raw `/tmp` path.
 - Run the focused test for the fix. Coverage findings require a non-gated router test, not harness-gated e2e alone.
-  CI measures the 92.2% line floor. Opening a PR does not re-run that suite; see [Create a PR](#create-a-pr).
+  CI measures the 91.0% line floor. Opening a PR does not re-run that suite; see [Create a PR](#create-a-pr).
 - Commit on the branch as a Conventional Commit referencing the finding, and push so CI re-runs:
 
 ```bash
@@ -347,7 +347,7 @@ Treat a failed Action as a narrow task and start from its first actionable failu
 5. When the failure exposes a behavior gap, add the non-gated covering test that would have caught it. Do not add a test
    merely to restate an infrastructure outage.
 6. Re-run the failed command and the directly affected gate. For a coverage failure, run `cargo llvm-cov --workspace
-   --fail-under-lines 90.2` and read its per-file table for the file that regressed; CI's `coverage floor` job prints
+   --fail-under-lines 91.0` and read its per-file table for the file that regressed; CI's `coverage floor` job prints
    the same ranking from the merged shard LCOV. Opening a new PR does not re-run that suite.
 7. Commit, push, and report the root cause, minimum fix, local proof, and any unrelated failing checks left untouched.
 
