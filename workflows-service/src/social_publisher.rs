@@ -2725,16 +2725,30 @@ mod tests {
     #[tokio::test]
     async fn tiktok_missing_disclosure_blocks_without_provider_requests() {
         let fixture = Fixture::new("TikTok disclosure").await;
-        let server = MockServer::start().await;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
         let id = fixture.blog_post().await;
-        let publisher = fixture.publisher(&server, allowed());
+        let publisher = fixture.publisher_at(&endpoint, allowed());
         let target = Destination {
             provider: SocialProvider::Tiktok,
             account_id: "tiktok-user".into(),
         };
         let result = publisher.prepare(id, &post(true), &target).await.unwrap();
         assert!(matches!(result,Step::Settled(PublishOutcome{state,..}) if state==FAILED));
-        assert!(server.received_requests().await.unwrap().is_empty());
+        let row = store::social_publications::find(&fixture.db, id, "tiktok")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(row
+            .last_error
+            .as_deref()
+            .unwrap()
+            .contains("tiktok_ai_generated"));
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
     }
 
     #[tokio::test]
@@ -3074,28 +3088,32 @@ mod tests {
         }
 
         fn publisher(&self, server: &MockServer, egress: SocialEgressGate) -> Publisher {
+            self.publisher_at(&server.uri(), egress)
+        }
+
+        fn publisher_at(&self, endpoint: &str, egress: SocialEgressGate) -> Publisher {
             Publisher {
                 surreal: self.db.clone(),
                 kms: std::sync::Arc::new(self.kms.clone()),
                 storage: self.storage.clone(),
                 egress,
                 refresh: TokenRefreshConfig {
-                    x_token_url: format!("{}/token", server.uri()),
-                    tiktok_token_url: format!("{}/tiktok-token", server.uri()),
+                    x_token_url: format!("{endpoint}/token"),
+                    tiktok_token_url: format!("{endpoint}/tiktok-token"),
                     tiktok_client: Some(("synthetic-app".into(), "synthetic-secret".into())),
                     x_client: Some(("x-id".into(), "x-secret".into())),
-                    threads_refresh_url: format!("{}/refresh_access_token", server.uri()),
-                    google_token_url: format!("{}/token", server.uri()),
+                    threads_refresh_url: format!("{endpoint}/refresh_access_token"),
+                    google_token_url: format!("{endpoint}/token"),
                     youtube_client: None,
                 },
                 endpoints: ProviderEndpoints {
-                    facebook_graph: server.uri(),
-                    threads: server.uri(),
-                    youtube_upload: server.uri(),
-                    youtube_api: server.uri(),
-                    x_api: server.uri(),
-                    tiktok: format!("{}/tiktok", server.uri()),
-                    linkedin_rest: server.uri(),
+                    facebook_graph: endpoint.to_owned(),
+                    threads: endpoint.to_owned(),
+                    youtube_upload: endpoint.to_owned(),
+                    youtube_api: endpoint.to_owned(),
+                    x_api: endpoint.to_owned(),
+                    tiktok: format!("{endpoint}/tiktok"),
+                    linkedin_rest: endpoint.to_owned(),
                 },
                 http: reqwest::Client::builder()
                     .timeout(Duration::from_millis(500))
