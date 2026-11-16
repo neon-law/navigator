@@ -77,6 +77,7 @@ pub const PUBLIC_PATHS: &[&str] = &[
     // Same Neon-only shape as `/delete-your-debt` above.
     "/same-day-legal",
     "/nautilus",
+    views::brand::SAME_DAY_LEGAL_APP_PATH,
     // The Neon-hosted gateway to the Abhaya Immigration practice. Same
     // Neon-only shape as `/delete-your-debt` above.
     "/immigration",
@@ -187,9 +188,10 @@ pub fn sitemap_paths(state: &AppState, key: BrandKey) -> std::collections::BTree
             .chain(key.practice_pages().iter().map(|(path, _)| *path))
             .map(str::to_string)
             .collect(),
-        // Lex Tecnica publishes its home, services, and contact pages: the
-        // band-built home's CTA links `/contact` (`#572`).
-        BrandKey::SameDayLegal => std::iter::once("/".to_string()).collect(),
+        BrandKey::SameDayLegal => ["/", views::brand::SAME_DAY_LEGAL_APP_PATH]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
         BrandKey::LexTecnica => ["/", "/services", "/contact"]
             .iter()
             .map(|path| (*path).to_string())
@@ -306,8 +308,16 @@ pub fn llms_txt(state: &AppState, key: BrandKey) -> portal::LlmsTxt {
         | BrandKey::Groundwork
         | BrandKey::CyberInjuryLaw
         | BrandKey::LexTecnica
-        | BrandKey::SameDayLegal
         | BrandKey::IepDefenders) => practice_brand_llms_txt(key),
+        BrandKey::SameDayLegal => {
+            let mut index = practice_brand_llms_txt(key);
+            index.pages.push(indexed_page(
+                "Mobile app",
+                views::brand::SAME_DAY_LEGAL_APP_PATH,
+                "App preview, subscription pricing, and enrollment.",
+            ));
+            index
+        }
         BrandKey::GuiebShook => {
             let mut index = practice_brand_llms_txt(BrandKey::GuiebShook);
             index.pages.push(indexed_page(

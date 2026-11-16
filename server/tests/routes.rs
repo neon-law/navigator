@@ -3220,7 +3220,7 @@ async fn llms_txt_indexes_the_markdown_corpus_with_absolute_urls() {
     assert!(body.contains("estate plans tailored to each person"));
     assert!(body.contains("Nevada asset protection planning"));
     assert!(body.contains("fee for a mutual split"));
-    assert!(body.contains("Explore legal services for starting a business"));
+    assert!(body.contains("Navigator, exacting agentic lawyering"));
     assert!(!body.contains("from $50/day") && !body.contains("example.com/business"));
     assert!(!body.contains("$500 setup fee") && !body.contains("$5,000 per trial day"));
     // The firm's own marketing surface. The workshops catalog is public
@@ -10546,7 +10546,7 @@ const LIVE_HOME_CONTRACTS: &[(views::brand::BrandKey, LiveHomeContract)] = &[
         views::brand::BrandKey::Neon,
         LiveHomeContract {
             title: "<title>Neon Law | Home</title>",
-            copy: "What is your legal need?",
+            copy: "Exacting agentic lawyering.",
         },
     ),
     (
@@ -10646,7 +10646,7 @@ const LIVE_HOME_CONTRACTS: &[(views::brand::BrandKey, LiveHomeContract)] = &[
         views::brand::BrandKey::SameDayLegal,
         LiveHomeContract {
             title: "<title>Same Day Legal | Home</title>",
-            copy: "Privacy, paperwork, and a lawyer, for one monthly fee.",
+            copy: "What is your legal need?",
         },
     ),
 ];
@@ -10921,7 +10921,7 @@ async fn the_delete_your_data_host_renders_its_own_home_catalog() {
     assert_eq!(neon_resp.status(), StatusCode::OK);
     let neon_body = body_string(neon_resp).await;
     assert!(
-        neon_body.contains("What is your legal need?"),
+        neon_body.contains("Exacting agentic lawyering."),
         "{neon_body}"
     );
     assert!(
@@ -10955,7 +10955,7 @@ async fn the_delete_your_data_host_renders_its_own_home_catalog() {
         "{delete_your_data_body}"
     );
     assert!(
-        !delete_your_data_body.contains("What is your legal need?"),
+        !delete_your_data_body.contains("Exacting agentic lawyering."),
         "{delete_your_data_body}"
     );
     assert!(!delete_your_data_body.contains("data-enrollment-intake"));
@@ -11343,7 +11343,7 @@ async fn host_brand_path_matrix_resolves_every_combination() {
 }
 
 #[tokio::test]
-async fn every_brand_home_publishes_one_lead_form() {
+async fn every_brand_publishes_one_public_lead_form() {
     let default_host = "www.neonlaw.com";
     let state =
         empty_state_with_canonical_host(CanonicalHost::new(Some(default_host.into()))).await;
@@ -11386,7 +11386,12 @@ async fn assert_brand_home_lead_capture(
         );
         return;
     }
-    let (host, cookie, body) = brand_home_lead_form(app, brand).await;
+    let source_path = if brand == views::brand::BrandKey::SameDayLegal {
+        views::brand::SAME_DAY_LEGAL_APP_PATH
+    } else {
+        "/"
+    };
+    let (host, cookie, body) = brand_lead_form(app, brand, source_path).await;
     let encoded = brand_home_lead_payload(&body, brand);
     let response = app
         .clone()
@@ -11405,7 +11410,7 @@ async fn assert_brand_home_lead_capture(
     assert_eq!(response.status(), StatusCode::SEE_OTHER, "{host}: submit");
     // Same Day Legal's enrollment continues to sign-in and the booking link.
     let sent = if brand == views::brand::BrandKey::SameDayLegal {
-        "/auth/login?return_to=%2F%23enrollment"
+        "/auth/login?return_to=/app%23enrollment"
     } else {
         "/contact/sent"
     };
@@ -11418,7 +11423,7 @@ async fn assert_brand_home_lead_capture(
     assert!(
         leads
             .iter()
-            .any(|lead| lead.brand_key == brand.as_str() && lead.source_path == "/"),
+            .any(|lead| lead.brand_key == brand.as_str() && lead.source_path == source_path),
         "{host}: lead persisted with brand and source"
     );
     assert_eq!(
@@ -11443,30 +11448,36 @@ async fn assert_brand_home_lead_capture(
     }
 }
 
-async fn brand_home_lead_form(
+async fn brand_lead_form(
     app: &axum::Router,
     brand: views::brand::BrandKey,
+    source_path: &str,
 ) -> (&'static str, String, String) {
     let host = brand.canonical_host();
-    let response = get_on_host(app, "/", host).await;
-    assert_eq!(response.status(), StatusCode::OK, "{host} home");
+    let response = get_on_host(app, source_path, host).await;
+    assert_eq!(response.status(), StatusCode::OK, "{host} {source_path}");
     let cookie = response
         .headers()
         .get_all(header::SET_COOKIE)
         .iter()
         .filter_map(|value| value.to_str().ok())
         .find(|value| value.starts_with("navigator_lead_csrf="))
-        .expect("home mints the lead CSRF cookie")
+        .expect("page mints the lead CSRF cookie")
         .split(';')
         .next()
         .unwrap()
         .to_string();
     let body = body_string(response).await;
-    assert_brand_home_lead_markup(&body, host, brand);
+    assert_brand_lead_markup(&body, host, brand, source_path);
     (host, cookie, body)
 }
 
-fn assert_brand_home_lead_markup(body: &str, host: &str, brand: views::brand::BrandKey) {
+fn assert_brand_lead_markup(
+    body: &str,
+    host: &str,
+    brand: views::brand::BrandKey,
+    source_path: &str,
+) {
     let html = Html::parse_document(body);
     let lead_form = Selector::parse(r#"form[action="/leads"]"#).unwrap();
     let inline_contact = Selector::parse(".cyber-assessment-contact").unwrap();
@@ -11489,8 +11500,8 @@ fn assert_brand_home_lead_markup(body: &str, host: &str, brand: views::brand::Br
         );
     }
     assert!(
-        body.contains(r#"name="source_path" value="/""#),
-        "{host}: home attribution"
+        body.contains(&format!(r#"name="source_path" value="{source_path}""#)),
+        "{host}: page attribution"
     );
     assert!(
         body.contains(r#"href="/privacy""#),
@@ -11498,7 +11509,7 @@ fn assert_brand_home_lead_markup(body: &str, host: &str, brand: views::brand::Br
     );
     assert!(
         !body.contains(r#"data-lead-modal="true""#),
-        "{host}: home form is inline"
+        "{host}: lead form is inline"
     );
     if brand == views::brand::BrandKey::SameDayLegal {
         assert!(

@@ -212,6 +212,9 @@ fn plan(path: &str) -> AuditPlan {
     if matches!(path, "/team" | "/team/nick" | "/team/waleed") {
         return AuditPlan::Skip("published on guiebshook.com");
     }
+    if path == views::brand::SAME_DAY_LEGAL_APP_PATH {
+        return AuditPlan::Skip("published on the Same Day Legal origin");
+    }
     if path == "/leads" {
         return AuditPlan::Skip("the POST-only lead-capture write handler");
     }
@@ -1074,8 +1077,8 @@ async fn public_navigation_images_and_collage_dialog_are_accessible() {
         .expect("the home call to action has an href")
         .expect("the home call to action has an href");
     assert_eq!(
-        href, "/contact",
-        "the Neon home's call to action opens attorney contact"
+        href, "https://github.com/neon-law/navigator",
+        "the Neon home's call to action stars the repository"
     );
 
     c.goto(&format!("{site_base_url}/blog/thanks-apple"))

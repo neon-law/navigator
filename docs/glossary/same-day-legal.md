@@ -13,8 +13,8 @@ credit monitoring, dark web monitoring, identity theft insurance, unclaimed prop
 filings such as forming an LLC, and attorney review of the client's own work. It also includes limited changes to an
 estate plan the client makes with [Vesta Estate Planning](vesta-estate-planning.md); the plan itself is a separate
 engagement. Government fees for a filing are separate. Monitoring and insurance coverage are confirmed before
-activation. The subscription includes $5 a month of model usage in the [Legal Sandbox](legal-sandbox.md), and the home
-previews the coming iPhone and Android apps.
+activation. The subscription includes $5 a month of model usage in the [Legal Sandbox](legal-sandbox.md). The `/app`
+page previews the coming iPhone and Android apps and hosts enrollment.
 
 A client chooses one of two ways to pay: the subscription, or a single attorney review for $50 paid once. A client who
 wants neither can prepare their own filings with Navigator, the free and open-source MCP tool, with no lawyer review.

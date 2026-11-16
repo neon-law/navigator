@@ -43,7 +43,7 @@ const NEON_GATEWAY_DELETE_YOUR_DEBT_YAML: &str =
 /// practice. Same family as [`NEON_GATEWAY_DELETE_YOUR_DEBT_YAML`].
 const NEON_GATEWAY_DELETE_YOUR_DATA_YAML: &str =
     include_str!("../locales/en/neon/gateway-delete-your-data.yaml");
-/// Neon's legal services homepage.
+/// Neon's home: Navigator, open source software for agentic lawyering.
 const NEON_HOME_MARKETING_YAML: &str = include_str!("../locales/en/neon/home-marketing.yaml");
 /// `/immigration` — Neon's own gateway to the Abhaya Immigration practice.
 /// Same family as [`NEON_GATEWAY_DELETE_YOUR_DEBT_YAML`].
@@ -245,6 +245,9 @@ fn lex_tecnica_catalog_yaml(key: BrandKey, page: &str) -> Option<&'static str> {
         (BrandKey::SameDayLegal, "home-marketing") => Some(include_str!(
             "../locales/en/same-day-legal/home-marketing.yaml"
         )),
+        (BrandKey::SameDayLegal, "mobile-app") => {
+            Some(include_str!("../locales/en/same-day-legal/mobile-app.yaml"))
+        }
         _ => None,
     }
 }
@@ -1605,13 +1608,17 @@ pub fn iep_home(branding: &views::brand::Branding, _deployment_host: Option<&str
     marketing_page(load_page(branding, "home-marketing"), None, branding)
 }
 
-/// Same Day Legal's home sells the subscription at the same prices and
-/// billing periods as `DeleteYourData`.
+/// Same Day Legal opens with its legal services.
 pub fn same_day_legal_home(
     branding: &views::brand::Branding,
     _deployment_host: Option<&str>,
 ) -> PageContent {
-    subscription_page(branding, "home-marketing")
+    marketing_page(load_page(branding, "home-marketing"), None, branding)
+}
+
+/// Same Day Legal’s app, subscription, and enrollment.
+pub fn same_day_legal_app() -> PageContent {
+    subscription_page(&views::brand::SAME_DAY_LEGAL_BRANDING, "mobile-app")
 }
 
 /// Same Day Legal's home in the deployment named by `deployment_host`, the
@@ -1620,7 +1627,7 @@ pub fn same_day_legal_href(deployment_host: Option<&str>) -> String {
     views::brand::BrandKey::SameDayLegal.public_home_href_for(deployment_host)
 }
 
-/// Neon's home lists legal services and offers attorney contact.
+/// Neon's home is the Navigator page, from `home-marketing.yaml`.
 pub fn neon_home(branding: &views::brand::Branding, _deployment_host: Option<&str>) -> PageContent {
     marketing_page(load_page(branding, "home-marketing"), None, branding)
 }
@@ -2584,7 +2591,7 @@ mod tests {
             ),
             (
                 "Same Day Legal",
-                include_str!("../locales/en/same-day-legal/home-marketing.yaml"),
+                include_str!("../locales/en/same-day-legal/mobile-app.yaml"),
             ),
             ("Vesta", include_str!("../locales/en/vesta/home.yaml")),
             (
@@ -2681,44 +2688,38 @@ mod tests {
         }
     }
 
-    /// Same Day Legal's home starts intake on its own host in each deployment.
+    /// Same Day Legal’s app keeps enrollment on the current host.
     #[test]
-    fn same_day_legal_home_prices_the_subscription_and_the_single_review() {
-        for (host, expected) in [
-            ("sameday.neonlaw.com", "#enrollment"),
-            ("staging-sameday.neonlaw.com", "#enrollment"),
+    fn same_day_legal_app_prices_the_subscription_and_the_single_review() {
+        let content = same_day_legal_app();
+        assert_eq!(
+            content.hero_cta.as_ref().expect("hero CTA").href,
+            "#enrollment"
+        );
+        let text = serde_yaml::to_string(&content).expect("page serializes");
+        for required in [
+            "$29/mo",
+            "$290/year",
+            "forming an LLC",
+            "Data removal",
+            "Privacy protection",
+            "Credit monitoring",
+            "Dark web monitoring",
+            "Identity theft insurance",
+            "Unclaimed property",
+            "Estate planning",
+            "Vesta Estate Planning",
+            "$50",
+            "Lex Tecnica, Ltd.",
+            "App Store",
+            "Google Play",
+            "https://github.com/neon-law/navigator",
+            "written engagement",
         ] {
-            let content = same_day_legal_home(&views::brand::SAME_DAY_LEGAL_BRANDING, Some(host));
-            assert_eq!(
-                content.hero_cta.as_ref().expect("hero CTA").href,
-                expected,
-                "{host}"
-            );
-            let text = serde_yaml::to_string(&content).expect("page serializes");
-            for required in [
-                "$29/mo",
-                "$290/year",
-                "forming an LLC",
-                "Data removal",
-                "Privacy protection",
-                "Credit monitoring",
-                "Dark web monitoring",
-                "Identity theft insurance",
-                "Unclaimed property",
-                "Estate planning",
-                "Vesta Estate Planning",
-                "$50",
-                "Lex Tecnica, Ltd.",
-                "App Store",
-                "Google Play",
-                "https://github.com/neon-law/navigator",
-                "written engagement",
-            ] {
-                assert!(text.contains(required), "{host}: missing {required}");
-            }
-            for retired in ["Nautilus", "DeleteYourData", "From $20", "non-legal"] {
-                assert!(!text.contains(retired), "{host}: {retired} survives");
-            }
+            assert!(text.contains(required), "missing {required}");
+        }
+        for retired in ["Nautilus", "DeleteYourData", "From $20", "non-legal"] {
+            assert!(!text.contains(retired), "{retired} survives");
         }
     }
 
@@ -2736,26 +2737,46 @@ mod tests {
         );
     }
 
+    /// The home is the Navigator page: it gives Notation its own band, links
+    /// the Legal Aid offer, and its only call to action stars the repository.
     #[test]
-    fn neon_home_lists_services_without_pricing_and_links_to_contact() {
+    fn neon_home_presents_navigator_and_asks_only_for_a_star() {
+        const REPO: &str = "https://github.com/neon-law/navigator";
         let content = neon_home(&views::brand::DEFAULT_BRANDING, None);
+        assert_eq!(content.tagline, "Exacting agentic lawyering.");
         let hero = content.hero_cta.as_ref().expect("hero action");
-        assert_eq!(hero.href, "/contact");
-
-        let [Band::Cards {
-            items,
-            pricing_style,
-            ..
-        }, Band::Cta { action, .. }] = content.bands.as_slice()
-        else {
-            panic!("the home lists services before offering attorney contact");
-        };
-        assert!(!pricing_style);
-        assert!(items.len() >= 6);
-        assert!(items
-            .iter()
-            .all(|item| item.cadence.is_none() && item.day_rate.is_none()));
-        assert_eq!(action.as_ref().expect("closing action").href, "/contact");
+        assert_eq!(
+            (hero.href.as_str(), hero.label.as_str()),
+            (REPO, "Star the repo")
+        );
+        let mut anchors = Vec::new();
+        for band in &content.bands {
+            match band {
+                Band::Cta { action, .. } => {
+                    let action = action.as_ref().expect("the closing band stars the repo");
+                    assert_eq!(action.href, REPO);
+                }
+                Band::Cards { anchor, .. } | Band::Steps { anchor, .. } => {
+                    anchors.push(anchor.as_str());
+                }
+                Band::Statement { .. } => {}
+                _ => panic!("the home publishes only steps, cards, statements, and the closing call to action"),
+            }
+        }
+        assert!(anchors.contains(&"notation"), "{anchors:?}");
+        let text = serde_yaml::to_string(&content).expect("home serializes");
+        assert!(text.contains("/legal-aid"));
+        assert!(!text.contains("open source"));
+        for retired in [
+            "/nautilus",
+            "Nautilus",
+            "#enrollment",
+            "$29",
+            "consultation",
+            "Book",
+        ] {
+            assert!(!text.contains(retired), "the home publishes {retired}");
+        }
     }
 
     #[test]
@@ -2763,7 +2784,7 @@ mod tests {
         let privacy = home(&views::brand::DELETE_YOUR_DATA_BRANDING)
             .privacy
             .expect("privacy");
-        let content = same_day_legal_home(&views::brand::SAME_DAY_LEGAL_BRANDING, None);
+        let content = same_day_legal_app();
         let cards = content
             .bands
             .iter()

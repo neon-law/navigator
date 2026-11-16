@@ -1495,6 +1495,12 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
         ),
         home_copy,
     ));
+    routers.push(dioxus_app::marketing_page_router(
+        views::brand::SAME_DAY_LEGAL_APP_PATH,
+        locales::same_day_legal_app(),
+        state.sessions.clone(),
+        portal::secure_cookies(state),
+    ));
     let testimonials_copy = branded_map(branding, "/testimonials", |resolved| {
         webapp::testimonials_page::InjectedTestimonials {
             brand_key: resolved.brand_key.as_str().to_string(),
@@ -1985,7 +1991,7 @@ fn resolve_world_content(branding: &views::brand::Branding) -> webapp::world_pag
 /// Brand-safe like [`resolve_firm_contact_content`]: the `<title>` names the
 /// mounted brand, resolved at router-build time.
 ///
-/// Neon's home uses the shared marketing bands for legal services and attorney contact.
+/// Neon’s home uses the shared marketing bands to present Navigator.
 /// Other house brands resolve their own home catalogs.
 pub(crate) fn resolve_firm_home_content(
     branding: &views::brand::Branding,

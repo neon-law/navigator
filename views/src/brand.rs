@@ -660,6 +660,8 @@ pub static LEX_TECNICA_BRANDING: Branding = Branding {
     brand_key: BrandKey::LexTecnica,
 };
 
+pub const SAME_DAY_LEGAL_APP_PATH: &str = "/app";
+
 /// Same Day Legal, at `sameday.neonlaw.com`: Lex Tecnica, Ltd.'s flat-fee
 /// subscription. It wears the Lex Tecnica brand kit and names the same legal
 /// entity, terms, and family.
@@ -672,9 +674,10 @@ pub static SAME_DAY_LEGAL_BRANDING: Branding = Branding {
         logo_href: "/public/brand/same-day-legal/logo.svg",
         social_image: "",
         nav: &[
-            NavLink::leaf("What you get", "/#included"),
-            NavLink::leaf("Pricing", "/#pricing"),
-            NavLink::leaf("Get started", "/#enrollment"),
+            NavLink::leaf("Legal services", "/#needs"),
+            NavLink::leaf("Mobile app", SAME_DAY_LEGAL_APP_PATH),
+            NavLink::leaf("Pricing", "/app#pricing"),
+            NavLink::leaf("Get started", "/app#enrollment"),
         ],
         is_law_firm: true,
         legal_entity: LEX_TECNICA_LEGAL_ENTITY,
@@ -1279,8 +1282,7 @@ impl BrandKey {
             // marketing-page band sequences (`home-marketing`), not the
             // legacy home schema.
             Self::IepDefenders | Self::LexTecnica => &["home-marketing", "services"],
-            // Same Day Legal is one band-built page: the subscription.
-            Self::SameDayLegal => &["home-marketing"],
+            Self::SameDayLegal => &["home-marketing", "mobile-app"],
             Self::GuiebShook => &["home", "services", "team"],
             Self::DeleteYourData
             | Self::Misericordia
@@ -1301,6 +1303,9 @@ impl BrandKey {
     /// its footer link; other firm paths 404 on the holding host.
     #[must_use]
     pub fn publishes_firm_path(self, path: &str) -> bool {
+        if path == SAME_DAY_LEGAL_APP_PATH {
+            return self == Self::SameDayLegal;
+        }
         if path == "/probate" {
             return self == Self::Vesta;
         }

@@ -17,7 +17,7 @@ use axum::{
 use chrono::Utc;
 use serde::Deserialize;
 use tower_cookies::Cookies;
-use views::brand::BrandKey;
+use views::brand::{BrandKey, SAME_DAY_LEGAL_APP_PATH};
 
 use crate::{password_reset, rate_limit::RateLimit, AppState, SessionStore};
 
@@ -100,7 +100,7 @@ async fn submit(
         return neutral_redirect();
     };
 
-    let source_path = safe_source_path(&form.source_path);
+    let source_path = safe_source_path(brand, &form.source_path);
     if !password_reset::verify_csrf_with(
         &state.sessions,
         &cookies,
@@ -193,9 +193,14 @@ async fn submit(
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     }
-    // Same Day Legal's enrollment continues to sign-in and its booking link.
-    if brand == BrandKey::SameDayLegal && source_path == "/" {
-        return Redirect::to("/auth/login?return_to=%2F%23enrollment").into_response();
+    accepted_redirect(brand, &source_path)
+}
+
+fn accepted_redirect(brand: BrandKey, source_path: &str) -> Response {
+    if brand == BrandKey::SameDayLegal && matches!(source_path, "/" | SAME_DAY_LEGAL_APP_PATH) {
+        let return_to =
+            crate::policy::percent_encode_path(&format!("{SAME_DAY_LEGAL_APP_PATH}#enrollment"));
+        return Redirect::to(&format!("/auth/login?return_to={return_to}")).into_response();
     }
     neutral_redirect()
 }
@@ -231,9 +236,11 @@ fn valid_phone(phone: &str) -> bool {
             .all(|c| c.is_ascii_digit() || matches!(c, '+' | ' ' | '-' | '(' | ')'))
 }
 
-fn safe_source_path(path: &str) -> String {
+fn safe_source_path(brand: BrandKey, path: &str) -> String {
     let path = path.trim();
-    if matches!(path, "/" | "/contact" | "/navigator" | "/services") {
+    if matches!(path, "/" | "/contact" | "/navigator" | "/services")
+        || (brand == BrandKey::SameDayLegal && path == SAME_DAY_LEGAL_APP_PATH)
+    {
         path.to_string()
     } else {
         "/leads".to_string()
@@ -326,16 +333,22 @@ mod tests {
     #[test]
     fn source_path_accepts_only_routes_that_mount_the_lead_form() {
         for path in ["/", "/contact", "/navigator", "/services"] {
-            assert_eq!(safe_source_path(path), path);
+            assert_eq!(safe_source_path(BrandKey::Neon, path), path);
         }
 
+        assert_eq!(
+            safe_source_path(BrandKey::SameDayLegal, SAME_DAY_LEGAL_APP_PATH),
+            SAME_DAY_LEGAL_APP_PATH
+        );
+
         for path in [
+            SAME_DAY_LEGAL_APP_PATH,
             "/client-name",
             "/services?utm_source=campaign",
             "/services/client@example.com",
         ] {
             assert_eq!(
-                safe_source_path(path),
+                safe_source_path(BrandKey::Neon, path),
                 "/leads",
                 "browser-selected source path must not enter a lead or telemetry record: {path}"
             );
@@ -371,18 +384,18 @@ mod tests {
         let (app, sessions) = test_app(db.clone(), RateLimit::disabled()).await;
         let token = "same-day-csrf";
         let payload = body(token, "visitor@example.com", "", false)
-            .replace("source_path=%2Fservices", "source_path=%2F");
+            .replace("source_path=%2Fservices", "source_path=%2Fapp");
         let mut req = request(payload, Some(csrf_cookie(&sessions, token)));
         req.extensions_mut().insert(BrandKey::SameDayLegal);
         let response = app.oneshot(req).await.unwrap();
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
         assert_eq!(
             response.headers()["location"],
-            "/auth/login?return_to=%2F%23enrollment"
+            "/auth/login?return_to=/app%23enrollment"
         );
         let leads = store::leads::list(&db).await.unwrap();
         assert_eq!(leads.len(), 1);
-        assert_eq!(leads[0].source_path, "/");
+        assert_eq!(leads[0].source_path, "/app");
         assert!(store::persons::find_by_email_ci(&db, "visitor@example.com")
             .await
             .unwrap()

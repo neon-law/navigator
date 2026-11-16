@@ -25,7 +25,7 @@ Neon Law (`neon/`):
 
 | File | Page |
 | --- | --- |
-| `neon/locales/en/neon/home-marketing.yaml` | `/` — Legal services and attorney contact |
+| `neon/locales/en/neon/home-marketing.yaml` | `/` — Navigator and exacting agentic lawyering |
 | `neon/locales/en/neon/litigation.yaml` | `/disputes` |
 | `neon/locales/en/neon/fractional-gc.yaml` | unpublished; `/business` answers a 301 to `/` |
 | `neon/locales/en/neon/personal-plan.yaml` | `/personal` |
@@ -278,22 +278,23 @@ links use the same Notion booking calendar as Neon and Vesta. Plus Jakarta Sans 
 Pricing uses the shared `PricingSection` with the brand palette and typeface. The cloak crossing an internet grid is
 decorative; reduced-motion preferences disable animation. The Solana section carries the approved request-record and
 litigation copy. The page uses the same footer treatment as Neon and Vesta. The same subscription is sold as [Same Day
-Legal](glossary/same-day-legal.md), Lex Tecnica, Ltd.'s brand at `sameday.neonlaw.com`, whose home reads
-`neon/locales/en/same-day-legal/home-marketing.yaml` and wears the `same_day_legal` skin: the Lex Tecnica brand kit in
-monochrome, with Cormorant SC display type. An `app_preview` band draws an iPhone in its body proportions, listing every
-check as an equal peer: data removal, privacy protection, credit monitoring, dark web monitoring, identity theft
-insurance, unclaimed property, estate planning, and basic form filings. Its `android_items` draw a Pixel beside it with
-a second screen, the paperwork view; screens are labelled illustrative. The page sells the subscription as
-cancel-anytime at $29/mo or $290/year, with LLC formation, the contract-template library, attorney review, and limited
-changes to a Vesta estate plan included. Its listing price and pricing cards resolve from DeleteYourData's home catalog.
-A second band offers the alternatives: Navigator, free, with no lawyer review, or one attorney review for $50 paid once.
-The store badges read "Coming soon" and link nowhere until the apps are published. Its CTA opens a three-step public
-contact intake before sign-in; the signed-in page exposes the configured enrollment booking link. Legal work begins
-under a written engagement with Lex Tecnica, Ltd. Neon's `/same-day-legal` and retired `/nautilus` paths answer a 301 to
-the Same Day Legal host.
+Legal](glossary/same-day-legal.md), a brand of Lex Tecnica, Ltd. Its home asks “What is your legal need?” and lists
+common legal services and attorney contact. The `/app` page carries the subscription and enrollment. Both pages use the
+`same_day_legal` skin, the Lex Tecnica brand kit in monochrome with Cormorant SC display type.
 
-Neon's home at `/` reads `neon/locales/en/neon/home-marketing.yaml` . It asks “What is your legal need?” and lists
-common legal services without prices. The hero and closing section link to `/contact` so visitors can reach an attorney.
+An `app_preview` band on `/app` draws an iPhone in its body proportions, listing every check as an equal peer: data
+removal, privacy protection, credit monitoring, dark web monitoring, identity theft insurance, unclaimed property,
+estate planning, and basic form filings. Its `android_items` draw a Pixel beside it with a second screen, the paperwork
+view; screens are labelled illustrative. The page sells the subscription as cancel-anytime at $29/mo or $290/year, with
+LLC formation, the contract-template library, attorney review, and limited changes to a Vesta estate plan included. Its
+listing price and pricing cards resolve from DeleteYourData's home catalog. A second band offers the alternatives:
+Navigator, free, with no lawyer review, or one attorney review for $50 paid once. The store badges read "Coming soon"
+and link nowhere until the apps are published. Its CTA opens a three-step public contact intake before sign-in; the
+signed-in page exposes the configured enrollment booking link. Legal work begins under a written engagement with Lex
+Tecnica, Ltd. Neon's `/same-day-legal` and retired `/nautilus` paths answer a 301 to the Same Day Legal host.
+
+Neon’s home at `/` presents Navigator under “Exacting agentic lawyering.” It explains Projects, Notations, and Lawyer
+Review and links to the repository, Notation library, and Legal Aid.
 
 The header links to Navigator at `/navigator` , Notations at `/notations` , and Legal Aid at `/legal-aid` . Hosted
 Navigator is offered only to legal aid organizations. Its price appears on the Legal Aid page, which also links the
