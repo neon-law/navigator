@@ -323,6 +323,8 @@ pub enum AssetError {
     /// module could not read back — see [`AssetRow::into_asset`].
     #[error("writing an asset returned no usable row")]
     WriteReturnedNothing,
+    #[error("PostgreSQL asset metadata: {0}")]
+    Postgres(String),
 }
 
 /// Run a write under the shared retry policy
@@ -452,6 +454,129 @@ pub async fn for_project(db: &SurrealDb, project_id: Uuid) -> Result<Vec<Asset>,
     many(response)
 }
 
+/// The metadata used to display or download a Project Inbox attachment.
+#[derive(Debug)]
+pub struct AttachmentMetadata {
+    pub id: Uuid,
+    pub project_id: Option<Uuid>,
+    pub filename: Option<String>,
+    pub kind: Option<String>,
+    pub content_type: String,
+    pub storage_key: String,
+}
+
+impl AttachmentMetadata {
+    fn from_row(row: &sqlx::postgres::PgRow) -> Result<Self, sqlx::Error> {
+        use sqlx::Row;
+        Ok(Self {
+            id: row.try_get("id")?,
+            project_id: row.try_get("project_id")?,
+            filename: row.try_get("filename")?,
+            kind: row.try_get("kind")?,
+            content_type: row.try_get("content_type")?,
+            storage_key: row.try_get("storage_key")?,
+        })
+    }
+}
+
+impl From<Asset> for AttachmentMetadata {
+    fn from(asset: Asset) -> Self {
+        Self {
+            id: asset.id,
+            project_id: asset.project_id,
+            filename: asset.filename,
+            kind: asset.kind,
+            content_type: asset.content_type,
+            storage_key: asset.storage_key,
+        }
+    }
+}
+
+/// Metadata for an already-authorized Inbox attachment download.
+pub async fn inbox_attachment_metadata(
+    db: &SurrealDb,
+    asset_id: Uuid,
+) -> Result<Option<AttachmentMetadata>, AssetError> {
+    if let Some(pg) = crate::postgres::PostgresDb::configured()
+        .await
+        .map_err(|error| AssetError::Postgres(error.to_string()))?
+    {
+        return sqlx::query(
+            "SELECT id, project_id, filename, kind, content_type, storage_key FROM asset WHERE id = $1",
+        )
+        .bind(asset_id)
+        .try_map(|row| AttachmentMetadata::from_row(&row))
+        .fetch_optional(pg.pool())
+        .await
+        .map_err(|error| AssetError::Postgres(error.to_string()));
+    }
+    Ok(find_by_id(db, asset_id).await?.map(Into::into))
+}
+
+/// Resolve metadata for a Project Inbox Message's authorized attachment IDs
+/// and older filed revisions. The primary slot precedes the filed revisions.
+pub async fn project_inbox_attachments(
+    db: &SurrealDb,
+    project_id: Uuid,
+    message_id: Uuid,
+    primary: Option<Uuid>,
+    linked: &[crate::inbox::MessageAttachment],
+) -> Result<Vec<AttachmentMetadata>, AssetError> {
+    let ids: Vec<_> = primary
+        .into_iter()
+        .chain(linked.iter().map(|link| link.asset_id))
+        .collect();
+    let source = message_id.to_string();
+    if let Some(pg) = crate::postgres::PostgresDb::configured()
+        .await
+        .map_err(|error| AssetError::Postgres(error.to_string()))?
+    {
+        // A linked ID can name a bare Asset or one on this Project. Only
+        // live Project files may enter through the older provenance slot.
+        let mut rows: Vec<(AttachmentMetadata, Option<String>)> = sqlx::query(
+            "SELECT id, project_id, filename, kind, content_type, storage_key, slug FROM asset
+             WHERE (id = ANY($1) AND (project_id IS NULL OR project_id = $2))
+                OR (project_id = $2 AND source_message_id = $3 AND deleted_at IS NULL)",
+        )
+        .bind(&ids)
+        .bind(project_id)
+        .bind(&source)
+        .try_map(|row| {
+            use sqlx::Row;
+            Ok((AttachmentMetadata::from_row(&row)?, row.try_get("slug")?))
+        })
+        .fetch_all(pg.pool())
+        .await
+        .map_err(|error: sqlx::Error| AssetError::Postgres(error.to_string()))?;
+        rows.sort_by_key(|(asset, slug)| {
+            (
+                Some(asset.id) != primary,
+                mail_attachment_index(slug.as_deref()),
+                asset.id,
+            )
+        });
+        return Ok(rows.into_iter().map(|(asset, _)| asset).collect());
+    }
+    let mut direct = find_by_ids(db, &ids).await?;
+    direct.retain(|asset| asset.project_id.is_none_or(|id| id == project_id));
+    let filed = find_by_source_message_id(db, project_id, &source).await?;
+    Ok(direct
+        .iter()
+        .position(|asset| Some(asset.id) == primary)
+        .map(|index| direct.remove(index))
+        .into_iter()
+        .chain(filed)
+        .chain(direct)
+        .map(Into::into)
+        .collect())
+}
+
+fn mail_attachment_index(slug: Option<&str>) -> u64 {
+    slug.and_then(|slug| slug.rsplit('/').next())
+        .and_then(|index| index.parse().ok())
+        .unwrap_or(u64::MAX)
+}
+
 /// The attachments one Message filed onto a Project, in attachment order —
 /// the `mail/{message_id}/{index}` revisions stamped with
 /// [`crate::documents::MailProvenance`] (LAW-238 D1). Project-scoped: a
@@ -479,14 +604,7 @@ pub async fn find_by_source_message_id(
         .await
         .and_then(surrealdb::IndexedResults::check)?,
     )?;
-    assets.sort_by_key(|asset| {
-        asset
-            .slug
-            .as_deref()
-            .and_then(|slug| slug.rsplit('/').next())
-            .and_then(|index| index.parse::<u64>().ok())
-            .unwrap_or(u64::MAX)
-    });
+    assets.sort_by_key(|asset| mail_attachment_index(asset.slug.as_deref()));
     Ok(assets)
 }
 

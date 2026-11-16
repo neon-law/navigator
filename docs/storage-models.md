@@ -71,6 +71,12 @@ and a delivery's reservation commits with its attempt. Parent rows (Project, Per
 in PostgreSQL. A retention purge refuses while an Inbox Message or a Notation source still names a Communication it
 would delete. The Inbox tables follow the same rule.
 
+The Project Inbox also reads synced Matter Page tabs and Asset metadata from PostgreSQL when the host is set. A
+Message's attachment links retain their provider order and names, and live filed Assets can also appear through their
+Message provenance. Attachment bytes are fetched from object storage after the Project and Message access checks. The
+Matter Page and Asset writers populate these PostgreSQL projections through the existing mirror, with backfill and
+reconciliation covering historical rows and interrupted writes.
+
 ## Brand and social content
 
 Whenever `NAVIGATOR_POSTGRES_HOST` is set, `store::posts`, `store::social_handles`, `store::social_publications`,

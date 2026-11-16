@@ -47,7 +47,7 @@ pub(crate) async fn put_pages(
             store::matter_pages::MatterPageError::Invalid(findings) => {
                 ApiError::PagesInvalid(findings.join("; "))
             }
-            other @ store::matter_pages::MatterPageError::Db(_) => ApiError::Db(other.to_string()),
+            other => ApiError::Db(other.to_string()),
         })?;
     Ok(Json(PagesView {
         synced_at: stored.first().map(|page| page.synced_at.clone()),

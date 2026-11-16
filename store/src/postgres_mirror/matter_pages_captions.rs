@@ -264,6 +264,36 @@ async fn target_pages(
     ))
 }
 
+/// Read the synced page entries from the PostgreSQL projection in manifest order.
+pub(crate) async fn project_page_entries(
+    pg: &PostgresDb,
+    project_id: Uuid,
+) -> Result<Vec<rules::pages::PageEntry>, MirrorError> {
+    let mut pages = target_pages(pg, Some(project_id)).await?;
+    Ok(pages
+        .remove(&project_id)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|page| {
+            let lenses = [
+                (rules::dashboard::Lens::Client, page.client_sections),
+                (rules::dashboard::Lens::Lawyer, page.lawyer_sections),
+                (rules::dashboard::Lens::Clerk, page.clerk_sections),
+            ]
+            .into_iter()
+            .filter_map(|(lens, sections)| Some((lens.as_str().to_string(), sections?)))
+            .collect();
+            rules::pages::PageEntry {
+                slug: page.slug,
+                kind: page.kind,
+                title: page.title,
+                draft: page.draft,
+                lenses,
+            }
+        })
+        .collect())
+}
+
 async fn target_captions(pg: &PostgresDb) -> Result<BTreeMap<Uuid, CaptionImage>, MirrorError> {
     let rows = sqlx::query(
         "SELECT id, project_id, firm_id, court, case_number, judicial_officer, department, \

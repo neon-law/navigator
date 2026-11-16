@@ -45,6 +45,8 @@ pub enum MatterPageError {
     /// The set fails the gate's own checks; each line is one finding.
     #[error("{}", .0.join("; "))]
     Invalid(Vec<String>),
+    #[error("PostgreSQL matter pages: {0}")]
+    Postgres(String),
 }
 
 #[derive(SurrealValue)]
@@ -192,6 +194,28 @@ pub async fn list_for_project(
         .and_then(surrealdb::IndexedResults::check)?;
     let rows: Vec<Row> = response.take(0)?;
     Ok(rows.into_iter().filter_map(Row::into_page).collect())
+}
+
+/// The Project Inbox reads tabs from the PostgreSQL projection when configured.
+pub async fn inbox_entries(
+    surreal: &SurrealDb,
+    project_id: Uuid,
+) -> Result<Vec<PageEntry>, MatterPageError> {
+    if let Some(pg) = crate::postgres::PostgresDb::configured()
+        .await
+        .map_err(|error| MatterPageError::Postgres(error.to_string()))?
+    {
+        return crate::postgres_mirror::matter_pages_captions::project_page_entries(
+            &pg, project_id,
+        )
+        .await
+        .map_err(|error| MatterPageError::Postgres(error.to_string()));
+    }
+    Ok(list_for_project(surreal, project_id)
+        .await?
+        .into_iter()
+        .map(|page| page.entry)
+        .collect())
 }
 
 /// Remove every stored page of a Project, for the matter-delete cascade.

@@ -48,8 +48,12 @@ fn main() {
             webapp::sections::page::MatterPage
         } else if inbox == Some(InboxRoot::Firm) {
             webapp::inbox::OwnerInbox
+        } else if inbox == Some(InboxRoot::FirmThread) {
+            webapp::inbox::OwnerInboxThread
         } else if inbox == Some(InboxRoot::Project) {
             webapp::inbox::ProjectInbox
+        } else if inbox == Some(InboxRoot::ProjectThread) {
+            webapp::inbox::ProjectInboxThread
         } else {
             webapp::App
         };
@@ -66,25 +70,41 @@ fn main() {
     }
 }
 
-/// The inbox workspace a list route renders. Its reading pane is a client
-/// signal, so the list must hydrate as the component the server rendered
-/// there, not as [`webapp::App`].
+/// Inbox lists and full conversations each hydrate the root rendered by SSR.
 #[cfg(any(test, all(feature = "web", target_arch = "wasm32")))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum InboxRoot {
     Firm,
+    FirmThread,
     Project,
+    ProjectThread,
 }
 
 #[cfg(any(test, all(feature = "web", target_arch = "wasm32")))]
 fn inbox_root(path: &str) -> Option<InboxRoot> {
-    if path == webapp::inbox::INBOX_PATH || path == webapp::inbox::OWNER_INBOX_PATH {
-        return Some(InboxRoot::Firm);
+    for base in [webapp::inbox::INBOX_PATH, webapp::inbox::OWNER_INBOX_PATH] {
+        if path == base {
+            return Some(InboxRoot::Firm);
+        }
+        if path
+            .strip_prefix(base)
+            .and_then(|tail| tail.strip_prefix('/'))
+            .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+        {
+            return Some(InboxRoot::FirmThread);
+        }
     }
-    path.strip_prefix("/app/projects/")
-        .and_then(|tail| tail.strip_suffix("/inbox"))
-        .filter(|code| !code.is_empty() && !code.contains('/'))
-        .map(|_| InboxRoot::Project)
+    let (code, route) = path.strip_prefix("/app/projects/")?.split_once('/')?;
+    if code.is_empty() {
+        return None;
+    }
+    if route == "inbox" {
+        return Some(InboxRoot::Project);
+    }
+    route
+        .strip_prefix("inbox/")
+        .filter(|id| uuid::Uuid::parse_str(id).is_ok())
+        .map(|_| InboxRoot::ProjectThread)
 }
 
 // The SSR marker belongs to the dedicated root, not to a glossary term or nested section.
@@ -103,19 +123,30 @@ mod tests {
     use super::{inbox_root, private_matter_page_root, InboxRoot};
 
     #[test]
-    fn inbox_lists_hydrate_as_their_workspace_roots() {
+    fn inbox_lists_and_conversations_hydrate_as_their_server_roots() {
         assert_eq!(inbox_root("/app/inbox"), Some(InboxRoot::Firm));
         assert_eq!(inbox_root("/app/owner/inbox"), Some(InboxRoot::Firm));
         assert_eq!(
             inbox_root("/app/projects/synthetic/inbox"),
             Some(InboxRoot::Project)
         );
+        let id = "01a1b198-c04d-732c-926f-972f8588d5db";
+        for base in ["/app/inbox", "/app/owner/inbox"] {
+            assert_eq!(
+                inbox_root(&format!("{base}/{id}")),
+                Some(InboxRoot::FirmThread)
+            );
+        }
+        assert_eq!(
+            inbox_root(&format!("/app/projects/synthetic/inbox/{id}")),
+            Some(InboxRoot::ProjectThread)
+        );
         for path in [
-            "/app/inbox/01a1b198-c04d-732c-926f-972f8588d5db",
             "/app/inbox/triage",
             "/app/inbox/calls",
             "/app/projects//inbox",
-            "/app/projects/synthetic/inbox/01a1b198-c04d-732c-926f-972f8588d5db",
+            "/app/projects/synthetic/inbox/not-a-conversation",
+            "/app/projects/synthetic/inbox/01a1b198-c04d-732c-926f-972f8588d5db/notes",
             "/app/projects/a/b/inbox",
             "/app/team",
         ] {
