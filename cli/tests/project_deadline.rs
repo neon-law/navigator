@@ -372,6 +372,7 @@ async fn cli_api_round_trip_cancels_refuses_replay_and_reopens_the_same_row() {
             integration_providers: state.integration_providers,
             billing_provider: state.billing_provider.clone(),
             canonical_base_url: None,
+            jev: None,
         })
         .layer(axum::Extension(portal::SessionData {
             person_id: Some(person.id),
