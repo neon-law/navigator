@@ -12,11 +12,13 @@
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
+use axum::{Extension, Json};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::api::{ApiError, ApiState, LawyerSession};
+use crate::attachment_scanner::{AttachmentScanner, ScanError, ScanVerdict};
 
 /// One request = one payload. `project` is a matter *code* (`sample-litigation`);
 /// attribution at import rides `store::inbox::assign` after ingest.
@@ -48,7 +50,7 @@ struct ImportedMessage {
     /// interrupted attachment filing or attribution.
     deduped: bool,
     direction: String,
-    /// Email attachments filed from this message (LinkedIn carries none).
+    /// Email attachments staged in the Firm Inbox or filed into a Project.
     attachments: Vec<ImportedAttachment>,
 }
 
@@ -57,7 +59,7 @@ struct ImportedAttachment {
     filename: String,
     content_type: String,
     size_bytes: usize,
-    /// The asset the bytes filed as — `mail/{message_id}/{index}.<extension>`.
+    /// The staged or filed asset containing these bytes.
     asset_id: Uuid,
 }
 
@@ -131,16 +133,6 @@ async fn resolve_firm(state: &ApiState, person_id: Uuid) -> Result<Uuid, Respons
     }
 }
 
-/// `POST /app/api/inbox/import` — import one correspondence payload into the
-/// Firm Inbox.
-///
-/// Lawyer-tier only (the [`LawyerSession`] extractor answers 401/403 before
-/// the body is parsed). `400` when the source is unknown, the payload is not
-/// valid base64 or not parseable by its adapter (AC9 — a mis-selected file
-/// or a changed LinkedIn export shape fails loudly, naming the offending
-/// headers), or the Firm/matter resolution is ambiguous. `201` carries one
-/// summary per ingested message; replaying the same payload reports the
-/// existing Message ids with `deduped: true`; interrupted filing can finish (AC3).
 /// The payload's bytes: `payload_base64` under the strict standard alphabet.
 /// A bad encoding is a 400 — the caller picked the wrong file or truncated it.
 fn decode_payload(encoded: &str) -> Result<Vec<u8>, Response> {
@@ -317,11 +309,22 @@ async fn import_all(
             .await
             .map_err(|error| inbox_error(&error))?;
 
-        // Filing identical bytes reuses the revision. Retry even after message
-        // deduplication so an interrupted import can finish its attachments.
-        let mut filed_attachments = Vec::new();
-        if let Some(project_id) = project_id {
-            for (index, attachment) in message.attachments.iter().enumerate() {
+        let mut attachments = Vec::new();
+        let mut links = Vec::new();
+        for (index, attachment) in message.attachments.iter().enumerate() {
+            let link = if mailbox.gmail {
+                store::inbox::ingest_attachment(
+                    &state.surreal,
+                    &state.storage,
+                    firm_id,
+                    None,
+                    &attachment.filename,
+                    &attachment.content_type,
+                    &attachment.bytes,
+                )
+                .await
+                .map_err(|error| inbox_error(&error))?
+            } else if let Some(project_id) = project_id {
                 let asset_id = file_import_attachment(
                     state,
                     project_id,
@@ -331,24 +334,22 @@ async fn import_all(
                     attachment,
                 )
                 .await?;
-                filed_attachments.push(ImportedAttachment {
-                    filename: attachment.filename.clone(),
-                    content_type: attachment.content_type.clone(),
-                    size_bytes: attachment.bytes.len(),
+                store::inbox::IngestAttachment {
                     asset_id,
-                });
-            }
+                    filename: attachment.filename.clone(),
+                    sha256: store::documents::sha256_hex(&attachment.bytes),
+                }
+            } else {
+                break;
+            };
+            attachments.push(ImportedAttachment {
+                filename: attachment.filename.clone(),
+                content_type: attachment.content_type.clone(),
+                size_bytes: attachment.bytes.len(),
+                asset_id: link.asset_id,
+            });
+            links.push(link);
         }
-
-        let links = filed_attachments
-            .iter()
-            .zip(&message.attachments)
-            .map(|(filed, parsed)| store::inbox::IngestAttachment {
-                asset_id: filed.asset_id,
-                filename: filed.filename.clone(),
-                sha256: store::documents::sha256_hex(&parsed.bytes),
-            })
-            .collect::<Vec<_>>();
         store::inbox::link_message_assets(&state.surreal, firm_id, ingested.message_id, &links)
             .await
             .map_err(|error| inbox_error(&error))?;
@@ -358,10 +359,40 @@ async fn import_all(
             conversation_id: ingested.conversation_id,
             deduped: ingested.deduped,
             direction: direction.to_string(),
-            attachments: filed_attachments,
+            attachments,
         });
     }
     Ok(imported)
+}
+
+async fn scan_gmail_attachments(
+    scanner: Option<&dyn AttachmentScanner>,
+    messages: &[store::inbox_import::ImportMessage],
+) -> Result<(), Response> {
+    for attachment in messages.iter().flat_map(|message| &message.attachments) {
+        let (status, error) = match scanner {
+            Some(scanner) => match scanner.scan(&attachment.bytes).await {
+                Ok(ScanVerdict::Clean) => continue,
+                Ok(ScanVerdict::Found { .. }) => (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "attachment_malware_detected",
+                ),
+                Err(ScanError::SizeLimit { .. }) => {
+                    (StatusCode::PAYLOAD_TOO_LARGE, "attachment_too_large")
+                }
+                Err(_) => (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "attachment_scanner_unavailable",
+                ),
+            },
+            None => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "attachment_scanner_unavailable",
+            ),
+        };
+        return Err((status, Json(serde_json::json!({"error": error}))).into_response());
+    }
+    Ok(())
 }
 
 /// `POST /app/api/inbox/import` — import one correspondence payload into the
@@ -377,6 +408,7 @@ async fn import_all(
 pub(crate) async fn inbox_import_door(
     State(state): State<ApiState>,
     lawyer: LawyerSession,
+    scanner: Option<Extension<Arc<dyn AttachmentScanner>>>,
     Json(input): Json<InboxImportRequest>,
 ) -> Result<Response, ApiError> {
     let person_id = lawyer.0.person_id.ok_or(ApiError::NotFound)?;
@@ -432,7 +464,14 @@ pub(crate) async fn inbox_import_door(
         return Ok((StatusCode::OK, Json(preview)).into_response());
     }
 
-    // Archive the verbatim payload first (AC6).
+    if gmail {
+        let scanner = scanner.as_ref().map(|Extension(scanner)| scanner.as_ref());
+        if let Err(response) = scan_gmail_attachments(scanner, &messages).await {
+            return Ok(response);
+        }
+    }
+
+    // Archive the verbatim payload before ingesting the Message (AC6).
     let archived_key =
         archive_payload(&state, adapter.channel(), firm_id, &mailbox, &bytes).await?;
 

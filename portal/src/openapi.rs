@@ -718,7 +718,7 @@ fn add_inbox_import_operation(document: &mut Value) {
     });
     document["paths"]["/app/api/inbox/import"] = json!({"post": {
         "operationId": "importInboxMessages", "tags": ["Inbox"], "summary": "Import historical Messages without sending",
-        "description": "Requires lawyer-tier access; writing imports also requires the PostgreSQL Inbox authority. Imports RFC 5322 email or a LinkedIn messages.csv export. The mailbox identifies the importing account. Gmail imports require the caller’s verified canonical mailbox and current Firm membership. They leave messages in the Inbox for individual filing approval. Other imports may name a Project if the caller has access. Filed content is internal by default. Retries reuse Messages and finish missing attachment filings. A dry run parses and previews without archiving or writing records.",
+        "description": "Requires lawyer-tier access; writing imports also requires the PostgreSQL Inbox authority. Imports RFC 5322 email or a LinkedIn messages.csv export. The mailbox identifies the importing account. Gmail imports require the caller’s verified canonical mailbox and current Firm membership. They scan attachments and stage clean files in the Firm Inbox for individual filing approval. Other imports may name a Project if the caller has access. Filed content is internal by default. Retries reuse Messages and finish missing attachment filings. A dry run parses and previews without archiving or writing records.",
         "requestBody": {"required": true, "content": {"application/json": {"schema": {
             "type": "object", "additionalProperties": false, "required": ["source", "mailbox", "payload_base64"],
             "properties": {
@@ -735,8 +735,10 @@ fn add_inbox_import_operation(document: &mut Value) {
             "401": {"description": "No authenticated session"},
             "403": {"description": "Lawyer-tier access or verified Gmail mailbox scope required"},
             "404": {"description": "Project or Conversation outside the caller's scope"},
-            "413": {"description": "Payload exceeds the request limit"},
-            "500": {"description": "Database, storage, or Inbox authority unavailable"}
+            "413": {"description": "Payload or Gmail attachment exceeds its size limit"},
+            "422": {"description": "Malware detected in a Gmail attachment"},
+            "500": {"description": "Database, storage, or Inbox authority unavailable"},
+            "503": {"description": "Gmail attachment scanner unavailable"}
         }
     }});
 }
