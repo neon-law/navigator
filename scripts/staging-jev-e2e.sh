@@ -103,7 +103,24 @@ api() {
 # dispatch's signature (Actions run 43885192582, run 43893047358).
 json_array_rows() {
   local -n rows_ref="$1"
+  # rows_ref is a nameref: mapfile writes through it into the CALLER's array.
+  # shellcheck disable=SC2034
   mapfile -t rows_ref < <(jq -c '.[]' <<<"$2")
+}
+
+# The entity seed template for one synthetic matter row. The seed contract
+# refuses an entity whose entity_type declares no jurisdiction (ENG-518):
+# `jurisdiction: { name: <Jurisdiction> }` must name an EXISTING Jurisdiction
+# — seed_entities looks it up by name and errors 'Entity.yaml references
+# unknown jurisdiction' rather than creating one, so a fresh environment
+# cannot resolve a name the canonical seed does not ship. Canonical
+# jurisdictions (store/seeds/Jurisdiction.yaml, the 50 states included) are
+# seeded before entities on every boot in every environment, so `California`
+# is always present; the run creates no jurisdiction and nothing to clean up.
+matter_entity_yaml() {
+  local entity_name="$1" entity_type="$2"
+  printf 'lookup_fields: [name, entity_type_id]\nrecords:\n  - name: %s\n    entity_type:\n      name: %s\n      jurisdiction:\n        name: California\n' \
+    "$entity_name" "$entity_type"
 }
 
 api_json() {
@@ -241,11 +258,7 @@ records:
   json_array_rows matter_rows "$matters"
   for row in "${matter_rows[@]}"; do
     entity_name="Synthetic Entity ($(jq -r .code <<<"$row"))"
-    entity_yaml="lookup_fields: [name, entity_type_id]
-records:
-  - name: ${entity_name}
-    entity_type:
-      name: ${entity_type}"
+    entity_yaml="$(matter_entity_yaml "$entity_name" "$entity_type")"
     entity_report="$(api_json POST /app/api/seed \
       "$(jq -nc --arg yaml "$entity_yaml" '{model: "entity", yaml: $yaml, dry_run: false, overwrite: false}')")"
     note "seed: entity for $(jq -r .code <<<"$row") created=$(jq -r .created <<<"$entity_report")"
