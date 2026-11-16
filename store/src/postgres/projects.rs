@@ -124,6 +124,21 @@ pub async fn find_by_code_on(pg: &PostgresDb, code: &str) -> Result<Option<Proje
         .transpose()
 }
 
+/// Whether another Project owns this Drive folder.
+pub(crate) async fn drive_folder_recorded_elsewhere_on(
+    pg: &PostgresDb,
+    project_id: Uuid,
+    drive_folder_id: &str,
+) -> Result<bool, ProjectError> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM project WHERE drive_folder_id = $1 AND id <> $2)",
+    )
+    .bind(drive_folder_id)
+    .bind(project_id)
+    .fetch_one(pg.pool())
+    .await?)
+}
+
 /// Seed lookup by display name; ties use UUID order.
 pub async fn find_by_name_on(pg: &PostgresDb, name: &str) -> Result<Option<Project>, ProjectError> {
     sqlx::query("SELECT * FROM project WHERE name=$1 ORDER BY id LIMIT 1")
