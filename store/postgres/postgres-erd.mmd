@@ -654,6 +654,10 @@ erDiagram
         datetime inserted_at
         datetime updated_at
     }
+    firm_calendar_settings {
+        string firm_id
+        string google_workspace_owner
+    }
     firm_forgejo_organization {
         uuid firm_id
         int forgejo_id
@@ -2080,6 +2084,7 @@ erDiagram
     person }o--|| firm_assumption : references
     brand }o--|| firm_brand : references
     firm }o--|| firm_brand : references
+    firm }o--|| firm_calendar_settings : references
     firm }o--|| firm_forgejo_organization : references
     firm }o--|| firm_integration_secret : references
     person }o--|| firm_integration_secret : references

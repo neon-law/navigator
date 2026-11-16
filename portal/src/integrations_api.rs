@@ -79,6 +79,26 @@ async fn ensure_lock(job_id: String) -> tokio::sync::OwnedMutexGuard<()> {
     lock.lock_owned().await
 }
 
+/// Serialize Calendar changes across web replicas as well as local callers.
+pub(crate) async fn calendar_lock(
+    project_id: uuid::Uuid,
+) -> Result<
+    (
+        tokio::sync::OwnedMutexGuard<()>,
+        Option<store::project_calendar::CalendarWriteLock>,
+        tokio::sync::SemaphorePermit<'static>,
+    ),
+    (),
+> {
+    static WRITERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(3);
+    let local = ensure_lock(format!("calendar:{project_id}")).await;
+    let permit = WRITERS.acquire().await.map_err(|_| ())?;
+    let lane = store::project_calendar::lock_writes(project_id)
+        .await
+        .map_err(|_| ())?;
+    Ok((local, lane, permit))
+}
+
 /// One Project's result. `outcome` is a closed slug; `detail` is present only
 /// for the outcomes that name a mechanism the operator has to act on.
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -801,7 +821,6 @@ async fn ensure_one_calendar(
     state: &ApiState,
     project: &store::projects::Project,
 ) -> ProjectOutcome {
-    let _guard = ensure_lock(format!("calendar:{}", project.id)).await;
     let calendar = match state
         .integration_providers
         .calendar(&state.surreal, project.id)
@@ -809,6 +828,9 @@ async fn ensure_one_calendar(
     {
         Ok(calendar) => calendar,
         Err(error) => return unavailable(project, &error),
+    };
+    let Ok(_guard) = calendar_lock(project.id).await else {
+        return ProjectOutcome::plain(project.code.clone(), "provider_unavailable");
     };
     match store::project_calendar::ensure(&state.surreal, project.id, calendar.as_ref()).await {
         Ok(report) => ProjectOutcome::plain(project.code.clone(), report.outcome.slug()),
@@ -872,12 +894,11 @@ pub(crate) async fn calendar_deadline_mirror_door(
     Ok((StatusCode::OK, Json(IntegrationReport { results })).into_response())
 }
 
-async fn mirror_one(
+pub(crate) async fn mirror_one(
     state: &ApiState,
     project: &store::projects::Project,
     dry_run: bool,
 ) -> ProjectOutcome {
-    let _guard = ensure_lock(format!("deadline-mirror:{}", project.id)).await;
     let calendar = match state
         .integration_providers
         .calendar(&state.surreal, project.id)
@@ -885,6 +906,9 @@ async fn mirror_one(
     {
         Ok(calendar) => calendar,
         Err(error) => return unavailable(project, &error),
+    };
+    let Ok(_guard) = calendar_lock(project.id).await else {
+        return ProjectOutcome::plain(project.code.clone(), "provider_unavailable");
     };
     match store::deadline_calendar::reconcile(
         &state.surreal,
@@ -895,11 +919,20 @@ async fn mirror_one(
     )
     .await
     {
-        Ok(report) => ProjectOutcome::with_detail(
-            project.code.clone(),
-            report.outcome.slug(),
-            store::deadline_calendar::report_line(&report),
-        ),
+        Ok(report) => {
+            if !report.failures.is_empty() {
+                tracing::warn!(
+                    project_id = %project.id,
+                    failures = report.failures.len(),
+                    "Deadline Calendar reconcile has pending events"
+                );
+            }
+            ProjectOutcome::with_detail(
+                project.code.clone(),
+                report.outcome.slug(),
+                store::deadline_calendar::report_line(&report),
+            )
+        }
         Err(store::deadline_calendar::MirrorError::Calendar(
             cloud::CalendarError::AmbiguousSummary { count },
         )) => ProjectOutcome::with_detail(

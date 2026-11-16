@@ -337,6 +337,85 @@ fn outcomes(report: &serde_json::Value) -> Vec<(String, String)> {
         .collect()
 }
 
+#[tokio::test]
+async fn navigator_deadline_mutations_update_the_same_project_calendar_event() {
+    let fx = build_fixture(true).await;
+    let project = store::projects::find_by_code(&fx.surreal, &fx.code)
+        .await
+        .unwrap()
+        .unwrap();
+    let path = format!("/app/api/projects/{}/deadlines", project.id);
+    let response = post(
+        &fx,
+        &path,
+        Some(&fx.lawyer),
+        serde_json::json!({
+            "title": "Synthetic deadline",
+            "due_at": "2028-04-01T14:00:00Z",
+            "authority_kind": "court_order",
+            "authority": "Synthetic order",
+            "source": "lawyer",
+            "calendar_role": "firm",
+            "category": "court",
+            "replay_key": "calendar-fixture"
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let id = json(response).await["id"].as_str().unwrap().to_owned();
+    let calendar = &fx.providers.calendar;
+    let calendars = calendar.calendars();
+    assert_eq!(calendars.len(), 1);
+    let calendar_id = &calendars[0].id;
+    let originally = calendar.events(calendar_id);
+    assert_eq!(originally.len(), 1);
+    assert_eq!(originally[0].private_properties["deadline_id"], id);
+
+    let response = fx
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("{path}/{id}"))
+                .header("authorization", fx.lawyer.as_str())
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"due_at":"2028-04-02T14:00:00Z"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let events = calendar.events(calendar_id);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].id, originally[0].id);
+    assert_ne!(
+        events[0].private_properties["body_sha"],
+        originally[0].private_properties["body_sha"]
+    );
+
+    let mut previous = events[0].clone();
+    for action in ["cancel", "reopen", "complete"] {
+        let response = post(
+            &fx,
+            &format!("{path}/{id}/{action}"),
+            Some(&fx.lawyer),
+            serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK, "{action} should succeed");
+        let events = calendar.events(calendar_id);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].id, originally[0].id);
+        assert_ne!(
+            events[0].private_properties["body_sha"],
+            previous.private_properties["body_sha"]
+        );
+        previous = events[0].clone();
+    }
+    assert_eq!(calendar.calendars().len(), 1);
+}
+
 const ALL_DOORS: [&str; 5] = [
     "/app/api/integrations/notion/ensure",
     "/app/api/integrations/notion/reconcile",

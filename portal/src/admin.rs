@@ -2823,6 +2823,8 @@ struct FirmUpdateInput {
     /// leaves it untouched.
     #[serde(default)]
     portal_theme_brand_key: Option<String>,
+    #[serde(default)]
+    google_workspace_calendar_owner: Option<String>,
 }
 
 /// `POST /app/admin/firms/{id}/edit` — a descriptive edit on
@@ -2843,6 +2845,27 @@ async fn firms_update(
     let Some(Extension(session_data)) = session else {
         return not_found_response();
     };
+    if let Some(owner) = input.google_workspace_calendar_owner.as_deref() {
+        return match store::firms::set_calendar_owner(
+            &state.surreal,
+            session_data.role,
+            session_data.person_id,
+            id,
+            owner,
+        )
+        .await
+        {
+            Ok(()) => Redirect::to(&format!("/app/admin/firms/{id}/edit")).into_response(),
+            Err(
+                store::firms::FirmError::NotAuthorized | store::firms::FirmError::NoSuchFirm(_),
+            ) => not_found_response(),
+            Err(error) => {
+                let mut query = String::new();
+                push_query(&mut query, "error", &error.user_message());
+                Redirect::to(&format!("/app/admin/firms/{id}/edit?{query}")).into_response()
+            }
+        };
+    }
     let edit = store::firms::FirmEdit {
         name: Some(input.name.clone()),
         status: Some(input.status.clone()),
@@ -6600,6 +6623,7 @@ mod tests {
                 status: status.into(),
                 entity_id: None,
                 admin_dri_person_id: admin,
+                google_workspace_calendar_owner: None,
                 portal_theme_brand_key: None,
             })
         };

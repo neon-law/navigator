@@ -313,6 +313,13 @@
     "scope": "firm",
     "through": "firm_id or Firm identity; referenced Projects must have the same Firm"
   },
+  "firm_calendar_settings": {
+    "migration_slice": "tenancy-storage",
+    "parity_scenario": "Owner saves a Workspace mailbox for one Firm; other Firms retain their own settings",
+    "scope": "firm",
+    "target_only": true,
+    "through": "firm_id -> firm.id"
+  },
   "firm_integration_secret": {
     "migration_slice": "matter-storage",
     "parity_scenario": "same-Firm round trip; cross-Firm refusal",

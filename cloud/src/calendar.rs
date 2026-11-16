@@ -12,7 +12,7 @@
 //! calendar in the Google web UI and records its address on the Project.
 //!
 //! Authentication reuses the Workspace service account Drive uses
-//! ([`crate::drive::DriveWorkspaceConfig`]): the same delegated user owns the
+//! ([`crate::drive::DriveWorkspaceConfig`]): a dedicated delegated user owns the
 //! calendars, and the account's domain-wide delegation must also grant the
 //! calendar scope.
 
@@ -27,10 +27,13 @@ use thiserror::Error;
 const CALENDAR_SCOPE: &str = "https://www.googleapis.com/auth/calendar";
 const CALENDAR_BASE_URL: &str = "https://www.googleapis.com/calendar/v3";
 
-/// The environment variables a calendar provider needs. They are Drive's
-/// Workspace coordinates, because the calendar is owned by the same
-/// delegated user.
-pub const CALENDAR_CONFIGURATION_KEYS: [&str; 2] = crate::delegation::WORKSPACE_DELEGATION_KEYS;
+/// Workspace mailbox that owns Guieb & Shook's Project Calendars.
+pub const CALENDAR_OWNER_ENV: &str = "NAVIGATOR_CALENDAR_NEON_LAW_OWNER";
+/// Calendar uses its own Workspace subject and the deployment's keyless signing account.
+pub const CALENDAR_CONFIGURATION_KEYS: [&str; 2] = [
+    CALENDAR_OWNER_ENV,
+    crate::workspace::NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT,
+];
 
 /// A Project's calendar, by its Calendar API id.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,10 +43,10 @@ pub struct ProjectCalendar {
     pub summary: String,
 }
 
-/// A calendar access role. `Owner` is the delegated user and is never changed
-/// here.
+/// A calendar access role. Reconciliation preserves existing owner grants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Ord, PartialOrd)]
 pub enum CalendarRole {
+    FreeBusyReader,
     Reader,
     Writer,
     Owner,
@@ -52,6 +55,7 @@ pub enum CalendarRole {
 impl CalendarRole {
     const fn api_value(self) -> &'static str {
         match self {
+            Self::FreeBusyReader => "freeBusyReader",
             Self::Reader => "reader",
             Self::Writer => "writer",
             Self::Owner => "owner",
@@ -60,8 +64,9 @@ impl CalendarRole {
 
     fn from_api(value: &str) -> Option<Self> {
         match value {
-            "reader" | "freeBusyReader" => Some(Self::Reader),
-            "writer" => Some(Self::Writer),
+            "freeBusyReader" => Some(Self::FreeBusyReader),
+            "reader" => Some(Self::Reader),
+            "writer" | "writerWithoutPrivateAccess" => Some(Self::Writer),
             "owner" => Some(Self::Owner),
             _ => None,
         }
@@ -244,6 +249,7 @@ pub struct GoogleCalendar {
     token_source: Arc<dyn google_cloud_token::TokenSource>,
     http: reqwest::Client,
     base_url: String,
+    namespace: Option<&'static str>,
 }
 
 impl GoogleCalendar {
@@ -269,19 +275,66 @@ impl GoogleCalendar {
         Self::from_lookup(|key| std::env::var(key).ok()).await
     }
 
+    /// Use the Firm's mailbox with the deployment's keyless signing account and naming rules.
+    pub async fn for_owner(owner: &str) -> Result<Self, CalendarError> {
+        Self::from_lookup(|key| {
+            if key == CALENDAR_OWNER_ENV {
+                Some(owner.to_owned())
+            } else {
+                std::env::var(key).ok()
+            }
+        })
+        .await
+    }
+
     async fn from_lookup<F>(get: F) -> Result<Self, CalendarError>
     where
         F: Fn(&str) -> Option<String>,
     {
-        match crate::delegation::WorkspaceDelegation::from_lookup(get) {
-            Ok(delegation) => Self::new(&delegation).await,
-            Err(crate::delegation::DelegationError::MissingConfig(missing)) => {
-                Err(CalendarError::MissingConfig(missing))
+        let [owner_key, account_key] = CALENDAR_CONFIGURATION_KEYS;
+        let value = |key| get(key).filter(|value| !value.trim().is_empty());
+        let owner = value(owner_key);
+        let account = value(account_key);
+        let (delegated_user, service_account) = match (owner, account) {
+            (Some(owner), Some(account)) => (owner, account),
+            (owner, account) => {
+                let missing = [
+                    (owner_key, owner.is_none()),
+                    (account_key, account.is_none()),
+                ]
+                .into_iter()
+                .filter_map(|(key, missing)| missing.then_some(key))
+                .collect::<Vec<_>>()
+                .join(" and ");
+                return Err(CalendarError::MissingConfig(missing));
             }
-            Err(crate::delegation::DelegationError::Authentication) => {
-                Err(CalendarError::Authentication)
-            }
+        };
+        let mut calendar = Self::new(&crate::delegation::WorkspaceDelegation {
+            service_account,
+            delegated_user,
+        })
+        .await?;
+        calendar.namespace = Some(
+            if get("NAVIGATOR_SIMULATED_MATTERS").as_deref() == Some("true") {
+                "staging"
+            } else {
+                "production"
+            },
+        );
+        Ok(calendar)
+    }
+
+    fn project_summary<'a>(&self, code: &'a str) -> std::borrow::Cow<'a, str> {
+        if self.namespace == Some("staging") {
+            format!("staging-{code}").into()
+        } else {
+            code.into()
         }
+    }
+
+    fn ownership_marker(&self) -> Option<String> {
+        self.namespace
+            .map(|environment| format!("Navigator Project Calendar ({environment})"))
     }
 
     fn from_parts(token_source: Arc<dyn google_cloud_token::TokenSource>, base_url: &str) -> Self {
@@ -289,6 +342,7 @@ impl GoogleCalendar {
             token_source,
             http: reqwest::Client::new(),
             base_url: base_url.trim_end_matches('/').to_string(),
+            namespace: None,
         }
     }
 
@@ -360,6 +414,40 @@ impl GoogleCalendar {
             }
         }
     }
+
+    async fn user_acl_rules(&self, calendar_id: &str) -> Result<Vec<AclRule>, CalendarError> {
+        let action = "listing calendar sharing";
+        let mut rules = Vec::new();
+        let mut page_token: Option<String> = None;
+        loop {
+            let token = self.token().await?;
+            let mut query = Vec::new();
+            if let Some(page) = &page_token {
+                query.push(("pageToken", page.clone()));
+            }
+            let page = Self::checked(
+                self.http
+                    .get(self.url(&["calendars", calendar_id, "acl"]))
+                    .bearer_auth(token)
+                    .query(&query)
+                    .send()
+                    .await,
+                action,
+            )?
+            .json::<AclPage>()
+            .await
+            .map_err(|source| CalendarError::Response { action, source })?;
+            rules.extend(
+                page.items
+                    .into_iter()
+                    .filter(|rule| rule.scope.kind == "user"),
+            );
+            page_token = page.next_page_token;
+            if page_token.is_none() {
+                return Ok(rules);
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -386,6 +474,8 @@ impl CalendarService for GoogleCalendar {
         .await
     }
     async fn find_calendar(&self, summary: &str) -> Result<Option<ProjectCalendar>, CalendarError> {
+        let summary = self.project_summary(summary);
+        let marker = self.ownership_marker();
         let action = "listing calendars";
         let mut found = Vec::new();
         let mut page_token: Option<String> = None;
@@ -410,7 +500,12 @@ impl CalendarService for GoogleCalendar {
             found.extend(
                 page.items
                     .into_iter()
-                    .filter(|entry| entry.summary.as_deref() == Some(summary))
+                    .filter(|entry| {
+                        entry.summary.as_deref() == Some(summary.as_ref())
+                            && marker
+                                .as_ref()
+                                .is_none_or(|expected| entry.description.as_ref() == Some(expected))
+                    })
                     .map(|entry| ProjectCalendar {
                         id: entry.id,
                         summary: summary.to_string(),
@@ -429,13 +524,18 @@ impl CalendarService for GoogleCalendar {
     }
 
     async fn create_calendar(&self, summary: &str) -> Result<ProjectCalendar, CalendarError> {
+        let summary = self.project_summary(summary);
+        let mut body = serde_json::json!({ "summary": summary.as_ref() });
+        if let Some(marker) = self.ownership_marker() {
+            body["description"] = marker.into();
+        }
         let action = "creating a calendar";
         let token = self.token().await?;
         let created = Self::checked(
             self.http
                 .post(self.url(&["calendars"]))
                 .bearer_auth(token)
-                .json(&serde_json::json!({ "summary": summary }))
+                .json(&body)
                 .send()
                 .await,
             action,
@@ -448,7 +548,7 @@ impl CalendarService for GoogleCalendar {
             .filter(|id| !id.is_empty())
             .ok_or(CalendarError::MissingCalendarId)?;
         tracing::info!(
-            project_code = summary,
+            project_code = summary.as_ref(),
             outcome = "created",
             "Project calendar provisioning completed"
         );
@@ -469,49 +569,33 @@ impl CalendarService for GoogleCalendar {
             .await
             .map_err(|source| CalendarError::Request { action, source })?;
         match response.status().as_u16() {
-            status if (200..300).contains(&status) => Ok(true),
+            status if (200..300).contains(&status) => {
+                let Some(marker) = self.ownership_marker() else {
+                    return Ok(true);
+                };
+                let calendar: CalendarListEntry = response
+                    .json()
+                    .await
+                    .map_err(|source| CalendarError::Response { action, source })?;
+                Ok(calendar.description.as_deref() == Some(marker.as_str()))
+            }
             404 | 410 => Ok(false),
             status => Err(CalendarError::Api { action, status }),
         }
     }
 
     async fn members(&self, calendar_id: &str) -> Result<Vec<CalendarMember>, CalendarError> {
-        let action = "listing calendar sharing";
-        let mut members = Vec::new();
-        let mut page_token: Option<String> = None;
-        loop {
-            let token = self.token().await?;
-            let mut query = Vec::new();
-            if let Some(page) = &page_token {
-                query.push(("pageToken", page.clone()));
-            }
-            let page = Self::checked(
-                self.http
-                    .get(self.url(&["calendars", calendar_id, "acl"]))
-                    .bearer_auth(token)
-                    .query(&query)
-                    .send()
-                    .await,
-                action,
-            )?
-            .json::<AclPage>()
-            .await
-            .map_err(|source| CalendarError::Response { action, source })?;
-            members.extend(page.items.into_iter().filter_map(|rule| {
-                if rule.scope.kind != "user" {
-                    return None;
-                }
+        Ok(self
+            .user_acl_rules(calendar_id)
+            .await?
+            .into_iter()
+            .filter_map(|rule| {
                 Some(CalendarMember {
                     email: rule.scope.value?,
                     role: CalendarRole::from_api(&rule.role)?,
                 })
-            }));
-            page_token = page.next_page_token;
-            if page_token.is_none() {
-                break;
-            }
-        }
-        Ok(members)
+            })
+            .collect())
     }
 
     async fn set_member_role(
@@ -521,21 +605,54 @@ impl CalendarService for GoogleCalendar {
         role: CalendarRole,
     ) -> Result<(), CalendarError> {
         let token = self.token().await?;
-        // Inserting a rule for a scope that already has one updates its role,
-        // so this one call both shares and re-shares.
-        Self::checked(
-            self.http
-                .post(self.url(&["calendars", calendar_id, "acl"]))
-                .bearer_auth(token)
-                .query(&[("sendNotifications", "false")])
-                .json(&serde_json::json!({
-                    "role": role.api_value(),
-                    "scope": { "type": "user", "value": email },
-                }))
-                .send()
-                .await,
-            "sharing a calendar",
-        )?;
+        let action = "sharing a calendar";
+        let response = self
+            .http
+            .post(self.url(&["calendars", calendar_id, "acl"]))
+            .bearer_auth(&token)
+            .query(&[("sendNotifications", "false")])
+            .json(&serde_json::json!({
+                "role": role.api_value(),
+                "scope": { "type": "user", "value": email },
+            }))
+            .send()
+            .await
+            .map_err(|source| CalendarError::Request { action, source })?;
+        if response.status() == reqwest::StatusCode::CONFLICT {
+            let existing = self
+                .user_acl_rules(calendar_id)
+                .await?
+                .into_iter()
+                .find(|rule| {
+                    rule.scope
+                        .value
+                        .as_deref()
+                        .is_some_and(|value| value.eq_ignore_ascii_case(email))
+                })
+                .ok_or(CalendarError::Api {
+                    action,
+                    status: 409,
+                })?;
+            if existing.role == "owner" {
+                return Ok(());
+            }
+            let rule_id = existing.id.ok_or(CalendarError::Api {
+                action,
+                status: 409,
+            })?;
+            Self::checked(
+                self.http
+                    .patch(self.url(&["calendars", calendar_id, "acl", &rule_id]))
+                    .bearer_auth(token)
+                    .query(&[("sendNotifications", "false")])
+                    .json(&serde_json::json!({ "role": role.api_value() }))
+                    .send()
+                    .await,
+                action,
+            )?;
+        } else {
+            Self::checked(Ok(response), action)?;
+        }
         tracing::info!(
             role = role.api_value(),
             outcome = "shared",
@@ -639,6 +756,7 @@ struct CalendarListPage {
 struct CalendarListEntry {
     id: String,
     summary: Option<String>,
+    description: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -656,6 +774,7 @@ struct AclPage {
 
 #[derive(Deserialize, Serialize)]
 struct AclRule {
+    id: Option<String>,
     role: String,
     scope: AclScope,
 }
@@ -1105,10 +1224,7 @@ mod tests {
             .err()
             .expect("no configuration is refused");
         let message = error.to_string();
-        assert!(
-            message.contains("NAVIGATOR_DRIVE_NEON_LAW_DELEGATED_USER"),
-            "{message}"
-        );
+        assert!(message.contains(super::CALENDAR_OWNER_ENV), "{message}");
         assert!(
             message.contains("NAVIGATOR_DRIVE_NEON_LAW_SERVICE_ACCOUNT"),
             "{message}"
@@ -1131,6 +1247,64 @@ mod tests {
         let calendar = google(&server).create_calendar("matter-42").await.unwrap();
         assert_eq!(calendar.id, "c_42@group.calendar.example.com");
         assert_eq!(calendar.summary, "matter-42");
+    }
+
+    #[tokio::test]
+    async fn staging_creates_and_finds_only_its_own_project_calendars() {
+        let server = MockServer::start().await;
+        let mut calendar = google(&server);
+        calendar.namespace = Some("staging");
+        let marker = "Navigator Project Calendar (staging)";
+        Mock::given(method("POST"))
+            .and(path("/calendars"))
+            .and(body_json(serde_json::json!({
+                "summary": "staging-fixture", "description": marker
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "staging-id"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/users/me/calendarList"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "items": [
+                    {"id": "staging-id", "summary": "staging-fixture", "description": marker},
+                    {"id": "production-id", "summary": "staging-fixture", "description": "Navigator Project Calendar (production)"},
+                    {"id": "legacy-id", "summary": "staging-fixture"}
+                ]
+            })))
+            .expect(2)
+            .mount(&server)
+            .await;
+        assert_eq!(
+            calendar.create_calendar("fixture").await.unwrap().summary,
+            "staging-fixture"
+        );
+        assert_eq!(
+            calendar.find_calendar("fixture").await.unwrap().unwrap().id,
+            "staging-id"
+        );
+        Mock::given(method("GET"))
+            .and(path("/calendars/legacy-id"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "legacy-id", "summary": "staging-fixture"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        assert!(!calendar.calendar_exists("legacy-id").await.unwrap());
+        calendar.namespace = Some("production");
+        assert_eq!(
+            calendar
+                .find_calendar("staging-fixture")
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            "production-id"
+        );
     }
 
     #[tokio::test]
@@ -1199,6 +1373,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn updates_an_existing_writer_grant_without_notifying() {
+        let server = MockServer::start().await;
+        let acl = "/calendars/c_42@group.calendar.example.com/acl";
+        Mock::given(method("POST"))
+            .and(path(acl))
+            .and(query_param("sendNotifications", "false"))
+            .respond_with(ResponseTemplate::new(409))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(acl))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "items": [{
+                    "id": "user:Clerk@example.com",
+                    "role": "writer",
+                    "scope": { "type": "user", "value": "Clerk@example.com" }
+                }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("PATCH"))
+            .and(path(format!("{acl}/user:Clerk@example.com")))
+            .and(query_param("sendNotifications", "false"))
+            .and(body_json(serde_json::json!({ "role": "reader" })))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+        google(&server)
+            .set_member_role(
+                "c_42@group.calendar.example.com",
+                "clerk@example.com",
+                CalendarRole::Reader,
+            )
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
     async fn lists_only_people_from_the_sharing_rules() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
@@ -1207,6 +1422,7 @@ mod tests {
                 "items": [
                     { "role": "owner", "scope": { "type": "user", "value": "owner@example.com" } },
                     { "role": "writer", "scope": { "type": "user", "value": "lawyer@example.com" } },
+                    { "role": "freeBusyReader", "scope": { "type": "user", "value": "clerk@example.com" } },
                     { "role": "reader", "scope": { "type": "domain", "value": "example.com" } },
                     { "role": "freeBusyReader", "scope": { "type": "default" } }
                 ]
@@ -1226,6 +1442,7 @@ mod tests {
             [
                 ("owner@example.com", CalendarRole::Owner),
                 ("lawyer@example.com", CalendarRole::Writer),
+                ("clerk@example.com", CalendarRole::FreeBusyReader),
             ]
         );
     }

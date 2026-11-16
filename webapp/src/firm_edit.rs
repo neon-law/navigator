@@ -63,6 +63,7 @@ pub struct FirmEditView {
     pub entities: Vec<FirmEntityOption>,
     /// The Firm's Portal Theme Brand key; `None` keeps each host's own look.
     #[serde(default)]
+    pub google_workspace_calendar_owner: Option<String>,
     pub portal_theme_brand_key: Option<String>,
     /// The Brands this Firm owns, the only ones the theme picker offers.
     #[serde(default)]
@@ -170,16 +171,7 @@ pub async fn get_firm_edit_form() -> Result<FirmEditView, ServerFnError> {
         return Ok(base);
     };
 
-    let entities = store::entities::all(&surreal)
-        .await
-        .map_err(|error| ServerFnError::new(error.to_string()))?
-        .into_iter()
-        .map(|e| FirmEntityOption {
-            id: e.id.to_string(),
-            name: e.name,
-        })
-        .collect();
-
+    let entities = firm_entity_options(&surreal).await?;
     let can_appoint_dri = store::firm_capability::resolve(
         &surreal,
         store_role(role),
@@ -198,8 +190,16 @@ pub async fn get_firm_edit_form() -> Result<FirmEditView, ServerFnError> {
         (None, Vec::new())
     };
 
+    let google_workspace_calendar_owner = if role == ViewerRole::Owner {
+        store::firms::calendar_owner(&surreal, id)
+            .await
+            .map_err(|error| ServerFnError::new(error.to_string()))?
+    } else {
+        None
+    };
     Ok(FirmEditView {
         found: true,
+        google_workspace_calendar_owner,
         name: firm.name,
         status: firm.status,
         entity_id: firm.entity_id.map(|id| id.to_string()),
@@ -284,6 +284,21 @@ fn theme_options(brands: &[FirmBrandOption]) -> Vec<Choice> {
     options
 }
 
+#[cfg(feature = "server")]
+async fn firm_entity_options(
+    surreal: &store::surreal::SurrealDb,
+) -> Result<Vec<FirmEntityOption>, ServerFnError> {
+    Ok(store::entities::all(surreal)
+        .await
+        .map_err(|error| ServerFnError::new(error.to_string()))?
+        .into_iter()
+        .map(|e| FirmEntityOption {
+            id: e.id.to_string(),
+            name: e.name,
+        })
+        .collect())
+}
+
 fn edit_form(view: &FirmEditView) -> Element {
     let mut fields = vec![
         Field::text("Name", "name", view.name.clone()).required(),
@@ -341,6 +356,20 @@ fn edit_form(view: &FirmEditView) -> Element {
             heading: Heading::H2,
             csrf_token: Some(view.csrf_token.clone()),
             fields,
+        }
+        if view.role == ViewerRole::Owner {
+            FormCard {
+                title: "Google Workspace Calendar".to_string(),
+                action: format!("/app/admin/firms/{}/edit", view.id),
+                submit_label: "Save Calendar owner".to_string(),
+                heading: Heading::H2,
+                csrf_token: Some(view.csrf_token.clone()),
+                fields: vec![Field::email(
+                    "Calendar owner account",
+                    "google_workspace_calendar_owner",
+                    view.google_workspace_calendar_owner.clone().unwrap_or_default(),
+                ).help("This Workspace mailbox creates and owns the Firm’s Project Calendars. Leave blank to disable Calendar.")],
+            }
         }
     }
 }
@@ -412,6 +441,7 @@ mod tests {
                 id: ENTITY_ID.to_string(),
                 name: "Guieb & Shook PC".to_string(),
             }],
+            google_workspace_calendar_owner: Some("calendar@example.test".to_string()),
             portal_theme_brand_key: Some("guieb-shook".to_string()),
             owned_brands: vec![
                 FirmBrandOption {
@@ -435,6 +465,16 @@ mod tests {
             role: ViewerRole::Owner,
             logo: None,
         }
+    }
+
+    #[test]
+    fn calendar_owner_field_is_visible_only_to_owners() {
+        let mut fixture = view();
+        let html = render(&fixture);
+        assert!(html.contains(r#"name="google_workspace_calendar_owner""#));
+        assert!(html.contains(r#"value="calendar@example.test""#));
+        fixture.role = ViewerRole::Admin;
+        assert!(!render(&fixture).contains(r#"name="google_workspace_calendar_owner""#));
     }
 
     /// Owner sees the Admin DRI picker, offering an Owner alongside the

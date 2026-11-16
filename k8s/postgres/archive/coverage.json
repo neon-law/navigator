@@ -676,6 +676,13 @@
       {
         "action": "export",
         "schema": "public",
+        "name": "firm_calendar_settings",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
         "name": "firm_forgejo_organization",
         "kind": "table",
         "accessible": true

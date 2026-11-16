@@ -1,21 +1,19 @@
 //! A Project's shared Google Calendar: create or adopt it, share it with the
 //! firm-side participants, and make it read-only when the matter closes.
 //!
-//! The calendar is named for the Project code, the way the Drive folder and
-//! the private Notion page are, so no client name reaches the Firm's
-//! calendar list. Its id is recorded as `project.calendar_id` before any
-//! sharing, so a run that shares and then fails cannot leave a calendar the
-//! next run would create a second time.
+//! The provider derives the calendar name from the Project code, keeping
+//! client names out of the Firm's calendar list. The id is recorded as
+//! `project.calendar_id` before sharing, so a partial failure can resume
+//! against the same calendar.
 //!
 //! A recorded id is checked by id, never rediscovered by name: a calendar
 //! someone renamed in Google is still the recorded one, and a deleted one is
 //! reported rather than silently replaced.
 //!
-//! Sharing goes to firm-side participants only — every participation whose
-//! Person is not a [`Role::Client`]. A client books through the Project's
-//! `booking_url`, never through calendar access. Sharing only ever adds or
-//! raises access while the matter is open; nobody is removed, so a person a
-//! lawyer shared by hand in Google keeps their access.
+//! Firm-side participants receive read access. Navigator writes Deadline
+//! events through the delegated Calendar owner. A client books through the
+//! Project's `booking_url`. Setup reconciles direct grants for eligible
+//! participants and preserves the owner and other Google Calendar grants.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -63,7 +61,7 @@ impl CalendarOutcome {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CalendarReport {
     pub outcome: CalendarOutcome,
-    /// People newly shared as writers, or made readers on close.
+    /// People newly shared as readers or whose writer grant became a reader grant.
     pub changed: usize,
 }
 
@@ -77,6 +75,40 @@ pub enum ProjectCalendarError {
     Command(#[from] ProjectCommandError),
     #[error("database: {0}")]
     Db(String),
+}
+
+/// A cross-replica Calendar write lane. Dropping it releases the transaction lock.
+pub struct CalendarWriteLock {
+    _transaction: sqlx::Transaction<'static, sqlx::Postgres>,
+}
+
+/// Lock Calendar writes for one Project when PostgreSQL is configured.
+/// # Errors
+/// Returns an error when the configured database or the write lane is unavailable.
+pub async fn lock_writes(
+    project_id: Uuid,
+) -> Result<Option<CalendarWriteLock>, crate::postgres::PostgresError> {
+    use crate::postgres::{PostgresDb, PostgresError};
+    let Some(db) = PostgresDb::configured().await? else {
+        return Ok(None);
+    };
+    let mut transaction = db
+        .pool()
+        .begin()
+        .await
+        .map_err(|_| PostgresError::Connection)?;
+    sqlx::query("SET LOCAL lock_timeout = '5s'")
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| PostgresError::Connection)?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext('project_calendar'), hashtext($1))")
+        .bind(project_id.to_string())
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| PostgresError::Connection)?;
+    Ok(Some(CalendarWriteLock {
+        _transaction: transaction,
+    }))
 }
 
 /// Create or adopt the Project's calendar and share it with its firm-side
@@ -123,15 +155,15 @@ pub async fn ensure(
         .map(|member| (member.email.to_ascii_lowercase(), member.role))
         .collect();
     let mut changed = 0;
-    for email in firm_side_emails(surreal, project_id).await? {
-        if current
-            .get(&email)
-            .is_some_and(|role| *role >= CalendarRole::Writer)
-        {
+    for email in calendar_reader_emails(surreal, project_id).await? {
+        if matches!(
+            current.get(&email),
+            Some(CalendarRole::Reader | CalendarRole::Owner)
+        ) {
             continue;
         }
         calendar
-            .set_member_role(&calendar_id, &email, CalendarRole::Writer)
+            .set_member_role(&calendar_id, &email, CalendarRole::Reader)
             .await?;
         changed += 1;
     }
@@ -183,21 +215,6 @@ pub async fn close(
     })
 }
 
-/// The deployment's Workspace calendar, or `None` when none of its
-/// configuration keys is set. A partial configuration is an error, never a
-/// silent skip.
-///
-/// # Errors
-/// [`CalendarError::MissingConfig`] naming each absent key, or an
-/// authentication failure.
-pub async fn calendar_from_env() -> Result<Option<cloud::GoogleCalendar>, CalendarError> {
-    if cloud::delegation::WorkspaceDelegation::declared(|key| std::env::var(key).ok()) {
-        cloud::GoogleCalendar::from_env().await.map(Some)
-    } else {
-        Ok(None)
-    }
-}
-
 async fn find(surreal: &SurrealDb, project_id: Uuid) -> Result<Project, ProjectCalendarError> {
     projects::find_by_id(surreal, project_id)
         .await
@@ -214,8 +231,8 @@ fn configured(project: &Project) -> Option<String> {
         .map(str::to_string)
 }
 
-/// The lowercased email of every participant who is not a client.
-async fn firm_side_emails(
+/// The lowercased emails of firm-side participants eligible to read the calendar.
+async fn calendar_reader_emails(
     surreal: &SurrealDb,
     project_id: Uuid,
 ) -> Result<BTreeSet<String>, ProjectCalendarError> {
@@ -223,18 +240,33 @@ async fn firm_side_emails(
         .await
         .map_err(|error| ProjectCalendarError::Db(error.to_string()))?;
     let mut emails = BTreeSet::new();
+    let mut clerk_emails = BTreeSet::new();
+    let mut has_lawyer_dri = false;
     for row in rows {
+        if row.is_client_dri
+            || projects::PARTICIPATION_CLIENT_SIDE.contains(&row.participation.as_str())
+        {
+            continue;
+        }
         let Some(person) = persons::find_by_id(surreal, row.person_id)
             .await
             .map_err(|error| ProjectCalendarError::Db(error.to_string()))?
         else {
             continue;
         };
+        has_lawyer_dri |= row.is_lawyer_dri && person.role.is_lawyer_tier();
         let email = person.email.trim();
-        if person.role == Role::Client || email.is_empty() {
+        if email.is_empty() {
             continue;
         }
-        emails.insert(email.to_ascii_lowercase());
+        if person.role.is_lawyer_tier() {
+            emails.insert(email.to_ascii_lowercase());
+        } else if person.role == Role::Clerk {
+            clerk_emails.insert(email.to_ascii_lowercase());
+        }
+    }
+    if has_lawyer_dri {
+        emails.extend(clerk_emails);
     }
     Ok(emails)
 }
@@ -288,11 +320,20 @@ mod tests {
         let surreal = mem_surreal().await;
         let project = open_matter(&surreal).await;
         let calendar = FakeCalendar::default();
+        let clerk = persons::create(
+            &surreal,
+            &NewPerson::with_role("Clerk", "Clerk@Example.com", Role::Clerk),
+        )
+        .await
+        .unwrap();
+        projects::add_participation(&surreal, project.id, clerk.id, "clerk")
+            .await
+            .unwrap();
 
         let report = ensure(&surreal, project.id, &calendar).await.unwrap();
 
         assert_eq!(report.outcome, CalendarOutcome::Created);
-        assert_eq!(report.changed, 1);
+        assert_eq!(report.changed, 2);
         let created = calendar.calendars();
         assert_eq!(created.len(), 1);
         assert_eq!(created[0].summary, "matter-one");
@@ -302,10 +343,10 @@ mod tests {
             .unwrap();
         assert_eq!(stored.calendar_id.as_deref(), Some(created[0].id.as_str()));
         let sharing = calendar.sharing(&created[0].id);
-        assert_eq!(
-            sharing.get("lawyer@example.com"),
-            Some(&CalendarRole::Writer)
-        );
+        for email in ["lawyer@example.com", "clerk@example.com"] {
+            assert_eq!(sharing.get(email), Some(&CalendarRole::Reader));
+        }
+        assert_eq!(sharing.get(FAKE_CALENDAR_OWNER), Some(&CalendarRole::Owner));
         assert!(
             !sharing.contains_key("client@example.com"),
             "a client is never shared the calendar: {sharing:?}"
@@ -324,6 +365,30 @@ mod tests {
         assert_eq!(again.outcome, CalendarOutcome::Present);
         assert_eq!(again.changed, 0, "nobody is re-shared");
         assert_eq!(calendar.created(), 1, "no second calendar");
+
+        let id = calendar.calendars()[0].id.clone();
+        calendar
+            .set_member_role(&id, "lawyer@example.com", CalendarRole::Writer)
+            .await
+            .unwrap();
+        calendar
+            .set_member_role(&id, "manual@example.com", CalendarRole::Writer)
+            .await
+            .unwrap();
+
+        let report = ensure(&surreal, project.id, &calendar).await.unwrap();
+
+        assert_eq!(report.changed, 1);
+        let sharing = calendar.sharing(&id);
+        assert_eq!(
+            sharing.get("lawyer@example.com"),
+            Some(&CalendarRole::Reader)
+        );
+        assert_eq!(sharing.get(FAKE_CALENDAR_OWNER), Some(&CalendarRole::Owner));
+        assert_eq!(
+            sharing.get("manual@example.com"),
+            Some(&CalendarRole::Writer)
+        );
     }
 
     #[tokio::test]
@@ -365,6 +430,11 @@ mod tests {
         let project = open_matter(&surreal).await;
         let calendar = FakeCalendar::default();
         ensure(&surreal, project.id, &calendar).await.unwrap();
+        let id = calendar.calendars()[0].id.clone();
+        calendar
+            .set_member_role(&id, "lawyer@example.com", CalendarRole::Writer)
+            .await
+            .unwrap();
         projects::update_project(
             &surreal,
             project.id,
@@ -380,7 +450,6 @@ mod tests {
 
         assert_eq!(report.outcome, CalendarOutcome::ReadOnly);
         assert_eq!(report.changed, 1);
-        let id = calendar.calendars()[0].id.clone();
         let sharing = calendar.sharing(&id);
         assert_eq!(
             sharing.get("lawyer@example.com"),
