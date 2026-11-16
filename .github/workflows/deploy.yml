@@ -3633,9 +3633,8 @@ jobs:
   release-operator-cli-publish:
     name: attach the operator CLI archives to the GitHub Release
     # `hudson` and `scorpio` attach after the Release exists, in a job
-    # of their own: the Homebrew tap, the gate action, and every downstream
-    # job wait only on `release-cli-publish`, so a slow operator build never
-    # holds the Projects CLI back.
+    # of their own. The gate action can consume Navigator as soon as
+    # `release-cli-publish` finishes. The tap waits for all three CLIs.
     needs:
       [
         release-cli-publish,
@@ -3675,13 +3674,12 @@ jobs:
 
   release-homebrew-tap:
     name: hand the release to the Homebrew tap
-    needs: [release-cli-publish, release-version]
+    needs: [release-operator-cli-publish, release-version]
     # TWO CONDITIONS, and they answer different questions.
     #
     # `publishable` is "did this commit cut a release?" The Release must also
-    # exist before the tap is told to read it — the bump downloads the attached
-    # archives to digest them, and a dispatch sent earlier would race an empty
-    # Release — which is what needing `release-cli-publish` buys.
+    # carry all three CLI archives before dispatch. The tap downloads them
+    # to compute formula checksums.
     #
     # AND THERE IS NO SECOND CONDITION ANY MORE. `publishable` is the whole
     # gate: EVERY publishable tag is dispatched, hotfix and release candidate
@@ -3800,42 +3798,29 @@ jobs:
           set -euo pipefail
           deadline=$((SECONDS + BUMP_BUDGET_MINUTES * 60))
           while :; do
-              # THE FORMULA IS ASKED FIRST, every pass. It is the only thing
-              # that proves the bump COMMITTED — a green run that wrote nothing
-              # is still a stale tap — and asking it before the conclusion is
-              # what makes a manual repair run end this loop cleanly instead of
-              # racing the failed dispatch run it was cutting short.
-              #
-              # A read failure is indistinguishable from a formula that has not
-              # moved yet, and both are answered by waiting, so a transient API
-              # error must not end the poll early.
-              formula="$(gh api -H "Accept: application/vnd.github.raw" \
-                  "/repos/${TAP_REPO}/contents/Formula/navigator.rb" || true)"
-              # The formula holds exactly one `version` line, and matching it by
-              # shape rather than by an exact string keeps the check working if
-              # the file is reindented.
-              published="$(printf '%s\n' "${formula}" |
-                  sed -n 's/^[[:space:]]*version "\([^"]*\)".*/\1/p' | head -n 1)"
-              if [ "${published}" = "${TAG}" ]; then
-                  echo "the tap's formula publishes ${TAG}"
+              # A failed read leaves that formula pending until the next poll.
+              published=()
+              for formula in navigator hudson scorpio; do
+                  contents="$(gh api -H "Accept: application/vnd.github.raw" \
+                      "/repos/${TAP_REPO}/contents/Formula/${formula}.rb" || true)"
+                  version="$(sed -n 's/^[[:space:]]*version "\([^"]*\)"$/\1/p' <<< "${contents}")"
+                  if [ "${version}" = "${TAG}" ]; then
+                      continue
+                  fi
+                  published+=("${formula}=${version:-missing}")
+              done
+              if [ "${#published[@]}" -eq 0 ]; then
+                  echo "the tap publishes Navigator, Hudson, and Scorpio at ${TAG}"
                   exit 0
               fi
 
-              # THE FORMULA HAS NOT MOVED. Ask the tap's own run whether it is
-              # still coming or already dead. `created=>=` and
-              # `event=repository_dispatch` narrow the list to bumps this job
-              # caused; the tap's `workflow_dispatch` repair path is deliberately
-              # not matched, because a human re-running a bump by hand is
-              # answered by the formula check above, not by this one.
-              #
-              # Every failure here is swallowed: an unreadable run list means
-              # this loop is the formula poll it has always been, bounded by the
-              # same deadline. The conclusion may only ever END THE WAIT EARLY.
+              # A completed failure can end the wait early. A successful run
+              # still needs all three versions to be visible in the tap.
               conclusion="$(GH_TOKEN="${PUBLIC_TOKEN}" gh api \
                   "/repos/${TAP_REPO}/actions/workflows/bump.yml/runs?event=repository_dispatch&created=%3E%3D${SINCE}&per_page=1" \
                   --jq '.workflow_runs[0] | select(.status == "completed") | .conclusion' 2>/dev/null || true)"
               if [ -n "${conclusion}" ] && [ "${conclusion}" != "success" ]; then
-                  echo "::error::the tap refused ${TAG} — its bump completed '${conclusion}' and the formula still reports '${published:-nothing}'. The dispatch was accepted, so the bump itself is what failed: https://github.com/${TAP_REPO}/actions/workflows/bump.yml"
+                  echo "::error::the tap refused ${TAG} — its bump completed '${conclusion}' and the tap still reports '${published[*]}'. The dispatch was accepted, so the bump itself is what failed: https://github.com/${TAP_REPO}/actions/workflows/bump.yml"
                   exit 1
               fi
               # A run that completed `success` without moving the formula is the
@@ -3844,7 +3829,7 @@ jobs:
               # trail a successful conclusion by seconds. The deadline below is
               # what reports it, and it reports it as what it is.
               if [ "${SECONDS}" -ge "${deadline}" ]; then
-                  echo "::error::the tap never published ${TAG} — its formula still reports '${published:-nothing}' after ${BUMP_BUDGET_MINUTES} minutes${conclusion:+, and its bump completed '${conclusion}' without moving it}. The dispatch above was accepted, so the bump itself is what failed: https://github.com/${TAP_REPO}/actions/workflows/bump.yml"
+                  echo "::error::the tap never published ${TAG} — the tap still reports '${published[*]}' after ${BUMP_BUDGET_MINUTES} minutes${conclusion:+, and its bump completed '${conclusion}' without updating all formulas}. The dispatch above was accepted, so the bump itself is what failed: https://github.com/${TAP_REPO}/actions/workflows/bump.yml"
                   exit 1
               fi
               sleep 10
