@@ -1001,6 +1001,7 @@ pub fn bootstrap_with_forgejo_oidc(
                     }
                 },
             })
+            .layer(axum::Extension(state.attachment_scanner.clone()))
             .layer(axum::middleware::from_fn_with_state(
                 (state.sessions.clone(), crate::csrf::CsrfMode::Strict),
                 crate::csrf::require_csrf,

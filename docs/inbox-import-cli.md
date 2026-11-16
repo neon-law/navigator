@@ -55,8 +55,9 @@ hudson inbox import --source gmail --mailbox lawyer@example.test --file mail/exa
 ```
 
 Sign in as the lawyer with the verified mailbox. The server checks Firm membership and the canonical mailbox setting.
-Replay reuses the provider Message-ID. Confirm each proposed Project filing in Navigator after import. The Gmail adapter
-rejects `--project`. Its dry run reports the operation and skips payload output and network access.
+Replay reuses the provider Message-ID. The server scans Gmail attachments and stages clean files in the Firm Inbox.
+Confirm each proposed Project filing in Navigator after import. The Gmail adapter rejects `--project`. Its dry run
+reports the operation and skips payload output and network access.
 
 ## Server requirements
 
@@ -68,11 +69,12 @@ The deduplication key is `(firm, channel, provider_account, provider_message_id)
 Mail whose sender matches the importing mailbox becomes an outbound Message authored by the importing lawyer. Historical
 delivery is recorded as `received`, so imports do not queue a provider send.
 
-Without a Project, attachment bytes remain in the original archived payload; a later import with `--project` files them
-through the shared document pipeline.
+For a generic email import without a Project, attachments remain in the archived payload. A later generic email import
+with `--project` files them through the shared document pipeline.
 
 ## Errors
 
 - Unsupported sources, unreadable or empty files, invalid payloads, and missing dates fail clearly.
+- Gmail import rejects malware before writing records. If the scanner is temporarily unavailable, retry the import.
 - A dropped connection can leave a partially completed import. Re-run the same command to reconcile it; Message ids and
   attachment filings remain stable.

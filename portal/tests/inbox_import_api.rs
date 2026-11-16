@@ -751,21 +751,58 @@ async fn assert_gmail_import_lifecycle(
         "Gmail intake must leave attribution for lawyer confirmation"
     );
 
-    let (status, first) =
-        post_json(&fixture.app, Some(&fixture.lawyer_session), body.clone()).await;
+    let scanner = portal::attachment_scanner::FakeAttachmentScanner::clean();
+    let unavailable = post_json(&fixture.app, Some(&fixture.lawyer_session), body.clone()).await;
+    assert_eq!(unavailable.0, 503);
+    let malware = portal::attachment_scanner::FakeAttachmentScanner::new(Ok(
+        portal::attachment_scanner::ScanVerdict::Found {
+            signature: "synthetic-malware".into(),
+        },
+    ));
+    let app = with_import_scanner(&fixture.app, malware);
+    let (status, blocked) = post_json(&app, Some(&fixture.lawyer_session), body.clone()).await;
+    assert_eq!(status, 422);
+    assert_eq!(blocked["error"], "attachment_malware_detected");
+
+    let app = with_import_scanner(&fixture.app, scanner.clone());
+    let (status, _) = post_json(
+        &app,
+        Some(&fixture.lawyer_session),
+        merge_extra(body.clone(), &json!({"dry_run": true})),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(scanner.calls(), 0);
+
+    let (status, first) = post_json(&app, Some(&fixture.lawyer_session), body.clone()).await;
     assert_eq!(status, 201, "{first}");
     let message_id = first["imported"][0]["message_id"]
         .as_str()
         .unwrap()
         .parse::<Uuid>()
         .unwrap();
-    let (status, replay) = post_json(&fixture.app, Some(&fixture.lawyer_session), body).await;
+    assert_eq!(first["imported"][0]["deduped"], false);
+    let (status, replay) = post_json(&app, Some(&fixture.lawyer_session), body).await;
     assert_eq!(status, 201, "{replay}");
     assert_eq!(
         replay["imported"][0]["message_id"],
         first["imported"][0]["message_id"]
     );
     assert_eq!(replay["imported"][0]["deduped"], true);
+    assert_eq!(
+        replay["imported"][0]["attachments"],
+        first["imported"][0]["attachments"]
+    );
+    assert_eq!(scanner.calls(), 2);
+    let links = store::inbox::message_assets(&fixture.surreal, firm_id, message_id)
+        .await
+        .unwrap();
+    assert_eq!(links.len(), 1);
+    assert_eq!(links[0].filename, "exhibit-a.pdf");
+    assert_eq!(
+        first["imported"][0]["attachments"][0]["asset_id"],
+        links[0].asset_id.to_string()
+    );
 
     let scope: (Uuid, String, Option<String>, Option<Uuid>) = sqlx::query_as(
         "SELECT c.firm_id, c.provider_account, c.source_channel, c.project_id
@@ -776,6 +813,15 @@ async fn assert_gmail_import_lifecycle(
     .await
     .unwrap();
     assert_eq!(scope, (firm_id, MAILBOX.into(), Some("email".into()), None));
+}
+
+fn with_import_scanner(
+    app: &Router,
+    scanner: portal::attachment_scanner::FakeAttachmentScanner,
+) -> Router {
+    let scanner: std::sync::Arc<dyn portal::attachment_scanner::AttachmentScanner> =
+        std::sync::Arc::new(scanner);
+    app.clone().layer(axum::Extension(scanner))
 }
 
 async fn assert_native_provider_attachment_ingest(
