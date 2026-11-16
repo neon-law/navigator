@@ -11743,6 +11743,7 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
             LawyerSession(session.clone()),
             Json(crate::inbox_api::AssignMatchesRequest {
                 apply: true,
+                scheduled: false,
                 after: None,
             }),
         )
@@ -11755,6 +11756,7 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
             LawyerSession(session.clone()),
             Json(crate::inbox_api::AssignMatchesRequest {
                 apply: false,
+                scheduled: false,
                 after: None,
             }),
         )
@@ -11812,6 +11814,7 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
             LawyerSession(session),
             Json(crate::inbox_api::AssignMatchesRequest {
                 apply: false,
+                scheduled: false,
                 after: None,
             }),
         )
