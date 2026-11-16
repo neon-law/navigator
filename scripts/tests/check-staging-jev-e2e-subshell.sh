@@ -196,4 +196,41 @@ bash -euo pipefail -c "
   [[ \"\$(jq -r '.[0].name' <<<\"\$(printf '[%s]' \"\${matter_rows[1]}\")\")\" == 'Synthetic Eviction Defense B (run 43885192582)' ]] \
     || { echo 'row content was mangled by the split' >&2; exit 1; }
 "
+
+# The seventh staging dispatch (run 43916737157) got the entities POST for
+# the first time (#822's row fix held) and was refused by the server with a
+# clean 422: the entity_type block declared no jurisdiction, and the seed
+# contract (ENG-518) refuses an entity without one rather than defaulting
+# it. seed_entities resolves `entity_type.jurisdiction.name` against an
+# EXISTING Jurisdiction — it never creates one — and the canonical
+# jurisdictions (store/seeds/Jurisdiction.yaml) are seeded before entities
+# on every boot, so the template must name one of those verbatim. This
+# check extracts the shipped template helper verbatim and asserts the
+# jurisdiction block is present, structurally valid YAML, and names a
+# jurisdiction the canonical seed actually ships.
+
+awk '/^matter_entity_yaml\(\) \{/,/^\}/' "$harness" > "${scratch}/yaml-only.sh"
+grep -q 'jurisdiction' "${scratch}/yaml-only.sh"
+
+bash -euo pipefail -c "
+  source '${scratch}/yaml-only.sh'
+  matter_entity_yaml 'Synthetic Entity (SYNJ0BA)' 'LLC' > '${scratch}/entity.yaml'
+  python3 - ${scratch}/entity.yaml <<'PY'
+import sys
+
+import yaml
+
+with open(sys.argv[1]) as fh:
+    doc = yaml.safe_load(fh)
+record = doc['records'][0]
+entity_type = record['entity_type']
+assert 'jurisdiction' in entity_type, f'no jurisdiction block: {entity_type}'
+assert entity_type['jurisdiction']['name'] == 'California', entity_type['jurisdiction']
+assert record['name'].startswith('Synthetic Entity ('), record['name']
+print(f\"jurisdiction block resolves: {entity_type}\")
+PY
+  grep -qx '  - name: California' store/seeds/Jurisdiction.yaml \
+    || { echo 'the declared jurisdiction is not in the canonical seed' >&2; exit 1; }
+"
+echo 'staging-jev-e2e: the entity template declares a canonical jurisdiction.'
 echo 'staging-jev-e2e: json_array_rows iterates space-containing JSON rows whole.'
