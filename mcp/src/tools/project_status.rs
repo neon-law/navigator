@@ -89,24 +89,7 @@ pub async fn call(
         .map_err(|error| ToolError::Database(error.to_string()))?
         .ok_or_else(|| ToolError::NotFound(format!("project_id={}", args.project_id)))?;
 
-    let pending_handoffs = if viewer.is_firm_side() {
-        let pg = store::postgres::PostgresDb::configured()
-            .await
-            .map_err(|error| ToolError::Database(error.to_string()))?;
-        Some(
-            store::task_handoffs::for_project(
-                pg.as_ref(),
-                viewer,
-                project.id,
-                &project.code,
-                false,
-            )
-            .await
-            .map_err(|error| ToolError::Database(error.to_string()))?,
-        )
-    } else {
-        None
-    };
+    let pending_handoffs = read_pending_handoffs(viewer, &project).await?;
 
     let deadlines = store::statutory_deadlines::by_project(surreal, args.project_id)
         .await
@@ -175,6 +158,22 @@ pub async fn call(
         response["structuredContent"]["pending_handoffs"] = json!(handoffs);
     }
     Ok(response)
+}
+
+async fn read_pending_handoffs(
+    viewer: store::access::MatterViewer,
+    project: &store::projects::Project,
+) -> Result<Option<Vec<store::task_handoffs::PendingHandoff>>, ToolError> {
+    if !viewer.is_firm_side() {
+        return Ok(None);
+    }
+    let pg = store::postgres::PostgresDb::configured()
+        .await
+        .map_err(|error| ToolError::Database(error.to_string()))?;
+    store::task_handoffs::for_project(pg.as_ref(), viewer, project.id, &project.code, false)
+        .await
+        .map(Some)
+        .map_err(|error| ToolError::Database(error.to_string()))
 }
 
 fn deadline_rows(deadlines: &[store::statutory_deadlines::StatutoryDeadline]) -> Vec<Value> {
