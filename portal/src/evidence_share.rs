@@ -508,13 +508,11 @@ mod tests {
             .ssl_mode(PgSslMode::Disable);
         let admin = PostgresDb::connect(options.clone()).await.unwrap();
         let name = format!("share_test_{}", Uuid::now_v7().simple());
-        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {name}")))
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {name}")))
             .execute(admin.pool())
             .await
             .unwrap();
-        let db = PostgresDb::connect(options.options([("search_path", name.as_str())]))
-            .await
-            .unwrap();
+        let db = PostgresDb::connect(options.database(&name)).await.unwrap();
         sqlx::raw_sql(include_str!(
             "../../store/postgres/migrations/20261116190000_create_evidence_share.sql"
         ))
@@ -527,7 +525,7 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::too_many_lines)]
     async fn evidence_share_routes_gate_terms_and_download_on_the_recipient() {
-        let Some((admin, db, schema)) = temporary_database().await else {
+        let Some((admin, db, database)) = temporary_database().await else {
             return;
         };
         let surreal = test_support::mem_surreal().await;
@@ -681,7 +679,7 @@ mod tests {
 
         drop(router);
         db.pool().close().await;
-        sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
+        sqlx::query(sqlx::AssertSqlSafe(format!("DROP DATABASE {database}")))
             .execute(admin.pool())
             .await
             .unwrap();
