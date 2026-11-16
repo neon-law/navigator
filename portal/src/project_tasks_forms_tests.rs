@@ -286,46 +286,7 @@ async fn reviewed_handoff_round_trip(
     assert!(handoffs.iter().any(|row| row.state == "pending"));
     assert!(read(MatterViewer::Client, true).await.unwrap().is_empty());
 
-    let agent_result = mcp::tools::project_status::call(
-        db,
-        &mcp::tools::ReadScope::Membership {
-            person_id: actor,
-            role: Role::Lawyer,
-        },
-        &serde_json::json!({"project_id": own.id}),
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        agent_result["structuredContent"]["pending_handoffs"]
-            .as_array()
-            .unwrap()
-            .len(),
-        2,
-    );
-
-    let client = store::persons::create(
-        db,
-        &NewPerson::new("Synthetic client", "project-handoff-client@example.com"),
-    )
-    .await
-    .unwrap();
-    store::projects::add_participation(db, own.id, client.id, "client")
-        .await
-        .unwrap();
-    let client_result = mcp::tools::project_status::call(
-        db,
-        &mcp::tools::ReadScope::Membership {
-            person_id: client.id,
-            role: Role::Client,
-        },
-        &serde_json::json!({"project_id": own.id}),
-    )
-    .await
-    .unwrap();
-    assert!(client_result["structuredContent"]
-        .get("pending_handoffs")
-        .is_none());
+    check_handoff_agent_scope(db, own.id, actor).await;
 
     let tasks = store::tasks::list_for_project(pg, own.id).await.unwrap();
     let ready_task = tasks.iter().find(|task| task.title == "Can retry").unwrap();
@@ -343,4 +304,47 @@ async fn reviewed_handoff_round_trip(
         .unwrap()
         .iter()
         .any(|row| row.state == "resolved"));
+}
+
+async fn check_handoff_agent_scope(db: &store::surreal::SurrealDb, project_id: Uuid, actor: Uuid) {
+    let agent_result = mcp::tools::project_status::call(
+        db,
+        &mcp::tools::ReadScope::Membership {
+            person_id: actor,
+            role: Role::Lawyer,
+        },
+        &serde_json::json!({"project_id": project_id}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        agent_result["structuredContent"]["pending_handoffs"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2,
+    );
+
+    let client = store::persons::create(
+        db,
+        &NewPerson::new("Synthetic client", "project-handoff-client@example.com"),
+    )
+    .await
+    .unwrap();
+    store::projects::add_participation(db, project_id, client.id, "client")
+        .await
+        .unwrap();
+    let client_result = mcp::tools::project_status::call(
+        db,
+        &mcp::tools::ReadScope::Membership {
+            person_id: client.id,
+            role: Role::Client,
+        },
+        &serde_json::json!({"project_id": project_id}),
+    )
+    .await
+    .unwrap();
+    assert!(client_result["structuredContent"]
+        .get("pending_handoffs")
+        .is_none());
 }
