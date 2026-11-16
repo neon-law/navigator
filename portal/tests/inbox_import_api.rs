@@ -809,6 +809,8 @@ async fn assert_gmail_import_lifecycle(
         links[0].asset_id.to_string()
     );
 
+    assert_gmail_thread_identity(fixture, &app, pg).await;
+
     let scope: (Uuid, String, Option<String>, Option<Uuid>) = sqlx::query_as(
         "SELECT c.firm_id, c.provider_account, c.source_channel, c.project_id
          FROM message m JOIN inbox_conversation c ON c.id = m.conversation_id WHERE m.id = $1",
@@ -847,6 +849,42 @@ fn with_import_scanner(
     let scanner: std::sync::Arc<dyn portal::attachment_scanner::AttachmentScanner> =
         std::sync::Arc::new(scanner);
     app.clone().layer(axum::Extension(scanner))
+}
+
+async fn assert_gmail_thread_identity(
+    fixture: &Fixture,
+    app: &Router,
+    pg: &store::postgres::PostgresDb,
+) {
+    let payload = |message, thread| {
+        let raw = format!(
+            "From: sender@example.test\r\nTo: {MAILBOX}\r\nDate: Mon, 16 Nov 2026 07:30:00 +0000\r\nMessage-ID: <{message}@example.test>\r\nSubject: Synthetic test\r\n\r\nSynthetic content\r\n"
+        );
+        email_body(
+            raw.as_bytes(),
+            &json!({"source": "gmail", "gmail_thread_id": thread}),
+        )
+    };
+    let session = Some(&fixture.lawyer_session);
+    let invalid = post_json(app, session, payload("invalid", "different/path")).await;
+    assert_eq!(invalid.0, 400);
+    let first = post_json(app, session, payload("one", "thread-a")).await;
+    assert_eq!(first.0, 201, "{}", first.1);
+    let second = post_json(app, session, payload("two", "thread-a")).await;
+    assert_eq!(second.0, 201, "{}", second.1);
+    let third = post_json(app, session, payload("three", "thread-b")).await;
+    assert_eq!(third.0, 201, "{}", third.1);
+    let first_id = &first.1["imported"][0]["conversation_id"];
+    assert_eq!(first_id, &second.1["imported"][0]["conversation_id"]);
+    assert_ne!(first_id, &third.1["imported"][0]["conversation_id"]);
+    let expected: Uuid = first_id.as_str().unwrap().parse().unwrap();
+    let provider_ref: String =
+        sqlx::query_scalar("SELECT provider_thread_ref FROM inbox_conversation WHERE id = $1")
+            .bind(expected)
+            .fetch_one(pg.pool())
+            .await
+            .unwrap();
+    assert_eq!(provider_ref, "gmail:thread-a");
 }
 
 async fn assert_native_provider_attachment_ingest(

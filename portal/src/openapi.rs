@@ -723,6 +723,7 @@ fn add_inbox_import_operation(document: &mut Value) {
             "type": "object", "additionalProperties": false, "required": ["source", "mailbox", "payload_base64"],
             "properties": {
                 "source": {"type": "string", "enum": ["email", "gmail", "linkedin"]},
+                "gmail_thread_id": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9_-]+$", "description": "Optional provider thread ID for the verified Gmail source."},
                 "mailbox": {"type": "string", "minLength": 1, "description": "Mailbox address or LinkedIn profile URL."},
                 "payload_base64": {"type": "string", "contentEncoding": "base64", "description": "Verbatim .eml or CSV payload bytes."},
                 "project": project, "dry_run": {"type": "boolean", "default": false}
