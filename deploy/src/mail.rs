@@ -2632,7 +2632,7 @@ async fn import_inbox(
                 .raw_message_bytes(&message.id)
                 .await
                 .with_context(|| format!("read Gmail thread Message {}", index + 1))?;
-            crate::inbox_import::import_gmail_message(host, &account, &raw)
+            crate::inbox_import::import_gmail_message(host, &account, &raw, Some(&id))
                 .await
                 .with_context(|| format!("import Gmail thread Message {}", index + 1))?;
         }
@@ -2644,7 +2644,7 @@ async fn import_inbox(
         println!("Would import one Gmail Message into the Inbox.");
         return Ok(());
     };
-    crate::inbox_import::import_gmail_message(host, &account, &raw).await
+    crate::inbox_import::import_gmail_message(host, &account, &raw, None).await
 }
 
 /// Files one saved RFC 5322 message into the matter inbox through the

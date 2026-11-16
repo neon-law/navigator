@@ -27,6 +27,8 @@ use crate::attachment_scanner::{AttachmentScanner, ScanError, ScanVerdict};
 pub(crate) struct InboxImportRequest {
     /// Which adapter parses the payload (`email` | `gmail` | `linkedin`).
     source: String,
+    /// Gmail thread identity read by the verified mailbox import command.
+    gmail_thread_id: Option<String>,
     /// The importing account — the lawyer's mailbox address, or their
     /// LinkedIn profile URL. Becomes the Inbox `provider_account`.
     mailbox: String,
@@ -321,6 +323,25 @@ async fn ensure_gmail_review(
     Ok(())
 }
 
+fn gmail_thread_ref(gmail: bool, id: Option<&str>) -> Result<Option<String>, Response> {
+    let Some(id) = id else {
+        return Ok(None);
+    };
+    if !gmail
+        || id.is_empty()
+        || id.len() > 128
+        || !id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    {
+        return Err(bad_request(
+            "invalid_gmail_thread_id",
+            "Gmail thread identity requires the Gmail source and a valid provider ID.",
+        ));
+    }
+    Ok(Some(format!("gmail:{id}")))
+}
+
 /// Walk every parsed message through the direction-aware postgres ingest,
 /// then idempotently file email attachments (AC4,
 /// AC8). The importing actor is the mailbox owner: their own rows (From
@@ -469,6 +490,10 @@ pub(crate) async fn inbox_import_door(
     }
     let source = input.source.trim();
     let gmail = source == "gmail";
+    let provider_thread_ref = match gmail_thread_ref(gmail, input.gmail_thread_id.as_deref()) {
+        Ok(thread) => thread,
+        Err(response) => return Ok(response),
+    };
     let adapter = match store::inbox_import::source_adapter(if gmail { "email" } else { source }) {
         Ok(adapter) => adapter,
         Err(error) => {
@@ -516,6 +541,12 @@ pub(crate) async fn inbox_import_door(
         let scanner = scanner.as_ref().map(|Extension(scanner)| scanner.as_ref());
         if let Err(response) = scan_gmail_attachments(scanner, &messages).await {
             return Ok(response);
+        }
+    }
+
+    if let Some(thread) = provider_thread_ref {
+        for message in &mut messages {
+            message.provider_thread_ref = Some(thread.clone());
         }
     }
 

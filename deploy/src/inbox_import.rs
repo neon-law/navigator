@@ -217,10 +217,14 @@ pub(crate) async fn import_gmail_message(
     host: Option<&str>,
     mailbox: &str,
     raw: &[u8],
+    thread_id: Option<&str>,
 ) -> Result<()> {
     let (base, token) = remote::resolve(host)?;
     let client = import_http_client(&base)?;
-    let body = request_body("gmail", mailbox, None, raw);
+    let mut body = request_body("gmail", mailbox, None, raw);
+    if let Some(thread_id) = thread_id {
+        body["gmail_thread_id"] = thread_id.into();
+    }
     let imported = submit_import(&client, &base, &token, &body).await?;
     for message in imported.imported {
         println!(
