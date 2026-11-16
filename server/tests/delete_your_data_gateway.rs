@@ -130,6 +130,60 @@ async fn the_gateway_is_404_on_every_non_neon_brand_host() {
     }
 }
 
+#[tokio::test]
+async fn same_day_legal_has_separate_services_and_app_pages() {
+    let app = app(state().await);
+    let app_path = views::brand::SAME_DAY_LEGAL_APP_PATH;
+    for host in ["sameday.neonlaw.com", "staging-sameday.neonlaw.com"] {
+        let (status, home) = get_on_host(&app, "/", Some(host)).await;
+        assert_eq!(status, StatusCode::OK, "{host}: {home}");
+        for expected in [
+            "<title>Same Day Legal | Home</title>",
+            "fm-page--same-day-legal",
+            "What is your legal need?",
+            "Start an LLC",
+            r#"href="/app""#,
+            "Email Same Day Legal",
+        ] {
+            assert!(home.contains(expected), "{host} is missing {expected:?}");
+        }
+        assert!(!home.contains("data-enrollment-intake"));
+        let (status, _) = get_on_host(&app, "/app/projects", Some(host)).await;
+        assert_eq!(status, StatusCode::SEE_OTHER);
+
+        let (status, body) = get_on_host(&app, app_path, Some(host)).await;
+        assert_eq!(status, StatusCode::OK, "{host}: {body}");
+        for expected in [
+            "<title>Same Day Legal | App</title>",
+            "fm-page--same-day-legal",
+            r#"data-phone="ios""#,
+            r#"data-store="ios""#,
+            r#"data-store="android""#,
+            "Identity theft insurance",
+            "Dark web monitoring",
+            "Vesta Estate Planning",
+            "$29/mo",
+            "$290/year",
+            "$50",
+            "forming an LLC",
+            "Lex Tecnica, Ltd.",
+            r##"href="#enrollment""##,
+            r#"action="/leads""#,
+            r#"data-enrollment-intake="true""#,
+            "Send and continue to sign in",
+            "Attorney advertisement.",
+            "site-footer",
+        ] {
+            assert!(body.contains(expected), "{host} is missing {expected:?}");
+        }
+        for retired in ["Nautilus", "From $20", "non-legal service"] {
+            assert!(!body.contains(retired), "{host} still carries {retired:?}");
+        }
+    }
+    let (status, _) = get_on_host(&app, app_path, Some("www.neonlaw.com")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
 /// Neon's `/same-day-legal` link and retired `/nautilus` page answer a 301 to
 /// Same Day Legal's host; every other brand host 404s both.
 #[tokio::test]
