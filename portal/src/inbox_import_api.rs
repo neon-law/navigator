@@ -277,7 +277,7 @@ struct ImportMailbox<'a> {
     gmail: bool,
 }
 
-/// Stage each imported inbound Message for individual lawyer review.
+/// Stage each imported Gmail Message for individual lawyer review.
 async fn ensure_gmail_review(
     state: &ApiState,
     firm_id: Uuid,
@@ -398,7 +398,7 @@ async fn import_all(
             .await
             .map_err(|error| inbox_error(&error))?;
 
-        if mailbox.gmail && direction == store::inbox::direction::INBOUND {
+        if mailbox.gmail {
             ensure_gmail_review(state, firm_id, ingested.message_id).await?;
         }
 

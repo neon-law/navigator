@@ -91,6 +91,7 @@ async fn native_authority_routes_the_public_inbox_lifecycle_to_postgres() {
     assert_public_native_lifecycle(&f).await;
     assert_public_native_private_triage(&f).await;
     assert_public_native_call_and_fi_triage_coordination(&f).await;
+    assert_historical_email_filing(&f).await;
     assert_public_native_preview_and_person(&f).await;
 }
 
@@ -123,6 +124,84 @@ async fn assert_public_native_preview_and_person(f: &Fixture) {
         .unwrap_or_else(|| panic!("the native ingest resolved the sender to a Person"));
     assert_eq!(person.person_id, created.id);
     assert_eq!(person.name, "Sender");
+}
+
+async fn assert_historical_email_filing(f: &Fixture) {
+    use crate::inbox_triage::{
+        self, FilingApproval, NewInboxTriage, PrivilegeLabel, TriageDisposition,
+    };
+
+    let archive_key = format!(
+        "mail/{}.eml",
+        crate::documents::sha256_hex(b"synthetic message")
+    );
+    for (provider_id, archive) in [
+        ("archived-sent-email", Some(archive_key.as_str())),
+        ("unarchived-outbound-email", None),
+    ] {
+        let mut input = inbound(
+            f.firm,
+            channel::EMAIL,
+            "historical-email",
+            provider_id,
+            "recipient@example.test",
+        );
+        input.raw_storage_key = archive;
+        let saved =
+            crate::inbox::ingest_imported(crate::inbox::direction::OUTBOUND, Some(f.owner), &input)
+                .await
+                .unwrap();
+        let review = inbox_triage::record(
+            &f.db,
+            &NewInboxTriage {
+                message_id: saved.message_id,
+                firm_id: f.firm,
+                suggested_project_id: Some(f.project),
+                project_confidence: None,
+                privilege: PrivilegeLabel::Uncertain,
+                privilege_confidence: None,
+                rationale: None,
+                model_id: None,
+                prompt_version: inbox_triage::RULES_ONLY_PROMPT.into(),
+                raw_output: None,
+                disposition: TriageDisposition::NeedsHuman,
+                labeled_example: false,
+            },
+        )
+        .await
+        .unwrap();
+        let outcome = inbox_triage::file_approved_message(
+            &f.db,
+            &FilingApproval {
+                triage_id: review.id,
+                message_id: saved.message_id,
+                project_id: f.project,
+                approved_by: f.owner,
+                review_revision: review.updated_at,
+                assignment_id: None,
+            },
+        )
+        .await;
+        if archive.is_some() {
+            let id = outcome.unwrap();
+            let stored = crate::communications::find(&f.db, f.project, id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(stored.direction, crate::communications::direction::INTERNAL);
+            assert_eq!(
+                stored.channel,
+                crate::communications::channel::EMAIL_OUTBOUND
+            );
+            let original = crate::inbox::message_by_id(&f.db, saved.message_id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(original.delivery_state, crate::inbox::delivery::RECEIVED);
+        } else {
+            assert!(matches!(outcome, Err(crate::inbox::InboxError::NotFound)));
+        }
+    }
 }
 
 async fn assert_public_native_private_triage(f: &Fixture) {

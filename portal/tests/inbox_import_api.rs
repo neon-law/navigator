@@ -818,6 +818,28 @@ async fn assert_gmail_import_lifecycle(
     .await
     .unwrap();
     assert_eq!(scope, (firm_id, MAILBOX.into(), Some("email".into()), None));
+    assert_gmail_sent_waits_for_review(fixture, &app, firm_id).await;
+}
+
+async fn assert_gmail_sent_waits_for_review(fixture: &Fixture, app: &Router, firm_id: Uuid) {
+    let sent = String::from_utf8(SENT_EML.to_vec()).unwrap().replace(
+        "reply-1@neonlaw.example",
+        "gmail-imported-sent@example.test",
+    );
+    let (status, imported) = post_json(
+        app,
+        Some(&fixture.lawyer_session),
+        email_body(sent.as_bytes(), &json!({"source": "gmail"})),
+    )
+    .await;
+    assert_eq!(status, 201);
+    let message_id = imported["imported"][0]["message_id"]
+        .as_str()
+        .unwrap()
+        .parse::<Uuid>()
+        .unwrap();
+    assert_eq!(imported["imported"][0]["direction"], "outbound");
+    assert_waiting_gmail_review(fixture, firm_id, message_id).await;
 }
 
 async fn assert_waiting_gmail_review(fixture: &Fixture, firm_id: Uuid, message_id: Uuid) -> Uuid {
