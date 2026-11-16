@@ -2,7 +2,7 @@
 name: omnichannel-inbox
 description: >-
   Map the omnichannel inbox, triage, inbound email, and relationship-graph surfaces when changing how Navigator
-  collects, associates, or displays firm communications.
+  collects, associates, or displays firm communications. Use when asked to review, file, or archive a matter email.
 ---
 
 # Omnichannel inbox
@@ -37,6 +37,17 @@ definitions.
 - Automation writes identity and Relationship Log rows only. It never writes a typed `relationship` or `entity_role`
   edge, and never mints a `person_mailbox` alias row.
 - An agent never sends, replies to, or forwards email. Draft-only; see [AGENTS.md](../../../AGENTS.md).
+
+## Review, file, then archive a matter email
+
+1. Open the exact thread in the connected mailbox. Read the messages and check relevant attachments. Identify the matter
+   from the record. For court notices, use [case-timeline](../case-timeline/SKILL.md) and distinguish the docket text
+   from the service list. Record any identified matter deadline using [deadline](../deadline/SKILL.md).
+2. Save the correspondence or a source-linked review in the matter's approved record. Verify the saved record and report
+   any material limits, such as redacted identifiers or attachments you could not review.
+3. When the user authorizes archiving, archive the exact thread in Gmail after the requested review and filing succeed.
+   Use the mailbox's Archive action and verify the thread is out of the inbox. If filing fails or the matter is
+   uncertain, leave the thread in the inbox and report what remains. Link the filed record in your report.
 
 ## Further reading
 
