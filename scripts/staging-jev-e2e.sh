@@ -86,8 +86,10 @@ api() {
 }
 
 api_json() {
+  api_capture "$1" "$2" "${3:-}"
   local out
-  out="$(api "$1" "$2" "${3:-}")"
+  out="$(cat "$API_BODY_FILE")"
+  rm -f "$API_BODY_FILE"
   if [[ "$API_STATUS" -lt 200 || "$API_STATUS" -ge 300 ]]; then
     die "$1 $2 -> HTTP $API_STATUS: $(head -c 400 <<<"$out")"
   fi
@@ -101,6 +103,12 @@ api_json() {
 # that needs the status or headers afterwards invokes api through this helper,
 # which runs it in the CURRENT shell and stages the body in a temp file;
 # API_BODY_FILE names the body, and the caller removes the file when done.
+# The boundary is the innermost command substitution: api_json's own
+# `$(api ...)` was still one level out from api's subshell, so its status
+# check read an unset global too — the third staging dispatch (Actions run
+# 43871368958) died in seed's api_json exactly there. Callers of api_json
+# never touch the globals, and api_json itself now captures through
+# api_capture, so the globals are read only in the shell that ran api.
 api_capture() {
   local method="$1" path="$2" body="${3:-}" tmp
   tmp="$(mktemp)"
