@@ -232,5 +232,42 @@ PY
   grep -qx '  - name: California' store/seeds/Jurisdiction.yaml \
     || { echo 'the declared jurisdiction is not in the canonical seed' >&2; exit 1; }
 "
+
+# The eighth staging dispatch (run 43923428002) opened all three synthetic
+# matters — the #822 and #825 fixes held — and then the person_project_role
+# seed was refused with a clean 422: 'references unknown project code
+# "SYNJ439234280021A"'. The seed contract resolves a project by exact code
+# match (projects::find_by_code), but open_matter normalizes every accepted
+# code to lowercase (normalize_code: trim + to_ascii_lowercase) and
+# is_valid_code admits only lowercase letters, digits, and single hyphens —
+# so the uppercase fixture code was stored lowercased and the seed's
+# uppercase reference could not resolve. This check extracts the shipped
+# suffix helper verbatim and asserts its output is already normalized: the
+# code the harness sends is the code the server stores.
+
+awk '/^matter_code_suffix\(\) \{/,/^\}/' "$harness" > "${scratch}/code-suffix-only.sh"
+grep -q 'tr -d' "${scratch}/code-suffix-only.sh"
+
+bash -euo pipefail -c "
+  source '${scratch}/code-suffix-only.sh'
+  suffix=\"\$(matter_code_suffix '43923428002-1')\"
+  # The output must already satisfy is_valid_code: lowercase letters, digits,
+  # and single hyphens only. An uppercase character here is exactly the bug
+  # that stranded run 43923428002.
+  [[ \"\$suffix\" =~ ^[a-z0-9-]+\$ ]] || {
+    echo \"the matter code suffix is not normalized: \${suffix}\" >&2
+    exit 1
+  }
+  [[ \"\$suffix\" == 'synj439234280021' ]] || {
+    echo \"unexpected suffix: \${suffix}\" >&2
+    exit 1
+  }
+  ! grep -q 'code_suffix=\"SYNJ' '$harness' || {
+    echo 'the harness still builds the code suffix outside the helper' >&2
+    exit 1
+  }
+  echo \"matter code suffix is normalized: \${suffix}\"
+"
+echo 'staging-jev-e2e: matter codes are emitted normalized for the seed contract.'
 echo 'staging-jev-e2e: the entity template declares a canonical jurisdiction.'
 echo 'staging-jev-e2e: json_array_rows iterates space-containing JSON rows whole.'
