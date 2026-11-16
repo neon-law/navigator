@@ -799,11 +799,10 @@ fn thread_attachment_views(
     project_id: uuid::Uuid,
     conversation_id: uuid::Uuid,
     message_id: uuid::Uuid,
-    primary: Option<store::assets::Asset>,
-    filed: Vec<store::assets::Asset>,
+    assets: Vec<store::assets::AttachmentMetadata>,
     linked: Vec<store::inbox::MessageAttachment>,
 ) -> Vec<InboxAttachmentView> {
-    attachment_views(primary, filed, linked, |id, asset| {
+    attachment_views(assets, linked, |id, asset| {
         if asset.is_some_and(|asset| asset.project_id == Some(project_id)) {
             format!("/app/projects/{code}/documents/{id}")
         } else {
@@ -816,14 +815,12 @@ fn thread_attachment_views(
 /// slot not already listed — each href built by `href`.
 #[cfg(feature = "server")]
 fn attachment_views(
-    primary: Option<store::assets::Asset>,
-    filed: Vec<store::assets::Asset>,
+    assets: Vec<store::assets::AttachmentMetadata>,
     linked: Vec<store::inbox::MessageAttachment>,
-    href: impl Fn(uuid::Uuid, Option<&store::assets::Asset>) -> String,
+    href: impl Fn(uuid::Uuid, Option<&store::assets::AttachmentMetadata>) -> String,
 ) -> Vec<InboxAttachmentView> {
     let mut attachments = Vec::new();
     let mut seen = Vec::new();
-    let assets = primary.into_iter().chain(filed).collect::<Vec<_>>();
     for link in linked {
         if seen.contains(&link.asset_id) {
             continue;
@@ -875,9 +872,11 @@ async fn firm_messages_with_attachments(
             .await
             .unwrap_or_default();
         let message_id = message.id;
-        view.attachments = attachment_views(primary, Vec::new(), linked, |id, _| {
-            format!("/app/inbox/{conversation_id}/messages/{message_id}/attachments/{id}")
-        });
+        view.attachments = attachment_views(
+            primary.into_iter().map(Into::into).collect(),
+            linked,
+            |id, _| format!("/app/inbox/{conversation_id}/messages/{message_id}/attachments/{id}"),
+        );
         views.push(view);
     }
     views
@@ -898,26 +897,24 @@ async fn thread_messages_with_attachments(
     let mut views = Vec::with_capacity(messages.len());
     for message in messages {
         let mut view = message_view(message);
-        let primary = match message.attachment_asset_id {
-            Some(asset_id) => store::assets::find_by_id(surreal, asset_id)
-                .await
-                .unwrap_or_default(),
-            None => None,
-        };
-        let filed =
-            store::assets::find_by_source_message_id(surreal, project_id, &message.id.to_string())
-                .await
-                .unwrap_or_default();
         let linked = store::inbox::message_assets(surreal, firm_id, message.id)
             .await
             .unwrap_or_default();
+        let assets = store::assets::project_inbox_attachments(
+            surreal,
+            project_id,
+            message.id,
+            message.attachment_asset_id,
+            &linked,
+        )
+        .await
+        .unwrap_or_default();
         view.attachments = thread_attachment_views(
             code,
             project_id,
             conversation_id,
             message.id,
-            primary,
-            filed,
+            assets,
             linked,
         );
         views.push(view);
@@ -1212,9 +1209,10 @@ async fn project_inbox_metadata(
             .ok()
             .flatten()
             .map(|entity| entity.name);
-        let tabs =
-            crate::sections::page::stored_page_tabs(surreal, project.id, project_code, viewer)
-                .await;
+        let entries = store::matter_pages::inbox_entries(surreal, project.id)
+            .await
+            .unwrap_or_default();
+        let tabs = crate::sections::page::matter_tabs(project_code, &entries, viewer);
         let logged = viewer
             .is_firm_side()
             .then(|| crate::sections::page::MatterTab::Communications.href(project_code));
@@ -3113,20 +3111,21 @@ mod tests {
         let project_id = uuid::Uuid::from_u128(10);
         let primary_id = uuid::Uuid::nil();
         let filed_id = uuid::Uuid::from_u128(2);
-        let asset = |id, filename: &str| store::assets::Asset {
+        let asset = |id, filename: &str| store::assets::AttachmentMetadata {
             id,
             filename: Some(filename.into()),
             kind: Some("pdf".into()),
             project_id: Some(project_id),
-            ..asset_fixture()
+            content_type: "application/pdf".into(),
+            storage_key: "assets/test".into(),
         };
         let views = thread_attachment_views(
             "sample-litigation",
             project_id,
             uuid::Uuid::from_u128(11),
             uuid::Uuid::from_u128(12),
-            Some(asset(primary_id, "exhibit-a.pdf")),
             vec![
+                asset(primary_id, "exhibit-a.pdf"),
                 asset(primary_id, "exhibit-a.pdf"),
                 asset(filed_id, "exhibit-b.pdf"),
             ],
@@ -3164,7 +3163,6 @@ mod tests {
             project,
             conversation,
             message,
-            None,
             Vec::new(),
             links,
         );
@@ -3172,23 +3170,6 @@ mod tests {
         assert_eq!(views[0].filename.as_deref(), Some("first.txt"));
         assert_eq!(views[1].filename.as_deref(), Some("second.txt"));
         assert_eq!(views[1].href, format!("/app/api/projects/{project}/inbox/{conversation}/messages/{message}/attachments/{}", uuid::Uuid::from_u128(2)));
-    }
-
-    fn asset_fixture() -> store::assets::Asset {
-        // Only the fields thread_attachment_views reads are load-bearing;
-        // the struct is a plain record, so the rest holds neutral values.
-        serde_json::from_value(serde_json::json!({
-            "id": uuid::Uuid::nil(),
-            "storage_key": "assets/test",
-            "content_type": "application/pdf",
-            "byte_size": 1,
-            "sha256_hex": "abc",
-            "visibility": "internal",
-            "notarization": [],
-            "inserted_at": "2026-10-30T00:00:00Z",
-            "updated_at": "2026-10-30T00:00:00Z"
-        }))
-        .expect("fixture asset")
     }
 
     #[test]

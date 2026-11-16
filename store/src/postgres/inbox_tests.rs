@@ -93,6 +93,7 @@ async fn native_authority_routes_the_public_inbox_lifecycle_to_postgres() {
     assert_public_native_call_and_fi_triage_coordination(&f).await;
     assert_historical_email_filing(&f).await;
     assert_public_native_preview_and_person(&f).await;
+    assert_project_inbox_reads_postgres_metadata(&f).await;
     assert_native_attachment_filing_retries_only_transient_failures(&f).await;
 }
 
@@ -267,6 +268,80 @@ async fn assert_public_native_preview_and_person(f: &Fixture) {
         .unwrap_or_else(|| panic!("the native ingest resolved the sender to a Person"));
     assert_eq!(person.person_id, created.id);
     assert_eq!(person.name, "Sender");
+
+    crate::inbox::assign(&f.db, f.owner, saved.conversation_id, f.project)
+        .await
+        .unwrap();
+    let row = crate::inbox::list_project(&f.db, f.lawyer, f.project)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|row| row.id == saved.conversation_id)
+        .expect("the assigned PostgreSQL email appears in the Project inbox");
+    assert_eq!(row.preview.as_deref(), Some("Hello from outside."));
+    let thread = crate::inbox::project_thread(&f.db, f.lawyer, f.project, saved.conversation_id)
+        .await
+        .unwrap();
+    assert_eq!(thread.conversation.channel, channel::EMAIL);
+    assert_eq!(thread.messages[0].id, saved.message_id);
+    assert_eq!(thread.messages[0].body, "Hello from outside.");
+}
+
+async fn assert_project_inbox_reads_postgres_metadata(f: &Fixture) {
+    sqlx::query(
+        "INSERT INTO matter_page (id, project_id, firm_id, slug, kind, title, position, lawyer_sections, synced_at)
+         VALUES ($1, $2, $3, 'inbox-test', 'docket_deadline_board', 'Synthetic page', 0, ARRAY['deadlines'], now())",
+    )
+    .bind(Uuid::now_v7())
+    .bind(f.project)
+    .bind(f.firm)
+    .execute(f.pg.pool())
+    .await
+    .unwrap();
+    assert!(crate::matter_pages::list_for_project(&f.db, f.project)
+        .await
+        .unwrap()
+        .is_empty());
+    let entries = crate::matter_pages::inbox_entries(&f.db, f.project)
+        .await
+        .unwrap();
+    assert_eq!(entries[0].slug, "inbox-test");
+    assert_eq!(entries[0].lenses["lawyer"], ["deadlines"]);
+
+    let message = Uuid::now_v7();
+    let mut expected = Vec::new();
+    for index in [10, 1, 2] {
+        let asset = Uuid::now_v7();
+        sqlx::query(
+            "INSERT INTO asset
+                 (id, project_id, storage_key, content_type, byte_size, sha256_hex, slug, source_message_id, deleted_at)
+             VALUES ($1, $2, 'blobs/test', 'image/png', 1, $3, $4, $5, $6)",
+        )
+        .bind(asset)
+        .bind(f.project)
+        .bind(format!("{:064x}", asset.as_u128()))
+        .bind(format!("mail/{message}/{index}"))
+        .bind(message.to_string())
+        .bind((index == 2).then(chrono::Utc::now))
+        .execute(f.pg.pool())
+        .await
+        .unwrap();
+        if index != 2 {
+            expected.insert(0, asset);
+        }
+    }
+    let assets = crate::assets::project_inbox_attachments(&f.db, f.project, message, None, &[])
+        .await
+        .unwrap();
+    assert_eq!(assets.iter().map(|asset| asset.id).collect::<Vec<_>>(), expected);
+    let first = assets[0].id;
+    assert!(crate::assets::find_by_id(&f.db, first).await.unwrap().is_none());
+    let download = crate::assets::inbox_attachment_metadata(&f.db, first)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(download.content_type, "image/png");
+    assert_eq!(download.storage_key, "blobs/test");
 }
 
 async fn assert_historical_email_filing(f: &Fixture) {

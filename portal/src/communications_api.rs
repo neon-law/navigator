@@ -268,7 +268,7 @@ pub(crate) async fn download_message_attachment(
     if linked.is_none() && message.attachment_asset_id != Some(asset_id) {
         return Err(ApiError::NotFound);
     }
-    let asset = store::assets::find_by_id(&state.surreal, asset_id)
+    let asset = store::assets::inbox_attachment_metadata(&state.surreal, asset_id)
         .await
         .map_err(ApiError::Asset)?
         .ok_or(ApiError::NotFound)?;
