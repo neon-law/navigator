@@ -365,14 +365,7 @@ mod tests {
         assert_eq!(again.outcome, CalendarOutcome::Present);
         assert_eq!(again.changed, 0, "nobody is re-shared");
         assert_eq!(calendar.created(), 1, "no second calendar");
-    }
 
-    #[tokio::test]
-    async fn setup_downgrades_existing_participant_writer_and_preserves_owner() {
-        let surreal = mem_surreal().await;
-        let project = open_matter(&surreal).await;
-        let calendar = FakeCalendar::default();
-        ensure(&surreal, project.id, &calendar).await.unwrap();
         let id = calendar.calendars()[0].id.clone();
         calendar
             .set_member_role(&id, "lawyer@example.com", CalendarRole::Writer)

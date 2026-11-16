@@ -171,16 +171,7 @@ pub async fn get_firm_edit_form() -> Result<FirmEditView, ServerFnError> {
         return Ok(base);
     };
 
-    let entities = store::entities::all(&surreal)
-        .await
-        .map_err(|error| ServerFnError::new(error.to_string()))?
-        .into_iter()
-        .map(|e| FirmEntityOption {
-            id: e.id.to_string(),
-            name: e.name,
-        })
-        .collect();
-
+    let entities = firm_entity_options(&surreal).await?;
     let can_appoint_dri = store::firm_capability::resolve(
         &surreal,
         store_role(role),
@@ -291,6 +282,21 @@ fn theme_options(brands: &[FirmBrandOption]) -> Vec<Choice> {
             .map(|brand| Choice::new(brand.key.clone(), brand.name.clone())),
     );
     options
+}
+
+#[cfg(feature = "server")]
+async fn firm_entity_options(
+    surreal: &store::surreal::SurrealDb,
+) -> Result<Vec<FirmEntityOption>, ServerFnError> {
+    Ok(store::entities::all(surreal)
+        .await
+        .map_err(|error| ServerFnError::new(error.to_string()))?
+        .into_iter()
+        .map(|e| FirmEntityOption {
+            id: e.id.to_string(),
+            name: e.name,
+        })
+        .collect())
 }
 
 fn edit_form(view: &FirmEditView) -> Element {

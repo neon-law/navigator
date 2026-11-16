@@ -1209,6 +1209,9 @@ service-account keys, so the web pod's runtime identity signs each delegation as
 `NAVIGATOR_DRIVE_NEON_LAW_STAGING_PROJECTS_ROOT_FOLDER_ID`; configure each only in the approved operator-managed
 environment that uses that root.
 
+`NAVIGATOR_CALENDAR_NEON_LAW_OWNER` supplies the bootstrap Google Workspace mailbox. An Owner can save a separate
+mailbox for the Firm in Firm Settings.
+
 The typed workspace map selects a distinct Projects root for each configured deployment. An unknown deployment fails
 closed rather than borrowing another root. Drive ingest is optional: configure the shared Drive ID and delegated user
 together with the matching Projects-root ID, or omit the shared Drive ID and root. The regional GCP command enables the

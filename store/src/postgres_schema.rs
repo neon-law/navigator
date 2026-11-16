@@ -1600,6 +1600,10 @@ mod tests {
                 "20261115150000_create_product_catalog_history.sql",
                 include_str!("../postgres/migrations/20261115150000_create_product_catalog_history.sql"),
             ),
+            (
+                "20261115170000_add_firm_calendar_settings.sql",
+                include_str!("../postgres/migrations/20261115170000_add_firm_calendar_settings.sql"),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

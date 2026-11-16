@@ -356,6 +356,7 @@ async fn navigator_deadline_mutations_update_the_same_project_calendar_event() {
             "authority": "Synthetic order",
             "source": "lawyer",
             "calendar_role": "firm",
+            "category": "court",
             "replay_key": "calendar-fixture"
         }),
     )

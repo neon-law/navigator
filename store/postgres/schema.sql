@@ -1,4 +1,3 @@
-
 -- Migration: 20261010120000_create_core_tenancy.sql
 -- First PostgreSQL target slice: reference rows and Firm → Brand → Project.
 -- Each migration filename is a UTC YYYYMMDDHHMMSS timestamp plus a name.
@@ -42,11 +41,6 @@ CREATE TABLE firm (
     entity_id UUID REFERENCES entity(id),
     inserted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE TABLE firm_calendar_settings (
-    firm_id uuid PRIMARY KEY REFERENCES firm(id) ON DELETE CASCADE,
-    google_workspace_owner text
 );
 
 CREATE TABLE brand (
@@ -4761,4 +4755,10 @@ CREATE TABLE product (
     retainer_template_code TEXT,
     updated_at TIMESTAMPTZ NOT NULL,
     xero_item_code TEXT
+);
+
+-- Migration: 20261115170000_add_firm_calendar_settings.sql
+CREATE TABLE firm_calendar_settings (
+    firm_id uuid PRIMARY KEY REFERENCES firm(id) ON DELETE CASCADE,
+    google_workspace_owner text
 );
