@@ -31,10 +31,10 @@ fn parse_kind(field: &str) -> Option<SignatureFieldKind> {
 }
 
 /// Human display name for a signer role.
-fn signer_label(signer: &str) -> String {
+fn signer_label(signer: &str, firm_legal_name: Option<&str>) -> String {
     match signer {
         "client" => "Client".to_string(),
-        "firm" => "Neon Law".to_string(),
+        "firm" => firm_legal_name.unwrap_or("Firm").to_string(),
         other => other
             .split('_')
             .map(|w| {
@@ -50,11 +50,15 @@ fn signer_label(signer: &str) -> String {
 }
 
 /// The caption rendered under the signature line.
-fn block_label(signer: &str, kind: SignatureFieldKind) -> String {
+fn block_label(signer: &str, kind: SignatureFieldKind, firm_legal_name: Option<&str>) -> String {
     match (signer, kind) {
-        ("firm", SignatureFieldKind::Signature) => "Neon Law, by authorized signatory".to_string(),
-        (_, SignatureFieldKind::Signature) => format!("{} signature", signer_label(signer)),
-        (_, SignatureFieldKind::Initials) => format!("{} initials", signer_label(signer)),
+        ("firm", SignatureFieldKind::Signature) => signer_label(signer, firm_legal_name),
+        (_, SignatureFieldKind::Signature) => {
+            format!("{} signature", signer_label(signer, firm_legal_name))
+        }
+        (_, SignatureFieldKind::Initials) => {
+            format!("{} initials", signer_label(signer, firm_legal_name))
+        }
         (_, SignatureFieldKind::Date) => "Date signed".to_string(),
     }
 }
@@ -63,13 +67,18 @@ fn block_label(signer: &str, kind: SignatureFieldKind) -> String {
 /// holding the invisible (white, tiny) anchor text, then the caption on
 /// the line below. The anchor sits *inside* the signing line so the
 /// provider drops its field right on the line.
-fn render_block(signer: &str, kind: SignatureFieldKind, anchor: &str) -> String {
+fn render_block(
+    signer: &str,
+    kind: SignatureFieldKind,
+    anchor: &str,
+    firm_legal_name: Option<&str>,
+) -> String {
     let width = match kind {
         SignatureFieldKind::Initials => "1in",
         SignatureFieldKind::Date => "2in",
         SignatureFieldKind::Signature => "3in",
     };
-    let label = block_label(signer, kind);
+    let label = pdf::escape_typst_markup(&block_label(signer, kind, firm_legal_name));
     let anchor = anchor.replace('_', "\\_");
     format!(
         "#box(stroke: (bottom: 0.5pt), width: {width}, height: 1.4em)\
@@ -90,6 +99,14 @@ fn anchor_string(signer: &str, field: &str, n: usize) -> String {
 /// are left verbatim (a valid template has none — N107 guards that).
 #[must_use]
 pub fn expand_signatures(body: &str) -> (String, Vec<SignatureField>) {
+    expand_signatures_for_firm(body, None)
+}
+
+/// Render the Firm caption from the document's resolved Firm legal name.
+pub(crate) fn expand_signatures_for_firm(
+    body: &str,
+    firm_legal_name: Option<&str>,
+) -> (String, Vec<SignatureField>) {
     let placeholders = rules::f107::signature_placeholders(body);
     let mut out = String::with_capacity(body.len());
     let mut fields = Vec::new();
@@ -116,7 +133,7 @@ pub fn expand_signatures(body: &str) -> (String, Vec<SignatureField>) {
             *c
         };
         let anchor = anchor_string(&signer, &ph.field, n);
-        out.push_str(&render_block(&signer, kind, &anchor));
+        out.push_str(&render_block(&signer, kind, &anchor, firm_legal_name));
         fields.push(SignatureField {
             recipient_role: signer,
             kind,
@@ -130,7 +147,7 @@ pub fn expand_signatures(body: &str) -> (String, Vec<SignatureField>) {
 
 #[cfg(test)]
 mod tests {
-    use super::expand_signatures;
+    use super::{expand_signatures, expand_signatures_for_firm};
     use crate::signature::SignatureFieldKind;
 
     #[test]
@@ -144,13 +161,17 @@ mod tests {
     #[test]
     fn expands_each_placeholder_to_an_anchor_and_records_the_field() {
         let body = "Sign: {{client.signature}} on {{client.date}}\nFirm: {{firm.signature}}";
-        let (out, fields) = expand_signatures(body);
+        let (out, fields) = expand_signatures_for_firm(body, Some("Example Legal Group, PC"));
 
         // Placeholders are gone; anchors are present in the text.
         assert!(!out.contains("{{client.signature}}"));
         assert!(out.contains("nlsig-client-signature-1"));
         assert!(out.contains("nlsig-client-date-1"));
         assert!(out.contains("nlsig-firm-signature-1"));
+        assert!(out.ends_with("#text(size: 9pt)[Example Legal Group, PC]"));
+        let (without_firm, fields_without_firm) = expand_signatures(body);
+        assert!(without_firm.ends_with("#text(size: 9pt)[Firm]"));
+        assert_eq!(fields, fields_without_firm);
 
         assert_eq!(fields.len(), 3);
         assert_eq!(fields[0].recipient_role, "client");
@@ -185,7 +206,8 @@ mod tests {
         let body = "Engagement terms above.\n\n\
                     {{client.signature}}\n\n{{client.date}}\n\n\
                     Initial here: {{client.initials}}\n\n{{firm.signature}}\n";
-        let (typst_source, _fields) = expand_signatures(body);
+        let (typst_source, _fields) =
+            expand_signatures_for_firm(body, Some("Example & Sample [Legal] #1"));
         let pdf = pdf::render(&typst_source).expect("expanded signature blocks must compile");
         assert!(pdf.starts_with(b"%PDF"), "renders a real PDF");
     }

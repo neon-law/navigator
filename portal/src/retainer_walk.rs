@@ -2047,8 +2047,9 @@ async fn approval_document_payload(
     let body = store::notation_clauses::splice(&source, &clauses);
     let (keys, labels) =
         build_answer_context(deps.surreal, Some(deps.storage), notation_id).await?;
-    let (typst_source, fields) = crate::signature_render::expand_signatures(
+    let (typst_source, fields) = crate::signature_render::expand_signatures_for_firm(
         &typst_body_from_template(&body, &keys, &labels, template.kind.as_deref()),
+        labels.get("firm.legal_name").map(String::as_str),
     );
 
     if let Some(form_code) = template.form_code.as_deref() {
