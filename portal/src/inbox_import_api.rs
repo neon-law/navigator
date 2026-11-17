@@ -21,25 +21,34 @@ use crate::api::{ApiError, ApiState, LawyerSession};
 use crate::attachment_scanner::{AttachmentScanner, ScanError, ScanVerdict};
 
 /// One request = one payload. `project` is a matter *code* (`sample-litigation`);
-/// attribution at import rides `store::inbox::assign` after ingest.
+/// attribution at import rides `store::inbox::assign` after ingest. `firm`
+/// names the landing Firm for the ingest-only doors when the caller belongs
+/// to more than one and no matter names the spot (LAW-347's staging e2e
+/// imports unfiled threads for Jev to propose against).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct InboxImportRequest {
     /// Which adapter parses the payload (`email` | `gmail` | `linkedin`).
-    source: String,
+    pub source: String,
     /// Gmail thread identity read by the verified mailbox import command.
-    gmail_thread_id: Option<String>,
+    pub gmail_thread_id: Option<String>,
     /// The importing account — the lawyer's mailbox address, or their
     /// LinkedIn profile URL. Becomes the Inbox `provider_account`.
-    mailbox: String,
+    pub mailbox: String,
     /// The verbatim payload bytes, base64-encoded.
-    payload_base64: String,
+    pub payload_base64: String,
     /// Optional matter code; conversations attribute (or move) there.
-    project: Option<String>,
+    pub project: Option<String>,
+    /// Optional Firm id for the ingest-only doors when the caller belongs to
+    /// more than one. The caller must hold a membership in it — naming a
+    /// Firm is not an authorization grant, exactly as a matter code is not
+    /// one. Rejected on the Gmail path, whose Firm comes from the canonical
+    /// intake mailbox.
+    pub firm: Option<Uuid>,
     /// Parse and preview without writing. The CLI's local `--dry-run`
     /// prints the request instead of contacting this endpoint.
     #[serde(default)]
-    dry_run: bool,
+    pub dry_run: bool,
 }
 
 /// One ingested message as the door reports it — the ids a re-run compares
@@ -73,6 +82,8 @@ struct InboxImportResponse {
     archived_key: String,
     /// The matter code attribution ran against, when the request carried one.
     project: Option<String>,
+    /// The Firm the import landed in, when the request named one.
+    firm: Option<Uuid>,
     imported: Vec<ImportedMessage>,
 }
 
@@ -85,6 +96,8 @@ struct InboxImportPreview {
     dry_run: bool,
     would_import: usize,
     project: Option<String>,
+    /// The Firm the import would land in, when the request named one.
+    firm: Option<Uuid>,
 }
 
 /// A `400 Bad Request` JSON body in the shared `{error, message}` shape —
@@ -132,6 +145,29 @@ async fn resolve_firm(state: &ApiState, person_id: Uuid) -> Result<Uuid, Respons
             "firm_ambiguous",
             "This account belongs to more than one Firm; pass `project` to name the matter.",
         )),
+    }
+}
+
+/// The caller's named Firm: accepted only when the caller holds a membership
+/// in it. Naming a Firm picks a landing spot; it grants nothing.
+async fn resolve_named_firm(
+    state: &ApiState,
+    person_id: Uuid,
+    firm_id: Uuid,
+) -> Result<Uuid, Response> {
+    let memberships = store::firms::memberships_for_person(&state.surreal, person_id)
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()).into_response())?;
+    if memberships
+        .iter()
+        .any(|membership| membership.firm_id == firm_id)
+    {
+        Ok(firm_id)
+    } else {
+        Err(bad_request(
+            "firm_not_member",
+            "This account does not belong to the named Firm, so imports cannot land there.",
+        ))
     }
 }
 
@@ -218,28 +254,51 @@ async fn resolve_firm_and_project(
     Ok((project_firm, Some(project.id)))
 }
 
-async fn resolve_import_target(
+pub(crate) async fn resolve_import_target(
     state: &ApiState,
     lawyer: &LawyerSession,
     person_id: Uuid,
     input: &InboxImportRequest,
     mailbox: String,
 ) -> Result<(Uuid, Option<Uuid>, String), Response> {
-    if input.source.trim() != "gmail" {
-        return resolve_firm_and_project(state, lawyer, person_id, input.project.as_deref())
+    if input.source.trim() == "gmail" {
+        if input.firm.is_some() {
+            return Err(bad_request(
+                "firm_not_supported",
+                "The Gmail import resolves its Firm from the canonical intake mailbox; the ingest-only doors name a Firm.",
+            ));
+        }
+        if input.project.is_some() {
+            return Err(bad_request(
+                "project_confirmation_required",
+                "Import Gmail into the Inbox and confirm proposed Project filings individually.",
+            ));
+        }
+        return gmail_import_firm(state, person_id, &mailbox)
             .await
-            .map(|(firm, project)| (firm, project, mailbox));
+            .map(|(firm, canonical)| (firm, None, canonical))
+            .map_err(IntoResponse::into_response);
     }
-    if input.project.is_some() {
+    // No matter named: the landing Firm is the caller's named membership, or
+    // their sole practice Firm by default (run 43930109007's ambiguity).
+    if input.project.is_none() {
+        if let Some(firm_id) = input.firm {
+            return resolve_named_firm(state, person_id, firm_id)
+                .await
+                .map(|firm| (firm, None, mailbox));
+        }
+    }
+    let (firm, project) =
+        resolve_firm_and_project(state, lawyer, person_id, input.project.as_deref()).await?;
+    // A Firm named alongside a matter must agree with it, or the request is
+    // internally contradictory: refuse loudly rather than guess one meaning.
+    if input.firm.is_some_and(|named| named != firm) {
         return Err(bad_request(
-            "project_confirmation_required",
-            "Import Gmail into the Inbox and confirm proposed Project filings individually.",
+            "firm_mismatch",
+            "The named Firm does not match the named matter's Firm.",
         ));
     }
-    gmail_import_firm(state, person_id, &mailbox)
-        .await
-        .map(|(firm, canonical)| (firm, None, canonical))
-        .map_err(IntoResponse::into_response)
+    Ok((firm, project, mailbox))
 }
 
 /// Archive the verbatim payload (AC6): one key for the .eml, or the CSV
@@ -533,6 +592,7 @@ pub(crate) async fn inbox_import_door(
             dry_run: true,
             would_import: messages.len(),
             project: input.project.clone(),
+            firm: input.firm,
         };
         return Ok((StatusCode::OK, Json(preview)).into_response());
     }
@@ -569,30 +629,44 @@ pub(crate) async fn inbox_import_door(
     )
     .await?;
 
-    // Attribution last, once per conversation: `assign` projects (or moves)
-    // every message on the conversation in one idempotent step (AC7).
-    let mut conversations = imported
-        .iter()
-        .map(|message| message.conversation_id)
-        .collect::<Vec<_>>();
-    conversations.sort_unstable();
-    conversations.dedup();
-    if let Some(project_id) = project_id {
-        for conversation_id in conversations {
-            store::inbox::assign(&state.surreal, person_id, conversation_id, project_id)
-                .await
-                .map_err(|error| inbox_error(&error))?;
-        }
-    }
+    // Attribution last, once per conversation (AC7).
+    attribute_imports(&state, person_id, project_id, &imported).await?;
 
     let response = InboxImportResponse {
         source: input.source.trim().to_string(),
         mailbox,
         archived_key,
         project: input.project,
+        firm: input.firm,
         imported,
     };
     Ok((StatusCode::CREATED, Json(response)).into_response())
+}
+
+/// Attribution rides last, once per conversation: `assign` projects (or
+/// moves) every message on the conversation in one idempotent step (AC7).
+/// Ingest-only imports carry no matter and stay unattributed for Jev.
+async fn attribute_imports(
+    state: &ApiState,
+    person_id: Uuid,
+    project_id: Option<Uuid>,
+    imported: &[ImportedMessage],
+) -> Result<(), ApiError> {
+    let Some(project_id) = project_id else {
+        return Ok(());
+    };
+    let mut conversations = imported
+        .iter()
+        .map(|message| message.conversation_id)
+        .collect::<Vec<_>>();
+    conversations.sort_unstable();
+    conversations.dedup();
+    for conversation_id in conversations {
+        store::inbox::assign(&state.surreal, person_id, conversation_id, project_id)
+            .await
+            .map_err(|error| inbox_error(&error))?;
+    }
+    Ok(())
 }
 
 /// File one parsed attachment as `mail/{message_id}/{index}.<extension>` with full

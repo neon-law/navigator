@@ -290,8 +290,9 @@ records:
     state_add entities "$(jq -nc --arg id "$(jq -r .id <<<"$entity_json")" --arg name "$entity_name" '{id: $id, name: $name}')"
     # The server's row is the truth for the code: open_matter normalizes
     # (lowercases) whatever it accepts, and the role seed and cleanup must
-    # reference the code as stored, not as specified.
-    state_add projects "$(jq -nc --arg id "$project_id" --arg code "$(jq -r .code <<<"$project_row")" '{id: $id, code: $code}')"
+    # reference the code as stored, not as specified. The Firm rides along
+    # for the import door, which must land threads where the matters live.
+    state_add projects "$(jq -nc --arg id "$project_id" --arg code "$(jq -r .code <<<"$project_row")" --arg firm "$(jq -r '.firm_id // empty' <<<"$project_row")" '{id: $id, code: $code, firm: $firm}')"
   done
 
   # One seeded party participates in matter A, so one thread assigns through
@@ -328,6 +329,17 @@ import-threads() {
   note "import: synthetic threads through the ingest-only import door"
   local mailbox="synthetic-mailbox-${RUN_ID}@${SYNTH_DOMAIN}"
 
+  # The threads import UNFILED — naming a `project` attributes each
+  # conversation outright and removes it from the Jev preview's scope. The
+  # staging operator belongs to more than one Firm (run 43930109007 died
+  # with `firm_ambiguous`), so the ingest-only door names the matters' own
+  # Firm — the open-matter responses recorded it in run state — so the
+  # threads land where the synthetic matters live and the same-firm
+  # address match can find its candidates.
+  local import_firm
+  import_firm="$(jq -r '.projects[0].firm // empty' "$STATE")"
+  [[ -n "$import_firm" ]] || die "run state records no firm for the import door"
+
   local from_local from subject body file payload response message_id conversation_id
   # (from_local, subject, body) tuples. Senders and content are synthetic;
   # the door ingests, it never sends.
@@ -338,8 +350,8 @@ import-threads() {
     eml "$from" "Synthetic Sender ${from_local}" "$subject" "$body" > "$file"
     payload="$(base64 -w0 "$file")"
     response="$(api_json POST /app/api/inbox/import \
-      "$(jq -nc --arg mailbox "$mailbox" --arg payload "$payload" \
-        '{source: "email", mailbox: $mailbox, payload_base64: $payload, dry_run: false}')")"
+      "$(jq -nc --arg mailbox "$mailbox" --arg payload "$payload" --arg firm "$import_firm" \
+        '{source: "email", mailbox: $mailbox, payload_base64: $payload, firm: $firm, dry_run: false}')")"
     message_id="$(jq -r '.imported[0].message_id // empty' <<<"$response")"
     conversation_id="$(jq -r '.imported[0].conversation_id // empty' <<<"$response")"
     [[ -n "$message_id" ]] || die "import of ${file} returned no message id: $(head -c 300 <<<"$response")"

@@ -12026,6 +12026,131 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
         message.conversation_id
     }
 
+    /// The ingest-only import body: a `.eml` payload previewed (never
+    /// attributed) against an optional Firm and matter code.
+    fn import_body(payload: &str, firm: Option<Uuid>, project: Option<&str>) -> serde_json::Value {
+        serde_json::json!({
+            "source": "email",
+            "mailbox": "mailbox@example.test",
+            "payload_base64": payload,
+            "project": project,
+            "firm": firm,
+            "dry_run": true,
+        })
+    }
+
+    #[tokio::test]
+    async fn inbox_import_names_the_firm_when_the_operator_belongs_to_more_than_one() {
+        // Run 43930109007: the ingest-only door died with `firm_ambiguous`
+        // because the staging operator belongs to more than one Firm, and
+        // naming a `project` would pre-attribute the very threads Jev must
+        // propose against. A named Firm resolves only through membership.
+        // Driven through the router (`call`): `resolve_import_target`'s
+        // composite future is far larger than the 2 MB libtest stack in a
+        // debug build when materialized unboxed, and the door boxes it.
+        use base64::Engine as _;
+        // The embedded-engine ratchet (cli/tests/embedded_surreal_ratchet.rs)
+        // forbids new `mem()` sites, and the PostgreSQL fixture cannot back
+        // `ApiState` — the router and the import door run on a SurrealDB
+        // handle. Ride the server-mode lane on a database of this test's own
+        // naming: CI requires it (`NAV_REQUIRE_SURREAL=1`), a bare laptop
+        // skips, and the unique name keeps shards isolated.
+        let Some(lane) = store::test_support::server_surreal(&format!(
+            "inbox_import_firm_{}",
+            Uuid::new_v4().simple()
+        ))
+        .await
+        else {
+            return;
+        };
+        let db = lane.db;
+        let firm = store::test_support::seed_firm_with_brand(&db, "neon").await;
+        let other_firm = store::test_support::seed_firm_with_brand(&db, "vesta").await;
+        let project =
+            store::test_support::seed_project_on_firm(&db, Some(firm), "E2E Firm Test").await;
+        let (state, session) = eml_lawyer_state(&db, project.id, "aries@neonlaw.com").await;
+        let person = session.person_id.unwrap();
+        for target in [firm, other_firm] {
+            store::firms::add_membership(
+                &db,
+                &store::firms::NewPersonFirmRole {
+                    person_id: person,
+                    firm_id: target,
+                    membership: store::firms::FirmMembership::Lawyer,
+                    is_dri: false,
+                },
+            )
+            .await
+            .unwrap();
+        }
+        // Driven through the router (`call`) — see the test's opening note.
+        let payload = base64::engine::general_purpose::STANDARD.encode(EML_PLAIN);
+        let body = |firm: Option<Uuid>, project: Option<&str>| import_body(&payload, firm, project);
+        let import = "/app/api/inbox/import";
+
+        // Two memberships, nothing named: the door names the ambiguity.
+        let (status, json) = call(
+            &state,
+            Some(&session),
+            "POST",
+            import,
+            Some(body(None, None)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+        assert_eq!(json["error"], "firm_ambiguous", "{json}");
+
+        // The caller's own named membership lands, threads unattributed.
+        let (status, json) = call(
+            &state,
+            Some(&session),
+            "POST",
+            import,
+            Some(body(Some(firm), None)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        assert_eq!(json["firm"], serde_json::json!(firm), "{json}");
+        assert!(json["project"].is_null(), "{json}");
+        assert_eq!(json["would_import"], 1, "{json}");
+
+        // A stranger Firm is refused: naming one grants nothing.
+        let (status, json) = call(
+            &state,
+            Some(&session),
+            "POST",
+            import,
+            Some(body(Some(Uuid::now_v7()), None)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+        assert_eq!(json["error"], "firm_not_member", "{json}");
+
+        // A matter's Firm and a named Firm must agree with each other.
+        let (status, json) = call(
+            &state,
+            Some(&session),
+            "POST",
+            import,
+            Some(body(Some(other_firm), Some(project.code.as_str()))),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+        assert_eq!(json["error"], "firm_mismatch", "{json}");
+
+        // The Gmail path keeps its canonical-mailbox Firm resolution.
+        let gmail = serde_json::json!({
+            "source": "gmail",
+            "mailbox": "mailbox@example.test",
+            "payload_base64": payload,
+            "firm": firm,
+            "dry_run": true,
+        });
+        let (status, json) = call(&state, Some(&session), "POST", import, Some(gmail)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+        assert_eq!(json["error"], "firm_not_supported", "{json}");
+    }
+
     #[tokio::test]
     async fn inbox_address_matches_are_confined_to_the_conversations_firm() {
         let db = store::surreal::test_support::mem().await;

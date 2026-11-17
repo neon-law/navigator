@@ -183,22 +183,13 @@ async fn seed_vesta_brand(
     with_logo: bool,
 ) -> uuid::Uuid {
     let firm_id = uuid::Uuid::now_v7();
-    let brand_id = uuid::Uuid::now_v7();
     let now = "2026-11-05T22:41:19Z";
-    let logo_fields = if with_logo {
-        ", logo_object_key = $logo, logo_content_type = 'image/png'"
-    } else {
-        ""
-    };
     surreal
         .db
-        .query(format!(
+        .query(
             "CREATE $firm SET name = $firm_name, slug = $slug, \
-             inserted_at = $now, updated_at = $now; \
-             CREATE $id SET name = $name, brand_key = 'vesta', firm_id = $firm, \
-             is_law_firm = true, legal_entity = $entity, website_url = $site{logo_fields}, \
-             inserted_at = $now, updated_at = $now"
-        ))
+             inserted_at = $now, updated_at = $now",
+        )
         .bind(("firm", record_id("firm", firm_id)))
         .bind(("firm_name", FIXTURE_FIRM_NAME.to_string()))
         // The applied schema tightens `slug` to `string READONLY` after its
@@ -215,8 +206,55 @@ async fn seed_vesta_brand(
                 firm_id.simple()
             ),
         ))
+        .bind(("now", now.to_string()))
+        .await
+        .expect("seed the fixture Firm")
+        .check()
+        .expect("seed the fixture Firm");
+
+    let logo_fields = if with_logo {
+        ", logo_object_key = $logo, logo_content_type = 'image/png'"
+    } else {
+        ""
+    };
+    // The server lane pre-seeds the compiled brand catalog
+    // (`store::test_support::server_surreal`), so a `vesta` row may already
+    // exist and `brand_key_unique` rejects a second CREATE. The fixture's
+    // presentation fields are load-bearing — the render assertions read them
+    // from the brand row — so an existing compiled row (bare: name = key, no
+    // site, no mark, no legal entity) is updated in place rather than
+    // re-created, and only an empty table falls back to a CREATE.
+    if let Some(existing) = store::test_support::brand_id_with_key(&surreal.db, "vesta").await {
+        surreal
+            .db
+            .query(format!(
+                "UPDATE $id SET name = $name, firm_id = $firm, is_law_firm = true, \
+                 legal_entity = $entity, website_url = $site{logo_fields}, updated_at = $now"
+            ))
+            .bind(("id", record_id("brand", existing)))
+            .bind(("name", "Vesta".to_string()))
+            .bind(("firm", record_id("firm", firm_id)))
+            .bind(("entity", VESTA_ENTITY.to_string()))
+            .bind(("site", VESTA_SITE.to_string()))
+            .bind(("logo", "brands/vesta/mark.png".to_string()))
+            .bind(("now", now.to_string()))
+            .await
+            .expect("wear the fixture fields on the compiled Brand")
+            .check()
+            .expect("wear the fixture fields on the compiled Brand");
+        return existing;
+    }
+    let brand_id = uuid::Uuid::now_v7();
+    surreal
+        .db
+        .query(format!(
+            "CREATE $id SET name = $name, brand_key = 'vesta', firm_id = $firm, \
+             is_law_firm = true, legal_entity = $entity, website_url = $site{logo_fields}, \
+             inserted_at = $now, updated_at = $now"
+        ))
         .bind(("id", record_id("brand", brand_id)))
         .bind(("name", "Vesta".to_string()))
+        .bind(("firm", record_id("firm", firm_id)))
         .bind(("entity", VESTA_ENTITY.to_string()))
         .bind(("site", VESTA_SITE.to_string()))
         .bind(("logo", "brands/vesta/mark.png".to_string()))
