@@ -9,5 +9,9 @@ and can be revoked. The recipient verifies the invited email address by signing 
 recorded terms before viewing or downloading the export and the image revisions selected at invitation creation. The
 share grants no Project participation.
 
-The invitation records the acceptance and counts views and download requests. Daily usage totals omit recipient and
-matter identifiers.
+The invitation records the acceptance and counts views and download requests. See [Evidence Share
+Usage](evidence-share-usage.md) for daily totals.
+
+The table is `evidence_share`.
+
+Schema: [`evidence_share`](../../store/postgres/schema.sql).

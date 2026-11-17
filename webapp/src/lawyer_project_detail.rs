@@ -1095,10 +1095,7 @@ pub fn LawyerProjectDetail() -> Element {
                             {admin_testimonial_card(&view.code, &csrf, view.testimonial.as_ref())}
                         }
 
-                        details {
-                            summary { "Integrations" }
-                            {integrations_section(&view)}
-                        }
+                        {integrations_section(&view)}
 
                         // The matter timeline: every docket entry on this matter's cases
                         // joined with every open deadline, in date order. Documents,

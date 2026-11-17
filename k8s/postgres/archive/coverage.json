@@ -613,6 +613,20 @@
       {
         "action": "export",
         "schema": "public",
+        "name": "evidence_share",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "evidence_share_usage",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
         "name": "expunge_record",
         "kind": "table",
         "accessible": true

@@ -674,10 +674,14 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::too_many_lines)]
     async fn evidence_share_routes_gate_terms_and_download_on_the_recipient() {
+        let fixture_name = format!("evidence_share_{}", Uuid::now_v7().simple());
+        let Some(fixture) = test_support::server_surreal(&fixture_name).await else {
+            return;
+        };
         let Some((admin, db, database)) = temporary_database().await else {
             return;
         };
-        let surreal = test_support::mem_surreal().await;
+        let surreal = fixture.db;
         let lawyer = test_support::ensure_person(
             &surreal,
             &store::persons::NewPerson {
