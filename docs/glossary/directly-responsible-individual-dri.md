@@ -38,7 +38,7 @@ Two rules bound the sets, both enforced in `store::participation` through tested
   and removal appends a `relationship_log` entry naming the actor, the matter, and the person moved.
 
 A matter is opened against a pre-existing [Entity](entity.md), **for** a pre-existing client, **and** always on a
-[retainer](engagement--retainer.md) — a project is not official until a retainer exists. The matter-open service
+[retainer](engagement--retainer.md). Execution follows the [Official](official.md) rule. The matter-open service
 validates the entity and the client role before any row is created.
 
 - Schema and command: [`store::projects`](../../store/src/projects.rs) (the `is_lawyer_dri` / `is_client_dri` fields);

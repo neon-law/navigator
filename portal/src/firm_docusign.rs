@@ -124,7 +124,10 @@ impl SignatureProvider for FirmDocuSign {
         db: &SurrealDb,
         project_id: Uuid,
     ) -> Result<Option<DocuSignSignatureProvider>, SignatureError> {
-        let firm = store::projects::find_by_id(db, project_id)
+        let pg = store::postgres::PostgresDb::from_env()
+            .await
+            .map_err(|_| unavailable())?;
+        let firm = store::postgres::projects::find_by_id_on(&pg, project_id)
             .await
             .map_err(|_| unavailable())?
             .and_then(|project| project.firm_id)

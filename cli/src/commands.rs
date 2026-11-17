@@ -5197,6 +5197,34 @@ mod gate_helpers_tests {
     }
 
     #[test]
+    fn onboarding_upload_envelope_id_is_a_uuid() {
+        let args = [
+            "navigator",
+            "site",
+            "document",
+            "upload",
+            "--project",
+            "sample",
+            "--file",
+            "onboarding.pdf",
+            "--kind",
+            "onboarding",
+            "--signing-method",
+            "docusign",
+            "--signed-on",
+            "2026-11-17",
+            "--envelope-id",
+        ];
+        assert!(Cli::try_parse_from(args[..args.len() - 1].iter().copied()).is_err());
+        assert!(Cli::try_parse_from(args.into_iter().chain(["invalid"])).is_err());
+        assert!(Cli::try_parse_from(
+            args.into_iter()
+                .chain(["0199b9e4-14b7-7ad0-87a5-71ef24a46d41",])
+        )
+        .is_ok());
+    }
+
+    #[test]
     fn relationship_add_requires_a_scope_and_an_existing_subject() {
         let args = [
             "navigator",

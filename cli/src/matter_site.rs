@@ -15,8 +15,8 @@ use crate::commands::{
 };
 use crate::{document_read, projects, remote};
 
-/// How an executed document was executed, as `site document upload` records
-/// it. Every flag is optional.
+/// Execution metadata recorded by `site document upload`.
+/// Signed onboarding through `DocuSign` requires its envelope UUID.
 #[derive(clap::Args)]
 pub struct ExecutionArgs {
     /// A YAML file with the expense amount, currency, payee, category, and source ID.
@@ -30,6 +30,13 @@ pub struct ExecutionArgs {
     /// `--signing-method`.
     #[arg(long, value_parser = parse_calendar_date, requires = "signing_method")]
     signed_on: Option<chrono::NaiveDate>,
+    /// Completed `DocuSign` envelope UUID for a signed onboarding upload.
+    #[arg(
+        long,
+        requires = "signing_method",
+        required_if_eq_all([("kind", "onboarding"), ("signing_method", "docusign")])
+    )]
+    envelope_id: Option<uuid::Uuid>,
     /// One notarial acknowledgment, repeatable for a packet with several:
     /// `method=in_person|remote_online,acknowledged_on=YYYY-MM-DD,state=NV,county=Clark,commission_expires=YYYY-MM-DD`.
     /// Never the notary's name or commission number.
@@ -92,6 +99,7 @@ impl ExecutionArgs {
     fn record(self) -> remote::DocumentExecution {
         remote::DocumentExecution {
             receipt: self.receipt,
+            envelope_id: self.envelope_id,
             signing: self
                 .signing_method
                 .zip(self.signed_on)

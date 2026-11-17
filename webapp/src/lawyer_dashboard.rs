@@ -116,9 +116,9 @@ pub struct ConflictFindingView {
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
 pub struct DashboardView {
     pub total_projects: u64,
-    /// Open matters with no onboarding artifact on file (`MatterLifecycle` pitch).
+    /// Open matters awaiting completed `DocuSign` onboarding (`MatterLifecycle` pitch).
     pub pitch_projects: u64,
-    /// Open matters with onboarding on file (`MatterLifecycle` active).
+    /// Open matters with verified completed `DocuSign` onboarding (`MatterLifecycle` active).
     pub active_projects: u64,
     pub closed_projects: u64,
     /// The current page of the status-filtered list.
@@ -211,8 +211,8 @@ pub async fn get_lawyer_dashboard() -> Result<DashboardView, ServerFnError> {
     };
     // The pie splits the same three states the matter-row lifecycle pill uses.
     // Archived matters stay out of the chart; an open matter is pitch until
-    // an onboarding artifact is on file.
-    let (has_engagement, _) = store::projects::matter_lifecycle_sets(&surreal, &projects)
+    // the onboarding DocuSign envelope UUID is verified as completed.
+    let has_engagement = store::projects::onboarding_official_sets(&surreal, &projects)
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "dashboard: matter_lifecycle_sets failed");
@@ -488,7 +488,7 @@ async fn calendar_events_for_projects(
 }
 
 /// Pitch / active / closed counts for the KPI pie. Archived matters are
-/// excluded. An open matter is pitch until an onboarding artifact is on file.
+/// excluded. An open matter is pitch until the onboarding `DocuSign` envelope UUID is verified as completed.
 #[cfg(feature = "server")]
 fn kpi_lifecycle_counts(
     projects: &[store::projects::Project],

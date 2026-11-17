@@ -1,321 +1,360 @@
 #![allow(clippy::doc_markdown)]
-//! Integration tests for `GET /app/api/project-lifecycle` — the admin-only
-//! deployment-wide lifecycle read.
-
-use std::collections::BTreeSet;
-
-use axum::body::Body;
-use axum::http::{Request, StatusCode};
-use http_body_util::BodyExt;
-use portal::session::SessionData;
-use portal::{AppState, SessionStore};
-use store::persons::Role;
-use store::projects::{
-    transition_project, transition_project_with_reason, ClosureReason, NewProject, Transition,
+//! PostgreSQL-only lifecycle and onboarding API regressions.
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+    response::Response,
 };
-use store::test_support::{mem_surreal, seed_entity};
+use http_body_util::BodyExt;
+use portal::{AppState, SessionStore};
+use sqlx::postgres::{PgConnectOptions, PgSslMode};
+use store::{persons::Role, postgres::PostgresDb};
 use tower::ServiceExt;
 use uuid::Uuid;
 
-use portal::test_support::TEST_SESSION_KEY as KEY;
-
-#[path = "common/bearer.rs"]
-mod bearer_common;
-
-use bearer_common::bearer_opt as bearer;
-const PATH: &str = "/app/api/project-lifecycle";
-
 struct Fixture {
     app: axum::Router,
-    surreal: store::surreal::SurrealDb,
-    admin: String,
-    lawyer: String,
-    client: String,
-    codes: [String; 3],
-    ids: [Uuid; 3],
+    pg: PostgresDb,
+    project: Uuid,
+    lawyer: Uuid,
 }
 
-async fn build_fixture() -> Fixture {
-    let surreal = mem_surreal().await;
-    let entity_id = seed_entity(&surreal).await;
-    let suffix = Uuid::now_v7().simple().to_string();
-    let codes = [
-        format!("open-{}", &suffix[..8]),
-        format!("closed-{}", &suffix[..8]),
-        format!("archived-{}", &suffix[..8]),
-    ];
+impl Fixture {
+    async fn new(
+        provider: Option<std::sync::Arc<dyn portal::signature::SignatureProvider>>,
+    ) -> Option<Self> {
+        let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
+            assert_ne!(std::env::var("NAV_REQUIRE_POSTGRES").as_deref(), Ok("1"));
+            return None;
+        };
+        let options = PgConnectOptions::new()
+            .host("127.0.0.1")
+            .port(port.parse().unwrap())
+            .username("postgres")
+            .password("synthetic")
+            .ssl_mode(PgSslMode::Disable);
+        let admin = PostgresDb::connect(options.clone().database("smoke"))
+            .await
+            .unwrap();
+        let database = format!("onboarding_test_{}", Uuid::now_v7().simple());
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {database}")))
+            .execute(admin.pool())
+            .await
+            .unwrap();
+        let pg = PostgresDb::connect(options.database(&database))
+            .await
+            .unwrap();
+        sqlx::raw_sql("CREATE EXTENSION IF NOT EXISTS age; LOAD 'age';")
+            .execute(pg.pool())
+            .await
+            .unwrap();
+        sqlx::raw_sql(store::postgres_schema::canonical_schema())
+            .execute(pg.pool())
+            .await
+            .unwrap();
+        let jurisdiction = Uuid::now_v7();
+        let entity_type = Uuid::now_v7();
+        let entity = Uuid::now_v7();
+        let project = Uuid::now_v7();
+        let lawyer = Uuid::now_v7();
+        sqlx::query("INSERT INTO jurisdiction(id,name) VALUES ($1,'Synthetic Jurisdiction')")
+            .bind(jurisdiction)
+            .execute(pg.pool())
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO entity_type(id,name) VALUES ($1,'Synthetic Entity')")
+            .bind(entity_type)
+            .execute(pg.pool())
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO entity(id,name,entity_type_id,jurisdiction_id) VALUES ($1,'Synthetic Entity',$2,$3)")
+            .bind(entity).bind(entity_type).bind(jurisdiction).execute(pg.pool()).await.unwrap();
+        sqlx::query(
+            "INSERT INTO brand(id,name,brand_key) VALUES ($1,'Synthetic Brand','synthetic')",
+        )
+        .bind(Uuid::now_v7())
+        .execute(pg.pool())
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO project(id,code,name,status,entity_id,brand) VALUES ($1,'synthetic-onboarding','Synthetic Project','open',$2,'synthetic')")
+            .bind(project).bind(entity).execute(pg.pool()).await.unwrap();
+        sqlx::query("INSERT INTO person(id,name,email,role) VALUES ($1,'Synthetic Lawyer','lawyer@example.com','lawyer')")
+            .bind(lawyer).execute(pg.pool()).await.unwrap();
+        let state = AppState {
+            sessions: SessionStore::new(portal::test_support::TEST_SESSION_KEY),
+            signature_provider: provider.unwrap_or_else(|| {
+                std::sync::Arc::new(portal::signature::FakeSignatureProvider::new())
+            }),
+            ..portal::test_support::app_state(store::surreal::SurrealDb::uninitialized()).await
+        };
+        Some(Self {
+            app: server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR)),
+            pg,
+            project,
+            lawyer,
+        })
+    }
 
-    let mut ids = Vec::new();
-    for code in &codes {
-        ids.push(
-            store::projects::create(
-                &surreal,
-                &NewProject {
-                    code: code.clone(),
-                    name: "Matter".into(),
-                    status: "open".into(),
-                    entity_id,
-                    ..Default::default()
-                },
-            )
+    async fn get(&self, path: &str, role: Option<Role>, person: Option<Uuid>) -> Response {
+        let mut request = Request::builder().uri(path);
+        if let Some(role) = role {
+            let mut session = portal::session::SessionData::fresh("synthetic", role);
+            session.person_id = person;
+            let token = SessionStore::new(portal::test_support::TEST_SESSION_KEY).encode(&session);
+            request = request.header("authorization", format!("Bearer {token}"));
+        }
+        PostgresDb::with_test_db(
+            self.pg.clone(),
+            self.app
+                .clone()
+                .oneshot(request.body(Body::empty()).unwrap()),
+        )
+        .await
+        .unwrap()
+    }
+
+    async fn upload(&self, body: serde_json::Value) -> Response {
+        let mut session = portal::session::SessionData::fresh("synthetic", Role::Lawyer);
+        session.person_id = Some(self.lawyer);
+        let token = SessionStore::new(portal::test_support::TEST_SESSION_KEY).encode(&session);
+        let request = Request::builder()
+            .method("POST")
+            .uri(format!("/app/api/projects/{}/documents", self.project))
+            .header("authorization", format!("Bearer {token}"))
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        PostgresDb::with_test_db(self.pg.clone(), self.app.clone().oneshot(request))
             .await
             .unwrap()
-            .id,
+    }
+
+    async fn participate(&self) {
+        sqlx::query("INSERT INTO person_project_role(person_id,project_id,participation) VALUES ($1,$2,'lawyer')")
+            .bind(self.lawyer).bind(self.project).execute(self.pg.pool()).await.unwrap();
+    }
+
+    async fn status(&self) -> serde_json::Value {
+        let response = self
+            .get(
+                &format!("/app/api/projects/{}/status", self.project),
+                Some(Role::Lawyer),
+                Some(self.lawyer),
+            )
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        json(response).await
+    }
+}
+
+async fn json(response: Response) -> serde_json::Value {
+    serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap()
+}
+
+#[tokio::test]
+async fn postgres_lifecycle_read_retains_admin_admission_and_source_state() {
+    let Some(fx) = Fixture::new(None).await else {
+        return;
+    };
+    let path = "/app/api/project-lifecycle";
+    assert_eq!(
+        fx.get(path, None, None).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    for role in [Role::Lawyer, Role::Client] {
+        assert_eq!(
+            fx.get(path, Some(role), None).await.status(),
+            StatusCode::FORBIDDEN
         );
     }
-    let mut response = surreal
-        .query(
-            "CREATE $asset SET project_id = $project_id, storage_key = 'test', \
-             content_type = 'application/pdf', byte_size = 1, sha256_hex = 'fixture-sha', \
-             kind = 'offboarding', visibility = 'internal', metadata = NONE",
-        )
-        .bind(("asset", store::surreal::record_id("asset", Uuid::now_v7())))
-        .bind(("project_id", store::surreal::record_id("project", ids[1])))
-        .await
-        .unwrap();
-    let _: Option<serde_json::Value> = response.take(0).unwrap();
-    transition_project_with_reason(
-        &surreal,
-        ids[1],
-        Transition::Close,
-        Some(ClosureReason::PitchDeclined),
-        None,
+    let rows = json(fx.get(path, Some(Role::Admin), None).await).await;
+    assert_eq!(rows[0]["status"], "open");
+    assert_eq!(rows[0]["lifecycle"], "pitch");
+    assert_eq!(rows[0]["source_state"], "not_enabled");
+    sqlx::query(
+        "UPDATE project SET repository_url='https://forge.example.test/synthetic' WHERE id=$1",
     )
+    .bind(fx.project)
+    .execute(fx.pg.pool())
     .await
     .unwrap();
-    transition_project(&surreal, ids[2], Transition::Archive, None)
-        .await
-        .unwrap();
+    let rows = json(fx.get(path, Some(Role::Admin), None).await).await;
+    assert_eq!(rows[0]["source_state"], "unknown");
+}
 
-    let ids: [Uuid; 3] = ids.try_into().unwrap();
-    let state = AppState {
-        sessions: SessionStore::new(KEY),
-        ..portal::test_support::app_state(surreal.clone()).await
+#[tokio::test]
+async fn postgres_status_requires_participation_and_verified_execution() {
+    let Some(fx) = Fixture::new(None).await else {
+        return;
     };
-    Fixture {
-        app: server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR)),
-        surreal,
-        admin: bearer(None, Role::Admin),
-        lawyer: bearer(None, Role::Lawyer),
-        client: bearer(None, Role::Client),
-        codes,
-        ids,
-    }
-}
-
-async fn get(fx: &Fixture, auth: Option<&str>) -> axum::http::Response<Body> {
-    let mut request = Request::builder().method("GET").uri(PATH);
-    if let Some(auth) = auth {
-        request = request.header("authorization", auth);
-    }
-    fx.app
-        .clone()
-        .oneshot(request.body(Body::empty()).unwrap())
-        .await
-        .unwrap()
-}
-
-async fn json(response: axum::http::Response<Body>) -> serde_json::Value {
-    let bytes = response.into_body().collect().await.unwrap().to_bytes();
-    serde_json::from_slice(&bytes).unwrap()
-}
-
-#[tokio::test]
-async fn admin_reads_every_project_lifecycle_without_matter_content() {
-    let fx = build_fixture().await;
-    let response = get(&fx, Some(&fx.admin)).await;
-    assert_eq!(response.status(), StatusCode::OK);
-    let rows = json(response).await.as_array().unwrap().clone();
-    assert_eq!(rows.len(), 3);
-
-    let fields: BTreeSet<&str> = rows[0]
-        .as_object()
-        .unwrap()
-        .keys()
-        .map(String::as_str)
-        .collect();
+    let path = format!("/app/api/projects/{}/status", fx.project);
     assert_eq!(
-        fields,
-        BTreeSet::from([
-            "brand",
-            "code",
-            "status",
-            "firm_id",
-            "closed_at",
-            "closure_reason",
-            "source_state"
-        ])
+        fx.get(&path, Some(Role::Lawyer), Some(fx.lawyer))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
     );
-
-    let by_code = rows
-        .into_iter()
-        .map(|row| (row["code"].as_str().unwrap().to_owned(), row))
-        .collect::<std::collections::HashMap<_, _>>();
-    assert_eq!(by_code[&fx.codes[0]]["status"], "open");
-    assert!(by_code[&fx.codes[0]]["closed_at"].is_null());
-    assert_eq!(by_code[&fx.codes[1]]["status"], "closed");
-    assert!(by_code[&fx.codes[1]]["closed_at"].is_string());
-    assert_eq!(by_code[&fx.codes[1]]["closure_reason"], "pitch_declined");
-    assert_eq!(by_code[&fx.codes[2]]["status"], "archived");
-    assert!(by_code[&fx.codes[2]]["closed_at"].is_string());
-    assert!(by_code[&fx.codes[2]]["closure_reason"].is_null());
-
-    // None of the three fixture matters ever recorded a repository, which is
-    // a legitimate resting state distinct from a stalled or failed one.
-    for code in &fx.codes {
-        assert_eq!(by_code[code]["source_state"], "not_enabled");
-    }
-}
-
-/// A repository recorded outside reconcile's own provisioning pass — a
-/// direct `PATCH` or a legacy row — reads as `unknown` rather than
-/// `attached`, because `forge_provisioned_at` was never stamped and the
-/// columns cannot say why.
-#[tokio::test]
-async fn a_repository_url_with_no_provisioned_stamp_reads_as_unknown() {
-    let fx = build_fixture().await;
-    store::projects::set_repository_url(
-        &fx.surreal,
-        fx.ids[0],
-        Some("https://forge.example/an-organization/acme"),
-    )
-    .await
-    .unwrap();
-
-    let rows = json(get(&fx, Some(&fx.admin)).await)
-        .await
-        .as_array()
-        .unwrap()
-        .clone();
-    let open_row = rows.iter().find(|row| row["code"] == fx.codes[0]).unwrap();
-    assert_eq!(open_row["source_state"], "unknown");
-}
-
-#[tokio::test]
-async fn only_the_admin_tier_reaches_the_project_lifecycle_read() {
-    let fx = build_fixture().await;
-    assert_eq!(get(&fx, Some(&fx.admin)).await.status(), StatusCode::OK);
-    assert_eq!(
-        get(&fx, Some(&fx.lawyer)).await.status(),
-        StatusCode::FORBIDDEN
-    );
-    assert_eq!(
-        get(&fx, Some(&fx.client)).await.status(),
-        StatusCode::FORBIDDEN
-    );
-    assert_eq!(get(&fx, None).await.status(), StatusCode::UNAUTHORIZED);
-}
-
-#[tokio::test]
-async fn matter_status_requires_participation_and_reports_filed_onboarding() {
-    let fx = build_fixture().await;
-    let lawyer = store::persons::create(
-        &fx.surreal,
-        &store::persons::NewPerson::with_role("Lawyer", "status@example.com", Role::Lawyer),
-    )
-    .await
-    .unwrap();
-    let mut session = SessionData::fresh("status-lawyer", Role::Lawyer);
-    session.person_id = Some(lawyer.id);
-    let auth = format!("Bearer {}", SessionStore::new(KEY).encode(&session));
-    let uri = format!("/app/api/projects/{}/status", fx.ids[0]);
-    let call = || {
-        Request::builder()
-            .uri(&uri)
-            .header("authorization", &auth)
-            .body(Body::empty())
-            .unwrap()
-    };
-    let response = fx.app.clone().oneshot(call()).await.unwrap();
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    store::projects::add_participation(&fx.surreal, fx.ids[0], lawyer.id, "lawyer")
+    fx.participate().await;
+    assert_eq!(fx.status().await["status"], "pitch");
+    let asset = Uuid::now_v7();
+    let envelope = Uuid::now_v7();
+    sqlx::query("INSERT INTO asset(id,project_id,storage_key,content_type,byte_size,sha256_hex,kind,visibility,metadata)
+                 VALUES ($1,$2,'synthetic','application/pdf',1,'synthetic','onboarding','client',$3)")
+        .bind(asset).bind(fx.project).bind(serde_json::json!({"docusign_envelope_id": envelope}))
+        .execute(fx.pg.pool()).await.unwrap();
+    let status = fx.status().await;
+    assert_eq!(status["status"], "pitch");
+    assert_eq!(status["onboarding"]["filed"], true);
+    assert_eq!(status["onboarding"]["execution_verified"], false);
+    sqlx::query("UPDATE asset SET metadata=metadata||$2::jsonb WHERE id=$1")
+        .bind(asset)
+        .bind(serde_json::json!({"verified_onboarding_envelope_id": envelope}))
+        .execute(fx.pg.pool())
         .await
         .unwrap();
-    let response = fx.app.clone().oneshot(call()).await.unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = json(response).await;
-    assert_eq!(body["status"], "pitch");
+    let status = fx.status().await;
+    assert_eq!(status["status"], "active");
+    assert_eq!(status["onboarding"]["execution_verified"], true);
+    let rows = json(
+        fx.get("/app/api/project-lifecycle", Some(Role::Admin), None)
+            .await,
+    )
+    .await;
+    assert_eq!(rows[0]["lifecycle"], "active");
+    for state in ["closed", "archived"] {
+        sqlx::query("UPDATE project SET status=$2,closed_at='2026-11-17T00:00:00Z' WHERE id=$1")
+            .bind(fx.project)
+            .bind(state)
+            .execute(fx.pg.pool())
+            .await
+            .unwrap();
+        assert_eq!(fx.status().await["status"], state);
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn docusign_upload_files_and_activates_only_in_postgres() {
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    let server = MockServer::start().await;
+    let account = Uuid::now_v7();
+    let envelope = Uuid::now_v7();
+    let provider = portal::signature::DocuSignSignatureProvider::new(
+        server.uri(),
+        account.to_string(),
+        "synthetic-token",
+        "firm@example.com",
+        "Synthetic Firm",
+    );
+    let Some(fx) = Fixture::new(Some(std::sync::Arc::new(provider))).await else {
+        return;
+    };
+    fx.participate().await;
+    let mut body = serde_json::json!({
+        "filename": "onboarding.pdf", "kind": "onboarding", "content_base64": "c2lnbmVk",
+        "signing": {"method": "docusign", "signed_on": "2026-11-17"},
+    });
+    assert_eq!(
+        fx.upload(body.clone()).await.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM asset WHERE project_id=$1")
+        .bind(fx.project)
+        .fetch_one(fx.pg.pool())
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+    body["envelope_id"] = serde_json::json!("invalid");
+    assert!(!fx.upload(body.clone()).await.status().is_success());
+    assert!(server.received_requests().await.unwrap().is_empty());
+
+    let mut unsigned = body.clone();
+    unsigned.as_object_mut().unwrap().remove("signing");
+    unsigned.as_object_mut().unwrap().remove("envelope_id");
+    unsigned["metadata"] = serde_json::json!({
+        "docusign_envelope_id": envelope, "verified_onboarding_envelope_id": envelope,
+    });
+    let response = fx.upload(unsigned).await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    assert!(json(response).await["docusign_envelope_id"].is_null());
+    assert_eq!(fx.status().await["status"], "pitch");
+
+    body["envelope_id"] = serde_json::json!(envelope);
+    for status in ["sent", "delivered", "declined", "voided", "completed"] {
+        server.reset().await;
+        Mock::given(method("GET"))
+            .and(path(format!("/v2.1/accounts/{account}/envelopes/{envelope}")))
+            .and(header("authorization", "Bearer synthetic-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "envelopeId": envelope, "status": status, "completedDateTime": "2026-11-17T00:00:00Z",
+            }))).mount(&server).await;
+        Mock::given(method("GET"))
+            .and(path(format!(
+                "/v2.1/accounts/{account}/envelopes/{envelope}/recipients"
+            )))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"signers": []})),
+            )
+            .mount(&server)
+            .await;
+        let response = fx.upload(body.clone()).await;
+        if status == "completed" {
+            assert_eq!(response.status(), StatusCode::CREATED);
+            assert_eq!(
+                json(response).await["docusign_envelope_id"],
+                envelope.to_string()
+            );
+            assert_eq!(fx.status().await["status"], "active");
+        } else {
+            assert_eq!(
+                response.status(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "{status}"
+            );
+            assert_eq!(fx.status().await["status"], "pitch");
+        }
+    }
+    assert_eq!(fx.upload(body).await.status(), StatusCode::OK);
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM asset WHERE project_id=$1")
+        .bind(fx.project)
+        .fetch_one(fx.pg.pool())
+        .await
+        .unwrap();
+    assert_eq!(count, 2);
+}
+
+#[tokio::test]
+async fn postgres_status_reports_repository_remotes_and_requested_envelopes() {
+    let Some(fx) = Fixture::new(None).await else {
+        return;
+    };
+    fx.participate().await;
+    let body = fx.status().await;
     assert!(body["repository_remotes"].is_object());
     assert!(body["repository_remotes"]["origin"].is_null());
-    assert_eq!(body["onboarding"]["filed"], false);
-    assert!(!body["missing"].as_array().unwrap().is_empty());
-    let envelope = record_matter_envelope(&fx, lawyer.id).await;
-    let response = fx.app.clone().oneshot(call()).await.unwrap();
-    let body = json(response).await;
+    assert!(body["adopted_envelopes"].as_array().unwrap().is_empty());
+
+    let template = Uuid::now_v7();
+    let notation = Uuid::now_v7();
+    let envelope = Uuid::now_v7().to_string();
+    sqlx::query("INSERT INTO template(id,code,title,respondent_type,is_current,kind,inserted_at,updated_at) VALUES ($1,'signature-read','Synthetic signature read','person',true,'memo',now(),now())")
+        .bind(template).execute(fx.pg.pool()).await.unwrap();
+    sqlx::query("INSERT INTO notation(id,template_id,person_id,project_id,state) VALUES ($1,$2,$3,$4,'begin')")
+        .bind(notation).bind(template).bind(fx.lawyer).bind(fx.project).execute(fx.pg.pool()).await.unwrap();
+    PostgresDb::with_test_db(
+        fx.pg.clone(),
+        store::signatures::record_request(
+            &store::surreal::SurrealDb::uninitialized(),
+            notation,
+            store::signatures::SignatureProvider::DocuSign,
+            &envelope,
+        ),
+    )
+    .await
+    .unwrap();
+    let body = fx.status().await;
     assert_eq!(body["envelopes"][0]["envelope"]["envelopeId"], envelope);
     assert_eq!(body["envelopes"][0]["envelope"]["status"], "requested");
     assert!(body["adopted_envelopes"].as_array().unwrap().is_empty());
-    let asset = Uuid::now_v7();
-    fx.surreal
-        .query(
-            "CREATE $asset SET project_id = $project, storage_key = 'test', \
-        content_type = 'application/pdf', byte_size = 1, sha256_hex = 'fixture-sha', \
-        kind = 'onboarding', visibility = 'internal', metadata = NONE",
-        )
-        .bind(("asset", store::surreal::record_id("asset", asset)))
-        .bind(("project", store::surreal::record_id("project", fx.ids[0])))
-        .await
-        .unwrap()
-        .check()
-        .unwrap();
-    let response = fx.app.clone().oneshot(call()).await.unwrap();
-    let body = json(response).await;
-    assert_eq!(body["status"], "active");
-    assert_eq!(body["onboarding"]["filed"], true);
-    assert_eq!(body["onboarding"]["documents"][0]["visibility"], "internal");
-    assert_eq!(body["onboarding"]["execution_verified"], false);
-    assert!(body["opened_at"].is_string());
-    assert_eq!(body["source_state"], "not_enabled");
-    assert!(body["missing"].as_array().unwrap().is_empty());
-    assert!(body.get("repository_url").is_none());
-    for (id, expected) in [(fx.ids[1], "closed"), (fx.ids[2], "archived")] {
-        store::projects::add_participation(&fx.surreal, id, lawyer.id, "lawyer")
-            .await
-            .unwrap();
-        let response = fx
-            .app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/app/api/projects/{id}/status"))
-                    .header("authorization", &auth)
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = json(response).await;
-        assert_eq!(body["status"], expected);
-        assert!(body["closed_at"].is_string());
-        assert!(body["missing"].as_array().unwrap().is_empty());
-    }
-}
-
-async fn record_matter_envelope(fx: &Fixture, lawyer_id: Uuid) -> String {
-    let template = store::test_support::seed_unpinned_project_template(
-        &fx.surreal,
-        fx.ids[0],
-        "signature-read",
-        "Signature read",
-        "person",
-        Some("memo"),
-    )
-    .await;
-    let notation = store::notations::create(
-        &fx.surreal,
-        &store::notations::NewNotation::new(template.id, lawyer_id, fx.ids[0], "begin"),
-    )
-    .await
-    .unwrap();
-    let envelope = Uuid::now_v7().to_string();
-    store::signatures::record_request(
-        &fx.surreal,
-        notation.id,
-        store::signatures::SignatureProvider::DocuSign,
-        &envelope,
-    )
-    .await
-    .unwrap();
-    envelope
 }

@@ -178,6 +178,7 @@ pub mod notation_pricing;
 pub mod notation_reset;
 pub mod notation_sources;
 pub mod notations;
+pub mod onboarding;
 pub mod outcome_calibration;
 pub mod outcome_estimates;
 pub mod participation;

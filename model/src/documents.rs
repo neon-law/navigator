@@ -235,6 +235,30 @@ pub enum SigningMethod {
     Docusign,
 }
 
+/// Require an envelope UUID for onboarding uploads declared as signed through `DocuSign`.
+///
+/// # Errors
+///
+/// Returns an error for missing or nil required IDs and IDs on other upload kinds.
+pub fn validate_onboarding_envelope(
+    kind: &str,
+    signing: Option<Signing>,
+    envelope_id: Option<uuid::Uuid>,
+) -> Result<(), &'static str> {
+    let required = kind == "onboarding"
+        && signing.is_some_and(|signing| signing.method == SigningMethod::Docusign);
+    match (required, envelope_id) {
+        (true, Some(id)) if !id.is_nil() => Ok(()),
+        (false, None) => Ok(()),
+        (true, _) => {
+            Err("A DocuSign-signed onboarding upload requires --envelope-id with a DocuSign UUID.")
+        }
+        (false, Some(_)) => {
+            Err("An envelope ID requires kind onboarding and signing method docusign.")
+        }
+    }
+}
+
 impl SigningMethod {
     /// Every method, in the order help and errors name them.
     pub const ALL: [Self; 2] = [Self::WetInk, Self::Docusign];
@@ -467,4 +491,32 @@ fn suggested_slug(filename: &str, slug: &str) -> Option<String> {
         .filter(|stem| !stem.is_empty() && !stem.ends_with('/') && !stem.ends_with('\\'))
         .unwrap_or(slug);
     Some(format!("{stem}.{extension}"))
+}
+
+#[cfg(test)]
+mod onboarding_envelope_tests {
+    use super::{validate_onboarding_envelope, Signing, SigningMethod};
+
+    #[test]
+    fn docusign_onboarding_requires_a_non_nil_envelope_uuid() {
+        let signing = Some(Signing {
+            method: SigningMethod::Docusign,
+            signed_on: chrono::NaiveDate::from_ymd_opt(2026, 11, 17).unwrap(),
+        });
+        assert!(validate_onboarding_envelope("onboarding", signing, None).is_err());
+        assert!(
+            validate_onboarding_envelope("onboarding", signing, Some(uuid::Uuid::nil())).is_err()
+        );
+        assert!(validate_onboarding_envelope(
+            "onboarding",
+            signing,
+            Some(uuid::Uuid::from_u128(123))
+        )
+        .is_ok());
+        assert!(validate_onboarding_envelope("onboarding", None, None).is_ok());
+        assert!(
+            validate_onboarding_envelope("letter", signing, Some(uuid::Uuid::from_u128(123)))
+                .is_err()
+        );
+    }
 }

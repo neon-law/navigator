@@ -1516,9 +1516,8 @@ mod tests {
     /// the matter name, its blurb the scope); the client confirms them in
     /// intake; the lawyer approves and sends; the local loop signs every
     /// recipient, self-delivers the HMAC-checked completion webhook through
-    /// this portal's own receiver, and files the completion; and the matter
-    /// turns `official` only when the loop completes — reading `pitch` up
-    /// to that point, acceptance alone notwithstanding.
+    /// this portal's own receiver, and files the completion. The synthetic
+    /// envelope ID leaves the matter a pitch under the DocuSign UUID rule.
     #[tokio::test]
     // One continuous ceremony reads better as a single narrative —
     // acceptance, confirmation, review, send, dual signing, filing —
@@ -1813,14 +1812,14 @@ mod tests {
             "the envelope completes on the last signature"
         );
 
-        // --- Filed: the receiver verified the HMAC, journaled and
-        // consumed the completion, and the matter turned official.
+        // The fake envelope completes the signature loop and archives its documents.
+        // Its synthetic provider ID cannot establish official DocuSign execution.
         assert_eq!(
             store::projects::onboarding_status(&surreal, project.id)
                 .await
                 .expect("read onboarding status after the loop"),
-            store::projects::OnboardingStatus::Official,
-            "a completed, Navigator-sent envelope makes the matter official"
+            store::projects::OnboardingStatus::Pitch,
+            "a synthetic provider ID leaves the matter a pitch"
         );
         let envelope = fake
             .envelope(&envelope_id)

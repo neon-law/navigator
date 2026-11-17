@@ -48,10 +48,10 @@ use crate::postgres::PostgresDb;
 use crate::surreal::{record_id, record_uuid, SurrealDb};
 pub use model::documents::{
     document_upload_size_message_for_kind, human_bytes, max_document_upload_bytes, sha256_hex,
-    streaming_upload_size_message, validate_document_slug, DocumentSlugError, Evidence,
-    EvidenceConfidence, EvidenceError, Notarization, NotarizationError, NotarizationMethod,
-    ReceiptMetadata, Signing, SigningMethod, MAX_DOCUMENT_UPLOAD_BYTES,
-    MAX_MEDIA_DOCUMENT_UPLOAD_BYTES, MAX_STREAMING_UPLOAD_BYTES,
+    streaming_upload_size_message, validate_document_slug, validate_onboarding_envelope,
+    DocumentSlugError, Evidence, EvidenceConfidence, EvidenceError, Notarization,
+    NotarizationError, NotarizationMethod, ReceiptMetadata, Signing, SigningMethod,
+    MAX_DOCUMENT_UPLOAD_BYTES, MAX_MEDIA_DOCUMENT_UPLOAD_BYTES, MAX_STREAMING_UPLOAD_BYTES,
 };
 
 /// Maximum REST request size needed to carry the document limit as base64 JSON.
@@ -459,7 +459,11 @@ pub async fn create_upload_session(
 
     let now = Utc::now();
     if let Some(existing) = find_resumable_session(db, args, now).await? {
-        return Ok(existing);
+        if crate::assets::verified_onboarding_envelope(existing.metadata.as_ref())
+            == crate::assets::verified_onboarding_envelope(args.metadata.as_ref())
+        {
+            return Ok(existing);
+        }
     }
     let session = UploadSession {
         id: Uuid::now_v7(),
@@ -1100,6 +1104,9 @@ pub async fn ingest_bytes_exactly_once_as(
     identity: &DocumentIdentity<'_>,
     bytes: &[u8],
 ) -> Result<IngestedDocument, IngestError> {
+    if args.kind == "onboarding" {
+        return ingest_bytes_as(db, storage, args, identity, bytes).await;
+    }
     let sha_hex = crate::assets::sha256_hex(bytes);
     if let Some(existing) =
         crate::assets::find_filed_copy(db, args.project_id, args.filename, &sha_hex).await?
@@ -1336,6 +1343,37 @@ async fn ingest_bytes_as_inner(
     asset_id: Option<Uuid>,
     bytes: &[u8],
 ) -> Result<IngestedDocument, IngestError> {
+    if args.kind == "onboarding" {
+        let pg = PostgresDb::from_env()
+            .await
+            .map_err(|error| crate::assets::AssetError::Postgres(error.to_string()))?;
+        let filed = Box::pin(crate::onboarding::file_document(
+            &pg, storage, args, identity, None, bytes,
+        ))
+        .await
+        .map_err(|error| crate::assets::AssetError::Postgres(error.to_string()))?;
+        return match filed {
+            crate::assets::Filed::Revision(document) => Ok(document),
+            crate::assets::Filed::Unchanged { asset_id } => {
+                let asset = crate::onboarding::revisions(
+                    &pg,
+                    args.project_id,
+                    identity.slug.unwrap_or(args.filename),
+                )
+                .await?
+                .into_iter()
+                .find(|asset| asset.id == asset_id)
+                .ok_or(IngestError::WriteReturnedNothing)?;
+                Ok(IngestedDocument {
+                    asset_id,
+                    storage_key: asset.storage_key,
+                    sha256_hex: asset.sha256_hex,
+                    byte_size: asset.byte_size,
+                    reused: true,
+                })
+            }
+        };
+    }
     if !rules::kind::Kind::parse(args.kind).is_some_and(|k| k.valid_for(rules::kind::Lane::Asset)) {
         return Err(IngestError::InvalidKind(args.kind.to_string()));
     }

@@ -1,6 +1,10 @@
 //! Asset rows in the PostgreSQL mirror: document assets and bare content
 //! assets alike.
 //!
+//! PostgreSQL owns onboarding Assets. The mirror preserves existing onboarding
+//! rows and imports missing ones only during the initial copy. Imported
+//! metadata carries no provider-verification stamp.
+//!
 //! The same contract as the tenancy mirror: SurrealDB is read back after its
 //! write, and PostgreSQL's copy is upserted or deleted to match. Each row
 //! keeps its Surreal record UUID as its PostgreSQL `id`, so a revision chain
@@ -74,6 +78,12 @@ const ASSET_COLUMNS: &[&str] = &[
 
 static ASSET_UPSERT: LazyLock<String> = LazyLock::new(|| upsert_sql("asset", ASSET_COLUMNS));
 static ASSET_SELECT: LazyLock<String> = LazyLock::new(|| select_sql("asset", ASSET_COLUMNS));
+static COMPAT_ASSET_SELECT: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "{} WHERE kind IS DISTINCT FROM 'onboarding'",
+        ASSET_SELECT.as_str()
+    )
+});
 
 /// The Surreal projection, every column the mirror copies.
 const ASSET_SOURCE_FIELDS: &str = "id, storage_key, secondary_storage_key, content_type, \
@@ -297,6 +307,14 @@ pub(super) async fn mirror(
         // `super::mirror` routes only asset keys here.
         return Err(MirrorError::Source);
     };
+    let authoritative: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM asset WHERE id=$1 AND kind='onboarding')")
+            .bind(id)
+            .fetch_one(pg.pool())
+            .await?;
+    if authoritative {
+        return Ok(Mirrored::Unchanged);
+    }
     let Some(row) = source_asset(surreal, *id).await? else {
         let deleted = sqlx::query("DELETE FROM asset WHERE id = $1")
             .bind(id)
@@ -304,7 +322,15 @@ pub(super) async fn mirror(
             .await?;
         return Ok(changed(deleted.rows_affected(), Mirrored::Deleted));
     };
-    let image = AssetImage::from_source(row)?;
+    let mut image = AssetImage::from_source(row)?;
+    if image.kind.as_deref() == Some("onboarding") {
+        if !super::initial_copy() {
+            return Ok(Mirrored::Unchanged);
+        }
+        if let Some(metadata) = image.metadata.as_mut().and_then(Json::as_object_mut) {
+            metadata.remove(crate::assets::VERIFIED_ONBOARDING_ENVELOPE_KEY);
+        }
+    }
     if let Some(project) = image.project_id {
         let held: bool = sqlx::query_scalar(PROJECT_PRESENT)
             .bind(project)
@@ -373,14 +399,19 @@ pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport
         let Some(id) = record_uuid(&row.id) else {
             continue;
         };
-        assets.insert(MirrorKey::Asset(id), AssetImage::from_source(row).ok());
+        if row.kind.as_deref() != Some("onboarding") {
+            assets.insert(MirrorKey::Asset(id), AssetImage::from_source(row).ok());
+        }
     }
     let tables = vec![compare(
         "asset",
         &assets,
-        &target(pg, ASSET_SELECT.as_str(), AssetImage::from_row, |row| {
-            MirrorKey::Asset(row.id)
-        })
+        &target(
+            pg,
+            COMPAT_ASSET_SELECT.as_str(),
+            AssetImage::from_row,
+            |row| MirrorKey::Asset(row.id),
+        )
         .await?,
     )];
     Ok(ParityReport { tables })

@@ -127,8 +127,8 @@ fn every_lifecycle_state_carries_its_own_title_and_green_states_its_limit() {
     assert!(
         MatterLifecycle::OnboardingOnFile
             .title()
-            .contains("not verified as executed"),
-        "the green title must state that filing is not execution: {}",
+            .contains("verified as completed"),
+        "the green title must state verified completion: {}",
         MatterLifecycle::OnboardingOnFile.title()
     );
 }

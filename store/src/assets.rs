@@ -408,6 +408,28 @@ pub async fn object_sha256(
 /// # Errors
 /// [`AssetError::Db`] if the lookup fails.
 pub async fn find_by_id(db: &SurrealDb, id: Uuid) -> Result<Option<Asset>, AssetError> {
+    if let Some(pg) = crate::postgres::PostgresDb::configured()
+        .await
+        .map_err(|error| AssetError::Postgres(error.to_string()))?
+    {
+        use sqlx::Row;
+        let row = sqlx::query("SELECT to_jsonb(a) AS row FROM asset a WHERE id=$1")
+            .bind(id)
+            .fetch_optional(pg.pool())
+            .await
+            .map_err(|e| AssetError::Postgres(e.to_string()))?;
+        return row
+            .map(|r| {
+                let mut value: serde_json::Value = r
+                    .try_get("row")
+                    .map_err(|e| AssetError::Postgres(e.to_string()))?;
+                if value["notarization"].is_null() {
+                    value["notarization"] = serde_json::json!([]);
+                }
+                serde_json::from_value(value).map_err(|e| AssetError::Postgres(e.to_string()))
+            })
+            .transpose();
+    }
     let response = db
         .query(format!("SELECT {SELECT} FROM ONLY $id LIMIT 1"))
         .bind(("id", record_id(TABLE, id)))
@@ -441,6 +463,12 @@ pub async fn find_by_ids(db: &SurrealDb, ids: &[Uuid]) -> Result<Vec<Asset>, Ass
 /// # Errors
 /// [`AssetError::Db`] if the lookup fails.
 pub async fn for_project(db: &SurrealDb, project_id: Uuid) -> Result<Vec<Asset>, AssetError> {
+    if let Some(pg) = crate::postgres::PostgresDb::configured()
+        .await
+        .map_err(|error| AssetError::Postgres(error.to_string()))?
+    {
+        return crate::onboarding::documents(&pg, project_id).await;
+    }
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE project_id = $project AND {LIVE} ORDER BY id DESC"
@@ -1042,6 +1070,22 @@ pub async fn kinds_by_projects(
         .collect())
 }
 
+/// Server-stamped evidence that an onboarding upload names a completed DocuSign envelope.
+pub const VERIFIED_ONBOARDING_ENVELOPE_KEY: &str = "verified_onboarding_envelope_id";
+
+pub(crate) fn verified_onboarding_envelope(metadata: Option<&serde_json::Value>) -> Option<Uuid> {
+    let metadata = metadata?;
+    let id = crate::document_pointers::envelope_id_from_asset_metadata(Some(metadata))?;
+    (!id.is_nil()
+        && metadata
+            .get(VERIFIED_ONBOARDING_ENVELOPE_KEY)?
+            .as_str()?
+            .parse::<Uuid>()
+            .ok()
+            == Some(id))
+    .then_some(id)
+}
+
 /// Every asset, newest first — the `/app/lawyer/assets` transparency listing.
 ///
 /// Unbounded. That is a real
@@ -1273,6 +1317,12 @@ pub async fn revisions(
     project_id: Uuid,
     slug: &str,
 ) -> Result<Vec<Asset>, AssetError> {
+    if let Some(pg) = crate::postgres::PostgresDb::configured()
+        .await
+        .map_err(|error| AssetError::Postgres(error.to_string()))?
+    {
+        return crate::onboarding::revisions(&pg, project_id, slug).await;
+    }
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} \
@@ -1340,6 +1390,21 @@ pub async fn set_visibility(
     };
     if asset.visibility == visibility {
         return Ok(Some(false));
+    }
+    if asset.kind.as_deref() == Some("onboarding") {
+        let pg = crate::postgres::PostgresDb::from_env()
+            .await
+            .map_err(|error| AssetError::Postgres(error.to_string()))?;
+        sqlx::query(
+            "UPDATE asset SET visibility=$3,updated_at=now() WHERE id=$1 AND project_id=$2",
+        )
+        .bind(asset_id)
+        .bind(project_id)
+        .bind(visibility)
+        .execute(pg.pool())
+        .await
+        .map_err(|error| AssetError::Postgres(error.to_string()))?;
+        return Ok(Some(true));
     }
     let response = writing(|| {
         db.query("UPDATE $id SET visibility = $visibility, updated_at = time::now()")
@@ -2593,7 +2658,7 @@ fn head_triple(head: &Asset, chain_len: usize) -> ExpectedHead {
 /// 2. **Kind is immutable across a chain.** A slug that already holds a
 ///    `retainer` does not accept an `agreement` revision — that is a
 ///    different document and belongs under its own slug.
-/// 3. **Identical bytes are a no-op**, scoped to this one slug on this
+/// 3. **Identical bytes and verified execution evidence are a no-op**, scoped to this one slug on this
 ///    one project. Never a global "we already have these bytes" probe:
 ///    that is an existence oracle, and legal documents are boilerplate
 ///    plus a few low-entropy fields — exactly the shape Harnik et al.
@@ -2669,6 +2734,20 @@ async fn file_revision_inner(
     expected_head: Option<&ExpectedHead>,
     bytes: &[u8],
 ) -> Result<Filed, RevisionError> {
+    if args.kind == "onboarding" {
+        let pg = crate::postgres::PostgresDb::from_env()
+            .await
+            .map_err(|error| AssetError::Postgres(error.to_string()))?;
+        return Box::pin(crate::onboarding::file_document(
+            &pg,
+            storage,
+            args,
+            identity,
+            expected_head,
+            bytes,
+        ))
+        .await;
+    }
     // Rule 1 — the lane is closed. An unrecognized string is rejected by
     // the same arm as a valid-but-wrong-lane one: neither classifies a
     // document that can be filed on a matter.
@@ -2719,7 +2798,7 @@ async fn file_revision_inner(
                 });
             }
         }
-        // Rule 3 — identical bytes change nothing.
+        // Rule 3 — identical bytes and verified execution evidence change nothing.
         if head.sha256_hex == sha256_hex(bytes) {
             return Ok(Filed::Unchanged { asset_id: head.id });
         }

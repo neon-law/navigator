@@ -234,6 +234,10 @@ impl NewNotation {
 /// Errors reading or writing a notation.
 #[derive(Debug, thiserror::Error)]
 pub enum NotationError {
+    #[error("PostgreSQL notation operation failed")]
+    Postgres(#[from] sqlx::Error),
+    #[error("PostgreSQL notation configuration is unavailable")]
+    Configuration(#[from] crate::postgres::PostgresError),
     #[error("database: {0}")]
     Db(#[from] surrealdb::Error),
     #[error("notation {0} not found")]
@@ -242,6 +246,11 @@ pub enum NotationError {
     /// module could not read back.
     #[error("writing a notation returned no usable row")]
     WriteReturnedNothing,
+}
+
+fn postgres_notation(row: &sqlx::postgres::PgRow) -> Result<Notation, NotationError> {
+    use sqlx::Row;
+    serde_json::from_value(row.try_get("row")?).map_err(|_| NotationError::WriteReturnedNothing)
 }
 
 /// Run a write under the shared retry policy
@@ -468,6 +477,15 @@ pub async fn delete_uncommitted(db: &SurrealDb, id: Uuid) -> Result<(), Notation
 ///
 /// [`NotationError::Db`] if the lookup fails.
 pub async fn find_by_id(db: &SurrealDb, id: Uuid) -> Result<Option<Notation>, NotationError> {
+    if let Some(pg) = crate::postgres::PostgresDb::configured().await? {
+        return sqlx::query("SELECT to_jsonb(n) AS row FROM notation n WHERE id=$1")
+            .bind(id)
+            .fetch_optional(pg.pool())
+            .await?
+            .as_ref()
+            .map(postgres_notation)
+            .transpose();
+    }
     let response = db
         .query(format!("SELECT {SELECT} FROM ONLY $id LIMIT 1"))
         .bind(("id", record_id(TABLE, id)))
@@ -487,6 +505,17 @@ pub async fn list_by_project(
     db: &SurrealDb,
     project_id: Uuid,
 ) -> Result<Vec<Notation>, NotationError> {
+    if let Some(pg) = crate::postgres::PostgresDb::configured().await? {
+        return sqlx::query(
+            "SELECT to_jsonb(n) AS row FROM notation n WHERE project_id=$1 ORDER BY inserted_at,id",
+        )
+        .bind(project_id)
+        .fetch_all(pg.pool())
+        .await?
+        .iter()
+        .map(postgres_notation)
+        .collect();
+    }
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE project_id = $project \
@@ -637,6 +666,9 @@ pub async fn find_by_project_template_person(
     template_id: Uuid,
     person_id: Uuid,
 ) -> Result<Option<Notation>, NotationError> {
+    if let Some(pg) = crate::postgres::PostgresDb::configured().await? {
+        return sqlx::query("SELECT to_jsonb(n) AS row FROM notation n WHERE project_id=$1 AND template_id=$2 AND person_id=$3 ORDER BY inserted_at DESC LIMIT 1").bind(project_id).bind(template_id).bind(person_id).fetch_optional(pg.pool()).await?.as_ref().map(postgres_notation).transpose();
+    }
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} \

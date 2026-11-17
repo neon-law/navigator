@@ -842,7 +842,7 @@ pub async fn mirror(
         | MirrorKey::NotationPackage(_)
         | MirrorKey::NotationPackageTemplate(_)
         | MirrorKey::NotationRate(_) => catalog::mirror(surreal, pg, key).await,
-        MirrorKey::Asset(_) => documents::mirror(surreal, pg, key).await,
+        MirrorKey::Asset(_) => Box::pin(documents::mirror(surreal, pg, key)).await,
         MirrorKey::Template(id) => templates::mirror(surreal, pg, *id).await,
         MirrorKey::Notation(_) | MirrorKey::NotationEvent(_) | MirrorKey::Answer(_) => {
             workflow::mirror(surreal, pg, key).await
