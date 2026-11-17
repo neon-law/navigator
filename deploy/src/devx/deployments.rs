@@ -1327,7 +1327,7 @@ fn postgres_login_secrets(
         .collect()
 }
 
-/// Build the selected service's Kubernetes file Secrets. No service payload
+/// Build the selected service's Kubernetes Secrets. No service payload
 /// is returned in a form that can be added to the Navigator app's env Secret.
 fn build_service_secrets(
     service: ServiceSecrets,
@@ -1364,83 +1364,88 @@ fn build_service_secrets(
             secrets.extend(postgres_login_secrets(payloads)?);
             Ok(secrets)
         }
-        ServiceSecrets::Forgejo => {
-            let root_url = deployment
-                .coordinates
-                .get("NAVIGATOR_FORGEJO_ROOT_URL")
-                .expect("service_plan validates the Forgejo URL");
-            let app_ini =
-                render_service_forgejo_app_ini(deployment, root_url, namespace, payloads)?;
-            let mut secrets = vec![
-                KubernetesSecretPayload {
-                    name: "navigator-forgejo-config",
-                    secret_type: "Opaque",
-                    data: BTreeMap::from([
-                        ("app.ini".to_owned(), app_ini),
-                        (
-                            "oauth2_jwt_secret".to_owned(),
-                            required_payload(payloads, "NAVIGATOR_FORGEJO_OAUTH2_JWT_SECRET")?,
-                        ),
-                    ]),
-                },
-                KubernetesSecretPayload {
-                    name: "navigator-forgejo-postgres-ca",
-                    secret_type: "Opaque",
-                    data: BTreeMap::from([(
-                        "ca.crt".to_owned(),
-                        required_payload(payloads, "NAVIGATOR_FORGEJO_POSTGRES_CA_CERT")?,
-                    )]),
-                },
-                // Read only by the `navigator-forgejo-database` Job, which
-                // sets the `forgejo` login's password from it.
-                KubernetesSecretPayload {
-                    name: "navigator-forgejo-database",
-                    secret_type: "Opaque",
-                    data: BTreeMap::from([(
-                        "password".to_owned(),
-                        required_payload(payloads, "NAVIGATOR_FORGEJO_DATABASE_PASSWORD")?,
-                    )]),
-                },
-            ];
-            if payloads.contains_key(FORGEJO_OIDC_KEYS[0]) {
-                let client_id = deployment
-                    .coordinates
-                    .get(FORGEJO_OIDC_CLIENT_ID)
-                    .cloned()
-                    .context("service_plan validates the Forgejo OIDC client id")?;
-                secrets.push(KubernetesSecretPayload {
-                    name: "navigator-forgejo-oidc",
-                    secret_type: "Opaque",
-                    data: BTreeMap::from([
-                        ("client_id".to_owned(), client_id),
-                        (
-                            "client_secret".to_owned(),
-                            required_payload(payloads, FORGEJO_OIDC_KEYS[0])?,
-                        ),
-                    ]),
-                });
-            }
-            if forgejo_signing_identity(deployment)?.is_some() {
-                secrets.push(forgejo_signing_secret(payloads)?);
-            }
-            if payloads.contains_key(FORGEJO_RUNNER_KEYS[0]) {
-                secrets.push(KubernetesSecretPayload {
-                    name: FORGEJO_RUNNER_SECRET,
-                    secret_type: "Opaque",
-                    data: BTreeMap::from([(
-                        "FORGEJO_TOKEN".to_owned(),
-                        required_payload(payloads, FORGEJO_RUNNER_KEYS[0])?,
-                    )]),
-                });
-            }
-            secrets.push(KubernetesSecretPayload {
-                name: FORGEJO_METRICS_SECRET,
-                secret_type: "Opaque",
-                data: BTreeMap::from([("token".to_owned(), forgejo_metrics_token(payloads)?)]),
-            });
-            Ok(secrets)
-        }
+        ServiceSecrets::Forgejo => build_forgejo_secrets(deployment, namespace, payloads),
     }
+}
+
+fn build_forgejo_secrets(
+    deployment: &Deployment,
+    namespace: &str,
+    payloads: &BTreeMap<String, String>,
+) -> Result<Vec<KubernetesSecretPayload>> {
+    let root_url = deployment
+        .coordinates
+        .get("NAVIGATOR_FORGEJO_ROOT_URL")
+        .expect("service_plan validates the Forgejo URL");
+    let app_ini = render_service_forgejo_app_ini(deployment, root_url, namespace, payloads)?;
+    let mut secrets = vec![
+        KubernetesSecretPayload {
+            name: "navigator-forgejo-config",
+            secret_type: "Opaque",
+            data: BTreeMap::from([
+                ("app.ini".to_owned(), app_ini),
+                (
+                    "oauth2_jwt_secret".to_owned(),
+                    required_payload(payloads, "NAVIGATOR_FORGEJO_OAUTH2_JWT_SECRET")?,
+                ),
+            ]),
+        },
+        KubernetesSecretPayload {
+            name: "navigator-forgejo-postgres-ca",
+            secret_type: "Opaque",
+            data: BTreeMap::from([(
+                "ca.crt".to_owned(),
+                required_payload(payloads, "NAVIGATOR_FORGEJO_POSTGRES_CA_CERT")?,
+            )]),
+        },
+        // Read only by the `navigator-forgejo-database` Job, which
+        // sets the `forgejo` login's password from it.
+        KubernetesSecretPayload {
+            name: "navigator-forgejo-database",
+            secret_type: "Opaque",
+            data: BTreeMap::from([(
+                "password".to_owned(),
+                required_payload(payloads, "NAVIGATOR_FORGEJO_DATABASE_PASSWORD")?,
+            )]),
+        },
+    ];
+    if payloads.contains_key(FORGEJO_OIDC_KEYS[0]) {
+        let client_id = deployment
+            .coordinates
+            .get(FORGEJO_OIDC_CLIENT_ID)
+            .cloned()
+            .context("service_plan validates the Forgejo OIDC client id")?;
+        secrets.push(KubernetesSecretPayload {
+            name: "navigator-forgejo-oidc",
+            secret_type: "Opaque",
+            data: BTreeMap::from([
+                ("client_id".to_owned(), client_id),
+                (
+                    "client_secret".to_owned(),
+                    required_payload(payloads, FORGEJO_OIDC_KEYS[0])?,
+                ),
+            ]),
+        });
+    }
+    if forgejo_signing_identity(deployment)?.is_some() {
+        secrets.push(forgejo_signing_secret(payloads)?);
+    }
+    if payloads.contains_key(FORGEJO_RUNNER_KEYS[0]) {
+        secrets.push(KubernetesSecretPayload {
+            name: FORGEJO_RUNNER_SECRET,
+            secret_type: "Opaque",
+            data: BTreeMap::from([(
+                "FORGEJO_TOKEN".to_owned(),
+                required_payload(payloads, FORGEJO_RUNNER_KEYS[0])?,
+            )]),
+        });
+    }
+    secrets.push(KubernetesSecretPayload {
+        name: FORGEJO_METRICS_SECRET,
+        secret_type: "Opaque",
+        data: BTreeMap::from([("token".to_owned(), forgejo_metrics_token(payloads)?)]),
+    });
+    Ok(secrets)
 }
 
 /// The Secret holding Forgejo's `/metrics` bearer token, which the `OTel`
