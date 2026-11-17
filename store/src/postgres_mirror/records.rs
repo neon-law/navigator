@@ -1098,6 +1098,7 @@ fn authoritative(table: &Table) -> bool {
     table.name == "product"
         || crate::postgres::matter::TABLES.contains(&table.name)
         || crate::postgres::accounting::TABLES.contains(&table.name)
+        || crate::postgres::cases::TABLES.contains(&table.name)
 }
 
 /// PostgreSQL holds the matter records authoritatively, so a SurrealDB row
