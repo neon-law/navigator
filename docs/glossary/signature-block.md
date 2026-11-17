@@ -19,3 +19,7 @@ the signer must be in the declared set, the field must be known, a Template that
 a `sent_for_signature` (or `sent_for_signature__*`) [State](state.md) to collect the signature, and an explicit
 `signers:` list must have a `signature` or `initials` placeholder for every listed role. Rule **N115** requires each
 declared role other than `firm` to be backed by questionnaire state carrying at least a name and an email.
+
+In the portal PDF, `{{firm.signature}}` uses the same legal name as `{{firm.legal_name}}` for its caption. The portal
+resolves the name from the live Project's [Brand](brand.md), which the Project's `navigator.yaml` can declare as
+`project.brand`. The caption reads “Firm” when the legal name is unavailable.
