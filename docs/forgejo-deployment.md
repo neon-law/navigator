@@ -102,7 +102,9 @@ Forgejo Actions can exchange a signed ID token for a short-lived, read-only Navi
 `POST /auth/ci/forgejo/seed-token` mints the seed session. Only the CD workflow on `refs/heads/main`, through a `push`
 or `workflow_dispatch`, gets a writing session. The gate on a pull request gets a dry-run-only one, and the gate on
 `main` is refused. Each session is bound to the Project row whose `repository_url` is the signing repository, and is
-attributed to that Project's lawyer DRI, exactly as on GitHub.
+attributed to that Project's lawyer DRI, exactly as on GitHub. A Project whose `repository_url` names its Forgejo
+repository still mints from its GitHub copy in the deployment's GitHub organization; [the GitHub
+mint](signed-url-delivery-audit.md) states that binding.
 
 ### CD on Forgejo
 

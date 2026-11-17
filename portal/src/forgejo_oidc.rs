@@ -391,6 +391,26 @@ impl ForgejoOidc {
         Ok(run)
     }
 
+    /// Whether `repository_url` is a repository called `name`, under any
+    /// owner, on this deployment's trusted Forgejo installation. A rejecting
+    /// verifier trusts no installation, so it answers `false`.
+    #[must_use]
+    pub fn hosts_repository_named(&self, repository_url: &str, name: &str) -> bool {
+        let ForgejoOidcInner::Jwks { issuer, .. } = &*self.inner else {
+            return false;
+        };
+        let owner = Url::parse(repository_url).ok().and_then(|url| {
+            url.path_segments()?
+                .rev()
+                .filter(|segment| !segment.is_empty())
+                .nth(1)
+                .map(str::to_owned)
+        });
+        owner.is_some_and(|owner| {
+            repository_matches_issuer(repository_url, issuer, &format!("{owner}/{name}"))
+        })
+    }
+
     /// Spend the exact verified JWT until its signed expiry. Forgejo v15 has
     /// no `jti`; the SHA-256 token digest distinguishes legitimate renewed
     /// tokens issued in the same run and attempt.
@@ -632,6 +652,34 @@ mod tests {
             issuer,
             "firm/acme"
         ));
+    }
+
+    #[test]
+    fn a_repository_named_for_the_code_is_hosted_only_on_the_trusted_installation() {
+        let trusted = ForgejoOidc::configured(
+            "https://forgejo.example/api/actions",
+            "navigator-ci",
+            ".forgejo/workflows/project-gate.yml",
+        )
+        .unwrap();
+        for url in [
+            "https://forgejo.example/example-org/acme",
+            "https://forgejo.example/example-org/acme.git",
+        ] {
+            assert!(trusted.hosts_repository_named(url, "acme"), "{url}");
+        }
+        for url in [
+            "https://other.example/example-org/acme",
+            "http://forgejo.example/example-org/acme",
+            "https://forgejo.example/example-org/other",
+            "https://forgejo.example/acme",
+            "https://forgejo.example/a/example-org/acme",
+            "https://user@forgejo.example/example-org/acme",
+        ] {
+            assert!(!trusted.hosts_repository_named(url, "acme"), "{url}");
+        }
+        assert!(!ForgejoOidc::rejecting()
+            .hosts_repository_named("https://forgejo.example/example-org/acme", "acme"));
     }
 
     #[test]

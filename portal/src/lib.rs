@@ -390,6 +390,9 @@ pub struct AppState {
     pub sessions: SessionStore,
     /// Verifier for GitHub Actions OIDC tokens presented to `/auth/ci/seed-token`.
     pub github_oidc: github_oidc::GitHubOidc,
+    /// The deployment's `NAVIGATOR_GITHUB_ORG`: the one GitHub owner whose
+    /// runs `/auth/ci/*-token` binds to a Project recorded at its Forgejo URL.
+    pub github_org: Option<String>,
     pub oauth: Option<OAuthConfig>,
     /// Microsoft Entra ID as a **second** browser sign-in provider, alongside
     /// (never instead of) [`Self::oauth`]. `None` — the default, and every
@@ -1476,6 +1479,7 @@ pub fn bootstrap_with_forgejo_oidc(
         sessions: state.sessions.clone(),
         surreal: state.surreal.clone(),
         github_oidc: state.github_oidc.clone(),
+        github_org: state.github_org.clone(),
         forgejo_oidc,
         canonical_host: state.canonical_host.clone(),
     })

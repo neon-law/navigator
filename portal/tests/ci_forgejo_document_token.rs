@@ -426,6 +426,7 @@ async fn discovery_metadata_must_keep_the_trusted_issuer_and_same_origin_jwks() 
             sessions: SessionStore::new(TEST_SESSION_KEY),
             surreal: mem_surreal().await,
             github_oidc: portal::github_oidc::GitHubOidc::rejecting(),
+            github_org: None,
             forgejo_oidc: verifier,
             canonical_host: portal::CanonicalHost::new(None),
         };

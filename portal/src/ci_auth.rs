@@ -3,7 +3,9 @@
 //! `POST /auth/ci/seed-token` and `POST /auth/ci/document-token` are the CI
 //! counterparts of `/auth/cli/start`. A Project repository's job presents
 //! GitHub's JWT; the door verifies it, binds the run to the live Project
-//! whose `repository_url` is that repository, and returns an HMAC-signed
+//! whose `repository_url` is that repository (or, in the deployment's own
+//! GitHub organization, to the Project of that name whose `repository_url` is
+//! on the trusted Forgejo; see [`resolve_project`]), and returns an HMAC-signed
 //! [`SessionData`] attributed to that Project's own lawyer DRI. Each door
 //! carries an explicit capability: the seed mint can reach its one write
 //! endpoint, while the document mint can reach only the metadata reads
@@ -38,6 +40,9 @@ pub struct CiAuthState {
     pub github_oidc: GitHubOidc,
     pub forgejo_oidc: ForgejoOidc,
     pub canonical_host: CanonicalHost,
+    /// The deployment's `NAVIGATOR_GITHUB_ORG`. Unset or blank disables the
+    /// GitHub door's Forgejo-URL fallback.
+    pub github_org: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -176,7 +181,7 @@ async fn mint_inner(
         .github_oidc
         .spend_jti(&claims.jti, claims.exp)
         .map_err(|error| MintError::Unauthorized(error.to_string()))?;
-    let project = resolve_project(&state.surreal, &claims).await?;
+    let project = resolve_project(state, &claims).await?;
     let actor = lawyer_dri_actor(&state.surreal, &project, kind).await?;
     let exp = now_unix_secs() + CI_SESSION_TTL_SECS;
     let session = SessionData {
@@ -353,8 +358,14 @@ fn subject_repository(sub: &str) -> Option<String> {
 /// exists.
 const UNBOUND: &str = "this GitHub Actions run is not bound to a live project";
 
+/// Bind a GitHub run to exactly one live Project: the one whose
+/// `repository_url` is this GitHub repository. Only when none is, a run whose
+/// owner is the deployment's GitHub organization binds to the one Project
+/// named for the repository whose `repository_url` is a repository of that
+/// name on the trusted Forgejo installation. That owner pin keeps a
+/// same-named repository under any other GitHub owner out.
 async fn resolve_project(
-    surreal: &store::surreal::SurrealDb,
+    state: &CiAuthState,
     claims: &GitHubActionsClaims,
 ) -> Result<store::projects::Project, MintError> {
     let Some((owner, code)) = claims.repository.split_once('/') else {
@@ -363,10 +374,11 @@ async fn resolve_project(
     if owner != claims.repository_owner || code.is_empty() {
         return Err(MintError::Forbidden(UNBOUND.into()));
     }
-    let matches: Vec<store::projects::Project> = store::projects::all(surreal)
+    let projects = store::projects::all(&state.surreal)
         .await
-        .map_err(|error| MintError::Internal(error.to_string()))?
-        .into_iter()
+        .map_err(|error| MintError::Internal(error.to_string()))?;
+    let mut matches: Vec<&store::projects::Project> = projects
+        .iter()
         .filter(|project| {
             project
                 .repository_url
@@ -376,13 +388,30 @@ async fn resolve_project(
                 == Some(claims.repository.as_str())
         })
         .collect();
+    let in_deployment_org = state
+        .github_org
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|org| !org.is_empty() && org == owner);
+    if matches.is_empty() && in_deployment_org {
+        matches = projects
+            .iter()
+            .filter(|project| {
+                project.code == code
+                    && project
+                        .repository_url
+                        .as_deref()
+                        .is_some_and(|url| state.forgejo_oidc.hosts_repository_named(url, code))
+            })
+            .collect();
+    }
     let [project] = matches.as_slice() else {
         return Err(MintError::Forbidden(UNBOUND.into()));
     };
     if project.code != code {
         return Err(MintError::Forbidden(UNBOUND.into()));
     }
-    Ok(project.clone())
+    Ok((*project).clone())
 }
 
 async fn resolve_forgejo_project(
@@ -616,6 +645,141 @@ mod tests {
             }),
             forgejo_oidc: ForgejoOidc::rejecting(),
             canonical_host: CanonicalHost::new(Some("staging.neonlaw.com".to_string())),
+            github_org: None,
+        }
+    }
+
+    /// A live Project `acme` with a lawyer DRI, recorded at `repository_url`.
+    async fn project_at(surreal: &store::surreal::SurrealDb, repository_url: &str) {
+        let project = project_with_no_lawyer_dri(surreal, "acme").await;
+        store::projects::set_repository_url(surreal, project.id, Some(repository_url))
+            .await
+            .unwrap();
+        let lawyer = store::persons::create(
+            surreal,
+            &store::persons::NewPerson::with_role(
+                "Lawyer Example",
+                "lawyer@example.com",
+                store::persons::Role::Lawyer,
+            ),
+        )
+        .await
+        .unwrap();
+        store::projects::designate_dri_in_surreal(
+            surreal,
+            project.id,
+            lawyer.id,
+            store::projects::DriSide::Lawyer,
+        )
+        .await
+        .unwrap();
+    }
+
+    /// A GitHub run of `<owner>/acme` against a deployment whose GitHub
+    /// organization is `org` and whose Forgejo issuer is `forgejo.example`.
+    async fn forgejo_fallback_mint(
+        repository_url: &str,
+        owner: &str,
+        org: Option<&str>,
+        forgejo_oidc: ForgejoOidc,
+    ) -> (StatusCode, serde_json::Value) {
+        let surreal = store::test_support::mem_surreal().await;
+        project_at(&surreal, repository_url).await;
+        let mut state = ci_state(surreal, &format!("{owner}/acme"), "fallback-jti");
+        state.github_oidc = GitHubOidc::fixed(GitHubActionsClaims {
+            repository: format!("{owner}/acme"),
+            repository_owner: owner.to_string(),
+            git_ref: "refs/heads/main".into(),
+            event_name: "push".into(),
+            jti: "fallback-jti".into(),
+            exp: now_unix_secs() + 60,
+            ..GitHubActionsClaims::default()
+        });
+        state.github_org = org.map(str::to_string);
+        state.forgejo_oidc = forgejo_oidc;
+        mint_request(state, "/auth/ci/document-token").await
+    }
+
+    fn trusted_forgejo() -> ForgejoOidc {
+        ForgejoOidc::configured(
+            "https://forgejo.example/api/actions",
+            "navigator-ci",
+            ".forgejo/workflows/project-gate.yml",
+        )
+        .unwrap()
+    }
+
+    const FORGEJO_URL: &str = "https://forgejo.example/example-forge-org/acme";
+
+    #[tokio::test]
+    async fn the_deployment_org_binds_a_project_recorded_at_its_trusted_forgejo_url() {
+        let (status, body) = forgejo_fallback_mint(
+            FORGEJO_URL,
+            "example-org",
+            Some("example-org"),
+            trusted_forgejo(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["project_code"], "acme");
+    }
+
+    #[tokio::test]
+    async fn the_exact_github_url_binds_without_the_fallback() {
+        let (status, body) = forgejo_fallback_mint(
+            "https://github.com/example-org/acme",
+            "example-org",
+            None,
+            ForgejoOidc::rejecting(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["project_code"], "acme");
+    }
+
+    #[tokio::test]
+    async fn the_forgejo_fallback_refuses_every_run_it_does_not_trust() {
+        for (case, repository_url, owner, org, forgejo_oidc) in [
+            (
+                "a same-named repository under a foreign owner",
+                FORGEJO_URL,
+                "someone-else",
+                Some("example-org"),
+                trusted_forgejo(),
+            ),
+            (
+                "a Project URL on an untrusted host",
+                "https://other.example/example-forge-org/acme",
+                "example-org",
+                Some("example-org"),
+                trusted_forgejo(),
+            ),
+            (
+                "an unset GitHub organization",
+                FORGEJO_URL,
+                "example-org",
+                None,
+                trusted_forgejo(),
+            ),
+            (
+                "a blank GitHub organization",
+                FORGEJO_URL,
+                "example-org",
+                Some("  "),
+                trusted_forgejo(),
+            ),
+            (
+                "no trusted Forgejo issuer",
+                FORGEJO_URL,
+                "example-org",
+                Some("example-org"),
+                ForgejoOidc::rejecting(),
+            ),
+        ] {
+            let (status, body) =
+                forgejo_fallback_mint(repository_url, owner, org, forgejo_oidc).await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{case}: {body}");
+            assert_eq!(body["message"], super::UNBOUND, "{case}");
         }
     }
 

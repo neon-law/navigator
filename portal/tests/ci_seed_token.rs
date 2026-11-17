@@ -22,6 +22,11 @@ async fn fixture_app() -> (axum::Router, String) {
 }
 
 async fn fixture_app_with_claims(claims: GitHubActionsClaims) -> (axum::Router, String) {
+    let state = fixture_state(claims, "https://github.com/neon-law-staging/acme").await;
+    (portal::router(state), "github-jwt".into())
+}
+
+async fn fixture_state(claims: GitHubActionsClaims, repository_url: &str) -> portal::AppState {
     let surreal = mem_surreal().await;
     let project = store::projects::create(
         &surreal,
@@ -35,13 +40,9 @@ async fn fixture_app_with_claims(claims: GitHubActionsClaims) -> (axum::Router, 
     )
     .await
     .unwrap();
-    store::projects::set_repository_url(
-        &surreal,
-        project.id,
-        Some("https://github.com/neon-law-staging/acme"),
-    )
-    .await
-    .unwrap();
+    store::projects::set_repository_url(&surreal, project.id, Some(repository_url))
+        .await
+        .unwrap();
     let lawyer = store::persons::create(
         &surreal,
         &NewPerson::with_role("Lawyer Example", "lawyer@neonlaw.com", Role::Lawyer),
@@ -60,7 +61,7 @@ async fn fixture_app_with_claims(claims: GitHubActionsClaims) -> (axum::Router, 
     let mut state = portal::test_support::app_state(surreal).await;
     state.canonical_host = portal::CanonicalHost::new(Some("staging.neonlaw.com".into()));
     state.github_oidc = GitHubOidc::fixed(claims);
-    (portal::router(state), "github-jwt".into())
+    state
 }
 
 async fn mint(app: &axum::Router, github_token: &str) -> axum::http::Response<Body> {
@@ -320,5 +321,38 @@ async fn a_pull_request_oidc_token_is_dry_run_only_through_bearer_and_cookie() {
             .await
             .unwrap();
         assert_eq!(response.status(), expected);
+    }
+}
+
+#[tokio::test]
+async fn the_deployment_org_mints_for_a_project_recorded_at_its_forgejo_url() {
+    let claims = GitHubActionsClaims {
+        sub: "repo:example-org/acme:ref:refs/heads/main".into(),
+        repository: "example-org/acme".into(),
+        repository_owner: "example-org".into(),
+        git_ref: "refs/heads/main".into(),
+        event_name: "push".into(),
+        jti: "jti-acme-forgejo-url".into(),
+        exp: 4_000_000_000,
+        ..GitHubActionsClaims::default()
+    };
+    for (org, expected) in [
+        (Some("example-org"), StatusCode::OK),
+        (None, StatusCode::FORBIDDEN),
+    ] {
+        let mut state = fixture_state(
+            claims.clone(),
+            "https://forgejo.example/example-forge-org/acme",
+        )
+        .await;
+        state.github_org = org.map(str::to_string);
+        let forgejo = portal::forgejo_oidc::ForgejoOidc::configured(
+            "https://forgejo.example/api/actions",
+            "navigator-ci",
+            ".forgejo/workflows/project-gate.yml",
+        )
+        .unwrap();
+        let app = portal::router_with_forgejo_oidc(state, forgejo);
+        assert_eq!(mint(&app, "github-jwt").await.status(), expected, "{org:?}");
     }
 }

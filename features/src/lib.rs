@@ -152,6 +152,7 @@ pub async fn app_state_with_email(
         portal_only: portal::PortalOnly::default(),
         sessions,
         github_oidc: portal::github_oidc::GitHubOidc::rejecting(),
+        github_org: None,
         oauth,
         storage,
         policy: policy_client,
