@@ -9289,7 +9289,7 @@ async fn lawyer_dashboard_accepts_both_machine_credentials() {
     let token = encode(
         &Header::default(),
         &claims,
-        &EncodingKey::from_secret(b"test-secret"),
+        &EncodingKey::from_secret(b"test-secret").unwrap(),
     )
     .unwrap();
     let jwt = app
@@ -9332,7 +9332,7 @@ async fn lawyer_dashboard_refuses_a_bearer_jwt_when_oidc_is_disabled() {
     let token = encode(
         &Header::default(),
         &claims,
-        &EncodingKey::from_secret(b"test-secret"),
+        &EncodingKey::from_secret(b"test-secret").unwrap(),
     )
     .unwrap();
     let resp = app
