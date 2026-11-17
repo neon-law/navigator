@@ -506,4 +506,109 @@ mod tests {
             "client_not_signer"
         );
     }
+
+    /// A fresh open matter the webhook can attach a completed envelope to.
+    fn open_project(firm: Uuid, client: Uuid, code: &str) -> store::projects::Project {
+        serde_json::from_value(serde_json::json!({
+            "id": Uuid::new_v4(),
+            "code": code,
+            "name": "Completion Example",
+            "status": "open",
+            "brand": "neon",
+            "entity_id": Uuid::new_v4(),
+            "firm_id": firm,
+            "client_dri_person_id": client,
+            "inserted_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z"
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn differing_hints_refuse_rather_than_guessing() {
+        let firm = Uuid::new_v4();
+        let client = Uuid::new_v4();
+        let candidates = [
+            open_project(firm, client, "completion-example"),
+            open_project(firm, client, "second-example"),
+        ];
+        assert_eq!(
+            match_project(
+                firm,
+                &candidates,
+                &[client],
+                &["completion-example".into(), "second-example".into()],
+                &[]
+            )
+            .unwrap_err(),
+            "ambiguous_project_hint"
+        );
+    }
+
+    #[test]
+    fn a_filename_code_drives_the_match_when_no_field_hint_exists() {
+        let firm = Uuid::new_v4();
+        let client = Uuid::new_v4();
+        let first = open_project(firm, client, "completion-example");
+        let second = open_project(firm, client, "second-example");
+        let first_id = first.id;
+        // Both projects share the signer as their client, so only the
+        // filename's code can pick one.
+        assert_eq!(
+            match_project(
+                firm,
+                &[first, second],
+                &[client],
+                &[],
+                &["completion-example__nda.pdf".into()]
+            )
+            .unwrap()
+            .id,
+            first_id
+        );
+    }
+
+    #[test]
+    fn an_unknown_code_or_a_closed_matter_matches_nothing() {
+        let firm = Uuid::new_v4();
+        let client = Uuid::new_v4();
+        let mut project = open_project(firm, client, "completion-example");
+        assert_eq!(
+            match_project(
+                firm,
+                &[project.clone()],
+                &[client],
+                &["ghost-project".into()],
+                &[]
+            )
+            .unwrap_err(),
+            "no_project_match"
+        );
+        project.status = "closed".into();
+        // Even the signer match is scoped to open matters.
+        assert_eq!(
+            match_project(firm, &[project], &[client], &[], &[]).unwrap_err(),
+            "no_project_match"
+        );
+    }
+
+    #[test]
+    fn a_hint_matches_case_insensitively_and_beats_the_signer_ambiguity() {
+        let firm = Uuid::new_v4();
+        let client = Uuid::new_v4();
+        let first = open_project(firm, client, "completion-example");
+        let second = open_project(firm, client, "second-example");
+        assert_eq!(
+            match_project(
+                firm,
+                &[first, second],
+                &[client],
+                &["COMPLETION-EXAMPLE".into()],
+                &[]
+            )
+            .unwrap()
+            .code,
+            "completion-example"
+        );
+    }
 }
