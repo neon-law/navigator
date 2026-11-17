@@ -1095,7 +1095,9 @@ pub(crate) fn columns(name: &str) -> Option<&'static [&'static str]> {
 }
 
 fn authoritative(table: &Table) -> bool {
-    table.name == "product" || crate::postgres::matter::TABLES.contains(&table.name)
+    table.name == "product"
+        || crate::postgres::matter::TABLES.contains(&table.name)
+        || crate::postgres::accounting::TABLES.contains(&table.name)
 }
 
 /// PostgreSQL holds the matter records authoritatively, so a SurrealDB row

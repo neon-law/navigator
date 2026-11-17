@@ -49,6 +49,7 @@ use surrealdb::types::{RecordId, SurrealValue};
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::postgres::accounting as authority;
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 
 pub(crate) const WITHDRAWAL_TABLE: &str = "iolta_withdrawal";
@@ -145,6 +146,62 @@ impl AllocationRow {
     }
 }
 
+/// The withdrawal row as PostgreSQL's `to_jsonb` serves it. The row's `id`
+/// is the Xero transaction id itself, so it adds nothing to decode.
+#[derive(serde::Deserialize)]
+struct PgWithdrawalRow {
+    xero_transaction_id: String,
+    jurisdiction_id: Uuid,
+    total_cents: i64,
+    currency: String,
+    occurred_at: DateTime<Utc>,
+    inserted_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+impl From<PgWithdrawalRow> for IoltaWithdrawal {
+    fn from(row: PgWithdrawalRow) -> Self {
+        IoltaWithdrawal {
+            xero_transaction_id: row.xero_transaction_id,
+            jurisdiction_id: row.jurisdiction_id,
+            total_cents: row.total_cents,
+            currency: row.currency,
+            occurred_at: row.occurred_at,
+            inserted_at: row.inserted_at,
+            updated_at: row.updated_at,
+        }
+    }
+}
+
+/// The allocation row as PostgreSQL's `to_jsonb` serves it. The row's `id`
+/// is the `withdrawal--invoice` pair, so it adds nothing to decode.
+#[derive(serde::Deserialize)]
+struct PgAllocationRow {
+    withdrawal_id: String,
+    xero_invoice_id: String,
+    project_id: Uuid,
+    invoice_reference: String,
+    amount_cents: i64,
+    occurred_at: DateTime<Utc>,
+    inserted_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+impl From<PgAllocationRow> for IoltaAllocation {
+    fn from(row: PgAllocationRow) -> Self {
+        IoltaAllocation {
+            withdrawal_id: row.withdrawal_id,
+            xero_invoice_id: row.xero_invoice_id,
+            project_id: row.project_id,
+            invoice_reference: row.invoice_reference,
+            amount_cents: row.amount_cents,
+            occurred_at: row.occurred_at,
+            inserted_at: row.inserted_at,
+            updated_at: row.updated_at,
+        }
+    }
+}
+
 /// Why a withdrawal was refused. Every variant names the numbers a human
 /// needs to reconcile it in Xero — none of them is recoverable by guessing.
 #[derive(Debug, Error)]
@@ -207,6 +264,9 @@ pub enum IoltaWithdrawalError {
     /// Reading or writing the matter's trust ledger failed.
     #[error("trust ledger: {0}")]
     Trust(String),
+    /// PostgreSQL, under the accounting authority, failed.
+    #[error(transparent)]
+    Postgres(#[from] crate::postgres::accounting::AccountingAuthorityError),
     #[error("writing an IOLTA withdrawal returned no usable row")]
     WriteReturnedNothing,
 }
@@ -370,11 +430,30 @@ pub async fn apply(
     })
 }
 
-async fn write_withdrawal(
+pub(crate) async fn write_withdrawal(
     db: &SurrealDb,
     input: &WithdrawalInput,
     jurisdiction_id: Uuid,
 ) -> Result<(), IoltaWithdrawalError> {
+    if let Some(pg) = authority::authority().await? {
+        let row = serde_json::json!({
+            "id": input.xero_transaction_id,
+            "xero_transaction_id": input.xero_transaction_id,
+            "jurisdiction_id": jurisdiction_id, "total_cents": input.total_cents,
+            "currency": input.currency, "occurred_at": input.occurred_at,
+        });
+        let query = sqlx::query(
+            "INSERT INTO iolta_withdrawal SELECT * FROM \
+             jsonb_populate_record(NULL::iolta_withdrawal, \
+             $1 || jsonb_build_object('inserted_at', now(), 'updated_at', now())) \
+             ON CONFLICT (id) DO UPDATE SET jurisdiction_id = EXCLUDED.jurisdiction_id, \
+             total_cents = EXCLUDED.total_cents, currency = EXCLUDED.currency, \
+             occurred_at = EXCLUDED.occurred_at, updated_at = now()",
+        )
+        .bind(row);
+        authority::execute(&pg, query).await?;
+        return Ok(());
+    }
     writing(|| {
         db.query(
             "UPSERT $id SET xero_transaction_id = $xero_transaction_id, \
@@ -403,7 +482,7 @@ async fn write_withdrawal(
     Ok(())
 }
 
-async fn write_allocation(
+pub(crate) async fn write_allocation(
     db: &SurrealDb,
     input: &WithdrawalInput,
     invoice: &crate::xero_invoices::XeroInvoice,
@@ -413,6 +492,26 @@ async fn write_allocation(
     // transfer refreshes its lines instead of doubling a matter's drawn
     // total — the same primary-key discipline the invoice mirror uses.
     let line_id = format!("{}--{}", input.xero_transaction_id, invoice.xero_invoice_id);
+    if let Some(pg) = authority::authority().await? {
+        let row = serde_json::json!({
+            "id": line_id, "withdrawal_id": input.xero_transaction_id,
+            "xero_invoice_id": invoice.xero_invoice_id,
+            "project_id": invoice.project_id,
+            "invoice_reference": invoice.reference,
+            "amount_cents": amount_cents, "occurred_at": input.occurred_at,
+        });
+        let query = sqlx::query(
+            "INSERT INTO iolta_allocation SELECT * FROM \
+             jsonb_populate_record(NULL::iolta_allocation, \
+             $1 || jsonb_build_object('inserted_at', now(), 'updated_at', now())) \
+             ON CONFLICT (id) DO UPDATE SET invoice_reference = EXCLUDED.invoice_reference, \
+             amount_cents = EXCLUDED.amount_cents, occurred_at = EXCLUDED.occurred_at, \
+             updated_at = now()",
+        )
+        .bind(row);
+        authority::execute(&pg, query).await?;
+        return Ok(());
+    }
     writing(|| {
         db.query(
             "UPSERT $id SET withdrawal_id = $withdrawal_id, \
@@ -449,6 +548,16 @@ pub async fn find(
     db: &SurrealDb,
     xero_transaction_id: &str,
 ) -> Result<Option<IoltaWithdrawal>, IoltaWithdrawalError> {
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "SELECT to_jsonb(iolta_withdrawal) AS row FROM iolta_withdrawal \
+             WHERE xero_transaction_id = $1 LIMIT 1",
+        )
+        .bind(xero_transaction_id);
+        return Ok(authority::maybe::<PgWithdrawalRow>(&pg, query)
+            .await?
+            .map(Into::into));
+    }
     let mut response = db
         .query(format!("SELECT {WITHDRAWAL_SELECT} FROM ONLY $id"))
         .bind((
@@ -474,6 +583,18 @@ pub async fn for_project(
     db: &SurrealDb,
     project_id: Uuid,
 ) -> Result<Vec<IoltaAllocation>, IoltaWithdrawalError> {
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "SELECT to_jsonb(iolta_allocation) AS row FROM iolta_allocation \
+             WHERE project_id = $1 ORDER BY occurred_at DESC",
+        )
+        .bind(project_id);
+        return Ok(authority::rows::<PgAllocationRow>(&pg, query)
+            .await?
+            .into_iter()
+            .map(Into::into)
+            .collect());
+    }
     let mut response = db
         .query(format!(
             "SELECT {ALLOCATION_SELECT} FROM {ALLOCATION_TABLE} \
@@ -502,6 +623,18 @@ pub async fn lines_for(
     db: &SurrealDb,
     withdrawal_id: &str,
 ) -> Result<Vec<IoltaAllocation>, IoltaWithdrawalError> {
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "SELECT to_jsonb(iolta_allocation) AS row FROM iolta_allocation \
+             WHERE withdrawal_id = $1 ORDER BY amount_cents DESC",
+        )
+        .bind(withdrawal_id);
+        return Ok(authority::rows::<PgAllocationRow>(&pg, query)
+            .await?
+            .into_iter()
+            .map(Into::into)
+            .collect());
+    }
     let mut response = db
         .query(format!(
             "SELECT {ALLOCATION_SELECT} FROM {ALLOCATION_TABLE} \

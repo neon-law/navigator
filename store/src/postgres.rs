@@ -5,6 +5,10 @@ use sqlx::migrate::{Migration, MigrationType, Migrator};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgSslMode};
 use sqlx::{AssertSqlSafe, PgPool, SqlSafeStr};
 
+/// PostgreSQL authority for the accounting domain — Xero invoices, IOLTA
+/// accounts and withdrawals, and the finance aggregate — automatic on a
+/// configured host.
+pub mod accounting;
 /// PostgreSQL authority for the shared catalogs, behind an opt-in switch.
 pub mod catalog;
 /// PostgreSQL authority for Communications and the email tables, behind an
