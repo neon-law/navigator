@@ -4025,12 +4025,12 @@ async fn api_people_create_authorizes_owner_admin_and_lawyer() {
     }
 }
 
-#[tokio::test]
-async fn an_admin_cannot_staff_or_edit_another_firms_unassigned_matter() {
-    let (state, surreal) = state_with_engines().await;
-    let (firm_id, _) = seed_project_brand_scope(&surreal).await;
+async fn seed_admin_and_foreign_matter(
+    surreal: &store::surreal::SurrealDb,
+) -> (store::persons::Person, Uuid) {
+    let (firm_id, _) = seed_project_brand_scope(surreal).await;
     let admin = store::persons::create(
-        &surreal,
+        surreal,
         &store::persons::NewPerson::with_role(
             "Scoped Admin",
             "scoped-admin@example.com",
@@ -4040,7 +4040,7 @@ async fn an_admin_cannot_staff_or_edit_another_firms_unassigned_matter() {
     .await
     .unwrap();
     store::firms::ensure_membership(
-        &surreal,
+        surreal,
         &store::firms::NewPersonFirmRole {
             person_id: admin.id,
             firm_id,
@@ -4050,24 +4050,31 @@ async fn an_admin_cannot_staff_or_edit_another_firms_unassigned_matter() {
     )
     .await
     .unwrap();
-    let project = store::projects::find_by_code(&surreal, "outside-matter")
+    let project = store::projects::find_by_code(surreal, "outside-matter")
         .await
         .unwrap()
         .unwrap();
     let legacy = store::projects::create(
-        &surreal,
+        surreal,
         &store::projects::NewProject {
             code: "outside-legacy".into(),
             name: "Project awaiting Firm assignment".into(),
             status: "open".into(),
             brand: project.brand.clone(),
-            entity_id: store::test_support::seed_entity(&surreal).await,
+            entity_id: store::test_support::seed_entity(surreal).await,
             ..Default::default()
         },
     )
     .await
     .unwrap();
     assert!(legacy.firm_id.is_none());
+    (admin, project.id)
+}
+
+#[tokio::test]
+async fn an_admin_cannot_staff_or_edit_another_firms_unassigned_matter() {
+    let (state, surreal) = state_with_engines().await;
+    let (admin, project_id) = seed_admin_and_foreign_matter(&surreal).await;
     let (cookie, csrf) = session_cookie_and_csrf_for_person(&admin);
     let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
     let cases = [
@@ -4088,12 +4095,12 @@ async fn an_admin_cannot_staff_or_edit_another_firms_unassigned_matter() {
         ),
         (
             "POST",
-            format!("/app/api/projects/{}/participants", project.id),
+            format!("/app/api/projects/{}/participants", project_id),
             serde_json::json!({"person_id": admin.id}).to_string(),
         ),
         (
             "PATCH",
-            format!("/app/api/projects/{}", project.id),
+            format!("/app/api/projects/{}", project_id),
             serde_json::json!({"name": "Changed"}).to_string(),
         ),
     ];
@@ -4150,7 +4157,7 @@ async fn an_admin_cannot_staff_or_edit_another_firms_unassigned_matter() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     assert!(
-        store::projects::participation_for_person(&surreal, admin.id, project.id)
+        store::projects::participation_for_person(&surreal, admin.id, project_id)
             .await
             .unwrap()
             .is_none()
