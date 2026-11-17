@@ -20,6 +20,8 @@ prompts:
   business_subprocessors: "List each subprocessor, function, location, and change-notice channel."
   business_subprocessor_notice: "What advance notice period applies to subprocessor changes?"
   business_exit: "Specify return format, deletion deadline, backup expiration, and legally required retention."
+  law: "Which jurisdiction’s law governs this agreement?"
+  seat: "Where is the arbitration seated?"
 audiences:
   effective_date: lawyer
   business_agreement: lawyer
@@ -53,6 +55,10 @@ questionnaire:
   custom_text__business_subprocessor_notice:
     _: custom_text__business_exit
   custom_text__business_exit:
+    _: jurisdiction__law
+  jurisdiction__law:
+    _: jurisdiction__seat
+  jurisdiction__seat:
     _: END
   END: {}
 workflow:

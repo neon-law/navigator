@@ -1622,6 +1622,10 @@ mod tests {
                 include_str!("../postgres/migrations/20261116080000_create_inbox_attachment_filing.sql"),
             ),
             (
+                "20261116120000_add_clause_heading_and_aliases.sql",
+                include_str!("../postgres/migrations/20261116120000_add_clause_heading_and_aliases.sql"),
+            ),
+            (
                 "20261116190000_create_project_calendar_grant.sql",
                 include_str!("../postgres/migrations/20261116190000_create_project_calendar_grant.sql"),
             ),
@@ -1915,10 +1919,13 @@ mod tests {
             "is_current",
             "retired_at",
             "inserted_at",
+            "heading",
+            "aliases",
         ] {
             assert!(clause.columns.contains_key(column), "clause.{column}");
         }
         assert_eq!(clause.columns["inputs"], "JSONB");
+        assert_eq!(clause.columns["aliases"], "JSONB");
         assert!(clause.references.is_empty(), "a shared catalog");
         assert!(!crate::schema::table_names().contains(&"clause".to_string()));
     }

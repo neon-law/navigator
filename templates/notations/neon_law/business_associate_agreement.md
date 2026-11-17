@@ -5,6 +5,11 @@ jurisdiction: US
 respondent_type: person_and_entity
 confidential: false
 clauses:
+  dispute:
+    source: dispute_resolution@1
+    inputs:
+      law: jurisdiction__law
+      seat: jurisdiction__seat
   administration:
     source: baa_administration@1
   signatures:
@@ -20,6 +25,8 @@ prompts:
   incident_contacts: "Who are the primary and alternate contacts? Include name, title, email, and postal address."
   business_rights: "State procedures and deadlines for access, amendment, and accounting requests."
   business_cure_period: "State the cure period for a curable material violation."
+  law: "Which jurisdiction’s law governs this agreement?"
+  seat: "Where is the arbitration seated?"
 audiences:
   effective_date: lawyer
   business_customer_role: lawyer
@@ -50,6 +57,10 @@ questionnaire:
   custom_text__business_rights:
     _: custom_text__business_cure_period
   custom_text__business_cure_period:
+    _: jurisdiction__law
+  jurisdiction__law:
+    _: jurisdiction__seat
+  jurisdiction__seat:
     _: END
   END: {}
 workflow:
@@ -139,7 +150,11 @@ feasible. On termination, Business Associate must return or destroy all PHI, inc
 feasible. If infeasible, it must explain why, continue protections, and limit further use to the purpose making return
 or destruction infeasible. Those duties survive while PHI remains.
 
-## VIII. Administration
+## VIII. Governing law and dispute resolution
+
+{{> dispute}}
+
+## IX. Administration
 
 {{> administration}}
 

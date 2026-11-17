@@ -21,6 +21,12 @@ struct Clause {
     retired_at: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(default)]
     inputs: BTreeMap<String, Input>,
+    /// Optional reserved caption for the section that restates this Clause.
+    #[serde(default)]
+    heading: Option<String>,
+    /// Further captions that reserve the same Clause.
+    #[serde(default)]
+    aliases: Vec<String>,
     body: String,
 }
 
@@ -49,6 +55,10 @@ pub struct LibraryClause {
     pub inputs: BTreeMap<String, Input>,
     /// Operative prose with `{{input}}` placeholders.
     pub body: String,
+    /// Optional reserved caption for the section that restates this Clause.
+    pub heading: Option<String>,
+    /// Further captions that reserve the same Clause.
+    pub aliases: Vec<String>,
 }
 
 const LIBRARY: &str = include_str!("../clauses/library.yaml");
@@ -74,10 +84,13 @@ pub fn library_clauses() -> Result<Vec<LibraryClause>, String> {
                 kind: clause.kind,
                 inputs: clause.inputs,
                 body: clause.body,
+                heading: clause.heading,
+                aliases: clause.aliases,
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
     clauses.sort_by(|left, right| (&left.code, left.version).cmp(&(&right.code, right.version)));
+    check_reserved_headings(&clauses)?;
     Ok(clauses)
 }
 
@@ -437,6 +450,128 @@ fn missing_engagement_arbitration(markdown: &str, engagement_executed: bool) -> 
     })
 }
 
+/// Normalize a heading caption for reserved-heading matching: strip a
+/// leading outline numeral (`IX.`, `7.`), trim, lower case, and drop a
+/// trailing colon.
+fn normalize_heading(text: &str) -> String {
+    let mut text = text.trim();
+    if let Some((numeral, rest)) = text.split_once('.') {
+        let roman_or_arabic = !numeral.is_empty()
+            && numeral.bytes().all(|byte| {
+                byte.is_ascii_digit()
+                    || matches!(
+                        byte.to_ascii_uppercase(),
+                        b'I' | b'V' | b'X' | b'L' | b'C' | b'D' | b'M'
+                    )
+            });
+        if roman_or_arabic {
+            text = rest.trim_start();
+        }
+    }
+    let caption = text.trim_end();
+    let caption = caption.strip_suffix(':').unwrap_or(caption).trim_end();
+    caption.to_lowercase()
+}
+
+/// Every reserved caption and alias may claim only one Clause code; a
+/// duplicate or cross-code collision fails library parsing.
+fn check_reserved_headings(clauses: &[LibraryClause]) -> Result<(), String> {
+    let mut claims = BTreeMap::<String, String>::new();
+    for clause in clauses {
+        let captions = clause
+            .heading
+            .iter()
+            .chain(clause.aliases.iter())
+            .map(String::as_str);
+        for caption in captions {
+            let normalized = normalize_heading(caption);
+            if normalized.is_empty() {
+                return Err(format!(
+                    "Clause `{}` reserves an empty heading",
+                    clause.code
+                ));
+            }
+            match claims.get(&normalized) {
+                Some(existing) if existing != &clause.code => {
+                    return Err(format!(
+                        "reserved heading `{caption}` is claimed by both `{existing}` and `{}`",
+                        clause.code
+                    ));
+                }
+                Some(_) => {}
+                None => {
+                    claims.insert(normalized, clause.code.clone());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Why an authored template misuses a reserved heading, one message per
+/// offending heading, or empty. Compiled snapshots — which carry
+/// `clause_sources:` and expanded wording — are never re-checked.
+fn reserved_heading_violations(markdown: &str) -> Vec<String> {
+    let Some((yaml, body)) = crate::frontmatter::split(markdown) else {
+        return Vec::new();
+    };
+    let Ok(doc) = serde_yaml::from_str::<Value>(yaml) else {
+        return Vec::new();
+    };
+    if doc.get("clause_sources").is_some() {
+        return Vec::new();
+    }
+    let Ok(library) = library_clauses() else {
+        return Vec::new();
+    };
+    let reserved = library
+        .iter()
+        .flat_map(|clause| {
+            clause
+                .heading
+                .iter()
+                .chain(clause.aliases.iter())
+                .map(|caption| (normalize_heading(caption), clause.code.clone()))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut violations = Vec::new();
+    let mut lines = body.lines().peekable();
+    while let Some(line) = lines.next() {
+        let trimmed = line.trim_start();
+        if !trimmed.starts_with('#') {
+            continue;
+        }
+        let caption = trimmed.trim_start_matches('#').trim_start();
+        let Some(code) = reserved.get(&normalize_heading(caption)) else {
+            continue;
+        };
+        let section = (&mut lines)
+            .take_while(|line| !line.trim_start().starts_with('#'))
+            .collect::<Vec<_>>()
+            .join("\n")
+            .trim()
+            .to_string();
+        let reference = section
+            .strip_prefix("{{>")
+            .and_then(|rest| rest.strip_suffix("}}"))
+            .map(str::trim);
+        let declared = reference.and_then(|alias| {
+            doc.get("clauses")
+                .and_then(|clauses| clauses.get(alias))
+                .and_then(|pin| pin.get("source"))
+                .and_then(Value::as_str)
+                .map(String::from)
+        });
+        if !matches!(&declared, Some(source) if source.starts_with(&format!("{code}@"))) {
+            violations.push(format!(
+                "the reserved heading `{}` must open a section whose only content is a `{{{{> name}}}}` reference to an active `{code}` version",
+                caption.trim_end()
+            ));
+        }
+    }
+    violations
+}
+
 /// Validate Clause composition and the expanded body's existing notation rules.
 #[derive(Debug, Default)]
 pub struct ClauseReferences {
@@ -474,6 +609,19 @@ impl crate::Rule for ClauseReferences {
                 range: crate::line_byte_range(&file.contents, 1),
                 message,
             }];
+        }
+        let reserved = reserved_heading_violations(&file.contents);
+        if !reserved.is_empty() {
+            return reserved
+                .into_iter()
+                .map(|message| crate::Violation {
+                    code: "N132",
+                    path: file.path.clone(),
+                    line: 1,
+                    range: crate::line_byte_range(&file.contents, 1),
+                    message,
+                })
+                .collect();
         }
         let compiled = match compile(&file.contents) {
             Ok(compiled) => compiled,
@@ -515,6 +663,7 @@ impl crate::Rule for ClauseReferences {
 #[cfg(test)]
 mod tests {
     use super::compile;
+    use std::collections::BTreeMap;
 
     #[test]
     fn library_clauses_split_every_source_into_code_and_version() {
@@ -532,6 +681,43 @@ mod tests {
         assert!(clauses
             .windows(2)
             .all(|pair| (&pair[0].code, pair[0].version) < (&pair[1].code, pair[1].version)));
+    }
+
+    /// The Global DPA's version restates `@1` verbatim and adds only the
+    /// transfer-instrument carve-out, so the two never drift apart silently.
+    #[test]
+    fn dispute_resolution_two_adds_only_the_transfer_instrument_carve_out() {
+        let clauses = super::library_clauses().unwrap();
+        let one = clauses
+            .iter()
+            .find(|clause| clause.code == "dispute_resolution" && clause.version == 1)
+            .unwrap();
+        let two = clauses
+            .iter()
+            .find(|clause| clause.code == "dispute_resolution" && clause.version == 2)
+            .unwrap();
+        assert_eq!(one.kind, "agreement");
+        assert_eq!(one.inputs, two.inputs);
+        assert_eq!(
+            one.inputs.keys().collect::<Vec<_>>(),
+            ["law", "seat"],
+            "the two versions bind the same typed inputs"
+        );
+        let carve_out = "Except that a dispute arising under a transfer instrument adopted for international data \
+            transfers, or affecting a data subject's or supervisory authority's rights under such an instrument, \
+            is resolved as that instrument provides.";
+        let words = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert_eq!(
+            words(&two.body),
+            format!("{} {}", words(&one.body), words(carve_out)),
+            "`@2` is `@1` plus the carve-out sentence, nothing else"
+        );
+        // `@1` stays active: the advisor agreement and MSA keep pinning it.
+        assert!(one.retired_at.is_none());
+        assert_eq!(
+            super::current_source("dispute_resolution").unwrap(),
+            "dispute_resolution@2"
+        );
     }
 
     fn source(reference: &str, body: &str) -> String {
@@ -830,6 +1016,139 @@ mod tests {
         assert!(
             error.contains("project.client_dri") && error.contains("person"),
             "the refusal names the field and its kind: {error}"
+        );
+    }
+
+    /// A DPA-shaped authored template: a numbered reserved section holding
+    /// exactly the body given, under frontmatter pinning `dispute_resolution`.
+    fn dpa(heading: &str, body: &str, pinned: &str) -> crate::SourceFile {
+        crate::SourceFile {
+            path: "dpa_us.md".into(),
+            contents: format!(
+                "---\nkind: agreement\nquestionnaire: [entity__company]\nclauses:\n  dispute:\n    source: {pinned}\n    inputs:\n      law: jurisdiction__law\n      seat: jurisdiction__seat\n---\n## VIII. Return, deletion, and priority\n\nProtection continues until deletion.\n\n{heading}\n\n{body}\n\n## Signatures\n"
+            ),
+        }
+    }
+
+    /// LAW-142: a reserved heading whose section is exactly one reference to
+    /// a pinned version of the reserving Clause passes the gate — whatever
+    /// the questionnaire binds into the declared inputs.
+    #[test]
+    fn a_compliant_reserved_heading_section_passes_the_gate() {
+        use crate::Rule;
+        for heading in [
+            "## IX. Governing law and dispute resolution",
+            "## Governing Law:",
+            "## Dispute resolution",
+            "### 7. Choice of Law",
+        ] {
+            assert!(
+                super::ClauseReferences::default()
+                    .lint(&dpa(heading, "{{> dispute}}", "dispute_resolution@1"))
+                    .is_empty(),
+                "the alias `{heading}` reserves the same Clause"
+            );
+        }
+    }
+
+    #[test]
+    fn a_hand_written_copy_of_the_clause_fails_the_reserved_heading() {
+        use crate::Rule;
+        let near_copy =
+            "The law of {{jurisdiction__law}} governs this agreement. Disputes go to AAA \
+             arbitration seated in {{jurisdiction__seat}}.";
+        let violations = super::ClauseReferences::default().lint(&dpa(
+            "## IX. Governing law and dispute resolution",
+            near_copy,
+            "dispute_resolution@1",
+        ));
+        assert_eq!(violations.len(), 1, "{violations:?}");
+        assert_eq!(violations[0].code, "N132");
+        assert!(
+            violations[0]
+                .message
+                .contains("Governing law and dispute resolution")
+                && violations[0].message.contains("dispute_resolution"),
+            "the error names the heading and the required Clause: {}",
+            violations[0].message
+        );
+    }
+
+    #[test]
+    fn a_reserved_heading_without_a_pin_fails() {
+        use crate::Rule;
+        let unpinned = "---\nkind: agreement\nquestionnaire: [entity__company]\n---\n## IX. Governing law and dispute resolution\n\nThe parties will arbitrate.\n";
+        let violations = super::ClauseReferences::default().lint(&crate::SourceFile {
+            path: "dpa.md".into(),
+            contents: unpinned.into(),
+        });
+        assert_eq!(violations.len(), 1, "{violations:?}");
+        assert_eq!(violations[0].code, "N132");
+        assert!(violations[0].message.contains("dispute_resolution"));
+        // An ordinary caption reserves nothing.
+        let ordinary = unpinned.replace(
+            "Governing law and dispute resolution",
+            "Term and termination",
+        );
+        assert!(super::ClauseReferences::default()
+            .lint(&crate::SourceFile {
+                path: "dpa.md".into(),
+                contents: ordinary
+            })
+            .is_empty());
+    }
+
+    /// A compiled snapshot carries expanded wording and `clause_sources:`
+    /// provenance and is never re-checked, so retired-version snapshots
+    /// stay readable (ENG-1092).
+    #[test]
+    fn compiled_snapshots_are_not_rechecked_for_reserved_headings() {
+        use crate::Rule;
+        let authored = dpa(
+            "## IX. Governing law and dispute resolution",
+            "{{> dispute}}",
+            "dispute_resolution@1",
+        );
+        let compiled = compile(&authored.contents).unwrap();
+        assert!(compiled.contains("clause_sources:"));
+        assert!(super::ClauseReferences::default()
+            .lint(&crate::SourceFile {
+                path: authored.path.clone(),
+                contents: compiled
+            })
+            .is_empty());
+    }
+
+    /// Reserved captions are data on the library versions; the same caption
+    /// may be declared again by another version of the same code, but a
+    /// cross-code claim fails library parsing.
+    #[test]
+    fn reserved_captions_may_claim_only_one_clause_code() {
+        let clause = |code: &str, caption: &str| super::LibraryClause {
+            retired_at: None,
+            code: code.into(),
+            version: 1,
+            kind: "agreement".into(),
+            inputs: BTreeMap::new(),
+            body: "Body.".into(),
+            heading: Some(caption.into()),
+            aliases: Vec::new(),
+        };
+        assert!(super::check_reserved_headings(&[
+            clause("dispute_resolution", "Governing law"),
+            clause("dispute_resolution", "governing law:"),
+        ])
+        .is_ok());
+        let error = super::check_reserved_headings(&[
+            clause("dispute_resolution", "Choice of law"),
+            clause("other_code", "Choice of law"),
+        ])
+        .unwrap_err();
+        assert!(
+            error.contains("Choice of law")
+                && error.contains("dispute_resolution")
+                && error.contains("other_code"),
+            "the refusal names the caption and both codes: {error}"
         );
     }
 }

@@ -271,7 +271,7 @@ diagnostic-only.
 | `N129` | Error | A notation's `audiences:` may only narrow its `custom_*` questions. | No |
 | `N130` | Error | A pleading body carries no caption markup; the caption comes from `matter:` and frontmatter. | No |
 | `N131` | Error | A template carries no drafting marker: bracket, stray blank, note, or typed Signer Box marker. | No |
-| `N132` | Error | Pins a version and binds inputs; an unexecuted onboarding has `engagement_arbitration`. | No |
+| `N132` | Error | Pins inputs; an onboarding has `engagement_arbitration`; a reserved heading must reference it. | No |
 | `N133` | Warning | A Project pleading must declare `docket:` so the caption can name the case it serves. | No |
 | `N134` | Warning | An agreement selects `letter` or `client_letter`. Use `contract` or omit `output:`. | No |
 

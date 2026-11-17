@@ -2538,9 +2538,11 @@
       },
       "clause": {
         "columns": {
+          "aliases": "JSONB",
           "body": "TEXT",
           "body_sha256": "TEXT",
           "code": "TEXT",
+          "heading": "TEXT",
           "id": "UUID",
           "inputs": "JSONB",
           "inserted_at": "TIMESTAMPTZ",
