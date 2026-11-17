@@ -10,11 +10,11 @@ One page of a [Matter](matter.md), declared as a `pages:` entry in the Project [
 (one of the matter page kinds, such as `docket_deadline_board` or `engagement_billing_records`), a `title`, an optional
 `draft` path, and its `lenses:` — the [Section](section.md) list each [Lens](lens.md) shows, in order.
 
-A WhatsApp timeline names a `document_revision:` UUID for its filed text export. Its optional `media:` list names
-exact filed image revisions by `document_revision:`. Each item can declare an RFC 3339 `created_at:` timestamp.
-Navigator labels the filing time when the original creation time is unavailable. Declare each timeline with its
-own slug. The page has a lawyer lens and appears as a panel on the Project overview. An
-[Evidence Share](evidence-share.md) controls access granted to an invited recipient.
+A WhatsApp timeline names a `document_revision:` UUID for its filed text export. Its optional `media:` list names exact
+filed image revisions by `document_revision:`. Each item can declare an RFC 3339 `created_at:` timestamp. Navigator
+labels the filing time when the original creation time is unavailable. Declare each timeline with its own slug. The page
+has a lawyer lens and appears as a panel on the Project overview. An [Evidence Share](evidence-share.md) controls access
+granted to an invited recipient.
 
 The page is composition, not code. The `kind` names a skeleton the gate checks the entry against (`Y021` for shape,
 `D001` through `D005` for composition); the renderer only ever sees sections, one component each. A Markdown file never
