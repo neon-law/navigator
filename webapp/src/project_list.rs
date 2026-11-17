@@ -243,10 +243,13 @@ async fn accessible_projects(
         }
         let allowed = match project.firm_id {
             Some(firm_id) => {
-                if let std::collections::hash_map::Entry::Vacant(entry) = administered.entry(firm_id) {
-                    let allowed = store::projects::can_administer_project(surreal, person_id, role, &project)
-                        .await
-                        .map_err(loader_error)?;
+                if let std::collections::hash_map::Entry::Vacant(entry) =
+                    administered.entry(firm_id)
+                {
+                    let allowed =
+                        store::projects::can_administer_project(surreal, person_id, role, &project)
+                            .await
+                            .map_err(loader_error)?;
                     entry.insert(allowed);
                 }
                 administered[&firm_id]
