@@ -471,6 +471,13 @@
     },
     {
       "extra_column": null,
+      "extra_table": "project_calendar_grant",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "project_cost_events",
       "missing_column": null,
       "missing_table": null,
@@ -2065,7 +2072,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 171,
+    "table_count": 172,
     "tables": {
       "address": {
         "columns": {
@@ -5120,6 +5127,30 @@
         "name": "project_archive_item",
         "references": [
           "project_archive_generation"
+        ]
+      },
+      "project_calendar_grant": {
+        "columns": {
+          "calendar_id": "TEXT",
+          "email": "TEXT",
+          "firm_id": "UUID",
+          "notified": "BOOLEAN",
+          "project_id": "UUID"
+        },
+        "foreign_keys": [
+          [
+            "firm_id",
+            "firm"
+          ],
+          [
+            "project_id",
+            "project"
+          ]
+        ],
+        "name": "project_calendar_grant",
+        "references": [
+          "firm",
+          "project"
         ]
       },
       "project_cost_events": {

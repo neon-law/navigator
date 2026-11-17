@@ -179,6 +179,14 @@ pub trait CalendarService: Send + Sync {
     /// Whether a calendar with this id still exists. Checked by id, never by
     /// name, so a renamed calendar is still the recorded one.
     async fn calendar_exists(&self, calendar_id: &str) -> Result<bool, CalendarError>;
+    /// Verify a recorded calendar against the Project code and its owning account.
+    async fn recorded_calendar_matches(&self, code: &str, id: &str) -> Result<bool, CalendarError> {
+        Ok(self
+            .find_calendar(code)
+            .await?
+            .is_some_and(|calendar| calendar.id == id))
+    }
+
     /// Every person the calendar is shared with, owner included.
     async fn members(&self, calendar_id: &str) -> Result<Vec<CalendarMember>, CalendarError>;
     /// Share the calendar with `email` at `role`, without a notification
@@ -189,6 +197,29 @@ pub trait CalendarService: Send + Sync {
         email: &str,
         role: CalendarRole,
     ) -> Result<(), CalendarError>;
+
+    /// Insert a reader grant and ask Google to notify the recipient. A conflict
+    /// is read-only and means a grant already exists.
+    async fn invite_reader(&self, calendar_id: &str, email: &str) -> Result<bool, CalendarError>;
+
+    /// Remove a direct reader grant without modifying elevated grants.
+    async fn revoke_reader(&self, calendar_id: &str, email: &str) -> Result<(), CalendarError>;
+
+    /// Reject calendars with public or domain access before automated sharing.
+    async fn verify_private_acl(&self, calendar_id: &str) -> Result<(), CalendarError>;
+
+    /// Verify that the Firm's delegation can act as this Workspace member.
+    async fn verify_workspace_member(&self, email: &str) -> Result<(), CalendarError>;
+
+    /// Verify access using the participant's Workspace identity.
+    async fn verify_reader(&self, calendar_id: &str, email: &str) -> Result<bool, CalendarError>;
+
+    /// Reconcile guests on events organized by the Project Calendar.
+    async fn sync_event_guests(
+        &self,
+        calendar_id: &str,
+        desired: &BTreeMap<String, String>,
+    ) -> Result<BTreeMap<String, BTreeMap<String, usize>>, CalendarError>;
 
     /// Read a Project Calendar only when its recorded id agrees with the
     /// unique calendar the deployment owns under the Project code.
@@ -419,7 +450,7 @@ impl GoogleCalendar {
         }
     }
 
-    async fn user_acl_rules(&self, calendar_id: &str) -> Result<Vec<AclRule>, CalendarError> {
+    async fn acl_rules(&self, calendar_id: &str) -> Result<Vec<AclRule>, CalendarError> {
         let action = "listing calendar sharing";
         let mut rules = Vec::new();
         let mut page_token: Option<String> = None;
@@ -441,16 +472,20 @@ impl GoogleCalendar {
             .json::<AclPage>()
             .await
             .map_err(|source| CalendarError::Response { action, source })?;
-            rules.extend(
-                page.items
-                    .into_iter()
-                    .filter(|rule| rule.scope.kind == "user"),
-            );
+            rules.extend(page.items);
             page_token = page.next_page_token;
             if page_token.is_none() {
                 return Ok(rules);
             }
         }
+    }
+    async fn user_acl_rules(&self, calendar_id: &str) -> Result<Vec<AclRule>, CalendarError> {
+        Ok(self
+            .acl_rules(calendar_id)
+            .await?
+            .into_iter()
+            .filter(|rule| rule.scope.kind == "user")
+            .collect())
     }
 }
 
@@ -588,6 +623,34 @@ impl CalendarService for GoogleCalendar {
         }
     }
 
+    async fn recorded_calendar_matches(&self, code: &str, id: &str) -> Result<bool, CalendarError> {
+        let action = "verifying the recorded Project Calendar owner and name";
+        let response = self
+            .http
+            .get(self.url(&["users", "me", "calendarList", id]))
+            .bearer_auth(self.token().await?)
+            .send()
+            .await
+            .map_err(|source| CalendarError::Request { action, source })?;
+        if matches!(response.status().as_u16(), 404 | 410) {
+            return Ok(false);
+        }
+        let entry = Self::checked(Ok(response), action)?
+            .json::<CalendarListEntry>()
+            .await
+            .map_err(|source| CalendarError::Response { action, source })?;
+        // A manually linked calendar can lack a Navigator marker. An explicit
+        // marker for another deployment can never be adopted.
+        let other_namespace = entry.description.as_deref().is_some_and(|description| {
+            description.starts_with("Navigator Project Calendar (")
+                && Some(description) != self.ownership_marker().as_deref()
+        });
+        Ok(entry.id == id
+            && entry.access_role.as_deref() == Some("owner")
+            && entry.summary.as_deref() == Some(self.project_summary(code).as_ref())
+            && !other_namespace)
+    }
+
     async fn members(&self, calendar_id: &str) -> Result<Vec<CalendarMember>, CalendarError> {
         Ok(self
             .user_acl_rules(calendar_id)
@@ -600,6 +663,214 @@ impl CalendarService for GoogleCalendar {
                 })
             })
             .collect())
+    }
+
+    async fn invite_reader(&self, calendar_id: &str, email: &str) -> Result<bool, CalendarError> {
+        let token = self.token().await?;
+        let action = "requesting a calendar invitation";
+        let response = self
+            .http
+            .post(self.url(&["calendars", calendar_id, "acl"]))
+            .bearer_auth(token)
+            .query(&[("sendNotifications", "true")])
+            .json(&serde_json::json!({
+                "role": "reader",
+                "scope": { "type": "user", "value": email },
+            }))
+            .send()
+            .await
+            .map_err(|source| CalendarError::Request { action, source })?;
+        if response.status().as_u16() == 409 {
+            return Ok(false);
+        }
+        Self::checked(Ok(response), action)?;
+        Ok(true)
+    }
+
+    async fn revoke_reader(&self, calendar_id: &str, email: &str) -> Result<(), CalendarError> {
+        let action = "revoking a calendar reader";
+        let Some(rule) = self
+            .user_acl_rules(calendar_id)
+            .await?
+            .into_iter()
+            .find(|rule| {
+                rule.role == "reader"
+                    && rule
+                        .scope
+                        .value
+                        .as_deref()
+                        .is_some_and(|value| value.eq_ignore_ascii_case(email))
+            })
+        else {
+            return Ok(());
+        };
+        let id = rule.id.ok_or(CalendarError::Api {
+            action,
+            status: 409,
+        })?;
+        let mut request = self
+            .http
+            .delete(self.url(&["calendars", calendar_id, "acl", &id]))
+            .bearer_auth(self.token().await?);
+        if let Some(etag) = rule.etag {
+            request = request.header(reqwest::header::IF_MATCH, etag);
+        }
+        let response = request
+            .send()
+            .await
+            .map_err(|source| CalendarError::Request { action, source })?;
+        if !matches!(response.status().as_u16(), 404 | 410) {
+            Self::checked(Ok(response), action)?;
+        }
+        if self.members(calendar_id).await?.iter().any(|member| {
+            member.role == CalendarRole::Reader && member.email.eq_ignore_ascii_case(email)
+        }) {
+            return Err(CalendarError::Api {
+                action,
+                status: 409,
+            });
+        }
+        Ok(())
+    }
+
+    async fn verify_private_acl(&self, calendar_id: &str) -> Result<(), CalendarError> {
+        if self.acl_rules(calendar_id).await?.iter().any(|rule| {
+            matches!(rule.scope.kind.as_str(), "default" | "domain") && rule.role != "none"
+        }) {
+            return Err(CalendarError::Api {
+                action: "Project Calendar has public or domain access",
+                status: 403,
+            });
+        }
+        Ok(())
+    }
+
+    async fn verify_workspace_member(&self, email: &str) -> Result<(), CalendarError> {
+        Self::for_owner(email).await?.token().await.map(|_| ())
+    }
+
+    async fn verify_reader(&self, calendar_id: &str, email: &str) -> Result<bool, CalendarError> {
+        let participant = Self::for_owner(email).await?;
+        let action = "reading Project Calendar as the assigned participant";
+        let response = participant
+            .http
+            .get(participant.url(&["calendars", calendar_id, "events"]))
+            .bearer_auth(participant.token().await?)
+            .query(&[("maxResults", "1"), ("fields", "accessRole")])
+            .send()
+            .await
+            .map_err(|source| CalendarError::Request { action, source })?;
+        if matches!(response.status().as_u16(), 403 | 404) {
+            return Ok(false);
+        }
+        let list = Self::checked(Ok(response), action)?
+            .json::<serde_json::Value>()
+            .await
+            .map_err(|source| CalendarError::Response { action, source })?;
+        Ok(matches!(
+            CalendarRole::from_api(list["accessRole"].as_str().unwrap_or_default()),
+            Some(CalendarRole::Reader | CalendarRole::Writer | CalendarRole::Owner)
+        ))
+    }
+
+    async fn sync_event_guests(
+        &self,
+        calendar_id: &str,
+        desired: &BTreeMap<String, String>,
+    ) -> Result<BTreeMap<String, BTreeMap<String, usize>>, CalendarError> {
+        let action = "reading Project Calendar invitation status";
+        let events = self
+            .list_events::<InvitationEvent>(calendar_id, action, &[])
+            .await?;
+        let mut status = BTreeMap::<String, BTreeMap<String, usize>>::new();
+        for event in events {
+            if event.status.as_deref() == Some("cancelled") {
+                continue;
+            }
+            if !event
+                .organizer
+                .as_ref()
+                .is_some_and(|organizer| organizer.is_self)
+            {
+                for person in desired.keys() {
+                    *status
+                        .entry(person.clone())
+                        .or_default()
+                        .entry("external_organizer".into())
+                        .or_default() += 1;
+                }
+                continue;
+            }
+            let stored = if let Some(patch) = event.guest_patch(desired)? {
+                let path = ["calendars", calendar_id, "events", event.id.as_str()];
+                Self::checked(
+                    self.http
+                        .patch(self.url(&path))
+                        .bearer_auth(self.token().await?)
+                        .header(reqwest::header::IF_MATCH, &event.etag)
+                        .query(&[("sendUpdates", "all")])
+                        .json(&patch)
+                        .send()
+                        .await,
+                    "updating Project Calendar guests",
+                )?;
+                let stored = Self::checked(
+                    self.http
+                        .get(self.url(&path))
+                        .bearer_auth(self.token().await?)
+                        .send()
+                        .await,
+                    action,
+                )?
+                .json::<InvitationEvent>()
+                .await
+                .map_err(|source| CalendarError::Response { action, source })?;
+                if let Some(markers) = patch["extendedProperties"]["private"].as_object() {
+                    if markers.iter().any(|(key, value)| {
+                        stored
+                            .extended_properties
+                            .private
+                            .get(key)
+                            .map(String::as_str)
+                            != value.as_str()
+                    }) {
+                        return Err(CalendarError::Api {
+                            action,
+                            status: 409,
+                        });
+                    }
+                }
+                stored
+            } else {
+                event
+            };
+            if stored.guest_patch(desired)?.is_some() {
+                return Err(CalendarError::Api {
+                    action,
+                    status: 409,
+                });
+            }
+            for (person, email) in desired {
+                let response = stored
+                    .attendees
+                    .iter()
+                    .find(|guest| attendee_matches(guest, email))
+                    .and_then(|guest| guest["responseStatus"].as_str());
+                let response = match response {
+                    Some("accepted") => "accepted",
+                    Some("declined") => "declined",
+                    Some("tentative") => "tentative",
+                    Some("needsAction") => "needs_action",
+                    _ => "response_unknown",
+                };
+                *status
+                    .entry(person.clone())
+                    .or_default()
+                    .entry(response.into())
+                    .or_default() += 1;
+            }
+        }
+        Ok(status)
     }
 
     async fn set_member_role(
@@ -757,8 +1028,10 @@ struct CalendarListPage {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct CalendarListEntry {
     id: String,
+    access_role: Option<String>,
     summary: Option<String>,
     description: Option<String>,
 }
@@ -778,6 +1051,7 @@ struct AclPage {
 
 #[derive(Deserialize, Serialize)]
 struct AclRule {
+    etag: Option<String>,
     id: Option<String>,
     role: String,
     scope: AclScope,
@@ -788,6 +1062,73 @@ struct AclScope {
     #[serde(rename = "type")]
     kind: String,
     value: Option<String>,
+}
+
+const INVITED_PERSON: &str = "nv_invited_";
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InvitationEvent {
+    id: String,
+    #[serde(default)]
+    etag: String,
+    status: Option<String>,
+    organizer: Option<InvitationOrganizer>,
+    #[serde(default)]
+    attendees: Vec<serde_json::Value>,
+    #[serde(default)]
+    attendees_omitted: bool,
+    #[serde(default)]
+    extended_properties: EventExtendedProperties,
+}
+
+#[derive(Deserialize)]
+struct InvitationOrganizer {
+    #[serde(rename = "self", default)]
+    is_self: bool,
+}
+
+fn attendee_matches(guest: &serde_json::Value, email: &str) -> bool {
+    guest["email"]
+        .as_str()
+        .is_some_and(|value| value.eq_ignore_ascii_case(email))
+}
+
+impl InvitationEvent {
+    fn guest_patch(
+        &self,
+        desired: &BTreeMap<String, String>,
+    ) -> Result<Option<serde_json::Value>, CalendarError> {
+        if self.attendees_omitted || self.etag.is_empty() {
+            return Err(CalendarError::Api {
+                action: "reading complete calendar guests",
+                status: 409,
+            });
+        }
+        let mut attendees = self.attendees.clone();
+        let mut markers = serde_json::Map::new();
+        for (key, email) in &self.extended_properties.private {
+            let Some(person) = key.strip_prefix(INVITED_PERSON) else {
+                continue;
+            };
+            if desired.get(person) != Some(email) && !desired.values().any(|value| value == email) {
+                attendees.retain(|guest| !attendee_matches(guest, email));
+                markers.insert(key.clone(), serde_json::Value::Null);
+            }
+        }
+        for (person, email) in desired {
+            if !attendees.iter().any(|guest| attendee_matches(guest, email)) {
+                attendees.push(serde_json::json!({ "email": email }));
+                markers.insert(format!("{INVITED_PERSON}{person}"), email.clone().into());
+            }
+        }
+        Ok((!markers.is_empty()).then(|| {
+            serde_json::json!({
+                "attendees": attendees,
+                "extendedProperties": { "private": markers }
+            })
+        }))
+    }
 }
 
 /// One page of a filtered events read.
@@ -1093,6 +1434,55 @@ impl CalendarService for FakeCalendar {
             .into_iter()
             .map(|(email, role)| CalendarMember { email, role })
             .collect())
+    }
+
+    async fn invite_reader(&self, calendar_id: &str, email: &str) -> Result<bool, CalendarError> {
+        let mut state = self.state.lock().expect("fake calendar mutex poisoned");
+        let entry = state
+            .calendars
+            .get_mut(calendar_id)
+            .ok_or(CalendarError::Api {
+                action: "inviting a calendar reader",
+                status: 404,
+            })?;
+        if entry.members.contains_key(email) {
+            return Ok(false);
+        }
+        entry.members.insert(email.into(), CalendarRole::Reader);
+        Ok(true)
+    }
+
+    async fn revoke_reader(&self, calendar_id: &str, email: &str) -> Result<(), CalendarError> {
+        let mut state = self.state.lock().expect("fake calendar mutex poisoned");
+        if let Some(entry) = state.calendars.get_mut(calendar_id) {
+            if entry.members.get(email) == Some(&CalendarRole::Reader) {
+                entry.members.remove(email);
+            }
+        }
+        Ok(())
+    }
+
+    async fn verify_private_acl(&self, _calendar_id: &str) -> Result<(), CalendarError> {
+        Ok(())
+    }
+
+    async fn verify_workspace_member(&self, _email: &str) -> Result<(), CalendarError> {
+        Ok(())
+    }
+
+    async fn verify_reader(&self, calendar_id: &str, email: &str) -> Result<bool, CalendarError> {
+        Ok(self
+            .sharing(calendar_id)
+            .get(email)
+            .is_some_and(|role| *role != CalendarRole::FreeBusyReader))
+    }
+
+    async fn sync_event_guests(
+        &self,
+        _calendar_id: &str,
+        _desired: &BTreeMap<String, String>,
+    ) -> Result<BTreeMap<String, BTreeMap<String, usize>>, CalendarError> {
+        Ok(BTreeMap::new())
     }
 
     async fn set_member_role(
@@ -1826,6 +2216,138 @@ mod tests {
             .calendar_exists("c_gone@group.calendar.example.com")
             .await
             .unwrap());
+    }
+
+    #[tokio::test]
+    async fn changed_project_guests_preserve_manual_guests_and_do_not_notify_on_replay() {
+        let server = MockServer::start().await;
+        let list = "/calendars/shared/events";
+        let event_path = "/calendars/shared/events/hearing";
+        let manual =
+            serde_json::json!({"email": "manual@example.com", "responseStatus": "accepted"});
+        let initial = serde_json::json!({
+            "id": "hearing", "etag": "old", "organizer": {"self": true},
+            "attendees": [manual.clone(), {"email": "old@example.com"}],
+            "extendedProperties": {"private": {"nv_invited_old": "old@example.com", "deadline_id": "d1"}}
+        });
+        let updated = serde_json::json!({
+            "id": "hearing", "etag": "new", "organizer": {"self": true},
+            "attendees": [manual.clone(), {"email": "new@example.com", "responseStatus": "needsAction"}],
+            "extendedProperties": {"private": {"nv_invited_new": "new@example.com", "deadline_id": "d1"}}
+        });
+        let before = Mock::given(method("GET"))
+            .and(path(list))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"items": [initial]})),
+            )
+            .expect(1)
+            .mount_as_scoped(&server)
+            .await;
+        Mock::given(method("PATCH")).and(path(event_path))
+            .and(wiremock::matchers::header("if-match", "old"))
+            .and(query_param("sendUpdates", "all"))
+            .and(body_json(serde_json::json!({
+                "attendees": [manual, {"email": "new@example.com"}],
+                "extendedProperties": {"private": {"nv_invited_new": "new@example.com", "nv_invited_old": null}}
+            })))
+            .respond_with(ResponseTemplate::new(200)).expect(1).mount(&server).await;
+        Mock::given(method("GET"))
+            .and(path(event_path))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&updated))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let calendar = google(&server);
+        let desired = [("new".into(), "new@example.com".into())]
+            .into_iter()
+            .collect();
+        let status = calendar
+            .sync_event_guests("shared", &desired)
+            .await
+            .unwrap();
+        assert_eq!(status["new"]["needs_action"], 1);
+        drop(before);
+        Mock::given(method("GET"))
+            .and(path(list))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"items": [updated]})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        assert_eq!(
+            calendar
+                .sync_event_guests("shared", &desired)
+                .await
+                .unwrap(),
+            status
+        );
+    }
+
+    #[tokio::test]
+    async fn a_linked_calendar_must_have_the_projects_name_and_be_owned() {
+        let server = MockServer::start().await;
+        for (id, summary, role) in [
+            ("owned", "synthetic", "owner"),
+            ("other-project", "different", "owner"),
+            ("other-firm", "synthetic", "reader"),
+        ] {
+            Mock::given(method("GET"))
+                .and(path(format!("/users/me/calendarList/{id}")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": id, "summary": summary, "accessRole": role
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        let calendar = google(&server);
+        assert!(calendar
+            .recorded_calendar_matches("synthetic", "owned")
+            .await
+            .unwrap());
+        assert!(!calendar
+            .recorded_calendar_matches("synthetic", "other-project")
+            .await
+            .unwrap());
+        assert!(!calendar
+            .recorded_calendar_matches("synthetic", "other-firm")
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_domain_grant_blocks_automatic_sharing() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/calendars/shared/acl"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "items": [{"role": "reader", "scope": {"type": "domain", "value": "example.com"}}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        assert!(matches!(
+            google(&server).verify_private_acl("shared").await,
+            Err(CalendarError::Api { status: 403, .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn invitation_conflict_does_not_update_an_existing_grant() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/calendars/shared/acl"))
+            .and(query_param("sendNotifications", "true"))
+            .respond_with(ResponseTemplate::new(409))
+            .expect(1)
+            .mount(&server)
+            .await;
+        assert!(!google(&server)
+            .invite_reader("shared", "clerk@example.com")
+            .await
+            .unwrap());
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
     }
 
     #[tokio::test]

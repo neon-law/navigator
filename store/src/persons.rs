@@ -1350,6 +1350,8 @@ pub async fn edit(
         assignments.push("name = $name");
     }
     if input.email.is_some() {
+        assignments
+            .push("email_confirmed = email_confirmed AND email_lower = string::lowercase($email)");
         assignments.push("email = $email");
     }
     if input.role.is_some() {
@@ -2186,6 +2188,8 @@ mod tests {
         let db = mem().await;
         let subject = person(&db, "Mover", "before@example.com").await;
 
+        set_email_confirmed(&db, subject.id, true).await.unwrap();
+
         let moved = edit(
             &db,
             subject.id,
@@ -2198,6 +2202,7 @@ mod tests {
         .expect("the edit is allowed")
         .expect("the row is still there");
         assert_eq!(moved.email, "After@example.com");
+        assert!(!moved.email_confirmed);
 
         assert_eq!(
             super::mailbox_holder(&db, "after@example.com")

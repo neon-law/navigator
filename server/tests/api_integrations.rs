@@ -537,10 +537,9 @@ async fn notion_ensure_creates_then_adopts_and_records_the_address() {
     assert_eq!(stored.private_notion_page_url.as_deref(), Some(&*page.url));
 }
 
-/// The calendar door creates once, records the id, and shares the calendar
-/// with the firm side only; a re-run finds it present and shares no one new.
+/// The calendar door creates a private calendar and reuses its recorded id.
 #[tokio::test]
-async fn calendar_ensure_creates_once_and_shares_only_the_firm_side() {
+async fn calendar_ensure_creates_once_and_stays_private() {
     let fx = build_fixture(true).await;
     let body = serde_json::json!({ "project_code": fx.code });
 
@@ -564,12 +563,8 @@ async fn calendar_ensure_creates_once_and_shares_only_the_firm_side() {
         .unwrap();
     assert_eq!(stored.calendar_id.as_deref(), Some(calendar.id.as_str()));
     let sharing = fx.providers.calendar.sharing(&calendar.id);
-    assert!(sharing.keys().any(|email| email.starts_with("lawyer-")));
-    assert!(sharing.keys().any(|email| email.starts_with("admin-")));
-    assert!(
-        !sharing.keys().any(|email| email.starts_with("client-")),
-        "the client is never shared the calendar: {sharing:?}"
-    );
+    assert_eq!(sharing.len(), 1);
+    assert_eq!(sharing.values().next(), Some(&cloud::CalendarRole::Owner));
 }
 
 /// Closing the matter makes its calendar read-only and clears the client's

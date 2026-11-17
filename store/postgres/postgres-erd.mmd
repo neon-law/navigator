@@ -1547,6 +1547,13 @@ erDiagram
         string source_key
         datetime verified_at
     }
+    project_calendar_grant {
+        string calendar_id
+        string email
+        uuid firm_id
+        boolean notified
+        uuid project_id
+    }
     project_cost_events {
         uuid actor_person_id
         json after_state
@@ -2199,6 +2206,8 @@ erDiagram
     legal_plan }o--|| project : references
     person }o--|| project : references
     project_archive_generation }o--|| project_archive_item : references
+    firm }o--|| project_calendar_grant : references
+    project }o--|| project_calendar_grant : references
     person }o--|| project_cost_events : references
     project_costs }o--|| project_cost_events : references
     asset }o--|| project_costs : references

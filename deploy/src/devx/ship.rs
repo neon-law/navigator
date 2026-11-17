@@ -619,7 +619,7 @@ const fn retired(cronjob: &'static str, resource: &'static str) -> RetiredCronJo
     RetiredCronJob { cronjob, resource }
 }
 
-const DBOS_SCHEDULES: [DbosSchedule; 5] = [
+const DBOS_SCHEDULES: [DbosSchedule; 6] = [
     DbosSchedule {
         env: "NAVIGATOR_DBOS_GENERAL_NAG_ENABLED",
         default_on: true,
@@ -658,6 +658,13 @@ const DBOS_SCHEDULES: [DbosSchedule; 5] = [
             "SLACK_MESSAGES_CHANNEL_ID",
             "SLACK_STAGING_MESSAGES_CHANNEL_ID",
         ],
+        secret: None,
+    },
+    DbosSchedule {
+        env: "NAVIGATOR_DBOS_PROJECT_CALENDAR_MEMBERSHIP_ENABLED",
+        default_on: false,
+        retires: None,
+        coordinates: &[],
         secret: None,
     },
     // Archives also renders `web-archives.yaml` and the coverage ConfigMap;

@@ -1241,6 +1241,13 @@
       {
         "action": "export",
         "schema": "public",
+        "name": "project_calendar_grant",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
         "name": "project_cost_events",
         "kind": "table",
         "accessible": true

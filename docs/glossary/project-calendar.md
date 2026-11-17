@@ -9,11 +9,17 @@ One secondary Google Calendar per [Project](project.md), owned by the Firm's del
 is the Project code, prefixed with `staging-` on staging. Its Calendar API id is `project.calendar_id`, and the
 repository records the same id as `navigator.yaml` `project.calendar_id`.
 
-`navigator project setup` creates or adopts the named calendar and records its id before sharing it. Firm-side Lawyer,
-Admin, and Owner participants and Clerk participants with a supervising Lawyer DRI receive read access. Setup converts
-existing direct writer grants for these participants to reader grants and preserves the calendar owner's access. A
-re-run creates no second calendar. A missing recorded calendar is reported as `recorded_resource_missing`. `navigator
-project set --calendar <id>` records an id by hand.
+`navigator project setup` creates or adopts the named calendar and records its id. A new calendar starts with only its
+owner. A re-run creates no second calendar. A missing recorded calendar is reported as `recorded_resource_missing`.
+`navigator project set --calendar <id>` records an id by hand.
+
+The opted-in DBOS membership job checks recorded calendars after setup and rechecks assignments in each five-minute
+slot. A Project participant needs the matching Firm role, a confirmed address in the owner's Google Workspace domain,
+and successful Workspace delegation. Clerks also require a supervising Lawyer DRI. Eligible participants receive reader
+access. Eligible Clerks and Admins are invited to events organized by the Project Calendar, including recurring series.
+Google controls invitations on events organized elsewhere. The job preserves existing manual grants and guests and
+removes the direct access and event guests it added when an assignment ends. It refuses automatic sharing on calendars
+with public or domain-wide access.
 
 Closing the Project makes every writer a reader and clears the [Booking Link](booking-link.md); the calendar and its
 events are kept as part of the matter's record. The matter page links the calendar to the firm side only, as a

@@ -1,5 +1,4 @@
-//! A Project's shared Google Calendar: create or adopt it, share it with the
-//! firm-side participants, and make it read-only when the matter closes.
+//! Provision a private Project Calendar and reconcile assigned Workspace members.
 //!
 //! The provider derives the calendar name from the Project code, keeping
 //! client names out of the Firm's calendar list. The id is recorded as
@@ -12,10 +11,10 @@
 //!
 //! Firm-side participants receive read access. Navigator writes Deadline
 //! events through the delegated Calendar owner. A client books through the
-//! Project's `booking_url`. Setup reconciles direct grants for eligible
-//! participants and preserves the owner and other Google Calendar grants.
+//! Project's `booking_url`. The DBOS job tracks the direct grants it creates
+//! and preserves other Google Calendar grants.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use uuid::Uuid;
 
@@ -33,7 +32,7 @@ pub enum CalendarOutcome {
     /// This pass found an unrecorded calendar named for the Project and
     /// recorded its id.
     Adopted,
-    /// The recorded calendar exists; sharing was reconciled.
+    /// The recorded calendar exists.
     Present,
     /// The matter is closed: writers were made readers and the booking link
     /// was cleared.
@@ -71,6 +70,12 @@ pub enum ProjectCalendarError {
     NotFound,
     #[error("calendar: {0}")]
     Calendar(#[from] CalendarError),
+    #[error("Calendar readback failed for Person {person_id}: {source}")]
+    Participant {
+        person_id: Uuid,
+        #[source]
+        source: CalendarError,
+    },
     #[error("{0}")]
     Command(#[from] ProjectCommandError),
     #[error("database: {0}")]
@@ -111,13 +116,11 @@ pub async fn lock_writes(
     }))
 }
 
-/// Create or adopt the Project's calendar and share it with its firm-side
-/// participants. A closed or archived matter is made read-only instead, so a
-/// re-run of setup after close converges rather than re-sharing.
+/// Create or adopt the Project's calendar. A closed or archived matter is
+/// made read-only instead.
 ///
 /// # Errors
-/// A store or provider failure. A provider failure after the id is recorded
-/// leaves the id in place, so the next pass resumes with sharing.
+/// A store or provider failure.
 pub async fn ensure(
     surreal: &SurrealDb,
     project_id: Uuid,
@@ -127,14 +130,18 @@ pub async fn ensure(
     if project.status != "open" {
         return close(surreal, project_id, calendar).await;
     }
-    let (calendar_id, outcome) = if let Some(recorded) = configured(&project) {
-        if !calendar.calendar_exists(&recorded).await? {
+    let outcome = if let Some(recorded) = configured(&project) {
+        if !calendar.calendar_exists(&recorded).await?
+            && !calendar
+                .recorded_calendar_matches(&project.code, &recorded)
+                .await?
+        {
             return Ok(CalendarReport {
                 outcome: CalendarOutcome::RecordedResourceMissing,
                 changed: 0,
             });
         }
-        (recorded, CalendarOutcome::Present)
+        CalendarOutcome::Present
     } else {
         let (found, outcome) = match calendar.find_calendar(&project.code).await? {
             Some(found) => (found, CalendarOutcome::Adopted),
@@ -146,28 +153,310 @@ pub async fn ensure(
         projects::set_calendar_id(surreal, project_id, &found.id)
             .await?
             .ok_or(ProjectCalendarError::NotFound)?;
-        (found.id, outcome)
+        outcome
     };
-    let current: BTreeMap<String, CalendarRole> = calendar
-        .members(&calendar_id)
+    Ok(CalendarReport {
+        outcome,
+        changed: 0,
+    })
+}
+
+/// Provider readback for one assigned Person, without persisting their
+/// delivery address or event details in DBOS.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ParticipantSync {
+    pub person_id: Uuid,
+    pub access: String,
+    pub calendar_invitation: String,
+    pub event_responses: BTreeMap<String, usize>,
+}
+
+/// Reconcile direct reader grants and event guests after provisioning. The
+/// caller holds the same project write lane as setup and the Deadline mirror.
+///
+/// # Errors
+/// Returns an error if the owning Firm, calendar, membership authority, or
+/// provider readback cannot be verified.
+pub async fn sync_membership(
+    surreal: &SurrealDb,
+    project_id: Uuid,
+    calendar: &dyn CalendarService,
+) -> Result<Vec<ParticipantSync>, ProjectCalendarError> {
+    let db = crate::postgres::PostgresDb::configured()
+        .await
+        .map_err(sync_db)?
+        .ok_or_else(|| ProjectCalendarError::Db("PostgreSQL not configured".into()))?;
+    let project = find(surreal, project_id).await?;
+    let (Some(firm_id), Some(calendar_id)) = (project.firm_id, configured(&project)) else {
+        return Err(ProjectCalendarError::Db(
+            "Project calendar or Firm is missing".into(),
+        ));
+    };
+
+    // A recorded id is an operator input. Verify it still identifies this
+    // Project's calendar in the owning Firm's Workspace before ACL or event writes.
+    if !calendar
+        .recorded_calendar_matches(&project.code, &calendar_id)
+        .await?
+    {
+        return Err(CalendarError::Api {
+            action: "verifying Project Calendar ownership",
+            status: 404,
+        }
+        .into());
+    }
+    calendar.verify_private_acl(&calendar_id).await?;
+    let owner = crate::firms::calendar_owner(surreal, firm_id)
+        .await
+        .map_err(sync_db)?
+        .ok_or_else(|| ProjectCalendarError::Db("Firm calendar owner is missing".into()))?;
+    let (desired, guests, mut report) = current_roster(surreal, &project, firm_id, &owner).await?;
+
+    reconcile_reader_grants(
+        &db,
+        calendar,
+        project_id,
+        firm_id,
+        &calendar_id,
+        &desired,
+        &mut report,
+    )
+    .await?;
+
+    let mut event_responses = calendar.sync_event_guests(&calendar_id, &guests).await?;
+    for row in &mut report {
+        if let Some(responses) = event_responses.remove(&row.person_id.simple().to_string()) {
+            row.event_responses = responses;
+        }
+    }
+    Ok(report)
+}
+
+async fn reconcile_reader_grants(
+    db: &crate::postgres::PostgresDb,
+    calendar: &dyn CalendarService,
+    project_id: Uuid,
+    firm_id: Uuid,
+    calendar_id: &str,
+    desired: &BTreeMap<Uuid, String>,
+    report: &mut [ParticipantSync],
+) -> Result<(), ProjectCalendarError> {
+    let mut managed: BTreeMap<String, bool> = sqlx::query_as::<_, (String, bool)>("SELECT email, notified FROM project_calendar_grant WHERE project_id = $1 AND firm_id = $2 AND calendar_id = $3")
+    .bind(project_id)
+    .bind(firm_id)
+    .bind(calendar_id)
+    .fetch_all(db.pool())
+    .await
+    .map_err(sync_db)?
+    .into_iter()
+    .collect();
+
+    // Revoke expired job grants before attempting new invitations. Direct
+    // grants that predate this job never enter the ledger.
+    for email in managed
+        .keys()
+        .filter(|email| !desired.values().any(|value| value == *email))
+    {
+        calendar.revoke_reader(calendar_id, email).await?;
+        delete_grant(db, project_id, firm_id, calendar_id, email).await?;
+    }
+    for (person_id, email) in desired {
+        calendar
+            .verify_workspace_member(email)
+            .await
+            .map_err(|source| ProjectCalendarError::Participant {
+                person_id: *person_id,
+                source,
+            })?;
+    }
+
+    let current: BTreeMap<_, _> = calendar
+        .members(calendar_id)
         .await?
         .into_iter()
         .map(|member| (member.email.to_ascii_lowercase(), member.role))
         .collect();
-    let mut changed = 0;
-    for email in calendar_reader_emails(surreal, project_id).await? {
-        if matches!(
-            current.get(&email),
-            Some(CalendarRole::Reader | CalendarRole::Owner)
-        ) {
+    for row in report {
+        let Some(email) = desired.get(&row.person_id) else {
             continue;
+        };
+        if !current.contains_key(email) {
+            // Record intent before making a side effect. On a lost response
+            // the next pass reads ACL state before it ever tries to invite.
+            sqlx::query(
+                "INSERT INTO project_calendar_grant (project_id, firm_id, calendar_id, email)
+                 VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
+            )
+            .bind(project_id)
+            .bind(firm_id)
+            .bind(calendar_id)
+            .bind(email)
+            .execute(db.pool())
+            .await
+            .map_err(sync_db)?;
+            if calendar.invite_reader(calendar_id, email).await? {
+                sqlx::query("UPDATE project_calendar_grant SET notified = true WHERE project_id = $1 AND firm_id = $2 AND calendar_id = $3 AND email = $4")
+                .bind(project_id).bind(firm_id).bind(calendar_id).bind(email)
+                .execute(db.pool()).await.map_err(sync_db)?;
+                managed.insert(email.clone(), true);
+            } else if !managed.contains_key(email) {
+                delete_grant(db, project_id, firm_id, calendar_id, email).await?;
+            }
         }
-        calendar
-            .set_member_role(&calendar_id, &email, CalendarRole::Reader)
-            .await?;
-        changed += 1;
+        let error_for = |source| ProjectCalendarError::Participant {
+            person_id: row.person_id,
+            source,
+        };
+        if !calendar
+            .verify_reader(calendar_id, email)
+            .await
+            .map_err(error_for)?
+        {
+            return Err(error_for(CalendarError::Api {
+                action: "verifying assigned participant access",
+                status: 403,
+            }));
+        }
+        row.access = "verified".into();
+        row.calendar_invitation = match managed.get(email) {
+            Some(true) => "notification_requested",
+            Some(false) => "notification_unconfirmed",
+            None => "existing_access",
+        }
+        .into();
     }
-    Ok(CalendarReport { outcome, changed })
+
+    Ok(())
+}
+
+type Roster = (
+    BTreeMap<Uuid, String>,
+    BTreeMap<String, String>,
+    Vec<ParticipantSync>,
+);
+
+async fn current_roster(
+    surreal: &SurrealDb,
+    project: &Project,
+    firm_id: Uuid,
+    owner: &str,
+) -> Result<Roster, ProjectCalendarError> {
+    let owner_domain = owner.rsplit_once('@').map(|(_, domain)| domain);
+    let rows = projects::participations_for_project(surreal, project.id)
+        .await
+        .map_err(sync_db)?;
+    let mut desired = BTreeMap::new();
+    let mut guests = BTreeMap::new();
+    let mut report = Vec::new();
+    let mut has_lawyer_dri = false;
+    let mut clerks = Vec::new();
+    if project.status == "open" {
+        for row in rows {
+            if row.is_client_dri
+                || projects::PARTICIPATION_CLIENT_SIDE.contains(&row.participation.as_str())
+            {
+                continue;
+            }
+            let Some(person) = persons::find_by_id(surreal, row.person_id)
+                .await
+                .map_err(sync_db)?
+            else {
+                continue;
+            };
+            let expected = match person.role {
+                Role::Clerk => crate::firms::FirmMembership::Clerk,
+                Role::Lawyer => crate::firms::FirmMembership::Lawyer,
+                Role::Owner | Role::Admin => crate::firms::FirmMembership::Admin,
+                Role::Client => continue,
+            };
+            let membership = crate::firms::membership_for_person(surreal, row.person_id, firm_id)
+                .await
+                .map_err(sync_db)?;
+            let address = person.email.trim().to_ascii_lowercase();
+            let gap = if row.participation != projects::participation_for_role(person.role) {
+                Some("project_role_mismatch")
+            } else if membership.is_none_or(|membership| membership.membership != expected) {
+                Some("not_a_firm_member")
+            } else {
+                delivery_gap(&address, person.email_confirmed, owner_domain)
+            };
+            report.push(ParticipantSync {
+                person_id: person.id,
+                access: gap.unwrap_or("pending").into(),
+                calendar_invitation: "not_requested".into(),
+                event_responses: BTreeMap::new(),
+            });
+            if gap.is_none() {
+                if person.role == Role::Clerk {
+                    clerks.push(person.id);
+                } else {
+                    has_lawyer_dri |= row.is_lawyer_dri;
+                }
+                if matches!(person.role, Role::Clerk | Role::Admin) {
+                    guests.insert(person.id.simple().to_string(), address.clone());
+                }
+                desired.insert(person.id, address);
+            }
+        }
+    }
+
+    if !has_lawyer_dri {
+        for clerk in clerks {
+            desired.remove(&clerk);
+            guests.remove(&clerk.simple().to_string());
+            if let Some(row) = report.iter_mut().find(|row| row.person_id == clerk) {
+                row.access = "no_supervising_lawyer".into();
+            }
+        }
+    }
+
+    Ok((desired, guests, report))
+}
+
+fn delivery_gap(
+    address: &str,
+    confirmed: bool,
+    owner_domain: Option<&str>,
+) -> Option<&'static str> {
+    let Some((local, domain)) = address.rsplit_once('@') else {
+        return Some("missing_or_placeholder_address");
+    };
+    if local.is_empty()
+        || local.contains('@')
+        || address.chars().any(char::is_whitespace)
+        || domain.ends_with(".invalid")
+        || domain == "example.com"
+    {
+        Some("missing_or_placeholder_address")
+    } else if !confirmed {
+        Some("unverified_address")
+    } else if !owner_domain.is_some_and(|owner| domain.eq_ignore_ascii_case(owner)) {
+        Some("outside_firm_workspace")
+    } else {
+        None
+    }
+}
+
+async fn delete_grant(
+    db: &crate::postgres::PostgresDb,
+    project_id: Uuid,
+    firm_id: Uuid,
+    calendar_id: &str,
+    email: &str,
+) -> Result<(), ProjectCalendarError> {
+    sqlx::query("DELETE FROM project_calendar_grant WHERE project_id = $1 AND firm_id = $2 AND calendar_id = $3 AND email = $4")
+    .bind(project_id)
+    .bind(firm_id)
+    .bind(calendar_id)
+    .bind(email)
+    .execute(db.pool())
+    .await
+    .map_err(sync_db)?;
+    Ok(())
+}
+
+fn sync_db(error: impl std::fmt::Display) -> ProjectCalendarError {
+    ProjectCalendarError::Db(error.to_string())
 }
 
 /// Make the Project's calendar read-only and clear its booking link. Every
@@ -194,7 +483,11 @@ pub async fn close(
             changed: 0,
         });
     };
-    if !calendar.calendar_exists(&calendar_id).await? {
+    if !calendar.calendar_exists(&calendar_id).await?
+        && !calendar
+            .recorded_calendar_matches(&project.code, &calendar_id)
+            .await?
+    {
         return Ok(CalendarReport {
             outcome: CalendarOutcome::RecordedResourceMissing,
             changed: 0,
@@ -229,46 +522,6 @@ fn configured(project: &Project) -> Option<String> {
         .map(str::trim)
         .filter(|id| !id.is_empty())
         .map(str::to_string)
-}
-
-/// The lowercased emails of firm-side participants eligible to read the calendar.
-async fn calendar_reader_emails(
-    surreal: &SurrealDb,
-    project_id: Uuid,
-) -> Result<BTreeSet<String>, ProjectCalendarError> {
-    let rows = projects::participations_for_project(surreal, project_id)
-        .await
-        .map_err(|error| ProjectCalendarError::Db(error.to_string()))?;
-    let mut emails = BTreeSet::new();
-    let mut clerk_emails = BTreeSet::new();
-    let mut has_lawyer_dri = false;
-    for row in rows {
-        if row.is_client_dri
-            || projects::PARTICIPATION_CLIENT_SIDE.contains(&row.participation.as_str())
-        {
-            continue;
-        }
-        let Some(person) = persons::find_by_id(surreal, row.person_id)
-            .await
-            .map_err(|error| ProjectCalendarError::Db(error.to_string()))?
-        else {
-            continue;
-        };
-        has_lawyer_dri |= row.is_lawyer_dri && person.role.is_lawyer_tier();
-        let email = person.email.trim();
-        if email.is_empty() {
-            continue;
-        }
-        if person.role.is_lawyer_tier() {
-            emails.insert(email.to_ascii_lowercase());
-        } else if person.role == Role::Clerk {
-            clerk_emails.insert(email.to_ascii_lowercase());
-        }
-    }
-    if has_lawyer_dri {
-        emails.extend(clerk_emails);
-    }
-    Ok(emails)
 }
 
 #[cfg(test)]
@@ -315,8 +568,26 @@ mod tests {
         .expect("open")
     }
 
+    #[test]
+    fn only_confirmed_addresses_inside_the_firm_workspace_are_eligible() {
+        let firm = Some("firm.test");
+        assert_eq!(super::delivery_gap("clerk@firm.test", true, firm), None);
+        assert_eq!(
+            super::delivery_gap("clerk@another-firm.test", true, firm),
+            Some("outside_firm_workspace")
+        );
+        assert_eq!(
+            super::delivery_gap("clerk@firm.test", false, firm),
+            Some("unverified_address")
+        );
+        assert_eq!(
+            super::delivery_gap("clerk@placeholder.invalid", true, firm),
+            Some("missing_or_placeholder_address")
+        );
+    }
+
     #[tokio::test]
-    async fn setup_creates_records_and_shares_with_the_firm_side_only() {
+    async fn setup_creates_and_records_a_private_calendar() {
         let surreal = mem_surreal().await;
         let project = open_matter(&surreal).await;
         let calendar = FakeCalendar::default();
@@ -333,7 +604,7 @@ mod tests {
         let report = ensure(&surreal, project.id, &calendar).await.unwrap();
 
         assert_eq!(report.outcome, CalendarOutcome::Created);
-        assert_eq!(report.changed, 2);
+        assert_eq!(report.changed, 0);
         let created = calendar.calendars();
         assert_eq!(created.len(), 1);
         assert_eq!(created[0].summary, "matter-one");
@@ -344,7 +615,7 @@ mod tests {
         assert_eq!(stored.calendar_id.as_deref(), Some(created[0].id.as_str()));
         let sharing = calendar.sharing(&created[0].id);
         for email in ["lawyer@example.com", "clerk@example.com"] {
-            assert_eq!(sharing.get(email), Some(&CalendarRole::Reader));
+            assert!(!sharing.contains_key(email));
         }
         assert_eq!(sharing.get(FAKE_CALENDAR_OWNER), Some(&CalendarRole::Owner));
         assert!(
@@ -378,11 +649,11 @@ mod tests {
 
         let report = ensure(&surreal, project.id, &calendar).await.unwrap();
 
-        assert_eq!(report.changed, 1);
+        assert_eq!(report.changed, 0);
         let sharing = calendar.sharing(&id);
         assert_eq!(
             sharing.get("lawyer@example.com"),
-            Some(&CalendarRole::Reader)
+            Some(&CalendarRole::Writer)
         );
         assert_eq!(sharing.get(FAKE_CALENDAR_OWNER), Some(&CalendarRole::Owner));
         assert_eq!(
@@ -483,8 +754,8 @@ mod tests {
         assert_eq!(report.outcome, CalendarOutcome::ReadOnly);
         let id = calendar.calendars()[0].id.clone();
         assert_eq!(
-            calendar.sharing(&id).get("lawyer@example.com"),
-            Some(&CalendarRole::Reader)
+            calendar.sharing(&id),
+            std::collections::BTreeMap::from([(FAKE_CALENDAR_OWNER.into(), CalendarRole::Owner)])
         );
     }
 }

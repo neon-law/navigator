@@ -76,6 +76,7 @@ pub const POSTGRES_TABLES: &[&str] = &[
     "firm_forgejo_organization",
     "dbos_workflow_request",
     "project",
+    "project_calendar_grant",
     "project_folder",
     "project_costs",
     "project_cost_events",

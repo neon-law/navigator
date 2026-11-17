@@ -21,6 +21,7 @@ mod nightly_project_update;
 mod notation;
 mod notation_reset;
 mod profit_digest;
+mod project_calendar;
 mod project_recovery;
 mod project_slack;
 mod reconcile;
