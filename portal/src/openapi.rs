@@ -838,7 +838,7 @@ fn canonical_document(base: &str) -> Value {
           "post": {
             "summary": "Create a Person through a Firm's administration boundary",
             "description": "Requires the Firm's Admin or an Owner. Only an Owner may create an Admin. \
-                            Staff join the Firm in the path. No Project participation is granted.",
+                            The path selects the Firm membership. No Project participation is granted.",
             "parameters": [
               { "name": "id", "in": "path", "required": true,
                 "schema": { "type": "string", "format": "uuid" } }

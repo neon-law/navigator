@@ -7399,7 +7399,9 @@ mod tests {
     async fn participation_create_update_and_delete_drive_the_ledger() {
         let db = store::test_support::mem_surreal().await;
         let (lawyer, _, project) = open_coverage_matter(&db, "coverage-people").await;
-        let admin = session_with_role(&db, Role::Admin).await;
+        let actor = person_with_role(&db, "coverage-firm-admin", Role::Admin).await;
+        store::test_support::grant_project_firm_admin(&db, project.id, actor.id).await;
+        let admin = session_for(&actor);
         let code = project.code.clone();
         let participants = format!("/app/projects/{code}/participants");
 

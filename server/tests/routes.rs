@@ -4072,7 +4072,7 @@ async fn seed_admin_and_foreign_matter(
 }
 
 #[tokio::test]
-async fn an_admin_cannot_staff_or_edit_another_firms_unassigned_matter() {
+async fn an_admin_cannot_assign_or_edit_another_firms_unassigned_matter() {
     let (state, surreal) = state_with_engines().await;
     let (admin, project_id) = seed_admin_and_foreign_matter(&surreal).await;
     let (cookie, csrf) = session_cookie_and_csrf_for_person(&admin);
@@ -4207,7 +4207,7 @@ async fn api_firm_person_creation_checks_actor_role_and_firm() {
             StatusCode::FORBIDDEN,
         ),
         (
-            "staff",
+            "lawyer",
             &admin_cookie,
             &admin_csrf,
             firm,
@@ -5532,7 +5532,7 @@ async fn api_projects_add_participant_authorizes_only_lawyer_and_admin() {
 
     // lawyer and admin → 201, the participation row lands. The lawyer case is
     // seeded onto the matter first: ENG-35 scopes this door to a lawyer who
-    // already participates (admin keeps the bypass, seeded with no row below),
+    // already participates (an Admin can act through Firm membership alone),
     // the same re-check `/close` uses.
     for (label, role) in [
         ("lawyer", store::persons::Role::Lawyer),
@@ -5551,6 +5551,9 @@ async fn api_projects_add_participant_authorizes_only_lawyer_and_admin() {
             store::persons::Role::Client,
         )
         .await;
+        if role == store::persons::Role::Admin {
+            store::test_support::grant_project_firm_admin(&surreal, matter, actor.id).await;
+        }
         let (cookie, csrf) = session_cookie_and_csrf_for_person(&actor);
         let resp = app
             .clone()
@@ -5678,6 +5681,9 @@ async fn api_projects_participant_item_authorizes_only_lawyer_and_admin() {
             store::projects::add_participation(&surreal, matter, actor.id, "lawyer")
                 .await
                 .unwrap();
+        }
+        if role_kind == store::persons::Role::Admin {
+            store::test_support::grant_project_firm_admin(&surreal, matter, actor.id).await;
         }
         let (cookie, csrf) = session_cookie_and_csrf_for_person(&actor);
         let resp = app
@@ -5817,7 +5823,13 @@ async fn api_projects_update_authorizes_only_lawyer_and_admin() {
             .uri(format!("/app/api/projects/{matter}"))
             .header("content-type", "application/json");
         if let Some(role) = role {
-            let (cookie, csrf) = session_cookie_and_csrf_for_role(role);
+            let (cookie, csrf) = if role == store::persons::Role::Admin {
+                let actor = seeded_actor(&surreal, "scope-admin@example.com", role).await;
+                store::test_support::grant_project_firm_admin(&surreal, matter, actor.id).await;
+                session_cookie_and_csrf_for_person(&actor)
+            } else {
+                session_cookie_and_csrf_for_role(role)
+            };
             builder = builder
                 .header(header::COOKIE, cookie)
                 .header("x-csrf-token", csrf);
@@ -6237,7 +6249,13 @@ async fn api_projects_delete_authorizes_only_lawyer_and_admin() {
             .method("DELETE")
             .uri(format!("/app/api/projects/{matter}"));
         if let Some(role) = role {
-            let (cookie, csrf) = session_cookie_and_csrf_for_role(role);
+            let (cookie, csrf) = if role == store::persons::Role::Admin {
+                let actor = seeded_actor(&surreal, "scope-admin@example.com", role).await;
+                store::test_support::grant_project_firm_admin(&surreal, matter, actor.id).await;
+                session_cookie_and_csrf_for_person(&actor)
+            } else {
+                session_cookie_and_csrf_for_role(role)
+            };
             builder = builder
                 .header(header::COOKIE, cookie)
                 .header("x-csrf-token", csrf);
@@ -6453,7 +6471,7 @@ async fn file_lifecycle_artifact(
 }
 
 #[tokio::test]
-async fn api_projects_lifecycle_authorizes_only_lawyer_and_admin() {
+async fn api_projects_lifecycle_authorizes_lawyer_and_owner() {
     // Same shape as the bare PATCH/DELETE matter path: tier-only, not scoped
     // to the caller's own matters — `seeded_matter` carries no participants
     // at all, and lawyer/admin still succeed.
@@ -6483,8 +6501,8 @@ async fn api_projects_lifecycle_authorizes_only_lawyer_and_admin() {
             "",
         ),
         (
-            "admin",
-            Some(store::persons::Role::Admin),
+            "owner",
+            Some(store::persons::Role::Owner),
             StatusCode::OK,
             "",
         ),
@@ -19372,7 +19390,7 @@ async fn admin_person_edit_page_locks_the_role_select_for_a_higher_tier_target()
 }
 
 #[tokio::test]
-async fn admin_can_update_a_persons_role() {
+async fn owner_can_promote_a_person_to_admin() {
     let (state, surreal) = state_with_engines().await;
     let libra = store::persons::create(
         &surreal,
@@ -19384,7 +19402,7 @@ async fn admin_can_update_a_persons_role() {
     )
     .await
     .unwrap();
-    let (cookie, csrf) = session_cookie_and_csrf_for_role(store::persons::Role::Admin);
+    let (cookie, csrf) = session_cookie_and_csrf_for_role(store::persons::Role::Owner);
     let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
 
     let resp = app

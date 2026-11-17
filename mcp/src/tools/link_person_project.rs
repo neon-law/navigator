@@ -50,7 +50,7 @@ struct Args {
     project_id: Uuid,
 }
 
-/// An authenticated Admin may staff matters in the Firms they administer.
+/// An authenticated Admin may assign participants to matters in the Firms they administer.
 pub(super) async fn require_admin_scope(
     surreal: &store::surreal::SurrealDb,
     identity: super::Identity,

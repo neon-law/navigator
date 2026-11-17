@@ -200,11 +200,11 @@ async fn participant_lawyer_approves_and_advances_past_lawyer_review() {
 }
 
 #[tokio::test]
-async fn admin_bypasses_scope_and_approves() {
+async fn firm_admin_can_approve() {
     let h = build_app().await;
     let project = open_project(&h.surreal).await;
     let notation_id = seed_lawyer_review_notation(&h, project.id).await;
-    let admin = bearer_new_person(&h.surreal, "admin@example.com", Role::Admin, None).await;
+    let admin = bearer_common::bearer_project_firm_admin(&h.surreal, project.id).await;
 
     let resp = post_approval(&h.app, Some(&admin), notation_id).await;
     assert_eq!(resp.status(), StatusCode::OK);
@@ -273,7 +273,7 @@ async fn a_preexisting_pdf_does_not_skip_lawyer_approval() {
     let h = build_app().await;
     let project = open_project(&h.surreal).await;
     let notation_id = seed_lawyer_review_notation(&h, project.id).await;
-    let admin = bearer_new_person(&h.surreal, "admin@example.com", Role::Admin, None).await;
+    let admin = bearer_common::bearer_project_firm_admin(&h.surreal, project.id).await;
     h.storage
         .put(
             &store::notations::document_pdf_storage_key(notation_id),

@@ -1809,8 +1809,8 @@ async fn assert_fi_assignment_rights_before_writes(
         )
         .await;
         assert_eq!(
-            status, 403,
-            "Admin cannot assign imported history to a Project"
+            status, 404,
+            "An unrelated Admin cannot resolve the Project for imported history"
         );
         assert_eq!(
             fi_counts(pg).await,

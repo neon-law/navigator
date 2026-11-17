@@ -448,11 +448,11 @@ async fn a_retainer_with_no_clauses_is_refused_and_never_reaches_the_provider() 
 }
 
 #[tokio::test]
-async fn admin_bypasses_scope_and_sends() {
+async fn firm_admin_can_send() {
     let h = build_app().await;
     let project = open_project(&h.surreal).await;
     let notation_id = seed_lawyer_review_notation(&h, project.id).await;
-    let admin = bearer_new_person(&h.surreal, "admin@example.com", Role::Admin, None).await;
+    let admin = bearer_common::bearer_project_firm_admin(&h.surreal, project.id).await;
 
     let approve = post(&h.app, Some(&admin), notation_id, "approval").await;
     assert_eq!(approve.status(), StatusCode::OK);

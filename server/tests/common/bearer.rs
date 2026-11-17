@@ -58,3 +58,18 @@ fn header(session: &SessionData) -> String {
         SessionStore::new(portal::test_support::TEST_SESSION_KEY).encode(session)
     )
 }
+
+/// Bearer for an Admin of the Project's Firm with no Project participation.
+pub async fn bearer_project_firm_admin(
+    surreal: &store::surreal::SurrealDb,
+    project_id: Uuid,
+) -> String {
+    let admin = store::persons::create(
+        surreal,
+        &store::persons::NewPerson::with_role("Firm Admin", "admin@example.com", Role::Admin),
+    )
+    .await
+    .expect("seed the Firm Admin");
+    store::test_support::grant_project_firm_admin(surreal, project_id, admin.id).await;
+    bearer(admin.id, Role::Admin)
+}

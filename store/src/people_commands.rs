@@ -281,7 +281,7 @@ fn classify_firm_write(error: crate::firms::FirmError) -> PeopleCommandError {
     }
 }
 
-/// Grant staff membership at creation. Only Lawyer and Clerk default to the anchor Firm.
+/// Grant Firm membership at creation. Only Lawyer and Clerk default to the anchor Firm.
 async fn grant_default_firm_membership(
     db: &SurrealDb,
     person: &Person,
