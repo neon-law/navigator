@@ -153,6 +153,7 @@ pub enum SectionView {
     DecisionQueue(Vec<SectionRow>),
     DeadlineBoard(Vec<DeadlineCard>),
     DocumentBody(PageDraft),
+    WhatsAppTimeline(Option<String>),
     CommentRail(Vec<SectionRow>),
     AuthorityTable(AuthorityView),
     EvidenceIndex(EvidenceIndexView),
@@ -621,6 +622,12 @@ pub fn SectionBody(view: SectionView) -> Element {
         SectionView::KeyDatesStrip(rows) => rsx! { KeyDatesStripSection { rows } },
         SectionView::DecisionQueue(rows) => rsx! { DecisionQueueSection { rows } },
         SectionView::DeadlineBoard(rows) => rsx! { records::DeadlineBoardSection { rows } },
+        SectionView::WhatsAppTimeline(Some(html)) => rsx! {
+            section { class: "whatsapp-timeline", dangerous_inner_html: html }
+        },
+        SectionView::WhatsAppTimeline(None) => rsx! {
+            p { "The declared WhatsApp export is unavailable." }
+        },
         SectionView::DocumentBody(draft) => rsx! { engagement::DocumentBodySection { draft } },
         SectionView::CommentRail(rows) => rsx! { CommentRailSection { rows } },
         SectionView::AuthorityTable(view) => rsx! { authorities::AuthorityTableSection { view } },

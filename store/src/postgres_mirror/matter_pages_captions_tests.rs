@@ -26,6 +26,7 @@ fn page(slug: &str, client: Option<&[&str]>) -> PageEntry {
         kind: "docket_deadline_board".to_string(),
         title: format!("Page {slug}"),
         draft: Some(format!("drafts/{slug}.md")),
+        document_revision: None,
         lenses,
     }
 }
@@ -167,7 +168,19 @@ async fn a_whole_set_sync_converges_replays_and_drops_removed_pages() {
     let firm_id = source_firm(&surreal).await;
     let project_id = source_project(&surreal, Some(firm_id)).await;
 
-    let synced = matter_pages::replace_for_project(&surreal, project_id, &pages())
+    let revision = Uuid::now_v7().to_string();
+    let mut declared = pages();
+    let timeline = &mut declared[1];
+    timeline.kind = "whatsapp_timeline".into();
+    timeline.draft = None;
+    timeline.document_revision = Some(revision.clone());
+    timeline.lenses.insert(
+        "lawyer".to_string(),
+        ["whatsapp_timeline", "boundary_note", "provenance_statement"]
+            .map(String::from)
+            .to_vec(),
+    );
+    let synced = matter_pages::replace_for_project(&surreal, project_id, &declared)
         .await
         .unwrap();
     assert_eq!(
@@ -188,6 +201,14 @@ async fn a_whole_set_sync_converges_replays_and_drops_removed_pages() {
     assert_eq!(stored[0].slug, "timeline");
     assert_eq!(stored[0].position, 0);
     assert_eq!(stored[1].position, 1);
+    assert_eq!(
+        synced[1].entry.document_revision.as_deref(),
+        Some(revision.as_str())
+    );
+    assert_eq!(
+        stored[1].document_revision.as_deref(),
+        Some(revision.as_str())
+    );
     assert_eq!(stored[0].firm_id, Some(firm_id));
     assert_eq!(stored[0].draft.as_deref(), Some("drafts/timeline.md"));
     assert_eq!(

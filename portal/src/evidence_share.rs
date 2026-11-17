@@ -24,7 +24,6 @@ const TERMS: &str = concat!(
     "views and download requests for this invitation. ",
     "Navigator also totals daily usage without storing account or invitation identifiers in the totals."
 );
-const PAGE_SIZE: usize = 100;
 
 pub(crate) fn routes(state: &AppState) -> Router<AppState> {
     share_routes(state, None)
@@ -268,10 +267,7 @@ async fn manage_action(
                 return Err(StatusCode::BAD_REQUEST);
             }
             let text = source(&state.app, &asset).await?;
-            if !crate::whatsapp_export::entries(&text)
-                .iter()
-                .any(|entry| !entry.timestamp.is_empty())
-            {
+            if !webapp::whatsapp_export::supported(&text) {
                 return Ok(private(
                     (
                         StatusCode::UNPROCESSABLE_ENTITY,
@@ -347,40 +343,13 @@ async fn view(
         return Ok(page("Evidence access terms", &body));
     }
     let text = shared_source(&state.app, &share).await?;
-    let entries = crate::whatsapp_export::entries(&text);
-    let page_count = entries.len().div_ceil(PAGE_SIZE).max(1);
-    let index = query.page.saturating_sub(1).min(page_count - 1);
     let base = invitation(id);
-    let mut body = format!(
-        r#"<section><p>{} entries · Page {} of {page_count}</p><p class="muted">Timestamps and order come from the original export.</p>
-<p><a href="{base}/download">Download original text export</a></p></section><nav aria-label="Timeline pages">"#,
-        entries.len(),
-        index + 1
+    let body = webapp::whatsapp_export::timeline_html(
+        &text,
+        query.page,
+        &base,
+        &format!("{base}/download"),
     );
-    if index > 0 {
-        let _ = write!(body, r#"<a href="{base}?page={index}">Previous page</a>"#);
-    }
-    if index + 1 < page_count {
-        let _ = write!(body, r#"<a href="{base}?page={}">Next page</a>"#, index + 2);
-    }
-    if page_count > 1 {
-        let _ = write!(
-            body,
-            r#"<form method="get"><label for="page">Jump to page</label>
-<input id="page" type="number" name="page" min="1" max="{page_count}" value="{}" required><button>Go</button></form>"#,
-            index + 1,
-        );
-    }
-    body.push_str("</nav>");
-    for entry in entries.iter().skip(index * PAGE_SIZE).take(PAGE_SIZE) {
-        let _ = write!(
-            body,
-            r#"<article><strong>{}</strong> <span class="timestamp">{}</span><p>{}</p></article>"#,
-            escape(entry.sender),
-            escape(entry.timestamp),
-            escape(&entry.message)
-        );
-    }
     record_access(&db, id, email, person, false).await?;
     Ok(page("WhatsApp timeline", &body))
 }

@@ -1412,6 +1412,7 @@
       "matter_page": {
         "clerk_sections": "option<array<string>>",
         "client_sections": "option<array<string>>",
+        "document_revision": "option<string>",
         "draft": "option<string>",
         "id": "record",
         "kind": "string",
@@ -4205,6 +4206,7 @@
         "columns": {
           "clerk_sections": "TEXT[]",
           "client_sections": "TEXT[]",
+          "document_revision": "TEXT",
           "draft": "TEXT",
           "firm_id": "UUID",
           "id": "UUID",

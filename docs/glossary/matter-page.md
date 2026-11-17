@@ -10,6 +10,9 @@ One page of a [Matter](matter.md), declared as a `pages:` entry in the Project [
 (one of the matter page kinds, such as `docket_deadline_board` or `engagement_billing_records`), a `title`, an optional
 `draft` path, and its `lenses:` — the [Section](section.md) list each [Lens](lens.md) shows, in order.
 
+A WhatsApp timeline also names a `document_revision:` UUID for its filed text export. The page has a lawyer lens. An
+[Evidence Share](evidence-share.md) controls any access granted to an invited recipient.
+
 The page is composition, not code. The `kind` names a skeleton the gate checks the entry against (`Y021` for shape,
 `D001` through `D005` for composition); the renderer only ever sees sections, one component each. A Markdown file never
 declares a page: a frontmatter `kind:` that names a page kind fails `S103`.

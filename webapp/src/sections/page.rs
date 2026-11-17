@@ -315,6 +315,9 @@ pub fn page_sections(
     };
     let page = pages.iter().find(|page| page.slug == slug)?;
     let mut sections = page.sections_for(rules_lens)?;
+    if page.dashboard_kind() == Some(rules::Kind::WhatsAppTimeline) {
+        return (lens == PageLens::Lawyer).then(|| (page.clone(), sections));
+    }
     if !sections.contains(&rules::dashboard::Section::ProjectCosts) {
         if let Some(invoice) = sections
             .iter()
@@ -404,23 +407,17 @@ pub async fn get_matter_page() -> Result<MatterPageView, ServerFnError> {
         .ok()
         .and_then(|axum::extract::RawQuery(query)| query)
         .unwrap_or_default();
-    let mut cx = load_context(
-        &surreal,
-        &project,
-        lens,
-        PageAddress {
-            synced_at,
-            slug: slug.clone(),
-            draft: page.draft.clone(),
-            document_on_page: sections.contains(&rules::dashboard::Section::NotationDocument),
-            side: side_filter(&query),
-            discovery: super::discovery::discovery_filter(&query),
-            viewer_person_id: person_id,
-        },
-    )
-    .await?;
-    let (chart, viewing_as_dri) = private_chart_context(project.id, lens).await;
-    cx.private_chart = chart;
+    let address = PageAddress {
+        synced_at,
+        slug: slug.clone(),
+        draft: page.draft.clone(),
+        document_on_page: sections.contains(&rules::dashboard::Section::NotationDocument),
+        side: side_filter(&query),
+        discovery: super::discovery::discovery_filter(&query),
+        viewer_person_id: person_id,
+    };
+    let (cx, viewing_as_dri) =
+        build_page_context(&surreal, &project, lens, &page, address, &query).await?;
     Ok(MatterPageView {
         viewing_as_dri,
         tabs: matter_tabs(&project.code, &entries, viewer),
@@ -480,6 +477,68 @@ pub fn side_filter(query: &str) -> super::SideFilter {
         .map_or_else(super::SideFilter::default, |(_, value)| {
             super::SideFilter::parse(value)
         })
+}
+
+#[cfg(feature = "server")]
+async fn build_page_context(
+    surreal: &store::surreal::SurrealDb,
+    project: &store::projects::Project,
+    lens: PageLens,
+    page: &rules::pages::PageEntry,
+    address: PageAddress,
+    query: &str,
+) -> Result<(super::LoadContext, Option<crate::components::ClientDriView>), ServerFnError> {
+    if page.dashboard_kind() == Some(rules::Kind::WhatsAppTimeline) {
+        let mut context = super::LoadContext::empty(lens);
+        context.synced_at = address.synced_at;
+        context.slug = address.slug;
+        context.whatsapp_timeline = load_whatsapp_timeline(surreal, project, page, query).await;
+        return Ok((context, None));
+    }
+    let mut context = load_context(surreal, project, lens, address).await?;
+    let (chart, viewing_as_dri) = private_chart_context(project.id, lens).await;
+    context.private_chart = chart;
+    Ok((context, viewing_as_dri))
+}
+
+#[cfg(feature = "server")]
+async fn load_whatsapp_timeline(
+    surreal: &store::surreal::SurrealDb,
+    project: &store::projects::Project,
+    page: &rules::pages::PageEntry,
+    query: &str,
+) -> Option<String> {
+    let id = page.document_revision.as_deref()?.parse().ok()?;
+    let document = store::assets::find_by_id(surreal, id).await.ok()??;
+    if document.project_id != Some(project.id) || !store::evidence_shares::eligible(&document) {
+        return None;
+    }
+    let storage = consume_context::<std::sync::Arc<dyn cloud::StorageService>>();
+    let object = storage.get(&document.storage_key).await.ok()?;
+    if store::assets::sha256_hex(&object.bytes) != document.sha256_hex {
+        return None;
+    }
+    let text = std::str::from_utf8(&object.bytes).ok()?;
+    if !crate::whatsapp_export::supported(text) {
+        return None;
+    }
+    let page_number = query
+        .split('&')
+        .find_map(|field| field.strip_prefix("page="))
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(1);
+    let base = format!("/app/projects/{}/{}", project.code, page.slug);
+    let document_url = format!("/app/projects/{}/documents/{id}", project.code);
+    Some(format!(
+        r#"<p><a href="{}/evidence-shares">Manage evidence invitations</a></p>{}"#,
+        crate::html_escape::escape_attr(&document_url),
+        crate::whatsapp_export::timeline_html(
+            text,
+            page_number,
+            &base,
+            &format!("{document_url}/download")
+        ),
+    ))
 }
 
 /// Where the reader is: the stored page and the filters they asked for.
@@ -1109,6 +1168,7 @@ mod tests {
                     kind: "docket_deadline_board".into(),
                     title: "Case timeline".into(),
                     draft: None,
+                    document_revision: None,
                     lenses: timeline,
                 },
                 PageEntry {
@@ -1116,6 +1176,7 @@ mod tests {
                     kind: "engagement_billing_records".into(),
                     title: "Engagement and billing".into(),
                     draft: None,
+                    document_revision: None,
                     lenses: billing,
                 },
             ]

@@ -226,7 +226,6 @@ pub mod tenant;
 /// use it; see the module docs.
 pub mod test_support;
 mod tiktok_comments;
-mod whatsapp_export;
 #[cfg(test)]
 pub(crate) use store::test_support::twilio as twilio_registry_harness;
 pub mod twilio_resolution;

@@ -263,6 +263,7 @@ fn pages() -> Vec<rules::pages::PageEntry> {
         kind: "estate_plan_console".into(),
         title: "Estate plan".into(),
         draft: None,
+        document_revision: None,
         lenses,
     }]
 }

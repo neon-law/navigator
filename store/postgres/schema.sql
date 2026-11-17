@@ -4839,3 +4839,6 @@ CREATE TABLE project_calendar_grant (
 
 -- Migration: 20261116200000_add_task_handoff.sql
 ALTER TABLE project_task ADD COLUMN handoff JSONB;
+
+-- Migration: 20261116210000_matter_page_document_revision.sql
+ALTER TABLE matter_page ADD COLUMN document_revision TEXT;

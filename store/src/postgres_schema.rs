@@ -1624,6 +1624,10 @@ mod tests {
                 "20261116190000_create_project_calendar_grant.sql",
                 include_str!("../postgres/migrations/20261116190000_create_project_calendar_grant.sql"),
             ),
+            (
+                "20261116210000_matter_page_document_revision.sql",
+                include_str!("../postgres/migrations/20261116210000_matter_page_document_revision.sql"),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

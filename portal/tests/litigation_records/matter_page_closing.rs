@@ -67,6 +67,7 @@ fn pages() -> Vec<rules::pages::PageEntry> {
         kind: "closing_room".into(),
         title: "Closing".into(),
         draft: None,
+        document_revision: None,
         lenses,
     }]
 }

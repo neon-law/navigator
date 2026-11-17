@@ -328,11 +328,17 @@ pages:
 | `kind` | yes | one of the matter page kinds below | Y021 |
 | `title` | yes | any non-empty text | Y021 |
 | `draft` | no | a tracked regular source file beneath `drafts/` or `templates/` | Y021, Y026 |
+| `document_revision` | for a WhatsApp timeline | a filed Document revision UUID | Y021 |
 | `lenses` | yes | a mapping of `client`, `lawyer`, or `clerk` to a list of section names | D001–D005 |
 
 The kinds are `review_queue_workbench`, `verifier_split_view`, `matter_status_console`, `docket_deadline_board`,
 `document_workbench`, `authority_library`, `discovery_cockpit`, `hearing_console`, `deliverable_package`,
 `engagement_billing_records`, `estate_plan_console`, and `closing_room`.
+
+A `whatsapp_timeline` entry uses `document_revision` to pin one filed WhatsApp text export and declares only a `lawyer`
+lens with `whatsapp_timeline`, `boundary_note`, and `provenance_statement`. Navigator checks the revision against the
+current Project before displaying the export. An [Evidence Share](glossary/evidence-share.md) is issued from the page
+when a lawyer chooses to invite someone.
 
 Two sections are in every kind's skeleton and must appear in **every** declared lens: `boundary_note` (what this page is
 not, and what still requires a human) and `provenance_statement` (as-of date, what was examined, what was not). A client

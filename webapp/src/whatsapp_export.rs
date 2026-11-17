@@ -63,6 +63,57 @@ fn split_entry(line: &str) -> Option<(&str, &str)> {
     Some((timestamp, rest))
 }
 
+/// Whether the source contains a supported timestamped WhatsApp entry.
+#[must_use]
+pub fn supported(text: &str) -> bool {
+    text.lines()
+        .any(|line| split_entry(line.trim_start_matches('\u{feff}')).is_some())
+}
+
+/// Render a page of source entries. Every source value and URL is escaped.
+#[must_use]
+pub fn timeline_html(text: &str, requested_page: usize, base: &str, download: &str) -> String {
+    use crate::html_escape::escape_attr as escape;
+    use std::fmt::Write as _;
+    const PAGE_SIZE: usize = 100;
+    let entries = entries(text);
+    let page_count = entries.len().div_ceil(PAGE_SIZE).max(1);
+    let index = requested_page.saturating_sub(1).min(page_count - 1);
+    let base = escape(base);
+    let download = escape(download);
+    let mut body = format!(
+        r#"<section><p>{} entries · Page {} of {page_count}</p><p class="muted">Timestamps and order come from the original export.</p>
+<p><a href="{download}">Download original text export</a></p></section><nav aria-label="Timeline pages">"#,
+        entries.len(),
+        index + 1
+    );
+    if index > 0 {
+        let _ = write!(body, r#"<a href="{base}?page={index}">Previous page</a>"#);
+    }
+    if index + 1 < page_count {
+        let _ = write!(body, r#"<a href="{base}?page={}">Next page</a>"#, index + 2);
+    }
+    if page_count > 1 {
+        let _ = write!(
+            body,
+            r#"<form method="get"><label for="page">Jump to page</label>
+<input id="page" type="number" name="page" min="1" max="{page_count}" value="{}" required><button>Go</button></form>"#,
+            index + 1,
+        );
+    }
+    body.push_str("</nav>");
+    for entry in entries.iter().skip(index * PAGE_SIZE).take(PAGE_SIZE) {
+        let _ = write!(
+            body,
+            r#"<article class="whatsapp-entry" style="border:1px solid #cfdae6;border-radius:.6rem;padding:1rem;margin:.8rem 0"><strong>{}</strong> <span class="timestamp">{}</span><p style="white-space:pre-wrap;overflow-wrap:anywhere">{}</p></article>"#,
+            escape(entry.sender),
+            escape(entry.timestamp),
+            escape(&entry.message)
+        );
+    }
+    body
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
