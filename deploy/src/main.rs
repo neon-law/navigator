@@ -2078,7 +2078,7 @@ enum OpsCmd {
         #[arg(long)]
         check: bool,
     },
-    /// Select the workspace tests that start no SurrealDB engine, for the PR
+    /// Select the workspace tests that start no `SurrealDB` engine, for the PR
     /// gate: writes a nextest filterset, a coverage ignore regex, and the
     /// `features` targets into `--out`. Run from the repository root.
     SurrealFreeTests {

@@ -1,11 +1,11 @@
 //! `hudson ops surreal-free-tests` — select the workspace tests that start no
-//! SurrealDB engine, for the PR gate.
+//! `SurrealDB` engine, for the PR gate.
 //!
-//! SurrealDB is being retired (ENG-1356..1358). The application may still talk
+//! `SurrealDB` is being retired (ENG-1356..1358). The application may still talk
 //! to it, but CI no longer tests it: the embedded engine costs about a second
 //! per test, was ~96% of the suite's run time, and made the gate cost ~6x more
-//! under SurrealDB 4. Every test defined in a file that starts an engine is
-//! left out of the run. Every file that names SurrealDB at all (`surreal`, any
+//! under `SurrealDB` 4. Every test defined in a file that starts an engine is
+//! left out of the run. Every file that names `SurrealDB` at all (`surreal`, any
 //! case, on a non-comment line) is left out of the coverage measurement, so the
 //! floor measures the code CI still tests.
 //!
@@ -17,7 +17,7 @@
 //!
 //! `store::surreal::test_support` refuses to start an engine under
 //! `NAVIGATOR_FORBID_SURREAL=1`, so a test this selection misses fails loudly
-//! instead of quietly bringing SurrealDB back into CI.
+//! instead of quietly bringing `SurrealDB` back into CI.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -62,7 +62,7 @@ fn write(out: &Path) -> Result<()> {
         selection.features_args.join("\n"),
     )?;
     println!(
-        "{} files that name SurrealDB left out of the coverage measurement",
+        "{} files that name `SurrealDB` left out of the coverage measurement",
         selection.ignored_files
     );
     println!(
@@ -101,7 +101,7 @@ fn starts_engine(source: &str) -> bool {
     })
 }
 
-/// `a/b.rs` or `a/b/mod.rs` → `a::b`; `lib.rs` / `main.rs` → ``.
+/// `a/b.rs` or `a/b/mod.rs` → `a::b`; `lib.rs` or `main.rs` → the empty path.
 fn module_path(src_relative: &Path) -> String {
     let mut parts: Vec<String> = src_relative
         .with_extension("")
@@ -310,6 +310,7 @@ fn rust_files(dir: &Path) -> Vec<PathBuf> {
     files
 }
 
+#[allow(clippy::too_many_lines)] // one pass per crate; splitting it scatters the cases
 fn select(root: &Path) -> Result<Selection> {
     let workspace: toml::Value = toml::from_str(
         &fs::read_to_string(root.join("Cargo.toml")).context("read the workspace manifest")?,
@@ -351,7 +352,7 @@ fn select(root: &Path) -> Result<Selection> {
             let relative_to_root = path.strip_prefix(root).unwrap_or(&path);
             ignored.push(relative_to_root.to_string_lossy().replace('.', "\\."));
             // A cucumber runner reaches the engine through a shared module, so
-            // naming SurrealDB is enough there.
+            // naming `SurrealDB` is enough there.
             if package != "features" && !starts_engine(&source) {
                 continue;
             }
@@ -475,7 +476,7 @@ mod tests {
     #[test]
     fn naming_surreal_ignores_comments() {
         assert!(names_surreal("fn f(_db: &store::surreal::SurrealDb) {}"));
-        assert!(!names_surreal("// SurrealDB is retired\nlet x = 1;"));
+        assert!(!names_surreal("// `SurrealDB` is retired\nlet x = 1;"));
     }
 
     #[test]
