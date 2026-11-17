@@ -6790,7 +6790,7 @@ mod matter_command_tests {
     async fn open_matter_refuses_a_client_as_the_attesting_attorney() {
         let db = store().await;
         let entity = seed_entity(&db).await;
-        let (attorney, client) = attorney_and_client(&db).await;
+        let (_, client) = attorney_and_client(&db).await;
         let firm_id = firm_wearing_neon(&db).await;
         assert!(matches!(
             open_matter(
