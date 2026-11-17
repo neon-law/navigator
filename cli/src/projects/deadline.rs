@@ -162,7 +162,10 @@ pub async fn sync(host: Option<&str>, project: Option<&str>, dry_run: bool) -> E
         let results = report["results"]
             .as_array()
             .ok_or_else(|| anyhow!("mirror report is not an array"))?;
+        let mut accepted = !results.is_empty();
         for result in results {
+            let outcome = result["outcome"].as_str().unwrap_or("?");
+            accepted &= matches!(outcome, "mirrored" | "planned" | "skipped_closed");
             let line = match result["detail"].as_str() {
                 Some(detail) => format!(" — {detail}"),
                 None => String::new(),
@@ -170,10 +173,14 @@ pub async fn sync(host: Option<&str>, project: Option<&str>, dry_run: bool) -> E
             println!(
                 "{}: {}{}",
                 result["project_code"].as_str().unwrap_or("?"),
-                result["outcome"].as_str().unwrap_or("?"),
+                outcome,
                 line
             );
         }
+        anyhow::ensure!(
+            accepted,
+            "calendar mirror did not report a successful outcome"
+        );
         Ok(())
     }
     .await;

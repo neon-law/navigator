@@ -603,6 +603,41 @@ async fn deadline_sync_dry_run_tells_the_door() {
     server.verify().await;
 }
 
+#[tokio::test]
+async fn deadline_sync_fails_when_the_provider_cannot_apply_the_report() {
+    let server = MockServer::start().await;
+    let root = TempDir::new().unwrap();
+    let host = server.uri();
+    let credentials = credentials(root.path(), &host);
+    mount_projects(&server).await;
+    mount_mirror(
+        &server,
+        json!({"results": [
+            {"project_code": "acme", "outcome": "provider_unavailable"}
+        ]}),
+        200,
+    )
+    .await;
+
+    Command::cargo_bin("navigator")
+        .unwrap()
+        .current_dir(root.path())
+        .env("NAVIGATOR_CREDENTIALS_FILE", &credentials)
+        .args([
+            "project",
+            "deadline",
+            "sync",
+            "--project",
+            "acme",
+            "--host",
+            &host,
+        ])
+        .assert()
+        .failure()
+        .stdout(predicates::str::contains("acme: provider_unavailable"));
+    server.verify().await;
+}
+
 /// A door answer without its results array is a failure, not a silent pass.
 #[tokio::test]
 async fn deadline_sync_fails_when_the_report_is_not_an_array() {
