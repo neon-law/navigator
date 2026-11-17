@@ -103,22 +103,25 @@ async fn check_hydration(c: &Client) {
         .is_enabled()
         .await
         .unwrap());
-    for (slug, expected) in [
-        ("instruments", "Instruments"),
-        ("not-declared", "Not found"),
+    for (slug, heading, expected) in [
+        ("instruments", "h2", "Instruments"),
+        ("not-declared", "h1", "Not found"),
     ] {
         c.goto(&format!("{}/app/projects/{code}/{slug}", base_url()))
             .await
             .expect("other private page");
         hydrated(c).await;
-        assert!(c
-            .find(Locator::Css("main[data-matter-page-root] h1"))
-            .await
-            .unwrap()
-            .text()
-            .await
-            .unwrap()
-            .contains(expected));
+        let selector = format!("main[data-matter-page-root] {heading}");
+        assert_eq!(
+            c.find(Locator::Css(&selector))
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap(),
+            expected,
+            "{slug} heading"
+        );
         assert!(
             c.find(Locator::Css("[data-private-chart]")).await.is_err(),
             "non-chart and absent pages never inherit personal controls"
