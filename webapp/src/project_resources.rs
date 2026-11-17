@@ -129,7 +129,7 @@ impl ResourceKind {
             Self::ClientSubmissionsFolder => "Client Submissions",
             Self::SharedSlackChannel => "Shared Slack channel",
             Self::SharedNotionPage => "Shared Notion page",
-            Self::ProjectCalendar => "Matter calendar",
+            Self::ProjectCalendar => "Project Google Calendar",
             Self::BookingLink => "Book a time",
         }
     }

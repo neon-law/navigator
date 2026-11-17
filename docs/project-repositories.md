@@ -671,7 +671,9 @@ having no public fallback while the pointer that actually served users had one.
 
 | State | Answer |
 | --- | --- |
-| `repository_url` recorded | The lawyer sees it verbatim. Never verified — the target may not exist yet. |
+| Forgejo URL matches the configured host and the Project's Firm and code | The lawyer sees the Forgejo browser link. |
+| Forgejo backend with any other recorded URL | The Source repository link is absent. |
+| GitHub backend with another recorded URL | The lawyer sees the recorded link. |
 | `repository_url` absent | The pointer is absent. Not an error, and nothing is composed. |
 | A value that is not an `http(s)` URL with a host and path | Refused at the write, not stored. |
 

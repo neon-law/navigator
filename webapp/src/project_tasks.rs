@@ -39,6 +39,13 @@ pub struct TaskRow {
     pub due_on: Option<String>,
 }
 
+impl TaskRow {
+    pub(crate) fn is_overdue(&self, today: &str) -> bool {
+        // ISO dates sort chronologically. A task due today stays current.
+        self.state != "done" && self.due_on.as_deref().is_some_and(|due| due < today)
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HandoffRow {
     title: String,
@@ -295,7 +302,7 @@ fn state_tone(state: &str) -> BadgeTone {
 fn next_state(state: &str) -> Option<(&'static str, &'static str)> {
     match state {
         "todo" => Some(("in_progress", "Start")),
-        "in_progress" => Some(("done", "Complete")),
+        "in_progress" => Some(("done", "Mark done")),
         _ => None,
     }
 }
@@ -316,6 +323,7 @@ pub fn TasksTab(
     code: String,
     csrf: String,
     tasks: Vec<TaskRow>,
+    today: String,
     assignees: Vec<AssigneeChoice>,
     /// The `?error=` flash a refused write redirected back with.
     #[props(default)]
@@ -359,7 +367,7 @@ pub fn TasksTab(
                             }
                         }
                         tbody {
-                            for row in tasks.iter() {
+                            for (row, overdue) in tasks.iter().map(|row| (row, row.is_overdue(&today))) {
                                 tr { id: "task-{row.id}",
                                     td {
                                         "{row.title}"
@@ -368,22 +376,34 @@ pub fn TasksTab(
                                         }
                                     }
                                     td { "{row.assignee.clone().unwrap_or_else(|| \"—\".to_string())}" }
-                                    td { "{row.due_on.clone().unwrap_or_else(|| \"—\".to_string())}" }
+                                    td {
+                                        "{row.due_on.as_deref().unwrap_or(\"—\")}"
+                                        if overdue {
+                                            " "
+                                            Badge { tone: BadgeTone::Review, "Overdue" }
+                                        }
+                                    }
                                     td {
                                         Badge { tone: state_tone(&row.state), "{state_label(&row.state)}" }
                                     }
                                     td { class: "nav-table__end",
                                         if let Some((next, label)) = next_state(&row.state) {
-                                            form {
-                                                class: "lawyer-detail__inline-form",
-                                                method: "post",
-                                                action: "/app/projects/{code}/tasks/{row.id}/transition",
-                                                input { r#type: "hidden", name: "_csrf", value: "{csrf}" }
-                                                input { r#type: "hidden", name: "next_state", value: "{next}" }
-                                                button {
-                                                    class: "nav-btn nav-btn--secondary matter-task-transition",
-                                                    r#type: "submit",
-                                                    "{label}"
+                                            {
+                                                let emphasis = if overdue || next == "done" { "primary" } else { "secondary" };
+                                                rsx! {
+                                                    form {
+                                                        class: "lawyer-detail__inline-form",
+                                                        method: "post",
+                                                        action: "/app/projects/{code}/tasks/{row.id}/transition",
+                                                        input { r#type: "hidden", name: "_csrf", value: "{csrf}" }
+                                                        input { r#type: "hidden", name: "next_state", value: "{next}" }
+                                                        button {
+                                                            class: "nav-btn nav-btn--{emphasis} matter-task-transition",
+                                                            aria_label: "{label}: {row.title}",
+                                                            r#type: "submit",
+                                                            "{label}"
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }
@@ -554,7 +574,10 @@ mod tests {
     #[test]
     fn done_has_no_forward_transition() {
         assert_eq!(super::next_state("todo"), Some(("in_progress", "Start")));
-        assert_eq!(super::next_state("in_progress"), Some(("done", "Complete")));
+        assert_eq!(
+            super::next_state("in_progress"),
+            Some(("done", "Mark done"))
+        );
         assert_eq!(super::next_state("done"), None);
     }
 
@@ -564,6 +587,7 @@ mod tests {
             TasksTab {
                 code: "acme".to_string(),
                 csrf: "token".to_string(),
+                today: "2026-11-16".to_string(),
                 tasks: vec![],
                 assignees: vec![],
             }
@@ -585,10 +609,13 @@ mod tests {
             TasksTab {
                 code: "acme".to_string(),
                 csrf: "token".to_string(),
+                today: "2026-11-16".to_string(),
                 tasks: vec![
                     a_row("todo", None),
                     a_row("in_progress", Some("00000000-0000-0000-0000-0000000000aa")),
                     a_row("done", None),
+                    TaskRow { due_on: Some("2026-11-16".into()), ..a_row("todo", None) },
+                    TaskRow { due_on: None, ..a_row("todo", None) },
                 ],
                 assignees: vec![(
                     "00000000-0000-0000-0000-0000000000aa".to_string(),
@@ -605,8 +632,9 @@ mod tests {
         );
         assert!(!html.contains(">in_progress<"), "{html}");
         // One forward transition per open row, none for the done row.
-        assert_eq!(html.matches("matter-task-transition").count(), 2, "{html}");
-        assert!(html.contains("Complete"), "{html}");
+        assert_eq!(html.matches("matter-task-transition").count(), 4, "{html}");
+        assert!(html.contains("Mark done"), "{html}");
+        assert_eq!(html.matches(">Overdue</span>").count(), 2, "{html}");
         assert!(
             html.contains(r#"name="next_state" value="in_progress""#),
             "{html}"
@@ -616,7 +644,7 @@ mod tests {
         // assignee for the screen reader, and preselects the held assignee.
         // (The token boundary matters: `matter-task-assignee` also contains
         // `matter-task-assign`.)
-        assert_eq!(html.matches("matter-task-assign\"").count(), 3, "{html}");
+        assert_eq!(html.matches("matter-task-assign\"").count(), 5, "{html}");
         assert!(
             html.contains("Assignee for Serve the request for production"),
             "{html}"
@@ -640,6 +668,7 @@ mod tests {
             TasksTab {
                 code: "acme".to_string(),
                 csrf: "token".to_string(),
+                today: "2026-11-16".to_string(),
                 tasks: vec![row],
                 assignees: vec![],
             }
@@ -658,6 +687,7 @@ mod tests {
             TasksTab {
                 code: "acme".to_string(),
                 csrf: "token".to_string(),
+                today: "2026-11-16".to_string(),
                 tasks: vec![],
                 assignees: vec![],
                 error: Some("That task is not on this matter.".to_string()),
