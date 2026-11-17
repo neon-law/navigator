@@ -159,6 +159,16 @@ where
         );
     }
     println!("push: the push branch is on origin");
+    if github && has_forgejo_remote(dir)? {
+        let head = git_text(dir, &["rev-parse", "HEAD"])?;
+        let reference = format!("refs/heads/{target}");
+        let advertised = git_text(dir, &["ls-remote", "--refs", "forgejo", &reference])
+            .map_err(|_| anyhow::anyhow!("could not verify the pushed branch on Forgejo"))?;
+        anyhow::ensure!(
+            advertised == format!("{head}\t{reference}"),
+            "Forgejo did not receive the pushed branch at the local commit. Check the origin push URLs and retry"
+        );
+    }
 
     // Review request, ready for review — never a draft (LAW-220 step 2).
     let review = forge
@@ -218,16 +228,19 @@ async fn sync_secondary_remote(
         })?
 }
 
+fn has_forgejo_remote(dir: &Path) -> Result<bool> {
+    Ok(git_text(dir, &["remote"])?
+        .lines()
+        .any(|name| name == "forgejo"))
+}
+
 fn sync_github_mirror(
     dir: &Path,
     branch: &str,
     reviewed_head: &str,
     merge_commit: &str,
 ) -> Result<()> {
-    if !git_text(dir, &["remote"])?
-        .lines()
-        .any(|name| name == "forgejo")
-    {
+    if !has_forgejo_remote(dir)? {
         return Ok(());
     }
     sync_mirror_refs(dir, branch, reviewed_head, merge_commit).with_context(|| {
@@ -1004,6 +1017,39 @@ mod tests {
             args.join(" "),
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+
+    #[tokio::test]
+    async fn github_push_refuses_to_open_review_when_the_mirror_missed_the_branch() {
+        let checkout = TempCheckout::new().with_signing();
+        checkout.dual_remote();
+        let dir = checkout.path();
+        let origin = checkout.temp.path().join("origin.git");
+        git_sh(
+            Some(dir),
+            &["config", "--unset-all", "remote.origin.pushurl"],
+        );
+        git_sh(
+            Some(dir),
+            &["config", "remote.origin.pushurl", origin.to_str().unwrap()],
+        );
+        let forge = MockForge::green_after(1);
+        let error = super::run(
+            dir,
+            "main",
+            Some("push/the-change"),
+            "the change",
+            None,
+            false,
+            true,
+            &forge,
+            instant_sleep,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("Forgejo did not receive"));
+        assert!(forge.opened.lock().unwrap().is_empty());
+        assert!(super::git_text(&origin, &["rev-parse", "refs/heads/push/the-change"]).is_ok());
     }
 
     #[tokio::test]
