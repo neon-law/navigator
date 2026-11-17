@@ -444,6 +444,10 @@ pub async fn create_person(
     email: &str,
     role: &str,
 ) -> ExitCode {
+    #[derive(serde::Deserialize)]
+    struct CreatedPerson {
+        id: uuid::Uuid,
+    }
     run(async {
         let (base, token) = resolve(host.as_deref())?;
         let firm_id = resolve_firm(&base, &token, firm, None).await?;
@@ -462,10 +466,6 @@ pub async fn create_person(
                 "create Person refused: {status}: {}",
                 message.unwrap_or_default()
             );
-        }
-        #[derive(serde::Deserialize)]
-        struct CreatedPerson {
-            id: uuid::Uuid,
         }
         let person: CreatedPerson = response.json().await.context("read created Person")?;
         println!("{}", person.id);
