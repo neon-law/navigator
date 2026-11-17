@@ -347,9 +347,8 @@ Treat a failed Action as a narrow task and start from its first actionable failu
 5. When the failure exposes a behavior gap, add the non-gated covering test that would have caught it. Do not add a test
    merely to restate an infrastructure outage.
 6. Re-run the failed command and the directly affected gate. For a coverage failure, run `cargo llvm-cov --workspace
-   --fail-under-lines 70.0` and read its per-file table for the file that regressed; CI's `coverage floor` job prints
-   the same ranking from the CI LCOV, which leaves out files that name SurrealDB. Opening a new PR does not re-run that
-   suite.
+   --fail-under-lines 70.0` and read its per-file table for the file that regressed; CI's `cargo test (workspace)` job
+   prints the same table, leaving out files that name SurrealDB. Opening a new PR does not re-run that suite.
 7. Commit, push, and report the root cause, minimum fix, local proof, and any unrelated failing checks left untouched.
 
 `.github/workflows/ci.yml` owns PR commands; [`gitops.md`](gitops.md) maps release and integration workflows. Propose,

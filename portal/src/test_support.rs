@@ -94,7 +94,7 @@ pub async fn embedded_surreal() -> store::surreal::SurrealDb {
     assert!(
         std::env::var("NAVIGATOR_FORBID_SURREAL").as_deref() != Ok("1"),
         "this test starts SurrealDB, which CI no longer tests; \
-         scripts/surreal-free-tests.py should have left it out"
+         `hudson ops surreal-free-tests` should have left it out"
     );
     let db = store::surreal::connect(&store::surreal::SurrealConfig {
         // Named, never defaulted — `store::surreal` refuses to guess an

@@ -51,6 +51,7 @@ mod sendgrid_openapi;
 mod site_asset;
 mod ssh_keys;
 mod surreal_archive;
+mod surreal_free_tests;
 mod video_prepare;
 
 use cli::commands::{
@@ -2077,6 +2078,14 @@ enum OpsCmd {
         #[arg(long)]
         check: bool,
     },
+    /// Select the workspace tests that start no SurrealDB engine, for the PR
+    /// gate: writes a nextest filterset, a coverage ignore regex, and the
+    /// `features` targets into `--out`. Run from the repository root.
+    SurrealFreeTests {
+        /// The directory the three selection files are written into.
+        #[arg(long)]
+        out: PathBuf,
+    },
     /// Firm-scoped diagnostics.
     Firms {
         #[command(subcommand)]
@@ -3625,6 +3634,7 @@ fn run() -> ExitCode {
             | OpsCmd::ReleaseDefaultTag { .. }
             | OpsCmd::Release { .. }
             | OpsCmd::Notices { .. }
+            | OpsCmd::SurrealFreeTests { .. }
             | OpsCmd::Firms { .. }
             | OpsCmd::PrivateTerms { .. }
             | OpsCmd::Postgres(_)
@@ -3645,6 +3655,7 @@ fn run() -> ExitCode {
                 }
             },
             OpsCmd::Notices { out, check } => notices::run(&out, check),
+            OpsCmd::SurrealFreeTests { out } => surreal_free_tests::run(&out),
             OpsCmd::CutRelease {
                 repo,
                 manifest_path,
