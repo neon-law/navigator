@@ -1628,6 +1628,10 @@ mod tests {
                 "20261116220000_create_evidence_share.sql",
                 include_str!("../postgres/migrations/20261116220000_create_evidence_share.sql"),
             ),
+            (
+                "20261116230000_add_matter_page_media.sql",
+                include_str!("../postgres/migrations/20261116230000_add_matter_page_media.sql"),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

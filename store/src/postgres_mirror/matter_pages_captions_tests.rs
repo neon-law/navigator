@@ -27,6 +27,7 @@ fn page(slug: &str, client: Option<&[&str]>) -> PageEntry {
         title: format!("Page {slug}"),
         draft: Some(format!("drafts/{slug}.md")),
         document_revision: None,
+        media: Vec::new(),
         lenses,
     }
 }

@@ -30,6 +30,7 @@ pub const ENTRY_KEYS: &[&str] = &[
     "title",
     "draft",
     "document_revision",
+    "media",
     "lenses",
 ];
 
@@ -93,8 +94,19 @@ pub struct PageEntry {
     pub draft: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub document_revision: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub media: Vec<TimelineMedia>,
     #[serde(default)]
     pub lenses: BTreeMap<String, Vec<String>>,
+}
+
+/// A filed image revision and, when known, the time the media was created.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TimelineMedia {
+    pub document_revision: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<chrono::DateTime<chrono::FixedOffset>>,
 }
 
 impl PageEntry {
@@ -430,9 +442,34 @@ fn check_timeline(entry: &serde_yaml::Mapping, push: &mut impl FnMut(String)) {
         if entry.contains_key("draft") {
             push("a WhatsApp timeline cannot declare a draft".to_string());
         }
-    } else if entry.contains_key("document_revision") {
-        push("document_revision is for a WhatsApp timeline".to_string());
+        if let Err(error) = timeline_media(entry) {
+            push(error);
+        }
+    } else {
+        for key in ["document_revision", "media"] {
+            if entry.contains_key(key) {
+                push(format!("{key} is for a WhatsApp timeline"));
+            }
+        }
     }
+}
+
+fn timeline_media(entry: &serde_yaml::Mapping) -> Result<Vec<TimelineMedia>, String> {
+    let Some(value) = entry.get("media") else {
+        return Ok(Vec::new());
+    };
+    let media: Vec<TimelineMedia> = serde_yaml::from_value(value.clone())
+        .map_err(|error| format!("invalid WhatsApp timeline media: {error}"))?;
+    let mut revisions = std::collections::BTreeSet::new();
+    for item in &media {
+        if !is_revision_id(&item.document_revision) {
+            return Err("timeline media requires a filed document revision UUID".to_string());
+        }
+        if !revisions.insert(item.document_revision.to_ascii_lowercase()) {
+            return Err("a media revision can only appear once on a timeline".to_string());
+        }
+    }
+    Ok(media)
 }
 
 fn is_revision_id(id: &str) -> bool {
@@ -510,6 +547,7 @@ pub fn entries(mapping: &serde_yaml::Mapping) -> Result<Vec<PageEntry>, String> 
                 title: required("title")?,
                 draft: text(entry, "draft"),
                 document_revision: text(entry, "document_revision"),
+                media: timeline_media(entry)?,
                 lenses: lenses_of(entry).unwrap_or_default().into_iter().collect(),
             })
         })
@@ -558,6 +596,33 @@ lenses:\n      lawyer: [whatsapp_timeline, boundary_note, provenance_statement]\
             &yaml.replace("00000000-0000-4000-8000-000000000001", "../export.txt")
         )
         .is_empty());
+    }
+
+    #[test]
+    fn whatsapp_timeline_media_pins_revisions_and_optional_creation_times() {
+        let yaml = r#"pages:
+  - slug: whatsapp-timeline
+    kind: whatsapp_timeline
+    title: WhatsApp timeline
+    document_revision: 00000000-0000-4000-8000-000000000001
+    media:
+      - document_revision: 00000000-0000-4000-8000-000000000002
+        created_at: "2026-11-03T09:12:00-05:00"
+      - document_revision: 00000000-0000-4000-8000-000000000003
+    lenses:
+      lawyer: [whatsapp_timeline, boundary_note, provenance_statement]
+"#;
+        let mapping = serde_yaml::from_str(yaml).unwrap();
+        let pages = entries(&mapping).unwrap();
+        assert!(shape_problems(yaml).is_empty());
+        assert_eq!(pages[0].media.len(), 2);
+        assert_eq!(
+            pages[0].media[0].created_at.unwrap().to_rfc3339(),
+            "2026-11-03T09:12:00-05:00"
+        );
+        assert_eq!(pages[0].media[1].created_at, None);
+        assert!(!shape_problems(&yaml.replace("09:12:00-05:00", "09:12:00")).is_empty());
+        assert!(!shape_problems(&yaml.replace("000000000003", "000000000002")).is_empty());
     }
 
     #[test]

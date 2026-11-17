@@ -3467,6 +3467,10 @@ test_evidence_invitation_admits_signed_in_recipient_to_grant_check if {
     authz.allow with input as {"path": ["app", "evidence-shares", "opaque-id", "download"], "method": "GET", "session": client_session}
     not authz.allow with input as {"path": ["app", "evidence-shares", "opaque-id"], "method": "GET", "session": null}
     not authz.allow with input as {"path": ["app", "evidence-shares", "opaque-id", "download"], "method": "GET", "session": {"role":"owner", "source":"ci"}}
+    path := ["app", "evidence-shares", "invitation", "media", "image"]
+    authz.allow with input as {"path": path, "method": "GET", "session": client_session}
+    not authz.allow with input as {"path": path, "method": "GET", "session": null}
+    not authz.allow with input as {"path": path, "method": "GET", "session": {"role":"owner", "source":"ci"}}
 }
 
 test_evidence_invitation_management_requires_lawyer_tier if {

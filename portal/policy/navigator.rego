@@ -2162,6 +2162,15 @@ evidence_share_management if {
 }
 
 route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "evidence-shares"
+    count(input.path) == 5
+    input.path[3] == "media"
+    input.method in {"GET", "HEAD"}
+    is_authenticated(input.session)
+}
+
+route_allow if {
     evidence_share_management
     input.method in {"GET", "HEAD", "POST"}
     is_lawyer(input.session)

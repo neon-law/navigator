@@ -58,6 +58,7 @@ struct Row {
     title: String,
     draft: Option<String>,
     document_revision: Option<String>,
+    media: Option<serde_json::Value>,
     position: i64,
     client_sections: Option<Vec<String>>,
     lawyer_sections: Option<Vec<String>>,
@@ -86,6 +87,10 @@ impl Row {
                 title: self.title,
                 draft: self.draft,
                 document_revision: self.document_revision,
+                media: self
+                    .media
+                    .and_then(|value| serde_json::from_value(value).ok())
+                    .unwrap_or_default(),
                 lenses,
             },
             position: self.position,
@@ -95,7 +100,7 @@ impl Row {
 }
 
 const SELECT: &str =
-    "id, project_id, slug, kind, title, draft, document_revision, position, client_sections, \
+    "id, project_id, slug, kind, title, draft, document_revision, media, position, client_sections, \
      lawyer_sections, clerk_sections, synced_at";
 
 /// Every gate finding against `pages`, as one line each: the `Y021` shape
@@ -149,7 +154,7 @@ pub async fn replace_for_project(
             query,
             "CREATE $id_{index} SET project_id = $project, slug = $slug_{index}, \
              kind = $kind_{index}, title = $title_{index}, draft = $draft_{index}, \
-             document_revision = $revision_{index}, \
+             document_revision = $revision_{index}, media = $media_{index}, \
              position = {index}, client_sections = $client_{index}, \
              lawyer_sections = $lawyer_{index}, clerk_sections = $clerk_{index}, \
              synced_at = $now;"
@@ -169,6 +174,7 @@ pub async fn replace_for_project(
             .bind((format!("title_{index}"), page.title.clone()))
             .bind((format!("draft_{index}"), page.draft.clone()))
             .bind((format!("revision_{index}"), page.document_revision.clone()))
+            .bind((format!("media_{index}"), serde_json::json!(page.media)))
             .bind((format!("client_{index}"), lens(Lens::Client)))
             .bind((format!("lawyer_{index}"), lens(Lens::Lawyer)))
             .bind((format!("clerk_{index}"), lens(Lens::Clerk)));
@@ -281,6 +287,7 @@ mod tests {
             title: format!("Page {slug}"),
             draft: None,
             document_revision: None,
+            media: Vec::new(),
             lenses,
         }
     }

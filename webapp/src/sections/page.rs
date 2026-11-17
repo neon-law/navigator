@@ -529,14 +529,34 @@ async fn load_whatsapp_timeline(
         .unwrap_or(1);
     let base = format!("/app/projects/{}/{}", project.code, page.slug);
     let document_url = format!("/app/projects/{}/documents/{id}", project.code);
+    let images: Vec<_> = store::evidence_shares::resolve_media(surreal, project.id, &page.media)
+        .await
+        .ok()?
+        .into_iter()
+        .map(|image| {
+            let download = format!(
+                "/app/projects/{}/documents/{}/download",
+                project.code, image.id
+            );
+            crate::whatsapp_export::TimelineImage {
+                name: image.name,
+                at: image.at,
+                original_time: image.original_time,
+                preview: format!("{download}?inline=1"),
+                download,
+            }
+        })
+        .collect();
     Some(format!(
-        r#"<p><a href="{}/evidence-shares">Manage evidence invitations</a></p>{}"#,
+        r#"<p><a href="{}/evidence-shares?timeline={}">Manage evidence invitations</a></p>{}"#,
         crate::html_escape::escape_attr(&document_url),
-        crate::whatsapp_export::timeline_html(
+        crate::html_escape::escape_attr(&page.slug),
+        crate::whatsapp_export::timeline_with_images(
             text,
             page_number,
             &base,
-            &format!("{document_url}/download")
+            &format!("{document_url}/download"),
+            &images,
         ),
     ))
 }
@@ -980,6 +1000,39 @@ pub fn CaseNav(tabs: Vec<PageTab>, current: String) -> Element {
     rsx! { crate::components::Tabs { aria_label: "Matter pages".to_string(), tabs } }
 }
 
+/// Project title and shared navigation used by built-in and declared pages.
+#[component]
+pub fn MatterHeading(name: String, tabs: Vec<PageTab>, current: String) -> Element {
+    rsx! {
+        h1 { "{name}" }
+        CaseNav { tabs, current }
+    }
+}
+
+/// Compact overview panels for the custom pages the current reader can open.
+#[component]
+pub fn CustomPagePanels(tabs: Vec<PageTab>) -> Element {
+    let pages: Vec<_> = tabs
+        .into_iter()
+        .filter(|tab| MatterTab::from_path(&tab.href).is_none())
+        .collect();
+    if pages.is_empty() {
+        return rsx! {};
+    }
+    rsx! {
+        section { class: "lawyer-detail__section", "aria-labelledby": "custom-pages-heading",
+            h2 { id: "custom-pages-heading", "Project views" }
+            div { style: "display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,14rem),1fr));gap:.75rem",
+                for page in pages {
+                    article { key: "{page.href}", class: "nav-card",
+                        h3 { a { class: "nav-link", href: "{page.href}", "{page.label}" } }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// The page body, prop-driven so SSR tests render it without a server future.
 #[component]
 pub fn MatterPageBody(view: MatterPageView) -> Element {
@@ -993,7 +1046,6 @@ pub fn MatterPageBody(view: MatterPageView) -> Element {
         };
     }
     let current = format!("/app/projects/{}/{}", view.code, view.slug);
-    let back = format!("/app/projects/{}", view.code);
     rsx! {
         document::Title { "{view.matter_name} | {view.title}" }
         document::Stylesheet { href: crate::components::THEME_STYLESHEET_HREF }
@@ -1011,12 +1063,11 @@ pub fn MatterPageBody(view: MatterPageView) -> Element {
             onmounted: move |_| hydrated.set(true),
             class: "nav-theme portal-detail",
             "data-lens": view.lens.as_str(),
-            nav { class: "portal-detail__back",
-                a { class: "nav-link", href: "{back}", "← {view.matter_name}" }
-            }
             crate::components::ClientDriViewBanner { view: view.viewing_as_dri.clone() }
-            h1 { "{view.title}" }
-            CaseNav { tabs: view.tabs.clone(), current }
+            header { class: "page-header",
+                MatterHeading { name: view.matter_name.clone(), tabs: view.tabs.clone(), current }
+            }
+            h2 { "{view.title}" }
             for section in view.sections.iter() {
                 SectionBody { view: section.clone() }
             }
@@ -1041,6 +1092,31 @@ mod tests {
     use crate::people::ViewerRole;
     use crate::sections::{NoteView, PageLens, SectionView};
     use dioxus::prelude::*;
+
+    #[test]
+    fn overview_panels_offer_each_declared_view_without_duplicating_billing() {
+        let mut dom = VirtualDom::new_with_props(
+            super::CustomPagePanels,
+            super::CustomPagePanelsProps {
+                tabs: vec![
+                    super::MatterTab::Overview.page_tab("synthetic"),
+                    super::MatterTab::Billing.page_tab("synthetic"),
+                    PageTab {
+                        href: "/app/projects/synthetic/chat".into(),
+                        label: "Chat timeline".into(),
+                    },
+                    PageTab {
+                        href: "/app/projects/synthetic/images".into(),
+                        label: "Image timeline".into(),
+                    },
+                ],
+            },
+        );
+        dom.rebuild_in_place();
+        let html = dioxus_ssr::render(&dom);
+        assert!(html.contains("Chat timeline") && html.contains("Image timeline"));
+        assert!(!html.contains("Billing"), "{html}");
+    }
 
     fn render(view: MatterPageView) -> String {
         let mut dom =
@@ -1169,6 +1245,7 @@ mod tests {
                     title: "Case timeline".into(),
                     draft: None,
                     document_revision: None,
+                    media: Vec::new(),
                     lenses: timeline,
                 },
                 PageEntry {
@@ -1177,6 +1254,7 @@ mod tests {
                     title: "Engagement and billing".into(),
                     draft: None,
                     document_revision: None,
+                    media: Vec::new(),
                     lenses: billing,
                 },
             ]

@@ -264,6 +264,7 @@ fn pages() -> Vec<rules::pages::PageEntry> {
         title: "Estate plan".into(),
         draft: None,
         document_revision: None,
+        media: Vec::new(),
         lenses,
     }]
 }

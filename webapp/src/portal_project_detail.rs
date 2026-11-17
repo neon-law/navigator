@@ -1110,8 +1110,8 @@ pub fn ClientProjectDetailPage(view: ProjectDetailView) -> Element {
             nav { class: "portal-detail__back",
                 a { class: "nav-link", href: "/app/projects", "← Your Projects" }
             }
-            h1 { "{view.name}" }
-            crate::sections::page::CaseNav {
+            crate::sections::page::MatterHeading {
+                name: view.name.clone(),
                 tabs: view.page_tabs.clone(),
                 current: view.selected_tab.href(&view.code),
             }

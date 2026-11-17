@@ -68,6 +68,7 @@ fn pages() -> Vec<rules::pages::PageEntry> {
         title: "Closing".into(),
         draft: None,
         document_revision: None,
+        media: Vec::new(),
         lenses,
     }]
 }

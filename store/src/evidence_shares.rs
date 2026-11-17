@@ -5,6 +5,15 @@ use chrono::{DateTime, Utc};
 use sqlx::{postgres::PgRow, FromRow, Row};
 use uuid::Uuid;
 
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct MediaRevision {
+    pub id: Uuid,
+    pub sha256: String,
+    pub name: String,
+    pub at: DateTime<Utc>,
+    pub original_time: bool,
+}
+
 pub struct EvidenceShare {
     pub id: Uuid,
     pub project_id: Uuid,
@@ -17,6 +26,7 @@ pub struct EvidenceShare {
     pub revoked_at: Option<DateTime<Utc>>,
     pub opens: i64,
     pub downloads: i64,
+    pub media: Vec<MediaRevision>,
 }
 
 impl FromRow<'_, PgRow> for EvidenceShare {
@@ -33,6 +43,9 @@ impl FromRow<'_, PgRow> for EvidenceShare {
             revoked_at: row.try_get("revoked_at")?,
             opens: row.try_get("opens")?,
             downloads: row.try_get("downloads")?,
+            media: row
+                .try_get::<sqlx::types::Json<Vec<MediaRevision>>, _>("media")?
+                .0,
         })
     }
 }
@@ -46,10 +59,24 @@ pub async fn create(
     actor: Uuid,
     terms: &str,
 ) -> Result<Uuid, sqlx::Error> {
+    create_with_media(db, project, asset, sha256, recipient, actor, terms, &[]).await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn create_with_media(
+    db: &PostgresDb,
+    project: Uuid,
+    asset: Uuid,
+    sha256: &str,
+    recipient: &str,
+    actor: Uuid,
+    terms: &str,
+    media: &[MediaRevision],
+) -> Result<Uuid, sqlx::Error> {
     let id = Uuid::now_v7();
     sqlx::query(
-        "INSERT INTO evidence_share (id, project_id, asset_id, sha256, recipient_email, created_by, terms)
-         VALUES ($1, $2, $3, $4, lower($5), $6, $7)",
+        "INSERT INTO evidence_share (id, project_id, asset_id, sha256, recipient_email, created_by, terms, media)
+         VALUES ($1, $2, $3, $4, lower($5), $6, $7, $8)",
     )
     .bind(id)
     .bind(project)
@@ -58,6 +85,7 @@ pub async fn create(
     .bind(recipient)
     .bind(actor)
     .bind(terms)
+    .bind(sqlx::types::Json(media))
     .execute(db.pool())
     .await?;
     Ok(id)
@@ -175,6 +203,52 @@ pub fn eligible(asset: &crate::assets::Asset) -> bool {
             name.rsplit_once('.')
                 .is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("txt"))
         })
+}
+
+/// Read only live, bounded raster images from the specified Project.
+#[must_use]
+pub fn image_content_type(asset: &crate::assets::Asset, project: Uuid) -> Option<&'static str> {
+    if asset.project_id != Some(project)
+        || asset.deleted_at.is_some()
+        || asset.purged_at.is_some()
+        || !(1..=10 * 1024 * 1024).contains(&asset.byte_size)
+    {
+        return None;
+    }
+    match asset.content_type.as_str() {
+        "image/jpeg" => Some("image/jpeg"),
+        "image/png" => Some("image/png"),
+        _ => None,
+    }
+}
+
+/// Resolve the ordered declaration to an immutable list of image revisions.
+pub async fn resolve_media(
+    db: &crate::surreal::SurrealDb,
+    project: Uuid,
+    declared: &[rules::pages::TimelineMedia],
+) -> Result<Vec<MediaRevision>, crate::assets::AssetError> {
+    let mut images = Vec::with_capacity(declared.len());
+    for item in declared {
+        let Ok(id) = item.document_revision.parse() else {
+            continue;
+        };
+        let Some(asset) = crate::assets::find_by_id(db, id).await? else {
+            continue;
+        };
+        if image_content_type(&asset, project).is_some() {
+            images.push(MediaRevision {
+                id,
+                sha256: asset.sha256_hex,
+                name: asset.filename.unwrap_or_else(|| "Filed image".to_string()),
+                at: item
+                    .created_at
+                    .map_or(asset.inserted_at, |date| date.to_utc()),
+                original_time: item.created_at.is_some(),
+            });
+        }
+    }
+    Ok(images)
 }
 
 #[cfg(test)]

@@ -967,8 +967,8 @@ pub fn LawyerProjectDetail() -> Element {
         }
         main { id: "lawyer-project", class: "nav-theme lawyer-detail",
             header { class: "page-header",
-                h1 { "{view.name}" }
-                crate::sections::page::CaseNav {
+                crate::sections::page::MatterHeading {
+                    name: view.name.clone(),
                     tabs: view.page_tabs.clone(),
                     current: view.active_tab.href(&view.code),
                 }
@@ -1069,7 +1069,10 @@ pub fn LawyerProjectDetail() -> Element {
                             a { class: "nav-link", href: "#notes", "Notes" }
                         }
 
-                        div { id: "stage",
+                        crate::sections::page::CustomPagePanels { tabs: view.page_tabs.clone() }
+
+                        details { id: "stage", open: view.error.is_some(),
+                            summary { "Case stage" }
                             StageSection {
                                 code: view.code.clone(),
                                 csrf: csrf.clone(),
@@ -1092,7 +1095,10 @@ pub fn LawyerProjectDetail() -> Element {
                             {admin_testimonial_card(&view.code, &csrf, view.testimonial.as_ref())}
                         }
 
-                        {integrations_section(&view)}
+                        details {
+                            summary { "Integrations" }
+                            {integrations_section(&view)}
+                        }
 
                         // The matter timeline: every docket entry on this matter's cases
                         // joined with every open deadline, in date order. Documents,

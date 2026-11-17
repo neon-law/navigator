@@ -4842,3 +4842,7 @@ CREATE TABLE evidence_share_usage (
     opens bigint NOT NULL,
     downloads bigint NOT NULL
 );
+
+-- Migration: 20261116230000_add_matter_page_media.sql
+ALTER TABLE matter_page ADD COLUMN media JSONB;
+ALTER TABLE evidence_share ADD COLUMN media JSONB NOT NULL DEFAULT '[]'::jsonb;

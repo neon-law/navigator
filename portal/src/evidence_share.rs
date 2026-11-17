@@ -18,8 +18,8 @@ use webapp::html_escape::escape_attr as escape;
 use crate::{session::SessionSource, AppState, SessionData};
 
 const TERMS: &str = concat!(
-    "Evidence access terms, version 1. ",
-    "This invitation allows you to view and download the document shared with your account. ",
+    "Evidence access terms, version 2. ",
+    "This invitation allows you to view and download the text export and any filed images shared with your account. ",
     "By selecting Accept and continue, you electronically sign these terms. ",
     "Navigator records your account and the time of acceptance, and maintains counts of timeline ",
     "views and download requests for this invitation. ",
@@ -60,6 +60,10 @@ fn share_routes(state: &AppState, database: Option<PostgresDb>) -> Router<AppSta
         .route(
             "/app/evidence-shares/{id}/download",
             get(download).head(|| async { StatusCode::METHOD_NOT_ALLOWED }),
+        )
+        .route(
+            "/app/evidence-shares/{id}/media/{asset}",
+            get(shared_media).head(|| async { StatusCode::METHOD_NOT_ALLOWED }),
         )
         .route_layer(axum::middleware::from_fn_with_state(
             (state.sessions.clone(), crate::csrf::CsrfMode::Strict),
@@ -130,7 +134,7 @@ async fn manage_asset(
     Ok((actor, filed_asset(state, project.id, id).await?))
 }
 
-async fn source(state: &AppState, asset: &Asset) -> Result<String, StatusCode> {
+async fn verified_bytes(state: &AppState, asset: &Asset) -> Result<Vec<u8>, StatusCode> {
     let object = state
         .storage
         .get(&asset.storage_key)
@@ -141,7 +145,12 @@ async fn source(state: &AppState, asset: &Asset) -> Result<String, StatusCode> {
     {
         return Err(StatusCode::SERVICE_UNAVAILABLE);
     }
-    String::from_utf8(object.bytes).map_err(|_| StatusCode::UNPROCESSABLE_ENTITY)
+    Ok(object.bytes)
+}
+
+async fn source(state: &AppState, asset: &Asset) -> Result<String, StatusCode> {
+    String::from_utf8(verified_bytes(state, asset).await?)
+        .map_err(|_| StatusCode::UNPROCESSABLE_ENTITY)
 }
 
 fn private(mut response: Response) -> Response {
@@ -197,21 +206,75 @@ fn invitation(id: Uuid) -> String {
     format!("/app/evidence-shares/{id}")
 }
 
+#[derive(Deserialize, Default)]
+struct TimelineSelection {
+    timeline: Option<String>,
+}
+
+async fn selected_media(
+    state: &AppState,
+    project: Uuid,
+    revision: Uuid,
+    slug: Option<&str>,
+) -> Result<Vec<shares::MediaRevision>, StatusCode> {
+    let Some(slug) = slug else {
+        return Ok(Vec::new());
+    };
+    let pages = store::matter_pages::list_for_project(&state.surreal, project)
+        .await
+        .map_err(unavailable)?;
+    let page = missing(pages.into_iter().map(|page| page.entry).find(|entry| {
+        entry.slug == slug
+            && entry.kind == "whatsapp_timeline"
+            && entry
+                .document_revision
+                .as_deref()
+                .and_then(|value| value.parse().ok())
+                == Some(revision)
+    }))?;
+    let media = shares::resolve_media(&state.surreal, project, &page.media)
+        .await
+        .map_err(unavailable)?;
+    if media.len() != page.media.len() {
+        return Err(StatusCode::UNPROCESSABLE_ENTITY);
+    }
+    Ok(media)
+}
+
+fn media_fingerprint(media: &[shares::MediaRevision]) -> Result<String, StatusCode> {
+    let json = serde_json::to_vec(media).map_err(unavailable)?;
+    Ok(store::assets::sha256_hex(&json))
+}
+
 async fn manage(
     State(state): State<ShareState>,
     Extension(session): Extension<SessionData>,
     Path((code, id)): Path<(String, Uuid)>,
+    Query(selection): Query<TimelineSelection>,
     mark: Option<Extension<AppBrandMark>>,
 ) -> Page {
     let (_, asset) = manage_asset(&state.app, &session, &code, id).await?;
     let project = missing(asset.project_id)?;
     let db = state.database().await?;
     let rows = shares::list(&db, project, id).await.map_err(unavailable)?;
+    let media = selected_media(&state.app, project, id, selection.timeline.as_deref()).await?;
+    let fingerprint = media_fingerprint(&media)?;
+    let mut scope = format!(
+        "<p>This invitation includes the text export and {} filed images.</p>",
+        media.len()
+    );
+    if !media.is_empty() {
+        scope.push_str("<details><summary>Review image revisions</summary><ul>");
+        for image in &media {
+            let _ = write!(scope, "<li>{}</li>", escape(&image.name));
+        }
+        scope.push_str("</ul></details>");
+    }
     let csrf = csrf(&session);
     let mut body = format!(
         r#"<p><a href="/app/projects/{}/documents/{id}">Back to document</a></p>
-<section><p>{}</p><p>Each invitation lets one verified email address read and download this revision for 14 days.</p>
-<form method="post">{csrf}<label for="email">Recipient email</label>
+<section><p>{}</p><p>Each invitation lets one verified email address read and download this revision for 14 days.</p>{scope}
+<form method="post">{csrf}<input type="hidden" name="media_fingerprint" value="{fingerprint}"><label for="email">Recipient email</label>
 <input type="email" id="email" name="email" maxlength="254" required><button>Create invitation</button></form></section>"#,
         escape(&code),
         escape(asset.filename.as_deref().unwrap_or_default())
@@ -251,12 +314,14 @@ async fn manage(
 struct ManageAction {
     email: Option<String>,
     revoke: Option<Uuid>,
+    media_fingerprint: Option<String>,
 }
 
 async fn manage_action(
     State(state): State<ShareState>,
     Extension(session): Extension<SessionData>,
     Path((code, id)): Path<(String, Uuid)>,
+    Query(selection): Query<TimelineSelection>,
     Form(action): Form<ManageAction>,
 ) -> Page {
     let (actor, asset) = manage_asset(&state.app, &session, &code, id).await?;
@@ -291,15 +356,36 @@ async fn manage_action(
                         .into_response(),
                 ));
             }
-            shares::create(&db, project, id, &asset.sha256_hex, email, actor, TERMS)
-                .await
-                .map_err(unavailable)?;
+            let media =
+                selected_media(&state.app, project, id, selection.timeline.as_deref()).await?;
+            if selection.timeline.is_some()
+                && action.media_fingerprint.as_deref() != Some(&media_fingerprint(&media)?)
+            {
+                return Err(StatusCode::CONFLICT);
+            }
+            shares::create_with_media(
+                &db,
+                project,
+                id,
+                &asset.sha256_hex,
+                email,
+                actor,
+                TERMS,
+                &media,
+            )
+            .await
+            .map_err(unavailable)?;
         }
         _ => return Err(StatusCode::BAD_REQUEST),
     }
+    let suffix = selection
+        .timeline
+        .as_deref()
+        .filter(|value| rules::pages::is_valid_slug(value))
+        .map_or_else(String::new, |value| format!("?timeline={value}"));
     Ok(private(
         Redirect::to(&format!(
-            "/app/projects/{code}/documents/{id}/evidence-shares"
+            "/app/projects/{code}/documents/{id}/evidence-shares{suffix}"
         ))
         .into_response(),
     ))
@@ -364,11 +450,26 @@ async fn view(
     }
     let text = shared_source(&state.app, &share).await?;
     let base = invitation(id);
-    let body = webapp::whatsapp_export::timeline_html(
+    let images: Vec<_> = share
+        .media
+        .iter()
+        .map(|image| {
+            let preview = format!("{base}/media/{}", image.id);
+            webapp::whatsapp_export::TimelineImage {
+                name: image.name.clone(),
+                at: image.at,
+                original_time: image.original_time,
+                download: format!("{preview}?download=true"),
+                preview,
+            }
+        })
+        .collect();
+    let body = webapp::whatsapp_export::timeline_with_images(
         &text,
         query.page,
         &base,
         &format!("{base}/download"),
+        &images,
     );
     record_access(&db, id, email, person, false).await?;
     Ok(page(mark, "WhatsApp timeline", &body))
@@ -408,12 +509,7 @@ async fn download(
 ) -> Page {
     let (person, email) = recipient(&session)?;
     let db = state.database().await?;
-    let share = missing(
-        shares::for_recipient(&db, id, email, person)
-            .await
-            .map_err(unavailable)?
-            .filter(|share| share.accepted_at.is_some()),
-    )?;
+    let share = accepted_share(&db, id, email, person).await?;
     let text = shared_source(&state.app, &share).await?;
     record_access(&db, id, email, person, true).await?;
     Ok(private(
@@ -429,6 +525,67 @@ async fn download(
         )
             .into_response(),
     ))
+}
+
+#[derive(Deserialize, Default)]
+struct MediaQuery {
+    #[serde(default)]
+    download: bool,
+}
+
+async fn shared_media(
+    State(state): State<ShareState>,
+    Extension(session): Extension<SessionData>,
+    Path((id, asset_id)): Path<(Uuid, Uuid)>,
+    Query(query): Query<MediaQuery>,
+) -> Page {
+    let (person, email) = recipient(&session)?;
+    let db = state.database().await?;
+    let share = accepted_share(&db, id, email, person).await?;
+    let image = missing(share.media.iter().find(|image| image.id == asset_id))?;
+    let asset = missing(
+        store::assets::find_by_id(&state.app.surreal, asset_id)
+            .await
+            .map_err(unavailable)?
+            .filter(|asset| asset.sha256_hex == image.sha256),
+    )?;
+    let content_type = missing(shares::image_content_type(&asset, share.project_id))?;
+    let bytes = verified_bytes(&state.app, &asset).await?;
+    if query.download {
+        record_access(&db, id, email, person, true).await?;
+    } else {
+        accepted_share(&db, id, email, person).await?;
+    }
+    let disposition = match (query.download, content_type) {
+        (true, "image/png") => "attachment; filename=evidence.png",
+        (true, _) => "attachment; filename=evidence.jpg",
+        (false, _) => "inline",
+    };
+    Ok(private(
+        (
+            [
+                (header::CONTENT_TYPE, content_type),
+                (header::CONTENT_DISPOSITION, disposition),
+                (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            ],
+            bytes,
+        )
+            .into_response(),
+    ))
+}
+
+async fn accepted_share(
+    db: &PostgresDb,
+    id: Uuid,
+    email: &str,
+    person: Uuid,
+) -> Result<shares::EvidenceShare, StatusCode> {
+    missing(
+        shares::for_recipient(db, id, email, person)
+            .await
+            .map_err(unavailable)?
+            .filter(|share| share.accepted_at.is_some()),
+    )
 }
 
 #[cfg(test)]
@@ -502,8 +659,11 @@ mod tests {
             .await
             .unwrap();
         let db = PostgresDb::connect(options.database(&name)).await.unwrap();
-        sqlx::raw_sql(include_str!(
-            "../../store/postgres/migrations/20261116220000_create_evidence_share.sql"
+        sqlx::raw_sql(concat!(
+            include_str!(
+                "../../store/postgres/migrations/20261116220000_create_evidence_share.sql"
+            ),
+            "ALTER TABLE evidence_share ADD COLUMN media JSONB NOT NULL DEFAULT '[]'::jsonb;",
         ))
         .execute(db.pool())
         .await
@@ -559,6 +719,53 @@ mod tests {
         )
         .await
         .unwrap();
+        let mut image_bytes = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(2, 2)
+            .write_to(&mut image_bytes, image::ImageFormat::Png)
+            .unwrap();
+        let image_bytes = image_bytes.into_inner();
+        let image = documents::ingest_bytes(
+            &state.surreal,
+            &state.storage,
+            &documents::IngestArgs {
+                project_id,
+                source: documents::source::UPLOAD,
+                filename: "synthetic.png",
+                kind: "exhibit",
+                content_type: "image/png",
+                description: None,
+                secondary_storage_key: None,
+                visibility: documents::visibility::INTERNAL,
+            },
+            &image_bytes,
+        )
+        .await
+        .unwrap();
+        let page = rules::pages::PageEntry {
+            slug: "whatsapp-timeline".into(),
+            kind: "whatsapp_timeline".into(),
+            title: "WhatsApp timeline".into(),
+            draft: None,
+            document_revision: Some(document.asset_id.to_string()),
+            media: vec![rules::pages::TimelineMedia {
+                document_revision: image.asset_id.to_string(),
+                created_at: Some(
+                    chrono::DateTime::parse_from_rfc3339("2026-11-03T09:01:00Z").unwrap(),
+                ),
+            }],
+            lenses: [(
+                "lawyer".into(),
+                vec![
+                    "whatsapp_timeline".into(),
+                    "boundary_note".into(),
+                    "provenance_statement".into(),
+                ],
+            )]
+            .into(),
+        };
+        store::matter_pages::replace_for_project(&state.surreal, project_id, &[page])
+            .await
+            .unwrap();
         let router = crate::session_boundary(
             share_routes(&state, Some(db.clone())),
             &state.sessions,
@@ -579,7 +786,7 @@ mod tests {
         let guest = session(Uuid::now_v7(), "recipient@example.test", Role::Client);
         let stranger = session(Uuid::now_v7(), "stranger@example.test", Role::Lawyer);
         let manage = format!(
-            "/app/projects/{}/documents/{}/evidence-shares",
+            "/app/projects/{}/documents/{}/evidence-shares?timeline=whatsapp-timeline",
             project.code, document.asset_id
         );
         assert_eq!(
@@ -588,7 +795,19 @@ mod tests {
                 .status(),
             StatusCode::NOT_FOUND
         );
-        let form = format!("email=recipient%40example.test&_csrf={}", lawyer.csrf_token);
+        let selected = selected_media(
+            &state,
+            project_id,
+            document.asset_id,
+            Some("whatsapp-timeline"),
+        )
+        .await
+        .unwrap();
+        let fingerprint = media_fingerprint(&selected).unwrap();
+        let form = format!(
+            "email=recipient%40example.test&media_fingerprint={fingerprint}&_csrf={}",
+            lawyer.csrf_token
+        );
         assert_eq!(
             request(&router, &state.sessions, Some(&lawyer), &manage, Some(form))
                 .await
@@ -601,6 +820,15 @@ mod tests {
         let id = grants[0].id;
         let url = invitation(id);
         let download = format!("{url}/download");
+        let image_url = format!("{url}/media/{}", image.asset_id);
+        assert_eq!(grants[0].media.len(), 1);
+        assert_eq!(grants[0].media[0].id, image.asset_id);
+        assert_eq!(
+            request(&router, &state.sessions, Some(&guest), &image_url, None)
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
         assert!(request(&router, &state.sessions, None, &url, None)
             .await
             .status()
@@ -654,6 +882,31 @@ mod tests {
         assert!(std::str::from_utf8(&timeline)
             .unwrap()
             .contains("&lt;script&gt;synthetic&lt;/script&gt;"));
+        assert!(std::str::from_utf8(&timeline).unwrap().contains(&image_url));
+        assert_eq!(
+            request(&router, &state.sessions, Some(&stranger), &image_url, None)
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        let wrong_image = format!("{url}/media/{}", Uuid::now_v7());
+        assert_eq!(
+            request(&router, &state.sessions, Some(&guest), &wrong_image, None)
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        let raster = request(&router, &state.sessions, Some(&guest), &image_url, None).await;
+        assert_eq!(raster.status(), StatusCode::OK);
+        assert_eq!(raster.headers()[header::CONTENT_TYPE], "image/png");
+        assert_eq!(raster.headers()[header::CACHE_CONTROL], "private, no-store");
+        assert_eq!(
+            to_bytes(raster.into_body(), 64 * 1024)
+                .await
+                .unwrap()
+                .as_ref(),
+            image_bytes
+        );
         let response = request(&router, &state.sessions, Some(&guest), &download, None).await;
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
@@ -677,6 +930,12 @@ mod tests {
             StatusCode::NOT_FOUND
         );
 
+        assert_eq!(
+            request(&router, &state.sessions, Some(&guest), &image_url, None)
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
         drop(router);
         db.pool().close().await;
         sqlx::query(sqlx::AssertSqlSafe(format!("DROP DATABASE {database}")))
