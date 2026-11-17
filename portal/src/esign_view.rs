@@ -168,25 +168,35 @@ pub async fn sign_get(
         client_user_id,
     };
 
-    let scoped = match state
+    let Ok(scoped) = state
         .signature_provider
         .for_project(&state.surreal, notation_row.project_id)
         .await
-    {
-        Ok(provider) => provider,
-        Err(_) => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Signature provider unavailable",
-            )
-                .into_response()
-        }
+    else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signature provider unavailable",
+        )
+            .into_response();
     };
-    let provider = crate::firm_docusign::resolved(&scoped, state.signature_provider.as_ref());
-    match provider
-        .create_recipient_view(&crate::signature::SignatureRequestId(request_id), &view)
-        .await
-    {
+    let provider =
+        crate::firm_docusign::resolved(scoped.as_ref(), state.signature_provider.as_ref());
+    recipient_view_response(
+        provider,
+        notation_id,
+        &crate::signature::SignatureRequestId(request_id),
+        &view,
+    )
+    .await
+}
+
+async fn recipient_view_response(
+    provider: &dyn crate::signature::SignatureProvider,
+    notation_id: Uuid,
+    request_id: &crate::signature::SignatureRequestId,
+    view: &RecipientView,
+) -> Response {
+    match provider.create_recipient_view(request_id, view).await {
         Ok(signing_url) => redirect_to_provider(&signing_url).unwrap_or_else(|| {
             tracing::error!(
                 %notation_id,
@@ -361,21 +371,19 @@ pub async fn sender_view_get(
         base.trim_end_matches('/')
     );
 
-    let scoped = match state
+    let Ok(scoped) = state
         .signature_provider
         .for_project(&state.surreal, notation_row.project_id)
         .await
-    {
-        Ok(provider) => provider,
-        Err(_) => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Signature provider unavailable",
-            )
-                .into_response()
-        }
+    else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signature provider unavailable",
+        )
+            .into_response();
     };
-    let provider = crate::firm_docusign::resolved(&scoped, state.signature_provider.as_ref());
+    let provider =
+        crate::firm_docusign::resolved(scoped.as_ref(), state.signature_provider.as_ref());
     match provider
         .create_sender_view(
             &crate::signature::SignatureRequestId(request_id),

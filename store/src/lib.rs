@@ -109,6 +109,7 @@ pub mod deployment;
 pub mod deployment_secret_changes;
 pub mod disclosures;
 pub mod document_comments;
+pub mod docusign_completion;
 pub mod evidence_shares;
 pub use model::document_pointers;
 pub mod attorney_calendars;
@@ -240,6 +241,7 @@ pub mod sandbox_usage;
 pub mod schema;
 pub mod seed;
 pub mod sent_emails;
+
 pub mod signature_webhook_journal;
 pub mod signatures;
 pub mod social_account_selections;

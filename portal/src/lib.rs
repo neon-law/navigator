@@ -144,6 +144,7 @@ pub mod dioxus_app;
 pub mod document_integrations;
 pub mod documents;
 pub mod docusign_auth;
+mod docusign_completion;
 pub mod email;
 mod email_acknowledgment;
 pub mod email_confirm;
@@ -812,6 +813,10 @@ fn public_ingress_routes() -> Router<AppState> {
         .route(
             "/webhook/email-events/{secret}",
             axum::routing::post(email_events::webhook),
+        )
+        .route(
+            "/webhook/esignature/firm/{firm}",
+            axum::routing::post(docusign_completion::webhook),
         )
         .route(
             "/webhook/esignature/{secret}",

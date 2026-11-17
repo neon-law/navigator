@@ -27,6 +27,7 @@ struct Connection {
     base_url: String,
     signer_email: String,
     signer_name: String,
+    connect_hmac_key: Option<String>,
 }
 
 impl Connection {
@@ -85,6 +86,24 @@ impl FirmDocuSign {
         db: &SurrealDb,
         firm: Uuid,
     ) -> Result<DocuSignSignatureProvider, SignatureError> {
+        self.connection(db, firm).await?.provider(self.demo)
+    }
+
+    pub(crate) async fn connect_key(
+        &self,
+        db: &SurrealDb,
+        firm: Uuid,
+    ) -> Result<(Uuid, String), SignatureError> {
+        let connection = self.connection(db, firm).await?;
+        let account = connection.account_id;
+        let key = connection
+            .connect_hmac_key
+            .filter(|value| !value.is_empty())
+            .ok_or_else(unavailable)?;
+        Ok((account, key))
+    }
+
+    async fn connection(&self, db: &SurrealDb, firm: Uuid) -> Result<Connection, SignatureError> {
         let credential = resolve_firm_credential(
             db,
             firm,
@@ -94,9 +113,7 @@ impl FirmDocuSign {
         )
         .await
         .map_err(|_| unavailable())?;
-        let connection: Connection = serde_json::from_str(credential.expose_for_provider_call())
-            .map_err(|_| unavailable())?;
-        connection.provider(self.demo)
+        serde_json::from_str(credential.expose_for_provider_call()).map_err(|_| unavailable())
     }
 }
 
@@ -113,6 +130,30 @@ impl SignatureProvider for FirmDocuSign {
             .and_then(|project| project.firm_id)
             .ok_or_else(unavailable)?;
         self.for_firm(db, firm).await.map(Some)
+    }
+
+    async fn for_firm(
+        &self,
+        db: &SurrealDb,
+        firm: Uuid,
+    ) -> Result<Option<DocuSignSignatureProvider>, SignatureError> {
+        FirmDocuSign::for_firm(self, db, firm).await.map(Some)
+    }
+
+    async fn verify_firm_connect(
+        &self,
+        db: &SurrealDb,
+        firm: Uuid,
+        signature: &str,
+        body: &[u8],
+    ) -> Option<Uuid> {
+        let (account, key) = self.connect_key(db, firm).await.ok()?;
+        crate::webhook_auth::verify_hmac_sha256_b64(key.as_bytes(), body, signature)
+            .then_some(account)
+    }
+
+    fn supports_firm_connect(&self) -> bool {
+        true
     }
 
     async fn send_for_signature(
@@ -166,10 +207,10 @@ pub(crate) async fn for_notation(
 }
 
 pub(crate) fn resolved<'a>(
-    scoped: &'a Option<DocuSignSignatureProvider>,
+    scoped: Option<&'a DocuSignSignatureProvider>,
     local: &'a dyn SignatureProvider,
 ) -> &'a dyn SignatureProvider {
-    scoped.as_ref().map_or(local, |provider| provider)
+    scoped.map_or(local, |provider| provider)
 }
 
 #[cfg(test)]
@@ -186,6 +227,7 @@ mod tests {
             base_url: base_url.into(),
             signer_email: "signer@example.com".into(),
             signer_name: "Example Signer".into(),
+            connect_hmac_key: None,
         }
     }
 

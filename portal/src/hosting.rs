@@ -965,6 +965,7 @@ async fn boot(brand: Site, host_dbos: bool) -> anyhow::Result<()> {
 
     // Journal replay (ENG-787): see `spawn_journal_replay`.
     spawn_journal_replay(&rt.state);
+    crate::docusign_completion::spawn(&rt.state);
 
     // Every local port a registered brand's own env var claims (see
     // `views::brand::BrandKey::local_port_env_var`), read before `rt.state`

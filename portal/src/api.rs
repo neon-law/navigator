@@ -4516,7 +4516,8 @@ async fn adopt_envelope(
         .for_project(db, id)
         .await
         .map_err(internal)?;
-    let provider = crate::firm_docusign::resolved(&scoped, state.signature_provider.as_ref());
+    let provider =
+        crate::firm_docusign::resolved(scoped.as_ref(), state.signature_provider.as_ref());
     let mut envelope = provider
         .read_external_envelope(input.envelope_id)
         .await
@@ -4552,6 +4553,24 @@ async fn adopt_envelope(
         envelope = latest;
     }
     lane.commit().await.map_err(internal)?;
+    if envelope.status == "completed" {
+        if let (Some(firm), Some(account)) = (
+            project.firm_id,
+            scoped
+                .as_ref()
+                .and_then(|provider| provider.account_id().parse().ok()),
+        ) {
+            if let Ok(Some(pg)) = store::postgres::PostgresDb::configured().await {
+                if store::docusign_completion::resume_adopted(&pg, firm, account, envelope_id, id)
+                    .await
+                    .is_err()
+                {
+                    tracing::warn!(firm_id = %firm, %envelope_id, "DocuSign completion review could not be cleared");
+                }
+            }
+        }
+    }
+
     Ok(Json(serde_json::json!({
         "notation_id": notation.id,
         "envelope": envelope,

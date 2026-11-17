@@ -57,7 +57,7 @@ pub(crate) async fn send_notation_for_signature(
     let scoped = provider
         .for_project(ctx.surreal, notation_row.project_id)
         .await?;
-    let provider = crate::firm_docusign::resolved(&scoped, provider);
+    let provider = crate::firm_docusign::resolved(scoped.as_ref(), provider);
     if crate::signature_adoption::evidence(ctx.storage.as_ref(), notation_id)
         .await
         .map_err(|_| WorkflowDriveError::Db("reading envelope evidence failed".into()))?

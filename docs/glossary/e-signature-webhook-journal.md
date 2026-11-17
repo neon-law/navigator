@@ -14,3 +14,5 @@ mid-consumption leaves the receipt replayable rather than lost.
   [`store/postgres/schema.sql`](../../store/postgres/schema.sql)
 
 The table is `esignature_webhook_journal`.
+
+Verified DocuSign Connect deliveries also register a [DocuSign completion](docusign-completion.md).

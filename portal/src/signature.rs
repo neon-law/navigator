@@ -310,6 +310,30 @@ pub trait SignatureProvider: Send + Sync {
         Ok(None)
     }
 
+    /// Resolve a configured Firm account for account-level reconciliation.
+    async fn for_firm(
+        &self,
+        _db: &store::surreal::SurrealDb,
+        _firm: Uuid,
+    ) -> Result<Option<DocuSignSignatureProvider>, SignatureError> {
+        Ok(None)
+    }
+
+    /// Verify the raw Connect delivery and return the bound account.
+    async fn verify_firm_connect(
+        &self,
+        _db: &store::surreal::SurrealDb,
+        _firm: Uuid,
+        _signature: &str,
+        _body: &[u8],
+    ) -> Option<Uuid> {
+        None
+    }
+
+    fn supports_firm_connect(&self) -> bool {
+        false
+    }
+
     /// Read an existing envelope without modifying it at the provider.
     async fn read_external_envelope(&self, _id: Uuid) -> Result<ExternalEnvelope, SignatureError> {
         Err(SignatureError::Provider(
@@ -1760,6 +1784,145 @@ struct RecipientViewResponse {
 }
 
 impl DocuSignSignatureProvider {
+    pub(crate) fn account_id(&self) -> &str {
+        &self.account_id
+    }
+
+    /// List a bounded time slice, following DocuSign pagination on this
+    /// same account and origin. The caller checkpoints only a complete slice.
+    pub(crate) async fn completed_envelopes(
+        &self,
+        from: chrono::DateTime<chrono::Utc>,
+        through: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<Uuid>, SignatureError> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Page {
+            #[serde(default)]
+            envelopes: Vec<Envelope>,
+            #[serde(default)]
+            next_uri: String,
+        }
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Envelope {
+            envelope_id: Uuid,
+            status: String,
+        }
+
+        let path = format!("v2.1/accounts/{}/envelopes", self.account_id);
+        let mut url = self.request_url(&path)?;
+        let first_page_path = url.path().to_owned();
+        url.query_pairs_mut()
+            .append_pair("from_date", &from.to_rfc3339())
+            .append_pair("to_date", &through.to_rfc3339())
+            .append_pair("from_to_status", "completed")
+            .append_pair("status", "completed")
+            .append_pair("count", "100");
+        let token = self.bearer_token().await?;
+        let mut ids = Vec::new();
+        for _ in 0..100 {
+            let page: Page = self
+                .http
+                .get(url.clone())
+                .bearer_auth(&token)
+                .send()
+                .await
+                .and_then(reqwest::Response::error_for_status)
+                .map_err(|_| SignatureError::Provider("DocuSign completion listing failed".into()))?
+                .json()
+                .await
+                .map_err(|_| {
+                    SignatureError::Provider("Invalid DocuSign completion listing".into())
+                })?;
+            ids.extend(
+                page.envelopes
+                    .into_iter()
+                    .filter(|env| env.status == "completed")
+                    .map(|env| env.envelope_id),
+            );
+            if page.next_uri.is_empty() {
+                return Ok(ids);
+            }
+            let next = url
+                .join(&page.next_uri)
+                .map_err(|_| SignatureError::Provider("Invalid DocuSign pagination link".into()))?;
+            if next.origin() != url.origin() || next.path() != first_page_path || next == url {
+                return Err(SignatureError::Provider(
+                    "Invalid DocuSign pagination link".into(),
+                ));
+            }
+            url = next;
+        }
+        Err(SignatureError::Provider(
+            "DocuSign completion listing exceeded its page limit".into(),
+        ))
+    }
+
+    pub(crate) async fn envelope_project_hints(
+        &self,
+        id: Uuid,
+    ) -> Result<(Vec<String>, Vec<String>), SignatureError> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Fields {
+            #[serde(default)]
+            text_custom_fields: Vec<Field>,
+        }
+        #[derive(Deserialize)]
+        struct Field {
+            name: String,
+            value: String,
+        }
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Documents {
+            #[serde(default)]
+            envelope_documents: Vec<Document>,
+        }
+        #[derive(Deserialize)]
+        struct Document {
+            name: String,
+        }
+        let path = format!("v2.1/accounts/{}/envelopes/{id}", self.account_id);
+        let token = self.bearer_token().await?;
+        let get = |resource: &str| {
+            self.request_url(&format!("{path}/{resource}"))
+                .map(|url| self.http.get(url).bearer_auth(&token))
+        };
+        let (fields, documents) =
+            tokio::try_join!(get("custom_fields")?.send(), get("documents")?.send(),).map_err(
+                |_| SignatureError::Provider("DocuSign envelope metadata unavailable".into()),
+            )?;
+        let error = |_| SignatureError::Provider("DocuSign envelope metadata unavailable".into());
+        let fields: Fields = fields
+            .error_for_status()
+            .map_err(error)?
+            .json()
+            .await
+            .map_err(error)?;
+        let documents: Documents = documents
+            .error_for_status()
+            .map_err(error)?
+            .json()
+            .await
+            .map_err(error)?;
+        let project_fields = fields
+            .text_custom_fields
+            .into_iter()
+            .filter(|field| field.name.eq_ignore_ascii_case("project_code"))
+            .map(|field| field.value)
+            .collect();
+        Ok((
+            project_fields,
+            documents
+                .envelope_documents
+                .into_iter()
+                .map(|doc| doc.name)
+                .collect(),
+        ))
+    }
+
     /// PUT an existing envelope's status to `sent` — the dispatch of a
     /// draft a previous prepare created.
     async fn dispatch_envelope(&self, envelope_id: &str) -> Result<(), SignatureError> {
@@ -2200,6 +2363,53 @@ mod tests {
             ])
             .unwrap(),
             SignatureProviderKind::DocuSign
+        );
+    }
+
+    #[tokio::test]
+    async fn account_completion_listing_follows_only_same_account_pages() {
+        use wiremock::{
+            matchers::{header, method, path, query_param},
+            Mock, MockServer, ResponseTemplate,
+        };
+        let server = MockServer::start().await;
+        let provider = super::DocuSignSignatureProvider::new(
+            server.uri(),
+            "example-account",
+            "example-token",
+            "signer@example.com",
+            "Example Signer",
+        );
+        let first = Uuid::new_v4();
+        let second = Uuid::new_v4();
+        let route = "/v2.1/accounts/example-account/envelopes";
+        Mock::given(method("GET"))
+            .and(path(route))
+            .and(header("authorization", "Bearer example-token"))
+            .and(query_param("from_to_status", "completed"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "envelopes": [{"envelopeId": first, "status": "completed"}],
+                "nextUri": format!("{route}?start_position=1"),
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(route))
+            .and(query_param("start_position", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "envelopes": [{"envelopeId": second, "status": "completed"}],
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let through = chrono::Utc::now();
+        assert_eq!(
+            provider
+                .completed_envelopes(through - chrono::Duration::minutes(10), through)
+                .await
+                .unwrap(),
+            vec![first, second]
         );
     }
 

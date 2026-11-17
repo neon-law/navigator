@@ -152,6 +152,8 @@ pub struct FirmFields {
     /// that case (see [`Self::can_view_secrets`]).
     #[serde(default)]
     pub secrets: Vec<SecretMetadataRow>,
+    #[serde(default)]
+    pub docusign_review: Vec<(String, String)>,
     /// Whether this caller may even see the metadata section — distinct from
     /// `secrets.is_empty()`, which is also true for a DRI who has configured
     /// nothing yet.
@@ -506,6 +508,20 @@ pub async fn get_firm_show() -> Result<FirmShowView, ServerFnError> {
     } else {
         Vec::new()
     };
+    let docusign_review = if can_view_secrets {
+        match store::postgres::PostgresDb::configured().await {
+            Ok(Some(pg)) => store::docusign_completion::review_queue(&pg, id)
+                .await
+                .map_err(|_| ServerFnError::new("DocuSign completion review unavailable"))?
+                .into_iter()
+                .map(|(envelope, reason)| (envelope.to_string(), reason.replace('_', " ")))
+                .collect(),
+            Ok(None) => Vec::new(),
+            Err(_) => return Err(ServerFnError::new("DocuSign completion review unavailable")),
+        }
+    } else {
+        Vec::new()
+    };
     let csrf_token = dioxus_fullstack_core::FullstackContext::extract::<
         axum::Extension<crate::csrf::CsrfToken>,
         _,
@@ -541,6 +557,7 @@ pub async fn get_firm_show() -> Result<FirmShowView, ServerFnError> {
             projected_cash,
             calibration,
             secrets,
+            docusign_review,
             can_view_secrets,
             can_manage_secrets,
             csrf_token,
@@ -681,6 +698,17 @@ pub fn firm_show_body(view: &FirmShowView) -> Element {
                     p { a { href: crate::deployment_keys::PATH, "Manage shared social app keys" } }
                 } else {
                     p { class: "nav-muted", "An Owner manages shared app keys through the production SOPS workflow." }
+                }
+            }
+            if fields.can_view_secrets && !fields.docusign_review.is_empty() {
+                section { id: "docusign-review",
+                    h2 { "DocuSign completion review" }
+                    p { "Use the envelope ID to verify the Project in DocuSign, then adopt the envelope from that Project." }
+                    ul {
+                        for (envelope, reason) in fields.docusign_review.iter() {
+                            li { key: "{envelope}", "{envelope} · {reason}" }
+                        }
+                    }
                 }
             }
             if fields.can_view_secrets {

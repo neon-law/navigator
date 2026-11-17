@@ -1632,6 +1632,10 @@ mod tests {
                 "20261116230000_add_matter_page_media.sql",
                 include_str!("../postgres/migrations/20261116230000_add_matter_page_media.sql"),
             ),
+            (
+                "20261117000000_create_docusign_completion.sql",
+                include_str!("../postgres/migrations/20261117000000_create_docusign_completion.sql"),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());
