@@ -3650,7 +3650,13 @@ async fn firm_inbox_displays_the_email_date_and_links_a_text_to_a_contact() {
     );
     assert_eq!(date.text().await.unwrap(), "Oct 10");
 
-    activate_inbox_link(&c, &format!("#inbox-row-{} a", text.conversation_id)).await;
+    let row_link = format!("#inbox-row-{} a[data-dioxus-id]", text.conversation_id);
+    c.wait()
+        .at_most(Duration::from_secs(15))
+        .for_element(Locator::Css(&row_link))
+        .await
+        .expect("the SMS inbox row is interactive");
+    activate_inbox_link(&c, &row_link).await;
     let form = format!(
         "#inbox-pane form[action='/app/inbox/{}/contact']",
         text.conversation_id
