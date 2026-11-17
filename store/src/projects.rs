@@ -6655,7 +6655,7 @@ mod matter_command_tests {
             uuid::Uuid::now_v7(),
             uuid::Uuid::now_v7(),
         );
-        let mut command = open_command(ids.0, ids.1, ids.2, ids.3, "Bad Code!");
+        let command = open_command(ids.0, ids.1, ids.2, ids.3, "Bad Code!");
         assert!(matches!(
             open_matter(&db, &command).await,
             Err(OpenMatterError::Invalid(
