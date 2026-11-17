@@ -151,6 +151,10 @@ wasm-bindgen = "=0.2.130"
 uuid = { workspace = true, features = ["js"] }
 
 [dev-dependencies]
+# The `server_reads` billing tests backdate timers and administer disposable
+# databases directly, mirroring the portal's end-to-end harness. A
+# dev-dependency, so it reaches neither the server binary nor the wasm bundle.
+sqlx.workspace = true
 # The component tests assert server-rendered markup directly (aria semantics,
 # theme classes) without standing up a router. Matches the pinned `dioxus`
 # version, and is unconditional here so tests build without `--features server`.
