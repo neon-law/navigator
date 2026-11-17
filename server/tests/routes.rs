@@ -7874,21 +7874,20 @@ async fn api_router_operations_match_openapi_document() {
     // dropped from `observed` below so only a genuine re-added verb trips the guard.
     let mut candidate_paths: BTreeSet<String> = documented.iter().map(|(_, p)| p.clone()).collect();
     candidate_paths.insert(REMOVED_ALIAS.to_string());
+    let owner_cookie = session_cookie_for_role(store::persons::Role::Owner);
 
     let mut observed: BTreeSet<(String, String)> = BTreeSet::new();
     for path in &candidate_paths {
         let uri = path.replace("{id}", "00000000-0000-0000-0000-000000000000");
-        // The `/app/api/*` routes now sit behind the session boundary (#732), so
-        // an anonymous probe answers 401 rather than the method router's 405.
-        // A signed-in session clears the boundary; TRACE is a CSRF-safe method,
-        // so the request reaches the method router and surfaces its `Allow` set.
+        // The Owner probe measures routing independently of Firm scope. TRACE
+        // reaches the method router without running a handler or requiring CSRF.
         let resp = app
             .clone()
             .oneshot(
                 Request::builder()
                     .method("TRACE")
                     .uri(&uri)
-                    .header(header::COOKIE, admin_session_cookie())
+                    .header(header::COOKIE, &owner_cookie)
                     .body(Body::empty())
                     .unwrap(),
             )
