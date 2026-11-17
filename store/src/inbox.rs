@@ -2607,15 +2607,6 @@ async fn dispatch_queued_messages(
         ))
         .await;
     }
-    dispatch_queued_surreal(db, transport, message_id).await
-}
-
-/// The legacy SurrealDB store behind [`dispatch_queued`].
-async fn dispatch_queued_surreal(
-    db: &SurrealDb,
-    transport: &dyn OutboundTransport,
-    message_id: Option<Uuid>,
-) -> Result<DispatchReport, InboxError> {
     let queued = match message_id {
         Some(id) => message_by_id(db, id)
             .await?
@@ -2624,6 +2615,15 @@ async fn dispatch_queued_surreal(
             .collect(),
         None => messages_in_state(db, delivery::QUEUED).await?,
     };
+    dispatch_queued_surreal(db, transport, queued).await
+}
+
+/// Dispatch the selected queued Messages through the SurrealDB store.
+async fn dispatch_queued_surreal(
+    db: &SurrealDb,
+    transport: &dyn OutboundTransport,
+    queued: Vec<Message>,
+) -> Result<DispatchReport, InboxError> {
     let mut report = DispatchReport::default();
     for message in queued {
         let Some(conversation) = conversation_by_id(db, message.conversation_id).await? else {
