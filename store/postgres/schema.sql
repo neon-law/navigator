@@ -4799,7 +4799,24 @@ CREATE TABLE inbox_attachment_filing (
 CREATE INDEX inbox_attachment_filing_pending
     ON inbox_attachment_filing (inserted_at, id) WHERE state = 'pending';
 
--- Migration: 20261116190000_create_evidence_share.sql
+-- Migration: 20261116190000_create_project_calendar_grant.sql
+-- Direct reader grants managed by Project Calendar reconciliation.
+CREATE TABLE project_calendar_grant (
+    project_id UUID NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+    firm_id UUID NOT NULL REFERENCES firm(id),
+    calendar_id TEXT NOT NULL,
+    email TEXT NOT NULL,
+    notified BOOLEAN NOT NULL DEFAULT false,
+    PRIMARY KEY (project_id, firm_id, calendar_id, email)
+);
+
+-- Migration: 20261116200000_add_task_handoff.sql
+ALTER TABLE project_task ADD COLUMN handoff JSONB;
+
+-- Migration: 20261116210000_matter_page_document_revision.sql
+ALTER TABLE matter_page ADD COLUMN document_revision TEXT;
+
+-- Migration: 20261116220000_create_evidence_share.sql
 CREATE TABLE evidence_share (
     id uuid PRIMARY KEY,
     project_id uuid NOT NULL,
@@ -4825,20 +4842,3 @@ CREATE TABLE evidence_share_usage (
     opens bigint NOT NULL,
     downloads bigint NOT NULL
 );
-
--- Migration: 20261116190000_create_project_calendar_grant.sql
--- Direct reader grants managed by Project Calendar reconciliation.
-CREATE TABLE project_calendar_grant (
-    project_id UUID NOT NULL REFERENCES project(id) ON DELETE CASCADE,
-    firm_id UUID NOT NULL REFERENCES firm(id),
-    calendar_id TEXT NOT NULL,
-    email TEXT NOT NULL,
-    notified BOOLEAN NOT NULL DEFAULT false,
-    PRIMARY KEY (project_id, firm_id, calendar_id, email)
-);
-
--- Migration: 20261116200000_add_task_handoff.sql
-ALTER TABLE project_task ADD COLUMN handoff JSONB;
-
--- Migration: 20261116210000_matter_page_document_revision.sql
-ALTER TABLE matter_page ADD COLUMN document_revision TEXT;

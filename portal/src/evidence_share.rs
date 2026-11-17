@@ -503,7 +503,7 @@ mod tests {
             .unwrap();
         let db = PostgresDb::connect(options.database(&name)).await.unwrap();
         sqlx::raw_sql(include_str!(
-            "../../store/postgres/migrations/20261116190000_create_evidence_share.sql"
+            "../../store/postgres/migrations/20261116220000_create_evidence_share.sql"
         ))
         .execute(db.pool())
         .await
