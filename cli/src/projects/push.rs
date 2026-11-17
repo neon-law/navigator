@@ -151,24 +151,7 @@ where
         println!("commit: signed");
     }
 
-    let pushed = git(dir, &["push", "-u", "origin", &target])?;
-    if !pushed.status.success() {
-        bail!(
-            "git push failed: {}",
-            String::from_utf8_lossy(&pushed.stderr).trim()
-        );
-    }
-    println!("push: the push branch is on origin");
-    if github && has_forgejo_remote(dir)? {
-        let head = git_text(dir, &["rev-parse", "HEAD"])?;
-        let reference = format!("refs/heads/{target}");
-        let advertised = git_text(dir, &["ls-remote", "--refs", "forgejo", &reference])
-            .map_err(|_| anyhow::anyhow!("could not verify the pushed branch on Forgejo"))?;
-        anyhow::ensure!(
-            advertised == format!("{head}\t{reference}"),
-            "Forgejo did not receive the pushed branch at the local commit. Check the origin push URLs and retry"
-        );
-    }
+    push_topic(dir, &target, github)?;
 
     // Review request, ready for review — never a draft (LAW-220 step 2).
     let review = forge
@@ -206,6 +189,28 @@ where
     let (mirror, delivery) = tokio::join!(mirror, delivery);
     mirror?;
     delivery
+}
+
+fn push_topic(dir: &Path, target: &str, github: bool) -> Result<()> {
+    let pushed = git(dir, &["push", "-u", "origin", target])?;
+    if !pushed.status.success() {
+        bail!(
+            "git push failed: {}",
+            String::from_utf8_lossy(&pushed.stderr).trim()
+        );
+    }
+    println!("push: the push branch is on origin");
+    if github && has_forgejo_remote(dir)? {
+        let head = git_text(dir, &["rev-parse", "HEAD"])?;
+        let reference = format!("refs/heads/{target}");
+        let advertised = git_text(dir, &["ls-remote", "--refs", "forgejo", &reference])
+            .map_err(|_| anyhow::anyhow!("could not verify the pushed branch on Forgejo"))?;
+        anyhow::ensure!(
+            advertised == format!("{head}\t{reference}"),
+            "Forgejo did not receive the pushed branch at the local commit. Check the origin push URLs and retry"
+        );
+    }
+    Ok(())
 }
 
 async fn sync_secondary_remote(
