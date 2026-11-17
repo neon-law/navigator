@@ -934,20 +934,28 @@ async fn independent_server_connections_share_the_intake_idempotency_boundary() 
         return;
     };
     let peer = store::surreal::connect(&server.config).await.unwrap();
-    // Match the minimal compiled-Brand fixture used by the embedded test engine.
-    server
-        .db
-        .query(
-            "CREATE $id SET name = 'Fixture Brand', brand_key = 'neon', \
-        firm_id = $firm, inserted_at = $now, updated_at = $now",
-        )
-        .bind(("id", store::surreal::record_id("brand", Uuid::now_v7())))
-        .bind(("firm", store::surreal::record_id("firm", Uuid::now_v7())))
-        .bind(("now", Utc::now().to_rfc3339()))
+    // Match the minimal compiled-Brand fixture used by the embedded test
+    // engine — unless the server lane's own compiled catalog already
+    // registered `neon`, in which case a CREATE would die on
+    // `brand_key_unique` and the pre-seeded row is exactly the fixture.
+    if store::test_support::brand_id_with_key(&server.db, "neon")
         .await
-        .unwrap()
-        .check()
-        .unwrap();
+        .is_none()
+    {
+        server
+            .db
+            .query(
+                "CREATE $id SET name = 'Fixture Brand', brand_key = 'neon', \
+             firm_id = $firm, inserted_at = $now, updated_at = $now",
+            )
+            .bind(("id", store::surreal::record_id("brand", Uuid::now_v7())))
+            .bind(("firm", store::surreal::record_id("firm", Uuid::now_v7())))
+            .bind(("now", Utc::now().to_rfc3339()))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+    }
     let project_id = open_matter(&server.db, "server-concurrent-intake").await;
     assert_concurrent_intake_converges(&server.db, &peer, project_id).await;
 }

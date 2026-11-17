@@ -51,6 +51,23 @@ pub async fn seed_body_asset(surreal: &crate::surreal::SurrealDb, bytes: &[u8]) 
     id
 }
 
+/// The `Uuid` behind the `brand` row carrying `key`, if the database holds
+/// one. Test fixtures that dress a brand with their own presentation fields
+/// look the row up first: the compiled catalog (`seed_compiled_brands`,
+/// seeded by both `mem` and `server_surreal`) pre-registers every closed
+/// key, and `brand_key_unique` rejects a second CREATE with the same key.
+pub async fn brand_id_with_key(surreal: &crate::surreal::SurrealDb, key: &str) -> Option<Uuid> {
+    let mut response = surreal
+        .query("SELECT id FROM brand WHERE brand_key = $key LIMIT 1")
+        .bind(("key", key.to_string()))
+        .await
+        .and_then(surrealdb::IndexedResults::check)
+        .expect("look up the fixture brand by key");
+    let rows: Vec<surrealdb::types::RecordId> =
+        response.take(0).expect("read the fixture brand lookup");
+    rows.first().and_then(crate::surreal::record_uuid)
+}
+
 /// The current project-scoped template version for `code` with no body and
 /// no commit — the shape of a row written before
 /// [`crate::templates::save_version`] required both, which it now refuses
