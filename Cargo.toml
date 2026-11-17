@@ -315,9 +315,3 @@ codegen-units = 1
 # minutes. Optimizing just lopdf keeps the suite honest and fast.
 [profile.dev.package.lopdf]
 opt-level = 3
-
-# The SurrealDB core emits debuginfo so heavy it OOMs 8 GB sandboxes
-# while compiling dev/test targets. Nothing debug-steps into a
-# dependency's internals, so drop the debuginfo for it alone.
-[profile.dev.package.surrealdb-core]
-debug = false

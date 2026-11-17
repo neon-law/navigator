@@ -23,7 +23,6 @@ use std::collections::HashSet;
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
-use crate::postgres::cases as authority;
 use crate::surreal::{record_id, record_uuid, SurrealDb};
 
 const CASE_TABLE: &str = "case";
@@ -169,21 +168,6 @@ pub enum CaseError {
     /// or a trial; only an appearance carries a date a continuance moves.
     #[error("a `{0}` entry is not an appearance and cannot be superseded")]
     NotAnAppearance(String),
-    /// A `kind`/`scheduled_on` pair the schema's ASSERT refuses on the
-    /// SurrealDB path; the PostgreSQL path enforces the same shape.
-    #[error("a hearing or trial entry requires a scheduled date and no other kind may carry one")]
-    ScheduledOnRule,
-    /// PostgreSQL, under the litigation authority, failed.
-    #[error(transparent)]
-    Postgres(#[from] authority::CasesAuthorityError),
-}
-
-// Raw sqlx calls inside the transaction helpers surface through the
-// litigation authority's error, which `CaseError::Postgres` already wraps.
-impl From<sqlx::Error> for CaseError {
-    fn from(err: sqlx::Error) -> Self {
-        CaseError::Postgres(err.into())
-    }
 }
 
 /// One litigation matter before one forum.
@@ -506,154 +490,6 @@ impl DiscoveryItemRow {
 const DISCOVERY_ITEM_SELECT: &str = "id, discovery_request_id, item_number, request_text, \
                                      response_text, objections, inserted_at, updated_at";
 
-// The litigation rows as PostgreSQL's `to_jsonb` serves them, under the
-// `postgres::cases` authority. Record links are plain UUID foreign keys, so
-// each type adds nothing to decode beyond the column list.
-
-#[derive(serde::Deserialize)]
-struct PgCaseRow {
-    id: Uuid,
-    project_id: Uuid,
-    caption: String,
-    forum: Option<String>,
-    jurisdiction: Option<String>,
-    docket_number: Option<String>,
-    judge: Option<String>,
-    posture: String,
-    status: String,
-    inserted_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
-}
-
-impl From<PgCaseRow> for Case {
-    fn from(row: PgCaseRow) -> Self {
-        Case {
-            id: row.id,
-            project_id: row.project_id,
-            caption: row.caption,
-            forum: row.forum,
-            jurisdiction: row.jurisdiction,
-            docket_number: row.docket_number,
-            judge: row.judge,
-            posture: row.posture,
-            status: row.status,
-            inserted_at: row.inserted_at,
-            updated_at: row.updated_at,
-        }
-    }
-}
-
-#[derive(serde::Deserialize)]
-struct PgDocketEntryRow {
-    id: Uuid,
-    case_id: Uuid,
-    entry_number: String,
-    kind: String,
-    title: String,
-    party: Option<String>,
-    filed_or_served_on: Option<String>,
-    scheduled_on: Option<DateTime<Utc>>,
-    supersedes: Option<Uuid>,
-    document_asset_id: Option<Uuid>,
-    notation_id: Option<Uuid>,
-    stamp_case_number: Option<String>,
-    stamp_entry_number: Option<String>,
-    stamp_filed_on: Option<String>,
-    integrity_checked_at: Option<DateTime<Utc>>,
-    integrity_source_sha256_hex: Option<String>,
-    integrity_matched: Option<bool>,
-    inserted_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
-}
-
-impl From<PgDocketEntryRow> for DocketEntry {
-    fn from(row: PgDocketEntryRow) -> Self {
-        DocketEntry {
-            id: row.id,
-            case_id: row.case_id,
-            entry_number: row.entry_number,
-            kind: row.kind,
-            title: row.title,
-            party: row.party,
-            filed_or_served_on: row.filed_or_served_on,
-            scheduled_on: row.scheduled_on,
-            supersedes: row.supersedes,
-            document_asset_id: row.document_asset_id,
-            notation_id: row.notation_id,
-            stamp_case_number: row.stamp_case_number,
-            stamp_entry_number: row.stamp_entry_number,
-            stamp_filed_on: row.stamp_filed_on,
-            integrity_checked_at: row.integrity_checked_at,
-            integrity_source_sha256_hex: row.integrity_source_sha256_hex,
-            integrity_matched: row.integrity_matched,
-            inserted_at: row.inserted_at,
-            updated_at: row.updated_at,
-        }
-    }
-}
-
-#[derive(serde::Deserialize)]
-struct PgDiscoveryRequestRow {
-    id: Uuid,
-    case_id: Uuid,
-    docket_entry_id: Option<Uuid>,
-    device: String,
-    set_number: i32,
-    propounding_party: String,
-    responding_party: String,
-    served_on: Option<String>,
-    responses_due_on: Option<String>,
-    status: String,
-    inserted_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
-}
-
-impl From<PgDiscoveryRequestRow> for DiscoveryRequest {
-    fn from(row: PgDiscoveryRequestRow) -> Self {
-        DiscoveryRequest {
-            id: row.id,
-            case_id: row.case_id,
-            docket_entry_id: row.docket_entry_id,
-            device: row.device,
-            set_number: row.set_number,
-            propounding_party: row.propounding_party,
-            responding_party: row.responding_party,
-            served_on: row.served_on,
-            responses_due_on: row.responses_due_on,
-            status: row.status,
-            inserted_at: row.inserted_at,
-            updated_at: row.updated_at,
-        }
-    }
-}
-
-#[derive(serde::Deserialize)]
-struct PgDiscoveryItemRow {
-    id: Uuid,
-    discovery_request_id: Uuid,
-    item_number: i32,
-    request_text: String,
-    response_text: Option<String>,
-    objections: Option<String>,
-    inserted_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
-}
-
-impl From<PgDiscoveryItemRow> for DiscoveryItem {
-    fn from(row: PgDiscoveryItemRow) -> Self {
-        DiscoveryItem {
-            id: row.id,
-            discovery_request_id: row.discovery_request_id,
-            item_number: row.item_number,
-            request_text: row.request_text,
-            response_text: row.response_text,
-            objections: row.objections,
-            inserted_at: row.inserted_at,
-            updated_at: row.updated_at,
-        }
-    }
-}
-
 /// What a new [`Case`] needs.
 #[derive(Debug, Clone)]
 pub struct NewCase<'a> {
@@ -673,9 +509,6 @@ pub struct NewCase<'a> {
 /// # Errors
 /// Propagates any database error.
 pub async fn open_case(db: &SurrealDb, new: &NewCase<'_>) -> Result<Case, CaseError> {
-    if let Some(pg) = authority::authority().await? {
-        return pg_open_case(&pg, new).await;
-    }
     let id = Uuid::now_v7();
     let mut response = db
         .query(format!(
@@ -710,9 +543,6 @@ pub async fn open_case(db: &SurrealDb, new: &NewCase<'_>) -> Result<Case, CaseEr
 /// # Errors
 /// Propagates database failures or a write that returns no usable case.
 pub async fn ensure_case(db: &SurrealDb, new: &NewCase<'_>) -> Result<Case, CaseError> {
-    if let Some(pg) = authority::authority().await? {
-        return pg_ensure_case(&pg, new).await;
-    }
     let Some(number) = new.docket_number else {
         return open_case(db, new).await;
     };
@@ -755,9 +585,6 @@ pub async fn ensure_case(db: &SurrealDb, new: &NewCase<'_>) -> Result<Case, Case
 /// # Errors
 /// Propagates any database error.
 pub async fn for_project(db: &SurrealDb, project_id: Uuid) -> Result<Vec<Case>, CaseError> {
-    if let Some(pg) = authority::authority().await? {
-        return pg_cases_for_project(&pg, project_id).await;
-    }
     let mut response = db
         .query(format!(
             "SELECT {CASE_SELECT} FROM {CASE_TABLE} WHERE project_id = $project ORDER BY id ASC"
@@ -783,7 +610,11 @@ pub async fn find_case_by_docket_number(
     docket_number: &str,
 ) -> Result<Option<Case>, CaseError> {
     let wanted = canonical_docket_number(docket_number);
-    Ok(canonical_match(for_project(db, project_id).await?, &wanted))
+    Ok(for_project(db, project_id).await?.into_iter().find(|case| {
+        case.docket_number
+            .as_deref()
+            .is_some_and(|stored| canonical_docket_number(stored) == wanted)
+    }))
 }
 
 /// A docket's identity excludes trailing judge initials. Single-letter
@@ -825,9 +656,6 @@ pub async fn docket_for_project(
 /// # Errors
 /// Propagates any database error.
 pub async fn find_entry(db: &SurrealDb, entry_id: Uuid) -> Result<Option<DocketEntry>, CaseError> {
-    if let Some(pg) = authority::authority().await? {
-        return pg_find_entry(&pg, entry_id).await;
-    }
     let mut response = db
         .query(format!(
             "SELECT {DOCKET_ENTRY_SELECT} FROM ONLY $id LIMIT 1"
@@ -852,9 +680,6 @@ pub async fn link_document(
     entry_id: Uuid,
     document_asset_id: Uuid,
 ) -> Result<DocketEntry, CaseError> {
-    if let Some(pg) = authority::authority().await? {
-        return pg_link_document(&pg, entry_id, document_asset_id).await;
-    }
     let mut response = db
         .query(format!(
             "UPDATE $id SET document_asset_id = $document, updated_at = time::now() \
@@ -934,9 +759,6 @@ pub async fn supersede(
 /// # Errors
 /// Propagates any database error.
 pub async fn delete_for_project(db: &SurrealDb, project_id: Uuid) -> Result<(), CaseError> {
-    if let Some(pg) = authority::authority().await? {
-        return pg_delete_for_project(&pg, project_id).await;
-    }
     let case_ids: Vec<Uuid> = for_project(db, project_id)
         .await?
         .into_iter()
@@ -1041,9 +863,6 @@ async fn persist_entry(
     new: &NewDocketEntry<'_>,
     reuse: bool,
 ) -> Result<DocketEntry, CaseError> {
-    if let Some(pg) = authority::authority().await? {
-        return pg_persist_entry(&pg, new, reuse).await;
-    }
     let id = Uuid::now_v7();
     let create = format!(
         "CREATE $id SET \
@@ -1125,9 +944,6 @@ pub async fn record_stamp(
     entry_id: Uuid,
     stamp: &crate::cm_ecf_stamp::CmEcfStamp,
 ) -> Result<DocketEntry, CaseError> {
-    if let Some(pg) = authority::authority().await? {
-        return pg_record_stamp(&pg, entry_id, stamp).await;
-    }
     let mut response = db
         .query(format!(
             "UPDATE $id SET \
@@ -1164,9 +980,6 @@ pub async fn record_integrity_check(
     source_sha256_hex: &str,
     matched: bool,
 ) -> Result<DocketEntry, CaseError> {
-    if let Some(pg) = authority::authority().await? {
-        return pg_record_integrity_check(&pg, entry_id, source_sha256_hex, matched).await;
-    }
     let mut response = db
         .query(format!(
             "UPDATE $id SET \
@@ -1195,9 +1008,6 @@ pub async fn record_integrity_check(
 /// # Errors
 /// Propagates any database error.
 pub async fn docket(db: &SurrealDb, case_id: Uuid) -> Result<Vec<DocketEntry>, CaseError> {
-    if let Some(pg) = authority::authority().await? {
-        return pg_docket(&pg, case_id).await;
-    }
     let mut response = db
         .query(format!(
             "SELECT {DOCKET_ENTRY_SELECT} FROM {DOCKET_ENTRY_TABLE} \
@@ -1321,9 +1131,6 @@ pub async fn current_appearances_for_projects(
 pub async fn undated_hearings_and_trials(
     db: &SurrealDb,
 ) -> Result<Vec<UndatedAppearance>, CaseError> {
-    if let Some(pg) = authority::authority().await? {
-        return pg_undated_hearings_and_trials(&pg).await;
-    }
     let mut response = db
         .query(format!(
             "SELECT {DOCKET_ENTRY_SELECT} FROM {DOCKET_ENTRY_TABLE} \
@@ -1368,9 +1175,6 @@ pub async fn serve_discovery(
     db: &SurrealDb,
     new: &NewDiscoveryRequest<'_>,
 ) -> Result<DiscoveryRequest, CaseError> {
-    if let Some(pg) = authority::authority().await? {
-        return pg_serve_discovery(&pg, new).await;
-    }
     let id = Uuid::now_v7();
     let mut response = db
         .query(format!(
@@ -1409,9 +1213,6 @@ pub async fn discovery_requests(
     db: &SurrealDb,
     case_id: Uuid,
 ) -> Result<Vec<DiscoveryRequest>, CaseError> {
-    if let Some(pg) = authority::authority().await? {
-        return pg_discovery_requests(&pg, case_id).await;
-    }
     let mut response = db
         .query(format!(
             "SELECT {DISCOVERY_REQUEST_SELECT} FROM {DISCOVERY_REQUEST_TABLE} \
@@ -1437,9 +1238,6 @@ pub async fn add_item(
     item_number: i32,
     request_text: &str,
 ) -> Result<DiscoveryItem, CaseError> {
-    if let Some(pg) = authority::authority().await? {
-        return pg_add_item(&pg, discovery_request_id, item_number, request_text).await;
-    }
     let id = Uuid::now_v7();
     let mut response = db
         .query(format!(
@@ -1473,9 +1271,6 @@ pub async fn answer_item(
     response_text: &str,
     objections: Option<&str>,
 ) -> Result<DiscoveryItem, CaseError> {
-    if let Some(pg) = authority::authority().await? {
-        return pg_answer_item(&pg, item_id, response_text, objections).await;
-    }
     let mut response = db
         .query(format!(
             "UPDATE $id SET \
@@ -1501,9 +1296,6 @@ pub async fn items(
     db: &SurrealDb,
     discovery_request_id: Uuid,
 ) -> Result<Vec<DiscoveryItem>, CaseError> {
-    if let Some(pg) = authority::authority().await? {
-        return pg_items(&pg, discovery_request_id).await;
-    }
     let mut response = db
         .query(format!(
             "SELECT {DISCOVERY_ITEM_SELECT} FROM {DISCOVERY_ITEM_TABLE} \
@@ -1519,407 +1311,6 @@ pub async fn items(
     Ok(rows
         .into_iter()
         .filter_map(DiscoveryItemRow::into_item)
-        .collect())
-}
-
-// The PostgreSQL path, under the `postgres::cases` authority. Each helper
-// below answers exactly one command, in the shapes the SurrealQL statements
-// above them produce; the public functions dispatch before touching
-// SurrealDB.
-
-async fn pg_cases_for_project(
-    pg: &crate::postgres::PostgresDb,
-    project_id: Uuid,
-) -> Result<Vec<Case>, CaseError> {
-    let query = sqlx::query(
-        "SELECT to_jsonb(\"case\") AS row FROM \"case\" \
-         WHERE project_id = $1 ORDER BY id ASC",
-    )
-    .bind(project_id);
-    Ok(authority::rows::<PgCaseRow>(pg, query)
-        .await?
-        .into_iter()
-        .map(Into::into)
-        .collect())
-}
-
-/// The case whose stored docket number canonicalizes to `wanted`, if any.
-fn canonical_match(cases: Vec<Case>, wanted: &str) -> Option<Case> {
-    cases.into_iter().find(|case: &Case| {
-        case.docket_number
-            .as_deref()
-            .is_some_and(|stored| canonical_docket_number(stored) == wanted)
-    })
-}
-
-async fn pg_open_case(
-    pg: &crate::postgres::PostgresDb,
-    new: &NewCase<'_>,
-) -> Result<Case, CaseError> {
-    let row = serde_json::json!({
-        "id": Uuid::now_v7(), "project_id": new.project_id, "caption": new.caption,
-        "forum": new.forum, "jurisdiction": new.jurisdiction,
-        "docket_number": new.docket_number, "judge": new.judge,
-        "posture": new.posture, "status": "open",
-    });
-    let query = sqlx::query(
-        "INSERT INTO \"case\" SELECT * FROM \
-         jsonb_populate_record(NULL::\"case\", \
-         $1 || jsonb_build_object('inserted_at', now(), 'updated_at', now())) \
-         RETURNING to_jsonb(\"case\") AS row",
-    )
-    .bind(row);
-    authority::maybe::<PgCaseRow>(pg, query)
-        .await?
-        .map(Into::into)
-        .ok_or(CaseError::WriteReturnedNothing("case"))
-}
-
-async fn pg_ensure_case(
-    pg: &crate::postgres::PostgresDb,
-    new: &NewCase<'_>,
-) -> Result<Case, CaseError> {
-    let Some(number) = new.docket_number else {
-        return pg_open_case(pg, new).await;
-    };
-    if let Some(existing) = canonical_match(
-        pg_cases_for_project(pg, new.project_id).await?,
-        &canonical_docket_number(number),
-    ) {
-        return Ok(existing);
-    }
-    let number = canonical_docket_number(number);
-    let mut tx = pg.pool().begin().await?;
-    // The SurrealDB path serializes the lookup/create on the owning Project
-    // row; here an advisory lock over the (project, canonical number) pair
-    // does, so concurrent intake cannot open a case twice.
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-        .bind(format!("case:{}:{}", new.project_id, number))
-        .execute(&mut *tx)
-        .await?;
-    let cases: Vec<PgCaseRow> = sqlx::query(
-        "SELECT to_jsonb(r) AS row FROM \"case\" AS r \
-         WHERE r.project_id = $1 ORDER BY r.id ASC",
-    )
-    .bind(new.project_id)
-    .fetch_all(&mut *tx)
-    .await?
-    .iter()
-    .map(authority::decode::<PgCaseRow>)
-    .collect::<Result<_, _>>()?;
-    if let Some(existing) = canonical_match(cases.into_iter().map(Into::into).collect(), &number) {
-        return Ok(existing);
-    }
-    let row = serde_json::json!({
-        "id": Uuid::now_v7(), "project_id": new.project_id, "caption": new.caption,
-        "forum": new.forum, "jurisdiction": new.jurisdiction,
-        "docket_number": number.clone(), "judge": new.judge,
-        "posture": new.posture, "status": "open",
-    });
-    let written = sqlx::query(
-        "INSERT INTO \"case\" SELECT * FROM \
-         jsonb_populate_record(NULL::\"case\", \
-         $1 || jsonb_build_object('inserted_at', now(), 'updated_at', now())) \
-         RETURNING to_jsonb(\"case\") AS row",
-    )
-    .bind(row)
-    .fetch_one(&mut *tx)
-    .await?;
-    let case: Case = authority::decode::<PgCaseRow>(&written)?.into();
-    tx.commit().await?;
-    Ok(case)
-}
-
-async fn pg_find_entry(
-    pg: &crate::postgres::PostgresDb,
-    entry_id: Uuid,
-) -> Result<Option<DocketEntry>, CaseError> {
-    let query = sqlx::query(
-        "SELECT to_jsonb(r) AS row FROM case_docket_entry AS r WHERE r.id = $1 LIMIT 1",
-    )
-    .bind(entry_id);
-    Ok(authority::maybe::<PgDocketEntryRow>(pg, query)
-        .await?
-        .map(Into::into))
-}
-
-async fn pg_link_document(
-    pg: &crate::postgres::PostgresDb,
-    entry_id: Uuid,
-    document_asset_id: Uuid,
-) -> Result<DocketEntry, CaseError> {
-    let query = sqlx::query(
-        "UPDATE case_docket_entry SET document_asset_id = $2, updated_at = now() \
-         WHERE id = $1 RETURNING to_jsonb(case_docket_entry) AS row",
-    )
-    .bind(entry_id)
-    .bind(document_asset_id);
-    authority::maybe::<PgDocketEntryRow>(pg, query)
-        .await?
-        .map(Into::into)
-        .ok_or(CaseError::EntryNotFound(entry_id))
-}
-
-async fn pg_delete_for_project(
-    pg: &crate::postgres::PostgresDb,
-    project_id: Uuid,
-) -> Result<(), CaseError> {
-    // Children before parents, in one explicit transaction.
-    let mut tx = pg.pool().begin().await?;
-    for statement in [
-        "DELETE FROM discovery_item WHERE discovery_request_id IN \
-         (SELECT id FROM discovery_request WHERE case_id IN \
-         (SELECT id FROM \"case\" WHERE project_id = $1))",
-        "DELETE FROM discovery_request WHERE case_id IN \
-         (SELECT id FROM \"case\" WHERE project_id = $1)",
-        "DELETE FROM case_docket_entry WHERE case_id IN \
-         (SELECT id FROM \"case\" WHERE project_id = $1)",
-        "DELETE FROM \"case\" WHERE project_id = $1",
-    ] {
-        sqlx::query(statement)
-            .bind(project_id)
-            .execute(&mut *tx)
-            .await?;
-    }
-    tx.commit().await?;
-    Ok(())
-}
-
-async fn pg_persist_entry(
-    pg: &crate::postgres::PostgresDb,
-    new: &NewDocketEntry<'_>,
-    reuse: bool,
-) -> Result<DocketEntry, CaseError> {
-    // The schema ASSERT is the write-time gate on the SurrealDB path; the
-    // PostgreSQL path refuses the same kind/date shapes before it writes.
-    if new.kind.is_appearance() != new.scheduled_on.is_some() {
-        return Err(CaseError::ScheduledOnRule);
-    }
-    let row = serde_json::json!({
-        "id": Uuid::now_v7(), "case_id": new.case_id,
-        "entry_number": new.entry_number, "kind": new.kind.as_str(),
-        "title": new.title, "party": new.party,
-        "filed_or_served_on": new.filed_or_served_on,
-        "scheduled_on": new.scheduled_on, "supersedes": new.supersedes,
-        "document_asset_id": new.document_asset_id, "notation_id": new.notation_id,
-    });
-    if !reuse {
-        let query = sqlx::query(
-            "INSERT INTO case_docket_entry SELECT * FROM \
-             jsonb_populate_record(NULL::case_docket_entry, \
-             $1 || jsonb_build_object('inserted_at', now(), 'updated_at', now())) \
-             RETURNING to_jsonb(case_docket_entry) AS row",
-        )
-        .bind(row);
-        return authority::maybe::<PgDocketEntryRow>(pg, query)
-            .await?
-            .map(Into::into)
-            .ok_or(CaseError::WriteReturnedNothing("docket entry"));
-    }
-    // Reuse: the Case row serializes the decision on the SurrealDB path;
-    // the unique (case, entry number) index is the final word here. An
-    // existing entry's document link fills only when it was missing — a
-    // later call never replaces an earlier one.
-    let mut tx = pg.pool().begin().await?;
-    sqlx::query("UPDATE \"case\" SET updated_at = now() WHERE id = $1")
-        .bind(new.case_id)
-        .execute(&mut *tx)
-        .await?;
-    let written = sqlx::query(
-        "INSERT INTO case_docket_entry AS d SELECT * FROM \
-         jsonb_populate_record(NULL::case_docket_entry, \
-         $1 || jsonb_build_object('inserted_at', now(), 'updated_at', now())) \
-         ON CONFLICT (case_id, entry_number) DO UPDATE SET \
-         document_asset_id = COALESCE(d.document_asset_id, EXCLUDED.document_asset_id), \
-         updated_at = now() \
-         RETURNING to_jsonb(d) AS row",
-    )
-    .bind(row)
-    .fetch_one(&mut *tx)
-    .await?;
-    let entry: DocketEntry = authority::decode::<PgDocketEntryRow>(&written)?.into();
-    tx.commit().await?;
-    Ok(entry)
-}
-
-async fn pg_record_stamp(
-    pg: &crate::postgres::PostgresDb,
-    entry_id: Uuid,
-    stamp: &crate::cm_ecf_stamp::CmEcfStamp,
-) -> Result<DocketEntry, CaseError> {
-    let query = sqlx::query(
-        "UPDATE case_docket_entry SET \
-         stamp_case_number = $2, stamp_entry_number = $3, stamp_filed_on = $4, \
-         updated_at = now() \
-         WHERE id = $1 RETURNING to_jsonb(case_docket_entry) AS row",
-    )
-    .bind(entry_id)
-    .bind(stamp.case_number.clone())
-    .bind(stamp.entry_number.clone())
-    .bind(stamp.filed_on.clone());
-    authority::maybe::<PgDocketEntryRow>(pg, query)
-        .await?
-        .map(Into::into)
-        .ok_or(CaseError::WriteReturnedNothing("docket entry"))
-}
-
-async fn pg_record_integrity_check(
-    pg: &crate::postgres::PostgresDb,
-    entry_id: Uuid,
-    source_sha256_hex: &str,
-    matched: bool,
-) -> Result<DocketEntry, CaseError> {
-    let query = sqlx::query(
-        "UPDATE case_docket_entry SET \
-         integrity_checked_at = now(), integrity_source_sha256_hex = $2, \
-         integrity_matched = $3, updated_at = now() \
-         WHERE id = $1 RETURNING to_jsonb(case_docket_entry) AS row",
-    )
-    .bind(entry_id)
-    .bind(source_sha256_hex.to_string())
-    .bind(matched);
-    authority::maybe::<PgDocketEntryRow>(pg, query)
-        .await?
-        .map(Into::into)
-        .ok_or(CaseError::WriteReturnedNothing("docket entry"))
-}
-
-async fn pg_docket(
-    pg: &crate::postgres::PostgresDb,
-    case_id: Uuid,
-) -> Result<Vec<DocketEntry>, CaseError> {
-    let query = sqlx::query(
-        "SELECT to_jsonb(r) AS row FROM case_docket_entry AS r \
-         WHERE r.case_id = $1 ORDER BY r.id ASC",
-    )
-    .bind(case_id);
-    Ok(authority::rows::<PgDocketEntryRow>(pg, query)
-        .await?
-        .into_iter()
-        .map(Into::into)
-        .collect())
-}
-
-async fn pg_undated_hearings_and_trials(
-    pg: &crate::postgres::PostgresDb,
-) -> Result<Vec<UndatedAppearance>, CaseError> {
-    let query = sqlx::query(
-        "SELECT to_jsonb(r) AS row FROM case_docket_entry AS r \
-         WHERE r.kind IN ('hearing', 'trial') AND r.scheduled_on IS NULL \
-         ORDER BY r.id ASC",
-    );
-    Ok(authority::rows::<PgDocketEntryRow>(pg, query)
-        .await?
-        .into_iter()
-        .map(Into::into)
-        .map(|entry: DocketEntry| UndatedAppearance {
-            id: entry.id,
-            case_id: entry.case_id,
-            kind: entry.kind,
-            title: entry.title,
-        })
-        .collect())
-}
-
-async fn pg_serve_discovery(
-    pg: &crate::postgres::PostgresDb,
-    new: &NewDiscoveryRequest<'_>,
-) -> Result<DiscoveryRequest, CaseError> {
-    let row = serde_json::json!({
-        "id": Uuid::now_v7(), "case_id": new.case_id,
-        "docket_entry_id": new.docket_entry_id, "device": new.device.as_str(),
-        "set_number": new.set_number,
-        "propounding_party": new.propounding_party,
-        "responding_party": new.responding_party,
-        "served_on": new.served_on, "responses_due_on": new.responses_due_on,
-        "status": "served",
-    });
-    let query = sqlx::query(
-        "INSERT INTO discovery_request SELECT * FROM \
-         jsonb_populate_record(NULL::discovery_request, \
-         $1 || jsonb_build_object('inserted_at', now(), 'updated_at', now())) \
-         RETURNING to_jsonb(discovery_request) AS row",
-    )
-    .bind(row);
-    authority::maybe::<PgDiscoveryRequestRow>(pg, query)
-        .await?
-        .map(Into::into)
-        .ok_or(CaseError::WriteReturnedNothing("discovery request"))
-}
-
-async fn pg_discovery_requests(
-    pg: &crate::postgres::PostgresDb,
-    case_id: Uuid,
-) -> Result<Vec<DiscoveryRequest>, CaseError> {
-    let query = sqlx::query(
-        "SELECT to_jsonb(r) AS row FROM discovery_request AS r \
-         WHERE r.case_id = $1 ORDER BY r.id ASC",
-    )
-    .bind(case_id);
-    Ok(authority::rows::<PgDiscoveryRequestRow>(pg, query)
-        .await?
-        .into_iter()
-        .map(Into::into)
-        .collect())
-}
-
-async fn pg_add_item(
-    pg: &crate::postgres::PostgresDb,
-    discovery_request_id: Uuid,
-    item_number: i32,
-    request_text: &str,
-) -> Result<DiscoveryItem, CaseError> {
-    let row = serde_json::json!({
-        "id": Uuid::now_v7(), "discovery_request_id": discovery_request_id,
-        "item_number": item_number, "request_text": request_text,
-        "response_text": null, "objections": null,
-    });
-    let query = sqlx::query(
-        "INSERT INTO discovery_item SELECT * FROM \
-         jsonb_populate_record(NULL::discovery_item, \
-         $1 || jsonb_build_object('inserted_at', now(), 'updated_at', now())) \
-         RETURNING to_jsonb(discovery_item) AS row",
-    )
-    .bind(row);
-    authority::maybe::<PgDiscoveryItemRow>(pg, query)
-        .await?
-        .map(Into::into)
-        .ok_or(CaseError::WriteReturnedNothing("discovery item"))
-}
-
-async fn pg_answer_item(
-    pg: &crate::postgres::PostgresDb,
-    item_id: Uuid,
-    response_text: &str,
-    objections: Option<&str>,
-) -> Result<DiscoveryItem, CaseError> {
-    let query = sqlx::query(
-        "UPDATE discovery_item SET response_text = $2, objections = $3, \
-         updated_at = now() \
-         WHERE id = $1 RETURNING to_jsonb(discovery_item) AS row",
-    )
-    .bind(item_id)
-    .bind(response_text.to_string())
-    .bind(objections.map(str::to_string));
-    authority::maybe::<PgDiscoveryItemRow>(pg, query)
-        .await?
-        .map(Into::into)
-        .ok_or(CaseError::ItemNotFound(item_id))
-}
-
-async fn pg_items(
-    pg: &crate::postgres::PostgresDb,
-    discovery_request_id: Uuid,
-) -> Result<Vec<DiscoveryItem>, CaseError> {
-    let query = sqlx::query(
-        "SELECT to_jsonb(r) AS row FROM discovery_item AS r \
-         WHERE r.discovery_request_id = $1 ORDER BY r.item_number ASC",
-    )
-    .bind(discovery_request_id);
-    Ok(authority::rows::<PgDiscoveryItemRow>(pg, query)
-        .await?
-        .into_iter()
-        .map(Into::into)
         .collect())
 }
 

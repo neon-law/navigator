@@ -1659,12 +1659,6 @@ mod tests {
                     "../postgres/migrations/20261117120000_add_accounting_authority_constraints.sql"
                 ),
             ),
-            (
-                "20261117130000_add_case_authority_constraints.sql",
-                include_str!(
-                    "../postgres/migrations/20261117130000_add_case_authority_constraints.sql"
-                ),
-            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());
