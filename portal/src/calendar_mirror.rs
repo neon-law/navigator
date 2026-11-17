@@ -61,3 +61,81 @@ impl MirrorSource for ScheduledMirror {
         .map_err(|error| error.to_string())
     }
 }
+
+use workflows::dbos_engine::project_calendar::{Source, SyncError};
+
+pub(crate) struct MembershipSource {
+    pub surreal: store::surreal::SurrealDb,
+    pub providers: Arc<dyn crate::integrations::IntegrationProviders>,
+}
+
+#[async_trait::async_trait]
+impl Source for MembershipSource {
+    async fn candidates(&self) -> Result<Vec<Uuid>, SyncError> {
+        Ok(store::projects::all(&self.surreal)
+            .await
+            .map_err(|_| sync_error("reading Project Calendar assignments"))?
+            .into_iter()
+            .filter(|project| {
+                project.firm_id.is_some()
+                    && project
+                        .calendar_id
+                        .as_ref()
+                        .is_some_and(|id| !id.trim().is_empty())
+            })
+            .map(|project| project.id)
+            .collect())
+    }
+
+    async fn sync(
+        &self,
+        project_id: Uuid,
+    ) -> Result<Vec<store::project_calendar::ParticipantSync>, SyncError> {
+        let _guard = crate::integrations_api::calendar_lock(project_id)
+            .await
+            .map_err(|()| sync_error("locking Project Calendar"))?;
+        let calendar = self
+            .providers
+            .calendar(&self.surreal, project_id)
+            .await
+            .map_err(|error| sync_error(error.slug()))?;
+        store::project_calendar::sync_membership(&self.surreal, project_id, calendar.as_ref())
+            .await
+            .map_err(|error| match error {
+                store::project_calendar::ProjectCalendarError::Participant {
+                    person_id,
+                    source,
+                } => {
+                    let mut error = provider_error(source);
+                    error.person_id = Some(person_id);
+                    error
+                }
+                store::project_calendar::ProjectCalendarError::Calendar(error) => {
+                    provider_error(error)
+                }
+                _ => sync_error("reading calendar assignment or grant records"),
+            })
+    }
+}
+
+fn provider_error(error: cloud::CalendarError) -> SyncError {
+    match error {
+        cloud::CalendarError::Api { action, status } => {
+            let mut error = sync_error(action);
+            error.status = Some(status);
+            error
+        }
+        cloud::CalendarError::Request { action, .. }
+        | cloud::CalendarError::Response { action, .. } => sync_error(action),
+        error => sync_error(&error.to_string()),
+    }
+}
+
+fn sync_error(phase: &str) -> SyncError {
+    SyncError {
+        phase: phase.into(),
+        status: None,
+        person_id: None,
+        attempts: 0,
+    }
+}

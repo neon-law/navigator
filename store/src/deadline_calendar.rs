@@ -269,8 +269,7 @@ async fn plan_rows(
     Ok(())
 }
 
-/// Ensure the Project's calendar exists and is shared, mapping the calendar
-/// pass's errors onto the mirror's.
+/// Ensure the Project's calendar exists before mirroring events.
 async fn ensure_calendar(
     surreal: &SurrealDb,
     project_id: Uuid,
@@ -279,7 +278,11 @@ async fn ensure_calendar(
     project_calendar::ensure(surreal, project_id, calendar)
         .await
         .map_err(|error| match error {
-            ProjectCalendarError::Calendar(calendar_error) => MirrorError::Calendar(calendar_error),
+            ProjectCalendarError::Calendar(calendar_error)
+            | ProjectCalendarError::Participant {
+                source: calendar_error,
+                ..
+            } => MirrorError::Calendar(calendar_error),
             ProjectCalendarError::NotFound => MirrorError::NotFound,
             ProjectCalendarError::Command(command) => MirrorError::Db(command.to_string()),
             ProjectCalendarError::Db(message) => MirrorError::Db(message),

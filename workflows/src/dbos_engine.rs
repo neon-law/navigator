@@ -34,6 +34,7 @@ pub mod heartbeat;
 pub mod linear_backlog;
 pub mod notation_reset;
 pub mod profit_digest;
+pub mod project_calendar;
 pub mod project_recovery;
 pub mod purchase_activation;
 pub mod retention_purge;
@@ -210,6 +211,7 @@ pub struct Schedules {
     pub source_imports: Option<source_imports::Context>,
     pub retention_purge: Option<retention_purge::Context>,
     pub deadline_mirror: Option<deadline_mirror::Context>,
+    pub project_calendar: Option<Arc<dyn project_calendar::Source>>,
     pub purchase_activation: Option<purchase_activation::Context>,
     pub billing_canary: Option<billing_canary::Context>,
     pub billing_digest: Option<billing_digest::Context>,
@@ -403,6 +405,11 @@ impl Executor {
         let purge = register_optional(&dbos, schedules.retention_purge, retention_purge::register)?;
         let mirror =
             register_optional(&dbos, schedules.deadline_mirror, deadline_mirror::register)?;
+        let calendar = register_optional(
+            &dbos,
+            schedules.project_calendar,
+            project_calendar::register_schedule,
+        )?;
         let activation = register_optional(
             &dbos,
             schedules.purchase_activation,
@@ -422,6 +429,7 @@ impl Executor {
         tracing::info!(app_name = APP_NAME, "DBOS launched");
         let stop = dbos::CancellationToken::new();
         let mut loops = vec![tokio::spawn(heartbeat::schedule(beat, clock, stop.clone()))];
+        loops.extend(calendar.map(|start| start(stop.clone())));
         if let Some(linear_backlog) = linear_backlog {
             loops.push(tokio::spawn(linear_backlog::schedule(
                 linear_backlog,

@@ -1208,6 +1208,8 @@ async fn dbos_schedules(
     } else {
         None
     };
+    let project_calendar = calendar_membership_schedule(rt, host_dbos, lookup)?;
+
     Ok(dbos_engine::Schedules {
         linear_backlog,
         general_nag,
@@ -1216,6 +1218,7 @@ async fn dbos_schedules(
         source_imports,
         retention_purge,
         deadline_mirror,
+        project_calendar,
         purchase_activation,
         billing_canary,
         billing_digest,
@@ -1223,6 +1226,27 @@ async fn dbos_schedules(
         profit_digest,
         ceo_digest,
     })
+}
+
+fn calendar_membership_schedule(
+    rt: &HostRuntime,
+    host_dbos: bool,
+    lookup: impl Fn(&str) -> Option<String> + Copy,
+) -> anyhow::Result<Option<Arc<dyn dbos_engine::project_calendar::Source>>> {
+    Ok(
+        if host_dbos
+            && dbos_engine::enabled(lookup)?
+            && dbos_engine::project_calendar::enabled(lookup)?
+        {
+            Some(Arc::new(crate::calendar_mirror::MembershipSource {
+                surreal: rt.state.surreal.clone(),
+                providers: Arc::clone(&rt.state.integration_providers),
+            })
+                as Arc<dyn dbos_engine::project_calendar::Source>)
+        } else {
+            None
+        },
+    )
 }
 
 /// Resolve the independent SourceImports gate and build its context, so an

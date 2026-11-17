@@ -357,6 +357,20 @@ events' private extended properties distinguish drift from a stale cache, so a r
 writes against Google Calendar require domain-wide delegation for the calendar scope — an account fact no repository
 carries — and the door and the CLI verb accept `dry-run` to rehearse without them.
 
+## Project Calendar membership
+
+Opt in with `NAVIGATOR_DBOS_PROJECT_CALENDAR_MEMBERSHIP_ENABLED=true` on the DBOS web host after applying PostgreSQL
+migrations. Setup creates or adopts the private calendar; the membership schedule discovers recorded calendars,
+including those linked by hand, and checks current assignments every five minutes. Each Project gets its own DBOS
+workflow and shares a write lock with setup and the Deadline mirror. The workflow retries a failed pass and the next
+slot repairs drift. Check the workflow output for Person IDs, access readback, calendar notification requests, and event
+response counts. A provider failure remains a failed workflow. Google Calendar reports attendee responses and accepts
+notification requests; it does not provide an email delivery receipt.
+
+On staging, run setup twice on a synthetic Project, assign a verified Workspace Clerk or Admin, and check the recorded
+ID, access readback, and event response status. Change the assignment and verify that the job removes only its own
+direct grants and guests. Confirm that an external address cannot receive access before enabling the job for production.
+
 ## Notation worker opt-in
 
 `NAVIGATOR_DBOS_NOTATION_ENABLED=true` selects the DBOS Notation caller and registers its worker workflow when

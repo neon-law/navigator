@@ -1616,6 +1616,10 @@ mod tests {
                 "20261116200000_add_task_handoff.sql",
                 include_str!("../postgres/migrations/20261116200000_add_task_handoff.sql"),
             ),
+            (
+                "20261116190000_create_project_calendar_grant.sql",
+                include_str!("../postgres/migrations/20261116190000_create_project_calendar_grant.sql"),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

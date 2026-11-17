@@ -535,6 +535,9 @@ pub(crate) async fn edit(
     if let Some(value) = input.email.as_deref() {
         builder.push(", email=").push_bind(value.trim());
     }
+    if moving_email.is_some() {
+        builder.push(", email_confirmed=false");
+    }
     if let Some(value) = input.role {
         builder.push(", role=").push_bind(value.as_str());
     }
