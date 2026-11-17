@@ -589,3 +589,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "glossary_postgres_tests.rs"]
+mod postgres_tests;
