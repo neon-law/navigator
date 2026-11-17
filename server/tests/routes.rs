@@ -4095,12 +4095,12 @@ async fn an_admin_cannot_staff_or_edit_another_firms_unassigned_matter() {
         ),
         (
             "POST",
-            format!("/app/api/projects/{}/participants", project_id),
+            format!("/app/api/projects/{project_id}/participants"),
             serde_json::json!({"person_id": admin.id}).to_string(),
         ),
         (
             "PATCH",
-            format!("/app/api/projects/{}", project_id),
+            format!("/app/api/projects/{project_id}"),
             serde_json::json!({"name": "Changed"}).to_string(),
         ),
     ];
