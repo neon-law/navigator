@@ -686,6 +686,7 @@ mod tests {
             return;
         };
         let surreal = fixture.db;
+        store::surreal::test_support::seed_compiled_brands(&surreal).await;
         let lawyer = test_support::ensure_person(
             &surreal,
             &store::persons::NewPerson {
