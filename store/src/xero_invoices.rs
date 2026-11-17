@@ -43,6 +43,7 @@ use surrealdb::types::{AlreadyExistsError, ErrorDetails, RecordId, SurrealValue}
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::postgres::accounting as authority;
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 
 /// How a Xero `Reference` names the Project an invoice bills.
@@ -165,6 +166,41 @@ impl XeroInvoiceRow {
     }
 }
 
+/// The invoice mirror row as PostgreSQL's `to_jsonb` serves it. The row's
+/// `id` is the Xero invoice id itself, so it adds nothing to decode.
+#[derive(serde::Deserialize)]
+struct PgXeroInvoiceRow {
+    project_id: Uuid,
+    xero_invoice_id: String,
+    reference: String,
+    status: String,
+    amount_cents: i64,
+    amount_paid_cents: i64,
+    currency: String,
+    issued_at: DateTime<Utc>,
+    due_at: Option<DateTime<Utc>>,
+    inserted_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+impl From<PgXeroInvoiceRow> for XeroInvoice {
+    fn from(row: PgXeroInvoiceRow) -> Self {
+        XeroInvoice {
+            project_id: row.project_id,
+            xero_invoice_id: row.xero_invoice_id,
+            reference: row.reference,
+            status: row.status,
+            amount_cents: row.amount_cents,
+            amount_paid_cents: row.amount_paid_cents,
+            currency: row.currency,
+            issued_at: row.issued_at,
+            due_at: row.due_at,
+            inserted_at: row.inserted_at,
+            updated_at: row.updated_at,
+        }
+    }
+}
+
 /// Errors reading or writing a Xero invoice mirror.
 ///
 /// This is deliberately not a bare [`surrealdb::Error`]: `portal`, `webapp`,
@@ -192,6 +228,9 @@ pub enum XeroInvoiceError {
     /// A write claimed success but returned no usable row.
     #[error("writing a Xero invoice mirror returned no usable row")]
     WriteReturnedNothing,
+    /// PostgreSQL, under the accounting authority, failed.
+    #[error(transparent)]
+    Postgres(#[from] crate::postgres::accounting::AccountingAuthorityError),
 }
 
 /// Whether `error` is a second `CREATE` colliding with the mirror row this
@@ -265,6 +304,16 @@ async fn for_xero_id(
     db: &SurrealDb,
     xero_invoice_id: &str,
 ) -> Result<Option<XeroInvoice>, XeroInvoiceError> {
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "SELECT to_jsonb(xero_invoice) AS row FROM xero_invoice \
+             WHERE xero_invoice_id = $1 LIMIT 1",
+        )
+        .bind(xero_invoice_id);
+        return Ok(authority::maybe::<PgXeroInvoiceRow>(&pg, query)
+            .await?
+            .map(Into::into));
+    }
     let response = db
         .query(format!("SELECT {SELECT} FROM ONLY $id"))
         .bind(("id", RecordId::new(TABLE, xero_invoice_id.to_string())))
@@ -357,6 +406,33 @@ pub async fn upsert(
     db: &SurrealDb,
     input: &UpsertXeroInvoice,
 ) -> Result<XeroInvoice, XeroInvoiceError> {
+    if let Some(pg) = authority::authority().await? {
+        // `amount_paid_cents` is deliberately absent from the DO UPDATE set:
+        // the reconcile workflow owns that field, exactly as the SurrealDB
+        // update path below preserves it.
+        let row = serde_json::json!({
+            "id": input.xero_invoice_id, "project_id": input.project_id,
+            "xero_invoice_id": input.xero_invoice_id, "reference": input.reference,
+            "status": input.status, "amount_cents": input.amount_cents,
+            "amount_paid_cents": 0, "currency": input.currency,
+            "issued_at": input.issued_at, "due_at": input.due_at,
+        });
+        let query = sqlx::query(
+            "INSERT INTO xero_invoice SELECT * FROM \
+             jsonb_populate_record(NULL::xero_invoice, \
+             $1 || jsonb_build_object('inserted_at', now(), 'updated_at', now())) \
+             ON CONFLICT (id) DO UPDATE SET project_id = EXCLUDED.project_id, \
+             reference = EXCLUDED.reference, status = EXCLUDED.status, \
+             amount_cents = EXCLUDED.amount_cents, currency = EXCLUDED.currency, \
+             issued_at = EXCLUDED.issued_at, due_at = EXCLUDED.due_at, \
+             updated_at = now() RETURNING to_jsonb(xero_invoice) AS row",
+        )
+        .bind(row);
+        return authority::maybe::<PgXeroInvoiceRow>(&pg, query)
+            .await?
+            .map(Into::into)
+            .ok_or(XeroInvoiceError::WriteReturnedNothing);
+    }
     if for_xero_id(db, &input.xero_invoice_id).await?.is_some() {
         return update_from_upsert(db, &input.xero_invoice_id, input).await;
     }
@@ -383,6 +459,19 @@ pub async fn record_reconcile(
     status: &str,
     amount_paid_cents: i64,
 ) -> Result<Option<XeroInvoice>, XeroInvoiceError> {
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "UPDATE xero_invoice SET status = $1, amount_paid_cents = $2, \
+             updated_at = now() WHERE xero_invoice_id = $3 \
+             RETURNING to_jsonb(xero_invoice) AS row",
+        )
+        .bind(status)
+        .bind(amount_paid_cents)
+        .bind(xero_invoice_id);
+        return Ok(authority::maybe::<PgXeroInvoiceRow>(&pg, query)
+            .await?
+            .map(Into::into));
+    }
     let response = writing(|| {
         db.query(format!(
             "UPDATE {TABLE} SET status = $status, amount_paid_cents = $amount_paid_cents, \
@@ -417,6 +506,19 @@ pub async fn find_for_allocation(
     if let Some(by_id) = for_xero_id(db, reference).await? {
         return Ok(Some(by_id));
     }
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "SELECT to_jsonb(xero_invoice) AS row FROM xero_invoice \
+             WHERE reference = $1 LIMIT 2",
+        )
+        .bind(reference);
+        let mut matches = authority::rows::<PgXeroInvoiceRow>(&pg, query).await?;
+        return if matches.len() == 1 {
+            Ok(Some(matches.remove(0).into()))
+        } else {
+            Ok(None)
+        };
+    }
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE reference = $reference LIMIT 2"
@@ -444,6 +546,18 @@ pub async fn for_projects(
 ) -> Result<Vec<XeroInvoice>, XeroInvoiceError> {
     if project_ids.is_empty() {
         return Ok(Vec::new());
+    }
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "SELECT to_jsonb(xero_invoice) AS row FROM xero_invoice \
+             WHERE project_id = ANY($1) ORDER BY issued_at DESC",
+        )
+        .bind(project_ids.to_vec());
+        return Ok(authority::rows::<PgXeroInvoiceRow>(&pg, query)
+            .await?
+            .into_iter()
+            .map(Into::into)
+            .collect());
     }
     let projects: Vec<RecordId> = project_ids
         .iter()
@@ -684,6 +798,17 @@ pub async fn firm_thirty_day_rollup(
 ///
 /// [`XeroInvoiceError::Db`] if the lookup fails.
 pub async fn needing_reconcile(db: &SurrealDb) -> Result<Vec<XeroInvoice>, XeroInvoiceError> {
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "SELECT to_jsonb(xero_invoice) AS row FROM xero_invoice \
+             WHERE status NOT IN ('PAID', 'VOIDED')",
+        );
+        return Ok(authority::rows::<PgXeroInvoiceRow>(&pg, query)
+            .await?
+            .into_iter()
+            .map(Into::into)
+            .collect());
+    }
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE status NOT IN ['PAID', 'VOIDED']"
