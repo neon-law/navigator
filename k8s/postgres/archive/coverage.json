@@ -529,6 +529,20 @@
       {
         "action": "export",
         "schema": "public",
+        "name": "docusign_completion",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
+        "name": "docusign_completion_cursor",
+        "kind": "table",
+        "accessible": true
+      },
+      {
+        "action": "export",
+        "schema": "public",
         "name": "efiling_transactions",
         "kind": "table",
         "accessible": true

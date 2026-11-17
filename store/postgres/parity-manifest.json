@@ -268,6 +268,20 @@
     },
     {
       "extra_column": null,
+      "extra_table": "docusign_completion",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
+      "extra_table": "docusign_completion_cursor",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "evidence_share",
       "missing_column": null,
       "missing_table": null,
@@ -2088,7 +2102,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 174,
+    "table_count": 176,
     "tables": {
       "address": {
         "columns": {
@@ -2842,6 +2856,51 @@
         "name": "document_upload_session",
         "references": [
           "project"
+        ]
+      },
+      "docusign_completion": {
+        "columns": {
+          "account_id": "UUID",
+          "created_at": "TIMESTAMPTZ",
+          "envelope_id": "UUID",
+          "firm_id": "UUID",
+          "next_attempt_at": "TIMESTAMPTZ",
+          "notified_at": "TIMESTAMPTZ",
+          "project_id": "UUID",
+          "review_reason": "TEXT",
+          "status": "TEXT"
+        },
+        "foreign_keys": [
+          [
+            "firm_id",
+            "firm"
+          ],
+          [
+            "project_id",
+            "project"
+          ]
+        ],
+        "name": "docusign_completion",
+        "references": [
+          "firm",
+          "project"
+        ]
+      },
+      "docusign_completion_cursor": {
+        "columns": {
+          "account_id": "UUID",
+          "checked_through": "TIMESTAMPTZ",
+          "firm_id": "UUID"
+        },
+        "foreign_keys": [
+          [
+            "firm_id",
+            "firm"
+          ]
+        ],
+        "name": "docusign_completion_cursor",
+        "references": [
+          "firm"
         ]
       },
       "efiling_transactions": {

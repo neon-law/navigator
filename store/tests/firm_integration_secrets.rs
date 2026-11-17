@@ -191,17 +191,17 @@ async fn typed_secret_rotation_is_metadata_only_and_resolves_by_project_firm() {
             actor_role: Role::Admin,
             actor_person_id: Some(dri_a.id),
             firm_id: firm_a.id,
-            provider: IntegrationProvider::Notion,
-            kind: IntegrationSecretKind::NotionToken,
-            value: "notion-token-one",
+            provider: IntegrationProvider::DocuSign,
+            kind: IntegrationSecretKind::DocuSignConnection,
+            value: "docusign-connection-one",
         },
         &kms,
     )
     .await
     .expect("Admin DRI writes the first version");
     assert_eq!(first.version, 1);
-    assert_eq!(first.provider, IntegrationProvider::Notion);
-    assert_eq!(first.kind, IntegrationSecretKind::NotionToken);
+    assert_eq!(first.provider, IntegrationProvider::DocuSign);
+    assert_eq!(first.kind, IntegrationSecretKind::DocuSignConnection);
 
     let second = put(
         &db,
@@ -209,9 +209,9 @@ async fn typed_secret_rotation_is_metadata_only_and_resolves_by_project_firm() {
             actor_role: Role::Admin,
             actor_person_id: Some(dri_a.id),
             firm_id: firm_a.id,
-            provider: IntegrationProvider::Notion,
-            kind: IntegrationSecretKind::NotionToken,
-            value: "notion-token-two",
+            provider: IntegrationProvider::DocuSign,
+            kind: IntegrationSecretKind::DocuSignConnection,
+            value: "docusign-connection-two",
         },
         &kms,
     )
@@ -224,32 +224,35 @@ async fn typed_secret_rotation_is_metadata_only_and_resolves_by_project_firm() {
         Role::Owner,
         None,
         firm_a.id,
-        IntegrationProvider::Notion,
-        IntegrationSecretKind::NotionToken,
+        IntegrationProvider::DocuSign,
+        IntegrationSecretKind::DocuSignConnection,
     )
     .await
     .expect("Owner can inspect metadata");
     let json = serde_json::to_value(&metadata).expect("metadata serializes");
     assert_eq!(json["version"], 2);
     assert!(json.get("value").is_none());
-    assert!(!format!("{json}").contains("notion-token"));
+    assert!(!format!("{json}").contains("docusign-connection"));
 
     let resolved = resolve_project_credential(
         &db,
         project_a.id,
-        IntegrationProvider::Notion,
-        IntegrationSecretKind::NotionToken,
+        IntegrationProvider::DocuSign,
+        IntegrationSecretKind::DocuSignConnection,
         &kms,
     )
     .await
     .expect("Project resolves its own Firm credential");
-    assert_eq!(resolved.expose_for_provider_call(), "notion-token-two");
+    assert_eq!(
+        resolved.expose_for_provider_call(),
+        "docusign-connection-two"
+    );
 
     let cross_firm = resolve_project_credential(
         &db,
         project_b.id,
-        IntegrationProvider::Notion,
-        IntegrationSecretKind::NotionToken,
+        IntegrationProvider::DocuSign,
+        IntegrationSecretKind::DocuSignConnection,
         &kms,
     )
     .await;
@@ -266,16 +269,16 @@ async fn typed_secret_rotation_is_metadata_only_and_resolves_by_project_firm() {
         .expect("raw secret query checks");
     let rows: Vec<Value> = raw.take(0).expect("raw rows deserialize");
     let rendered = serde_json::to_string(&rows).expect("rows serialize");
-    assert!(!rendered.contains("notion-token-one"));
-    assert!(!rendered.contains("notion-token-two"));
+    assert!(!rendered.contains("docusign-connection-one"));
+    assert!(!rendered.contains("docusign-connection-two"));
 
     revoke(
         &db,
         Role::Admin,
         Some(dri_a.id),
         firm_a.id,
-        IntegrationProvider::Notion,
-        IntegrationSecretKind::NotionToken,
+        IntegrationProvider::DocuSign,
+        IntegrationSecretKind::DocuSignConnection,
     )
     .await
     .expect("Admin DRI revokes");
@@ -283,8 +286,8 @@ async fn typed_secret_rotation_is_metadata_only_and_resolves_by_project_firm() {
         resolve_project_credential(
             &db,
             project_a.id,
-            IntegrationProvider::Notion,
-            IntegrationSecretKind::NotionToken,
+            IntegrationProvider::DocuSign,
+            IntegrationSecretKind::DocuSignConnection,
             &kms,
         )
         .await,
@@ -435,7 +438,7 @@ async fn list_metadata_for_firm_lists_every_configured_kind_and_is_firm_scoped()
 /// unreachable from any write door.
 #[test]
 fn all_kinds_covers_the_closed_vocabulary_with_no_duplicates() {
-    assert_eq!(ALL_KINDS.len(), 12);
+    assert_eq!(ALL_KINDS.len(), 13);
     assert!(ALL_KINDS.contains(&IntegrationSecretKind::PortalLogin));
     assert!(ALL_KINDS.contains(&IntegrationSecretKind::TwilioAuthToken));
     let mut slugs: Vec<&str> = ALL_KINDS.iter().map(|kind| kind.as_str()).collect();

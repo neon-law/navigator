@@ -22,6 +22,7 @@ const PERSON_TABLE: &str = "person";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum IntegrationProvider {
     Xero,
+    DocuSign,
     Mercury,
     Slack,
     Notion,
@@ -38,6 +39,7 @@ impl IntegrationProvider {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Xero => "xero",
+            Self::DocuSign => "docusign",
             Self::Mercury => "mercury",
             Self::Slack => "slack",
             Self::Notion => "notion",
@@ -53,7 +55,7 @@ impl IntegrationProvider {
 /// view builds its "create a secret" choices from this rather than a
 /// hand-kept second list, so a new kind cannot be added to the enum without
 /// also appearing there.
-pub const ALL_KINDS: [IntegrationSecretKind; 12] = [
+pub const ALL_KINDS: [IntegrationSecretKind; 13] = [
     IntegrationSecretKind::MercuryReadToken,
     IntegrationSecretKind::XeroTenantId,
     IntegrationSecretKind::XeroWebhookKey,
@@ -66,6 +68,7 @@ pub const ALL_KINDS: [IntegrationSecretKind; 12] = [
     IntegrationSecretKind::ForgejoAccessToken,
     IntegrationSecretKind::PortalLogin,
     IntegrationSecretKind::TwilioAuthToken,
+    IntegrationSecretKind::DocuSignConnection,
 ];
 
 /// Typed Firm API credentials and provider webhook verification keys.
@@ -90,6 +93,7 @@ pub enum IntegrationSecretKind {
     /// receiving numbers. Each registered number resolves through its own
     /// version, not through a Firm-wide current one.
     TwilioAuthToken,
+    DocuSignConnection,
 }
 
 impl IntegrationSecretKind {
@@ -108,6 +112,7 @@ impl IntegrationSecretKind {
             Self::ForgejoAccessToken => "forgejo_access_token",
             Self::PortalLogin => "portal_login",
             Self::TwilioAuthToken => "twilio_auth_token",
+            Self::DocuSignConnection => "docusign_connection",
         }
     }
 
@@ -126,6 +131,7 @@ impl IntegrationSecretKind {
             Self::ForgejoAccessToken => IntegrationProvider::Forgejo,
             Self::PortalLogin => IntegrationProvider::CourtPortal,
             Self::TwilioAuthToken => IntegrationProvider::Twilio,
+            Self::DocuSignConnection => IntegrationProvider::DocuSign,
         }
     }
 }
@@ -261,6 +267,7 @@ pub fn parse_provider(value: &str) -> Option<IntegrationProvider> {
         "forgejo" => Some(IntegrationProvider::Forgejo),
         "court_portal" => Some(IntegrationProvider::CourtPortal),
         "twilio" => Some(IntegrationProvider::Twilio),
+        "docusign" => Some(IntegrationProvider::DocuSign),
         _ => None,
     }
 }
@@ -282,6 +289,7 @@ pub fn parse_kind(value: &str) -> Option<IntegrationSecretKind> {
         "forgejo_access_token" => Some(IntegrationSecretKind::ForgejoAccessToken),
         "portal_login" => Some(IntegrationSecretKind::PortalLogin),
         "twilio_auth_token" => Some(IntegrationSecretKind::TwilioAuthToken),
+        "docusign_connection" => Some(IntegrationSecretKind::DocuSignConnection),
         _ => None,
     }
 }
@@ -920,7 +928,7 @@ mod tests {
 
     #[test]
     fn all_kinds_includes_the_court_portal_pair() {
-        assert_eq!(super::ALL_KINDS.len(), 12);
+        assert_eq!(super::ALL_KINDS.len(), 13);
         assert_eq!(IntegrationSecretKind::PortalLogin.as_str(), "portal_login");
         assert_eq!(
             IntegrationSecretKind::PortalLogin.provider(),

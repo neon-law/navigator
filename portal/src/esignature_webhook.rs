@@ -107,16 +107,18 @@ impl IntoResponse for WebhookError {
 /// top-level `event` (`envelope-completed`) or
 /// `data.envelopeSummary.status == "completed"`.
 #[derive(serde::Deserialize)]
-struct ConnectPayload {
+pub(crate) struct ConnectPayload {
     #[serde(default)]
     event: Option<String>,
-    data: ConnectData,
+    pub(crate) data: ConnectData,
 }
 
 #[derive(serde::Deserialize)]
-struct ConnectData {
+pub(crate) struct ConnectData {
     #[serde(rename = "envelopeId")]
-    envelope_id: String,
+    pub(crate) envelope_id: String,
+    #[serde(rename = "accountId")]
+    pub(crate) account_id: Option<uuid::Uuid>,
     /// Present on recipient events: the recipient id the manifest sent,
     /// which is that signer's routing order.
     #[serde(rename = "recipientId", default)]
@@ -133,7 +135,7 @@ struct EnvelopeSummary {
 
 impl ConnectPayload {
     /// True when this callback reports the envelope as fully executed.
-    fn is_completed(&self) -> bool {
+    pub(crate) fn is_completed(&self) -> bool {
         self.event.as_deref() == Some("envelope-completed")
             || self
                 .envelope_summary_status()
@@ -243,24 +245,59 @@ fn verify_webhook_request(
 /// notation — signals `signature_received`.
 pub async fn webhook(
     State(state): State<crate::AppState>,
-    Path(provided): Path<String>,
+    Path(path_secret): Path<String>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<StatusCode, WebhookError> {
-    verify_webhook_request(&state, &provided, &headers, &body)?;
+    verify_webhook_request(&state, &path_secret, &headers, &body)?;
     let payload: ConnectPayload =
         serde_json::from_slice(&body).map_err(|e| WebhookError::Malformed(e.to_string()))?;
 
+    if state.signature_provider.supports_firm_connect() {
+        let provider = store::signatures::SignatureProvider::DocuSign;
+        let Some(signature) =
+            store::signatures::by_provider(&state.surreal, provider, &payload.data.envelope_id)
+                .await
+                .map_err(|_| WebhookError::Database("signature lookup failed".into()))?
+        else {
+            return Ok(StatusCode::OK);
+        };
+        let scoped = crate::firm_docusign::for_notation(
+            state.signature_provider.as_ref(),
+            &state.surreal,
+            signature.notation_id,
+        )
+        .await
+        .map_err(|_| WebhookError::UnauthorizedSignature)?;
+        let matches = scoped
+            .as_ref()
+            .and_then(|provider| provider.account_id().parse().ok())
+            == payload.data.account_id
+            && payload.data.account_id.is_some();
+        if !matches {
+            return Err(WebhookError::UnauthorizedSignature);
+        }
+    }
+
+    process_known(&state, payload, &body).await
+}
+
+/// Apply a verified event for a Signature that can already be correlated.
+pub(crate) async fn process_known(
+    state: &crate::AppState,
+    payload: ConnectPayload,
+    body: &[u8],
+) -> Result<StatusCode, WebhookError> {
     // Map the terminal envelope events to workflow conditions. A
     // completion executes the retainer; a decline/void ends the wait
     // without an engagement. Progress deliveries update signer evidence.
     if let Some(recipient_id) = payload.completed_recipient() {
-        record_progress(&state, &payload.data.envelope_id, Some(recipient_id)).await?;
+        record_progress(state, &payload.data.envelope_id, Some(recipient_id)).await?;
         return Ok(StatusCode::OK);
     }
     let Some(terminal_state) = payload.terminal_state() else {
         if payload.event.as_deref() == Some("envelope-delivered") {
-            record_progress(&state, &payload.data.envelope_id, None).await?;
+            record_progress(state, &payload.data.envelope_id, None).await?;
             return Ok(StatusCode::OK);
         }
         tracing::info!(
@@ -299,7 +336,7 @@ pub async fn webhook(
         signature_provider,
         &payload.data.envelope_id,
         terminal_state.as_str(),
-        &String::from_utf8_lossy(&body),
+        &String::from_utf8_lossy(body),
     )
     .await
     .map_err(|e| WebhookError::Database(e.to_string()))?;
@@ -318,7 +355,7 @@ pub async fn webhook(
     // Consume through the same function the boot-time replay sweep runs.
     // A failure records on the receipt and answers 5xx so the provider
     // redelivers; the sweep retries regardless.
-    match consume_receipt(&state, &signature, terminal_state).await {
+    match consume_receipt(state, &signature, terminal_state, None).await {
         Ok(()) => {
             store::signature_webhook_journal::mark_consumed(&state.surreal, receipt.id)
                 .await
@@ -364,7 +401,7 @@ pub async fn webhook(
 /// idempotent semantics.
 #[derive(Debug, thiserror::Error)]
 #[error("webhook consumption failed, receipt stays pending for replay: {0}")]
-struct ConsumeFailure(String);
+pub(crate) struct ConsumeFailure(String);
 
 /// One consumption attempt for a verified terminal-event receipt: advance
 /// the workflow wait, mirror the notation row, stamp the signature row,
@@ -377,10 +414,11 @@ struct ConsumeFailure(String);
 /// consumption re-runs only the unfinished tail — the wait is signaled
 /// once, the stamp lands once, the archive is an idempotent re-put.
 /// Re-running the loop resumes; it does not duplicate.
-async fn consume_receipt(
+pub(crate) async fn consume_receipt(
     state: &crate::AppState,
     signature: &store::signatures::Signature,
     terminal_state: store::signatures::SignatureState,
+    verified_completed_at: Option<chrono::DateTime<chrono::FixedOffset>>,
 ) -> Result<(), ConsumeFailure> {
     let provider = store::signatures::SignatureProvider::DocuSign;
     let envelope_id = &signature.provider_id;
@@ -439,6 +477,14 @@ async fn consume_receipt(
         }
     }
 
+    // Firm account completions confirm the provider timestamp and both
+    // documents before exposing the completed Signature.
+    if let Some(completed) = verified_completed_at {
+        archive_completed_documents(state, envelope_id, notation_id, completed.date_naive())
+            .await
+            .map_err(|e| ConsumeFailure(format!("archiving completed documents: {e}")))?;
+    }
+
     // Phase 2: stamp the signature row with its terminal outcome. The
     // stamps are the idempotence authority — each re-reads the row and a
     // missing envelope or an already-terminal row is a no-op — so a
@@ -450,7 +496,9 @@ async fn consume_receipt(
                 &state.surreal,
                 provider,
                 envelope_id,
-                &chrono::Utc::now().to_rfc3339(),
+                &verified_completed_at
+                    .unwrap_or_else(|| chrono::Utc::now().fixed_offset())
+                    .to_rfc3339(),
             )
             .await
         }
@@ -474,10 +522,17 @@ async fn consume_receipt(
     // storage. Always re-run: the put is idempotent, so a replay whose
     // retryable consumption failure — the ESIGN record is not optional,
     // and the journal is how it stops being best-effort.
-    if terminal_state == store::signatures::SignatureState::Completed {
-        archive_completed_documents(state, envelope_id, notation_id)
-            .await
-            .map_err(|e| ConsumeFailure(format!("archiving completed documents: {e}")))?;
+    if terminal_state == store::signatures::SignatureState::Completed
+        && verified_completed_at.is_none()
+    {
+        archive_completed_documents(
+            state,
+            envelope_id,
+            notation_id,
+            chrono::Utc::now().date_naive(),
+        )
+        .await
+        .map_err(|e| ConsumeFailure(format!("archiving completed documents: {e}")))?;
     }
     Ok(())
 }
@@ -494,8 +549,16 @@ async fn refresh_adoption(
         let lane = crate::signature_adoption::lock()
             .await
             .map_err(|_| ConsumeFailure("opening adopted envelope lane".into()))?;
-        let envelope = state
-            .signature_provider
+        let scoped = crate::firm_docusign::for_notation(
+            state.signature_provider.as_ref(),
+            &state.surreal,
+            notation_id,
+        )
+        .await
+        .map_err(|e| ConsumeFailure(e.to_string()))?;
+        let provider =
+            crate::firm_docusign::resolved(scoped.as_ref(), state.signature_provider.as_ref());
+        let envelope = provider
             .read_external_envelope(adoption.envelope_id)
             .await
             .map_err(|e| ConsumeFailure(e.to_string()))?;
@@ -507,7 +570,7 @@ async fn refresh_adoption(
         crate::signature_adoption::reconcile(
             &state.surreal,
             &state.storage,
-            state.signature_provider.as_ref(),
+            provider,
             notation_id,
             &envelope,
         )
@@ -618,7 +681,7 @@ async fn replay_one(
         }
         return;
     };
-    match consume_receipt(state, &signature, terminal_state).await {
+    match consume_receipt(state, &signature, terminal_state, None).await {
         Ok(()) => {
             match store::signature_webhook_journal::mark_consumed(&state.surreal, receipt.id).await
             {
@@ -748,11 +811,19 @@ async fn archive_completed_documents(
     state: &crate::AppState,
     envelope_id: &str,
     notation_id: uuid::Uuid,
+    signed_on: chrono::NaiveDate,
 ) -> Result<(), crate::signature::SignatureError> {
     use crate::signature::SignatureRequestId;
 
-    let docs = state
-        .signature_provider
+    let scoped = crate::firm_docusign::for_notation(
+        state.signature_provider.as_ref(),
+        &state.surreal,
+        notation_id,
+    )
+    .await?;
+    let provider =
+        crate::firm_docusign::resolved(scoped.as_ref(), state.signature_provider.as_ref());
+    let docs = provider
         .fetch_completed_documents(&SignatureRequestId(envelope_id.to_string()))
         .await?;
 
@@ -761,7 +832,7 @@ async fn archive_completed_documents(
         &state.storage,
         envelope_id,
         notation_id,
-        chrono::Utc::now().date_naive(),
+        signed_on,
         None,
         docs,
     )
@@ -849,6 +920,53 @@ pub(crate) async fn file_completed_documents(
         %envelope_id,
         "esignature webhook: filed signed document + certificate to the matter"
     );
+    Ok(())
+}
+
+/// File a completed envelope without assigning it to an unrelated Notation.
+pub(crate) async fn file_external_completion(
+    db: &store::surreal::SurrealDb,
+    storage: &std::sync::Arc<dyn cloud::StorageService>,
+    project: uuid::Uuid,
+    envelope: &crate::signature::ExternalEnvelope,
+    docs: crate::signature::CompletedDocuments,
+) -> Result<(), crate::signature::SignatureError> {
+    use crate::signature::SignatureError;
+    let completed = envelope
+        .completed_date_time
+        .ok_or_else(|| SignatureError::Provider("DocuSign completion time missing".into()))?;
+    if !docs.signed_pdf.starts_with(b"%PDF-") || !docs.certificate_pdf.starts_with(b"%PDF-") {
+        return Err(SignatureError::Provider(
+            "DocuSign did not return two PDFs".into(),
+        ));
+    }
+    let envelope_id = envelope.envelope_id.to_string();
+    let root = format!("projects/{project}/docusign/{envelope_id}");
+    for (suffix, bytes, signing) in [
+        (
+            "signed",
+            docs.signed_pdf,
+            Some(store::documents::Signing {
+                method: store::documents::SigningMethod::Docusign,
+                signed_on: completed.date_naive(),
+            }),
+        ),
+        ("certificate", docs.certificate_pdf, None),
+    ] {
+        file_signed_copy_back(
+            db,
+            storage,
+            project,
+            "agreement",
+            &envelope_id,
+            &format!("docusign_{envelope_id}_{suffix}.pdf"),
+            store::documents::visibility::INTERNAL,
+            &format!("{root}/{suffix}.pdf"),
+            bytes,
+            signing,
+        )
+        .await?;
+    }
     Ok(())
 }
 

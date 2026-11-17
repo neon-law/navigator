@@ -4511,8 +4511,14 @@ async fn adopt_envelope(
             "Assign a client DRI to the Project before adopting an envelope",
         ))?;
     let lane = lock().await?;
-    let mut envelope = state
+    let scoped = state
         .signature_provider
+        .for_project(db, id)
+        .await
+        .map_err(internal)?;
+    let provider =
+        crate::firm_docusign::resolved(scoped.as_ref(), state.signature_provider.as_ref());
+    let mut envelope = provider
         .read_external_envelope(input.envelope_id)
         .await
         .map_err(internal)?;
@@ -4535,33 +4541,36 @@ async fn adopt_envelope(
 
     let envelope_id = input.envelope_id;
     let notation = resolve_adoption_notation(&state, &project, client, input).await?;
-    reconcile(
-        db,
-        &state.storage,
-        state.signature_provider.as_ref(),
-        notation.id,
-        &envelope,
-    )
-    .await?;
+    reconcile(db, &state.storage, provider, notation.id, &envelope).await?;
     if matches!(envelope.status.as_str(), "sent" | "delivered" | "signed") {
         // A terminal Connect delivery can arrive before the Signature exists.
         // Check again after registration so completion cannot fall into that gap.
-        let latest = state
-            .signature_provider
+        let latest = provider
             .read_external_envelope(envelope_id)
             .await
             .map_err(internal)?;
-        reconcile(
-            db,
-            &state.storage,
-            state.signature_provider.as_ref(),
-            notation.id,
-            &latest,
-        )
-        .await?;
+        reconcile(db, &state.storage, provider, notation.id, &latest).await?;
         envelope = latest;
     }
     lane.commit().await.map_err(internal)?;
+    if envelope.status == "completed" {
+        if let (Some(firm), Some(account)) = (
+            project.firm_id,
+            scoped
+                .as_ref()
+                .and_then(|provider| provider.account_id().parse().ok()),
+        ) {
+            if let Ok(Some(pg)) = store::postgres::PostgresDb::configured().await {
+                if store::docusign_completion::resume_adopted(&pg, firm, account, envelope_id, id)
+                    .await
+                    .is_err()
+                {
+                    tracing::warn!(firm_id = %firm, %envelope_id, "DocuSign completion review could not be cleared");
+                }
+            }
+        }
+    }
+
     Ok(Json(serde_json::json!({
         "notation_id": notation.id,
         "envelope": envelope,

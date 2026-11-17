@@ -216,9 +216,8 @@ impl DocuSignJwtAuth {
             .map_err(|e| SignatureError::Provider(e.to_string()))?;
         let status = resp.status();
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
             return Err(SignatureError::Provider(format!(
-                "docusign oauth responded {status}: {body}"
+                "docusign oauth responded {status}"
             )));
         }
         let token: TokenResponse = resp

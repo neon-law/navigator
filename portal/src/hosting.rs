@@ -307,6 +307,10 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
     // persist + correlate.
     let signature_kind = crate::signature::SignatureProviderKind::from_env()
         .context("selecting the signature provider")?;
+    // The same fail-closed runtime KMS handle, exposed separately so the
+    // Firm settings door can encrypt/decrypt directly through
+    // `store::firm_secrets` without a Notion database id.
+    let runtime_kms = crate::integrations::runtime_kms_from_env().await;
     let (signature_provider, fake_signature_dir): (
         std::sync::Arc<dyn crate::signature::SignatureProvider>,
         Option<std::path::PathBuf>,
@@ -343,15 +347,16 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
             (std::sync::Arc::new(fake), Some(dir))
         }
         crate::signature::SignatureProviderKind::DocuSign => {
-            let ds = crate::signature::DocuSignSignatureProvider::from_env().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "NAVIGATOR_SIGNATURE_PROVIDER=docusign requires DOCUSIGN_BASE_URL \
-                     and DOCUSIGN_ACCOUNT_ID (+ DOCUSIGN_ACCESS_TOKEN or the JWT-grant \
-                     vars — docs/docusign-esignature.md)"
-                )
-            })?;
-            tracing::info!("signature provider: DocuSignSignatureProvider");
-            (std::sync::Arc::new(ds), None)
+            let demo = cfg.environment == store::DeploymentEnvironment::Dev
+                || store::sample_matters(cfg.environment)
+                    .context("resolve DocuSign environment")?;
+            (
+                std::sync::Arc::new(crate::firm_docusign::FirmDocuSign {
+                    kms: runtime_kms.clone(),
+                    demo,
+                }),
+                None,
+            )
         }
     };
 
@@ -361,10 +366,6 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
     // a Firm credential has no deployment-wide fallback, so "not configured"
     // is the honest answer rather than a provider that pretends.
     let integration_providers = crate::integrations::from_env().await;
-    // The same fail-closed runtime KMS handle, exposed separately so the
-    // Firm settings door can encrypt/decrypt directly through
-    // `store::firm_secrets` without a Notion database id.
-    let runtime_kms = crate::integrations::runtime_kms_from_env().await;
 
     // Real Xero provider when configured. Without credentials, invoice
     // generation refuses unless the deployment declares simulated matters;
@@ -964,6 +965,7 @@ async fn boot(brand: Site, host_dbos: bool) -> anyhow::Result<()> {
 
     // Journal replay (ENG-787): see `spawn_journal_replay`.
     spawn_journal_replay(&rt.state);
+    crate::docusign_completion::spawn(&rt.state);
 
     // Every local port a registered brand's own env var claims (see
     // `views::brand::BrandKey::local_port_env_var`), read before `rt.state`

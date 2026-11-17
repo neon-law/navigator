@@ -2,9 +2,8 @@
 
 How Neon Law Navigator sends a retainer for signature, how a client reaches the signing ceremony from the portal — the
 ceremony itself runs on DocuSign's own site, never inside a Navigator page — and how each cloud deployment receives an
-isolated DocuSign attachment. Local sandbox values use a gitignored `.env`; cloud values live in that deployment's
-`deployments/<name>/secrets.enc.yaml` per [`deployment-secrets.md`](deployment-secrets.md). The environment-variable
-convention is in [`third-party-integrations.md`](third-party-integrations.md). This page is the DocuSign specifics.
+isolated DocuSign attachment. The web app resolves credentials from each [Firm connection](#firm-connection). Standalone
+sandbox tools read local credentials from a gitignored `.env`.
 
 The signature seam lives under `portal/src/`: [`signature.rs`](../portal/src/signature.rs) (the `SignatureProvider`
 trait, the provider selection, and the DocuSign + fake impls), JWT-grant auth in
@@ -23,8 +22,8 @@ accepts exactly `fake` or `docusign` (`portal::signature::SignatureProviderKind:
 - **`fake` in a production environment** — the boot refuses to start: the fake provider creates envelopes with no legal
   weight. `NAVIGATOR_ENVIRONMENT` unset *is* the production profile, so the fake only ever boots where a developer named
   dev explicitly.
-- **`docusign`** — the real provider, which requires `DOCUSIGN_BASE_URL` + `DOCUSIGN_ACCOUNT_ID` and a token source
-  (below). Declaring it incompletely is also a boot failure.
+- **`docusign`** — the real provider, which selects the encrypted [Firm connection](#firm-connection) for
+  each Project. Signature operations refuse when that connection cannot be resolved.
 
 `fake` is the local signature loop: envelopes persist to disk, anchors are validated against the prepared PDF's text,
 each recipient signs a real local page, and completion is delivered as a DocuSign-Connect-shaped HMAC-signed webhook —
@@ -159,7 +158,7 @@ call with the RSA key directly — every call needs a Bearer token, so the priva
 The integration key + user id + account id are required regardless of grant type: every call is scoped to an account and
 user.
 
-Required env (canonical `DOCUSIGN_*` names — same names in `.env` for sandbox and `.env.production` for prod):
+The standalone sandbox tools accept the following `DOCUSIGN_*` settings:
 
 - `DOCUSIGN_INTEGRATION_KEY` — the app's Integration Key / OAuth client id (the JWT `iss`). **Not** the OAuth secret.
   `DOCUSIGN_USER_ID` — the impersonated API user GUID (the JWT `sub`); the "API Username", not the email.
@@ -293,28 +292,45 @@ against the template's `signers:` order and records that role in `signature.comp
 recorded on a live envelope, the matter page reads "You have signed. Awaiting the firm's countersignature." and stops
 offering **Review and sign**.
 
-> **Production readiness gate.** The prod `DOCUSIGN_HMAC_KEY` is currently a generated placeholder (a boot invariant in
-  [`portal/src/config.rs`](../portal/src/config.rs)). E-sign is safe to run, but **not client-ready** until DocuSign
-  Connect on the production account is configured with an HMAC key and the matching value is set in the prod Secret.
+## Production cutover
 
-## Production cutover (Phase 2)
-
-The production deployment needs a production-capable eSignature account and an integration approved or promoted through
-Go-Live. Configuration does not copy; set up and prove the production attachment separately from demo:
-
-1. **Promote + prod auth.** Complete Go-Live, then on `account.docusign.com` add a **production RSA keypair**
-   and **grant consent** for the production attachment's production user. The OAuth host becomes `account.docusign.com`;
-   discover the account's assigned REST base from `/oauth/userinfo`.
-2. **Production secrets (`deployments/<name>/secrets.enc.yaml` → Secret Manager → projected Secret).** The identifiers
-   (`DOCUSIGN_INTEGRATION_KEY`, `DOCUSIGN_USER_ID`, `DOCUSIGN_ACCOUNT_ID`, `DOCUSIGN_BASE_URL`, `DOCUSIGN_OAUTH_BASE`)
-   accompany that row's `DOCUSIGN_PRIVATE_KEY` and `DOCUSIGN_HMAC_KEY`. Use the `ship` pre-deploy Secret check.
-3. **DocuSign Connect (production account).** Configure
-   `https://<deployment-host>/webhook/esignature/<secret>`, subscribe to envelope **completed**, **declined**,
-   **voided**, and **expired**, and to recipient **completed** (signed), and enable HMAC with that attachment's key.
-4. **Deploy + verify.** `ship` rolls the service images at one published tag, confirms the boot invariant passes, and
-   round-trips a real envelope through the prod webhook.
+Set up the Firm's live account separately from the demo account. Complete DocuSign Go-Live, grant JWT consent for the
+Firm's API user, and get the REST base from `/oauth/userinfo`. Save the [Firm connection](#firm-connection) and
+configure [account completion filing](#account-completion-filing). Apply PostgreSQL migrations before starting the
+completion worker and verify the full flow against a synthetic Project on staging.
 
 ## Related
 
 - [`third-party-integrations.md`](third-party-integrations.md) — the per-deployment provider convention this follows.
   [`.env`](../.env.example) is the canonical per-variable reference (JWT-grant preferred, static fallback).
+
+## Firm connection
+
+A Firm administrator saves a `DocuSign connection` in the Firm's integration secret settings. The value is a single JSON
+object with `account_id`, `integration_key`, `user_id`, `private_key_pem`, `base_url`, `signer_name`, and
+`signer_email`. Use the account's DocuSign REST base ending in `/restapi`, and encode PEM line breaks as JSON escapes.
+Grant the integration JWT impersonation consent for the selected DocuSign user before connecting it.
+
+Navigator uses the Project's owning Firm to resolve the encrypted connection. DocuSign calls use short-lived JWT grant
+access tokens. Simulated deployments require a DocuSign demo account and live deployments require a live account.
+Replace the secret to reconnect or rotate the key. Revoke it to stop subsequent operations through that connection.
+Before switching an existing deployment to this build, provision the Firm connection for each account with outstanding
+envelopes.
+
+## Account completion filing
+
+Add `connect_hmac_key` to the Firm's connection JSON and set the same key in DocuSign Connect. Configure an account-wide
+JSON callback at `/webhook/esignature/firm/<firm-id>`. Subscribe to envelope completed, delivered, declined, voided, and
+expired, and recipient completed. The endpoint verifies the raw signature and account ID and journals completed
+envelopes in PostgreSQL before acknowledging them. The Firm connection's DocuSign user needs permission to read
+completed envelopes sent by the other users in that account. Connect can omit document bytes.
+
+The worker verifies completion with DocuSign, then assigns the envelope to an open Project in that Firm. It uses the
+`project_code` envelope custom field, then a recognizable `<project-code>__` filename prefix, then the signing client
+DRI's email. A known client DRI must be a signer even when a code selects the Project. Missing and ambiguous assignments
+appear under **DocuSign completion review** on the Firm's admin page for manual verification and adoption.
+
+The worker files the signed PDF and the Certificate of Completion with the verified envelope ID. For an onboarding or
+engagement document, Navigator links the completion to the onboarding Notation and marks the engagement official after
+filing. Other matched agreements are filed privately without making the engagement official. A notice goes to the
+Project's private Slack channel after filing. A scheduled account poll recovers missed callbacks using a durable cursor.

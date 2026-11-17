@@ -419,6 +419,22 @@ erDiagram
         string transcript_quality
         string visibility
     }
+    docusign_completion {
+        uuid account_id
+        datetime created_at
+        uuid envelope_id
+        uuid firm_id
+        datetime next_attempt_at
+        datetime notified_at
+        uuid project_id
+        string review_reason
+        string status
+    }
+    docusign_completion_cursor {
+        uuid account_id
+        datetime checked_through
+        uuid firm_id
+    }
     efiling_transactions {
         string accepted_on
         string case_number
@@ -2117,6 +2133,9 @@ erDiagram
     person }o--|| credential : references
     document_chain_archive }o--|| document_chain_archive_item : references
     project }o--|| document_upload_session : references
+    firm }o--|| docusign_completion : references
+    project }o--|| docusign_completion : references
+    firm }o--|| docusign_completion_cursor : references
     firm }o--|| email_conversation : references
     notation }o--|| email_conversation : references
     person }o--|| email_conversation : references
