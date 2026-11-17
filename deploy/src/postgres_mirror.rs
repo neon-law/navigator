@@ -35,6 +35,18 @@ pub enum PostgresCmd {
     Mirror(MirrorCmd),
     /// Copy the `SurrealDB` rows the mirror never saw, in resumable batches.
     Backfill(crate::postgres_backfill::BackfillArgs),
+    /// Verify or rebuild the Apache AGE projection from PostgreSQL.
+    #[command(subcommand)]
+    Graph(GraphCmd),
+}
+
+/// `hudson ops postgres graph`.
+#[derive(Debug, Subcommand)]
+pub enum GraphCmd {
+    /// Compare the graph with its relational sources without writing.
+    Parity,
+    /// Rebuild the projection using the migration login, then verify it.
+    Rebuild,
 }
 
 /// `hudson ops postgres mirror`.
@@ -136,6 +148,7 @@ pub fn run(command: PostgresCmd) -> ExitCode {
     let command = match command {
         PostgresCmd::Mirror(command) => command,
         PostgresCmd::Backfill(args) => return crate::postgres_backfill::run(&args),
+        PostgresCmd::Graph(command) => return run_graph(&command),
     };
     let (mode, json) = match command {
         MirrorCmd::Parity { json } => (Mode::Parity, json),
@@ -180,6 +193,46 @@ pub fn run(command: PostgresCmd) -> ExitCode {
             if json {
                 println!("{}", unavailable_json(mode, &error));
             }
+            ExitCode::from(UNAVAILABLE)
+        }
+    }
+}
+
+fn run_graph(command: &GraphCmd) -> ExitCode {
+    let result = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("start PostgreSQL graph runtime")
+        .and_then(|runtime| {
+            runtime.block_on(async {
+                let pg = PostgresDb::from_env().await?;
+                if matches!(command, GraphCmd::Rebuild) {
+                    store::postgres_graph::project_graph(&pg).await?;
+                }
+                Ok(store::postgres_graph::validate_graph(&pg).await?)
+            })
+        });
+    match result {
+        Ok(validation) => {
+            println!(
+                "{}",
+                json!({
+                    "clean": validation.is_clean(),
+                    "vertices": validation.vertices,
+                    "source_vertices": validation.source_vertices,
+                    "edges": validation.edges,
+                    "source_edges": validation.source_edges,
+                    "broken_endpoints": validation.broken_endpoints
+                })
+            );
+            if validation.is_clean() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(DRIFT)
+            }
+        }
+        Err(error) => {
+            eprintln!("navigator: graph operation failed: {error:#}");
             ExitCode::from(UNAVAILABLE)
         }
     }

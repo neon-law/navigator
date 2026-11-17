@@ -31,16 +31,14 @@ async fn manifest(pool: &PgPool) -> CoverageManifest {
         .unwrap()
         .into_iter()
         .map(|relation| {
-            if relation.schema == "public"
-                && relation.name == "derived"
-                && relation.kind == archives::coverage::RelationKind::View
-            {
-                Rule::Derived {
-                    relation,
-                    reason: "rebuild from probe".into(),
-                }
-            } else {
-                Rule::Export(relation)
+            let reason = match (relation.schema.as_str(), relation.name.as_str()) {
+                ("public", "derived") => "rebuild from probe",
+                ("public", "geography_columns" | "geometry_columns") => "recreated by PostGIS",
+                _ => return Rule::Export(relation),
+            };
+            Rule::Derived {
+                relation,
+                reason: reason.into(),
             }
         })
         .collect();
@@ -140,6 +138,32 @@ async fn postgres_paired_sources_fail_closed_and_rehydrate_from_iceberg() {
     // are deliberately different, so a public-only restore cannot pass.
     for pool in [&navigator, &target_nav] {
         sqlx::raw_sql(NAV_SCHEMA).execute(pool).await.unwrap();
+    }
+    let postgis_available: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'postgis')",
+    )
+    .fetch_one(&navigator)
+    .await
+    .unwrap();
+    if postgis_available {
+        for pool in [&navigator, &target_nav] {
+            sqlx::raw_sql(
+                "CREATE EXTENSION postgis;
+                 CREATE TABLE public.spatial_probe (id bigint PRIMARY KEY, segments geometry(MultiLineString,4326));
+                 TRUNCATE public.spatial_ref_sys",
+            )
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+        sqlx::raw_sql(
+            "INSERT INTO public.spatial_probe VALUES
+             (1, ST_GeomFromText('MULTILINESTRING((-110 5,-105 6),(-90 32,-80 36))',4326)),
+             (2, NULL)",
+        )
+        .execute(&navigator)
+        .await
+        .unwrap();
     }
     for pool in [&forgejo, &target_forge] {
         sqlx::raw_sql(FORGE_SCHEMA).execute(pool).await.unwrap();
@@ -484,6 +508,20 @@ async fn postgres_paired_sources_fail_closed_and_rehydrate_from_iceberg() {
             "DBOS state and checkpoint rows rehydrate exactly"
         );
     }
+    if postgis_available {
+        let geometry = "SELECT ST_AsEWKB(segments), ST_SRID(segments), GeometryType(segments)
+                        FROM public.spatial_probe ORDER BY id";
+        let read_geometry = |pool| {
+            sqlx::query_as::<_, (Option<Vec<u8>>, Option<i32>, Option<String>)>(geometry)
+                .fetch_all(pool)
+        };
+        let source = read_geometry(&navigator).await.unwrap();
+        let restored = read_geometry(&target_nav).await.unwrap();
+        assert_eq!(source, restored);
+        assert_eq!(restored[0].1, Some(4326));
+        assert_eq!(restored[0].2.as_deref(), Some("MULTILINESTRING"));
+        assert_eq!(restored[1], (None, None, None));
+    }
     let restored_large_object: Vec<u8> = sqlx::query_scalar("SELECT lo_get($1::bigint::oid)")
         .bind(large_object)
         .fetch_one(&target_nav)
@@ -602,26 +640,34 @@ async fn postgres_paired_sources_fail_closed_and_rehydrate_from_iceberg() {
     }
 
     // Both added and dropped tables must prevent publication, including empty ones.
-    for pool in [&navigator, &forgejo] {
-        sqlx::raw_sql("CREATE TABLE public.unclassified (id bigint)")
-            .execute(pool)
-            .await
-            .unwrap();
+    for (pool, create, remove, relation) in [
+        (
+            &navigator,
+            "LOAD 'age'; SELECT ag_catalog.create_graph('storage_probe')",
+            "LOAD 'age'; SELECT ag_catalog.drop_graph('storage_probe', true)",
+            "storage_probe._ag_label_edge",
+        ),
+        (
+            &forgejo,
+            "CREATE TABLE public.unclassified (id bigint)",
+            "DROP TABLE public.unclassified",
+            "public.unclassified",
+        ),
+    ] {
+        sqlx::raw_sql(create).execute(pool).await.unwrap();
         let failed_dir = tempfile::tempdir().unwrap();
         let failed_storage = FsStorage::new(failed_dir.path()).await.unwrap();
-        assert!(export_pair(
+        let error = export_pair(
             source("navigator", &navigator, &nav_coverage),
             source("forgejo", &forgejo, &forge_coverage),
             &failed_storage,
-            base
+            base,
         )
         .await
-        .is_err());
+        .unwrap_err();
+        assert!(format!("{error:#}").contains(&format!("unclassified relation {relation}")));
         assert!(failed_storage.list("").await.unwrap().is_empty());
-        sqlx::raw_sql("DROP TABLE public.unclassified")
-            .execute(pool)
-            .await
-            .unwrap();
+        sqlx::raw_sql(remove).execute(pool).await.unwrap();
     }
     sqlx::raw_sql("DROP TABLE public.empty")
         .execute(&navigator)

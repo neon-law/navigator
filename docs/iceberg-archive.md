@@ -304,6 +304,12 @@ how each view is rebuilt before it can ship. `person_directory` and `firm_visibl
 a plain view over exported tables, rebuilt by its migration. PostGIS's `geometry_columns` and `geography_columns` are
 derived from the system catalogs and recreated by `CREATE EXTENSION postgis`; its `spatial_ref_sys` table is exported.
 
+PostGIS geometry exports as HEXEWKB text, which preserves coordinates, dimensions, and the spatial reference identifier.
+The column schema records the PostgreSQL geometry type and modifier for restoring into a PostGIS-enabled database.
+
+Run persistent storage probes in a separate scratch database. A probe table or AGE graph blocks export from an archived
+database until its relations are covered or the probe is removed.
+
 ## Recovery: physical backups first
 
 The Iceberg archive is the **logical and analytical copy** of PostgreSQL. It is not the recovery path for the

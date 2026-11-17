@@ -89,7 +89,8 @@ Run the backfill with `NAVIGATOR_POSTGRES_USER=navigator_owner` and the migratio
 ```bash
 hudson ops postgres backfill --dry-run --json          # the plan; writes nothing
 hudson ops postgres backfill --batch-size 500 --json   # the run; resumable by run id
-hudson ops postgres mirror parity                      # must be clean before you trust it
+hudson ops postgres mirror parity                      # relational mirror parity
+hudson ops postgres graph parity                       # AGE projection parity, as navigator_app
 ```
 
 The graph arm rebuilds the projection wholesale — vertices keyed by the Surreal record UUIDs, so `source_id` provenance
@@ -97,6 +98,11 @@ chains stay traceable — then validates counts and endpoint existence and repor
 reports graph validation alongside the relational parity counts. After the first backfill completes, parity skips
 PostgreSQL-authoritative graph tables and validates the AGE projection against PostgreSQL. Exit status 0 requires zero
 drift. The failed row list in `mirror_backfill_failure` gives table names and UUIDs.
+
+When PostgreSQL holds the source rows, pause graph writers and run `hudson ops postgres graph rebuild` as
+`navigator_owner` to replace the AGE projection from PostgreSQL alone. Run `graph parity` as `navigator_app` before
+resuming writes. It checks label and edge counts and endpoint integrity. Use the staging conflict flows below to verify
+findings.
 
 ## 4. Staging soak, then production cutover
 
