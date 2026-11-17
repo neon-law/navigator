@@ -22,7 +22,7 @@ use store::surreal::SurrealDb;
 use uuid::Uuid;
 use workflows::{upsert_channel_canvas, CanvasWrite, SlackBot};
 
-use super::repository::RepositoryForge;
+use super::repository::{matches_recorded_repository, RepositoryForge};
 use super::{slack_error, tag_retry_policy, ProjectTagRequest};
 use crate::firm_slack::ProjectSlackBots;
 use crate::project_slack::LaneError;
@@ -266,9 +266,11 @@ async fn repository_activity(
     url: &str,
 ) -> String {
     let firm_forge;
-    let forge: &dyn ForgeService = match forge {
-        RepositoryForge::None => {
-            return "Repository activity unavailable: no forge provider configured.".into()
+    let selected = forge.for_repository(Some(url));
+    let forge: &dyn ForgeService = match &selected {
+        RepositoryForge::None | RepositoryForge::ByProject { .. } => {
+            return "Repository activity unavailable: no forge provider for the recorded repository."
+                .into()
         }
         RepositoryForge::GitHub(forge) => forge.as_ref(),
         RepositoryForge::Forgejo(firms) => match firms.for_project(surreal, project.id).await {
@@ -283,7 +285,7 @@ async fn repository_activity(
         },
     };
     match forge.find_repository(&project.code).await {
-        Ok(Some(repository)) if repository.url == url => {
+        Ok(Some(repository)) if matches_recorded_repository(&repository.url, url) => {
             match forge.head_commit_committed_at(&project.code).await {
                 Ok(Some(date)) => format!("Latest default-branch commit: {date}."),
                 Ok(None) => "No default-branch commit date available.".into(),
@@ -380,7 +382,7 @@ pub(crate) fn render_canvas(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::nightly_project_update::repository::tests::{forgejo, github};
+    use crate::nightly_project_update::repository::tests::{github, mixed_forges};
     use std::sync::Mutex;
     use store::persons::{self, NewPerson, Role};
     use store::projects::{self, create, designate_dri_in_surreal, DriSide, NewProject};
@@ -492,7 +494,10 @@ mod tests {
         .await
         .unwrap();
         let text = &slack.posted_messages()[0].1;
-        assert!(text.contains("no forge provider configured"), "{text}");
+        assert!(
+            text.contains("no forge provider for the recorded repository"),
+            "{text}"
+        );
         assert!(
             text.contains("<https://forge.example/example/sample-no-forge|View repository>"),
             "the recorded repository is linked even without a forge client: {text}"
@@ -502,13 +507,16 @@ mod tests {
     /// A Forgejo deployment reads the latest commit through the Project's own
     /// Firm forge and links the Forgejo repository in the channel.
     #[tokio::test]
-    async fn a_forgejo_repository_reports_activity_through_the_firm_forge() {
+    async fn a_recorded_forgejo_repository_uses_the_firm_forge_with_a_github_default() {
         use cloud::forge::{FakeForge, ForgeService};
         let surreal = mem_surreal().await;
         let project = seeded(&surreal, "sample-forgejo", "open").await;
         let forge = FakeForge::new();
         let repository = forge.ensure_repository(&project.code).await.unwrap();
         forge.set_head_commit_committed_at(&project.code, "2026-11-08T09:00:00Z");
+        let github = FakeForge::new();
+        github.ensure_repository(&project.code).await.unwrap();
+        github.set_head_commit_committed_at(&project.code, "2026-01-01T00:00:00Z");
         projects::update_project(
             &surreal,
             project.id,
@@ -520,9 +528,15 @@ mod tests {
         .await
         .unwrap();
         let slack = CapturingSlackBot::new();
-        post_notice(&surreal, &slack, &forgejo(&forge), "2026-11-09", project.id)
-            .await
-            .unwrap();
+        post_notice(
+            &surreal,
+            &slack,
+            &mixed_forges(&github, &forge),
+            "2026-11-09",
+            project.id,
+        )
+        .await
+        .unwrap();
         let text = &slack.posted_messages()[0].1;
         assert!(
             text.contains("Latest default-branch commit: 2026-11-08T09:00:00Z."),

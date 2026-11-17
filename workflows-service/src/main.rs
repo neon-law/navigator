@@ -592,16 +592,15 @@ async fn main() -> anyhow::Result<()> {
     let youtube_dbos = youtube_dbos_enabled
         .then(|| YoutubeCommentsPollerService::new(surreal.clone(), kms.clone()));
     let dbos_social_assets_storage = assets_storage.clone();
-    // The nightly `repository` and `slack` tags: on Forgejo each Project's
-    // own Firm client, which also governs the repository and proposes the
-    // version update; otherwise the deployment's GitHub forge, detection only.
-    let repository_forge = match cloud::ForgeBackend::from_lookup(|key| std::env::var(key).ok())
-        .context("select the Project forge")?
-    {
-        cloud::ForgeBackend::Forgejo => {
-            RepositoryForge::Forgejo(Arc::new(EnvFirmForges::new(kms.clone())))
-        }
-        cloud::ForgeBackend::GitHub => forge.map_or(RepositoryForge::None, RepositoryForge::GitHub),
+    let repository_forge = RepositoryForge::ByProject {
+        default: cloud::ForgeBackend::from_lookup(|key| std::env::var(key).ok())
+            .context("select the default Project forge")?,
+        github: forge,
+        forgejo: Arc::new(EnvFirmForges::new(kms.clone())),
+        forgejo_origin: std::env::var(cloud::forgejo_forge::NAVIGATOR_FORGEJO_ROOT_URL_ENV)
+            .ok()
+            .and_then(|root| url::Url::parse(root.trim()).ok())
+            .map(|root| root.origin()),
     };
     let sandbox_credit_reset_stores = if sandbox_credit_reset_enabled {
         Some((
