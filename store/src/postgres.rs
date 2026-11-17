@@ -4,7 +4,6 @@ use include_dir::{include_dir, Dir};
 use sqlx::migrate::{Migration, MigrationType, Migrator};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgSslMode};
 use sqlx::{AssertSqlSafe, PgPool, SqlSafeStr};
-
 /// PostgreSQL authority for the accounting domain — Xero invoices, IOLTA
 /// accounts and withdrawals, and the finance aggregate — automatic on a
 /// configured host.
@@ -21,6 +20,9 @@ pub mod communications;
 pub mod identity;
 pub mod notation_creation_attempts;
 pub mod people;
+/// PostgreSQL authority for the review surface — review documents and
+/// document comments — automatic on a configured host.
+pub mod review;
 
 /// Consuming a journaled Forgejo push receipt: analysis on the row, the
 /// forge API only once.

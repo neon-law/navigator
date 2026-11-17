@@ -33,6 +33,7 @@ use serde::Serialize;
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::postgres::review as authority;
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 
 /// The table these rows live in.
@@ -98,6 +99,45 @@ impl DocumentCommentRow {
     }
 }
 
+/// The row as PostgreSQL's `to_jsonb` serves it, under the `postgres::review`
+/// authority. The anchors arrive as JSON numbers over the `BIGINT` columns
+/// and the bare `communication_id` uuid as a string over its `TEXT` column.
+#[derive(serde::Deserialize)]
+struct PgDocumentCommentRow {
+    id: Uuid,
+    review_document_id: Uuid,
+    person_id: Uuid,
+    anchor_start: i64,
+    anchor_end: i64,
+    quoted_text: String,
+    body: String,
+    resolved: bool,
+    communication_id: Option<String>,
+    inserted_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+impl PgDocumentCommentRow {
+    /// `None` when a column is out of the application type's range — the
+    /// same tolerance [`DocumentCommentRow::into_comment`] shows a row
+    /// written by something that bypassed the record-id seam.
+    fn into_comment(self) -> Option<DocumentComment> {
+        Some(DocumentComment {
+            id: self.id,
+            review_document_id: self.review_document_id,
+            person_id: self.person_id,
+            anchor_start: i32::try_from(self.anchor_start).ok()?,
+            anchor_end: i32::try_from(self.anchor_end).ok()?,
+            quoted_text: self.quoted_text,
+            body: self.body,
+            resolved: self.resolved,
+            communication_id: self.communication_id.and_then(|s| s.parse().ok()),
+            inserted_at: self.inserted_at,
+            updated_at: self.updated_at,
+        })
+    }
+}
+
 /// The projection every read shares, so one field list describes the row
 /// and a new column cannot reach [`DocumentCommentRow`] from only one
 /// query.
@@ -152,6 +192,9 @@ pub enum DocumentCommentError {
     Surreal(#[from] surrealdb::Error),
     #[error("communications: {0}")]
     Communication(#[from] crate::communications::CommunicationError),
+    /// PostgreSQL, under the review authority, failed.
+    #[error(transparent)]
+    Postgres(#[from] authority::ReviewAuthorityError),
     /// A write reported success but returned no row, or returned one this
     /// module could not read back.
     #[error("writing a document comment returned no usable row")]
@@ -191,7 +234,27 @@ async fn create_row(
     quoted_text: &str,
     body: &str,
     communication_id: Option<Uuid>,
-) -> Result<Uuid, surrealdb::Error> {
+) -> Result<Uuid, DocumentCommentError> {
+    if let Some(pg) = authority::authority().await? {
+        let row = serde_json::json!({
+            "id": Uuid::now_v7(), "review_document_id": review_document_id,
+            "person_id": person_id, "anchor_start": anchor_start,
+            "anchor_end": anchor_end, "quoted_text": quoted_text,
+            "body": body, "resolved": false,
+            "communication_id": communication_id.map(|u| u.to_string()),
+        });
+        let query = sqlx::query(
+            "INSERT INTO document_comment SELECT * FROM \
+             jsonb_populate_record(NULL::document_comment, \
+             $1 || jsonb_build_object('inserted_at', now(), 'updated_at', now())) \
+             RETURNING document_comment.id",
+        )
+        .bind(row);
+        let id: Uuid = authority::maybe_scalar(&pg, query)
+            .await?
+            .ok_or(DocumentCommentError::WriteReturnedNothing)?;
+        return Ok(id);
+    }
     let id = Uuid::now_v7();
     let mut response = db
         .query(format!(
@@ -227,7 +290,7 @@ async fn create_row(
 ///
 /// [`DocumentCommentError::Surreal`] if the insert fails.
 pub async fn create(db: &SurrealDb, new: &NewComment<'_>) -> Result<Uuid, DocumentCommentError> {
-    Ok(create_row(
+    create_row(
         db,
         new.review_document_id,
         new.person_id,
@@ -237,7 +300,7 @@ pub async fn create(db: &SurrealDb, new: &NewComment<'_>) -> Result<Uuid, Docume
         new.body,
         None,
     )
-    .await?)
+    .await
 }
 
 /// Create a comment **and** its `communications` spine row — see the
@@ -300,6 +363,15 @@ pub async fn find_by_id(
     db: &SurrealDb,
     id: Uuid,
 ) -> Result<Option<DocumentComment>, DocumentCommentError> {
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "SELECT to_jsonb(document_comment) AS row FROM document_comment WHERE id = $1",
+        )
+        .bind(id);
+        return Ok(authority::maybe::<PgDocumentCommentRow>(&pg, query)
+            .await?
+            .and_then(PgDocumentCommentRow::into_comment));
+    }
     let mut response = db
         .query(format!("SELECT {SELECT} FROM ONLY $id LIMIT 1"))
         .bind(("id", record_id(TABLE, id)))
@@ -318,6 +390,18 @@ pub async fn for_review_document(
     db: &SurrealDb,
     review_document_id: Uuid,
 ) -> Result<Vec<DocumentComment>, DocumentCommentError> {
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "SELECT to_jsonb(document_comment) AS row FROM document_comment \
+             WHERE review_document_id = $1 ORDER BY id ASC",
+        )
+        .bind(review_document_id);
+        return Ok(authority::rows::<PgDocumentCommentRow>(&pg, query)
+            .await?
+            .into_iter()
+            .filter_map(PgDocumentCommentRow::into_comment)
+            .collect());
+    }
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE review_document_id = $review_document \
@@ -343,6 +427,17 @@ pub async fn set_resolved(
     id: Uuid,
     resolved: bool,
 ) -> Result<Option<DocumentComment>, DocumentCommentError> {
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "UPDATE document_comment SET resolved = $2, updated_at = now() WHERE id = $1 \
+             RETURNING to_jsonb(document_comment) AS row",
+        )
+        .bind(id)
+        .bind(resolved);
+        return Ok(authority::maybe::<PgDocumentCommentRow>(&pg, query)
+            .await?
+            .and_then(PgDocumentCommentRow::into_comment));
+    }
     let mut response = writing(|| {
         db.query(format!(
             "UPDATE $id SET resolved = $resolved, updated_at = time::now() RETURN {SELECT}"
@@ -369,6 +464,18 @@ pub async fn clear_communication_links(
     communication_ids: &[Uuid],
 ) -> Result<(), DocumentCommentError> {
     if communication_ids.is_empty() {
+        return Ok(());
+    }
+    if let Some(pg) = authority::authority().await? {
+        let ids: Vec<String> = communication_ids.iter().map(Uuid::to_string).collect();
+        sqlx::query(
+            "UPDATE document_comment SET communication_id = NULL, updated_at = now() \
+             WHERE communication_id = ANY($1)",
+        )
+        .bind(ids)
+        .execute(pg.pool())
+        .await
+        .map_err(authority::ReviewAuthorityError::from)?;
         return Ok(());
     }
     let ids: Vec<Uuid> = communication_ids.to_vec();
