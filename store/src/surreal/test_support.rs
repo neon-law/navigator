@@ -78,9 +78,29 @@ const COMPILED_BRAND_FIXTURE_FIRM_ID: uuid::Uuid =
 ///
 /// A test that needs to observe an empty `brand` table uses [`unmigrated`]
 /// directly instead of [`mem`].
+///
+/// Idempotent per key: the schema declares `brand_key_unique` over `brand`,
+/// so seeding a database that already carries the catalog — `server_surreal`
+/// seeds it, and a test such as `portal::evidence_share` then seeds its own
+/// database again through this same helper — must skip existing keys rather
+/// than die on the unique index.
 pub async fn seed_compiled_brands(db: &SurrealDb) {
     let now = chrono::Utc::now().to_rfc3339();
     for key in crate::firms::CLOSED_BRAND_KEYS {
+        let mut response = db
+            .query("SELECT id FROM brand WHERE brand_key = $key LIMIT 1")
+            .bind(("key", (*key).to_string()))
+            .await
+            .and_then(surrealdb::IndexedResults::check)
+            .unwrap_or_else(|error| {
+                panic!("look up the compiled brand {key} for a test engine: {error}")
+            });
+        let existing: Vec<surrealdb::types::RecordId> = response.take(0).unwrap_or_else(|error| {
+            panic!("read the compiled brand {key} lookup for a test engine: {error}")
+        });
+        if !existing.is_empty() {
+            continue;
+        }
         // An explicit UUID id, minted exactly like every other writer in
         // this crate (`record_id(TABLE, Uuid::now_v7())`) rather than
         // SurrealDB's own auto-generated key: `store::surreal::record_uuid`

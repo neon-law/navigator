@@ -152,6 +152,14 @@ pub async fn server_surreal(database: &str) -> Option<ServerSurreal> {
         .await
         .expect("connect to the person store");
     crate::schema::apply(&db).await.expect("apply the schema");
+    // The embedded lane seeds the compiled brand catalog after the schema
+    // (`mem`), and a real deployment reaches the same state before any
+    // traffic (`store::seed`). A fresh server-mode database starts with an
+    // empty `brand` table, so `seed_firm_with_brand`'s `attach_brand` would
+    // die with `UnknownBrand`. Give the server lane the same catalog, once
+    // per database — every caller names its own database, so no caller
+    // observes another test's rows.
+    crate::surreal::test_support::seed_compiled_brands(&db).await;
     Some(ServerSurreal { db, config })
 }
 
