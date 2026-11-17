@@ -1649,6 +1649,12 @@ mod tests {
                 "20261117000100_add_stripe_draft_to_billing_batch.sql",
                 include_str!("../postgres/migrations/20261117000100_add_stripe_draft_to_billing_batch.sql"),
             ),
+            (
+                "20261117120000_add_accounting_authority_constraints.sql",
+                include_str!(
+                    "../postgres/migrations/20261117120000_add_accounting_authority_constraints.sql"
+                ),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

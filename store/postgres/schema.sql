@@ -4878,3 +4878,12 @@ ALTER TABLE matter_billing_batch ADD COLUMN stripe_account_id TEXT;
 ALTER TABLE matter_billing_batch ADD COLUMN stripe_iolta BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE matter_billing_batch ADD COLUMN stripe_invoice_id TEXT;
 ALTER TABLE matter_billing_batch ADD CONSTRAINT matter_billing_batch_issuer CHECK ((stripe_account_id IS NULL AND NOT stripe_iolta AND stripe_invoice_id IS NULL AND xero_contact_id IS NOT NULL) OR (stripe_account_id IS NOT NULL AND xero_contact_id IS NULL AND xero_invoice_id IS NULL));
+
+-- Migration: 20261117120000_add_accounting_authority_constraints.sql
+-- The accounting tables hold the application's authority for these rows once
+-- NAVIGATOR_POSTGRES_HOST is set, so the unique semantics SurrealDB's schema
+-- enforces on the same tables must hold here too: one pooled IOLTA account
+-- per state, and one allocation line per (withdrawal, invoice) pair.
+CREATE UNIQUE INDEX iolta_account_jurisdiction_key ON iolta_account (jurisdiction_id);
+CREATE UNIQUE INDEX iolta_allocation_withdrawal_invoice_key
+    ON iolta_allocation (withdrawal_id, xero_invoice_id);
