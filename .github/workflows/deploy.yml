@@ -2203,7 +2203,8 @@ jobs:
               BIN=trigger
           - image: navigator-surreal-archive
             dockerfile: images/Containerfile.trigger
-            runner: blacksmith-4vcpu-ubuntu-2404
+            # Building Hudson links the portal graph and exhausted the 4-vCPU runner's memory.
+            runner: blacksmith-8vcpu-ubuntu-2404
             build-args: |
               CRATE=hudson
               BIN=hudson
