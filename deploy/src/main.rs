@@ -4106,6 +4106,24 @@ fn run_render(
     // hand, in the preview and the final render alike.
     let mut answer_context = rendered_answers(&contents, answers);
     fill_firm_legal_name(file, &mut answer_context);
+    if contents.contains("firm.portal_url") {
+        let brand = match projects::matter::find_manifest(file) {
+            Some(path) => std::fs::read_to_string(path)
+                .ok()
+                .and_then(|text| projects::manifest::parse(&text).ok())
+                .and_then(|manifest| {
+                    cli::letterhead::resolve_brand(
+                        manifest.brand.as_deref(),
+                        manifest.host.as_deref(),
+                    )
+                    .ok()
+                }),
+            None => Some(views::brand::BrandKey::Neon),
+        };
+        if let Some(brand) = brand {
+            answer_context.insert("firm.portal_url".to_string(), brand.client_portal_href());
+        }
+    }
     fill_firm_office(file, &contents, &mut answer_context);
     let Ok(body) = pleading_body(file, &contents, &profile, &answer_context, preview)
         .map_err(|message| eprintln!("navigator: {message}"))

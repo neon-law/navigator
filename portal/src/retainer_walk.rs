@@ -3333,6 +3333,10 @@ pub(crate) async fn build_answer_context(
     let firm = project
         .as_ref()
         .and_then(|project| firm_legal_name_for_brand(&project.brand));
+    let portal_url = project
+        .as_ref()
+        .and_then(|project| views::brand::BrandKey::parse(project.brand.trim()))
+        .map(views::brand::BrandKey::client_portal_href);
     // The Project's bound client-DRI Person, if any. Refusal to infer is the
     // store setter's contract; a row with no pin renders nothing here.
     let client_dri = match project
@@ -3379,6 +3383,9 @@ pub(crate) async fn build_answer_context(
         if let Some(name) = &firm {
             ctx.entry("firm.legal_name".to_string())
                 .or_insert_with(|| name.clone());
+        }
+        if let Some(url) = &portal_url {
+            ctx.insert("firm.portal_url".to_string(), url.clone());
         }
         if !projection.declares_state(GOVERNING_LAW_CONTEXT_KEY)
             || projection.includes_state(GOVERNING_LAW_CONTEXT_KEY)
@@ -3670,14 +3677,27 @@ mod tests {
     /// expansion's display name) fill from the pinned Person in both the
     /// keys and labels contexts. A Project with no pin renders nothing.
     #[tokio::test]
-    async fn the_bound_client_dri_fills_its_render_context_without_a_question() {
+    async fn the_project_fills_its_client_dri_and_branded_portal_link() {
         const TEMPLATE: &str =
             include_str!("../../workflows/tests/fixtures/onboarding_implicit_end.txt");
         let surreal = store::test_support::mem_surreal().await;
         let dir = tempfile::tempdir().unwrap();
         let storage: std::sync::Arc<dyn cloud::StorageService> =
             std::sync::Arc::new(cloud::FsStorage::new(dir.path()).await.unwrap());
-        let project = store::test_support::seed_project(&surreal, "DRI project").await;
+        let brand = views::brand::BrandKey::Vesta;
+        let project = store::projects::create(
+            &surreal,
+            &store::projects::NewProject {
+                code: "onboarding-render-test".to_string(),
+                name: "Onboarding render test".to_string(),
+                status: "open".to_string(),
+                brand: brand.as_str().to_string(),
+                entity_id: store::test_support::seed_entity(&surreal).await,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         store::template_source::persist_contents(
             &surreal,
             &storage,
@@ -3729,6 +3749,10 @@ mod tests {
             super::build_answer_context(&surreal, Some(&storage), notation.notation_id)
                 .await
                 .unwrap();
+        let portal_url = format!("{}/app/projects", brand.public_home_href());
+        let onboarding = rules::clauses::compile(workflows::RETAINER_INTAKE_TEMPLATE).unwrap();
+        let typst = super::typst_body_from_template(&onboarding, &keys, &labels, Some("onboarding"));
+        assert!(typst.contains(&format!("#link(\"{portal_url}\")")));
         for ctx in [&keys, &labels] {
             assert_eq!(
                 ctx.get("client_dri.name").map(String::as_str),

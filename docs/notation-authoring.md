@@ -402,6 +402,8 @@ under [Pleading paper](#pleading-paper). Both commands validate the file against
 gate`, fill placeholders through the same notation evaluator, and produce byte-identical output when the source revision
 and answers are unchanged.
 
+The `{{firm.portal_url}}` binding supplies the client portal URL for the Project's Brand.
+
 **The Firm's legal name and office fill from the Brand.** `{{firm.legal_name}}` prints the legal name of the Firm behind
 the Project's Brand. `{{firm.office.address}}`, `{{firm.office.phone}}`, and `{{firm.office.email}}` print the office
 that Brand publishes in the template's `jurisdiction:` — the Washington office for `jurisdiction: WA`. A jurisdiction
