@@ -24,6 +24,10 @@ pub mod people;
 /// document comments — automatic on a configured host.
 pub mod review;
 
+/// PostgreSQL authority for the provider-envelope family — signatures,
+/// verifications, and notarizations — automatic on a configured host.
+pub mod signatures;
+
 /// Consuming a journaled Forgejo push receipt: analysis on the row, the
 /// forge API only once.
 pub mod forgejo_push_analysis;
