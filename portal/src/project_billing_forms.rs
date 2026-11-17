@@ -877,7 +877,12 @@ mod tests {
             State(outage_store()),
             None,
             Path("ACME".to_string()),
-            Form(LogTimeForm::default()),
+            Form(LogTimeForm {
+                description: String::new(),
+                performed_on: String::new(),
+                minutes: String::new(),
+                billable: None,
+            }),
         )
         .await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
@@ -890,7 +895,12 @@ mod tests {
             State(outage_store()),
             Some(axum::Extension(session)),
             Path("ACME".to_string()),
-            Form(LogTimeForm::default()),
+            Form(LogTimeForm {
+                description: String::new(),
+                performed_on: String::new(),
+                minutes: String::new(),
+                billable: None,
+            }),
         )
         .await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
@@ -902,7 +912,12 @@ mod tests {
             State(outage_store()),
             Some(axum::Extension(SessionData::fresh("no-row", Role::Lawyer))),
             Path("ACME".to_string()),
-            Form(LogTimeForm::default()),
+            Form(LogTimeForm {
+                description: String::new(),
+                performed_on: String::new(),
+                minutes: String::new(),
+                billable: None,
+            }),
         )
         .await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
@@ -914,7 +929,12 @@ mod tests {
             State(outage_store()),
             Some(axum::Extension(attorney_session())),
             Path("NOT-A-MATTER".to_string()),
-            Form(LogTimeForm::default()),
+            Form(LogTimeForm {
+                description: String::new(),
+                performed_on: String::new(),
+                minutes: String::new(),
+                billable: None,
+            }),
         )
         .await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
@@ -927,7 +947,9 @@ mod tests {
             State(store.clone()),
             None,
             Path("ACME".to_string()),
-            Form(TimerStartForm::default()),
+            Form(TimerStartForm {
+                note: String::new(),
+            }),
         )
         .await;
         assert_eq!(started.status(), StatusCode::NOT_FOUND);
@@ -935,7 +957,10 @@ mod tests {
             State(store.clone()),
             None,
             Path("ACME".to_string()),
-            Form(TimerStopForm::default()),
+            Form(TimerStopForm {
+                description: String::new(),
+                billable: None,
+            }),
         )
         .await;
         assert_eq!(stopped.status(), StatusCode::NOT_FOUND);
@@ -951,7 +976,9 @@ mod tests {
             State(store.clone()),
             Some(session.clone()),
             Path("ACME".to_string()),
-            Form(TimerStartForm::default()),
+            Form(TimerStartForm {
+                note: String::new(),
+            }),
         )
         .await;
         assert_eq!(started.status(), StatusCode::NOT_FOUND);
@@ -959,7 +986,10 @@ mod tests {
             State(store.clone()),
             Some(session.clone()),
             Path("ACME".to_string()),
-            Form(TimerStopForm::default()),
+            Form(TimerStopForm {
+                description: String::new(),
+                billable: None,
+            }),
         )
         .await;
         assert_eq!(stopped.status(), StatusCode::NOT_FOUND);
@@ -975,7 +1005,9 @@ mod tests {
             State(store.clone()),
             Some(session.clone()),
             Path("NOT-A-MATTER".to_string()),
-            Form(TimerStartForm::default()),
+            Form(TimerStartForm {
+                note: String::new(),
+            }),
         )
         .await;
         assert_eq!(started.status(), StatusCode::NOT_FOUND);
@@ -983,7 +1015,10 @@ mod tests {
             State(store.clone()),
             Some(session.clone()),
             Path("NOT-A-MATTER".to_string()),
-            Form(TimerStopForm::default()),
+            Form(TimerStopForm {
+                description: String::new(),
+                billable: None,
+            }),
         )
         .await;
         assert_eq!(stopped.status(), StatusCode::NOT_FOUND);
@@ -1047,7 +1082,10 @@ mod tests {
             State(billing_admin_state(outage_store()).await),
             None,
             Path("ACME".to_string()),
-            Form(GenerateInvoiceForm::default()),
+            Form(GenerateInvoiceForm {
+                confirm: None,
+                digest: None,
+            }),
         )
         .await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
@@ -1059,7 +1097,10 @@ mod tests {
             State(billing_admin_state(outage_store()).await),
             Some(axum::Extension(dri_view_session())),
             Path("ACME".to_string()),
-            Form(GenerateInvoiceForm::default()),
+            Form(GenerateInvoiceForm {
+                confirm: None,
+                digest: None,
+            }),
         )
         .await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
@@ -1071,7 +1112,10 @@ mod tests {
             State(billing_admin_state(outage_store()).await),
             Some(axum::Extension(attorney_session())),
             Path("NOT-A-MATTER".to_string()),
-            Form(GenerateInvoiceForm::default()),
+            Form(GenerateInvoiceForm {
+                confirm: None,
+                digest: None,
+            }),
         )
         .await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
