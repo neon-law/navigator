@@ -542,6 +542,9 @@ impl Kind {
             | "regnamespace" | "regclass" | "char" | "_aclitem" | "label_id" | "label_kind" => {
                 Self::Text
             }
+            // PostGIS outputs HEXEWKB, preserving coordinates, dimensions, and SRID.
+            // The paired manifest retains the original geometry type modifier.
+            "geometry" => Self::Text,
             "json" | "jsonb" => Self::Json,
             "numeric" => Self::Numeric,
             "bool" => Self::Bool,
