@@ -18,7 +18,24 @@ use serde::Serialize;
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::postgres::cases as authority;
 use crate::surreal::{record_id, record_uuid, SurrealDb};
+
+/// Errors from the filings commands.
+#[derive(Debug, thiserror::Error)]
+pub enum FilingError {
+    #[error("database: {0}")]
+    Db(#[from] surrealdb::Error),
+    /// PostgreSQL, under the litigation authority, failed.
+    #[error(transparent)]
+    Postgres(#[from] authority::CasesAuthorityError),
+    /// `submitted_at` is not an RFC 3339 timestamp PostgreSQL can store.
+    #[error("`{0}` is not an RFC 3339 timestamp")]
+    SubmittedAt(String),
+    /// A write reported success but returned no row.
+    #[error("writing a filing returned no usable row")]
+    WriteReturnedNothing,
+}
 
 /// The table these rows live in.
 const TABLE: &str = "filing";
@@ -59,6 +76,38 @@ struct FilingRow {
     submitted_at: String,
     inserted_at: surrealdb::types::Datetime,
     updated_at: surrealdb::types::Datetime,
+}
+
+/// The row as PostgreSQL's `to_jsonb` serves it, under the `postgres::cases`
+/// authority. `submitted_at` is a `timestamptz` column there, so it arrives
+/// as a timestamp and leaves as the RFC 3339 string the type carries.
+#[derive(serde::Deserialize)]
+struct PgFilingRow {
+    id: Uuid,
+    notation_id: Uuid,
+    kind: String,
+    office: String,
+    reference: Option<String>,
+    summary: String,
+    submitted_at: DateTime<Utc>,
+    inserted_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+impl From<PgFilingRow> for Filing {
+    fn from(row: PgFilingRow) -> Self {
+        Filing {
+            id: row.id,
+            notation_id: row.notation_id,
+            kind: row.kind,
+            office: row.office,
+            reference: row.reference,
+            summary: row.summary,
+            submitted_at: row.submitted_at.to_rfc3339(),
+            inserted_at: row.inserted_at,
+            updated_at: row.updated_at,
+        }
+    }
 }
 
 impl FilingRow {
@@ -103,7 +152,29 @@ pub struct NewFiling<'a> {
 /// # Errors
 ///
 /// Propagates any database error.
-pub async fn record(db: &SurrealDb, new: &NewFiling<'_>) -> Result<Uuid, surrealdb::Error> {
+pub async fn record(db: &SurrealDb, new: &NewFiling<'_>) -> Result<Uuid, FilingError> {
+    if let Some(pg) = authority::authority().await? {
+        let submitted_at = DateTime::parse_from_rfc3339(new.submitted_at)
+            .map_err(|_| FilingError::SubmittedAt(new.submitted_at.to_string()))?
+            .with_timezone(&Utc);
+        let row = serde_json::json!({
+            "id": Uuid::now_v7(), "notation_id": new.notation_id,
+            "kind": new.kind, "office": new.office,
+            "reference": new.reference, "summary": new.summary,
+            "submitted_at": submitted_at,
+        });
+        let query = sqlx::query(
+            "INSERT INTO filing SELECT * FROM \
+             jsonb_populate_record(NULL::filing, \
+             $1 || jsonb_build_object('inserted_at', now(), 'updated_at', now())) \
+             RETURNING filing.id",
+        )
+        .bind(row);
+        let id: Uuid = authority::maybe_scalar(&pg, query)
+            .await?
+            .ok_or(FilingError::WriteReturnedNothing)?;
+        return Ok(id);
+    }
     let id = Uuid::now_v7();
     let mut response = db
         .query(format!(
@@ -133,10 +204,19 @@ pub async fn record(db: &SurrealDb, new: &NewFiling<'_>) -> Result<Uuid, surreal
 /// # Errors
 ///
 /// Propagates any database error.
-pub async fn for_notation(
-    db: &SurrealDb,
-    notation_id: Uuid,
-) -> Result<Vec<Filing>, surrealdb::Error> {
+pub async fn for_notation(db: &SurrealDb, notation_id: Uuid) -> Result<Vec<Filing>, FilingError> {
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "SELECT to_jsonb(filing) AS row FROM filing \
+             WHERE notation_id = $1 ORDER BY id ASC",
+        )
+        .bind(notation_id);
+        return Ok(authority::rows::<PgFilingRow>(&pg, query)
+            .await?
+            .into_iter()
+            .map(Into::into)
+            .collect());
+    }
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE notation_id = $notation ORDER BY id ASC"
