@@ -10445,6 +10445,22 @@ spec:
         let containers = deployment["spec"]["template"]["spec"]["containers"]
             .as_sequence()
             .expect("workflows-service containers");
+        let worker = containers
+            .iter()
+            .find(|container| container["name"].as_str() == Some("worker"))
+            .expect("workflow worker container");
+        let forgejo_root = worker["env"]
+            .as_sequence()
+            .expect("worker env")
+            .iter()
+            .find(|entry| {
+                entry["name"].as_str() == Some(cloud::forgejo_forge::NAVIGATOR_FORGEJO_ROOT_URL_ENV)
+            })
+            .expect("worker Forgejo root URL");
+        assert_eq!(
+            forgejo_root["value"].as_str(),
+            Some("https://forge.example.invalid/")
+        );
 
         for (name, cpu, memory) in [("worker", "100m", "256Mi"), ("envoy", "50m", "128Mi")] {
             let container = containers

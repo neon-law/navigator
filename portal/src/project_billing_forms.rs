@@ -570,9 +570,578 @@ fn flash_for_timer(error: &store::timers::TimerError) -> String {
     }
 }
 
-/// The matter billing forms under test.
 #[cfg(test)]
 mod tests {
+    use super::{
+        back_to_billing, discard_timer, flash_for_entry, flash_for_invoice, flash_for_timer,
+        generate_invoice, log_time, raise_confirmation, start_timer, stop_timer,
+        GenerateInvoiceForm, LogTimeForm, TimerStartForm, TimerStopForm,
+    };
+    use crate::session::{DriView, SessionData};
+    use axum::extract::{Form, Path, State};
+    use axum::http::StatusCode;
+    use chrono::NaiveDate;
+    use store::persons::Role;
+    use store::time_entries::TimeEntryError;
+    use store::timers::TimerError;
+    use uuid::Uuid;
+
+    /// A handle with no engine behind it — the documented outage posture
+    /// (`portal/src/lead_capture.rs`). Every store call errors, so the doors
+    /// take their not-found exit without standing up an embedded engine:
+    /// the SurrealDB test-support ratchet counts this crate's call sites and
+    /// new ones are refused (`cli/tests/embedded_surreal_ratchet.rs`).
+    fn outage_store() -> store::surreal::SurrealDb {
+        store::surreal::SurrealDb::uninitialized()
+    }
+
+    /// A lawyer-tier session the way an authenticated attorney arrives: a
+    /// person row, no DRI view. `person_id` is a random UUID — the doors
+    /// resolve the matter from the path code, never from the session, so a
+    /// session that names nobody the store knows still reaches the
+    /// not-found exits these tests assert.
+    fn attorney_session() -> SessionData {
+        let mut session = SessionData::fresh("attorney-sub", Role::Lawyer);
+        session.person_id = Some(Uuid::now_v7());
+        session
+    }
+
+    /// The read-only client-DRI view: a lawyer session switched into a
+    /// client's eyes, which every mutating door here must refuse.
+    fn dri_view_session() -> SessionData {
+        let mut session = SessionData::fresh("attorney-sub", Role::Lawyer);
+        session.person_id = Some(Uuid::now_v7());
+        session.viewing_as_dri = Some(DriView {
+            actor_sub: "attorney-sub".to_string(),
+            actor_email: Some("attorney@example.com".to_string()),
+            actor_person_id: Some(Uuid::now_v7()),
+            target_name: "Client DRI".to_string(),
+            target_email: "dri@example.com".to_string(),
+        });
+        session
+    }
+
+    fn redirect_location(response: &axum::response::Response) -> String {
+        response
+            .headers()
+            .get(axum::http::header::LOCATION)
+            .expect("the doors answer with a redirect")
+            .to_str()
+            .expect("the redirect target is a valid header value")
+            .to_string()
+    }
+
+    #[test]
+    fn back_to_billing_builds_the_query_in_channel_order() {
+        // No channel: the bare tab path, no dangling separator.
+        assert_eq!(
+            redirect_location(&back_to_billing("ACME", None, None)),
+            "/app/projects/ACME/billing"
+        );
+        // Success alone rides `?flash=`; a refusal alone rides `?error=`.
+        assert_eq!(
+            redirect_location(&back_to_billing("ACME", Some("Time logged."), None)),
+            "/app/projects/ACME/billing?flash=Time%20logged."
+        );
+        assert_eq!(
+            redirect_location(&back_to_billing("ACME", None, Some("Capture the time in whole minutes — for example, 90."))),
+            "/app/projects/ACME/billing?error=Capture%20the%20time%20in%20whole%20minutes%20%E2%80%94%20for%20example,%2090."
+        );
+        // Both channels: flash opens the query, error continues it — an `&`
+        // before the first parameter would break the path outright.
+        assert_eq!(
+            redirect_location(&back_to_billing("ACME", Some("a?b"), Some("c&d"))),
+            "/app/projects/ACME/billing?flash=a%3Fb&error=c%26d"
+        );
+    }
+
+    #[test]
+    fn raise_confirmation_names_the_reference_and_what_it_consumed() {
+        let receipt = crate::project_billing_api::InvoiceReceipt {
+            xero_invoice_id: Some("xero-1".to_string()),
+            stripe_invoice_id: None,
+            stripe_iolta: None,
+            reference: "INV-001".to_string(),
+            currency: "USD".to_string(),
+            total_cents: 12_345,
+            line_items: Vec::new(),
+            consumed_time_entries: 4,
+            consumed_costs: 2,
+            flat_fee: false,
+        };
+        assert_eq!(
+            raise_confirmation(&receipt),
+            "Invoice INV-001 raised in Xero — 4 time entries and 2 expenses billed."
+        );
+    }
+
+    #[test]
+    fn a_flat_fee_invoice_confirms_the_fee_rather_than_itemized_time() {
+        let receipt = crate::project_billing_api::InvoiceReceipt {
+            flat_fee: true,
+            consumed_costs: 3,
+            ..flat_fee_receipt()
+        };
+        assert_eq!(
+            raise_confirmation(&receipt),
+            "Invoice INV-FLAT raised in Xero — the matter's flat fee, with 3 expenses billed alongside it."
+        );
+    }
+
+    fn flat_fee_receipt() -> crate::project_billing_api::InvoiceReceipt {
+        crate::project_billing_api::InvoiceReceipt {
+            xero_invoice_id: None,
+            stripe_invoice_id: None,
+            stripe_iolta: None,
+            reference: "INV-FLAT".to_string(),
+            currency: "USD".to_string(),
+            total_cents: 5_000,
+            line_items: Vec::new(),
+            consumed_time_entries: 9,
+            consumed_costs: 0,
+            flat_fee: true,
+        }
+    }
+
+    #[test]
+    fn stripe_drafts_split_the_confirmation_by_iolta() {
+        // The Stripe branch answers before the reference is ever read: the
+        // draft lives in the law firm's Stripe account, not Xero.
+        let iolta = crate::project_billing_api::InvoiceReceipt {
+            stripe_iolta: Some(true),
+            ..flat_fee_receipt()
+        };
+        assert_eq!(
+            raise_confirmation(&iolta),
+            "The draft is ready for review in the Stripe account for Nevada."
+        );
+        let not_iolta = crate::project_billing_api::InvoiceReceipt {
+            stripe_iolta: Some(false),
+            ..flat_fee_receipt()
+        };
+        assert_eq!(
+            raise_confirmation(&not_iolta),
+            "Stripe draft created for lawyer review. This is not IOLTA billing."
+        );
+    }
+
+    #[test]
+    fn entry_refusals_render_in_the_log_time_form_s_vocabulary() {
+        let rendered = |error| flash_for_entry(&error);
+        assert_eq!(
+            rendered(TimeEntryError::Invalid("minutes")),
+            "Capture the time in whole minutes, more than zero — for example, 90."
+        );
+        assert_eq!(
+            rendered(TimeEntryError::Invalid("performed_on")),
+            "Check the entry fields and submit the form again."
+        );
+        assert_eq!(
+            rendered(TimeEntryError::NotParticipant),
+            "Only a participant on this matter logs time on it."
+        );
+        assert_eq!(
+            rendered(TimeEntryError::Conflict),
+            "That work is already invoiced — it cannot be logged again."
+        );
+        assert_eq!(
+            rendered(TimeEntryError::NotFound),
+            "The time record is gone — review the table and try again."
+        );
+        assert_eq!(
+            rendered(TimeEntryError::Database(sqlx::Error::RowNotFound)),
+            "The time record is unavailable right now — try again shortly."
+        );
+        assert_eq!(
+            rendered(TimeEntryError::Postgres(
+                store::postgres::PostgresError::Connection
+            )),
+            "The time record is unavailable right now — try again shortly."
+        );
+    }
+
+    #[test]
+    fn timer_refusals_render_in_the_timer_widget_s_vocabulary() {
+        let rendered = |error| flash_for_timer(&error);
+        assert_eq!(
+            rendered(TimerError::Conflict),
+            "You already have a timer running — stop or discard it before starting another."
+        );
+        assert_eq!(
+            rendered(TimerError::NotParticipant),
+            "Only a participant on this matter runs a timer on it."
+        );
+        // Not-owner and missing rows answer with the same sentence: from the
+        // widget's point of view there is no timer running either way.
+        assert_eq!(
+            rendered(TimerError::NotOwner),
+            "The timer is no longer running."
+        );
+        assert_eq!(
+            rendered(TimerError::NotFound),
+            "The timer is no longer running."
+        );
+        assert_eq!(
+            rendered(TimerError::Invalid("note")),
+            "Check the timer fields and try again."
+        );
+        // An entry failure underneath a timer capture keeps the entry's own
+        // vocabulary rather than the timer's.
+        assert_eq!(
+            rendered(TimerError::Entry(TimeEntryError::Conflict)),
+            "That work is already invoiced — it cannot be logged again."
+        );
+        assert_eq!(
+            rendered(TimerError::Database(sqlx::Error::RowNotFound)),
+            "The timer record is unavailable right now — try again shortly."
+        );
+        assert_eq!(
+            rendered(TimerError::Postgres(
+                store::postgres::PostgresError::Connection
+            )),
+            "The timer record is unavailable right now — try again shortly."
+        );
+    }
+
+    #[test]
+    fn invoice_refusals_render_in_the_owners_vocabulary() {
+        use crate::project_billing_api::InvoiceGenerationError;
+        let rendered = |error| flash_for_invoice(&error, Uuid::now_v7());
+        assert_eq!(
+            rendered(InvoiceGenerationError::StripeUnavailable),
+            "Stripe billing is unavailable for this Firm and jurisdiction."
+        );
+        assert_eq!(
+            rendered(InvoiceGenerationError::BillingUnavailable),
+            "Invoicing is unavailable right now — try again shortly."
+        );
+        assert_eq!(
+            rendered(InvoiceGenerationError::NothingToInvoice),
+            "There is nothing unbilled to invoice on this matter yet."
+        );
+        assert_eq!(
+            rendered(InvoiceGenerationError::PreviewChanged),
+            "The compose changed since the preview — review it again before raising."
+        );
+        assert_eq!(
+            rendered(InvoiceGenerationError::FlatFeeAlreadyBilled),
+            "The matter's agreed flat fee is already billed — amend the fee for additional work."
+        );
+        // The batch store's flat-fee refusal answers with the same sentence.
+        assert_eq!(
+            rendered(InvoiceGenerationError::Batch(
+                store::billing_batches::BillingBatchError::FlatFeeAlreadyBilled
+            )),
+            "The matter's agreed flat fee is already billed — amend the fee for additional work."
+        );
+        assert_eq!(
+            rendered(InvoiceGenerationError::ReconciliationRequired),
+            "The last invoice attempt needs reconciliation before another raise — ask support to reconcile it."
+        );
+        assert_eq!(
+            rendered(InvoiceGenerationError::InvoiceNotBillable),
+            "The last invoice attempt needs reconciliation before another raise — ask support to reconcile it."
+        );
+        assert_eq!(
+            rendered(InvoiceGenerationError::CurrencyMismatch("EUR".to_string())),
+            "An unbilled expense is in EUR; matter invoices are raised in USD."
+        );
+        assert_eq!(
+            rendered(InvoiceGenerationError::NoBilledParty),
+            "The matter names no client to bill — add the client's participation first."
+        );
+        assert_eq!(
+            rendered(InvoiceGenerationError::FutureDatedCost(
+                NaiveDate::from_ymd_opt(2030, 1, 1).expect("a valid date")
+            )),
+            "An expense is dated 2030-01-01, after today's invoice — resolve its date first."
+        );
+        assert_eq!(
+            rendered(InvoiceGenerationError::Billing(
+                billing::BillingError::Provider("xero unavailable".to_string())
+            )),
+            "Xero refused the invoice — nothing was raised. Try again in a moment; a retry raises the same invoice."
+        );
+        // Everything unlisted — a missing matter row among them — answers
+        // with the record-unavailable sentence, never a variant name.
+        assert_eq!(
+            rendered(InvoiceGenerationError::NoMatter),
+            "The billing record is unavailable right now — try again shortly."
+        );
+    }
+
+    #[tokio::test]
+    async fn the_time_entry_door_refuses_without_a_session() {
+        let response = log_time(
+            State(outage_store()),
+            None,
+            Path("ACME".to_string()),
+            Form(LogTimeForm {
+                description: String::new(),
+                performed_on: String::new(),
+                minutes: String::new(),
+                billable: None,
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn the_time_entry_door_refuses_a_client_dri_view() {
+        let session = dri_view_session();
+        let response = log_time(
+            State(outage_store()),
+            Some(axum::Extension(session)),
+            Path("ACME".to_string()),
+            Form(LogTimeForm {
+                description: String::new(),
+                performed_on: String::new(),
+                minutes: String::new(),
+                billable: None,
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn the_time_entry_door_refuses_a_session_without_a_person_row() {
+        let response = log_time(
+            State(outage_store()),
+            Some(axum::Extension(SessionData::fresh("no-row", Role::Lawyer))),
+            Path("ACME".to_string()),
+            Form(LogTimeForm {
+                description: String::new(),
+                performed_on: String::new(),
+                minutes: String::new(),
+                billable: None,
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn the_time_entry_door_answers_not_found_for_an_unknown_matter_code() {
+        let response = log_time(
+            State(outage_store()),
+            Some(axum::Extension(attorney_session())),
+            Path("NOT-A-MATTER".to_string()),
+            Form(LogTimeForm {
+                description: String::new(),
+                performed_on: String::new(),
+                minutes: String::new(),
+                billable: None,
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn the_timer_doors_refuse_without_a_session() {
+        let store = outage_store();
+        let started = start_timer(
+            State(store.clone()),
+            None,
+            Path("ACME".to_string()),
+            Form(TimerStartForm {
+                note: String::new(),
+            }),
+        )
+        .await;
+        assert_eq!(started.status(), StatusCode::NOT_FOUND);
+        let stopped = stop_timer(
+            State(store.clone()),
+            None,
+            Path("ACME".to_string()),
+            Form(TimerStopForm {
+                description: String::new(),
+                billable: None,
+            }),
+        )
+        .await;
+        assert_eq!(stopped.status(), StatusCode::NOT_FOUND);
+        let discarded = discard_timer(State(store), None, Path("ACME".to_string())).await;
+        assert_eq!(discarded.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn the_timer_doors_refuse_a_client_dri_view() {
+        let store = outage_store();
+        let session = axum::Extension(dri_view_session());
+        let started = start_timer(
+            State(store.clone()),
+            Some(session.clone()),
+            Path("ACME".to_string()),
+            Form(TimerStartForm {
+                note: String::new(),
+            }),
+        )
+        .await;
+        assert_eq!(started.status(), StatusCode::NOT_FOUND);
+        let stopped = stop_timer(
+            State(store.clone()),
+            Some(session.clone()),
+            Path("ACME".to_string()),
+            Form(TimerStopForm {
+                description: String::new(),
+                billable: None,
+            }),
+        )
+        .await;
+        assert_eq!(stopped.status(), StatusCode::NOT_FOUND);
+        let discarded = discard_timer(State(store), Some(session), Path("ACME".to_string())).await;
+        assert_eq!(discarded.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn the_timer_doors_answer_not_found_for_an_unknown_matter_code() {
+        let store = outage_store();
+        let session = axum::Extension(attorney_session());
+        let started = start_timer(
+            State(store.clone()),
+            Some(session.clone()),
+            Path("NOT-A-MATTER".to_string()),
+            Form(TimerStartForm {
+                note: String::new(),
+            }),
+        )
+        .await;
+        assert_eq!(started.status(), StatusCode::NOT_FOUND);
+        let stopped = stop_timer(
+            State(store.clone()),
+            Some(session.clone()),
+            Path("NOT-A-MATTER".to_string()),
+            Form(TimerStopForm {
+                description: String::new(),
+                billable: None,
+            }),
+        )
+        .await;
+        assert_eq!(stopped.status(), StatusCode::NOT_FOUND);
+        let discarded = discard_timer(
+            State(store),
+            Some(session),
+            Path("NOT-A-MATTER".to_string()),
+        )
+        .await;
+        assert_eq!(discarded.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// The admin console's state as `crate::test_support::app_state` builds
+    /// it, over the given store handle — the same shape the admin tests'
+    /// `blog_admin_state` helper assembles, minus the embedded engine.
+    async fn billing_admin_state(surreal: store::surreal::SurrealDb) -> crate::admin::AdminState {
+        let crate::AppState {
+            surreal,
+            workflow_runtime,
+            signature_provider,
+            questionnaire_runtime,
+            storage,
+            assets_storage,
+            forms_registry,
+            email,
+            billing_provider,
+            contract_reviewer,
+            bootstrap_owner_email,
+            on_call_lawyer_email,
+            sessions,
+            attachment_scanner,
+            runtime_kms,
+            ..
+        } = crate::test_support::app_state(surreal).await;
+        crate::admin::AdminState {
+            surreal,
+            workflow_runtime,
+            signature_provider,
+            retainer_intake_questionnaire: workflows::retainer_intake_questionnaire(),
+            questionnaire_runtime,
+            storage,
+            assets_storage,
+            forms_registry,
+            email,
+            billing_provider,
+            contract_reviewer,
+            bootstrap_owner_email,
+            on_call_lawyer_email,
+            bootstrap_company: "Test Firm".to_string(),
+            sessions,
+            secure_cookies: false,
+            attachment_scanner,
+            runtime_kms,
+            twilio_registry: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn the_invoice_door_refuses_without_a_session() {
+        let response = generate_invoice(
+            State(billing_admin_state(outage_store()).await),
+            None,
+            Path("ACME".to_string()),
+            Form(GenerateInvoiceForm {
+                confirm: None,
+                digest: None,
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn the_invoice_door_refuses_a_client_dri_view() {
+        let response = generate_invoice(
+            State(billing_admin_state(outage_store()).await),
+            Some(axum::Extension(dri_view_session())),
+            Path("ACME".to_string()),
+            Form(GenerateInvoiceForm {
+                confirm: None,
+                digest: None,
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn the_invoice_door_answers_not_found_for_an_unknown_matter_code() {
+        let response = generate_invoice(
+            State(billing_admin_state(outage_store()).await),
+            Some(axum::Extension(attorney_session())),
+            Path("NOT-A-MATTER".to_string()),
+            Form(GenerateInvoiceForm {
+                confirm: None,
+                digest: None,
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn an_unconfirmed_invoice_post_opens_the_compose_preview() {
+        // An unknown matter code cannot reach the compose — this posture is
+        // the outage store's not-found, not the preview redirect. The
+        // preview redirect itself needs a resolvable matter; the admission
+        // and copy halves this door shares are pinned above and by the
+        // confirm-step tests in the JSON API's own module.
+        let response = generate_invoice(
+            State(billing_admin_state(outage_store()).await),
+            Some(axum::Extension(attorney_session())),
+            Path("NOT-A-MATTER".to_string()),
+            Form(GenerateInvoiceForm {
+                confirm: None,
+                digest: None,
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+}
+#[cfg(test)]
+mod end_to_end_tests {
     use super::*;
     use crate::session::DriView;
     use axum::http::{header::LOCATION, StatusCode};

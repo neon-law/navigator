@@ -22,7 +22,7 @@ scratch_dir="$(mktemp -d)"
 trap 'rm -rf "${scratch_dir}"' EXIT
 for section in common independent production-only staging-only operator-only \
   postgres-service-only postgres-client-service-only postgres-dbos-service-only \
-  forgejo-service-only forgejo-oidc-service-only; do
+  forgejo-service-only forgejo-oidc-service-only forgejo-runner-service-only; do
   : > "${scratch_dir}/${section}"
 done
 
@@ -42,6 +42,7 @@ while IFS= read -r line; do
     postgres_dbos_service_only:) section="postgres-dbos-service-only" ;;
     forgejo_service_only:) section="forgejo-service-only" ;;
     forgejo_oidc_service_only:) section="forgejo-oidc-service-only" ;;
+    forgejo_runner_service_only:) section="forgejo-runner-service-only" ;;
     [a-z]*:)
       echo "${inventory} has an unknown section: ${line}" >&2
       exit 1
@@ -62,7 +63,8 @@ cat "${scratch_dir}"/common "${scratch_dir}"/independent "${scratch_dir}"/produc
   "${scratch_dir}"/staging-only "${scratch_dir}"/operator-only \
   "${scratch_dir}"/postgres-service-only "${scratch_dir}"/postgres-client-service-only \
   "${scratch_dir}"/postgres-dbos-service-only \
-  "${scratch_dir}"/forgejo-service-only "${scratch_dir}"/forgejo-oidc-service-only | sort > "${listed}"
+  "${scratch_dir}"/forgejo-service-only "${scratch_dir}"/forgejo-oidc-service-only \
+  "${scratch_dir}"/forgejo-runner-service-only | sort > "${listed}"
 duplicated="$(uniq -d "${listed}")"
 if [ -n "${duplicated}" ]; then
   echo "${inventory} lists key(s) in more than one section:" >&2
@@ -70,7 +72,7 @@ if [ -n "${duplicated}" ]; then
   exit 1
 fi
 for section in common independent production-only staging-only postgres-service-only \
-  postgres-client-service-only postgres-dbos-service-only forgejo-service-only forgejo-oidc-service-only; do
+  postgres-client-service-only postgres-dbos-service-only forgejo-service-only forgejo-oidc-service-only forgejo-runner-service-only; do
   sort -u -o "${scratch_dir}/${section}" "${scratch_dir}/${section}"
 done
 
@@ -130,6 +132,7 @@ for row in production staging; do
   comm -12 "${actual}" "${scratch_dir}/postgres-dbos-service-only" >> "${leaked}"
   comm -12 "${actual}" "${scratch_dir}/forgejo-service-only" >> "${leaked}"
   comm -12 "${actual}" "${scratch_dir}/forgejo-oidc-service-only" >> "${leaked}"
+  comm -12 "${actual}" "${scratch_dir}/forgejo-runner-service-only" >> "${leaked}"
   if [ -s "${leaked}" ]; then
     echo "${row} web/workflow secrets.enc.yaml contains service-only key(s); move them to the dedicated service file:" >&2
     cat "${leaked}" >&2
@@ -182,9 +185,9 @@ for row in production staging; do
 
   service_actual="${scratch_dir}/${row}-forgejo-service-actual"
   service_allowed="${scratch_dir}/${row}-forgejo-service-allowed"
-  # The OIDC client secret is optional: allowed, never required.
+  # OIDC and the runner controller are independent opt-ins.
   sort -u "${scratch_dir}/forgejo-service-only" "${scratch_dir}/forgejo-oidc-service-only" \
-    > "${service_allowed}"
+    "${scratch_dir}/forgejo-runner-service-only" > "${service_allowed}"
   service_file="${root}/deployments/${deployment_name}/forgejo-secrets.enc.yaml"
   : > "${service_actual}"
   if [ -f "${service_file}" ]; then
