@@ -10,18 +10,8 @@ The repository is one Cargo workspace. `Cargo.toml` is the authoritative member 
   over it; the binary is the site.
 - `workflows-service`, `archives`, and `billing-workflows` each consume `restate-sdk` directly; `workflows` itself
   carries no `restate-sdk` dependency.
-- `word` owns the Rust loss-aware DOCX protocol and typed model. Its local managed adapter is built from the pinned
-  .NET SDK and official `DocumentFormat.OpenXml` package, then invoked without network access at runtime; the adapter
-  never becomes a second Rust OOXML schema.
+- `word` renders a Markdown notation to `.docx` and reads a Navigator-exported package back into that Markdown.
 - `features` uses its custom Cucumber harness and runs with `cargo test -p features`.
-
-The managed Word adapter tests require the .NET SDK pinned in `word/adapter/global.json`. With that SDK installed, run
-them locally:
-
-```text
-dotnet restore word/adapter/WordAdapter.Tests.csproj --locked-mode
-dotnet test word/adapter/WordAdapter.Tests.csproj --no-restore --configuration Release
-```
 
 ## The browser surface
 
@@ -60,8 +50,7 @@ email docs](email-events-pipeline.md) cover the outbound event pipeline and summ
 
 ## Adding a new crate
 
-A new Cargo member must also enter every affected `images/Containerfile.*` `COPY` list. The `word` member additionally
-ships its managed adapter through the `neon` image's pinned .NET build stage. See
+A new Cargo member must also enter every affected `images/Containerfile.*` `COPY` list. See
 [`durable-workflows.md`](durable-workflows.md) and [`rust-programming.md`](rust-programming.md).
 
 `portal::bootstrap` owns authenticated, protocol, and operational routes; a host supplies public routes as

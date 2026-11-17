@@ -211,7 +211,7 @@ async fn search_file(
     let digest: [u8; 32] = Sha256::digest(&bytes).into();
     let cache_key = (kind.clone(), digest);
     if !cache.contains_key(&cache_key) {
-        cache.insert(cache_key.clone(), extract(path, &bytes).await);
+        cache.insert(cache_key.clone(), extract(path, &bytes));
     }
     let Some(extracted) = cache.get(&cache_key) else {
         return Ok(());
@@ -342,7 +342,7 @@ struct Part {
     page: Option<usize>,
 }
 
-async fn extract(path: &Path, bytes: &[u8]) -> Extracted {
+fn extract(path: &Path, bytes: &[u8]) -> Extracted {
     match extension(path).as_str() {
         "pdf" => {
             // The parser can panic on malformed numeric objects. Keep that failure local
@@ -369,8 +369,8 @@ async fn extract(path: &Path, bytes: &[u8]) -> Extracted {
             }
             None => Extracted::Error("email decode error".into()),
         },
-        "docx" => match word::parse(path.to_string_lossy().as_ref(), bytes).await {
-            Ok(document) => Extracted::Text(document.accepted_view_text()),
+        "docx" => match word::package_text(path.to_string_lossy().as_ref(), bytes) {
+            Ok(text) => Extracted::Text(text),
             Err(error) => Extracted::Error(format!("DOCX decode error: {error}")),
         },
         "json" => match serde_json::from_slice::<serde_json::Value>(bytes) {

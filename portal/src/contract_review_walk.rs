@@ -32,7 +32,6 @@ use axum::extract::{Extension, Multipart, Path as AxumPath, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Redirect, Response};
 use base64::Engine as _;
-use chrono::Utc;
 use tower_cookies::Cookies;
 use uuid::Uuid;
 use workflows::{IntakeArtifact, IntakePayload, MachineKind, StateMachineRuntime};
@@ -71,8 +70,6 @@ pub enum ContractReviewError {
     DocumentIngest(#[from] store::documents::IngestError),
     #[error("decode document bytes: {0}")]
     Base64(#[from] base64::DecodeError),
-    #[error("contract artifact: {0}")]
-    Artifact(String),
     #[error("Word package: {0}")]
     Word(#[from] word::WordError),
     #[error("template: {0}")]
@@ -87,10 +84,6 @@ pub enum ContractReviewError {
     Snapshot(String),
     #[error("serialize intake payload: {0}")]
     Payload(serde_json::Error),
-    #[error("serialize Word anchor manifest: {0}")]
-    Manifest(serde_json::Error),
-    #[error("Notation document: {0}")]
-    NotationDocument(#[from] store::notation_documents::NotationDocumentError),
     #[error("no active playbook on file for this Entity")]
     NoPlaybook,
     #[error("playbook positions malformed: {0}")]
@@ -203,31 +196,14 @@ async fn contract_text_for_review(
     artifact: &ParsedArtifact,
 ) -> Result<String, ContractReviewError> {
     if let ParsedArtifact::File {
-        bytes: _, filename, ..
+        bytes, filename, ..
     } = artifact
     {
         if word::is_docx_filename(filename) {
-            let adapter = word::ManagedAdapter::from_env();
-            return contract_text_for_review_with_adapter(artifact, &adapter).await;
+            return Ok(word::package_text(filename, bytes)?);
         }
     }
     Ok(artifact.contract_text())
-}
-
-async fn contract_text_for_review_with_adapter<A: word::WordAdapter + ?Sized>(
-    artifact: &ParsedArtifact,
-    adapter: &A,
-) -> Result<String, ContractReviewError> {
-    match artifact {
-        ParsedArtifact::File {
-            bytes, filename, ..
-        } if word::is_docx_filename(filename) => {
-            Ok(word::parse_with_adapter(adapter, filename, bytes)
-                .await?
-                .accepted_view_text())
-        }
-        _ => Ok(artifact.contract_text()),
-    }
 }
 
 /// Open the notation, file the contract, run the analysis, and land at
@@ -286,11 +262,6 @@ pub async fn drive_contract_review(
     let filed_artifact =
         stage_contract_artifact(deps.surreal, deps.storage, project_id, filename, &artifact)
             .await?;
-    let original_asset_id = match (&artifact, &filed_artifact) {
-        (IntakeArtifact::File { .. }, IntakeArtifact::Stored { asset_id }) => Some(*asset_id),
-        _ => None,
-    };
-
     // Open the notation at BEGIN, bound to the client Entity.
     let new_notation = store::notations::NewNotation::new(
         template_row.id,
@@ -305,47 +276,6 @@ pub async fn drive_contract_review(
         .await
         .map_err(|error| ContractReviewError::Db(error.to_string()))?
         .id;
-
-    // A DOCX upload owns a governed Notation source before the workflow is
-    // started. A parse/import failure must leave the workflow at BEGIN rather
-    // than advancing a notation whose source could not be understood.
-    if filename
-        .rsplit_once('.')
-        .is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("docx"))
-    {
-        let IntakeArtifact::File { bytes_base64, .. } = &artifact else {
-            return Err(ContractReviewError::Artifact(
-                "DOCX source was not supplied as a file".to_string(),
-            ));
-        };
-        let asset_id = original_asset_id.ok_or_else(|| {
-            ContractReviewError::Artifact("DOCX source was not filed".to_string())
-        })?;
-        let adapter = word::ManagedAdapter::from_env();
-        let bytes = base64::engine::general_purpose::STANDARD.decode(bytes_base64)?;
-        let parsed = word::parse_with_adapter(&adapter, filename, &bytes).await?;
-        let markdown = parsed.notation_markdown();
-        let manifest = parsed
-            .anchor_manifest()
-            .map_err(ContractReviewError::Manifest)?;
-        let recorded_at = Utc::now().to_rfc3339();
-        store::notation_documents::import_root(
-            deps.surreal,
-            deps.storage,
-            store::notation_documents::ImportRoot {
-                project_id,
-                notation_id,
-                original_asset_id: asset_id,
-                markdown: markdown.as_ref().as_bytes(),
-                anchor_manifest: &manifest,
-                parser_version: "word-protocol-1",
-                schema_version: 1,
-                authored_by_person_id: person_id,
-                recorded_at: &recorded_at,
-            },
-        )
-        .await?;
-    }
 
     // Start the workflow and file the contract: `contract_uploaded` lands on
     // `document_intake__inbound_contract`, whose document-intake side effect
@@ -564,9 +494,8 @@ impl ParsedArtifact {
     }
 
     /// The fallback text for non-DOCX captures: a paste directly, or a file
-    /// decoded as UTF-8. DOCX captures are parsed through
-    /// `contract_text_for_review`, which preserves accepted revision semantics
-    /// instead of treating the package as binary text.
+    /// decoded as UTF-8. A `.docx` capture is read by
+    /// `contract_text_for_review`, which keeps visible `w:t` text.
     pub(crate) fn contract_text(&self) -> String {
         match self {
             Self::Text(text) => text.clone(),
@@ -652,65 +581,7 @@ pub(crate) async fn parse_form(mut multipart: Multipart) -> Option<ContractForm>
 mod tests {
     use std::io::Write as _;
 
-    use super::{contract_text_for_review_with_adapter, ContractForm, ParsedArtifact};
-    use word::{
-        Block, DocumentModel, Inline, Paragraph, RevisionKind, RevisionNode, Story, StoryKind,
-        WordAdapter,
-    };
-
-    struct FixtureAdapter;
-
-    #[async_trait::async_trait]
-    impl WordAdapter for FixtureAdapter {
-        async fn parse(
-            &self,
-            _request: word::protocol::AdapterRequest,
-        ) -> Result<word::protocol::AdapterReply, word::AdapterError> {
-            let mut model = DocumentModel::empty();
-            model.stories.push(Story {
-                kind: StoryKind::MainDocument,
-                part_uri: "/word/document.xml".into(),
-                blocks: vec![Block::Paragraph(Paragraph {
-                    anchor: "document:paragraph:1".into(),
-                    style_id: None,
-                    numbering: None,
-                    nodes: vec![
-                        Inline::Text {
-                            text: "kept".into(),
-                            style_id: None,
-                            revision: None,
-                        },
-                        Inline::Revision {
-                            revision: RevisionNode {
-                                kind: RevisionKind::Insertion,
-                                id: Some("1".into()),
-                                anchor: "document:ins".into(),
-                            },
-                            children: vec![Inline::Text {
-                                text: " added".into(),
-                                style_id: None,
-                                revision: None,
-                            }],
-                        },
-                        Inline::Revision {
-                            revision: RevisionNode {
-                                kind: RevisionKind::Deletion,
-                                id: Some("2".into()),
-                                anchor: "document:del".into(),
-                            },
-                            children: vec![Inline::Text {
-                                text: " removed".into(),
-                                style_id: None,
-                                revision: None,
-                            }],
-                        },
-                    ],
-                    revisions: Vec::new(),
-                })],
-            });
-            Ok(word::protocol::AdapterReply::success(model))
-        }
-    }
+    use super::{ContractForm, ParsedArtifact};
 
     #[test]
     fn file_capture_wins_over_text_and_decodes_utf8() {
@@ -759,30 +630,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn docx_review_uses_the_loss_aware_accepted_view() {
-        let artifact = ParsedArtifact::File {
-            bytes: valid_docx_container(),
-            content_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                .into(),
-            filename: "synthetic.docx".into(),
-        };
-        let text = contract_text_for_review_with_adapter(&artifact, &FixtureAdapter)
-            .await
-            .expect("synthetic DOCX parses through the boundary");
-        assert_eq!(text, "kept added\n");
-        assert!(!text.contains("removed"));
-    }
-
-    fn valid_docx_container() -> Vec<u8> {
+    async fn docx_review_reads_visible_word_text() {
+        let document = concat!(
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">"#,
+            "<w:body><w:p><w:r><w:t>kept</w:t></w:r>",
+            r#"<w:ins w:id="1"><w:r><w:t> added</w:t></w:r></w:ins>"#,
+            r#"<w:del w:id="2"><w:r><w:delText> removed</w:delText></w:r></w:del>"#,
+            "</w:p></w:body></w:document>",
+        );
         let mut output = std::io::Cursor::new(Vec::new());
         let mut archive = zip::ZipWriter::new(&mut output);
         let options = zip::write::SimpleFileOptions::default();
         archive.start_file("[Content_Types].xml", options).unwrap();
         archive.write_all(b"<Types/>").unwrap();
         archive.start_file("word/document.xml", options).unwrap();
-        archive.write_all(b"<document/>").unwrap();
+        archive.write_all(document.as_bytes()).unwrap();
         archive.finish().unwrap();
-        output.into_inner()
+        let artifact = ParsedArtifact::File {
+            bytes: output.into_inner(),
+            content_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                .into(),
+            filename: "synthetic.docx".into(),
+        };
+        let text = super::contract_text_for_review(&artifact)
+            .await
+            .expect("a readable package");
+        assert_eq!(text, "kept added");
+        assert!(!text.contains("removed"));
     }
 
     #[tokio::test]
@@ -1172,20 +1046,6 @@ mod tests {
         );
 
         seed_template(&matter.surreal).await;
-        let error = drive_contract_review(
-            &deps,
-            matter.project_id,
-            matter.client_id,
-            "c.docx",
-            "contract body",
-            text(),
-        )
-        .await
-        .unwrap_err();
-        assert!(
-            matches!(&error, ContractReviewError::Artifact(message) if message.contains("not supplied as a file")),
-            "{error}"
-        );
         let error = drive_contract_review(
             &deps,
             matter.project_id,

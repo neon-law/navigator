@@ -51,7 +51,7 @@ private instruments and clearance references outside this repository.
 | Rights | SendGrid generator template provenance | Owner/counsel |
 | Rights | Trademark permissions for each brand mark and QR artwork | Owner/counsel |
 | Notice | Reconcile Cargo notices with the packages and native components in each shipped artifact | Release/counsel |
-| Notice | NuGet license texts for the Word adapter graph | Release/counsel |
+| Notice | Cargo notices for the `word` crate's Markdown and `.docx` renderer | Release/counsel |
 | Notice | Swagger UI 5.17.14 upstream license and NOTICE for CSS, bundle, preset, and favicons | Release |
 | Notice | Tinos web WOFF2 files have no colocated OFL record | Release |
 | Notice | Notices delivered inside the extension package and each image | Release |
@@ -123,7 +123,7 @@ cleared.
 | PostgreSQL, AGE, pgvector, Debian | E7 | Upstream terms declared separately | D | Release/counsel |
 | DBOS test application | E8 | MIT declared for test only | M | Release: verify actual copied or shipped bytes |
 | VS Code extension | E9 | Dual declared | R | Release: include notices in extension package |
-| Word adapter | E10 | No separate license field | R; D | Owner/release: confirm binary and NuGet scope |
+| Word rendering | E10 | Dual declared | R | Markdown renders to `.docx` in the `word` crate |
 
 The root LICENSE offered MIT or Apache-2.0 at the inventory baseline. NOTICE was informational; CONTRIBUTORS.md licensed
 accepted contributions under both options without a separate CLA or copyright assignment. Existing signed agreements
@@ -1590,36 +1590,7 @@ entries. These historical counts do not establish notice sufficiency or current 
 
 ### NuGet inventory
 
-Cargo notices do not inventory the Word adapter's NuGet graph. These lockfile entries establish versions and dependency
-types but do not contain full license instruments. Release/counsel must obtain exact package license texts, copyright,
-native/runtime obligations, and determine which packages ship; test dependencies still need source/package review.
-Evidence Q1 is [WordAdapter.packages.lock.json](../../word/adapter/WordAdapter.packages.lock.json); Q2 is
-[WordAdapter.Tests.packages.lock.json](../../word/adapter/WordAdapter.Tests.packages.lock.json).
-
-| Item | Evidence | Redistribution status | Notice | Unresolved owner or counsel review |
-| --- | --- | --- | --- | --- |
-| DocumentFormat.OpenXml 3.5.1 | Q1 | Unverified | D | Release/counsel |
-| Microsoft.NET.ILLink.Tasks 8.0.31 | Q1 | Unverified | D | Release/counsel |
-| DocumentFormat.OpenXml.Framework 3.5.1 | Q1 | Unverified | D | Release/counsel |
-| System.IO.Packaging 8.0.1 | Q1 | Unverified | D | Release/counsel |
-| Microsoft.NET.Test.Sdk 17.13.0 | Q2 | Unverified | D | Release/counsel |
-| xunit 2.9.3 | Q2 | Unverified | D | Release/counsel |
-| xunit.runner.visualstudio 3.0.2 | Q2 | Unverified | D | Release/counsel |
-| DocumentFormat.OpenXml 3.5.1 | Q2 | Unverified | D | Release/counsel |
-| DocumentFormat.OpenXml.Framework 3.5.1 | Q2 | Unverified | D | Release/counsel |
-| Microsoft.CodeCoverage 17.13.0 | Q2 | Unverified | D | Release/counsel |
-| Microsoft.TestPlatform.ObjectModel 17.13.0 | Q2 | Unverified | D | Release/counsel |
-| Microsoft.TestPlatform.TestHost 17.13.0 | Q2 | Unverified | D | Release/counsel |
-| Newtonsoft.Json 13.0.1 | Q2 | Unverified | D | Release/counsel |
-| System.IO.Packaging 8.0.1 | Q2 | Unverified | D | Release/counsel |
-| System.Reflection.Metadata 1.6.0 | Q2 | Unverified | D | Release/counsel |
-| xunit.abstractions 2.0.3 | Q2 | Unverified | D | Release/counsel |
-| xunit.analyzers 1.18.0 | Q2 | Unverified | D | Release/counsel |
-| xunit.assert 2.9.3 | Q2 | Unverified | D | Release/counsel |
-| xunit.core 2.9.3 | Q2 | Unverified | D | Release/counsel |
-| xunit.extensibility.core 2.9.3 | Q2 | Unverified | D | Release/counsel |
-| xunit.extensibility.execution 2.9.3 | Q2 | Unverified | D | Release/counsel |
-| navigator-word-adapter project | Q2; R | First-party scope asserted | R | Owner/release/counsel |
+Navigator does not ship a .NET package. Markdown notations render to `.docx` in the `word` crate.
 
 ## Individual non-font asset inventory
 
@@ -1753,7 +1724,7 @@ E8: images/postgres/NOTICE
 
 E9: lsp/vscode-ext/package.json
 
-E10: word/adapter/WordAdapter.csproj
+E10: word/Cargo.toml
 
 E11: [archives/Cargo.toml](../../archives/Cargo.toml)
 

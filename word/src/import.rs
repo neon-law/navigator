@@ -708,6 +708,29 @@ impl EditedDocument {
     }
 }
 
+/// Visible text of the main story: each paragraph's `w:t` runs, in order.
+/// Deletions are stored as `w:delText` and do not appear. `None` when the
+/// package has no readable main-story body.
+pub(crate) fn accepted_text(docx: &[u8]) -> Option<String> {
+    let body = extract_body_xml(docx)?;
+    let mut lines = Vec::new();
+    let mut rest = body.as_str();
+    while let Some(position) = rest.find("<w:p") {
+        let element = &rest[position..];
+        if element.starts_with("<w:p>") || element.starts_with("<w:p ") {
+            let end = element.find("</w:p>")? + "</w:p>".len();
+            let text = paragraph_text(&element[..end]);
+            if !text.is_empty() {
+                lines.push(text);
+            }
+            rest = &element[end..];
+        } else {
+            rest = &element["<w:p".len()..];
+        }
+    }
+    Some(lines.join("\n"))
+}
+
 /// The `word/document.xml` part of a package.
 pub(crate) fn extract_body_xml(docx: &[u8]) -> Option<String> {
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(docx)).ok()?;

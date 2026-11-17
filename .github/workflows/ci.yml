@@ -22,7 +22,7 @@ name: ci
 # in `deploy.yml`. UI changes also use the local worktree browser gate before
 # review; the required PR merge gate below remains independent of that workflow.
 #
-# Shell/API coordination jobs, the content gate, and the managed Word adapter
+# Shell/API coordination jobs and the content gate
 # use standard GitHub-hosted `ubuntu-24.04` runners, free for public
 # repositories (four vCPU, 16 GB RAM). The `rust` job alone retains Blacksmith
 # disk capacity: the workspace suite peaks at 142 GB (see below), against the
@@ -159,7 +159,6 @@ jobs:
     timeout-minutes: 5
     outputs:
       rust: ${{ steps.scope.outputs.rust }}
-      word_adapter: ${{ steps.scope.outputs.word_adapter }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -171,7 +170,6 @@ jobs:
           if ! changed="$(git diff --name-only HEAD^ HEAD 2>/dev/null)" || [ -z "${changed}" ]; then
               echo "could not read the PR diff — running the Rust suite anyway"
               echo "rust=true" >> "${GITHUB_OUTPUT}"
-              echo "word_adapter=true" >> "${GITHUB_OUTPUT}"
               exit 0
           fi
           echo "changed files:"
@@ -184,34 +182,6 @@ jobs:
               echo "-> out of scope: no Rust sources in this PR"
               echo "rust=false" >> "${GITHUB_OUTPUT}"
           fi
-          if echo "${changed}" | grep -qE '^(word/|images/Containerfile\.neon$|global\.json$|\.github/workflows/ci\.yml$)'; then
-              echo "-> in scope: running the managed Word adapter tests"
-              echo "word_adapter=true" >> "${GITHUB_OUTPUT}"
-          else
-              echo "-> out of scope: no managed Word adapter sources in this PR"
-              echo "word_adapter=false" >> "${GITHUB_OUTPUT}"
-          fi
-
-  word-adapter:
-    name: test managed Word adapter
-    needs: [changes]
-    if: needs.changes.outputs.word_adapter == 'true'
-    # Standard runner. A .NET restore and test plus one SDK-stage docker build
-    # compile no Rust, so nothing here needs Blacksmith's disk.
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: set up the pinned .NET SDK
-        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
-        with:
-          global-json-file: global.json
-      - name: verify the locked restore in the release SDK image
-        run: docker build --target word-adapter-builder --file images/Containerfile.neon .
-      - name: restore the managed Word adapter tests
-        run: dotnet restore word/adapter/WordAdapter.Tests.csproj --locked-mode
-      - name: test the managed Word adapter
-        run: dotnet test word/adapter/WordAdapter.Tests.csproj --no-restore --configuration Release
 
   # Always run. A locale or Markdown edit still has to pass `navigator project
   # gate`; that is the cheap gate that lets the rust job stay skipped.
@@ -1101,7 +1071,7 @@ jobs:
   # is not a statement about whether the code is good.
   ci:
     name: ci
-    needs: [changes, gate, rust, clippy, word-adapter]
+    needs: [changes, gate, rust, clippy]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -1112,13 +1082,11 @@ jobs:
           GATE_RESULT: ${{ needs.gate.result }}
           RUST_RESULT: ${{ needs.rust.result }}
           CLIPPY_RESULT: ${{ needs.clippy.result }}
-          WORD_ADAPTER_RESULT: ${{ needs.word-adapter.result }}
         run: |
           set -euo pipefail
           echo "classify the pull request: ${CHANGES_RESULT}"
           echo "gate content: ${GATE_RESULT}"
           echo "cargo test (workspace): ${RUST_RESULT}"
-          echo "test managed Word adapter: ${WORD_ADAPTER_RESULT}"
           if [ "${CHANGES_RESULT}" != "success" ]; then
               echo "::error::the merge gate is red — classify the pull request reported ${CHANGES_RESULT}"
               exit 1
@@ -1134,9 +1102,5 @@ jobs:
           echo "cargo clippy: ${CLIPPY_RESULT}"
           if [ "${CLIPPY_RESULT}" != "success" ] && [ "${CLIPPY_RESULT}" != "skipped" ]; then
               echo "::error::the merge gate is red — cargo clippy reported ${CLIPPY_RESULT}"
-              exit 1
-          fi
-          if [ "${WORD_ADAPTER_RESULT}" != "success" ] && [ "${WORD_ADAPTER_RESULT}" != "skipped" ]; then
-              echo "::error::the merge gate is red — test managed Word adapter reported ${WORD_ADAPTER_RESULT}"
               exit 1
           fi

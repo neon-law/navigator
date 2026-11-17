@@ -38,7 +38,6 @@ use store::playbooks::{self, Playbook, SEVERITY_HIGH, SEVERITY_LOW, SEVERITY_MED
 use workflows::{DocumentPayload, MachineKind, StateMachineRuntime};
 
 use crate::admin::AdminState;
-use crate::contract_review_walk::INBOUND_CONTRACT_KIND;
 use crate::session::SessionData;
 
 const FINDING_ACCEPTED: &str = "finding_accepted";
@@ -745,7 +744,6 @@ async fn deliver_memo(
     findings: &[Finding],
 ) -> anyhow::Result<()> {
     let notation_id = loaded.notation.id;
-    export_and_verify_review_document(surreal, storage, loaded).await?;
     let risk_summary = loaded.review.risk_summary.clone().unwrap_or_default();
     let accepted: Vec<&Finding> = findings.iter().filter(|f| f.accepted).collect();
     let typst_source = assemble_memo_typst(&MemoInput {
@@ -799,126 +797,6 @@ async fn deliver_memo(
     .await?;
     sync_notation_state(surreal, notation_id, s.as_str()).await?;
     Ok(())
-}
-
-/// Reapply the governed Notation edit projection to the immutable Word
-/// baseline, then independently validate the resulting package before filing
-/// it as internal attorney work product. The managed exporter refuses a
-/// missing or ambiguous embedded anchor; it never falls back to text matching.
-async fn export_and_verify_review_document(
-    surreal: &store::surreal::SurrealDb,
-    storage: &std::sync::Arc<dyn cloud::StorageService>,
-    loaded: &Loaded,
-) -> anyhow::Result<()> {
-    let Some(document) = store::notation_documents::find_document(
-        surreal,
-        loaded.notation.project_id,
-        loaded.notation.id,
-    )
-    .await?
-    else {
-        return Ok(());
-    };
-    let Some(current) = store::notation_documents::current_version(
-        surreal,
-        loaded.notation.project_id,
-        loaded.notation.id,
-    )
-    .await?
-    else {
-        return Ok(());
-    };
-    let original = store::assets::fetch(surreal, storage, document.original_asset_id).await?;
-    let adapter = word::ManagedAdapter::from_env();
-    let parsed = word::parse_with_adapter(&adapter, "source.docx", &original).await?;
-    let governed = store::notation_documents::markdown_of(surreal, storage, &current).await?;
-    let edited = word::CanonicalDocument::from_markdown(
-        &word::TrustedNotationMarkdown::from_governed_store(governed),
-    );
-    let changes = changed_blocks(&edited, &parsed.canonical_outline());
-    let exported = word::export_with_adapter(&adapter, "reviewed.docx", &original, changes).await?;
-    word::verify_with_adapter(&adapter, "reviewed.docx", &exported).await?;
-    let exported_document = word::parse_with_adapter(&adapter, "reviewed.docx", &exported).await?;
-    word::verify_outline_preserved(&parsed, &exported_document)?;
-    store::documents::ingest_bytes_exactly_once(
-        surreal,
-        storage,
-        &store::documents::IngestArgs {
-            project_id: loaded.notation.project_id,
-            source: store::documents::source::GENERATED,
-            filename: "reviewed-contract.docx",
-            kind: INBOUND_CONTRACT_KIND,
-            content_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            description: Some("Attorney-reviewed Word contract"),
-            secondary_storage_key: None,
-            visibility: store::documents::visibility::INTERNAL,
-        },
-        &exported,
-    )
-    .await?;
-    Ok(())
-}
-
-fn changed_blocks(
-    edited: &word::CanonicalDocument,
-    original: &word::CanonicalDocument,
-) -> Vec<word::ExportChange> {
-    let mut original_by_anchor = std::collections::BTreeMap::new();
-    collect_block_text(&original.stories, &mut original_by_anchor);
-    let mut changes = Vec::new();
-    collect_changes(&edited.stories, &original_by_anchor, &mut changes);
-    changes
-}
-
-fn collect_block_text(
-    stories: &[word::CanonicalStory],
-    output: &mut std::collections::BTreeMap<String, (String, bool)>,
-) {
-    for story in stories {
-        collect_block_texts(&story.blocks, output);
-    }
-}
-
-fn collect_block_texts(
-    blocks: &[word::CanonicalBlock],
-    output: &mut std::collections::BTreeMap<String, (String, bool)>,
-) {
-    for block in blocks {
-        output.insert(
-            block.anchor.clone(),
-            (block.text.clone(), block.is_editable()),
-        );
-        collect_block_texts(&block.children, output);
-    }
-}
-
-fn collect_changes(
-    stories: &[word::CanonicalStory],
-    original: &std::collections::BTreeMap<String, (String, bool)>,
-    output: &mut Vec<word::ExportChange>,
-) {
-    for story in stories {
-        collect_changes_from_blocks(&story.blocks, original, output);
-    }
-}
-
-fn collect_changes_from_blocks(
-    blocks: &[word::CanonicalBlock],
-    original: &std::collections::BTreeMap<String, (String, bool)>,
-    output: &mut Vec<word::ExportChange>,
-) {
-    for block in blocks {
-        if let Some((old_text, editable)) = original.get(&block.anchor) {
-            if *editable && block.is_editable() && old_text != &block.text {
-                output.push(word::ExportChange {
-                    anchor: block.anchor.clone(),
-                    replacement_text: block.text.clone(),
-                    author: "Neon Law attorney".to_string(),
-                });
-            }
-        }
-        collect_changes_from_blocks(&block.children, original, output);
-    }
 }
 
 /// What the memo is assembled from.
@@ -1258,20 +1136,6 @@ mod tests {
         assert!(!typ.contains("Suggested redline:"));
         assert!(typ.contains("Attorney note:"));
         assert!(typ.contains("Client accepts renewal."));
-    }
-
-    #[test]
-    fn changed_blocks_reports_only_edited_editable_blocks() {
-        let original = clause_document();
-        assert!(changed_blocks(&original, &original).is_empty());
-        let edited = original
-            .with_block_text("a1", "The fee is 200 dollars.")
-            .expect("paragraph a1 is editable");
-        let changes = changed_blocks(&edited, &original);
-        assert_eq!(changes.len(), 1);
-        assert_eq!(changes[0].anchor, "a1");
-        assert_eq!(changes[0].replacement_text, "The fee is 200 dollars.");
-        assert_eq!(changes[0].author, "Neon Law attorney");
     }
 
     // --- review commands against an embedded store -------------------------
