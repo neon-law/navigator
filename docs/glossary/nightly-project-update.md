@@ -81,13 +81,13 @@ reported in the notice. Canvas failure does not suppress the notice. Repository 
 journaled step; its result carries counts only. Never read or write the customer channel.
 
 `repository` — create or adopt the private repository and record its URL. Read `navigator.yaml` `version:` against the
-running Navigator release. On GitHub a stale pin is only reported. On Forgejo (`NAVIGATOR_FORGE_BACKEND=forgejo`) the
-tag uses the Project's own Firm client. Once the repository has a head commit, it reconciles the [Repository
-Governance](repository-governance.md) every night. For a stale pin, it opens one pull request per release on
-`navigator/update-<release>`, rewriting only `version:`, with squash auto-merge waiting for the gate. A re-run reuses
-the open pull request, and a closed one is not reopened. Nothing is pushed to `main`. The report counts update pull
-requests opened, awaiting merge, and declined, and the repositories whose governance was repaired. Participation is
-never copied onto the forge.
+running Navigator release. The recorded URL selects the forge, with the deployment default used before a URL is
+recorded. On GitHub a stale pin is only reported. On Forgejo the tag uses the Project's own Firm client. Once the
+repository has a head commit, it reconciles the [Repository Governance](repository-governance.md) every night. For a
+stale pin, it opens one pull request per release on `navigator/update-<release>`, rewriting only `version:`, with squash
+auto-merge waiting for the gate. A re-run reuses the open pull request, and a closed one is not reopened. Nothing is
+pushed to `main`. The report counts update pull requests opened, awaiting merge, and declined, and the repositories
+whose governance was repaired. Participation is never copied onto the forge.
 
 `calendar` — read stored [Deadlines](deadline.md), keep Project-set `internal` dates, source the applicable court rules
 (private Notion page, then approved research MCPs), and write cited Deadline rows. The summary quotes stored `due_on`

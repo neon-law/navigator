@@ -4,8 +4,8 @@
 //! copied onto the forge. A closed or archived Project is never given a
 //! repository, and a deployment with no forge skips the tag.
 //!
-//! On Forgejo (`NAVIGATOR_FORGE_BACKEND=forgejo`) the tag works through the
-//! Project's own Firm client and, once the repository has a head commit, also
+//! On Forgejo the tag works through the Project's own Firm client and, once
+//! the repository has a head commit, also
 //! keeps it governed and current: it reconciles the repository governance
 //! (squash merge only, `main` protected, the `navigator project gate` check,
 //! signed commits, no administrator exemption) and, for a stale pin, proposes
@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use cloud::forge::ForgeService;
 use cloud::forgejo_governance::{FileUpdate, GovernedForge, UpdateProposal};
+use cloud::ForgeBackend;
 use restate_sdk::prelude::*;
 use rules::project_manifest::{
     pin_status, pinned_version, with_pinned_version, PinStatus, FILE as MANIFEST,
@@ -67,6 +68,46 @@ pub enum RepositoryForge {
     /// Forgejo: each Project's own Firm client, which also governs the
     /// repository and proposes the version update.
     Forgejo(Arc<dyn FirmForges>),
+    /// Route recorded repositories by origin. The deployment default is
+    /// used only when a Project has no recorded repository.
+    ByProject {
+        default: ForgeBackend,
+        github: Option<Arc<dyn ForgeService>>,
+        forgejo: Arc<dyn FirmForges>,
+        forgejo_origin: Option<url::Origin>,
+    },
+}
+
+impl RepositoryForge {
+    pub(super) fn for_repository(&self, repository_url: Option<&str>) -> Self {
+        let Self::ByProject {
+            default,
+            github,
+            forgejo,
+            forgejo_origin,
+        } = self
+        else {
+            return self.clone();
+        };
+        let backend = match repository_url {
+            None => *default,
+            Some(recorded) => match url::Url::parse(recorded) {
+                Ok(url) if forgejo_origin.as_ref() == Some(&url.origin()) => ForgeBackend::Forgejo,
+                Ok(url) if url.origin().ascii_serialization() == "https://github.com" => {
+                    ForgeBackend::GitHub
+                }
+                _ => return Self::None,
+            },
+        };
+        match backend {
+            ForgeBackend::Forgejo => Self::Forgejo(Arc::clone(forgejo)),
+            ForgeBackend::GitHub => github.clone().map_or(Self::None, Self::GitHub),
+        }
+    }
+}
+
+pub(super) fn matches_recorded_repository(found: &str, recorded: &str) -> bool {
+    found.trim_end_matches('/') == recorded.trim_end_matches('/')
 }
 
 /// Resolves the Forgejo client confined to one Project's Firm.
@@ -190,15 +231,29 @@ pub async fn reconcile_repository(
     else {
         return Ok(RepositoryOutcome::default());
     };
-    let governed = match forge {
+    let selected = forge.for_repository(project.repository_url.as_deref());
+    let governed = match &selected {
         RepositoryForge::Forgejo(firms) => Some(firms.for_project(surreal, project_id).await?),
-        RepositoryForge::GitHub(_) | RepositoryForge::None => None,
+        _ => None,
     };
-    let forge: &dyn ForgeService = match (forge, governed.as_deref()) {
+    let forge: &dyn ForgeService = match (&selected, governed.as_deref()) {
         (_, Some(governed)) => governed,
         (RepositoryForge::GitHub(forge), None) => forge.as_ref(),
         _ => return Ok(RepositoryOutcome::default()),
     };
+    if let Some(recorded) = project.repository_url.as_deref() {
+        // The origin selects a client. Verify the full URL before using that
+        // client's namespace for reads or governance changes.
+        let repository = forge.find_repository(&project.code).await.map_err(|_| {
+            HandlerError::from(anyhow::anyhow!("Recorded repository lookup failed"))
+        })?;
+        if !repository.is_some_and(|repo| matches_recorded_repository(&repo.url, recorded)) {
+            return Err(TerminalError::new(
+                "Configured forge did not verify the recorded repository",
+            )
+            .into());
+        }
+    }
     let surfaces = store::project_surfaces::reconcile(
         surreal,
         project_id,
@@ -322,6 +377,28 @@ pub(crate) mod tests {
 
     pub(crate) fn forgejo(forge: &FakeForge) -> RepositoryForge {
         RepositoryForge::Forgejo(Arc::new(FakeFirms(forge.clone())))
+    }
+
+    pub(crate) fn mixed_forges(github: &FakeForge, forgejo: &FakeForge) -> RepositoryForge {
+        RepositoryForge::ByProject {
+            default: ForgeBackend::GitHub,
+            github: Some(Arc::new(github.clone())),
+            forgejo: Arc::new(FakeFirms(forgejo.clone())),
+            forgejo_origin: Some(url::Url::parse("https://forge.example/").unwrap().origin()),
+        }
+    }
+
+    #[test]
+    fn a_recorded_origin_selects_only_its_own_provider() {
+        let forges = mixed_forges(&FakeForge::new(), &FakeForge::new());
+        assert!(matches!(
+            forges.for_repository(Some("https://github.com/firm/project")),
+            RepositoryForge::GitHub(_)
+        ));
+        assert!(matches!(
+            forges.for_repository(Some("https://forge.example.attacker.test/firm/project")),
+            RepositoryForge::None
+        ));
     }
 
     const STALE: &str =
@@ -452,6 +529,12 @@ pub(crate) mod tests {
         let surreal = mem_surreal().await;
         let project = open_project(&surreal, "sample-forgejo-drift").await;
         let forge = FakeForge::new();
+        let recorded = forge.ensure_repository(&project.code).await.unwrap();
+        store::projects::set_repository_url(&surreal, project.id, Some(&recorded.url))
+            .await
+            .unwrap()
+            .unwrap();
+        let forges = mixed_forges(&FakeForge::new(), &forge);
         forge.set_file(&project.code, "navigator.yaml", "version: 26.10.5\n");
         forge.set_head_commit_sha(&project.code, "synthetic-head");
         forge.set_governance_drift(
@@ -459,17 +542,41 @@ pub(crate) mod tests {
             &["main.enable_push", "repository.allow_merge_commits"],
         );
 
-        let outcome = reconcile_repository(&surreal, &forgejo(&forge), project.id, "26.10.5")
+        let outcome = reconcile_repository(&surreal, &forges, project.id, "26.10.5")
             .await
             .unwrap();
         assert_eq!(outcome.governance_repaired, 2);
         assert_eq!(outcome.pin, Some(PinStatus::Current));
         assert_eq!(outcome.update, None, "a current pin proposes nothing");
-        let rerun = reconcile_repository(&surreal, &forgejo(&forge), project.id, "26.10.5")
+        let rerun = reconcile_repository(&surreal, &forges, project.id, "26.10.5")
             .await
             .unwrap();
         assert_eq!(rerun.governance_repaired, 0);
         assert_eq!(forge.governance_reconciles(), 2, "reconciled every run");
+    }
+
+    #[tokio::test]
+    async fn a_recorded_forgejo_repository_in_another_namespace_is_never_governed() {
+        let surreal = mem_surreal().await;
+        let project = open_project(&surreal, "sample-foreign-repo").await;
+        let forge = FakeForge::new();
+        forge.ensure_repository(&project.code).await.unwrap();
+        forge.set_head_commit_sha(&project.code, "synthetic-head");
+        store::projects::set_repository_url(
+            &surreal,
+            project.id,
+            Some("https://forge.example/another-firm/sample-foreign-repo"),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let forges = mixed_forges(&FakeForge::new(), &forge);
+        assert!(
+            reconcile_repository(&surreal, &forges, project.id, "26.10.5")
+                .await
+                .is_err()
+        );
+        assert_eq!(forge.governance_reconciles(), 0);
     }
 
     #[tokio::test]
