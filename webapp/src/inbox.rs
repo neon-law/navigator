@@ -1072,6 +1072,13 @@ pub async fn inbox_conversation(conversation_id: String) -> Result<InboxThreadPa
 }
 
 #[cfg(feature = "server")]
+fn contact_href(role: ViewerRole, contact: Option<&store::inbox::ContactLink>) -> Option<String> {
+    contact
+        .filter(|_| role.is_admin_tier())
+        .map(|contact| format!("{}/{}", crate::person_show::DETAIL_PATH, contact.person_id))
+}
+
+#[cfg(feature = "server")]
 async fn firm_thread_page(conversation_id: uuid::Uuid) -> Result<InboxThreadPage, ServerFnError> {
     let role = crate::admin_listing::require_firm_person().await?;
     let surreal = surreal().await;
@@ -1110,11 +1117,7 @@ async fn firm_thread_page(conversation_id: uuid::Uuid) -> Result<InboxThreadPage
             },
             contact_label,
         ),
-        contact_href: detail
-            .contact
-            .as_ref()
-            .filter(|_| role.is_admin_tier())
-            .map(|contact| format!("{}/{}", crate::person_show::DETAIL_PATH, contact.person_id)),
+        contact_href: contact_href(role, detail.contact.as_ref()),
         interaction_type: detail.conversation.interaction_type.clone(),
         provider_post_id: detail.conversation.provider_post_id.clone(),
         provider_thread_ref: detail.conversation.provider_thread_ref.clone(),
@@ -3122,14 +3125,23 @@ mod tests {
         assert!(html.contains("Link phone to contact"), "{html}");
         assert!(html.contains("/app/inbox/c1/contact"), "{html}");
         assert!(html.contains("name=\"email\""), "{html}");
-        let pane = dioxus_ssr::render_element(inbox_pane_body(&page, "/app/inbox/c1"));
-        assert!(pane.contains("Link phone to contact"), "{pane}");
+        let reading_html = dioxus_ssr::render_element(inbox_pane_body(&page, "/app/inbox/c1"));
+        assert!(
+            reading_html.contains("Link phone to contact"),
+            "{reading_html}"
+        );
 
         page.link_phone_action = None;
         page.contact_href = Some("/app/admin/people/p1".into());
-        let pane = dioxus_ssr::render_element(inbox_pane_body(&page, "/app/inbox/c1"));
-        assert!(pane.contains(r#"href="/app/admin/people/p1""#), "{pane}");
-        assert!(!pane.contains("Link phone to contact"), "{pane}");
+        let reading_html = dioxus_ssr::render_element(inbox_pane_body(&page, "/app/inbox/c1"));
+        assert!(
+            reading_html.contains(r#"href="/app/admin/people/p1""#),
+            "{reading_html}"
+        );
+        assert!(
+            !reading_html.contains("Link phone to contact"),
+            "{reading_html}"
+        );
         assert!(!thread(&page).contains("Link phone to contact"));
     }
 
