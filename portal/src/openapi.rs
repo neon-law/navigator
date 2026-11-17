@@ -2778,9 +2778,9 @@ fn canonical_document(base: &str) -> Value {
         "/app/api/projects/{id}/invoices": {
           "post": {
             "summary": "Generate the matter's invoice from unbilled work",
-            "description": "Composes the matter's unbilled billable time entries at their snapshotted rates and its unbilled confirmed Project costs into one invoice raised through the billing provider seam (Xero is the books), then mirrors it locally and marks the consumed entries and costs invoiced under the Xero id. When the matter carries an agreed flat fee, its remaining unbilled amount is one line covering the entries instead. Each persisted billing batch uses its own idempotency key and reserves its work before invoice creation. Retries resume the frozen batch and any saved provider invoice. Xero retains idempotency keys for six minutes. Creates stop four minutes after the persisted first attempt, with a 60-second request budget; expired uncertain attempts require manual reconciliation. A provider refusal leaves work reserved for retry, with no invoice mirror. Authorization: lawyer tier and a participation row; otherwise 404.",
+            "description": "Composes the matter's unbilled billable time entries at their snapshotted rates and its unbilled confirmed Project costs into one invoice. Xero invoices are mirrored and mark their work invoiced. Stripe creates an unsent draft on the Firm's configured account and keeps work reserved for reconciliation. When the matter carries an agreed flat fee, its remaining unbilled amount is one line covering the entries instead. Each persisted billing batch uses its own idempotency key and reserves its work before invoice creation. Retries resume the frozen batch and any saved provider invoice. Xero retains idempotency keys for six minutes. Creates stop four minutes after the persisted first attempt, with a 60-second request budget; expired uncertain attempts require manual reconciliation. A provider refusal leaves work reserved for retry, with no invoice mirror. Authorization: lawyer tier and a participation row; otherwise 404.",
             "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }],
-            "responses": { "200": { "description": "The raised invoice and the work consumed under it", "content": { "application/json": { "schema": { "type": "object" } } } }, "401": { "description": "Authenticated session required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "403": { "description": "Lawyer tier required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "404": { "description": "No such Project, or the caller does not participate", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "409": { "description": "Nothing is unbilled on the matter, or unbilled work moved under a racing invoice" }, "422": { "description": "The matter names no client to bill, or an unbilled cost is in another currency" }, "502": { "description": "The billing provider refused or is unreachable; nothing was marked" }, "503": { "description": "PostgreSQL is unavailable" } }
+            "responses": { "200": { "description": "The provider invoice receipt, including work consumed for a raised Xero invoice", "content": { "application/json": { "schema": { "type": "object" } } } }, "401": { "description": "Authenticated session required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "403": { "description": "Lawyer tier required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "404": { "description": "No such Project, or the caller does not participate", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }, "409": { "description": "Nothing is unbilled on the matter, or unbilled work moved under a racing invoice" }, "422": { "description": "The matter names no client to bill, or an unbilled cost is in another currency" }, "502": { "description": "The billing provider refused or is unreachable; nothing was marked" }, "503": { "description": "PostgreSQL is unavailable" } }
           }
         },
         "/app/api/projects/{id}/tasks": {
@@ -3229,6 +3229,24 @@ fn canonical_document(base: &str) -> Value {
               "200": { "description": "The stored Cap Table Holdings", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } } },
               "401": { "description": "No authenticated session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
               "404": { "description": "No such Project, or the caller does not participate", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }
+            }
+          }
+        },
+        "/app/api/projects/{id}/jurisdiction": {
+          "put": {
+            "summary": "Sync the Project's governing jurisdiction",
+            "description": "Project the repository's navigator.yaml project.jurisdiction code into Navigator. Requires firm-side Project participation.",
+            "parameters": [
+              { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+            ],
+            "requestBody": {
+              "required": true,
+              "content": { "application/json": { "schema": { "type": "object", "required": ["code"], "properties": { "code": { "type": "string" } } } } }
+            },
+            "responses": {
+              "204": { "description": "Jurisdiction synced" },
+              "401": { "description": "No authenticated session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "404": { "description": "No such Project or firm-side participation" }
             }
           }
         },

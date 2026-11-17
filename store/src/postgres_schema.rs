@@ -321,6 +321,15 @@ pub fn parse_schema(sql: &str) -> Result<BTreeMap<String, Table>, Error> {
                 }
                 continue;
             }
+            if let [name, "ALTER", "COLUMN", column, "DROP", "NOT", "NULL"] = words.as_slice() {
+                if !tables
+                    .get(*name)
+                    .is_some_and(|table| table.columns.contains_key(*column))
+                {
+                    return Err(Error::UnsupportedSql(line.to_string()));
+                }
+                continue;
+            }
             if let [name, "ALTER", "COLUMN", column, "TYPE", sql_type] = words.as_slice() {
                 let current = tables
                     .get_mut(*name)
@@ -1635,6 +1644,10 @@ mod tests {
             (
                 "20261117000000_create_docusign_completion.sql",
                 include_str!("../postgres/migrations/20261117000000_create_docusign_completion.sql"),
+            ),
+            (
+                "20261117000100_add_stripe_draft_to_billing_batch.sql",
+                include_str!("../postgres/migrations/20261117000100_add_stripe_draft_to_billing_batch.sql"),
             ),
         ])
         .expect("timestamped migration assembles");

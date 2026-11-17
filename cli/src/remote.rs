@@ -1645,6 +1645,23 @@ impl DocumentClient {
         serde_json::from_str(&text).context("parse service response")
     }
 
+    /// Project the repository's governing jurisdiction into Navigator.
+    pub async fn put_jurisdiction(&self, code: &str) -> Result<()> {
+        let url = format!(
+            "{}/app/api/projects/{}/jurisdiction",
+            self.base, self.project_id
+        );
+        self.client
+            .put(url)
+            .bearer_auth(&self.token)
+            .json(&serde_json::json!({ "code": code }))
+            .send()
+            .await?
+            .error_for_status()
+            .context("sync Project jurisdiction")?;
+        Ok(())
+    }
+
     /// `PUT /app/api/projects/{id}/pages` — replace the Project's stored
     /// Matter Pages with `pages`. Returns how many the server stored.
     pub async fn put_pages(&self, pages: &[rules::pages::PageEntry]) -> Result<usize> {

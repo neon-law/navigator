@@ -867,8 +867,8 @@ fn assert_frozen_debtor_request(
         "the same key carries the exact frozen request"
     );
     assert_eq!(
-        requests[0].contact_id.as_ref().unwrap().0,
-        batch.xero_contact_id
+        requests[0].contact_id.as_ref().map(|id| id.0.as_str()),
+        batch.xero_contact_id.as_deref()
     );
     assert_eq!(
         requests[0].issued_date,
@@ -1373,6 +1373,46 @@ async fn run_noop() {
         time_entry_status(&fixture.pg, unresolved.id).await,
         "unbilled"
     );
+    assert!(fixture.provider.create_keys().is_empty());
+    assert!(pending_batch(&fixture.pg, fixture.project_id)
+        .await
+        .is_none());
+    assert_nevada_cannot_fall_back_to_xero(&fixture, unresolved.id).await;
+}
+
+async fn assert_nevada_cannot_fall_back_to_xero(fixture: &Fixture, entry_id: Uuid) {
+    store::jurisdictions::find_or_create(
+        &fixture.surreal,
+        &store::jurisdictions::NewJurisdiction::new("Nevada", "NV", "state"),
+    )
+    .await
+    .unwrap();
+    let response = fixture
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(format!(
+                    "/app/api/projects/{}/jurisdiction",
+                    fixture.project_id
+                ))
+                .header(header::CONTENT_TYPE, "application/json")
+                .extension(fixture.lawyer.clone())
+                .body(Body::from(r#"{"code":"NV"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let response = generate(&fixture.app, fixture).await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        body_value(response).await["reason"],
+        "stripe_credential_missing"
+    );
+    assert_eq!(time_entry_status(&fixture.pg, entry_id).await, "unbilled");
     assert!(fixture.provider.create_keys().is_empty());
     assert!(pending_batch(&fixture.pg, fixture.project_id)
         .await

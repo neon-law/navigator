@@ -88,7 +88,7 @@ fn request_for_batch(
     line_items: &[InvoiceLine],
 ) -> InvoiceRequest {
     InvoiceRequest {
-        contact_id: Some(billing::ContactId(batch.xero_contact_id.clone())),
+        contact_id: batch.xero_contact_id.clone().map(billing::ContactId),
         contact_name: batch.contact_name.clone(),
         contact_email: batch.contact_email.clone(),
         reference: batch.reference.clone(),
@@ -202,7 +202,12 @@ async fn billed_party(
 /// that were consumed under it, and the Xero id every local flip carries.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct InvoiceReceipt {
-    pub xero_invoice_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub xero_invoice_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stripe_invoice_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stripe_iolta: Option<bool>,
     pub reference: String,
     pub currency: String,
     pub total_cents: i64,
@@ -220,6 +225,8 @@ pub(crate) struct InvoiceReceipt {
 pub(crate) enum InvoiceGenerationError {
     #[error("invoice generation is unavailable without a billing provider")]
     BillingUnavailable,
+    #[error("the Firm has no usable Stripe billing credential for this route")]
+    StripeUnavailable,
     #[error("nothing is unbilled on this matter")]
     NothingToInvoice,
     #[error("an unbilled cost is in {0}; a matter invoice bills in USD")]
@@ -274,6 +281,8 @@ pub(crate) enum InvoiceGenerationError {
 /// batch and the retry resumes it — the provider call is keyed on the batch
 /// id within a bounded retry window; older uncertain attempts require
 /// reconciliation.
+// The shared command keeps provider selection, reservation, and retry ordering together.
+#[allow(clippy::too_many_lines)]
 pub(crate) async fn generate_invoice(
     surreal: &store::surreal::SurrealDb,
     pg: &store::postgres::PostgresDb,
@@ -283,9 +292,6 @@ pub(crate) async fn generate_invoice(
     now: DateTime<Utc>,
     expected_preview_digest: Option<&str>,
 ) -> Result<InvoiceReceipt, InvoiceGenerationError> {
-    if !provider.invoices_available() {
-        return Err(InvoiceGenerationError::BillingUnavailable);
-    }
     let project = projects::find_by_id(surreal, project_id)
         .await?
         .ok_or(InvoiceGenerationError::NoMatter)?;
@@ -295,8 +301,51 @@ pub(crate) async fn generate_invoice(
     // retry resumes that exact batch instead of recomposing a different one —
     // new work logged meanwhile composes the NEXT batch, it never slips into
     // this one.
-    if let Some(batch) = billing_batches::pending_for_project(pg, project_id).await? {
-        return raise_batch(surreal, pg, provider, project_id, &batch, actor_id).await;
+    let pending = billing_batches::pending_for_project(pg, project_id).await?;
+    if let Some(batch) = pending
+        .as_ref()
+        .filter(|batch| batch.stripe_account_id.is_none())
+    {
+        if !provider.invoices_available() {
+            return Err(InvoiceGenerationError::BillingUnavailable);
+        }
+        return raise_batch(surreal, pg, provider, project_id, batch, actor_id).await;
+    }
+    let stripe_iolta = if let Some(batch) = &pending {
+        Some(batch.stripe_iolta)
+    } else {
+        store::firm_secrets::stripe_kind_for_project(surreal, &project)
+            .await
+            .map_err(|_| InvoiceGenerationError::StripeUnavailable)?
+            .map(|kind| kind == store::firm_secrets::IntegrationSecretKind::StripeNevadaAppKey)
+    };
+    let stripe_key = match stripe_iolta {
+        Some(iolta) => stripe_credential(surreal, project.firm_id, iolta).await?,
+        None => None,
+    };
+    let stripe = stripe_key
+        .as_ref()
+        .map(|key| {
+            use store::config::{sample_matters, staging_from, DeploymentEnvironment};
+            let mode = DeploymentEnvironment::from_env()
+                .map_err(|_| InvoiceGenerationError::StripeUnavailable)?;
+            let simulated =
+                sample_matters(mode).map_err(|_| InvoiceGenerationError::StripeUnavailable)?;
+            let staging = staging_from(|key| std::env::var(key).ok())
+                .map_err(|_| InvoiceGenerationError::StripeUnavailable)?;
+            let live = mode == DeploymentEnvironment::Production && !simulated && !staging;
+            billing::stripe::StripeInvoiceClient::new(key.expose_for_provider_call(), live)
+                .map_err(|_| InvoiceGenerationError::StripeUnavailable)
+        })
+        .transpose()?;
+    if (stripe_iolta == Some(true) || pending.is_some()) && stripe.is_none() {
+        return Err(InvoiceGenerationError::StripeUnavailable);
+    }
+    if let (Some(batch), Some(stripe)) = (&pending, &stripe) {
+        return raise_stripe_draft(pg, stripe, batch).await;
+    }
+    if stripe.is_none() && !provider.invoices_available() {
+        return Err(InvoiceGenerationError::BillingUnavailable);
     }
 
     let entries = time_entries::unbilled_billable(pg, project_id).await?;
@@ -342,7 +391,11 @@ pub(crate) async fn generate_invoice(
     // preview re-opens the review instead of billing charges nobody saw. The
     // pending-batch resume above never recomposes, so the binding cannot
     // strand an already-frozen batch.
-    let preview_digest = billing_batches::preview_digest(&entries, &unbilled_costs, flat_fee_cents);
+    let preview_digest = billing_batches::invoice_destination_digest(
+        billing_batches::preview_digest(&entries, &unbilled_costs, flat_fee_cents),
+        stripe.as_ref().and(stripe_iolta),
+        project.firm_id,
+    );
     if expected_preview_digest.is_some_and(|expected| expected != preview_digest) {
         return Err(InvoiceGenerationError::PreviewChanged);
     }
@@ -357,17 +410,23 @@ pub(crate) async fn generate_invoice(
     // re-confirmed, so nothing the lawyer removed can slip into the batch
     // while Xero is deciding.
     let due_date = matter_due_date(now.date_naive())?;
-    let contact = provider
-        .ensure_contact(&billing::ContactRequest {
-            name: party.name.clone(),
-            email: party.email.clone(),
-        })
-        .await?;
-    if contact.0.trim().is_empty() {
-        return Err(
-            billing::BillingError::Provider("resolved invoice contact id missing".into()).into(),
-        );
-    }
+    let (contact, stripe_account_id) = if let Some(stripe) = &stripe {
+        (None, Some(stripe.account_id().await?))
+    } else {
+        let contact = provider
+            .ensure_contact(&billing::ContactRequest {
+                name: party.name.clone(),
+                email: party.email.clone(),
+            })
+            .await?;
+        if contact.0.trim().is_empty() {
+            return Err(billing::BillingError::Provider(
+                "resolved invoice contact id missing".into(),
+            )
+            .into());
+        }
+        (Some(contact.0), None)
+    };
     let entry_ids = entries.iter().map(|entry| entry.id).collect::<Vec<_>>();
     let cost_ids = unbilled_costs
         .iter()
@@ -384,7 +443,10 @@ pub(crate) async fn generate_invoice(
             reference: matter_reference(&project.code),
             contact_name: party.name.clone(),
             contact_email: party.email.clone(),
-            xero_contact_id: contact.0,
+            xero_contact_id: contact,
+            stripe_account_id,
+            stripe_iolta: stripe_iolta == Some(true),
+            stripe_invoice_id: None,
             due_date,
             first_attempted_at: None,
             line_items: serde_json::to_value(&compose.line_items)?,
@@ -401,7 +463,84 @@ pub(crate) async fn generate_invoice(
         agreed_fee_cents.map(|_| billed_fee_cents),
     )
     .await?;
-    raise_batch(surreal, pg, provider, project_id, &batch, actor_id).await
+    if let Some(stripe) = &stripe {
+        raise_stripe_draft(pg, stripe, &batch).await
+    } else {
+        raise_batch(surreal, pg, provider, project_id, &batch, actor_id).await
+    }
+}
+
+async fn stripe_credential(
+    surreal: &store::surreal::SurrealDb,
+    firm: Option<Uuid>,
+    iolta: bool,
+) -> Result<Option<store::firm_secrets::ResolvedCredential>, InvoiceGenerationError> {
+    use store::firm_secrets::{IntegrationProvider, IntegrationSecretKind, SecretStoreError};
+    let Some(firm) = firm else {
+        return Ok(None);
+    };
+    let kind = if iolta {
+        IntegrationSecretKind::StripeNevadaAppKey
+    } else {
+        IntegrationSecretKind::StripeOperatingAppKey
+    };
+    if !store::firm_secrets::stripe_billing_enabled(kind) {
+        return Ok(None);
+    }
+    let kms = crate::integrations::runtime_kms_from_env().await;
+    match store::firm_secrets::resolve_firm_credential(
+        surreal,
+        firm,
+        IntegrationProvider::Stripe,
+        kind,
+        kms.as_ref(),
+    )
+    .await
+    {
+        Ok(key) if !key.expose_for_provider_call().trim().is_empty() => Ok(Some(key)),
+        Ok(_) | Err(SecretStoreError::NotConfigured { .. }) => Ok(None),
+        Err(_) => Err(InvoiceGenerationError::StripeUnavailable),
+    }
+}
+
+async fn raise_stripe_draft(
+    pg: &store::postgres::PostgresDb,
+    stripe: &billing::stripe::StripeInvoiceClient<'_>,
+    batch: &billing_batches::MatterBillingBatch,
+) -> Result<InvoiceReceipt, InvoiceGenerationError> {
+    if Some(stripe.account_id().await?) != batch.stripe_account_id {
+        return Err(InvoiceGenerationError::ReconciliationRequired);
+    }
+    let line_items: Vec<InvoiceLine> = serde_json::from_value(batch.line_items.clone())?;
+    let batch = billing_batches::start_attempt(pg, batch.id, Utc::now()).await?;
+    let stripe_id = if let Some(id) = &batch.stripe_invoice_id {
+        id.clone()
+    } else {
+        if batch
+            .first_attempted_at
+            .is_some_and(|first| Utc::now() >= first + chrono::TimeDelta::hours(23))
+        {
+            return Err(InvoiceGenerationError::ReconciliationRequired);
+        }
+        let request = request_for_batch(&batch, &line_items);
+        let id = stripe
+            .create_draft(batch.id, &request, batch.stripe_iolta)
+            .await?;
+        billing_batches::attach_stripe_draft(pg, batch.id, &id.0).await?;
+        id.0
+    };
+    Ok(InvoiceReceipt {
+        xero_invoice_id: None,
+        stripe_invoice_id: Some(stripe_id),
+        stripe_iolta: Some(batch.stripe_iolta),
+        reference: batch.reference,
+        currency: batch.currency,
+        total_cents: batch.total_cents,
+        line_items,
+        consumed_time_entries: 0,
+        consumed_costs: 0,
+        flat_fee: batch.flat_fee_cents.is_some(),
+    })
 }
 
 async fn invoice_for_batch(
@@ -537,7 +676,9 @@ async fn raise_batch(
     billing_batches::complete(pg, batch.id).await?;
 
     Ok(InvoiceReceipt {
-        xero_invoice_id: invoice_id.0,
+        xero_invoice_id: Some(invoice_id.0),
+        stripe_invoice_id: None,
+        stripe_iolta: None,
         reference: batch.reference.clone(),
         currency: currency.clone(),
         total_cents: amount_cents,
@@ -567,6 +708,9 @@ fn error(error: &InvoiceGenerationError, project_id: Uuid) -> Response {
         InvoiceGenerationError::BillingUnavailable => {
             tracing::warn!(event = "invoice_generation_billing_unavailable", outcome = "unavailable", project_id = %project_id);
             return refused(StatusCode::SERVICE_UNAVAILABLE, "billing_unavailable");
+        }
+        InvoiceGenerationError::StripeUnavailable => {
+            (StatusCode::SERVICE_UNAVAILABLE, "stripe_credential_missing")
         }
         InvoiceGenerationError::NothingToInvoice => (StatusCode::CONFLICT, "nothing_to_invoice"),
         InvoiceGenerationError::PreviewChanged => {
@@ -825,7 +969,10 @@ mod tests {
             reference: "Synthetic invoice".into(),
             contact_name: "Synthetic client".into(),
             contact_email: "client@example.com".into(),
-            xero_contact_id: "synthetic-resolved-contact".into(),
+            xero_contact_id: Some("synthetic-resolved-contact".into()),
+            stripe_account_id: None,
+            stripe_iolta: false,
+            stripe_invoice_id: None,
             due_date: "2026-11-14".parse().unwrap(),
             first_attempted_at: None,
             line_items: serde_json::json!([]),

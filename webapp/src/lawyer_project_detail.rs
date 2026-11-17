@@ -649,7 +649,7 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         _ => None,
     };
     let invoice_generate = match pg.as_ref() {
-        Some(pg) => crate::project_billing::read_generate(pg, id).await?,
+        Some(pg) => crate::project_billing::read_generate(&surreal, pg, &project).await?,
         None => GenerateInvoiceView::default(),
     };
     let today = chrono::Utc::now().date_naive().to_string();
