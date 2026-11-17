@@ -6555,14 +6555,28 @@ mod matter_command_tests {
 
     /// A Firm wearing the seeded `neon` brand — the `firm_brand` row the
     /// open transaction consults before it will name a Firm on the row.
-    async fn firm_wearing_neon(db: &SurrealDb, attorney: uuid::Uuid) -> uuid::Uuid {
+    async fn firm_wearing_neon(db: &SurrealDb) -> uuid::Uuid {
+        // Firm creation requires an admin-tier Admin DRI, and a person may
+        // hold one role, so the firm gets its own admin distinct from the
+        // matter's lawyer.
+        let admin_dri = crate::persons::create(
+            db,
+            &crate::persons::NewPerson::with_role(
+                "Open Matter Practice Admin DRI",
+                format!("open-matter-admin-{}@example.com", uuid::Uuid::now_v7()),
+                Role::Admin,
+            ),
+        )
+        .await
+        .unwrap()
+        .id;
         let firm = crate::firms::create(
             db,
             &NewFirm {
                 name: "Open Matter Practice".to_string(),
                 status: "active".to_string(),
                 entity_id: seed_entity(db).await,
-                admin_dri_person_id: attorney,
+                admin_dri_person_id: admin_dri,
             },
         )
         .await
@@ -6672,7 +6686,7 @@ mod matter_command_tests {
         let db = store().await;
         let entity = seed_entity(&db).await;
         let (attorney, client) = attorney_and_client(&db).await;
-        let firm_id = firm_wearing_neon(&db, attorney).await;
+        let firm_id = firm_wearing_neon(&db).await;
         let created = open_matter(
             &db,
             &open_command(firm_id, client, attorney, entity, "  Matter-Code-13 "),
@@ -6694,7 +6708,7 @@ mod matter_command_tests {
         let db = store().await;
         let entity = seed_entity(&db).await;
         let (attorney, client) = attorney_and_client(&db).await;
-        let firm_id = firm_wearing_neon(&db, attorney).await;
+        let firm_id = firm_wearing_neon(&db).await;
         let closed_at = chrono::Utc::now() - chrono::Duration::hours(2);
         let mut command = open_command(firm_id, client, attorney, entity, "already-closed");
         command.closed_at = Some(closed_at);
@@ -6710,7 +6724,7 @@ mod matter_command_tests {
         let db = store().await;
         let entity = seed_entity(&db).await;
         let (attorney, client) = attorney_and_client(&db).await;
-        let firm_id = firm_wearing_neon(&db, attorney).await;
+        let firm_id = firm_wearing_neon(&db).await;
         let mut command = open_command(firm_id, client, attorney, entity, "future-close");
         command.closed_at = Some(chrono::Utc::now() + chrono::Duration::hours(2));
         assert!(matches!(
@@ -6728,7 +6742,7 @@ mod matter_command_tests {
         let db = store().await;
         let entity = seed_entity(&db).await;
         let (attorney, client) = attorney_and_client(&db).await;
-        let firm_id = firm_wearing_neon(&db, attorney).await;
+        let firm_id = firm_wearing_neon(&db).await;
         open_matter(
             &db,
             &open_command(firm_id, client, attorney, entity, "one-code-only"),
@@ -6759,7 +6773,7 @@ mod matter_command_tests {
         let db = store().await;
         let entity = seed_entity(&db).await;
         let (attorney, _client) = attorney_and_client(&db).await;
-        let firm_id = firm_wearing_neon(&db, attorney).await;
+        let firm_id = firm_wearing_neon(&db).await;
         assert!(matches!(
             open_matter(
                 &db,
@@ -6777,7 +6791,7 @@ mod matter_command_tests {
         let db = store().await;
         let entity = seed_entity(&db).await;
         let (attorney, client) = attorney_and_client(&db).await;
-        let firm_id = firm_wearing_neon(&db, attorney).await;
+        let firm_id = firm_wearing_neon(&db).await;
         assert!(matches!(
             open_matter(
                 &db,
