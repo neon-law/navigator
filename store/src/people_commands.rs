@@ -37,12 +37,9 @@ pub struct CreatePersonCommand {
     /// table, never on the Person row.
     #[serde(default)]
     pub notion_user_id: Option<String>,
-    /// Which Firm a new Lawyer or Clerk joins (ENG-495). Omitted or blank
-    /// defaults to the deployment's anchor Firm
-    /// ([`crate::firms::anchor_firm`]); a creating surface names a different
-    /// one by supplying it. Read only for a `lawyer`/`clerk` role — Owner and
-    /// Admin membership stays explicit and out of scope, and a `client`
-    /// reaches a matter through `person_project_role`, never this join.
+    /// The Firm a new Admin, Lawyer, or Clerk joins. Admin requires an
+    /// explicit Firm to gain membership. Lawyer and Clerk default to the
+    /// deployment's anchor Firm. Client and Owner do not join here.
     #[serde(default)]
     pub firm_id: Option<Uuid>,
 }
@@ -284,32 +281,18 @@ fn classify_firm_write(error: crate::firms::FirmError) -> PeopleCommandError {
     }
 }
 
-/// ENG-495: a newly created Lawyer or Clerk joins a Firm the same way the
-/// one-time backfill (#ENG-462) pointed every *existing* person at one —
-/// except this runs on every create, not once. `input.firm_id` lets the
-/// creating surface name a different Firm; omitted, it defaults to
-/// [`crate::firms::anchor_firm`]. Owner and Admin are untouched (their
-/// membership stays explicit), and a Client never reaches this branch at
-/// all — `store::firms::add_membership` would refuse it, but a Client should
-/// never even attempt the write.
-///
-/// A deployment with no anchor Firm yet (no other Firm named either) grants
-/// nothing rather than failing the person create over it: the omission is
-/// exactly what this issue reports being invisible, but it is not this door's
-/// place to invent a Firm.
+/// Grant staff membership at creation. Only Lawyer and Clerk default to the anchor Firm.
 async fn grant_default_firm_membership(
     db: &SurrealDb,
     person: &Person,
     firm_id: Option<Uuid>,
 ) -> Result<(), PeopleCommandError> {
-    // Matched on the tier itself, not on whether `FirmMembership::for_role`
-    // returns `Some` — that also holds for Admin, whose membership this
-    // issue explicitly leaves explicit and out of scope.
-    let membership = match person.role {
-        Role::Lawyer => crate::firms::FirmMembership::Lawyer,
-        Role::Clerk => crate::firms::FirmMembership::Clerk,
-        Role::Owner | Role::Admin | Role::Client => return Ok(()),
+    let Some(membership) = crate::firms::FirmMembership::for_role(person.role) else {
+        return Ok(());
     };
+    if person.role == Role::Admin && firm_id.is_none() {
+        return Ok(());
+    }
     let firm_id = match firm_id {
         Some(id) => Some(id),
         None => crate::firms::anchor_firm(db)
@@ -438,6 +421,11 @@ pub async fn update_person(
         if requested.authority_rank() > ctx.actor_role.authority_rank() {
             return Err(PeopleCommandError::Blocked(
                 "You cannot assign a system role above your own.",
+            ));
+        }
+        if requested == Role::Admin && existing.role != Role::Admin && !ctx.actor_role.is_owner() {
+            return Err(PeopleCommandError::Blocked(
+                "Only an Owner can assign the Admin role.",
             ));
         }
         requested
@@ -1124,6 +1112,18 @@ mod tests {
         assert!(matches!(
             update_person(&db, owner.id, &owner_input, &admin_ctx).await,
             Err(PeopleCommandError::Blocked(_))
+        ));
+
+        let admin_promotion = UpdatePersonCommand {
+            name: Some(client.name.clone()),
+            email: Some(client.email.clone()),
+            ..owner_input
+        };
+        assert!(matches!(
+            update_person(&db, client.id, &admin_promotion, &admin_ctx).await,
+            Err(PeopleCommandError::Blocked(
+                "Only an Owner can assign the Admin role."
+            ))
         ));
 
         let promote_input = UpdatePersonCommand {

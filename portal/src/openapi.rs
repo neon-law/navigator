@@ -807,8 +807,8 @@ fn canonical_document(base: &str) -> Value {
               "Creates one Person row. The `role` field defaults conservatively to `client`; \
                supported values are `owner`, `admin`, `lawyer`, `clerk`, and `client`, and non-empty invalid \
                values are rejected. Blank structured legal-name fields are stored as null. \
-               Authorization: the caller's `persons.role` must be `lawyer` or `admin`; \
-               anonymous, `client`, and non-lawyer `clerk` callers are rejected.",
+               Lawyers create Clients. Admins can also create Lawyers and Clerks. \
+               Only Owners can create Admins or Owners.",
             "requestBody": {
               "required": true,
               "content": { "application/json": {
@@ -831,6 +831,33 @@ fn canonical_document(base: &str) -> Value {
               "409": { "description": "Email already exists", "content": { "application/json": {
                 "schema": { "$ref": "#/components/schemas/ApiError" }
               } } }
+            }
+          }
+        },
+        "/app/api/firms/{id}/people": {
+          "post": {
+            "summary": "Create a Person through a Firm's administration boundary",
+            "description": "Requires the Firm's Admin or an Owner. Only an Owner may create an Admin. \
+                            Staff join the Firm in the path. No Project participation is granted.",
+            "parameters": [
+              { "name": "id", "in": "path", "required": true,
+                "schema": { "type": "string", "format": "uuid" } }
+            ],
+            "requestBody": {
+              "required": true,
+              "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/CreatePersonRequest" }
+              } }
+            },
+            "responses": {
+              "201": { "description": "Created Person", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/Person" }
+              } } },
+              "400": { "description": "Validation failed" },
+              "401": { "description": "No authenticated session" },
+              "403": { "description": "Insufficient authority for the operation or requested role" },
+              "404": { "description": "Firm is unavailable to the caller" },
+              "409": { "description": "Email already exists" }
             }
           }
         },
@@ -5771,7 +5798,7 @@ fn canonical_document(base: &str) -> Value {
               "email":       { "type": "string", "format": "email",
                                "description": "Omit to leave unchanged; present must not be blank." },
               "role":        { "allOf": [ { "$ref": "#/components/schemas/PersonRole" } ],
-                               "description": "Blank/absent preserves the current role; honored only for Owner/Admin callers up to their own authority, and the bootstrap Owner is always `owner`." },
+                               "description": "Blank or absent preserves the current role. Owner and Admin may edit roles within their authority. Only an Owner may promote a Person to Admin. The bootstrap Owner is always `owner`." },
               "given_name":  { "type": ["string", "null"],
                                "description": "Omit to leave unchanged; send null or a blank string to clear." },
               "family_name": { "type": ["string", "null"],

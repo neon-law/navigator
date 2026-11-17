@@ -115,9 +115,9 @@ fn render_people_new(resource: &Resource<Result<PeopleNewView, ServerFnError>>) 
     let mut role_options = Vec::new();
     if role == ViewerRole::Owner {
         role_options.push(Choice::new("owner", "Owner"));
+        role_options.push(Choice::new("admin", "Admin"));
     }
     role_options.extend([
-        Choice::new("admin", "Admin"),
         Choice::new("lawyer", "Lawyer (lawyer)"),
         Choice::new("clerk", "Clerk (non-lawyer)"),
         Choice::new("client", "Client"),

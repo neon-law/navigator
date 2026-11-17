@@ -1354,7 +1354,7 @@ fn can_assign_role(session: Option<&SessionData>, requested: store::persons::Rol
     session.is_none_or(|s| {
         s.viewing_as_dri.is_none()
             && s.role.is_admin_tier()
-            && requested.authority_rank() <= s.role.authority_rank()
+            && crate::api::may_create_person_role(s.role, requested)
     })
 }
 
@@ -1434,6 +1434,13 @@ async fn admin_people_create(
             "/app/admin/people/new?error=You%20cannot%20assign%20a%20system%20role%20above%20your%20own.",
         )
         .into_response();
+    }
+    if let (Some(session), Some(firm_id)) = (session.as_deref(), command.firm_id) {
+        if let Err(error) =
+            crate::api::require_firm_administration(&surreal, session, firm_id).await
+        {
+            return error.into_response();
+        }
     }
     match crate::people_commands::create_person(&surreal, &command).await {
         Ok(_) => Redirect::to("/app/admin/people").into_response(),
@@ -4044,17 +4051,24 @@ async fn project_participation_access(
     if !can_manage_project_participation(session) {
         return Err(not_found_response());
     }
-    // Only admins reach this helper, and the lawyer access model gives admins
-    // the documented all-project bypass. Keep the project lookup below so a
-    // random identifier still returns a normal not-found response.
-    match store::projects::find_by_id(surreal, project_id).await {
-        Ok(Some(_)) => Ok(()),
-        Ok(None) => Err(not_found_response()),
-        Err(e) => {
-            tracing::error!(error = %e, project_id = %project_id, "project participation: project lookup failed");
-            Err((StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response())
-        }
+    let Some(session) = session else {
+        return Err(not_found_response());
+    };
+    let project_error = |error: store::projects::ProjectStoreError| {
+        tracing::error!(%error, %project_id, "project participation: scope lookup failed");
+        (StatusCode::INTERNAL_SERVER_ERROR, "internal").into_response()
+    };
+    let project = store::projects::find_by_id(surreal, project_id)
+        .await
+        .map_err(project_error)?
+        .ok_or_else(not_found_response)?;
+    if !store::projects::can_administer_project(surreal, session.person_id, session.role, &project)
+        .await
+        .map_err(project_error)?
+    {
+        return Err(not_found_response());
     }
+    Ok(())
 }
 
 async fn project_show_path(surreal: &store::surreal::SurrealDb, project_id: Uuid) -> String {
@@ -4318,6 +4332,9 @@ async fn matter_dri_designate(
     let Some(id) = store::projects::id_for_code(&surreal, &project_code).await else {
         return not_found_response();
     };
+    if !admin_project_in_scope(&surreal, session, id).await {
+        return not_found_response();
+    }
     let Some(row) = participation_row(&surreal, id, role_id).await else {
         return not_found_response();
     };
@@ -4360,6 +4377,9 @@ async fn matter_dri_remove(
     let Some(id) = store::projects::id_for_code(&surreal, &project_code).await else {
         return not_found_response();
     };
+    if !admin_project_in_scope(&surreal, session, id).await {
+        return not_found_response();
+    }
     let Some(row) = participation_row(&surreal, id, role_id).await else {
         return not_found_response();
     };
@@ -4492,7 +4512,7 @@ async fn projects_update_brand(
         .map_err(|error| ApiError::Db(error.to_string()))?
         .ok_or(ApiError::NotFound)?;
     let firm_id = project.firm_id.ok_or(ApiError::NotFound)?;
-    crate::api::require_project_firm_administration(&surreal, &session, firm_id).await?;
+    crate::api::require_firm_administration(&surreal, &session, firm_id).await?;
     if !store::access::matter_viewer(&surreal, session.person_id, session.role, project.id)
         .await
         .map_err(ApiError::Db)?
@@ -4548,6 +4568,9 @@ async fn projects_update_lawyer_only(
         return (StatusCode::NOT_FOUND, webapp::error_pages::not_found()).into_response();
     };
     let project_id = project.id;
+    if !admin_project_in_scope(&surreal, session.as_deref(), project_id).await {
+        return not_found_response();
+    }
     // ENG-477: each shared resource's own card carries a "Share a separate
     // resource with the client" toggle. An unchecked toggle forces the shared
     // column blank regardless of whatever text a lawyer left in that (hidden)
@@ -4624,6 +4647,20 @@ async fn projects_update_lawyer_only(
     }
 }
 
+/// Preserve the handler's existing tier checks and constrain Admin project access.
+async fn admin_project_in_scope(
+    surreal: &store::surreal::SurrealDb,
+    session: Option<&SessionData>,
+    project_id: Uuid,
+) -> bool {
+    let Some(admin) = session.filter(|session| session.role == store::persons::Role::Admin) else {
+        return true;
+    };
+    store::access::can_see_project_as_lawyer(surreal, admin.person_id, admin.role, project_id)
+        .await
+        .unwrap_or(false)
+}
+
 async fn projects_delete_lawyer_only(
     State(surreal): State<store::surreal::SurrealDb>,
     session: Option<Extension<SessionData>>,
@@ -4635,6 +4672,9 @@ async fn projects_delete_lawyer_only(
     let Some(id) = store::projects::id_for_code(&surreal, &project_code).await else {
         return not_found_response();
     };
+    if !admin_project_in_scope(&surreal, session.as_deref(), id).await {
+        return not_found_response();
+    }
     match store::projects::delete_project_with_surreal(&surreal, id).await {
         // `NotFound` lands with `Ok` on purpose: already gone is what the
         // caller wanted, so a double-clicked delete or a second tab must not

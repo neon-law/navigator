@@ -78,12 +78,12 @@ The four Firm-private integration doors — Notion ensure and reconcile, and Sla
 The capability resolver therefore authorizes on the caller's membership in that Firm, rather than treating the Project
 visibility listing as permission to use the target Firm's credentials.
 
-A Lawyer or Clerk gets this row the moment they are created, not only once: `store::people_commands::create_person`
-grants it right after the Person write, defaulting to the deployment's anchor Firm (`store::firms::anchor_firm`) unless
-the creating surface names a different one (ENG-495). Before this, only a one-time backfill (ENG-462) pointed *existing*
-people at the seeded practice, so a lawyer or clerk created afterward was silently missing from `visible_person_ids` and
-therefore from the Admin people directory. Owner and Admin membership is unaffected — it stays explicit — and a Client
-is never offered the write.
+Person creation grants a Lawyer or Clerk membership in the selected Firm. If the caller omits the Firm, the store uses
+the deployment's anchor Firm.
+
+`hudson site person create` requires a Firm. A Firm Admin can create a Client, Clerk, or Lawyer within that scope. An
+Owner can also create an Admin, who joins that Firm without becoming its Admin DRI. Client creation grants no Firm
+membership. The command grants no Project participation.
 
 ## Evidence invitations
 
@@ -176,19 +176,16 @@ DRIs; none of them may be a Clerk.
 ### `admin`
 
 A **licensed lawyer** with system-administration authority — manage the person table, rotate keys, archive projects.
-Admin is a superset of Lawyer. Like Owner, a matter nobody has put an Admin on still gates its full content: the
-workbench, documents, and notations at `/app/projects/{code}` stay behind the participation row every tier needs. What
-Admin sees instead of a `404` there is a participation-only rendering — enough to see the matter and manage who is
-assigned to it. The Projects list includes unassigned matters within the selected Brand or Firm. The people directory
-and the matter directory at `/app/admin` use the Admin's `person_firm_role` memberships to scope their lists. Privileged
-reach is a surface you navigate to rather than an invisible widening of a shared route, which is what makes a lens bug
-distinguishable from an intended bypass — the two are otherwise indistinguishable from a response body. Admin cannot
-create, edit, or demote an Owner. `/app/owner` is not an Admin surface. `/app/admin/brands` is: Owner and Admin reach
-the registry. An Admin sees only their own Firm-scoped rows, never another Firm's — every brand is Firm-scoped now
-(ENG-659), so there is no system-wide row left to also see. That Firm's Admin DRI creates its brand, and may change its
-palette, replace its logo and uploaded font, and choose among its own already-uploaded font family names — never a
-compiled catalog, and never another Firm's row. `/app/admin/leads` is the same Owner/Admin door: the public contact
-queue, not a matter surface.
+Admin inherits the Lawyer tier. Full workbench content at `/app/projects/{code}` requires participation. The
+participation ledger and assignment controls are available to an Admin of the owning Firm. Projects awaiting Firm
+assignment remain available for administration. An Admin can reach a Project in another Firm through an explicit
+participation assignment. The people and matter directories at `/app/admin` use the Admin's Firm memberships. Admin
+cannot create, edit, or demote an Owner. `/app/owner` is not an Admin surface. Owner and Admin can reach the brand
+registry at `/app/admin/brands`. An Admin sees only their own Firm-scoped rows, never another Firm's — every brand is
+Firm-scoped now (ENG-659), so there is no system-wide row left to also see. That Firm's Admin DRI creates its brand, and
+may change its palette, replace its logo and uploaded font, and choose among its own already-uploaded font family names
+— never a compiled catalog, and never another Firm's row. `/app/admin/leads` is the same Owner/Admin door: the public
+contact queue, not a matter surface.
 
 ### *anonymous*
 
@@ -349,15 +346,10 @@ participation history, append a row to `relationship_log` — that's what the ta
 Each person has at most one current participation row for a Project. Changing the participation updates that row; it
 does not create a second, competing assignment.
 
-Two doors write it, scoped differently on purpose. The firm-wide participation form (`/app/projects/{code}/people`)
-stays admin-only, because it reads the whole people directory to pick who to add — a broad capability that changing who
-can see the matter deserves. `POST/PATCH/DELETE /app/api/projects/{id}/participants[/…]` is narrower in what it reads
-(it names a person already known to the caller) and admits any lawyer already participating in that matter, not only
-admin — the same "must already be on the matter" re-check `/close` uses, with Owner/Admin bypassing it as everywhere
-else. This is the door a participating lawyer uses to grant or revoke a Clerk's portal visibility on their own matter:
-adding the Clerk's participation row is what admits them through `store::access::can_see_project`, and removing it is
-the toggle back off — see [`clerk`](#clerk) above. A lawyer with no row on the matter gets the same non-disclosing `404`
-an unrelated caller would, from either door.
+The participation form at `/app/projects/{code}/people` requires an Owner or an Admin of the owning Firm. The
+participation API at `/app/api/projects/{id}/participants` also accepts a participating lawyer. A lawyer may use it to
+grant or revoke a Clerk's portal access on that matter. The portal returns `404` when the actor has neither the required
+participation nor administrative access to the Project.
 
 ## The directory lens
 

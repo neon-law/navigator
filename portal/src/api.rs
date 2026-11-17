@@ -177,6 +177,7 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
                 .layer(DefaultBodyLimit::max(crate::private_chart::MAX_BODY_BYTES)),
         ),
         ("POST", "/app/api/people", post(create_person)),
+        ("POST", "/app/api/firms/{id}/people", post(create_firm_person)),
         ("POST", "/app/api/people/merge", post(merge_people)),
         ("GET", "/app/api/people/{id}", get(get_person)),
         ("PATCH", "/app/api/people/{id}", patch(update_person)),
@@ -1409,16 +1410,58 @@ async fn create_person(
         command.role = store::persons::Role::Client.as_str().to_string();
     }
     if crate::people_commands::parse_role(&command.role)
-        .is_some_and(|role| role.authority_rank() > session.role.authority_rank())
+        .is_some_and(|role| !may_create_person_role(session.role, role))
     {
         return mutation_error(PeopleCommandError::Blocked(
             "You cannot assign a system role above your own.",
         ));
     }
+    if let Some(firm_id) = command.firm_id {
+        if let Err(error) = require_firm_administration(&surreal, &session, firm_id).await {
+            return error.into_response();
+        }
+    }
     match crate::people_commands::create_person(&surreal, &command).await {
         Ok(created) => (StatusCode::CREATED, Json(created)).into_response(),
         Err(e) => mutation_error(e),
     }
+}
+
+pub(crate) fn may_create_person_role(
+    actor: store::persons::Role,
+    requested: store::persons::Role,
+) -> bool {
+    use store::persons::Role;
+    match requested {
+        Role::Admin | Role::Owner => actor.is_owner(),
+        _ => requested.authority_rank() <= actor.authority_rank(),
+    }
+}
+
+async fn create_firm_person(
+    State(surreal): State<store::surreal::SurrealDb>,
+    AdminSession(session): AdminSession,
+    Path(firm_id): Path<Uuid>,
+    Json(mut command): Json<crate::people_commands::CreatePersonCommand>,
+) -> Result<(StatusCode, Json<store::persons::Person>), ApiError> {
+    use store::persons::Role;
+    require_firm_administration(&surreal, &session, firm_id).await?;
+    if crate::people_commands::parse_role(&command.role)
+        .is_some_and(|role| role == Role::Owner || !may_create_person_role(session.role, role))
+    {
+        return Err(ApiError::Forbidden);
+    }
+    command.firm_id = Some(firm_id);
+    let person = crate::people_commands::create_person(&surreal, &command)
+        .await
+        .map_err(|error| match error {
+            PeopleCommandError::Db(_) => ApiError::Db("Person storage failed".into()),
+            PeopleCommandError::FirmMembership(_) => {
+                ApiError::Db("Firm membership grant failed".into())
+            }
+            other => ApiError::from(other),
+        })?;
+    Ok((StatusCode::CREATED, Json(person)))
 }
 
 async fn update_person(
@@ -3136,6 +3179,42 @@ struct SeedRequest {
 /// endpoint string is refused before the body is even parsed further.
 pub(crate) const SEED_ENDPOINT: &str = "/app/api/seed";
 
+/// Backstop the project-keyed API with the Admin's Firm and participation scope.
+pub(crate) async fn scope_admin_project_request(
+    State(surreal): State<store::surreal::SurrealDb>,
+    params: Result<axum::extract::RawPathParams, axum::extract::rejection::RawPathParamsRejection>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let admin = request
+        .extensions()
+        .get::<SessionData>()
+        .filter(|session| session.role == store::persons::Role::Admin);
+    let route = request.extensions().get::<axum::extract::MatchedPath>();
+    if let (Some(admin), Some(route), Ok(params)) = (admin, route, params) {
+        if route.as_str().starts_with("/app/api/projects/{id}") {
+            let project_id = params.iter().find_map(|(key, value)| {
+                (key == "id").then(|| value.parse::<Uuid>().ok()).flatten()
+            });
+            if let Some(project_id) = project_id {
+                let result = store::projects::can_access_as_lawyer_in_surreal(
+                    &surreal,
+                    admin.person_id,
+                    admin.role,
+                    project_id,
+                )
+                .await;
+                match result {
+                    Ok(true) => {}
+                    Ok(false) => return ApiError::NotFound.into_response(),
+                    Err(error) => return ApiError::Db(error.to_string()).into_response(),
+                }
+            }
+        }
+    }
+    next.run(request).await
+}
+
 /// A CI-minted session may only reach its scoped endpoint on `/app/api`.
 pub(crate) async fn refuse_scoped_elsewhere(request: Request, next: Next) -> Response {
     if let Some(session) = request.extensions().get::<SessionData>() {
@@ -3427,7 +3506,7 @@ async fn selected_project_brand(
         ));
     }
     if let (Some(firm_id), Some(brand)) = (firm_id, brand.as_deref()) {
-        require_project_firm_administration(&state.surreal, session, firm_id).await?;
+        require_firm_administration(&state.surreal, session, firm_id).await?;
         let wearing = store::firms::firm_id_for_brand_key(&state.surreal, brand)
             .await
             .map_err(|error| ApiError::Db(error.to_string()))?;
@@ -3442,8 +3521,8 @@ async fn selected_project_brand(
     Ok(brand.unwrap_or_else(|| views::brand::brand_key().as_str().to_string()))
 }
 
-/// Creation and reassignment share the same Firm authorization boundary.
-pub(crate) async fn require_project_firm_administration(
+/// Authorize administration of one explicitly selected Firm.
+pub(crate) async fn require_firm_administration(
     surreal: &store::surreal::SurrealDb,
     session: &SessionData,
     firm_id: Uuid,
@@ -3487,7 +3566,7 @@ async fn update_project(
     JsonOrForm(input): JsonOrForm<store::projects::UpdateProjectCommand>,
 ) -> Result<Response, ApiError> {
     if let Some(firm_id) = input.firm_id {
-        require_project_firm_administration(&state.surreal, &session, firm_id).await?;
+        require_firm_administration(&state.surreal, &session, firm_id).await?;
     }
     let drive_folder_check = match input.drive_folder_id.as_deref().map(str::trim) {
         Some(folder) if store::projects::is_valid_drive_folder_id(folder) => Some(

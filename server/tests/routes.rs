@@ -1158,6 +1158,10 @@ async fn admin_people_new_form_renders_for_admin_with_csrf() {
         !body.contains("value=\"owner\""),
         "Admin must not be offered the higher Owner tier: {body}",
     );
+    assert!(
+        !body.contains(r#"value="admin""#),
+        "Only Owners can create Admins: {body}",
+    );
 }
 
 #[tokio::test]
@@ -4017,6 +4021,225 @@ async fn api_people_create_authorizes_owner_admin_and_lawyer() {
             assert_eq!(body["email"], format!("{label}-api-authz@example.com"));
         } else {
             assert_eq!(body["error"], error);
+        }
+    }
+}
+
+#[tokio::test]
+async fn an_admin_cannot_staff_or_edit_another_firms_unassigned_matter() {
+    let (state, surreal) = state_with_engines().await;
+    let (firm_id, _) = seed_project_brand_scope(&surreal).await;
+    let admin = store::persons::create(
+        &surreal,
+        &store::persons::NewPerson::with_role(
+            "Scoped Admin",
+            "scoped-admin@example.com",
+            store::persons::Role::Admin,
+        ),
+    )
+    .await
+    .unwrap();
+    store::firms::ensure_membership(
+        &surreal,
+        &store::firms::NewPersonFirmRole {
+            person_id: admin.id,
+            firm_id,
+            membership: store::firms::FirmMembership::Admin,
+            is_dri: false,
+        },
+    )
+    .await
+    .unwrap();
+    let project = store::projects::find_by_code(&surreal, "outside-matter")
+        .await
+        .unwrap()
+        .unwrap();
+    let (cookie, csrf) = session_cookie_and_csrf_for_person(&admin);
+    let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
+    let cases = [
+        (
+            "GET",
+            "/app/projects/outside-matter/participants".to_string(),
+            String::new(),
+        ),
+        (
+            "GET",
+            "/app/projects/outside-matter/people/new".to_string(),
+            String::new(),
+        ),
+        (
+            "POST",
+            format!("/app/api/projects/{}/participants", project.id),
+            serde_json::json!({"person_id": admin.id}).to_string(),
+        ),
+        (
+            "PATCH",
+            format!("/app/api/projects/{}", project.id),
+            serde_json::json!({"name": "Changed"}).to_string(),
+        ),
+    ];
+    for (method, uri, body) in cases {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(&uri)
+                    .header(header::COOKIE, &cookie)
+                    .header("x-csrf-token", &csrf)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{method} {uri}");
+    }
+    let seed = serde_json::json!({
+        "model": "person_project_role",
+        "yaml": format!(
+            "lookup_fields: [person_id, project_id]\nrecords:\n  - person:\n      email: {}\n    project:\n      code: outside-matter\n",
+            admin.email,
+        ),
+    });
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/app/api/seed")
+                .header(header::COOKIE, &cookie)
+                .header("x-csrf-token", &csrf)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(seed.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/app/projects/outside-matter/people")
+                .header(header::COOKIE, &cookie)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!("person_id={}&_csrf={csrf}", admin.id)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert!(
+        store::projects::participation_for_person(&surreal, admin.id, project.id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn api_firm_person_creation_checks_actor_role_and_firm() {
+    use store::persons::Role;
+
+    let (state, surreal) = state_with_engines().await;
+    let (firm, admin) = seed_project_brand_scope(&surreal).await;
+    let outside = store::projects::find_by_code(&surreal, "outside-matter")
+        .await
+        .unwrap()
+        .unwrap()
+        .firm_id
+        .unwrap();
+    let (admin_cookie, admin_csrf) = session_cookie_and_csrf_for_person(&admin);
+    let (owner_cookie, owner_csrf) = session_cookie_and_csrf_for_role(Role::Owner);
+    let (lawyer_cookie, lawyer_csrf) = session_cookie_and_csrf_for_role(Role::Lawyer);
+    let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
+
+    for (case, cookie, csrf, target, role, expected) in [
+        (
+            "lawyer",
+            &lawyer_cookie,
+            &lawyer_csrf,
+            firm,
+            "client",
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            "other-firm",
+            &admin_cookie,
+            &admin_csrf,
+            outside,
+            "lawyer",
+            StatusCode::NOT_FOUND,
+        ),
+        (
+            "peer",
+            &admin_cookie,
+            &admin_csrf,
+            firm,
+            "admin",
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            "staff",
+            &admin_cookie,
+            &admin_csrf,
+            firm,
+            "lawyer",
+            StatusCode::CREATED,
+        ),
+        (
+            "owner",
+            &owner_cookie,
+            &owner_csrf,
+            firm,
+            "admin",
+            StatusCode::CREATED,
+        ),
+    ] {
+        let email = format!("{case}-provisioned@example.com");
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/app/api/firms/{target}/people"))
+                    .header(header::COOKIE, cookie.as_str())
+                    .header("x-csrf-token", csrf.as_str())
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "name": "Provisioned Person", "email": email, "role": role,
+                            "firm_id": outside
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected, "{case}");
+        let person = store::persons::find_by_email_ci(&surreal, &email)
+            .await
+            .unwrap();
+        if expected == StatusCode::CREATED {
+            let person = person.unwrap();
+            assert_eq!(person.role.as_str(), role);
+            let memberships = store::firms::memberships_for_person(&surreal, person.id)
+                .await
+                .unwrap();
+            assert_eq!(memberships.len(), 1);
+            assert_eq!(memberships[0].firm_id, firm);
+            assert_eq!(memberships[0].membership.as_str(), role);
+            assert!(!memberships[0].is_dri);
+            assert!(
+                store::projects::participations_for_person(&surreal, person.id)
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+        } else {
+            assert!(person.is_none());
         }
     }
 }

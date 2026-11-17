@@ -1006,6 +1006,10 @@ pub fn bootstrap_with_forgejo_oidc(
                     }
                 },
             })
+            .route_layer(axum::middleware::from_fn_with_state(
+                state.surreal.clone(),
+                crate::api::scope_admin_project_request,
+            ))
             .layer(axum::Extension(state.attachment_scanner.clone()))
             .layer(axum::middleware::from_fn_with_state(
                 (state.sessions.clone(), crate::csrf::CsrfMode::Strict),

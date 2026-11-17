@@ -560,6 +560,9 @@ pub async fn reconcile_yaml(
         ),
         None => None,
     };
+    if let Some(project) = &scope_project {
+        require_seed_admin_project(surreal, actor, project).await?;
+    }
     match model {
         SeedModel::Person => {
             reconcile_people(surreal, yaml, overwrite, actor, scope_project.as_ref()).await
@@ -1062,6 +1065,25 @@ async fn update_entity_from_seed(
     Ok(())
 }
 
+async fn require_seed_admin_project(
+    surreal: &SurrealDb,
+    actor: &ReconcileActor<'_>,
+    project: &crate::projects::Project,
+) -> anyhow::Result<()> {
+    if actor.actor_role == crate::persons::Role::Admin
+        && !crate::projects::can_administer_project(
+            surreal,
+            actor.actor_person_id,
+            actor.actor_role,
+            project,
+        )
+        .await?
+    {
+        return Err(ScopeViolation::CrossProject.into());
+    }
+    Ok(())
+}
+
 async fn reconcile_person_project_roles(
     surreal: &SurrealDb,
     yaml: &str,
@@ -1099,6 +1121,7 @@ async fn reconcile_person_project_roles(
                 return Err(anyhow::Error::new(ScopeViolation::CrossProject));
             }
         }
+        require_seed_admin_project(surreal, actor, &project).await?;
         let participation = crate::projects::participation_for_role(person.role);
         if crate::projects::participation_for_person(surreal, person.id, project.id)
             .await?

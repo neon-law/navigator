@@ -50,6 +50,34 @@ struct Args {
     project_id: Uuid,
 }
 
+/// An authenticated Admin may staff matters in the Firms they administer.
+pub(super) async fn require_admin_scope(
+    surreal: &store::surreal::SurrealDb,
+    identity: super::Identity,
+    arguments: &Value,
+) -> Result<(), ToolError> {
+    if identity.role != store::persons::Role::Admin {
+        return Ok(());
+    }
+    let args: Args = super::decode_args(arguments)?;
+    let project = store::projects::find_by_id(surreal, args.project_id)
+        .await
+        .map_err(|error| ToolError::Database(error.to_string()))?
+        .ok_or_else(|| ToolError::NotFound("project".into()))?;
+    if !store::projects::can_administer_project(
+        surreal,
+        Some(identity.person_id),
+        identity.role,
+        &project,
+    )
+    .await
+    .map_err(|error| ToolError::Database(error.to_string()))?
+    {
+        return Err(ToolError::NotFound("project".into()));
+    }
+    Ok(())
+}
+
 pub async fn call(
     surreal: &store::surreal::SurrealDb,
     arguments: &Value,
