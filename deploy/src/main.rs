@@ -2500,6 +2500,15 @@ A queued job has no log yet; a running job's log appears when it finishes."
         /// New private receipt path; existing files are never replaced.
         receipt: std::path::PathBuf,
     },
+    /// Export already-archived GitHub Project repositories to verified private bundles.
+    BackfillClosed {
+        /// Navigator deployment with an existing administrator session.
+        #[arg(long)]
+        host: String,
+        /// Existing private directory for per-Project receipts and the backfill report.
+        #[arg(long)]
+        receipts: std::path::PathBuf,
+    },
     /// Restore a bundle from the exact GCS generation named by its receipt.
     Restore {
         /// Private receipt produced by `ops forgejo archive`.

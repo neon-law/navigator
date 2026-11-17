@@ -1102,6 +1102,10 @@ fn dispatch_with_dns_provider(
             object,
             receipt,
         })) => forgejo::bundle::archive(&mirror, &object, &receipt),
+        crate::Command::Ops(crate::OpsCmd::Forgejo(crate::ForgejoPolicyCmd::BackfillClosed {
+            host,
+            receipts,
+        })) => forgejo::bundle::backfill_closed(&host, &receipts),
         crate::Command::Ops(crate::OpsCmd::Forgejo(crate::ForgejoPolicyCmd::Restore {
             receipt,
             output,

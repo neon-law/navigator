@@ -174,6 +174,8 @@ pub enum Finding {
         #[serde(flatten)]
         review: BranchReview,
     },
+    /// An upstream topic has not reached the secondary mirror.
+    GitHubBranch { repository: String, branch: String },
     /// A dual-forge checkout could not establish main parity.
     ForgeParity {
         repository: String,
@@ -213,7 +215,8 @@ impl Finding {
             Self::RowlessByDeclaration { .. } => Status::Ok,
             Self::ManifestDisagreesWithName { .. }
             | Self::NoManifest { .. }
-            | Self::ForgejoBranch { .. } => Status::Warn,
+            | Self::ForgejoBranch { .. }
+            | Self::GitHubBranch { .. } => Status::Warn,
             Self::RepositoryHasNoRow { .. }
             | Self::DuplicateCode { .. }
             | Self::UnreadableManifest { .. }
@@ -233,6 +236,7 @@ impl Finding {
             Self::NoManifest { .. } => "no-manifest",
             Self::ForgeParity { .. } => "forge-parity",
             Self::ForgejoBranch { .. } => "forgejo-branch",
+            Self::GitHubBranch { .. } => "github-branch",
         }
     }
 
@@ -248,7 +252,8 @@ impl Finding {
             | Self::UnreadableManifest { repository, .. }
             | Self::NoManifest { repository }
             | Self::ForgeParity { repository, .. }
-            | Self::ForgejoBranch { repository, .. } => repository,
+            | Self::ForgejoBranch { repository, .. }
+            | Self::GitHubBranch { repository, .. } => repository,
         }
     }
 
@@ -283,6 +288,9 @@ impl Finding {
                 "`{repository}` carries no {MANIFEST}, so it declares no Project and cannot \
                  be reconciled"
             ),
+            Self::GitHubBranch { branch, .. } => {
+                format!("GitHub topic `{branch}` is absent from the Forgejo mirror")
+            }
             Self::ForgejoBranch { branch, review, .. } => {
                 let evidence = match review {
                     BranchReview::DifferentGitHubHead => "GitHub has a different head".to_owned(),
@@ -739,8 +747,8 @@ pub async fn run(
         render(&report, &scan_root, all);
         if let Some(coverage) = &forge_coverage {
             println!(
-                "Forge parity: {} checkout(s) checked, {} with other origins skipped",
-                coverage.checked, coverage.other_origin
+                "Forge parity: {} checked, {} with other origins, {} Project rows without a matching checkout",
+                coverage.checked, coverage.other_origin, coverage.without_matching_checkout
             );
         }
     }
@@ -759,6 +767,7 @@ async fn report_fleet_forge_parity(
     findings: &mut Vec<Finding>,
 ) -> ForgeCoverage {
     let live: BTreeSet<&str> = live_codes.iter().map(String::as_str).collect();
+    let mut matching = BTreeSet::new();
     let mut coverage = ForgeCoverage::default();
     for repository in repositories {
         if repository.manifest_error.is_none()
@@ -766,6 +775,7 @@ async fn report_fleet_forge_parity(
             && repository.declared_code.as_deref() == Some(repository.directory.as_str())
             && live.contains(repository.code())
         {
+            matching.insert(repository.code());
             let checkout = dir.join(&repository.directory);
             if check_forge_parity(&checkout, repository.code(), findings).await {
                 coverage.checked += 1;
@@ -774,6 +784,7 @@ async fn report_fleet_forge_parity(
             }
         }
     }
+    coverage.without_matching_checkout = live.difference(&matching).count();
     coverage
 }
 
@@ -781,6 +792,7 @@ async fn report_fleet_forge_parity(
 struct ForgeCoverage {
     checked: usize,
     other_origin: usize,
+    without_matching_checkout: usize,
 }
 
 async fn git_probe(dir: &Path, args: &[&str]) -> Option<std::process::Output> {
@@ -885,13 +897,59 @@ async fn check_forge_parity(dir: &Path, repository: &str, findings: &mut Vec<Fin
     }
 }
 
+// OpenSSH aliases can select an account-specific key for the same GitHub host.
+async fn github_origin(dir: &Path, remote: &str) -> Option<(String, String)> {
+    if let Ok(repository) = super::lifecycle::github_owner_name(remote) {
+        return Some(repository);
+    }
+    let (host, path) = ssh_origin_parts(remote)?;
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        tokio::process::Command::new("ssh")
+            .args(["-G", "--", host.as_str()])
+            .current_dir(dir)
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let config = std::str::from_utf8(&output.stdout).ok()?;
+    let hostname = config
+        .lines()
+        .find_map(|line| line.strip_prefix("hostname "))?;
+    github_ssh_repository(hostname, &path)
+}
+
+fn ssh_origin_parts(remote: &str) -> Option<(String, String)> {
+    if remote.starts_with("ssh://") {
+        let url = url::Url::parse(remote).ok()?;
+        return Some((
+            url.host_str()?.to_owned(),
+            url.path().trim_start_matches('/').to_owned(),
+        ));
+    }
+    let (host, path) = remote.strip_prefix("git@")?.split_once(':')?;
+    Some((host.to_owned(), path.to_owned()))
+}
+
+fn github_ssh_repository(hostname: &str, path: &str) -> Option<(String, String)> {
+    if !matches!(hostname, "github.com" | "ssh.github.com") {
+        return None;
+    }
+    super::lifecycle::github_owner_name(&format!("https://github.com/{path}")).ok()
+}
+
 async fn review_forge_refs(
     dir: &Path,
     repository: &str,
     findings: &mut Vec<Finding>,
 ) -> Result<bool, ForgeParityProblem> {
     let origin_url = remote_url(dir, "origin", true).await?;
-    let Ok((owner, name)) = super::lifecycle::github_owner_name(&origin_url) else {
+    let Some((owner, name)) = github_origin(dir, &origin_url).await else {
         return Ok(false);
     };
     let (origin_fetch, mirror_fetch) = tokio::try_join!(
@@ -916,6 +974,15 @@ async fn review_forge_refs(
         None
     };
     report_forgejo_branches(repository, &origin, &forgejo, github.as_ref(), findings).await;
+    findings.extend(
+        origin
+            .keys()
+            .filter(|branch| branch.as_str() != "main" && !forgejo.contains_key(*branch))
+            .map(|branch| Finding::GitHubBranch {
+                repository: repository.to_owned(),
+                branch: branch.clone(),
+            }),
+    );
     compare_main(&origin, &forgejo).map(|()| true)
 }
 
@@ -963,6 +1030,18 @@ mod tests {
     use std::path::Path;
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[test]
+    fn ssh_alias_parity_resolves_only_github_hosts() {
+        let (host, path) = super::ssh_origin_parts("ssh://git@work-forge:443/example/matter.git")
+            .expect("SSH alias URL");
+        assert_eq!(host, "work-forge");
+        assert_eq!(
+            super::github_ssh_repository("ssh.github.com", &path),
+            Some(("example".into(), "matter".into()))
+        );
+        assert_eq!(super::github_ssh_repository("forge.example", &path), None);
+    }
 
     #[tokio::test]
     async fn forge_parity_reports_configuration_access_and_main_differences(

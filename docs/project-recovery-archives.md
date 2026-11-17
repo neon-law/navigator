@@ -101,6 +101,19 @@ existing row or object that differs stops the restore rather than being replaced
 
 Restore the repository from the reported Git bundle receipt with `hudson ops forgejo bundle restore`.
 
+## Export closed GitHub repositories
+
+Run `hudson ops forgejo backfill-closed --host <navigator-host> --receipts <private-directory>` with an existing
+Navigator administrator session, GitHub read access and access to the private Git bundle archive bucket. Create the
+receipt directory with mode `0700`. The command checks the closed Project inventory, the existing GitHub archive setting
+and the commit filed with the Project's closed repository document. Each successful export records a receipt after
+restoring all captured refs from the exact immutable storage generation. A rerun verifies existing receipts.
+
+The private report lists every closed Project and its outcome, including source or document access failures. The command
+exits unsuccessfully if any Project needs review. Use the receipt as the source backup when requesting the Project
+Recovery Archive. The export captures Git history and default branch. LFS, document objects and forge metadata require
+their own recovery coverage.
+
 ## Soft-deleted chains and the purge
 
 A soft-deleted chain is archived to the same lane and the same content-addressed objects, then its verified active
