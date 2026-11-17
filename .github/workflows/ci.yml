@@ -954,11 +954,10 @@ jobs:
           # counter-file location into this shell only, so a later step would
           # not find the profile data.
           #
-          # The floor sits under what the `coverage floor` job measures from
-          # the LCOV. Last print with SurrealDB tests in the run: 91.40% line coverage
-          # (481824 of 527139) on 2026-11-16, from run 43851127830. The 91.0
-          # floor is the merge gate: 0.40pt of headroom so one drift window
-          # does not fail every PR.
+          # The floor is 70.0% since CI stopped testing SurrealDB: code that
+          # names no SurrealDB but was exercised only by SurrealDB-backed tests
+          # now reads as uncovered. ENG-1375 raises it back to 95.0% as domains
+          # move to PostgreSQL and their tests to the PostgreSQL fixture.
           #
           # Raising the floor means moving four constants together — the
           # `coverage` job `FLOOR`, `AGENTS.md`, `docs/agent-workflows.md`, and
@@ -1100,7 +1099,7 @@ jobs:
           merge-multiple: true
       - name: merge and hold the floor
         env:
-          FLOOR: "91.0"
+          FLOOR: "70.0"
         run: |
           python3 - <<'PYTHON'
           import collections, glob, os, sys
