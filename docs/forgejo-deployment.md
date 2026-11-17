@@ -395,8 +395,11 @@ operator runs the verb only to pre-stage a release. A job whose release is missi
 
 `hudson ops forgejo runner-controller` starts a disposable runner for every queued job, so no Forgejo pull request waits
 for a person. It runs as one Deployment in the application namespace
-([`runner-controller.yaml`](../examples/deploy/k8s/gke/forgejo/runner-controller/runner-controller.yaml)), with
-`FORGEJO_TOKEN` set to the environment's Forgejo operator token. Every 20 seconds it:
+([`runner-controller.yaml`](../examples/deploy/k8s/gke/forgejo/runner-controller/runner-controller.yaml)), with a
+dedicated controller credential projected by [Forgejo service
+apply](deployment-secrets.md#postgresql-and-forgejo-service-secrets). Grant access to the admin runner queue and
+registrations, repository runner registration, run metadata, and package uploads for pinned releases. Keep the
+credential in the controller's application namespace. Every 20 seconds it:
 
 1. **Recovers leftovers.** A finished runner Job that no live launch owns is removed with its registration two minutes
    after it finished. Each Job carries its registration ID and repository as annotations for exactly this. A
@@ -413,14 +416,14 @@ Each launch is the `runner-once` Job, unchanged: a repository-scoped ephemeral r
 without an API token, a read-only root filesystem, no host or Docker socket, `/32` egress to the `--egress-host`
 addresses resolved at launch, a thirty-minute deadline and a five-minute TTL. The controller talks to the Kubernetes API
 with its own service account. Its Role reaches only `navigator-forgejo-runners`: Jobs, and creating Secrets, service
-accounts and NetworkPolicies, plus pod logs. Its ClusterRole reads that one namespace object. The operator token stays
-in the controller and never enters a job pod. `--once` runs one tick, waits for its runners and exits. `--context`
-drives a cluster through `kubectl` from an operator host instead.
+accounts and NetworkPolicies, plus pod logs. Its ClusterRole reads that one namespace object. The token stays in the
+controller and never enters a job pod. `--once` runs one tick, waits for its runners and exits. `--context` drives a
+cluster through `kubectl` from an operator host instead.
 
-For a production canary, add `--repository <owner/repository>` to the controller arguments. The controller verifies the
-exact private repository and retains its numeric identity. It launches and observes only that repository and recovers
-only Jobs and registrations attributed to it. Registrations without repository metadata require explicit operator
-cleanup. Omit the flag for installation-wide operation.
+For a canary, add `--repository <owner/repository>` to the controller arguments. The controller verifies the exact
+private repository and retains its numeric identity. It launches and observes only that repository and recovers only
+Jobs and registrations attributed to it. Registrations without repository metadata require explicit operator cleanup.
+Omit the flag for installation-wide operation.
 
 Forgejo 15.0.9 has no API to re-run a run (the endpoint returns 404). To re-run a failed job, push a new commit; the
 controller picks it up within one tick.
