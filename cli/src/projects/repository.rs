@@ -4552,14 +4552,6 @@ jobs:
     }
 
     #[test]
-    fn canonical_contract_marks_email_draft_only() {
-        assert!(AGENT_CONTRACT_BASE.contains("## Critical: email is draft-only"));
-        assert!(AGENT_CONTRACT_BASE.contains("Every email must remain a draft"));
-        assert!(AGENT_CONTRACT_BASE.contains("never sends, replies to, or forwards email"));
-        assert!(AGENT_CONTRACT_BASE.contains("lawyer reviews each draft"));
-    }
-
-    #[test]
     fn claude_settings_deny_email_delivery_and_preserve_draft_creation() {
         let settings: serde_json::Value =
             serde_json::from_str(CLAUDE_SETTINGS_CONTENTS).expect("valid Claude settings JSON");

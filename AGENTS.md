@@ -62,11 +62,16 @@ Relationship Log entries only — never a typed `relationship` or `entity_role` 
 row. Conflicts read the one firm-wide graph through `store/src/conflicts.rs`; email-derived identity lands there by
 being a correct Person, not by minting edges.
 
-## Email is draft-only
+## Email and signature requests
 
-An agent never sends, replies to, or forwards email. Every email an agent touches ends as a draft for lawyer review —
-the same doctrine the [Project-repo contract](cli/src/projects/agent_contract.md) states for Project repositories,
-applied to this one. To send something, prepare the draft and hand it to the lawyer.
+Keep email correspondence, including Gmail, draft-only. The lawyer reviews and sends it.
+
+- Prepare a DocuSign signature request with `navigator notation envelope prepare <notation-id>`.
+- Use the sender view to review the signing fields with the lawyer.
+- Send only after the lawyer explicitly approves the document, recipients, and signing fields. Run
+  `navigator notation envelope send <notation-id>`.
+- Verify the envelope ID and status with `navigator notation envelope status <notation-id>`.
+- To have DocuSign email the client an engagement letter, start with `navigator project onboard --delivery emailed`.
 
 ## Least code, coverage never lower
 
