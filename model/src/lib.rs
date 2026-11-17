@@ -3,8 +3,8 @@
 //!
 //! `store` and `cloud` re-export each module's items under their original
 //! paths, so `store::documents::Signing` and `model::documents::Signing` are
-//! one type. The lean `navigator` CLI depends on this crate alone, which keeps
-//! `SurrealDB`, `SQLx`, Typst, and the cloud SDKs out of its build.
+//! one type. The `navigator` CLI uses these models without linking database clients or
+//! workflow runtimes; its local document renderer links Typst separately.
 
 pub mod cases;
 pub mod correspondence;
@@ -30,3 +30,6 @@ pub mod projects;
 pub mod question_registry;
 pub mod seed;
 pub mod workspace;
+
+pub mod brand_letterheads;
+pub mod fi_import;

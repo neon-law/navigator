@@ -361,6 +361,51 @@ pub fn answer_type_is_aggregate(answer_type: &str) -> bool {
     answer_type == "people_list"
 }
 
+/// Render metadata keys for a typed questionnaire state.
+#[must_use]
+pub fn metadata_keys_for_state(state: &str) -> Vec<&str> {
+    let (ty, role) = state.split_once("__").unwrap_or((state, state));
+    match (ty, role) {
+        ("person", "client") => vec!["client", "client_name"],
+        ("project", "engagement") => vec!["engagement", "project_name"],
+        ("entity", "company") => vec!["company", "entity_name"],
+        ("entity", "nonprofit") => vec!["nonprofit", "nonprofit_legal_name"],
+        ("person", "worker") => vec!["worker", "worker_legal_name"],
+        _ => vec![role],
+    }
+}
+
+/// Optional choice labels shared by local rendering and the workflow interpreter.
+pub fn choice_labels_from_yaml(
+    yaml: &str,
+) -> Result<std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>, String>
+{
+    #[derive(Deserialize)]
+    struct Choices {
+        #[serde(default)]
+        choices: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+    }
+    let mut value: serde_yaml::Value = serde_yaml::from_str(yaml).map_err(|e| e.to_string())?;
+    rules::normalize_value(&mut value)?;
+    serde_yaml::from_value::<Choices>(value)
+        .map(|c| c.choices)
+        .map_err(|e| e.to_string())
+}
+
+/// Resolve one saved choice using the same metadata keys on every rendering surface.
+#[must_use]
+pub fn choice_label(
+    choices: &std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+    state: &str,
+    value: &str,
+) -> Option<String> {
+    metadata_keys_for_state(state)
+        .into_iter()
+        .find_map(|key| choices.get(key))
+        .and_then(|labels| labels.get(value))
+        .cloned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -496,22 +496,7 @@ pub(crate) fn question_code_for_state(state: &str) -> &str {
     state.split_once("__").map_or(state, |(code, _)| code)
 }
 
-pub(crate) fn role_key_for_state(state: &str) -> &str {
-    state.split_once("__").map_or(state, |(_, role)| role)
-}
-
-pub(crate) fn metadata_keys_for_state(state: &str) -> Vec<&str> {
-    let role = role_key_for_state(state);
-    let ty = question_code_for_state(state);
-    match (ty, role) {
-        ("person", "client") => vec!["client", "client_name"],
-        ("project", "engagement") => vec!["engagement", "project_name"],
-        ("entity", "company") => vec!["company", "entity_name"],
-        ("entity", "nonprofit") => vec!["nonprofit", "nonprofit_legal_name"],
-        ("person", "worker") => vec!["worker", "worker_legal_name"],
-        _ => vec![role],
-    }
-}
+pub(crate) use store::question_registry::metadata_keys_for_state;
 
 /// The declared choice VALUES for a question `state` — the keys the
 /// walker renders and the only values a named route may match. Resolves

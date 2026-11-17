@@ -304,9 +304,7 @@ pub fn audiences_from_yaml(yaml: &str) -> Result<BTreeMap<String, String>, Workf
 pub fn choices_from_yaml(
     yaml: &str,
 ) -> Result<BTreeMap<String, BTreeMap<String, String>>, WorkflowSpecError> {
-    let wrapper: ChoiceFrontmatter = serde_yaml::from_value(normalized_yaml(yaml)?)
-        .map_err(|error| WorkflowSpecError::Yaml(error.to_string()))?;
-    Ok(wrapper.choices)
+    store::question_registry::choice_labels_from_yaml(yaml).map_err(WorkflowSpecError::Yaml)
 }
 
 /// Extract the `workflow:` block from a notation template's YAML
@@ -396,12 +394,6 @@ struct PromptFrontmatter {
 struct AudienceFrontmatter {
     #[serde(default)]
     audiences: BTreeMap<String, String>,
-}
-
-#[derive(Deserialize)]
-struct ChoiceFrontmatter {
-    #[serde(default)]
-    choices: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 fn extract_frontmatter(contents: &str) -> Option<&str> {

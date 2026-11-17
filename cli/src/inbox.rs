@@ -1,4 +1,4 @@
-//! `hudson inbox` — the lawyer-mailbox processing backlog.
+//! `navigator inbox` — the lawyer-mailbox processing backlog.
 //!
 //! Plan by default: listing and showing a message classify server-side and
 //! record nothing. `--apply` records the classified route (idempotent),
@@ -63,7 +63,7 @@ pub enum InboxAction {
     },
     /// Show one message's process plan, or with --apply, record it.
     Process {
-        /// Inbox message id from `hudson inbox list`.
+        /// Inbox message id from `navigator inbox list`.
         message: Uuid,
         /// Record the classified route, notify the matter channel, and
         /// archive --gmail only after a NEF filing finishes; refusals fail in triage.
@@ -107,7 +107,7 @@ fn finish(result: Result<()>) -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("hudson inbox: {error:#}");
+            eprintln!("navigator inbox: {error:#}");
             ExitCode::FAILURE
         }
     }
@@ -300,16 +300,12 @@ struct NefFiling {
 
 impl ProcessApplyView {
     fn require_completed_filing(&self) -> Result<()> {
-        if self.route != store::inbox::route::NEF {
+        if self.route != "nef" {
             return Ok(());
         }
         let outcome = self.nef.as_ref().map(|filing| filing.outcome.as_str());
         match outcome {
-            Some(
-                store::inbox::nef_outcome::FILED
-                | store::inbox::nef_outcome::ALREADY_RECORDED
-                | store::inbox::nef_outcome::TEXT_ONLY,
-            ) => Ok(()),
+            Some("filed" | "already_recorded" | "text_only") => Ok(()),
             Some(outcome) => Err(anyhow!(
                 "NEF filing remains in triage: {outcome}; Gmail copy left in the inbox"
             )),
@@ -567,7 +563,7 @@ async fn download(
             return Err(anyhow!("inbox attachments refused: {status} {text}"));
         }
         let bytes = response.bytes().await.context("read the attachment")?;
-        if store::assets::sha256_hex(&bytes) != attachment.sha256 {
+        if model::documents::sha256_hex(&bytes) != attachment.sha256 {
             return Err(anyhow!(
                 "{name} does not match the digest its message records; nothing was written"
             ));
@@ -813,7 +809,7 @@ mod tests {
         let _lock = CREDENTIALS_LOCK.lock().await;
         let previous = credentials_previous();
         let out = tempfile::tempdir().unwrap();
-        let plan = plan_with_attachment(&store::assets::sha256_hex(ATTACHMENT_BYTES));
+        let plan = plan_with_attachment(&model::documents::sha256_hex(ATTACHMENT_BYTES));
         for _ in 0..2 {
             let base = serve_each(vec![
                 ("200 OK".into(), plan.clone().into_bytes()),
@@ -845,7 +841,7 @@ mod tests {
         let base = serve_each(vec![
             (
                 "200 OK".into(),
-                plan_with_attachment(&store::assets::sha256_hex(b"other bytes")).into_bytes(),
+                plan_with_attachment(&model::documents::sha256_hex(b"other bytes")).into_bytes(),
             ),
             ("200 OK".into(), ATTACHMENT_BYTES.to_vec()),
         ])
@@ -877,7 +873,7 @@ mod tests {
         // One response only: a fetch of the unmatched attachment would hang.
         let base = serve_once(
             "200 OK",
-            plan_with_attachment(&store::assets::sha256_hex(ATTACHMENT_BYTES)),
+            plan_with_attachment(&model::documents::sha256_hex(ATTACHMENT_BYTES)),
         )
         .await;
         stored_login(&base);

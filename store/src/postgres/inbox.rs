@@ -592,7 +592,7 @@ pub(crate) async fn ingest_fi_message_in(
     scope: &crate::fi_import::Scope,
     row: &crate::fi_import::Row,
 ) -> Result<IngestedInbound, crate::fi_import::FiImportError> {
-    use crate::fi_import::FiImportError as Error;
+    use crate::fi_import::{FiImportError as Error, IngestRow};
     let ids: Vec<Uuid> = sqlx::query_scalar("SELECT DISTINCT message_id FROM inbox_ingress WHERE firm_id=$1 AND provider_account=$2 AND provider_message_id=$3")
         .bind(scope.firm).bind(&scope.account).bind(&row.provider_message_id)
         .fetch_all(&mut *connection).await.map_err(|_|Error::Storage)?;

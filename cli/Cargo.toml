@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 pdf.workspace = true
+forms.workspace = true
 model.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true

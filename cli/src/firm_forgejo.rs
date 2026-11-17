@@ -1,4 +1,4 @@
-//! `hudson site firm provision-forgejo <slug>`: ask a deployment to create
+//! `navigator site firm provision-forgejo <slug>`: ask a deployment to create
 //! or reconcile a Firm's Forgejo organization.
 //!
 //! The deployment does the work with its own provisioning identity
@@ -26,7 +26,8 @@ struct Provisioned {
     owner_added: bool,
 }
 
-pub(crate) fn refusal(status: reqwest::StatusCode, body: &str) -> String {
+#[must_use]
+pub fn refusal(status: reqwest::StatusCode, body: &str) -> String {
     let value = serde_json::from_str::<serde_json::Value>(body).ok();
     let message = value
         .as_ref()
@@ -104,7 +105,7 @@ async fn provision_at(base: &str, token: &str, slug: &str) -> Result<String> {
     ))
 }
 
-/// `hudson site firm provision-forgejo`.
+/// `navigator site firm provision-forgejo`.
 pub async fn provision(host: Option<&str>, slug: &str) -> ExitCode {
     let result = async {
         let (base, token) = crate::remote::resolve(host)?;

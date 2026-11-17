@@ -389,18 +389,18 @@ threads the evaluated Typst source to the **worker** as a `DocumentPayload` on t
 durability. `web` reads the PDF back from storage to hand to the signature provider. This is one-directional: template →
 fresh PDF.
 
-**Rendering a template offline — `hudson notation pdf` / `hudson notation word`.** For an ad-hoc artifact outside the
-durable workflow (a demand letter to send by hand, a draft for review), `hudson notation pdf <template.md> --out
-<file.pdf>` or `hudson notation word <template.md> --out <file.docx>` takes any validation-passing notation template and
-compiles it in pure Rust; `--out` must carry the matching extension, and any other extension is refused. PDF rendering
-converts the Markdown body to Typst. Word rendering writes editable OOXML with native heading styles, US Letter
-geometry, and page fields; a notation whose frame is `letter` receives the same firm identity as its PDF plus separate
-first-page and running headers. A `pleading` gets the same court-paper calibration in both formats: under `jurisdiction:
-CA` or `NV`, a 28-line numbered rail on a 24pt line pitch with line 1 an inch down the page (under `WA`, a 23pt pitch;
-see [Pleading paper](#pleading-paper)), the footer's page number and paper title, and the first-page caption described
-under [Pleading paper](#pleading-paper). Both commands validate the file against the same rule set as `navigator project
-gate`, fill placeholders through the same notation evaluator, and produce byte-identical output when the source revision
-and answers are unchanged.
+**Rendering a template offline — `navigator notation pdf` / `navigator notation word`.** For an ad-hoc artifact outside
+the durable workflow (a demand letter to send by hand, a draft for review), `navigator notation pdf <template.md> --out
+<file.pdf>` or `navigator notation word <template.md> --out <file.docx>` takes any validation-passing notation template
+and compiles it in pure Rust; `--out` must carry the matching extension, and any other extension is refused. PDF
+rendering converts the Markdown body to Typst. Word rendering writes editable OOXML with native heading styles, US
+Letter geometry, and page fields; a notation whose frame is `letter` receives the same firm identity as its PDF plus
+separate first-page and running headers. A `pleading` gets the same court-paper calibration in both formats: under
+`jurisdiction: CA` or `NV`, a 28-line numbered rail on a 24pt line pitch with line 1 an inch down the page (under `WA`,
+a 23pt pitch; see [Pleading paper](#pleading-paper)), the footer's page number and paper title, and the first-page
+caption described under [Pleading paper](#pleading-paper). Both commands validate the file against the same rule set as
+`navigator project gate`, fill placeholders through the same notation evaluator, and produce byte-identical output when
+the source revision and answers are unchanged.
 
 The `{{firm.portal_url}}` binding supplies the web app sign-in URL for the Project's Brand.
 
@@ -422,7 +422,7 @@ clerk assigns a case number; see the [synthetic Washington
 declaration](../cli/tests/fixtures/synthetic_washington_matter/templates/declaration.md).
 
 **Redlining a revision — `--redline-against`.** When a notation has been delivered before and the template (or its
-answers) have since changed, `hudson notation word <template.md> --out <new.docx> --redline-against <previous.docx>`
+answers) have since changed, `navigator notation word <template.md> --out <new.docx> --redline-against <previous.docx>`
 renders the current template exactly as `notation word` does, then writes the difference from the previous document as
 real Word tracked changes (`w:ins`/`w:del`) instead of clean prose. The revisions are attributed to the signing lawyer —
 `--redline-author` if given, else `matter.counsel.name` from the Project's `navigator.yaml`, the same name the `/s/`
@@ -442,7 +442,7 @@ Signature, acceptance, notary, and jurat blocks are the only spaces a person com
 HTML comment (`<!-- … -->`), which never renders and is not scanned. A bracket that is a link, a footnote, a checkbox,
 `[sic]`, or a citation with a number passes.
 
-`hudson notation pdf` and `hudson notation word` render final unless `--preview` is passed, refusing with each
+`navigator notation pdf` and `navigator notation word` render final unless `--preview` is passed, refusing with each
 unfinished line and, for a placeholder, the questionnaire state that answers it. `--preview` keeps the highlighted draft
 for review. Sending a notation for signature runs the same check on the filled document before the `pdf_persisted`
 transition, so the provider is never called with an unfinished document. Templates are held to the same standard by

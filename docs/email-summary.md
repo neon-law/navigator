@@ -34,7 +34,7 @@ not authorize a Clerk's substantive reply or grant matter or promotional consent
 
 ## Scheduled Inbox preview
 
-Run `hudson inbox assign-matches --scheduled --dry-run` under the approved Navigator identity. The Portal requires
+Run `navigator inbox assign-matches --scheduled --dry-run` under the approved Navigator identity. The Portal requires
 `NAVIGATOR_INBOX_PREVIEW_ACTOR_ID`, `NAVIGATOR_INBOX_PREVIEW_FIRM_ID`, `NAVIGATOR_INBOX_PREVIEW_BRAND`, and
 `NAVIGATOR_INBOX_PREVIEW_PROVIDER_ACCOUNT`. Use the integration's recorded provider account for the receiving mailbox.
 The current actor must have access to the configured Firm and the Firm must own the receiving Brand. The preview also

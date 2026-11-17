@@ -83,7 +83,7 @@ pub fn run_download(tag: &str, dir: Option<PathBuf>) -> ExitCode {
 /// value as an argument, so it is unit-testable without mutating
 /// process-global env — the same pattern
 /// `credentials::resolve_credentials_path` uses.
-pub(crate) fn default_downloads_dir(home: Option<String>) -> Result<PathBuf> {
+pub fn default_downloads_dir(home: Option<String>) -> Result<PathBuf> {
     let base = home.filter(|h| !h.is_empty()).ok_or_else(|| {
         anyhow!("cannot resolve a home directory ($HOME is unset) to find Downloads")
     })?;

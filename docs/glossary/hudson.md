@@ -1,19 +1,20 @@
 ---
 title: "Hudson"
-description: "Hudson is Navigator's command-line tool for managing deployments and running the local development stack."
+description: "Hudson is Navigator's operator CLI for deployments, infrastructure and local development."
 ---
 
-Navigator's **operator CLI**: the `hudson` binary, built from the `hudson` package under `deploy/`. It holds the verbs a
-[Deployment Operator](deployment-operator.md) and a contributor run to deploy Navigator, run the local stack, and
-configure the Firm — `dev`, `ops`, letterheads, social accounts, OAuth clients, secrets, and the rest of `hudson
---help`. It links the web client, the cloud SDKs, and the KIND tooling, so it ships as its own release archive and in
-the `navigator-cli` image, never in the Homebrew tap.
+Navigator's **operator CLI**: the `hudson` binary, built from the `hudson` package under `deploy/`. A [Deployment
+Operator](deployment-operator.md) uses `ops` and `dev` for cloud access, deployment, infrastructure, migrations,
+backups, recovery, secrets provisioning and the remaining Restate operations.
 
-The rule for a new verb: if it works on a Project's matter (its documents, mail, notations, pages, or glossary terms),
-it is `navigator`; if it deploys Navigator or configures the Firm, it is `hudson`. `navigator site document`, `site
-mail`, `site notation`, and `glossary` follow it, and `hudson` keeps those spellings as deprecated aliases for one
-release. `preview`, `notation` rendering, and `mail` still link the web renderer, Typst, or the store directly, so they
-stay here until they read through the site API.
+Authorized application work belongs in `navigator`, including People, Firm and Brand administration, Legal Plans, mail
+drafts, Inbox, Downloads and Notation rendering. These operations use the existing Navigator site session and key
+storage. Local PDF and Word rendering shares the existing renderer; remote reads go through the site API rather than
+opening a database from the user toolchain.
 
-Two other binaries sit beside it: `navigator`, the lean CLI for Projects, Jujutsu repositories, `validate`, and matter
-work; and `scorpio`, the [Ephemeris](ephemeris.md) CLI. From a checkout, run it with `cargo run -p hudson -- <verb>`.
+Hudson retains existing application spellings during the release transition so pinned repositories continue working. The
+local Matter Page preview and other remaining compatibility commands must not acquire new application behavior; new
+application work belongs in Navigator. The public Project toolchain never requires cloud or database credentials.
+
+`scorpio` is the separate [Ephemeris](ephemeris.md) CLI. From a checkout, run the operator with `cargo run -p hudson --
+<verb>`.

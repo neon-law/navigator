@@ -178,6 +178,7 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
         ),
         ("POST", "/app/api/people", post(create_person)),
         ("GET", "/app/api/mail-signature", get(mail_signature)),
+        ("GET", "/app/api/forms/{code}/blank", get(form_blank)),
         ("POST", "/app/api/firms/{id}/people", post(create_firm_person)),
         ("POST", "/app/api/people/merge", post(merge_people)),
         ("GET", "/app/api/people/{id}", get(get_person)),
@@ -1402,35 +1403,34 @@ async fn list_people(
     ))
 }
 
+#[derive(Deserialize)]
+struct CreatePersonRequest {
+    #[serde(flatten)]
+    person: crate::people_commands::CreatePersonCommand,
+    #[serde(default)]
+    project_id: Option<Uuid>,
+}
+
 async fn create_person(
     State(surreal): State<store::surreal::SurrealDb>,
     LawyerSession(session): LawyerSession,
-    JsonOrForm(input): JsonOrForm<crate::people_commands::CreatePersonCommand>,
+    JsonOrForm(input): JsonOrForm<CreatePersonRequest>,
 ) -> Response {
-    let mut command = input;
-    // The role select is authoritative server-side, not just disabled in
-    // the browser: a caller who can't change roles always creates a
-    // `client`, so a lawyer can't POST `role=admin` past the form.
-    // Only coerce a *recognized* role — an unrecognized value still falls
-    // through to the command's validation and is rejected as a 400.
-    if !may_change_roles(&session) && crate::people_commands::parse_role(&command.role).is_some() {
-        command.role = store::persons::Role::Client.as_str().to_string();
+    if session.viewing_as_dri.is_some() {
+        return ApiError::Forbidden.into_response();
     }
-    if crate::people_commands::parse_role(&command.role)
-        .is_some_and(|role| !may_create_person_role(session.role, role))
+    match store::people_commands::create_person_for_actor(
+        &surreal,
+        input.person,
+        session.role,
+        session.person_id,
+        input.project_id,
+    )
+    .await
     {
-        return mutation_error(PeopleCommandError::Blocked(
-            "You cannot assign a system role above your own.",
-        ));
-    }
-    if let Some(firm_id) = command.firm_id {
-        if let Err(error) = require_firm_administration(&surreal, &session, firm_id).await {
-            return error.into_response();
-        }
-    }
-    match crate::people_commands::create_person(&surreal, &command).await {
         Ok(created) => (StatusCode::CREATED, Json(created)).into_response(),
-        Err(e) => mutation_error(e),
+        Err(PeopleCommandError::Blocked(_)) => ApiError::Forbidden.into_response(),
+        Err(error) => mutation_error(error),
     }
 }
 
@@ -1461,6 +1461,30 @@ async fn mail_signature(
     Ok(Json(signature))
 }
 
+async fn form_blank(
+    State(state): State<ApiState>,
+    _lawyer: LawyerSession,
+    Path(code): Path<String>,
+) -> Result<Response, ApiError> {
+    let form = state
+        .forms_registry
+        .iter()
+        .find(|form| form.code == code)
+        .ok_or(ApiError::NotFound)?;
+    let blank = state
+        .assets_storage
+        .get(form.object_path)
+        .await
+        .map_err(|_| ApiError::Db("Form blank storage unavailable".into()))?;
+    forms::verify_sha256(form.pinned_sha256(), &blank.bytes)
+        .map_err(|_| ApiError::Db("Form blank failed its content pin".into()))?;
+    Ok((
+        [(axum::http::header::CONTENT_TYPE, "application/pdf")],
+        blank.bytes,
+    )
+        .into_response())
+}
+
 pub(crate) fn may_create_person_role(
     actor: store::persons::Role,
     requested: store::persons::Role,
@@ -1478,10 +1502,9 @@ async fn create_firm_person(
     Path(firm_id): Path<Uuid>,
     Json(mut command): Json<crate::people_commands::CreatePersonCommand>,
 ) -> Result<(StatusCode, Json<store::persons::Person>), ApiError> {
-    use store::persons::Role;
     require_firm_administration(&surreal, &session, firm_id).await?;
     if crate::people_commands::parse_role(&command.role)
-        .is_some_and(|role| role == Role::Owner || !may_create_person_role(session.role, role))
+        .is_some_and(|role| !may_create_person_role(session.role, role))
     {
         return Err(ApiError::Forbidden);
     }
@@ -15329,6 +15352,44 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
     #[allow(clippy::too_many_lines)]
     async fn the_people_doors_create_read_update_and_delete_a_person() {
         let f = door_fixture().await;
+        let (status, _) = call(
+            &f.state, Some(&f.lawyer), "POST", "/app/api/people",
+            Some(serde_json::json!({"name":"Independent Contact", "email":"independent@example.com", "role":"client"})),
+        ).await;
+        assert_eq!(
+            status,
+            StatusCode::CREATED,
+            "contact creation is independent of Project creation"
+        );
+        let (status, _) = call(
+            &f.state, Some(&f.lawyer), "POST", "/app/api/people",
+            Some(serde_json::json!({"name":"Refused", "email":"refused@example.com", "project_id":f.project})),
+        ).await;
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "unrelated Project context stays hidden"
+        );
+        store::participation::add_participant(
+            &f.db,
+            &store::participation::AddParticipantCommand {
+                project_id: f.project,
+                person_id: f.lawyer.person_id.unwrap(),
+                dri: store::participation::DriRequest::Unchanged,
+                actor: store::participation::DriActor::System,
+            },
+        )
+        .await
+        .unwrap();
+        let (status, _) = call(
+            &f.state, Some(&f.lawyer), "POST", "/app/api/people",
+            Some(serde_json::json!({"name":"Refused", "email":"refused@example.com", "role":"admin", "project_id":f.project})),
+        ).await;
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "a Lawyer cannot assign a staff tier"
+        );
         let (status, created) = call(
             &f.state,
             Some(&f.lawyer),
@@ -15337,14 +15398,28 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
             Some(serde_json::json!({
                 "name": "Dana Client",
                 "email": "dana@example.com",
-                "role": "admin",
+                "role": "client",
+                "project_id": f.project,
             })),
         )
         .await;
         assert_eq!(status, StatusCode::CREATED, "{created}");
         assert_eq!(
             created["role"], "client",
-            "a lawyer cannot mint an admin; the role is coerced to client"
+            "a participating Lawyer creates a client without role coercion"
+        );
+        let (status, _) = call(
+            &f.state,
+            Some(&f.lawyer),
+            "GET",
+            "/app/api/mail-signature?account=dana%40example.com",
+            None,
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "a Person creation does not expose that Person's mail signature"
         );
         let id = created["id"].as_str().unwrap().to_string();
 

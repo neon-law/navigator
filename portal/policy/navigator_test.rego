@@ -3504,3 +3504,13 @@ test_ci_cannot_read_mail_signatures if {
     session := object.union(owner_session, {"source": "ci"})
     not authz.allow with input as {"path": ["app", "api", "mail-signature"], "method": "GET", "session": session}
 }
+
+test_cli_render_inputs_require_a_lawyer_session if {
+    paths := [["app", "api", "mail-signature"], ["app", "api", "forms", "example", "blank"]]
+    every path in paths {
+        authz.allow with input as {"path": path, "method": "GET", "session": lawyer_session}
+        not authz.allow with input as {"path": path, "method": "GET", "session": clerk_session}
+        not authz.allow with input as {"path": path, "method": "GET", "session": client_session}
+        not authz.allow with input as {"path": path, "method": "GET", "session": null}
+    }
+}

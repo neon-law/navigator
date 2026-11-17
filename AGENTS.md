@@ -37,11 +37,16 @@ fixtures, or duplicate another check. Keep coverage for authorization, isolation
 
 ## navigator or hudson
 
-A command that works on a Project's matter (its documents, mail, notations, pages, or glossary terms) belongs in
-`navigator`, the toolchain a Project repository names and Homebrew installs. A command that deploys Navigator or
-configures the Firm (letterheads, social accounts, OAuth clients, secrets) belongs in `hudson`. `hudson preview` and
-`hudson notation` still link the web renderer, Typst, or the store, so they wait in `hudson` until their reads go
-through the site API.
+Every authorized application operation belongs in `navigator`, the toolchain Project repositories name and Homebrew
+installs. This includes People, Firm and Brand administration, Legal Plans, mail drafts, Inbox, Downloads, and local
+Notation previews and rendering. Lawyers can create contacts without a Project requirement. Staff-role grants follow
+Firm administration; only an Owner creates Admin or Owner identities. Creation does not itself grant Project
+participation.
+
+`hudson` operates the installation through `ops` and `dev`: cloud access, deployments, infrastructure, migrations,
+backups, recovery, secrets provisioning and the remaining Restate operations. Application commands use Navigator's
+existing authenticated site session and key storage. Keep compatibility spellings during the release transition; do not
+add application commands to Hudson or link new SurrealDB or Restate clients into Navigator.
 
 ## Find the term first
 

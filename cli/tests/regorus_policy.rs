@@ -525,7 +525,7 @@ fn regorus_matches_every_checked_in_policy_decision() {
     // Mail signature reads cover lawyer admission and denial to other tiers, anonymous callers, and CI.
     assert_eq!(
         test_names.len(),
-        696,
+        697,
         "the policy decision inventory changed; review every new or removed rule"
     );
 

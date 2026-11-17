@@ -12,6 +12,8 @@ publish.workspace = true
 # `navigator` links this crate instead of theirs.
 
 [dependencies]
+csv.workspace = true
+chrono-tz.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 base64.workspace = true

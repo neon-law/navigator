@@ -17,6 +17,106 @@ use crate::external_identities::{self, ExternalIdentityError, ExternalSystem};
 use crate::persons::{self, ContactUpdate, NewPerson, Person, PersonEdit, PersonError, Role};
 use crate::surreal::SurrealDb;
 
+#[path = "person_creation_scope.rs"]
+mod creation_scope;
+
+/// Authorize Person creation against the actor's current Project and Firm access.
+/// The resolved Firm is context only: creating a Person grants no matter access.
+pub async fn authorize_creation(
+    db: &SurrealDb,
+    input: &CreatePersonCommand,
+    actor_role: Role,
+    actor_person_id: Option<Uuid>,
+    project_id: Option<Uuid>,
+) -> Result<Option<Uuid>, PeopleCommandError> {
+    if let Some(message) = input.validation_message() {
+        return Err(PeopleCommandError::Invalid(message));
+    }
+    if !actor_role.is_lawyer_tier() {
+        return Err(PeopleCommandError::Blocked(
+            "Person creation requires Lawyer, Admin or Owner authority.",
+        ));
+    }
+    let requested = parse_create_role(&input.role);
+    let mut firm_id = input.firm_id;
+    if actor_role == Role::Admin
+        && requested != Role::Client
+        && firm_id.is_none()
+        && project_id.is_none()
+    {
+        let person_id = actor_person_id.ok_or(PeopleCommandError::NotFound)?;
+        let memberships = crate::firms::memberships_for_person(db, person_id)
+            .await
+            .map_err(|error| PeopleCommandError::Dependency(error.to_string()))?;
+        let mut administered = memberships
+            .iter()
+            .filter(|row| row.membership == crate::firms::FirmMembership::Admin);
+        firm_id = administered.next().map(|row| row.firm_id);
+        if administered.next().is_some() {
+            return Err(PeopleCommandError::Invalid(
+                "Select an administered Firm explicitly.",
+            ));
+        }
+    }
+    if let Some(project_id) = project_id {
+        if actor_role == Role::Lawyer {
+            let visible = crate::access::can_see_project_as_lawyer(
+                db,
+                actor_person_id,
+                actor_role,
+                project_id,
+            )
+            .await
+            .map_err(PeopleCommandError::Dependency)?;
+            if !visible {
+                return Err(PeopleCommandError::NotFound);
+            }
+        }
+        let project = crate::projects::find_by_id(db, project_id)
+            .await
+            .map_err(|error| PeopleCommandError::Dependency(error.to_string()))?
+            .ok_or(PeopleCommandError::NotFound)?;
+        if firm_id.is_some() && firm_id != project.firm_id {
+            return Err(PeopleCommandError::NotFound);
+        }
+        firm_id = project.firm_id;
+    }
+    if !creation_scope::permits(actor_role, requested, firm_id.is_some()) {
+        return Err(PeopleCommandError::Blocked(
+            "Person creation requires an authorized Project or Firm and an allowed role.",
+        ));
+    }
+    if actor_role.is_admin_tier() {
+        if let Some(firm_id) = firm_id {
+            let capability = crate::firm_capability::resolve(
+                db,
+                actor_role,
+                actor_person_id,
+                firm_id,
+                crate::firm_capability::FirmCapability::ManageMembership,
+            )
+            .await
+            .map_err(|error| PeopleCommandError::Dependency(error.to_string()))?;
+            if !capability.is_allowed() {
+                return Err(PeopleCommandError::NotFound);
+            }
+        }
+    }
+    Ok(firm_id)
+}
+
+/// Authorize and create through the same boundary for the API and native forms.
+pub async fn create_person_for_actor(
+    db: &SurrealDb,
+    mut input: CreatePersonCommand,
+    actor_role: Role,
+    actor_person_id: Option<Uuid>,
+    project_id: Option<Uuid>,
+) -> Result<Person, PeopleCommandError> {
+    input.firm_id = authorize_creation(db, &input, actor_role, actor_person_id, project_id).await?;
+    create_person(db, &input).await
+}
+
 /// Request body for creating a Person through the command boundary.
 #[derive(Debug, Deserialize)]
 pub struct CreatePersonCommand {

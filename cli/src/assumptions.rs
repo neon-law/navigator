@@ -7,7 +7,7 @@ use std::process::ExitCode;
 use uuid::Uuid;
 
 #[derive(Subcommand)]
-pub(crate) enum AssumptionsCmd {
+pub enum AssumptionsCmd {
     /// The Firm's current assumptions: one row per known key it has set.
     List,
     /// The newest version of one key, or a blank result when never set.
@@ -36,7 +36,7 @@ pub(crate) enum AssumptionsCmd {
     Catalog,
 }
 
-pub(crate) async fn run(firm: Uuid, host: Option<String>, action: AssumptionsCmd) -> ExitCode {
+pub async fn run(firm: Uuid, host: Option<String>, action: AssumptionsCmd) -> ExitCode {
     match execute(firm, host, action).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
