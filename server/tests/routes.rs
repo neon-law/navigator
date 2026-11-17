@@ -4054,9 +4054,28 @@ async fn an_admin_cannot_staff_or_edit_another_firms_unassigned_matter() {
         .await
         .unwrap()
         .unwrap();
+    let legacy = store::projects::create(
+        &surreal,
+        &store::projects::NewProject {
+            code: "outside-legacy".into(),
+            name: "Project awaiting Firm assignment".into(),
+            status: "open".into(),
+            brand: project.brand.clone(),
+            entity_id: store::test_support::seed_entity(&surreal).await,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert!(legacy.firm_id.is_none());
     let (cookie, csrf) = session_cookie_and_csrf_for_person(&admin);
     let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
     let cases = [
+        (
+            "GET",
+            "/app/projects/outside-legacy/participants".to_string(),
+            String::new(),
+        ),
         (
             "GET",
             "/app/projects/outside-matter/participants".to_string(),

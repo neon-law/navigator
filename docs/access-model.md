@@ -177,10 +177,10 @@ DRIs; none of them may be a Clerk.
 
 A **licensed lawyer** with system-administration authority — manage the person table, rotate keys, archive projects.
 Admin inherits the Lawyer tier. Full workbench content at `/app/projects/{code}` requires participation. The
-participation ledger and assignment controls are available to an Admin of the owning Firm. Projects awaiting Firm
-assignment remain available for administration. An Admin can reach a Project in another Firm through an explicit
-participation assignment. The people and matter directories at `/app/admin` use the Admin's Firm memberships. Admin
-cannot create, edit, or demote an Owner. `/app/owner` is not an Admin surface. Owner and Admin can reach the brand
+participation ledger and assignment controls are available to an Admin of the owning Firm. For a Project awaiting Firm
+assignment, the Brand determines scope when a Firm wears it. An Admin can reach a Project in another Firm through an
+explicit participation assignment. The people and matter directories at `/app/admin` use the Admin's Firm memberships.
+Admin cannot create, edit, or demote an Owner. `/app/owner` is not an Admin surface. Owner and Admin can reach the brand
 registry at `/app/admin/brands`. An Admin sees only their own Firm-scoped rows, never another Firm's — every brand is
 Firm-scoped now (ENG-659), so there is no system-wide row left to also see. That Firm's Admin DRI creates its brand, and
 may change its palette, replace its logo and uploaded font, and choose among its own already-uploaded font family names

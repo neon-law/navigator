@@ -241,23 +241,21 @@ async fn accessible_projects(
         if matters.iter().any(|m| m.id == project.id) {
             continue;
         }
-        let Some(firm_id) = project.firm_id else {
-            matters.push(project);
-            continue;
+        let allowed = match project.firm_id {
+            Some(firm_id) => {
+                if let std::collections::hash_map::Entry::Vacant(entry) = administered.entry(firm_id) {
+                    let allowed = store::projects::can_administer_project(surreal, person_id, role, &project)
+                        .await
+                        .map_err(loader_error)?;
+                    entry.insert(allowed);
+                }
+                administered[&firm_id]
+            }
+            None => store::projects::can_administer_project(surreal, person_id, role, &project)
+                .await
+                .map_err(loader_error)?,
         };
-        if let std::collections::hash_map::Entry::Vacant(entry) = administered.entry(firm_id) {
-            let decision = store::firm_capability::resolve(
-                surreal,
-                role,
-                person_id,
-                firm_id,
-                store::firm_capability::FirmCapability::ManageMembership,
-            )
-            .await
-            .map_err(loader_error)?;
-            entry.insert(decision.is_allowed());
-        }
-        if administered[&firm_id] {
+        if allowed {
             matters.push(project);
         }
     }

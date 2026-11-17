@@ -1028,8 +1028,11 @@ pub async fn can_administer_project(
     if role != Role::Admin {
         return Ok(role.is_owner());
     }
-    let Some(firm_id) = project.firm_id else {
-        // Keep administrative access to records awaiting Firm assignment.
+    let firm_id = match project.firm_id {
+        Some(firm_id) => Some(firm_id),
+        None => crate::firms::firm_id_for_brand_key(surreal, &project.brand).await?,
+    };
+    let Some(firm_id) = firm_id else {
         return Ok(true);
     };
     let decision = crate::firm_capability::FirmCapability::ManageMembership
