@@ -6498,3 +6498,451 @@ mod onboarding_status_tests {
         );
     }
 }
+
+/// Matter-open, delete, and archive-restore commands — the write paths the
+/// SurrealDB store owns outright. `unmigrated()` + `apply()` follows this
+/// file's existing read-test convention; no new embedded-engine call sites
+/// (`unmigrated` is not a ratchet-counted symbol).
+#[cfg(test)]
+mod matter_command_tests {
+    use super::{
+        create, delete_project_with_surreal, find_by_id, open_matter, restore_archived, NewProject,
+        OpenMatterCommand, OpenMatterError, ProjectCommandError,
+    };
+    use crate::firms::NewFirm;
+    use crate::persons::Role;
+    use crate::schema::apply;
+    use crate::surreal::test_support::{seed_compiled_brands, unmigrated};
+    use crate::surreal::SurrealDb;
+    use crate::test_support::seed_entity;
+
+    /// A store with the schema applied and the compiled brand rows seeded —
+    /// the posture `mem_surreal` hands out, assembled from the two public
+    /// pieces so this module adds no embedded-engine call sites.
+    async fn store() -> SurrealDb {
+        let db = unmigrated().await;
+        apply(&db).await.unwrap();
+        seed_compiled_brands(&db).await;
+        db
+    }
+
+    /// An attorney (the future attester) and a client of record.
+    async fn attorney_and_client(db: &SurrealDb) -> (uuid::Uuid, uuid::Uuid) {
+        let attorney = crate::persons::create(
+            db,
+            &crate::persons::NewPerson::with_role(
+                "Matter Attorney",
+                format!("matter-attorney-{}@example.com", uuid::Uuid::now_v7()),
+                Role::Lawyer,
+            ),
+        )
+        .await
+        .unwrap()
+        .id;
+        let client = crate::persons::create(
+            db,
+            &crate::persons::NewPerson::with_role(
+                "Matter Client",
+                format!("matter-client-{}@example.com", uuid::Uuid::now_v7()),
+                Role::Client,
+            ),
+        )
+        .await
+        .unwrap()
+        .id;
+        (attorney, client)
+    }
+
+    /// A Firm wearing the seeded `neon` brand — the `firm_brand` row the
+    /// open transaction consults before it will name a Firm on the row.
+    async fn firm_wearing_neon(db: &SurrealDb, attorney: uuid::Uuid) -> uuid::Uuid {
+        let firm = crate::firms::create(
+            db,
+            &NewFirm {
+                name: "Open Matter Practice".to_string(),
+                status: "active".to_string(),
+                entity_id: seed_entity(db).await,
+                admin_dri_person_id: attorney,
+            },
+        )
+        .await
+        .unwrap();
+        db.query(
+            "CREATE firm_brand SET firm_id = $firm, brand_key = 'neon', \
+             inserted_at = '2026-11-17T00:00:00Z', updated_at = '2026-11-17T00:00:00Z'",
+        )
+        .bind((
+            "firm",
+            crate::surreal::record_id(crate::firms::TABLE, firm.id),
+        ))
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
+        firm.id
+    }
+
+    fn open_command(
+        firm_id: uuid::Uuid,
+        client_id: uuid::Uuid,
+        attorney: uuid::Uuid,
+        entity_id: uuid::Uuid,
+        code: &str,
+    ) -> OpenMatterCommand {
+        OpenMatterCommand {
+            firm_id: Some(firm_id),
+            name: "In re Coverage Backfill".to_string(),
+            code: code.to_string(),
+            client_id,
+            entity_id,
+            jurisdiction_id: None,
+            description: None,
+            brand: "neon".to_string(),
+            attestation: true,
+            acting_person_id: attorney,
+            closed_at: None,
+        }
+    }
+
+    /// Attestation is checked before anything else: a missing one is refused
+    /// without a single store query.
+    #[tokio::test]
+    async fn open_matter_requires_the_attestation() {
+        let db = unmigrated().await;
+        let mut command = open_command(
+            uuid::Uuid::now_v7(),
+            uuid::Uuid::now_v7(),
+            uuid::Uuid::now_v7(),
+            uuid::Uuid::now_v7(),
+            "attestation-first",
+        );
+        command.attestation = false;
+        assert!(matches!(
+            open_matter(&db, &command).await,
+            Err(OpenMatterError::AttestationRequired)
+        ));
+    }
+
+    #[tokio::test]
+    async fn open_matter_rejects_a_blank_name_before_a_blank_code() {
+        let db = unmigrated().await;
+        let ids = (
+            uuid::Uuid::now_v7(),
+            uuid::Uuid::now_v7(),
+            uuid::Uuid::now_v7(),
+            uuid::Uuid::now_v7(),
+        );
+        let mut command = open_command(ids.0, ids.1, ids.2, ids.3, "valid-code");
+        command.name = "   ".to_string();
+        assert!(matches!(
+            open_matter(&db, &command).await,
+            Err(OpenMatterError::Invalid("Name is required."))
+        ));
+        command.name = "Named".to_string();
+        command.code = "   ".to_string();
+        assert!(matches!(
+            open_matter(&db, &command).await,
+            Err(OpenMatterError::Invalid("Code is required."))
+        ));
+    }
+
+    #[tokio::test]
+    async fn open_matter_rejects_a_code_the_charset_refuses() {
+        let db = unmigrated().await;
+        let ids = (
+            uuid::Uuid::now_v7(),
+            uuid::Uuid::now_v7(),
+            uuid::Uuid::now_v7(),
+            uuid::Uuid::now_v7(),
+        );
+        let mut command = open_command(ids.0, ids.1, ids.2, ids.3, "Bad Code!");
+        assert!(matches!(
+            open_matter(&db, &command).await,
+            Err(OpenMatterError::Invalid(
+                "Project code must use lowercase letters, digits, and single hyphens; \
+                 it must start and end with a letter or digit."
+            ))
+        ));
+    }
+
+    /// The stored code is the caller's code, normalized for case and
+    /// whitespace only — never generated, never appended to.
+    #[tokio::test]
+    async fn open_matter_stores_the_code_normalized_but_untouched() {
+        let db = store().await;
+        let entity = seed_entity(&db).await;
+        let (attorney, client) = attorney_and_client(&db).await;
+        let firm_id = firm_wearing_neon(&db, attorney).await;
+        let created = open_matter(
+            &db,
+            &open_command(firm_id, client, attorney, entity, "  Matter-Code-13 "),
+        )
+        .await
+        .unwrap();
+        assert_eq!(created.code, "matter-code-13");
+        assert_eq!(created.status, "open");
+        assert_eq!(created.firm_id, Some(firm_id));
+        assert_eq!(created.closed_at, None);
+        let reloaded = find_by_id(&db, created.id).await.unwrap().unwrap();
+        assert_eq!(reloaded.code, "matter-code-13");
+    }
+
+    /// ENG-469: a matter can open already closed, dated in the same insert —
+    /// a close that predates the row it belongs to.
+    #[tokio::test]
+    async fn open_matter_can_open_an_already_closed_matter() {
+        let db = store().await;
+        let entity = seed_entity(&db).await;
+        let (attorney, client) = attorney_and_client(&db).await;
+        let firm_id = firm_wearing_neon(&db, attorney).await;
+        let closed_at = chrono::Utc::now() - chrono::Duration::hours(2);
+        let mut command = open_command(firm_id, client, attorney, entity, "already-closed");
+        command.closed_at = Some(closed_at);
+        let created = open_matter(&db, &command).await.unwrap();
+        assert_eq!(created.status, "closed");
+        assert_eq!(created.firm_id, Some(firm_id));
+    }
+
+    /// A close cannot be dated in the future — the one bound that survives
+    /// baking the state into the initial row.
+    #[tokio::test]
+    async fn open_matter_refuses_a_future_close_date() {
+        let db = store().await;
+        let entity = seed_entity(&db).await;
+        let (attorney, client) = attorney_and_client(&db).await;
+        let firm_id = firm_wearing_neon(&db, attorney).await;
+        let mut command = open_command(firm_id, client, attorney, entity, "future-close");
+        command.closed_at = Some(chrono::Utc::now() + chrono::Duration::hours(2));
+        assert!(matches!(
+            open_matter(&db, &command).await,
+            Err(OpenMatterError::Invalid(
+                "closed_at cannot be in the future."
+            ))
+        ));
+    }
+
+    /// A code already in use is refused, never silently resolved — the code
+    /// is a coordinate shared with systems Navigator does not own.
+    #[tokio::test]
+    async fn open_matter_refuses_a_code_collision() {
+        let db = store().await;
+        let entity = seed_entity(&db).await;
+        let (attorney, client) = attorney_and_client(&db).await;
+        let firm_id = firm_wearing_neon(&db, attorney).await;
+        open_matter(
+            &db,
+            &open_command(firm_id, client, attorney, entity, "one-code-only"),
+        )
+        .await
+        .unwrap();
+        let (second_attorney, second_client) = attorney_and_client(&db).await;
+        assert!(matches!(
+            open_matter(
+                &db,
+                &open_command(
+                    firm_id,
+                    second_client,
+                    second_attorney,
+                    entity,
+                    "one-code-only"
+                ),
+            )
+            .await,
+            Err(OpenMatterError::CodeConflict)
+        ));
+    }
+
+    /// The client of record must be a `Role::Client` person — the firm as
+    /// its own client is the loyalty problem both councils flagged.
+    #[tokio::test]
+    async fn open_matter_refuses_a_firm_attorney_as_client() {
+        let db = store().await;
+        let entity = seed_entity(&db).await;
+        let (attorney, _client) = attorney_and_client(&db).await;
+        let firm_id = firm_wearing_neon(&db, attorney).await;
+        assert!(matches!(
+            open_matter(
+                &db,
+                &open_command(firm_id, attorney, attorney, entity, "attorney-as-client"),
+            )
+            .await,
+            Err(OpenMatterError::ClientNotAllowed)
+        ));
+    }
+
+    /// A client or clerk can never attest: the attester becomes the
+    /// accountable lawyer DRI.
+    #[tokio::test]
+    async fn open_matter_refuses_a_client_as_the_attesting_attorney() {
+        let db = store().await;
+        let entity = seed_entity(&db).await;
+        let (attorney, client) = attorney_and_client(&db).await;
+        let firm_id = firm_wearing_neon(&db, attorney).await;
+        assert!(matches!(
+            open_matter(
+                &db,
+                &open_command(firm_id, client, client, entity, "client-attests"),
+            )
+            .await,
+            Err(OpenMatterError::AttesterNotAllowed)
+        ));
+    }
+
+    /// A matter nobody participates in deletes outright.
+    #[tokio::test]
+    async fn delete_refuses_nothing_on_an_unreferenced_matter() {
+        let db = store().await;
+        let entity = seed_entity(&db).await;
+        let created = create(
+            &db,
+            &NewProject {
+                code: "deletable-matter".to_string(),
+                name: "Deletable Matter".to_string(),
+                status: "open".to_string(),
+                entity_id: entity,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let deleted = delete_project_with_surreal(&db, created.id).await.unwrap();
+        assert_eq!(deleted.id, created.id);
+        assert_eq!(find_by_id(&db, created.id).await.unwrap(), None);
+    }
+
+    /// A missing matter answers `NotFound`.
+    #[tokio::test]
+    async fn delete_reports_not_found_for_a_missing_matter() {
+        let db = store().await;
+        assert!(matches!(
+            delete_project_with_surreal(&db, uuid::Uuid::now_v7()).await,
+            Err(ProjectCommandError::NotFound)
+        ));
+    }
+
+    /// A matter with a participation is referenced — the delete is refused
+    /// with the referencing table named, and the row survives.
+    #[tokio::test]
+    async fn delete_is_refused_while_a_participation_names_the_matter() {
+        let db = store().await;
+        let entity = seed_entity(&db).await;
+        let created = create(
+            &db,
+            &NewProject {
+                code: "referenced-matter".to_string(),
+                name: "Referenced Matter".to_string(),
+                status: "open".to_string(),
+                entity_id: entity,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let person = crate::persons::create(
+            &db,
+            &crate::persons::NewPerson::with_role(
+                "Participant",
+                format!("participant-{}@example.com", uuid::Uuid::now_v7()),
+                Role::Lawyer,
+            ),
+        )
+        .await
+        .unwrap();
+        super::add_participation(&db, created.id, person.id, "lawyer")
+            .await
+            .unwrap();
+        match delete_project_with_surreal(&db, created.id).await {
+            Err(ProjectCommandError::Referenced(table)) => {
+                assert_eq!(table, "person_project_roles");
+            }
+            other => panic!("expected a referenced-matter refusal, got {other:?}"),
+        }
+        assert!(find_by_id(&db, created.id).await.unwrap().is_some());
+    }
+
+    /// The archiver's restore is a no-op on a row still present and equal.
+    #[tokio::test]
+    async fn restore_answers_identical_for_the_live_row() {
+        let db = store().await;
+        let entity = seed_entity(&db).await;
+        let created = create(
+            &db,
+            &NewProject {
+                code: "restore-identical".to_string(),
+                name: "Restore Identical".to_string(),
+                status: "open".to_string(),
+                entity_id: entity,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let live = find_by_id(&db, created.id).await.unwrap().unwrap();
+        assert_eq!(
+            restore_archived(&db, &live).await.unwrap(),
+            crate::assets::RowRestore::Identical
+        );
+    }
+
+    /// A differing live row — or a live row holding the code under a
+    /// different id — is a conflict the caller must resolve.
+    #[tokio::test]
+    async fn restore_answers_conflict_for_a_differing_or_recoded_row() {
+        let db = store().await;
+        let entity = seed_entity(&db).await;
+        let created = create(
+            &db,
+            &NewProject {
+                code: "restore-conflict".to_string(),
+                name: "Restore Conflict".to_string(),
+                status: "open".to_string(),
+                entity_id: entity,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let mut drifted = find_by_id(&db, created.id).await.unwrap().unwrap();
+        drifted.name = "Drifted Name".to_string();
+        assert_eq!(
+            restore_archived(&db, &drifted).await.unwrap(),
+            crate::assets::RowRestore::Conflict
+        );
+        // Same code, different id: the code is taken either way.
+        let mut recoded = find_by_id(&db, created.id).await.unwrap().unwrap();
+        recoded.id = uuid::Uuid::now_v7();
+        assert_eq!(
+            restore_archived(&db, &recoded).await.unwrap(),
+            crate::assets::RowRestore::Conflict
+        );
+    }
+
+    /// A row the archiver took comes back whole: same code, same fields,
+    /// readable again.
+    #[tokio::test]
+    async fn restore_creates_a_row_the_archiver_took() {
+        let db = store().await;
+        let entity = seed_entity(&db).await;
+        let created = create(
+            &db,
+            &NewProject {
+                code: "restore-created".to_string(),
+                name: "Restore Created".to_string(),
+                status: "open".to_string(),
+                entity_id: entity,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let archived = find_by_id(&db, created.id).await.unwrap().unwrap();
+        delete_project_with_surreal(&db, created.id).await.unwrap();
+        assert_eq!(find_by_id(&db, created.id).await.unwrap(), None);
+        assert_eq!(
+            restore_archived(&db, &archived).await.unwrap(),
+            crate::assets::RowRestore::Created
+        );
+        let restored = find_by_id(&db, created.id).await.unwrap().unwrap();
+        assert_eq!(restored, archived);
+    }
+}
