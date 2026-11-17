@@ -5444,6 +5444,7 @@
           "assignee_id": "UUID",
           "body": "TEXT",
           "due_on": "DATE",
+          "handoff": "JSONB",
           "id": "UUID",
           "inserted_at": "TIMESTAMPTZ",
           "project_id": "UUID",

@@ -39,6 +39,7 @@ async fn native_task_actions_cannot_change_a_different_matter() {
             "--nocapture",
         ])
         .env("NAV_TASK_FORM_CHILD", "1")
+        .env("NAVIGATOR_RELEASE_TAG", "26.11.17")
         .env("NAVIGATOR_POSTGRES_HOST", "127.0.0.1")
         .env("NAVIGATOR_POSTGRES_PORT", &port)
         .env("NAVIGATOR_POSTGRES_USER", "postgres")
@@ -161,6 +162,7 @@ async fn cross_matter_actions() {
         person_id: Some(actor),
         ..SessionData::fresh("synthetic@example.com", Role::Lawyer)
     };
+    reviewed_handoff_round_trip(&db, &pg, &own, session.clone(), actor).await;
     let response = Box::pin(assign(
         State(db.clone()),
         Some(Extension(session.clone())),
@@ -225,4 +227,124 @@ fn invalid_task_fields_explain_how_to_correct_the_input() {
         assert!(message.contains(limit), "{message}");
         assert!(!message.contains("unavailable"), "{message}");
     }
+}
+
+async fn reviewed_handoff_round_trip(
+    db: &store::surreal::SurrealDb,
+    pg: &store::postgres::PostgresDb,
+    own: &store::projects::Project,
+    session: SessionData,
+    actor: Uuid,
+) {
+    use store::access::MatterViewer;
+    use store::task_handoffs::for_project;
+
+    let form = |reviewed: bool, release: &str, title: &str| {
+        Form(TaskCreateForm {
+            title: title.into(),
+            body: "Synthetic release follow-up".into(),
+            assignee_id: String::new(),
+            due_on: "2026-11-30".into(),
+            reviewed_handoff: reviewed.then(|| "yes".into()),
+            responsible_role: Some("lawyer".into()),
+            retry_on_release: Some(release.into()),
+            communication_id: None,
+            deadline_id: None,
+            issue: Some("ENG-1234".into()),
+        })
+    };
+    for (reviewed, release, title) in [
+        (false, "26.11.17", "Unreviewed"),
+        (true, "26.11.18", "Waiting"),
+        (true, "26.11.17", "Can retry"),
+    ] {
+        let response = Box::pin(create(
+            State(db.clone()),
+            Some(Extension(session.clone())),
+            Path(own.code.clone()),
+            form(reviewed, release, title),
+        ))
+        .await;
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    }
+
+    let read = |viewer, include_resolved| {
+        for_project(Some(pg), viewer, own.id, &own.code, include_resolved)
+    };
+    let handoffs = read(MatterViewer::Lawyer, false).await.unwrap();
+    assert_eq!(handoffs.len(), 2);
+    let ready = handoffs
+        .iter()
+        .find(|row| row.title == "Can retry")
+        .unwrap();
+    assert_eq!(ready.state, "ready_to_retry");
+    assert_eq!(ready.author.as_deref(), Some("Synthetic task lawyer"));
+    assert!(ready
+        .sources
+        .iter()
+        .any(|source| source.label == "ENG-1234"));
+    assert!(handoffs.iter().any(|row| row.state == "pending"));
+    assert!(read(MatterViewer::Client, true).await.unwrap().is_empty());
+
+    check_handoff_agent_scope(db, own.id, actor).await;
+
+    let tasks = store::tasks::list_for_project(pg, own.id).await.unwrap();
+    let ready_task = tasks.iter().find(|task| task.title == "Can retry").unwrap();
+    for next in [
+        store::tasks::TaskState::InProgress,
+        store::tasks::TaskState::Done,
+    ] {
+        store::tasks::transition(pg, ready_task.id, actor, next)
+            .await
+            .unwrap();
+    }
+    assert_eq!(read(MatterViewer::Lawyer, false).await.unwrap().len(), 1);
+    assert!(read(MatterViewer::Lawyer, true)
+        .await
+        .unwrap()
+        .iter()
+        .any(|row| row.state == "resolved"));
+}
+
+async fn check_handoff_agent_scope(db: &store::surreal::SurrealDb, project_id: Uuid, actor: Uuid) {
+    let agent_result = mcp::tools::project_status::call(
+        db,
+        &mcp::tools::ReadScope::Membership {
+            person_id: actor,
+            role: Role::Lawyer,
+        },
+        &serde_json::json!({"project_id": project_id}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        agent_result["structuredContent"]["pending_handoffs"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2,
+    );
+
+    let client = store::persons::create(
+        db,
+        &NewPerson::new("Synthetic client", "project-handoff-client@example.com"),
+    )
+    .await
+    .unwrap();
+    store::projects::add_participation(db, project_id, client.id, "client")
+        .await
+        .unwrap();
+    let client_result = mcp::tools::project_status::call(
+        db,
+        &mcp::tools::ReadScope::Membership {
+            person_id: client.id,
+            role: Role::Client,
+        },
+        &serde_json::json!({"project_id": project_id}),
+    )
+    .await
+    .unwrap();
+    assert!(client_result["structuredContent"]
+        .get("pending_handoffs")
+        .is_none());
 }

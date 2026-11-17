@@ -19,3 +19,9 @@ table with no Surreal source. The Project must already be mirrored to PostgreSQL
 `store/postgres/migrations/20261030120000_create_project_task.sql`.
 
 The table is `project_task`.
+
+A handoff is an internal Task with a responsible role and optional references to an internal Communication, a Deadline,
+or a bare engineering issue identifier. Review and save one note on the Project's Tasks tab. Pending handoffs appear at
+the top of the firm workbench and in the firm-side agent's `project_status` result. A release trigger becomes ready to
+retry when the installed Navigator release meets it. The trigger is evaluated on read. Completing the Task resolves the
+handoff and keeps it in Project history.

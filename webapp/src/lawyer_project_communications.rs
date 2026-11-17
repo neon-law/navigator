@@ -14,6 +14,7 @@ use crate::lawyer_project_detail::LawyerDetailView;
 /// `store` type, which does not cross to the wasm client build.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
 pub struct CommunicationRow {
+    pub id: String,
     /// `note`, `email_inbound`, `email_outbound`, or `call` — the wire
     /// shape of `store::communications::channel`.
     pub channel: String,
@@ -44,6 +45,7 @@ pub(crate) fn communication_views(
     let mut correspondence = Vec::new();
     for row in rows {
         let view = CommunicationRow {
+            id: row.id.to_string(),
             channel: row.channel.clone(),
             direction: row.direction.clone(),
             counterparty: row.counterparty.clone(),
@@ -92,7 +94,7 @@ pub fn notes_tab(view: &LawyerDetailView) -> Element {
                 }
             } else {
                 for note in view.notes.iter() {
-                    article { class: "detail-note",
+                    article { class: "detail-note", id: "communication-{note.id}",
                         header { class: "detail-note__meta",
                             span {
                                 class: "detail-note__author",
@@ -160,6 +162,7 @@ mod tests {
 
     fn note_row(subject: &str) -> CommunicationRow {
         CommunicationRow {
+            id: String::new(),
             channel: "note".to_string(),
             direction: "internal".to_string(),
             counterparty: None,
@@ -199,6 +202,7 @@ mod tests {
     fn the_communications_tab_prints_direction_words_and_counterparties() {
         let view = LawyerDetailView {
             correspondence: vec![CommunicationRow {
+                id: String::new(),
                 channel: "email_inbound".to_string(),
                 direction: "inbound".to_string(),
                 counterparty: Some("clerk@courts.example".to_string()),

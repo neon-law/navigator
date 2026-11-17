@@ -285,6 +285,7 @@ pub struct LawyerDetailView {
     /// has no PostgreSQL configured (the task store is PostgreSQL-native).
     #[serde(default)]
     pub tasks: Vec<TaskRow>,
+    pub pending_handoffs: Vec<crate::project_tasks::HandoffRow>,
     /// The people a task on this matter can be assigned to, resolved
     /// server-side to `(person id, display name)` — the matter's
     /// participants, since the store refuses an assignee off the matter.
@@ -564,6 +565,14 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         None => Vec::new(),
     };
 
+    let pending_handoffs =
+        store::task_handoffs::for_project(pg.as_ref(), viewer, id, &project.code, true)
+            .await
+            .map_err(server_error)?
+            .into_iter()
+            .map(crate::project_tasks::HandoffRow::from)
+            .collect();
+
     // The stage surface's read — where the matter sits in the Firm's
     // workflow. Same absence rule as the task rows: a deployment without
     // PostgreSQL renders the workbench without a stage; a read failure
@@ -833,6 +842,7 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         correspondence,
         unread_inbox,
         tasks,
+        pending_handoffs,
         task_assignees,
         stage,
         billing_entries,
@@ -1035,6 +1045,12 @@ pub fn LawyerProjectDetail() -> Element {
                 }
             }
 
+            if view.active_tab == MatterTab::Overview {
+                crate::project_tasks::PendingHandoffs {
+                    code: view.code.clone(),
+                    rows: view.pending_handoffs.clone(),
+                }
+            }
             {matter_fact_grid(&view)}
 
             {

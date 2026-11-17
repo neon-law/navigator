@@ -46,6 +46,12 @@ pub(crate) struct TaskCreateForm {
     pub(crate) assignee_id: String,
     #[serde(default)]
     pub(crate) due_on: String,
+    pub(crate) reviewed_handoff: Option<String>,
+    pub(crate) responsible_role: Option<String>,
+    pub(crate) retry_on_release: Option<String>,
+    pub(crate) communication_id: Option<String>,
+    pub(crate) deadline_id: Option<String>,
+    pub(crate) issue: Option<String>,
 }
 
 /// `POST /app/projects/{code}/tasks` — create a task from the tab's form.
@@ -112,22 +118,59 @@ pub(crate) async fn create(
             Some("The task store is unavailable right now — try again shortly."),
         );
     };
-    match store::tasks::create(
-        &pg,
-        project.id,
-        person_id,
-        &store::tasks::NewProjectTask {
-            title,
-            body: (!body.is_empty()).then_some(body),
-            assignee_id,
-            due_on,
-        },
-    )
-    .await
-    {
+    let task = store::tasks::NewProjectTask {
+        title,
+        body: (!body.is_empty()).then_some(body),
+        assignee_id,
+        due_on,
+    };
+    let result = match handoff_from_form(input) {
+        Ok(Some(_)) if task.body.is_none() => {
+            return back_to_tasks(&code, Some("Enter the reviewed handoff note."));
+        }
+        Ok(Some(handoff)) => {
+            store::task_handoffs::create(&surreal, &pg, project.id, person_id, &task, &handoff)
+                .await
+        }
+        Ok(None) => store::tasks::create(&pg, project.id, person_id, &task).await,
+        Err(message) => return back_to_tasks(&code, Some(message)),
+    };
+    match result {
         Ok(_) => back_to_tasks(&code, None),
         Err(e) => back_to_tasks(&code, Some(&flash_for(&e))),
     }
+}
+
+fn handoff_from_form(
+    input: TaskCreateForm,
+) -> Result<Option<store::task_handoffs::Handoff>, &'static str> {
+    fn optional(raw: Option<String>) -> Option<String> {
+        raw.map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+    }
+    fn source_id(raw: Option<String>) -> Result<Option<Uuid>, &'static str> {
+        optional(raw)
+            .map(|id| id.parse().map_err(|_| "Enter a valid source ID."))
+            .transpose()
+    }
+
+    let Some(role) = input.responsible_role else {
+        return if input.reviewed_handoff.is_some() {
+            Err("Choose the role responsible for this handoff.")
+        } else {
+            Ok(None)
+        };
+    };
+    if input.reviewed_handoff.as_deref() != Some("yes") {
+        return Err("Review the handoff for this Project before saving it.");
+    }
+    Ok(Some(store::task_handoffs::Handoff {
+        responsible_role: role,
+        retry_on_release: optional(input.retry_on_release),
+        communication_id: source_id(input.communication_id)?,
+        deadline_id: source_id(input.deadline_id)?,
+        issue: optional(input.issue),
+    }))
 }
 
 /// The row action's assign control: names the person the task now belongs
