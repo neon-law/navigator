@@ -976,6 +976,7 @@ fn forgejo_policy_help_requires_explicit_targets_and_names_the_guarded_actions()
         [
             "archive",
             "auto-merge",
+            "backfill-closed",
             "bundle",
             "logs",
             "release",

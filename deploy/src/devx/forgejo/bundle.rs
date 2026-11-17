@@ -5,6 +5,7 @@
 //! stable mirror; this command never fetches or changes a live forge. Only refs
 //! already present in that mirror are covered, including explicitly fetched PR refs.
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
 
@@ -136,6 +137,220 @@ async fn archive_with_storage(
     Ok(())
 }
 
+#[derive(Deserialize)]
+struct ClosedProjectRow {
+    code: String,
+    firm_id: Option<uuid::Uuid>,
+    status: String,
+}
+
+#[derive(Deserialize)]
+struct ArchiveProject {
+    id: uuid::Uuid,
+    code: String,
+    repository_url: Option<String>,
+    firm_id: Option<uuid::Uuid>,
+    status: String,
+}
+
+#[derive(Serialize)]
+struct BackfillOutcome {
+    project: String,
+    outcome: &'static str,
+}
+
+#[derive(Deserialize)]
+struct GitHubArchive {
+    archived: bool,
+}
+
+pub(in crate::devx) fn backfill_closed(host: &str, receipts: &Path) -> Result<()> {
+    let receipts = receipts
+        .canonicalize()
+        .context("open private receipt directory")?;
+    let metadata = receipts.metadata()?;
+    ensure!(
+        metadata.is_dir() && metadata.permissions().mode().trailing_zeros() >= 6,
+        "receipt directory must be private (mode 0700)"
+    );
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(async {
+        let (base, token) = cli::remote::resolve(Some(host))?;
+        let client = cli::remote::authenticated_client_builder(&base)?
+            .timeout(std::time::Duration::from_secs(30))
+            .build()?;
+        let lifecycle: Vec<ClosedProjectRow> = client
+            .get(format!("{base}/app/api/project-lifecycle"))
+            .bearer_auth(&token)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        let projects: Vec<ArchiveProject> =
+            serde_json::from_str(&cli::remote::fetch_project_list(&client, &base, &token).await?)?;
+        let storage = archive_storage().await?;
+        let mut report = Vec::new();
+        for row in lifecycle.into_iter().filter(|row| row.status == "closed") {
+            let matches: Vec<_> = projects.iter().filter(|project| {
+                    project.code == row.code && project.firm_id == row.firm_id && project.status == "closed"
+                }).collect();
+            let outcome = match matches.as_slice() {
+                [project] => backfill_one(&base, project, &receipts, &storage).await,
+                [] => "project-inaccessible",
+                _ => "ambiguous-project",
+            };
+            report.push(BackfillOutcome { project: row.code, outcome });
+        }
+        let mut report_file = tempfile::Builder::new()
+            .prefix("closed-project-export-")
+            .suffix(".json")
+            .tempfile_in(&receipts)?;
+        serde_json::to_writer_pretty(report_file.as_file_mut(), &report)?;
+        report_file.as_file().sync_all()?;
+        report_file.keep()?;
+        let verified = report.iter().filter(|row| row.outcome == "verified").count();
+        println!("Closed Projects: {}. Verified exports: {verified}. Outcomes are in the private report.", report.len());
+        ensure!(verified == report.len(), "some closed Projects require review");
+        Ok(())
+    })
+}
+
+async fn backfill_one(
+    base: &str,
+    project: &ArchiveProject,
+    receipts: &Path,
+    storage: &dyn cloud::StorageService,
+) -> &'static str {
+    let Some(url) = project.repository_url.as_deref() else {
+        return "repository-unrecorded";
+    };
+    let Ok((owner, repo)) = cli::projects::lifecycle::github_owner_name(url) else {
+        return "source-is-not-github";
+    };
+    if repo != project.code
+        || !cloud::workspace::is_valid_slug(&project.code)
+        || !cloud::workspace::is_valid_slug(&owner)
+    {
+        return "source-project-mismatch";
+    }
+    if let Err(outcome) = check_github_archive(&owner, &repo).await {
+        return outcome;
+    }
+
+    let Ok(client) = cli::remote::DocumentClient::connect(Some(base), &project.code).await else {
+        return "project-inaccessible";
+    };
+    if client.project_id() != project.id {
+        return "ambiguous-project";
+    }
+    let Ok(documents) = client.list_documents().await else {
+        return "documents-inaccessible";
+    };
+    let commits: std::collections::BTreeSet<_> = documents
+        .iter()
+        .filter(|document| document.kind.as_deref() == Some("closed_repository"))
+        .filter_map(|document| document.metadata.as_ref()?.get("commit_sha")?.as_str())
+        .collect();
+    let Some(commit) = commits.first().filter(|_| commits.len() == 1) else {
+        return "missing-or-ambiguous-close-commit";
+    };
+    let Ok(scratch) = tempfile::tempdir() else {
+        return "workspace-unavailable";
+    };
+    let mirror = scratch.path().join("mirror");
+    let clone = tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        tokio::process::Command::new("git")
+            .args(["clone", "--mirror", "--", url])
+            .arg(&mirror)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await;
+    if !matches!(clone, Ok(Ok(output)) if output.status.success()) {
+        return "clone-failed";
+    }
+    if !matches!(text(&mirror, &["rev-parse", "HEAD"]), Ok(head) if verify_close_head(commit, &head))
+    {
+        return "close-commit-mismatch";
+    }
+    let Ok(refs) = text(
+        &mirror,
+        &["for-each-ref", "--format=%(refname) %(objectname)"],
+    ) else {
+        return "refs-unavailable";
+    };
+    let Ok(head) = text(&mirror, &["rev-parse", "--symbolic-full-name", "HEAD"]) else {
+        return "refs-unavailable";
+    };
+    let fingerprint = sha256_hex(&[head.as_slice(), refs.as_slice()].concat());
+    let object_prefix = format!("closed/{}/{fingerprint}/", project.id);
+    let key = format!("{object_prefix}{}.bundle", uuid::Uuid::new_v4());
+    let receipt = receipts.join(format!("{}-{fingerprint}.json", project.id));
+    let result = if receipt.exists() {
+        let verified_receipt = std::fs::read(&receipt)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<BundleReceipt>(&bytes).ok())
+            .is_some_and(|receipt| {
+                receipt.object.starts_with(&object_prefix)
+                    && format!("{}\n", receipt.head).as_bytes() == head
+                    && format!("{}\n", receipt.refs).as_bytes() == refs
+            });
+        if !verified_receipt {
+            return "receipt-does-not-match-source";
+        }
+        restore_with_storage(&receipt, &scratch.path().join("restored"), storage).await
+    } else {
+        archive_with_storage(&mirror, &key, &receipt, storage, storage).await
+    };
+    if result.is_ok() {
+        "verified"
+    } else {
+        "archive-or-restore-failed"
+    }
+}
+
+async fn check_github_archive(owner: &str, repo: &str) -> Result<(), &'static str> {
+    let metadata = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        tokio::process::Command::new("gh")
+            .args([
+                "api",
+                "--hostname",
+                "github.com",
+                &format!("repos/{owner}/{repo}"),
+            ])
+            .env("GH_PROMPT_DISABLED", "1")
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await;
+    let Ok(Ok(metadata)) = metadata else {
+        return Err("github-inaccessible");
+    };
+    if !metadata.status.success() {
+        return Err("github-inaccessible");
+    }
+    let Ok(metadata) = serde_json::from_slice::<GitHubArchive>(&metadata.stdout) else {
+        return Err("github-metadata-unavailable");
+    };
+    if !metadata.archived {
+        return Err("repository-not-archived");
+    }
+
+    Ok(())
+}
+
+fn verify_close_head(filed: &str, actual: &[u8]) -> bool {
+    matches!(filed.len(), 40 | 64)
+        && filed.bytes().all(|byte| byte.is_ascii_hexdigit())
+        && std::str::from_utf8(actual).is_ok_and(|head| head.trim_end().eq_ignore_ascii_case(filed))
+}
+
 pub(in crate::devx) fn restore(receipt_path: &Path, output: &Path) -> Result<()> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -220,7 +435,6 @@ fn write_receipt(path: &Path, receipt: &BundleReceipt) -> Result<()> {
     let mut temp = tempfile::NamedTempFile::new_in(parent)?;
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
         temp.as_file()
             .set_permissions(std::fs::Permissions::from_mode(0o600))?;
     }
@@ -686,5 +900,18 @@ mod tests {
         let error = publish_mirror_no_clobber(Path::new("source"), Path::new("destination"))
             .expect_err("unsupported platform must not use a weaker rename");
         assert!(error.to_string().contains("unsupported"));
+    }
+}
+
+#[cfg(test)]
+mod close_tests {
+    use super::verify_close_head;
+
+    #[test]
+    fn closed_source_requires_the_exact_filed_head() {
+        let filed = "a".repeat(40);
+        assert!(verify_close_head(&filed, format!("{filed}\n").as_bytes()));
+        assert!(!verify_close_head(&filed, "b".repeat(40).as_bytes()));
+        assert!(!verify_close_head("aaaa", b"aaaa\n"));
     }
 }
