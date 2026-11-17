@@ -23,6 +23,7 @@
 //! `web` re-exports it as `portal::billing` / `portal::xero_auth`.
 
 pub mod gcp_cost;
+pub mod stripe;
 pub mod xero_auth;
 
 pub use gcp_cost::{

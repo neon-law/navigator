@@ -442,6 +442,13 @@ pub(crate) async fn generate_invoice(
 /// of the books — and the work it consumed. The amount itself renders in the
 /// invoice table the redirect lands on, formatted once, by the tab.
 fn raise_confirmation(receipt: &crate::project_billing_api::InvoiceReceipt) -> String {
+    if let Some(iolta) = receipt.stripe_iolta {
+        return if iolta {
+            "The draft is ready for review in the Stripe account for Nevada.".to_string()
+        } else {
+            "Stripe draft created for lawyer review. This is not IOLTA billing.".to_string()
+        };
+    }
     if receipt.flat_fee {
         format!(
             "Invoice {} raised in Xero — the matter's flat fee, with {} expenses billed alongside it.",
@@ -465,6 +472,9 @@ fn flash_for_invoice(
 ) -> String {
     use crate::project_billing_api::InvoiceGenerationError;
     match error {
+        InvoiceGenerationError::StripeUnavailable => {
+            "Stripe billing is unavailable for this Firm and jurisdiction.".to_string()
+        }
         InvoiceGenerationError::BillingUnavailable => {
             tracing::warn!(
                 event = "invoice_generation_billing_unavailable",

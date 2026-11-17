@@ -996,11 +996,12 @@ DEFINE FIELD OVERWRITE portal_theme_brand_key ON firm TYPE option<string>;
 DEFINE TABLE IF NOT EXISTS firm_integration_secret SCHEMAFULL PERMISSIONS NONE;
 DEFINE FIELD OVERWRITE firm_id ON firm_integration_secret TYPE record<firm>;
 DEFINE FIELD OVERWRITE provider ON firm_integration_secret TYPE string
-    ASSERT $value IN ['xero', 'slack', 'notion', 'github', 'mercury', 'forgejo', 'court_portal', 'twilio', 'docusign'];
+    ASSERT $value IN ['xero', 'slack', 'notion', 'github', 'mercury', 'forgejo', 'court_portal', 'twilio', 'docusign', 'stripe'];
 DEFINE FIELD OVERWRITE kind ON firm_integration_secret TYPE string
     ASSERT $value IN ['xero_client_id', 'xero_client_secret', 'xero_refresh_token',
                       'slack_bot_token', 'notion_token', 'github_app_private_key', 'mercury_read_token', 'xero_tenant_id', 'xero_webhook_key',
-                      'forgejo_access_token', 'portal_login', 'twilio_auth_token', 'docusign_connection'];
+                      'forgejo_access_token', 'portal_login', 'twilio_auth_token', 'docusign_connection',
+                      'stripe_nevada_app_key', 'stripe_operating_app_key'];
 DEFINE FIELD OVERWRITE version ON firm_integration_secret TYPE int;
 DEFINE FIELD OVERWRITE ciphertext ON firm_integration_secret TYPE string;
 DEFINE FIELD OVERWRITE wrapped_dek ON firm_integration_secret TYPE string;

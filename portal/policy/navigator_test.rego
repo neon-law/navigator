@@ -1690,18 +1690,22 @@ test_lawyer_denied_a_deeper_pages_put if {
 
 test_lawyer_can_store_a_matter_caption if {
 	authz.allow with input as {"path": ["app", "api", "projects", "p1", "matter"], "method": "PUT", "session": lawyer_session}
+	authz.allow with input as {"path": ["app", "api", "projects", "p1", "jurisdiction"], "method": "PUT", "session": lawyer_session}
 }
 
 test_clerk_denied_store_a_matter_caption if {
 	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "matter"], "method": "PUT", "session": clerk_session}
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "jurisdiction"], "method": "PUT", "session": clerk_session}
 }
 
 test_client_denied_store_a_matter_caption if {
 	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "matter"], "method": "PUT", "session": client_session}
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "jurisdiction"], "method": "PUT", "session": client_session}
 }
 
 test_anonymous_denied_store_a_matter_caption if {
 	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "matter"], "method": "PUT", "session": null}
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "jurisdiction"], "method": "PUT", "session": null}
 }
 
 test_lawyer_denied_a_deeper_matter_put if {

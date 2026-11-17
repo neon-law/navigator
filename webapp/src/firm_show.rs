@@ -216,6 +216,8 @@ fn secret_kind_choices() -> Vec<Choice> {
         Choice::new("forgejo_access_token", "Forgejo access token"),
         Choice::new("twilio_auth_token", "Twilio auth token"),
         Choice::new("docusign_connection", "DocuSign connection"),
+        Choice::new("stripe_nevada_app_key", "STRIPE_NEVADA_APP_KEY"),
+        Choice::new("stripe_operating_app_key", "STRIPE_OPERATING_APP_KEY"),
     ]
 }
 

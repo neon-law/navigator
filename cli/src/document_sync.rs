@@ -1782,6 +1782,16 @@ async fn project_sync(
     if scoped {
         return Ok(());
     }
+    let path = root.join(crate::projects::manifest::FILE);
+    let contents = std::fs::read_to_string(&path)?;
+    let manifest = crate::projects::manifest::parse(&contents).map_err(|error| anyhow!(error))?;
+    if let Some(code) = manifest.jurisdiction {
+        if dry_run {
+            println!("would sync governing jurisdiction {code}");
+        } else {
+            client.put_jurisdiction(&code).await?;
+        }
+    }
     sync_pages(&root, &client, dry_run).await?;
     sync_matter(&root, &client, dry_run).await?;
     sync_case_timeline(&root, &client, &project, dry_run, yes_delete).await

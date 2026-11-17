@@ -815,6 +815,7 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             "/app/api/projects/{id}/service/{service_id}",
             get(crate::service_api::show_service),
         ),
+        ("PUT", "/app/api/projects/{id}/jurisdiction", put(put_project_jurisdiction)),
         (
             "PUT",
             "/app/api/projects/{id}/pages",
@@ -2952,6 +2953,33 @@ async fn get_contract_review_door(
         return Err(ApiError::NotFound);
     }
     Ok((StatusCode::OK, Json(review)).into_response())
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PutProjectJurisdiction {
+    code: String,
+}
+
+async fn put_project_jurisdiction(
+    State(state): State<ApiState>,
+    lawyer: LawyerSession,
+    Path(id): Path<Uuid>,
+    Json(input): Json<PutProjectJurisdiction>,
+) -> Result<StatusCode, ApiError> {
+    if !participates_as_firm(&state, &lawyer, id).await {
+        return Err(ApiError::NotFound);
+    }
+    let jurisdiction = store::jurisdictions::find_by_code(&state.surreal, &input.code)
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))?
+        .ok_or(store::projects::ProjectCommandError::Invalid(
+            "unknown jurisdiction code",
+        ))?;
+    store::projects::set_jurisdiction(&state.surreal, id, Some(jurisdiction.id))
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Whether a lawyer-tier caller holds a *firm-side* participation row on

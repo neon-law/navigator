@@ -1,10 +1,10 @@
 # Xero billing — setup, invoice flow, and production cutover
 
-**All accounting originates in Xero.** Navigator does not compute, discount, or raise money: lawyers agree a matter's
-price with the client and raise the invoice in Xero directly. This page covers the **receivables** side — how a Xero
-invoice reaches the portal and how its paid-status is reconciled back — and how **one custom connection per
-organisation** keeps test activity off the live ledger. The **client-trust** side of the same integration, where Xero is
-equally the books, is [`trust-accounting.md`](trust-accounting.md).
+**Xero holds the accounting ledger.** Lawyers agree a matter's price with the client. Navigator can issue a Xero invoice
+from approved billing work or prepare a Stripe draft for the Firm's configured payment destination. This page covers the
+**receivables** side — how a Xero invoice reaches the portal and how its paid-status is reconciled back — and how **one
+custom connection per organisation** keeps test activity off the live ledger. The **client-trust** side of the same
+integration, where Xero is equally the books, is [`trust-accounting.md`](trust-accounting.md).
 
 Local sandbox values use a gitignored `.env`; production values live in that deployment's `secrets.enc.yaml` per
 [`deployment-secrets.md`](deployment-secrets.md). The environment-variable convention is in
@@ -16,6 +16,26 @@ The billing seam lives in [`billing/src/lib.rs`](../billing/src/lib.rs) (the `Bi
 [`billing-workflows`](../billing-workflows/). The crate is re-exported as `portal::billing` so the app and tests share
 one trait. An unconfigured vendor falls back to the in-process stub, so a fresh checkout boots and self-tests without a
 Xero account.
+
+## Stripe draft routing
+
+A Project's Jujutsu repository declares its governing jurisdiction as `project.jurisdiction: NV` in `navigator.yaml`.
+Run `navigator project sync` to project that code to the Project before generating an invoice. An absent declaration
+leaves the current Project jurisdiction in place.
+
+For Nevada, the Project's Firm supplies `STRIPE_NEVADA_APP_KEY` through the Firm integration secret settings. A missing
+credential disables Nevada invoice creation. A Project without a jurisdiction can use the Firm's
+`STRIPE_OPERATING_APP_KEY` when configured. Operating drafts identify themselves as outside IOLTA billing. Each
+deployment has its own Firm secrets. Staging accepts a sandbox key and routes synthetic data to Stripe's sandbox.
+Production accepts a live key.
+
+The operating route requires `STRIPE_DEFAULT` in the deployment environment, and the Nevada route requires
+`STRIPE_NEVADA`. Only presence matters. Each route also needs its own Firm integration secret.
+
+Navigator creates an unsent draft on the authenticated Stripe account and reserves the underlying work for review. The
+billing batch retains the account and invoice identity so a retry cannot silently move to a different account. A Stripe
+draft does not create a Xero receivable or settle time and expenses. The Stripe path does not collect payments or
+calculate a card surcharge.
 
 ## One connection per organisation (the contrast with DocuSign)
 
@@ -38,12 +58,11 @@ The demo company is the one free, non-binding target: invoices and contacts crea
 are self-cleaning (the demo org resets periodically). That is why dev, CI, and the live grounding test all point at the
 demo company — a leaked sandbox secret cannot raise a real invoice against a real client.
 
-## Who raises the invoice: lawyers, in Xero
+## Who raises Xero invoices
 
-A matter is a relationship the firm opens, priced bespoke per client. Lawyers agree the price with the client and raise
-the **`ACCREC`** (accounts-receivable) invoice **in Xero directly**. No Navigator handler and no Restate workflow raises
-one, and no Navigator code applies a discount or otherwise computes what a client owes. Navigator's job is to record the
-legal work.
+Lawyers agree the price with the client and can raise an **`ACCREC`** (accounts-receivable) invoice in Xero directly or
+generate it from the Project's Billing tab. Navigator composes the invoice from the agreed fee or recorded billable work
+and confirmed costs.
 
 What Navigator does hold is a **read-only mirror**: the `xero_invoice` table carries the Xero `InvoiceID`, reference,
 amount, dates, and paid-status for **every** invoice tagged to a matter. The row is keyed on the Xero invoice id;

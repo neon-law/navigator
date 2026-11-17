@@ -649,7 +649,7 @@ route_allow if {
     input.path[0] == "app"
     input.path[1] == "api"
     input.path[2] == "projects"
-    input.path[4] == "matter"
+    input.path[4] in {"matter", "jurisdiction"}
     count(input.path) == 5
     input.method == "PUT"
     is_lawyer(input.session)

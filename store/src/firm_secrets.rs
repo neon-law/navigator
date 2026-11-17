@@ -32,6 +32,7 @@ pub enum IntegrationProvider {
     /// docket scraper resolves its session credentials through this provider.
     CourtPortal,
     Twilio,
+    Stripe,
 }
 
 impl IntegrationProvider {
@@ -47,6 +48,7 @@ impl IntegrationProvider {
             Self::Forgejo => "forgejo",
             Self::CourtPortal => "court_portal",
             Self::Twilio => "twilio",
+            Self::Stripe => "stripe",
         }
     }
 }
@@ -55,7 +57,7 @@ impl IntegrationProvider {
 /// view builds its "create a secret" choices from this rather than a
 /// hand-kept second list, so a new kind cannot be added to the enum without
 /// also appearing there.
-pub const ALL_KINDS: [IntegrationSecretKind; 13] = [
+pub const ALL_KINDS: [IntegrationSecretKind; 15] = [
     IntegrationSecretKind::MercuryReadToken,
     IntegrationSecretKind::XeroTenantId,
     IntegrationSecretKind::XeroWebhookKey,
@@ -69,6 +71,8 @@ pub const ALL_KINDS: [IntegrationSecretKind; 13] = [
     IntegrationSecretKind::PortalLogin,
     IntegrationSecretKind::TwilioAuthToken,
     IntegrationSecretKind::DocuSignConnection,
+    IntegrationSecretKind::StripeNevadaAppKey,
+    IntegrationSecretKind::StripeOperatingAppKey,
 ];
 
 /// Typed Firm API credentials and provider webhook verification keys.
@@ -94,6 +98,8 @@ pub enum IntegrationSecretKind {
     /// version, not through a Firm-wide current one.
     TwilioAuthToken,
     DocuSignConnection,
+    StripeNevadaAppKey,
+    StripeOperatingAppKey,
 }
 
 impl IntegrationSecretKind {
@@ -113,6 +119,8 @@ impl IntegrationSecretKind {
             Self::PortalLogin => "portal_login",
             Self::TwilioAuthToken => "twilio_auth_token",
             Self::DocuSignConnection => "docusign_connection",
+            Self::StripeNevadaAppKey => "stripe_nevada_app_key",
+            Self::StripeOperatingAppKey => "stripe_operating_app_key",
         }
     }
 
@@ -132,6 +140,7 @@ impl IntegrationSecretKind {
             Self::PortalLogin => IntegrationProvider::CourtPortal,
             Self::TwilioAuthToken => IntegrationProvider::Twilio,
             Self::DocuSignConnection => IntegrationProvider::DocuSign,
+            Self::StripeNevadaAppKey | Self::StripeOperatingAppKey => IntegrationProvider::Stripe,
         }
     }
 }
@@ -268,6 +277,7 @@ pub fn parse_provider(value: &str) -> Option<IntegrationProvider> {
         "court_portal" => Some(IntegrationProvider::CourtPortal),
         "twilio" => Some(IntegrationProvider::Twilio),
         "docusign" => Some(IntegrationProvider::DocuSign),
+        "stripe" => Some(IntegrationProvider::Stripe),
         _ => None,
     }
 }
@@ -290,6 +300,8 @@ pub fn parse_kind(value: &str) -> Option<IntegrationSecretKind> {
         "portal_login" => Some(IntegrationSecretKind::PortalLogin),
         "twilio_auth_token" => Some(IntegrationSecretKind::TwilioAuthToken),
         "docusign_connection" => Some(IntegrationSecretKind::DocuSignConnection),
+        "stripe_nevada_app_key" => Some(IntegrationSecretKind::StripeNevadaAppKey),
+        "stripe_operating_app_key" => Some(IntegrationSecretKind::StripeOperatingAppKey),
         _ => None,
     }
 }
@@ -657,6 +669,69 @@ pub async fn revoke_twilio_auth_token_by_ref(
     Ok(())
 }
 
+/// Select the Firm credential kind for a Project's governing jurisdiction.
+pub async fn stripe_kind_for_project(
+    surreal: &SurrealDb,
+    project: &crate::projects::Project,
+) -> Result<Option<IntegrationSecretKind>, crate::jurisdictions::JurisdictionError> {
+    let Some(id) = project.jurisdiction_id else {
+        return Ok(Some(IntegrationSecretKind::StripeOperatingAppKey));
+    };
+    let jurisdiction = crate::jurisdictions::find_by_id(surreal, id).await?;
+    Ok(jurisdiction
+        .filter(|jurisdiction| jurisdiction.code == "NV")
+        .map(|_| IntegrationSecretKind::StripeNevadaAppKey))
+}
+
+/// Whether the deployment enables a Stripe billing route. The environment
+/// only gates access. Provider credentials are resolved from the Firm.
+#[must_use]
+pub fn stripe_billing_enabled(kind: IntegrationSecretKind) -> bool {
+    stripe_billing_enabled_from(kind, |key| std::env::var_os(key).is_some())
+}
+
+fn stripe_billing_enabled_from(
+    kind: IntegrationSecretKind,
+    is_set: impl FnOnce(&str) -> bool,
+) -> bool {
+    let variable = match kind {
+        IntegrationSecretKind::StripeOperatingAppKey => "STRIPE_DEFAULT",
+        IntegrationSecretKind::StripeNevadaAppKey => "STRIPE_NEVADA",
+        _ => return false,
+    };
+    is_set(variable)
+}
+
+/// Check Stripe availability after the caller has established Firm-side
+/// Project access. This reads only the presence of the typed credential.
+pub async fn stripe_credential_configured(
+    surreal: &SurrealDb,
+    firm_id: Uuid,
+    kind: IntegrationSecretKind,
+) -> Result<bool, SecretStoreError> {
+    validate_kind(IntegrationProvider::Stripe, kind)?;
+    if !stripe_billing_enabled(kind) {
+        return Ok(false);
+    }
+    let mut response = match surreal
+        .query(format!(
+            "SELECT VALUE version FROM {TABLE} WHERE firm_id = $firm_id AND provider = 'stripe' \
+             AND kind = $kind AND status = 'active' LIMIT 1"
+        ))
+        .bind(("firm_id", record_id(FIRM_TABLE, firm_id)))
+        .bind(("kind", kind.as_str().to_owned()))
+        .await
+        .and_then(surrealdb::IndexedResults::check)
+        .map_err(|error| classify_query_error(error, IntegrationProvider::Stripe, kind))
+    {
+        Ok(response) => response,
+        Err(SecretStoreError::NotConfigured { .. }) => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    let versions: Vec<i64> = response.take(0)?;
+    Ok(!versions.is_empty())
+}
+
 /// Resolve a single current credential from the Project's owning Firm.
 pub async fn resolve_project_credential(
     surreal: &SurrealDb,
@@ -799,6 +874,24 @@ pub async fn resolve_twilio_auth_token_by_ref(
 mod tests {
     use super::{zeroize, IntegrationProvider, IntegrationSecretKind, ResolvedCredential};
 
+    #[test]
+    fn stripe_billing_checks_only_the_gate_for_that_route() {
+        use super::stripe_billing_enabled_from;
+        let is_set = |key: &str| key == "STRIPE_NEVADA";
+        assert!(stripe_billing_enabled_from(
+            IntegrationSecretKind::StripeNevadaAppKey,
+            is_set
+        ));
+        assert!(!stripe_billing_enabled_from(
+            IntegrationSecretKind::StripeOperatingAppKey,
+            is_set
+        ));
+        assert!(stripe_billing_enabled_from(
+            IntegrationSecretKind::StripeOperatingAppKey,
+            |key| key == "STRIPE_DEFAULT"
+        ));
+    }
+
     const SECRET: &[u8] = b"la-superior-password";
 
     /// The live shape the engine raises for a query against a table that
@@ -928,7 +1021,7 @@ mod tests {
 
     #[test]
     fn all_kinds_includes_the_court_portal_pair() {
-        assert_eq!(super::ALL_KINDS.len(), 13);
+        assert!(super::ALL_KINDS.contains(&IntegrationSecretKind::PortalLogin));
         assert_eq!(IntegrationSecretKind::PortalLogin.as_str(), "portal_login");
         assert_eq!(
             IntegrationSecretKind::PortalLogin.provider(),
