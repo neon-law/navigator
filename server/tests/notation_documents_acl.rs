@@ -180,12 +180,12 @@ async fn notation_pdfs_are_gated_by_project_participation_and_listed_on_the_proj
         "a non-participant must get 404, not the document",
     );
 
-    // (3) Admin bypasses participation.
-    let admin_cookie = cookie_for(&f.sessions, Role::Admin, None);
+    // (3) The Owner has deployment-wide oversight.
+    let owner_cookie = cookie_for(&f.sessions, Role::Owner, None);
     assert_eq!(
-        get(&f.app, &lawyer_doc_uri, &admin_cookie).await.status(),
+        get(&f.app, &lawyer_doc_uri, &owner_cookie).await.status(),
         StatusCode::OK,
-        "admin bypasses project scoping",
+        "the Owner has project access",
     );
 
     // (4) Once the provider confirms execution, the client project page

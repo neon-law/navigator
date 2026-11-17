@@ -200,6 +200,26 @@ async fn load(
     else {
         return Ok(hidden(role).await);
     };
+    let person_id = dioxus_fullstack_core::FullstackContext::extract::<
+        axum::Extension<crate::portal_project_list::PersonId>,
+        _,
+    >()
+    .await
+    .ok()
+    .and_then(|axum::Extension(pid)| pid.0)
+    .and_then(|raw| raw.parse::<uuid::Uuid>().ok());
+    let admin_role = if role.is_owner() {
+        store::persons::Role::Owner
+    } else {
+        store::persons::Role::Admin
+    };
+    if !store::projects::can_administer_project(&surreal, person_id, admin_role, &project)
+        .await
+        .map_err(|error| ServerFnError::new(error.to_string()))?
+    {
+        return Ok(hidden(role).await);
+    }
+
     let project_id = project.id;
 
     // On the edit mount, the row must exist *and* belong to this matter — a

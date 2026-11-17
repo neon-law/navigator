@@ -179,11 +179,11 @@ async fn participant_lawyer_appends_a_clause() {
 }
 
 #[tokio::test]
-async fn admin_bypasses_scope_and_appends() {
+async fn firm_admin_can_append() {
     let (app, surreal) = build_app().await;
     let project = open_project(&surreal).await;
     let notation_id = seed_notation(&surreal, project.id).await;
-    let admin = bearer_new_person(&surreal, "admin@example.com", Role::Admin, None).await;
+    let admin = bearer_common::bearer_project_firm_admin(&surreal, project.id).await;
 
     let resp = post_clause(&app, Some(&admin), notation_id, "A clause.").await;
     assert_eq!(resp.status(), StatusCode::CREATED);

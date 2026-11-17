@@ -1108,6 +1108,20 @@ enum PersonPhoneCmd {
 
 #[derive(Subcommand)]
 enum SitePersonCmd {
+    /// Create a Person through the selected Firm's admin boundary. Only an Owner can create an Admin.
+    Create {
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        email: String,
+        /// Name of the Firm as listed by `hudson site firm list`.
+        #[arg(long)]
+        firm: String,
+        #[arg(long, default_value = "client", value_parser = ["client", "clerk", "lawyer", "admin"])]
+        role: String,
+        #[command(flatten)]
+        host: HostOpt,
+    },
     /// Merge a duplicate Person into the Person to keep.
     ///
     /// An address change imported without `previous_email:` leaves two
@@ -3274,6 +3288,18 @@ fn run() -> ExitCode {
             }
         },
         Command::Site { action } => match action {
+            SiteCmd::Person {
+                action:
+                    SitePersonCmd::Create {
+                        name,
+                        email,
+                        firm,
+                        role,
+                        host,
+                    },
+            } => runtime().block_on(remote::create_person(
+                host.host, &firm, &name, &email, &role,
+            )),
             SiteCmd::Person {
                 action: SitePersonCmd::Merge { keep, drop, host },
             } => runtime().block_on(remote::merge_people(host.host, &keep, &drop)),

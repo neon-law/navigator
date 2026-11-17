@@ -73,8 +73,8 @@ async fn build_app() -> axum::Router {
     server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR))
 }
 
-fn admin_bearer() -> String {
-    let mut session = SessionData::fresh("cli-admin", Role::Admin);
+fn owner_bearer() -> String {
+    let mut session = SessionData::fresh("cli-admin", Role::Owner);
     session.email = Some("nick@neonlaw.com".into());
     format!("Bearer {}", SessionStore::new(SESSION_KEY).encode(&session))
 }
@@ -137,7 +137,7 @@ async fn post(
 #[allow(clippy::too_many_lines)]
 async fn llc_formation_walker_json_step_and_document_download_drive_the_formation() {
     let app = build_app().await;
-    let bearer = admin_bearer();
+    let bearer = owner_bearer();
 
     // Open the matter through the questionnaire-walker entry; the redirect
     // names the notation.

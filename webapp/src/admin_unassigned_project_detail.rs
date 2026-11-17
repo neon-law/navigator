@@ -19,11 +19,8 @@
 //! reference data with no participation ledger of its own
 //! (`crate::admin_listing::require_lawyer`'s gate, not the matter surface's).
 //!
-//! Reusing the workbench's admin-gated write routes
-//! (`/app/projects/{code}/people/...`, `crate::project_participation`) is what
-//! makes this safe: those routes already check `role.is_admin_tier()` alone,
-//! never a participation row, so this page adds no new write capability —
-//! only a place to reach the one that already existed.
+//! The loader and participation writes both require authority to administer
+//! the Project's Firm.
 
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -136,6 +133,19 @@ pub async fn get_admin_unassigned_project_detail() -> Result<AdminUnassignedView
     else {
         return Ok(not_found(role, logo, firm_name));
     };
+
+    let person_id = person_id.and_then(|raw| raw.parse::<uuid::Uuid>().ok());
+    let admin_role = if role.is_owner() {
+        store::persons::Role::Owner
+    } else {
+        store::persons::Role::Admin
+    };
+    if !store::projects::can_administer_project(&surreal, person_id, admin_role, &project)
+        .await
+        .map_err(|error| ServerFnError::new(error.to_string()))?
+    {
+        return Ok(not_found(role, logo, firm_name));
+    }
 
     let entity = store::entities::find_by_id(&surreal, project.entity_id)
         .await

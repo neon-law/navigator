@@ -283,14 +283,14 @@ async fn participant_lawyer_opens_a_notation_and_returns_201_json() {
 }
 
 #[tokio::test]
-async fn admin_bypasses_scope_and_opens_a_notation() {
+async fn firm_admin_can_open_a_notation() {
     let _repo_guard = REPO_ENV_LOCK.lock().await;
     let (app, surreal) = build_app().await;
     let project = open_project(&surreal).await;
     let project_id = project.id;
     commit_template(&project.code, "amendment", amendment_template().as_bytes());
-    // Admin does NOT participate in the matter; the scope check bypasses for admin.
-    let admin = bearer_new_person(&surreal, "admin@example.com", Role::Admin, None).await;
+    // The Firm membership authorizes the Admin without Project participation.
+    let admin = bearer_common::bearer_project_firm_admin(&surreal, project_id).await;
 
     let resp = post_json(
         &app,

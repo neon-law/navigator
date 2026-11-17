@@ -92,7 +92,7 @@ async fn open_notation(h: &Harness, project: &store::projects::Project) -> (uuid
         &store::persons::NewPerson::with_role(
             "opener@example.com",
             "opener@example.com",
-            Role::Admin,
+            Role::Owner,
         ),
     )
     .await
@@ -102,7 +102,7 @@ async fn open_notation(h: &Harness, project: &store::projects::Project) -> (uuid
         h.runtime.as_ref(),
         &h.storage,
         Some(admin.id),
-        Role::Admin,
+        Role::Owner,
         project.id,
         "amendment",
         "libra@example.com",
@@ -220,13 +220,13 @@ async fn participant_lawyer_answers_the_step_and_gets_the_next() {
 }
 
 #[tokio::test]
-async fn admin_bypasses_scope_and_answers() {
+async fn firm_admin_can_answer() {
     let _repo_guard = REPO_ENV_LOCK.lock().await;
     let h = build_app().await;
     let project = open_project(&h.surreal).await;
     let (notation_id, code) = open_notation(&h, &project).await;
-    // Admin does NOT participate; the scope check bypasses for admin.
-    let admin = bearer_new_person(&h.surreal, "admin@example.com", Role::Admin, None).await;
+    // The Firm membership authorizes the Admin without Project participation.
+    let admin = bearer_common::bearer_project_firm_admin(&h.surreal, project.id).await;
 
     let resp = post_answer(&h.app, Some(&admin), notation_id, &code, "Aquarius Lumen").await;
     assert_eq!(resp.status(), StatusCode::OK);

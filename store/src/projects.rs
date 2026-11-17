@@ -1018,21 +1018,31 @@ pub async fn has_firm_participation(
         }))
 }
 
-/// Whether a lawyer-tier actor may read a Project through the firm lens,
-/// with the Owner/Admin project-scoping bypass applied.
-///
-/// The matter surface does not come through here: `store::access` requires
-/// a participation row of every tier, so privileged reach is an explicit
-/// place you navigate to rather than an invisible widening. The callers here
-/// legitimately act as the deployment rather than as a person on a matter: the MCP *write* tools, `create_notation` and
-/// `create_project`, which check that the matter they are about to write
-/// to is one the acting principal may write to.
-///
-/// Not the MCP reads. Since ENG-216 those answer through the caller's own
-/// lens — `store::access::visible_projects` for the membership tiers and
-/// [`matter_directory`] for Owner and Admin — so the admin-tier
-/// short-circuit below is deliberately not on that path. It grants *full*
-/// access to a matter, which is the opposite of what oversight gets.
+/// Whether an Owner or Firm Admin may oversee this Project without participation.
+pub async fn can_administer_project(
+    surreal: &SurrealDb,
+    person_id: Option<Uuid>,
+    role: Role,
+    project: &Project,
+) -> Result<bool, ProjectStoreError> {
+    if role != Role::Admin {
+        return Ok(role.is_owner());
+    }
+    let firm_id = match project.firm_id {
+        Some(firm_id) => Some(firm_id),
+        None => crate::firms::firm_id_for_brand_key(surreal, &project.brand).await?,
+    };
+    let Some(firm_id) = firm_id else {
+        return Ok(true);
+    };
+    let decision = crate::firm_capability::FirmCapability::ManageMembership
+        .resolve(surreal, role, person_id, firm_id)
+        .await?;
+    Ok(decision.is_allowed())
+}
+
+/// Legacy firm-side command access follows Project participation and allows
+/// oversight by the Owner or an Admin of the owning Firm.
 pub async fn can_access_as_lawyer_in_surreal(
     surreal: &SurrealDb,
     person_id: Option<Uuid>,
@@ -1042,8 +1052,16 @@ pub async fn can_access_as_lawyer_in_surreal(
     if !role.is_lawyer_tier() {
         return Ok(false);
     }
-    if role.is_admin_tier() {
+    if role.is_owner() {
         return Ok(true);
+    }
+    if role == Role::Admin {
+        let Some(project) = find_by_id(surreal, project_id).await? else {
+            return Ok(false);
+        };
+        if can_administer_project(surreal, person_id, role, &project).await? {
+            return Ok(true);
+        }
     }
     let Some(person_id) = person_id else {
         return Ok(false);

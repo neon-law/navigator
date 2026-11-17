@@ -1382,14 +1382,20 @@ async fn assert_fi_assignment_authorization(
     )
     .await;
     let csv = "type,way,phone,at,length,id\nC,I,+15555550456,2026-10-29T18:00:00Z,61,authorization-call\nS,O,+15555550789,2026-10-29T18:01:00Z,,authorization-sms\n";
-    for (label, actor, session_role) in [
-        ("own Firm Admin", admin, Role::Admin),
-        ("foreign Firm Admin", outsider.id, Role::Admin),
-        ("stale Owner session for stored Admin", admin, Role::Owner),
+    for (label, actor, session_role, expected_status) in [
+        ("own Firm Admin", admin, Role::Admin, 403),
+        ("foreign Firm Admin", outsider.id, Role::Admin, 404),
+        (
+            "stale Owner session for stored Admin",
+            admin,
+            Role::Owner,
+            403,
+        ),
         (
             "stale Owner session for stored Client",
             client.id,
             Role::Owner,
+            403,
         ),
     ] {
         let session = portal::SessionData {
@@ -1420,7 +1426,7 @@ async fn assert_fi_assignment_authorization(
             after_audits, audits,
             "{label} must not pin or audit an assignment"
         );
-        assert_eq!(status, 403, "{label}: {body}");
+        assert_eq!(status, expected_status, "{label}: {body}");
     }
     assert_fi_unscoped_admin_preview(fixture, admin, csv).await;
     let owner = ensure_person(
@@ -1809,8 +1815,8 @@ async fn assert_fi_assignment_rights_before_writes(
         )
         .await;
         assert_eq!(
-            status, 403,
-            "Admin cannot assign imported history to a Project"
+            status, 404,
+            "An unrelated Admin cannot resolve the Project for imported history"
         );
         assert_eq!(
             fi_counts(pg).await,

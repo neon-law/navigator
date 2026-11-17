@@ -88,7 +88,7 @@ async fn open_project(surreal: &store::surreal::SurrealDb) -> store::projects::P
 }
 
 /// Open a notation on `project` bound to `CLIENT_EMAIL`, returning its id.
-/// Opened as an admin so it needs no participation seeding.
+/// The fixture is opened by the Owner.
 async fn open_notation(h: &Harness, project: &store::projects::Project) -> uuid::Uuid {
     commit_template(&project.code, "amendment", amendment_template().as_bytes());
     let admin = store::persons::create(
@@ -96,7 +96,7 @@ async fn open_notation(h: &Harness, project: &store::projects::Project) -> uuid:
         &store::persons::NewPerson::with_role(
             "opener@example.com",
             "opener@example.com",
-            Role::Admin,
+            Role::Owner,
         ),
     )
     .await
@@ -106,7 +106,7 @@ async fn open_notation(h: &Harness, project: &store::projects::Project) -> uuid:
         h.runtime.as_ref(),
         &h.storage,
         Some(admin.id),
-        Role::Admin,
+        Role::Owner,
         project.id,
         "amendment",
         CLIENT_EMAIL,
@@ -224,12 +224,12 @@ async fn dispatched_intake_uses_the_project_code_in_its_route() {
 }
 
 #[tokio::test]
-async fn admin_bypasses_scope_and_dispatches() {
+async fn firm_admin_can_dispatch() {
     let _repo_guard = REPO_ENV_LOCK.lock().await;
     let h = build_app().await;
     let project = open_project(&h.surreal).await;
     let notation_id = open_notation(&h, &project).await;
-    let admin = bearer_new_person(&h.surreal, "admin@example.com", Role::Admin, None).await;
+    let admin = bearer_common::bearer_project_firm_admin(&h.surreal, project.id).await;
 
     let resp = post_intake(&h.app, Some(&admin), notation_id).await;
     assert_eq!(resp.status(), StatusCode::OK);

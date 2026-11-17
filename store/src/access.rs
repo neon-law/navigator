@@ -384,19 +384,8 @@ pub async fn can_see_project_as_client(
         .map(|row| row.is_some_and(|row| is_client_participation(&row)))
 }
 
-/// `true` iff the caller may see the project through the firm lens, with the
-/// Owner/Admin project-scoping bypass still applied.
-///
-/// This is the gate for the firm surfaces ENG-81 has **not** collapsed yet —
-/// most of `/app/api/*`, the notation walker, and contract reviews. It keeps the
-/// behavior documented in `docs/access-model.md` so this slice does not quietly
-/// re-authorize surfaces outside its scope. The matter surface uses
-/// [`can_see_project`] instead, which has no bypass, as do the matter-content
-/// reads added since — they are content, not oversight, so they never wanted
-/// the bypass in the first place.
-///
-/// Reach for this one only to keep an *existing* surface's behavior. A new
-/// door belongs on [`can_see_project`].
+/// Legacy firm-side command access, including the Owner and the Project's
+/// Firm Admin. Matter content uses [`can_see_project`]'s participation gate.
 pub async fn can_see_project_as_lawyer(
     surreal: &SurrealDb,
     person_id: Option<Uuid>,

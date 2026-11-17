@@ -87,10 +87,10 @@ async fn build_app(
     )
 }
 
-/// A fresh admin session bearer, minted exactly as `/auth/cli/start`
+/// A fresh session bearer, minted exactly as `/auth/cli/start`
 /// would, signed with the test session key.
-fn admin_bearer() -> String {
-    let mut session = SessionData::fresh("cli-admin", Role::Admin);
+fn session_bearer(role: Role) -> String {
+    let mut session = SessionData::fresh("cli-test", role);
     session.email = Some("nick@neonlaw.com".into());
     SessionStore::new(SESSION_KEY).encode(&session)
 }
@@ -108,7 +108,7 @@ fn enc(s: &str) -> String {
 #[allow(clippy::too_many_lines)]
 async fn cli_bearer_opens_retainer_then_approve_parks_and_send_dispatches_once() {
     let (app, surreal, stub) = build_app("happy").await;
-    let bearer = format!("Bearer {}", admin_bearer());
+    let bearer = format!("Bearer {}", session_bearer(Role::Owner));
 
     // Open the retainer through the walker door — `POST /app/projects`
     // opens the matter and only the matter, so the retainer (and the
@@ -401,7 +401,10 @@ async fn whoami_echoes_the_bearer_identity() {
         .oneshot(
             Request::builder()
                 .uri("/auth/cli/whoami")
-                .header("authorization", format!("Bearer {}", admin_bearer()))
+                .header(
+                    "authorization",
+                    format!("Bearer {}", session_bearer(Role::Admin)),
+                )
                 .body(Body::empty())
                 .unwrap(),
         )

@@ -436,6 +436,44 @@ fn parse_seed_counts(body: &str) -> SeedCounts {
     serde_json::from_str(body).unwrap_or_default()
 }
 
+/// Create a Person through the Firm-scoped administration endpoint.
+pub async fn create_person(
+    host: Option<String>,
+    firm: &str,
+    name: &str,
+    email: &str,
+    role: &str,
+) -> ExitCode {
+    #[derive(serde::Deserialize)]
+    struct CreatedPerson {
+        id: uuid::Uuid,
+    }
+    run(async {
+        let (base, token) = resolve(host.as_deref())?;
+        let firm_id = resolve_firm(&base, &token, firm, None).await?;
+        let response = reqwest::Client::new()
+            .post(format!("{base}/app/api/firms/{firm_id}/people"))
+            .bearer_auth(token)
+            .json(&serde_json::json!({ "name": name, "email": email, "role": role }))
+            .send()
+            .await
+            .context("POST /app/api/firms/{id}/people")?;
+        let status = response.status();
+        if status != reqwest::StatusCode::CREATED {
+            let error = response.json::<serde_json::Value>().await.ok();
+            let message = error.as_ref().and_then(|body| body["message"].as_str());
+            anyhow::bail!(
+                "create Person refused: {status}: {}",
+                message.unwrap_or_default()
+            );
+        }
+        let person: CreatedPerson = response.json().await.context("read created Person")?;
+        println!("{}", person.id);
+        Ok(())
+    })
+    .await
+}
+
 /// `hudson site person merge <keep> <drop>`: one `POST
 /// /app/api/people/merge`, printing how many addresses the kept Person answers to (never the
 /// parsed `keep`/`drop` arguments, which `CodeQL` treats as secrets).
@@ -6390,6 +6428,47 @@ mod tests {
                 previous,
             }
         }
+    }
+
+    #[tokio::test]
+    async fn create_person_posts_to_the_selected_firm() {
+        let _lock = CREDENTIALS_ENV_LOCK.lock().await;
+        let server = MockServer::start().await;
+        let base = server.uri();
+        let _credentials = CredentialsEnv::new(&base);
+        let firm = Uuid::now_v7();
+        Mock::given(method("GET"))
+            .and(path("/app/api/firms"))
+            .and(header("authorization", "Bearer test-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                { "id": Uuid::now_v7(), "name": "Other Practice" },
+                { "id": firm, "name": "Example Practice" }
+            ])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(format!("/app/api/firms/{firm}/people")))
+            .and(header("authorization", "Bearer test-token"))
+            .and(body_json(serde_json::json!({
+                "name": "Example Person", "email": "person@example.com", "role": "admin"
+            })))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "id": Uuid::now_v7()
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let result = super::create_person(
+            Some(base),
+            "Example Practice",
+            "Example Person",
+            "person@example.com",
+            "admin",
+        )
+        .await;
+        assert_eq!(result, ExitCode::SUCCESS);
     }
 
     /// LAW-241: `set_folder` `PATCH`es the document door with the folder
