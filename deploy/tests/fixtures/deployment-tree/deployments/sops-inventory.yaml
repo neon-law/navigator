@@ -110,3 +110,6 @@ forgejo_service_only:
 # client id is the NAVIGATOR_FORGEJO_OIDC_CLIENT_ID config.toml coordinate.
 forgejo_oidc_service_only:
   NAVIGATOR_FORGEJO_OIDC_CLIENT_SECRET: Forgejo OIDC client secret at the installation issuer
+
+forgejo_runner_service_only:
+  NAVIGATOR_FORGEJO_RUNNER_CONTROLLER_TOKEN: Forgejo Actions runner controller credential

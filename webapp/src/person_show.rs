@@ -353,8 +353,10 @@ fn edit_fields(fields: &PersonFields, edit_lock: EditLock, viewer_role: ViewerRo
     if viewer_role == ViewerRole::Owner {
         role_options.push(Choice::new("owner", "Owner"));
     }
+    if viewer_role == ViewerRole::Owner || fields.role == "admin" {
+        role_options.push(Choice::new("admin", "Admin"));
+    }
     role_options.extend([
-        Choice::new("admin", "Admin"),
         Choice::new("lawyer", "Lawyer (lawyer)"),
         Choice::new("clerk", "Clerk (non-lawyer)"),
         Choice::new("client", "Client"),

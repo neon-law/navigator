@@ -245,9 +245,11 @@ erDiagram
         string why
     }
     clause {
+        json aliases
         string body
         string body_sha256
         string code
+        string heading
         uuid id
         json inputs
         datetime inserted_at
@@ -1044,6 +1046,9 @@ erDiagram
         uuid project_id
         string reference
         string status
+        string stripe_account_id
+        string stripe_invoice_id
+        boolean stripe_iolta
         int total_cents
         datetime updated_at
         string xero_contact_id

@@ -3900,6 +3900,15 @@ a.nav-link:hover {
   flex-basis: 100%;
 }
 
+.lawyer-detail__resource-action {
+  display: inline-grid;
+  place-items: center;
+  box-sizing: border-box;
+  inline-size: 2rem;
+  block-size: 2rem;
+  padding: 0;
+}
+
 /* Overview's jump menu: one wrapping row of in-page links above the first
  * section. */
 .lawyer-detail__jump {

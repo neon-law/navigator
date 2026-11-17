@@ -41,6 +41,7 @@ use surrealdb::types::{Datetime, RecordId, SurrealValue};
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::postgres::accounting as authority;
 use crate::surreal::retry::writing;
 use crate::surreal::{record_id, record_uuid, SurrealDb};
 
@@ -405,6 +406,9 @@ pub enum FinanceAggregateError {
     Db(#[from] surrealdb::Error),
     #[error("report document: {0}")]
     Json(#[from] serde_json::Error),
+    /// PostgreSQL, under the accounting authority, failed.
+    #[error(transparent)]
+    Postgres(#[from] crate::postgres::accounting::AccountingAuthorityError),
 }
 
 /// The row as the engine reads and writes it.
@@ -414,6 +418,13 @@ struct Row {
     run_id: String,
     computed_at: Datetime,
     parameters: Parameters,
+    report_json: String,
+}
+
+/// The aggregate row as PostgreSQL's `to_jsonb` serves it. The report's own
+/// JSON carries the shape the portal reads; only the text is needed here.
+#[derive(serde::Deserialize)]
+struct PgAggregateRow {
     report_json: String,
 }
 
@@ -429,6 +440,25 @@ pub async fn upsert(
     report: &FinanceReport,
 ) -> Result<(), FinanceAggregateError> {
     let report_json = serde_json::to_string(report)?;
+    if let Some(pg) = authority::authority().await? {
+        let row = serde_json::json!({
+            "id": report.run_id, "project_id": project_id, "run_id": report.run_id,
+            "computed_at": report.computed_at, "parameters": report.parameters,
+            "report_json": report_json,
+        });
+        let query = sqlx::query(
+            "INSERT INTO finance_aggregate SELECT * FROM \
+             jsonb_populate_record(NULL::finance_aggregate, \
+             $1 || jsonb_build_object('inserted_at', now(), 'updated_at', now())) \
+             ON CONFLICT (id) DO UPDATE SET project_id = EXCLUDED.project_id, \
+             run_id = EXCLUDED.run_id, computed_at = EXCLUDED.computed_at, \
+             parameters = EXCLUDED.parameters, report_json = EXCLUDED.report_json, \
+             updated_at = now()",
+        )
+        .bind(row);
+        authority::execute(&pg, query).await?;
+        return Ok(());
+    }
     writing(|| {
         db.query(
             "UPSERT $id SET project_id = $project_id, run_id = $run_id, \
@@ -458,6 +488,17 @@ pub async fn latest_for_project(
     db: &SurrealDb,
     project_id: Uuid,
 ) -> Result<Option<FinanceReport>, FinanceAggregateError> {
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "SELECT to_jsonb(finance_aggregate) AS row FROM finance_aggregate \
+             WHERE project_id = $1 ORDER BY computed_at DESC, run_id DESC LIMIT 1",
+        )
+        .bind(project_id);
+        let row = authority::maybe::<PgAggregateRow>(&pg, query).await?;
+        return row
+            .map(|row| serde_json::from_str(&row.report_json).map_err(Into::into))
+            .transpose();
+    }
     let mut response = db
         .query(format!(
             "SELECT project_id, run_id, computed_at, parameters, report_json FROM {TABLE} \

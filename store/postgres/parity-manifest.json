@@ -2538,9 +2538,11 @@
       },
       "clause": {
         "columns": {
+          "aliases": "JSONB",
           "body": "TEXT",
           "body_sha256": "TEXT",
           "code": "TEXT",
+          "heading": "TEXT",
           "id": "UUID",
           "inputs": "JSONB",
           "inserted_at": "TIMESTAMPTZ",
@@ -4157,6 +4159,9 @@
           "project_id": "UUID",
           "reference": "TEXT",
           "status": "TEXT",
+          "stripe_account_id": "TEXT",
+          "stripe_invoice_id": "TEXT",
+          "stripe_iolta": "BOOLEAN",
           "total_cents": "BIGINT",
           "updated_at": "TIMESTAMPTZ",
           "xero_contact_id": "TEXT",

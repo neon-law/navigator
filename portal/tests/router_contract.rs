@@ -977,7 +977,7 @@ mod clauses_page {
             .unwrap();
         let end = list[start..].find("</tr>").unwrap() + start;
         assert!(
-            list[start..end].contains("4 Templates"),
+            list[start..end].contains("7 Templates"),
             "{}",
             &list[start..end]
         );
@@ -988,6 +988,9 @@ mod clauses_page {
             "master_services_agreement",
             "mutual_nda",
             "one_way_nda",
+            "dpa_us",
+            "dpa_global",
+            "business_associate_agreement",
         ] {
             assert!(detail.contains(&format!("({code})")), "{code} pins it");
         }

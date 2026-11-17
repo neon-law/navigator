@@ -204,6 +204,8 @@ spec:
               value: YOUR_SLACK_STAGING_MESSAGES_CHANNEL_ID
             - name: OTEL_SERVICE_NAME
               value: workflows-service
+            - name: NAVIGATOR_FORGEJO_ROOT_URL
+              value: YOUR_FORGEJO_ROOT_URL
             - name: POD_NAME
               valueFrom:
                 fieldRef:

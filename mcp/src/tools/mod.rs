@@ -354,7 +354,16 @@ pub async fn call_tool(
         }
         "list_projects" => list_projects::call(surreal, &scope, arguments).await,
         "project_status" => project_status::call(surreal, &scope, arguments).await,
-        "link_person_project" => link_person_project::call(surreal, arguments).await,
+        "link_person_project" => {
+            if let Caller::Authenticated {
+                identity: Some(identity),
+                ..
+            } = caller
+            {
+                link_person_project::require_admin_scope(surreal, identity, arguments).await?;
+            }
+            link_person_project::call(surreal, arguments).await
+        }
         "bulk_import" => bulk_import::call(surreal, principal, arguments).await,
         "list_tools" => list_tools::call(arguments).await,
         "spawn_legal_council" => spawn_legal_council::call(arguments).await,

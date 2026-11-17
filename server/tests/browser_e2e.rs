@@ -3191,6 +3191,7 @@ async fn seed_inbox_walkthrough(
     provider_account: &str,
     channel: &str,
     project_id: Option<Uuid>,
+    external_address: &str,
 ) -> store::inbox::IngestedInbound {
     let firm = store::firms::firm_id_for_brand_key(db, "neon")
         .await
@@ -3211,11 +3212,7 @@ async fn seed_inbox_walkthrough(
             provider_account,
             provider_message_id: &Uuid::now_v7().to_string(),
             provider_thread_ref: None,
-            external_address: if channel == store::inbox::channel::EMAIL {
-                "synthetic-sender@example.test"
-            } else {
-                "synthetic-sender"
-            },
+            external_address,
             external_name: None,
             subject: Some("Synthetic Inbox walkthrough"),
             body: "Synthetic inquiry for the browser walkthrough.",
@@ -3483,6 +3480,7 @@ async fn seed_inbox_filing_review(db: &store::surreal::SurrealDb) -> (Uuid, Uuid
         "synthetic-filing-account",
         store::inbox::channel::EMAIL,
         None,
+        "synthetic-sender@example.test",
     )
     .await;
     let review = store::inbox_triage::record(
@@ -3520,6 +3518,7 @@ async fn lawyer_workbench_card_opens_the_unified_inbox() {
         "synthetic-receiving-account",
         store::inbox::channel::SMS,
         None,
+        "synthetic-sender",
     )
     .await;
     c.goto(&format!("{}/app/lawyers", base_url()))
@@ -3608,6 +3607,88 @@ async fn lawyer_workbench_card_opens_the_unified_inbox() {
 }
 
 #[tokio::test]
+async fn firm_inbox_displays_the_email_date_and_links_a_text_to_a_contact() {
+    let Some(c) = new_client_or_skip().await else {
+        return;
+    };
+    login_as_owner(&c).await;
+    let db = store::surreal::connect_from_env().await.unwrap();
+    let email = format!("inbox-{}@example.test", Uuid::now_v7());
+    let mail = seed_inbox_walkthrough(
+        &db,
+        "synthetic-older-email",
+        store::inbox::channel::EMAIL,
+        None,
+        &email,
+    )
+    .await;
+    let person = store::persons::find_by_any_email(&db, &email)
+        .await
+        .unwrap()
+        .expect("sender was linked at ingest");
+    let phone = format!("+1202555{:04}", 100 + std::process::id() % 100);
+    let text = seed_inbox_walkthrough(
+        &db,
+        "synthetic-text-account",
+        store::inbox::channel::SMS,
+        None,
+        &phone,
+    )
+    .await;
+
+    c.goto(&format!("{}/app/inbox", base_url())).await.unwrap();
+    let date = c
+        .find(Locator::Css(&format!(
+            "#inbox-row-{} time",
+            mail.conversation_id
+        )))
+        .await
+        .unwrap();
+    assert_eq!(
+        date.attr("datetime").await.unwrap().as_deref(),
+        Some("2026-10-10T12:00:00+00:00")
+    );
+    assert_eq!(date.text().await.unwrap(), "Oct 10");
+
+    activate_inbox_link(&c, &format!("#inbox-row-{} a", text.conversation_id)).await;
+    let form = format!(
+        "#inbox-pane form[action='/app/inbox/{}/contact']",
+        text.conversation_id
+    );
+    let field = format!("{form} input[name=email]");
+    c.wait()
+        .at_most(Duration::from_secs(10))
+        .for_element(Locator::Css(&field))
+        .await
+        .unwrap();
+    let csrf = c
+        .find(Locator::Css(&format!("{form} input[name=_csrf]")))
+        .await
+        .unwrap()
+        .attr("value")
+        .await
+        .unwrap();
+    assert!(csrf.is_some_and(|token| !token.is_empty()));
+    fill_text_field(&c, &field, &email).await;
+    scroll_and_js_click(&c, &format!("{form} button[type=submit]")).await;
+    let contact = format!("/app/admin/people/{}", person.id);
+    let link = format!("#inbox-thread a[href='{contact}']");
+    c.wait()
+        .at_most(Duration::from_secs(10))
+        .for_element(Locator::Css(&link))
+        .await
+        .unwrap();
+    activate_inbox_link(&c, &link).await;
+    wait_for_path(&c, &contact, Duration::from_secs(10)).await;
+    let linked = store::persons::find_by_phone(&db, &phone)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(linked.id, person.id);
+    c.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn project_inbox_opens_a_full_email_thread_with_application_chrome() {
     let Some(c) = new_client_or_skip().await else {
         return;
@@ -3632,6 +3713,7 @@ async fn project_inbox_opens_a_full_email_thread_with_application_chrome() {
         "synthetic-project-thread",
         store::inbox::channel::EMAIL,
         Some(project.id),
+        "synthetic-sender@example.test",
     )
     .await;
     let inbox = format!("/app/projects/{}/inbox", project.code);
@@ -4085,16 +4167,15 @@ async fn admin_edits_matter_participation_from_the_project_workbench() {
     let surreal = store::surreal::connect_from_env()
         .await
         .expect("connect to the port-forwarded SurrealDB");
-    let lawyer = store::persons::find_by_email_ci(&surreal, "lawyer@neonlaw.com")
+    login_as_admin(&c).await;
+    let admin = store::persons::find_by_email_ci(&surreal, "admin@neonlaw.com")
         .await
-        .expect("look up lawyer person")
-        .expect("the browser harness requires `navigator dev grant-lawyer`");
-    let original_role = lawyer.role;
-    let lawyer_id = lawyer.id;
-    store::persons::set_role(&surreal, lawyer_id, store::persons::Role::Admin)
+        .expect("look up the Admin")
+        .expect("seeded Admin");
+    let firm_id = store::firms::firm_id_for_brand_key(&surreal, "neon")
         .await
-        .expect("promote the browser-harness lawyer for this admin-only flow");
-    login_as_lawyer(&c).await;
+        .expect("look up the Firm")
+        .expect("seeded Firm");
     let unique = Uuid::now_v7();
     let candidate = store::persons::create(
         &surreal,
@@ -4135,14 +4216,15 @@ async fn admin_edits_matter_participation_from_the_project_workbench() {
             name: format!("Participation E2E Matter {unique}"),
             status: "open".into(),
             entity_id: store::test_support::seed_entity(&surreal).await,
+            firm_id: Some(firm_id),
             ..Default::default()
         },
     )
     .await
     .expect("seed project");
-    store::projects::add_participation(&surreal, project.id, lawyer.id, "lawyer")
+    store::projects::add_participation(&surreal, project.id, admin.id, "admin")
         .await
-        .expect("disclose logged-in lawyer to project");
+        .expect("add the signed-in Admin to the Project");
 
     // The ledger and its "Add person" button live on the Participants tab;
     // the workbench opens on Overview (#176).
@@ -4274,9 +4356,6 @@ async fn admin_edits_matter_participation_from_the_project_workbench() {
         "the edit re-derived participation from the incoming person's tier"
     );
 
-    store::persons::set_role(&surreal, lawyer_id, original_role)
-        .await
-        .expect("restore the browser-harness lawyer role");
     c.close().await.unwrap();
 }
 

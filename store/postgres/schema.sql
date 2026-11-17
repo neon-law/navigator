@@ -4799,6 +4799,14 @@ CREATE TABLE inbox_attachment_filing (
 CREATE INDEX inbox_attachment_filing_pending
     ON inbox_attachment_filing (inserted_at, id) WHERE state = 'pending';
 
+-- Migration: 20261116120000_add_clause_heading_and_aliases.sql
+-- Reserved-heading data on the shared Clause read model (ENG-1091 · LAW-142).
+-- `rules/clauses/library.yaml` is the source of truth; these columns mirror
+-- the optional `heading:` and `aliases:` keys a library version may declare.
+ALTER TABLE clause ADD COLUMN heading TEXT;
+
+ALTER TABLE clause ADD COLUMN aliases JSONB;
+
 -- Migration: 20261116190000_create_project_calendar_grant.sql
 -- Direct reader grants managed by Project Calendar reconciliation.
 CREATE TABLE project_calendar_grant (
@@ -4871,3 +4879,19 @@ CREATE TABLE docusign_completion_cursor (
     checked_through TIMESTAMPTZ NOT NULL,
     PRIMARY KEY (firm_id, account_id)
 );
+
+-- Migration: 20261117000100_add_stripe_draft_to_billing_batch.sql
+ALTER TABLE matter_billing_batch ALTER COLUMN xero_contact_id DROP NOT NULL;
+ALTER TABLE matter_billing_batch ADD COLUMN stripe_account_id TEXT;
+ALTER TABLE matter_billing_batch ADD COLUMN stripe_iolta BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE matter_billing_batch ADD COLUMN stripe_invoice_id TEXT;
+ALTER TABLE matter_billing_batch ADD CONSTRAINT matter_billing_batch_issuer CHECK ((stripe_account_id IS NULL AND NOT stripe_iolta AND stripe_invoice_id IS NULL AND xero_contact_id IS NOT NULL) OR (stripe_account_id IS NOT NULL AND xero_contact_id IS NULL AND xero_invoice_id IS NULL));
+
+-- Migration: 20261117120000_add_accounting_authority_constraints.sql
+-- The accounting tables hold the application's authority for these rows once
+-- NAVIGATOR_POSTGRES_HOST is set, so the unique semantics SurrealDB's schema
+-- enforces on the same tables must hold here too: one pooled IOLTA account
+-- per state, and one allocation line per (withdrawal, invoice) pair.
+CREATE UNIQUE INDEX iolta_account_jurisdiction_key ON iolta_account (jurisdiction_id);
+CREATE UNIQUE INDEX iolta_allocation_withdrawal_invoice_key
+    ON iolta_allocation (withdrawal_id, xero_invoice_id);

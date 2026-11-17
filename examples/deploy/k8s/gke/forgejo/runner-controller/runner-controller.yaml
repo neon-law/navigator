@@ -3,11 +3,10 @@
 # `navigator-forgejo-runners` for every queued Actions job. See
 # docs/forgejo-deployment.md, "Runner controller".
 #
-# The controller's image is the in-cluster CLI image (`navigator` on
-# distroless, with CA certificates); its token reaches only the runner
-# namespace. `FORGEJO_TOKEN` is the environment's one Forgejo operator token,
-# synced from Secret Manager into `navigator-forgejo-runner-controller`; it
-# never enters a job pod, which holds only its own one-job runner credential.
+# The in-cluster Hudson image includes CA certificates. Its Kubernetes RBAC
+# is limited to the runner namespace. Forgejo service apply projects the
+# controller credential as FORGEJO_TOKEN in navigator-forgejo-runner-controller.
+# A job pod holds only its own one-job runner credential.
 apiVersion: v1
 kind: Namespace
 metadata:

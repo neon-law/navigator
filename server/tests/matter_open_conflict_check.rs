@@ -25,9 +25,9 @@ use store::test_support::mem_surreal;
 use tower::ServiceExt;
 use workflows::{DispatchingRuntime, InMemoryRuntime, StateMachineRuntime};
 
-fn admin_bearer() -> String {
+fn owner_bearer() -> String {
     let sessions = portal::SessionStore::new(portal::test_support::TEST_SESSION_KEY);
-    let mut session = portal::SessionData::fresh("admin@neonlaw.com", store::persons::Role::Admin);
+    let mut session = portal::SessionData::fresh("admin@neonlaw.com", store::persons::Role::Owner);
     session.source = portal::session::SessionSource::Cli;
     format!("Bearer {}", sessions.encode(&session))
 }
@@ -163,7 +163,7 @@ async fn post_projects(app: &axum::Router, body: String) -> axum::http::Response
             Request::builder()
                 .method("POST")
                 .uri("/app/projects")
-                .header("authorization", admin_bearer())
+                .header("authorization", owner_bearer())
                 .header("content-type", "application/x-www-form-urlencoded")
                 .body(Body::from(body))
                 .unwrap(),
@@ -264,7 +264,7 @@ async fn adversity_recorded_from_a_matter_blocks_the_next_open_that_reaches_it()
                     "/app/api/projects/{}/relationships/adverse",
                     matter.id
                 ))
-                .header("authorization", admin_bearer())
+                .header("authorization", owner_bearer())
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::json!({ "entity_id": counterparty }).to_string(),
@@ -338,7 +338,7 @@ async fn adversity_against_an_unreferenced_party_is_refused() {
                         "/app/api/projects/{}/relationships/adverse",
                         matter.id
                     ))
-                    .header("authorization", admin_bearer())
+                    .header("authorization", owner_bearer())
                     .header("content-type", "application/json")
                     .body(Body::from(party.to_string()))
                     .unwrap(),

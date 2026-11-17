@@ -892,7 +892,7 @@ pub async fn new_text_post(
         form.consent.as_deref() == Some("yes"),
     )
     .await;
-    let (conversation_id, _) = match queued {
+    let (conversation_id, message_id) = match queued {
         Ok(opened) => opened,
         Err(store::inbox::InboxError::Denied) => {
             return redirect_error(
@@ -903,14 +903,29 @@ pub async fn new_text_post(
         Err(error) => return redirect_error(back, &error.to_string()),
     };
     let thread = format!("/app/inbox/{conversation_id}");
-    if let Err(error) = dispatch_now(&state).await {
+    if let Err(error) = dispatch_now(&state, Some(message_id)).await {
         return redirect_error(&thread, &error.to_string());
     }
-    Redirect::to(&thread).into_response()
+    match store::inbox::message_by_id(&state.surreal, message_id).await {
+        Ok(Some(message)) => match message.delivery_state.as_str() {
+            store::inbox::delivery::FAILED | store::inbox::delivery::SUPPRESSED => {
+                redirect_error(&thread, "The text could not be sent.")
+            }
+            store::inbox::delivery::UNKNOWN => redirect_error(
+                &thread,
+                "The provider did not confirm whether it accepted the text.",
+            ),
+            _ => Redirect::to(&thread).into_response(),
+        },
+        _ => redirect_error(&thread, "The text's delivery status could not be checked."),
+    }
 }
 
-/// Dispatch every queued Message through the deployment's channel transports.
-async fn dispatch_now(state: &AdminState) -> Result<(), store::inbox::InboxError> {
+/// Dispatch through the deployment's channel transports.
+async fn dispatch_now(
+    state: &AdminState,
+    message_id: Option<Uuid>,
+) -> Result<(), store::inbox::InboxError> {
     let transport = crate::inbox_transport::ChannelTransport::new(
         state.email.clone(),
         std::sync::Arc::new(crate::inbox_sms::TwilioSmsTransport::new(
@@ -925,9 +940,11 @@ async fn dispatch_now(state: &AdminState) -> Result<(), store::inbox::InboxError
             state.runtime_kms.clone(),
         ),
     ));
-    store::inbox::dispatch_queued(&state.surreal, &transport)
-        .await
-        .map(|_| ())
+    match message_id {
+        Some(id) => store::inbox::dispatch_queued_message(&state.surreal, &transport, id).await,
+        None => store::inbox::dispatch_queued(&state.surreal, &transport).await,
+    }
+    .map(|_| ())
 }
 
 /// `POST /app/projects/{project_code}/inbox/{conversation_id}/replies`
@@ -966,7 +983,7 @@ pub async fn reply_post(
     if let Err(error) = queued {
         return redirect_error(&back, &error.to_string());
     }
-    if let Err(error) = dispatch_now(&state).await {
+    if let Err(error) = dispatch_now(&state, None).await {
         return redirect_error(&back, &error.to_string());
     }
     Redirect::to(&back).into_response()
@@ -997,7 +1014,7 @@ pub async fn intake_reply_post(
         {
             return redirect_error(&back, &error.to_string());
         }
-        if let Err(error) = dispatch_now(&state).await {
+        if let Err(error) = dispatch_now(&state, None).await {
             return redirect_error(&back, &error.to_string());
         }
         return Redirect::to(&back).into_response();
@@ -1016,7 +1033,7 @@ pub async fn intake_reply_post(
     {
         return redirect_error(&back, &error.to_string());
     }
-    if let Err(error) = dispatch_now(&state).await {
+    if let Err(error) = dispatch_now(&state, None).await {
         return redirect_error(&back, &error.to_string());
     }
     Redirect::to(&back).into_response()

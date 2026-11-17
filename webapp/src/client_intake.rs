@@ -11,8 +11,7 @@
 //! `workflows::notation_session::client_intake_step`, and `webapp` does not
 //! depend on `workflows`. The portal router's pre-layer resolves it — along with
 //! the matter-visibility check, the flow label and the seeded country options —
-//! and injects the wasm-safe [`InjectedIntake`] this page reads back, the same
-//! seam [`crate::lawyer_project_detail::ProjectRepositoryPointer`] uses. The
+//! and injects the wasm-safe [`InjectedIntake`] this page reads back. The
 //! pre-layer owns the 404, so an unauthorised or unknown notation never
 //! reaches the render.
 

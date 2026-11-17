@@ -140,11 +140,11 @@ async fn a_participant_lawyer_opens_the_closing_notation() {
 }
 
 #[tokio::test]
-async fn an_admin_bypasses_scope_and_closes() {
+async fn an_firm_admin_can_close() {
     let h = build_app().await;
     let project_id = seed_matter(&h.surreal, true).await;
-    // Admin does NOT participate; the scope check bypasses for admin.
-    let admin = bearer_new_person(&h.surreal, "admin@example.com", Role::Admin, None).await;
+    // The Firm membership authorizes the Admin without Project participation.
+    let admin = bearer_common::bearer_project_firm_admin(&h.surreal, project_id).await;
 
     let resp = close(&h.app, project_id, Some(&admin)).await;
     assert_eq!(resp.status(), StatusCode::CREATED);

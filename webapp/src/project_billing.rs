@@ -167,6 +167,9 @@ pub struct GenerateInvoiceView {
     /// — work logged or edited since the preview re-opens the review.
     #[serde(default)]
     pub digest: String,
+    /// Stripe draft destination, when this matter uses Stripe.
+    #[serde(default)]
+    pub stripe_iolta: Option<bool>,
 }
 
 /// The human word and chip tone for an entry's billing status. `Reserved`
@@ -460,7 +463,7 @@ pub fn BillingTab(
 
             section { class: "lawyer-detail__subsection matter-billing-generate",
                 h3 { "Generate invoice" }
-                if confirming {
+                if confirming && generate.ready {
                     {confirm_step(&code, &csrf, &generate)}
                 } else if generate.resuming {
                     p { class: "nav-callout", role: "status",
@@ -482,9 +485,13 @@ pub fn BillingTab(
                     }
                 } else if generate.ready {
                     p { class: "nav-muted",
-                        "Compose this matter's unbilled work into one invoice and raise it in \
-                         Xero. Raising is externally visible — the client's books change — so \
-                         the compose is shown before anything is raised."
+                        if generate.stripe_iolta.is_some() {
+                            "Review the unbilled work before creating a Stripe draft."
+                        } else {
+                            "Compose this matter's unbilled work into one invoice and raise it in \
+                             Xero. Raising is externally visible — the client's books change — so \
+                             the compose is shown before anything is raised."
+                        }
                     }
                     form {
                         class: "lawyer-detail__inline-form",
@@ -645,7 +652,11 @@ pub fn BillingTab(
 fn confirm_step(code: &str, csrf: &str, generate: &GenerateInvoiceView) -> Element {
     rsx! {
         p { class: "nav-muted",
-            "Raising writes one invoice to the Firm's Xero ledger. This is what it composes:"
+            {match generate.stripe_iolta {
+                Some(true) => "This creates an unsent draft in the Stripe account for Nevada.",
+                Some(false) => "This creates an unsent draft in the Firm's operating account. This is not IOLTA billing.",
+                None => "Raising writes one invoice to the Firm's Xero ledger. This is what it composes:",
+            }}
         }
         div { class: "nav-table-wrap",
             table { class: "nav-table matter-billing-generate-preview",
@@ -682,7 +693,7 @@ fn confirm_step(code: &str, csrf: &str, generate: &GenerateInvoiceView) -> Eleme
             button {
                 class: "nav-btn matter-billing-raise-button",
                 r#type: "submit",
-                "Raise in Xero"
+                if generate.stripe_iolta.is_some() { "Create Stripe draft" } else { "Raise in Xero" }
             }
         }
         a { class: "nav-link", href: "/app/projects/{code}?tab=billing", "Not now" }
@@ -940,18 +951,63 @@ pub(crate) async fn read_timer(
 #[cfg(feature = "server")]
 #[cfg_attr(feature = "server", allow(clippy::too_many_lines))]
 pub(crate) async fn read_generate(
+    surreal: &store::surreal::SurrealDb,
     pg: &store::postgres::PostgresDb,
-    project_id: uuid::Uuid,
+    project: &store::projects::Project,
 ) -> Result<GenerateInvoiceView, ServerFnError> {
     use crate::lawyer_project_detail::server_error;
+    use store::firm_secrets::{self, IntegrationSecretKind};
+    let project_id = project.id;
+    let pending = store::billing_batches::pending_for_project(pg, project_id)
+        .await
+        .map_err(server_error)?;
+    let kind = if let Some(batch) = &pending {
+        batch.stripe_account_id.as_ref().map(|_| {
+            if batch.stripe_iolta {
+                IntegrationSecretKind::StripeNevadaAppKey
+            } else {
+                IntegrationSecretKind::StripeOperatingAppKey
+            }
+        })
+    } else {
+        firm_secrets::stripe_kind_for_project(surreal, project)
+            .await
+            .map_err(server_error)?
+    };
+    let mut stripe_iolta = None;
+    if let Some(kind) = kind {
+        let iolta = kind == IntegrationSecretKind::StripeNevadaAppKey;
+        let available = match project.firm_id {
+            Some(firm) => firm_secrets::stripe_credential_configured(surreal, firm, kind)
+                .await
+                .map_err(server_error)?,
+            None => false,
+        };
+        if available {
+            stripe_iolta = Some(iolta);
+        } else if iolta || pending.is_some() {
+            return Ok(GenerateInvoiceView {
+                note: Some(
+                    "Stripe billing requires an enabled route and a Firm credential.".to_string(),
+                ),
+                ..GenerateInvoiceView::default()
+            });
+        }
+    }
+    if pending
+        .as_ref()
+        .is_some_and(|batch| batch.stripe_invoice_id.is_some())
+    {
+        return Ok(GenerateInvoiceView {
+            note: Some("A Stripe draft is awaiting review and reconciliation.".to_string()),
+            ..GenerateInvoiceView::default()
+        });
+    }
 
     // A pending batch is the matter's open invoice intent: its frozen lines
     // and total are what the next raise sends, whatever was logged since —
     // new work composes the NEXT batch, never this one.
-    if let Some(batch) = store::billing_batches::pending_for_project(pg, project_id)
-        .await
-        .map_err(server_error)?
-    {
+    if let Some(batch) = pending {
         let mut lines = Vec::new();
         if let serde_json::Value::Array(items) = &batch.line_items {
             for item in items {
@@ -979,6 +1035,7 @@ pub(crate) async fn read_generate(
             // A pending batch is frozen: its lines and total are what the
             // next raise sends, so there is nothing fresh to fingerprint.
             digest: String::new(),
+            stripe_iolta,
         });
     }
 
@@ -1045,7 +1102,11 @@ pub(crate) async fn read_generate(
             });
         }
     }
-    let digest = store::billing_batches::preview_digest(&entries, &unbilled_costs, flat_fee_cents);
+    let digest = store::billing_batches::invoice_destination_digest(
+        store::billing_batches::preview_digest(&entries, &unbilled_costs, flat_fee_cents),
+        stripe_iolta,
+        project.firm_id,
+    );
     let mut lines = Vec::new();
     let mut total_cents: i64 = 0;
     if let Some(fee_cents) = flat_fee_cents {
@@ -1081,6 +1142,7 @@ pub(crate) async fn read_generate(
         flat_fee: flat_fee_cents.is_some(),
         note: None,
         digest,
+        stripe_iolta,
     })
 }
 
@@ -1544,6 +1606,7 @@ mod tests {
                 resuming: false,
                 flat_fee: false,
                 digest: "digest-of-the-reviewed-compose".to_string(),
+                stripe_iolta: None,
             },
             true,
         );

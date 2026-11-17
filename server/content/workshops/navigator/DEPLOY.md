@@ -1804,6 +1804,67 @@ backend, not a client-facing sharing product. A disclosed client sees reviewed m
 them through the portal. A disclosed Lawyer/admin user sees more of the matter because their role allows legal editing
 and history — through the same portal, not a separate privileged tier.
 
+## Route invoices and client funds
+
+### Classify the payment
+
+- Earned fees go to the Firm's operating account.
+- Advances held for the client go to an approved trust account under the applicable rules.
+- IOLTA pools eligible nominal or short-term client funds.
+
+---
+
+Decide who owns the money before configuring the payment link. Issuing an invoice does not by itself earn an advance.
+Nevada Rule of Professional Conduct 1.15 governs segregation, placement and withdrawal of client money. Nevada Supreme
+Court Rules 78 and 217 govern approved trust depositories and pooled interest-bearing accounts. [Nevada Rule
+1.15](https://www.leg.state.nv.us/CourtRules/RPC.html) · [Nevada Supreme Court Rules 78 and
+217](https://www.leg.state.nv.us/CourtRules/SCR.html)
+
+### One Stripe account per USD payout destination
+
+| Payment route | Stripe account | Bank destination |
+| --- | --- | --- |
+| Operating | Firm operating account | Operating bank |
+| Nevada trust | Firm Nevada account | Nevada IOLTA |
+| Another state's trust | Firm account for that state | Approved IOLTA for that state |
+
+---
+
+A standard Stripe account allows one payout bank per settlement currency. Stripe chooses the payout destination for the
+account's USD balance, so a common USD account cannot select a different IOLTA for each invoice. Use a separate Stripe
+account for each approved trust destination. Navigator implements Nevada first. Verify the applicable rules before
+adding another route.
+
+[Stripe payout limits](https://support.stripe.com/questions/can-i-add-more-than-one-bank-account-for-payouts)
+
+### Turn on the route and set the Firm key
+
+- `STRIPE_DEFAULT` enables the operating route.
+- `STRIPE_NEVADA` enables the Nevada route.
+- Set each credential in the Firm's Integration Secrets.
+- Sync `project.jurisdiction: NV` from the Project repository's `navigator.yaml`.
+
+---
+
+The environment variables are presence checks. Use sandbox credentials with synthetic data in staging and live
+credentials in production. Nevada uses the Firm's `STRIPE_NEVADA_APP_KEY`; its operating account uses
+`STRIPE_OPERATING_APP_KEY`. A missing Nevada credential blocks the Nevada draft. An operating draft carries an explicit
+disclosure that it is outside IOLTA billing.
+
+### Verify before accepting trust payments
+
+- In staging, create an unsent Nevada draft and verify its Stripe account.
+- Verify the live payout bank and the account's payments and payouts status.
+- Confirm full settlement to trust and operating coverage for fees and disputes.
+
+---
+
+Check the payout and debit terms with the processor and bank. Stripe can debit a linked bank account for a negative
+balance, so seeing the correct payout bank does not establish how disputes or processing fees will be recovered. Keep
+the Stripe test draft unsent. Any later credit-card surcharge needs an eligible credit card and disclosure before
+payment. [Stripe negative-balance debits](https://support.stripe.com/questions/auto-debit-faq) · [Visa surcharge
+rules](https://usa.visa.com/dam/VCOM/global/support-legal/documents/merchant-surcharging-qa-for-web.pdf)
+
 ## Ship the Instance
 
 ### Ship and verify

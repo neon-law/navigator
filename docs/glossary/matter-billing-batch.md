@@ -5,12 +5,11 @@ description: One saved invoice request and the matter work reserved for it, reta
 
 ## Matter Billing Batch
 
-A **Matter Billing Batch** freezes the billed [Person](person.md)'s resolved provider contact identifier, name, and
-email; the invoice lines; and the [Time Entries](time-entry.md) and [Project Costs](project-cost.md) they consume before
-calling the billing provider. Its identifier is the provider's idempotency key. The invoice uses only the saved contact
-identifier for its debtor. Reserved work cannot be written off or linked manually while the batch is pending. A retry
-resumes the same request and any saved [Xero Invoice](xero-invoice.md) identifier; later work creates a new batch after
-completion.
+A **Matter Billing Batch** freezes the billed [Person](person.md)'s name and email, the invoice lines, and the [Time
+Entries](time-entry.md) and [Project Costs](project-cost.md) it reserves before calling the billing provider. Its
+identifier supplies the provider's idempotency key. Xero uses the saved Xero contact identifier for its debtor. Reserved
+work cannot be written off or linked manually. A retry resumes the request and the saved [Xero Invoice](xero-invoice.md)
+or [Stripe Invoice](stripe-invoice.md) identifier. A new batch can compose after the current batch completes.
 
 Generation refuses an unavailable billing provider before reserving work. Synthetic invoice identifiers are allowed only
 when the deployment explicitly runs simulated matters. Missing Xero credentials on real matters do not consume work.

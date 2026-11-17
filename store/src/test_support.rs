@@ -303,6 +303,41 @@ pub async fn seed_project(
     seed_project_row(surreal, name).await
 }
 
+/// Give a test Admin authority over the Project's Firm or its Brand's Firm.
+///
+/// # Panics
+///
+/// If the Project is missing or the Firm lookup or membership write fails.
+pub async fn grant_project_firm_admin(
+    surreal: &crate::surreal::SurrealDb,
+    project_id: Uuid,
+    person_id: Uuid,
+) {
+    let project = crate::projects::find_by_id(surreal, project_id)
+        .await
+        .expect("read the seeded Project")
+        .expect("the seeded Project exists");
+    let firm_id = match project.firm_id {
+        Some(firm_id) => Some(firm_id),
+        None => crate::firms::firm_id_for_brand_key(surreal, &project.brand)
+            .await
+            .expect("read the Brand's Firm"),
+    };
+    if let Some(firm_id) = firm_id {
+        crate::firms::ensure_membership(
+            surreal,
+            &crate::firms::NewPersonFirmRole {
+                person_id,
+                firm_id,
+                membership: crate::firms::FirmMembership::Admin,
+                is_dri: false,
+            },
+        )
+        .await
+        .expect("grant the test Admin's Firm membership");
+    }
+}
+
 /// [`seed_project`] returning just the id — what most fixtures want.
 ///
 /// # Panics

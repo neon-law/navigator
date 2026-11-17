@@ -22,11 +22,6 @@
 //! The calendar is [`crate::project_calendar`] scoped to this matter. It is
 //! the matter timeline: every docket entry on the matter's cases joined with
 //! every open deadline, in date order ([`crate::project_timeline`]).
-//!
-//! One seam `webapp` cannot cross itself, injected by the portal router the
-//! same wasm-safe way as [`ViewerRole`] / [`crate::csrf::CsrfToken`]:
-//! [`ProjectRepositoryPointer`] (this matter's one deployment-configured
-//! repository URL).
 
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -56,9 +51,6 @@ use crate::lawyer_project_notations::project_notation_board;
 #[cfg(feature = "server")]
 use crate::lawyer_project_participation::to_participation_rows;
 
-#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub struct ProjectRepositoryPointer(pub Option<String>);
-
 /// The workbench's read query: the `?error=` flash a refused write redirects
 /// back with, the write forms' success flash, and the generate-invoice
 /// action's confirm step (`?confirm=1`).
@@ -87,6 +79,11 @@ fn matter_fact_grid(view: &LawyerDetailView) -> Element {
     let document_count = view.documents.len();
     let people_count = view.participations.len();
     let open_tasks = view.tasks.iter().filter(|row| row.state != "done").count();
+    let overdue_tasks = view
+        .tasks
+        .iter()
+        .filter(|row| row.is_overdue(&view.today))
+        .count();
     let trust_held = view.trust.held.clone();
     let wip = view.wip.clone();
     let outstanding = view.outstanding.clone();
@@ -109,7 +106,15 @@ fn matter_fact_grid(view: &LawyerDetailView) -> Element {
             FactGrid {
                 if open_tasks > 0 {
                     FactCard { title: "Open tasks".to_string(),
-                        span { class: "lawyer-detail__fact-value", "{open_tasks}" }
+                        a {
+                            href: MatterTab::Tasks.href(&view.code),
+                            class: "lawyer-detail__fact-value lawyer-detail__fact-link",
+                            aria_label: "View {open_tasks} open tasks",
+                            "{open_tasks}"
+                        }
+                        if overdue_tasks > 0 {
+                            span { "{overdue_tasks} overdue" }
+                        }
                     }
                 }
                 if unread_inbox > 0 {
@@ -367,18 +372,22 @@ async fn dri_names(
     Ok(names)
 }
 
-/// Read activity on the same repository the Project links to, using only a
-/// forge client configured for that repository's installation and owner.
+/// Resolve the browser link and activity for the same Project source.
 #[cfg(feature = "server")]
-async fn last_committed_at(
+async fn project_source(
     surreal: &store::surreal::SurrealDb,
     project: &store::projects::Project,
-) -> Option<String> {
+) -> (Option<String>, Option<String>) {
     use cloud::forge::ForgeService;
     use cloud::forgejo_forge::NAVIGATOR_FORGEJO_ROOT_URL_ENV;
 
-    let recorded = project.repository_url.as_deref()?;
-    let uses_forgejo = match (
+    let Some(recorded) = project.repository_url.as_deref() else {
+        return (None, None);
+    };
+    let Ok(backend) = cloud::ForgeBackend::from_lookup(|key| std::env::var(key).ok()) else {
+        return (None, None);
+    };
+    let forgejo_url = match (
         std::env::var(NAVIGATOR_FORGEJO_ROOT_URL_ENV),
         project.firm_id,
     ) {
@@ -386,36 +395,54 @@ async fn last_committed_at(
             .await
             .ok()
             .flatten()
-            .is_some_and(|firm| {
-                matches_forgejo_binding(recorded, &root, &firm.slug, &project.code)
-            }),
-        _ => false,
+            .and_then(|firm| forgejo_repository_url(recorded, &root, &firm.slug, &project.code)),
+        _ => None,
     };
-    if uses_forgejo {
+    if let Some(url) = forgejo_url {
         let kms = cloud::runtime_kms_from_env().await;
-        let forge = store::project_surfaces::forgejo_for_project(
+        let activity = match store::project_surfaces::forgejo_for_project(
             surreal,
             project.id,
             kms.as_ref(),
             |key| std::env::var(key).ok(),
         )
         .await
-        .ok()?;
-        return forge.head_commit_committed_at(&project.code).await.ok()?;
+        {
+            Ok(forge) => forge
+                .head_commit_committed_at(&project.code)
+                .await
+                .ok()
+                .flatten(),
+            Err(_) => None,
+        };
+        return (Some(url), activity);
     }
-    let workspace = cloud::workspace::WorkspaceConfig::from_env().ok()?;
-    if recorded != workspace.expected_repository_url(&project.code) {
-        return None;
+
+    if backend == cloud::ForgeBackend::Forgejo {
+        return (None, None);
     }
-    let forge = cloud::forge::GitHubForge::from_env().ok()?;
-    forge.head_commit_committed_at(&project.code).await.ok()?
+    let activity = match cloud::workspace::WorkspaceConfig::from_env() {
+        Ok(workspace) if recorded == workspace.expected_repository_url(&project.code) => {
+            match cloud::forge::GitHubForge::from_env() {
+                Ok(forge) => forge
+                    .head_commit_committed_at(&project.code)
+                    .await
+                    .ok()
+                    .flatten(),
+                Err(_) => None,
+            }
+        }
+        _ => None,
+    };
+    (Some(recorded.to_owned()), activity)
 }
 
 #[cfg(feature = "server")]
-fn matches_forgejo_binding(recorded: &str, root: &str, firm: &str, code: &str) -> bool {
+fn forgejo_repository_url(recorded: &str, root: &str, firm: &str, code: &str) -> Option<String> {
     let expected = format!("{}/{firm}/{code}", root.trim().trim_end_matches('/'));
     let normalized = recorded.trim_end_matches('/');
-    normalized == expected || normalized.strip_suffix(".git") == Some(expected.as_str())
+    (normalized == expected || normalized.strip_suffix(".git") == Some(expected.as_str()))
+        .then_some(expected)
 }
 
 /// Fetch the lawyer-lens workbench for one matter. Refuses a non-lawyer caller and
@@ -475,14 +502,6 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
             .await
             .map(|axum::Extension(token)| token.0)
             .unwrap_or_default();
-    let ProjectRepositoryPointer(repository_url) =
-        dioxus_fullstack_core::FullstackContext::extract::<
-            axum::Extension<ProjectRepositoryPointer>,
-            _,
-        >()
-        .await
-        .map(|axum::Extension(pointer)| pointer)
-        .unwrap_or_default();
     let person_id = dioxus_fullstack_core::FullstackContext::extract::<
         axum::Extension<crate::portal_project_list::PersonId>,
         _,
@@ -527,7 +546,7 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         .map_err(server_error)?;
     let entity_id = entity.as_ref().map(|entity| entity.id.to_string());
     let entity_name = entity.map(|entity| entity.name);
-    let last_committed_at = last_committed_at(&surreal, &project).await;
+    let (repository_url, last_committed_at) = project_source(&surreal, &project).await;
     let (has_engagement, has_closing) =
         store::projects::matter_lifecycle_sets(&surreal, std::slice::from_ref(&project))
             .await
@@ -649,7 +668,7 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         _ => None,
     };
     let invoice_generate = match pg.as_ref() {
-        Some(pg) => crate::project_billing::read_generate(pg, id).await?,
+        Some(pg) => crate::project_billing::read_generate(&surreal, pg, &project).await?,
         None => GenerateInvoiceView::default(),
     };
     let today = chrono::Utc::now().date_naive().to_string();
@@ -1035,6 +1054,26 @@ pub fn LawyerProjectDetail() -> Element {
                 nav { class: "lawyer-detail__actions", "aria-label": "Project actions",
                     a { class: "nav-btn nav-btn--primary", href: "/app/projects/{view.code}/notations/new", "New notation" }
                     a { class: "nav-btn nav-btn--secondary", href: "/app/projects/{view.code}/edit", "Edit project" }
+                    for kind in [
+                        crate::project_resources::ResourceKind::ProjectCalendar,
+                        crate::project_resources::ResourceKind::PrivateSlackChannel,
+                    ] {
+                        if let Some(resource) = view.resources.resources.iter().find(|resource| resource.kind == kind) {
+                            a {
+                                key: "{kind.name()}",
+                                class: "nav-btn nav-btn--secondary lawyer-detail__resource-action",
+                                href: "{resource.url}",
+                                title: kind.label(),
+                                aria_label: kind.label(),
+                                target: "_blank",
+                                rel: "noopener noreferrer",
+                                crate::components::resource_mark::ResourceMarkGlyph {
+                                    mark: kind.mark(),
+                                    class: "project-resources__mark".to_string(),
+                                }
+                            }
+                        }
+                    }
                     if let Some(url) = view.repository_url.as_ref() {
                         a {
                             class: "nav-btn nav-btn--secondary",
@@ -1195,6 +1234,7 @@ pub fn LawyerProjectDetail() -> Element {
                             code: view.code.clone(),
                             csrf: csrf.clone(),
                             tasks: view.tasks.clone(),
+                            today: view.today.clone(),
                             assignees: view.task_assignees.clone(),
                             error: view.error.clone(),
                         }
@@ -1356,18 +1396,16 @@ mod tests {
 
     #[cfg(feature = "server")]
     #[test]
-    fn project_activity_uses_only_its_own_forgejo_binding() {
+    fn source_link_uses_the_browser_url_for_its_own_forgejo_binding() {
         let root = "https://forge.example.test";
         for repo in [
             "https://forge.example.test/example/sample-project",
             "https://forge.example.test/example/sample-project.git",
         ] {
-            assert!(matches_forgejo_binding(
-                repo,
-                root,
-                "example",
-                "sample-project"
-            ));
+            assert_eq!(
+                forgejo_repository_url(repo, root, "example", "sample-project").as_deref(),
+                Some("https://forge.example.test/example/sample-project")
+            );
         }
         for repo in [
             "https://forge.example.test/other-firm/sample-project",
@@ -1375,12 +1413,7 @@ mod tests {
             "https://forge.example.test.evil.test/example/sample-project",
             "https://github.com/example/sample-project",
         ] {
-            assert!(!matches_forgejo_binding(
-                repo,
-                root,
-                "example",
-                "sample-project"
-            ));
+            assert!(forgejo_repository_url(repo, root, "example", "sample-project").is_none());
         }
     }
 
@@ -1394,6 +1427,13 @@ mod tests {
     #[test]
     fn fact_grid_renders_the_facts_the_matter_has() {
         let view = LawyerDetailView {
+            code: "synthetic".into(),
+            today: "2026-11-16".into(),
+            tasks: vec![TaskRow {
+                state: "in_progress".into(),
+                due_on: Some("2026-11-15".into()),
+                ..TaskRow::default()
+            }],
             deadlines: vec![crate::project_deadlines::DeadlineRow {
                 due: "Monday, March 14, 2026".to_string(),
                 ..crate::project_deadlines::DeadlineRow::default()
@@ -1408,6 +1448,11 @@ mod tests {
 
         let html = dioxus_ssr::render_element(matter_fact_grid(&view));
         assert!(html.contains("lawyer-detail__summary"), "{html}");
+        assert!(
+            html.contains(r#"href="/app/projects/synthetic/tasks""#),
+            "{html}"
+        );
+        assert!(html.contains("1 overdue"), "{html}");
         // Two deadline tiles: the open count and the soonest due date.
         assert!(html.contains("Open deadlines"), "{html}");
         assert!(html.contains("Next deadline"), "{html}");

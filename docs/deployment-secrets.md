@@ -260,7 +260,7 @@ when they start, so `hudson ops ship --deployment <name> --restart-only` forces 
 PostgreSQL and Forgejo credentials have separate encrypted input files and use an explicit service selector. The usual
 `ops secrets apply` path remains dedicated to the Navigator web/workflow environment Secret. Service files are never
 read by that path and their values are never added to a web/workflow `envFrom` Secret. The service path writes only
-mounted-file Secrets consumed by the selected infrastructure service; it does not deploy or restart pods.
+Secrets consumed by the selected infrastructure service; it does not deploy or restart pods.
 
 The PostgreSQL file contains `NAVIGATOR_POSTGRES_PASSWORD`, `NAVIGATOR_POSTGRES_TLS_CERTIFICATE`, and
 `NAVIGATOR_POSTGRES_TLS_PRIVATE_KEY`. It may add the client logins as a complete set of four:
@@ -271,7 +271,7 @@ bundle; [`postgres-kubernetes.md`](postgres-kubernetes.md) names their consumers
 `NAVIGATOR_POSTGRES_DBOS_PASSWORD`, the DBOS executor's login, which the same apply writes to `navigator-postgres-dbos`
 with the client set's `ca.crt`.
 
-Forgejo's file contains exactly `NAVIGATOR_FORGEJO_DATABASE_PASSWORD`, `NAVIGATOR_FORGEJO_SECRET_KEY`,
+Forgejo's file requires `NAVIGATOR_FORGEJO_DATABASE_PASSWORD`, `NAVIGATOR_FORGEJO_SECRET_KEY`,
 `NAVIGATOR_FORGEJO_INTERNAL_TOKEN`, `NAVIGATOR_FORGEJO_OAUTH2_JWT_SECRET`, and `NAVIGATOR_FORGEJO_POSTGRES_CA_CERT`.
 Generate the OAuth2 JWT key with `forgejo generate secret JWT_SECRET`; it must be a unique base64-encoded 32-byte value.
 Mount it as a read-only file named `oauth2_jwt_secret`, read from `JWT_SECRET_URI`; the generated `app.ini` contains
@@ -284,6 +284,12 @@ repository provisioning call Forgejo's API, and derives Forgejo's Ingress host f
 Forgejo's sign-in client at the installation's OIDC issuer is optional as a set: the encrypted
 `NAVIGATOR_FORGEJO_OIDC_CLIENT_SECRET` plus the public `NAVIGATOR_FORGEJO_OIDC_CLIENT_ID` coordinate in `config.toml`. A
 secret without the client id is refused. Without the pair, Forgejo has no external sign-in.
+
+For an installation running the Forgejo Actions controller, add the approved controller credential as
+`NAVIGATOR_FORGEJO_RUNNER_CONTROLLER_TOKEN` in the Forgejo service file or published service key inventory. The Forgejo
+service apply projects it as `FORGEJO_TOKEN` in the controller's own `navigator-forgejo-runner-controller` Secret. Check
+the target with `--dry-run` before applying. The controller reads the Secret at startup, so restart its Deployment after
+rotating the credential. See [Runner controller](forgejo-deployment.md#runner-controller) for the access it needs.
 
 The PostgreSQL certificate must include `navigator-postgres.<namespace>.svc.cluster.local` in its SAN, as Forgejo
 validates the full service DNS name.
@@ -307,14 +313,14 @@ hudson ops secrets apply --deployment <name> --service forgejo --deployments-dir
 ```
 
 The selected command decrypts only its corresponding file in process, writes its listed values to Secret Manager, then
-server-side applies only that service's mounted-file Secrets from `kubectl` stdin. PostgreSQL targets
-`navigator-postgres-auth` and `navigator-postgres-tls`, plus the three client-login Secrets when the file carries them;
-Forgejo targets `navigator-forgejo-config`, `navigator-forgejo-postgres-ca`, and `navigator-forgejo-database` (the
-`forgejo` login's `password`, read only by the `navigator-forgejo-database` Job), plus `navigator-forgejo-oidc`
-(`client_id`, `client_secret`) when the file carries the OIDC client secret. Service credentials and generated `app.ini`
-are not placed in web/workflow env vars. Applying the file alone does not change an existing PostgreSQL role password or
-restart a service. For the client logins, re-applying the PostgreSQL overlay re-runs the roles Job, which sets each
-password from its Secret; then restart that login's clients. See the rotation steps in
+server-side applies only that service's Secrets from `kubectl` stdin. PostgreSQL targets `navigator-postgres-auth` and
+`navigator-postgres-tls`, plus the three client-login Secrets when the file carries them; Forgejo targets
+`navigator-forgejo-config`, `navigator-forgejo-postgres-ca`, and `navigator-forgejo-database` (the `forgejo` login's
+`password`, read only by the `navigator-forgejo-database` Job), plus `navigator-forgejo-oidc` (`client_id`,
+`client_secret`) when the file carries the OIDC client secret. Service credentials and generated `app.ini` are not
+placed in web/workflow env vars. Applying the file alone does not change an existing PostgreSQL role password or restart
+a service. For the client logins, re-applying the PostgreSQL overlay re-runs the roles Job, which sets each password
+from its Secret; then restart that login's clients. See the rotation steps in
 [`postgres-kubernetes.md`](postgres-kubernetes.md#rotation).
 
 ## Secret Manager catalog and pod contract

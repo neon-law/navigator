@@ -74,6 +74,7 @@ const PROJECT_KEYS: &[&str] = &[
     "calendar_id",
     "client_dri",
     "drive_folder_id",
+    "jurisdiction",
     "host",
     "lawyer_dri",
     "name",
@@ -94,6 +95,7 @@ const HANDLE_KEYS: &[&str] = &[
     "xero_customer",
     "calendar_id",
     "drive_folder_id",
+    "jurisdiction",
 ];
 
 const REQUIRED_HANDLE_KEYS: &[&str] = &[
@@ -166,6 +168,8 @@ pub struct Manifest {
     /// setup` creates or adopts the folder and `navigator project set
     /// --drive-folder` records it here.
     pub drive_folder_id: Option<String>,
+    /// The Project’s governing jurisdiction code.
+    pub jurisdiction: Option<String>,
     pub no_live_row: Option<serde_yaml::Value>,
     pub allowed_hosts: BTreeMap<String, String>,
     pub allowed_links: BTreeMap<String, String>,
@@ -1038,6 +1042,7 @@ fn lint_handle(path: &Path, key: &str, value: &serde_yaml::Value) -> Vec<Manifes
         | "shared_slack_channel"
         | "shared_notion_page" => is_https_url(&value),
         "xero_customer" => true,
+        "jurisdiction" => value.len() == 2 && value.bytes().all(|byte| byte.is_ascii_uppercase()),
         "calendar_id" => model::projects::is_valid_calendar_id(&value),
         "drive_folder_id" => model::projects::is_valid_drive_folder_id(&value),
         _ => false,
@@ -1159,6 +1164,7 @@ pub fn parse(contents: &str) -> Result<Manifest, String> {
         private_notion_page: values("private_notion_page")?,
         calendar_id: values("calendar_id")?,
         drive_folder_id: values("drive_folder_id")?,
+        jurisdiction: values("jurisdiction")?,
         no_live_row: mapping.get("no_live_row").cloned(),
         allowed_hosts: parse_reason_map(mapping, "allowed_hosts")?,
         allowed_links: parse_reason_map(mapping, "allowed_links")?,
@@ -1416,6 +1422,17 @@ mod tests {
         "      adapter: la-superior\n",
         "      portal_url: https://canvas.lasuperiorcourt.org\n",
     );
+
+    #[test]
+    fn a_project_jurisdiction_is_read_from_the_project_mapping() {
+        let source =
+            "project:\n  host: navigator.example.test\n  name: sample-matter\n  jurisdiction: NV\n";
+        let manifest = parse(source).unwrap();
+        assert_eq!(manifest.jurisdiction.as_deref(), Some("NV"));
+        assert!(!lint_contents(Path::new(FILE), source)
+            .iter()
+            .any(|finding| finding.message.contains("jurisdiction")));
+    }
 
     #[test]
     fn ownership_requires_a_uuid_and_brand_together() {

@@ -131,7 +131,15 @@ pub async fn matter_viewer_kind() -> Result<MatterViewerKind, ServerFnError> {
         // itself applies before it ever queries: a session naming no linked
         // person is not an identified admin to hand a page to, whatever its
         // tier claims.
-        None if role.is_admin_tier() && person_id.is_some() => MatterViewerKind::AdminUnassigned,
+        None if person_id.is_some()
+            && store::projects::can_administer_project(
+                &surreal, person_id, store_role, &project,
+            )
+            .await
+            .map_err(ServerFnError::new)? =>
+        {
+            MatterViewerKind::AdminUnassigned
+        }
         None => {
             commit_not_found();
             MatterViewerKind::None

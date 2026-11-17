@@ -201,6 +201,36 @@ dispute_resolution@1:
     competent jurisdiction for temporary or provisional relief in aid of arbitration, and judgment on the award may be
     entered in any court of competent jurisdiction. Nothing in this paragraph waives a right that applicable law makes
     nonwaivable.
+dispute_resolution@2:
+  kind: agreement
+  heading: Governing law and dispute resolution
+  aliases:
+  - Governing law
+  - Dispute resolution
+  - Choice of law
+  inputs:
+    law:
+      types:
+      - jurisdiction
+      prompt: Which jurisdiction’s law governs this agreement?
+    seat:
+      types:
+      - jurisdiction
+      prompt: Where is the arbitration seated?
+  body: |-
+    The law of {{law}} governs this agreement, without regard to its conflict-of-laws rules.
+
+    Except for a claim within a small-claims court's jurisdiction and a claim that law does not permit to be arbitrated,
+    any dispute arising out of or relating to this agreement, including its formation, interpretation, breach, or
+    termination, will be resolved by final and binding arbitration administered by the American Arbitration Association
+    under its Commercial Arbitration Rules, before a single arbitrator, seated in {{seat}}, and conducted confidentially.
+    The arbitrator applies the same law and may award the same remedies a court could. Either party may ask a court of
+    competent jurisdiction for temporary or provisional relief in aid of arbitration, and judgment on the award may be
+    entered in any court of competent jurisdiction. Nothing in this paragraph waives a right that applicable law makes
+    nonwaivable.
+
+    Except that a dispute arising under a transfer instrument adopted for international data transfers, or affecting a
+    data subject's or supervisory authority's rights under such an instrument, is resolved as that instrument provides.
 employment_arbitration@1:
   kind: letter
   inputs:

@@ -48,6 +48,7 @@ pub struct AuthConfig(Arc<AuthConfigInner>);
 /// One verifier per supported algorithm. `from_env` picks one or
 /// the other; production deployments will typically use `Jwks`.
 enum Verifier {
+    RejectAll,
     Hs256 {
         key: DecodingKey,
         validation: Validation,
@@ -119,10 +120,17 @@ impl AuthConfig {
 
     #[must_use]
     pub fn new(disabled: bool, hs256_secret: Option<&str>) -> Self {
-        let verifier = hs256_secret.map(|s| Verifier::Hs256 {
-            key: DecodingKey::from_secret(s.as_bytes()),
-            validation: Validation::default(),
-        });
+        let verifier =
+            hs256_secret.map(|secret| match DecodingKey::from_secret(secret.as_bytes()) {
+                Ok(key) => Verifier::Hs256 {
+                    key,
+                    validation: Validation::default(),
+                },
+                Err(error) => {
+                    tracing::error!(%error, "auth: invalid OIDC_HS256_SECRET, rejecting JWTs");
+                    Verifier::RejectAll
+                }
+            });
         Self(Arc::new(AuthConfigInner { disabled, verifier }))
     }
 
@@ -205,6 +213,7 @@ impl AuthConfig {
     fn verify(&self, token: &str) -> Option<AuthClaims> {
         let v = self.0.verifier.as_ref()?;
         match v {
+            Verifier::RejectAll => None,
             Verifier::Hs256 { key, validation } => decode::<AuthClaims>(token, key, validation)
                 .ok()
                 .map(|d| d.claims),
@@ -613,7 +622,7 @@ mod tests {
         encode(
             &Header::default(),
             &claims,
-            &EncodingKey::from_secret(secret.as_bytes()),
+            &EncodingKey::from_secret(secret.as_bytes()).unwrap(),
         )
         .unwrap()
     }
@@ -634,6 +643,13 @@ mod tests {
     fn config_with_secret_is_enforced() {
         let cfg = AuthConfig::new(false, Some("secret"));
         assert!(cfg.is_enforced());
+    }
+
+    #[test]
+    fn empty_configured_secret_keeps_verification_enforced() {
+        let cfg = AuthConfig::new(false, Some(""));
+        assert!(cfg.is_enforced());
+        assert!(cfg.verify(&sign("another-secret", "nick")).is_none());
     }
 
     #[test]

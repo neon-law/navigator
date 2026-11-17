@@ -1456,7 +1456,6 @@ pub fn project_detail_router(
     policy: crate::policy::PolicyClient,
     auth: crate::auth::AuthConfig,
 ) -> Router {
-    let repository_surreal = surreal.clone();
     let project_visit_surreal = surreal.clone();
     let pending_intake_state = (surreal.clone(), storage.clone());
     // Both lenses render from this one mount, so it provides the union of what
@@ -1481,10 +1480,6 @@ pub fn project_detail_router(
             .layer(from_fn_with_state(
                 pending_intake_state.clone(),
                 inject_pending_client_intake,
-            ))
-            .layer(from_fn_with_state(
-                repository_surreal.clone(),
-                inject_project_repository_pointer,
             ))
             .layer(from_fn_with_state(
                 project_visit_surreal.clone(),
@@ -1544,42 +1539,6 @@ pub(crate) async fn project_show_path(
             || "/app/projects".to_string(),
             |project| format!("/app/projects/{}", project.code),
         )
-}
-
-/// Resolve this matter's recorded repository URL and inject it as
-/// [`webapp::lawyer_project_detail::ProjectRepositoryPointer`].
-///
-/// This has no forge client and composes nothing: the URL is stored on the
-/// Project, so it may name any forge and any organization. A missing id, a
-/// missing matter, or a Project with no repository recorded leaves the pointer
-/// absent rather than failing the lawyer page. Navigator never verifies the
-/// URL — it provisions no repositories, so the target may not exist.
-async fn inject_project_repository_pointer(
-    axum::extract::State(surreal): axum::extract::State<store::surreal::SurrealDb>,
-    mut req: Request,
-    next: Next,
-) -> Response {
-    let path = req.uri().path().to_string();
-    let pointer = match project_id_from_path(&surreal, &path).await {
-        Some(id) => project_repository_pointer(&surreal, id).await,
-        None => None,
-    };
-    req.extensions_mut()
-        .insert(webapp::lawyer_project_detail::ProjectRepositoryPointer(
-            pointer,
-        ));
-    next.run(req).await
-}
-
-/// One Project, one repository, recorded as a whole URL on the Project.
-async fn project_repository_pointer(
-    surreal: &store::surreal::SurrealDb,
-    project_id: uuid::Uuid,
-) -> Option<String> {
-    store::projects::find_by_id(surreal, project_id)
-        .await
-        .ok()??
-        .repository_url
 }
 
 /// The lawyer matter-open form path (#956 Phase 4) — `Add project`, plus the two
@@ -1850,8 +1809,7 @@ pub const PORTAL_INTAKE_PATH: &str = "/app/projects/{project_code}/intake/{notat
 ///
 /// Resolving a step means calling `workflows::notation_session`, which `webapp`
 /// does not depend on, so the work happens here and only the wasm-safe result
-/// crosses — the same seam [`inject_project_repository_pointer`] uses. This
-/// layer also owns the refusal: an unknown or unauthorised notation gets the `404` here
+/// crosses. This layer also owns the refusal: an unknown or unauthorised notation gets the `404` here
 /// (never a `403`, which would confirm the matter exists) and never reaches the
 /// render.
 async fn inject_client_intake(
@@ -2784,7 +2742,8 @@ where
                     .layer(axum::Extension(endpoint_surreal.clone()))
                     .layer(from_fn(inject_viewer_role))
                     .layer(from_fn(inject_app_brand_mark))
-                    .layer(from_fn(inject_person_id)),
+                    .layer(from_fn(inject_person_id))
+                    .layer(from_fn(inject_csrf_token)),
             );
         }
     }

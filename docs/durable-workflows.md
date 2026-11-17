@@ -85,25 +85,26 @@ Client DRI directory emails, the Lawyer DRI names and emails, the Portal link, a
 repository URL when recorded). The canvas is edited in place, so a later run never stacks a second one; `post-notice`
 posts the run date, a link to the recorded repository with its latest default-branch commit date, and up to 20 open
 stored Deadlines with their `due_at`, calendar role, and authority. The commit date reads through the same forge as the
-`repository` tag — the Project's own Firm client on Forgejo, the deployment's GitHub client otherwise. It reports
-unavailable repository activity explicitly, still links the recorded repository, and still runs after a canvas failure.
-This reports the latest commit, rather than a complete activity feed of pull requests or every commit since the previous
-run. Stored dates are quoted; no legal dates are calculated. The worker links the portal under
-`https://$NAVIGATOR_PUBLIC_HOST` when that variable is set and by path otherwise. The customer Slack channel
-(`external_slack_channel_url`) is not read or written. The journal records only whether the canvas was created, edited,
-or skipped; the directory emails exist only in the canvas body.
+`repository` tag. Both use the recorded repository URL to choose the Project's own Firm client on Forgejo or the
+deployment's GitHub client on GitHub, then verify the repository before reading it. The deployment default selects the
+provider for Projects without a recorded repository. The notice reports unavailable repository activity explicitly,
+still links the recorded repository, and still runs after a canvas failure. This reports the latest commit, rather than
+a complete activity feed of pull requests or every commit since the previous run. Stored dates are quoted; no legal
+dates are calculated. The worker links the portal under `https://$NAVIGATOR_PUBLIC_HOST` when that variable is set and
+by path otherwise. The customer Slack channel (`external_slack_channel_url`) is not read or written. The journal records
+only whether the canvas was created, edited, or skipped; the directory emails exist only in the canvas body.
 
 The `repository` child creates or adopts the open Project's private repository and records its URL, then reads the
 committed `navigator.yaml` `version:` through the forge and grades it against the worker's own release: `current` (the
 running release or newer), `stale` (older), or `unreadable` (missing, unparsable, or not a release version). The grade
 and the two versions sit on the child outcome; the environment report carries the three counts. One unreadable manifest
 is counted, not fatal. The reader is `rules::project_manifest`, the same one `navigator project gate` uses. On GitHub
-this is detection only. With `NAVIGATOR_FORGE_BACKEND=forgejo` the child resolves the Project's own Firm client. When
-the repository has a head commit, the child reconciles its Repository Governance and, for a stale pin, proposes the
-`version:` bump on `navigator/update-<release>` with squash auto-merge (`cloud::forgejo_governance`). Each step is
-idempotent, so a retried journal step opens no second pull request. Nothing is pushed to `main`. Participation is never
-copied onto the forge. A deployment with no forge skips it. The parent retains its journal order: `membership`, `slack`,
-then `repository`. A repository created by the last tag appears in the next daily Slack update.
+this is detection only. On Forgejo the child resolves the Project's own Firm client. When the repository has a head
+commit, the child reconciles its Repository Governance and, for a stale pin, proposes the `version:` bump on
+`navigator/update-<release>` with squash auto-merge (`cloud::forgejo_governance`). Each step is idempotent, so a retried
+journal step opens no second pull request. Nothing is pushed to `main`. Participation is never copied onto the forge. A
+deployment with no forge skips it. The parent retains its journal order: `membership`, `slack`, then `repository`. A
+repository created by the last tag appears in the next daily Slack update.
 
 A closed or archived Project is not updated: `membership` archives its recorded channel and nothing else runs. The
 environment's `#messages` or `#staging-messages` channel gets aggregate counts only: Projects, channels, invitations,

@@ -315,7 +315,7 @@ async fn an_enforced_deployment_admits_a_raw_oidc_bearer_jwt() {
     let jwt = jsonwebtoken::encode(
         &jsonwebtoken::Header::default(),
         &claims,
-        &jsonwebtoken::EncodingKey::from_secret(SECRET.as_bytes()),
+        &jsonwebtoken::EncodingKey::from_secret(SECRET.as_bytes()).unwrap(),
     )
     .unwrap();
 

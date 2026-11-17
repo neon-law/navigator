@@ -167,8 +167,32 @@ The NDAs, advisor agreement, and MSA use `dispute_resolution@1`. The onboarding 
 include their distinct arbitration Clauses. The onboarding retains its existing binding of both law and seat to the
 governing-law answer. The Nevada engagement uses `nevada_engagement_arbitration@2`, with AAA rules and Nevada
 fee-dispute protection. The employment offer letter uses `employment_arbitration@1` and includes
-`california_employment@1` only when California is the work state.
+`california_employment@1` only when California is the work state. The U.S. DPA and BAA restate `dispute_resolution@1`
+under a reserved heading; the Global DPA restates `dispute_resolution@2`, which carves transfer-instrument disputes out
+to the executed instrument.
 
-Reserved-heading enforcement, automatic jurisdiction variants, nested Clause references, and automatic extraction of
-similar text are separate work. The library makes reuse explicit; it does not infer legal equivalence from similar
-words.
+## Reserved headings
+
+A library version may declare one canonical caption and further aliases that reserve it:
+
+```yaml
+dispute_resolution@1:
+  heading: Governing law and dispute resolution
+  aliases:
+  - Governing law
+  - Dispute resolution
+  - Choice of law
+```
+
+A reserved caption may claim only one Clause code; a duplicate or cross-code collision fails library parsing. In an
+authored template, any Markdown heading whose caption — after stripping a leading outline numeral (`IX.`, `7.`),
+trimming, lowering case, and dropping a trailing colon — equals a reserved caption or alias must open a section whose
+only content is one `{{> alias}}` reference whose pin names that code (any active version). N132 reports an Error naming
+the heading and the required Clause otherwise: a hand-written near-copy of the Clause body fails, while a compliant
+reference passes whatever the questionnaire binds into the Clause's declared, type-compatible inputs. Composition has
+already substituted those inputs, so no caption is matched against expanded prose. Compiled snapshots carry expanded
+wording and `clause_sources:` provenance, never re-resolve the library, and are not re-checked — retired-version
+snapshots stay readable.
+
+Automatic jurisdiction variants, nested Clause references, and automatic extraction of similar text are separate work.
+The library makes reuse explicit; it does not infer legal equivalence from similar words.

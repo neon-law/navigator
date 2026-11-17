@@ -321,6 +321,15 @@ pub fn parse_schema(sql: &str) -> Result<BTreeMap<String, Table>, Error> {
                 }
                 continue;
             }
+            if let [name, "ALTER", "COLUMN", column, "DROP", "NOT", "NULL"] = words.as_slice() {
+                if !tables
+                    .get(*name)
+                    .is_some_and(|table| table.columns.contains_key(*column))
+                {
+                    return Err(Error::UnsupportedSql(line.to_string()));
+                }
+                continue;
+            }
             if let [name, "ALTER", "COLUMN", column, "TYPE", sql_type] = words.as_slice() {
                 let current = tables
                     .get_mut(*name)
@@ -1613,6 +1622,10 @@ mod tests {
                 include_str!("../postgres/migrations/20261116080000_create_inbox_attachment_filing.sql"),
             ),
             (
+                "20261116120000_add_clause_heading_and_aliases.sql",
+                include_str!("../postgres/migrations/20261116120000_add_clause_heading_and_aliases.sql"),
+            ),
+            (
                 "20261116190000_create_project_calendar_grant.sql",
                 include_str!("../postgres/migrations/20261116190000_create_project_calendar_grant.sql"),
             ),
@@ -1635,6 +1648,16 @@ mod tests {
             (
                 "20261117000000_create_docusign_completion.sql",
                 include_str!("../postgres/migrations/20261117000000_create_docusign_completion.sql"),
+            ),
+            (
+                "20261117000100_add_stripe_draft_to_billing_batch.sql",
+                include_str!("../postgres/migrations/20261117000100_add_stripe_draft_to_billing_batch.sql"),
+            ),
+            (
+                "20261117120000_add_accounting_authority_constraints.sql",
+                include_str!(
+                    "../postgres/migrations/20261117120000_add_accounting_authority_constraints.sql"
+                ),
             ),
         ])
         .expect("timestamped migration assembles");
@@ -1896,10 +1919,13 @@ mod tests {
             "is_current",
             "retired_at",
             "inserted_at",
+            "heading",
+            "aliases",
         ] {
             assert!(clause.columns.contains_key(column), "clause.{column}");
         }
         assert_eq!(clause.columns["inputs"], "JSONB");
+        assert_eq!(clause.columns["aliases"], "JSONB");
         assert!(clause.references.is_empty(), "a shared catalog");
         assert!(!crate::schema::table_names().contains(&"clause".to_string()));
     }

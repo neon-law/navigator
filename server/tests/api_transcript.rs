@@ -49,7 +49,7 @@ struct Harness {
     app: axum::Router,
     surreal: store::surreal::SurrealDb,
     storage: Arc<dyn cloud::StorageService>,
-    admin: String,
+    owner: String,
     client: String,
     outsider: String,
 }
@@ -99,7 +99,7 @@ async fn harness() -> Harness {
         app: server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR)),
         surreal,
         storage,
-        admin: bearer(None, Role::Admin),
+        owner: bearer(None, Role::Owner),
         client: bearer(Some(client.id), Role::Client),
         outsider: bearer(Some(outsider.id), Role::Lawyer),
     }
@@ -173,7 +173,7 @@ async fn coverage_runs_against_the_notation_questionnaire() {
     let resp = post(
         &h,
         &format!("/app/api/notations/{notation_id}/transcript"),
-        Some(&h.admin),
+        Some(&h.owner),
         serde_json::json!({
             "transcript": "The client gave their consent to record. The testator is Jane Doe."
         }),
@@ -214,7 +214,7 @@ async fn coverage_with_an_empty_transcript_is_400() {
     let resp = post(
         &h,
         &format!("/app/api/notations/{notation_id}/transcript"),
-        Some(&h.admin),
+        Some(&h.owner),
         serde_json::json!({ "transcript": "   " }),
     )
     .await;

@@ -30,6 +30,10 @@ pub struct Clause {
     pub is_current: bool,
     pub retired_at: Option<DateTime<Utc>>,
     pub inserted_at: DateTime<Utc>,
+    /// The one canonical caption this version reserves, when any.
+    pub heading: Option<String>,
+    /// Further captions reserving the same Clause code.
+    pub aliases: Option<serde_json::Value>,
 }
 
 /// What one seed wrote.
@@ -67,7 +71,7 @@ pub enum ClauseError {
 }
 
 const COLUMNS: &str =
-    "id, code, version, kind, inputs, body, body_sha256, is_current, retired_at, inserted_at";
+    "id, code, version, kind, inputs, body, body_sha256, is_current, retired_at, inserted_at, heading, aliases";
 
 fn query_failed(_: sqlx::Error) -> ClauseError {
     ClauseError::Query
@@ -85,6 +89,8 @@ fn clause(row: &sqlx::postgres::PgRow) -> Result<Clause, sqlx::Error> {
         is_current: row.try_get("is_current")?,
         retired_at: row.try_get("retired_at")?,
         inserted_at: row.try_get("inserted_at")?,
+        heading: row.try_get("heading")?,
+        aliases: row.try_get("aliases")?,
     })
 }
 
@@ -154,6 +160,10 @@ pub struct CatalogClause {
     pub body: String,
     /// The newest active version of its code.
     pub is_current: bool,
+    /// The one canonical caption this version reserves, when any.
+    pub heading: Option<String>,
+    /// Further captions reserving the same Clause code.
+    pub aliases: Vec<String>,
 }
 
 /// Every Clause version, ordered by code and version: the PostgreSQL read
@@ -181,6 +191,15 @@ pub async fn catalog() -> Result<Vec<CatalogClause>, ClauseError> {
                             kind: clause.kind,
                             body: clause.body,
                             is_current: clause.is_current,
+                            heading: clause.heading,
+                            aliases: clause
+                                .aliases
+                                .map(|aliases| {
+                                    serde_json::from_value::<Vec<String>>(aliases)
+                                        .map_err(|error| ClauseError::Library(error.to_string()))
+                                })
+                                .transpose()?
+                                .unwrap_or_default(),
                         })
                     })
                     .collect();
@@ -205,6 +224,8 @@ pub async fn catalog() -> Result<Vec<CatalogClause>, ClauseError> {
             kind: clause.kind,
             inputs: clause.inputs,
             body: clause.body,
+            heading: clause.heading,
+            aliases: clause.aliases,
         })
         .collect())
 }
@@ -235,9 +256,11 @@ pub async fn seed(db: &PostgresDb, library: &[LibraryClause]) -> Result<SeedRepo
     for source in library {
         let inputs = serde_json::to_value(&source.inputs)
             .map_err(|error| ClauseError::Library(error.to_string()))?;
+        let aliases = serde_json::to_value(&source.aliases)
+            .map_err(|error| ClauseError::Library(error.to_string()))?;
         let digest = body_sha256(&source.body);
         let inserted = sqlx::query(
-            "INSERT INTO clause (code, version, kind, inputs, body, body_sha256, retired_at) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (code, version) DO NOTHING",
+            "INSERT INTO clause (code, version, kind, inputs, body, body_sha256, retired_at, heading, aliases) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (code, version) DO NOTHING",
         )
         .bind(&source.code)
         .bind(source.version)
@@ -246,13 +269,15 @@ pub async fn seed(db: &PostgresDb, library: &[LibraryClause]) -> Result<SeedRepo
         .bind(&source.body)
         .bind(&digest)
         .bind(source.retired_at)
+        .bind(&source.heading)
+        .bind(&aliases)
         .execute(&mut *tx)
         .await
         .map_err(query_failed)?
         .rows_affected();
         if inserted == 0 {
             let same: bool = sqlx::query_scalar(
-                "SELECT kind = $3 AND inputs = $4 AND body_sha256 = $5 AND body = $6 FROM clause WHERE code = $1 AND version = $2",
+                "SELECT kind = $3 AND inputs = $4 AND body_sha256 = $5 AND body = $6 AND heading IS NOT DISTINCT FROM $7 AND aliases IS NOT DISTINCT FROM $8 FROM clause WHERE code = $1 AND version = $2",
             )
             .bind(&source.code)
             .bind(source.version)
@@ -260,6 +285,8 @@ pub async fn seed(db: &PostgresDb, library: &[LibraryClause]) -> Result<SeedRepo
             .bind(&inputs)
             .bind(&digest)
             .bind(&source.body)
+            .bind(&source.heading)
+            .bind(&aliases)
             .fetch_one(&mut *tx)
             .await
             .map_err(query_failed)?;
