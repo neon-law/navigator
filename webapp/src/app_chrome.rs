@@ -165,10 +165,20 @@ pub fn firm_app_logo() -> Option<AppLogo> {
         return None;
     }
     Some(AppLogo {
-        src: brand.logo_href.to_string(),
+        src: compiled_app_mark_src(views::brand::brand_key(), brand.logo_href).to_string(),
         href: brand.home_href.to_string(),
         brand_name: brand.site_name.to_string(),
     })
+}
+
+/// The bundled G&S mark is available on all application hosts.
+#[cfg(feature = "server")]
+fn compiled_app_mark_src(key: views::brand::BrandKey, fallback: &str) -> &str {
+    if key == views::brand::BrandKey::GuiebShook {
+        "/public/brand/guieb-shook/logo.svg"
+    } else {
+        fallback
+    }
 }
 
 /// The running deploy's brand identity, resolved where the brand `task_local`
@@ -282,7 +292,7 @@ pub async fn resolve_theme_brand_mark(
         .flatten()
         .and_then(|brand| brand.logo_object_key)
         .map(|object_key| format!("/assets/{object_key}"));
-    let src = uploaded.unwrap_or_else(|| firm.logo_href.to_string());
+    let src = uploaded.unwrap_or_else(|| compiled_app_mark_src(key, firm.logo_href).to_string());
     AppBrandMark {
         logo: (!src.is_empty()).then(|| AppLogo {
             src,
@@ -862,10 +872,9 @@ mod tests {
         let mark =
             resolve_theme_brand_mark(&surreal, BrandKey::Neon, BrandKey::GuiebShook, None).await;
         assert_eq!(mark.tokens_href, "/public/css/brand-guieb-shook-tokens.css");
-        assert_eq!(
-            mark.firm_name,
-            mark.logo.expect("the theme brand ships a logo").brand_name
-        );
+        let logo = mark.logo.expect("the theme brand ships a logo");
+        assert_eq!(mark.firm_name, logo.brand_name);
+        assert_eq!(logo.src, "/public/brand/guieb-shook/logo.svg");
         assert_ne!(mark.firm_name, firm_brand_mark().firm_name);
         assert_eq!(
             resolve_theme_brand_mark(&surreal, BrandKey::Neon, BrandKey::Neon, None).await,

@@ -12,6 +12,7 @@ use axum::{
 use serde::Deserialize;
 use store::{assets::Asset, evidence_shares as shares, postgres::PostgresDb};
 use uuid::Uuid;
+use webapp::app_chrome::{firm_brand_mark, AppBrandMark};
 use webapp::html_escape::escape_attr as escape;
 
 use crate::{session::SessionSource, AppState, SessionData};
@@ -155,20 +156,33 @@ fn private(mut response: Response) -> Response {
     response
 }
 
-fn page(title: &str, body: &str) -> Response {
+fn page(mark: Option<Extension<AppBrandMark>>, title: &str, body: &str) -> Response {
+    let mark = mark.map_or_else(firm_brand_mark, |Extension(mark)| mark);
+    let firm = escape(&mark.firm_name);
     let title = escape(title);
+    let identity = mark.logo.map_or_else(
+        || format!("<p>{firm}</p>"),
+        |logo| {
+            format!(
+                r#"<img class="firm-mark" src="{}" alt="{}">"#,
+                escape(&logo.src),
+                escape(&logo.brand_name)
+            )
+        },
+    );
     private(Html(format!(
         r#"<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1"><title>{title} | Navigator</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>{title} | {firm}</title>
 <style>
 *{{box-sizing:border-box}}body{{margin:0;background:#eef2f6;color:#172637;font:1rem/1.55 system-ui}}
-header{{background:#172637;color:white;padding:1.75rem 1rem}}header div,main{{max-width:48rem;margin:auto}}
+header{{background:white;padding:1.75rem 1rem;border-bottom:1px solid #cfdae6}}header div,main{{max-width:48rem;margin:auto}}
+.firm-mark{{display:block;max-width:100%;height:auto;max-height:3rem;margin-bottom:.8rem}}
 main{{padding:1rem}}h1,p{{margin:0 0 .75rem}}header p{{margin:0}}h1{{font-size:1.7rem}}
 article,section{{background:white;border:1px solid #cfdae6;border-radius:.6rem;padding:1rem;margin:0 0 .8rem}}
 article{{border-left:4px solid #35689b}}.timestamp,.muted{{color:#42566d}}article p{{white-space:pre-wrap;overflow-wrap:anywhere;margin:.5rem 0 0}}
 a{{color:#164e84}}form{{margin:.5rem 0}}label{{display:block}}input,button{{font:inherit;padding:.4rem .65rem;margin:.3rem .25rem .3rem 0;max-width:100%}}
 button{{cursor:pointer}}nav{{display:flex;gap:1rem;flex-wrap:wrap;margin:0 0 1rem}}
-</style></head><body><header><div><p>Navigator</p><h1>{title}</h1></div></header><main>{body}</main></body></html>"#
+</style></head><body><header><div>{identity}<h1>{title}</h1></div></header><main>{body}</main></body></html>"#
     )).into_response())
 }
 
@@ -187,6 +201,7 @@ async fn manage(
     State(state): State<ShareState>,
     Extension(session): Extension<SessionData>,
     Path((code, id)): Path<(String, Uuid)>,
+    mark: Option<Extension<AppBrandMark>>,
 ) -> Page {
     let (_, asset) = manage_asset(&state.app, &session, &code, id).await?;
     let project = missing(asset.project_id)?;
@@ -229,7 +244,7 @@ async fn manage(
         }
         body.push_str("</section>");
     }
-    Ok(page("Evidence invitations", &body))
+    Ok(page(mark, "Evidence invitations", &body))
 }
 
 #[derive(Deserialize)]
@@ -317,6 +332,7 @@ async fn view(
     Extension(session): Extension<SessionData>,
     Path(id): Path<Uuid>,
     Query(query): Query<TimelineQuery>,
+    mark: Option<Extension<AppBrandMark>>,
 ) -> Page {
     if !session.email_verified {
         let body = format!(
@@ -324,7 +340,11 @@ async fn view(
 <p><a href="/auth/login?return_to={}">Sign in again</a></p></section>"#,
             invitation(id),
         );
-        return Ok((StatusCode::FORBIDDEN, page("Verify your email", &body)).into_response());
+        return Ok((
+            StatusCode::FORBIDDEN,
+            page(mark, "Verify your email", &body),
+        )
+            .into_response());
     }
     let (person, email) = recipient(&session)?;
     let db = state.database().await?;
@@ -340,7 +360,7 @@ async fn view(
             escape(&share.terms),
             csrf(&session)
         );
-        return Ok(page("Evidence access terms", &body));
+        return Ok(page(mark, "Evidence access terms", &body));
     }
     let text = shared_source(&state.app, &share).await?;
     let base = invitation(id);
@@ -351,7 +371,7 @@ async fn view(
         &format!("{base}/download"),
     );
     record_access(&db, id, email, person, false).await?;
-    Ok(page("WhatsApp timeline", &body))
+    Ok(page(mark, "WhatsApp timeline", &body))
 }
 
 async fn shared_source(
@@ -545,6 +565,15 @@ mod tests {
             &state.auth,
         )
         .with_state(state.clone())
+        .layer(Extension(AppBrandMark {
+            firm_name: "Guieb & Shook".into(),
+            logo: Some(webapp::app_chrome::AppLogo {
+                src: "/public/brand/guieb-shook/logo.svg".into(),
+                brand_name: "Guieb & Shook".into(),
+                href: "/".into(),
+            }),
+            ..AppBrandMark::default()
+        }))
         .layer(tower_cookies::CookieManagerLayer::new());
         let lawyer = session(lawyer.id, &lawyer.email, Role::Lawyer);
         let guest = session(Uuid::now_v7(), "recipient@example.test", Role::Client);
@@ -587,6 +616,8 @@ mod tests {
         let terms = to_bytes(terms.into_body(), 64 * 1024).await.unwrap();
         let terms = std::str::from_utf8(&terms).unwrap();
         assert!(terms.contains("Accept and continue"));
+        assert!(terms.contains("Evidence access terms | Guieb &amp; Shook"));
+        assert!(terms.contains(r#"src="/public/brand/guieb-shook/logo.svg""#));
         assert!(!terms.contains("synthetic</script>"));
         assert_eq!(
             request(&router, &state.sessions, Some(&guest), &download, None)
