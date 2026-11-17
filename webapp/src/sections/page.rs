@@ -1183,6 +1183,18 @@ mod tests {
         }
 
         #[test]
+        fn whatsapp_page_does_not_expose_a_client_face_or_add_costs() {
+            let mut page = pages().remove(0);
+            page.kind = "whatsapp_timeline".into();
+            page.lenses
+                .insert("lawyer".into(), vec!["whatsapp_timeline".into()]);
+            let slug = page.slug.clone();
+            assert!(page_sections(std::slice::from_ref(&page), &slug, PageLens::Client).is_none());
+            let (_, sections) = page_sections(&[page], &slug, PageLens::Lawyer).unwrap();
+            assert_eq!(sections, [rules::dashboard::Section::WhatsAppTimeline]);
+        }
+
+        #[test]
         fn a_client_sees_only_client_lens_sections() {
             let (_, sections) = page_sections(&pages(), "timeline", PageLens::Client).unwrap();
             assert_eq!(

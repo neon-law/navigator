@@ -703,7 +703,7 @@ pub(crate) mod tests {
     /// wasm build of this crate never links `rules`; the server-side test
     /// below proves the two agree.
     fn rules_section_count() -> usize {
-        59
+        60
     }
 
     pub(super) fn render(view: SectionView) -> String {
