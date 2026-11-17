@@ -153,6 +153,7 @@ pub enum SectionView {
     DecisionQueue(Vec<SectionRow>),
     DeadlineBoard(Vec<DeadlineCard>),
     DocumentBody(PageDraft),
+    WhatsAppTimeline(Option<String>),
     CommentRail(Vec<SectionRow>),
     AuthorityTable(AuthorityView),
     EvidenceIndex(EvidenceIndexView),
@@ -219,6 +220,7 @@ impl SectionView {
             Self::DecisionQueue(_) => "decision_queue",
             Self::DeadlineBoard(_) => "deadline_board",
             Self::DocumentBody(_) => "document_body",
+            Self::WhatsAppTimeline(_) => "whatsapp_timeline",
             Self::CommentRail(_) => "comment_rail",
             Self::AuthorityTable(_) => "authority_table",
             Self::EvidenceIndex(_) => "evidence_index",
@@ -285,6 +287,7 @@ impl SectionView {
             Self::DecisionQueue(Vec::new()),
             Self::DeadlineBoard(Vec::new()),
             Self::DocumentBody(PageDraft::default()),
+            Self::WhatsAppTimeline(None),
             Self::CommentRail(Vec::new()),
             Self::AuthorityTable(AuthorityView::default()),
             Self::EvidenceIndex(EvidenceIndexView::default()),
@@ -621,6 +624,17 @@ pub fn SectionBody(view: SectionView) -> Element {
         SectionView::KeyDatesStrip(rows) => rsx! { KeyDatesStripSection { rows } },
         SectionView::DecisionQueue(rows) => rsx! { DecisionQueueSection { rows } },
         SectionView::DeadlineBoard(rows) => rsx! { records::DeadlineBoardSection { rows } },
+        SectionView::WhatsAppTimeline(Some(html)) => rsx! {
+            section { class: "whatsapp-timeline", "data-section": "whatsapp_timeline", dangerous_inner_html: html }
+        },
+        SectionView::WhatsAppTimeline(None) => rsx! {
+            SectionFrame {
+                name: "whatsapp_timeline",
+                heading: "WhatsApp export",
+                empty: "The declared WhatsApp export is unavailable.",
+                rows: Vec::new(),
+            }
+        },
         SectionView::DocumentBody(draft) => rsx! { engagement::DocumentBodySection { draft } },
         SectionView::CommentRail(rows) => rsx! { CommentRailSection { rows } },
         SectionView::AuthorityTable(view) => rsx! { authorities::AuthorityTableSection { view } },
@@ -694,7 +708,7 @@ pub(crate) mod tests {
     /// wasm build of this crate never links `rules`; the server-side test
     /// below proves the two agree.
     fn rules_section_count() -> usize {
-        59
+        60
     }
 
     pub(super) fn render(view: SectionView) -> String {

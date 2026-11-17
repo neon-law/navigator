@@ -422,6 +422,8 @@ DEFINE FIELD OVERWRITE slug ON matter_page TYPE string;
 DEFINE FIELD OVERWRITE kind ON matter_page TYPE string;
 DEFINE FIELD OVERWRITE title ON matter_page TYPE string;
 DEFINE FIELD OVERWRITE draft ON matter_page TYPE option<string>;
+DEFINE FIELD OVERWRITE document_revision ON matter_page TYPE option<string>;
+DEFINE FIELD OVERWRITE media ON matter_page TYPE any;
 DEFINE FIELD OVERWRITE position ON matter_page TYPE int;
 DEFINE FIELD OVERWRITE client_sections ON matter_page TYPE option<array<string>>;
 DEFINE FIELD OVERWRITE lawyer_sections ON matter_page TYPE option<array<string>>;

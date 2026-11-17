@@ -379,6 +379,7 @@ async fn session_cookie_for(world: &mut WritesWorld, email: &str) -> String {
         source: portal::session::SessionSource::Browser,
         provider: None,
         viewing_as_dri: None,
+        email_verified: false,
         scope: None,
     };
     format!(

@@ -215,6 +215,7 @@ pub enum Kind {
     /// (LAW-235). The page reads a matter's history instead of working its
     /// deadlines; the activity-log section is its spine.
     DayLog,
+    WhatsAppTimeline,
     /// A litigation pitch: the claim in one line, one card per claim, and
     /// what pursuing it costs (LAW-223). The page a lawyer pitches from,
     /// and the client reads — nothing on it is firm-only.
@@ -337,6 +338,7 @@ impl Kind {
         Kind::EstatePlanConsole,
         Kind::ClosingRoom,
         Kind::DayLog,
+        Kind::WhatsAppTimeline,
         Kind::LitigationPitch,
         Kind::PracticeGuide,
     ];
@@ -385,6 +387,7 @@ impl Kind {
             Kind::EstatePlanConsole => "estate_plan_console",
             Kind::ClosingRoom => "closing_room",
             Kind::DayLog => "day_log",
+            Kind::WhatsAppTimeline => "whatsapp_timeline",
             Kind::LitigationPitch => "litigation_pitch",
             Kind::PracticeGuide => "practice_guide",
         }
@@ -469,6 +472,7 @@ impl Kind {
             Kind::ClosingRoom => {
                 "A matter dashboard: closing checklist, signatures, and open terms"
             }
+            Kind::WhatsAppTimeline => "A filed WhatsApp text export in source order",
             Kind::DayLog => "A matter dashboard: the matter's activity, one dated entry per day",
             Kind::LitigationPitch => {
                 "A litigation pitch: the claim in one line, one card per claim, and what it costs"
@@ -540,6 +544,7 @@ impl Kind {
             | Kind::EstatePlanConsole
             | Kind::ClosingRoom
             | Kind::DayLog
+            | Kind::WhatsAppTimeline
             | Kind::LitigationPitch
             | Kind::PracticeGuide => false,
         }
@@ -601,6 +606,7 @@ impl Kind {
             | Kind::EstatePlanConsole
             | Kind::ClosingRoom
             | Kind::DayLog
+            | Kind::WhatsAppTimeline
             | Kind::LitigationPitch
             | Kind::PracticeGuide => false,
         }
@@ -630,6 +636,7 @@ impl Kind {
                 | Kind::EstatePlanConsole
                 | Kind::ClosingRoom
                 | Kind::DayLog
+                | Kind::WhatsAppTimeline
                 | Kind::LitigationPitch
                 | Kind::PracticeGuide
         )
@@ -772,6 +779,7 @@ impl Kind {
             | Kind::EstatePlanConsole
             | Kind::ClosingRoom
             | Kind::DayLog
+                | Kind::WhatsAppTimeline
             | Kind::LitigationPitch
             | Kind::PracticeGuide => "plain",
         }
@@ -816,7 +824,7 @@ impl Kind {
             Kind::Github => Category::Engineering,
             Kind::Resume => Category::Profile,
             Kind::TrialPrep => Category::TrialPreparation,
-            // The fifteen matter-dashboard page types (see `is_dashboard`).
+            // The matter-dashboard page types (see `is_dashboard`).
             Kind::ReviewQueueWorkbench
             | Kind::VerifierSplitView
             | Kind::MatterStatusConsole
@@ -830,6 +838,7 @@ impl Kind {
             | Kind::EstatePlanConsole
             | Kind::ClosingRoom
             | Kind::DayLog
+            | Kind::WhatsAppTimeline
             | Kind::LitigationPitch
             | Kind::PracticeGuide => Category::MatterDashboard,
             // Asset-lane-only classifications: never declared in a
@@ -936,6 +945,7 @@ impl Kind {
                 | Kind::EstatePlanConsole
                 | Kind::ClosingRoom
                 | Kind::DayLog
+                | Kind::WhatsAppTimeline
                 | Kind::LitigationPitch
                 | Kind::PracticeGuide
                 | Kind::Transcript
@@ -996,6 +1006,7 @@ impl Kind {
                 | Kind::EstatePlanConsole
                 | Kind::ClosingRoom
                 | Kind::DayLog
+                | Kind::WhatsAppTimeline
                 | Kind::LitigationPitch
                 | Kind::PracticeGuide => false,
             },
@@ -1385,7 +1396,7 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_kinds_are_exactly_the_fifteen_catalog_entries() {
+    fn dashboard_kinds_are_match_the_catalog() {
         let dashboards: Vec<&str> = Kind::ALL
             .iter()
             .filter(|k| k.is_dashboard())
@@ -1407,6 +1418,7 @@ mod tests {
                 "estate_plan_console",
                 "closing_room",
                 "day_log",
+                "whatsapp_timeline",
                 "litigation_pitch",
                 "practice_guide",
             ],

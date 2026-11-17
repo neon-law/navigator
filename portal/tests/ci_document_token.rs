@@ -519,6 +519,7 @@ async fn old_unscoped_ci_credentials_fail_closed_through_bearer_and_cookie_admis
         source: SessionSource::Ci,
         provider: None,
         viewing_as_dri: None,
+        email_verified: false,
         scope: None,
     });
 

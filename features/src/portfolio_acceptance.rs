@@ -243,6 +243,7 @@ pub async fn request_api(app: &Router, sessions: &SessionStore, id: &str) -> Res
         source: portal::session::SessionSource::Browser,
         provider: None,
         viewing_as_dri: None,
+        email_verified: false,
         scope: None,
     };
     let cookie = format!("{SESSION_COOKIE_NAME}={}", sessions.encode(&session));

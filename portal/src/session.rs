@@ -161,6 +161,9 @@ pub struct SessionData {
     /// IdPs withhold it without explicit `scope=email`.
     #[serde(default)]
     pub email: Option<String>,
+    /// Whether the current sign-in verified this address.
+    #[serde(default)]
+    pub email_verified: bool,
     /// `persons.id` from our own database — the local row we
     /// upserted after the OIDC handshake. `None` only briefly
     /// during boot-time tests that bypass the callback.
@@ -226,6 +229,7 @@ impl SessionData {
             source: SessionSource::Browser,
             provider: None,
             viewing_as_dri: None,
+            email_verified: false,
             scope: None,
         }
     }

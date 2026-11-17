@@ -109,6 +109,7 @@ pub mod deployment;
 pub mod deployment_secret_changes;
 pub mod disclosures;
 pub mod document_comments;
+pub mod evidence_shares;
 pub use model::document_pointers;
 pub mod attorney_calendars;
 pub mod document_retention;

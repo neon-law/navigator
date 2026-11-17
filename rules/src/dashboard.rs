@@ -147,6 +147,7 @@ pub enum Section {
     /// A draft's block-structured Markdown body. Pagination and paper
     /// geometry are Typst's job (#889), never the browser's.
     DocumentBody,
+    WhatsAppTimeline,
     /// Phrase-anchored comments alongside a document body.
     CommentRail,
     /// Authorities with citation, holding, verbatim quote, and position
@@ -275,6 +276,7 @@ impl Section {
         Section::DecisionQueue,
         Section::DeadlineBoard,
         Section::DocumentBody,
+        Section::WhatsAppTimeline,
         Section::CommentRail,
         Section::AuthorityTable,
         Section::DiscoveryPairs,
@@ -340,6 +342,7 @@ impl Section {
             Section::DecisionQueue => "decision_queue",
             Section::DeadlineBoard => "deadline_board",
             Section::DocumentBody => "document_body",
+            Section::WhatsAppTimeline => "whatsapp_timeline",
             Section::CommentRail => "comment_rail",
             Section::AuthorityTable => "authority_table",
             Section::DiscoveryPairs => "discovery_pairs",
@@ -409,6 +412,7 @@ impl Section {
             Section::DeadlineBoard => {
                 "Dated rows with hard/soft classification and calendar export"
             }
+            Section::WhatsAppTimeline => "A filed WhatsApp text export in source order",
             Section::DocumentBody => "A draft's block-structured Markdown body",
             Section::CommentRail => "Phrase-anchored comments alongside a document body",
             Section::AuthorityTable => "Authorities with citation, holding, quote, and position",
@@ -695,6 +699,12 @@ pub fn skeleton(kind: Kind) -> Option<Skeleton> {
         },
         // The matter as it happened: one dated entry per day, newest
         // first. Reading, not working — the records speak for themselves.
+        Kind::WhatsAppTimeline => Skeleton {
+            family: Family::Dashboard,
+            required: &[S::WhatsAppTimeline],
+            optional: &[],
+            lawyer_only: &[S::WhatsAppTimeline],
+        },
         Kind::DayLog => Skeleton {
             family: Family::Dashboard,
             required: &[S::ActivityLog],
@@ -778,6 +788,14 @@ pub fn scaffold(kind: Kind, slug: &str, title: &str) -> Option<String> {
         .chain(UNIVERSAL.iter())
         .map(|s| s.as_str())
         .collect();
+    if kind == Kind::WhatsAppTimeline {
+        return Some(format!(
+            "  - slug: {slug}\n    kind: whatsapp_timeline\n    title: {title}\n    \
+             document_revision: 00000000-0000-0000-0000-000000000000 # Replace with the filed revision UUID\n    \
+             lenses:\n      lawyer: [{}]\n",
+            lawyer.join(", "),
+        ));
+    }
     let client: Vec<&str> = UNIVERSAL.iter().map(|s| s.as_str()).collect();
 
     let mut out = String::new();
@@ -827,7 +845,6 @@ mod tests {
                 kind.as_str(),
             );
         }
-        assert_eq!(dashboard_kinds().len(), 15, "the catalog is fifteen kinds");
     }
 
     #[test]

@@ -238,6 +238,7 @@ mod tests {
                 source: SessionSource::Cli,
                 provider: None,
                 viewing_as_dri: None,
+                email_verified: false,
                 scope: None,
             });
         format!("Bearer {token}")

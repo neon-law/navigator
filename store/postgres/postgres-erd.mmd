@@ -567,6 +567,28 @@ erDiagram
         uuid project_id
         datetime updated_at
     }
+    evidence_share {
+        string accepted_at
+        string accepted_by
+        string asset_id
+        string created_at
+        string created_by
+        string downloads
+        string expires_at
+        string id
+        json media
+        string opens
+        string project_id
+        string recipient_email
+        string revoked_at
+        string sha256
+        string terms
+    }
+    evidence_share_usage {
+        string day
+        string downloads
+        string opens
+    }
     expunge_record {
         uuid authorized_by_person_id
         string category
@@ -1048,11 +1070,13 @@ erDiagram
     matter_page {
         string clerk_sections
         string client_sections
+        string document_revision
         string draft
         uuid firm_id
         uuid id
         string kind
         string lawyer_sections
+        json media
         int position
         uuid project_id
         string slug

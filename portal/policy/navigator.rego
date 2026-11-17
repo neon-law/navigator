@@ -300,6 +300,7 @@ route_allow if {
 route_allow if {
     input.path[0] == "app"
     input.path[1] == "projects"
+    not evidence_share_management
     is_authenticated(input.session)
 }
 
@@ -2132,4 +2133,56 @@ route_allow if {
     input.path[4] == "envelope-adoptions"
     input.method == "POST"
     is_lawyer(input.session)
+}
+
+# The handler checks the verified recipient and the individual grant.
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "evidence-shares"
+    count(input.path) == 3
+    input.method in {"GET", "HEAD", "POST"}
+    is_authenticated(input.session)
+}
+
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "evidence-shares"
+    count(input.path) == 4
+    input.path[3] == "download"
+    input.method in {"GET", "HEAD"}
+    is_authenticated(input.session)
+}
+
+evidence_share_management if {
+    input.path[0] == "app"
+    input.path[1] == "projects"
+    input.path[3] == "documents"
+    input.path[5] == "evidence-shares"
+    count(input.path) == 6
+}
+
+route_allow if {
+    input.path[0] == "app"
+    input.path[1] == "evidence-shares"
+    count(input.path) == 5
+    input.path[3] == "media"
+    input.method in {"GET", "HEAD"}
+    is_authenticated(input.session)
+}
+
+route_allow if {
+    evidence_share_management
+    input.method in {"GET", "HEAD", "POST"}
+    is_lawyer(input.session)
+}
+
+ci_matter_content_denied if {
+    input.session.source == "ci"
+    input.path[0] == "app"
+    input.path[1] == "evidence-shares"
+}
+
+ci_matter_content_denied if {
+    input.session.source == "ci"
+    evidence_share_management
 }

@@ -725,7 +725,6 @@ mod control_contract {
         ("project_participation.rs", 1),
         ("retainer_start.rs", 2),
         ("review.rs", 1),
-        ("sections/page.rs", 1),
         ("template_gallery.rs", 1),
         ("walker_step.rs", 1),
     ];

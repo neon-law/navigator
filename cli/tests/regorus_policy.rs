@@ -519,10 +519,11 @@ fn regorus_matches_every_checked_in_policy_decision() {
     //   and a client, a clerk, and a CI session may not.
     // 686 + 2 = 688.
     // + 2 for envelope adoption: Lawyer admitted and Client denied.
-    // 688 + 2 = 690.
+    // + 2 for evidence invitation recipient and lawyer route admission.
+    // 688 + 2 + 2 = 692.
     assert_eq!(
         test_names.len(),
-        690,
+        692,
         "the policy decision inventory changed; review every new or removed rule"
     );
 

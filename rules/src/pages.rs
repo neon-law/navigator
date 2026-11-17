@@ -24,7 +24,15 @@ use crate::{line_byte_range, SourceFile, Violation};
 pub const KEY: &str = "pages";
 
 /// The keys a `pages:` entry may carry.
-pub const ENTRY_KEYS: &[&str] = &["slug", "kind", "title", "draft", "lenses"];
+pub const ENTRY_KEYS: &[&str] = &[
+    "slug",
+    "kind",
+    "title",
+    "draft",
+    "document_revision",
+    "media",
+    "lenses",
+];
 
 /// The longest slug a page may take, so a URL segment stays readable.
 pub const MAX_SLUG_LEN: usize = 48;
@@ -84,8 +92,21 @@ pub struct PageEntry {
     pub title: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub draft: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_revision: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub media: Vec<TimelineMedia>,
     #[serde(default)]
     pub lenses: BTreeMap<String, Vec<String>>,
+}
+
+/// A filed image revision and, when known, the time the media was created.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TimelineMedia {
+    pub document_revision: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<chrono::DateTime<chrono::FixedOffset>>,
 }
 
 impl PageEntry {
@@ -380,6 +401,7 @@ pub fn shape_problems(contents: &str) -> Vec<ShapeProblem> {
         if let Some(message) = title_problem(text(entry, "title"), line, &mut seen_titles) {
             push(message);
         }
+        check_timeline(entry, &mut push);
         if let Some(draft) = entry.get("draft") {
             let ok = draft.as_str().map(str::trim).is_some_and(|path| {
                 !path.is_empty()
@@ -396,6 +418,67 @@ pub fn shape_problems(contents: &str) -> Vec<ShapeProblem> {
         }
     }
     problems
+}
+
+fn check_timeline(entry: &serde_yaml::Mapping, push: &mut impl FnMut(String)) {
+    let timeline = text(entry, "kind").as_deref() == Some("whatsapp_timeline");
+    if timeline {
+        if !text(entry, "document_revision")
+            .as_deref()
+            .is_some_and(is_revision_id)
+        {
+            push(
+                "a WhatsApp timeline requires a filed document revision UUID in document_revision"
+                    .to_string(),
+            );
+        }
+        if !entry
+            .get("lenses")
+            .and_then(serde_yaml::Value::as_mapping)
+            .is_some_and(|lenses| lenses.len() == 1 && lenses.contains_key("lawyer"))
+        {
+            push("a WhatsApp timeline requires only the lawyer lens".to_string());
+        }
+        if entry.contains_key("draft") {
+            push("a WhatsApp timeline cannot declare a draft".to_string());
+        }
+        if let Err(error) = timeline_media(entry) {
+            push(error);
+        }
+    } else {
+        for key in ["document_revision", "media"] {
+            if entry.contains_key(key) {
+                push(format!("{key} is for a WhatsApp timeline"));
+            }
+        }
+    }
+}
+
+fn timeline_media(entry: &serde_yaml::Mapping) -> Result<Vec<TimelineMedia>, String> {
+    let Some(value) = entry.get("media") else {
+        return Ok(Vec::new());
+    };
+    let media: Vec<TimelineMedia> = serde_yaml::from_value(value.clone())
+        .map_err(|error| format!("invalid WhatsApp timeline media: {error}"))?;
+    let mut revisions = std::collections::BTreeSet::new();
+    for item in &media {
+        if !is_revision_id(&item.document_revision) {
+            return Err("timeline media requires a filed document revision UUID".to_string());
+        }
+        if !revisions.insert(item.document_revision.to_ascii_lowercase()) {
+            return Err("a media revision can only appear once on a timeline".to_string());
+        }
+    }
+    Ok(media)
+}
+
+fn is_revision_id(id: &str) -> bool {
+    let widths = [8, 4, 4, 4, 12];
+    let parts: Vec<_> = id.split('-').collect();
+    parts.len() == widths.len()
+        && parts.iter().zip(widths).all(|(part, width)| {
+            part.len() == width && part.bytes().all(|byte| byte.is_ascii_hexdigit())
+        })
 }
 
 /// A page title's problem, if any: missing, the show page's own tab label,
@@ -463,6 +546,8 @@ pub fn entries(mapping: &serde_yaml::Mapping) -> Result<Vec<PageEntry>, String> 
                 kind: required("kind")?,
                 title: required("title")?,
                 draft: text(entry, "draft"),
+                document_revision: text(entry, "document_revision"),
+                media: timeline_media(entry)?,
                 lenses: lenses_of(entry).unwrap_or_default().into_iter().collect(),
             })
         })
@@ -488,6 +573,56 @@ lawyer: [engagement_letter, invoice, boundary_note, provenance_statement]\n";
             "{:?}",
             shape_problems(VALID)
         );
+    }
+
+    #[test]
+    fn whatsapp_timeline_requires_a_filed_revision_and_the_lawyer_lens() {
+        let yaml = "pages:\n  - slug: whatsapp-timeline\n    kind: whatsapp_timeline\n    \
+title: WhatsApp timeline\n    document_revision: 00000000-0000-4000-8000-000000000001\n    \
+lenses:\n      lawyer: [whatsapp_timeline, boundary_note, provenance_statement]\n";
+        assert!(shape_problems(yaml).is_empty());
+        let source = crate::SourceFile {
+            path: std::path::PathBuf::from("navigator.yaml"),
+            contents: yaml.to_string(),
+        };
+        assert!(crate::lint_pages(&source).is_empty());
+        let mapping = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(
+            entries(&mapping).unwrap()[0].document_revision.as_deref(),
+            Some("00000000-0000-4000-8000-000000000001"),
+        );
+        assert!(!shape_problems(&yaml.replace("lawyer:", "client:")).is_empty());
+        assert!(!shape_problems(
+            &yaml.replace("00000000-0000-4000-8000-000000000001", "../export.txt")
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn whatsapp_timeline_media_pins_revisions_and_optional_creation_times() {
+        let yaml = r#"pages:
+  - slug: whatsapp-timeline
+    kind: whatsapp_timeline
+    title: WhatsApp timeline
+    document_revision: 00000000-0000-4000-8000-000000000001
+    media:
+      - document_revision: 00000000-0000-4000-8000-000000000002
+        created_at: "2026-11-03T09:12:00-05:00"
+      - document_revision: 00000000-0000-4000-8000-000000000003
+    lenses:
+      lawyer: [whatsapp_timeline, boundary_note, provenance_statement]
+"#;
+        let mapping = serde_yaml::from_str(yaml).unwrap();
+        let pages = entries(&mapping).unwrap();
+        assert!(shape_problems(yaml).is_empty());
+        assert_eq!(pages[0].media.len(), 2);
+        assert_eq!(
+            pages[0].media[0].created_at.unwrap().to_rfc3339(),
+            "2026-11-03T09:12:00-05:00"
+        );
+        assert_eq!(pages[0].media[1].created_at, None);
+        assert!(!shape_problems(&yaml.replace("09:12:00-05:00", "09:12:00")).is_empty());
+        assert!(!shape_problems(&yaml.replace("000000000003", "000000000002")).is_empty());
     }
 
     #[test]

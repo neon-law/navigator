@@ -67,6 +67,7 @@ pub struct LoadContext {
     /// The page's `draft:`, read once for `document_body` and for
     /// `engagement_letter`'s fallback.
     pub page_draft: super::PageDraft,
+    pub whatsapp_timeline: Option<String>,
     /// Whether the matter has any filed engagement letter, whatever its
     /// visibility.
     pub engagement_filed_any: bool,
@@ -128,6 +129,7 @@ impl LoadContext {
             estate: super::estate::EstateViews::default(),
             closing: super::transactional::ClosingViews::default(),
             page_draft: super::PageDraft::default(),
+            whatsapp_timeline: None,
             engagement_filed_any: false,
             engagement_letters: Vec::new(),
             outcome_projection: OutcomeProjectionView::default(),
@@ -226,6 +228,7 @@ pub fn load(section: Section, cx: &LoadContext) -> SectionView {
         Section::MetricStrip => SectionView::MetricStrip(Vec::new()),
         Section::WorkstreamCards => SectionView::WorkstreamCards(Vec::new()),
         Section::DecisionQueue => SectionView::DecisionQueue(cx.notations.decisions.clone()),
+        Section::WhatsAppTimeline => SectionView::WhatsAppTimeline(cx.whatsapp_timeline.clone()),
         Section::DocumentBody => SectionView::DocumentBody(cx.page_draft.clone()),
         Section::CommentRail => SectionView::CommentRail(Vec::new()),
         Section::AuthorityTable => SectionView::AuthorityTable(cx.authorities.clone()),

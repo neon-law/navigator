@@ -206,6 +206,10 @@ fn pages() -> serde_json::Value {
 }
 
 async fn sync_pages(f: &Fixture) {
+    sync_page_payload(f, pages()).await;
+}
+
+async fn sync_page_payload(f: &Fixture, payload: serde_json::Value) {
     let response = f
         .app
         .clone()
@@ -216,7 +220,7 @@ async fn sync_pages(f: &Fixture) {
                 .header("cookie", &f.lawyer_cookie)
                 .header("x-csrf-token", &f.lawyer_csrf)
                 .header("content-type", "application/json")
-                .body(Body::from(pages().to_string()))
+                .body(Body::from(payload.to_string()))
                 .unwrap(),
         )
         .await
@@ -246,6 +250,67 @@ async fn get_page(f: &Fixture, slug: &str, cookie: &str) -> (StatusCode, String)
         .await
         .unwrap();
     (status, String::from_utf8_lossy(&bytes).into_owned())
+}
+
+#[tokio::test]
+async fn a_declared_whatsapp_timeline_renders_the_filed_revision_for_the_lawyer() {
+    let f = fixture().await;
+    let marker = Uuid::now_v7();
+    let source = format!("[11/3/26, 9:00:00 AM] Synthetic Sender: Timeline marker {marker}\n");
+    let args = store::documents::IngestArgs {
+        project_id: f.project_id,
+        source: store::documents::source::UPLOAD,
+        filename: "synthetic-whatsapp.txt",
+        kind: "exhibit",
+        content_type: "text/plain",
+        description: None,
+        secondary_storage_key: None,
+        visibility: store::documents::visibility::INTERNAL,
+    };
+    let id = store::documents::ingest_bytes(&f.surreal, &f.storage, &args, source.as_bytes())
+        .await
+        .unwrap()
+        .asset_id;
+    let page_payload = |revision| {
+        serde_json::json!({ "pages": [{
+            "slug": "whatsapp-timeline",
+            "kind": "whatsapp_timeline",
+            "title": "WhatsApp timeline",
+            "document_revision": revision,
+            "lenses": {
+                "lawyer": ["whatsapp_timeline", "boundary_note", "provenance_statement"]
+            }
+        }]})
+    };
+    sync_page_payload(&f, page_payload(id)).await;
+
+    let (status, html) = get_page(&f, "whatsapp-timeline", &f.lawyer_cookie).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(html.contains(&format!("Timeline marker {marker}")));
+    assert!(html.contains(&format!("/documents/{id}/evidence-shares")));
+    let (status, html) = get_page(&f, "whatsapp-timeline", &f.client_cookie).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(!html.contains(&marker.to_string()));
+
+    let other_project =
+        store::test_support::seed_project_surreal(&f.surreal, "Unrelated synthetic matter").await;
+    let foreign_id = store::documents::ingest_bytes(
+        &f.surreal,
+        &f.storage,
+        &store::documents::IngestArgs {
+            project_id: other_project,
+            ..args
+        },
+        source.as_bytes(),
+    )
+    .await
+    .unwrap()
+    .asset_id;
+    sync_page_payload(&f, page_payload(foreign_id)).await;
+    let (status, html) = get_page(&f, "whatsapp-timeline", &f.lawyer_cookie).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(html.contains("The declared WhatsApp export is unavailable."));
+    assert!(!html.contains(&marker.to_string()));
 }
 
 #[tokio::test]

@@ -210,6 +210,19 @@ impl Field {
         Self::input(label, name, value, "email")
     }
 
+    /// Render this labeled field for a server-owned native HTML form.
+    #[cfg(feature = "server")]
+    #[must_use]
+    pub fn render_html(self) -> String {
+        #[component]
+        fn NativeField(field: Field) -> Element {
+            field.render()
+        }
+        let mut dom = VirtualDom::new_with_props(NativeField, NativeFieldProps { field: self });
+        dom.rebuild_in_place();
+        dioxus_ssr::render(&dom)
+    }
+
     /// A `password` input. It takes no value: a password is never echoed back
     /// into the page, not even after a failed submit.
     #[must_use]

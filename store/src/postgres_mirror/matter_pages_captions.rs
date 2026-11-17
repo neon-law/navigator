@@ -40,6 +40,8 @@ pub(super) struct PageImage {
     kind: String,
     title: String,
     draft: Option<String>,
+    document_revision: Option<String>,
+    media: Option<serde_json::Value>,
     position: i64,
     client_sections: Option<Vec<String>>,
     lawyer_sections: Option<Vec<String>>,
@@ -74,6 +76,8 @@ struct PageSource {
     kind: String,
     title: String,
     draft: Option<String>,
+    document_revision: Option<String>,
+    media: Option<serde_json::Value>,
     position: i64,
     client_sections: Option<Vec<String>>,
     lawyer_sections: Option<Vec<String>>,
@@ -119,6 +123,8 @@ impl TryFrom<PageSource> for PageImage {
             kind: row.kind,
             title: row.title,
             draft: row.draft,
+            document_revision: row.document_revision,
+            media: row.media,
             position: row.position,
             client_sections: row.client_sections,
             lawyer_sections: row.lawyer_sections,
@@ -149,7 +155,7 @@ impl TryFrom<CaptionSource> for CaptionImage {
 }
 
 const PAGE_SOURCE: &str = "SELECT id, project_id, project_id.firm_id AS firm_id, slug, kind, \
-     title, draft, position, client_sections, lawyer_sections, clerk_sections, synced_at \
+     title, draft, document_revision, media, position, client_sections, lawyer_sections, clerk_sections, synced_at \
      FROM matter_page";
 const CAPTION_SOURCE: &str = "SELECT id, project_id, project_id.firm_id AS firm_id, court, \
      case_number, judicial_officer, department, filed_on, trial_on, parties, counsel, synced_at \
@@ -218,6 +224,8 @@ fn page_from_row(row: &PgRow) -> Result<PageImage, sqlx::Error> {
         kind: row.try_get("kind")?,
         title: row.try_get("title")?,
         draft: row.try_get("draft")?,
+        document_revision: row.try_get("document_revision")?,
+        media: row.try_get("media")?,
         position: row.try_get("position")?,
         client_sections: row.try_get("client_sections")?,
         lawyer_sections: row.try_get("lawyer_sections")?,
@@ -250,7 +258,7 @@ async fn target_pages(
     project_id: Option<Uuid>,
 ) -> Result<BTreeMap<Uuid, Vec<PageImage>>, MirrorError> {
     let rows = sqlx::query(
-        "SELECT id, project_id, firm_id, slug, kind, title, draft, position, client_sections, \
+        "SELECT id, project_id, firm_id, slug, kind, title, draft, document_revision, media, position, client_sections, \
          lawyer_sections, clerk_sections, synced_at FROM matter_page \
          WHERE $1::uuid IS NULL OR project_id = $1",
     )
@@ -288,6 +296,11 @@ pub(crate) async fn project_page_entries(
                 kind: page.kind,
                 title: page.title,
                 draft: page.draft,
+                document_revision: page.document_revision,
+                media: page
+                    .media
+                    .and_then(|value| serde_json::from_value(value).ok())
+                    .unwrap_or_default(),
                 lenses,
             }
         })
@@ -336,19 +349,20 @@ async fn ensure_owner(
 }
 
 const PAGE_UPSERT: &str = "INSERT INTO matter_page (id, project_id, firm_id, slug, kind, title, \
-     draft, position, client_sections, lawyer_sections, clerk_sections, synced_at) \
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
+     draft, position, client_sections, lawyer_sections, clerk_sections, synced_at, document_revision, media) \
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) \
      ON CONFLICT (id) DO UPDATE SET project_id = EXCLUDED.project_id, \
      firm_id = EXCLUDED.firm_id, slug = EXCLUDED.slug, kind = EXCLUDED.kind, \
      title = EXCLUDED.title, draft = EXCLUDED.draft, position = EXCLUDED.position, \
+     document_revision = EXCLUDED.document_revision, media = EXCLUDED.media, \
      client_sections = EXCLUDED.client_sections, lawyer_sections = EXCLUDED.lawyer_sections, \
      clerk_sections = EXCLUDED.clerk_sections, synced_at = EXCLUDED.synced_at \
      WHERE (matter_page.project_id, matter_page.firm_id, matter_page.slug, matter_page.kind, \
      matter_page.title, matter_page.draft, matter_page.position, matter_page.client_sections, \
-     matter_page.lawyer_sections, matter_page.clerk_sections, matter_page.synced_at) \
+     matter_page.lawyer_sections, matter_page.clerk_sections, matter_page.synced_at, matter_page.document_revision, matter_page.media) \
      IS DISTINCT FROM (EXCLUDED.project_id, EXCLUDED.firm_id, EXCLUDED.slug, EXCLUDED.kind, \
      EXCLUDED.title, EXCLUDED.draft, EXCLUDED.position, EXCLUDED.client_sections, \
-     EXCLUDED.lawyer_sections, EXCLUDED.clerk_sections, EXCLUDED.synced_at)";
+     EXCLUDED.lawyer_sections, EXCLUDED.clerk_sections, EXCLUDED.synced_at, EXCLUDED.document_revision, EXCLUDED.media)";
 
 const CAPTION_UPSERT: &str = "INSERT INTO matter_caption (id, project_id, firm_id, court, \
      case_number, judicial_officer, department, filed_on, trial_on, parties, counsel, synced_at) \
@@ -401,6 +415,8 @@ async fn write_pages(
             .bind(&page.lawyer_sections)
             .bind(&page.clerk_sections)
             .bind(page.synced_at)
+            .bind(&page.document_revision)
+            .bind(&page.media)
             .execute(&mut *tx)
             .await?
             .rows_affected();

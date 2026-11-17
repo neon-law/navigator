@@ -1613,12 +1613,24 @@ mod tests {
                 include_str!("../postgres/migrations/20261116080000_create_inbox_attachment_filing.sql"),
             ),
             (
+                "20261116190000_create_project_calendar_grant.sql",
+                include_str!("../postgres/migrations/20261116190000_create_project_calendar_grant.sql"),
+            ),
+            (
                 "20261116200000_add_task_handoff.sql",
                 include_str!("../postgres/migrations/20261116200000_add_task_handoff.sql"),
             ),
             (
-                "20261116190000_create_project_calendar_grant.sql",
-                include_str!("../postgres/migrations/20261116190000_create_project_calendar_grant.sql"),
+                "20261116210000_matter_page_document_revision.sql",
+                include_str!("../postgres/migrations/20261116210000_matter_page_document_revision.sql"),
+            ),
+            (
+                "20261116220000_create_evidence_share.sql",
+                include_str!("../postgres/migrations/20261116220000_create_evidence_share.sql"),
+            ),
+            (
+                "20261116230000_add_matter_page_media.sql",
+                include_str!("../postgres/migrations/20261116230000_add_matter_page_media.sql"),
             ),
         ])
         .expect("timestamped migration assembles");

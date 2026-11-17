@@ -78,7 +78,7 @@ const COMPILED_BRAND_FIXTURE_FIRM_ID: uuid::Uuid =
 ///
 /// A test that needs to observe an empty `brand` table uses [`unmigrated`]
 /// directly instead of [`mem`].
-async fn seed_compiled_brands(db: &SurrealDb) {
+pub async fn seed_compiled_brands(db: &SurrealDb) {
     let now = chrono::Utc::now().to_rfc3339();
     for key in crate::firms::CLOSED_BRAND_KEYS {
         // An explicit UUID id, minted exactly like every other writer in
