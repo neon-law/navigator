@@ -388,21 +388,22 @@ pub fn TasksTab(
                                     }
                                     td { class: "nav-table__end",
                                         if let Some((next, label)) = next_state(&row.state) {
-                                            form {
-                                                class: "lawyer-detail__inline-form",
-                                                method: "post",
-                                                action: "/app/projects/{code}/tasks/{row.id}/transition",
-                                                input { r#type: "hidden", name: "_csrf", value: "{csrf}" }
-                                                input { r#type: "hidden", name: "next_state", value: "{next}" }
-                                                button {
-                                                    class: if overdue || next == "done" {
-                                                        "nav-btn nav-btn--primary matter-task-transition"
-                                                    } else {
-                                                        "nav-btn nav-btn--secondary matter-task-transition"
-                                                    },
-                                                    aria_label: "{label}: {row.title}",
-                                                    r#type: "submit",
-                                                    "{label}"
+                                            {
+                                                let emphasis = if overdue || next == "done" { "primary" } else { "secondary" };
+                                                rsx! {
+                                                    form {
+                                                        class: "lawyer-detail__inline-form",
+                                                        method: "post",
+                                                        action: "/app/projects/{code}/tasks/{row.id}/transition",
+                                                        input { r#type: "hidden", name: "_csrf", value: "{csrf}" }
+                                                        input { r#type: "hidden", name: "next_state", value: "{next}" }
+                                                        button {
+                                                            class: "nav-btn nav-btn--{emphasis} matter-task-transition",
+                                                            aria_label: "{label}: {row.title}",
+                                                            r#type: "submit",
+                                                            "{label}"
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }
