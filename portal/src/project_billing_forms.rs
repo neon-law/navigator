@@ -1371,7 +1371,12 @@ mod tests {
 
         // Raise the invoice: the first POST opens the compose preview, and
         // the confirmed POST raises it through the stub provider.
-        let app = crate::test_support::app_state(surreal.clone()).await;
+        // The invoice command needs a provider that admits invoices: the
+        // shared `app_state` stub refuses by default, while a simulated-
+        // matters boot selects the admitting stub (hosting.rs).
+        let mut app = crate::test_support::app_state(surreal.clone()).await;
+        app.billing_provider =
+            std::sync::Arc::new(crate::billing::StubBillingProvider::for_simulated_matters());
         let admin = blog_admin_state(app);
         let response = generate_invoice(
             State(admin.clone()),
