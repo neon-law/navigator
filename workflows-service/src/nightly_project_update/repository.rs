@@ -525,7 +525,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn a_forgejo_repository_with_governance_drift_is_repaired_every_night() {
+    async fn nightly_governance_repairs_only_the_verified_forgejo_repository() {
         let surreal = mem_surreal().await;
         let project = open_project(&surreal, "sample-forgejo-drift").await;
         let forge = FakeForge::new();
@@ -553,30 +553,20 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(rerun.governance_repaired, 0);
         assert_eq!(forge.governance_reconciles(), 2, "reconciled every run");
-    }
-
-    #[tokio::test]
-    async fn a_recorded_forgejo_repository_in_another_namespace_is_never_governed() {
-        let surreal = mem_surreal().await;
-        let project = open_project(&surreal, "sample-foreign-repo").await;
-        let forge = FakeForge::new();
-        forge.ensure_repository(&project.code).await.unwrap();
-        forge.set_head_commit_sha(&project.code, "synthetic-head");
         store::projects::set_repository_url(
             &surreal,
             project.id,
-            Some("https://forge.example/another-firm/sample-foreign-repo"),
+            Some("https://forge.example/another-firm/sample-forgejo-drift"),
         )
         .await
         .unwrap()
         .unwrap();
-        let forges = mixed_forges(&FakeForge::new(), &forge);
         assert!(
             reconcile_repository(&surreal, &forges, project.id, "26.10.5")
                 .await
                 .is_err()
         );
-        assert_eq!(forge.governance_reconciles(), 0);
+        assert_eq!(forge.governance_reconciles(), 2);
     }
 
     #[tokio::test]
