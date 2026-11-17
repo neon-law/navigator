@@ -4167,16 +4167,15 @@ async fn admin_edits_matter_participation_from_the_project_workbench() {
     let surreal = store::surreal::connect_from_env()
         .await
         .expect("connect to the port-forwarded SurrealDB");
-    let lawyer = store::persons::find_by_email_ci(&surreal, "lawyer@neonlaw.com")
+    login_as_admin(&c).await;
+    let admin = store::persons::find_by_email_ci(&surreal, "admin@neonlaw.com")
         .await
-        .expect("look up lawyer person")
-        .expect("the browser harness requires `navigator dev grant-lawyer`");
-    let original_role = lawyer.role;
-    let lawyer_id = lawyer.id;
-    store::persons::set_role(&surreal, lawyer_id, store::persons::Role::Admin)
+        .expect("look up the Admin")
+        .expect("seeded Admin");
+    let firm_id = store::firms::firm_id_for_brand_key(&surreal, "neon")
         .await
-        .expect("promote the browser-harness lawyer for this admin-only flow");
-    login_as_lawyer(&c).await;
+        .expect("look up the Firm")
+        .expect("seeded Firm");
     let unique = Uuid::now_v7();
     let candidate = store::persons::create(
         &surreal,
@@ -4217,14 +4216,15 @@ async fn admin_edits_matter_participation_from_the_project_workbench() {
             name: format!("Participation E2E Matter {unique}"),
             status: "open".into(),
             entity_id: store::test_support::seed_entity(&surreal).await,
+            firm_id: Some(firm_id),
             ..Default::default()
         },
     )
     .await
     .expect("seed project");
-    store::projects::add_participation(&surreal, project.id, lawyer.id, "lawyer")
+    store::projects::add_participation(&surreal, project.id, admin.id, "admin")
         .await
-        .expect("disclose logged-in lawyer to project");
+        .expect("add the signed-in Admin to the Project");
 
     // The ledger and its "Add person" button live on the Participants tab;
     // the workbench opens on Overview (#176).
@@ -4356,9 +4356,6 @@ async fn admin_edits_matter_participation_from_the_project_workbench() {
         "the edit re-derived participation from the incoming person's tier"
     );
 
-    store::persons::set_role(&surreal, lawyer_id, original_role)
-        .await
-        .expect("restore the browser-harness lawyer role");
     c.close().await.unwrap();
 }
 
