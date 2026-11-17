@@ -1,4 +1,4 @@
-//! Read WhatsApp text exports in source order and preserve their timestamp labels.
+//! Read `WhatsApp` text exports in source order and preserve their timestamp labels.
 
 pub(crate) struct Entry<'a> {
     pub timestamp: &'a str,
@@ -63,7 +63,7 @@ fn split_entry(line: &str) -> Option<(&str, &str)> {
     Some((timestamp, rest))
 }
 
-/// Whether the source contains a supported timestamped WhatsApp entry.
+/// Whether the source contains a supported timestamped `WhatsApp` entry.
 #[must_use]
 pub fn supported(text: &str) -> bool {
     text.lines()
