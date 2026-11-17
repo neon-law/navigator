@@ -600,6 +600,47 @@ mod tests {
         })
     }
 
+    /// Plant the people-authority rows the matter and its participation
+    /// reference. Under people authority PostgreSQL is authoritative and
+    /// the mirror never copies these rows, so the fixture writes the
+    /// matter's client entity and its lawyer directly.
+    async fn seed_pg_identity(
+        pg: &store::postgres::PostgresDb,
+        entity_id: Uuid,
+        lawyer: &store::persons::Person,
+    ) {
+        let catalog = Uuid::now_v7();
+        sqlx::query("INSERT INTO jurisdiction(id,name) VALUES ($1,$2)")
+            .bind(catalog)
+            .bind(format!("Synthetic {catalog}"))
+            .execute(pg.pool())
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO entity_type(id,name) VALUES ($1,$2)")
+            .bind(catalog)
+            .bind(format!("Synthetic {catalog}"))
+            .execute(pg.pool())
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO entity(id,name,entity_type_id,jurisdiction_id) VALUES ($1,$2,$3,$4)",
+        )
+        .bind(entity_id)
+        .bind("Synthetic Entity")
+        .bind(catalog)
+        .bind(catalog)
+        .execute(pg.pool())
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO person(id,name,email) VALUES ($1,$2,$3)")
+            .bind(lawyer.id)
+            .bind(&lawyer.name)
+            .bind(&lawyer.email)
+            .execute(pg.pool())
+            .await
+            .unwrap();
+    }
+
     /// A throwaway pool for direct SQL the store seam does not expose —
     /// the child process's fixture database, read back from its env.
     async fn raw_test_pool() -> sqlx::PgPool {
@@ -1074,10 +1115,12 @@ mod tests {
         let surreal = crate::test_support::embedded_surreal().await;
         let (project, lawyer, session) = lawyer_on_seeded_matter(&surreal).await;
 
-        // The doors' journal reads join the PostgreSQL mirrors, and the
-        // test fixture does not configure a process-wide mirror target —
-        // publish the matter and the lawyer's participation into this
-        // pool explicitly.
+        // People authority keeps each entity and person row
+        // PostgreSQL-side — the mirror never copies them — so the
+        // fixture plants the matter's client entity and its lawyer
+        // directly, then publishes the matter and the lawyer's
+        // participation, which the doors' journal reads join.
+        seed_pg_identity(&pg, project.entity_id, &lawyer).await;
         store::postgres_mirror::mirror(
             &surreal,
             &pg,

@@ -1707,28 +1707,34 @@ mod tests {
 
         #[tokio::test]
         async fn billing_reads_assemble_the_tabs_rows_from_both_stores() {
-            if !run_in_postgres_fixture(
+            // The child process re-enters this test with the flag set
+            // and runs the fixture-backed body; the parent only
+            // supervises the child.
+            if std::env::var("NAV_BILLING_WEBAPP_CHILD").as_deref() == Ok("reads") {
+                billing_reads_child().await;
+                return;
+            }
+            run_in_postgres_fixture(
                 "reads",
                 "project_billing::tests::billing_reads_assemble_the_tabs_rows_from_both_stores",
             )
-            .await
-            {
-                return;
-            }
-            billing_reads_child().await;
+            .await;
         }
 
         #[tokio::test]
         async fn generate_preview_resumes_a_pending_batch_and_names_the_stripe_draft() {
-            if !run_in_postgres_fixture(
-            "generate",
-            "project_billing::tests::generate_preview_resumes_a_pending_batch_and_names_the_stripe_draft",
-        )
-        .await
-        {
-            return;
-        }
-            billing_generate_child().await;
+            // The child process re-enters this test with the flag set
+            // and runs the fixture-backed body; the parent only
+            // supervises the child.
+            if std::env::var("NAV_BILLING_WEBAPP_CHILD").as_deref() == Ok("generate") {
+                billing_generate_child().await;
+                return;
+            }
+            run_in_postgres_fixture(
+                "generate",
+                "project_billing::tests::generate_preview_resumes_a_pending_batch_and_names_the_stripe_draft",
+            )
+            .await;
         }
 
         /// The dual-store fixture: a migrated PostgreSQL journal plus an
@@ -1748,14 +1754,19 @@ mod tests {
             (pg, surreal)
         }
 
-        /// Publish the matter and its participations into the fixture's
-        /// pool: the journal rows these tests write (rates, timers,
-        /// batches) all key off the mirrored matter.
+        /// Publish the matter's people-authority rows, the matter, and
+        /// its participations into the fixture's pool: the journal rows
+        /// these tests write (rates, timers, batches) all key off the
+        /// mirrored matter, and the mirror never copies entity or
+        /// person rows — people authority keeps those PostgreSQL-side,
+        /// so they are planted directly.
         async fn mirror_matter(
             pg: &store::postgres::PostgresDb,
             surreal: &store::surreal::SurrealDb,
             project: &store::projects::Project,
+            lawyer: &store::persons::Person,
         ) {
+            seed_pg_identity(pg, project.entity_id, lawyer).await;
             store::postgres_mirror::mirror(
                 surreal,
                 pg,
@@ -1775,6 +1786,47 @@ mod tests {
                 .await
                 .expect("mirror the participation into PostgreSQL");
             }
+        }
+
+        /// Plant the people-authority rows the matter and its
+        /// participation reference: the client entity and the lawyer.
+        async fn seed_pg_identity(
+            pg: &store::postgres::PostgresDb,
+            entity_id: uuid::Uuid,
+            lawyer: &store::persons::Person,
+        ) {
+            let catalog = uuid::Uuid::now_v7();
+            sqlx::query("INSERT INTO jurisdiction(id,name) VALUES ($1,$2)")
+                .bind(catalog)
+                .bind(format!("Synthetic {catalog}"))
+                .execute(pg.pool())
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO entity_type(id,name) VALUES ($1,$2)")
+                .bind(catalog)
+                .bind(format!("Synthetic {catalog}"))
+                .execute(pg.pool())
+                .await
+                .unwrap();
+            sqlx::query(
+                "INSERT INTO entity(id,name,entity_type_id,jurisdiction_id) VALUES ($1,$2,$3,$4)",
+            )
+            .bind(entity_id)
+            .bind("Synthetic Entity")
+            .bind(catalog)
+            .bind(catalog)
+            .execute(pg.pool())
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO person(id,name,email) VALUES ($1,$2,$3) ON CONFLICT (id) DO NOTHING",
+            )
+            .bind(lawyer.id)
+            .bind(&lawyer.name)
+            .bind(&lawyer.email)
+            .execute(pg.pool())
+            .await
+            .unwrap();
         }
 
         /// A lawyer joined to the matter — the participation row mirrors to
@@ -1830,7 +1882,7 @@ mod tests {
             let project =
                 store::test_support::seed_project(&surreal, "Synthetic billing reads matter").await;
             let lawyer = seed_lawyer_on(&surreal, &project, "Synthetic billing reader").await;
-            mirror_matter(&pg, &surreal, &project).await;
+            mirror_matter(&pg, &surreal, &project, &lawyer).await;
             let today = chrono::Utc::now().date_naive();
             store::attorney_rates::set_hourly_rate(
                 &pg,
@@ -1906,7 +1958,7 @@ mod tests {
             let other =
                 store::test_support::seed_project(&surreal, "Synthetic billing reads other").await;
             join_lawyer(&surreal, &other, lawyer.id).await;
-            mirror_matter(&pg, &surreal, &other).await;
+            mirror_matter(&pg, &surreal, &other, &lawyer).await;
             store::timers::start_timer(&pg, lawyer.id, other.id, None)
                 .await
                 .expect("start the other matter's timer");
@@ -2064,7 +2116,7 @@ mod tests {
                 store::test_support::seed_project(&surreal, "Synthetic generate preview matter")
                     .await;
             let lawyer = seed_lawyer_on(&surreal, &project, "Synthetic billing reader").await;
-            mirror_matter(&pg, &surreal, &project).await;
+            mirror_matter(&pg, &surreal, &project, &lawyer).await;
 
             // Nothing billable yet: the action is not ready, and does not pretend.
             let view = read_generate(&surreal, &pg, &project)
@@ -2130,7 +2182,7 @@ mod tests {
             draft.project_id = draft_project.id;
             draft.stripe_invoice_id = Some("in_draft_1".into());
             draft.flat_fee_cents = None;
-            mirror_matter(&pg, &surreal, &draft_project).await;
+            mirror_matter(&pg, &surreal, &draft_project, &lawyer).await;
             store::billing_batches::insert(&pg, &draft)
                 .await
                 .expect("insert the stripe draft batch");
