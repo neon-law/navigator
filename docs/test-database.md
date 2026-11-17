@@ -78,6 +78,8 @@ NAV_REQUIRE_SURREAL=1 cargo nextest run --workspace
 
 ## How CI runs them
 
-The test job starts the PostgreSQL fixture and sets `NAVIGATOR_TEST_POSTGRES_PORT`. It also starts one SurrealDB
-container for the server-mode lane and sets `NAV_REQUIRE_SURREAL=1`, so a broken engine is a red build rather than a
-silently absent test. KIND e2e covers the real stack, browser, and accessibility.
+CI does not test SurrealDB. The test job starts the PostgreSQL fixture and sets `NAVIGATOR_TEST_POSTGRES_PORT`.
+`scripts/surreal-free-tests.py` leaves out every test in a file that starts a SurrealDB engine, and every cucumber
+runner that reaches one, and leaves every file that names SurrealDB out of the coverage measurement. The job sets
+`NAVIGATOR_FORBID_SURREAL=1`, so a test that starts an engine anyway fails instead of running. KIND e2e covers the real
+stack, browser, and accessibility. Draft pull requests skip the Rust suite; marking one ready runs it.

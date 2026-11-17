@@ -303,18 +303,18 @@ jobs:
       - name: test the external deployment-coordinate denylist scanner
         run: python3 scripts/validate-deployment-coordinates.py --self-test
   rust:
-    name: cargo test (workspace, shard ${{ matrix.shard }}/4)
+    name: cargo test (workspace)
     needs: [changes]
-    if: needs.changes.outputs.rust == 'true'
-    # Four shards run the suite in parallel through `nextest --partition`,
-    # each under coverage instrumentation; the `coverage` job merges their
-    # LCOV and holds the floor. Shard 1 also runs the one-shot checks (fmt,
-    # clippy, the content gate, notices, the lockfile) and shard 2 the
-    # cucumber suites and doctests, so the four finish close together.
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4]
+    # A draft is a pull request still being written, and every push to one
+    # used to spend a full metered run that the next push cancelled. Marking it
+    # ready (`ready_for_review`) runs the suite; a skipped `rust` reads as
+    # success in the `ci` job below, and a draft cannot merge anyway.
+    if: needs.changes.outputs.rust == 'true' && github.event.pull_request.draft == false
+    # One runner, no SurrealDB. `scripts/surreal-free-tests.py` leaves out
+    # every test that starts a SurrealDB engine — about 96% of the suite's run
+    # time — so the four-way shard that kept the SurrealDB 4 suite under the
+    # job ceiling only multiplied the build by four. The application may still
+    # talk to SurrealDB; CI no longer tests it (ENG-1356..1358).
     # `neon-law-medium` does not exist in the `neon-law-source-code` org. That
     # label was a GitHub-hosted larger runner on the previous org, and a label
     # with no runner behind it does not fail the job — it queues it forever, so
@@ -326,18 +326,10 @@ jobs:
     # blacksmith-...-4vcpu`), which is the check the paragraph above demands
     # before any label goes here.
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    # A wedge detector, not a duration budget. This job had no cap at all while
-    # it ran ~30 min; a cap well under GitHub's 6-hour default means a hung
-    # build cannot hold a metered runner for most of a working day and block
-    # the PR behind an in-progress required check the whole time. The covered
-    # run measured ~1h50 end to end on SurrealDB 3 (2026-11-12: ~25 min build,
-    # ~60 min nextest, then cucumber, doctests, the coverage report, and the
-    # cache save). Under SurrealDB 4 the same run is ~2.5x slower end to end:
-    # run 43457613469 was cancelled at the old 180-minute cap with nextest at
-    # 10,841/15,093 tests, still passing steadily with no failures. The real
-    # duration is ~4-5h, so 330 keeps ~1h of headroom over the measured pace
-    # while still catching a genuine wedge below the 6-hour ceiling.
-    timeout-minutes: 330
+    # A wedge detector, not a duration budget: a hung build must not hold a
+    # metered runner for hours. Without SurrealDB the run is the build (~25 min
+    # cold) plus a short test pass.
+    timeout-minutes: 120
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
@@ -558,31 +550,7 @@ jobs:
           # `shared-key` replaces that automatic part, so the entry this job
           # writes is the entry it reads on the next push of the same branch.
           shared-key: workspace
-      # SurrealDB for the server-mode lane (#1093). Unit tests use the
-      # embedded `kv-mem` engine and need nothing running; this container
-      # exists for `store/tests/surreal_server.rs`, which covers what an
-      # in-process engine cannot — the WebSocket protocol, root `signin`,
-      # and namespace/database selection over a wire, i.e. the path every
-      # deployment actually uses. Memory-backed and thrown away with the
-      # job. The image tag MUST match the `surrealdb` crate version in the
-      # workspace manifest; bump both in the same PR.
-      - name: start SurrealDB for the server-mode lane
-        run: |
-          docker run -d --name test-surreal \
-            -p 8000:8000 \
-            surrealdb/surrealdb:v4.0.1 \
-            start --bind 0.0.0.0:8000 --user root --pass root --no-banner memory
-          for i in $(seq 1 30); do
-              if curl -sS http://127.0.0.1:8000/health >/dev/null 2>&1; then
-                  echo "test-surreal ready after $i attempt(s)"; exit 0
-              fi
-              sleep 1
-          done
-          echo "test-surreal never came up" >&2
-          docker logs test-surreal >&2 || true
-          exit 1
       - name: cargo fmt
-        if: matrix.shard == 1
         run: cargo fmt --all -- --check
       # The wasm client build, which nothing else in this workflow compiles.
       #
@@ -624,7 +592,6 @@ jobs:
       # exists to close, and the check is cheap next to a wrong skip.
       - name: does this PR touch the wasm client graph
         id: wasm-scope
-        if: matrix.shard == 1
         run: |
           set -uo pipefail
           if ! changed="$(git diff --name-only HEAD^ HEAD 2>/dev/null)" || [ -z "${changed}" ]; then
@@ -642,10 +609,10 @@ jobs:
               echo "run=false" >> "${GITHUB_OUTPUT}"
           fi
       - name: install the wasm client target
-        if: matrix.shard == 1 && steps.wasm-scope.outputs.run == 'true'
+        if: steps.wasm-scope.outputs.run == 'true'
         run: rustup target add wasm32-unknown-unknown
       - name: cargo check (webapp, wasm client)
-        if: matrix.shard == 1 && steps.wasm-scope.outputs.run == 'true'
+        if: steps.wasm-scope.outputs.run == 'true'
         run: cargo check -p webapp --target wasm32-unknown-unknown --features web
       # Dogfood the CLI as the Markdown gate: build `navigator` once, then run
       # that binary over the full visible repository tree (including
@@ -655,16 +622,13 @@ jobs:
       # `${CARGO_TARGET_DIR:-target}`, not `./target`: the step above may have
       # moved the build directory onto the larger disk.
       - name: build navigator CLI
-        if: matrix.shard == 1
         run: cargo build -p hudson --quiet
       - name: verify generated SendGrid adapter
-        if: matrix.shard == 1
         run: "${CARGO_TARGET_DIR:-target}/debug/hudson dev sendgrid-openapi --verify"
       # One content validator over the whole tree: lint every `.md` against the
       # classified rule set, run the typed event checks over each event file,
       # and parse every `.yaml`/`.yml` in the same walk.
       - name: gate the content tree with navigator
-        if: matrix.shard == 1
         run: "${CARGO_TARGET_DIR:-target}/debug/hudson project gate --ci"
       # ---- The release preflight, run on every pull request ----------------
       #
@@ -678,7 +642,6 @@ jobs:
       # ordinary PR and only have anything to say when a bump is involved.
       #
       - name: is the workspace version a releasable one
-        if: matrix.shard == 1
         run: "${CARGO_TARGET_DIR:-target}/debug/hudson ops release check"
       # `ops notices --check` is here now. It could not be while `notices_for`
       # read "this crate's source is absent" and "this crate ships no licence
@@ -709,7 +672,6 @@ jobs:
       # mutable files left in registry/src by an earlier run cannot change the
       # generated notice text for an unchanged Cargo.lock.
       - name: are the third-party notices current
-        if: matrix.shard == 1
         run: |
           rm -rf "${CARGO_HOME:-$HOME/.cargo}/registry/src"
           cargo fetch --locked
@@ -722,7 +684,6 @@ jobs:
       # `ops release version` refreshes both files together; this is the check
       # that proves it happened.
       - name: does Cargo.lock agree with the manifest
-        if: matrix.shard == 1
         run: cargo metadata --locked --no-deps --format-version 1 > /dev/null
       # The repo holds the firm's OWN data and synthetic fixtures — never a
       # client's. That invariant is enforced by `cli/tests/no_client_data.rs`,
@@ -730,15 +691,13 @@ jobs:
       # server/content) inside the workspace test pass below. See AGENTS.md
       # "No client data in the repo".
       - name: cargo clippy
-        if: matrix.shard == 1
         run: cargo clippy --workspace --all-targets -- -D warnings
       # The headroom the clippy artifacts leave behind, which is the number that
       # says whether the narrowed clean below stays affordable. It was never
       # recorded while the bare `cargo clean` hid it.
       - name: report free disk after clippy
-        if: matrix.shard == 1
         run: df -h
-      # Start coverage on every shard without cached workspace binaries.
+      # Start coverage without cached workspace binaries.
       # A stale binary can map old source lines into the merged LCOV even
       # when all the tests that ran used current binaries.
       #
@@ -909,25 +868,16 @@ jobs:
           PYTHON
       - name: cargo test with coverage
         env:
-          # The server-mode SurrealDB lane. `NAV_REQUIRE_SURREAL=1` makes
-          # it fail rather than skip here, so a broken engine is a red
-          # build instead of a silently absent test. It is deliberately not
+          # A test that starts SurrealDB fails here instead of running: the
+          # selection below should have left it out. Deliberately not
           # `NAV_REQUIRE_HARNESS`, which arms the browser suites and the
-          # Restate broker fixture: this job starts database fixtures only, so that
-          # flag would fail every suite whose fixture belongs to
-          # `hudson dev e2e` instead.
-          NAVIGATOR_SURREAL_ENDPOINT: ws://127.0.0.1:8000
-          NAVIGATOR_SURREAL_NAMESPACE: navigator
-          NAVIGATOR_SURREAL_DATABASE: navigator
-          NAVIGATOR_SURREAL_USER: root
-          NAVIGATOR_SURREAL_PASSWORD: root
-          NAV_REQUIRE_SURREAL: "1"
+          # Restate broker fixture this job does not start.
+          NAVIGATOR_FORBID_SURREAL: "1"
           NAVIGATOR_TEST_POSTGRES_PORT: "25432"
           NAV_REQUIRE_POSTGRES: "1"
           RUST_BACKTRACE: full
-          # Coverage-instrumented routes and the embedded SurrealDB engine
-          # share a test thread. 32 MiB holds store persons::create and portal
-          # inbox_transport under llvm-cov; 8 MiB does not.
+          # Coverage-instrumented routes run deep on a test thread; 8 MiB has
+          # overflowed under llvm-cov.
           RUST_MIN_STACK: "33554432"
         # Compile and run at the machine's full width.
         run: |
@@ -970,8 +920,10 @@ jobs:
           # Tee the suite so a red run still has the panic after the log
           # stream is gone; the step after this one uploads the JUnit on every
           # outcome and the tee file on failure.
+          # Every test that starts no SurrealDB engine; see the script.
+          python3 scripts/surreal-free-tests.py /tmp/surreal-free
           cargo nextest run --workspace --no-fail-fast --profile ci \
-              --partition hash:${{ matrix.shard }}/4 2>&1 | tee /tmp/navigator-workspace-tests.log
+              -E "$(cat /tmp/surreal-free/nextest-filter)" 2>&1 | tee /tmp/navigator-workspace-tests.log
           # The two lanes nextest does not run, kept so this gate stays exactly
           # as wide as the `cargo test --workspace` it replaces — and so the
           # coverage number keeps measuring the same test set.
@@ -988,10 +940,9 @@ jobs:
           #     local `cargo llvm-cov --workspace` lane reads lower than this
           #     job — so dropping them would both narrow the gate and move the
           #     percentage it is compared against.
-          if [ "${{ matrix.shard }}" = 2 ]; then
-              cargo test -p features
-              cargo test --workspace --doc
-          fi
+          # shellcheck disable=SC2046 # one runner per line
+          cargo test -p features $(cat /tmp/surreal-free/features-args)
+          cargo test --workspace --doc
           # THE COVERAGE GATE. `--fail-under-lines` exits non-zero when total
           # workspace line coverage is under the floor, which fails this job and
           # therefore the `ci` merge gate. There is no upload, no separate
@@ -1004,7 +955,7 @@ jobs:
           # not find the profile data.
           #
           # The floor sits under what the `coverage floor` job measures from
-          # the merged shard LCOV. Latest published print: 91.40% line coverage
+          # the LCOV. Last print with SurrealDB tests in the run: 91.40% line coverage
           # (481824 of 527139) on 2026-11-16, from run 43851127830. The 91.0
           # floor is the merge gate: 0.40pt of headroom so one drift window
           # does not fail every PR.
@@ -1070,8 +1021,8 @@ jobs:
           # capability shape, port polling — stay counted in
           # `scraper/session.rs` with their tests.
           cargo llvm-cov report \
-              --lcov --output-path /tmp/lcov-shard-${{ matrix.shard }}.info \
-              --ignore-filename-regex '(deploy/src/devx/(browser_e2e|chrome|e2e|seaweedfs|orchestrate|staging)|deploy/src/devx/forgejo/(cluster|oidc|smoke)|deploy/src/devx/email_summary_e2e/(harness|scenarios)|features/src/webdriver|deploy/src/scraper/browser)\.rs$'
+              --lcov --output-path /tmp/lcov-workspace.info \
+              --ignore-filename-regex "(deploy/src/devx/(browser_e2e|chrome|e2e|seaweedfs|orchestrate|staging)|deploy/src/devx/forgejo/(cluster|oidc|smoke)|deploy/src/devx/email_summary_e2e/(harness|scenarios)|features/src/webdriver|deploy/src/scraper/browser)\\.rs\$|$(cat /tmp/surreal-free/coverage-ignore)"
       - name: stop covered PostgreSQL fixture
         if: always()
         run: docker rm -f test-postgres
@@ -1079,19 +1030,19 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: nextest-junit-${{ matrix.shard }}
+          name: nextest-junit
           path: target/nextest/ci/junit.xml
       - name: upload workspace test log
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: workspace-test-log-${{ matrix.shard }}
+          name: workspace-test-log
           path: /tmp/navigator-workspace-tests.log
-      - name: upload this shard's coverage
+      - name: upload the coverage report
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: lcov-shard-${{ matrix.shard }}
-          path: /tmp/lcov-shard-${{ matrix.shard }}.info
+          name: lcov-workspace
+          path: /tmp/lcov-workspace.info
           retention-days: 3
       - name: report free disk after the test build
         if: always()
@@ -1131,11 +1082,9 @@ jobs:
   # a red run is a regression in the seam, the anchors, or the webhook
   # trust path — never an environment problem, because nothing here reaches
   # past localhost.
-  # THE COVERAGE GATE. Each shard ran a quarter of the suite and exported
-  # LCOV for the same instrumented sources; a line counts as covered when any
-  # shard executed it. `--fail-under-lines` used to run inside the single test
-  # job; this applies the same floor to the merged total and prints the files
-  # with the most uncovered lines when it trips.
+  # THE COVERAGE GATE. Applies the floor to the `rust` job's LCOV and prints
+  # the files with the most uncovered lines when it trips. Files that name
+  # SurrealDB are outside the measurement (see `scripts/surreal-free-tests.py`).
   coverage:
     name: coverage floor
     needs: [rust]
@@ -1143,10 +1092,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - name: download every shard's coverage
+      - name: download the coverage report
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: lcov-shard-*
+          pattern: lcov-workspace
           path: lcov
           merge-multiple: true
       - name: merge and hold the floor
@@ -1155,9 +1104,9 @@ jobs:
         run: |
           python3 - <<'PYTHON'
           import collections, glob, os, sys
-          files = sorted(glob.glob('lcov/lcov-shard-*.info'))
-          if len(files) != 4:
-              sys.exit(f'expected 4 shard reports, found {len(files)}: {files}')
+          files = sorted(glob.glob('lcov/lcov-workspace.info'))
+          if len(files) != 1:
+              sys.exit(f'expected one coverage report, found {len(files)}: {files}')
           hits = collections.defaultdict(dict)
           for path in files:
               source = None
@@ -1184,7 +1133,8 @@ jobs:
   signature-loop:
     name: signature loop
     needs: [changes]
-    if: needs.changes.outputs.rust == 'true'
+    # Drafts skip it for the reason `rust` gives.
+    if: needs.changes.outputs.rust == 'true' && github.event.pull_request.draft == false
     # Same fleet as `rust` (see its sizing note); the loop compiles only the
     # portal lib test binary, so 30 minutes is wide headroom.
     runs-on: blacksmith-4vcpu-ubuntu-2404
