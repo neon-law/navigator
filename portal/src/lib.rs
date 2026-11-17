@@ -208,6 +208,7 @@ pub mod review;
 pub mod session;
 pub mod session_renew;
 pub mod signature;
+mod signature_adoption;
 pub mod signature_flow;
 pub mod signature_render;
 pub mod signature_status;

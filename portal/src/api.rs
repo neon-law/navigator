@@ -1018,6 +1018,11 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
         ),
         (
             "POST",
+            "/app/api/projects/{id}/envelope-adoptions",
+            post(adopt_envelope),
+        ),
+        (
+            "POST",
             "/app/api/notations/{id}/approval",
             post(approve_notation),
         ),
@@ -2030,8 +2035,7 @@ async fn get_project_door(
 
 /// Live lifecycle evidence for a firm-side participant. Filing establishes
 /// onboarding presence; `onboarding.status` carries the execution reading —
-/// `official` only once the onboarding envelope completed a loop Navigator
-/// sent.
+/// `official` once the onboarding envelope is verified as completed.
 async fn project_status_door(
     State(state): State<ApiState>,
     lawyer: LawyerSession,
@@ -2073,6 +2077,17 @@ async fn project_status_door(
     let onboarding_status = store::projects::onboarding_status(&state.surreal, id)
         .await
         .map_err(ApiError::Db)?;
+    let mut adopted_envelopes = Vec::new();
+    for notation in store::notations::list_by_project(&state.surreal, id).await? {
+        if let Some(envelope) =
+            crate::signature_adoption::evidence(state.storage.as_ref(), notation.id).await?
+        {
+            adopted_envelopes.push(serde_json::json!({
+                "notation_id": notation.id,
+                "envelope": envelope,
+            }));
+        }
+    }
     Ok(Json(serde_json::json!({
         "code": project.code,
         "status": if project.status == "archived" { "archived" } else { lifecycle.label() },
@@ -2088,6 +2103,7 @@ async fn project_status_door(
             "documents": documents,
             "execution_verified": onboarding_status == store::projects::OnboardingStatus::Official
         },
+        "adopted_envelopes": adopted_envelopes,
         "missing": missing
     }))
     .into_response())
@@ -4463,6 +4479,166 @@ async fn create_notation(
         }),
     )
         .into_response())
+}
+
+#[derive(Deserialize)]
+struct AdoptEnvelopeRequest {
+    envelope_id: Uuid,
+    template_code: String,
+    source: String,
+    commit_sha: String,
+}
+
+async fn adopt_envelope(
+    State(state): State<ApiState>,
+    lawyer: LawyerSession,
+    Path(id): Path<Uuid>,
+    JsonOrForm(input): JsonOrForm<AdoptEnvelopeRequest>,
+) -> Result<Response, ApiError> {
+    use crate::signature_adoption::{internal, lock, reconcile, validate};
+
+    if !participates_as_firm(&state, &lawyer, id).await {
+        return Err(ApiError::NotFound);
+    }
+    let db = &state.surreal;
+    let project = store::projects::find_by_id(db, id)
+        .await
+        .map_err(internal)?
+        .ok_or(ApiError::NotFound)?;
+    let client = project
+        .client_dri_person_id
+        .ok_or(ApiError::EnvelopeAdoption(
+            "Assign a client DRI to the Project before adopting an envelope",
+        ))?;
+    let lane = lock().await?;
+    let mut envelope = state
+        .signature_provider
+        .read_external_envelope(input.envelope_id)
+        .await
+        .map_err(internal)?;
+    validate(&envelope)?;
+    let mut client_is_signer = false;
+    for signer in &envelope.signers {
+        if store::persons::find_by_any_email(db, &signer.email)
+            .await?
+            .is_some_and(|person| person.id == client)
+        {
+            client_is_signer = true;
+            break;
+        }
+    }
+    if !client_is_signer {
+        return Err(ApiError::EnvelopeAdoption(
+            "The Project's client DRI is not an envelope signer",
+        ));
+    }
+
+    let envelope_id = input.envelope_id;
+    let notation = resolve_adoption_notation(&state, &project, client, input).await?;
+    reconcile(
+        db,
+        &state.storage,
+        state.signature_provider.as_ref(),
+        notation.id,
+        &envelope,
+    )
+    .await?;
+    if matches!(envelope.status.as_str(), "sent" | "delivered" | "signed") {
+        // A terminal Connect delivery can arrive before the Signature exists.
+        // Check again after registration so completion cannot fall into that gap.
+        let latest = state
+            .signature_provider
+            .read_external_envelope(envelope_id)
+            .await
+            .map_err(internal)?;
+        reconcile(
+            db,
+            &state.storage,
+            state.signature_provider.as_ref(),
+            notation.id,
+            &latest,
+        )
+        .await?;
+        envelope = latest;
+    }
+    lane.commit().await.map_err(internal)?;
+    Ok(Json(serde_json::json!({
+        "notation_id": notation.id,
+        "envelope": envelope,
+    }))
+    .into_response())
+}
+
+async fn resolve_adoption_notation(
+    state: &ApiState,
+    project: &store::projects::Project,
+    client: Uuid,
+    input: AdoptEnvelopeRequest,
+) -> Result<store::notations::Notation, ApiError> {
+    use crate::signature_adoption::internal;
+    use store::signatures::SignatureProvider::DocuSign;
+
+    let db = &state.surreal;
+    let id = project.id;
+    let envelope_key = input.envelope_id.to_string();
+    let linked = store::signatures::by_provider(db, DocuSign, &envelope_key)
+        .await
+        .map_err(internal)?;
+    let linked_notation = if let Some(signature) = linked {
+        let notation = store::notations::find_by_id(db, signature.notation_id)
+            .await?
+            .filter(|notation| notation.project_id == id && notation.person_id == client)
+            .ok_or(ApiError::EnvelopeAdoption(
+                "This envelope is already linked to another Notation",
+            ))?;
+        if crate::signature_adoption::evidence(state.storage.as_ref(), notation.id)
+            .await?
+            .is_none_or(|evidence| evidence.envelope_id != input.envelope_id)
+        {
+            return Err(ApiError::EnvelopeAdoption(
+                "This envelope is already linked to another Notation",
+            ));
+        }
+        Some(notation)
+    } else {
+        None
+    };
+
+    let draft = store::template_source::persist_contents(
+        db,
+        &state.storage,
+        id,
+        &input.template_code,
+        input.source,
+        input.commit_sha,
+    )
+    .await
+    .map_err(|_| ApiError::EnvelopeAdoption("The Project Draft could not be saved"))?;
+    if let Some(notation) = linked_notation {
+        if notation.template_id != draft.template.id {
+            return Err(ApiError::EnvelopeAdoption(
+                "This envelope is already linked to another Draft version",
+            ));
+        }
+        return Ok(notation);
+    }
+    if let Some(existing) =
+        store::notations::find_by_project_template_person(db, id, draft.template.id, client).await?
+    {
+        if store::signatures::latest_for_notation(db, existing.id)
+            .await
+            .map_err(internal)?
+            .is_some()
+        {
+            return Err(ApiError::EnvelopeAdoption(
+                "This Notation already has a Signature",
+            ));
+        }
+        return Ok(existing);
+    }
+    let new = store::notations::NewNotation::new(draft.template.id, client, id, "END")
+        .with_entity(project.entity_id);
+    Ok(store::notations::create(db, &new).await?)
 }
 
 /// Request body for `POST /app/api/notations/{id}/answers` — answer the
@@ -8820,6 +8996,7 @@ pub enum ApiError {
     Entity(store::entity_commands::EntityCommandError),
     Project(store::projects::ProjectCommandError),
     PitchArtifactConflict,
+    EnvelopeAdoption(&'static str),
     OpenMatter(store::projects::OpenMatterError),
     AddParticipant(store::participation::AddParticipantError),
     UpdateParticipant(store::participation::UpdateParticipantError),
@@ -9926,6 +10103,10 @@ impl IntoResponse for ApiError {
                 )
                     .into_response()
             }
+            Self::EnvelopeAdoption(message) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({"error": "envelope_adoption", "message": message})),
+            ).into_response(),
             Self::PrivateTermsConflict(message) | Self::PrivateTermsInvalid(message) => {
                 let status = if matches!(self, Self::PrivateTermsConflict(_)) {
                     StatusCode::CONFLICT
@@ -14175,6 +14356,16 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
                 Some(
                     serde_json::json!({ "template_code": "nda", "client_email": "c@example.com" }),
                 ),
+            ),
+            (
+                "POST",
+                format!("/app/api/projects/{p}/envelope-adoptions"),
+                Some(serde_json::json!({
+                    "envelope_id": Uuid::nil(),
+                    "template_code": "agreement",
+                    "source": "",
+                    "commit_sha": "",
+                })),
             ),
             (
                 "POST",

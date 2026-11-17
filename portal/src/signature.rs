@@ -278,8 +278,35 @@ pub enum SignatureError {
     TabValidation(String),
 }
 
+/// Envelope evidence returned by the Firm's configured DocuSign account.
+#[derive(Debug, serde::Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalEnvelope {
+    pub envelope_id: Uuid,
+    pub status: String,
+    pub completed_date_time: Option<chrono::DateTime<chrono::FixedOffset>>,
+    #[serde(default)]
+    pub signers: Vec<ExternalSigner>,
+}
+
+#[derive(Debug, serde::Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalSigner {
+    pub name: String,
+    pub email: String,
+    pub status: String,
+    pub signed_date_time: Option<chrono::DateTime<chrono::FixedOffset>>,
+}
+
 #[async_trait]
 pub trait SignatureProvider: Send + Sync {
+    /// Read an existing envelope without modifying it at the provider.
+    async fn read_external_envelope(&self, _id: Uuid) -> Result<ExternalEnvelope, SignatureError> {
+        Err(SignatureError::Provider(
+            "DocuSign envelope adoption is unavailable".into(),
+        ))
+    }
+
     /// Submit the rendered retainer PDF for the given notation, placing
     /// the fields described by `manifest`. Returns a provider-issued id
     /// correlating future events. `mode` decides what the provider does
@@ -1676,10 +1703,13 @@ impl DocuSignSignatureProvider {
         envelope_id: &str,
         which: &str,
     ) -> Result<Vec<u8>, SignatureError> {
-        let url = self.request_url(&format!(
+        let mut url = self.request_url(&format!(
             "v2.1/accounts/{}/envelopes/{}/documents/{which}",
             self.account_id, envelope_id
         ))?;
+        if which == "combined" {
+            url.query_pairs_mut().append_pair("certificate", "false");
+        }
         let resp = self
             .http
             .get(url)
@@ -1749,6 +1779,45 @@ impl DocuSignSignatureProvider {
 
 #[async_trait]
 impl SignatureProvider for DocuSignSignatureProvider {
+    async fn read_external_envelope(&self, id: Uuid) -> Result<ExternalEnvelope, SignatureError> {
+        #[derive(Deserialize)]
+        struct Recipients {
+            #[serde(default)]
+            signers: Vec<ExternalSigner>,
+        }
+
+        let path = format!("v2.1/accounts/{}/envelopes/{id}", self.account_id);
+        let token = self.bearer_token().await?;
+        let get = |path: &str| {
+            self.request_url(path)
+                .map(|url| self.http.get(url).bearer_auth(&token))
+        };
+        let (envelope, recipients) = tokio::try_join!(
+            get(&path)?.send(),
+            get(&format!("{path}/recipients"))?.send(),
+        )
+        .map_err(|error| SignatureError::Provider(error.to_string()))?;
+        let mut envelope: ExternalEnvelope = envelope
+            .error_for_status()
+            .map_err(|error| SignatureError::Provider(error.to_string()))?
+            .json()
+            .await
+            .map_err(|error| SignatureError::Provider(error.to_string()))?;
+        if envelope.envelope_id != id {
+            return Err(SignatureError::Provider(
+                "DocuSign returned a different envelope".into(),
+            ));
+        }
+        let recipients: Recipients = recipients
+            .error_for_status()
+            .map_err(|error| SignatureError::Provider(error.to_string()))?
+            .json()
+            .await
+            .map_err(|error| SignatureError::Provider(error.to_string()))?;
+        envelope.signers = recipients.signers;
+        Ok(envelope)
+    }
+
     async fn send_for_signature(
         &self,
         notation_id: Uuid,
@@ -3137,6 +3206,53 @@ mod tests {
                 panic!("expected Provider, got {other:?}")
             }
         }
+    }
+
+    #[tokio::test]
+    async fn docusign_reads_an_external_envelope_and_its_signers() {
+        let server = MockServer::start().await;
+        let id = uuid::Uuid::from_u128(42);
+        let endpoint = format!("/v2.1/accounts/acct-guid/envelopes/{id}");
+        for (path_value, response) in [
+            (
+                endpoint.clone(),
+                serde_json::json!({
+                    "envelopeId": id, "status": "completed",
+                    "completedDateTime": "2026-01-02T03:04:05Z"
+                }),
+            ),
+            (
+                format!("{endpoint}/recipients"),
+                serde_json::json!({
+                    "signers": [{
+                        "name": "Example Signer", "email": "signer@example.com",
+                        "status": "completed", "signedDateTime": "2026-01-02T03:04:00Z"
+                    }]
+                }),
+            ),
+        ] {
+            Mock::given(method("GET"))
+                .and(path(path_value))
+                .and(header("authorization", "Bearer TOKEN"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(response))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        let envelope = docusign(server.uri())
+            .read_external_envelope(id)
+            .await
+            .unwrap();
+        assert_eq!(envelope.status, "completed");
+        assert_eq!(
+            envelope.completed_date_time.unwrap().to_rfc3339(),
+            "2026-01-02T03:04:05+00:00"
+        );
+        assert_eq!(envelope.signers[0].email, "signer@example.com");
+        assert_eq!(
+            envelope.signers[0].signed_date_time.unwrap().to_rfc3339(),
+            "2026-01-02T03:04:00+00:00"
+        );
     }
 
     #[tokio::test]

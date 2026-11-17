@@ -3453,3 +3453,11 @@ test_contingency_doors_are_shape_bound if {
 }
 
 contingency_doors := {"contingency-terms", "outcome-estimates", "matter-outcome"}
+
+test_lawyer_can_adopt_external_envelope if {
+	authz.allow with input as {"path": ["app", "api", "projects", "p1", "envelope-adoptions"], "method": "POST", "session": lawyer_session}
+}
+
+test_client_cannot_adopt_external_envelope if {
+	not authz.allow with input as {"path": ["app", "api", "projects", "p1", "envelope-adoptions"], "method": "POST", "session": client_session}
+}

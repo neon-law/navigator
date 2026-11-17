@@ -91,7 +91,26 @@ fn print_status(value: &serde_json::Value) {
             );
         }
     }
-    println!("Onboarding presence confirms filing; execution is not verified.");
+    if let Some(adoptions) = value["adopted_envelopes"].as_array() {
+        for adoption in adoptions {
+            let envelope = &adoption["envelope"];
+            println!(
+                "DocuSign envelope {}: {} (Notation {})",
+                envelope["envelopeId"].as_str().unwrap_or("unknown"),
+                envelope["status"].as_str().unwrap_or("unknown"),
+                adoption["notation_id"],
+            );
+            if let Some(signers) = envelope["signers"].as_array() {
+                for signer in signers {
+                    println!(
+                        "  {}: {}",
+                        signer["name"].as_str().unwrap_or("unknown"),
+                        signer["status"].as_str().unwrap_or("unknown")
+                    );
+                }
+            }
+        }
+    }
     if let Some(missing) = value["missing"].as_array() {
         for item in missing {
             println!("missing: {}", item.as_str().unwrap_or_default());
