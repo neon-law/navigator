@@ -3751,7 +3751,8 @@ mod tests {
                 .unwrap();
         let portal_url = format!("{}/app/projects", brand.public_home_href());
         let onboarding = rules::clauses::compile(workflows::RETAINER_INTAKE_TEMPLATE).unwrap();
-        let typst = super::typst_body_from_template(&onboarding, &keys, &labels, Some("onboarding"));
+        let typst =
+            super::typst_body_from_template(&onboarding, &keys, &labels, Some("onboarding"));
         assert!(typst.contains(&format!("#link(\"{portal_url}\")")));
         for ctx in [&keys, &labels] {
             assert_eq!(
