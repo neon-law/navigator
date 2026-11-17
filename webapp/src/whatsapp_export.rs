@@ -111,6 +111,7 @@ pub fn timeline_with_images(
     use crate::html_escape::escape_attr as escape;
     use std::fmt::Write as _;
     const PAGE_SIZE: usize = 100;
+    const CARD: &str = "border:1px solid #cfdae6;border-radius:.6rem;padding:1rem;margin:.8rem 0";
     enum Item<'a> {
         Chat(&'a Entry<'a>),
         Image(&'a TimelineImage),
@@ -164,7 +165,7 @@ pub fn timeline_with_images(
             Item::Chat(entry) => {
                 let _ = write!(
                     body,
-                    r#"<article class="whatsapp-entry" style="border:1px solid #cfdae6;border-radius:.6rem;padding:1rem;margin:.8rem 0"><strong>{}</strong> <span class="timestamp">{}</span><p style="white-space:pre-wrap;overflow-wrap:anywhere">{}</p></article>"#,
+                    r#"<article class="whatsapp-entry" style="{CARD}"><strong>{}</strong> <span class="timestamp">{}</span><p style="white-space:pre-wrap;overflow-wrap:anywhere">{}</p></article>"#,
                     escape(entry.sender),
                     escape(entry.timestamp),
                     escape(&entry.message)
@@ -178,7 +179,7 @@ pub fn timeline_with_images(
                 };
                 let _ = write!(
                     body,
-                    r#"<article class="whatsapp-entry"><strong>{}</strong> <span class="timestamp">{date_label} {}</span><p><img src="{}" alt="{}" loading="lazy" decoding="async" style="max-width:100%;max-height:34rem;object-fit:contain"></p><p><a href="{}">Download image</a></p></article>"#,
+                    r#"<article class="whatsapp-entry" style="{CARD}"><strong>{}</strong> <span class="timestamp">{date_label} {}</span><p><img src="{}" alt="{}" loading="lazy" decoding="async" style="max-width:100%;max-height:34rem;object-fit:contain"></p><p><a href="{}">Download image</a></p></article>"#,
                     escape(&image.name),
                     image.at.format("%Y-%m-%d %H:%M UTC"),
                     escape(&image.preview),

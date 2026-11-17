@@ -1014,7 +1014,7 @@ pub fn MatterHeading(name: String, tabs: Vec<PageTab>, current: String) -> Eleme
 pub fn CustomPagePanels(tabs: Vec<PageTab>) -> Element {
     let pages: Vec<_> = tabs
         .into_iter()
-        .filter(|tab| MatterTab::from_path(&tab.href).is_none())
+        .filter(|tab| MatterTab::from_path(&tab.href).is_none() && !tab.href.ends_with("/inbox"))
         .collect();
     if pages.is_empty() {
         return rsx! {};
@@ -1102,6 +1102,10 @@ mod tests {
                     super::MatterTab::Overview.page_tab("synthetic"),
                     super::MatterTab::Billing.page_tab("synthetic"),
                     PageTab {
+                        href: "/app/projects/synthetic/inbox".into(),
+                        label: "Communications".into(),
+                    },
+                    PageTab {
                         href: "/app/projects/synthetic/chat".into(),
                         label: "Chat timeline".into(),
                     },
@@ -1116,6 +1120,7 @@ mod tests {
         let html = dioxus_ssr::render(&dom);
         assert!(html.contains("Chat timeline") && html.contains("Image timeline"));
         assert!(!html.contains("Billing"), "{html}");
+        assert!(!html.contains("Communications"), "{html}");
     }
 
     fn render(view: MatterPageView) -> String {

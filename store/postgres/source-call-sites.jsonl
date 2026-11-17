@@ -5969,11 +5969,11 @@
 {"file":"webapp/src/sections/instruments.rs","line":557,"function":"load","operation":"insert","sql_operations":[],"tables":["entity"],"transaction":false}
 {"file":"webapp/src/sections/instruments.rs","line":675,"function":"formalities","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"webapp/src/sections/page.rs","line":326,"function":"page_sections","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"webapp/src/sections/page.rs","line":1216,"function":"pages","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"webapp/src/sections/page.rs","line":1222,"function":"pages","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"webapp/src/sections/page.rs","line":1229,"function":"pages","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"webapp/src/sections/page.rs","line":1267,"function":"whatsapp_page_does_not_expose_a_client_face_or_add_costs","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"webapp/src/sections/page.rs","line":1293,"function":"receipt_backed_costs_follow_invoices_for_both_lenses","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"webapp/src/sections/page.rs","line":1221,"function":"pages","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"webapp/src/sections/page.rs","line":1227,"function":"pages","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"webapp/src/sections/page.rs","line":1234,"function":"pages","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"webapp/src/sections/page.rs","line":1272,"function":"whatsapp_page_does_not_expose_a_client_face_or_add_costs","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"webapp/src/sections/page.rs","line":1298,"function":"receipt_backed_costs_follow_invoices_for_both_lenses","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"word/src/notation.rs","line":411,"function":"flush","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"word/src/outline.rs","line":734,"function":"alpha","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"workflows-service/src/dbos_email_summary.rs","line":315,"function":"database_url","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
