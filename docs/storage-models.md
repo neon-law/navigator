@@ -69,7 +69,8 @@ tables. The first [Mirror Backfill](postgres-tooling.md#mirror-backfill) inserts
 tables after the first completed run. Without a host, SurrealDB is the fallback. The unique indexes decide replay races,
 and a delivery's reservation commits with its attempt. Parent rows (Project, Person, Firm, Notation, Asset) must exist
 in PostgreSQL. A retention purge refuses while an Inbox Message or a Notation source still names a Communication it
-would delete. The Inbox tables follow the same rule.
+would delete. The Inbox tables follow the same rule. The Inbox displays and sorts email threads by the latest recorded
+email send time, with the Conversation update time as a fallback when no email date is available.
 
 The Project Inbox also reads synced Matter Page tabs and Asset metadata from PostgreSQL when the host is set. A
 Message's attachment links retain their provider order and names, and live filed Assets can also appear through their

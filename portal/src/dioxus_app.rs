@@ -2784,7 +2784,8 @@ where
                     .layer(axum::Extension(endpoint_surreal.clone()))
                     .layer(from_fn(inject_viewer_role))
                     .layer(from_fn(inject_app_brand_mark))
-                    .layer(from_fn(inject_person_id)),
+                    .layer(from_fn(inject_person_id))
+                    .layer(from_fn(inject_csrf_token)),
             );
         }
     }

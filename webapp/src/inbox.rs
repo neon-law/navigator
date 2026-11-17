@@ -216,6 +216,8 @@ pub struct InboxThreadPage {
     #[serde(default)]
     pub sender: String,
     #[serde(default)]
+    pub contact_href: Option<String>,
+    #[serde(default)]
     pub interaction_type: String,
     #[serde(default)]
     pub provider_post_id: Option<String>,
@@ -721,6 +723,7 @@ fn inbox_channels() -> Vec<String> {
 
 #[cfg(feature = "server")]
 fn row_view(row: &store::inbox::IntakeRow, href: String) -> InboxRowView {
+    let date = row.email_sent_at.unwrap_or(row.updated_at);
     InboxRowView {
         id: row.id.to_string(),
         href,
@@ -744,9 +747,9 @@ fn row_view(row: &store::inbox::IntakeRow, href: String) -> InboxRowView {
             },
             contact_label,
         ),
-        updated: row.updated_at.format("%b %-d, %H:%M UTC").to_string(),
-        updated_short: row.updated_at.format("%b %-d").to_string(),
-        updated_iso: row.updated_at.to_rfc3339(),
+        updated: date.format("%b %-d, %H:%M UTC").to_string(),
+        updated_short: date.format("%b %-d").to_string(),
+        updated_iso: date.to_rfc3339(),
         direction: row.direction.clone(),
         has_attachments: row.has_attachments,
         sent: row.sent,
@@ -999,7 +1002,7 @@ pub async fn owner_inbox_page() -> Result<InboxPage, ServerFnError> {
         None => store::inbox::list_intake(&surreal, actor).await,
     }
     .map_err(|error| ServerFnError::new(error.to_string()))?;
-    let rows = scoped_rows
+    let mut rows = scoped_rows
         .into_iter()
         .filter(|row| {
             row.trashed == trash_only
@@ -1014,6 +1017,7 @@ pub async fn owner_inbox_page() -> Result<InboxPage, ServerFnError> {
                 )
         })
         .collect::<Vec<_>>();
+    rows.sort_by_key(|row| std::cmp::Reverse(row.email_sent_at.unwrap_or(row.updated_at)));
     let (logo, tokens_href, firm_name) = chrome().await;
     Ok(InboxPage {
         role,
@@ -1106,6 +1110,11 @@ async fn firm_thread_page(conversation_id: uuid::Uuid) -> Result<InboxThreadPage
             },
             contact_label,
         ),
+        contact_href: detail
+            .contact
+            .as_ref()
+            .filter(|_| role.is_admin_tier())
+            .map(|contact| format!("{}/{}", crate::person_show::DETAIL_PATH, contact.person_id)),
         interaction_type: detail.conversation.interaction_type.clone(),
         provider_post_id: detail.conversation.provider_post_id.clone(),
         provider_thread_ref: detail.conversation.provider_thread_ref.clone(),
@@ -1251,7 +1260,7 @@ pub async fn project_inbox_page() -> Result<InboxPage, ServerFnError> {
     let brands = inbox_brands(&all_rows);
     let brand_filter = brand_filter.filter(|brand| brands.contains(brand));
     let brands = brand_options(&surreal, brands).await;
-    let rows = all_rows
+    let mut rows = all_rows
         .into_iter()
         .filter(|row| {
             row.trashed == trash_only
@@ -1266,6 +1275,7 @@ pub async fn project_inbox_page() -> Result<InboxPage, ServerFnError> {
                 )
         })
         .collect::<Vec<_>>();
+    rows.sort_by_key(|row| std::cmp::Reverse(row.email_sent_at.unwrap_or(row.updated_at)));
     let (logo, tokens_href, firm_name) = chrome().await;
     Ok(InboxPage {
         role,
@@ -1376,6 +1386,7 @@ async fn project_thread_page(
             .external_name
             .clone()
             .unwrap_or_else(|| thread.conversation.external_address.clone()),
+        contact_href: None,
         interaction_type: thread.conversation.interaction_type.clone(),
         provider_post_id: thread.conversation.provider_post_id.clone(),
         provider_thread_ref: thread.conversation.provider_thread_ref.clone(),
@@ -1499,7 +1510,7 @@ fn InboxWorkspace(page: InboxPage) -> Element {
     }
 }
 
-/// The compose dialog's element id; the rail's Compose button opens it.
+/// The compose dialog's element id; the rail's New text button opens it.
 const COMPOSE_DIALOG_ID: &str = "inbox-compose";
 
 /// The new-text form as a modal `<dialog>`, rendered only when the server
@@ -1920,7 +1931,7 @@ fn inbox_rail(page: &InboxPage) -> Element {
                             "document.getElementById('{COMPOSE_DIALOG_ID}')?.showModal();"
                         ));
                     },
-                    "Compose"
+                    "New text"
                 }
             }
             { inbox_rail_group("Mailboxes", "Mail", &mailbox_options) }
@@ -2050,8 +2061,7 @@ async fn pane_conversation(
 }
 
 /// The reading pane's transcript: the subject, the conversation's facts as
-/// chips, an assign-to-project control, and the messages. Replies, notes,
-/// and number linking stay on the full thread the pane links to.
+/// chips, Project assignment, contact linking, and the messages.
 pub fn inbox_pane_body(page: &InboxThreadPage, href: &str) -> Element {
     let brand = page.brand_key.as_deref().unwrap_or("unbranded");
     let messages = page
@@ -2070,6 +2080,7 @@ pub fn inbox_pane_body(page: &InboxThreadPage, href: &str) -> Element {
                     "{channel_name(&page.channel)}"
                 }
                 li { class: "inbox-chip", "{brand}" }
+                { contact_chip(page) }
                 li { class: "inbox-chip",
                     if let Some(project_href) = page.project_href.as_ref() {
                         // One inline box, so the chip's flex layout keeps the space.
@@ -2085,6 +2096,7 @@ pub fn inbox_pane_body(page: &InboxThreadPage, href: &str) -> Element {
             { facts_list(page) }
             { assign_control(page, true) }
             { trash_control(page) }
+            { link_phone_control(page) }
             if page.bodies_visible {
                 { messages }
             } else {
@@ -2092,6 +2104,37 @@ pub fn inbox_pane_body(page: &InboxThreadPage, href: &str) -> Element {
                     "Message bodies stay on the project. Assign or reassign from here."
                 }
             }
+        }
+    }
+}
+
+fn contact_chip(page: &InboxThreadPage) -> Element {
+    rsx! {
+        li { class: "inbox-chip",
+            if let Some(href) = page.contact_href.as_ref() {
+                span {
+                    "From: "
+                    a { class: "nav-link", href: "{href}", "{page.sender}" }
+                }
+            } else {
+                "From: {page.sender}"
+            }
+        }
+    }
+}
+
+fn link_phone_control(page: &InboxThreadPage) -> Element {
+    let Some(action) = page.link_phone_action.clone() else {
+        return rsx! {};
+    };
+    rsx! {
+        FormCard {
+            title: "Link phone to contact".to_string(),
+            action,
+            submit_label: "Link number".to_string(),
+            heading: Heading::H2,
+            csrf_token: Some(page.csrf_token.clone()),
+            fields: vec![Field::email("Contact email", "email", "").required()],
         }
     }
 }
@@ -2369,18 +2412,6 @@ pub fn inbox_thread_body(page: &InboxThreadPage) -> Element {
                 }
             }
         });
-    let link_phone = page.link_phone_action.clone().map(|action| {
-        rsx! {
-            FormCard {
-                title: "Whose number is this?".to_string(),
-                action,
-                submit_label: "Link number".to_string(),
-                heading: Heading::H2,
-                csrf_token: Some(page.csrf_token.clone()),
-                fields: vec![Field::email("Their email on file", "email", "").required()],
-            }
-        }
-    });
     rsx! {
         document::Title { "{firm_name} | {title}" }
         document::Meta { name: "description", content: "One inbox conversation." }
@@ -2408,7 +2439,7 @@ pub fn inbox_thread_body(page: &InboxThreadPage) -> Element {
                     li { class: "inbox-chip", "{unread}" }
                     li { class: "inbox-chip", "Delivery: {page.delivery}" }
                     li { class: "inbox-chip", "Next: {next_action}" }
-                    li { class: "inbox-chip", "From: {page.sender}" }
+                    { contact_chip(page) }
                     li { class: "inbox-chip", "Account: {page.provider_account}" }
                     li { class: "inbox-chip", "{page.interaction_type}" }
                     if let Some(source) = page.source_page.as_ref() {
@@ -2445,7 +2476,7 @@ pub fn inbox_thread_body(page: &InboxThreadPage) -> Element {
             }
             {note}
             {reply}
-            {link_phone}
+            { link_phone_control(page) }
         }
     }
 }
@@ -2562,8 +2593,16 @@ mod tests {
             trashed: false,
             preview: None,
             person: None,
+            email_sent_at: Some(
+                chrono::DateTime::parse_from_rfc3339("2026-09-10T09:30:00-04:00")
+                    .unwrap()
+                    .to_utc(),
+            ),
             updated_at: chrono::Utc::now(),
         };
+        let view = row_view(&row, "/app/inbox/fixture".into());
+        assert_eq!(view.updated_short, "Sep 10");
+        assert_eq!(view.updated_iso, "2026-09-10T13:30:00+00:00");
         let selected = (
             Some("email"),
             Some("neon"),
@@ -2798,6 +2837,7 @@ mod tests {
             can_attribute: true,
             note_action: None,
             reply_action: None,
+            contact_href: None,
             link_phone_action: None,
             trash_action: Some("/app/inbox/c1/trash".into()),
             trashed: false,
@@ -2813,14 +2853,14 @@ mod tests {
     fn compose_is_a_modal_dialog_offered_only_when_the_server_allows_it() {
         let plain = list_html(&page(ViewerRole::Owner, vec![]));
         assert!(!plain.contains("id=\"inbox-compose\""), "{plain}");
-        assert!(!plain.contains(">Compose<"), "{plain}");
+        assert!(!plain.contains(">New text<"), "{plain}");
 
         let mut composing = page(ViewerRole::Owner, vec![]);
         composing.compose_action = Some("/app/inbox/texts".into());
         composing.csrf_token = "token".into();
         let html = list_html(&composing);
         assert!(html.contains("aria-controls=\"inbox-compose\""), "{html}");
-        assert!(html.contains(">Compose<"), "{html}");
+        assert!(html.contains(">New text<"), "{html}");
         // The form lives inside the closed dialog, never as a box on the page.
         let dialog = &html[html
             .find("<dialog id=\"inbox-compose\"")
@@ -3079,12 +3119,18 @@ mod tests {
         page.channel = "sms".into();
         page.link_phone_action = Some("/app/inbox/c1/contact".into());
         let html = thread(&page);
-        assert!(html.contains("Whose number is this?"), "{html}");
+        assert!(html.contains("Link phone to contact"), "{html}");
         assert!(html.contains("/app/inbox/c1/contact"), "{html}");
         assert!(html.contains("name=\"email\""), "{html}");
+        let pane = dioxus_ssr::render_element(inbox_pane_body(&page, "/app/inbox/c1"));
+        assert!(pane.contains("Link phone to contact"), "{pane}");
 
         page.link_phone_action = None;
-        assert!(!thread(&page).contains("Whose number is this?"));
+        page.contact_href = Some("/app/admin/people/p1".into());
+        let pane = dioxus_ssr::render_element(inbox_pane_body(&page, "/app/inbox/c1"));
+        assert!(pane.contains(r#"href="/app/admin/people/p1""#), "{pane}");
+        assert!(!pane.contains("Link phone to contact"), "{pane}");
+        assert!(!thread(&page).contains("Link phone to contact"));
     }
 
     #[test]
@@ -3210,6 +3256,7 @@ mod tests {
             trashed: false,
             preview: None,
             person: None,
+            email_sent_at: None,
             updated_at: chrono::Utc::now(),
         };
         assert_eq!(row_view(&row, "/x".into()).sender, "Pat Client");
@@ -4022,6 +4069,7 @@ mod tests {
                 trashed: false,
                 preview: None,
                 person: None,
+                email_sent_at: None,
                 updated_at: chrono::Utc::now(),
             };
             let rows = [
