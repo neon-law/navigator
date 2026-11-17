@@ -87,6 +87,11 @@ fn matter_fact_grid(view: &LawyerDetailView) -> Element {
     let document_count = view.documents.len();
     let people_count = view.participations.len();
     let open_tasks = view.tasks.iter().filter(|row| row.state != "done").count();
+    let overdue_tasks = view
+        .tasks
+        .iter()
+        .filter(|row| row.is_overdue(&view.today))
+        .count();
     let trust_held = view.trust.held.clone();
     let wip = view.wip.clone();
     let outstanding = view.outstanding.clone();
@@ -109,7 +114,15 @@ fn matter_fact_grid(view: &LawyerDetailView) -> Element {
             FactGrid {
                 if open_tasks > 0 {
                     FactCard { title: "Open tasks".to_string(),
-                        span { class: "lawyer-detail__fact-value", "{open_tasks}" }
+                        a {
+                            href: MatterTab::Tasks.href(&view.code),
+                            class: "lawyer-detail__fact-value lawyer-detail__fact-link",
+                            aria_label: "View {open_tasks} open tasks",
+                            "{open_tasks}"
+                        }
+                        if overdue_tasks > 0 {
+                            span { "{overdue_tasks} overdue" }
+                        }
                     }
                 }
                 if unread_inbox > 0 {
@@ -1035,6 +1048,26 @@ pub fn LawyerProjectDetail() -> Element {
                 nav { class: "lawyer-detail__actions", "aria-label": "Project actions",
                     a { class: "nav-btn nav-btn--primary", href: "/app/projects/{view.code}/notations/new", "New notation" }
                     a { class: "nav-btn nav-btn--secondary", href: "/app/projects/{view.code}/edit", "Edit project" }
+                    for kind in [
+                        crate::project_resources::ResourceKind::ProjectCalendar,
+                        crate::project_resources::ResourceKind::PrivateSlackChannel,
+                    ] {
+                        if let Some(resource) = view.resources.resources.iter().find(|resource| resource.kind == kind) {
+                            a {
+                                key: "{kind.name()}",
+                                class: "nav-btn nav-btn--secondary lawyer-detail__resource-action",
+                                href: "{resource.url}",
+                                title: kind.label(),
+                                aria_label: kind.label(),
+                                target: "_blank",
+                                rel: "noopener noreferrer",
+                                crate::components::resource_mark::ResourceMarkGlyph {
+                                    mark: kind.mark(),
+                                    class: "project-resources__mark".to_string(),
+                                }
+                            }
+                        }
+                    }
                     if let Some(url) = view.repository_url.as_ref() {
                         a {
                             class: "nav-btn nav-btn--secondary",
@@ -1195,6 +1228,7 @@ pub fn LawyerProjectDetail() -> Element {
                             code: view.code.clone(),
                             csrf: csrf.clone(),
                             tasks: view.tasks.clone(),
+                            today: view.today.clone(),
                             assignees: view.task_assignees.clone(),
                             error: view.error.clone(),
                         }
@@ -1394,6 +1428,13 @@ mod tests {
     #[test]
     fn fact_grid_renders_the_facts_the_matter_has() {
         let view = LawyerDetailView {
+            code: "synthetic".into(),
+            today: "2026-11-16".into(),
+            tasks: vec![TaskRow {
+                state: "in_progress".into(),
+                due_on: Some("2026-11-15".into()),
+                ..TaskRow::default()
+            }],
             deadlines: vec![crate::project_deadlines::DeadlineRow {
                 due: "Monday, March 14, 2026".to_string(),
                 ..crate::project_deadlines::DeadlineRow::default()
@@ -1408,6 +1449,11 @@ mod tests {
 
         let html = dioxus_ssr::render_element(matter_fact_grid(&view));
         assert!(html.contains("lawyer-detail__summary"), "{html}");
+        assert!(
+            html.contains(r#"href="/app/projects/synthetic/tasks""#),
+            "{html}"
+        );
+        assert!(html.contains("1 overdue"), "{html}");
         // Two deadline tiles: the open count and the soonest due date.
         assert!(html.contains("Open deadlines"), "{html}");
         assert!(html.contains("Next deadline"), "{html}");
