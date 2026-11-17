@@ -148,7 +148,7 @@ pub fn run(command: PostgresCmd) -> ExitCode {
     let command = match command {
         PostgresCmd::Mirror(command) => command,
         PostgresCmd::Backfill(args) => return crate::postgres_backfill::run(&args),
-        PostgresCmd::Graph(command) => return run_graph(command),
+        PostgresCmd::Graph(command) => return run_graph(&command),
     };
     let (mode, json) = match command {
         MirrorCmd::Parity { json } => (Mode::Parity, json),
@@ -198,7 +198,7 @@ pub fn run(command: PostgresCmd) -> ExitCode {
     }
 }
 
-fn run_graph(command: GraphCmd) -> ExitCode {
+fn run_graph(command: &GraphCmd) -> ExitCode {
     let result = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
