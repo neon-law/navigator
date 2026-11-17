@@ -567,7 +567,7 @@ mod tests {
         .with_state(state.clone())
         .layer(Extension(AppBrandMark {
             firm_name: "Guieb & Shook".into(),
-            logo: Some(webapp::app_chrome::AppLogo {
+            logo: Some(webapp::components::AppLogo {
                 src: "/public/brand/guieb-shook/logo.svg".into(),
                 brand_name: "Guieb & Shook".into(),
                 href: "/".into(),
