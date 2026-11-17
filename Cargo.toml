@@ -150,7 +150,7 @@ hmac = "0.13"
 # UTC→TAI→TT→TDB conversion with the leap-second table pinned by hifitime,
 # so the dynamical-time input of every SPK lookup is reproducible.
 hifitime = "4.3"
-jsonwebtoken = { version = "11", default-features = false, features = ["use_pem", "rust_crypto"] }
+jsonwebtoken = { version = "12", default-features = false, features = ["use_pem", "rust_crypto"] }
 # P-256 ECDSA — verifies SendGrid's Signed Event Webhook signature. Already
 # compiled in the tree via `jsonwebtoken`'s ES256 support, so this direct dep
 # adds no new build cost.

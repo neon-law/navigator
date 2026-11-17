@@ -162,7 +162,7 @@ async fn app_mcp_accepts_valid_bearer_token_when_auth_enforced() {
     let token = encode(
         &Header::default(),
         &claims,
-        &EncodingKey::from_secret(b"test-secret"),
+        &EncodingKey::from_secret(b"test-secret").unwrap(),
     )
     .unwrap();
 
@@ -197,7 +197,7 @@ async fn mcp_accepts_valid_bearer_token_when_auth_enforced() {
     let token = encode(
         &Header::default(),
         &claims,
-        &EncodingKey::from_secret(b"test-secret"),
+        &EncodingKey::from_secret(b"test-secret").unwrap(),
     )
     .unwrap();
 

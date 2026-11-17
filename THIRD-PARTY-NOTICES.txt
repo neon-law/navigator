@@ -5757,6 +5757,7 @@ ciborium-io 0.2.2
 ciborium-ll 0.2.2
 cmov 0.5.4
 crc-fast 1.10.0
+crypto-primes 0.7.2
 ctutils 0.4.8
 encode_unicode 1.0.0
 encoding_rs 0.8.44
@@ -15057,6 +15058,7 @@ roaring 0.11.5
 robust 1.2.0
 roxmltree 0.20.0
 roxmltree 0.21.2
+rsa 0.10.0
 rsa 0.9.10
 rustc-hash 1.1.0
 rustc_version 0.4.1
@@ -15604,11 +15606,13 @@ opaque-debug 0.3.1
 p256 0.13.2
 p256 0.14.0
 p384 0.13.1
+p384 0.14.0
 password-hash 0.5.0
 pbkdf2 0.12.2
 pem-rfc7468 0.7.0
 pem-rfc7468 1.0.0
 pkcs1 0.7.5
+pkcs1 0.8.0
 pkcs8 0.10.2
 pkcs8 0.11.0
 polyval 0.6.2
@@ -24891,6 +24895,7 @@ SOFTWARE.
 
 ----------------------------------------------------------------------------------------
 p384 0.13.1
+p384 0.14.0
 
 Copyright (c) 2020-2021 RustCrypto Developers
 
@@ -25413,6 +25418,7 @@ DEALINGS IN THE SOFTWARE.
 
 ----------------------------------------------------------------------------------------
 crypto-bigint 0.7.11
+pkcs1 0.8.0
 sec1 0.8.1
 spki 0.8.1
 
@@ -26830,6 +26836,17 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+----------------------------------------------------------------------------------------
+crypto-primes 0.7.2
+
+Copyright 2022-* Bogdan Opanchuk
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the “Software”), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ----------------------------------------------------------------------------------------
 bytecheck 0.8.3
@@ -32810,6 +32827,7 @@ proc-macro2 1.0.107
 quote 1.0.47
 ref-cast 1.0.27
 ref-cast-impl 1.0.27
+rsa 0.10.0
 rsa 0.9.10
 rustc-hash 1.1.0
 rustc-hash 2.1.3
@@ -34145,6 +34163,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ----------------------------------------------------------------------------------------
 jsonwebtoken 10.4.0
 jsonwebtoken 11.1.0
+jsonwebtoken 12.0.0
 
 The MIT License (MIT)
 
@@ -34403,6 +34422,7 @@ SOFTWARE.
 
 ----------------------------------------------------------------------------------------
 pem 3.0.6
+pem 4.0.0
 
 The MIT License (MIT)
 
