@@ -494,8 +494,15 @@ async fn refresh_adoption(
         let lane = crate::signature_adoption::lock()
             .await
             .map_err(|_| ConsumeFailure("opening adopted envelope lane".into()))?;
-        let envelope = state
-            .signature_provider
+        let scoped = crate::firm_docusign::for_notation(
+            state.signature_provider.as_ref(),
+            &state.surreal,
+            notation_id,
+        )
+        .await
+        .map_err(|e| ConsumeFailure(e.to_string()))?;
+        let provider = crate::firm_docusign::resolved(&scoped, state.signature_provider.as_ref());
+        let envelope = provider
             .read_external_envelope(adoption.envelope_id)
             .await
             .map_err(|e| ConsumeFailure(e.to_string()))?;
@@ -507,7 +514,7 @@ async fn refresh_adoption(
         crate::signature_adoption::reconcile(
             &state.surreal,
             &state.storage,
-            state.signature_provider.as_ref(),
+            provider,
             notation_id,
             &envelope,
         )
@@ -751,8 +758,14 @@ async fn archive_completed_documents(
 ) -> Result<(), crate::signature::SignatureError> {
     use crate::signature::SignatureRequestId;
 
-    let docs = state
-        .signature_provider
+    let scoped = crate::firm_docusign::for_notation(
+        state.signature_provider.as_ref(),
+        &state.surreal,
+        notation_id,
+    )
+    .await?;
+    let provider = crate::firm_docusign::resolved(&scoped, state.signature_provider.as_ref());
+    let docs = provider
         .fetch_completed_documents(&SignatureRequestId(envelope_id.to_string()))
         .await?;
 

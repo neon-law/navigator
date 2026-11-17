@@ -168,8 +168,22 @@ pub async fn sign_get(
         client_user_id,
     };
 
-    match state
+    let scoped = match state
         .signature_provider
+        .for_project(&state.surreal, notation_row.project_id)
+        .await
+    {
+        Ok(provider) => provider,
+        Err(_) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Signature provider unavailable",
+            )
+                .into_response()
+        }
+    };
+    let provider = crate::firm_docusign::resolved(&scoped, state.signature_provider.as_ref());
+    match provider
         .create_recipient_view(&crate::signature::SignatureRequestId(request_id), &view)
         .await
     {
@@ -347,8 +361,22 @@ pub async fn sender_view_get(
         base.trim_end_matches('/')
     );
 
-    match state
+    let scoped = match state
         .signature_provider
+        .for_project(&state.surreal, notation_row.project_id)
+        .await
+    {
+        Ok(provider) => provider,
+        Err(_) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Signature provider unavailable",
+            )
+                .into_response()
+        }
+    };
+    let provider = crate::firm_docusign::resolved(&scoped, state.signature_provider.as_ref());
+    match provider
         .create_sender_view(
             &crate::signature::SignatureRequestId(request_id),
             &return_url,

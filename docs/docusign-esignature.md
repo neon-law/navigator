@@ -23,8 +23,8 @@ accepts exactly `fake` or `docusign` (`portal::signature::SignatureProviderKind:
 - **`fake` in a production environment** — the boot refuses to start: the fake provider creates envelopes with no legal
   weight. `NAVIGATOR_ENVIRONMENT` unset *is* the production profile, so the fake only ever boots where a developer named
   dev explicitly.
-- **`docusign`** — the real provider, which requires `DOCUSIGN_BASE_URL` + `DOCUSIGN_ACCOUNT_ID` and a token source
-  (below). Declaring it incompletely is also a boot failure.
+- **`docusign`** — the real provider, which selects the encrypted [Firm connection](#firm-connection) for
+  each Project. Signature operations refuse when that connection cannot be resolved.
 
 `fake` is the local signature loop: envelopes persist to disk, anchors are validated against the prepared PDF's text,
 each recipient signs a real local page, and completion is delivered as a DocuSign-Connect-shaped HMAC-signed webhook —
@@ -318,3 +318,16 @@ Go-Live. Configuration does not copy; set up and prove the production attachment
 
 - [`third-party-integrations.md`](third-party-integrations.md) — the per-deployment provider convention this follows.
   [`.env`](../.env.example) is the canonical per-variable reference (JWT-grant preferred, static fallback).
+
+## Firm connection
+
+A Firm administrator saves a `DocuSign connection` in the Firm's integration secret settings. The value is a single JSON
+object with `account_id`, `integration_key`, `user_id`, `private_key_pem`, `base_url`, `signer_name`, and
+`signer_email`. Use the account's DocuSign REST base ending in `/restapi`, and encode PEM line breaks as JSON escapes.
+Grant the integration JWT impersonation consent for the selected DocuSign user before connecting it.
+
+Navigator uses the Project's owning Firm to resolve the encrypted connection. DocuSign calls use short-lived JWT grant
+access tokens. Simulated deployments require a DocuSign demo account and live deployments require a live account.
+Replace the secret to reconnect or rotate the key. Revoke it to stop subsequent operations through that connection.
+Before switching an existing deployment to this build, provision the Firm connection for each account with outstanding
+envelopes.

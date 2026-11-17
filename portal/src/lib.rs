@@ -156,6 +156,7 @@ mod evidence_share;
 pub mod expunge;
 pub mod expunge_request_route;
 pub mod expunge_route;
+mod firm_docusign;
 pub mod forgejo_oidc;
 pub mod forgejo_push_pipeline;
 pub mod forgejo_webhook;

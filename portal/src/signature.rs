@@ -300,6 +300,16 @@ pub struct ExternalSigner {
 
 #[async_trait]
 pub trait SignatureProvider: Send + Sync {
+    /// Resolve a real provider before making any requests for a Project.
+    /// Local providers already operate inside an isolated test environment.
+    async fn for_project(
+        &self,
+        _db: &store::surreal::SurrealDb,
+        _project_id: Uuid,
+    ) -> Result<Option<DocuSignSignatureProvider>, SignatureError> {
+        Ok(None)
+    }
+
     /// Read an existing envelope without modifying it at the provider.
     async fn read_external_envelope(&self, _id: Uuid) -> Result<ExternalEnvelope, SignatureError> {
         Err(SignatureError::Provider(
@@ -1719,9 +1729,8 @@ impl DocuSignSignatureProvider {
             .map_err(|e| SignatureError::Provider(e.to_string()))?;
         let status = resp.status();
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
             return Err(SignatureError::Provider(format!(
-                "docusign document {which} responded {status}: {body}"
+                "docusign document {which} responded {status}"
             )));
         }
         let bytes = resp
@@ -1768,9 +1777,8 @@ impl DocuSignSignatureProvider {
             .map_err(|e| SignatureError::Provider(e.to_string()))?;
         let status = resp.status();
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
             return Err(SignatureError::Provider(format!(
-                "docusign envelope dispatch responded {status}: {body}"
+                "docusign envelope dispatch responded {status}"
             )));
         }
         Ok(())
@@ -1858,9 +1866,8 @@ impl SignatureProvider for DocuSignSignatureProvider {
             .map_err(|e| SignatureError::Provider(e.to_string()))?;
         let response_status = resp.status();
         if !response_status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
             return Err(SignatureError::Provider(format!(
-                "docusign responded {response_status}: {body}"
+                "docusign responded {response_status}"
             )));
         }
         let summary: EnvelopeSummary = resp
@@ -1935,9 +1942,8 @@ impl SignatureProvider for DocuSignSignatureProvider {
             .map_err(|e| SignatureError::Provider(e.to_string()))?;
         let status = resp.status();
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
             return Err(SignatureError::Provider(format!(
-                "docusign recipient view responded {status}: {body}"
+                "docusign recipient view responded {status}"
             )));
         }
         let view: RecipientViewResponse = resp
@@ -1984,9 +1990,8 @@ impl SignatureProvider for DocuSignSignatureProvider {
             .map_err(|e| SignatureError::Provider(e.to_string()))?;
         let status = resp.status();
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
             return Err(SignatureError::Provider(format!(
-                "docusign sender view responded {status}: {body}"
+                "docusign sender view responded {status}"
             )));
         }
         let view: RecipientViewResponse = resp
