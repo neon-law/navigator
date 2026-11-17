@@ -271,11 +271,15 @@ async fn manage(
         scope.push_str("</ul></details>");
     }
     let csrf = csrf(&session);
+    let email_field = webapp::components::Field::email("Recipient email", "email", "")
+        .required()
+        .maxlength(254)
+        .render_html();
     let mut body = format!(
         r#"<p><a href="/app/projects/{}/documents/{id}">Back to document</a></p>
 <section><p>{}</p><p>Each invitation lets one verified email address read and download this revision for 14 days.</p>{scope}
-<form method="post">{csrf}<input type="hidden" name="media_fingerprint" value="{fingerprint}"><label for="email">Recipient email</label>
-<input type="email" id="email" name="email" maxlength="254" required><button>Create invitation</button></form></section>"#,
+<form method="post">{csrf}<input type="hidden" name="media_fingerprint" value="{fingerprint}">{email_field}
+<button>Create invitation</button></form></section>"#,
         escape(&code),
         escape(asset.filename.as_deref().unwrap_or_default())
     );

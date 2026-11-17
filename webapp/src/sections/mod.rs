@@ -625,10 +625,15 @@ pub fn SectionBody(view: SectionView) -> Element {
         SectionView::DecisionQueue(rows) => rsx! { DecisionQueueSection { rows } },
         SectionView::DeadlineBoard(rows) => rsx! { records::DeadlineBoardSection { rows } },
         SectionView::WhatsAppTimeline(Some(html)) => rsx! {
-            section { class: "whatsapp-timeline", dangerous_inner_html: html }
+            section { class: "whatsapp-timeline", "data-section": "whatsapp_timeline", dangerous_inner_html: html }
         },
         SectionView::WhatsAppTimeline(None) => rsx! {
-            p { "The declared WhatsApp export is unavailable." }
+            SectionFrame {
+                name: "whatsapp_timeline",
+                heading: "WhatsApp export",
+                empty: "The declared WhatsApp export is unavailable.",
+                rows: Vec::new(),
+            }
         },
         SectionView::DocumentBody(draft) => rsx! { engagement::DocumentBodySection { draft } },
         SectionView::CommentRail(rows) => rsx! { CommentRailSection { rows } },
