@@ -13,7 +13,7 @@ Writes three files into the directory given as the only argument:
 
   nextest-filter     a nextest filterset excluding those tests (`-E`)
   coverage-ignore    a regex for `cargo llvm-cov report --ignore-filename-regex`
-  features-args      the `cargo test -p features` runners that touch no SurrealDB
+  features-args      `cargo test -p features` targets that touch no SurrealDB
 
 `store::surreal::test_support` refuses to start an engine under
 `NAVIGATOR_FORBID_SURREAL=1`, so a test this selection misses fails loudly
@@ -156,10 +156,10 @@ def select(root: pathlib.Path):
             features = sorted(set(targets.values()) - surreal_targets)
     nextest = "not (" + " | ".join(exclusions) + ")" if exclusions else "all()"
     coverage = "(" + "|".join(path.replace(".", r"\.") for path in ignored) + ")$"
-    # Only the cucumber runners: they are `harness = false`, so libtest
-    # arguments cannot follow them, and the `features` library is the
-    # harness that starts the shared SurrealDB engine.
-    args = [f"--test={name}" for name in features]
+    # The library's own unit tests start no engine (the guard keeps it that
+    # way), plus the cucumber runners that reach none. No libtest arguments:
+    # the runners are `harness = false`.
+    args = ["--lib"] + [f"--test={name}" for name in features]
     return nextest, coverage, args, len(ignored)
 
 

@@ -302,6 +302,9 @@ jobs:
           --deployments-dir deploy/tests/fixtures/deployment-tree
       - name: test the external deployment-coordinate denylist scanner
         run: python3 scripts/validate-deployment-coordinates.py --self-test
+      # The `rust` job's test selection comes from this script.
+      - name: test the SurrealDB-free test selection
+        run: python3 scripts/surreal-free-tests.py --self-test
   rust:
     name: cargo test (workspace)
     needs: [changes]
