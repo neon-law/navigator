@@ -1641,4 +1641,507 @@ mod tests {
             "missing [This is what it composes]"
         );
     }
+
+    // ---- the server-side reads, against PostgreSQL ----
+    #[cfg(feature = "server")]
+    mod server_reads {
+        use super::super::*;
+
+        /// Runs `test_path` in a child process against a disposable PostgreSQL
+        /// database — the same harness the portal's billing end-to-end uses,
+        /// because env-driven journal mirroring must stay private to one
+        /// process. Returns `false` (not a failure) when the fixture is
+        /// unavailable locally.
+        async fn run_in_postgres_fixture(child_flag: &str, test_path: &str) -> bool {
+            let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
+                assert!(
+                    std::env::var("NAV_REQUIRE_POSTGRES").as_deref() != Ok("1"),
+                    "PostgreSQL fixture required"
+                );
+                return false;
+            };
+            let admin = sqlx::PgPool::connect_with(
+                sqlx::postgres::PgConnectOptions::new()
+                    .host("127.0.0.1")
+                    .port(port.parse().unwrap())
+                    .username("postgres")
+                    .password("synthetic")
+                    .database("smoke")
+                    .ssl_mode(sqlx::postgres::PgSslMode::Disable),
+            )
+            .await
+            .unwrap();
+            let database = format!("billing_reads_{}", uuid::Uuid::new_v4().simple());
+            sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {database}")))
+                .execute(&admin)
+                .await
+                .unwrap();
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", test_path, "--nocapture"])
+                .env("NAV_BILLING_WEBAPP_CHILD", child_flag)
+                .env("NAVIGATOR_RELEASE_TAG", "26.11.17")
+                .env("NAVIGATOR_POSTGRES_HOST", "127.0.0.1")
+                .env("NAVIGATOR_POSTGRES_PORT", &port)
+                .env("NAVIGATOR_POSTGRES_USER", "postgres")
+                .env("NAVIGATOR_POSTGRES_PASSWORD", "synthetic")
+                .env("NAVIGATOR_POSTGRES_DATABASE", &database)
+                .env("NAVIGATOR_POSTGRES_SSLMODE", "disable")
+                .status()
+                .unwrap();
+            sqlx::query("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1")
+                .bind(&database)
+                .execute(&admin)
+                .await
+                .unwrap();
+            sqlx::query(sqlx::AssertSqlSafe(format!("DROP DATABASE {database}")))
+                .execute(&admin)
+                .await
+                .unwrap();
+            admin.close().await;
+            assert!(
+                status.success(),
+                "the {test_path} child failed — rerun with --nocapture"
+            );
+            true
+        }
+
+        #[tokio::test]
+        async fn billing_reads_assemble_the_tabs_rows_from_both_stores() {
+            if !run_in_postgres_fixture(
+                "reads",
+                "project_billing::tests::billing_reads_assemble_the_tabs_rows_from_both_stores",
+            )
+            .await
+            {
+                return;
+            }
+            billing_reads_child().await;
+        }
+
+        #[tokio::test]
+        async fn generate_preview_resumes_a_pending_batch_and_names_the_stripe_draft() {
+            if !run_in_postgres_fixture(
+            "generate",
+            "project_billing::tests::generate_preview_resumes_a_pending_batch_and_names_the_stripe_draft",
+        )
+        .await
+        {
+            return;
+        }
+            billing_generate_child().await;
+        }
+
+        /// The dual-store fixture: a migrated PostgreSQL journal plus an
+        /// in-memory `SurrealDB` engine wearing the compiled brand catalog.
+        async fn fixture_stores() -> (store::postgres::PostgresDb, store::surreal::SurrealDb) {
+            let pg = store::postgres::PostgresDb::from_env()
+                .await
+                .expect("open the fixture PostgreSQL journal");
+            pg.migrate_embedded(None)
+                .await
+                .expect("migrate the fixture journal");
+            let surreal = store::surreal::test_support::unmigrated().await;
+            store::schema::apply(&surreal)
+                .await
+                .expect("apply the Surreal schema to the fixture engine");
+            store::surreal::test_support::seed_compiled_brands(&surreal).await;
+            (pg, surreal)
+        }
+
+        /// Publish the matter and its participations into the fixture's
+        /// pool: the journal rows these tests write (rates, timers,
+        /// batches) all key off the mirrored matter.
+        async fn mirror_matter(
+            pg: &store::postgres::PostgresDb,
+            surreal: &store::surreal::SurrealDb,
+            project: &store::projects::Project,
+        ) {
+            store::postgres_mirror::mirror(
+                surreal,
+                pg,
+                &store::postgres_mirror::MirrorKey::Project(project.id),
+            )
+            .await
+            .expect("mirror the matter into PostgreSQL");
+            for role in store::projects::participations_for_project(surreal, project.id)
+                .await
+                .expect("read the matter's participations")
+            {
+                store::postgres_mirror::mirror(
+                    surreal,
+                    pg,
+                    &store::postgres_mirror::MirrorKey::ProjectParticipation(role.id),
+                )
+                .await
+                .expect("mirror the participation into PostgreSQL");
+            }
+        }
+
+        /// A lawyer joined to the matter — the participation row mirrors to
+        /// PostgreSQL, which is what the timer doors check.
+        async fn seed_lawyer_on(
+            surreal: &store::surreal::SurrealDb,
+            project: &store::projects::Project,
+            name: &str,
+        ) -> store::persons::Person {
+            let lawyer = store::persons::create(
+                surreal,
+                &store::persons::NewPerson::with_role(
+                    name,
+                    format!("billing-reads-{}@example.com", uuid::Uuid::new_v4()),
+                    store::persons::Role::Lawyer,
+                ),
+            )
+            .await
+            .expect("seed the billing reader");
+            join_lawyer(surreal, project, lawyer.id).await;
+            lawyer
+        }
+
+        async fn join_lawyer(
+            surreal: &store::surreal::SurrealDb,
+            project: &store::projects::Project,
+            person_id: uuid::Uuid,
+        ) {
+            store::participation::add_participant(
+                surreal,
+                &store::participation::AddParticipantCommand {
+                    project_id: project.id,
+                    person_id,
+                    dri: store::participation::DriRequest::Unchanged,
+                    actor: store::participation::DriActor::System,
+                },
+            )
+            .await
+            .expect("join the billing reader to the matter");
+        }
+
+        /// The Billing tab's reads against real stores: the timer widget's
+        /// absence/here/elsewhere faces, entry and expense rows priced from the
+        /// frozen snapshots, the fee structure, the mirror's settled and open
+        /// invoices, and the compose the raise button will confirm.
+        #[expect(
+            clippy::too_many_lines,
+            reason = "one read pass, four doors: timer, entries, mirror, compose"
+        )]
+        async fn billing_reads_child() {
+            use store::time_entries::{NewTimeEntry, TimeEntrySource};
+            let (pg, surreal) = fixture_stores().await;
+            let project =
+                store::test_support::seed_project(&surreal, "Synthetic billing reads matter").await;
+            let lawyer = seed_lawyer_on(&surreal, &project, "Synthetic billing reader").await;
+            mirror_matter(&pg, &surreal, &project).await;
+            let today = chrono::Utc::now().date_naive();
+            store::attorney_rates::set_hourly_rate(
+                &pg,
+                store::attorney_rates::NewAttorneyRate {
+                    person_id: lawyer.id,
+                    project_id: Some(project.id),
+                    hourly_rate_cents: 25_000,
+                    effective_on: today - chrono::Duration::days(2),
+                },
+            )
+            .await
+            .expect("set the billing reader's hourly rate");
+
+            // With no Timer anywhere, the header widget is absent.
+            assert_eq!(
+                read_timer(&surreal, &pg, lawyer.id, project.id)
+                    .await
+                    .expect("read the empty timer"),
+                None
+            );
+
+            // A running Timer on this matter offers its clock and note.
+            store::timers::start_timer(
+                &pg,
+                lawyer.id,
+                project.id,
+                Some("Called the client".into()),
+            )
+            .await
+            .expect("start the timer");
+            let timer_view = read_timer(&surreal, &pg, lawyer.id, project.id)
+                .await
+                .expect("read the running timer")
+                .expect("the timer is running");
+            assert!(timer_view.on_this_matter);
+            assert_eq!(timer_view.note.as_deref(), Some("Called the client"));
+            assert!(timer_view.other_matter_code.is_none());
+
+            // Backdate 90 minutes and stop: the capture freezes the snapshot
+            // rate and stamps the Timer's own performed-on date.
+            let running = store::timers::running_for_person(&pg, lawyer.id)
+                .await
+                .expect("read the running timer row")
+                .expect("the timer row exists");
+            sqlx::query(
+                "UPDATE timer SET started_at = started_at - interval '90 minutes' WHERE id = $1",
+            )
+            .bind(running.id)
+            .execute(pg.pool())
+            .await
+            .expect("backdate the timer");
+            let captured = store::timers::stop_timer(
+                &pg,
+                running.id,
+                lawyer.id,
+                NewTimeEntry {
+                    attorney_id: lawyer.id,
+                    performed_on: running.started_at.date_naive(),
+                    minutes: 0,
+                    description: "Called the client".into(),
+                    billable: true,
+                    rate_cents_per_hour: 25_000,
+                    source: TimeEntrySource::Timer,
+                },
+            )
+            .await
+            .expect("stop the timer");
+            assert_eq!(captured.minutes, 90);
+            assert_eq!(captured.rate_cents_per_hour, 25_000);
+
+            // A Timer on another matter renders as a link to that matter's
+            // Billing tab instead of offering the doors.
+            let other =
+                store::test_support::seed_project(&surreal, "Synthetic billing reads other").await;
+            join_lawyer(&surreal, &other, lawyer.id).await;
+            mirror_matter(&pg, &surreal, &other).await;
+            store::timers::start_timer(&pg, lawyer.id, other.id, None)
+                .await
+                .expect("start the other matter's timer");
+            let elsewhere = read_timer(&surreal, &pg, lawyer.id, project.id)
+                .await
+                .expect("read the timer from the other matter")
+                .expect("the timer is running");
+            assert!(!elsewhere.on_this_matter);
+            assert_eq!(
+                elsewhere.other_matter_code.as_deref(),
+                Some(other.code.as_str())
+            );
+            assert_eq!(
+                elsewhere.other_matter_name.as_deref(),
+                Some("Synthetic billing reads other")
+            );
+            let running = store::timers::running_for_person(&pg, lawyer.id)
+                .await
+                .expect("read the running timer row")
+                .expect("the timer row exists");
+            store::timers::discard_timer(&pg, running.id, lawyer.id)
+                .await
+                .expect("discard the timer");
+
+            // Non-billable work logs without any fee structure and carries no
+            // price in the tab.
+            store::time_entries::create(
+                &pg,
+                project.id,
+                lawyer.id,
+                &NewTimeEntry {
+                    attorney_id: lawyer.id,
+                    performed_on: today,
+                    minutes: 30,
+                    description: "Reviewed the file".into(),
+                    billable: false,
+                    rate_cents_per_hour: 0,
+                    source: TimeEntrySource::Manual,
+                },
+            )
+            .await
+            .expect("log the non-billable entry");
+
+            let reads = read_billing(&surreal, &pg, project.id, Some(lawyer.id))
+                .await
+                .expect("read the billing tab");
+            assert_eq!(reads.entry_rows.len(), 2);
+            let billable = reads
+                .entry_rows
+                .iter()
+                .find(|row| row.billable)
+                .expect("the captured billable entry");
+            assert_eq!(billable.amount.as_deref(), Some("$375.00"));
+            assert_eq!(billable.minutes, 90);
+            assert_eq!(billable.attorney, "Synthetic billing reader");
+            let non_billable = reads
+                .entry_rows
+                .iter()
+                .find(|row| !row.billable)
+                .expect("the manual non-billable entry");
+            assert_eq!(non_billable.amount, None);
+            assert_eq!(reads.fees.hourly_rate.as_deref(), Some("$250.00"));
+            assert_eq!(reads.fees.flat_fee, None);
+            assert!(reads.invoice_rows.is_empty(), "no mirror rows yet");
+
+            // An unbilled confirmed expense lands in the expense table.
+            store::project_costs::create(
+                &surreal,
+                &pg,
+                project.id,
+                lawyer.id,
+                &store::project_costs::NewProjectCost {
+                    occurred_on: today,
+                    payee: "County Clerk".into(),
+                    description: "Filing fee".into(),
+                    amount_cents: 12_000,
+                    currency: "USD".into(),
+                    amount_status: "confirmed".into(),
+                    receipt_document_id: uuid::Uuid::now_v7(),
+                    idempotency_key: format!("billing-reads-{}", uuid::Uuid::now_v7()),
+                    source_reference: format!("mercury::{}", uuid::Uuid::now_v7()),
+                },
+            )
+            .await
+            .expect("record the filing fee");
+
+            // The mirror is the invoice table: an open row and — after the
+            // reconcile folds the payment in — a settled one.
+            for reference in ["INV-OPEN", "INV-SETTLED"] {
+                store::xero_invoices::upsert(
+                    &surreal,
+                    &store::xero_invoices::UpsertXeroInvoice {
+                        project_id: project.id,
+                        xero_invoice_id: reference.to_string(),
+                        reference: reference.to_string(),
+                        status: "AUTHORISED".into(),
+                        amount_cents: 12_000,
+                        currency: "USD".into(),
+                        issued_at: chrono::Utc::now(),
+                        due_at: None,
+                    },
+                )
+                .await
+                .expect("mirror the invoice");
+            }
+            store::xero_invoices::record_reconcile(&surreal, "INV-SETTLED", "PAID", 12_000)
+                .await
+                .expect("reconcile the settled invoice");
+
+            let reads = read_billing(&surreal, &pg, project.id, Some(lawyer.id))
+                .await
+                .expect("read the billing tab again");
+            assert_eq!(reads.expense_rows.len(), 1);
+            assert_eq!(reads.expense_rows[0].amount, "$120.00");
+            assert_eq!(reads.expense_rows[0].payee, "County Clerk");
+            assert_eq!(reads.invoice_rows.len(), 2);
+            let settled = reads
+                .invoice_rows
+                .iter()
+                .find(|row| row.reference == "INV-SETTLED")
+                .expect("the settled mirror row");
+            assert!(settled.settled);
+            let open = reads
+                .invoice_rows
+                .iter()
+                .find(|row| row.reference == "INV-OPEN")
+                .expect("the open mirror row");
+            assert!(!open.settled);
+
+            // The compose, from the same store reads the command runs: one line
+            // per unbilled billable entry at its snapshot rate, the confirmed
+            // expense itemized after — never an estimate.
+            let view = read_generate(&surreal, &pg, &project)
+                .await
+                .expect("read the generate state");
+            assert!(view.ready);
+            assert!(!view.resuming);
+            assert!(!view.flat_fee);
+            assert!(view.stripe_iolta.is_none());
+            assert_eq!(view.lines.len(), 2);
+            assert!(view.lines[0].description.contains("Called the client"));
+            assert_eq!(view.lines[0].amount, "$375.00");
+            assert!(view.lines[1].description.contains("Filing fee"));
+            assert_eq!(view.lines[1].amount, "$120.00");
+            assert_eq!(view.total, "$495.00");
+            assert!(!view.digest.is_empty(), "a fresh compose is fingerprinted");
+        }
+
+        /// The generate action's state machine: nothing to invoice explains
+        /// itself, a pending batch resumes frozen, and a Stripe draft awaiting
+        /// review names itself instead of offering a raise.
+        async fn billing_generate_child() {
+            let (pg, surreal) = fixture_stores().await;
+            let project =
+                store::test_support::seed_project(&surreal, "Synthetic generate preview matter")
+                    .await;
+            let lawyer = seed_lawyer_on(&surreal, &project, "Synthetic billing reader").await;
+            mirror_matter(&pg, &surreal, &project).await;
+
+            // Nothing billable yet: the action is not ready, and does not pretend.
+            let view = read_generate(&surreal, &pg, &project)
+                .await
+                .expect("read the empty generate state");
+            assert!(!view.ready);
+            assert!(view.lines.is_empty());
+            assert!(view.note.is_none());
+
+            // A pending batch is the matter's open invoice intent: the next
+            // raise resumes it — frozen lines and total, whatever was logged
+            // since — and there is nothing fresh to fingerprint.
+            let batch = store::billing_batches::MatterBillingBatch {
+                id: uuid::Uuid::now_v7(),
+                project_id: project.id,
+                status: "pending".into(),
+                reference: "SYN-0001".into(),
+                contact_name: "Synthetic Client".into(),
+                contact_email: "synthetic-client@example.com".into(),
+                xero_contact_id: None,
+                stripe_account_id: None,
+                stripe_iolta: false,
+                stripe_invoice_id: None,
+                due_date: (chrono::Utc::now() + chrono::Duration::days(14)).date_naive(),
+                first_attempted_at: None,
+                line_items: serde_json::json!([
+                    {"description": "Legal services — 2026-11-17", "unit_amount_cents": 50_000}
+                ]),
+                total_cents: 50_000,
+                currency: "USD".into(),
+                entry_ids: vec![],
+                cost_ids: vec![],
+                xero_invoice_id: None,
+                flat_fee_cents: Some(50_000),
+                actor_id: lawyer.id,
+                inserted_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            };
+            store::billing_batches::insert(&pg, &batch)
+                .await
+                .expect("insert the pending batch");
+            let view = read_generate(&surreal, &pg, &project)
+                .await
+                .expect("read the resumed state");
+            assert!(view.ready);
+            assert!(view.resuming);
+            assert!(view.flat_fee);
+            assert!(
+                view.digest.is_empty(),
+                "a frozen batch has nothing fresh to fingerprint"
+            );
+            assert_eq!(view.total, "$500.00");
+            assert_eq!(view.lines.len(), 1);
+            assert!(view.lines[0].description.contains("Legal services"));
+            assert_eq!(view.lines[0].amount, "$500.00");
+
+            // A Stripe draft awaiting review and reconciliation names itself
+            // instead of offering a raise.
+            let draft_project =
+                store::test_support::seed_project(&surreal, "Synthetic stripe draft matter").await;
+            let mut draft = batch.clone();
+            draft.id = uuid::Uuid::now_v7();
+            draft.project_id = draft_project.id;
+            draft.stripe_invoice_id = Some("in_draft_1".into());
+            draft.flat_fee_cents = None;
+            mirror_matter(&pg, &surreal, &draft_project).await;
+            store::billing_batches::insert(&pg, &draft)
+                .await
+                .expect("insert the stripe draft batch");
+            let view = read_generate(&surreal, &pg, &draft_project)
+                .await
+                .expect("read the draft state");
+            assert!(!view.ready);
+            assert_eq!(
+                view.note.as_deref(),
+                Some("A Stripe draft is awaiting review and reconciliation.")
+            );
+        }
+    }
 }

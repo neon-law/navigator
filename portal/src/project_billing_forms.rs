@@ -1074,6 +1074,30 @@ mod tests {
         let surreal = crate::test_support::embedded_surreal().await;
         let (project, lawyer, session) = lawyer_on_seeded_matter(&surreal).await;
 
+        // The doors' journal reads join the PostgreSQL mirrors, and the
+        // test fixture does not configure a process-wide mirror target —
+        // publish the matter and the lawyer's participation into this
+        // pool explicitly.
+        store::postgres_mirror::mirror(
+            &surreal,
+            &pg,
+            &store::postgres_mirror::MirrorKey::Project(project.id),
+        )
+        .await
+        .expect("mirror the matter into PostgreSQL");
+        for role in store::projects::participations_for_project(&surreal, project.id)
+            .await
+            .expect("read the lawyer's participation")
+        {
+            store::postgres_mirror::mirror(
+                &surreal,
+                &pg,
+                &store::postgres_mirror::MirrorKey::ProjectParticipation(role.id),
+            )
+            .await
+            .expect("mirror the participation into PostgreSQL");
+        }
+
         // The lawyer's fee structure prices billable time: 250 cents an
         // hour from two days ago, so any performed-on date resolves.
         let today = Utc::now().date_naive();
