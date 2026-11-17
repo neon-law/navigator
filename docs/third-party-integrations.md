@@ -180,14 +180,16 @@ off; a configured number without an auth token or public host fails boot.
 
 Authorized Project participants can reply through the same receiving number when `TWILIO_ACCOUNT_SID` is also
 configured; a configured number makes `ops ship` require it. The Owner, or an Admin who may manage Brand content, can
-also start a text to a new number from `/app/inbox` ("New text") and reply to any text conversation there. Live sends
-require a production deployment with simulated matters disabled; a deployment on simulated matters (persistent staging)
-texts only the numbers in the `NAVIGATOR_SMS_TEST_RECIPIENTS` secret, so a test never reaches a real person. Twilio
-acceptance stores the provider SID; signed callbacks at `/webhook/twilio/status` update delivery on that Message.
-Unknown sends are not retransmitted automatically. Operators must complete Twilio's applicable sender registration
-before enabling replies. A text whose number matches a Person's recorded phone (digits only, ignoring a leading US `1`)
-shows that Person and their role in the Inbox; the Owner or a Brand-content Admin links an unknown number from the
-thread by entering the Person's email. A phone is an address, not proof of identity, and grants nothing.
+also start a text to a new number from `/app/inbox` ("New text") and reply to any text conversation there. New text
+dispatches the submitted Message and shows failures or unconfirmed sends in its thread. Live sends require a production
+deployment with simulated matters disabled. A deployment on simulated matters (persistent staging) texts only the
+numbers in the `NAVIGATOR_SMS_TEST_RECIPIENTS` secret, so a test never reaches a real person. Twilio acceptance stores
+the provider SID; signed callbacks at `/webhook/twilio/status` update delivery on that Message. Unknown sends are not
+retransmitted automatically. Operators must complete Twilio's applicable sender registration before enabling replies. A
+text whose number matches a Person's recorded phone (digits only, ignoring a leading US `1`) shows that Person and their
+role in the Inbox. Owners and Admins can open the linked Person record from the reading pane or full thread. An
+authorized viewer can link an unknown number there by entering the Person's primary email or alias. A phone is an
+address, not proof of identity, and grants nothing.
 
 A receiving number answers calls with its [Call Script](glossary/call-script.md), run by the number's Twilio Studio
 Flow. Reconcile it with `TWILIO_ACCOUNT_SID` and `TWILIO_AUTH_TOKEN` in the environment, or pass `--project-id

@@ -251,6 +251,7 @@ async fn assert_public_native_preview_and_person(f: &Fixture) {
         "preview-sender@example.com",
     );
     input.brand_key = Some("neon");
+    input.occurred_at = "2026-09-10T12:00:00Z";
     let saved = crate::inbox::ingest_inbound(&f.db, &input).await.unwrap();
     let rows = crate::inbox::list_intake(&f.db, f.owner).await.unwrap();
     let row = rows
@@ -258,6 +259,10 @@ async fn assert_public_native_preview_and_person(f: &Fixture) {
         .find(|row| row.id == saved.conversation_id)
         .unwrap_or_else(|| panic!("native intake list answers the ingested conversation"));
     assert_eq!(row.preview.as_deref(), Some("Hello from outside."));
+    assert_eq!(
+        row.email_sent_at.unwrap().to_rfc3339(),
+        "2026-09-10T12:00:00+00:00"
+    );
     let person = row
         .person
         .as_ref()
@@ -279,6 +284,10 @@ async fn assert_public_native_preview_and_person(f: &Fixture) {
         .find(|row| row.id == saved.conversation_id)
         .expect("the assigned PostgreSQL email appears in the Project inbox");
     assert_eq!(row.preview.as_deref(), Some("Hello from outside."));
+    assert_eq!(
+        row.email_sent_at.unwrap().to_rfc3339(),
+        "2026-09-10T12:00:00+00:00"
+    );
     let thread = crate::inbox::project_thread(&f.db, f.lawyer, f.project, saved.conversation_id)
         .await
         .unwrap();
@@ -606,9 +615,21 @@ async fn assert_public_native_project_actions(f: &Fixture, saved: &crate::inbox:
             .len(),
         1
     );
-    let report = inbox::dispatch_queued(&f.db, &CapturingTransport::default())
+    let other = inbox::queue_sms_reply(&f.db, f.lawyer, saved.conversation_id, "another reply")
         .await
         .unwrap();
+    let transport = CapturingTransport::default();
+    let report = inbox::dispatch_queued_message(&f.db, &transport, reply)
+        .await
+        .unwrap();
+    assert_eq!(
+        inbox::message_by_id(&f.db, other)
+            .await
+            .unwrap()
+            .unwrap()
+            .delivery_state,
+        delivery::QUEUED
+    );
     assert_eq!(report.submitted, 1);
     assert_eq!(
         inbox::message_by_id(&f.db, reply)
@@ -617,6 +638,13 @@ async fn assert_public_native_project_actions(f: &Fixture, saved: &crate::inbox:
             .unwrap()
             .delivery_state,
         delivery::SUBMITTED
+    );
+    assert_eq!(
+        inbox::dispatch_queued(&f.db, &transport)
+            .await
+            .unwrap()
+            .submitted,
+        1
     );
 }
 
@@ -1703,9 +1731,10 @@ async fn lawyer_sent_imports_ingest_outbound_with_author() {
     assert_eq!(message.delivery_state, delivery::RECEIVED);
 
     // Dispatching the queue does not resend historical imports.
-    let report = crate::postgres::inbox::dispatch_queued_on(&fixture.pg, &fixture.db, &NoTransport)
-        .await
-        .unwrap();
+    let report =
+        crate::postgres::inbox::dispatch_queued_on(&fixture.pg, &fixture.db, &NoTransport, None)
+            .await
+            .unwrap();
     assert_eq!(report.submitted, 0);
     assert_eq!(report.failed, 0);
     assert_eq!(report.suppressed, 0);
@@ -2433,7 +2462,7 @@ async fn native_dispatch_retains_each_outcome_and_never_resends_uncertain_messag
         );
     }
     let transport = CapturingTransport::default();
-    let report = pg_inbox::dispatch_queued_on(&fixture.pg, &fixture.db, &transport)
+    let report = pg_inbox::dispatch_queued_on(&fixture.pg, &fixture.db, &transport, None)
         .await
         .unwrap();
     assert_eq!(
@@ -2461,7 +2490,7 @@ async fn native_dispatch_retains_each_outcome_and_never_resends_uncertain_messag
             expected
         );
     }
-    let again = pg_inbox::dispatch_queued_on(&fixture.pg, &fixture.db, &transport)
+    let again = pg_inbox::dispatch_queued_on(&fixture.pg, &fixture.db, &transport, None)
         .await
         .unwrap();
     assert_eq!(again, crate::inbox::DispatchReport::default());
@@ -2740,7 +2769,7 @@ async fn native_social_replies_keep_private_threads_private_through_dispatch() {
     .await
     .unwrap();
     let transport = CapturingTransport::default();
-    let report = pg_inbox::dispatch_queued_on(&fixture.pg, &fixture.db, &transport)
+    let report = pg_inbox::dispatch_queued_on(&fixture.pg, &fixture.db, &transport, None)
         .await
         .unwrap();
     assert_eq!(report.submitted, 1);
@@ -2776,7 +2805,7 @@ async fn native_social_replies_keep_private_threads_private_through_dispatch() {
         .execute(fixture.pg.pool())
         .await
         .unwrap();
-    let refused = pg_inbox::dispatch_queued_on(&fixture.pg, &fixture.db, &transport)
+    let refused = pg_inbox::dispatch_queued_on(&fixture.pg, &fixture.db, &transport, None)
         .await
         .unwrap();
     assert_eq!(refused.suppressed, 1);
@@ -3616,7 +3645,7 @@ async fn fi_history_is_native_idempotent_metadata_and_cannot_queue_or_dispatch()
         .await,
         Err(InboxError::Denied)
     ));
-    let report = pg_inbox::dispatch_queued_on(&f.pg, &f.db, &NoTransport)
+    let report = pg_inbox::dispatch_queued_on(&f.pg, &f.db, &NoTransport, None)
         .await
         .unwrap();
     assert_eq!(report.submitted, 0);
@@ -3627,7 +3656,7 @@ async fn fi_history_is_native_idempotent_metadata_and_cannot_queue_or_dispatch()
         .execute(f.pg.pool())
         .await
         .unwrap();
-    let report = pg_inbox::dispatch_queued_on(&f.pg, &f.db, &NoTransport)
+    let report = pg_inbox::dispatch_queued_on(&f.pg, &f.db, &NoTransport, None)
         .await
         .unwrap();
     assert_eq!(report.suppressed, 1);
@@ -4186,7 +4215,7 @@ async fn native_existing_voice_outbound_rows_never_reach_the_transport() {
             .bind(id).bind(conversation).bind(f.lawyer).bind(state).execute(f.pg.pool()).await.unwrap();
         ids.push(id);
     }
-    let report = pg_inbox::dispatch_queued_on(&f.pg, &f.db, &NoTransport)
+    let report = pg_inbox::dispatch_queued_on(&f.pg, &f.db, &NoTransport, None)
         .await
         .unwrap();
     assert_eq!(report.suppressed, 1);

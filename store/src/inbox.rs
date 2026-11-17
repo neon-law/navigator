@@ -726,6 +726,8 @@ pub struct IntakeRow {
     /// The Person the inbound sender resolved to at ingest, when one was
     /// persisted — display only, as [`IntakeRow::contact`] is.
     pub person: Option<PersonBadge>,
+    /// The latest email exchanged with the counterparty, if its date is available.
+    pub email_sent_at: Option<DateTime<Utc>>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -2381,7 +2383,7 @@ pub async fn link_contact_phone(
         return Err(InboxError::Denied);
     }
     authorize_social_reply(db, actor_id, &conversation).await?;
-    let person = persons::find_by_email_ci(db, email.trim())
+    let person = persons::find_by_any_email(db, email.trim())
         .await?
         .ok_or_else(|| InboxError::Contact("No person has that email".into()))?;
     if let Some(holder) = persons::find_by_phone(db, &conversation.external_address).await? {
@@ -2578,21 +2580,50 @@ pub async fn dispatch_queued(
     db: &SurrealDb,
     transport: &dyn OutboundTransport,
 ) -> Result<DispatchReport, InboxError> {
+    dispatch_queued_messages(db, transport, None).await
+}
+
+/// Dispatch a single queued Message, leaving other queued Messages untouched.
+///
+/// # Errors
+///
+/// Propagates database failures while checking and recording delivery.
+pub async fn dispatch_queued_message(
+    db: &SurrealDb,
+    transport: &dyn OutboundTransport,
+    message_id: Uuid,
+) -> Result<DispatchReport, InboxError> {
+    dispatch_queued_messages(db, transport, Some(message_id)).await
+}
+
+async fn dispatch_queued_messages(
+    db: &SurrealDb,
+    transport: &dyn OutboundTransport,
+    message_id: Option<Uuid>,
+) -> Result<DispatchReport, InboxError> {
     if let Some(pg) = inbox_authority().await? {
         return Box::pin(crate::postgres::inbox::dispatch_queued_on(
-            &pg, db, transport,
+            &pg, db, transport, message_id,
         ))
         .await;
     }
-    dispatch_queued_surreal(db, transport).await
+    let queued = match message_id {
+        Some(id) => message_by_id(db, id)
+            .await?
+            .filter(|message| message.delivery_state == delivery::QUEUED)
+            .into_iter()
+            .collect(),
+        None => messages_in_state(db, delivery::QUEUED).await?,
+    };
+    dispatch_queued_surreal(db, transport, queued).await
 }
 
-/// The legacy SurrealDB store behind [`dispatch_queued`].
+/// Dispatch the selected queued Messages through the SurrealDB store.
 async fn dispatch_queued_surreal(
     db: &SurrealDb,
     transport: &dyn OutboundTransport,
+    queued: Vec<Message>,
 ) -> Result<DispatchReport, InboxError> {
-    let queued = messages_in_state(db, delivery::QUEUED).await?;
     let mut report = DispatchReport::default();
     for message in queued {
         let Some(conversation) = conversation_by_id(db, message.conversation_id).await? else {
@@ -3025,6 +3056,7 @@ async fn intake_rows(
         let person = conversation
             .person_id
             .and_then(|person_id| people.get(&person_id).cloned());
+        let email_sent_at = email_sent_at(&conversation.channel, &messages);
         rows.push(IntakeRow {
             contact,
             id: conversation.id,
@@ -3051,6 +3083,7 @@ async fn intake_rows(
             has_attachments: has_attachments(&messages),
             sent: has_sent(&messages),
             trashed: conversation.trashed_at.is_some(),
+            email_sent_at,
             updated_at: conversation.updated_at,
         });
     }
@@ -3619,6 +3652,7 @@ pub async fn list_project(
             has_attachments: has_attachments(&messages),
             sent: has_sent(&messages),
             trashed: conversation.trashed_at.is_some(),
+            email_sent_at: email_sent_at(&conversation.channel, &messages),
             updated_at: conversation.updated_at,
         });
     }
@@ -4573,6 +4607,18 @@ fn has_sent(messages: &[Message]) -> bool {
 
 fn is_sent(message: &Message) -> bool {
     message.direction == direction::OUTBOUND && message.author_person_id.is_some()
+}
+
+fn email_sent_at(channel: &str, messages: &[Message]) -> Option<DateTime<Utc>> {
+    if channel != channel::EMAIL {
+        return None;
+    }
+    messages
+        .iter()
+        .filter(|message| message.direction == direction::INBOUND || is_sent(message))
+        .filter_map(|message| DateTime::parse_from_rfc3339(&message.occurred_at).ok())
+        .max()
+        .map(|date| date.with_timezone(&Utc))
 }
 
 /// How much of a message body a list row previews.
@@ -6160,7 +6206,8 @@ mod tests {
             Err(InboxError::Empty)
         ));
 
-        let (conversation_id, _) = open(world.owner, "+15555550123", true).await.unwrap();
+        let (conversation_id, first_message) =
+            open(world.owner, "+15555550123", true).await.unwrap();
         let (again, _) = open(world.owner, "+15555550123", true).await.unwrap();
         assert_eq!(conversation_id, again);
         let conversation = conversation_by_id(&db, conversation_id)
@@ -6188,8 +6235,20 @@ mod tests {
         let transport = RecordingTransport::new(TransportOutcome::Submitted {
             provider_ref: "SM1".into(),
         });
+        let report = dispatch_queued_message(&db, &transport, first_message)
+            .await
+            .unwrap();
+        assert_eq!(report.submitted, 1);
+        assert_eq!(
+            message_by_id(&db, first_message)
+                .await
+                .unwrap()
+                .unwrap()
+                .delivery_state,
+            delivery::SUBMITTED
+        );
         let report = dispatch_queued(&db, &transport).await.unwrap();
-        assert_eq!(report.submitted, 3);
+        assert_eq!(report.submitted, 2);
         assert_eq!(report.suppressed, 0);
         let calls = transport.calls();
         assert!(calls.iter().all(|call| {
@@ -6438,6 +6497,7 @@ mod tests {
             "client@example.com",
         );
         reply.body = "A later reply.";
+        reply.occurred_at = "2026-10-01T12:00:00Z";
         reply.email_conversation_id = Some(first.conversation_id);
         let _ = ingest_inbound(&db, &reply).await.unwrap();
 
@@ -6447,6 +6507,10 @@ mod tests {
             .find(|row| row.id == first.conversation_id)
             .unwrap();
         assert_eq!(row.preview.as_deref(), Some("A later reply."));
+        assert_eq!(
+            row.email_sent_at.unwrap().to_rfc3339(),
+            "2026-10-01T12:00:00+00:00"
+        );
         let created = persons::find_by_any_email(&db, "client@example.com")
             .await
             .unwrap()
@@ -6652,7 +6716,9 @@ mod tests {
 
         let client_email = "pat.client@example.com";
         let pat = person(&db, "Pat Client", client_email, Role::Client).await;
-        let linked = link_contact_phone(&db, world.owner, text.conversation_id, client_email)
+        let alias = "pat.alias@example.com";
+        persons::add_alias(&db, pat, alias).await.unwrap();
+        let linked = link_contact_phone(&db, world.owner, text.conversation_id, alias)
             .await
             .unwrap();
         assert_eq!(linked.person_id, pat);

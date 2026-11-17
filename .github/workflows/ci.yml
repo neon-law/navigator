@@ -738,7 +738,9 @@ jobs:
       - name: report free disk after clippy
         if: matrix.shard == 1
         run: df -h
-      # Clear the WORKSPACE crates' clippy output, and nothing else.
+      # Start coverage on every shard without cached workspace binaries.
+      # A stale binary can map old source lines into the merged LCOV even
+      # when all the tests that ran used current binaries.
       #
       # A bare `cargo clean` deletes the entire target directory, which threw
       # away every third-party rlib the two steps above had just built —
@@ -761,8 +763,7 @@ jobs:
       # `cargo metadata --no-deps` is the package list, so the arguments are
       # always real workspace members and `cargo clean -p` cannot fail on an
       # unmatched spec.
-      - name: clear the clippy check artifacts for workspace crates
-        if: matrix.shard == 1
+      - name: clear workspace build artifacts before coverage
         run: |
           set -euo pipefail
           cargo metadata --no-deps --format-version 1 \

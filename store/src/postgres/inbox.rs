@@ -1378,7 +1378,7 @@ pub(crate) async fn link_contact_phone_on(
     if !inbox::social_reply_actor_still_authorized(db, actor_id, &conversation).await? {
         return Err(InboxError::Denied);
     }
-    let person = crate::persons::find_by_email_ci(db, email.trim())
+    let person = crate::persons::find_by_any_email(db, email.trim())
         .await?
         .ok_or_else(|| InboxError::Contact("No person has that email".into()))?;
     if let Some(holder) = crate::persons::find_by_phone(db, &conversation.external_address).await? {
@@ -1527,8 +1527,16 @@ pub(crate) async fn dispatch_queued_on(
     pg: &PostgresDb,
     db: &SurrealDb,
     transport: &dyn inbox::OutboundTransport,
+    message_id: Option<Uuid>,
 ) -> Result<DispatchReport, InboxError> {
-    let queued = messages_in_state_on(pg, delivery::QUEUED).await?;
+    let queued = match message_id {
+        Some(id) => message_by_id_on(pg, id)
+            .await?
+            .filter(|message| message.delivery_state == delivery::QUEUED)
+            .into_iter()
+            .collect(),
+        None => messages_in_state_on(pg, delivery::QUEUED).await?,
+    };
     let mut report = DispatchReport::default();
     for message in queued {
         let Some(conversation) = conversation_by_id_on(pg, message.conversation_id).await? else {
@@ -2066,8 +2074,9 @@ async fn intake_rows(
     for conversation in conversations {
         let delivery_state = latest_outbound_state_on(pg, conversation.id).await?;
         let assignee_name = inbox::assignee_label(db, conversation.project_id).await?;
-        let (direction, has_attachments, sent, preview) =
-            latest_row_facts_on(pg, conversation.id).await?;
+        let (direction, has_attachments, sent, preview, email_sent_at) =
+            latest_row_facts_on(pg, conversation.id, conversation.channel == channel::EMAIL)
+                .await?;
         let person = conversation
             .person_id
             .and_then(|person_id| people.get(&person_id).cloned());
@@ -2097,6 +2106,7 @@ async fn intake_rows(
             has_attachments,
             sent,
             trashed: conversation.trashed_at.is_some(),
+            email_sent_at,
             updated_at: conversation.updated_at,
         });
     }
@@ -2114,8 +2124,18 @@ async fn intake_rows(
 async fn latest_row_facts_on(
     pg: &PostgresDb,
     conversation_id: Uuid,
-) -> Result<(String, bool, bool, Option<String>), InboxError> {
-    let row = sqlx::query_as::<_, (Option<String>, bool, bool, Option<String>)>(
+    email: bool,
+) -> Result<
+    (
+        String,
+        bool,
+        bool,
+        Option<String>,
+        Option<chrono::DateTime<Utc>>,
+    ),
+    InboxError,
+> {
+    let row = sqlx::query_as::<_, (Option<String>, bool, bool, Option<String>, Option<Vec<String>>)>(
         "SELECT (SELECT direction FROM message WHERE conversation_id = $1 \
          ORDER BY occurred_at DESC, id DESC LIMIT 1), \
          EXISTS(SELECT 1 FROM message WHERE conversation_id = $1 \
@@ -2124,9 +2144,12 @@ async fn latest_row_facts_on(
          AND direction = 'outbound' AND author_person_id IS NOT NULL), \
          (SELECT left(body, 400) FROM message WHERE conversation_id = $1 \
          AND (direction <> 'outbound' OR author_person_id IS NOT NULL) \
-         ORDER BY occurred_at DESC, id DESC LIMIT 1)",
+         ORDER BY occurred_at DESC, id DESC LIMIT 1), \
+         CASE WHEN $2 THEN ARRAY(SELECT occurred_at FROM message WHERE conversation_id = $1 \
+         AND (direction = 'inbound' OR (direction = 'outbound' AND author_person_id IS NOT NULL))) END",
     )
     .bind(conversation_id)
+    .bind(email)
     .fetch_one(&pg.0)
     .await
     .map_err(db_error)?;
@@ -2135,6 +2158,12 @@ async fn latest_row_facts_on(
         row.1,
         row.2,
         row.3.as_deref().and_then(inbox::preview_snippet),
+        row.4
+            .into_iter()
+            .flatten()
+            .filter_map(|date| chrono::DateTime::parse_from_rfc3339(&date).ok())
+            .max()
+            .map(|date| date.with_timezone(&Utc)),
     ))
 }
 
