@@ -367,22 +367,55 @@ async fn dri_names(
     Ok(names)
 }
 
-/// The matter repository's tip commit date, best-effort: `None` when the
-/// matter has no `repository_url`, when that URL is not this deployment's own
-/// GitHub organization (the configured token cannot reach another forge), or
-/// when the live read fails. A forge fault degrades this one fact, not the
-/// page.
+/// Read activity on the same repository the Project links to, using only a
+/// forge client configured for that repository's installation and owner.
 #[cfg(feature = "server")]
-async fn last_committed_at(project: &store::projects::Project) -> Option<String> {
+async fn last_committed_at(
+    surreal: &store::surreal::SurrealDb,
+    project: &store::projects::Project,
+) -> Option<String> {
     use cloud::forge::ForgeService;
+    use cloud::forgejo_forge::NAVIGATOR_FORGEJO_ROOT_URL_ENV;
 
-    let forge = cloud::forge::GitHubForge::from_env().ok()?;
+    let recorded = project.repository_url.as_deref()?;
+    let uses_forgejo = match (
+        std::env::var(NAVIGATOR_FORGEJO_ROOT_URL_ENV),
+        project.firm_id,
+    ) {
+        (Ok(root), Some(firm_id)) => store::firms::find_by_id(surreal, firm_id)
+            .await
+            .ok()
+            .flatten()
+            .is_some_and(|firm| {
+                matches_forgejo_binding(recorded, &root, &firm.slug, &project.code)
+            }),
+        _ => false,
+    };
+    if uses_forgejo {
+        let kms = cloud::runtime_kms_from_env().await;
+        let forge = store::project_surfaces::forgejo_for_project(
+            surreal,
+            project.id,
+            kms.as_ref(),
+            |key| std::env::var(key).ok(),
+        )
+        .await
+        .ok()?;
+        return forge.head_commit_committed_at(&project.code).await.ok()?;
+    }
     let workspace = cloud::workspace::WorkspaceConfig::from_env().ok()?;
-    let repository_url = project.repository_url.as_deref()?;
-    if repository_url != workspace.expected_repository_url(&project.code) {
+    if recorded != workspace.expected_repository_url(&project.code) {
         return None;
     }
+    let forge = cloud::forge::GitHubForge::from_env().ok()?;
     forge.head_commit_committed_at(&project.code).await.ok()?
+}
+
+#[cfg(feature = "server")]
+fn matches_forgejo_binding(recorded: &str, root: &str, firm: &str, code: &str) -> bool {
+    let expected = format!("{}/{firm}/{code}", root.trim().trim_end_matches('/'));
+    let normalized = recorded.trim_end_matches('/');
+    normalized == expected || normalized.strip_suffix(".git") == Some(expected.as_str())
 }
 
 /// Fetch the lawyer-lens workbench for one matter. Refuses a non-lawyer caller and
@@ -494,7 +527,7 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         .map_err(server_error)?;
     let entity_id = entity.as_ref().map(|entity| entity.id.to_string());
     let entity_name = entity.map(|entity| entity.name);
-    let last_committed_at = last_committed_at(&project).await;
+    let last_committed_at = last_committed_at(&surreal, &project).await;
     let (has_engagement, has_closing) =
         store::projects::matter_lifecycle_sets(&surreal, std::slice::from_ref(&project))
             .await
@@ -1315,6 +1348,36 @@ mod tests {
             }
             let status = command.status().unwrap();
             assert!(status.success(), "dashboard PostgreSQL case {case} failed");
+        }
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn project_activity_uses_only_its_own_forgejo_binding() {
+        let root = "https://forge.example.test";
+        for repo in [
+            "https://forge.example.test/example/sample-project",
+            "https://forge.example.test/example/sample-project.git",
+        ] {
+            assert!(matches_forgejo_binding(
+                repo,
+                root,
+                "example",
+                "sample-project"
+            ));
+        }
+        for repo in [
+            "https://forge.example.test/other-firm/sample-project",
+            "https://forge.example.test/example/another-sample-project",
+            "https://forge.example.test.evil.test/example/sample-project",
+            "https://github.com/example/sample-project",
+        ] {
+            assert!(!matches_forgejo_binding(
+                repo,
+                root,
+                "example",
+                "sample-project"
+            ));
         }
     }
 

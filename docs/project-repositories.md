@@ -1284,7 +1284,16 @@ an expired token. `--json` carries the same answer as `reconciled`, and each fin
 beside its `kind` and `severity`, so a consumer reads the repository or code it needs by name rather than parsing the
 `detail` sentence.
 
-### A repository declares its own absence
+### Check Project links at Forgejo cutover
+
+When a Project is promoted, update its recorded repository URL and verify the Project from `/app/projects`. Open its
+detail page and confirm the **Source repository** action and the repository field on the edit page use the verified
+Forgejo address. When Forgejo is reachable with the Firm's configured credentials, the last source commit should agree
+with the Project's Forgejo `main`. Confirm that Projects still using GitHub keep their current links and that access
+still follows Project participation. If the switch is rolled back, verify the same surfaces against the restored
+repository URL.
+
+## A repository declares its own absence
 
 Not every repository without a row is drift. A closed matter may deliberately carry no row, and a command that reports
 known-good repositories as failures is a command nobody runs twice. The repository says so in the manifest it already
