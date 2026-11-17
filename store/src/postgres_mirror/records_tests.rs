@@ -1459,13 +1459,23 @@ async fn absent_source_rows_delete_nothing_from_an_empty_target() {
         Mirrored::Unchanged
     );
     for table_name in ["firm_anchor", "iolta_account"] {
-        assert_eq!(
+        // iolta_account is PostgreSQL-authoritative outside the first
+        // Mirror Backfill; the absent-source no-op holds inside one.
+        let mirrored = if table_name == "iolta_account" {
+            super::super::during_initial_copy(mirror_string(
+                &surreal,
+                &pg,
+                table_name,
+                "synthetic-absent",
+            ))
+            .await
+            .unwrap()
+        } else {
             mirror_string(&surreal, &pg, table_name, "synthetic-absent")
                 .await
-                .unwrap(),
-            Mirrored::Unchanged,
-            "{table_name}"
-        );
+                .unwrap()
+        };
+        assert_eq!(mirrored, Mirrored::Unchanged, "{table_name}");
     }
     pg.0.close().await;
 }
