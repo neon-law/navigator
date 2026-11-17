@@ -1809,7 +1809,8 @@ mod tests {
                 .await
                 .unwrap();
             sqlx::query(
-                "INSERT INTO entity(id,name,entity_type_id,jurisdiction_id) VALUES ($1,$2,$3,$4)",
+                "INSERT INTO entity(id,name,entity_type_id,jurisdiction_id) VALUES ($1,$2,$3,$4)
+                 ON CONFLICT (id) DO NOTHING",
             )
             .bind(entity_id)
             .bind("Synthetic Entity")

@@ -623,7 +623,8 @@ mod tests {
             .await
             .unwrap();
         sqlx::query(
-            "INSERT INTO entity(id,name,entity_type_id,jurisdiction_id) VALUES ($1,$2,$3,$4)",
+            "INSERT INTO entity(id,name,entity_type_id,jurisdiction_id) VALUES ($1,$2,$3,$4)
+             ON CONFLICT (id) DO NOTHING",
         )
         .bind(entity_id)
         .bind("Synthetic Entity")
@@ -632,13 +633,17 @@ mod tests {
         .execute(pg.pool())
         .await
         .unwrap();
-        sqlx::query("INSERT INTO person(id,name,email) VALUES ($1,$2,$3)")
-            .bind(lawyer.id)
-            .bind(&lawyer.name)
-            .bind(&lawyer.email)
-            .execute(pg.pool())
-            .await
-            .unwrap();
+        // People authority may already have copied the lawyer's row via
+        // participation mirroring; the fixture only guarantees presence.
+        sqlx::query(
+            "INSERT INTO person(id,name,email) VALUES ($1,$2,$3) ON CONFLICT (id) DO NOTHING",
+        )
+        .bind(lawyer.id)
+        .bind(&lawyer.name)
+        .bind(&lawyer.email)
+        .execute(pg.pool())
+        .await
+        .unwrap();
     }
 
     /// A throwaway pool for direct SQL the store seam does not expose —
