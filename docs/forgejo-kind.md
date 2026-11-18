@@ -38,8 +38,8 @@ revokes `PUBLIC` there, and grants it nothing on `navigator`. Forgejo connects w
 
 The first `up` generates synthetic credentials once and keeps them in the `navigator-forgejo-kind` Secret: the
 PostgreSQL passwords, Forgejo's keys, and the runner's registration secret. Every other Secret is derived from it, so
-re-running `up` converges instead of rotating. The PostgreSQL server certificate is a self-signed synthetic one,
-generated once with `openssl`. The base `app.ini` is the deployment template rendered by the same code as `ops secrets
+re-running `up` converges instead of rotating. A per-tier synthetic CA signs new PostgreSQL server certificates;
+retained TLS material is reused. The base `app.ini` is the deployment template rendered by the same code as `ops secrets
 apply --service forgejo`, with three KIND differences: a loopback `ROOT_URL`, Actions on, and an instance signing key.
 `up` generates that synthetic SSH key once into the `navigator-forgejo-signing` Secret and mounts it read-only; Forgejo
 signs authorized initial commits, API edits and merges with it. The instance signing policy is `always` for these
