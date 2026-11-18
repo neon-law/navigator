@@ -31,12 +31,12 @@ pub enum TenancyError {
 }
 
 /// Source selection is confined to the explicit importer context.
-pub(crate) fn enabled() -> Result<bool, TenancyError> {
+pub(crate) fn enabled() -> bool {
     #[cfg(test)]
     if let Ok(enabled) = TEST_TENANCY_AUTHORITY.try_with(|enabled| *enabled) {
-        return Ok(enabled);
+        return enabled;
     }
-    Ok(!crate::postgres_mirror::reading_source())
+    !crate::postgres_mirror::reading_source()
 }
 
 pub(crate) async fn db() -> Result<crate::postgres::PostgresDb, TenancyError> {

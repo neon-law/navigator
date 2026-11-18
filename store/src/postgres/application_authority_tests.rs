@@ -185,12 +185,7 @@ fn source_forbidden_boundary_rejects_sdk_access_before_any_engine() {
         return;
     }
     let source = crate::surreal::SurrealDb::uninitialized();
-    assert!(
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| std::ops::Deref::deref(
-            &source
-        )))
-        .is_err()
-    );
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| &*source)).is_err());
     assert_eq!(
         crate::surreal::record_uuid(&crate::surreal::record_id("person", uuid::Uuid::nil())),
         Some(uuid::Uuid::nil())
@@ -337,7 +332,7 @@ async fn physical_mail_replay_is_native_and_preserves_the_recorded_piece() {
 #[tokio::test]
 async fn concurrent_consent_preserves_one_lead_and_immutable_events() {
     let (pg, _, _, _, _) = application_fixture().await;
-    PostgresDb::with_test_db(pg.clone(),async {
+    Box::pin(PostgresDb::with_test_db(pg.clone(),async {
         let source=crate::surreal::SurrealDb::uninitialized();
         let now=chrono::Utc::now();
         let input=crate::leads::NewLead {email:"lead@example.invalid".into(),phone:None,
@@ -358,7 +353,7 @@ async fn concurrent_consent_preserves_one_lead_and_immutable_events() {
         assert!(crate::leads::record_consent_event(&source,&input,&event).await.is_err());
         assert_eq!(crate::leads::find(&source,left.id).await.unwrap().unwrap().submissions,2);
         assert_eq!(crate::leads::consent_history(&source,left.id).await.unwrap().len(),2);
-    }).await;
+    })).await;
 }
 
 #[tokio::test]
@@ -495,6 +490,52 @@ async fn person_merge_rejects_foreign_primary_claim_and_handles_phone_only_peopl
                 .await
                 .unwrap();
         assert_eq!(empty_claims, 0);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn activated_identity_cannot_be_resurrected_by_global_source_import() {
+    let (pg, _, _, _, _) = application_fixture().await;
+    PostgresDb::with_test_db(pg.clone(), async {
+        let source = crate::surreal::SurrealDb::uninitialized();
+        let person = crate::persons::create(
+            &source,
+            &crate::persons::NewPerson::new("Synthetic Deleted", "deleted-import@example.invalid"),
+        )
+        .await
+        .unwrap();
+        sqlx::query("DELETE FROM person_mailbox WHERE person_id=$1")
+            .bind(person.id)
+            .execute(pg.pool())
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM person WHERE id=$1")
+            .bind(person.id)
+            .execute(pg.pool())
+            .await
+            .unwrap();
+        crate::postgres_mirror::from_source(crate::postgres_mirror::during_initial_copy(async {
+            assert!(crate::postgres_graph::holds("relationship"));
+            let outcome = crate::postgres_mirror::mirror(
+                &source,
+                &pg,
+                &crate::postgres_mirror::MirrorKey::Person(person.id),
+            )
+            .await
+            .unwrap();
+            assert!(matches!(
+                outcome,
+                crate::postgres_mirror::Mirrored::Unchanged
+            ));
+        }))
+        .await;
+        let present: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM person WHERE id=$1)")
+            .bind(person.id)
+            .fetch_one(pg.pool())
+            .await
+            .unwrap();
+        assert!(!present);
     })
     .await;
 }

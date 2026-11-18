@@ -222,3 +222,59 @@ async fn an_entity_naming_a_missing_reference_is_refused_and_reported() {
     assert_eq!(report.tables[2].divergent, [MirrorKey::Entity(entity)]);
     assert_eq!(report.tables[2].target_rows, 0);
 }
+
+#[tokio::test]
+async fn catalog_parents_copy_only_before_global_history_completes() {
+    let Some((options, database)) = fresh_schema().await else {
+        return;
+    };
+    let pg = connect(&options, &database).await;
+    let surreal = super::super::from_source(mem_surreal()).await;
+    let entity = synthetic_entity(&surreal).await;
+    let key = MirrorKey::Entity(entity);
+    let outcome = super::super::from_source(super::super::during_initial_copy(mirror(
+        &surreal, &pg, &key,
+    )))
+    .await
+    .unwrap();
+    assert!(matches!(outcome, Mirrored::Written));
+    let jurisdiction: Uuid = sqlx::query_scalar("SELECT jurisdiction_id FROM entity WHERE id=$1")
+        .bind(entity)
+        .fetch_one(pg.pool())
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM entity WHERE id=$1")
+        .bind(entity)
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM jurisdiction WHERE id=$1")
+        .bind(jurisdiction)
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO mirror_backfill_run(id,batch_size,status,scope,completed_at) VALUES($1,1,'completed','global',now())")
+        .bind(Uuid::new_v4()).execute(pg.pool()).await.unwrap();
+    assert!(
+        super::super::from_source(crate::jurisdictions::find_by_id(&surreal, jurisdiction))
+            .await
+            .unwrap()
+            .is_some()
+    );
+    let result = super::super::from_source(super::super::during_initial_copy(mirror(
+        &surreal, &pg, &key,
+    )))
+    .await;
+    assert!(matches!(result, Err(MirrorError::MatterAuthority)));
+    let restored: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM jurisdiction WHERE id=$1)")
+            .bind(jurisdiction)
+            .fetch_one(pg.pool())
+            .await
+            .unwrap();
+    assert!(!restored);
+    let result =
+        super::super::from_source(ensure(&surreal, &pg, MirrorKey::Jurisdiction(jurisdiction)))
+            .await;
+    assert!(result.is_err());
+}

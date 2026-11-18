@@ -121,6 +121,20 @@ const PARTICIPATION_COLUMNS: &[&str] = &[
 
 /// An upsert keyed on `id` that writes only when a column differs.
 pub(super) fn upsert_sql(table: &str, columns: &[&str]) -> String {
+    use crate::postgres_backfill::family::Family;
+    if matches!(
+        Family::for_table(table),
+        Some(Family::Identity | Family::Tenancy)
+    ) {
+        let placeholders = (1..=columns.len())
+            .map(|index| format!("${index}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return format!(
+            "INSERT INTO {table} ({}) VALUES ({placeholders}) ON CONFLICT DO NOTHING",
+            columns.join(", ")
+        );
+    }
     let placeholders = (1..=columns.len())
         .map(|index| format!("${index}"))
         .collect::<Vec<_>>()
@@ -612,6 +626,10 @@ pub(super) async fn mirror(
     pg: &PostgresDb,
     key: &MirrorKey,
 ) -> Result<Mirrored, MirrorError> {
+    if !super::source_import_allowed(pg, key.table()).await? {
+        return Ok(Mirrored::Unchanged);
+    }
+
     // Keep the row writer's provider/store futures off callers' stack frames.
     Box::pin(mirror_inner(surreal, pg, key)).await
 }
@@ -634,7 +652,7 @@ async fn mirror_inner(
                     }
                     upsert_firm(pg, &image).await
                 }
-                None => delete(pg, "DELETE FROM firm WHERE id = $1", *id).await,
+                None => Ok(Mirrored::Unchanged),
             }
         }
         MirrorKey::Brand(id) => {
@@ -643,7 +661,7 @@ async fn mirror_inner(
                 .map_err(|_| MirrorError::Source)?;
             match source {
                 Some(brand) => upsert_brand(pg, &BrandImage::from_source(&brand)?).await,
-                None => delete(pg, "DELETE FROM brand WHERE id = $1", *id).await,
+                None => Ok(Mirrored::Unchanged),
             }
         }
         MirrorKey::FirmBrand { brand_key } => {
@@ -653,11 +671,7 @@ async fn mirror_inner(
             if let Some(row) = source {
                 return upsert_firm_brand(pg, &FirmBrandImage::from_source(&row)?).await;
             }
-            let deleted = sqlx::query("DELETE FROM firm_brand WHERE brand_key = $1")
-                .bind(brand_key)
-                .execute(&pg.0)
-                .await?;
-            Ok(changed(deleted.rows_affected(), Mirrored::Deleted))
+            Ok(Mirrored::Unchanged)
         }
         MirrorKey::Project(id) => {
             let source = crate::projects::find_by_id_in_surreal(surreal, *id)
@@ -669,7 +683,7 @@ async fn mirror_inner(
                     identity::ensure(surreal, pg, MirrorKey::Entity(image.entity_id)).await?;
                     upsert_project(pg, &image).await
                 }
-                None => delete_project(pg, *id).await,
+                None => Ok(Mirrored::Unchanged),
             }
         }
         MirrorKey::FirmMembership { person_id, firm_id } => {
@@ -681,13 +695,7 @@ async fn mirror_inner(
                 identity::ensure(surreal, pg, MirrorKey::Person(image.person_id)).await?;
                 return upsert_membership(pg, &image).await;
             }
-            let deleted =
-                sqlx::query("DELETE FROM person_firm_role WHERE person_id = $1 AND firm_id = $2")
-                    .bind(person_id)
-                    .bind(firm_id)
-                    .execute(&pg.0)
-                    .await?;
-            Ok(changed(deleted.rows_affected(), Mirrored::Deleted))
+            Ok(Mirrored::Unchanged)
         }
         MirrorKey::ProjectParticipation(id) => {
             let source = crate::projects::participation_by_id_in_surreal(surreal, *id)
@@ -699,7 +707,7 @@ async fn mirror_inner(
                     identity::ensure(surreal, pg, MirrorKey::Person(image.person_id)).await?;
                     upsert_participation(pg, &image).await
                 }
-                None => delete(pg, "DELETE FROM person_project_role WHERE id = $1", *id).await,
+                None => Ok(Mirrored::Unchanged),
             }
         }
         // `super::mirror` routes only tenancy keys here.
@@ -707,19 +715,8 @@ async fn mirror_inner(
     }
 }
 
-async fn delete(pg: &PostgresDb, sql: &'static str, id: Uuid) -> Result<Mirrored, MirrorError> {
-    let deleted = sqlx::query(sql).bind(id).execute(&pg.0).await?;
-    Ok(changed(deleted.rows_affected(), Mirrored::Deleted))
-}
-
 async fn upsert_firm(pg: &PostgresDb, firm: &FirmImage) -> Result<Mirrored, MirrorError> {
     let mut tx = pg.0.begin().await?;
-    let stale = sqlx::query("DELETE FROM firm WHERE slug = $1 AND id <> $2")
-        .bind(&firm.slug)
-        .bind(firm.id)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
     let written = sqlx::query(FIRM_UPSERT.as_str())
         .bind(firm.id)
         .bind(&firm.name)
@@ -732,17 +729,11 @@ async fn upsert_firm(pg: &PostgresDb, firm: &FirmImage) -> Result<Mirrored, Mirr
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
-    Ok(changed(stale + written.rows_affected(), Mirrored::Written))
+    Ok(changed(written.rows_affected(), Mirrored::Written))
 }
 
 async fn upsert_brand(pg: &PostgresDb, brand: &BrandImage) -> Result<Mirrored, MirrorError> {
     let mut tx = pg.0.begin().await?;
-    let stale = sqlx::query("DELETE FROM brand WHERE brand_key = $1 AND id <> $2")
-        .bind(&brand.brand_key)
-        .bind(brand.id)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
     let written = sqlx::query(BRAND_UPSERT.as_str())
         .bind(brand.id)
         .bind(&brand.name)
@@ -765,17 +756,11 @@ async fn upsert_brand(pg: &PostgresDb, brand: &BrandImage) -> Result<Mirrored, M
         .await?
         .rows_affected();
     tx.commit().await?;
-    Ok(changed(stale + written, Mirrored::Written))
+    Ok(changed(written, Mirrored::Written))
 }
 
 async fn upsert_firm_brand(pg: &PostgresDb, row: &FirmBrandImage) -> Result<Mirrored, MirrorError> {
     let mut tx = pg.0.begin().await?;
-    let stale = sqlx::query("DELETE FROM firm_brand WHERE brand_key = $1 AND id <> $2")
-        .bind(&row.brand_key)
-        .bind(row.id)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
     let written = sqlx::query(FIRM_BRAND_UPSERT.as_str())
         .bind(row.id)
         .bind(row.firm_id)
@@ -786,7 +771,7 @@ async fn upsert_firm_brand(pg: &PostgresDb, row: &FirmBrandImage) -> Result<Mirr
         .await?
         .rows_affected();
     tx.commit().await?;
-    Ok(changed(stale + written, Mirrored::Written))
+    Ok(changed(written, Mirrored::Written))
 }
 
 /// Write one whole Project row, every column as given, the way an archive
@@ -794,28 +779,28 @@ async fn upsert_firm_brand(pg: &PostgresDb, row: &FirmBrandImage) -> Result<Mirr
 pub(crate) async fn put_project(
     pg: &PostgresDb,
     project: &crate::projects::Project,
-) -> Result<(), MirrorError> {
-    upsert_project(pg, &ProjectImage::from_source(project)?).await?;
-    Ok(())
+) -> Result<crate::assets::RowRestore, MirrorError> {
+    let expected = ProjectImage::from_source(project)?;
+    let written = upsert_project(pg, &expected).await?;
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "{} WHERE id=$1",
+        PROJECT_SELECT.as_str()
+    )))
+    .bind(project.id)
+    .fetch_optional(pg.pool())
+    .await?;
+    let actual = row.as_ref().map(ProjectImage::from_row).transpose()?;
+    Ok(if actual.as_ref() != Some(&expected) {
+        crate::assets::RowRestore::Conflict
+    } else if matches!(written, Mirrored::Written) {
+        crate::assets::RowRestore::Created
+    } else {
+        crate::assets::RowRestore::Identical
+    })
 }
 
 async fn upsert_project(pg: &PostgresDb, project: &ProjectImage) -> Result<Mirrored, MirrorError> {
     let mut tx = pg.0.begin().await?;
-    let stale = sqlx::query(
-        "DELETE FROM person_project_role WHERE project_id IN \
-         (SELECT id FROM project WHERE code = $1 AND id <> $2)",
-    )
-    .bind(&project.code)
-    .bind(project.id)
-    .execute(&mut *tx)
-    .await?
-    .rows_affected()
-        + sqlx::query("DELETE FROM project WHERE code = $1 AND id <> $2")
-            .bind(&project.code)
-            .bind(project.id)
-            .execute(&mut *tx)
-            .await?
-            .rows_affected();
     let written = sqlx::query(PROJECT_UPSERT.as_str())
         .bind(project.id)
         .bind(&project.code)
@@ -857,23 +842,7 @@ async fn upsert_project(pg: &PostgresDb, project: &ProjectImage) -> Result<Mirro
         .await?
         .rows_affected();
     tx.commit().await?;
-    Ok(changed(stale + written, Mirrored::Written))
-}
-
-async fn delete_project(pg: &PostgresDb, id: Uuid) -> Result<Mirrored, MirrorError> {
-    let mut tx = pg.0.begin().await?;
-    let participations = sqlx::query("DELETE FROM person_project_role WHERE project_id = $1")
-        .bind(id)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
-    let projects = sqlx::query("DELETE FROM project WHERE id = $1")
-        .bind(id)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
-    tx.commit().await?;
-    Ok(changed(participations + projects, Mirrored::Deleted))
+    Ok(changed(written, Mirrored::Written))
 }
 
 async fn upsert_membership(
@@ -881,15 +850,6 @@ async fn upsert_membership(
     role: &MembershipImage,
 ) -> Result<Mirrored, MirrorError> {
     let mut tx = pg.0.begin().await?;
-    let stale = sqlx::query(
-        "DELETE FROM person_firm_role WHERE person_id = $1 AND firm_id = $2 AND id <> $3",
-    )
-    .bind(role.person_id)
-    .bind(role.firm_id)
-    .bind(role.id)
-    .execute(&mut *tx)
-    .await?
-    .rows_affected();
     let written = sqlx::query(MEMBERSHIP_UPSERT.as_str())
         .bind(role.id)
         .bind(role.person_id)
@@ -902,7 +862,7 @@ async fn upsert_membership(
         .await?
         .rows_affected();
     tx.commit().await?;
-    Ok(changed(stale + written, Mirrored::Written))
+    Ok(changed(written, Mirrored::Written))
 }
 
 async fn upsert_participation(
@@ -910,15 +870,6 @@ async fn upsert_participation(
     role: &ParticipationImage,
 ) -> Result<Mirrored, MirrorError> {
     let mut tx = pg.0.begin().await?;
-    let stale = sqlx::query(
-        "DELETE FROM person_project_role WHERE person_id = $1 AND project_id = $2 AND id <> $3",
-    )
-    .bind(role.person_id)
-    .bind(role.project_id)
-    .bind(role.id)
-    .execute(&mut *tx)
-    .await?
-    .rows_affected();
     let written = sqlx::query(PARTICIPATION_UPSERT.as_str())
         .bind(role.id)
         .bind(role.person_id)
@@ -932,7 +883,7 @@ async fn upsert_participation(
         .await?
         .rows_affected();
     tx.commit().await?;
-    Ok(changed(stale + written, Mirrored::Written))
+    Ok(changed(written, Mirrored::Written))
 }
 
 /// One table's comparison. A source row whose timestamp cannot be read is

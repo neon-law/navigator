@@ -57,7 +57,7 @@ async fn postgres_people_helpers_read_filter_write_and_guard_columns() {
     };
     let pg = crate::postgres_mirror::tests::connect(&options, &database).await;
     crate::postgres::fixtures::activate_application(&pg).await;
-    PostgresDb::with_test_db(pg.clone(), async {
+    Box::pin(PostgresDb::with_test_db(pg.clone(), async {
         let surreal = crate::surreal::SurrealDb::uninitialized();
 
         let owner = super::create(
@@ -288,7 +288,7 @@ async fn postgres_people_helpers_read_filter_write_and_guard_columns() {
             None
         );
         pg.0.close().await;
-    })
+    }))
     .await;
 }
 

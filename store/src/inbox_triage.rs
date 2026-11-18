@@ -1439,6 +1439,10 @@ async fn row_conversation_id(db: &SurrealDb, row: &InboxTriage) -> Result<Uuid, 
     Ok(conversation_for_message(db, row.message_id).await?.id)
 }
 
+fn triage_pg_error(_error: crate::postgres::matter::MatterAuthorityError) -> InboxError {
+    InboxError::Db("PostgreSQL triage authority is unavailable".into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -2608,8 +2612,4 @@ mod tests {
         assert_eq!(visible[0].triage.rationale, input.rationale);
         assert_eq!(visible[0].triage.raw_output, input.raw_output);
     }
-}
-
-fn triage_pg_error(_error: crate::postgres::matter::MatterAuthorityError) -> InboxError {
-    InboxError::Db("PostgreSQL triage authority is unavailable".into())
 }

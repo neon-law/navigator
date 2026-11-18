@@ -606,18 +606,17 @@ async fn demote_merged_calendar_primary(
 }
 
 /// Commit the identity and reference merge under the same Person writer locks.
-pub(crate) async fn merge_rows(
-    pg: &PostgresDb,
+async fn lock_merge_people(
+    tx: &mut Transaction<'_, Postgres>,
     keep_id: Uuid,
     drop_id: Uuid,
 ) -> Result<(), crate::person_merge::PersonMergeError> {
-    let mut tx = pg.0.begin().await.map_err(database)?;
     let mut locked = [keep_id, drop_id];
     locked.sort();
     for id in locked {
         sqlx::query("SELECT pg_advisory_xact_lock(1312902736, hashtext($1::text))")
             .bind(id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await
             .map_err(database)?;
     }
@@ -625,7 +624,7 @@ pub(crate) async fn merge_rows(
         "SELECT id,role,email::text FROM person WHERE id=ANY($1::uuid[]) ORDER BY id FOR UPDATE",
     )
     .bind(locked.to_vec())
-    .fetch_all(&mut *tx)
+    .fetch_all(&mut **tx)
     .await
     .map_err(database)?;
     let keep = people
@@ -646,11 +645,21 @@ pub(crate) async fn merge_rows(
             continue;
         }
         let holder: Option<Uuid> = sqlx::query_scalar("WITH claimed AS (INSERT INTO person_mailbox(id,person_id) VALUES(lower($1),$2) ON CONFLICT(id) DO NOTHING RETURNING person_id) SELECT person_id FROM claimed UNION ALL SELECT person_id FROM person_mailbox WHERE id=lower($1) LIMIT 1")
-            .bind(email.trim()).bind(owner).fetch_optional(&mut *tx).await.map_err(database)?;
+            .bind(email.trim()).bind(owner).fetch_optional(&mut **tx).await.map_err(database)?;
         if holder != Some(owner) {
             return Err(PersonError::EmailTaken.into());
         }
     }
+    Ok(())
+}
+
+pub(crate) async fn merge_rows(
+    pg: &PostgresDb,
+    keep_id: Uuid,
+    drop_id: Uuid,
+) -> Result<(), crate::person_merge::PersonMergeError> {
+    let mut tx = pg.0.begin().await.map_err(database)?;
+    lock_merge_people(&mut tx, keep_id, drop_id).await?;
     for flag in ["is_lawyer_dri", "is_client_dri"] {
         sqlx::query(AssertSqlSafe(format!(
             "UPDATE person_project_role SET {flag} = true WHERE person_id = $1 AND project_id IN \
@@ -870,13 +879,13 @@ pub(crate) async fn create(
 
 pub(crate) async fn find_or_create(
     pg: &PostgresDb,
-    _db: &SurrealDb,
+    db: &SurrealDb,
     input: &NewPerson,
 ) -> Result<Person, PersonError> {
     if let Some(row) = by_email(pg, &input.email).await? {
         return Ok(row);
     }
-    match create(pg, _db, input).await {
+    match create(pg, db, input).await {
         Err(PersonError::EmailTaken) => {
             let row = by_email(pg, &input.email)
                 .await?

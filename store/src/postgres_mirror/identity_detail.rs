@@ -612,14 +612,7 @@ async fn mirror_detail<D: Detail>(
     id: Uuid,
 ) -> Result<Mirrored, MirrorError> {
     let Some((_, image)) = sources::<D>(surreal, Some(id)).await?.pop() else {
-        let deleted = sqlx::query(sqlx::AssertSqlSafe(format!(
-            "DELETE FROM {} WHERE id = $1",
-            D::TABLE
-        )))
-        .bind(id)
-        .execute(&pg.0)
-        .await?;
-        return Ok(changed(deleted.rows_affected(), Mirrored::Deleted));
+        return Ok(Mirrored::Unchanged);
     };
     let image = image?;
     for parent in image.parents() {
@@ -708,7 +701,7 @@ async fn mirror_entity_role(
     let Some(tie) = found else {
         // A tie SurrealDB lacks is no evidence once PostgreSQL holds the
         // table: copy, never delete.
-        if crate::postgres_graph::holds("entity_role").await {
+        if crate::postgres_graph::holds("entity_role") {
             return Err(MirrorError::GraphAuthority);
         }
         let deleted = sqlx::query(
@@ -806,8 +799,7 @@ async fn source_claims(
     Ok(claims)
 }
 
-/// Make PostgreSQL hold exactly the mailboxes SurrealDB says `person`
-/// claims. A mailbox PostgreSQL holds for another Person moves to this one.
+/// Insert captured mailbox claims without releasing or taking existing claims.
 async fn mirror_mailboxes(
     surreal: &SurrealDb,
     pg: &PostgresDb,
@@ -823,18 +815,11 @@ async fn mirror_mailboxes(
         identity::ensure(surreal, pg, MirrorKey::Person(person)).await?;
     }
     let mut tx = pg.0.begin().await?;
-    let released = sqlx::query("DELETE FROM person_mailbox WHERE person_id = $1 AND id <> ALL($2)")
-        .bind(person)
-        .bind(&claims)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
     let mut claimed = 0;
     for mailbox in &claims {
         claimed += sqlx::query(
             "INSERT INTO person_mailbox (id, person_id) VALUES ($1, $2) \
-             ON CONFLICT (id) DO UPDATE SET person_id = EXCLUDED.person_id \
-             WHERE person_mailbox.person_id IS DISTINCT FROM EXCLUDED.person_id",
+             ON CONFLICT (id) DO NOTHING",
         )
         .bind(mailbox)
         .bind(person)
@@ -843,11 +828,7 @@ async fn mirror_mailboxes(
         .rows_affected();
     }
     tx.commit().await?;
-    Ok(if claims.is_empty() {
-        changed(released, Mirrored::Deleted)
-    } else {
-        changed(released + claimed, Mirrored::Written)
-    })
+    Ok(changed(claimed, Mirrored::Written))
 }
 
 async fn compare_mailboxes(
@@ -879,6 +860,10 @@ pub(super) async fn mirror(
     pg: &PostgresDb,
     key: &MirrorKey,
 ) -> Result<Mirrored, MirrorError> {
+    if !super::source_import_allowed(pg, key.table()).await? {
+        return Ok(Mirrored::Unchanged);
+    }
+
     if key.held_by_people_authority() {
         return Ok(Mirrored::Unchanged);
     }
@@ -914,7 +899,7 @@ pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport
         compare_detail::<CredentialImage>(surreal, pg).await?,
         compare_detail::<EmailTokenImage>(surreal, pg).await?,
     ];
-    let graph_authoritative = crate::postgres_graph::holds("entity_role").await;
+    let graph_authoritative = crate::postgres_graph::holds("entity_role");
     if !graph_authoritative || super::compares_authoritative(pg).await? {
         let entity_roles = compare_entity_roles(surreal, pg).await?;
         tables.push(if graph_authoritative {

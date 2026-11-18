@@ -996,7 +996,7 @@ async fn locked(
     run_id: Uuid,
     work: impl std::future::Future<Output = Result<usize, BackfillError>>,
 ) -> Result<RunReport, BackfillError> {
-    let (batches, parity, unresolved_references) = with_import_lock(pg, async {
+    let (batches, parity, unresolved_references) = Box::pin(with_import_lock(pg, async {
         let first = !crate::postgres_mirror::backfilled(pg).await?;
         first_copy(first, async {
             let covered = mirror_coverage(surreal, pg).await?;
@@ -1008,7 +1008,7 @@ async fn locked(
             Ok((batches, parity, references))
         })
         .await
-    })
+    }))
     .await?;
     let mut report = report(pg, run_id).await?;
     report.batches_this_invocation = batches;

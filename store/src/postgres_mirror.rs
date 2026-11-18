@@ -789,7 +789,25 @@ pub async fn mirror(
     pg: &PostgresDb,
     key: &MirrorKey,
 ) -> Result<Mirrored, MirrorError> {
-    from_source(mirror_source(surreal, pg, key)).await
+    from_source(Box::pin(mirror_source(surreal, pg, key))).await
+}
+
+/// Persisted ownership fences imports independently from Source read dispatch.
+/// Unregistered groups retain their existing global-import admission checks.
+pub(crate) fn source_import_allowed<'a>(
+    pg: &'a PostgresDb,
+    table: &'a str,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<bool, MirrorError>> + Send + 'a>> {
+    Box::pin(async move {
+        use crate::postgres_backfill::family::{self, Family, ImportMode};
+        if family::active_for_table(pg, table).await? {
+            return Ok(false);
+        }
+        if Family::for_table(table).is_some() {
+            return Ok(family::import_mode(pg, table).await? != ImportMode::Refuse);
+        }
+        Ok(true)
+    })
 }
 
 async fn mirror_source(
@@ -797,6 +815,9 @@ async fn mirror_source(
     pg: &PostgresDb,
     key: &MirrorKey,
 ) -> Result<Mirrored, MirrorError> {
+    if !source_import_allowed(pg, key.table()).await? {
+        return Ok(Mirrored::Unchanged);
+    }
     match key {
         MirrorKey::SentEmail(id) => sent_emails::mirror(surreal, pg, *id).await,
         key @ (MirrorKey::InboxConversation(_)

@@ -365,6 +365,10 @@ pub(super) async fn mirror(
     pg: &PostgresDb,
     key: &MirrorKey,
 ) -> Result<Mirrored, MirrorError> {
+    if !super::source_import_allowed(pg, key.table()).await? {
+        return Ok(Mirrored::Unchanged);
+    }
+
     if key.held_by_people_authority() {
         return Ok(Mirrored::Unchanged);
     }
@@ -390,7 +394,7 @@ async fn mirror_inner(
                 .await
                 .map_err(source)?;
             let Some(entity) = source else {
-                return delete(pg, "DELETE FROM entity WHERE id = $1", *id).await;
+                return Ok(Mirrored::Unchanged);
             };
             let image = EntityImage::from_source(&entity);
             if !present(pg, ENTITY_TYPE_PRESENT, image.entity_type_id).await? {
@@ -403,7 +407,7 @@ async fn mirror_inner(
         }
         MirrorKey::Person(id) => match source_person(surreal, *id).await? {
             Some(person) => upsert_person(pg, &person).await,
-            None => delete(pg, "DELETE FROM person WHERE id = $1", *id).await,
+            None => Ok(Mirrored::Unchanged),
         },
         // `super::mirror` routes only identity keys here.
         _ => Err(MirrorError::Source),
@@ -425,8 +429,12 @@ pub(super) async fn ensure(
         _ => return Ok(()),
     };
     if !present(pg, sql, id).await? {
-        // A missing parent is copied even into the authoritative catalog.
-        super::during_initial_copy(mirror(surreal, pg, &key)).await?;
+        // Preserve the caller's actual import authority; missing parents cannot
+        // escalate a scoped enrollment into the first global copy.
+        mirror(surreal, pg, &key).await?;
+        if !present(pg, sql, id).await? {
+            return Err(MirrorError::Target("23503".into()));
+        }
     }
     Ok(())
 }
@@ -442,21 +450,20 @@ async fn present(pg: &PostgresDb, sql: &'static str, id: Uuid) -> Result<bool, M
     Ok(Box::pin(sqlx::query_scalar(sql).bind(id).fetch_one(&pg.0)).await?)
 }
 
-async fn delete(pg: &PostgresDb, sql: &'static str, id: Uuid) -> Result<Mirrored, MirrorError> {
-    let deleted = sqlx::query(sql).bind(id).execute(&pg.0).await?;
-    Ok(changed(deleted.rows_affected(), Mirrored::Deleted))
-}
-
 async fn mirror_jurisdiction(
     surreal: &SurrealDb,
     pg: &PostgresDb,
     id: Uuid,
 ) -> Result<Mirrored, MirrorError> {
+    if !super::initial_copy() || super::backfilled(pg).await? {
+        return Err(MirrorError::MatterAuthority);
+    }
+
     let source = super::from_source(crate::jurisdictions::find_by_id(surreal, id))
         .await
         .map_err(source)?;
     let Some(row) = source else {
-        return delete(pg, "DELETE FROM jurisdiction WHERE id = $1", id).await;
+        return Ok(Mirrored::Unchanged);
     };
     let row = JurisdictionImage::from_source(&row);
     let written = sqlx::query(JURISDICTION_UPSERT.as_str())
@@ -476,11 +483,15 @@ async fn mirror_entity_type(
     pg: &PostgresDb,
     id: Uuid,
 ) -> Result<Mirrored, MirrorError> {
+    if !super::initial_copy() || super::backfilled(pg).await? {
+        return Err(MirrorError::MatterAuthority);
+    }
+
     let source = super::from_source(crate::entity_types::find_by_id(surreal, id))
         .await
         .map_err(source)?;
     let Some(row) = source else {
-        return delete(pg, "DELETE FROM entity_type WHERE id = $1", id).await;
+        return Ok(Mirrored::Unchanged);
     };
     let row = EntityTypeImage::from_source(&row);
     let written = sqlx::query(ENTITY_TYPE_UPSERT.as_str())

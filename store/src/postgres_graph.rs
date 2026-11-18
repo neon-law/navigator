@@ -141,8 +141,15 @@ pub(crate) const AUTHORITATIVE_TABLES: &[&str] = &[
 /// PostgreSQL is configured but unreachable. The mirror neither writes nor
 /// deletes such a row, so a missing Surreal row cannot delete an
 /// authoritative one.
-pub(crate) async fn holds(table: &str) -> bool {
-    AUTHORITATIVE_TABLES.contains(&table) && graph_authority().await.map_or(true, |pg| pg.is_some())
+pub(crate) fn holds(table: &str) -> bool {
+    if !AUTHORITATIVE_TABLES.contains(&table) {
+        return false;
+    }
+    #[cfg(test)]
+    if let Ok(selected) = TEST_GRAPH_AUTHORITY.try_with(Clone::clone) {
+        return selected.is_some();
+    }
+    true
 }
 
 #[cfg(test)]

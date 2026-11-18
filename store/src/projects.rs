@@ -415,7 +415,7 @@ impl From<ProjectStoreError> for ProjectCommandError {
 /// The PostgreSQL handle when tenancy authority owns Projects and their
 /// participation ledger (`NAVIGATOR_POSTGRES_TENANCY_AUTHORITY`), else `None`.
 async fn authority() -> Result<Option<PostgresDb>, ProjectStoreError> {
-    if crate::postgres::tenancy::enabled()? {
+    if crate::postgres::tenancy::enabled() {
         Ok(Some(Box::pin(crate::postgres::tenancy::db()).await?))
     } else {
         Ok(None)
@@ -776,12 +776,6 @@ async fn mirror_project_with_participations(
     .await?;
     Ok(())
 }
-
-/// Write PostgreSQL's committed Project into the SurrealDB compatibility copy
-/// that the readers still on SurrealDB query.
-
-/// Write PostgreSQL's committed participation row into the SurrealDB
-/// compatibility copy.
 
 /// Add one person to a Project, validating both record links at the command
 /// seam. The unique pair index is the concurrency backstop.
@@ -1618,9 +1612,7 @@ pub async fn restore_archived(
         return Ok(crate::assets::RowRestore::Conflict);
     }
     if let Some(pg) = authority().await? {
-        Box::pin(crate::postgres_mirror::tenancy::put_project(&pg, project)).await?;
-
-        return Ok(crate::assets::RowRestore::Created);
+        return Ok(Box::pin(crate::postgres_mirror::tenancy::put_project(&pg, project)).await?);
     }
     restore_archived_in_surreal(surreal, project).await?;
     Ok(crate::assets::RowRestore::Created)

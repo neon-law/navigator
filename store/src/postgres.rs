@@ -226,14 +226,14 @@ impl PostgresDb {
         if crate::postgres_mirror::reading_source() {
             return Ok(None);
         }
-        Self::application().await.map(Some)
+        Box::pin(Self::application()).await.map(Some)
     }
 
     /// Connect an application only after its complete historical enrollment.
     /// Operators and migrations use `from_env` before activation instead.
     pub async fn application() -> Result<Self, PostgresError> {
         let pg = Self::from_env().await?;
-        pg.require_application_history().await?;
+        Box::pin(pg.require_application_history()).await?;
         Ok(pg)
     }
 
@@ -246,9 +246,11 @@ impl PostgresDb {
         {
             return Err(PostgresError::History);
         }
-        crate::postgres_backfill::family::require_runtime_scopes(self)
-            .await
-            .map_err(|_| PostgresError::History)
+        Box::pin(crate::postgres_backfill::family::require_runtime_scopes(
+            self,
+        ))
+        .await
+        .map_err(|_| PostgresError::History)
     }
     async fn connect_env() -> Result<Self, PostgresError> {
         let get = |key: &str| std::env::var(key).map_err(|_| PostgresError::Configuration);

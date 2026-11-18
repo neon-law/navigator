@@ -407,7 +407,11 @@ pub async fn import_mode(pg: &PostgresDb, table: &str) -> Result<ImportMode, Fam
         .fetch_one(&pg.0)
         .await?;
         return if pending {
-            Ok(ImportMode::Refresh)
+            Ok(if matches!(family, Family::Identity | Family::Tenancy) {
+                ImportMode::InsertMissing
+            } else {
+                ImportMode::Refresh
+            })
         } else {
             Err(FamilyError::Receipt)
         };

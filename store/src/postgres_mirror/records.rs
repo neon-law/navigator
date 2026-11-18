@@ -1414,8 +1414,8 @@ async fn require_source_authority(pg: &PostgresDb, table: &Table) -> Result<(), 
 /// A row SurrealDB lacks is no evidence against a graph table PostgreSQL
 /// holds ([`crate::postgres_graph::holds`]): the mirror still copies the
 /// Surreal-era rows across, but never deletes.
-async fn refuse_graph_delete(table: &Table) -> Result<(), MirrorError> {
-    if crate::postgres_graph::holds(table.name).await {
+fn refuse_graph_delete(table: &Table) -> Result<(), MirrorError> {
+    if crate::postgres_graph::holds(table.name) {
         Err(MirrorError::GraphAuthority)
     } else {
         Ok(())
@@ -1551,14 +1551,7 @@ pub(super) fn normalize_surreal(
     }
     let mut row = row.into_json_value();
     if table.name == "deployment_secret_change" {
-        let fields = row.as_object_mut().ok_or(MirrorError::Source)?;
-        let timestamp = fields
-            .get("inserted_at")
-            .and_then(Value::as_str)
-            .filter(|value| DateTime::parse_from_rfc3339(value).is_ok())
-            .ok_or(MirrorError::Source)?
-            .to_owned();
-        fields.insert("inserted_at_text".into(), Value::String(timestamp));
+        preserve_deployment_change_context(&mut row)?;
     }
 
     if let Some((id, kind)) = natural_id {
@@ -1580,6 +1573,18 @@ pub(super) fn normalize_surreal(
         }
     }
     normalized_record(table.name, row)
+}
+
+fn preserve_deployment_change_context(row: &mut Value) -> Result<(), MirrorError> {
+    let fields = row.as_object_mut().ok_or(MirrorError::Source)?;
+    let timestamp = fields
+        .get("inserted_at")
+        .and_then(Value::as_str)
+        .filter(|value| DateTime::parse_from_rfc3339(value).is_ok())
+        .ok_or(MirrorError::Source)?
+        .to_owned();
+    fields.insert("inserted_at_text".into(), Value::String(timestamp));
+    Ok(())
 }
 
 fn normalize_typed_record_links(value: &surrealdb::types::Value) -> Value {
@@ -1915,7 +1920,7 @@ pub async fn mirror(
         if crate::postgres_backfill::family::Family::for_table(table.name).is_some() {
             return Err(MirrorError::Source);
         }
-        refuse_graph_delete(table).await?;
+        refuse_graph_delete(table)?;
         // `table.name` is one of the static names above, never input.
         let deleted = if MIXED_KEY_TABLES.contains(&table.name) {
             sqlx::query(sqlx::AssertSqlSafe(format!(
@@ -1955,7 +1960,7 @@ pub async fn mirror_string(
         return Err(MirrorError::Source);
     }
     let Some(row) = source_one_string(surreal, table, id).await? else {
-        refuse_graph_delete(table).await?;
+        refuse_graph_delete(table)?;
         let statement = if MIXED_KEY_TABLES.contains(&table.name) {
             format!(
                 "DELETE FROM \"{}\" WHERE id_kind = 'string' AND id = $1",
@@ -2095,7 +2100,7 @@ pub async fn parity(
             reports.push(scoped_table_parity(surreal, pg, table.name).await?);
             continue;
         }
-        let authoritative = authoritative(table) || crate::postgres_graph::holds(table.name).await;
+        let authoritative = authoritative(table) || crate::postgres_graph::holds(table.name);
         if authoritative {
             if compares_authoritative.is_none() {
                 compares_authoritative = Some(super::compares_authoritative(pg).await?);
