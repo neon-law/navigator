@@ -31,7 +31,8 @@ sets `GH_HOST`, or repoints `NAVIGATOR_GITHUB_API_BASE`: `gh` and every Action d
 
 Standard GitHub-hosted runners are free for public repositories. Coordination jobs, auto-merge, CodeQL, Dependabot, the
 KIND quickstart, the nightly stress test, the content gate, the CLI release archives, and the release ships use
-`ubuntu-24.04`. The Rust suite, KIND integration, and the buildx image builds retain Blacksmith for its disk. The
+`ubuntu-24.04`. The database-free CLI glossary check uses `ubuntu-24.04`. The Rust coverage suite, KIND integration, and buildx
+image builds retain Blacksmith for their disk and memory requirements. The
 Marketplace is available.
 
 **Confirm an App id against a live check run before trusting it.** A required status check registered under the wrong id

@@ -838,6 +838,30 @@ jobs:
           path: /tmp/${{ matrix.alias }}.tar
           retention-days: 1
 
+  # The lean CLI reads the checked-in glossary without a database fixture.
+  # Keep this smoke test on a free public GitHub runner.
+  cli-glossary:
+    name: CLI glossary (no database)
+    needs: [release-version]
+    if: >-
+      needs.release-version.outputs.publishable == 'true'
+      || github.event_name == 'schedule'
+      || startsWith(github.ref_name, 'kind-ci/')
+      || (vars.DEPLOY_EXPECTED_REPOSITORY != '' && github.repository != vars.DEPLOY_EXPECTED_REPOSITORY)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_BUILD_JOBS: "2"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: 1.98.0
+      - name: verify the CLI glossary without SurrealDB
+        run: cargo run -p cli --locked --quiet -- glossary show Jurisdiction
+
   # ---------- Stage 1: KIND end-to-end integration ----------
   integration:
     name: KIND integration (tag ${{ needs.release-version.outputs.tag }})
@@ -1087,56 +1111,6 @@ jobs:
       - name: wait for rollouts, ClamAV readiness, and run attachment smoke checks
         timeout-minutes: 90
         run: cargo run -p hudson -- dev e2e
-
-      # ---------- cross-binary interop ----------
-      # Proves that `cli` and the in-cluster `web` cohabit on the same
-      # `store` schema + `rules` engine.
-      - uses: ./.github/actions/slack-progress
-        timeout-minutes: 90
-        with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          tag: "${{ needs.release-version.outputs.tag }}"
-          stage: "integration"
-          step: "start ephemeral SurrealDB for cli interop"
-      # The cli needs a real store — stand up a throwaway one on the runner
-      # (not the in-cluster engine) so interop doesn't depend on
-      # port-forwarding. Memory-backed, and the same version the KIND
-      # overlay pins (k8s/overlays/kind/surreal/surreal.yaml).
-      - name: start ephemeral SurrealDB for cli interop
-        timeout-minutes: 90
-        run: |
-          docker run -d --rm --name interop-surreal \
-            -p 28000:8000 \
-            surrealdb/surrealdb:v4.0.1 \
-            start --bind 0.0.0.0:8000 --no-banner \
-            --user root --pass root memory
-          for i in 1 2 3 4 5 6 7 8 9 10; do
-              if curl -sf http://127.0.0.1:28000/health >/dev/null 2>&1; then
-                  echo "interop-surreal ready after $i attempt(s)"
-                  exit 0
-              fi
-              sleep 1
-          done
-          echo "interop-surreal never came up" >&2
-          exit 1
-      - uses: ./.github/actions/slack-progress
-        timeout-minutes: 90
-        with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          tag: "${{ needs.release-version.outputs.tag }}"
-          stage: "integration"
-          step: "interop — cli glossary"
-      - name: interop — cli glossary
-        timeout-minutes: 90
-        env:
-          NAVIGATOR_SURREAL_ENDPOINT: ws://127.0.0.1:28000
-          NAVIGATOR_SURREAL_NAMESPACE: navigator
-          NAVIGATOR_SURREAL_DATABASE: navigator
-          NAVIGATOR_SURREAL_USER: root
-          NAVIGATOR_SURREAL_PASSWORD: root
-        run: |
-          set -euo pipefail
-          cargo run -p hudson --quiet -- glossary show jurisdiction
 
       - uses: ./.github/actions/slack-progress
         timeout-minutes: 90
@@ -1585,7 +1559,7 @@ jobs:
   # `release-tag` itself instead of one hop away.
   release-tag:
     name: tag ${{ needs.release-version.outputs.tag }}
-    needs: [integration, release-version]
+    needs: [integration, cli-glossary, release-version]
     if: needs.release-version.outputs.publishable == 'true'
     runs-on: ubuntu-24.04
     # THE ONLY JOB IN THIS FILE THAT WRITES A GIT REF, and it only ever creates
@@ -4282,6 +4256,7 @@ jobs:
         release-version,
         build,
         integration,
+        cli-glossary,
         release-tag,
         publish-service,
         publish-triggers,
