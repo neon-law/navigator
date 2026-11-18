@@ -5,8 +5,9 @@
 #
 # The current pin is read from k8s/postgres/kustomization.yaml, the server's
 # own kustomization, and every tracked file naming that repository or digest
-# is rewritten: the kustomizations, the CI and persistence workflows, the
-# manifest test, and the compatibility doc. `.github/workflows/postgres-image.yml`
+# is rewritten: the kustomizations, the manifest test, and the docs. Workflows
+# read the pin from that kustomization instead of repeating it, because the App
+# that opens the pin pull request holds no `workflows` permission. `.github/workflows/postgres-image.yml`
 # runs this after each weekly publish so Navigator consumes the image it ships.
 set -euo pipefail
 
@@ -39,6 +40,11 @@ git grep -lzF -e "$old_digest" -e "newName: $old_name" -- ':!server/public/repor
       s/\Q$ENV{OLD_DIGEST}\E/$ENV{NEW_DIGEST}/g;
     '
 
+if git diff --name-only | grep -q '^\.github/workflows/'; then
+  echo "postgres-image-pin: a workflow repeats the digest; read it from $server instead" >&2
+  git diff --name-only -- .github/workflows >&2
+  exit 1
+fi
 if git grep -qF "$old_digest" -- ':!server/public/reports'; then
   echo "postgres-image-pin: $old_digest is still pinned somewhere:" >&2
   git grep -nF "$old_digest" -- ':!server/public/reports' >&2
