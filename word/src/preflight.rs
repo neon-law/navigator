@@ -7,8 +7,7 @@ use crate::WordError;
 
 const OLE_COMPOUND_FILE_HEADER: &[u8; 8] = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1";
 
-// These limits are mirrored by PackageSafety in word/adapter/Program.cs; keep
-// the two copies together. A real DOCX has tens to low hundreds of parts, so
+// A real DOCX has tens to low hundreds of parts, so
 // 4,096 leaves generous headroom while bounding central-directory work. The
 // 64 MiB per-entry and 256 MiB total uncompressed limits prevent one oversized
 // part and cap expansion at 2.56x the existing 100 MiB compressed ceiling.

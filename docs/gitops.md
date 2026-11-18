@@ -406,12 +406,12 @@ also use these runners. In `deploy.yml`, tag creation, Homebrew and Zed dispatch
 rollout dispatch also move to GitHub. These jobs run shell commands and API calls without compiling Rust or building
 images.
 
-The content gate and managed Word adapter also run on `ubuntu-24.04`: the gate compiles one debug CLI, the same build
-`quickstart.yml` proves on that runner. So do the release decision, the Linux CLI archive, the CLI container and Release
-publish, the daily release cut, and both release-deploy ships. The Rust suite, KIND integration, and every buildx image
-build (`build`, `publish-service`, `publish-triggers`) retain `blacksmith-4vcpu-ubuntu-2404`. Public GitHub Linux
-runners provide four CPUs, 16 GB RAM, and 14 GB SSD storage; private repositories get two CPUs and 8 GB RAM with the
-same label. Free usage depends on actual repository visibility. See [GitHub's runner
+The content gate also runs on `ubuntu-24.04`: the gate compiles one debug CLI, the same build `quickstart.yml` proves on
+that runner. So do the release decision, the Linux CLI archive, the CLI container and Release publish, the daily release
+cut, and both release-deploy ships. The Rust suite, KIND integration, and every buildx image build (`build`,
+`publish-service`, `publish-triggers`) retain `blacksmith-4vcpu-ubuntu-2404`. Public GitHub Linux runners provide four
+CPUs, 16 GB RAM, and 14 GB SSD storage; private repositories get two CPUs and 8 GB RAM with the same label. Free usage
+depends on actual repository visibility. See [GitHub's runner
 specifications](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
 
 The Rust workflow records a measured peak of 142 GB disk use, so CPU count alone does not make a standard runner a
@@ -420,12 +420,11 @@ remaining Blacksmith job, measure peak disk and memory, cold and warm cache beha
 runner. The workflow remains the source of truth for commands, caches, and pinned tool versions.
 
 The `ci` job is the required status check — see [One required check, named `ci`
-everywhere](#one-required-check-named-ci-everywhere). It aggregates `changes`, `gate`, `rust`, and `word-adapter`, and
-fails unless `changes` and `gate` succeeded and the two scoped test jobs succeeded or were skipped. It tests each
-dependency's result explicitly rather than relying on a bare `needs:`, because a skipped required check is not a red
-one: GitHub reports no result at all, so the gate would quietly stop blocking exactly when the job it guards had failed.
-A copy-only PR can skip the scoped tests and still post `ci`. The `word-adapter` job verifies its locked restore in a
-Docker SDK image, then runs the .NET tests on the host.
+everywhere](#one-required-check-named-ci-everywhere). It aggregates `changes`, `gate`, `rust`, and `clippy`, and fails
+unless `changes` and `gate` succeeded and the scoped test jobs succeeded or were skipped. It tests each dependency's
+result explicitly rather than relying on a bare `needs:`, because a skipped required check is not a red one: GitHub
+reports no result at all, so the gate would quietly stop blocking exactly when the job it guards had failed. A copy-only
+PR can skip the scoped tests and still post `ci`.
 
 `deploy.yml` has no `pull_request` trigger, so no PR depends on the release workflow's script and image builds. UI and
 browser changes are verified locally before opening a PR — see the `web-preview` and

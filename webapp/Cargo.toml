@@ -126,9 +126,9 @@ futures = { workspace = true, optional = true }
 # block/anchor manifest `store::notation_documents` persists as
 # `word::BlockManifestEntry` rows, the same typed contract the writing side
 # (`portal::notation_document_review`) produces. Gated behind `server` like
-# `store` — `word` spawns the managed adapter process, which has no wasm32
-# story, and the wasm client never needs outline structure since the
-# server-computed rows ride the wire in the view.
+# `store`: the wasm client never needs outline structure, since the
+# server-computed rows ride the wire in the view, and it does not render
+# `.docx`.
 word = { workspace = true, optional = true }
 
 # The workspace pin carries `v7`, which compiles `uuid`'s `rng` module. On

@@ -70,7 +70,8 @@ struct Report {
     coverage: Coverage,
 }
 
-pub async fn run(
+#[must_use]
+pub fn run(
     pattern: &str,
     dir: &Path,
     ignore_case: bool,
@@ -78,7 +79,7 @@ pub async fn run(
     json: bool,
     court_only: bool,
 ) -> ExitCode {
-    match search(pattern, dir, ignore_case, context, court_only).await {
+    match search(pattern, dir, ignore_case, context, court_only) {
         Ok(report) => {
             if json {
                 match serde_json::to_string_pretty(&report) {
@@ -116,7 +117,7 @@ pub async fn run(
     }
 }
 
-async fn search(
+fn search(
     pattern: &str,
     root: &Path,
     ignore_case: bool,
@@ -173,15 +174,14 @@ async fn search(
                     court_only,
                     &mut cache,
                     &mut report,
-                )
-                .await?;
+                );
             }
         }
     }
     Ok(report)
 }
 
-async fn search_file(
+fn search_file(
     path: &Path,
     root: &Path,
     matcher: &regex::Regex,
@@ -189,11 +189,11 @@ async fn search_file(
     court_only: bool,
     cache: &mut BTreeMap<(String, [u8; 32]), Extracted>,
     report: &mut Report,
-) -> Result<()> {
+) {
     let relative = path.strip_prefix(root).unwrap_or(path);
     let record = classify(relative);
     if court_only && record != Record::Court {
-        return Ok(());
+        return;
     }
     let kind = extension(path);
     let bytes = match fs::read(path) {
@@ -205,19 +205,19 @@ async fn search_file(
                 kind,
                 reason: format!("read error: {error}"),
             });
-            return Ok(());
+            return;
         }
     };
     let digest: [u8; 32] = Sha256::digest(&bytes).into();
     let cache_key = (kind.clone(), digest);
     if !cache.contains_key(&cache_key) {
-        cache.insert(cache_key.clone(), extract(path, &bytes).await);
+        cache.insert(cache_key.clone(), extract(path, &bytes));
     }
     let Some(extracted) = cache.get(&cache_key) else {
-        return Ok(());
+        return;
     };
     let Some(parts) = searchable_parts(extracted, relative, &kind, report) else {
-        return Ok(());
+        return;
     };
     *report
         .coverage
@@ -239,7 +239,6 @@ async fn search_file(
         part
     });
     append_hits(report, relative, record, &kind, matcher, context, parts);
-    Ok(())
 }
 
 fn searchable_parts(
@@ -342,7 +341,7 @@ struct Part {
     page: Option<usize>,
 }
 
-async fn extract(path: &Path, bytes: &[u8]) -> Extracted {
+fn extract(path: &Path, bytes: &[u8]) -> Extracted {
     match extension(path).as_str() {
         "pdf" => {
             // The parser can panic on malformed numeric objects. Keep that failure local
@@ -369,8 +368,8 @@ async fn extract(path: &Path, bytes: &[u8]) -> Extracted {
             }
             None => Extracted::Error("email decode error".into()),
         },
-        "docx" => match word::parse(path.to_string_lossy().as_ref(), bytes).await {
-            Ok(document) => Extracted::Text(document.accepted_view_text()),
+        "docx" => match word::package_text(path.to_string_lossy().as_ref(), bytes) {
+            Ok(text) => Extracted::Text(text),
             Err(error) => Extracted::Error(format!("DOCX decode error: {error}")),
         },
         "json" => match serde_json::from_slice::<serde_json::Value>(bytes) {
@@ -585,8 +584,8 @@ mod tests {
         .is_err());
     }
 
-    #[tokio::test]
-    async fn pdf_panic_preserves_hits_and_reports_each_failed_file() {
+    #[test]
+    fn pdf_panic_preserves_hits_and_reports_each_failed_file() {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir_all(root.path().join("documents")).unwrap();
         fs::create_dir_all(root.path().join("notes")).unwrap();
@@ -597,7 +596,7 @@ mod tests {
         }
         fs::write(root.path().join("documents/d.pdf"), two_page_pdf()).unwrap();
         fs::write(root.path().join("notes/after.md"), "marker after").unwrap();
-        let report = search("marker", root.path(), true, 1, false).await.unwrap();
+        let report = search("marker", root.path(), true, 1, false).unwrap();
         assert_eq!(
             report
                 .hits
@@ -624,19 +623,17 @@ mod tests {
         let json = serde_json::to_value(&report).unwrap();
         assert_eq!(json["hits"].as_array().unwrap().len(), 3);
         assert_eq!(
-            super::run("marker", root.path(), true, 1, true, false).await,
+            super::run("marker", root.path(), true, 1, true, false),
             std::process::ExitCode::from(2)
         );
     }
 
-    #[tokio::test]
-    async fn pdf_decode_error_remains_a_coverage_failure() {
+    #[test]
+    fn pdf_decode_error_remains_a_coverage_failure() {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir_all(root.path().join("documents")).unwrap();
         fs::write(root.path().join("documents/broken.pdf"), b"not a PDF").unwrap();
-        let report = search("marker", root.path(), false, 0, false)
-            .await
-            .unwrap();
+        let report = search("marker", root.path(), false, 0, false).unwrap();
         assert!(report.hits.is_empty());
         assert!(report.coverage.searched_by_kind.is_empty());
         assert_eq!(report.coverage.not_searched.len(), 1);
@@ -646,8 +643,8 @@ mod tests {
             .starts_with("PDF decode error:"));
     }
 
-    #[tokio::test]
-    async fn searches_git_ignored_bytes_and_decodes_soft_broken_email() {
+    #[test]
+    fn searches_git_ignored_bytes_and_decodes_soft_broken_email() {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir_all(root.path().join("documents/correspondence")).unwrap();
         fs::create_dir_all(root.path().join("documents/dockets")).unwrap();
@@ -663,9 +660,7 @@ mod tests {
         )
         .unwrap();
 
-        let report = search("soft broken phrase", root.path(), true, 0, false)
-            .await
-            .unwrap();
+        let report = search("soft broken phrase", root.path(), true, 0, false).unwrap();
         assert_eq!(report.hits.len(), 1);
         assert_eq!(report.hits[0].record_class, "correspondence");
         assert_eq!(report.hits[0].message_date.as_deref(), Some("2026-10-15"));
@@ -676,9 +671,7 @@ mod tests {
             pdf::blank_acroform(&[]),
         )
         .unwrap();
-        let report = search("anything", root.path(), true, 0, false)
-            .await
-            .unwrap();
+        let report = search("anything", root.path(), true, 0, false).unwrap();
         assert!(report
             .coverage
             .not_searched
@@ -686,8 +679,8 @@ mod tests {
             .any(|file| file.path.ends_with("ignored-scan.pdf")));
     }
 
-    #[tokio::test]
-    async fn html_only_email_is_extracted_as_text() {
+    #[test]
+    fn html_only_email_is_extracted_as_text() {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir_all(root.path().join("documents/correspondence")).unwrap();
         fs::write(
@@ -695,13 +688,13 @@ mod tests {
             "From: Counsel <counsel@example.com>\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<p>hidden searchable phrase</p>",
         )
         .unwrap();
-        let report = search("hidden", root.path(), true, 0, false).await.unwrap();
+        let report = search("hidden", root.path(), true, 0, false).unwrap();
         assert_eq!(report.hits.len(), 1);
         assert_eq!(report.coverage.searched_by_kind.get("eml"), Some(&1));
     }
 
-    #[tokio::test]
-    async fn json_mail_messages_keep_their_own_provenance() {
+    #[test]
+    fn json_mail_messages_keep_their_own_provenance() {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir_all(root.path().join("documents/correspondence")).unwrap();
         fs::write(
@@ -712,9 +705,7 @@ mod tests {
             ]"#,
         )
         .unwrap();
-        let report = search("marker", root.path(), false, 0, false)
-            .await
-            .unwrap();
+        let report = search("marker", root.path(), false, 0, false).unwrap();
         assert_eq!(report.hits.len(), 2);
         assert_eq!(report.hits[0].message_date.as_deref(), Some("2026-01-02"));
         assert_eq!(report.hits[0].from.as_deref(), Some("first@example.com"));
@@ -722,8 +713,8 @@ mod tests {
         assert_eq!(report.hits[1].from.as_deref(), Some("second@example.com"));
     }
 
-    #[tokio::test]
-    async fn reports_a_scanned_pdf_as_not_searched() {
+    #[test]
+    fn reports_a_scanned_pdf_as_not_searched() {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir_all(root.path().join("documents/filings")).unwrap();
         fs::write(
@@ -731,9 +722,7 @@ mod tests {
             pdf::blank_acroform(&[]),
         )
         .unwrap();
-        let report = search("anything", root.path(), true, 0, false)
-            .await
-            .unwrap();
+        let report = search("anything", root.path(), true, 0, false).unwrap();
         assert!(report.hits.is_empty());
         assert_eq!(report.coverage.not_searched.len(), 1);
         assert!(report.coverage.not_searched[0]
@@ -741,8 +730,8 @@ mod tests {
             .contains("no searchable text layer"));
     }
 
-    #[tokio::test]
-    async fn finds_text_on_second_pdf_page_and_in_ignored_pdf() {
+    #[test]
+    fn finds_text_on_second_pdf_page_and_in_ignored_pdf() {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir_all(root.path().join("documents/filings")).unwrap();
         fs::write(root.path().join(".gitignore"), "*.pdf\n").unwrap();
@@ -751,9 +740,7 @@ mod tests {
             two_page_pdf(),
         )
         .unwrap();
-        let report = search("second page marker", root.path(), false, 0, false)
-            .await
-            .unwrap();
+        let report = search("second page marker", root.path(), false, 0, false).unwrap();
         assert_eq!(report.hits.len(), 1);
         assert_eq!(report.hits[0].page, Some(2));
         assert_eq!(report.coverage.searched_by_kind.get("pdf"), Some(&1));
