@@ -235,8 +235,16 @@ async fn matter_status_requires_participation_and_reports_filed_onboarding() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = json(response).await;
     assert_eq!(body["status"], "pitch");
+    assert!(body["repository_remotes"].is_object());
+    assert!(body["repository_remotes"]["origin"].is_null());
     assert_eq!(body["onboarding"]["filed"], false);
     assert!(!body["missing"].as_array().unwrap().is_empty());
+    let envelope = record_matter_envelope(&fx, lawyer.id).await;
+    let response = fx.app.clone().oneshot(call()).await.unwrap();
+    let body = json(response).await;
+    assert_eq!(body["envelopes"][0]["envelope"]["envelopeId"], envelope);
+    assert_eq!(body["envelopes"][0]["envelope"]["status"], "requested");
+    assert!(body["adopted_envelopes"].as_array().unwrap().is_empty());
     let asset = Uuid::now_v7();
     fx.surreal
         .query(
@@ -282,4 +290,32 @@ async fn matter_status_requires_participation_and_reports_filed_onboarding() {
         assert!(body["closed_at"].is_string());
         assert!(body["missing"].as_array().unwrap().is_empty());
     }
+}
+
+async fn record_matter_envelope(fx: &Fixture, lawyer_id: Uuid) -> String {
+    let template = store::test_support::seed_unpinned_project_template(
+        &fx.surreal,
+        fx.ids[0],
+        "signature-read",
+        "Signature read",
+        "person",
+        Some("memo"),
+    )
+    .await;
+    let notation = store::notations::create(
+        &fx.surreal,
+        &store::notations::NewNotation::new(template.id, lawyer_id, fx.ids[0], "begin"),
+    )
+    .await
+    .unwrap();
+    let envelope = Uuid::now_v7().to_string();
+    store::signatures::record_request(
+        &fx.surreal,
+        notation.id,
+        store::signatures::SignatureProvider::DocuSign,
+        &envelope,
+    )
+    .await
+    .unwrap();
+    envelope
 }

@@ -132,15 +132,16 @@ draft. The CLI opens the sender view only with `--open`.
 Run the command from the Project checkout after publishing the Draft used to prepare the envelope.
 
 ```bash
-navigator site notation adopt-envelope --host "$host" --project "$project" \
-  --draft drafts/onboarding__letter.md --envelope "$envelope_id"
+navigator project envelope register "$envelope_id" --host "$host" --project "$project" \
+  --draft drafts/onboarding__letter.md
 ```
 
 The Project's client DRI must be among the signers. Navigator links the envelope to the Draft's Notation and records the
-provider's signer status. Use `navigator project status <code>` to read the recorded status. A pending envelope keeps a
-pitch pending. On completion, Navigator files the signed PDF and Certificate of Completion with their DocuSign envelope
-ID and records the provider's completion date. A verified Connect completion updates the linked envelope, and rerunning
-the command refreshes it directly from DocuSign.
+provider's signer status and timestamps on the matter. Use `navigator project envelope status <code> --host <host>` to
+refresh known envelopes directly from the Firm's DocuSign account. `navigator project status <code>` reads the saved
+status. A pending envelope keeps a pitch pending. On completion, Navigator files the signed PDF and Certificate of
+Completion with their DocuSign envelope ID and records the provider's completion date. A verified Connect completion
+updates the linked envelope, and rerunning the command refreshes it directly from DocuSign.
 
 ## Authentication: JWT grant
 

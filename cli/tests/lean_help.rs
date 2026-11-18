@@ -35,6 +35,7 @@ fn the_lean_navigator_names_only_its_own_verbs() {
         [
             "calendar",
             "glossary",
+            "mail",
             "notation",
             "project",
             "relationship",

@@ -95,7 +95,6 @@ pub const HUDSON_VERBS: &[&str] = &[
     "journal",
     "legal-plans",
     "lsp",
-    "mail",
     "same-day",
     "notation",
     "ops",
@@ -275,10 +274,7 @@ mod tests {
         let lean = Command::new("navigator")
             .subcommand(Command::new("project").subcommand(Command::new("gate")))
             .subcommand(Command::new("site").subcommand(Command::new("login")));
-        assert_eq!(
-            unresolved_verb("navigator mail draft --body-file x", &lean),
-            None
-        );
+        assert_eq!(unresolved_verb("navigator person create", &lean), None);
         assert_eq!(
             unresolved_verb("navigator site document upload", &lean),
             None

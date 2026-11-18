@@ -770,6 +770,19 @@ fn canonical_document(base: &str) -> Value {
         { "sessionCookie": [] }
       ],
       "paths": {
+        "/app/api/mail-signature": {
+          "get": {
+            "summary": "Read the signed-in lawyer's stored mail signature",
+            "parameters": [{"name": "account", "in": "query", "required": true, "schema": {"type": "string"}}],
+            "responses": {
+              "200": {"description": "The sending account's signature body and revision"},
+              "401": {"description": "Authentication required"},
+              "403": {"description": "Lawyer tier required"},
+              "404": {"description": "Account does not belong to this person, or no signature exists"},
+              "500": {"description": "Signature storage is unavailable"}
+            }
+          }
+        },
         "/app/api/people": {
           "get": {
             "summary": "List people, one keyset page at a time",
@@ -3645,6 +3658,21 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/projects/{id}/envelopes/refresh": {
+          "post": {
+            "summary": "Refresh the Project's known DocuSign envelopes",
+            "description": "Requires firm-side Project participation. Reads the Firm account, records provider timestamps and signers, and files completed documents. Never sends an envelope.",
+            "parameters": [{ "name": "id", "in": "path", "required": true,
+              "schema": { "type": "string", "format": "uuid" } }],
+            "responses": {
+              "200": { "description": "Refreshed envelope and signer evidence" },
+              "401": { "description": "No authenticated session" },
+              "403": { "description": "Lawyer tier required" },
+              "404": { "description": "Project outside the caller's participation" },
+              "500": { "description": "Provider or persistence failed; retry to refresh remaining envelopes" }
+            }
+          }
+        },
         "/app/api/projects/{id}/envelope-adoptions": {
           "post": {
             "summary": "Adopt an envelope sent from the Firm's DocuSign account",
@@ -5255,6 +5283,8 @@ fn canonical_document(base: &str) -> Value {
                   "required": ["raw_base64"],
                   "properties": {
                     "raw_base64": { "type": "string", "description": "The raw .eml message, base64-encoded" },
+                    "gmail_message_id": { "type": "string", "description": "Optional Gmail message ID, deduplicated within the source mailbox" },
+                    "gmail_sent": { "type": "boolean", "description": "The Gmail SENT label, used for direction even when the sender uses an alias" },
                     "mailbox": { "type": "string", "description": "The firm mailbox filing the message; matching From marks it outbound" },
                     "kind": {
                       "type": "string",

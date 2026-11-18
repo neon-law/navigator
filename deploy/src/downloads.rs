@@ -1,7 +1,7 @@
 //! `hudson downloads` — the legal files sitting in the lawyer's Downloads
 //! folder.
 //!
-//! Mail that came through `hudson mail` is already filed; the files that
+//! Mail that came through `navigator mail` is already filed; the files that
 //! never came through mail sit in Downloads, unclassified and unfiled. This
 //! verb family scans that folder, proposes a matter, kind, and conventional
 //! `YYYY.MM.DD_name` slug for each candidate (LAW-196), files one candidate

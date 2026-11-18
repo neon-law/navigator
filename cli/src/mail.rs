@@ -1,4 +1,4 @@
-//! Gmail access for `hudson mail`.
+//! Gmail access for `navigator mail`.
 
 use std::collections::HashSet;
 use std::fmt::Write as _;
@@ -16,7 +16,7 @@ use serde_json::json;
 use url::Url;
 use uuid::Uuid;
 
-pub(crate) mod attachments;
+pub mod attachments;
 mod login;
 mod packet;
 mod signature;
@@ -29,10 +29,10 @@ const MAX_SEARCH_RESULTS: u8 = 25;
 const REFRESH_TOKEN_SERVICE: &str = "com.neonlaw.navigator.gmail.refresh-token";
 /// Keychain service holding the OAuth client secret; the account is the
 /// configured client id.
-const CLIENT_SECRET_SERVICE: &str = "com.neonlaw.navigator.gmail.client-secret";
+pub const CLIENT_SECRET_SERVICE: &str = "com.neonlaw.navigator.gmail.client-secret";
 /// The operating doc for the Firm's Gmail OAuth client and a lawyer machine's
 /// sign-in. Errors about a missing client or sign-in name it.
-const PROVISIONING_DOC: &str = "docs/mail-cli.md#provision-gmail-for-hudson-mail";
+const PROVISIONING_DOC: &str = "docs/mail-cli.md#provision-gmail-for-navigator-mail";
 /// Gmail's 25 MB message limit, measured on the encoded MIME message.
 const MAX_MESSAGE_BYTES: u64 = 25_000_000;
 /// Where `mail save` writes by default: the Project checkout's git-ignored
@@ -45,7 +45,7 @@ const DEFAULT_PARSE_UPLOAD_KIND: &str = "letter";
 
 const DRAFT_HELP: &str = "\
 Signature:
-  When the deployment's stores are reachable, the draft wears the attorney's
+  When the authenticated deployment is reachable, the draft wears the attorney's
   stored signature row (resolved by the sending Gmail account), and stderr
   prints the provenance line naming its source and revision. Offline, the
   command falls back to NAVIGATOR_GMAIL_SIGNATURE — announced on stderr,
@@ -133,8 +133,8 @@ pub enum MailAction {
     },
     /// Hand a signed packet to the Firm's mail-center vendor for printing and
     /// physical mail: an unsent Gmail draft to the vendor with the PDFs
-    /// attached and the job sheet in the body, logged on the matter as an
-    /// outbound Communication with the role `other`. Nothing is sent; the
+    /// attached and the job sheet in the body. The draft stays unfiled until
+    /// the lawyer sends it and mail sync observes it. Nothing is sent; the
     /// lawyer reviews and sends the draft. A preview, a `/s/ DRAFT`
     /// signature, or unsigned signing lines are refused.
     Packet {
@@ -156,12 +156,6 @@ pub enum MailAction {
         /// The date the packet must be mailed by, `YYYY-MM-DD`.
         #[arg(long)]
         mail_by: chrono::NaiveDate,
-        /// Matter code the Communication is logged on. Defaults to project.name in navigator.yaml.
-        #[arg(long)]
-        project: Option<String>,
-        /// Navigator host. Defaults to host in navigator.yaml.
-        #[arg(long)]
-        host: Option<String>,
         /// Print the job sheet; draft nothing and log nothing.
         #[arg(long)]
         dry_run: bool,
@@ -172,12 +166,12 @@ pub enum MailAction {
         /// Read the client secret from Google's Desktop-app client JSON.
         ///
         /// Takes `installed.client_secret` from a `client_secret_*.json`,
-        /// stores it in the Keychain, and never prints it. Otherwise saved GCP
-        /// settings select Secret Manager, or login uses Keychain/hidden input.
+        /// stores it in the Keychain, and never prints it. Saved GCP
+        /// settings are preserved; login uses Keychain or hidden input.
         #[arg(long, value_name = "PATH", conflicts_with_all = ["client_secret_from_gcp", "project", "secret"])]
         client_secret_file: Option<PathBuf>,
-        /// Fetch the client secret using the signed-in gcloud account.
-        #[arg(long)]
+        /// Compatibility flag; cloud provisioning belongs in Hudson ops.
+        #[arg(long, hide = true)]
         client_secret_from_gcp: bool,
         /// Secret Manager project. Overrides saved mail setup.
         #[arg(long)]
@@ -200,6 +194,23 @@ pub enum MailAction {
         /// Save the secret name; defaults to navigator-mail-oauth-client-secret.
         #[arg(long, requires = "project")]
         secret: Option<String>,
+    },
+    /// File non-draft Messages in a Project's Gmail label, including lawyer-sent follow-ups.
+    Sync {
+        /// Matter code; defaults to the checkout manifest.
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        host: Option<String>,
+        /// Gmail label explicitly assigned to this matter; defaults to its code.
+        #[arg(long)]
+        label: Option<String>,
+        /// Required attachment classification for every filed document.
+        #[arg(long, value_parser = crate::parse_asset_kind)]
+        kind: String,
+        /// Continue polling until Ctrl-C; no Gmail labels or messages are changed.
+        #[arg(long)]
+        watch: bool,
     },
     /// File every message in a Gmail thread as a matter Communication.
     File {
@@ -698,6 +709,8 @@ struct RawGmailMessage {
 #[derive(Debug, Deserialize)]
 struct GmailMessage {
     id: String,
+    #[serde(default, rename = "labelIds")]
+    label_ids: Vec<String>,
     #[serde(rename = "internalDate")]
     internal_date: Option<String>,
     payload: Option<MessagePart>,
@@ -1000,7 +1013,7 @@ fn body_entity(body: &str, html: Option<&str>) -> Result<String> {
             "Content-Type: text/plain; charset=UTF-8\r\n\r\n{text}"
         ));
     };
-    let boundary = format!("navigator-alternative-{}", Uuid::new_v4().simple());
+    let boundary = format!("navigator-alternative-{}", Uuid::now_v7().simple());
     if text.contains(&boundary) {
         return Err(anyhow!("draft body collides with the MIME boundary"));
     }
@@ -1059,7 +1072,7 @@ fn draft_raw(
         raw.push_str(&entity);
         return Ok(raw);
     }
-    let boundary = format!("navigator-mixed-{}", Uuid::new_v4().simple());
+    let boundary = format!("navigator-mixed-{}", Uuid::now_v7().simple());
     if entity.contains(&boundary) {
         return Err(anyhow!("draft body collides with the MIME boundary"));
     }
@@ -1359,7 +1372,7 @@ fn unresolved_reference_or(reference: &str, fallback: &str) -> anyhow::Error {
         return anyhow!(
             "the reference carries a Gmail web id that names no API message id (Gmail uses \
              this form for drafts and some sent mail): {reference}. Find its Gmail message id \
-             with `hudson mail search` and pass that, or copy the URL from a conversation \
+             with `navigator mail search` and pass that, or copy the URL from a conversation \
              view"
         );
     }
@@ -1574,7 +1587,7 @@ fn setup_path() -> PathBuf {
 
 fn load_setup(path: &Path) -> Result<StoredSetup> {
     match std::fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes).context("parse saved Gmail setup; run hudson mail setup --account <gmail-address> --client-id <oauth-client-id> to replace it"),
+        Ok(bytes) => serde_json::from_slice(&bytes).context("parse saved Gmail setup; run navigator mail setup --account <gmail-address> --client-id <oauth-client-id> to replace it"),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(StoredSetup::default()),
         Err(error) => Err(error).context("read saved Gmail setup"),
     }
@@ -1650,7 +1663,7 @@ fn setup_from(account: Option<String>, client_id: Option<String>) -> Result<(Str
     match (account, client_id) {
         (Some(account), Some(client_id)) => Ok((account, client_id)),
         _ => Err(anyhow!(
-            "Gmail is not set up. Run hudson mail setup --account <gmail-address> --client-id <oauth-client-id> to save settings, or set environment overrides. The Firm's OAuth client and this machine's sign-in are in {PROVISIONING_DOC}: {}",
+            "Gmail is not set up. Run navigator mail setup --account <gmail-address> --client-id <oauth-client-id> to save settings, or set environment overrides. The Firm's OAuth client and this machine's sign-in are in {PROVISIONING_DOC}: {}",
             steps.join("; ")
         )),
     }
@@ -1670,7 +1683,7 @@ struct SetupReport {
 
 /// Checklist for the draft-only Gmail path. Built from booleans only, so it never carries a secret
 /// or a value read from the environment. The client secret is optional: a token minted by
-/// `hudson mail login` with a Desktop client needs it to refresh, and the refresh exchange
+/// `navigator mail login` with a Desktop client needs it to refresh, and the refresh exchange
 /// sends it whenever one is stored.
 fn setup_report(
     account_set: bool,
@@ -1680,7 +1693,7 @@ fn setup_report(
 ) -> SetupReport {
     let mark = |ok: bool| if ok { "ok      " } else { "MISSING " };
     let keychain_ok = keychain == KeychainState::Present;
-    let mut text = String::from("Gmail draft-only setup for hudson mail\n");
+    let mut text = String::from("Gmail draft-only setup for navigator mail\n");
     let _ = writeln!(
         text,
         "  [{}] Gmail account (saved or NAVIGATOR_GMAIL_ACCOUNT)",
@@ -1693,7 +1706,7 @@ fn setup_report(
     );
     let _ = writeln!(
         text,
-        "  [{}] OAuth client secret in the macOS Keychain, service {CLIENT_SECRET_SERVICE} (hudson mail login stores it)",
+        "  [{}] OAuth client secret in the macOS Keychain, service {CLIENT_SECRET_SERVICE} (navigator mail login stores it)",
         if client_secret_stored { "ok      " } else { "optional" }
     );
     let _ = writeln!(
@@ -1715,18 +1728,18 @@ fn setup_report(
     if keychain == KeychainState::Missing {
         let _ = writeln!(
             text,
-            "\nAuthorize Gmail in the browser and store the refresh token (uses the selected client secret source):\n  hudson mail login\nSign-in steps for a new machine: {PROVISIONING_DOC}."
+            "\nAuthorize Gmail in the browser and store the refresh token (uses the selected client secret source):\n  navigator mail login\nSign-in steps for a new machine: {PROVISIONING_DOC}."
         );
     }
     text.push_str(
-        "\nScopes: hudson mail login requests gmail.readonly and gmail.compose only, and refuses a token \
-carrying any other scope. Gmail has no narrower scope that creates drafts. hudson mail never sends, replies, or \
+        "\nScopes: navigator mail login requests gmail.readonly and gmail.compose only, and refuses a token \
+carrying any other scope. Gmail has no narrower scope that creates drafts. navigator mail never sends, replies, or \
 forwards: it has no send verb and calls no send endpoint. Never print, paste, or log the token or client secret. See \
 docs/mail-cli.md.\n",
     );
     let ready = account_set && client_id_set && keychain_ok;
     if ready {
-        text.push_str("\nReady: hudson mail draft can create unsent drafts.\n");
+        text.push_str("\nReady: navigator mail draft can create unsent drafts.\n");
     }
     SetupReport { text, ready }
 }
@@ -1806,7 +1819,9 @@ fn refresh_form<'a>(
 async fn client() -> Result<GmailClient> {
     let (account, client_id) = configured_setup()?;
     let refresh_token = keychain_refresh_token(&account).with_context(|| {
-        format!("Gmail refresh token unavailable; run hudson mail login (see {PROVISIONING_DOC})")
+        format!(
+            "Gmail refresh token unavailable; run navigator mail login (see {PROVISIONING_DOC})"
+        )
     })?;
     let client_secret = keychain_read(CLIENT_SECRET_SERVICE, &client_id)?;
     let response = reqwest::Client::new()
@@ -1835,6 +1850,14 @@ fn keychain_refresh_token(account: &str) -> Result<String> {
         return Err(anyhow!("Gmail refresh token is empty in Keychain"));
     }
     Ok(token)
+}
+
+/// Provision the existing local OAuth client secret store; used by the operator CLI.
+pub fn provision_oauth_client_secret(client_id: &str, secret: &str) -> Result<()> {
+    if client_id.trim().is_empty() || secret.trim().is_empty() {
+        return Err(anyhow!("OAuth client and secret must be nonempty"));
+    }
+    keychain_write(CLIENT_SECRET_SERVICE, client_id, secret.trim())
 }
 
 /// Reads one generic-password item. `None` when the item does not exist;
@@ -1888,7 +1911,7 @@ fn finish(result: Result<()>) -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("hudson mail: {error:#}");
+            eprintln!("navigator mail: {error:#}");
             ExitCode::FAILURE
         }
     }
@@ -1937,7 +1960,7 @@ async fn run_inner(action: MailAction) -> Result<()> {
             let threads = client().await?.search(&scoped, all).await?;
             if threads.is_empty() && scoped != query {
                 eprintln!(
-                    "hudson mail: no threads matched within this Project's scope (its client \
+                    "navigator mail: no threads matched within this Project's scope (its client \
                      contact and dockets: case numbers); pass --unscoped to search the whole mailbox"
                 );
             }
@@ -2016,8 +2039,6 @@ async fn run_inner(action: MailAction) -> Result<()> {
             service,
             return_receipt,
             mail_by,
-            project,
-            host,
             dry_run,
         } => {
             let job = packet::MailJob {
@@ -2036,7 +2057,7 @@ async fn run_inner(action: MailAction) -> Result<()> {
                     job.subject(),
                     job.sheet()
                 );
-                eprintln!("dry run: no draft saved and no Communication logged");
+                eprintln!("dry run: no draft saved");
                 return Ok(());
             }
             let body = tempfile::NamedTempFile::new().context("create the job sheet file")?;
@@ -2066,31 +2087,6 @@ async fn run_inner(action: MailAction) -> Result<()> {
                 "Mail job drafted unsent to {} with {} attachment(s); review and send it from Gmail Drafts. Gmail API draft ID: {}.",
                 job.vendor, saved.attachments, saved.id
             );
-            let logged = cli::projects::communication::create_row(
-                host.as_deref(),
-                project.as_deref(),
-                &cli::projects::communication::NewCommunication {
-                    channel: "email_outbound".into(),
-                    direction: "outbound".into(),
-                    counterparty: job.vendor.clone(),
-                    role: Some("other".into()),
-                    at: chrono::Utc::now().to_rfc3339(),
-                    duration: None,
-                    body_file: body.path().to_path_buf(),
-                    recorded: "none".into(),
-                    meet_and_confer: None,
-                    agreements: Vec::new(),
-                    confirms: None,
-                    acknowledges: None,
-                    source_ref: Some(format!("gmail-draft:{}", saved.id)),
-                    asset_id: None,
-                    client_visible: false,
-                    subject: Some(job.subject()),
-                },
-            )
-            .await
-            .context("the draft is saved, but logging its Communication failed")?;
-            println!("{logged}");
             Ok(())
         }
         MailAction::Setup {
@@ -2105,17 +2101,10 @@ async fn run_inner(action: MailAction) -> Result<()> {
             project,
             secret,
         } => {
-            let gcp = if client_secret_file.is_some() {
-                None
-            } else {
-                login::gcp_source(
-                    project.as_deref(),
-                    secret.as_deref(),
-                    client_secret_from_gcp,
-                    &load_setup(&setup_path())?,
-                )?
-            };
-            login::login_command(client_secret_file.as_deref(), gcp.as_ref()).await
+            if client_secret_from_gcp || project.is_some() || secret.is_some() {
+                return Err(anyhow!("Cloud provisioning belongs in hudson ops gmail-client; navigator mail login uses the existing Keychain or --client-secret-file."));
+            }
+            login::login_command(client_secret_file.as_deref()).await
         }
         MailAction::Attachments {
             reference,
@@ -2123,6 +2112,22 @@ async fn run_inner(action: MailAction) -> Result<()> {
             only,
             include_inline,
         } => attachments::run(&reference, &dir, only.as_deref(), include_inline).await,
+        MailAction::Sync {
+            project,
+            host,
+            label,
+            kind,
+            watch,
+        } => {
+            sync_mail(
+                project.as_deref(),
+                host.as_deref(),
+                label.as_deref(),
+                &kind,
+                watch,
+            )
+            .await
+        }
         MailAction::File {
             thread,
             project,
@@ -2284,28 +2289,45 @@ async fn resolve_draft_signature(
 }
 
 /// The stored signature for the sending account's Person, or `Err` naming
-/// why the deployment's stores could not answer — the caller falls back to
+/// why the authenticated site API could not answer — the caller falls back to
 /// the env var and announces it. The account resolves against `Person.email`
 /// exactly: a sending account that is no Person has no row to fetch, and the
 /// fallback says so rather than signing with another attorney's block.
-async fn runtime_signature(
-    sending_account: Option<&str>,
-) -> Result<store::mail_signatures::MailSignature, String> {
-    let account = sending_account.ok_or("no configured Gmail account; run hudson mail setup")?;
-    let surreal = store::surreal::connect_from_env()
+#[derive(Deserialize)]
+struct RuntimeSignature {
+    person_id: Uuid,
+    body: String,
+    updated_at: Option<String>,
+}
+
+async fn runtime_signature(sending_account: Option<&str>) -> Result<RuntimeSignature, String> {
+    let account = sending_account.ok_or("no configured Gmail account; run navigator mail setup")?;
+    let (base, token) = crate::remote::resolve(None).map_err(|error| error.to_string())?;
+    runtime_signature_on(&base, &token, account).await
+}
+
+async fn runtime_signature_on(
+    base: &str,
+    token: &str,
+    account: &str,
+) -> Result<RuntimeSignature, String> {
+    let response = crate::remote::authenticated_client_builder(base)
+        .map_err(|_| "signature request unavailable".to_string())?
+        .build()
+        .map_err(|_| "signature request unavailable".to_string())?
+        .get(format!("{base}/app/api/mail-signature"))
+        .bearer_auth(token)
+        .query(&[("account", account)])
+        .send()
         .await
-        .map_err(|error| format!("the deployment's document store is unreachable: {error}"))?;
-    let pg = store::postgres::PostgresDb::from_env()
+        .map_err(|_| "signature request unavailable".to_string())?;
+    if !response.status().is_success() {
+        return Err(format!("signature read refused ({})", response.status()));
+    }
+    response
+        .json()
         .await
-        .map_err(|error| format!("the deployment's relational store is unreachable: {error}"))?;
-    let person = store::persons::find_by_email_ci(&surreal, account)
-        .await
-        .map_err(|error| format!("the sending account's Person lookup failed: {error}"))?
-        .ok_or_else(|| format!("no Person matches the sending account {account}"))?;
-    store::mail_signatures::for_person(&surreal, &pg, person.id)
-        .await
-        .map_err(|error| format!("the stored signature read failed: {error}"))?
-        .ok_or_else(|| format!("no stored signature row for the sending account {account}"))
+        .map_err(|_| "invalid signature response".to_string())
 }
 
 /// The env fallback for a runtime reason: announced, never silent. A blank
@@ -2313,7 +2335,7 @@ async fn runtime_signature(
 /// it, so it leaves `Neither` and the refusal names the env var itself.
 fn env_fallback(env_signature: Option<&str>, reason: &str) -> ResolvedSignature {
     let unavailable =
-        format!("hudson mail: the deployment's stored signature is unavailable ({reason})");
+        format!("navigator mail: the deployment's stored signature is unavailable ({reason})");
     match env_signature.filter(|value| !value.trim().is_empty()) {
         Some(body) => ResolvedSignature::Env {
             signature: DraftSignature {
@@ -2448,7 +2470,7 @@ async fn account_signed(
     };
     if let Some(line) = signature::sign_off(&signed) {
         eprintln!(
-            "hudson mail: the body ends with the sign-off `{line}` above the signature; \
+            "navigator mail: the body ends with the sign-off `{line}` above the signature; \
              the signature is the close, so remove it"
         );
     }
@@ -2693,6 +2715,49 @@ async fn ingest_provider_message(
     Ok(())
 }
 
+fn matter_label_query(label: &str) -> Result<String> {
+    anyhow::ensure!(
+        !label.trim().is_empty()
+            && !label
+                .chars()
+                .any(|c| c.is_control() || matches!(c, '"' | '\\')),
+        "choose a nonempty Gmail label without quotes or backslashes"
+    );
+    Ok(format!("label:\"{label}\" -in:drafts"))
+}
+
+async fn sync_mail(
+    project: Option<&str>,
+    host: Option<&str>,
+    label: Option<&str>,
+    kind: &str,
+    watch: bool,
+) -> Result<()> {
+    let local = crate::projects::manifest::read(Path::new("."));
+    let project = project
+        .or_else(|| local.as_ref().and_then(|m| m.project.as_deref()))
+        .context("pass --project or run from a Project checkout")?;
+    let host = host.or_else(|| local.as_ref().and_then(|m| m.host.as_deref()));
+    let query = matter_label_query(label.unwrap_or(project))?;
+    // Verify the target before fetching any mailbox content.
+    let (base, token) = crate::remote::resolve(host)?;
+    crate::projects::surfaces::resolve_project_id(&base, &token, project).await?;
+    loop {
+        let gmail = client().await?;
+        let threads = gmail.search(&query, true).await?;
+        for thread in threads {
+            file_thread(&thread.id, Some(project), host, Some(kind)).await?;
+        }
+        if !watch {
+            return Ok(());
+        }
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => { result?; return Ok(()); }
+            () = tokio::time::sleep(std::time::Duration::from_secs(30)) => {}
+        }
+    }
+}
+
 async fn file_thread(
     thread_id: &str,
     project_code: Option<&str>,
@@ -2729,43 +2794,17 @@ async fn file_thread(
         expected_contact.as_deref(),
     )
     .await?;
-    let bodies = thread
-        .messages
-        .iter()
-        .map(|message| {
-            message
-                .payload
-                .as_ref()
-                .and_then(plain_text)
-                .filter(|body| !body.trim().is_empty())
-                .ok_or_else(|| {
-                    anyhow!(
-                        "message {} has no supported text body; no messages were filed",
-                        message.id
-                    )
-                })
-        })
-        .collect::<Result<Vec<_>>>()?;
     let target = FileTarget {
         base: &base,
         navigator_token: &navigator_token,
         project_id,
         mailbox: &profile.email_address,
     };
-    let mut attachments_filed = 0;
-    for (message, body) in thread.messages.iter().zip(bodies) {
-        if has_attachments(message) {
-            let filed = file_raw_message(&gmail, &target, &message.id, kind).await?;
-            attachments_filed += filed.attachments_filed;
-            filed.print_skipped();
-        } else {
-            file_message(&target, message, &body).await?;
-        }
-    }
+    let (messages_filed, attachments_filed) =
+        file_thread_messages(&gmail, &target, &thread, kind).await?;
     println!(
         "Filed {} message(s) from thread {} as Communications",
-        thread.messages.len(),
-        thread.id
+        messages_filed, thread.id
     );
     if attachments_filed > 0 {
         println!("Filed {attachments_filed} attachment(s) as {kind} documents");
@@ -2773,16 +2812,28 @@ async fn file_thread(
     Ok(())
 }
 
-/// Whether a message carries a part a lawyer would call an attachment.
-fn has_attachments(message: &GmailMessage) -> bool {
-    message.payload.as_ref().is_some_and(|part| {
-        let mut names = Vec::new();
-        attachments(part, &mut names);
-        !names.is_empty()
-    })
+async fn file_thread_messages(
+    gmail: &GmailClient,
+    target: &FileTarget<'_>,
+    thread: &GmailThread,
+    kind: &str,
+) -> Result<(usize, usize)> {
+    let mut messages = 0;
+    let mut attachments = 0;
+    for message in thread
+        .messages
+        .iter()
+        .filter(|message| !message.label_ids.iter().any(|label| label == "DRAFT"))
+    {
+        let filed = file_raw_message(gmail, target, message, kind).await?;
+        messages += 1;
+        attachments += filed.attachments_filed;
+        filed.print_skipped();
+    }
+    Ok((messages, attachments))
 }
 
-/// File a message that carries attachments: fetch its RFC 822 copy through
+/// File a Gmail message with its raw source: fetch its RFC 822 copy through
 /// the read-only Gmail path and post it to the `mail/eml` door, which files
 /// the Communication and each attachment as a linked, internal document of
 /// `kind`. The door dedupes on the message's own Message-ID, so a re-run
@@ -2790,17 +2841,21 @@ fn has_attachments(message: &GmailMessage) -> bool {
 async fn file_raw_message(
     gmail: &GmailClient,
     target: &FileTarget<'_>,
-    message_id: &str,
+    message: &GmailMessage,
     kind: &str,
 ) -> Result<EmlFiled> {
-    let raw = gmail.raw_message_bytes(message_id).await?;
-    let filed = post_eml(
+    let raw = gmail.raw_message_bytes(&message.id).await?;
+    let filed = post_eml_with_source(
         target.base,
         target.navigator_token,
         target.project_id,
         &raw,
         kind,
         Some(target.mailbox),
+        Some(GmailSource {
+            message_id: &message.id,
+            sent: message.label_ids.iter().any(|label| label == "SENT"),
+        }),
     )
     .await?;
     Ok(eml_filing_summary(&filed))
@@ -2897,6 +2952,10 @@ async fn parse_gmail_message(
     };
     let message_id = message_id.as_str();
     let message = gmail.message(message_id).await?;
+    anyhow::ensure!(
+        !message.label_ids.iter().any(|label| label == "DRAFT"),
+        "drafts are not filed; wait until the lawyer sends the message"
+    );
     let payload = message
         .payload
         .as_ref()
@@ -2933,7 +2992,7 @@ async fn parse_gmail_message(
         println!("Filed the message as a Communication");
         return Ok(());
     }
-    let filed = file_raw_message(&gmail, &target, message_id, kind).await?;
+    let filed = file_raw_message(&gmail, &target, &message, kind).await?;
     println!("Filed the message as a Communication");
     if filed.deduped {
         println!("Already filed (deduped on {})", filed.source_ref);
@@ -3029,8 +3088,38 @@ async fn post_eml(
     kind: &str,
     mailbox: Option<&str>,
 ) -> Result<serde_json::Value> {
+    post_eml_with_source(
+        base,
+        navigator_token,
+        project_id,
+        bytes,
+        kind,
+        mailbox,
+        None,
+    )
+    .await
+}
+
+struct GmailSource<'a> {
+    message_id: &'a str,
+    sent: bool,
+}
+
+async fn post_eml_with_source(
+    base: &str,
+    navigator_token: &str,
+    project_id: Uuid,
+    bytes: &[u8],
+    kind: &str,
+    mailbox: Option<&str>,
+    gmail: Option<GmailSource<'_>>,
+) -> Result<serde_json::Value> {
     let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
     let mut request = json!({ "raw_base64": encoded, "kind": kind });
+    if let Some(source) = gmail {
+        request["gmail_message_id"] = json!(source.message_id);
+        request["gmail_sent"] = json!(source.sent);
+    }
     if let Some(mailbox) = mailbox {
         request["mailbox"] = json!(mailbox);
     }
@@ -3218,6 +3307,7 @@ mod tests {
     fn synthetic_message(headers: &[(&str, &str)]) -> GmailMessage {
         GmailMessage {
             id: "message-1".into(),
+            label_ids: Vec::new(),
             internal_date: None,
             payload: Some(MessagePart {
                 mime_type: None,
@@ -3234,6 +3324,58 @@ mod tests {
                 parts: None,
                 filename: None,
             }),
+        }
+    }
+
+    #[tokio::test]
+    async fn thread_filing_includes_sent_messages_and_skips_unsent_drafts() {
+        use wiremock::matchers::{body_partial_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        let raw = b"From: lawyer@example.test\r\nTo: client@example.test\r\nCc: copy@example.test\r\nDate: Fri, 30 Oct 2026 14:03:00 +0000\r\nSubject: Follow-up\r\n\r\nOwn message.";
+        Mock::given(method("GET"))
+            .and(path("/users/me/messages/sent-msg1"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"raw": GMAIL_BASE64URL.encode(raw)})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST")).and(path(format!("/app/api/projects/{}/mail/eml", Uuid::nil())))
+            .and(body_partial_json(json!({"gmail_message_id": "sent-msg1", "gmail_sent": true, "raw_base64": base64::engine::general_purpose::STANDARD.encode(raw), "kind": "letter"})))
+            .respond_with(ResponseTemplate::new(201).set_body_json(json!({"filed": [], "deduped": false})))
+            .expect(1).mount(&server).await;
+        let thread: GmailThread = serde_json::from_value(json!({"id": "thread1", "messages": [
+            {"id": "sent-msg1", "labelIds": ["SENT"]},
+            {"id": "draft-msg1", "labelIds": ["DRAFT"]}
+        ]}))
+        .unwrap();
+        let gmail = GmailClient::with_base_url("token".into(), Url::parse(&server.uri()).unwrap());
+        let base = server.uri();
+        let target = FileTarget {
+            base: &base,
+            navigator_token: "test",
+            project_id: Uuid::nil(),
+            mailbox: "lawyer@example.test",
+        };
+        assert_eq!(
+            file_thread_messages(&gmail, &target, &thread, "letter")
+                .await
+                .unwrap(),
+            (1, 0)
+        );
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    }
+
+    #[test]
+    fn matter_label_sync_cannot_expand_its_explicit_gmail_scope() {
+        assert_eq!(
+            matter_label_query("matter-code").unwrap(),
+            "label:\"matter-code\" -in:drafts"
+        );
+        for label in ["", "matter\" OR in:anywhere", "a\nb", "a\\b"] {
+            assert!(matter_label_query(label).is_err());
         }
     }
 
@@ -3434,6 +3576,8 @@ MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n\
             .and(path(format!("/app/api/projects/{}/mail/eml", Uuid::nil())))
             .and(body_partial_json(json!({
                 "kind": "exhibit",
+                "gmail_message_id": "message-1",
+                "gmail_sent": false,
                 "mailbox": "lawyer@example.test",
                 "raw_base64": base64::engine::general_purpose::STANDARD.encode(raw),
             })))
@@ -3453,7 +3597,7 @@ MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n\
             project_id: Uuid::nil(),
             mailbox: "lawyer@example.test",
         };
-        let filed = file_raw_message(&client, &target, "message-1", "exhibit")
+        let filed = file_raw_message(&client, &target, &synthetic_message(&[]), "exhibit")
             .await
             .unwrap();
         assert_eq!(filed.attachments_filed, 1);
@@ -3500,7 +3644,7 @@ MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n\
         assert_eq!(gmail_message_id(url), None);
         let message = unresolved_reference(url).to_string();
         assert!(message.contains("Gmail web id"), "{message}");
-        assert!(message.contains("hudson mail search"), "{message}");
+        assert!(message.contains("navigator mail search"), "{message}");
         let plain = unresolved_reference("notes/draft-body.txt").to_string();
         assert!(plain.contains("neither"), "{plain}");
     }
@@ -3724,8 +3868,8 @@ MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n\
     #[test]
     fn agent_contract_documents_mail_parse_and_save() {
         let contract = include_str!("../../cli/src/projects/agent_contract.md");
-        assert!(contract.contains("hudson mail parse"));
-        assert!(contract.contains("hudson mail save"));
+        assert!(contract.contains("navigator mail parse"));
+        assert!(contract.contains("navigator mail save"));
         assert!(contract.contains("`mail/` is git-ignored"));
     }
 
@@ -4216,8 +4360,8 @@ MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n\
         let doc = include_str!("../../docs/mail-cli.md");
         let (path, anchor) = PROVISIONING_DOC.split_once('#').unwrap();
         assert_eq!(path, "docs/mail-cli.md");
-        assert_eq!(anchor, "provision-gmail-for-hudson-mail");
-        assert!(doc.contains("\n## Provision Gmail for hudson mail\n"));
+        assert_eq!(anchor, "provision-gmail-for-navigator-mail");
+        assert!(doc.contains("\n## Provision Gmail for navigator mail\n"));
     }
 
     #[test]
@@ -4228,7 +4372,7 @@ MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n\
                 && error.contains("NAVIGATOR_GMAIL_CLIENT_ID")
         );
         assert!(
-            error.contains("docs/mail-cli.md#provision-gmail-for-hudson-mail"),
+            error.contains("docs/mail-cli.md#provision-gmail-for-navigator-mail"),
             "the error must name the provisioning doc: {error}"
         );
         assert_eq!(
@@ -4760,14 +4904,14 @@ MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n\
         assert!(!report.text.contains("security add-generic-password"));
         assert!(report.text.contains(
             "No OAuth client id yet? The Firm's operator creates one Desktop-app client per Firm; \
-see docs/mail-cli.md#provision-gmail-for-hudson-mail."
+see docs/mail-cli.md#provision-gmail-for-navigator-mail."
         ));
 
         let missing = setup_report(true, true, false, KeychainState::Missing);
         assert!(!missing.ready);
-        assert!(missing.text.contains("hudson mail login"));
+        assert!(missing.text.contains("navigator mail login"));
         assert!(missing.text.contains(
-            "Sign-in steps for a new machine: docs/mail-cli.md#provision-gmail-for-hudson-mail."
+            "Sign-in steps for a new machine: docs/mail-cli.md#provision-gmail-for-navigator-mail."
         ));
         assert!(!missing.text.contains("No OAuth client id yet"));
         assert!(missing.text.contains("[optional] OAuth client secret"));
@@ -4776,7 +4920,7 @@ see docs/mail-cli.md#provision-gmail-for-hudson-mail."
         // The client secret is optional: its absence never blocks readiness.
         let ready = setup_report(true, true, false, KeychainState::Present);
         assert!(ready.ready);
-        assert!(!ready.text.contains("  hudson mail login\n"));
+        assert!(!ready.text.contains("  navigator mail login\n"));
 
         let with_secret = setup_report(true, true, true, KeychainState::Present);
         assert!(with_secret.ready);
@@ -4812,6 +4956,7 @@ see docs/mail-cli.md#provision-gmail-for-hudson-mail."
     fn message_with_body(mime_type: &str, body_data: &str) -> GmailMessage {
         GmailMessage {
             id: "message-1".into(),
+            label_ids: Vec::new(),
             internal_date: None,
             payload: Some(MessagePart {
                 mime_type: Some(mime_type.into()),
@@ -4838,11 +4983,13 @@ see docs/mail-cli.md#provision-gmail-for-hudson-mail."
         let html_only = message_with_body("text/html", &encoded(b"<p>Confirmed</p>"));
         let no_payload = GmailMessage {
             id: "message-3".into(),
+            label_ids: Vec::new(),
             internal_date: None,
             payload: None,
         };
         let with_attachment = GmailMessage {
             id: "message-4".into(),
+            label_ids: Vec::new(),
             internal_date: None,
             payload: Some(MessagePart {
                 mime_type: Some("multipart/mixed".into()),
@@ -5074,6 +5221,36 @@ see docs/mail-cli.md#provision-gmail-for-hudson-mail."
             parsed.action,
             MailAction::Search { unscoped: true, all: false, ref query } if query == "from:ecf"
         ));
+    }
+
+    #[tokio::test]
+    async fn signature_reads_use_the_navigator_bearer_and_sending_account() {
+        use wiremock::{
+            matchers::{header, method, path, query_param},
+            Mock, ResponseTemplate,
+        };
+        let server = wiremock::MockServer::start().await;
+        let person = Uuid::now_v7();
+        Mock::given(method("GET"))
+            .and(path("/app/api/mail-signature"))
+            .and(header("authorization", "Bearer navigator-session"))
+            .and(query_param("account", "lawyer@example.com"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "person_id":person, "body":"Sample Attorney", "updated_at":"2026-11-17T12:00:00Z"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let signature =
+            runtime_signature_on(&server.uri(), "navigator-session", "lawyer@example.com")
+                .await
+                .unwrap();
+        assert_eq!(signature.person_id, person);
+        assert_eq!(signature.body, "Sample Attorney");
+        assert_eq!(
+            signature.updated_at.as_deref(),
+            Some("2026-11-17T12:00:00Z")
+        );
     }
 
     #[tokio::test]

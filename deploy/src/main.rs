@@ -22,6 +22,7 @@ mod firm_forgejo;
 mod firms_doctor;
 mod forms_render;
 mod forms_sync;
+mod gmail_client;
 mod import;
 mod inbox;
 mod inbox_import;
@@ -29,7 +30,7 @@ mod journal;
 mod letterhead;
 mod lsp_download;
 mod lsp_publish;
-mod mail;
+use cli::mail;
 mod mcp_bridge;
 mod notation_import;
 mod notation_kinds;
@@ -63,8 +64,8 @@ use cli::commands::{
 #[cfg(test)]
 use cli::commands::{help_headline, parse_notarization};
 use cli::{
-    answers_file, atomic_directory, authorities, credentials, document_layout, document_sync,
-    legal_plans, login, palette, projects, release, remote,
+    answers_file, atomic_directory, authorities, document_layout, document_sync, legal_plans,
+    login, palette, projects, release, remote,
 };
 use devx::brand::BrandCmd;
 use devx::{CertificatesCmd, DnsCmd, GcpCmd, HostCmd, RestateCmd, StagingAction, WorktreeEnvCmd};
@@ -677,14 +678,6 @@ mod help_tests {
             NOTATION_RENDER_FALLBACK_EPOCH
         );
     }
-}
-
-/// The live clap tree `hudson` dispatches, for tests that render a
-/// subcommand's help. Outside tests the `cli` library's `navigator_command`
-/// (the lean tree) is the one the gate reads.
-#[cfg(test)]
-fn navigator_command() -> clap::Command {
-    Cli::command()
 }
 
 // These Clap enums live only for the duration of one CLI invocation. Their
@@ -1684,6 +1677,15 @@ enum KustomizeCmd {
 #[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum OpsCmd {
+    /// Provision the Gmail OAuth client secret into Navigator's local Keychain.
+    GmailClient {
+        #[arg(long)]
+        project: String,
+        #[arg(long, default_value = "navigator-mail-oauth-client-secret")]
+        secret: String,
+        #[arg(long)]
+        client_id: String,
+    },
     /// Reconcile one named GitHub repository's merge protections and policy.
     /// Reads `GITHUB_TOKEN`; the required repository argument is never inferred
     /// from the environment or a checkout's `origin` remote.
@@ -3237,6 +3239,11 @@ fn run() -> ExitCode {
         return ExitCode::from(2);
     };
     match cli_command {
+        Command::Ops(OpsCmd::GmailClient {
+            project,
+            secret,
+            client_id,
+        }) => devx_result(runtime().block_on(gmail_client::provision(project, secret, &client_id))),
         Command::Pii { dir, analyzer_url } => {
             let Ok(findings) = runtime().block_on(cli::pii_audit::audit_tree(&dir, &analyzer_url))
             else {
@@ -5031,7 +5038,7 @@ mod command_boundary_tests {
     /// Matter-work verbs that still link the store, Typst, or the web
     /// renderer, which the lean `navigator` leaves out. Each moves once it
     /// reads through the site API; remove it here when it does.
-    const PENDING_MATTER_VERBS: &[&str] = &["downloads", "inbox", "mail", "preview"];
+    const PENDING_MATTER_VERBS: &[&str] = &["downloads", "inbox", "preview"];
     const PENDING_NOTATION_VERBS: &[&str] = &["help", "import", "kinds", "pdf", "preview", "word"];
 
     /// Every subcommand of `hudson` at `group` is Firm work, a pending

@@ -88,7 +88,7 @@ enum Command {
         #[arg(long, hide = true)]
         ci: bool,
     },
-    /// Preview the Jujutsu checkouts needed for active Projects on a host.
+    /// Synchronize Jujutsu checkouts for participating open and pitch Projects.
     Sync {
         /// Target Navigator host.
         #[arg(long)]
@@ -97,8 +97,13 @@ enum Command {
         #[arg(long)]
         dir: Option<PathBuf>,
         /// Report checkout state without changing files or contacting the forge.
-        #[arg(long, required = true)]
+        #[arg(long)]
         dry_run: bool,
+    },
+    /// Search, read, draft, and file Gmail correspondence; sending stays with the lawyer.
+    Mail {
+        #[command(subcommand)]
+        action: crate::mail::MailAction,
     },
     /// Interact with a project hosted on a navigator site.
     ///
@@ -418,11 +423,10 @@ fn run() -> ExitCode {
             errors_only,
             ci: _,
         } => run_validate(&dir, fix, errors_only),
-        Command::Sync {
-            host,
-            dir,
-            dry_run: _,
-        } => runtime().block_on(projects::watch::run_preview(dir, &host)),
+        Command::Sync { host, dir, dry_run } => {
+            runtime().block_on(projects::watch::run_sync(dir, &host, dry_run))
+        }
+        Command::Mail { action } => runtime().block_on(crate::mail::run(action)),
         Command::Projects { action } => runtime().block_on(run_projects(action)),
         Command::Notation {
             action: NotationCmd::Envelope { action },
@@ -737,6 +741,11 @@ pub enum FinanceCmd {
 
 #[derive(Subcommand)]
 pub enum ProjectsCmd {
+    /// Register and refresh `DocuSign` envelopes recorded on this matter.
+    Envelope {
+        #[command(subcommand)]
+        action: ProjectEnvelopeCmd,
+    },
     /// Check a draft issue for client or matter identifiers before filing it
     /// in an outside tracker. Runs locally; the text is never sent anywhere.
     /// Exits non-zero and names each placeholder to use when it finds any.
@@ -922,7 +931,7 @@ pub enum ProjectsCmd {
         #[command(subcommand)]
         action: DocumentsCmd,
     },
-    /// Watch open Projects, fetch remote bookmarks, and download document revisions.
+    /// Watch participating open and pitch Projects, fetch bookmarks, and download document revisions.
     Watch {
         /// Directory holding one checkout per Project.
         #[arg(long)]
@@ -1340,6 +1349,26 @@ pub enum SurfacesCmd {
 }
 
 #[derive(Subcommand)]
+pub enum ProjectEnvelopeCmd {
+    /// Adopt an envelope sent from `DocuSign` using the published Draft.
+    Register {
+        envelope_id: uuid::Uuid,
+        #[arg(long)]
+        project: String,
+        #[arg(long)]
+        draft: String,
+        #[command(flatten)]
+        host: HostOpt,
+    },
+    /// Refresh recorded `DocuSign` envelopes on this matter.
+    Status {
+        project_code: String,
+        #[command(flatten)]
+        host: HostOpt,
+    },
+}
+
+#[derive(Subcommand)]
 pub enum ProjectJjCmd {
     /// Show the checkout's history in lawyer terms: each change's
     /// description, author, and time, with an explicit warning on a
@@ -1354,6 +1383,14 @@ pub enum ProjectJjCmd {
 
 #[derive(Subcommand)]
 pub enum ProjectRepositoryCmd {
+    /// Synchronize Forgejo after a GitHub review merged outside the push verb.
+    Reconcile {
+        #[arg(long, default_value = ".")]
+        dir: PathBuf,
+        /// Merged GitHub pull request number.
+        #[arg(long)]
+        review: u64,
+    },
     /// Restore missing or drifted canonical Agent Skills, `AGENTS.md`, and
     /// the root `.gitignore` lines this release requires.
     SyncSkills {
@@ -2291,6 +2328,20 @@ impl ClosureReasonArg {
 #[allow(clippy::too_many_lines)]
 pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
     match action {
+        ProjectsCmd::Envelope { action } => match action {
+            ProjectEnvelopeCmd::Register {
+                envelope_id,
+                project,
+                draft,
+                host,
+            } => {
+                remote::notation_adopt_envelope(host.host.as_deref(), &project, &draft, envelope_id)
+                    .await
+            }
+            ProjectEnvelopeCmd::Status { project_code, host } => {
+                projects::status::refresh_envelopes(host.host.as_deref(), &project_code).await
+            }
+        },
         ProjectsCmd::FeedbackCheck {
             file,
             terms,
@@ -2882,7 +2933,7 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
             brand,
             host,
         } => {
-            remote::projects_create_named(
+            let result = remote::projects_create_named(
                 host.host.as_deref(),
                 &name,
                 &code,
@@ -2895,7 +2946,15 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 firm.as_deref(),
                 brand.as_deref(),
             )
-            .await
+            .await;
+            if result == ExitCode::SUCCESS && !closed {
+                if let Err(error) = projects::watch::sync_project(host.host.as_deref(), &code).await
+                {
+                    eprintln!("navigator: {error:#}");
+                    return ExitCode::FAILURE;
+                }
+            }
+            result
         }
         ProjectsCmd::ImportSource {
             project_code,
@@ -3028,6 +3087,15 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
             },
         },
         ProjectsCmd::Repository { action } => match action {
+            ProjectRepositoryCmd::Reconcile { dir, review } => {
+                match projects::push::reconcile(&dir, review).await {
+                    Ok(()) => ExitCode::SUCCESS,
+                    Err(error) => {
+                        eprintln!("navigator: {error:#}");
+                        ExitCode::from(2)
+                    }
+                }
+            }
             ProjectRepositoryCmd::SyncSkills { dir } => {
                 match projects::repository::repair_skills(&dir) {
                     Ok(repaired) => {
@@ -5115,6 +5183,19 @@ pub fn print_error_recap(errors: &[GateError]) {
 mod gate_helpers_tests {
     use super::*;
     use std::fmt::Write as _;
+
+    #[test]
+    fn sync_can_apply_or_preview_the_same_active_inventory() {
+        assert!(Cli::try_parse_from(["navigator", "sync", "--host", "site.example.test"]).is_ok());
+        assert!(Cli::try_parse_from([
+            "navigator",
+            "sync",
+            "--host",
+            "site.example.test",
+            "--dry-run"
+        ])
+        .is_ok());
+    }
 
     #[test]
     fn relationship_add_requires_a_scope_and_an_existing_subject() {

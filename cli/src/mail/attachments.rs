@@ -1,4 +1,4 @@
-//! `hudson mail attachments`: write a Gmail message's attachments to a
+//! `navigator mail attachments`: write a Gmail message's attachments to a
 //! local directory, one file per attachment, without clobbering.
 //!
 //! The message is read with `format=raw` — the same read `mail save` makes
@@ -15,9 +15,9 @@ use sha2::{Digest, Sha256};
 
 /// One attachment pulled out of a message, named and ready to write.
 #[derive(Debug)]
-pub(crate) struct ExtractedAttachment {
-    pub(crate) name: String,
-    pub(crate) bytes: Vec<u8>,
+pub struct ExtractedAttachment {
+    pub name: String,
+    pub bytes: Vec<u8>,
 }
 
 /// What the walk is told to keep.
@@ -31,7 +31,7 @@ pub(super) struct Selection<'a> {
 /// Refuses a name that cannot be written as one plain file in the target
 /// directory: empty, `.` or `..`, a path separator, or a control character.
 /// Surrounding whitespace is trimmed; nothing else is rewritten.
-pub(crate) fn checked_filename(name: &str) -> Result<String> {
+pub fn checked_filename(name: &str) -> Result<String> {
     let name = name.trim();
     if name.is_empty() || name == "." || name == ".." {
         return Err(anyhow!("an attachment has an empty or dot-only filename"));
@@ -51,7 +51,8 @@ pub(crate) fn checked_filename(name: &str) -> Result<String> {
 
 /// A shell-style glob on a filename: `*` matches any run, `?` one
 /// character, ASCII case-insensitive.
-pub(crate) fn glob_matches(pattern: &str, name: &str) -> bool {
+#[must_use]
+pub fn glob_matches(pattern: &str, name: &str) -> bool {
     let pattern: Vec<char> = pattern.chars().map(|c| c.to_ascii_lowercase()).collect();
     let name: Vec<char> = name.chars().map(|c| c.to_ascii_lowercase()).collect();
     let (mut p, mut n) = (0, 0);
@@ -142,7 +143,8 @@ pub(super) fn extract(raw: &[u8], selection: &Selection<'_>) -> Result<Vec<Extra
 /// Two attachments may share a filename. Identical bytes collapse to one
 /// file; differing bytes get `-2`, `-3`, ... before the extension, in
 /// message order, so a re-run names them the same way.
-pub(crate) fn disambiguate(attachments: Vec<ExtractedAttachment>) -> Vec<ExtractedAttachment> {
+#[must_use]
+pub fn disambiguate(attachments: Vec<ExtractedAttachment>) -> Vec<ExtractedAttachment> {
     let mut kept: Vec<ExtractedAttachment> = Vec::new();
     for mut attachment in attachments {
         if kept
@@ -222,7 +224,7 @@ pub(super) fn write_all(
 /// Writes named attachments into `dir` and reports each file. The seam
 /// `mail attachments` and `inbox attachments` share, so both refuse a
 /// clobber the same way.
-pub(crate) fn write_reports(
+pub fn write_reports(
     dir: &Path,
     attachments: &[ExtractedAttachment],
 ) -> Result<Vec<AttachmentReport>> {
@@ -236,7 +238,7 @@ pub(crate) fn write_reports(
 /// What one written attachment reports: built only from the parsed MIME
 /// part and the write outcome, never from the Gmail client or its token.
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) struct AttachmentReport {
+pub struct AttachmentReport {
     pub(super) name: String,
     pub(super) bytes: u64,
     pub(super) sha256: [u8; 32],
@@ -255,7 +257,8 @@ impl AttachmentReport {
 }
 
 /// One output line: name, byte count, digest, and whether it was written.
-pub(crate) fn format_report(report: &AttachmentReport) -> String {
+#[must_use]
+pub fn format_report(report: &AttachmentReport) -> String {
     let mut digest = String::with_capacity(64);
     for byte in report.sha256 {
         let _ = write!(digest, "{byte:02x}");
@@ -271,7 +274,7 @@ pub(crate) fn format_report(report: &AttachmentReport) -> String {
     )
 }
 
-/// `hudson mail attachments`, from its parsed flags.
+/// `navigator mail attachments`, from its parsed flags.
 pub(super) async fn run(
     reference: &str,
     dir: &Path,

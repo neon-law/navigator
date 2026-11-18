@@ -17,7 +17,7 @@ use serde_json::json;
 use super::forge::{
     ArmOutcome, CheckVerdict, DeploymentJob, DeploymentRun, Forge, ReviewRef, ReviewRequest,
 };
-use super::lifecycle::{git_text, github_owner_name, github_token};
+use super::lifecycle::{git_text, github_token};
 
 const API_VERSION: &str = "2022-11-28";
 
@@ -79,12 +79,56 @@ impl GitHubForge {
     /// the checkout's `origin` remote, the token from the environment or
     /// `gh auth token` — the same resolution every other GitHub-speaking
     /// verb uses.
-    pub fn from_checkout(dir: &std::path::Path) -> Result<Self> {
+    pub async fn from_checkout(dir: &std::path::Path) -> Result<Self> {
         let remote = git_text(dir, &["remote", "get-url", "origin"])
             .context("read the checkout's origin remote; run from a Project repository")?;
-        let (owner, name) = github_owner_name(&remote)?;
+        let (owner, name) = super::lifecycle::github_origin(dir, &remote)
+            .await
+            .context("origin must resolve to a GitHub repository")?;
         let token = github_token()?;
         Self::new("https://api.github.com", &owner, &name, &token)
+    }
+
+    /// Read an authoritative merged review before reconciling its mirror.
+    pub async fn merged_review(&self, number: u64) -> Result<(String, String, String)> {
+        #[derive(Deserialize)]
+        struct MergedReview {
+            merged: bool,
+            merge_commit_sha: Option<String>,
+            head: MergedHead,
+            base: PullBase,
+        }
+        #[derive(Deserialize)]
+        struct MergedHead {
+            sha: String,
+            #[serde(rename = "ref")]
+            branch: String,
+            repo: Option<Repository>,
+        }
+        #[derive(Deserialize)]
+        struct Repository {
+            full_name: String,
+        }
+        let pull: MergedReview = self
+            .get_json(&self.repo_path(&format!("pulls/{number}")))
+            .await?;
+        anyhow::ensure!(
+            pull.merged && pull.base.git_ref == "main",
+            "review is not merged into main"
+        );
+        anyhow::ensure!(
+            pull.head.repo.is_some_and(|repo| repo
+                .full_name
+                .eq_ignore_ascii_case(&format!("{}/{}", self.owner, self.name))),
+            "review head belongs to another repository"
+        );
+        anyhow::ensure!(pull.head.branch != "main", "refusing to delete main");
+        Ok((
+            pull.head.branch,
+            pull.head.sha,
+            pull.merge_commit_sha
+                .context("merged review has no merge commit")?,
+        ))
     }
 
     fn repo_path(&self, suffix: &str) -> String {
@@ -615,6 +659,37 @@ mod tests {
     use serde_json::json;
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn reconciliation_requires_a_merged_same_repository_main_review() {
+        for (merged, base, repository, accepted) in [
+            (true, "main", "acme/nav", true),
+            (false, "main", "acme/nav", false),
+            (true, "other", "acme/nav", false),
+            (true, "main", "fork/nav", false),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/repos/acme/nav/pulls/7"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "merged": merged, "merge_commit_sha": "merged",
+                    "base": {"ref": base}, "head": {"sha": "reviewed", "ref": "topic",
+                    "repo": {"full_name": repository}}
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let github = GitHubForge::new(&server.uri(), "acme", "nav", "test").unwrap();
+            let result = github.merged_review(7).await;
+            assert_eq!(result.is_ok(), accepted);
+            if accepted {
+                assert_eq!(
+                    result.unwrap(),
+                    ("topic".into(), "reviewed".into(), "merged".into())
+                );
+            }
+        }
+    }
 
     #[tokio::test]
     async fn mirror_review_matches_only_a_merged_main_review_for_the_exact_source_tip() {

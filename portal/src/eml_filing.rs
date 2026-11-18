@@ -71,9 +71,8 @@ pub fn parse_eml(raw: &[u8], mailbox: Option<&str>) -> Result<ParsedEml, EmlPars
     let at = eml_sent_at(message.date())?;
     let body = message
         .body_text(0)
-        .map(|body| body.trim().to_string())
-        .filter(|body| !body.is_empty())
-        .ok_or(EmlParseError::NoBody)?;
+        .map(|body| crate::email_threads::strip_quoted(&body).trim().to_string())
+        .unwrap_or_default();
     let from = address_text(message.from());
     let to = address_text(message.to());
     let direction = match mailbox {
@@ -96,6 +95,9 @@ pub fn parse_eml(raw: &[u8], mailbox: Option<&str>) -> Result<ParsedEml, EmlPars
             (shown, crate::inbound_email::inbound_attachment(&part))
         })
         .partition(|(shown, _)| *shown);
+    if body.is_empty() && attachments.is_empty() {
+        return Err(EmlParseError::NoBody);
+    }
     Ok(ParsedEml {
         message_ref: message_ref.clone(),
         source_ref: format!("eml:{message_ref}"),
@@ -191,6 +193,18 @@ Date: Fri, 30 Oct 2026 14:03:00 +0000\r\n\
 Content-Type: text/plain; charset=utf-8\r\n\
 \r\n\
 Can I sign electronically?\r\n";
+
+    #[test]
+    fn filing_uses_only_the_messages_own_text() {
+        let raw = PLAIN.replace(
+            "Can I sign electronically?",
+            "Can I sign electronically?\r\n-- \r\nSignature\r\nOn Friday wrote:\r\n> quoted history",
+        );
+        let parsed = parse_eml(raw.as_bytes(), None).unwrap();
+        assert_eq!(parsed.body, "Can I sign electronically?");
+        assert!(!parsed.body.contains("Signature"));
+        assert!(!parsed.body.contains("quoted history"));
+    }
 
     #[test]
     fn a_plain_eml_parses_with_its_headers_and_eml_scoped_source_ref() {
@@ -300,5 +314,10 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
         assert_eq!(parsed.attachments[0].filename, "order.pdf");
         assert_eq!(parsed.attachments[0].content_type, "application/pdf");
         assert_eq!(parsed.attachments[0].bytes, b"%PDF-1.4");
+        let attachment_only = WITH_ATTACHMENT.replace("See the attached order.", "");
+        let parsed =
+            parse_eml(attachment_only.as_bytes(), None).expect("an attachment-only message files");
+        assert!(parsed.body.is_empty());
+        assert_eq!(parsed.attachments[0].filename, "order.pdf");
     }
 }

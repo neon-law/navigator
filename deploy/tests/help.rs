@@ -154,6 +154,7 @@ fn mail_help_exposes_only_draft_only_actions() {
             "save",
             "search",
             "setup",
+            "sync",
             "help"
         ]
     );
@@ -281,6 +282,7 @@ fn projects_help_lists_the_project_workspace_verbs() {
             "drift",
             "drive-ingest",
             "efiling",
+            "envelope",
             "feedback-check",
             "finance",
             "gate",
@@ -947,6 +949,7 @@ fn ops_help_lists_operator_members() {
             "forgejo",
             "gcp",
             "github",
+            "gmail-client",
             "host",
             "logs",
             "lsp",

@@ -11,6 +11,7 @@ name = "navigator"
 path = "src/main.rs"
 
 [dependencies]
+pdf.workspace = true
 model.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
@@ -69,7 +70,6 @@ rustix.workspace = true
 
 [dev-dependencies]
 cloud.workspace = true
-pdf.workspace = true
 assert_cmd.workspace = true
 # The gate and docket tests drive a real portal router in-process.
 axum.workspace = true

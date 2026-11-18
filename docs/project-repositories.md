@@ -1180,12 +1180,17 @@ lawyer lens, read from the same skeletons the gate checks.
 
 ## Local checkouts
 
-One checkout root per organization, holding one directory per Project code. The root is the organization's own name, so
-nothing has to be translated between the coordinate and the path:
+`navigator sync --host <host>` keeps the signed-in person's participating open and pitch Projects one level below
+`~/Work`, at `~/Work/<code>`. `--dir` selects another root; `--dry-run` reports missing, present, unavailable, and
+occupied paths without contacting a forge or changing files. `project create` finishes by creating that matter's
+checkout through the same sync operation. A failed checkout leaves the opened Project available for a sync retry.
 
-```text
-~/neon-law/<project-code>
-```
+Missing repositories are cloned with `jj git clone --colocate`. Clean existing Git directories are colocated with jj; a
+directory with local edits is left in place. Sync checks the Project and host in the manifest, configures the secondary
+Forgejo remote and both origin push destinations during the dual run, and fetches remote bookmarks. Local work,
+conflicts, unexpected remotes, or unsafe paths skip that Project and make the run fail after the other Projects are
+processed. Closed Project checkouts are reported and retained. Document hydration stays in `project sync` and `project
+watch`; one-shot sync handles source checkouts only.
 
 These are **source** roots. Git never stores legal files. Drive is an optional ingest dropbox read through its API, not
 the working-file store, and no workstation mount of it is read.
@@ -1243,9 +1248,12 @@ so a row whose URL names a different repository is drift with no checkout involv
 a machine holding the clones knows what repositories exist. This section is the second half.
 
 ```bash
-navigator project drift --dir ~/<organization>
-navigator project drift --dir ~/<organization> --all --json
+navigator project drift --host <host> --dir ~/Work
+navigator project drift --host <host> --dir ~/Work --all --json
 ```
+
+The same drift run also reads the caller's participating open and pitch Projects and fails for each missing local
+checkout. This coverage check includes an empty checkout root and does not require `--forge-parity`.
 
 During the GitHub and Forgejo dual run, add `--forge-parity` to compare the live `main` refs advertised by the `origin`
 and `forgejo` fetch remotes for each checked-out Project that reconciles to a live row. It reports absent remote
@@ -1258,13 +1266,14 @@ Project codes from `project_codes` on the reconciliation report. The codes rathe
 is entirely fine produces no finding: an absence in the finding set would mean "reconciled" and "does not exist"
 indistinguishably, and the whole question here is which codes exist.
 
-Deliberately not `GET /app/api/projects`. That route returns the *caller's* matters — `store::access::visible_projects`
-scopes to participation rows for every firm tier, Owner and Admin included — so a repository whose row exists but the
-caller does not participate in would read as a repository with no row at all, which is the loudest finding this command
-emits. The reconciliation door is admin-tier and reads every row.
+The rowless-repository check does not use `GET /app/api/projects`. That route returns the caller's matters, scoped by
+`store::access::visible_projects` scopes to participation rows for every firm tier, Owner and Admin included — so a
+repository whose row exists but the caller does not participate in would read as a repository with no row at all, which
+is the loudest finding this command emits. The reconciliation door is admin-tier and reads every row.
 
 | Finding | Meaning | Severity |
 | --- | --- | --- |
+| `missing-checkout` | A participating open or pitch Project has no local checkout. | Fail |
 | `repository-has-no-row` | Declares a code no live row carries; its Matter Pages render nowhere | fail |
 | `duplicate-code` | Two checkouts claim one Project code. | fail |
 | `unreadable-manifest` | `navigator.yaml` is present but unparsable, or names an invalid code. | fail |

@@ -40,7 +40,7 @@ pub const REQUIRED_SERVICES: &[&str] = &[
     "drive.googleapis.com",
     "admin.googleapis.com",
     "aiplatform.googleapis.com",
-    // `hudson mail` calls Gmail with an OAuth client the Firm creates in
+    // `navigator mail` calls Gmail with an OAuth client the Firm creates in
     // this project; Google refuses the client's tokens until the project
     // enables the API. See docs/mail-cli.md#provision-gmail-for-hudson-mail.
     "gmail.googleapis.com",

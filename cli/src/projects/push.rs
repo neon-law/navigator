@@ -49,10 +49,11 @@ pub async fn dispatch(
     dry_run: bool,
 ) -> Result<()> {
     let remote = git_text(dir, &["remote", "get-url", "origin"])?;
-    let github = remote.starts_with("git@github.com:")
-        || url::Url::parse(&remote).is_ok_and(|url| url.host_str() == Some("github.com"));
+    let github = super::lifecycle::github_origin(dir, &remote)
+        .await
+        .is_some();
     let forge: Box<dyn Forge> = if github {
-        Box::new(GitHubForge::from_checkout(dir)?)
+        Box::new(GitHubForge::from_checkout(dir).await?)
     } else {
         Box::new(ForgejoForge::from_checkout(dir)?)
     };
@@ -68,6 +69,42 @@ pub async fn dispatch(
         tokio::time::sleep,
     )
     .await?;
+    Ok(())
+}
+
+/// Reconcile a review merged outside the delivery lane, without changing local work.
+pub async fn reconcile(dir: &Path, review: u64) -> Result<()> {
+    require_secondary_remote(dir)?;
+    let forge = GitHubForge::from_checkout(dir).await?;
+    let (branch, head, merge) = forge.merged_review(review).await?;
+    sync_secondary_remote(
+        dir,
+        true,
+        branch,
+        &ReviewRef {
+            number: review,
+            url: String::new(),
+            head_sha: head,
+        },
+        &merge,
+    )
+    .await?;
+    if dir.join(".jj").is_dir() {
+        let status = tokio::process::Command::new("jj")
+            .current_dir(dir)
+            .args(["--ignore-working-copy", "git", "fetch", "--all-remotes"])
+            .status()
+            .await?;
+        anyhow::ensure!(status.success(), "could not refresh jj remote bookmarks");
+    }
+    Ok(())
+}
+
+fn require_secondary_remote(dir: &Path) -> Result<()> {
+    anyhow::ensure!(
+        has_forgejo_remote(dir)?,
+        "no Forgejo remote; configure the secondary forge before reconciliation"
+    );
     Ok(())
 }
 
@@ -248,7 +285,28 @@ fn sync_github_mirror(
     if !has_forgejo_remote(dir)? {
         return Ok(());
     }
-    sync_mirror_refs(dir, branch, reviewed_head, merge_commit).with_context(|| {
+    let synchronize = || -> Result<()> {
+        let advertised = git_text(dir, &["ls-remote", "--refs", "origin", "refs/heads/main"])?;
+        let main = advertised
+            .split_once('\t')
+            .filter(|(_, reference)| *reference == "refs/heads/main")
+            .map(|(sha, _)| sha)
+            .context("GitHub did not advertise main")?;
+        for sha in [main, merge_commit] {
+            git_text(
+                dir,
+                &["fetch", "--no-tags", "--no-write-fetch-head", "origin", sha],
+            )?;
+        }
+        anyhow::ensure!(
+            git(dir, &["merge-base", "--is-ancestor", merge_commit, main])?
+                .status
+                .success(),
+            "the verified merge is not an ancestor of GitHub main"
+        );
+        sync_mirror_refs(dir, branch, reviewed_head, main)
+    };
+    synchronize().with_context(|| {
         format!(
             "GitHub merged {merge_commit}, but Forgejo synchronization failed. Verify its refs, \
              fast-forward main to that SHA, and delete {branch} only at reviewed head {reviewed_head}"
@@ -1055,6 +1113,41 @@ mod tests {
         assert!(error.to_string().contains("Forgejo did not receive"));
         assert!(forge.opened.lock().unwrap().is_empty());
         assert!(super::git_text(&origin, &["rev-parse", "refs/heads/push/the-change"]).is_ok());
+    }
+
+    #[test]
+    fn explicit_reconciliation_requires_a_secondary_remote() {
+        let checkout = TempCheckout::new();
+        assert!(super::require_secondary_remote(checkout.path()).is_err());
+        checkout.dual_remote();
+        assert!(super::require_secondary_remote(checkout.path()).is_ok());
+    }
+
+    #[test]
+    fn reconciling_an_older_review_catches_up_to_the_current_authoritative_main() {
+        let checkout = TempCheckout::new();
+        let mirror = checkout.dual_remote();
+        let dir = checkout.path();
+        let merge = super::git_text(dir, &["rev-parse", "HEAD"]).unwrap();
+        git_sh(
+            Some(dir),
+            &[
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "later merge",
+            ],
+        );
+        let current = super::git_text(dir, &["rev-parse", "HEAD"]).unwrap();
+        let origin = checkout.temp.path().join("origin.git");
+        git_sh(Some(dir), &["push", origin.to_str().unwrap(), "HEAD:main"]);
+        super::sync_github_mirror(dir, "topic", &merge, &merge).unwrap();
+        assert_eq!(
+            super::git_text(&mirror, &["rev-parse", "refs/heads/main"]).unwrap(),
+            current
+        );
     }
 
     #[tokio::test]

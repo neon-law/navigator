@@ -286,6 +286,12 @@ pub struct ExternalEnvelope {
     pub status: String,
     pub completed_date_time: Option<chrono::DateTime<chrono::FixedOffset>>,
     #[serde(default)]
+    pub sent_date_time: Option<chrono::DateTime<chrono::FixedOffset>>,
+    #[serde(default)]
+    pub delivered_date_time: Option<chrono::DateTime<chrono::FixedOffset>>,
+    #[serde(default)]
+    pub status_changed_date_time: Option<chrono::DateTime<chrono::FixedOffset>>,
+    #[serde(default)]
     pub signers: Vec<ExternalSigner>,
 }
 
@@ -296,6 +302,8 @@ pub struct ExternalSigner {
     pub email: String,
     pub status: String,
     pub signed_date_time: Option<chrono::DateTime<chrono::FixedOffset>>,
+    #[serde(default)]
+    pub routing_order: Option<String>,
 }
 
 #[async_trait]
@@ -1986,6 +1994,13 @@ impl SignatureProvider for DocuSignSignatureProvider {
             .await
             .map_err(|error| SignatureError::Provider(error.to_string()))?;
         envelope.signers = recipients.signers;
+        envelope.signers.sort_by_key(|signer| {
+            signer
+                .routing_order
+                .as_deref()
+                .and_then(|order| order.parse::<u32>().ok())
+                .unwrap_or(u32::MAX)
+        });
         Ok(envelope)
     }
 
@@ -3433,7 +3448,10 @@ mod tests {
                 endpoint.clone(),
                 serde_json::json!({
                     "envelopeId": id, "status": "completed",
-                    "completedDateTime": "2026-01-02T03:04:05Z"
+                    "completedDateTime": "2026-01-02T03:04:05Z",
+                    "sentDateTime": "2026-01-01T01:00:00Z",
+                    "deliveredDateTime": "2026-01-01T02:00:00Z",
+                    "statusChangedDateTime": "2026-01-02T03:04:05Z"
                 }),
             ),
             (
@@ -3441,7 +3459,7 @@ mod tests {
                 serde_json::json!({
                     "signers": [{
                         "name": "Example Signer", "email": "signer@example.com",
-                        "status": "completed", "signedDateTime": "2026-01-02T03:04:00Z"
+                        "status": "completed", "signedDateTime": "2026-01-02T03:04:00Z", "routingOrder": "1"
                     }]
                 }),
             ),
@@ -3459,6 +3477,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(envelope.status, "completed");
+        assert!(envelope.sent_date_time.is_some());
+        assert!(envelope.delivered_date_time.is_some());
+        assert!(envelope.status_changed_date_time.is_some());
+        assert_eq!(envelope.signers[0].routing_order.as_deref(), Some("1"));
         assert_eq!(
             envelope.completed_date_time.unwrap().to_rfc3339(),
             "2026-01-02T03:04:05+00:00"

@@ -12,7 +12,8 @@ Before naming a table, field, state, or UI concept, follow the **Find the term f
 
 ## The rule
 
-"Push changes" means finish the pull request through merge: the job ends when it is merged and local `main` is current.
+"Push changes" means finish the pull request through merge: the job ends when it is merged, both forges have the same
+`main`, and local `main` is current.
 
 1. Inspect `git status --short --branch` and review the diff. Before committing, attach work on `main` or a detached
    HEAD to a fresh topic branch with `git switch -c <branch>`; this retains local commits and uncommitted work. Reuse
@@ -38,7 +39,11 @@ Before naming a table, field, state, or UI concept, follow the **Find the term f
    On another forge, watch its required checks and verify its merged state. Fix failed checks on this branch. If main
    moves and conflicts, fetch, signed-rebase, gate, and push this branch again. Report an unresolved review, permission,
    or policy blocker honestly; do not call an open or closed-unmerged pull request complete.
-6. After merge, fetch origin. Run `git switch main` and `git pull --rebase origin main` when local main is available.
-   If main belongs to another worktree, keep this checkout isolated and fast-forward it to the fetched `origin/main`
-   with `git switch --detach origin/main`; report that the other worktree's main was not updated. Never reset a dirty
-   tree or change another worktree. Report the pull request URL and merged commit.
+6. After a GitHub merge, run `navigator project repository reconcile --review <number>` in this checkout, including
+   a colocated jj checkout in `~/Work/<code>`. It verifies the merged review, fast-forwards the configured Forgejo
+   `main`, deletes the mirrored topic only at the reviewed head, and refreshes jj remote bookmarks. A missing remote,
+   unavailable forge, or diverged main is a failure to finish; report it without force-pushing or deleting unmatched
+   work. Then fetch origin. Run `git switch main` and `git pull --rebase origin main` when local main is available. If
+   main belongs to another worktree, keep this checkout isolated and fast-forward it to the fetched `origin/main` with
+   `git switch --detach origin/main`; report that the other worktree's main was not updated. Never reset a dirty tree or
+   change another worktree. Report the pull request URL and merged commit.

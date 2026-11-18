@@ -659,7 +659,7 @@ mod tests {
     use super::{
         finish, list_request, process_body, process_request, run, InboxAction, ProcessApplyView,
     };
-    use crate::credentials::{Credentials, HostCredential};
+    use cli::credentials::{Credentials, HostCredential};
     use reqwest::Method;
     use uuid::Uuid;
 
@@ -931,7 +931,7 @@ mod tests {
                 expires_at: 1_900_000_000,
             },
         );
-        crate::credentials::save(&path, &creds).unwrap();
+        cli::credentials::save(&path, &creds).unwrap();
         std::env::set_var("NAVIGATOR_CREDENTIALS_FILE", path);
     }
 

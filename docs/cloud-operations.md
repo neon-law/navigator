@@ -85,7 +85,7 @@ The remaining hosting work is deliberately adjacent, not a missing setup stage:
 | TLS and Gateway manifests | `hudson ops ship` renders and applies the Gateway, certificate, and routes. |
 | Restate | The Restate operator and its manifests provision the broker; `ops ship` re-registers the worker. |
 | Secret values | `hudson ops secrets apply`; decrypts and writes Secret Manager plus the Kubernetes Secret. |
-| Gmail OAuth client | A console step; see [Gmail for mail](mail-cli.md#provision-gmail-for-hudson-mail). |
+| Gmail OAuth client | A console step; see [Gmail for mail](mail-cli.md#provision-gmail-for-navigator-mail). |
 
 `hudson ops gcp services --project-id <project>` is the read-only check on the API stage: it prints `ok` or `MISSING`
 for each API setup enables and exits nonzero on drift. Re-running setup enables a missing API.
