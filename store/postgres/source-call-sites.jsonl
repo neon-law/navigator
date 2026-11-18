@@ -6389,11 +6389,11 @@
 {"file":"workflows-service/src/dbos_email_summary.rs","line":359,"function":"drop","operation":"query","sql_operations":["SELECT"],"tables":[],"transaction":false}
 {"file":"workflows-service/src/dbos_email_summary.rs","line":366,"function":"drop","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
 {"file":"workflows-service/src/dbos_email_summary.rs","line":366,"function":"drop","operation":"query","sql_operations":[],"tables":[],"transaction":false}
-{"file":"workflows-service/src/dbos_ingress.rs","line":413,"function":"claim_request_identity","operation":"query_as","sql_operations":["SELECT"],"tables":[],"transaction":false}
-{"file":"workflows-service/src/dbos_ingress.rs","line":435,"function":"claim_request_identity","operation":"query_as","sql_operations":["SELECT"],"tables":[],"transaction":false}
-{"file":"workflows-service/src/dbos_ingress.rs","line":457,"function":"claim_request_identity","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
-{"file":"workflows-service/src/dbos_ingress.rs","line":457,"function":"claim_request_identity","operation":"query","sql_operations":["INSERT"],"tables":[],"transaction":false}
-{"file":"workflows-service/src/dbos_ingress.rs","line":467,"function":"claim_request_identity","operation":"query_as","sql_operations":["SELECT"],"tables":[],"transaction":false}
+{"file":"workflows-service/src/dbos_ingress.rs","line":484,"function":"claim_request_identity","operation":"query_as","sql_operations":["SELECT"],"tables":[],"transaction":false}
+{"file":"workflows-service/src/dbos_ingress.rs","line":506,"function":"claim_request_identity","operation":"query_as","sql_operations":["SELECT"],"tables":[],"transaction":false}
+{"file":"workflows-service/src/dbos_ingress.rs","line":528,"function":"claim_request_identity","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
+{"file":"workflows-service/src/dbos_ingress.rs","line":528,"function":"claim_request_identity","operation":"query","sql_operations":["INSERT"],"tables":[],"transaction":false}
+{"file":"workflows-service/src/dbos_ingress.rs","line":538,"function":"claim_request_identity","operation":"query_as","sql_operations":["SELECT"],"tables":[],"transaction":false}
 {"file":"workflows-service/src/dbos_project_slack.rs","line":157,"function":"acquire","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
 {"file":"workflows-service/src/dbos_project_slack.rs","line":157,"function":"acquire","operation":"query","sql_operations":["SELECT"],"tables":[],"transaction":false}
 {"file":"workflows-service/src/dbos_project_slack.rs","line":171,"function":"release","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
@@ -6412,7 +6412,7 @@
 {"file":"workflows-service/src/inbound_message_alert.rs","line":232,"function":"persisted_receipts_prevent_duplicate_posts_and_cross_firm_notices","operation":"query","sql_operations":["UPDATE"],"tables":[],"transaction":false}
 {"file":"workflows-service/src/inbound_triage.rs","line":1282,"function":"a_message_that_is_not_inbound_has_no_triage_context","operation":"bind","sql_operations":[],"tables":["message"],"transaction":false}
 {"file":"workflows-service/src/inbound_triage.rs","line":1282,"function":"a_message_that_is_not_inbound_has_no_triage_context","operation":"query","sql_operations":["UPDATE"],"tables":[],"transaction":false}
-{"file":"workflows-service/src/lib.rs","line":78,"function":"record_debug","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"workflows-service/src/lib.rs","line":70,"function":"record_debug","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"workflows-service/src/nightly_project_update/membership.rs","line":224,"function":"invite_members","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"workflows-service/src/social_publisher.rs","line":498,"function":"run","operation":"bind","sql_operations":[],"tables":["post"],"transaction":false}
 {"file":"workflows-service/src/social_publisher.rs","line":498,"function":"run","operation":"query","sql_operations":["UPDATE"],"tables":[],"transaction":false}
