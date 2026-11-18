@@ -119,8 +119,8 @@ The legacy connection remains in `.devx/env` as `NAVIGATOR_SURREAL_ENDPOINT`, `_
 remaining compatibility callers. Its idempotent schema is `store/src/schema/navigator.surql` with a `schema_version`
 record. The PostgreSQL image and its pin are in the [`postgres`](../postgres/SKILL.md) skill.
 
-Forgejo is opt-in the same way: `cargo run -p hudson -- dev forgejo up` adds the retained PostgreSQL server, Forgejo,
-and an Actions runner to the sourced tier, signing in through its Rauthy; `dev forgejo smoke` proves it. See
+Forgejo is opt-in: `cargo run -p hudson -- dev forgejo up` reuses the retained PostgreSQL server and adds Forgejo
+and an Actions runner to the sourced tier, signing in through Rauthy; `dev forgejo smoke` proves it. See
 [`docs/forgejo-kind.md`](../../../docs/forgejo-kind.md).
 
 ## Verification
