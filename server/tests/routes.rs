@@ -747,6 +747,7 @@ async fn state_with_workshops(materials: Vec<WorkshopMaterial>) -> AppState {
         portal_only: portal::PortalOnly::default(),
         sessions: test_sessions(),
         github_oidc: portal::github_oidc::GitHubOidc::rejecting(),
+        github_org: None,
         oauth: None,
         oauth_microsoft: None,
         oauth_apple: None,

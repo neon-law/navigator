@@ -161,6 +161,7 @@ pub async fn app_state(surreal: store::surreal::SurrealDb) -> AppState {
         portal_only: crate::PortalOnly::default(),
         sessions: SessionStore::new(TEST_SESSION_KEY),
         github_oidc: crate::github_oidc::GitHubOidc::rejecting(),
+        github_org: None,
         oauth: None,
         oauth_microsoft: None,
         oauth_apple: None,

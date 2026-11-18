@@ -405,8 +405,13 @@ token at `POST /auth/ci/document-token` ([`portal/src/ci_auth.rs`](../portal/src
 
 The mint checks the deployment's canonical host as audience, accepts a `push` or `workflow_dispatch` on
 `refs/heads/main` and a `pull_request` merge ref, spends the token's `jti` once, and binds the repository to exactly one
-live Project whose `repository_url` names it. The session is attributed to that Project's lawyer DRI and expires in ten
-minutes ([`portal/src/session.rs`](../portal/src/session.rs)).
+live Project whose `repository_url` names it. When no Project's `repository_url` names the GitHub repository, a run
+whose owner is the deployment's `NAVIGATOR_GITHUB_ORG` binds instead to the one live Project whose code is the
+repository's name and whose `repository_url` is a repository of that name on the trusted Forgejo installation (the host
+of `NAVIGATOR_FORGEJO_ACTIONS_OIDC_ISSUER`). The owner pin is what keeps a same-named repository under any other GitHub
+owner out; with either setting unset, only the exact URL binds. Every refusal reads the same `not bound to a live
+project`. The session is attributed to that Project's lawyer DRI and expires in ten minutes
+([`portal/src/session.rs`](../portal/src/session.rs)).
 
 The document session carries an explicit [`DocumentScope`](../portal/src/session.rs):
 

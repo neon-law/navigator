@@ -609,6 +609,9 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
         portal_only,
         sessions,
         github_oidc: crate::github_oidc::GitHubOidc::github_actions(),
+        github_org: std::env::var(cloud::workspace::NAVIGATOR_GITHUB_ORG)
+            .ok()
+            .filter(|org| !org.trim().is_empty()),
         oauth,
         storage,
         assets_storage,

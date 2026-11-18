@@ -636,7 +636,9 @@ Navigator spells no organization in its source, and one forge host: the named de
 occupies, and `NAVIGATOR_GIT_HOST` names the host it lives on. The two are one `(host, organization)` coordinate — where
 this deployment's Project repositories are created, and the boundary `ops github setup` refuses a governance write
 outside. Two organizations are admissible on a governance write: the public one holding Navigator itself, and this
-deployment's own. A remote in neither is refused before a token is read.
+deployment's own. A remote in neither is refused before a token is read. The portal reads the same organization as the
+one GitHub owner whose CI runs may bind to a Project recorded at its Forgejo URL ([the GitHub
+mint](signed-url-delivery-audit.md)).
 
 Repository provisioning uses the deployment's GitHub App when the App ID, installation ID, and private key are all set.
 Navigator signs a short-lived App JWT, exchanges it for an installation token, and reuses that token until it nears
