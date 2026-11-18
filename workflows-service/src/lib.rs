@@ -1,18 +1,9 @@
-//! Restate worker for the `notation` virtual object.
+//! Durable workflow adapters and the shared application/worker host.
 //!
-//! Each Notation runs *two* state machines back-to-back: a
-//! questionnaire walker followed by the post-intake workflow.
-//! This crate hosts them as a single Restate virtual-object
-//! service keyed by `notation_id`, so signals to either timeline
-//! serialize on one logical journal and store-side projections
-//! land in the same atomic-with-respect-to-replay envelope.
-//!
-//! The lib exports the service trait + impl for integration tests
-//! and a `main.rs` binary that boots the HTTP server Restate
-//! discovers and dispatches into.
-//!
-//! See `docs/glossary/` (Workflow Runtime, Restate, Durable
-//! execution) for the architectural arc.
+//! DBOS workflows run on PostgreSQL through one executor in the application
+//! process or the separately selected worker. The same host retains the Restate
+//! compatibility endpoint while caller and retained-work handover is incomplete.
+//! Notation transitions preserve per-object serialization and store projections.
 
 pub mod asset_config;
 pub mod dbos_email_summary;
@@ -33,6 +24,7 @@ pub mod finance_aggregate;
 pub mod firm_slack;
 pub mod general_nag;
 pub mod health;
+pub mod host;
 pub mod inbound_message_alert;
 pub mod inbound_triage;
 pub mod inbox_attachment_filing;

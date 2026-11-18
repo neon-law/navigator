@@ -15,13 +15,14 @@
 
 FROM rust:1.100-bookworm AS builder
 
-# Which crate's `trigger` binary to build. Required — no sensible default.
+# Which crate's scheduled binary to build. Required — no sensible default.
 ARG CRATE
 RUN test -n "$CRATE" \
     || (echo "build-arg CRATE is required (archives|billing-workflows|hudson)" && false)
 
-# Which binary within the crate. Defaults to `trigger` (the canary / archives
-# entrypoint); billing-workflows also ships `reconcile-trigger`, while the
+# Which binary within the crate. The default selects Archives or BillingCanary;
+# BillingCanary uses its unique Cargo target name to avoid workspace collisions.
+# billing-workflows also ships `reconcile-trigger`, while the
 # SurrealDB archive selects `hudson`, the binary that owns `ops`.
 ARG BIN=trigger
 
@@ -109,7 +110,8 @@ COPY skills             skills
 # dir, so that tree must be staged too (the 26.11.9 KIND fixture failed on it).
 COPY assumptions        assumptions
 
-RUN cargo build --release --target x86_64-unknown-linux-musl -p "${CRATE}" --bin "${BIN}" \
+RUN if [ "$CRATE" = "billing-workflows" ] && [ "$BIN" = "trigger" ]; then BIN=billing-canary-trigger; fi \
+    && cargo build --release --target x86_64-unknown-linux-musl -p "${CRATE}" --bin "${BIN}" \
     && cp "target/x86_64-unknown-linux-musl/release/${BIN}" /trigger-bin
 
 # ---------- Stage 2: runtime ----------

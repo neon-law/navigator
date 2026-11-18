@@ -261,6 +261,17 @@ impl RestatePorts {
         })
     }
 
+    fn manual_starts(
+        &self,
+        billing_digest: Option<billing_digest::BillingDigestWorkflow>,
+    ) -> ManualSchedules {
+        ManualSchedules {
+            billing_canary: self.billing_canary.clone(),
+            billing_digest,
+            notation_reset: self.notation_reset.clone(),
+        }
+    }
+
     fn spawn(self, stop: &dbos::CancellationToken, loops: &mut Vec<tokio::task::JoinHandle<()>>) {
         if let Some(workflow) = self.billing_canary {
             loops.push(tokio::spawn(billing_canary::schedule(
@@ -290,7 +301,66 @@ pub struct Executor {
     dbos: dbos::DBOS,
     stop: dbos::CancellationToken,
     schedules: Vec<tokio::task::JoinHandle<()>>,
+    manual: ManualSchedules,
 }
+/// Typed handles for manual starts of the same workflows the schedules run.
+#[derive(Clone, Default)]
+pub struct ManualSchedules {
+    billing_canary: Option<billing_canary::BillingCanaryWorkflow>,
+    billing_digest: Option<billing_digest::BillingDigestWorkflow>,
+    notation_reset: Option<notation_reset::NotationResetWorkflow>,
+}
+
+/// The selected workflow could not admit a manual start.
+#[derive(Debug, thiserror::Error)]
+#[error("the scheduled workflow could not be started")]
+pub struct ManualStartError;
+
+impl ManualSchedules {
+    /// Start a registered schedule with an explicit identity. Unknown or disabled
+    /// workflows return false; the caller never falls back to another engine.
+    pub async fn start(&self, service: &str, workflow_id: &str) -> Result<bool, ManualStartError> {
+        let options = dbos::StartOptions {
+            workflow_id: Some(workflow_id),
+            ..Default::default()
+        };
+        match service {
+            "BillingCanary" => {
+                if let Some(workflow) = &self.billing_canary {
+                    workflow
+                        .start_with((), options)
+                        .await
+                        .map_err(|_| ManualStartError)?;
+                } else {
+                    return Ok(false);
+                }
+            }
+            "BillingDigest" => {
+                if let Some(workflow) = &self.billing_digest {
+                    workflow
+                        .start_with((), options)
+                        .await
+                        .map_err(|_| ManualStartError)?;
+                } else {
+                    return Ok(false);
+                }
+            }
+            "NotationReset" => {
+                if let Some(workflow) = &self.notation_reset {
+                    workflow
+                        .start_with((), options)
+                        .await
+                        .map_err(|_| ManualStartError)?;
+                } else {
+                    return Ok(false);
+                }
+            }
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+}
+
 /// A readiness-probe handle for a launched executor: shares the stop token and
 /// the system database URL without owning the executor, so the health route can
 /// report DBOS state while `main` keeps exclusive shutdown rights.
@@ -419,6 +489,7 @@ impl Executor {
             RestatePorts::register(&dbos, schedules.billing_canary, schedules.notation_reset)?;
         let billing_digest =
             register_optional(&dbos, schedules.billing_digest, billing_digest::register)?;
+        let manual = restate_ports.manual_starts(billing_digest.clone());
         let profit_digest =
             register_optional(&dbos, schedules.profit_digest, profit_digest::register)?;
         let ceo_digest = register_optional(&dbos, schedules.ceo_digest, ceo_digest::register)?;
@@ -484,7 +555,14 @@ impl Executor {
             dbos,
             stop,
             schedules: loops,
+            manual,
         })
+    }
+
+    /// Clone manual-start handles without transferring executor shutdown ownership.
+    #[must_use]
+    pub fn manual_schedules(&self) -> ManualSchedules {
+        self.manual.clone()
     }
 
     /// Stop scheduling, shut down the DBOS SDK, then join schedule loops.

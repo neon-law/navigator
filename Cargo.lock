@@ -9046,6 +9046,7 @@ dependencies = [
  "wiremock",
  "word",
  "workflows",
+ "workflows-service",
  "zip",
 ]
 

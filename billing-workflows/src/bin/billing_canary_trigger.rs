@@ -24,6 +24,12 @@ async fn main() -> Result<()> {
     // so the drop flushes any batched export before the process exits.
     let _telemetry = telemetry::init("navigator-billing-canary-trigger");
 
+    if workflows::trigger::dbos_owns_schedule("NAVIGATOR_DBOS_BILLING_CANARY_ENABLED", |name| {
+        std::env::var(name).ok()
+    })? {
+        tracing::info!("BillingCanary is scheduled by the DBOS executor");
+        return Ok(());
+    }
     let ingress = std::env::var("RESTATE_INGRESS_URL")
         .context("RESTATE_INGRESS_URL must be set (the Restate ingress endpoint)")?;
     // Optional bearer — present only when targeting Restate Cloud.

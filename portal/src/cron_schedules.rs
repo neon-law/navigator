@@ -1,9 +1,7 @@
-//! Manual queueing for the Cron schedules lawyer page.
+//! Manual starts from the Cron schedules operations page.
 //!
-//! Every scheduled workflow is started through this module so the operations
-//! page, rather than the lawyer dashboard, is the one place to run it on
-//! demand. A manual invocation always uses a unique key: an operator's
-//! explicit run must not be deduplicated against the schedule's date key.
+//! Each control selects the workflow's configured durable engine. A manual
+//! invocation uses a unique key so an explicit run stays distinct from a scheduled slot.
 
 use axum::{
     extract::Path,
@@ -15,43 +13,51 @@ use uuid::Uuid;
 struct ManualJob {
     slug: &'static str,
     service: &'static str,
+    dbos_flag: &'static str,
 }
 
 const MANUAL_JOBS: &[ManualJob] = &[
     ManualJob {
         slug: "archives",
         service: "Archives",
+        dbos_flag: "NAVIGATOR_DBOS_ARCHIVES_ENABLED",
     },
     ManualJob {
         slug: "billing-canary",
         service: "BillingCanary",
+        dbos_flag: "NAVIGATOR_DBOS_BILLING_CANARY_ENABLED",
     },
     ManualJob {
         slug: "billing-digest",
         service: "BillingDigest",
+        dbos_flag: "NAVIGATOR_DBOS_BILLING_DIGEST_ENABLED",
     },
     ManualJob {
         slug: "notation-reset",
         service: "NotationReset",
+        dbos_flag: "NAVIGATOR_DBOS_NOTATION_RESET_ENABLED",
     },
     ManualJob {
         slug: "reconcile-invoices",
         service: "ReconcileInvoices",
+        dbos_flag: "NAVIGATOR_DBOS_RECONCILE_INVOICES_ENABLED",
     },
 ];
 
-/// `POST /app/admin/schedules/:job/run` — queue one known CronJob workflow.
+/// `POST /app/admin/schedules/:job/run` — queue one configured scheduled workflow.
 pub async fn run(Path(slug): Path<String>) -> Response {
     let broker = restate_broker_url();
     let token = std::env::var("RESTATE_AUTH_TOKEN").ok();
     let dbos_ingress = dbos_ingress_url();
     let dbos_token = std::env::var("NAVIGATOR_DBOS_INGRESS_TOKEN").ok();
-    let reconcile_dbos_flag = std::env::var("NAVIGATOR_DBOS_RECONCILE_INVOICES_ENABLED").ok();
-    let Ok(reconcile_dbos_enabled) = workflows::dbos_engine::flag_enabled(
-        "NAVIGATOR_DBOS_RECONCILE_INVOICES_ENABLED",
-        reconcile_dbos_flag.as_deref(),
+    let Some(job) = MANUAL_JOBS.iter().find(|job| job.slug == slug) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let Ok(dbos_enabled) = workflows::dbos_engine::flag_enabled(
+        job.dbos_flag,
+        std::env::var(job.dbos_flag).ok().as_deref(),
     ) else {
-        return redirect_with_notice("reconcile-invoices", "not_queued");
+        return redirect_with_notice(job.slug, "not_queued");
     };
     run_configured_with_dbos(
         &slug,
@@ -59,7 +65,7 @@ pub async fn run(Path(slug): Path<String>) -> Response {
         token.as_deref(),
         dbos_ingress.as_deref(),
         dbos_token.as_deref(),
-        reconcile_dbos_enabled,
+        dbos_enabled,
     )
     .await
 }
@@ -75,26 +81,19 @@ async fn run_configured_with_dbos(
     token: Option<&str>,
     dbos_ingress: Option<&str>,
     dbos_token: Option<&str>,
-    reconcile_dbos_enabled: bool,
+    dbos_enabled: bool,
 ) -> Response {
     let Some(job) = MANUAL_JOBS.iter().find(|job| job.slug == slug) else {
         return StatusCode::NOT_FOUND.into_response();
     };
     let run_key = format!("manual-{}", Uuid::new_v4());
-    let queued = if job.service == "ReconcileInvoices" {
-        if reconcile_dbos_enabled {
-            if let Some(ingress) = dbos_ingress {
-                match dbos_token.filter(|token| !token.trim().is_empty()) {
-                    Some(dbos_token) => trigger_dbos(ingress, dbos_token, job, &run_key).await,
-                    None => Err(workflows::TriggerError::Transport),
-                }
-            } else {
-                Err(workflows::TriggerError::Transport)
-            }
-        } else if let Some(broker) = broker {
-            trigger(broker, token, job, &run_key).await.map(|_| ())
-        } else {
-            Err(workflows::TriggerError::Transport)
+    let queued = if dbos_enabled {
+        match (
+            dbos_ingress.filter(|url| !url.trim().is_empty()),
+            dbos_token.filter(|token| !token.trim().is_empty()),
+        ) {
+            (Some(ingress), Some(token)) => trigger_dbos(ingress, token, job, &run_key).await,
+            _ => Err(workflows::TriggerError::Transport),
         }
     } else if let Some(broker) = broker {
         trigger(broker, token, job, &run_key).await.map(|_| ())
@@ -124,14 +123,16 @@ async fn trigger_dbos(
     job: &ManualJob,
     run_key: &str,
 ) -> Result<(), workflows::TriggerError> {
-    workflows::trigger::start_dbos_reconcile(
-        ingress,
-        token,
-        &serde_json::json!({
-            "workflow_id": format!("{}:{run_key}", job.service)
-        }),
-    )
-    .await
+    if job.service == "ReconcileInvoices" {
+        workflows::trigger::start_dbos_reconcile(
+            ingress,
+            token,
+            &serde_json::json!({ "workflow_id": format!("{}:{run_key}", job.service) }),
+        )
+        .await
+    } else {
+        workflows::trigger::start_dbos_schedule(ingress, token, job.service, run_key).await
+    }
 }
 
 fn redirect_with_notice(slug: &str, outcome: &str) -> Response {
@@ -195,14 +196,6 @@ mod tests {
             .expect("ASCII redirect location")
     }
 
-    #[test]
-    fn every_manual_control_maps_to_a_known_workflow() {
-        assert_eq!(MANUAL_JOBS.len(), 5);
-        assert!(MANUAL_JOBS
-            .iter()
-            .all(|job| !job.slug.is_empty() && !job.service.is_empty()));
-    }
-
     #[tokio::test]
     async fn trigger_queues_the_selected_workflow_with_a_manual_key() {
         let server = MockServer::start().await;
@@ -227,6 +220,75 @@ mod tests {
         .await
         .expect("ingress accepts invocation");
         assert!(body.contains("inv_x"));
+    }
+
+    #[tokio::test]
+    async fn every_other_manual_schedule_uses_dbos_without_a_restate_request() {
+        for job in MANUAL_JOBS
+            .iter()
+            .filter(|job| job.service != "ReconcileInvoices")
+        {
+            let dbos = MockServer::start().await;
+            let restate = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path_regex(r"^/internal/dbos/schedules$"))
+                .and(header("authorization", "Bearer synthetic-dbos-token"))
+                .and(body_partial_json(
+                    serde_json::json!({"service": job.service}),
+                ))
+                .respond_with(ResponseTemplate::new(202))
+                .expect(1)
+                .mount(&dbos)
+                .await;
+            let response = run_configured_with_dbos(
+                job.slug,
+                Some(&restate.uri()),
+                None,
+                Some(&dbos.uri()),
+                Some("synthetic-dbos-token"),
+                true,
+            )
+            .await;
+            assert!(location(&response).contains("notice=queued:"));
+            assert!(restate.received_requests().await.unwrap().is_empty());
+            let requests = dbos.received_requests().await.unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+            let key = body["run_key"]
+                .as_str()
+                .unwrap()
+                .strip_prefix("manual-")
+                .unwrap();
+            uuid::Uuid::parse_str(key).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn selected_manual_dbos_never_falls_back_when_unconfigured_or_rejected() {
+        for job in MANUAL_JOBS {
+            let restate = MockServer::start().await;
+            let dbos = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(503))
+                .mount(&dbos)
+                .await;
+            for (url, token) in [
+                (None, Some("synthetic-token")),
+                (Some(dbos.uri()), None),
+                (Some(dbos.uri()), Some("synthetic-token")),
+            ] {
+                let response = run_configured_with_dbos(
+                    job.slug,
+                    Some(&restate.uri()),
+                    None,
+                    url.as_deref(),
+                    token,
+                    true,
+                )
+                .await;
+                assert!(location(&response).contains("notice=not_queued:"));
+            }
+            assert!(restate.received_requests().await.unwrap().is_empty());
+        }
     }
 
     #[tokio::test]

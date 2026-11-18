@@ -3,7 +3,7 @@
 # integration is live end-to-end (find-or-create a stable canary contact,
 # assert idempotency), the `BillingDigest` GCP cost notice, and the nightly
 # `ReconcileInvoices` fold of Xero paid-status onto the local mirror. None of
-# them raises money. Ships one binary — `trigger` — the CronJob entrypoint that
+# them raises money. Ships the `billing-canary-trigger` binary — the CronJob entrypoint that
 # POSTs one invocation to the Restate ingress and exits (mirrors
 # `archives`'s split of long-running worker vs. thin trigger).
 [package]
@@ -19,8 +19,8 @@ name = "billing_workflows"
 path = "src/lib.rs"
 
 [[bin]]
-name = "trigger"
-path = "src/bin/trigger.rs"
+name = "billing-canary-trigger"
+path = "src/bin/billing_canary_trigger.rs"
 
 [[bin]]
 name = "reconcile-trigger"

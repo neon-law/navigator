@@ -78,7 +78,7 @@ pub fn open_matters_followup(simulated: bool, open: usize, pitches: usize) -> Op
 /// `ReconcileInvoicesService`), the worker-side Slack [`Notifier`], and
 /// whether this deployment discloses simulated matters
 /// (`store::sample_matters`) — resolved once at boot in
-/// `workflows-service/src/main.rs`, not re-read from the environment on
+/// `workflows-service/src/host.rs`, not re-read from the environment on
 /// every run.
 #[derive(Clone)]
 pub struct DriDigestService {

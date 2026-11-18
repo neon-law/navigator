@@ -50,7 +50,7 @@ pub fn nag_message(_simulated: bool) -> String {
 /// Service registered with the Restate endpoint. Holds a `SurrealDB` clone
 /// (the same connection the worker opened at boot), the target-aware Slack
 /// bot, `#general`'s channel id, and whether this deployment discloses
-/// simulated matters — resolved once at boot in `workflows-service/src/main.rs`.
+/// simulated matters — resolved once at boot in `workflows-service/src/host.rs`.
 #[derive(Clone)]
 pub struct GeneralNagService {
     surreal: SurrealDb,

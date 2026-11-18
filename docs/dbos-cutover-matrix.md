@@ -1,6 +1,6 @@
 # Restate to DBOS worker cutover inventory
 
-This inventory follows services bound by `workflows-service/src/main.rs` and `workflows-service/src/registry.rs`;
+This inventory follows services bound by `workflows-service/src/host.rs` and `workflows-service/src/registry.rs`;
 registered DBOS workflows alone do not prove that callers, CronJobs, or data paths have switched engines.
 
 ## How to read this checklist
@@ -9,6 +9,11 @@ Implementation and caller selection are separate from deployment acceptance. A D
 callers still select Restate. Optional workflow switches default off. External callers selecting DBOS require the
 authenticated ingress URL and token and fail closed when either is missing. Keep the Restate bindings until the handover
 gate below passes. Source and integration-test coverage do not establish which engine a deployment currently uses.
+
+The complete worker registry can also run inside the application process with `NAVIGATOR_WORKFLOWS_IN_WEB=true`; see
+[one application container](dbos-durability.md#one-application-container). Cohosting preserves each workflow's switch
+and the handover gate. The manual Archives, BillingCanary, BillingDigest, and NotationReset controls select the same
+engine as their schedule; an enabled DBOS control never uses Restate as a fallback.
 
 ## Durable workflows
 
@@ -51,7 +56,7 @@ gate below passes. Source and integration-test coverage do not establish which e
 - **YoutubeCommentsPoller** — DBOS adapter with one checkpoint per video and one run per 15-minute UTC slot.
   Remaining: PostgreSQL publication and credential parity, deployed selection and retained runs.
 
-The implementations and bindings are in `workflows-service/src/main.rs`, `dbos_*.rs`, and `registry.rs`. Shared caller
+The implementations and bindings are in `workflows-service/src/host.rs`, `dbos_*.rs`, and `registry.rs`. Shared caller
 selection lives in `workflows/src/trigger.rs`; callers include the Portal, trigger binaries, CLI, and webapp. Verify the
 configured switch at every entry point before removing a trigger or binding.
 

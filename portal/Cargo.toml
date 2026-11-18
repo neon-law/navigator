@@ -72,6 +72,7 @@ uuid.workspace = true
 views.workspace = true
 walkdir.workspace = true
 webapp = { workspace = true, features = ["server"] }
+workflows-service.workspace = true
 workflows = { workspace = true, features = ["dbos"] }
 word.workspace = true
 zip.workspace = true
