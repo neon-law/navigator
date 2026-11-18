@@ -80,7 +80,7 @@ engagement.
 We charge flat, pre-approved fees. We do not bill by the hour.
 
 {{#if firm.portal_url}}
-Sign in to your client portal at <{{firm.portal_url}}>.
+Sign in to view your matter at <{{firm.portal_url}}>.
 {{/if}}
 
 ## I. Scope

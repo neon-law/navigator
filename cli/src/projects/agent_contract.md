@@ -1,8 +1,11 @@
 # Working in a Navigator Project repository
 
-## Email and signature requests
+## Critical: email is draft-only
 
-Keep email correspondence, including Gmail, draft-only. The lawyer reviews and sends it.
+**Every email must remain a draft. An agent never sends, replies to, or forwards email.** The lawyer reviews each draft
+and sends it personally. A request to send, reply, or forward means prepare a draft for lawyer review instead.
+
+## Signature requests
 
 * Prepare a DocuSign signature request with `navigator notation envelope prepare <notation-id>`.
 * Use the sender view to review the signing fields with the lawyer.
