@@ -930,7 +930,7 @@ impl Verification {
 
 /// Seed explicit completed enrollment evidence for synthetic native-accessor tests.
 /// Import acceptance exercises the real driver separately; this is never a runtime bypass.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) async fn activate_fixture(pg: &PostgresDb, family: Family) {
     use sha2::Digest;
     let exists: bool =

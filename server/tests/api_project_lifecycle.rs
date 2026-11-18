@@ -23,6 +23,13 @@ impl Fixture {
     async fn new(
         provider: Option<std::sync::Arc<dyn portal::signature::SignatureProvider>>,
     ) -> Option<Self> {
+        Self::with_scope(provider, true).await
+    }
+
+    async fn with_scope(
+        provider: Option<std::sync::Arc<dyn portal::signature::SignatureProvider>>,
+        enrolled: bool,
+    ) -> Option<Self> {
         let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
             assert_ne!(std::env::var("NAV_REQUIRE_POSTGRES").as_deref(), Ok("1"));
             return None;
@@ -52,6 +59,13 @@ impl Fixture {
             .execute(pg.pool())
             .await
             .unwrap();
+        if enrolled {
+            store::test_support::seed_postgres_family(
+                &pg,
+                store::postgres_backfill::family::Family::Notation,
+            )
+            .await;
+        }
         let jurisdiction = Uuid::now_v7();
         let entity_type = Uuid::now_v7();
         let entity = Uuid::now_v7();
@@ -149,6 +163,19 @@ impl Fixture {
 
 async fn json(response: Response) -> serde_json::Value {
     serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap()
+}
+
+#[tokio::test]
+async fn postgres_lifecycle_refuses_unenrolled_notation_history() {
+    let Some(fx) = Fixture::with_scope(None, false).await else {
+        return;
+    };
+    assert_eq!(
+        fx.get("/app/api/project-lifecycle", Some(Role::Admin), None)
+            .await
+            .status(),
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
 }
 
 #[tokio::test]
