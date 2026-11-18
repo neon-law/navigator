@@ -2688,21 +2688,7 @@ pub async fn repair_missing_object(
     else {
         return Err(RepairStorageError::NotOnProject);
     };
-    let code = if let Some(pg) = matter::authority_for(TABLE)
-        .await
-        .map_err(AssetError::from)?
-    {
-        native::project_code(&pg, project_id).await?.ok_or(
-            crate::projects::ProjectStoreError::NoSuchProject(project_id),
-        )?
-    } else {
-        crate::projects::find_by_id(db, project_id)
-            .await?
-            .ok_or(crate::projects::ProjectStoreError::NoSuchProject(
-                project_id,
-            ))?
-            .code
-    };
+    let code = repair_project_code(db, project_id).await?;
     let canonical = format!(
         "{}/{}",
         cloud::workspace::documents_prefix(&code),
@@ -2787,6 +2773,27 @@ pub async fn repair_missing_object(
     })
 }
 
+async fn repair_project_code(
+    db: &SurrealDb,
+    project_id: Uuid,
+) -> Result<String, RepairStorageError> {
+    let authority = matter::authority_for(TABLE)
+        .await
+        .map_err(AssetError::from)?;
+    let missing = crate::projects::ProjectStoreError::NoSuchProject(project_id);
+    let code = if let Some(pg) = authority {
+        native::project_code(&pg, project_id)
+            .await?
+            .ok_or(missing)?
+    } else {
+        crate::projects::find_by_id(db, project_id)
+            .await?
+            .ok_or(missing)?
+            .code
+    };
+    Ok(code)
+}
+
 /// Why a [`file_revision`] call wrote nothing.
 #[derive(Debug, thiserror::Error)]
 pub enum RevisionError {
@@ -2861,7 +2868,7 @@ impl std::fmt::Display for ExpectedHead {
 /// The expected-head triple of a chain read: the live head's id, its
 /// one-based version (the chain's length — the same numbering the
 /// revisions door reports), and its byte digest.
-fn head_triple(head: &Asset, chain_len: usize) -> ExpectedHead {
+pub(crate) fn head_triple(head: &Asset, chain_len: usize) -> ExpectedHead {
     ExpectedHead {
         asset_id: head.id,
         version: u32::try_from(chain_len).unwrap_or(u32::MAX),

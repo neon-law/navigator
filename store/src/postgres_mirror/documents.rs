@@ -203,6 +203,13 @@ fn source_json(
 }
 
 impl AssetImage {
+    fn without_source_stamp(mut self) -> Self {
+        if let Some(metadata) = self.metadata.as_mut().and_then(Json::as_object_mut) {
+            metadata.remove(crate::assets::VERIFIED_ONBOARDING_ENVELOPE_KEY);
+        }
+        self
+    }
+
     fn from_source(row: AssetSource) -> Result<Self, MirrorError> {
         Ok(Self {
             id: record_uuid(&row.id).ok_or(MirrorError::Source)?,
@@ -336,10 +343,7 @@ pub(super) async fn mirror(
     if held {
         return Ok(Mirrored::Unchanged);
     }
-    let mut image = AssetImage::from_source(row)?;
-    if let Some(metadata) = image.metadata.as_mut().and_then(Json::as_object_mut) {
-        metadata.remove(crate::assets::VERIFIED_ONBOARDING_ENVELOPE_KEY);
-    }
+    let image = AssetImage::from_source(row)?.without_source_stamp();
     if mode == ImportMode::InsertMissing {
         if let Some(project) = image.project_id {
             let held: bool = sqlx::query_scalar(PROJECT_PRESENT)
@@ -511,19 +515,16 @@ pub(crate) async fn native_protects(pg: &PostgresDb, notation: Uuid) -> Result<b
     Ok(false)
 }
 
-fn resolved_native_difference(source: &AssetImage, target: &AssetImage) -> bool {
+fn resolved_native_visibility(source: &AssetImage, target: &AssetImage) -> bool {
     let mut retained = target.clone();
     retained.visibility.clone_from(&source.visibility);
     retained.updated_at = source.updated_at;
-    if let Some(metadata) = retained.metadata.as_mut().and_then(Json::as_object_mut) {
-        metadata.remove(crate::assets::VERIFIED_ONBOARDING_ENVELOPE_KEY);
-    }
-    // Source verification markers are never trusted or imported.
-    let mut source = source.clone();
-    if let Some(metadata) = source.metadata.as_mut().and_then(Json::as_object_mut) {
-        metadata.remove(crate::assets::VERIFIED_ONBOARDING_ENVELOPE_KEY);
-    }
-    retained == source
+    target.kind.as_deref() == Some("onboarding") && retained == *source
+}
+
+fn resolved_native_difference(source: &AssetImage, target: &AssetImage) -> bool {
+    let retained = target.clone().without_source_stamp();
+    resolved_native_visibility(source, &retained)
 }
 
 async fn compare_union(
@@ -531,6 +532,10 @@ async fn compare_union(
     source: BTreeMap<Uuid, AssetImage>,
     target: BTreeMap<Uuid, AssetImage>,
 ) -> Result<(super::TableParity, AssetUnionProof), MirrorError> {
+    let source: BTreeMap<_, _> = source
+        .into_iter()
+        .map(|(id, row)| (id, row.without_source_stamp()))
+        .collect();
     let mut proof = AssetUnionProof {
         full_metadata_compared: true,
         ..Default::default()
@@ -545,7 +550,10 @@ async fn compare_union(
             Some(held) => {
                 proof.compared_overlaps += 1;
                 if row != held {
-                    if resolved_native_difference(row, held) && native_onboarding(pg, held).await? {
+                    if resolved_native_visibility(row, held)
+                        || (resolved_native_difference(row, held)
+                            && native_onboarding(pg, held).await?)
+                    {
                         proof.resolved_native_overlaps += 1;
                     } else {
                         proof.unresolved_overlaps += 1;

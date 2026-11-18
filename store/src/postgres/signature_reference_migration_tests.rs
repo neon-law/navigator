@@ -50,7 +50,7 @@ async fn signature_parent_constraint_retains_history_and_rejects_new_orphans() {
     assert_eq!(
         rejected
             .as_database_error()
-            .and_then(|error| error.code())
+            .and_then(sqlx::error::DatabaseError::code)
             .as_deref(),
         Some("23503")
     );

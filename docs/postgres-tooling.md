@@ -265,8 +265,8 @@ matching scoped importer may refresh divergent captured rows. Missing Source row
 completed enrollment prevents import or reconciliation from resurrecting native rows.
 
 `postgres_mirror::notation_clauses::parity` applies the same pending-enrollment boundary to custom clauses. Native
-append and move operations serialize render positions. PostgreSQL draft reset locks the Notation, rechecks its state
-and live document, Asset, and signature protection, then deletes its four child families and parent in one transaction.
+append and move operations serialize render positions. PostgreSQL draft reset locks the Notation, rechecks its state and
+live document, Asset, and signature protection, then deletes its four child families and parent in one transaction.
 Canonical fact writers lock the parent before committing their facts, so a queued reset observes their committed
 protection. Compensation uses the same protected deletion seam.
 
@@ -422,17 +422,17 @@ application or worker readiness succeeds. The Notation scope also checks referen
 frozen capture. A pin difference blocks activation until the existing catalog copy is repaired and verified. Template
 ownership remains unchanged, and native Notation creation refuses a missing PostgreSQL Template.
 
-Asset parity compares the full metadata image. An overlap may retain independently verified native onboarding
-visibility, its update timestamp, and the reserved verification marker. Proof requires matching canonical PostgreSQL
-completion evidence for the envelope and Project; a Notation-scoped key also requires the same Notation. A metadata
-marker alone establishes no ownership. Proven native target-only onboarding rows remain in PostgreSQL; unknown
-provenance and every other unexplained column or metadata difference block activation. Reports show raw Source and
-PostgreSQL counts alongside resolved native overlaps, proven native target-only rows, and unknown target-only rows.
-These counts cannot cancel unrelated drift.
+Asset parity compares the full metadata image after excluding the reserved verification marker from Source input. An
+onboarding overlap retains PostgreSQL visibility and its update timestamp when all remaining fields and metadata match.
+Retaining a native verification marker requires independent canonical PostgreSQL completion evidence for the envelope
+and Project; a Notation-scoped key also requires the same Notation. A metadata marker alone establishes no ownership.
+Proven native target-only onboarding rows remain in PostgreSQL; unknown provenance and every other unexplained column or
+metadata difference block activation. Reports show raw Source and PostgreSQL counts alongside resolved native overlaps,
+proven native target-only rows, and unknown target-only rows. These counts cannot cancel unrelated drift.
 
-Reset verification separately reports retained native protection and refuses any missing captured protection.
-Documents and immutable versions use canonical parent checks and transactional head comparison. Comment bodies remain
-in SurrealDB; comment parent admission resolves canonical document/version rows, including PostgreSQL-only versions.
+Reset verification separately reports retained native protection and refuses any missing captured protection. Documents
+and immutable versions use canonical parent checks and transactional head comparison. Comment bodies remain in
+SurrealDB; comment parent admission resolves canonical document/version rows, including PostgreSQL-only versions.
 Project archive restoration holds verified parent leases until its Asset and document facts commit. Private historical
 restore paths preserve verified missing-parent associations; ordinary new writes still require their parents, and
 same-id conflicts are refused. This completion boundary does not make the whole Project restore one transaction.

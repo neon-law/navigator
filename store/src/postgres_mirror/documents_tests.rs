@@ -89,6 +89,10 @@ fn asset_keys_name_rows_without_values() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one frozen import including normalization and retained native drift"
+)]
 async fn frozen_asset_import_preserves_json_presence_and_refuses_native_drift_repair() {
     let Some((options, database)) = fresh_schema().await else {
         return;
@@ -212,6 +216,7 @@ async fn frozen_asset_import_preserves_json_presence_and_refuses_native_drift_re
     )
     .await
     .unwrap();
-    assert_eq!(parity.divergent, vec![MirrorKey::Asset(forged)]);
-    assert_eq!(proof.unresolved_overlaps, 1);
+    assert!(parity.divergent.is_empty());
+    assert_eq!(proof.resolved_native_overlaps, 0);
+    assert_eq!(proof.proven_native_target_only, 0);
 }

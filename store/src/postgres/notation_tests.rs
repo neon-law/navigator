@@ -221,6 +221,18 @@ async fn notation_pins_state_compare_and_swap_and_archive_replay_are_durable() {
             .unwrap();
     sqlx::query("UPDATE template SET source_commit_sha='1111111111111111111111111111111111111111',body_sha256='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' WHERE id=$1")
         .bind(template).execute(pg.pool()).await.unwrap();
+    let refused = sqlx::query("DELETE FROM template WHERE id=$1")
+        .bind(template)
+        .execute(pg.pool())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refused
+            .as_database_error()
+            .and_then(sqlx::error::DatabaseError::code)
+            .as_deref(),
+        Some("23503")
+    );
     crate::postgres::fixtures::activate_family(&pg, Family::Notation).await;
     let db = crate::surreal::SurrealDb::uninitialized();
     with_test_db(pg.clone(), async {
@@ -295,6 +307,22 @@ async fn notation_accessors_refuse_provisional_rows_before_scope_completion() {
     };
     let pg = connect(&options, &database).await;
     let (_, notation, _) = workflow_fixture(&pg).await;
+    let project: Uuid = sqlx::query_scalar("SELECT project_id FROM notation WHERE id=$1")
+        .bind(notation)
+        .fetch_one(pg.pool())
+        .await
+        .unwrap();
+    assert!(crate::onboarding::official_projects(&pg, &[project])
+        .await
+        .is_err());
+    assert!(crate::onboarding::filed_documents(&pg, &[project])
+        .await
+        .is_err());
+    assert!(
+        crate::plan_metrics::template_effect(&pg, Uuid::new_v4(), &[])
+            .await
+            .is_err()
+    );
     let db = crate::surreal::SurrealDb::uninitialized();
     with_test_db(pg.clone(), async {
         assert!(crate::notations::find_by_id(&db, notation).await.is_err());
@@ -399,7 +427,11 @@ async fn archived_questionnaire_snapshots_distinguish_missing_json_null_and_nest
 }
 
 #[tokio::test]
-async fn document_root_edits_and_archive_replay_use_postgres_without_legacy_parents() {
+#[expect(
+    clippy::too_many_lines,
+    reason = "one document import, CAS, and immutable archive journey"
+)]
+async fn document_root_edits_and_archive_replay_use_postgres_without_source_parents() {
     use crate::{
         assets, notation_documents as documents,
         notation_reset::{self, ResetOutcome},
@@ -551,6 +583,10 @@ async fn document_root_edits_and_archive_replay_use_postgres_without_legacy_pare
 }
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one Asset lifecycle and protected parent reset journey"
+)]
 async fn asset_metadata_lifecycle_and_note_key_protection_are_postgres_authoritative() {
     use crate::{
         assets, documents,
@@ -573,7 +609,7 @@ async fn asset_metadata_lifecycle_and_note_key_protection_are_postgres_authorita
     let storage: Arc<dyn cloud::StorageService> =
         Arc::new(cloud::FsStorage::new(directory.path()).await.unwrap());
     let db = crate::surreal::SurrealDb::uninitialized();
-    with_test_db(pg.clone(), async {
+    Box::pin(with_test_db(pg.clone(), async {
         let key = crate::notations::document_pdf_storage_key(notation);
         let args = documents::IngestArgs {
             project_id: project,
@@ -658,7 +694,7 @@ async fn asset_metadata_lifecycle_and_note_key_protection_are_postgres_authorita
             assets::count_for_projects(&db, &[project]).await.unwrap(),
             0
         );
-    })
+    }))
     .await;
     pg.pool().close().await;
 }

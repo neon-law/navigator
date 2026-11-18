@@ -471,6 +471,27 @@ fn run_json(report: &RunReport) -> serde_json::Value {
     })
 }
 
+fn write_family_proof(out: &mut String, table: &store::postgres_backfill::ParityTableReport) {
+    use std::fmt::Write as _;
+    if let Some(proof) = &table.template_pins {
+        let _ = writeln!(
+            out,
+            "Template pins: compared {} differences {}",
+            proof.compared, proof.differences
+        );
+    }
+    if let Some(proof) = &table.asset_union {
+        let _ = writeln!(out,"Asset union: source {} PostgreSQL {} resolved native overlaps {} proven native target-only {} unknown target-only {}",table.surreal,table.postgres,proof.resolved_native_overlaps,proof.proven_native_target_only,proof.unknown_target_only);
+    }
+    if let Some(proof) = &table.reset_union {
+        let _ = writeln!(
+            out,
+            "reset protection: compared {} retained native {}",
+            proof.compared, proof.retained_native_protections
+        );
+    }
+}
+
 fn run_text(report: &RunReport) -> String {
     use std::fmt::Write as _;
     let mut out = String::new();
@@ -515,23 +536,7 @@ fn run_text(report: &RunReport) -> String {
         );
     }
     for table in &report.parity {
-        if let Some(proof) = &table.template_pins {
-            let _ = writeln!(
-                out,
-                "Template pins: compared {} differences {}",
-                proof.compared, proof.differences
-            );
-        }
-        if let Some(proof) = &table.asset_union {
-            let _ = writeln!(out,"Asset union: source {} PostgreSQL {} resolved native overlaps {} proven native target-only {} unknown target-only {}",table.surreal,table.postgres,proof.resolved_native_overlaps,proof.proven_native_target_only,proof.unknown_target_only);
-        }
-        if let Some(proof) = &table.reset_union {
-            let _ = writeln!(
-                out,
-                "reset protection: compared {} retained native {}",
-                proof.compared, proof.retained_native_protections
-            );
-        }
+        write_family_proof(&mut out, table);
         if table.missing > 0 || table.differing > 0 || table.extra > 0 {
             let _ = writeln!(
                 out,

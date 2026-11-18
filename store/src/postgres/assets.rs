@@ -442,7 +442,7 @@ pub(crate) async fn file_revision(
     expected: Option<&crate::assets::ExpectedHead>,
     bytes: &[u8],
 ) -> Result<crate::assets::Filed, crate::assets::RevisionError> {
-    use crate::assets::{ExpectedHead, Filed, RevisionError};
+    use crate::assets::{Filed, RevisionError};
     require_ready(pg).await?;
     if !rules::kind::Kind::parse(args.kind)
         .is_some_and(|kind| kind.valid_for(rules::kind::Lane::Asset))
@@ -510,11 +510,7 @@ pub(crate) async fn file_revision(
         let current = chain
             .iter()
             .find(|head| head.deleted_at.is_none())
-            .map(|head| ExpectedHead {
-                asset_id: head.id,
-                version: u32::try_from(chain.len()).unwrap_or(u32::MAX),
-                sha256: head.sha256_hex.clone(),
-            });
+            .map(|head| crate::assets::head_triple(head, chain.len()));
         if current.as_ref() != Some(expected) {
             return Err(RevisionError::HeadConflict {
                 slug: slug.into(),

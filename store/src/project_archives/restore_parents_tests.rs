@@ -55,6 +55,10 @@ async fn bare_asset(pg: &PostgresDb) -> assets::Asset {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one verified historical graph restored and replayed under strict ordinary writes"
+)]
 async fn verified_history_restores_orphans_without_widening_normal_writes() {
     let Some((options, database)) = fresh_schema().await else {
         return;

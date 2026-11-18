@@ -35,6 +35,11 @@ pub(super) async fn fixture() -> Option<Fixture> {
         .execute(pg.pool())
         .await
         .unwrap();
+    crate::postgres::fixtures::activate_family(
+        &pg,
+        crate::postgres_backfill::family::Family::Notation,
+    )
+    .await;
     Some(Fixture {
         pg,
         input: NewProject {

@@ -2,6 +2,8 @@
 use super::*;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+// Domain evidence is checked by the real-PG Asset classifier tests. This adapter
+// double isolates how the real ledger validates, seals, and replays that typed result.
 struct CapturedNotation {
     receipt: SourceReceipt,
     asset: Uuid,
@@ -73,6 +75,10 @@ impl Source for CapturedNotation {
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one real enrollment and completed-replay protocol journey"
+)]
 async fn handoff_case(known_native: bool, old_global_complete: bool) {
     use sha2::Digest;
     let (options, database) = crate::postgres_mirror::tests::fresh_schema()
