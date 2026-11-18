@@ -144,7 +144,7 @@ pub(super) async fn mirror(
     Ok(changed(written.rows_affected(), Mirrored::Written))
 }
 
-pub(super) async fn parity(
+pub(crate) async fn parity(
     surreal: &SurrealDb,
     pg: &PostgresDb,
 ) -> Result<ParityReport, MirrorError> {

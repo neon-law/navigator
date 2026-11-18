@@ -604,3 +604,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod signature_reference_migration_tests;

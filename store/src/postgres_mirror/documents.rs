@@ -34,6 +34,7 @@ use uuid::Uuid;
 use super::tenancy::{compare, remirror, select_sql, source, target};
 use super::{changed, identity, micros, MirrorError, MirrorKey, Mirrored, ParityReport};
 use crate::postgres::PostgresDb;
+use crate::postgres_backfill::family::{self, ImportMode};
 use crate::surreal::{record_id, record_uuid, SurrealDb};
 
 pub(super) const ASSET_COLUMNS: &[&str] = &[
@@ -97,18 +98,13 @@ const ASSET_SOURCE_FIELDS: &str = "id, storage_key, secondary_storage_key, conte
     visibility, slug, published_at, source_message_id, source_sender, source_received_at, \
     source_subject, metadata, derived_from, transcript_quality, signing, notarization, evidence, \
     folder, deleted_at, purge_after, deleted_by_person_id, deleted_commit_sha, legal_hold_at, purged_at, \
-    inserted_at, updated_at, metadata IS NONE AS metadata_is_none, \
-    derived_from IS NONE AS derived_from_is_none, signing IS NONE AS signing_is_none, \
-    notarization IS NONE AS notarization_is_none, evidence IS NONE AS evidence_is_none";
+    inserted_at, updated_at, {metadata:metadata IS NONE, derived_from:derived_from IS NONE, \
+    signing:signing IS NONE, notarization:notarization IS NONE, evidence:evidence IS NONE} AS json_none";
 
 /// The asset row as SurrealDB stores it.
 #[derive(SurrealValue)]
 struct AssetSource {
-    metadata_is_none: bool,
-    derived_from_is_none: bool,
-    signing_is_none: bool,
-    notarization_is_none: bool,
-    evidence_is_none: bool,
+    json_none: BTreeMap<String, bool>,
     id: surrealdb::types::RecordId,
     storage_key: String,
     secondary_storage_key: Option<String>,
@@ -197,8 +193,13 @@ fn instant(at: Option<surrealdb::types::Datetime>) -> Option<DateTime<Utc>> {
 
 /// Surreal's typed optional projection collapses NULL and NONE; the raw
 /// presence projection keeps explicit caller JSON null distinct from absence.
-fn source_json(value: Option<Json>, absent: bool) -> Option<Json> {
-    (!absent).then(|| value.unwrap_or(Json::Null))
+fn source_json(
+    value: Option<Json>,
+    presence: &BTreeMap<String, bool>,
+    field: &str,
+) -> Result<Option<Json>, MirrorError> {
+    let absent = presence.get(field).ok_or(MirrorError::Source)?;
+    Ok((!absent).then(|| value.unwrap_or(Json::Null)))
 }
 
 impl AssetImage {
@@ -223,12 +224,12 @@ impl AssetImage {
             source_sender: row.source_sender,
             source_received_at: row.source_received_at,
             source_subject: row.source_subject,
-            metadata: source_json(row.metadata, row.metadata_is_none),
-            derived_from: source_json(row.derived_from, row.derived_from_is_none),
+            metadata: source_json(row.metadata, &row.json_none, "metadata")?,
+            derived_from: source_json(row.derived_from, &row.json_none, "derived_from")?,
             transcript_quality: row.transcript_quality,
-            signing: source_json(row.signing, row.signing_is_none),
-            notarization: source_json(row.notarization, row.notarization_is_none),
-            evidence: source_json(row.evidence, row.evidence_is_none),
+            signing: source_json(row.signing, &row.json_none, "signing")?,
+            notarization: source_json(row.notarization, &row.json_none, "notarization")?,
+            evidence: source_json(row.evidence, &row.json_none, "evidence")?,
             folder: row.folder,
             deleted_at: instant(row.deleted_at),
             purge_after: instant(row.purge_after),
@@ -321,7 +322,6 @@ pub(super) async fn mirror(
         // `super::mirror` routes only asset keys here.
         return Err(MirrorError::Source);
     };
-    use crate::postgres_backfill::family::{self, ImportMode};
     let mode = family::import_mode(pg, "asset").await?;
     if mode == ImportMode::Refuse {
         return Err(MirrorError::MatterAuthority);
@@ -337,10 +337,8 @@ pub(super) async fn mirror(
         return Ok(Mirrored::Unchanged);
     }
     let mut image = AssetImage::from_source(row)?;
-    if image.kind.as_deref() == Some("onboarding") {
-        if let Some(metadata) = image.metadata.as_mut().and_then(Json::as_object_mut) {
-            metadata.remove(crate::assets::VERIFIED_ONBOARDING_ENVELOPE_KEY);
-        }
+    if let Some(metadata) = image.metadata.as_mut().and_then(Json::as_object_mut) {
+        metadata.remove(crate::assets::VERIFIED_ONBOARDING_ENVELOPE_KEY);
     }
     if mode == ImportMode::InsertMissing {
         if let Some(project) = image.project_id {
@@ -439,18 +437,7 @@ pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport
     Ok(ParityReport { tables })
 }
 
-/// Full Asset union accounting for the scoped handoff. PostgreSQL-only rows
-/// are accepted only with independent native onboarding evidence.
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub(crate) struct AssetUnionProof {
-    pub source_only_remaining: usize,
-    pub compared_overlaps: usize,
-    pub resolved_native_overlaps: usize,
-    pub unresolved_overlaps: usize,
-    pub proven_native_target_only: usize,
-    pub unknown_target_only: usize,
-    pub full_metadata_compared: bool,
-}
+pub(crate) use crate::postgres_backfill::family::AssetUnionProof;
 
 async fn native_onboarding(pg: &PostgresDb, row: &AssetImage) -> Result<bool, MirrorError> {
     if row.kind.as_deref() != Some("onboarding") {
@@ -505,6 +492,23 @@ async fn native_onboarding(pg: &PostgresDb, row: &AssetImage) -> Result<bool, Mi
     .bind(envelope)
     .fetch_one(pg.pool())
     .await?)
+}
+
+/// Whether independently native Asset ownership explains a target-only reset fact.
+pub(crate) async fn native_protects(pg: &PostgresDb, notation: Uuid) -> Result<bool, MirrorError> {
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "{} WHERE starts_with(storage_key,$1) OR starts_with(secondary_storage_key,$1)",
+        ASSET_SELECT.as_str()
+    )))
+    .bind(format!("notations/{notation}/"))
+    .fetch_all(pg.pool())
+    .await?;
+    for row in rows {
+        if native_onboarding(pg, &AssetImage::from_row(&row)?).await? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn resolved_native_difference(source: &AssetImage, target: &AssetImage) -> bool {

@@ -733,14 +733,79 @@ pub async fn reconcile(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityRep
     parity(surreal, pg).await
 }
 
+/// Verify pins of the exact immutable Template versions referenced by Source
+/// Notations. A historical same-ID pin repair must reach PostgreSQL before
+/// opening native Notations from that version.
+pub(crate) async fn template_pin_parity(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+) -> Result<crate::postgres_backfill::family::TemplatePinProof, MirrorError> {
+    #[derive(SurrealValue)]
+    struct Pins {
+        id: surrealdb::types::RecordId,
+        source_commit_sha: Option<String>,
+        body_sha256: Option<String>,
+    }
+    let source_links: Vec<surrealdb::types::RecordId> = surreal
+        .query("SELECT VALUE template_id FROM notation")
+        .await
+        .and_then(surrealdb::IndexedResults::check)
+        .map_err(source)?
+        .take(0)
+        .map_err(source)?;
+    let ids = source_links
+        .iter()
+        .map(|id| record_uuid(id).ok_or(MirrorError::Source))
+        .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
+    let record_keys: Vec<_> = ids.iter().map(|id| record_id("template", *id)).collect();
+    let rows: Vec<Pins> = surreal
+        .query("SELECT id,source_commit_sha,body_sha256 FROM template WHERE id IN $ids")
+        .bind(("ids", record_keys))
+        .await
+        .and_then(surrealdb::IndexedResults::check)
+        .map_err(source)?
+        .take(0)
+        .map_err(source)?;
+    let source_pins = rows
+        .into_iter()
+        .map(|row| {
+            Ok((
+                record_uuid(&row.id).ok_or(MirrorError::Source)?,
+                (row.source_commit_sha, row.body_sha256),
+            ))
+        })
+        .collect::<Result<BTreeMap<_, _>, MirrorError>>()?;
+    let target: Vec<(Uuid, Option<String>, Option<String>)> =
+        sqlx::query_as("SELECT id,source_commit_sha,body_sha256 FROM template WHERE id=ANY($1)")
+            .bind(ids.iter().copied().collect::<Vec<_>>())
+            .fetch_all(pg.pool())
+            .await?;
+    let target: BTreeMap<_, _> = target
+        .into_iter()
+        .map(|(id, commit, body)| (id, (commit, body)))
+        .collect();
+    let differences = ids
+        .iter()
+        .filter(|id| !source_pins.contains_key(id) || source_pins.get(id) != target.get(id))
+        .count();
+    Ok(crate::postgres_backfill::family::TemplatePinProof {
+        compared: ids.len(),
+        differences,
+    })
+}
+
 /// Notations whose compatibility-owned document or rendered-Asset protection
 /// differs from PostgreSQL. Activation requires this list to be empty.
 /// Signature evidence stays on its existing PostgreSQL authority.
 pub(crate) async fn reset_fact_differences(
     surreal: &SurrealDb,
     pg: &PostgresDb,
-) -> Result<Vec<Uuid>, MirrorError> {
+) -> Result<(Vec<Uuid>, crate::postgres_backfill::family::ResetUnionProof), MirrorError> {
     let mut differences = Vec::new();
+    let mut proof = crate::postgres_backfill::family::ResetUnionProof {
+        compared: 0,
+        retained_native_protections: 0,
+    };
     let mut after: Option<Uuid> = None;
     loop {
         let ids: Vec<Uuid> = sqlx::query_scalar(
@@ -757,13 +822,18 @@ pub(crate) async fn reset_fact_differences(
                 .await
                 .map_err(source)?;
             let (target_document, _) = crate::postgres::notations::draft_facts(pg, *id).await?;
+            proof.compared += 1;
             if source_document != target_document {
-                differences.push(*id);
+                if target_document && super::documents::native_protects(pg, *id).await? {
+                    proof.retained_native_protections += 1;
+                } else {
+                    differences.push(*id);
+                }
             }
         }
         after = ids.last().copied();
     }
-    Ok(differences)
+    Ok((differences, proof))
 }
 
 #[cfg(test)]

@@ -384,6 +384,17 @@ pub(crate) fn document_row(
     row
 }
 
+pub(crate) async fn project_code(
+    pg: &PostgresDb,
+    project: Uuid,
+) -> Result<Option<String>, AssetError> {
+    sqlx::query_scalar("SELECT code FROM project WHERE id=$1")
+        .bind(project)
+        .fetch_optional(pg.pool())
+        .await
+        .map_err(AssetError::from)
+}
+
 pub(crate) async fn ingest_document(
     pg: &PostgresDb,
     storage: &Arc<dyn StorageService>,
@@ -393,11 +404,7 @@ pub(crate) async fn ingest_document(
     id: Option<Uuid>,
     bytes: &[u8],
 ) -> Result<crate::documents::IngestedDocument, crate::documents::IngestError> {
-    let code: Option<String> = sqlx::query_scalar("SELECT code FROM project WHERE id=$1")
-        .bind(args.project_id)
-        .fetch_optional(pg.pool())
-        .await
-        .map_err(AssetError::from)?;
+    let code = project_code(pg, args.project_id).await?;
     let code = code.ok_or(crate::projects::ProjectStoreError::NoSuchProject(
         args.project_id,
     ))?;
@@ -435,8 +442,8 @@ pub(crate) async fn file_revision(
     expected: Option<&crate::assets::ExpectedHead>,
     bytes: &[u8],
 ) -> Result<crate::assets::Filed, crate::assets::RevisionError> {
-    require_ready(pg).await?;
     use crate::assets::{ExpectedHead, Filed, RevisionError};
+    require_ready(pg).await?;
     if !rules::kind::Kind::parse(args.kind)
         .is_some_and(|kind| kind.valid_for(rules::kind::Lane::Asset))
     {
@@ -488,18 +495,7 @@ pub(crate) async fn file_revision(
                 attempted: args.kind.into(),
             });
         }
-        if head.drive_checkout_path().is_some() {
-            let target = identity
-                .metadata
-                .get_or_insert_with(|| json!({}))
-                .as_object_mut()
-                .ok_or(RevisionError::InvalidTreeMetadata)?;
-            if let Some(source) = head.metadata.as_ref().and_then(Value::as_object) {
-                for (key, value) in source.iter().filter(|(key, _)| key.starts_with("drive_")) {
-                    target.entry(key.clone()).or_insert_with(|| value.clone());
-                }
-            }
-        }
+        crate::assets::preserve_drive_metadata(&mut identity, head)?;
         let evidence = crate::assets::verified_onboarding_envelope(identity.metadata.as_ref());
         if head.deleted_at.is_none()
             && head.sha256_hex == sha

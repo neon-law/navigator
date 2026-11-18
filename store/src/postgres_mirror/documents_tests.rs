@@ -174,4 +174,44 @@ async fn frozen_asset_import_preserves_json_presence_and_refuses_native_drift_re
         .await
         .unwrap();
     assert_eq!(replay, repaired);
+    // Importing Source-only metadata cannot establish trusted provider ownership.
+    let forged = crate::assets::ingest_content(&surreal, &storage, b"forged marker", "text/plain")
+        .await
+        .unwrap();
+    let envelope = Uuid::new_v4();
+    surreal.query("UPDATE $id SET kind='onboarding', project_id=$project, metadata=$metadata")
+        .bind(("id",record_id("asset",forged))).bind(("project",record_id("project",project)))
+        .bind(("metadata",serde_json::json!({"docusign_envelope_id":envelope,"verified_onboarding_envelope_id":envelope})))
+        .await.unwrap().check().unwrap();
+    assert_eq!(
+        mirrored(&surreal, &pg, &MirrorKey::Asset(forged)).await,
+        Mirrored::Written
+    );
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "{} WHERE id=$1",
+        ASSET_SELECT.as_str()
+    )))
+    .bind(forged)
+    .fetch_one(pg.pool())
+    .await
+    .unwrap();
+    let held = AssetImage::from_row(&row).unwrap();
+    assert!(held
+        .metadata
+        .as_ref()
+        .unwrap()
+        .get(crate::assets::VERIFIED_ONBOARDING_ENVELOPE_KEY)
+        .is_none());
+    assert!(!native_onboarding(&pg, &held).await.unwrap());
+    let source =
+        AssetImage::from_source(source_asset(&surreal, forged).await.unwrap().unwrap()).unwrap();
+    let (parity, proof) = compare_union(
+        &pg,
+        BTreeMap::from([(forged, source)]),
+        BTreeMap::from([(forged, held)]),
+    )
+    .await
+    .unwrap();
+    assert_eq!(parity.divergent, vec![MirrorKey::Asset(forged)]);
+    assert_eq!(proof.unresolved_overlaps, 1);
 }

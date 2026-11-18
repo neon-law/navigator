@@ -7,7 +7,40 @@ use crate::postgres_mirror::tests::{connect, fresh_schema, mirror_identity};
 use crate::test_support::mem_surreal;
 
 async fn mirrored(surreal: &SurrealDb, pg: &PostgresDb, key: &MirrorKey) -> Mirrored {
-    super::super::mirror(surreal, pg, key).await.unwrap()
+    super::super::during_initial_copy(super::super::mirror(surreal, pg, key))
+        .await
+        .unwrap()
+}
+
+async fn assert_template_pin_repair(surreal: &SurrealDb, pg: &PostgresDb, template: Uuid) {
+    super::super::templates::mirror(surreal, pg, template)
+        .await
+        .unwrap();
+    assert_eq!(
+        template_pin_parity(surreal, pg).await.unwrap().differences,
+        0
+    );
+    let digest = "a".repeat(64);
+    surreal
+        .query("UPDATE $id SET body_sha256=$digest")
+        .bind(("id", record_id("template", template)))
+        .bind(("digest", digest.clone()))
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
+    let mismatch = template_pin_parity(surreal, pg).await.unwrap();
+    assert_eq!((mismatch.compared, mismatch.differences), (1, 1));
+    sqlx::query("UPDATE template SET body_sha256=$2 WHERE id=$1")
+        .bind(template)
+        .bind(digest)
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    assert_eq!(
+        template_pin_parity(surreal, pg).await.unwrap().differences,
+        0
+    );
 }
 
 /// Every list-shaped notation read compares equal once the mirror has
@@ -25,6 +58,7 @@ async fn the_notation_list_shapes_shadow_a_match_after_the_mirror() {
     let template = draft(&surreal).await;
     let a = open(&surreal, template, client, project_a).await;
     let b = open(&surreal, template, client, project_b).await;
+    assert_template_pin_repair(&surreal, &pg, template).await;
     mirrored(&surreal, &pg, &MirrorKey::Notation(a)).await;
     mirrored(&surreal, &pg, &MirrorKey::Notation(b)).await;
     let row_a = crate::notations::find_by_id(&surreal, a)

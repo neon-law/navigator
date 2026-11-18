@@ -75,6 +75,9 @@ fn an_existing_source_orphan_cannot_mask_a_different_missing_postgres_parent() {
         references: vec![reference],
         reset_fact_differences: vec![],
         foreign_keys_hold: true,
+        asset_union: None,
+        reset_union: None,
+        template_pins: None,
     };
     assert!(!snapshot.clean());
 }
@@ -156,6 +159,9 @@ impl super::Source for FrozenRows {
                 references: vec![],
                 reset_fact_differences: vec![],
                 foreign_keys_hold: super::foreign_keys_hold(pg, family).await?,
+                asset_union: None,
+                reset_union: None,
+                template_pins: None,
             })
         })
     }
@@ -283,6 +289,7 @@ async fn scoped_import_repairs_sql_null_then_retries_failure_without_replaying_a
     assert!(completed.is_clean());
     assert_eq!(completed.unresolved_references.len(), 1);
     assert_eq!(completed.unresolved_references[0].source_orphans, 1);
+    super::activate_fixture(&pg, Family::Notation).await;
     super::require_runtime_scopes(&pg).await.unwrap();
     assert!(
         !crate::postgres_mirror::backfilled(&pg).await.unwrap(),
@@ -494,6 +501,7 @@ async fn malformed_extra_and_ambiguous_completion_proofs_fail_closed() {
         Err(FamilyError::NotActive)
     ));
     super::activate_fixture(&pg, Family::Satellites).await;
+    super::activate_fixture(&pg, Family::Notation).await;
     super::require_runtime_scopes(&pg).await.unwrap();
     let run = super::validated_scope(&pg, Family::Satellites)
         .await
@@ -673,6 +681,7 @@ async fn an_older_runtime_refuses_disjoint_future_authority_but_reports_remain_a
         Err(FamilyError::NotActive)
     ));
     super::activate_fixture(&pg, Family::Satellites).await;
+    super::activate_fixture(&pg, Family::Notation).await;
     let known = super::validated_scope(&pg, Family::Satellites)
         .await
         .unwrap();
@@ -680,7 +689,7 @@ async fn an_older_runtime_refuses_disjoint_future_authority_but_reports_remain_a
     sqlx::query("INSERT INTO mirror_backfill_run(id,batch_size,status,scope,source_receipt) VALUES ($1,1,'running','future-documents:1','{}')")
         .bind(future).execute(pg.pool()).await.unwrap();
     super::require_runtime_scopes(&pg).await.unwrap();
-    sqlx::query("INSERT INTO mirror_backfill_checkpoint(run_id,mirror,completed_at,verification) VALUES ($1,'table:asset',now(),'{}')")
+    sqlx::query("INSERT INTO mirror_backfill_checkpoint(run_id,mirror,completed_at,verification) VALUES ($1,'table:future_projection',now(),'{}')")
         .bind(future).execute(pg.pool()).await.unwrap();
     sqlx::query(
         "UPDATE mirror_backfill_run SET status = 'completed', completed_at = now() WHERE id = $1",
@@ -723,4 +732,25 @@ async fn an_older_runtime_refuses_disjoint_future_authority_but_reports_remain_a
         .unwrap();
     operator.pool().close().await;
     pg.pool().close().await;
+}
+
+#[test]
+fn native_asset_extras_cannot_cancel_unknown_rows_or_overlapping_drift() {
+    let mut proof = super::AssetUnionProof {
+        compared_overlaps: 2,
+        resolved_native_overlaps: 1,
+        unresolved_overlaps: 1,
+        proven_native_target_only: 3,
+        unknown_target_only: 1,
+        full_metadata_compared: true,
+        ..Default::default()
+    };
+    assert!(proof.valid(2, 6, 2));
+    assert!(!proof.valid(2, 6, 0));
+    proof.unresolved_overlaps = 0;
+    proof.unknown_target_only = 0;
+    assert!(proof.valid(2, 5, 0));
+    assert!(!proof.valid(2, 6, 0));
+    proof.proven_native_target_only = usize::MAX;
+    assert!(!proof.valid(2, 0, 0));
 }

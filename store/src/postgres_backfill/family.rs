@@ -246,6 +246,26 @@ async fn validated_scope(pg: &PostgresDb, family: Family) -> Result<Uuid, Family
                 .ok_or(FamilyError::Receipt)?,
         )
         .map_err(|_| FamilyError::Receipt)?;
+        if family == Family::Notation
+            && proof
+                .reset_union
+                .as_ref()
+                .and_then(|proof| i64::try_from(proof.compared).ok())
+                != receipt.table_counts.get("notation").copied()
+        {
+            return Err(FamilyError::Receipt);
+        }
+        if family == Family::Notation
+            && !proof.template_pins.as_ref().is_some_and(|pins| {
+                receipt
+                    .table_counts
+                    .get("notation")
+                    .and_then(|count| usize::try_from(*count).ok())
+                    .is_some_and(|count| pins.clean(count))
+            })
+        {
+            return Err(FamilyError::Receipt);
+        }
         if !proof.clean(family, captured, table) {
             return Err(FamilyError::Receipt);
         }
@@ -301,6 +321,13 @@ pub(super) async fn completed_proof(
             divergent_ids: vec![],
             omitted_divergent_ids: 0,
             withheld_non_uuid_keys: 0,
+            asset_union: proof.asset_union,
+            reset_union: (*table == "notation")
+                .then_some(proof.reset_union)
+                .flatten(),
+            template_pins: (*table == "notation")
+                .then_some(proof.template_pins)
+                .flatten(),
         });
     }
     Ok((tables, references))
@@ -449,6 +476,68 @@ impl SourceReceipt {
     }
 }
 
+/// Full Asset union accounting for the scoped handoff. PostgreSQL-only rows
+/// are accepted only with independent native onboarding evidence.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AssetUnionProof {
+    pub source_only_remaining: usize,
+    pub compared_overlaps: usize,
+    pub resolved_native_overlaps: usize,
+    pub unresolved_overlaps: usize,
+    pub proven_native_target_only: usize,
+    pub unknown_target_only: usize,
+    pub full_metadata_compared: bool,
+}
+
+impl AssetUnionProof {
+    fn valid(&self, source: usize, target: usize, differences: usize) -> bool {
+        self.full_metadata_compared
+            && self
+                .source_only_remaining
+                .checked_add(self.compared_overlaps)
+                == Some(source)
+            && self
+                .compared_overlaps
+                .checked_add(self.proven_native_target_only)
+                .and_then(|count| count.checked_add(self.unknown_target_only))
+                == Some(target)
+            && self
+                .resolved_native_overlaps
+                .checked_add(self.unresolved_overlaps)
+                .is_some_and(|count| count <= self.compared_overlaps)
+            && self
+                .source_only_remaining
+                .checked_add(self.unresolved_overlaps)
+                .and_then(|count| count.checked_add(self.unknown_target_only))
+                == Some(differences)
+    }
+}
+
+/// Extra PostgreSQL reset protection proven by independently native Assets.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResetUnionProof {
+    pub compared: usize,
+    pub retained_native_protections: usize,
+}
+
+/// Referenced immutable Template pins checked against the same frozen capture.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TemplatePinProof {
+    pub compared: usize,
+    pub differences: usize,
+}
+
+impl TemplatePinProof {
+    fn clean(&self, notations: usize) -> bool {
+        self.compared <= notations
+            && (self.compared == 0) == (notations == 0)
+            && self.differences == 0
+    }
+}
+
 /// Final snapshot comparisons, with only table names, counts, and row identities.
 pub(super) struct Snapshot {
     pub schema_sha256: String,
@@ -459,6 +548,9 @@ pub(super) struct Snapshot {
     pub references: Vec<crate::postgres_mirror::records::UnresolvedReference>,
     pub reset_fact_differences: Vec<Uuid>,
     pub foreign_keys_hold: bool,
+    pub asset_union: Option<AssetUnionProof>,
+    pub reset_union: Option<ResetUnionProof>,
+    pub template_pins: Option<TemplatePinProof>,
 }
 
 impl Snapshot {
@@ -471,6 +563,27 @@ impl Snapshot {
             && self.export_bytes == receipt.export_bytes
             && self.tables.len() == expected.len()
             && actual == expected
+            && match family {
+                Family::Satellites => {
+                    self.asset_union.is_none()
+                        && self.reset_union.is_none()
+                        && self.template_pins.is_none()
+                }
+                Family::Notation => {
+                    self.tables
+                        .iter()
+                        .find(|table| table.table == "asset")
+                        .zip(self.asset_union.as_ref())
+                        .is_some_and(|(table, proof)| {
+                            proof.valid(table.source_rows, table.target_rows, table.divergent.len())
+                        })
+                        && self.reset_union.as_ref().is_some_and(|proof| {
+                            self.raw_counts.get("notation") == Some(&proof.compared)
+                                && proof.retained_native_protections <= proof.compared
+                        })
+                }
+            }
+            && (family != Family::Notation || self.template_pins.is_some())
             && self.tables.iter().all(|table| {
                 table.divergent.iter().all(|key| key.table() == table.table)
                     && self.raw_counts.get(table.table) == Some(&table.source_rows)
@@ -484,15 +597,24 @@ impl Snapshot {
 
     fn clean(&self) -> bool {
         self.foreign_keys_hold
-            && self
-                .tables
-                .iter()
-                .all(|table| table.divergent.is_empty() && table.source_rows == table.target_rows)
+            && self.tables.iter().all(|table| {
+                table.divergent.is_empty()
+                    && if table.table == "asset" {
+                        self.asset_union.as_ref().is_some_and(|proof| {
+                            proof.valid(table.source_rows, table.target_rows, 0)
+                        })
+                    } else {
+                        table.source_rows == table.target_rows
+                    }
+            })
             && self
                 .references
                 .iter()
                 .all(|reference| reference.newly_target_missing == 0)
             && self.reset_fact_differences.is_empty()
+            && self.template_pins.as_ref().is_none_or(|proof| {
+                proof.clean(self.raw_counts.get("notation").copied().unwrap_or_default())
+            })
     }
 }
 
@@ -641,8 +763,13 @@ pub(super) async fn advance_with(
                         newly_target_missing: reference.newly_target_missing,
                     })
                     .collect(),
-                reset_facts_checked: false,
+                reset_facts_checked: family == Family::Notation,
                 reset_fact_differences: final_snapshot.reset_fact_differences.len(),
+                asset_union: (table.table == "asset")
+                    .then(|| final_snapshot.asset_union.clone())
+                    .flatten(),
+                reset_union: final_snapshot.reset_union.clone(),
+                template_pins: final_snapshot.template_pins.clone(),
             })
             .map_err(|_| FamilyError::Receipt)?;
             sqlx::query("UPDATE mirror_backfill_checkpoint SET completed_at = now(), verification = $3, failed = 0, updated_at = now() WHERE run_id = $1 AND mirror = $2")
@@ -761,12 +888,33 @@ struct Verification {
     references: Vec<ReferenceVerification>,
     reset_facts_checked: bool,
     reset_fact_differences: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    asset_union: Option<AssetUnionProof>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reset_union: Option<ResetUnionProof>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    template_pins: Option<TemplatePinProof>,
 }
 
 impl Verification {
-    fn clean(&self, _family: Family, captured: usize, table: &str) -> bool {
+    fn clean(&self, family: Family, captured: usize, table: &str) -> bool {
         self.source_rows == captured
-            && self.target_rows == captured
+            && if family == Family::Notation && table == "asset" {
+                self.asset_union
+                    .as_ref()
+                    .is_some_and(|proof| proof.valid(captured, self.target_rows, self.differences))
+            } else {
+                self.target_rows == captured && self.asset_union.is_none()
+            }
+            && match family {
+                Family::Satellites => self.reset_union.is_none() && self.template_pins.is_none(),
+                Family::Notation => {
+                    self.reset_facts_checked
+                        && self.reset_union.as_ref().is_some_and(|proof| {
+                            proof.retained_native_protections <= proof.compared
+                        })
+                }
+            }
             && self.differences == 0
             && self.references_checked
             && self.foreign_keys_checked
@@ -817,6 +965,11 @@ pub(crate) async fn activate_fixture(pg: &PostgresDb, family: Family) {
     receipt.clone().verify_export(export).unwrap();
     receipt.validate(family).unwrap();
     let run = Uuid::new_v4();
+    let template_count: i64 =
+        sqlx::query_scalar("SELECT count(DISTINCT template_id) FROM notation")
+            .fetch_one(pg.pool())
+            .await
+            .unwrap();
     let mut tx = pg.0.begin().await.unwrap();
     sqlx::query("INSERT INTO mirror_backfill_run (id, batch_size, status, scope, source_receipt, completed_at) VALUES ($1, 1, 'completed', $2, $3, now())")
         .bind(run).bind(family.scope()).bind(serde_json::to_value(&receipt).unwrap()).execute(&mut *tx).await.unwrap();
@@ -829,8 +982,23 @@ pub(crate) async fn activate_fixture(pg: &PostgresDb, family: Family) {
             references_checked: true,
             foreign_keys_checked: true,
             references: vec![],
-            reset_facts_checked: false,
+            reset_facts_checked: family == Family::Notation,
             reset_fact_differences: 0,
+            asset_union: (family == Family::Notation && *table == "asset").then_some(
+                AssetUnionProof {
+                    compared_overlaps: count,
+                    full_metadata_compared: true,
+                    ..Default::default()
+                },
+            ),
+            reset_union: (family == Family::Notation).then(|| ResetUnionProof {
+                compared: usize::try_from(receipt.table_counts["notation"]).unwrap(),
+                retained_native_protections: 0,
+            }),
+            template_pins: (family == Family::Notation).then(|| TemplatePinProof {
+                compared: usize::try_from(template_count).unwrap(),
+                differences: 0,
+            }),
         };
         sqlx::query("INSERT INTO mirror_backfill_checkpoint (run_id, mirror, completed_at, verification) VALUES ($1, $2, now(), $3)")
             .bind(run).bind(checkpoint(table)).bind(serde_json::to_value(proof).unwrap()).execute(&mut *tx).await.unwrap();
@@ -908,3 +1076,7 @@ fn identifier(value: &str) -> String {
 #[cfg(test)]
 #[path = "family_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "notation_family_tests.rs"]
+mod notation_tests;

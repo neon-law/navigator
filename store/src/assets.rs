@@ -471,12 +471,12 @@ pub async fn find_by_id(db: &SurrealDb, id: Uuid) -> Result<Option<Asset>, Asset
 /// [`AssetError::Db`] if the lookup fails.
 pub async fn find_by_ids(db: &SurrealDb, ids: &[Uuid]) -> Result<Vec<Asset>, AssetError> {
     if let Some(pg) = matter::authority_for(TABLE).await? {
-        return Ok(native::rows(
+        return native::rows(
             &pg,
             "AND r.id IN (SELECT jsonb_array_elements_text($1->'ids')::uuid)",
             json!({"ids":ids}),
         )
-        .await?);
+        .await;
     }
 
     if ids.is_empty() {
@@ -498,12 +498,12 @@ pub async fn find_by_ids(db: &SurrealDb, ids: &[Uuid]) -> Result<Vec<Asset>, Ass
 /// [`AssetError::Db`] if the lookup fails.
 pub async fn for_project(db: &SurrealDb, project_id: Uuid) -> Result<Vec<Asset>, AssetError> {
     if let Some(pg) = matter::authority_for(TABLE).await? {
-        return Ok(native::rows(
+        return native::rows(
             &pg,
             "AND r.project_id=($1->>'project')::uuid AND r.deleted_at IS NULL ORDER BY id DESC",
             json!({"project":project_id}),
         )
-        .await?);
+        .await;
     }
 
     let response = db
@@ -685,12 +685,12 @@ pub async fn for_project_including_deleted(
     project_id: Uuid,
 ) -> Result<Vec<Asset>, AssetError> {
     if let Some(pg) = matter::authority_for(TABLE).await? {
-        return Ok(native::rows(
+        return native::rows(
             &pg,
             "AND r.project_id=($1->>'project')::uuid ORDER BY id DESC",
             json!({"project":project_id}),
         )
-        .await?);
+        .await;
     }
 
     let response = db
@@ -1083,7 +1083,7 @@ pub async fn digest_needed_elsewhere(
 /// [`AssetError::Db`] if the lookup fails.
 pub async fn soft_deleted_unpurged(db: &SurrealDb, limit: usize) -> Result<Vec<Asset>, AssetError> {
     if let Some(pg) = matter::authority_for(TABLE).await? {
-        return Ok(native::rows(&pg,"AND r.deleted_at IS NOT NULL AND r.purged_at IS NULL ORDER BY id ASC LIMIT ($1->>'limit')::bigint",json!({"limit":i64::try_from(limit).unwrap_or(i64::MAX)})).await?);
+        return native::rows(&pg,"AND r.deleted_at IS NOT NULL AND r.purged_at IS NULL ORDER BY id ASC LIMIT ($1->>'limit')::bigint",json!({"limit":i64::try_from(limit).unwrap_or(i64::MAX)})).await;
     }
 
     let response = db
@@ -1113,7 +1113,7 @@ pub async fn chain(db: &SurrealDb, asset: &Asset) -> Result<Vec<Asset>, AssetErr
 /// [`AssetError::Db`] if the count fails.
 pub async fn count_for_projects(db: &SurrealDb, project_ids: &[Uuid]) -> Result<usize, AssetError> {
     if let Some(pg) = matter::authority_for(TABLE).await? {
-        return Ok(native::count(&pg,"AND r.project_id IN(SELECT jsonb_array_elements_text($1->'projects')::uuid) AND r.deleted_at IS NULL",json!({"projects":project_ids})).await?);
+        return native::count(&pg,"AND r.project_id IN(SELECT jsonb_array_elements_text($1->'projects')::uuid) AND r.deleted_at IS NULL",json!({"projects":project_ids})).await;
     }
 
     if project_ids.is_empty() {
@@ -1147,6 +1147,11 @@ pub async fn kinds_by_projects(
     db: &SurrealDb,
     project_ids: &[Uuid],
 ) -> Result<Vec<(Uuid, Option<String>)>, AssetError> {
+    #[derive(SurrealValue)]
+    struct KindRow {
+        project_id: Option<surrealdb::types::RecordId>,
+        kind: Option<String>,
+    }
     if let Some(pg) = matter::authority_for(TABLE).await? {
         return Ok(sqlx::query_as(
             "SELECT project_id,kind FROM asset WHERE project_id=ANY($1) AND deleted_at IS NULL",
@@ -1154,12 +1159,6 @@ pub async fn kinds_by_projects(
         .bind(project_ids)
         .fetch_all(pg.pool())
         .await?);
-    }
-
-    #[derive(SurrealValue)]
-    struct KindRow {
-        project_id: Option<surrealdb::types::RecordId>,
-        kind: Option<String>,
     }
 
     if project_ids.is_empty() {
@@ -1209,7 +1208,7 @@ pub(crate) fn verified_onboarding_envelope(metadata: Option<&serde_json::Value>)
 /// [`AssetError::Db`] if the lookup fails.
 pub async fn list_all(db: &SurrealDb) -> Result<Vec<Asset>, AssetError> {
     if let Some(pg) = matter::authority_for(TABLE).await? {
-        return Ok(native::rows(&pg, "ORDER BY id DESC", json!({})).await?);
+        return native::rows(&pg, "ORDER BY id DESC", json!({})).await;
     }
 
     let response = db
@@ -1469,12 +1468,12 @@ pub async fn revisions(
     slug: &str,
 ) -> Result<Vec<Asset>, AssetError> {
     if let Some(pg) = matter::authority_for(TABLE).await? {
-        return Ok(native::rows(
+        return native::rows(
             &pg,
             "AND r.project_id=($1->>'project')::uuid AND r.slug=$1->>'slug' ORDER BY id DESC",
             json!({"project":project_id,"slug":slug}),
         )
-        .await?);
+        .await;
     }
 
     let response = db
@@ -1507,7 +1506,7 @@ pub async fn revisions_for_slugs(
     slugs: &[String],
 ) -> Result<Vec<Asset>, AssetError> {
     if let Some(pg) = matter::authority_for(TABLE).await? {
-        return Ok(native::rows(&pg,"AND r.project_id=($1->>'project')::uuid AND r.slug IN(SELECT jsonb_array_elements_text($1->'slugs')) ORDER BY slug ASC,id DESC",json!({"project":project_id,"slugs":slugs})).await?);
+        return native::rows(&pg,"AND r.project_id=($1->>'project')::uuid AND r.slug IN(SELECT jsonb_array_elements_text($1->'slugs')) ORDER BY slug ASC,id DESC",json!({"project":project_id,"slugs":slugs})).await;
     }
 
     if slugs.is_empty() {
@@ -2003,7 +2002,7 @@ pub async fn set_legal_hold(
 /// [`AssetError::Db`] if the lookup fails.
 pub async fn due_for_purge(db: &SurrealDb, now: DateTime<Utc>) -> Result<Vec<Asset>, AssetError> {
     if let Some(pg) = matter::authority_for(TABLE).await? {
-        return Ok(native::rows(&pg,"AND r.deleted_at IS NOT NULL AND r.purged_at IS NULL AND r.purge_after<=($1->>'now')::timestamptz ORDER BY id ASC",json!({"now":now})).await?);
+        return native::rows(&pg,"AND r.deleted_at IS NOT NULL AND r.purged_at IS NULL AND r.purge_after<=($1->>'now')::timestamptz ORDER BY id ASC",json!({"now":now})).await;
     }
 
     let response = db
@@ -2069,6 +2068,10 @@ pub async fn restore_archived(db: &SurrealDb, asset: &Asset) -> Result<RowRestor
         return native::restore(&pg, asset).await;
     }
 
+    restore_in_surreal(db, asset).await
+}
+
+async fn restore_in_surreal(db: &SurrealDb, asset: &Asset) -> Result<RowRestore, AssetError> {
     if let Some(existing) = find_by_id(db, asset.id).await? {
         return Ok(if &existing == asset {
             RowRestore::Identical
@@ -2689,11 +2692,9 @@ pub async fn repair_missing_object(
         .await
         .map_err(AssetError::from)?
     {
-        sqlx::query_scalar::<_, String>("SELECT code FROM project WHERE id=$1")
-            .bind(project_id)
-            .fetch_one(pg.pool())
-            .await
-            .map_err(AssetError::from)?
+        native::project_code(&pg, project_id).await?.ok_or(
+            crate::projects::ProjectStoreError::NoSuchProject(project_id),
+        )?
     } else {
         crate::projects::find_by_id(db, project_id)
             .await?
@@ -2947,6 +2948,30 @@ pub async fn file_revision_with_provenance(
     file_revision_inner(db, storage, args, identity, Some(provenance), None, bytes).await
 }
 
+pub(crate) fn preserve_drive_metadata(
+    identity: &mut crate::documents::DocumentIdentity<'_>,
+    head: &Asset,
+) -> Result<(), RevisionError> {
+    if head.drive_checkout_path().is_none() {
+        return Ok(());
+    }
+    let target = identity
+        .metadata
+        .get_or_insert_with(|| json!({}))
+        .as_object_mut()
+        .ok_or(RevisionError::InvalidTreeMetadata)?;
+    if let Some(source) = head
+        .metadata
+        .as_ref()
+        .and_then(serde_json::Value::as_object)
+    {
+        for (key, value) in source.iter().filter(|(key, _)| key.starts_with("drive_")) {
+            target.entry(key.clone()).or_insert_with(|| value.clone());
+        }
+    }
+    Ok(())
+}
+
 async fn file_revision_inner(
     db: &SurrealDb,
     storage: &Arc<dyn StorageService>,
@@ -3003,26 +3028,8 @@ async fn file_revision_inner(
 
     let latest = current(db, args.project_id, slug, Lens::Lawyer).await?;
     let mut preserved_identity = identity.clone();
-    if let Some(head) = latest
-        .as_ref()
-        .filter(|head| head.drive_checkout_path().is_some())
-    {
-        let metadata = preserved_identity
-            .metadata
-            .get_or_insert_with(|| serde_json::json!({}));
-        if !metadata.is_object() {
-            return Err(RevisionError::InvalidTreeMetadata);
-        }
-        if let (Some(target), Some(source)) = (
-            metadata.as_object_mut(),
-            head.metadata
-                .as_ref()
-                .and_then(serde_json::Value::as_object),
-        ) {
-            for (key, value) in source.iter().filter(|(key, _)| key.starts_with("drive_")) {
-                target.entry(key.clone()).or_insert_with(|| value.clone());
-            }
-        }
+    if let Some(head) = latest.as_ref() {
+        preserve_drive_metadata(&mut preserved_identity, head)?;
     }
     let identity = &preserved_identity;
     if let Some(head) = latest {
