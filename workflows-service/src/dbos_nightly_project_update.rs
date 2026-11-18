@@ -211,9 +211,7 @@ pub fn register(dbos: &DBOS, context: Context) -> dbos::Result<NightlyWorkflow> 
                             },
                         )
                         .await
-                        .map_err(|_| {
-                            restate_sdk::prelude::TerminalError::new("DBOS tag child failed")
-                        })
+                        .map_err(|_| "DBOS tag child failed".to_owned())
                 }
             })
             .await;
@@ -463,6 +461,28 @@ mod tests {
         child_workflow_id, enabled, post_once, unlaunched_workflow, workflow_id, NightlyError,
     };
     use crate::nightly_project_update::Tag;
+
+    #[tokio::test]
+    async fn native_child_failure_message_needs_no_transport_error() {
+        let roster = [true, false].map(|open| crate::nightly_project_update::RosterEntry {
+            project_id: Uuid::new_v4(),
+            open,
+        });
+        let mut calls = Vec::new();
+        let report = crate::nightly_project_update::sweep(&roster, |tag, id| {
+            calls.push((id, tag));
+            async { Err("DBOS tag child failed".to_owned()) }
+        })
+        .await;
+
+        assert_eq!(calls.len(), 4, "closed Projects still run membership only");
+        assert_eq!(report.failed_projects, 2);
+        assert_eq!(report.failures(), 4);
+        assert!(report
+            .failure_causes
+            .iter()
+            .all(|cause| cause.example == "DBOS tag child failed"));
+    }
 
     /// Slack that refuses either the receipt lookup or the post.
     struct Refusing {
