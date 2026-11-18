@@ -922,7 +922,7 @@ jobs:
           # counter-file location into this shell only, so a later step would
           # not find the profile data.
           #
-          # The required floor is 87.0%, measured without SurrealDB. ENG-1375
+          # The required floor is 90.0%, measured without SurrealDB. ENG-1375
           # raises it to 95.0% as domains and tests move to PostgreSQL.
           #
           # Raising the floor means moving four constants together — the
@@ -985,9 +985,9 @@ jobs:
           # redacted `Debug`, cookie/state serialization, the driver command,
           # capability shape, port polling — stay counted in
           # `scraper/session.rs` with their tests.
-          # The floor is 87.0% (ENG-1375 raises it back to 95.0%). The per-file
+          # The floor is 90.0% (ENG-1375 raises it back to 95.0%). The per-file
           # table this prints is the diagnostic when it trips.
-          cargo llvm-cov report --fail-under-lines 87.0 \
+          cargo llvm-cov report --fail-under-lines 90.0 \
               --ignore-filename-regex "(deploy/src/devx/(browser_e2e|chrome|e2e|seaweedfs|orchestrate|staging)|deploy/src/devx/forgejo/(cluster|oidc|smoke)|deploy/src/devx/email_summary_e2e/(harness|scenarios)|features/src/webdriver|deploy/src/scraper/browser)\\.rs\$|$(cat /tmp/surreal-free/coverage-ignore)"
       - name: stop covered PostgreSQL fixture
         if: always()
