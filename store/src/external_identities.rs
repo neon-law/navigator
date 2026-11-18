@@ -78,7 +78,7 @@ use uuid::Uuid;
 use sqlx::{postgres::PgRow, AssertSqlSafe, Row};
 
 use crate::persons::{self, PersonError};
-use crate::postgres::identity::{self as authority, AuthorityError, EXTERNAL_IDENTITY};
+use crate::postgres::identity::{self as authority, AuthorityError};
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 
 /// The table these rows live in.
@@ -412,7 +412,7 @@ pub async fn link(
         .await
         .map_err(|error| pg_error(error, system))?;
         let identity = from_pg(&row).map_err(|error| pg_error(error, system))?;
-        authority::project(&pg, db, &EXTERNAL_IDENTITY, id).await?;
+
         return Ok(identity);
     }
     let mut response = writing(system, || {
@@ -566,21 +566,16 @@ pub async fn notion_user_ids_for_project_leads(
     db: &SurrealDb,
     project_id: Uuid,
 ) -> Result<Vec<String>, ExternalIdentityError> {
-    let mut response = db
-        .query(
-            "SELECT VALUE person_id FROM person_project_role \
-             WHERE project_id = $project_id AND is_lawyer_dri = true",
-        )
-        .bind(("project_id", record_id("project", project_id)))
+    let participations = crate::projects::participations_for_project(db, project_id)
         .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let person_ids: Vec<surrealdb::types::RecordId> = response.take(0)?;
-
+        .map_err(|_| {
+            ExternalIdentityError::Authority(AuthorityError::Unavailable(
+                "Project participation unavailable".into(),
+            ))
+        })?;
     let mut notion_ids = Vec::new();
-    for person_id in person_ids {
-        let Some(person_id) = record_uuid(&person_id) else {
-            continue;
-        };
+    for participation in participations.into_iter().filter(|row| row.is_lawyer_dri) {
+        let person_id = participation.person_id;
         if let Some(identity) =
             find_by_person_and_system(db, person_id, ExternalSystem::Notion).await?
         {
@@ -717,7 +712,7 @@ pub async fn set_for_person(
             .map_err(|error| pg_error(error, system))?
             .ok_or(ExternalIdentityError::WriteReturnedNothing)?;
             let updated = from_pg(&row).map_err(|error| pg_error(error, system))?;
-            authority::project(&pg, db, &EXTERNAL_IDENTITY, identity.id).await?;
+
             return Ok(Some(updated));
         }
         let mut response = writing(system, || {
@@ -755,7 +750,7 @@ pub async fn unlink(db: &SurrealDb, identity_id: Uuid) -> Result<(), ExternalIde
             .execute(&pg.0)
             .await
             .map_err(AuthorityError::from)?;
-        authority::project(&pg, db, &EXTERNAL_IDENTITY, identity_id).await?;
+
         return Ok(());
     }
     db.query("DELETE $id")

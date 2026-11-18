@@ -41,6 +41,203 @@ pub(super) struct Table {
 
 pub(super) const TABLES: &[Table] = &[
     Table {
+        name: "mailroom",
+        group: "application_scoped",
+        columns: &["id", "name", "address_id", "inserted_at", "updated_at"],
+        references: &[("address_id", "address")],
+        timestamps: &["inserted_at", "updated_at"],
+    },
+    Table {
+        name: "letter",
+        group: "application_scoped",
+        columns: &[
+            "id",
+            "mailroom_id",
+            "project_id",
+            "direction",
+            "sender",
+            "recipient",
+            "summary",
+            "inserted_at",
+            "updated_at",
+        ],
+        references: &[("mailroom_id", "mailroom"), ("project_id", "project")],
+        timestamps: &["inserted_at", "updated_at"],
+    },
+    Table {
+        name: "lead",
+        group: "application_scoped",
+        columns: &[
+            "id",
+            "email",
+            "email_lower",
+            "phone",
+            "brand_key",
+            "source_path",
+            "consent_version",
+            "consented_at",
+            "status",
+            "unsubscribed_at",
+            "person_id",
+            "submissions",
+            "inserted_at",
+            "updated_at",
+        ],
+        references: &[("person_id", "person")],
+        timestamps: &[
+            "consented_at",
+            "unsubscribed_at",
+            "inserted_at",
+            "updated_at",
+        ],
+    },
+    Table {
+        name: "lead_consent",
+        group: "application_scoped",
+        columns: &[
+            "id",
+            "lead_id",
+            "consented_at",
+            "phone",
+            "source_path",
+            "sms_consent_version",
+            "sms_policy_version",
+            "sms_opt_in",
+            "call_consent_version",
+            "call_opt_in",
+        ],
+        references: &[("lead_id", "lead")],
+        timestamps: &["consented_at"],
+    },
+    Table {
+        name: "project_deadlines",
+        group: "application_scoped",
+        columns: &[
+            "id",
+            "project_id",
+            "due_at",
+            "authority_kind",
+            "authority",
+            "source",
+            "source_document_id",
+            "owner_person_id",
+            "status",
+            "calendar_role",
+            "internal_lead_days",
+            "client_lead_days",
+            "replay_key",
+            "inserted_at",
+            "updated_at",
+            "title",
+            "calendar_sequence",
+            "description",
+            "category",
+        ],
+        references: &[("project_id", "project"), ("owner_person_id", "person")],
+        timestamps: &["due_at", "inserted_at", "updated_at"],
+    },
+    Table {
+        name: "project_service",
+        group: "application_scoped",
+        columns: &[
+            "id",
+            "project_id",
+            "document_id",
+            "recipient",
+            "recipient_person_id",
+            "recipient_entity_id",
+            "counsel_for",
+            "method",
+            "served_on",
+            "address",
+            "declarant",
+            "declarant_person_id",
+            "letter_id",
+            "sent_email_id",
+            "inserted_at",
+            "updated_at",
+        ],
+        references: &[
+            ("project_id", "project"),
+            ("document_id", "asset"),
+            ("recipient_person_id", "person"),
+            ("recipient_entity_id", "entity"),
+            ("declarant_person_id", "person"),
+            ("letter_id", "letter"),
+            ("sent_email_id", "sent_email"),
+        ],
+        timestamps: &["inserted_at", "updated_at"],
+    },
+    Table {
+        name: "summary_sender_approval",
+        group: "application_scoped",
+        columns: &[
+            "id",
+            "firm_id",
+            "project_id",
+            "provider_account",
+            "person_id",
+            "sender_email",
+            "status",
+            "updated_at",
+        ],
+        references: &[
+            ("firm_id", "firm"),
+            ("project_id", "project"),
+            ("person_id", "person"),
+        ],
+        timestamps: &["updated_at"],
+    },
+    Table {
+        name: "summary_sender_approval_event",
+        group: "application_scoped",
+        columns: &[
+            "id",
+            "firm_id",
+            "actor_person_id",
+            "project_id",
+            "provider_account",
+            "sender_email",
+            "person_id",
+            "action",
+            "inserted_at",
+        ],
+        references: &[
+            ("firm_id", "firm"),
+            ("actor_person_id", "person"),
+            ("project_id", "project"),
+            ("person_id", "person"),
+        ],
+        timestamps: &["inserted_at"],
+    },
+    Table {
+        name: "inbox_triage",
+        group: "application_scoped",
+        columns: &[
+            "id",
+            "message_id",
+            "firm_id",
+            "suggested_project_id",
+            "project_confidence",
+            "privilege",
+            "privilege_confidence",
+            "rationale",
+            "model_id",
+            "prompt_version",
+            "raw_output",
+            "disposition",
+            "labeled_example",
+            "inserted_at",
+            "updated_at",
+        ],
+        references: &[
+            ("message_id", "message"),
+            ("firm_id", "firm"),
+            ("suggested_project_id", "project"),
+        ],
+        timestamps: &["inserted_at", "updated_at"],
+    },
+    Table {
         name: "product",
         group: "source_domain_records",
         columns: &[
@@ -195,6 +392,7 @@ pub(super) const TABLES: &[Table] = &[
             "actor_id",
             "ciphertext",
             "inserted_at",
+            "inserted_at_text",
             "key",
             "kms_key_version",
             "request_id",
@@ -1352,6 +1550,17 @@ pub(super) fn normalize_surreal(
         }
     }
     let mut row = row.into_json_value();
+    if table.name == "deployment_secret_change" {
+        let fields = row.as_object_mut().ok_or(MirrorError::Source)?;
+        let timestamp = fields
+            .get("inserted_at")
+            .and_then(Value::as_str)
+            .filter(|value| DateTime::parse_from_rfc3339(value).is_ok())
+            .ok_or(MirrorError::Source)?
+            .to_owned();
+        fields.insert("inserted_at_text".into(), Value::String(timestamp));
+    }
+
     if let Some((id, kind)) = natural_id {
         let fields = row.as_object_mut().ok_or(MirrorError::Source)?;
         fields.insert("id".to_owned(), Value::String(id));

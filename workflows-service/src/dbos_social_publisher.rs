@@ -515,20 +515,9 @@ async fn mark_post_published(
     dbos::step("mark-post-published", move || {
         let surreal = surreal.clone();
         async move {
-            surreal
-                .query(
-                    "UPDATE $id SET status = 'published', updated_at = time::now() WHERE status = 'scheduled'",
-                )
-                .bind(("id", store::surreal::record_id("post", post_id)))
+            store::posts::publish_scheduled(&surreal, post_id)
                 .await
-                .map_err(|_| dbos::Error::Application(SocialPublishDbosError::Provider))?
-                .check()
                 .map_err(|_| dbos::Error::Application(SocialPublishDbosError::Provider))?;
-            store::postgres_mirror::after_write(
-                &surreal,
-                store::postgres_mirror::MirrorKey::Post(post_id),
-            )
-            .await;
             Ok(())
         }
     })

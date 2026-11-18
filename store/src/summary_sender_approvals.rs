@@ -16,7 +16,7 @@ use crate::{
 pub const TABLE: &str = "summary_sender_approval";
 const AUDIT_TABLE: &str = "summary_sender_approval_event";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct SummarySenderApproval {
     pub id: Uuid,
     pub firm_id: Uuid,
@@ -30,6 +30,8 @@ pub struct SummarySenderApproval {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ApprovalError {
+    #[error(transparent)]
+    Postgres(#[from] crate::postgres::matter::MatterAuthorityError),
     #[error("not authorized")]
     NotAuthorized,
     #[error("sender email must belong to an email-confirmed Person")]
@@ -98,6 +100,12 @@ pub async fn is_approved(
     if !is_current_client_dri(db, project_id, person_id).await? {
         return Ok(false);
     }
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
+        let found: Option<serde_json::Value> = crate::postgres::matter::find(&pg, TABLE,
+            serde_json::json!({"firm_id": firm_id,"project_id": project_id,"provider_account": provider_account,
+                "person_id": person_id,"sender_email": email.trim().to_ascii_lowercase(),"status": "approved"})).await?;
+        return Ok(found.is_some());
+    }
     let mut response = db.query(format!("SELECT VALUE id FROM {TABLE} WHERE firm_id = $firm AND project_id = $project AND provider_account = $account AND person_id = $person AND sender_email = $email AND status = 'approved' LIMIT 1"))
         .bind(("firm", record_id(crate::firms::TABLE, firm_id)))
         .bind(("project", record_id(crate::projects::PROJECT_TABLE, project_id)))
@@ -116,6 +124,16 @@ pub async fn list_for_firm(
     firm_id: Uuid,
 ) -> Result<Vec<SummarySenderApproval>, ApprovalError> {
     authorize(db, role, actor, firm_id).await?;
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
+        return Ok(crate::postgres::matter::select(
+            &pg,
+            TABLE,
+            serde_json::json!({"firm_id": firm_id}),
+            &["updated_at DESC", "id DESC"],
+        )
+        .await?);
+    }
+
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE firm_id = $firm ORDER BY updated_at DESC"
@@ -137,6 +155,16 @@ pub async fn audit_history_for_firm(
     firm_id: Uuid,
 ) -> Result<Vec<ApprovalEvent>, ApprovalError> {
     authorize(db, role, actor, firm_id).await?;
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
+        return Ok(crate::postgres::matter::select(
+            &pg,
+            AUDIT_TABLE,
+            serde_json::json!({"firm_id": firm_id}),
+            &["inserted_at DESC", "id DESC"],
+        )
+        .await?);
+    }
+
     let mut response = db.query(format!("SELECT id, firm_id, actor_person_id, project_id, provider_account, sender_email, person_id, action, inserted_at FROM {AUDIT_TABLE} WHERE firm_id = $firm ORDER BY inserted_at DESC"))
         .bind(("firm", record_id(crate::firms::TABLE, firm_id)))
         .await.and_then(surrealdb::IndexedResults::check)?;
@@ -147,7 +175,7 @@ pub async fn audit_history_for_firm(
         .collect())
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct ApprovalEvent {
     pub id: Uuid,
     pub actor_person_id: Uuid,
@@ -200,6 +228,18 @@ pub async fn approve(
         .filter(|person| person.email_confirmed)
         .ok_or(ApprovalError::SenderNotVerified)?;
     validate_project_sender(db, firm_id, project_id, person.id).await?;
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
+        return approve_postgres(
+            &pg,
+            actor,
+            firm_id,
+            project_id,
+            provider_account,
+            &email,
+            person.id,
+        )
+        .await;
+    }
     let identity_changed = find_by_identity(db, firm_id, project_id, provider_account, &email)
         .await?
         .is_some_and(|existing| existing.person_id != person.id);
@@ -251,6 +291,12 @@ async fn find_by_identity(
     provider_account: &str,
     email: &str,
 ) -> Result<Option<SummarySenderApproval>, ApprovalError> {
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
+        return Ok(crate::postgres::matter::find(&pg, TABLE, serde_json::json!({
+            "firm_id": firm_id,"project_id": project_id,"provider_account": provider_account,"sender_email": email,
+        })).await?);
+    }
+
     let mut response = db.query(format!("SELECT {SELECT} FROM {TABLE} WHERE firm_id = $firm AND project_id = $project AND provider_account = $account AND sender_email = $email LIMIT 1"))
         .bind(("firm", record_id(crate::firms::TABLE, firm_id)))
         .bind(("project", record_id(crate::projects::PROJECT_TABLE, project_id)))
@@ -268,6 +314,9 @@ pub async fn revoke(
     approval_id: Uuid,
 ) -> Result<(), ApprovalError> {
     authorize(db, role, Some(actor), firm_id).await?;
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
+        return revoke_postgres(&pg, actor, firm_id, approval_id).await;
+    }
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE id = $id AND firm_id = $firm LIMIT 1"
@@ -400,6 +449,131 @@ async fn audit(db: &SurrealDb, event: ApprovalAudit<'_>) -> Result<(), ApprovalE
         crate::postgres_mirror::MirrorKey::SummarySenderApprovalEvent(event.id),
     )
     .await;
+    Ok(())
+}
+
+async fn audit_postgres(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    event: ApprovalAudit<'_>,
+) -> Result<(), ApprovalError> {
+    sqlx::query("INSERT INTO summary_sender_approval_event (id,firm_id,actor_person_id,project_id,provider_account,sender_email,person_id,action,inserted_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now())")
+        .bind(event.id).bind(event.firm_id).bind(event.actor).bind(event.project_id)
+        .bind(event.account).bind(event.email).bind(event.person).bind(event.action)
+        .execute(&mut **tx).await.map_err(crate::postgres::matter::MatterAuthorityError::from)?;
+    Ok(())
+}
+
+async fn approve_postgres(
+    pg: &crate::postgres::PostgresDb,
+    actor: Uuid,
+    firm: Uuid,
+    project: Uuid,
+    account: &str,
+    email: &str,
+    person: Uuid,
+) -> Result<SummarySenderApproval, ApprovalError> {
+    use crate::postgres::matter::{self, MatterAuthorityError as PgError};
+    let mut tx = pg.pool().begin().await.map_err(PgError::from)?;
+    sqlx::query("SELECT pg_advisory_xact_lock(1312902740, hashtext($1::text))")
+        .bind(serde_json::json!([firm, project, account, email]).to_string())
+        .execute(&mut *tx)
+        .await
+        .map_err(PgError::from)?;
+    let locked: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM project WHERE id=$1 AND firm_id=$2 FOR SHARE")
+            .bind(project)
+            .bind(firm)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(PgError::from)?;
+    if locked.is_none() {
+        return Err(ApprovalError::SenderNotClientDri);
+    }
+    let valid: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM person p JOIN person_project_role r ON r.person_id=p.id WHERE p.id=$1 AND p.email_confirmed AND lower(p.email::text)=$2 AND r.project_id=$3 AND r.is_client_dri)")
+        .bind(person).bind(email).bind(project).fetch_one(&mut *tx).await.map_err(PgError::from)?;
+    if !valid {
+        return Err(ApprovalError::SenderNotVerified);
+    }
+    let existing: Option<serde_json::Value> = sqlx::query_scalar("SELECT to_jsonb(r) FROM summary_sender_approval r WHERE firm_id=$1 AND project_id=$2 AND provider_account=$3 AND sender_email=$4 FOR UPDATE")
+        .bind(firm).bind(project).bind(account).bind(email).fetch_optional(&mut *tx).await.map_err(PgError::from)?;
+    let existing: Option<SummarySenderApproval> = existing
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(PgError::from)?;
+    if existing.as_ref().is_some_and(|row| row.person_id != person) {
+        return Err(ApprovalError::SenderNotVerified);
+    }
+    let id = existing.as_ref().map_or_else(Uuid::now_v7, |row| row.id);
+    let row = matter::upsert_on(
+        &mut *tx,
+        TABLE,
+        serde_json::json!({"id": id,"firm_id": firm,
+        "project_id": project,"provider_account": account,"person_id": person,"sender_email": email,
+        "status": "approved","updated_at": Utc::now()}),
+    )
+    .await?;
+    audit_postgres(
+        &mut tx,
+        ApprovalAudit {
+            id: Uuid::now_v7(),
+            firm_id: firm,
+            actor,
+            project_id: Some(project),
+            account,
+            email,
+            person,
+            action: "approved",
+        },
+    )
+    .await?;
+    tx.commit().await.map_err(PgError::from)?;
+    Ok(row)
+}
+
+async fn revoke_postgres(
+    pg: &crate::postgres::PostgresDb,
+    actor: Uuid,
+    firm: Uuid,
+    id: Uuid,
+) -> Result<(), ApprovalError> {
+    use crate::postgres::matter::MatterAuthorityError as PgError;
+    let mut tx = pg.pool().begin().await.map_err(PgError::from)?;
+    let previous: Option<serde_json::Value> = sqlx::query_scalar(
+        "SELECT to_jsonb(r) FROM summary_sender_approval r WHERE id=$1 AND firm_id=$2 FOR UPDATE",
+    )
+    .bind(id)
+    .bind(firm)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(PgError::from)?;
+    let Some(previous) = previous else {
+        return Ok(());
+    };
+    let previous: SummarySenderApproval =
+        serde_json::from_value(previous).map_err(PgError::from)?;
+    if previous.status == "revoked" {
+        return Ok(());
+    }
+    sqlx::query("UPDATE summary_sender_approval SET status='revoked',updated_at=now() WHERE id=$1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .map_err(PgError::from)?;
+    audit_postgres(
+        &mut tx,
+        ApprovalAudit {
+            id: Uuid::now_v7(),
+            firm_id: firm,
+            actor,
+            project_id: previous.project_id,
+            account: &previous.provider_account,
+            email: &previous.sender_email,
+            person: previous.person_id,
+            action: "revoked",
+        },
+    )
+    .await?;
+    tx.commit().await.map_err(PgError::from)?;
     Ok(())
 }
 

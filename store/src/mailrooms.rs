@@ -13,7 +13,7 @@
 //! [`create`] is the check, not the `record<T>` type.
 
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
@@ -26,7 +26,7 @@ const TABLE: &str = "mailroom";
 const ADDRESS_TABLE: &str = "address";
 
 /// One mail-receiving destination.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Mailroom {
     pub id: Uuid,
     /// Unique.
@@ -68,6 +68,8 @@ const SELECT: &str = "id, name, address_id, inserted_at, updated_at";
 /// Errors reading or writing a mailroom.
 #[derive(Debug, thiserror::Error)]
 pub enum MailroomError {
+    #[error(transparent)]
+    Postgres(#[from] crate::postgres::matter::MatterAuthorityError),
     /// A database operation failed.
     #[error("database: {0}")]
     Db(#[from] surrealdb::Error),
@@ -129,6 +131,30 @@ pub async fn create(
     name: &str,
     address_id: Uuid,
 ) -> Result<Mailroom, MailroomError> {
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
+        if addresses::find_by_id(db, address_id).await?.is_none() {
+            return Err(MailroomError::NoSuchAddress(address_id));
+        }
+        let now = Utc::now();
+        let result = crate::postgres::matter::upsert(
+            &pg,
+            TABLE,
+            &serde_json::json!({
+                "id": Uuid::now_v7(), "name": name, "address_id": address_id,
+                "inserted_at": now, "updated_at": now,
+            }),
+        )
+        .await;
+        return match result {
+            Err(crate::postgres::matter::MatterAuthorityError::Conflict(ref index))
+                if index == "mailroom_name_key" =>
+            {
+                Err(MailroomError::NameTaken)
+            }
+            value => value.map_err(MailroomError::from),
+        };
+    }
+
     if addresses::find_by_id(db, address_id).await?.is_none() {
         return Err(MailroomError::NoSuchAddress(address_id));
     }
@@ -200,6 +226,12 @@ pub async fn find_or_create(
 ///
 /// [`MailroomError::Db`] if the lookup fails.
 pub async fn find_by_name(db: &SurrealDb, name: &str) -> Result<Option<Mailroom>, MailroomError> {
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
+        return Ok(
+            crate::postgres::matter::find(&pg, TABLE, serde_json::json!({"name": name})).await?,
+        );
+    }
+
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM ONLY {TABLE} WHERE name = $name LIMIT 1"
@@ -217,6 +249,10 @@ pub async fn find_by_name(db: &SurrealDb, name: &str) -> Result<Option<Mailroom>
 ///
 /// [`MailroomError::Db`] if the lookup fails.
 pub async fn find_by_id(db: &SurrealDb, id: Uuid) -> Result<Option<Mailroom>, MailroomError> {
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
+        return Ok(crate::postgres::matter::find(&pg, TABLE, serde_json::json!({"id": id})).await?);
+    }
+
     let mut response = db
         .query(format!("SELECT {SELECT} FROM ONLY $id"))
         .bind(("id", record_id(TABLE, id)))
@@ -233,6 +269,16 @@ pub async fn find_by_id(db: &SurrealDb, id: Uuid) -> Result<Option<Mailroom>, Ma
 ///
 /// [`MailroomError::Db`] if the lookup fails.
 pub async fn list_all(db: &SurrealDb) -> Result<Vec<Mailroom>, MailroomError> {
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
+        return Ok(crate::postgres::matter::select(
+            &pg,
+            TABLE,
+            serde_json::json!({}),
+            &["name", "id"],
+        )
+        .await?);
+    }
+
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} ORDER BY inserted_at ASC, id ASC"
@@ -253,6 +299,14 @@ pub async fn list_all(db: &SurrealDb) -> Result<Vec<Mailroom>, MailroomError> {
 ///
 /// [`MailroomError::Db`] if the count fails.
 pub async fn count(db: &SurrealDb) -> Result<i64, MailroomError> {
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
+        return sqlx::query_scalar("SELECT count(*) FROM mailroom")
+            .fetch_one(pg.pool())
+            .await
+            .map_err(crate::postgres::matter::MatterAuthorityError::from)
+            .map_err(MailroomError::from);
+    }
+
     let mut response = db
         .query(format!("SELECT count() FROM {TABLE} GROUP ALL"))
         .await

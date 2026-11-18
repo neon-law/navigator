@@ -152,6 +152,9 @@ pub async fn save(
     fields: &BTreeMap<String, String>,
 ) -> Result<usize, ChangeError> {
     authorize(role, environment)?;
+    let pg = crate::postgres::matter::authority_for(TABLE)
+        .await
+        .map_err(|_| ChangeError::Store)?;
     let selected = replacements(fields)?;
     let mut encrypted = Vec::with_capacity(selected.len());
     let mut ids = Vec::with_capacity(selected.len());
@@ -185,6 +188,20 @@ pub async fn save(
     if count == 0 {
         return Ok(0);
     }
+    if let Some(pg) = pg {
+        let mut tx = pg.pool().begin().await.map_err(|_| ChangeError::Store)?;
+        for row in encrypted {
+            let id = Uuid::parse_str(&row.request_id).map_err(|_| ChangeError::Store)?;
+            let timestamp = chrono::DateTime::parse_from_rfc3339(&row.inserted_at)
+                .map_err(|_| ChangeError::Store)?;
+            sqlx::query("INSERT INTO deployment_secret_change (id,request_id,actor_id,key,ciphertext,wrapped_key,kms_key_version,inserted_at,inserted_at_text,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$8)")
+                .bind(id).bind(row.request_id).bind(row.actor_id).bind(row.key).bind(row.ciphertext)
+                .bind(row.wrapped_key).bind(row.kms_key_version).bind(timestamp).bind(row.inserted_at)
+                .execute(&mut *tx).await.map_err(|_| ChangeError::Store)?;
+        }
+        tx.commit().await.map_err(|_| ChangeError::Store)?;
+        return Ok(count);
+    }
     // The mirror locates each encrypted change by its request UUID.
     // Commit the entire batch before publishing any mirror writes.
     db.query(
@@ -211,6 +228,26 @@ pub async fn latest(
     environment: DeploymentEnvironment,
 ) -> Result<Vec<EncryptedChange>, ChangeError> {
     authorize(role, environment)?;
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE)
+        .await
+        .map_err(|_| ChangeError::Store)?
+    {
+        let rows: Vec<serde_json::Value> = sqlx::query_scalar(
+            "SELECT jsonb_build_object('request_id',request_id,'actor_id',actor_id,'key',key,
+             'ciphertext',ciphertext,'wrapped_key',wrapped_key,'kms_key_version',kms_key_version,
+             'inserted_at',inserted_at_text) FROM deployment_secret_change ORDER BY inserted_at,id",
+        )
+        .fetch_all(pg.pool())
+        .await
+        .map_err(|_| ChangeError::Store)?;
+        let mut latest = BTreeMap::new();
+        for row in rows {
+            let row: EncryptedChange =
+                serde_json::from_value(row).map_err(|_| ChangeError::Store)?;
+            latest.insert(row.key.clone(), row);
+        }
+        return Ok(latest.into_values().collect());
+    }
     let mut response = db.query("SELECT request_id, actor_id, key, ciphertext, wrapped_key, kms_key_version, inserted_at FROM deployment_secret_change ORDER BY inserted_at ASC")
         .await.map_err(|_| ChangeError::Store)?;
     let rows: Vec<EncryptedChange> = response.take(0).map_err(|_| ChangeError::Store)?;

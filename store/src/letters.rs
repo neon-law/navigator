@@ -12,7 +12,7 @@
 //! is accepted. The read-back in [`record`] is the check.
 
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
@@ -30,7 +30,7 @@ pub const DIRECTION_INCOMING: &str = "incoming";
 pub const DIRECTION_OUTGOING: &str = "outgoing";
 
 /// One piece of physical mail.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Letter {
     pub id: Uuid,
     pub mailroom_id: Uuid,
@@ -99,6 +99,8 @@ const SELECT: &str = "id, mailroom_id, project_id, direction, sender, recipient,
 /// Errors reading or writing a letter.
 #[derive(Debug, thiserror::Error)]
 pub enum LetterError {
+    #[error(transparent)]
+    Postgres(#[from] crate::postgres::matter::MatterAuthorityError),
     /// A database operation failed.
     #[error("database: {0}")]
     Db(#[from] surrealdb::Error),
@@ -113,6 +115,8 @@ pub enum LetterError {
     /// this module could not read back.
     #[error("writing a letter returned no usable row")]
     WriteReturnedNothing,
+    #[error("letter replay differs from the recorded letter")]
+    ReplayConflict,
 }
 
 /// Run a write under the shared retry policy
@@ -152,6 +156,45 @@ pub async fn record_with_id(
     id: Uuid,
     new: &NewLetter,
 ) -> Result<Letter, LetterError> {
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
+        if mailrooms::find_by_id(db, new.mailroom_id).await?.is_none() {
+            return Err(LetterError::NoSuchMailroom(new.mailroom_id));
+        }
+        let row: serde_json::Value = sqlx::query_scalar(
+            "INSERT INTO letter AS r (id,mailroom_id,project_id,direction,sender,recipient,summary)
+             VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (id) DO NOTHING RETURNING to_jsonb(r)",
+        )
+        .bind(id)
+        .bind(new.mailroom_id)
+        .bind(new.project_id)
+        .bind(&new.direction)
+        .bind(&new.sender)
+        .bind(&new.recipient)
+        .bind(&new.summary)
+        .fetch_optional(pg.pool())
+        .await
+        .map_err(crate::postgres::matter::MatterAuthorityError::from)?
+        .unwrap_or(serde_json::Value::Null);
+        let existing: Letter = if row.is_null() {
+            crate::postgres::matter::find(&pg, TABLE, serde_json::json!({"id": id}))
+                .await?
+                .ok_or(LetterError::WriteReturnedNothing)?
+        } else {
+            serde_json::from_value(row)
+                .map_err(crate::postgres::matter::MatterAuthorityError::from)?
+        };
+        if existing.mailroom_id != new.mailroom_id
+            || existing.project_id != new.project_id
+            || existing.direction != new.direction
+            || existing.sender != new.sender
+            || existing.recipient != new.recipient
+            || existing.summary != new.summary
+        {
+            return Err(LetterError::ReplayConflict);
+        }
+        return Ok(existing);
+    }
+
     if mailrooms::find_by_id(db, new.mailroom_id).await?.is_none() {
         return Err(LetterError::NoSuchMailroom(new.mailroom_id));
     }
@@ -196,6 +239,10 @@ pub async fn record_with_id(
 ///
 /// [`LetterError::Db`] if the lookup fails.
 pub async fn find_by_id(db: &SurrealDb, id: Uuid) -> Result<Option<Letter>, LetterError> {
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
+        return Ok(crate::postgres::matter::find(&pg, TABLE, serde_json::json!({"id": id})).await?);
+    }
+
     let mut response = db
         .query(format!("SELECT {SELECT} FROM ONLY $id"))
         .bind(("id", record_id(TABLE, id)))
@@ -217,6 +264,15 @@ pub async fn find_by_mailroom_sender_summary(
     sender: &str,
     summary: &str,
 ) -> Result<Option<Letter>, LetterError> {
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
+        return Ok(crate::postgres::matter::find(
+            &pg,
+            TABLE,
+            serde_json::json!({"mailroom_id": mailroom_id,"sender": sender,"summary": summary}),
+        )
+        .await?);
+    }
+
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM ONLY {TABLE} \
@@ -238,6 +294,16 @@ pub async fn find_by_mailroom_sender_summary(
 ///
 /// [`LetterError::Db`] if the lookup fails.
 pub async fn list_all(db: &SurrealDb) -> Result<Vec<Letter>, LetterError> {
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
+        return Ok(crate::postgres::matter::select(
+            &pg,
+            TABLE,
+            serde_json::json!({}),
+            &["inserted_at", "id"],
+        )
+        .await?);
+    }
+
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} ORDER BY inserted_at ASC, id ASC"
@@ -258,6 +324,14 @@ pub async fn list_all(db: &SurrealDb) -> Result<Vec<Letter>, LetterError> {
 ///
 /// [`LetterError::Db`] if the count fails.
 pub async fn count(db: &SurrealDb) -> Result<i64, LetterError> {
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
+        return sqlx::query_scalar("SELECT count(*) FROM letter")
+            .fetch_one(pg.pool())
+            .await
+            .map_err(crate::postgres::matter::MatterAuthorityError::from)
+            .map_err(LetterError::from);
+    }
+
     let mut response = db
         .query(format!("SELECT count() FROM {TABLE} GROUP ALL"))
         .await

@@ -238,6 +238,19 @@ pub async fn merge(
     if dropped.role != persons::Role::Client {
         return Err(PersonMergeError::Blocked);
     }
+    if let Some(pg) = persons::postgres_authority().await? {
+        Box::pin(crate::postgres::people::merge(&pg, db, keep_id, drop_id)).await?;
+        let mut emails = persons::aliases(db, keep_id).await?;
+        emails.push(keep.email.trim().to_lowercase());
+        emails.sort();
+        emails.dedup();
+        return Ok(PersonMergeReport {
+            kept_id: keep_id,
+            dropped_id: drop_id,
+            emails,
+        });
+    }
+
     // Participation rows the relink rewrites or deletes, so the Project
     // ledger can be republished once the relink commits.
     let mut participations: Vec<Uuid> = Vec::new();

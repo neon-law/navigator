@@ -64,6 +64,8 @@ const SELECT: &str = "id, project_id, document_id, recipient, recipient_person_i
 
 #[derive(Debug, thiserror::Error)]
 pub enum ServiceError {
+    #[error(transparent)]
+    Postgres(#[from] crate::postgres::matter::MatterAuthorityError),
     #[error("database: {0}")]
     Db(#[from] surrealdb::Error),
     #[error("{0}")]
@@ -161,6 +163,20 @@ async fn require_project_document(
 /// [`ServiceError::Invalid`] for a bad method, date, blank name, two
 /// recipient links, or a document from another Project; any database error.
 pub async fn create(surreal: &SurrealDb, new: &NewService) -> Result<ProjectService, ServiceError> {
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
+        let normalized = normalize(new)?;
+        require_project_document(surreal, new.project_id, new.document_id).await?;
+        let now = chrono::Utc::now().to_rfc3339();
+        return Ok(crate::postgres::matter::upsert(&pg, TABLE, &serde_json::json!({
+            "id": Uuid::now_v7(), "project_id": new.project_id, "document_id": new.document_id,
+            "recipient": normalized.recipient, "recipient_person_id": new.recipient_person_id,
+            "recipient_entity_id": new.recipient_entity_id, "counsel_for": normalized.counsel_for,
+            "method": normalized.method, "served_on": normalized.served_on, "address": normalized.address,
+            "declarant": normalized.declarant, "declarant_person_id": new.declarant_person_id,
+            "letter_id": new.letter_id, "sent_email_id": new.sent_email_id, "inserted_at": now, "updated_at": now,
+        })).await?);
+    }
+
     let normalized = normalize(new)?;
     require_project_document(surreal, new.project_id, new.document_id).await?;
     let id = Uuid::now_v7();
@@ -232,6 +248,16 @@ pub async fn list(
     surreal: &SurrealDb,
     project_id: Uuid,
 ) -> Result<Vec<ProjectService>, ServiceError> {
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
+        return Ok(crate::postgres::matter::select(
+            &pg,
+            TABLE,
+            serde_json::json!({"project_id": project_id}),
+            &["served_on", "id"],
+        )
+        .await?);
+    }
+
     let mut response = surreal
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE project_id = $project \
@@ -256,6 +282,15 @@ pub async fn find(
     project_id: Uuid,
     id: Uuid,
 ) -> Result<Option<ProjectService>, ServiceError> {
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
+        return Ok(crate::postgres::matter::find(
+            &pg,
+            TABLE,
+            serde_json::json!({"id": id, "project_id": project_id}),
+        )
+        .await?);
+    }
+
     let mut response = surreal
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE id = $id AND project_id = $project LIMIT 1"
@@ -276,6 +311,12 @@ pub async fn find(
 /// # Errors
 /// Propagates any database error.
 pub async fn delete_for_project(surreal: &SurrealDb, project_id: Uuid) -> Result<(), ServiceError> {
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
+        crate::postgres::matter::delete(&pg, TABLE, serde_json::json!({"project_id": project_id}))
+            .await?;
+        return Ok(());
+    }
+
     let mut response = surreal
         .query(format!(
             "DELETE {TABLE} WHERE project_id = $project RETURN BEFORE"

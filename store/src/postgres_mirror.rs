@@ -789,6 +789,14 @@ pub async fn mirror(
     pg: &PostgresDb,
     key: &MirrorKey,
 ) -> Result<Mirrored, MirrorError> {
+    from_source(mirror_source(surreal, pg, key)).await
+}
+
+async fn mirror_source(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+    key: &MirrorKey,
+) -> Result<Mirrored, MirrorError> {
     match key {
         MirrorKey::SentEmail(id) => sent_emails::mirror(surreal, pg, *id).await,
         key @ (MirrorKey::InboxConversation(_)
@@ -1560,7 +1568,7 @@ impl Mirror {
         surreal: &SurrealDb,
         pg: &PostgresDb,
     ) -> Result<ParityReport, MirrorError> {
-        (self.parity)(surreal, pg).await
+        from_source((self.parity)(surreal, pg)).await
     }
 }
 

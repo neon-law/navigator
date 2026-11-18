@@ -86,6 +86,14 @@ impl Deref for SurrealDb {
     type Target = Surreal<Any>;
 
     fn deref(&self) -> &Self::Target {
+        // Unit native-lane proof must catch attempted SDK access even when a
+        // best-effort caller would otherwise swallow an uninitialized-engine error.
+        #[cfg(test)]
+        assert_ne!(
+            std::env::var("NAVIGATOR_FORBID_SURREAL").as_deref(),
+            Ok("1"),
+            "Source SDK access is forbidden in the PostgreSQL-only test lane"
+        );
         &self.0
     }
 }

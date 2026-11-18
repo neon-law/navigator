@@ -226,9 +226,15 @@ impl PostgresDb {
         if crate::postgres_mirror::reading_source() {
             return Ok(None);
         }
+        Self::application().await.map(Some)
+    }
+
+    /// Connect an application only after its complete historical enrollment.
+    /// Operators and migrations use `from_env` before activation instead.
+    pub async fn application() -> Result<Self, PostgresError> {
         let pg = Self::from_env().await?;
         pg.require_application_history().await?;
-        Ok(Some(pg))
+        Ok(pg)
     }
 
     /// Require the existing global import and every current scoped activation.

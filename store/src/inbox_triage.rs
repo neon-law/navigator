@@ -28,11 +28,14 @@ const SELECT: &str = "id, message_id, firm_id, suggested_project_id, project_con
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PrivilegeLabel {
     /// A confident client-email classifier flag, or a human review decision.
+    #[serde(alias = "privileged")]
     Privileged,
     /// Explicitly public social posts, or a human review decision.
+    #[serde(alias = "not_privileged")]
     NotPrivileged,
     /// Everything automation cannot settle — including client email below
     /// the confidence floor. These rows wait for a person.
+    #[serde(alias = "uncertain")]
     Uncertain,
 }
 
@@ -73,14 +76,18 @@ impl PrivilegeLabel {
 pub enum TriageDisposition {
     /// The rule layer and classifier settled the content; a Project is
     /// suggested and waits for a person to confirm it.
+    #[serde(alias = "suggested")]
     Suggested,
     /// A person confirmed the suggested Project.
+    #[serde(alias = "confirmed")]
     Confirmed,
     /// A person corrected the suggestion; the row is a labeled example for
     /// the next classifier generation.
+    #[serde(alias = "overridden")]
     Overridden,
     /// Uncertain privilege or no confident Project — the row is in the
     /// human review queue.
+    #[serde(alias = "needs_human")]
     NeedsHuman,
 }
 
@@ -240,6 +247,20 @@ pub async fn record(db: &SurrealDb, triage: &NewInboxTriage) -> Result<InboxTria
             return Err(InboxError::CrossFirm);
         }
     }
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE)
+        .await
+        .map_err(triage_pg_error)?
+    {
+        let now = chrono::Utc::now();
+        return crate::postgres::matter::upsert(&pg, TABLE, &serde_json::json!({
+            "id": Uuid::now_v7(), "message_id": triage.message_id, "firm_id": triage.firm_id,
+            "suggested_project_id": triage.suggested_project_id, "project_confidence": triage.project_confidence,
+            "privilege": triage.privilege.as_str(), "privilege_confidence": triage.privilege_confidence,
+            "rationale": triage.rationale,"model_id": triage.model_id,"prompt_version": triage.prompt_version,
+            "raw_output": triage.raw_output,"disposition": triage.disposition.as_str(),
+            "labeled_example": triage.labeled_example,"inserted_at": now,"updated_at": now,
+        })).await.map_err(triage_pg_error);
+    }
     let id = Uuid::now_v7();
     let mut response = db
         .query(format!(
@@ -290,6 +311,19 @@ pub async fn find_for_message(
     db: &SurrealDb,
     message_id: Uuid,
 ) -> Result<Option<InboxTriage>, InboxError> {
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE)
+        .await
+        .map_err(triage_pg_error)?
+    {
+        return crate::postgres::matter::find(
+            &pg,
+            TABLE,
+            serde_json::json!({"message_id": message_id}),
+        )
+        .await
+        .map_err(triage_pg_error);
+    }
+
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE message_id = $message LIMIT 1"
@@ -439,20 +473,29 @@ pub async fn list_for_review(
     } else {
         return Err(InboxError::Denied);
     };
-    let mut response = db
-        .query(format!(
-            "SELECT {SELECT} FROM {TABLE} \
-             WHERE disposition = 'needs_human' OR disposition = 'suggested' \
-             ORDER BY updated_at DESC"
-        ))
-        .await?
-        .check()?;
-    let rows: Vec<TriageRow> = response.take(0)?;
+    let rows: Vec<InboxTriage> = if let Some(pg) = crate::postgres::matter::authority_for(TABLE)
+        .await
+        .map_err(triage_pg_error)?
+    {
+        let rows: Vec<serde_json::Value> = sqlx::query_scalar("SELECT to_jsonb(r) FROM inbox_triage r WHERE disposition IN ('needs_human','suggested') ORDER BY updated_at DESC,id DESC")
+            .fetch_all(pg.pool()).await.map_err(crate::postgres::matter::MatterAuthorityError::from).map_err(triage_pg_error)?;
+        rows.into_iter()
+            .map(|row| {
+                serde_json::from_value(row)
+                    .map_err(crate::postgres::matter::MatterAuthorityError::from)
+                    .map_err(triage_pg_error)
+            })
+            .collect::<Result<_, _>>()?
+    } else {
+        let mut response = db.query(format!("SELECT {SELECT} FROM {TABLE} WHERE disposition = 'needs_human' OR disposition = 'suggested' ORDER BY updated_at DESC"))
+            .await?.check()?;
+        let rows: Vec<TriageRow> = response.take(0)?;
+        rows.into_iter()
+            .filter_map(TriageRow::into_triage)
+            .collect()
+    };
     let mut review_rows = Vec::new();
-    for row in rows {
-        let Some(triage) = row.into_triage() else {
-            continue;
-        };
+    for triage in rows {
         if let Some(firms) = &visible_firms {
             if !firms.contains(&triage.firm_id) {
                 continue;
@@ -530,6 +573,15 @@ pub async fn find_by_id(
     db: &SurrealDb,
     triage_id: Uuid,
 ) -> Result<Option<InboxTriage>, InboxError> {
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE)
+        .await
+        .map_err(triage_pg_error)?
+    {
+        return crate::postgres::matter::find(&pg, TABLE, serde_json::json!({"id": triage_id}))
+            .await
+            .map_err(triage_pg_error);
+    }
+
     let mut response = db
         .query(format!("SELECT {SELECT} FROM $id"))
         .bind(("id", record_id(TABLE, triage_id)))
@@ -958,6 +1010,18 @@ async fn write_review_decision(
     triage_id: Uuid,
     decision: ReviewDecision,
 ) -> Result<InboxTriage, InboxError> {
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE)
+        .await
+        .map_err(triage_pg_error)?
+    {
+        return crate::postgres::matter::update(&pg, TABLE, serde_json::json!({"id": triage_id}), serde_json::json!({
+            "privilege": decision.privilege.as_str(),"privilege_confidence": decision.privilege_confidence,
+            "suggested_project_id": decision.suggested_project_id,"project_confidence": decision.project_confidence,
+            "rationale": decision.rationale,"disposition": decision.disposition.as_str(),
+            "labeled_example": decision.labeled_example,"updated_at": chrono::Utc::now(),
+        })).await.map_err(triage_pg_error)?.into_iter().next().ok_or(InboxError::NotFound);
+    }
+
     let mut response = db
         .query(format!(
             "UPDATE $id SET privilege = $privilege, \
@@ -2544,4 +2608,8 @@ mod tests {
         assert_eq!(visible[0].triage.rationale, input.rationale);
         assert_eq!(visible[0].triage.raw_output, input.raw_output);
     }
+}
+
+fn triage_pg_error(_error: crate::postgres::matter::MatterAuthorityError) -> InboxError {
+    InboxError::Db("PostgreSQL triage authority is unavailable".into())
 }

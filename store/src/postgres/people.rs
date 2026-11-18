@@ -1,9 +1,6 @@
 //! PostgreSQL operations for the People directory.
 //!
-//! The opt-in People authority path uses the same UUIDs and role vocabulary
-//! as the source store. Mailbox claims and their Person row are committed in
-//! one PostgreSQL transaction; successful writes are then projected to
-//! SurrealDB for callers whose non-People records still use its links.
+//! Mailbox claims and their Person row commit in one PostgreSQL transaction.
 
 use sqlx::{AssertSqlSafe, Postgres, QueryBuilder, Row, Transaction};
 use uuid::Uuid;
@@ -11,7 +8,7 @@ use uuid::Uuid;
 use crate::listing::{self, ListParams, Page};
 use crate::persons::{NewPerson, Person, PersonEdit, PersonError, Role};
 use crate::postgres::PostgresDb;
-use crate::surreal::{record_id, SurrealDb};
+use crate::surreal::SurrealDb;
 
 const COLUMNS: &str = "id, name, given_name, family_name, middle_name, email, \
     oidc_subject, microsoft_subject, apple_subject, role, title, phone, \
@@ -327,55 +324,9 @@ async fn person_transaction(
     Ok(tx)
 }
 
-/// Project the current committed PostgreSQL state while serializing both
-/// authoritative writes and compatibility projections for this Person.
-async fn sync_current_surreal(
-    pg: &PostgresDb,
-    db: &SurrealDb,
-    id: Uuid,
-) -> Result<(), PersonError> {
-    let mut tx = person_transaction(pg, id).await?;
-    let row = sqlx::query(AssertSqlSafe(format!(
-        "SELECT {COLUMNS} FROM person WHERE id=$1 FOR UPDATE"
-    )))
-    .bind(id)
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(database)?;
-    if let Some(row) = row {
-        let admitted: bool = row.try_get("is_admitted").map_err(database)?;
-        let current = person(&row).map_err(database)?;
-        let claims: Vec<String> =
-            sqlx::query_scalar("SELECT id FROM person_mailbox WHERE person_id=$1 ORDER BY id")
-                .bind(id)
-                .fetch_all(&mut *tx)
-                .await
-                .map_err(database)?;
-        sync_surreal(db, &current, admitted, &claims).await?;
-    } else {
-        db.query("DELETE $id")
-            .bind(("id", record_id("person", id)))
-            .await
-            .and_then(surrealdb::IndexedResults::check)
-            .map_err(|error| {
-                PersonError::PostgresProjection(format!("SurrealDB delete failed: {error}"))
-            })?;
-        db.query("DELETE person_mailbox WHERE person_id=$id")
-            .bind(("id", record_id("person", id)))
-            .await
-            .and_then(surrealdb::IndexedResults::check)
-            .map_err(|error| {
-                PersonError::PostgresProjection(format!(
-                    "SurrealDB mailbox cleanup failed: {error}"
-                ))
-            })?;
-    }
-    tx.commit().await.map_err(database)
-}
-
 pub(crate) async fn set_text(
     pg: &PostgresDb,
-    db: &SurrealDb,
+    _db: &SurrealDb,
     id: Uuid,
     column: &str,
     value: Option<&str>,
@@ -400,13 +351,12 @@ pub(crate) async fn set_text(
     };
     let row = person(&row).map_err(database)?;
     tx.commit().await.map_err(database)?;
-    sync_current_surreal(pg, db, id).await?;
     Ok(Some(row))
 }
 
 pub(crate) async fn set_flag(
     pg: &PostgresDb,
-    db: &SurrealDb,
+    _db: &SurrealDb,
     id: Uuid,
     column: &str,
     value: bool,
@@ -429,13 +379,12 @@ pub(crate) async fn set_flag(
     };
     let row = person(&row).map_err(database)?;
     tx.commit().await.map_err(database)?;
-    sync_current_surreal(pg, db, id).await?;
     Ok(Some(row))
 }
 
 pub(crate) async fn set_role(
     pg: &PostgresDb,
-    db: &SurrealDb,
+    _db: &SurrealDb,
     id: Uuid,
     role: Role,
 ) -> Result<Option<Person>, PersonError> {
@@ -454,13 +403,12 @@ pub(crate) async fn set_role(
     };
     let row = person(&row).map_err(database)?;
     tx.commit().await.map_err(database)?;
-    sync_current_surreal(pg, db, id).await?;
     Ok(Some(row))
 }
 
 pub(crate) async fn link_subject(
     pg: &PostgresDb,
-    db: &SurrealDb,
+    _db: &SurrealDb,
     id: Uuid,
     column: &str,
     subject: &str,
@@ -490,13 +438,12 @@ pub(crate) async fn link_subject(
     };
     let row = person(&row).map_err(database)?;
     tx.commit().await.map_err(database)?;
-    sync_current_surreal(pg, db, id).await?;
     Ok(Some(row))
 }
 
 pub(crate) async fn edit(
     pg: &PostgresDb,
-    db: &SurrealDb,
+    _db: &SurrealDb,
     id: Uuid,
     input: &PersonEdit,
 ) -> Result<Option<Person>, PersonError> {
@@ -582,13 +529,12 @@ pub(crate) async fn edit(
             .map_err(database)?;
     }
     tx.commit().await.map_err(database)?;
-    sync_current_surreal(pg, db, id).await?;
     Ok(Some(row))
 }
 
 pub(crate) async fn update_contact(
     pg: &PostgresDb,
-    db: &SurrealDb,
+    _db: &SurrealDb,
     id: Uuid,
     input: &crate::persons::ContactUpdate,
 ) -> Result<Option<Person>, PersonError> {
@@ -602,11 +548,10 @@ pub(crate) async fn update_contact(
     };
     let row = person(&row).map_err(database)?;
     tx.commit().await.map_err(database)?;
-    sync_current_surreal(pg, db, id).await?;
     Ok(Some(row))
 }
 
-pub(crate) async fn delete(pg: &PostgresDb, db: &SurrealDb, id: Uuid) -> Result<(), PersonError> {
+pub(crate) async fn delete(pg: &PostgresDb, _db: &SurrealDb, id: Uuid) -> Result<(), PersonError> {
     let mut tx = person_transaction(pg, id).await?;
     sqlx::query("DELETE FROM person_mailbox WHERE person_id=$1")
         .bind(id)
@@ -619,7 +564,7 @@ pub(crate) async fn delete(pg: &PostgresDb, db: &SurrealDb, id: Uuid) -> Result<
         .await
         .map_err(database)?;
     tx.commit().await.map_err(database)?;
-    sync_current_surreal(pg, db, id).await
+    Ok(())
 }
 
 /// Tables where a unique index spans a Person link, with the other columns
@@ -660,12 +605,12 @@ async fn demote_merged_calendar_primary(
     Ok(())
 }
 
-/// Commit the canonical relational merge before compatibility projection.
+/// Commit the identity and reference merge under the same Person writer locks.
 pub(crate) async fn merge_rows(
     pg: &PostgresDb,
     keep_id: Uuid,
     drop_id: Uuid,
-) -> Result<Vec<Uuid>, PersonError> {
+) -> Result<(), crate::person_merge::PersonMergeError> {
     let mut tx = pg.0.begin().await.map_err(database)?;
     let mut locked = [keep_id, drop_id];
     locked.sort();
@@ -675,6 +620,36 @@ pub(crate) async fn merge_rows(
             .execute(&mut *tx)
             .await
             .map_err(database)?;
+    }
+    let people: Vec<(Uuid, String, String)> = sqlx::query_as(
+        "SELECT id,role,email::text FROM person WHERE id=ANY($1::uuid[]) ORDER BY id FOR UPDATE",
+    )
+    .bind(locked.to_vec())
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(database)?;
+    let keep = people
+        .iter()
+        .find(|row| row.0 == keep_id)
+        .ok_or_else(|| crate::person_merge::PersonMergeError::NotFound(keep_id.to_string()))?;
+    let dropped = people
+        .iter()
+        .find(|row| row.0 == drop_id)
+        .ok_or_else(|| crate::person_merge::PersonMergeError::NotFound(drop_id.to_string()))?;
+    if dropped.1 != Role::Client.as_str() {
+        return Err(crate::person_merge::PersonMergeError::Blocked);
+    }
+    // Imported rows can predate mailbox claims. Preserve both primaries as
+    // claims before moving links, without taking another Person's capability.
+    for (email, owner) in [(&keep.2, keep_id), (&dropped.2, drop_id)] {
+        if email.trim().is_empty() {
+            continue;
+        }
+        let holder: Option<Uuid> = sqlx::query_scalar("WITH claimed AS (INSERT INTO person_mailbox(id,person_id) VALUES(lower($1),$2) ON CONFLICT(id) DO NOTHING RETURNING person_id) SELECT person_id FROM claimed UNION ALL SELECT person_id FROM person_mailbox WHERE id=lower($1) LIMIT 1")
+            .bind(email.trim()).bind(owner).fetch_optional(&mut *tx).await.map_err(database)?;
+        if holder != Some(owner) {
+            return Err(PersonError::EmailTaken.into());
+        }
     }
     for flag in ["is_lawyer_dri", "is_client_dri"] {
         sqlx::query(AssertSqlSafe(format!(
@@ -739,15 +714,15 @@ pub(crate) async fn merge_rows(
     }
     // `person_phone` names its Person without a foreign key. The kept
     // Person's primary number stays the only primary.
-    let phones: Vec<Uuid> = sqlx::query_scalar(
+    sqlx::query(
         "UPDATE person_phone d SET person_id = $1, updated_at = now(), \
          is_primary = d.is_primary AND NOT EXISTS \
          (SELECT 1 FROM person_phone k WHERE k.person_id = $1 AND k.is_primary) \
-         WHERE d.person_id = $2 RETURNING d.id",
+         WHERE d.person_id = $2",
     )
     .bind(keep_id)
     .bind(drop_id)
-    .fetch_all(&mut *tx)
+    .execute(&mut *tx)
     .await
     .map_err(database)?;
     move_subjects(&mut tx, keep_id, drop_id).await?;
@@ -757,23 +732,16 @@ pub(crate) async fn merge_rows(
         .await
         .map_err(database)?;
     tx.commit().await.map_err(database)?;
-    Ok(phones)
+    Ok(())
 }
 
 pub(crate) async fn merge(
     pg: &PostgresDb,
-    db: &SurrealDb,
+    _db: &SurrealDb,
     keep_id: Uuid,
     drop_id: Uuid,
-) -> Result<(), PersonError> {
-    let phones = merge_rows(pg, keep_id, drop_id).await?;
-    sync_current_surreal(pg, db, drop_id).await?;
-    sync_current_surreal(pg, db, keep_id).await?;
-    for phone in phones {
-        crate::postgres::identity::project(pg, db, &crate::postgres::identity::PERSON_PHONE, phone)
-            .await
-            .map_err(|error| PersonError::PostgresProjection(error.to_string()))?;
-    }
+) -> Result<(), crate::person_merge::PersonMergeError> {
+    merge_rows(pg, keep_id, drop_id).await?;
     Ok(())
 }
 
@@ -839,40 +807,6 @@ async fn insert_person(
     person(&row).map_err(database)
 }
 
-async fn sync_surreal(
-    db: &SurrealDb,
-    person: &Person,
-    admitted: bool,
-    claims: &[String],
-) -> Result<(), PersonError> {
-    let query = db.query("UPSERT $id SET name=$name, given_name=$given_name, family_name=$family_name, middle_name=$middle_name, email=$email, oidc_subject=$oidc_subject, microsoft_subject=$microsoft_subject, apple_subject=$apple_subject, role=$role, title=$title, phone=$phone, xero_contact_id=$xero_contact_id, profile_image_url=$profile_image_url, linkedin_url=$linkedin_url, email_confirmed=$email_confirmed, is_admitted=$is_admitted, inserted_at=$inserted_at, updated_at=$updated_at")
-        .bind(("id", record_id("person", person.id))).bind(("name", person.name.clone()))
-        .bind(("given_name", person.given_name.clone())).bind(("family_name", person.family_name.clone()))
-        .bind(("middle_name", person.middle_name.clone())).bind(("email", person.email.clone()))
-        .bind(("oidc_subject", person.oidc_subject.clone())).bind(("microsoft_subject", person.microsoft_subject.clone()))
-        .bind(("apple_subject", person.apple_subject.clone())).bind(("role", person.role.as_str().to_string()))
-        .bind(("title", person.title.clone())).bind(("phone", person.phone.clone()))
-        .bind(("xero_contact_id", person.xero_contact_id.clone())).bind(("profile_image_url", person.profile_image_url.clone()))
-        .bind(("linkedin_url", person.linkedin_url.clone())).bind(("email_confirmed", person.email_confirmed))
-        .bind(("is_admitted", admitted)).bind(("inserted_at", surrealdb::types::Datetime::from(person.inserted_at)))
-        .bind(("updated_at", surrealdb::types::Datetime::from(person.updated_at)));
-    query
-        .await
-        .and_then(surrealdb::IndexedResults::check)
-        .map_err(|error| {
-            PersonError::PostgresProjection(format!("SurrealDB write failed: {error}"))
-        })?;
-    // Every claim the Person holds in PostgreSQL, primary and aliases alike,
-    // replaces the projected set in one statement.
-    db.query("DELETE person_mailbox WHERE person_id = $id; FOR $claim IN $claims { UPSERT type::record('person_mailbox', $claim) SET person_id = $id; };")
-        .bind(("id", record_id("person", person.id))).bind(("claims", claims.to_vec()))
-        .await.and_then(surrealdb::IndexedResults::check)
-        .map_err(|error| {
-            PersonError::PostgresProjection(format!("SurrealDB mailbox sync failed: {error}"))
-        })?;
-    Ok(())
-}
-
 /// Every address `id` holds besides its primary one, lowercased and sorted.
 pub(crate) async fn aliases(pg: &PostgresDb, id: Uuid) -> Result<Vec<String>, PersonError> {
     sqlx::query_scalar(
@@ -889,7 +823,7 @@ pub(crate) async fn aliases(pg: &PostgresDb, id: Uuid) -> Result<Vec<String>, Pe
 /// left as it is; one another Person holds is refused, never taken.
 pub(crate) async fn add_alias(
     pg: &PostgresDb,
-    db: &SurrealDb,
+    _db: &SurrealDb,
     id: Uuid,
     email: &str,
 ) -> Result<(), PersonError> {
@@ -910,12 +844,12 @@ pub(crate) async fn add_alias(
         return Err(PersonError::EmailTaken);
     }
     tx.commit().await.map_err(database)?;
-    sync_current_surreal(pg, db, id).await
+    Ok(())
 }
 
 pub(crate) async fn create(
     pg: &PostgresDb,
-    db: &SurrealDb,
+    _db: &SurrealDb,
     input: &NewPerson,
 ) -> Result<Person, PersonError> {
     let id = Uuid::now_v7();
@@ -931,25 +865,22 @@ pub(crate) async fn create(
         .await
         .map_err(classify)?;
     tx.commit().await.map_err(database)?;
-    sync_current_surreal(pg, db, id).await?;
     Ok(row)
 }
 
 pub(crate) async fn find_or_create(
     pg: &PostgresDb,
-    db: &SurrealDb,
+    _db: &SurrealDb,
     input: &NewPerson,
 ) -> Result<Person, PersonError> {
     if let Some(row) = by_email(pg, &input.email).await? {
-        sync_current_surreal(pg, db, row.id).await?;
         return Ok(row);
     }
-    match create(pg, db, input).await {
+    match create(pg, _db, input).await {
         Err(PersonError::EmailTaken) => {
             let row = by_email(pg, &input.email)
                 .await?
                 .ok_or(PersonError::WriteReturnedNothing)?;
-            sync_current_surreal(pg, db, row.id).await?;
             Ok(row)
         }
         result => result,

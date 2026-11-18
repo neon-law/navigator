@@ -21,7 +21,7 @@ use uuid::Uuid;
 
 use sqlx::{postgres::PgRow, AssertSqlSafe, Row};
 
-use crate::postgres::identity::{self as authority, AuthorityError, PERSON_PHONE};
+use crate::postgres::identity::{self as authority, AuthorityError};
 use crate::postgres::PostgresDb;
 use crate::postgres_mirror::MirrorKey;
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
@@ -91,7 +91,7 @@ async fn pg_list(pg: &PostgresDb, person_id: Uuid) -> Result<Vec<PersonPhone>, P
 /// row whose primary flag moved is projected afterwards.
 async fn pg_set(
     pg: &PostgresDb,
-    db: &SurrealDb,
+    _db: &SurrealDb,
     person_id: Uuid,
     e164: &str,
     label: PhoneLabel,
@@ -121,19 +121,17 @@ async fn pg_set(
     .map_err(query)?;
     let is_primary = is_primary || !has_any;
     let id = existing.unwrap_or_else(Uuid::now_v7);
-    let mut touched: Vec<Uuid> = if is_primary {
-        sqlx::query_scalar(AssertSqlSafe(format!(
+    if is_primary {
+        sqlx::query(AssertSqlSafe(format!(
             "UPDATE {TABLE} SET is_primary = false, updated_at = now() \
-             WHERE person_id = $1 AND is_primary AND id <> $2 RETURNING id"
+             WHERE person_id = $1 AND is_primary AND id <> $2"
         )))
         .bind(person_id)
         .bind(id)
-        .fetch_all(&mut *tx)
+        .execute(&mut *tx)
         .await
-        .map_err(query)?
-    } else {
-        Vec::new()
-    };
+        .map_err(query)?;
+    }
     let row = sqlx::query(AssertSqlSafe(format!(
         "INSERT INTO {TABLE} (id, person_id, e164, label, is_primary, inserted_at, updated_at) \
          VALUES ($1, $2, $3, $4, $5, now(), now()) \
@@ -150,10 +148,6 @@ async fn pg_set(
     .map_err(query)?;
     let phone = from_pg(&row).map_err(query)?.ok_or(PhoneError::WriteLost)?;
     tx.commit().await.map_err(query)?;
-    touched.push(id);
-    for row in touched {
-        authority::project(pg, db, &PERSON_PHONE, row).await?;
-    }
     Ok(phone)
 }
 
@@ -422,10 +416,10 @@ pub async fn remove_phone(
         .fetch_optional(&pg.0)
         .await
         .map_err(AuthorityError::from)?;
-        let Some(id) = removed else {
+        let Some(_id) = removed else {
             return Ok(None);
         };
-        authority::project(&pg, db, &PERSON_PHONE, id).await?;
+
         return Ok(Some(e164));
     }
     let mut removed: Vec<PersonPhoneRow> = db

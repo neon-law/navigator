@@ -27,6 +27,16 @@ use crate::postgres::PostgresDb;
 
 /// The tables whose owning module dispatches here.
 pub(crate) const TABLES: &[&str] = &[
+    "deployment_secret_change",
+    "mailroom",
+    "letter",
+    "lead",
+    "lead_consent",
+    "project_deadlines",
+    "project_service",
+    "summary_sender_approval",
+    "summary_sender_approval_event",
+    "inbox_triage",
     "asset",
     "notation",
     "answer",

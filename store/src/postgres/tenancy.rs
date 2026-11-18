@@ -12,8 +12,6 @@ use chrono::{DateTime, Utc};
 use sqlx::Row;
 use uuid::Uuid;
 
-const AUTHORITY_ENV: &str = "NAVIGATOR_POSTGRES_TENANCY_AUTHORITY";
-
 #[cfg(test)]
 tokio::task_local! {
     static TEST_TENANCY_DB: crate::postgres::PostgresDb;
@@ -32,27 +30,13 @@ pub enum TenancyError {
     InvalidRow,
 }
 
-/// Resolve the switch strictly: unset/off means legacy mode, on means
-/// PostgreSQL authority, and unknown values fail closed.
+/// Source selection is confined to the explicit importer context.
 pub(crate) fn enabled() -> Result<bool, TenancyError> {
     #[cfg(test)]
     if let Ok(enabled) = TEST_TENANCY_AUTHORITY.try_with(|enabled| *enabled) {
         return Ok(enabled);
     }
-    let value = match std::env::var(AUTHORITY_ENV) {
-        Err(std::env::VarError::NotPresent) => return Ok(false),
-        Err(std::env::VarError::NotUnicode(_)) => return Err(TenancyError::Configuration),
-        Ok(value) => value,
-    };
-    enabled_value(Some(&value))
-}
-
-fn enabled_value(value: Option<&str>) -> Result<bool, TenancyError> {
-    match value {
-        None | Some("0" | "false") => Ok(false),
-        Some("1" | "true") => Ok(true),
-        Some(_) => Err(TenancyError::Configuration),
-    }
+    Ok(!crate::postgres_mirror::reading_source())
 }
 
 pub(crate) async fn db() -> Result<crate::postgres::PostgresDb, TenancyError> {
@@ -60,7 +44,9 @@ pub(crate) async fn db() -> Result<crate::postgres::PostgresDb, TenancyError> {
     if let Ok(pg) = TEST_TENANCY_DB.try_with(Clone::clone) {
         return Ok(pg);
     }
-    Ok(crate::postgres::PostgresDb::from_env().await?)
+    crate::postgres::PostgresDb::configured()
+        .await?
+        .ok_or(TenancyError::Configuration)
 }
 
 #[cfg(test)]
@@ -1135,22 +1121,4 @@ async fn brand_list(
         _ => return Err(TenancyError::Configuration),
     };
     rows.iter().map(brand).collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn tenancy_authority_switch_parses_strictly() {
-        assert!(!enabled_value(None).unwrap());
-        assert!(!enabled_value(Some("0")).unwrap());
-        assert!(!enabled_value(Some("false")).unwrap());
-        assert!(enabled_value(Some("1")).unwrap());
-        assert!(enabled_value(Some("true")).unwrap());
-        assert!(matches!(
-            enabled_value(Some("yes")),
-            Err(TenancyError::Configuration)
-        ));
-    }
 }

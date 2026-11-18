@@ -94,6 +94,9 @@ impl Family {
                 "summary_sender_approval_event",
                 "inbox_triage",
                 "deployment_secret_change",
+                "matter_page",
+                "notation_document_comment",
+                "firm_integration_secret",
             ],
             Self::Notation => &[
                 "notation",

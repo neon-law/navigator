@@ -31,7 +31,7 @@ use sqlx::{postgres::PgRow, AssertSqlSafe, Row};
 
 use crate::jurisdictions::{self, JurisdictionError};
 use crate::persons::{self, PersonError};
-use crate::postgres::identity::{self as authority, AuthorityError, CREDENTIAL};
+use crate::postgres::identity::{self as authority, AuthorityError};
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 
 /// The table these rows live in.
@@ -206,7 +206,7 @@ pub async fn grant(
         .await
         .map_err(pg_error)?;
         let credential = from_pg(&row).map_err(pg_error)?;
-        authority::project(&pg, db, &CREDENTIAL, id).await?;
+
         return Ok(credential);
     }
     let mut response = writing(|| {
@@ -402,7 +402,7 @@ pub async fn revoke(db: &SurrealDb, credential_id: Uuid) -> Result<(), Credentia
             .execute(&pg.0)
             .await
             .map_err(pg_error)?;
-        authority::project(&pg, db, &CREDENTIAL, credential_id).await?;
+
         return Ok(());
     }
     db.query("DELETE $id")

@@ -86,7 +86,7 @@ use uuid::Uuid;
 use sqlx::{postgres::PgRow, AssertSqlSafe, Row};
 
 use crate::persons::Role;
-use crate::postgres::identity::{self as authority, AuthorityError, PERSON_DELEGATE};
+use crate::postgres::identity::{self as authority, AuthorityError};
 use crate::postgres::PostgresDb;
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 
@@ -390,7 +390,7 @@ async fn pg_rows(
 /// Run one delegation write in PostgreSQL and project the row it returns.
 async fn pg_write(
     pg: &PostgresDb,
-    surreal: &SurrealDb,
+    _surreal: &SurrealDb,
     query: sqlx::query::Query<'_, sqlx::Postgres, sqlx::postgres::PgArguments>,
 ) -> Result<Delegation, DelegationError> {
     let row = query
@@ -401,7 +401,7 @@ async fn pg_write(
     let delegation = from_pg(&row)
         .map_err(AuthorityError::from)?
         .ok_or(DelegationError::WriteReturnedNothing)?;
-    authority::project(pg, surreal, &PERSON_DELEGATE, delegation.id).await?;
+
     Ok(delegation)
 }
 

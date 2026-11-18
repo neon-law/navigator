@@ -233,11 +233,6 @@ pub enum PersonError {
     /// PostgreSQL People authority is configured but unavailable or a query failed.
     #[error("PostgreSQL People authority: {0}")]
     Postgres(String),
-    /// The PostgreSQL write committed but its SurrealDB compatibility projection failed.
-    #[error(
-        "PostgreSQL committed the Person change, but the compatibility projection failed: {0}"
-    )]
-    PostgresProjection(String),
     /// The write collided with `person_email_lower` — another row
     /// already holds this mailbox, case-insensitively.
     #[error("that email is already in use")]
@@ -260,58 +255,23 @@ pub enum PersonError {
     WriteReturnedNothing,
 }
 
-/// When set to `1`, every People operation uses PostgreSQL and fails closed
-/// when PostgreSQL cannot serve it. The default keeps the current store path.
-pub const POSTGRES_PEOPLE_AUTHORITY_ENV: &str = "NAVIGATOR_POSTGRES_PEOPLE_AUTHORITY";
-
+/// Application identity reads and writes require validated PostgreSQL history.
+/// The explicit importer context alone reads Source rows.
 pub(crate) fn postgres_authority(
 ) -> Pin<Box<dyn Future<Output = Result<Option<crate::postgres::PostgresDb>, PersonError>> + Send>>
 {
-    Box::pin(async move {
-        let setting = match std::env::var(POSTGRES_PEOPLE_AUTHORITY_ENV) {
-            Ok(setting) => Some(setting),
-            Err(std::env::VarError::NotPresent) => None,
-            Err(std::env::VarError::NotUnicode(_)) => {
-                return Err(PersonError::Postgres(
-                    "authority setting must be valid Unicode".into(),
-                ));
-            }
-        };
-        let enabled = parse_postgres_authority(setting.as_deref())?;
-        if enabled {
-            crate::postgres::PostgresDb::from_env()
-                .await
-                .map(Some)
-                .map_err(|_| PersonError::Postgres("PostgreSQL is unavailable".into()))
-        } else {
-            Ok(None)
-        }
+    Box::pin(async {
+        crate::postgres::PostgresDb::configured()
+            .await
+            .map_err(|_| {
+                PersonError::Postgres("PostgreSQL identity authority is unavailable".into())
+            })
     })
 }
 
-fn parse_postgres_authority(setting: Option<&str>) -> Result<bool, PersonError> {
-    match setting {
-        None | Some("0" | "false") => Ok(false),
-        Some("1" | "true") => Ok(true),
-        Some(_) => Err(PersonError::Postgres(
-            "authority setting must be one of 0, 1, false, or true".into(),
-        )),
-    }
-}
-
-/// Whether legacy Person mirrors must refuse writes to PostgreSQL. Invalid
-/// authority configuration also protects PostgreSQL until the app fails
-/// closed through [`postgres_authority`].
+/// Ordinary mirrors cannot change authoritative identity rows.
 pub(crate) fn postgres_people_authority_configured() -> bool {
-    match std::env::var(POSTGRES_PEOPLE_AUTHORITY_ENV) {
-        Ok(setting) => people_authority_setting_protects_mirror(Some(&setting)),
-        Err(std::env::VarError::NotPresent) => false,
-        Err(std::env::VarError::NotUnicode(_)) => true,
-    }
-}
-
-fn people_authority_setting_protects_mirror(setting: Option<&str>) -> bool {
-    parse_postgres_authority(setting).unwrap_or(true)
+    !crate::postgres_mirror::initial_copy() && !crate::postgres_backfill::family::importing(TABLE)
 }
 
 /// Turn a write failure into the caller-correctable conflict it names,
@@ -1872,23 +1832,6 @@ pub async fn delete(db: &SurrealDb, id: Uuid) -> Result<(), PersonError> {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn postgres_authority_is_opt_in_and_rejects_ambiguous_values() {
-        assert!(!super::parse_postgres_authority(None).unwrap());
-        assert!(!super::parse_postgres_authority(Some("0")).unwrap());
-        assert!(!super::parse_postgres_authority(Some("false")).unwrap());
-        assert!(super::parse_postgres_authority(Some("1")).unwrap());
-        assert!(super::parse_postgres_authority(Some("true")).unwrap());
-        assert!(matches!(
-            super::parse_postgres_authority(Some("yes")),
-            Err(super::PersonError::Postgres(_))
-        ));
-        assert!(!super::people_authority_setting_protects_mirror(None));
-        assert!(!super::people_authority_setting_protects_mirror(Some("0")));
-        assert!(super::people_authority_setting_protects_mirror(Some("1")));
-        assert!(super::people_authority_setting_protects_mirror(Some("yes")));
-    }
-
     #[test]
     fn phone_digits_ignores_punctuation_and_a_leading_us_one() {
         assert_eq!(super::phone_digits("+1 (510) 800-2090"), "5108002090");

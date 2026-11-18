@@ -447,7 +447,6 @@ where
     substitutions.extend(archives_substitutions(&get));
     substitutions.extend(replica_substitutions(deployment, &get)?);
     substitutions.push(mirror_recovery_substitution());
-    substitutions.push(authority_substitution(&get)?);
     // Not in PLAINTEXT_SUBSTITUTIONS and not read from `get` at all: the additional brand
     // hosts this deployment's environment serves come from the compiled
     // `views::brand::BrandKey` registry, keyed off the `NAVIGATOR_PUBLIC_HOST`
@@ -523,36 +522,6 @@ where
 }
 
 const MIRROR_RESOURCE_TOKEN: &str = "  # NAVIGATOR_POSTGRES_MIRROR_RESOURCE\n";
-const AUTHORITY_ENV_TOKEN: &str = "            # NAVIGATOR_POSTGRES_AUTHORITY_ENV\n";
-/// The domain switches still read at runtime; every other domain is
-/// PostgreSQL-authoritative wherever `web` has PostgreSQL, which is every
-/// deployment.
-const BOOLEAN_AUTHORITY_KEYS: &[&str] = &[
-    store::persons::POSTGRES_PEOPLE_AUTHORITY_ENV,
-    "NAVIGATOR_POSTGRES_PROJECT_LIFECYCLE_AUTHORITY",
-    "NAVIGATOR_POSTGRES_TENANCY_AUTHORITY",
-];
-fn authority_substitution(get: &impl Fn(&str) -> Option<String>) -> Result<Substitution> {
-    use std::fmt::Write as _;
-    let mut value = String::new();
-    for &key in BOOLEAN_AUTHORITY_KEYS {
-        let Some(setting) = get(key) else { continue };
-        ensure!(
-            matches!(setting.as_str(), "1" | "true" | "0" | "false"),
-            "{key} must be 0, 1, false, or true"
-        );
-        writeln!(
-            value,
-            "            - name: {key}\n              value: \"{setting}\""
-        )?;
-    }
-    Ok(Substitution {
-        token: AUTHORITY_ENV_TOKEN,
-        env: "NAVIGATOR_POSTGRES_HOST",
-        value,
-    })
-}
-
 /// The recurring mirror recovery every deployment runs: `web` mirrors
 /// wherever it has PostgreSQL, which is every deployment.
 fn mirror_recovery_substitution() -> Substitution {
@@ -7643,36 +7612,6 @@ mod tests {
             !manifest.contains("kind: Job\n"),
             "initial scan is a separate release gate"
         );
-    }
-
-    #[test]
-    fn remaining_authority_switches_render_on_web_and_refuse_typos() {
-        let switches = [
-            ("NAVIGATOR_POSTGRES_PEOPLE_AUTHORITY", "1"),
-            ("NAVIGATOR_POSTGRES_PROJECT_LIFECYCLE_AUTHORITY", "true"),
-            ("NAVIGATOR_POSTGRES_TENANCY_AUTHORITY", "true"),
-        ];
-        let get = |key: &str| {
-            switches
-                .iter()
-                .find(|(name, _)| *name == key)
-                .map(|(_, value)| (*value).to_owned())
-                .or_else(|| env_getter(FULL_ENV)(key))
-        };
-        let env = rendered_web_env_entries(get);
-        for (name, value) in switches {
-            assert!(
-                env.iter()
-                    .any(|entry| entry["name"] == name && entry["value"] == value),
-                "{name}={value} missing from rendered web environment"
-            );
-        }
-        let typo = |key: &str| {
-            (key == "NAVIGATOR_POSTGRES_TENANCY_AUTHORITY")
-                .then(|| "yes".to_owned())
-                .or_else(|| env_getter(FULL_ENV)(key))
-        };
-        assert!(resolve_substitutions_for_deployment("synthetic", "26.9.16", typo).is_err());
     }
 
     #[test]

@@ -659,9 +659,9 @@ pub async fn plan(
 /// [`crate::postgres_mirror::initial_copy`].
 async fn first_copy<T>(first: bool, work: impl Future<Output = T>) -> T {
     if first {
-        crate::postgres_mirror::during_initial_copy(work).await
+        crate::postgres_mirror::during_initial_copy(crate::postgres_mirror::from_source(work)).await
     } else {
-        work.await
+        crate::postgres_mirror::from_source(work).await
     }
 }
 
@@ -1730,7 +1730,7 @@ impl family::Source for FamilySource<'_> {
         selected: family::Family,
     ) -> std::pin::Pin<Box<dyn Future<Output = Result<family::Snapshot, BackfillError>> + Send + 'a>>
     {
-        Box::pin(async move {
+        Box::pin(crate::postgres_mirror::from_source(async move {
             let before = source_archive_inventory(self.surreal)
                 .await
                 .map_err(|_| BackfillError::SourceInventory)?;
@@ -1788,7 +1788,7 @@ impl family::Source for FamilySource<'_> {
                 export_sha256,
                 foreign_keys_hold: family::foreign_keys_hold(pg, selected).await?,
             })
-        })
+        }))
     }
 
     fn write<'a>(

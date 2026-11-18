@@ -57,7 +57,7 @@ use uuid::Uuid;
 
 use sqlx::{postgres::PgRow, AssertSqlSafe, Row};
 
-use crate::postgres::identity::{self as authority, AuthorityError, ENTITY};
+use crate::postgres::identity::{self as authority, AuthorityError};
 use crate::postgres::PostgresDb;
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 
@@ -247,14 +247,11 @@ enum PgBind {
 /// Run one entity write in PostgreSQL and project each row it returns.
 async fn pg_write(
     pg: &PostgresDb,
-    db: &SurrealDb,
+    _db: &SurrealDb,
     query: sqlx::query::Query<'_, sqlx::Postgres, sqlx::postgres::PgArguments>,
 ) -> Result<Option<Entity>, EntityError> {
     let row = query.fetch_optional(&pg.0).await.map_err(pg_error)?;
     let entity = row.as_ref().map(from_pg).transpose().map_err(pg_error)?;
-    if let Some(entity) = &entity {
-        authority::project(pg, db, &ENTITY, entity.id).await?;
-    }
     Ok(entity)
 }
 
