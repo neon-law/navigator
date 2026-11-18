@@ -206,7 +206,9 @@ RUN cargo build --release --target "$(cat /tmp/rust-target)" -p neon \
 # Then assert the outcome rather than trusting the flag. dioxus-cli swallows a
 # wasm-opt failure, so a future dx that reopens this must fail HERE, loudly,
 # instead of quietly doubling what every visitor downloads.
+# Serialize the fullstack client and server compilers to bound peak memory.
 RUN NO_DOWNLOADS=1 dx build --package webapp --platform web --release --debug-symbols false \
+    --force-sequential true \
     && mkdir -p /dioxus-bundle \
     && cp -r target/dx/webapp/release/web/public/. /dioxus-bundle/ \
     && if grep -rla '\.debug_info' /dioxus-bundle; then \
