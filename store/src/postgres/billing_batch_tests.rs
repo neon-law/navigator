@@ -1,12 +1,12 @@
 //! PostgreSQL acceptance for durable billing intent and provider replay identity.
 
 use super::fixtures::{firm_for_notation, workflow_fixture};
+use crate::billing_batches::{self as batches, BillingBatchError, MatterBillingBatch};
 use crate::postgres_mirror::tests::{connect, fresh_schema};
 use uuid::Uuid;
 
 #[tokio::test]
 async fn billing_batch_retries_keep_the_frozen_attempt_and_refuse_stale_fee_compositions() {
-    use crate::billing_batches::{self as batches, BillingBatchError, MatterBillingBatch};
     let Some((options, database)) = fresh_schema().await else {
         return;
     };
@@ -14,30 +14,7 @@ async fn billing_batch_retries_keep_the_frozen_attempt_and_refuse_stale_fee_comp
     let (actor, notation, _) = workflow_fixture(&pg).await;
     let (_, project) = firm_for_notation(&pg, notation).await;
     let now = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
-    let batch = MatterBillingBatch {
-        id: Uuid::new_v4(),
-        project_id: project,
-        status: "pending".into(),
-        reference: "Synthetic".into(),
-        contact_name: "Synthetic".into(),
-        contact_email: "synthetic@example.invalid".into(),
-        xero_contact_id: Some("synthetic-contact".into()),
-        stripe_account_id: None,
-        stripe_iolta: false,
-        stripe_invoice_id: None,
-        due_date: now.date_naive(),
-        first_attempted_at: None,
-        line_items: serde_json::json!([{ "description": "Synthetic", "amount": 100 }]),
-        total_cents: 100,
-        currency: "USD".into(),
-        entry_ids: vec![],
-        cost_ids: vec![],
-        xero_invoice_id: None,
-        flat_fee_cents: Some(100),
-        actor_id: actor,
-        inserted_at: now,
-        updated_at: now,
-    };
+    let batch = synthetic_batch(actor, project, now);
     let stored = batches::insert_with_reservations(&pg, &batch, Some(0))
         .await
         .unwrap();
@@ -99,6 +76,47 @@ async fn billing_batch_retries_keep_the_frozen_attempt_and_refuse_stale_fee_comp
         .await,
         Err(BillingBatchError::FlatFeeAlreadyBilled)
     ));
+    assert_stripe_draft_identity(&pg, batch).await;
+    assert!(matches!(
+        batches::start_attempt(&pg, Uuid::new_v4(), now).await,
+        Err(BillingBatchError::NotFound)
+    ));
+    pg.pool().close().await;
+}
+
+fn synthetic_batch(
+    actor: Uuid,
+    project: Uuid,
+    now: chrono::DateTime<chrono::Utc>,
+) -> MatterBillingBatch {
+    MatterBillingBatch {
+        id: Uuid::new_v4(),
+        project_id: project,
+        status: "pending".into(),
+        reference: "Synthetic".into(),
+        contact_name: "Synthetic".into(),
+        contact_email: "synthetic@example.invalid".into(),
+        xero_contact_id: Some("synthetic-contact".into()),
+        stripe_account_id: None,
+        stripe_iolta: false,
+        stripe_invoice_id: None,
+        due_date: now.date_naive(),
+        first_attempted_at: None,
+        line_items: serde_json::json!([{ "description": "Synthetic", "amount": 100 }]),
+        total_cents: 100,
+        currency: "USD".into(),
+        entry_ids: vec![],
+        cost_ids: vec![],
+        xero_invoice_id: None,
+        flat_fee_cents: Some(100),
+        actor_id: actor,
+        inserted_at: now,
+        updated_at: now,
+    }
+}
+
+async fn assert_stripe_draft_identity(pg: &super::PostgresDb, batch: MatterBillingBatch) {
+    let project = batch.project_id;
     let stripe = MatterBillingBatch {
         id: Uuid::new_v4(),
         xero_contact_id: None,
@@ -106,19 +124,19 @@ async fn billing_batch_retries_keep_the_frozen_attempt_and_refuse_stale_fee_comp
         flat_fee_cents: None,
         ..batch
     };
-    batches::insert(&pg, &stripe).await.unwrap();
-    batches::attach_stripe_draft(&pg, stripe.id, "in_synthetic")
+    batches::insert(pg, &stripe).await.unwrap();
+    batches::attach_stripe_draft(pg, stripe.id, "in_synthetic")
         .await
         .unwrap();
-    batches::attach_stripe_draft(&pg, stripe.id, "in_synthetic")
+    batches::attach_stripe_draft(pg, stripe.id, "in_synthetic")
         .await
         .unwrap();
     assert!(matches!(
-        batches::attach_stripe_draft(&pg, stripe.id, "in_different").await,
+        batches::attach_stripe_draft(pg, stripe.id, "in_different").await,
         Err(BillingBatchError::NotFound)
     ));
     assert_eq!(
-        batches::pending_for_project(&pg, project)
+        batches::pending_for_project(pg, project)
             .await
             .unwrap()
             .unwrap()
@@ -126,9 +144,4 @@ async fn billing_batch_retries_keep_the_frozen_attempt_and_refuse_stale_fee_comp
             .as_deref(),
         Some("in_synthetic")
     );
-    assert!(matches!(
-        batches::start_attempt(&pg, Uuid::new_v4(), now).await,
-        Err(BillingBatchError::NotFound)
-    ));
-    pg.pool().close().await;
 }
