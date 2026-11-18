@@ -1086,18 +1086,30 @@ jobs:
       # a KIND `web` without it answers those routes with 500s. This stands up
       # the same `k8s/postgres` StatefulSet, login roles, and migrate Job a
       # hosted deployment runs, then applies the hosted `web` connection patch.
-      # The CA is minted per run with a `localhost` SAN so the host-side
-      # fixtures reach it through the port-forward below with verify-full.
+      # A per-run CA signs a server certificate with a `localhost` SAN, so the
+      # host-side fixtures reach it through the port-forward below with
+      # verify-full. The two must differ: sqlx's rustls-webpki never accepts a
+      # trust anchor as the server's own certificate, though psql does.
       # The passwords are synthetic: this cluster lives for one job.
       - name: provision PostgreSQL and point web at it
         timeout-minutes: 90
         run: |
           set -euo pipefail
-          openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj /CN=navigator-postgres \
-              -addext "subjectAltName=DNS:navigator-postgres.navigator.svc.cluster.local,DNS:localhost" \
-              -keyout /tmp/navigator-postgres.key -out /tmp/navigator-postgres-ca.crt
+          openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj /CN=navigator-postgres-ca \
+              -keyout /tmp/navigator-postgres-ca.key -out /tmp/navigator-postgres-ca.crt
+          openssl req -newkey rsa:2048 -nodes -subj /CN=navigator-postgres \
+              -keyout /tmp/navigator-postgres.key -out /tmp/navigator-postgres.csr
+          printf '%s\n' \
+              'subjectAltName=DNS:navigator-postgres.navigator.svc.cluster.local,DNS:localhost' \
+              'basicConstraints=critical,CA:FALSE' \
+              'keyUsage=critical,digitalSignature,keyEncipherment' \
+              'extendedKeyUsage=serverAuth' > /tmp/navigator-postgres.ext
+          openssl x509 -req -in /tmp/navigator-postgres.csr -days 2 \
+              -CA /tmp/navigator-postgres-ca.crt -CAkey /tmp/navigator-postgres-ca.key -CAcreateserial \
+              -extfile /tmp/navigator-postgres.ext -out /tmp/navigator-postgres.crt
+          openssl verify -CAfile /tmp/navigator-postgres-ca.crt /tmp/navigator-postgres.crt
           kubectl -n navigator create secret tls navigator-postgres-tls \
-              --cert=/tmp/navigator-postgres-ca.crt --key=/tmp/navigator-postgres.key
+              --cert=/tmp/navigator-postgres.crt --key=/tmp/navigator-postgres.key
           kubectl -n navigator create secret generic navigator-postgres-auth \
               --from-literal=password=synthetic-postgres
           for login in app migrator backup; do
@@ -1107,12 +1119,21 @@ jobs:
           done
           kubectl apply -k k8s/overlays/kind-postgres-persistence
           kubectl -n navigator rollout status statefulset/navigator-postgres --timeout=300s
+          # Stop at the Job's first verdict: waiting only for `complete` sits
+          # out the whole timeout behind a Job that has already failed.
           run_job() {
-            if ! kubectl -n navigator wait --for=condition=complete "job/$1" --timeout=600s; then
-              kubectl -n navigator describe "job/$1" >&2
-              kubectl -n navigator logs "job/$1" --all-containers >&2 || true
-              exit 1
-            fi
+            for _ in $(seq 1 120); do
+              status=$(kubectl -n navigator get "job/$1" \
+                  -o jsonpath='{.status.succeeded}/{.status.failed}')
+              case "$status" in
+                1/*) return 0 ;;
+                */[1-9]*) break ;;
+              esac
+              sleep 5
+            done
+            kubectl -n navigator describe "job/$1" >&2
+            kubectl -n navigator logs "job/$1" --all-containers >&2 || true
+            exit 1
           }
           kubectl apply -k k8s/postgres/access
           run_job navigator-postgres-roles
