@@ -931,6 +931,8 @@ fn spawn_journal_replay(state: &crate::AppState) {
     });
 }
 
+mod cohost;
+
 async fn boot(brand: Site, host_dbos: bool) -> anyhow::Result<()> {
     // Load `.env` / `.devx/env` before any env read; in cluster the
     // environment is injected and both calls are no-ops.
@@ -940,6 +942,9 @@ async fn boot(brand: Site, host_dbos: bool) -> anyhow::Result<()> {
     // One observability seam per binary, named for the deployment.
     let telemetry_guard = telemetry::init(brand.service_name);
 
+    let lookup = |key: &str| std::env::var(key).ok();
+    let combined = cohost::enabled(host_dbos, lookup)?;
+    workflows_service::request_identity::install_crypto_provider();
     let mut rt = build_from_env(brand.seed).await?;
 
     // The tenant shape lights the existing portal-only mode rather than adding
@@ -984,7 +989,8 @@ async fn boot(brand: Site, host_dbos: bool) -> anyhow::Result<()> {
     let lookup = |key: &str| std::env::var(key).ok();
     let dbos_schedules = dbos_schedules(&rt, host_dbos, lookup).await?;
     let sent_email_export = sent_email_export_source(host_dbos, lookup).await?;
-    let archives = archives_context(host_dbos, rt.config.environment, lookup)?;
+    // The combined worker registers Archives; this host still supplies Sent Email Export.
+    let archives = archives_context(host_dbos && !combined, rt.config.environment, lookup)?;
     let router = crate::bootstrap(
         rt.state,
         &rt.public_dir,
@@ -1019,16 +1025,18 @@ async fn boot(brand: Site, host_dbos: bool) -> anyhow::Result<()> {
     // router: a request's brand comes from its `Host:` header (`portal`'s
     // `resolve_brand_and_enforce_host`), not from which listener accepted
     // it, so every listener shares this one composed router. Each task
-    // drains its own graceful-shutdown signal independently — Ctrl-C and
-    // `SIGTERM` both support more than one listener — so every bound port
-    // stops serving together.
+    // drains on the shared cancellation token, so every bound port stops
+    // serving together when the signal or either host fails.
+    let stop = dbos::CancellationToken::new();
+    let server_stop = stop.clone();
     let serve = async move {
         let mut servers = tokio::task::JoinSet::new();
         for listener in listeners {
             let router = router.clone();
+            let stop = server_stop.clone();
             servers.spawn(async move {
                 axum::serve(listener, router)
-                    .with_graceful_shutdown(shutdown_signal())
+                    .with_graceful_shutdown(stop.cancelled_owned())
                     .await
             });
         }
@@ -1039,19 +1047,16 @@ async fn boot(brand: Site, host_dbos: bool) -> anyhow::Result<()> {
         }
         anyhow::Ok(())
     };
-    let served = if host_dbos {
-        let lookup = |key: &str| std::env::var(key).ok();
-        with_dbos_hosting_and_external(
-            lookup,
-            workflows::notify::notifier_from_lookup(lookup),
-            dbos_schedules,
-            move |dbos| register_archive_schedules(dbos, sent_email_export, archives),
-            serve,
-        )
-        .await
-    } else {
-        serve.await
-    };
+    let served = Box::pin(cohost::run(
+        host_dbos,
+        combined,
+        dbos_schedules,
+        sent_email_export,
+        archives,
+        stop,
+        serve,
+    ))
+    .await;
     telemetry_guard.shutdown();
     served
 }

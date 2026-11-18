@@ -1,7 +1,7 @@
 //! The canonical list of Restate services this worker registers, split by
 //! shape, plus the naming guarantee that keeps the ingress legible.
 //!
-//! `main.rs` binds exactly these services onto the one endpoint Restate
+//! `host.rs` binds exactly these services onto the one endpoint Restate
 //! discovers. Two shapes live there:
 //!
 //! - **Durable workflows** — one-shot, keyed-by-idempotency invocations
@@ -18,13 +18,13 @@
 //!   here so a future lowercase *workflow* still fails the test.
 //!
 //! This registry is the single source of truth for those names; the
-//! `registered_services` test guards it against drift from `main.rs`'s actual
+//! `registered_services` test guards it against drift from `host.rs`'s actual
 //! `.bind(...)` calls so adding a service without recording its name — or
 //! recording one with the wrong case — fails the build.
 
 /// Durable workflow services bound by the worker. Each name MUST be `PascalCase`
 /// (enforced by `workflow_service_names_are_pascal_case`). Keep in lockstep
-/// with the `.bind(...)` calls in `main.rs`.
+/// with the `.bind(...)` calls in `host.rs`.
 pub const WORKFLOW_SERVICES: &[&str] = &[
     "EmailSummary",
     "Archives",
@@ -121,19 +121,19 @@ mod tests {
         assert!(!WORKFLOW_SERVICES.contains(&"ProjectSlackMembershipSync"));
     }
 
-    /// Drift guard: the registry must account for every service `main.rs`
+    /// Drift guard: the registry must account for every service `host.rs`
     /// actually binds. Counting `.bind(` calls in the worker's source keeps the
     /// two in lockstep — add a `.bind(...)` without listing its name here (or
     /// vice versa) and this fails. Cheap, but it catches the one mistake that
     /// otherwise ships a service with no naming guarantee at all.
     #[test]
     fn registry_accounts_for_every_bound_service() {
-        let main_rs = include_str!("main.rs");
-        let bind_calls = main_rs.matches(".bind(").count();
+        let host_rs = include_str!("host.rs");
+        let bind_calls = host_rs.matches(".bind(").count();
         let registered = WORKFLOW_SERVICES.len() + VIRTUAL_OBJECTS.len();
         assert_eq!(
             bind_calls, registered,
-            "main.rs binds {bind_calls} services but the registry lists {registered}; \
+            "host.rs binds {bind_calls} services but the registry lists {registered}; \
              update WORKFLOW_SERVICES / VIRTUAL_OBJECTS to match the `.bind(...)` calls"
         );
     }

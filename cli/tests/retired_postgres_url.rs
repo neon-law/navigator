@@ -125,7 +125,7 @@ fn application_source_does_not_read_database_url() {
 /// Debug-formatting the store config is how a password reaches Cloud Logging.
 #[test]
 fn hosting_does_not_debug_format_the_store_config() {
-    let hosts = ["portal/src/hosting.rs", "workflows-service/src/main.rs"];
+    let hosts = ["portal/src/hosting.rs", "workflows-service/src/host.rs"];
     let needles = [
         "?cfg.db",
         "?cfg.surreal",

@@ -34,6 +34,7 @@ pub struct FinanceIngress {
 
 #[derive(Clone, Default)]
 pub struct WorkerIngress {
+    pub manual_schedules: Option<ManualIngress>,
     pub finance: Option<FinanceIngress>,
     pub reconcile: Option<ReconcileIngress>,
     pub nightly_project_update: Option<NightlyIngress>,
@@ -46,6 +47,76 @@ pub struct WorkerIngress {
     pub youtube_comments: Option<YoutubeIngress>,
     pub inbound_triage: Option<TriageIngress>,
     pub sandbox_credit_reset: Option<SandboxResetIngress>,
+}
+
+/// Authenticated manual starts for schedules already owned by this executor.
+#[derive(Clone)]
+pub struct ManualIngress {
+    pub token: Arc<str>,
+    pub builtin: workflows::dbos_engine::ManualSchedules,
+    pub archives: Option<archives::workflow::ArchivesDbosWorkflow>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ManualStart {
+    service: String,
+    run_key: String,
+}
+
+async fn start_manual_schedule(
+    State(ingress): State<ManualIngress>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<(StatusCode, Json<Accepted>), StatusCode> {
+    if !authorized(&headers, &ingress.token) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    if body.len() > MAX_BODY_BYTES {
+        return Err(StatusCode::PAYLOAD_TOO_LARGE);
+    }
+    let request: ManualStart =
+        serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let key = request
+        .run_key
+        .strip_prefix("manual-")
+        .ok_or(StatusCode::BAD_REQUEST)?;
+    let id = uuid::Uuid::parse_str(key).map_err(|_| StatusCode::BAD_REQUEST)?;
+    if request.run_key != format!("manual-{id}")
+        || !matches!(
+            request.service.as_str(),
+            "Archives" | "BillingCanary" | "BillingDigest" | "NotationReset"
+        )
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let workflow_id = format!("{}:{}", request.service, request.run_key);
+    if request.service == "Archives" {
+        let workflow = ingress
+            .archives
+            .as_ref()
+            .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+        workflow
+            .start_with(
+                archives::workflow::RunRequest {
+                    scheduled_for: None,
+                },
+                dbos::StartOptions {
+                    workflow_id: Some(&workflow_id),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    } else if !ingress
+        .builtin
+        .start(&request.service, &workflow_id)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
+    {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+    Ok((StatusCode::ACCEPTED, Json(Accepted { workflow_id })))
 }
 
 #[derive(Clone)]
@@ -526,7 +597,19 @@ struct Accepted {
     workflow_id: String,
 }
 
+fn add_manual_route(router: Router, manual: Option<ManualIngress>) -> Router {
+    if let Some(manual) = manual {
+        router.route(
+            "/internal/dbos/schedules",
+            post(start_manual_schedule).with_state(manual),
+        )
+    } else {
+        router
+    }
+}
+
 pub fn add_routes(router: Router, ingress: WorkerIngress) -> Router {
+    let router = add_manual_route(router, ingress.manual_schedules);
     let router = if let Some(finance) = ingress.finance {
         router.route(
             "/internal/dbos/finance-aggregate",
@@ -2431,5 +2514,45 @@ mod tests {
             router.oneshot(request).await.unwrap().status(),
             StatusCode::NOT_FOUND
         );
+    }
+}
+
+#[cfg(test)]
+mod manual_schedule_tests {
+    use super::*;
+    use axum::{body::Body, http::Request};
+    use tower::ServiceExt;
+
+    fn router() -> Router {
+        add_routes(
+            Router::new(),
+            WorkerIngress {
+                manual_schedules: Some(ManualIngress {
+                    token: "synthetic-manual-token".into(),
+                    builtin: workflows::dbos_engine::ManualSchedules::default(),
+                    archives: None,
+                }),
+                ..Default::default()
+            },
+        )
+    }
+
+    #[tokio::test]
+    async fn manual_schedule_ingress_checks_auth_before_parsing_and_fails_closed() {
+        for (token, body, expected) in [
+            (None, "not-json".to_owned(), StatusCode::UNAUTHORIZED),
+            (Some("wrong"), "not-json".to_owned(), StatusCode::UNAUTHORIZED),
+            (Some("synthetic-manual-token"), "not-json".to_owned(), StatusCode::BAD_REQUEST),
+            (Some("synthetic-manual-token"), serde_json::json!({"service":"Unknown", "run_key":format!("manual-{}", uuid::Uuid::new_v4())}).to_string(), StatusCode::BAD_REQUEST),
+            (Some("synthetic-manual-token"), serde_json::json!({"service":"BillingCanary", "run_key":"daily"}).to_string(), StatusCode::BAD_REQUEST),
+            (Some("synthetic-manual-token"), serde_json::json!({"service":"BillingCanary", "run_key":format!("manual-{}", uuid::Uuid::new_v4())}).to_string(), StatusCode::SERVICE_UNAVAILABLE),
+            (Some("synthetic-manual-token"), serde_json::json!({"service":"Archives", "run_key":format!("manual-{}", uuid::Uuid::new_v4())}).to_string(), StatusCode::SERVICE_UNAVAILABLE),
+            (Some("synthetic-manual-token"), "x".repeat(MAX_BODY_BYTES + 1), StatusCode::PAYLOAD_TOO_LARGE),
+        ] {
+            let mut request = Request::post("/internal/dbos/schedules");
+            if let Some(token) = token { request = request.header("authorization", format!("Bearer {token}")); }
+            let response = router().oneshot(request.body(Body::from(body)).unwrap()).await.unwrap();
+            assert_eq!(response.status(), expected);
+        }
     }
 }

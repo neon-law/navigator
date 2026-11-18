@@ -169,6 +169,25 @@ pub async fn start_workflow<B: Serialize + ?Sized>(
     Ok(resp_body)
 }
 
+/// Start an explicitly selected DBOS schedule through authenticated ingress.
+/// A caller retains its manual key when retrying the same request.
+pub async fn start_dbos_schedule(
+    ingress: &str,
+    token: &str,
+    service: &str,
+    run_key: &str,
+) -> Result<(), TriggerError> {
+    start_dbos_at(
+        ingress,
+        token,
+        "/internal/dbos/schedules",
+        &serde_json::json!({
+            "service": service, "run_key": run_key,
+        }),
+    )
+    .await
+}
+
 /// Authenticated DBOS handoff for a manually requested FinanceAggregate.
 /// The caller must already have applied its user/Firm authorization check;
 /// this bearer authenticates only the in-cluster app-to-worker hop.

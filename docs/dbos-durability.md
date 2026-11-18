@@ -111,6 +111,37 @@ Slack operations notice is at least once: a crash after Slack accepts it and bef
 again. The switch defaults off, and enabling it requires the configured Xero provider and Slack webhook. The existing
 Restate service and CronJob remain in place during this staged rollout.
 
+### One application container
+
+Set `NAVIGATOR_WORKFLOWS_IN_WEB=true`, `NAVIGATOR_DBOS_ENABLED=true`, and `NAVIGATOR_WORKFLOW_ENGINE=dbos` to host the
+complete workflow registry in the application process. Each workflow's own switch still selects its engine; cohosting
+does not transfer ownership of pending work. The application registers its app-only schedules alongside the worker's
+adapters and launches one DBOS executor. HTTP serving starts after workflow registration, DBOS launch, and listener
+binding succeed. A host failure stops both listeners; shutdown drains the application and authenticated workflow ingress
+before stopping DBOS.
+
+The combined host uses `WORKFLOWS_SERVICE_HEALTH_LISTEN` for readiness and authenticated DBOS ingress. It binds no
+Restate compatibility listener and requires no Restate identity key. For calls from the same container, set
+`NAVIGATOR_DBOS_INGRESS_URL=http://127.0.0.1:9083` and configure `NAVIGATOR_DBOS_INGRESS_TOKEN` on the host and callers.
+External triggers need a private Service reaching that listener and the matching credential. Keep PostgreSQL and object
+storage independent of the application container.
+
+Keep the separate worker deployment until the handover gate in [the cutover inventory](dbos-cutover-matrix.md) passes.
+Before selecting the combined host on a deployment, quiesce starts, account for pending runs and executor identities,
+remove the separate executor, and route internal callers and readiness probes to the application's workflow listener.
+The compatibility Restate endpoint remains available in the combined process, but its public HTTP/1.1-to-h2c proxy is
+not embedded. Retained Restate traffic still needs its existing proxy and routing until that traffic is reconciled. The
+shipped separate-worker Kubernetes topology remains the default.
+
+### Manual schedule controls
+
+The manual Archives, BillingCanary, BillingDigest, NotationReset, and ReconcileInvoices controls follow their respective
+DBOS switches. An enabled DBOS control requires the authenticated ingress; failure never falls back to Restate. Archives
+and the first three built-in schedules use `POST /internal/dbos/schedules`, with an allowlisted service and
+`manual-<UUID>` run key. A retry reuses that key and joins the existing workflow. Separate operator clicks get distinct
+keys. The executor's typed schedule handles start the same workflows as the automatic schedules; manual dispatch adds no
+second workflow implementation. ReconcileInvoices retains its identity-claim route.
+
 ### Several replicas
 
 Every DBOS host must set `NAVIGATOR_DBOS_EXECUTOR_ID` to a unique value for each concurrently running pod. The web and

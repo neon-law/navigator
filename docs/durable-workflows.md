@@ -327,7 +327,7 @@ can't silently recur; when you fix a new one, add its guard in the same PR.
 - **Every workspace member is in every workspace-building Containerfile.** Add a crate → add `COPY <crate> <crate>` to
   `images/Containerfile.{trigger,workflows-service,web}`. Guarded by
   `every_workspace_staging_containerfile_copies_every_member` in `cli/tests/containerfile_docs_copy.rs`.
-- **Registered workflow names are PascalCase** and the registry matches `main.rs`'s `.bind(...)` calls — guarded by the
+- **Registered workflow names are PascalCase** and the registry matches `host.rs`'s `.bind(...)` calls — guarded by the
   `workflows_service::registry` tests (template filenames follow the separate snake_case convention `N103` enforces).
 - **Trigger CronJobs carry `activeDeadlineSeconds` + `startingDeadlineSeconds`** so a stuck Job can't wedge `Forbid`,
   and `start_workflow` has a 30s HTTP timeout so a hung ingress can't keep a trigger pod alive.
