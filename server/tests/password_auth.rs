@@ -192,6 +192,16 @@ async fn valid_password_mints_the_standard_session_cookie() {
     )
     .await;
     let (state, surreal) = state_with_password(Some(idp.uri())).await;
+    store::persons::create(
+        &surreal,
+        &store::persons::NewPerson::with_role(
+            "Existing Client",
+            "client@example.org",
+            store::persons::Role::Client,
+        ),
+    )
+    .await
+    .unwrap();
     let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
 
     let (csrf_cookie, csrf_token) = open_login_form(&app).await;
@@ -379,7 +389,11 @@ async fn sign_in_with_claims_and_admin(
         store::persons::create(&surreal, &person).await.unwrap();
     }
     let app = server::neon_router(state, std::path::Path::new(portal::DEFAULT_PUBLIC_DIR));
-    let (csrf_cookie, csrf_token) = open_login_form(&app).await;
+    let (mut csrf_cookie, csrf_token) = open_login_form(&app).await;
+    if admin {
+        let (signup_cookies, _) = open_signup(&app).await;
+        csrf_cookie = format!("{csrf_cookie}; {signup_cookies}");
+    }
     let email = claims["email"].as_str().unwrap().to_owned();
     let password = test_password("correct-horse");
     let resp = post_password(
@@ -501,11 +515,67 @@ async fn signup_app() -> (axum::Router, MockServer, store::surreal::SurrealDb) {
 }
 
 async fn open_signup(app: &axum::Router) -> (String, String) {
+    let age_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/auth/signup")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(age_response.status(), StatusCode::OK);
+    let csrf_cookie = age_response
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .map(|v| v.to_str().unwrap())
+        .find(|v| v.starts_with("navigator_account_csrf="))
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+    let age_html = body_string(age_response).await;
+    assert!(!age_html.contains("name=\"email\""));
+    assert!(!age_html.contains("name=\"password\""));
+    let needle = "name=\"csrf_token\" value=\"";
+    let token = age_html[age_html.find(needle).unwrap() + needle.len()..]
+        .split('"')
+        .next()
+        .unwrap();
+    let age_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/signup/age")
+                .header("cookie", csrf_cookie)
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(format!("age=13&csrf_token={token}")))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(age_response.status(), StatusCode::SEE_OTHER);
+    let age_cookie = age_response
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .map(|v| v.to_str().unwrap())
+        .find(|v| v.starts_with("navigator_signup_age="))
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
     let response = app
         .clone()
         .oneshot(
             Request::builder()
                 .uri("/auth/signup")
+                .header("cookie", &age_cookie)
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -531,7 +601,7 @@ async fn open_signup(app: &axum::Router) -> (String, String) {
         .next()
         .unwrap()
         .to_string();
-    (cookie, token)
+    (format!("{cookie}; {age_cookie}"), token)
 }
 
 async fn post_signup(app: &axum::Router, cookie: &str, body: String) -> axum::response::Response {
@@ -640,4 +710,126 @@ async fn signup_creates_only_an_unverified_client() {
         .unwrap()
         .unwrap();
     assert_eq!(row.role, store::persons::Role::Client);
+}
+
+#[tokio::test]
+async fn signup_without_an_age_decision_never_contacts_the_provider() {
+    let (app, idp, _) = signup_app().await;
+    let (cookie, csrf) = open_signup(&app).await;
+    for cookie in [
+        cookie.split(';').next().unwrap().to_string(),
+        format!(
+            "{}; navigator_signup_age=forged",
+            cookie.split(';').next().unwrap()
+        ),
+        format!(
+            "{}; navigator_signup_age={}",
+            cookie.split(';').next().unwrap(),
+            sessions().encode_signed_bytes(b"eligible:1")
+        ),
+    ] {
+        let response = post_signup(
+            &app,
+            &cookie,
+            form_body("new@example.org", &test_password("new-account"), &csrf),
+        )
+        .await;
+        assert!(!has_session(&response));
+        let html = body_string(response).await;
+        assert!(html.contains("name=\"age\""));
+        assert!(!html.contains("name=\"email\""));
+    }
+    assert!(idp.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn under_thirteen_cannot_retry_with_an_older_age_or_post_credentials() {
+    let (app, idp, _) = signup_app().await;
+    let (cookie, csrf) = open_signup(&app).await;
+    let csrf_cookie = cookie.split(';').next().unwrap();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/signup/age")
+                .header("cookie", csrf_cookie)
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(format!("age=12&csrf_token={csrf}")))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let blocked_cookie = response
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .map(|v| v.to_str().unwrap())
+        .find(|v| v.starts_with("navigator_signup_age="))
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+    let blocked_cookie = format!("{csrf_cookie}; {blocked_cookie}");
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/signup/age")
+                .header("cookie", &blocked_cookie)
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(format!("age=21&csrf_token={csrf}")))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let html = body_string(response).await;
+    assert!(!html.contains("name=\"age\""));
+    assert!(!html.contains("name=\"email\""));
+    let response = post_signup(
+        &app,
+        &blocked_cookie,
+        form_body("new@example.org", &test_password("new-account"), &csrf),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert!(!has_session(&response));
+    assert!(idp.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn age_screen_rejects_missing_csrf_and_invalid_ages() {
+    let (app, idp, _) = signup_app().await;
+    let (cookie, csrf) = open_signup(&app).await;
+    for body in [
+        "age=13".to_string(),
+        format!("age=121&csrf_token={csrf}"),
+        format!("age=-1&csrf_token={csrf}"),
+        format!("age=unknown&csrf_token={csrf}"),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/auth/signup/age")
+                    .header("cookie", cookie.split(';').next().unwrap())
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(response.status().is_client_error());
+        assert!(!response
+            .headers()
+            .get_all("set-cookie")
+            .iter()
+            .any(|v| v.to_str().unwrap().starts_with("navigator_signup_age=")));
+    }
+    assert!(idp.received_requests().await.unwrap().is_empty());
 }

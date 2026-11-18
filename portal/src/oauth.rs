@@ -1098,6 +1098,7 @@ pub fn routes(state: AuthState) -> Router {
     let mut router = Router::new()
         .route("/auth/login", get(login))
         .route("/auth/signup", get(signup_form))
+        .route("/auth/signup/age", post(crate::signup_age::submit))
         // The per-provider redirect, always reachable by its own path so a
         // button on the chooser works even when `/auth/login` renders the
         // chooser instead of redirecting. `oidc` is the primary slot's slug,
@@ -1429,6 +1430,9 @@ fn login_chooser_response(
 }
 
 async fn signup_form(State(s): State<AuthState>, cookies: Cookies) -> Response {
+    if !crate::signup_age::eligible(&s, &cookies) {
+        return crate::signup_age::response(&s, &cookies);
+    }
     if s.identity_password.is_none() || s.identity_admin.is_none() {
         return Redirect::to("/auth/login").into_response();
     }
@@ -1442,7 +1446,11 @@ fn signup_response(
     status: StatusCode,
 ) -> Response {
     let csrf = crate::password_reset::mint_csrf(s, cookies);
-    (status, webapp::auth_pages::signup(&csrf, error)).into_response()
+    (
+        status,
+        webapp::auth_pages::signup(&csrf, error, &provider_buttons(s, "")),
+    )
+        .into_response()
 }
 
 async fn signup_submit(
@@ -1459,6 +1467,9 @@ async fn signup_submit(
     let (Some(cfg), Some(admin)) = (&s.identity_password, &s.identity_admin) else {
         return StatusCode::NOT_FOUND.into_response();
     };
+    if !crate::signup_age::eligible(&s, &cookies) {
+        return crate::signup_age::response(&s, &cookies);
+    }
     if form.password.chars().count() < 8 || form.email.len() > 254 || !form.email.contains('@') {
         return signup_response(
             &s,
@@ -2713,6 +2724,7 @@ async fn complete_sign_in(
         &claims,
         s.bootstrap_owner_email.as_deref(),
         !unverified_password,
+        crate::signup_age::eligible(s, cookies),
     )
     .await
     {
@@ -2737,6 +2749,9 @@ async fn complete_sign_in(
                 webapp::error_pages::sign_in_not_provisioned(),
             )
                 .into_response();
+        }
+        Err(ResolveError::AgeRequired) => {
+            return Redirect::to("/auth/signup").into_response();
         }
         Err(ResolveError::Db(e)) => {
             if let Some(provider) = auth_provider {
@@ -2867,6 +2882,8 @@ fn refuse_unconfirmable_address() -> Response {
 /// `persons` row.
 #[derive(Debug, thiserror::Error)]
 enum ResolveError {
+    #[error("age screening is required before account creation")]
+    AgeRequired,
     /// No row matched on the provider's subject, and the claims carried no
     /// email from which to create a Person. The caller renders a 403.
     #[error("no known persons row for an IdP token without email")]
@@ -3035,7 +3052,7 @@ async fn resolve_person_from_claims(
     claims: &IdTokenClaims,
     bootstrap_owner_email: Option<&str>,
 ) -> Result<(Uuid, Role, ResolutionMetadata), ResolveError> {
-    resolve_person(surreal, provider, claims, bootstrap_owner_email, true).await
+    resolve_person(surreal, provider, claims, bootstrap_owner_email, true, true).await
 }
 
 /// [`resolve_person_from_claims`], with `link` deciding whether an existing
@@ -3047,12 +3064,19 @@ async fn resolve_person(
     claims: &IdTokenClaims,
     bootstrap_owner_email: Option<&str>,
     link: bool,
+    allow_creation: bool,
 ) -> Result<(Uuid, Role, ResolutionMetadata), ResolveError> {
     use store::persons;
 
     if claims.foreign_tenant {
-        return resolve_foreign_tenant_person(surreal, provider, claims, bootstrap_owner_email)
-            .await;
+        return resolve_foreign_tenant_person(
+            surreal,
+            provider,
+            claims,
+            bootstrap_owner_email,
+            allow_creation,
+        )
+        .await;
     }
 
     let bootstrap_owner = bootstrap_owner_email.map(str::to_lowercase);
@@ -3121,6 +3145,9 @@ async fn resolve_person(
         ));
     }
 
+    if !allow_creation {
+        return Err(ResolveError::AgeRequired);
+    }
     if !is_bootstrap_owner {
         // A supported provider's verified unknown email creates a client with
         // no Project participation. Identity admission is distinct from
@@ -3194,6 +3221,7 @@ async fn resolve_foreign_tenant_person(
     provider: Option<ProviderId>,
     claims: &IdTokenClaims,
     bootstrap_owner_email: Option<&str>,
+    allow_creation: bool,
 ) -> Result<(Uuid, Role, ResolutionMetadata), ResolveError> {
     use store::persons;
 
@@ -3210,6 +3238,9 @@ async fn resolve_foreign_tenant_person(
         bootstrap_owner_email.is_some_and(|owner| owner.trim().eq_ignore_ascii_case(&email));
     if is_bootstrap_owner || persons::find_by_email_ci(surreal, &email).await?.is_some() {
         return Err(ResolveError::AddressInUse);
+    }
+    if !allow_creation {
+        return Err(ResolveError::AgeRequired);
     }
     let name = claims.name.clone().unwrap_or_else(|| email.clone());
     let new = new_person_with_provider_subject(
@@ -4903,6 +4934,68 @@ mod tests {
             .await
             .expect_err("an unadmitted linked row must not resolve");
         assert!(matches!(err, ResolveError::NotAdmitted));
+    }
+
+    #[tokio::test]
+    async fn new_provider_accounts_require_age_admission_but_existing_accounts_do_not() {
+        let surreal = mem_surreal().await;
+        for provider in [
+            ProviderId::Primary,
+            ProviderId::Microsoft,
+            ProviderId::Apple,
+        ] {
+            let claims = unknown_claims("new@example.com");
+            let refused =
+                super::resolve_person(&surreal, Some(provider), &claims, None, true, false).await;
+            assert!(matches!(refused, Err(ResolveError::AgeRequired)));
+            assert!(
+                store::persons::find_by_email_ci(&surreal, "new@example.com")
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        let claims = unknown_claims("existing@example.com");
+        let (id, _, _) = super::resolve_person(
+            &surreal,
+            Some(ProviderId::Primary),
+            &claims,
+            None,
+            true,
+            true,
+        )
+        .await
+        .unwrap();
+        let (existing, _, resolution) = super::resolve_person(
+            &surreal,
+            Some(ProviderId::Primary),
+            &claims,
+            None,
+            true,
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(id, existing);
+        assert!(resolution.fresh.is_none());
+        let mut foreign = unknown_claims("foreign@example.com");
+        foreign.foreign_tenant = true;
+        let refused = super::resolve_person(
+            &surreal,
+            Some(ProviderId::Microsoft),
+            &foreign,
+            None,
+            true,
+            false,
+        )
+        .await;
+        assert!(matches!(refused, Err(ResolveError::AgeRequired)));
+        assert!(
+            store::persons::find_by_email_ci(&surreal, "foreign@example.com")
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]

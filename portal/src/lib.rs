@@ -215,6 +215,7 @@ mod signature_adoption;
 pub mod signature_flow;
 pub mod signature_render;
 pub mod signature_status;
+mod signup_age;
 pub mod social_oauth;
 pub mod social_webhooks;
 pub mod ssh_keys;
