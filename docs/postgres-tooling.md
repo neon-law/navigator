@@ -245,11 +245,11 @@ only. A Person whose email or sign-in subject PostgreSQL still holds under anoth
 converges once that other row is mirrored. Surreal timestamps are RFC 3339 text; a row whose timestamp does not parse is
 refused and reported, never given a substitute time.
 
-`postgres_mirror::documents::parity` and `documents::reconcile` compare and repair every asset row; run them after the
-tenancy pair. An asset row copies its checksum, storage keys, revision identity (`project_id`, `slug`, ordered by id),
-visibility, mail provenance, and its soft-deletion, Legal Hold, and purge stamps as stored; its JSON columns are copied
-without being re-parsed. Before an asset is upserted, its Project and the Person who deleted it are mirrored when
-PostgreSQL does not hold them. Reports name assets by id only, never by filename or storage key.
+`postgres_mirror::documents::parity` compares Asset metadata before enrollment. The frozen scoped import inserts
+Source-only identities and preserves existing PostgreSQL rows, including visibility and provenance. Every canonical
+column and JSON value participates in the comparison; absent JSON and explicit JSON `null` remain distinct. Source
+metadata cannot establish a trusted onboarding verification marker. Reports contain Asset ids and counts, without
+filenames or storage keys. The scoped native ownership exception is described below.
 
 `postgres_mirror::catalog::parity` and `catalog::reconcile` compare and repair the catalog tables, a Notation package
 before its templates; run them after the editorial pair. Mirroring a package template first mirrors its package when
@@ -258,20 +258,17 @@ PostgreSQL lacks is refused by its foreign key and stays divergent until that As
 retain pinned package versions. A citation, slug, or code PostgreSQL holds under another id is refused, not overwritten;
 `reconcile` deletes the stale row and converges.
 
-`postgres_mirror::workflow::parity` and `workflow::reconcile` compare and repair every Notation, Notation Event, and
-answer; run them after the catalog pair. Notation Event ids are UUIDv7, so `ORDER BY id` gives the same latest event per
-`(notation_id, machine_kind)` in both stores. Answers sort by insertion time at PostgreSQL's microsecond precision, then
-UUID for deterministic ties, so latest-answer reads agree across both stores. Events and answers are append-only: a
-correction is another row, and an answer keeps its respondent and author apart. A Notation SurrealDB no longer has takes
-its PostgreSQL events and answers with it; one SurrealDB still holds keeps the Notation in place, and parity reports
-both. Before a Notation or answer is upserted, the Notation Package or Question it names is mirrored when PostgreSQL
-does not hold it. Each Notation and Notation Event also mirrors its exact Template version on demand; foreign keys
-retain those versions even after a newer version becomes current.
+`postgres_mirror::workflow::parity` compares the pending Notation, Notation Event, and answer enrollment against the
+frozen capture. Events retain actor and Template attribution; answers keep respondent and author separate. Event
+ordering uses UUIDv7, and answer ordering uses insertion time at PostgreSQL precision followed by UUID for ties. The
+matching scoped importer may refresh divergent captured rows. Missing Source rows are never deletion evidence, and
+completed enrollment prevents import or reconciliation from resurrecting native rows.
 
-`postgres_mirror::notation_clauses::parity` and `notation_clauses::reconcile` compare and repair the custom clauses
-attached to each Notation; run them after workflow. Each row keeps its author, body, and render position. Body edits,
-deletions, and transactional position swaps mirror after the SurrealDB write succeeds. PostgreSQL deletes its child rows
-when a Notation is deleted.
+`postgres_mirror::notation_clauses::parity` applies the same pending-enrollment boundary to custom clauses. Native
+append and move operations serialize render positions. PostgreSQL draft reset locks the Notation, rechecks its state and
+live document, Asset, and signature protection, then deletes its four child families and parent in one transaction.
+Canonical fact writers lock the parent before committing their facts, so a queued reset observes their committed
+protection. Compensation uses the same protected deletion seam.
 
 `postgres_mirror::identity_detail::parity` and `identity_detail::reconcile` cover the identity-detail tables; run them
 after the identity pair. Rows with a record UUID keep it. An `entity_role` row is keyed by its Person, Entity, and role,
@@ -372,8 +369,10 @@ Before relying on a backfill report, run `ops postgres mirror parity` and requir
 
 `satellites:1` enrolls exactly `attestation`, `authority_use`, `citation`, `contract_review`, `efiling_transactions`,
 `expunge_record`, `expunge_request`, `git_access_token`, `matter_caption`, `playbook`, `project_module`,
-`social_oauth_attempt`, and `testimonial`. This scope is independent of global completion. Notation, document, Asset,
-and encrypted deployment-change ownership retain their existing contracts.
+`social_oauth_attempt`, and `testimonial`. `notation:1` enrolls exactly `notation`, `answer`, `notation_event`,
+`notation_clause`, `notation_source`, `asset`, `notation_document`, and `notation_document_version`. Both scopes are
+independent of global completion. Signature and Notarization retain their existing PostgreSQL authority; encrypted
+deployment changes retain their existing storage contract.
 
 Apply the checked-in PostgreSQL migrations through the existing operator migration command before enrollment. Use the
 importer binary before launching application or worker binaries that require the new scope. PostgreSQL connections and
@@ -393,8 +392,9 @@ inspection remain available.
    writers.
 3. Run the bounded import using that pair. It verifies the actual export bytes, then compares the live frozen export,
    schema, raw census, decoded rows, complete content, references, and target constraints. Source-only rows import in
-   registered dependency order; pending differences refresh. Target-only identities and conflicting PostgreSQL Person
-   references require explicit review and block completion; they are never automatically deleted or overwritten.
+   registered dependency order. Pending satellite differences refresh; Asset imports preserve existing PostgreSQL rows.
+   Unexplained target-only identities and conflicting PostgreSQL Person references block completion and require review.
+   The typed Asset union exception below records independently native ownership without deleting or overwriting rows.
 4. Continue with the recorded run id until its final verified capture has no blocking differences. Activate explicitly
    while all writers remain frozen, deploy only the guarded writer version, and then resume traffic and workers. This is
    an operational sequence, not a cross-database transaction or permission for a mixed-version writer window.
@@ -414,6 +414,28 @@ identical verified pair is idempotent. Activation makes both the capture and its
 Completed scoped replay validates the exact persisted receipt using PostgreSQL alone; it needs neither source access nor
 capture files. Reports identify the scope and sealed capture basis and retain historical orphan diagnostics. A later
 source import, reconciliation, or first global import cannot overwrite or resurrect activated PostgreSQL rows.
+
+#### Notation enrollment checks
+
+Use the same capture and resume procedure with `--family notation:1`. All registered scopes must be active before
+application or worker readiness succeeds. The Notation scope also checks referenced Template version pins against the
+frozen capture. A pin difference blocks activation until the existing catalog copy is repaired and verified. Template
+ownership remains unchanged, and native Notation creation refuses a missing PostgreSQL Template.
+
+Asset parity compares the full metadata image after excluding the reserved verification marker from Source input. An
+onboarding overlap retains PostgreSQL visibility and its update timestamp when all remaining fields and metadata match.
+Retaining a native verification marker requires independent canonical PostgreSQL completion evidence for the envelope
+and Project; a Notation-scoped key also requires the same Notation. A metadata marker alone establishes no ownership.
+Proven native target-only onboarding rows remain in PostgreSQL; unknown provenance and every other unexplained column or
+metadata difference block activation. Reports show raw Source and PostgreSQL counts alongside resolved native overlaps,
+proven native target-only rows, and unknown target-only rows. These counts cannot cancel unrelated drift.
+
+Reset verification separately reports retained native protection and refuses any missing captured protection. Documents
+and immutable versions use canonical parent checks and transactional head comparison. Comment bodies remain in
+SurrealDB; comment parent admission resolves canonical document/version rows, including PostgreSQL-only versions.
+Project archive restoration holds verified parent leases until its Asset and document facts commit. Private historical
+restore paths preserve verified missing-parent associations; ordinary new writes still require their parents, and
+same-id conflicts are refused. This completion boundary does not make the whole Project restore one transaction.
 
 For a fresh, task-owned synthetic development database, complete the same quiesced enrollment before starting a
 configured application or worker. Ordinary environment provisioning and sample seeding do not bypass readiness or

@@ -22,6 +22,16 @@
 
 use uuid::Uuid;
 
+/// Seed validated completed enrollment evidence for a synthetic PostgreSQL fixture.
+/// This writes the same scoped ledger rows unit fixtures use; accessors still
+/// validate the receipt rather than skipping their readiness checks.
+pub async fn seed_postgres_family(
+    pg: &crate::postgres::PostgresDb,
+    family: crate::postgres_backfill::family::Family,
+) {
+    crate::postgres_backfill::family::activate_fixture(pg, family).await;
+}
+
 /// Synthetic Twilio registry and credential fixtures shared by route tests.
 pub mod twilio;
 

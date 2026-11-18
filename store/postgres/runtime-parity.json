@@ -16,26 +16,51 @@
     "scenario": "notation isolation; append-only corrections; latest per notation/state; respondent and author provenance",
     "runtime_tests": [
       {
-        "file": "store/src/postgres_mirror/workflow_tests.rs",
-        "function": "notations_events_and_answers_converge_with_order_and_provenance",
-        "proves": "Notation, transition and answer images preserve ordering and provenance, with Project-filtered SQL reads."
+        "file": "store/src/postgres/notation_tests.rs",
+        "function": "answer_json_null_nested_values_and_chronology_are_preserved",
+        "proves": "Native answers preserve arbitrary nested JSON and explicit JSON null, chronological latest projections, and respondent separation."
+      },
+      {
+        "file": "store/src/postgres/notation_tests.rs",
+        "function": "reset_rolls_back_children_on_failure_then_retries_without_cross_notation_deletion",
+        "proves": "A failed child delete rolls back the entire native reset; retry removes only the draft family and preserves another Notation."
       }
     ],
     "remaining": [
-      "Equivalent application runtime queries, complete authorization decisions, and questionnaire/post-intake behavior require separate acceptance."
+      "Operational activation, observed deployment/shadow behavior, full route authorization, and broader recovery acceptance remain separate from these native storage boundaries."
     ]
   },
   "asset": {
     "scenario": "content-addressed bytes and revision pointers; internal default; Project isolation; legal hold and retention",
     "runtime_tests": [
       {
+        "file": "store/src/postgres/notation_tests.rs",
+        "function": "asset_metadata_lifecycle_and_note_key_protection_are_postgres_authoritative",
+        "proves": "Native metadata privacy, soft deletion, retention, legal hold, archive replay, and canonical Note-key protection use PostgreSQL without Source."
+      },
+      {
+        "file": "store/src/postgres_mirror/asset_union_tests.rs",
+        "function": "native_evidence_resolves_only_owned_columns_and_preserves_unknown_drift",
+        "proves": "Full metadata comparison preserves unstamped PG privacy, requires independent evidence for native stamps and target-only rows, refuses matching forged markers and cross-Note provenance, and never overwrites a colliding PG row."
+      },
+      {
+        "file": "store/src/project_archives/restore_parents_tests.rs",
+        "function": "verified_history_restores_orphans_without_widening_normal_writes",
+        "proves": "Verified archive rows preserve historical missing-parent associations, idempotent replay, and conflict refusal; ordinary writes remain strict."
+      },
+      {
+        "file": "store/src/project_archives/restore_parents_tests.rs",
+        "function": "queued_reset_cannot_deadlock_inner_archive_writes_or_remove_restored_facts",
+        "proves": "A reset queued behind the verified parent lease cannot deadlock inner restore writes or delete the restored protection."
+      },
+      {
         "file": "store/src/postgres_mirror/documents_tests.rs",
-        "function": "a_revision_chain_converges_through_retention_and_removal",
-        "proves": "Revision pointers and retention/deletion stamps converge across stores through the document lifecycle."
+        "function": "frozen_asset_import_preserves_json_presence_and_refuses_native_drift_repair",
+        "proves": "The compatibility adapter preserves SDK NULL/NONE and nested-null distinctions, inserts only missing identities, and strips untrusted Source verification markers."
       }
     ],
     "remaining": [
-      "Equivalent document application queries and Project visibility enforcement require separate acceptance."
+      "Operational activation, observed deployment/shadow behavior, full route authorization, and broader recovery acceptance remain separate from these native storage boundaries."
     ]
   },
   "assistant_turn": {
@@ -909,33 +934,74 @@
     "scenario": "state-machine identity and events; Project isolation; questionnaire and post-intake phases stay distinct",
     "runtime_tests": [
       {
+        "file": "store/src/postgres/notation_tests.rs",
+        "function": "notation_accessors_refuse_provisional_rows_before_scope_completion",
+        "proves": "Native reads, writes, reset, and direct onboarding/metrics projections refuse provisional rows before valid enrollment."
+      },
+      {
+        "file": "store/src/postgres/notation_tests.rs",
+        "function": "notation_pins_state_compare_and_swap_and_archive_replay_are_durable",
+        "proves": "Native creation pins the referenced Template; reconciliation compares observed state, immutable restore refuses conflicts, and the referenced version cannot be deleted."
+      },
+      {
+        "file": "store/src/postgres/notation_tests.rs",
+        "function": "reset_rolls_back_children_on_failure_then_retries_without_cross_notation_deletion",
+        "proves": "A failed child delete rolls back the entire native reset; retry removes only the draft family and preserves another Notation."
+      },
+      {
+        "file": "store/src/postgres_backfill/notation_family_tests.rs",
+        "function": "unknown_assets_block_and_native_union_seals_after_fresh_or_completed_global_import",
+        "proves": "The existing ledger blocks unknown target provenance, seals the typed eight-table proof with fresh or completed global history, preserves Satellites receipts, and never replays deleted native rows."
+      },
+      {
         "file": "store/src/postgres_mirror/workflow_tests.rs",
-        "function": "notations_events_and_answers_converge_with_order_and_provenance",
-        "proves": "Notation, transition and answer images preserve ordering and provenance, with Project-filtered SQL reads."
+        "function": "the_notation_list_shapes_shadow_a_match_after_the_mirror",
+        "proves": "All merged list/probe shadow shapes retain their comparison behavior, and referenced same-ID Template pin drift blocks clean capture until repaired."
       }
     ],
     "remaining": [
-      "Equivalent application runtime queries, complete authorization decisions, and questionnaire/post-intake behavior require separate acceptance."
+      "Operational activation, observed deployment/shadow behavior, full route authorization, and broader recovery acceptance remain separate from these native storage boundaries."
     ]
   },
   "notation_clause": {
     "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
     "runtime_tests": [
       {
-        "file": "store/src/postgres_mirror/workflow_tests.rs",
-        "function": "notation_clauses_keep_author_and_render_order_across_edits",
-        "proves": "PostgreSQL mirror writes preserve author, body and ordering across clause edits and moves; parity detects target-only stale rows and reconciliation removes them; parent Notation deletion cascades."
+        "file": "store/src/postgres/notation_tests.rs",
+        "function": "workflow_satellites_preserve_replay_ordering_and_attribution",
+        "proves": "Native event attribution, serialized clause order, and unique ordered sources are read without a Source connection."
+      },
+      {
+        "file": "store/src/postgres/notation_tests.rs",
+        "function": "reset_rolls_back_children_on_failure_then_retries_without_cross_notation_deletion",
+        "proves": "A failed child delete rolls back the entire native reset; retry removes only the draft family and preserves another Notation."
       }
     ],
     "remaining": [
-      "Application reads and complete authorization decisions, including cross-Project and cross-Firm refusal, require separate acceptance; this mirror regression does not establish them."
+      "Operational activation, observed deployment/shadow behavior, full route authorization, and broader recovery acceptance remain separate from these native storage boundaries."
     ]
   },
   "notation_document": {
     "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [],
+    "runtime_tests": [
+      {
+        "file": "store/src/postgres/notation_tests.rs",
+        "function": "document_root_edits_and_archive_replay_use_postgres_without_source_parents",
+        "proves": "Native root identity, immutable edits, stale-head compare-and-swap, bytes and archive conflict refusal work without Source parent rows."
+      },
+      {
+        "file": "store/src/project_archives/restore_parents_tests.rs",
+        "function": "verified_history_restores_orphans_without_widening_normal_writes",
+        "proves": "Verified archive rows preserve historical missing-parent associations, idempotent replay, and conflict refusal; ordinary writes remain strict."
+      },
+      {
+        "file": "store/src/project_archives/restore_parents_tests.rs",
+        "function": "queued_reset_cannot_deadlock_inner_archive_writes_or_remove_restored_facts",
+        "proves": "A reset queued behind the verified parent lease cannot deadlock inner restore writes or delete the restored protection."
+      }
+    ],
     "remaining": [
-      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+      "Operational activation, observed deployment/shadow behavior, full route authorization, and broader recovery acceptance remain separate from these native storage boundaries."
     ]
   },
   "notation_document_comment": {
@@ -947,9 +1013,25 @@
   },
   "notation_document_version": {
     "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
-    "runtime_tests": [],
+    "runtime_tests": [
+      {
+        "file": "store/src/postgres/notation_tests.rs",
+        "function": "document_root_edits_and_archive_replay_use_postgres_without_source_parents",
+        "proves": "Native immutable version attempts survive a losing head CAS; scoped reads and exact archive replay retain version bytes and conflicts."
+      },
+      {
+        "file": "store/src/project_archives/restore_parents_tests.rs",
+        "function": "verified_history_restores_orphans_without_widening_normal_writes",
+        "proves": "Verified archive rows preserve historical missing-parent associations, idempotent replay, and conflict refusal; ordinary writes remain strict."
+      },
+      {
+        "file": "store/src/project_archives/restore_parents_tests.rs",
+        "function": "queued_reset_cannot_deadlock_inner_archive_writes_or_remove_restored_facts",
+        "proves": "A reset queued behind the verified parent lease cannot deadlock inner restore writes or delete the restored protection."
+      }
+    ],
     "remaining": [
-      "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
+      "Operational activation, observed deployment/shadow behavior, full route authorization, and broader recovery acceptance remain separate from these native storage boundaries."
     ]
   },
   "notation_draft": {
@@ -969,13 +1051,18 @@
     "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
     "runtime_tests": [
       {
-        "file": "store/src/postgres_mirror/workflow_tests.rs",
-        "function": "notations_events_and_answers_converge_with_order_and_provenance",
-        "proves": "Notation, transition and answer images preserve ordering and provenance, with Project-filtered SQL reads."
+        "file": "store/src/postgres/notation_tests.rs",
+        "function": "workflow_satellites_preserve_replay_ordering_and_attribution",
+        "proves": "Native event attribution, serialized clause order, and unique ordered sources are read without a Source connection."
+      },
+      {
+        "file": "store/src/postgres/notation_tests.rs",
+        "function": "reset_rolls_back_children_on_failure_then_retries_without_cross_notation_deletion",
+        "proves": "A failed child delete rolls back the entire native reset; retry removes only the draft family and preserves another Notation."
       }
     ],
     "remaining": [
-      "Equivalent application runtime queries, complete authorization decisions, and questionnaire/post-intake behavior require separate acceptance."
+      "Operational activation, observed deployment/shadow behavior, full route authorization, and broader recovery acceptance remain separate from these native storage boundaries."
     ]
   },
   "notation_meter_entry": {
@@ -1038,13 +1125,18 @@
     "scenario": "same-Project round trip; cross-Project and cross-Firm refusal",
     "runtime_tests": [
       {
-        "file": "store/src/postgres_mirror/records_tests.rs",
-        "function": "notation_inputs_mirror_and_follow_their_notation",
-        "proves": "Notation sources keep their source UUID, Notation link, and review order; a Notation removed from SurrealDB takes its sources in PostgreSQL."
+        "file": "store/src/postgres/notation_tests.rs",
+        "function": "workflow_satellites_preserve_replay_ordering_and_attribution",
+        "proves": "Native event attribution, serialized clause order, and unique ordered sources are read without a Source connection."
+      },
+      {
+        "file": "store/src/postgres/notation_tests.rs",
+        "function": "reset_rolls_back_children_on_failure_then_retries_without_cross_notation_deletion",
+        "proves": "A failed child delete rolls back the entire native reset; retry removes only the draft family and preserves another Notation."
       }
     ],
     "remaining": [
-      "Cross-Project and cross-Firm refusal in application reads, authorization decisions, and read cutover remain outside this mirror acceptance."
+      "Operational activation, observed deployment/shadow behavior, full route authorization, and broader recovery acceptance remain separate from these native storage boundaries."
     ]
   },
   "plan_intake": {
@@ -1382,7 +1474,13 @@
   },
   "signature": {
     "scenario": "provider/envelope correlation; duplicate completion harmless; signed artifact retrieval; notation isolation",
-    "runtime_tests": [],
+    "runtime_tests": [
+      {
+        "file": "store/src/postgres/signature_reference_migration_tests.rs",
+        "function": "signature_parent_constraint_retains_history_and_rejects_new_orphans",
+        "proves": "The actual NOT VALID migration retains preexisting historical orphans while refusing new missing-parent rows and accepting a valid parent."
+      }
+    ],
     "remaining": [
       "No reviewed runtime test reference is linked for this scenario; source-only tests and schema presence do not establish PostgreSQL parity."
     ]
@@ -1539,9 +1637,9 @@
     "scenario": "version pins; one current row per scoped code; shared and Project catalogs coexist",
     "runtime_tests": [
       {
-        "file": "store/src/postgres_mirror/workflow_tests.rs",
-        "function": "workflow_template_versions_are_mirrored_and_retained",
-        "proves": "Exact Template versions named by Notations are mirrored and retained."
+        "file": "store/src/postgres/notation_tests.rs",
+        "function": "notation_pins_state_compare_and_swap_and_archive_replay_are_durable",
+        "proves": "Native Notation pins retain the exact referenced Template version and its foreign-key deletion protection."
       }
     ],
     "remaining": [

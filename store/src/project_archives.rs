@@ -36,6 +36,8 @@ use uuid::Uuid;
 use crate::assets::{Asset, RowRestore};
 use crate::firm_capability::FirmCapability;
 use crate::notation_documents::{NotationDocument, NotationDocumentVersion};
+pub(crate) mod restore_parents;
+
 use crate::notations::Notation;
 use crate::persons::Role;
 use crate::postgres::PostgresDb;
@@ -43,7 +45,7 @@ use crate::projects::Project;
 use crate::surreal::SurrealDb;
 
 /// The manifest and restore-metadata format this build writes and reads.
-pub const FORMAT: u32 = 1;
+pub const FORMAT: u32 = 2;
 /// The Git bundle receipt format `navigator ops forgejo bundle archive` writes.
 pub const SOURCE_BACKUP_FORMAT: u32 = 1;
 /// How many times one run re-plans a Project that keeps changing.
@@ -1240,7 +1242,7 @@ async fn read_manifest(
     }
     let manifest: Manifest =
         serde_json::from_slice(&bytes).map_err(|_| ArchiveError::ManifestMismatch)?;
-    if manifest.format != FORMAT
+    if !matches!(manifest.format, 1 | FORMAT)
         || manifest.generation_id != generation.id
         || manifest.firm_id != generation.firm_id
         || manifest.project_id != generation.project_id
@@ -1391,6 +1393,35 @@ pub async fn restore(
         bytes_by_digest.insert(item.sha256.clone(), bytes);
     }
     let mut metadata = metadata.ok_or(ArchiveError::ManifestMismatch)?;
+    // Format 1 serialized missing and JSON-null snapshots identically, and
+    // its reader treated both as missing. Keep that historical interpretation.
+    if metadata.format == 1 {
+        for asset in &mut metadata.assets {
+            if asset
+                .metadata
+                .as_ref()
+                .is_some_and(serde_json::Value::is_null)
+            {
+                asset.metadata = None;
+            }
+            if asset
+                .derived_from
+                .as_ref()
+                .is_some_and(serde_json::Value::is_null)
+            {
+                asset.derived_from = None;
+            }
+        }
+        for notation in &mut metadata.notations {
+            if notation
+                .questionnaire_snapshot
+                .as_ref()
+                .is_some_and(serde_json::Value::is_null)
+            {
+                notation.questionnaire_snapshot = None;
+            }
+        }
+    }
     // A revision the retention purge removed after this generation committed
     // comes back as the tombstone the purge left, never with bytes.
     for asset in &mut metadata.assets {
@@ -1400,7 +1431,7 @@ pub async fn restore(
             }
         }
     }
-    if metadata.format != FORMAT
+    if metadata.format != manifest.format
         || metadata.project.id != generation.project_id
         || metadata.project.firm_id != Some(generation.firm_id)
     {
@@ -1483,6 +1514,9 @@ async fn restore_rows(
     target: &RestoreTarget<'_>,
     report: &mut RestoreReport,
 ) -> Result<(), ArchiveError> {
+    let pg = crate::postgres::matter::authority_for("notation")
+        .await
+        .map_err(store_error)?;
     let mut tally = |outcome: RowRestore, what: String| match outcome {
         RowRestore::Created => {
             report.rows_created += 1;
@@ -1500,14 +1534,6 @@ async fn restore_rows(
             .map_err(store_error)?,
         format!("project {}", metadata.project.id),
     )?;
-    for asset in &metadata.assets {
-        tally(
-            crate::assets::restore_archived(target.surreal, asset)
-                .await
-                .map_err(store_error)?,
-            format!("asset {}", asset.id),
-        )?;
-    }
     for notation in &metadata.notations {
         tally(
             crate::notations::restore_archived(target.surreal, notation)
@@ -1516,21 +1542,59 @@ async fn restore_rows(
             format!("notation {}", notation.id),
         )?;
     }
+    let parents = match &pg {
+        Some(pg) => Some(restore_parents::acquire(pg, metadata).await?),
+        None => None,
+    };
+    for asset in &metadata.assets {
+        tally(
+            match &parents {
+                Some(parents) => crate::postgres::assets::restore_history(parents, asset)
+                    .await
+                    .map_err(store_error)?,
+                None => crate::assets::restore_archived(target.surreal, asset)
+                    .await
+                    .map_err(store_error)?,
+            },
+            format!("asset {}", asset.id),
+        )?;
+    }
     for document in &metadata.notation_documents {
         tally(
-            crate::notation_documents::restore_archived_document(target.surreal, document)
-                .await
-                .map_err(store_error)?,
+            match &parents {
+                Some(parents) => {
+                    crate::postgres::notation_documents::restore_document_history(parents, document)
+                        .await
+                        .map_err(store_error)?
+                }
+                None => {
+                    crate::notation_documents::restore_archived_document(target.surreal, document)
+                        .await
+                        .map_err(store_error)?
+                }
+            },
             format!("notation document {}", document.id),
         )?;
     }
     for version in &metadata.notation_document_versions {
         tally(
-            crate::notation_documents::restore_archived_version(target.surreal, version)
-                .await
-                .map_err(store_error)?,
+            match &parents {
+                Some(parents) => {
+                    crate::postgres::notation_documents::restore_version_history(parents, version)
+                        .await
+                        .map_err(store_error)?
+                }
+                None => {
+                    crate::notation_documents::restore_archived_version(target.surreal, version)
+                        .await
+                        .map_err(store_error)?
+                }
+            },
             format!("notation document version {}", version.id),
         )?;
+    }
+    if let Some(parents) = parents {
+        parents.finish().await?;
     }
     Ok(())
 }

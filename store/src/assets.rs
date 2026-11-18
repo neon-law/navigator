@@ -1,13 +1,11 @@
 //! `store::assets` — the content-addressed lane for the `asset` table,
 //! and every query against it.
 //!
-//! # This table lives in SurrealDB
+//! # PostgreSQL authority
 //!
-//! `assets` moved with wave five of #1093 (ENG-121), together with
-//! [`crate::templates`], because `templates.asset_id` couples them:
-//! `save_version` folds that id into the tuple deciding whether a template
-//! version changed, so porting one without the other would leave the lane's
-//! version identity in one engine and the bytes it names in the other.
+//! PostgreSQL owns Asset metadata after verified Notation-family enrollment.
+//! Reads and writes fail closed while configured PostgreSQL awaits that proof.
+//! The compatibility lane runs only without configured PostgreSQL.
 //!
 //! # Two shapes, one table
 //!
@@ -31,6 +29,8 @@
 //! [`crate::documents::ingest_bytes_as`] for what carries that guarantee
 //! now.
 
+use crate::postgres::{assets as native, matter};
+use serde_json::json;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -100,9 +100,19 @@ pub struct Asset {
     /// the schema types it `any`, which is what lets it hold an object, a
     /// nested object, or an array. Validators belong in the `rules` crate
     /// per the S103 discipline, never in a database constraint.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::postgres::matter::present_json"
+    )]
     pub metadata: Option<Json>,
     /// Source revision for a generated transcript, if this row derives from
     /// another Project document. Optional for rows written before LAW-76.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::postgres::matter::present_json"
+    )]
     pub derived_from: Option<Json>,
     /// `machine` or `proofread` when transcript quality is known; absent for
     /// legacy and user-authored transcripts without an explicit assertion.
@@ -110,6 +120,7 @@ pub struct Asset {
     /// How an executed document was signed, when that was recorded at upload.
     pub signing: Option<crate::documents::Signing>,
     /// The notarial acknowledgments recorded at upload; empty when none were.
+    #[serde(default)]
     pub notarization: Vec<crate::documents::Notarization>,
     /// Evidence provenance a lawyer recorded at upload (LAW-185): the date
     /// the exhibit itself bears, where it came from, how confidently it was
@@ -315,6 +326,12 @@ const LIVE: &str = "deleted_at IS NONE";
 /// Errors from [`ingest_content`] / [`fetch`].
 #[derive(Debug, thiserror::Error)]
 pub enum AssetError {
+    #[error("the asset's Notation association changed concurrently")]
+    ConcurrentAssociation,
+    #[error("PostgreSQL asset operation failed")]
+    PostgresQuery(#[from] sqlx::Error),
+    #[error(transparent)]
+    Authority(#[from] crate::postgres::matter::MatterAuthorityError),
     #[error("storage: {0}")]
     Storage(#[from] cloud::StorageError),
     #[error("database: {0}")]
@@ -348,12 +365,33 @@ where
 /// Mirror each written asset row into PostgreSQL. A no-op unless the mirror
 /// is configured; a failure is logged and left for parity, never returned.
 pub(crate) async fn mirror_writes(db: &SurrealDb, ids: &[Uuid]) {
+    if !crate::postgres_mirror::reading_source() {
+        match matter::authority().await {
+            Ok(Some(_)) => return,
+            Err(_) => {
+                tracing::warn!("Asset metadata authority unavailable");
+                return;
+            }
+            Ok(None) => {}
+        }
+    }
+
     let keys: Vec<_> = ids
         .iter()
         .copied()
         .map(crate::postgres_mirror::MirrorKey::Asset)
         .collect();
     crate::postgres_mirror::after_writes(db, keys).await;
+}
+
+async fn patch_postgres(id: Uuid, changes: Json) -> Result<bool, AssetError> {
+    let Some(pg) = matter::authority_for(TABLE).await? else {
+        return Ok(false);
+    };
+    native::patch(&pg, id, changes)
+        .await?
+        .ok_or(AssetError::WriteReturnedNothing)?;
+    Ok(true)
 }
 
 /// Read one asset out of a query response, dropping a row this module
@@ -408,28 +446,15 @@ pub async fn object_sha256(
 /// # Errors
 /// [`AssetError::Db`] if the lookup fails.
 pub async fn find_by_id(db: &SurrealDb, id: Uuid) -> Result<Option<Asset>, AssetError> {
-    if let Some(pg) = crate::postgres::PostgresDb::configured()
-        .await
-        .map_err(|error| AssetError::Postgres(error.to_string()))?
-    {
-        use sqlx::Row;
-        let row = sqlx::query("SELECT to_jsonb(a) AS row FROM asset a WHERE id=$1")
-            .bind(id)
-            .fetch_optional(pg.pool())
-            .await
-            .map_err(|e| AssetError::Postgres(e.to_string()))?;
-        return row
-            .map(|r| {
-                let mut value: serde_json::Value = r
-                    .try_get("row")
-                    .map_err(|e| AssetError::Postgres(e.to_string()))?;
-                if value["notarization"].is_null() {
-                    value["notarization"] = serde_json::json!([]);
-                }
-                serde_json::from_value(value).map_err(|e| AssetError::Postgres(e.to_string()))
-            })
-            .transpose();
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return Ok(
+            native::rows(&pg, "AND r.id=($1->>'id')::uuid", json!({"id":id}))
+                .await?
+                .into_iter()
+                .next(),
+        );
     }
+
     let response = db
         .query(format!("SELECT {SELECT} FROM ONLY $id LIMIT 1"))
         .bind(("id", record_id(TABLE, id)))
@@ -445,6 +470,15 @@ pub async fn find_by_id(db: &SurrealDb, id: Uuid) -> Result<Option<Asset>, Asset
 /// # Errors
 /// [`AssetError::Db`] if the lookup fails.
 pub async fn find_by_ids(db: &SurrealDb, ids: &[Uuid]) -> Result<Vec<Asset>, AssetError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return native::rows(
+            &pg,
+            "AND r.id IN (SELECT jsonb_array_elements_text($1->'ids')::uuid)",
+            json!({"ids":ids}),
+        )
+        .await;
+    }
+
     if ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -463,12 +497,15 @@ pub async fn find_by_ids(db: &SurrealDb, ids: &[Uuid]) -> Result<Vec<Asset>, Ass
 /// # Errors
 /// [`AssetError::Db`] if the lookup fails.
 pub async fn for_project(db: &SurrealDb, project_id: Uuid) -> Result<Vec<Asset>, AssetError> {
-    if let Some(pg) = crate::postgres::PostgresDb::configured()
-        .await
-        .map_err(|error| AssetError::Postgres(error.to_string()))?
-    {
-        return crate::onboarding::documents(&pg, project_id).await;
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return native::rows(
+            &pg,
+            "AND r.project_id=($1->>'project')::uuid AND r.deleted_at IS NULL ORDER BY id DESC",
+            json!({"project":project_id}),
+        )
+        .await;
     }
+
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE project_id = $project AND {LIVE} ORDER BY id DESC"
@@ -525,10 +562,7 @@ pub async fn inbox_attachment_metadata(
     db: &SurrealDb,
     asset_id: Uuid,
 ) -> Result<Option<AttachmentMetadata>, AssetError> {
-    if let Some(pg) = crate::postgres::PostgresDb::configured()
-        .await
-        .map_err(|error| AssetError::Postgres(error.to_string()))?
-    {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
         return sqlx::query(
             "SELECT id, project_id, filename, kind, content_type, storage_key FROM asset WHERE id = $1",
         )
@@ -538,6 +572,7 @@ pub async fn inbox_attachment_metadata(
         .await
         .map_err(|error| AssetError::Postgres(error.to_string()));
     }
+
     Ok(find_by_id(db, asset_id).await?.map(Into::into))
 }
 
@@ -555,10 +590,8 @@ pub async fn project_inbox_attachments(
         .chain(linked.iter().map(|link| link.asset_id))
         .collect();
     let source = message_id.to_string();
-    if let Some(pg) = crate::postgres::PostgresDb::configured()
-        .await
-        .map_err(|error| AssetError::Postgres(error.to_string()))?
-    {
+
+    if let Some(pg) = matter::authority_for(TABLE).await? {
         // A linked ID can name a bare Asset or one on this Project. Only
         // live Project files may enter through the older provenance slot.
         let mut rows: Vec<(AttachmentMetadata, Option<String>)> = sqlx::query(
@@ -619,6 +652,12 @@ pub async fn find_by_source_message_id(
     project_id: Uuid,
     source_message_id: &str,
 ) -> Result<Vec<Asset>, AssetError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        let mut assets=native::rows(&pg,"AND r.project_id=($1->>'project')::uuid AND r.source_message_id=$1->>'message' AND r.deleted_at IS NULL",json!({"project":project_id,"message":source_message_id})).await?;
+        assets.sort_by_key(|asset| mail_attachment_index(asset.slug.as_deref()));
+        return Ok(assets);
+    }
+
     let mut assets = many(
         db.query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE project_id = $project \
@@ -645,6 +684,15 @@ pub async fn for_project_including_deleted(
     db: &SurrealDb,
     project_id: Uuid,
 ) -> Result<Vec<Asset>, AssetError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return native::rows(
+            &pg,
+            "AND r.project_id=($1->>'project')::uuid ORDER BY id DESC",
+            json!({"project":project_id}),
+        )
+        .await;
+    }
+
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE project_id = $project ORDER BY id DESC"
@@ -715,6 +763,16 @@ pub async fn grouped_for_project(
 ///
 /// [`AssetError::Db`] if the lookup fails.
 pub async fn exists_for_project(db: &SurrealDb, project_id: Uuid) -> Result<bool, AssetError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return Ok(native::count(
+            &pg,
+            "AND r.project_id=($1->>'project')::uuid",
+            json!({"project":project_id}),
+        )
+        .await?
+            > 0);
+    }
+
     let mut response = db
         .query(format!(
             "SELECT VALUE id FROM {TABLE} WHERE project_id = $project LIMIT 1"
@@ -748,6 +806,10 @@ pub async fn find_by_project_and_filename(
     project_id: Uuid,
     filename: &str,
 ) -> Result<Option<Asset>, AssetError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return Ok(native::rows(&pg,"AND r.project_id=($1->>'project')::uuid AND r.filename=$1->>'filename' AND r.deleted_at IS NULL ORDER BY id DESC LIMIT 1",json!({"project":project_id,"filename":filename})).await? .into_iter().next());
+    }
+
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} \
@@ -776,6 +838,10 @@ pub async fn find_filed_copy(
     filename: &str,
     sha256_hex: &str,
 ) -> Result<Option<Asset>, AssetError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return Ok(native::rows(&pg,"AND r.project_id=($1->>'project')::uuid AND r.filename=$1->>'filename' AND r.sha256_hex=$1->>'sha' AND r.deleted_at IS NULL ORDER BY id DESC LIMIT 1",json!({"project":project_id,"filename":filename,"sha":sha256_hex})).await? .into_iter().next());
+    }
+
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE project_id = $project \
@@ -803,6 +869,10 @@ pub async fn find_live_by_sha256(
     project_id: Uuid,
     sha256_hex: &str,
 ) -> Result<Option<Asset>, AssetError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return Ok(native::rows(&pg,"AND r.project_id=($1->>'project')::uuid AND r.sha256_hex=$1->>'sha' AND r.deleted_at IS NULL ORDER BY id ASC LIMIT 1",json!({"project":project_id,"sha":sha256_hex})).await? .into_iter().next());
+    }
+
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE project_id = $project \
@@ -840,6 +910,16 @@ pub async fn sync_visibility(
     sha256_hex: &str,
     visibility: &str,
 ) -> Result<usize, AssetError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        let rows=native::rows(&pg,"AND r.project_id=($1->>'project')::uuid AND r.filename=$1->>'filename' AND r.sha256_hex=$1->>'sha' AND r.visibility<>$1->>'visibility'",json!({"project":project_id,"filename":filename,"sha":sha256_hex,"visibility":visibility})).await?;
+        for row in &rows {
+            native::patch(&pg, row.id, json!({"visibility":visibility}))
+                .await?
+                .ok_or(AssetError::WriteReturnedNothing)?;
+        }
+        return Ok(rows.len());
+    }
+
     let mut response = writing(|| {
         db.query(format!(
             "UPDATE {TABLE} SET visibility = $visibility, updated_at = time::now() \
@@ -874,6 +954,10 @@ pub async fn latest_of_kind(
     project_id: Uuid,
     kind: &str,
 ) -> Result<Option<Asset>, AssetError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return Ok(native::rows(&pg,"AND r.project_id=($1->>'project')::uuid AND r.kind=$1->>'kind' AND r.deleted_at IS NULL ORDER BY id DESC LIMIT 1",json!({"project":project_id,"kind":kind})).await? .into_iter().next());
+    }
+
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE project_id = $project AND kind = $kind \
@@ -904,6 +988,10 @@ pub async fn referenced_by_another_project(
     project_id: Uuid,
     storage_key: &str,
 ) -> Result<bool, AssetError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return Ok(native::count(&pg,"AND (r.storage_key=$1->>'key' OR r.secondary_storage_key=$1->>'key') AND r.project_id IS NOT NULL AND r.project_id<>($1->>'project')::uuid",json!({"project":project_id,"key":storage_key})).await? > 0);
+    }
+
     let mut response = db
         .query(format!(
             "SELECT VALUE id FROM {TABLE} \
@@ -933,6 +1021,10 @@ pub async fn storage_key_needed_elsewhere(
     storage_key: &str,
     excluding: &[Uuid],
 ) -> Result<bool, AssetError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return Ok(native::count(&pg,"AND (r.storage_key=$1->>'key' OR r.secondary_storage_key=$1->>'key') AND r.purged_at IS NULL AND r.id NOT IN(SELECT jsonb_array_elements_text($1->'excluded')::uuid)",json!({"key":storage_key,"excluded":excluding})).await? > 0);
+    }
+
     let excluded: Vec<surrealdb::types::RecordId> =
         excluding.iter().map(|id| record_id(TABLE, *id)).collect();
     let mut response = db
@@ -960,6 +1052,10 @@ pub async fn digest_needed_elsewhere(
     sha256_hex: &str,
     excluding: &[Uuid],
 ) -> Result<bool, AssetError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return Ok(native::count(&pg,"AND r.project_id=($1->>'project')::uuid AND r.sha256_hex=$1->>'sha' AND r.purged_at IS NULL AND r.id NOT IN(SELECT jsonb_array_elements_text($1->'excluded')::uuid)",json!({"project":project_id,"sha":sha256_hex,"excluded":excluding})).await? > 0);
+    }
+
     let excluded: Vec<surrealdb::types::RecordId> =
         excluding.iter().map(|id| record_id(TABLE, *id)).collect();
     let mut response = db
@@ -986,6 +1082,10 @@ pub async fn digest_needed_elsewhere(
 /// # Errors
 /// [`AssetError::Db`] if the lookup fails.
 pub async fn soft_deleted_unpurged(db: &SurrealDb, limit: usize) -> Result<Vec<Asset>, AssetError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return native::rows(&pg,"AND r.deleted_at IS NOT NULL AND r.purged_at IS NULL ORDER BY id ASC LIMIT ($1->>'limit')::bigint",json!({"limit":i64::try_from(limit).unwrap_or(i64::MAX)})).await;
+    }
+
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE deleted_at IS NOT NONE \
@@ -1012,6 +1112,10 @@ pub async fn chain(db: &SurrealDb, asset: &Asset) -> Result<Vec<Asset>, AssetErr
 /// # Errors
 /// [`AssetError::Db`] if the count fails.
 pub async fn count_for_projects(db: &SurrealDb, project_ids: &[Uuid]) -> Result<usize, AssetError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return native::count(&pg,"AND r.project_id IN(SELECT jsonb_array_elements_text($1->'projects')::uuid) AND r.deleted_at IS NULL",json!({"projects":project_ids})).await;
+    }
+
     if project_ids.is_empty() {
         return Ok(0);
     }
@@ -1047,6 +1151,14 @@ pub async fn kinds_by_projects(
     struct KindRow {
         project_id: Option<surrealdb::types::RecordId>,
         kind: Option<String>,
+    }
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return Ok(sqlx::query_as(
+            "SELECT project_id,kind FROM asset WHERE project_id=ANY($1) AND deleted_at IS NULL",
+        )
+        .bind(project_ids)
+        .fetch_all(pg.pool())
+        .await?);
     }
 
     if project_ids.is_empty() {
@@ -1095,6 +1207,10 @@ pub(crate) fn verified_onboarding_envelope(metadata: Option<&serde_json::Value>)
 /// # Errors
 /// [`AssetError::Db`] if the lookup fails.
 pub async fn list_all(db: &SurrealDb) -> Result<Vec<Asset>, AssetError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return native::rows(&pg, "ORDER BY id DESC", json!({})).await;
+    }
+
     let response = db
         .query(format!("SELECT {SELECT} FROM {TABLE} ORDER BY id DESC"))
         .await
@@ -1114,6 +1230,10 @@ pub async fn list_all(db: &SurrealDb) -> Result<Vec<Asset>, AssetError> {
 /// # Errors
 /// [`AssetError::Db`] if the delete fails.
 pub async fn delete(db: &SurrealDb, id: Uuid) -> Result<Option<Asset>, AssetError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return native::delete(&pg, id).await;
+    }
+
     let response = writing(|| {
         db.query("DELETE $id RETURN BEFORE")
             .bind(("id", record_id(TABLE, id)))
@@ -1136,6 +1256,16 @@ pub async fn storage_key_is_referenced(
     db: &SurrealDb,
     storage_key: &str,
 ) -> Result<bool, AssetError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return Ok(native::count(
+            &pg,
+            "AND r.storage_key=$1->>'key'",
+            json!({"key":storage_key}),
+        )
+        .await?
+            > 0);
+    }
+
     let mut response = db
         .query(format!(
             "SELECT VALUE id FROM {TABLE} WHERE storage_key = $key LIMIT 1"
@@ -1164,6 +1294,10 @@ pub async fn ingest_content(
     bytes: &[u8],
     content_type: &str,
 ) -> Result<Uuid, AssetError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return native::ingest_content(&pg, storage, bytes, content_type).await;
+    }
+
     let sha_hex = sha256_hex(bytes);
     if let Some(existing) = find_bare_by_sha(db, &sha_hex).await? {
         return Ok(existing.id);
@@ -1209,6 +1343,17 @@ pub async fn ingest_content(
 /// `filename` unset — a document asset sharing the bytes is a different
 /// row with different metadata and must never be handed to this lane.
 async fn find_bare_by_sha(db: &SurrealDb, sha_hex: &str) -> Result<Option<Asset>, AssetError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return Ok(native::rows(
+            &pg,
+            "AND r.sha256_hex=$1->>'sha' AND r.filename IS NULL ORDER BY id LIMIT 1",
+            json!({"sha":sha_hex}),
+        )
+        .await?
+        .into_iter()
+        .next());
+    }
+
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} \
@@ -1282,6 +1427,11 @@ pub async fn current(
     slug: &str,
     lens: Lens,
 ) -> Result<Option<Asset>, AssetError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        let suffix=match lens { Lens::Lawyer=>"AND r.project_id=($1->>'project')::uuid AND r.slug=$1->>'slug' AND r.deleted_at IS NULL ORDER BY id DESC LIMIT 1", Lens::Client=>"AND r.project_id=($1->>'project')::uuid AND r.slug=$1->>'slug' AND r.deleted_at IS NULL AND r.published_at IS NOT NULL AND r.visibility=$1->>'visible' ORDER BY id DESC LIMIT 1" };
+        return Ok(native::rows(&pg,suffix,json!({"project":project_id,"slug":slug,"visible":crate::documents::visibility::CLIENT})).await?.into_iter().next());
+    }
+
     let lens_filter = match lens {
         Lens::Lawyer => "",
         Lens::Client => " AND published_at IS NOT NONE AND visibility = $visible",
@@ -1317,12 +1467,15 @@ pub async fn revisions(
     project_id: Uuid,
     slug: &str,
 ) -> Result<Vec<Asset>, AssetError> {
-    if let Some(pg) = crate::postgres::PostgresDb::configured()
-        .await
-        .map_err(|error| AssetError::Postgres(error.to_string()))?
-    {
-        return crate::onboarding::revisions(&pg, project_id, slug).await;
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return native::rows(
+            &pg,
+            "AND r.project_id=($1->>'project')::uuid AND r.slug=$1->>'slug' ORDER BY id DESC",
+            json!({"project":project_id,"slug":slug}),
+        )
+        .await;
     }
+
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} \
@@ -1352,6 +1505,10 @@ pub async fn revisions_for_slugs(
     project_id: Uuid,
     slugs: &[String],
 ) -> Result<Vec<Asset>, AssetError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return native::rows(&pg,"AND r.project_id=($1->>'project')::uuid AND r.slug IN(SELECT jsonb_array_elements_text($1->'slugs')) ORDER BY slug ASC,id DESC",json!({"project":project_id,"slugs":slugs})).await;
+    }
+
     if slugs.is_empty() {
         return Ok(Vec::new());
     }
@@ -1391,20 +1548,11 @@ pub async fn set_visibility(
     if asset.visibility == visibility {
         return Ok(Some(false));
     }
-    if asset.kind.as_deref() == Some("onboarding") {
-        let pg = crate::postgres::PostgresDb::from_env()
-            .await
-            .map_err(|error| AssetError::Postgres(error.to_string()))?;
-        sqlx::query(
-            "UPDATE asset SET visibility=$3,updated_at=now() WHERE id=$1 AND project_id=$2",
-        )
-        .bind(asset_id)
-        .bind(project_id)
-        .bind(visibility)
-        .execute(pg.pool())
-        .await
-        .map_err(|error| AssetError::Postgres(error.to_string()))?;
+    if patch_postgres(asset_id, json!({"visibility":visibility})).await? {
         return Ok(Some(true));
+    }
+    if asset.kind.as_deref() == Some("onboarding") {
+        return Err(matter::MatterAuthorityError::Unavailable.into());
     }
     let response = writing(|| {
         db.query("UPDATE $id SET visibility = $visibility, updated_at = time::now()")
@@ -1457,6 +1605,14 @@ pub async fn set_folder(
     };
     if asset.folder.as_deref() == folder.map(crate::document_pointers::MatterFolder::as_str) {
         return Ok(Some(false));
+    }
+    if patch_postgres(
+        asset_id,
+        json!({"folder":folder.map(crate::document_pointers::MatterFolder::as_str)}),
+    )
+    .await?
+    {
+        return Ok(Some(true));
     }
     let response = match folder {
         Some(folder) => writing(|| {
@@ -1556,6 +1712,22 @@ async fn read_stamp_target(
     db: &SurrealDb,
     asset_id: Uuid,
 ) -> Result<Option<StampTarget>, AssetError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        let row = native::rows(&pg, "AND r.id=($1->>'id')::uuid", json!({"id":asset_id}))
+            .await?
+            .into_iter()
+            .next();
+        return Ok(row.map(|asset| StampTarget {
+            project_id: asset
+                .project_id
+                .map(|id| record_id(crate::projects::PROJECT_TABLE, id)),
+            slug: asset.slug,
+            kind: asset.kind,
+            deleted_at: asset.deleted_at.map(Into::into),
+            purge_after: asset.purge_after.map(Into::into),
+        }));
+    }
+
     let mut response = db
         .query(format!("SELECT {STAMP_TARGET} FROM ONLY $id LIMIT 1"))
         .bind(("id", record_id(TABLE, asset_id)))
@@ -1677,6 +1849,8 @@ async fn stamp_row(
     now: DateTime<Utc>,
     purge_after: DateTime<Utc>,
 ) -> Result<(), AssetError> {
+    if patch_postgres(asset_id,json!({"deleted_at":now,"purge_after":purge_after,"deleted_by_person_id":deleted_by,"deleted_commit_sha":commit_sha})).await? { return Ok(()); }
+
     writing(|| {
         db.query(format!(
             "UPDATE $id SET deleted_at = $deleted_at, purge_after = $purge_after, \
@@ -1747,6 +1921,7 @@ pub async fn restore(
     }
     let mut changed = false;
     for row in chain.iter().filter(|row| row.deleted_at.is_some()) {
+        if patch_postgres(row.id,json!({"deleted_at":null,"purge_after":null,"deleted_by_person_id":null,"deleted_commit_sha":null})).await? { changed=true; continue; }
         let response = writing(|| {
             db.query(
                 "UPDATE $id SET deleted_at = NONE, purge_after = NONE, \
@@ -1796,6 +1971,9 @@ pub async fn set_legal_hold(
     };
     let chain = chain_of(db, &asset).await?;
     for row in &chain {
+        if patch_postgres(row.id, json!({"legal_hold_at":held.then_some(now)})).await? {
+            continue;
+        }
         let response = writing(|| {
             let query = if held {
                 "UPDATE $id SET legal_hold_at = $now, updated_at = time::now()"
@@ -1823,6 +2001,10 @@ pub async fn set_legal_hold(
 /// # Errors
 /// [`AssetError::Db`] if the lookup fails.
 pub async fn due_for_purge(db: &SurrealDb, now: DateTime<Utc>) -> Result<Vec<Asset>, AssetError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return native::rows(&pg,"AND r.deleted_at IS NOT NULL AND r.purged_at IS NULL AND r.purge_after<=($1->>'now')::timestamptz ORDER BY id ASC",json!({"now":now})).await;
+    }
+
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE deleted_at IS NOT NONE \
@@ -1844,6 +2026,9 @@ pub async fn mark_purged(
     now: DateTime<Utc>,
 ) -> Result<(), AssetError> {
     for id in ids {
+        if patch_postgres(*id, json!({"purged_at":now})).await? {
+            continue;
+        }
         let response = writing(|| {
             db.query("UPDATE $id SET purged_at = $now, updated_at = time::now()")
                 .bind(("id", record_id(TABLE, *id)))
@@ -1879,6 +2064,14 @@ pub enum RowRestore {
 /// # Errors
 /// [`AssetError`] on a database failure.
 pub async fn restore_archived(db: &SurrealDb, asset: &Asset) -> Result<RowRestore, AssetError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return native::restore(&pg, asset).await;
+    }
+
+    restore_in_surreal(db, asset).await
+}
+
+async fn restore_in_surreal(db: &SurrealDb, asset: &Asset) -> Result<RowRestore, AssetError> {
     if let Some(existing) = find_by_id(db, asset.id).await? {
         return Ok(if &existing == asset {
             RowRestore::Identical
@@ -2073,6 +2266,15 @@ pub async fn assign_slug(
         }
         return Ok(preview);
     }
+    let mut changes = json!({"slug":slug});
+    if let Some(kind) = &kind {
+        changes["kind"] = json!(kind);
+    }
+    if patch_postgres(asset_id, changes).await? {
+        return Ok(find_by_id(db, asset_id)
+            .await?
+            .ok_or(AssetError::WriteReturnedNothing)?);
+    }
     let response = match &kind {
         Some(kind) => writing(|| {
             db.query("UPDATE $id SET slug = $slug, kind = $kind, updated_at = time::now()")
@@ -2188,6 +2390,9 @@ pub async fn reclassify_kind(
         ids.push(asset.id);
     }
     for id in ids.iter().copied() {
+        if patch_postgres(id, json!({"kind":kind})).await? {
+            continue;
+        }
         let response = writing(|| {
             db.query("UPDATE $id SET kind = $kind, updated_at = time::now()")
                 .bind(("id", record_id(TABLE, id)))
@@ -2287,6 +2492,9 @@ pub async fn reclassify_accepted_kind(
         ids.push(asset.id);
     }
     for id in ids.iter().copied() {
+        if patch_postgres(id, json!({"kind":kind})).await? {
+            continue;
+        }
         let response = writing(|| {
             db.query("UPDATE $id SET kind = $kind, updated_at = time::now()")
                 .bind(("id", record_id(TABLE, id)))
@@ -2395,6 +2603,9 @@ pub async fn reslug(
         ids.push(asset.id);
     }
     for id in ids.iter().copied() {
+        if patch_postgres(id, json!({"slug":new_slug})).await? {
+            continue;
+        }
         let response = writing(|| {
             db.query("UPDATE $id SET slug = $slug, updated_at = time::now()")
                 .bind(("id", record_id(TABLE, id)))
@@ -2477,12 +2688,10 @@ pub async fn repair_missing_object(
     else {
         return Err(RepairStorageError::NotOnProject);
     };
-    let project = crate::projects::find_by_id(db, project_id).await?.ok_or(
-        crate::projects::ProjectStoreError::NoSuchProject(project_id),
-    )?;
+    let code = repair_project_code(db, project_id).await?;
     let canonical = format!(
         "{}/{}",
-        cloud::workspace::documents_prefix(&project.code),
+        cloud::workspace::documents_prefix(&code),
         asset.sha256_hex
     );
     if object_head(storage, &asset.storage_key).await?.is_some() {
@@ -2540,7 +2749,7 @@ pub async fn repair_missing_object(
             .await
             .map_err(AssetError::from)?;
     }
-    if repoint {
+    if repoint && !patch_postgres(asset_id, json!({"storage_key":canonical})).await? {
         let response = writing(|| {
             db.query("UPDATE $id SET storage_key = $storage_key, updated_at = time::now()")
                 .bind(("id", record_id(TABLE, asset_id)))
@@ -2562,6 +2771,27 @@ pub async fn repair_missing_object(
         copied,
         dry_run: false,
     })
+}
+
+async fn repair_project_code(
+    db: &SurrealDb,
+    project_id: Uuid,
+) -> Result<String, RepairStorageError> {
+    let authority = matter::authority_for(TABLE)
+        .await
+        .map_err(AssetError::from)?;
+    let missing = crate::projects::ProjectStoreError::NoSuchProject(project_id);
+    let code = if let Some(pg) = authority {
+        native::project_code(&pg, project_id)
+            .await?
+            .ok_or(missing)?
+    } else {
+        crate::projects::find_by_id(db, project_id)
+            .await?
+            .ok_or(missing)?
+            .code
+    };
+    Ok(code)
 }
 
 /// Why a [`file_revision`] call wrote nothing.
@@ -2638,7 +2868,7 @@ impl std::fmt::Display for ExpectedHead {
 /// The expected-head triple of a chain read: the live head's id, its
 /// one-based version (the chain's length — the same numbering the
 /// revisions door reports), and its byte digest.
-fn head_triple(head: &Asset, chain_len: usize) -> ExpectedHead {
+pub(crate) fn head_triple(head: &Asset, chain_len: usize) -> ExpectedHead {
     ExpectedHead {
         asset_id: head.id,
         version: u32::try_from(chain_len).unwrap_or(u32::MAX),
@@ -2725,6 +2955,30 @@ pub async fn file_revision_with_provenance(
     file_revision_inner(db, storage, args, identity, Some(provenance), None, bytes).await
 }
 
+pub(crate) fn preserve_drive_metadata(
+    identity: &mut crate::documents::DocumentIdentity<'_>,
+    head: &Asset,
+) -> Result<(), RevisionError> {
+    if head.drive_checkout_path().is_none() {
+        return Ok(());
+    }
+    let target = identity
+        .metadata
+        .get_or_insert_with(|| json!({}))
+        .as_object_mut()
+        .ok_or(RevisionError::InvalidTreeMetadata)?;
+    if let Some(source) = head
+        .metadata
+        .as_ref()
+        .and_then(serde_json::Value::as_object)
+    {
+        for (key, value) in source.iter().filter(|(key, _)| key.starts_with("drive_")) {
+            target.entry(key.clone()).or_insert_with(|| value.clone());
+        }
+    }
+    Ok(())
+}
+
 async fn file_revision_inner(
     db: &SurrealDb,
     storage: &Arc<dyn StorageService>,
@@ -2734,6 +2988,22 @@ async fn file_revision_inner(
     expected_head: Option<&ExpectedHead>,
     bytes: &[u8],
 ) -> Result<Filed, RevisionError> {
+    if let Some(pg) = matter::authority_for(TABLE)
+        .await
+        .map_err(AssetError::from)?
+    {
+        return native::file_revision(
+            &pg,
+            storage,
+            args,
+            identity,
+            provenance,
+            expected_head,
+            bytes,
+        )
+        .await;
+    }
+
     if args.kind == "onboarding" {
         let pg = crate::postgres::PostgresDb::from_env()
             .await
@@ -2765,26 +3035,8 @@ async fn file_revision_inner(
 
     let latest = current(db, args.project_id, slug, Lens::Lawyer).await?;
     let mut preserved_identity = identity.clone();
-    if let Some(head) = latest
-        .as_ref()
-        .filter(|head| head.drive_checkout_path().is_some())
-    {
-        let metadata = preserved_identity
-            .metadata
-            .get_or_insert_with(|| serde_json::json!({}));
-        if !metadata.is_object() {
-            return Err(RevisionError::InvalidTreeMetadata);
-        }
-        if let (Some(target), Some(source)) = (
-            metadata.as_object_mut(),
-            head.metadata
-                .as_ref()
-                .and_then(serde_json::Value::as_object),
-        ) {
-            for (key, value) in source.iter().filter(|(key, _)| key.starts_with("drive_")) {
-                target.entry(key.clone()).or_insert_with(|| value.clone());
-            }
-        }
+    if let Some(head) = latest.as_ref() {
+        preserve_drive_metadata(&mut preserved_identity, head)?;
     }
     let identity = &preserved_identity;
     if let Some(head) = latest {
@@ -2896,6 +3148,9 @@ pub(crate) async fn refresh_drive_import(
     if head.metadata.as_ref() == Some(&metadata) && head.filename.as_deref() == Some(filename) {
         return Ok(());
     }
+    if patch_postgres(asset_id, json!({"metadata":metadata,"filename":filename})).await? {
+        return Ok(());
+    }
     let response = writing(|| {
         db.query("UPDATE $id SET metadata=$metadata, filename=$filename, updated_at=time::now()")
             .bind(("id", record_id(TABLE, asset_id)))
@@ -2926,6 +3181,20 @@ pub async fn demote_superseded(
     slug: &str,
     current: Uuid,
 ) -> Result<usize, AssetError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        let rows=native::rows(&pg,"AND r.project_id=($1->>'project')::uuid AND r.slug=$1->>'slug' AND r.id<>($1->>'current')::uuid AND r.visibility<>$1->>'internal'",json!({"project":project_id,"slug":slug,"current":current,"internal":crate::documents::visibility::INTERNAL})).await?;
+        for row in &rows {
+            native::patch(
+                &pg,
+                row.id,
+                json!({"visibility":crate::documents::visibility::INTERNAL}),
+            )
+            .await?
+            .ok_or(AssetError::WriteReturnedNothing)?;
+        }
+        return Ok(rows.len());
+    }
+
     let internal = crate::documents::visibility::INTERNAL;
     let mut response = writing(|| {
         db.query(format!(

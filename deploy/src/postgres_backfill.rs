@@ -451,7 +451,7 @@ fn run_json(report: &RunReport) -> serde_json::Value {
             "postgres_missing": reference.postgres_missing,
             "newly_target_missing": reference.newly_target_missing,
         })).collect::<Vec<_>>(),
-        "parity": report.parity.iter().map(|table| json!({
+        "parity": report.parity.iter().map(|table| { let mut value = json!({
             "mirror": table.mirror,
             "table": table.table,
             "surreal": table.surreal,
@@ -462,8 +462,34 @@ fn run_json(report: &RunReport) -> serde_json::Value {
             "divergent_ids": table.divergent_ids,
             "omitted_divergent_ids": table.omitted_divergent_ids,
             "withheld_non_uuid_keys": table.withheld_non_uuid_keys,
-        })).collect::<Vec<_>>(),
+        });
+            if let Some(proof) = &table.asset_union { value["asset_union"] = json!(proof); }
+            if let Some(proof) = &table.reset_union { value["reset_union"] = json!(proof); }
+            if let Some(proof) = &table.template_pins { value["template_pins"] = json!(proof); }
+            value
+        }).collect::<Vec<_>>(),
     })
+}
+
+fn write_family_proof(out: &mut String, table: &store::postgres_backfill::ParityTableReport) {
+    use std::fmt::Write as _;
+    if let Some(proof) = &table.template_pins {
+        let _ = writeln!(
+            out,
+            "Template pins: compared {} differences {}",
+            proof.compared, proof.differences
+        );
+    }
+    if let Some(proof) = &table.asset_union {
+        let _ = writeln!(out,"Asset union: source {} PostgreSQL {} resolved native overlaps {} proven native target-only {} unknown target-only {}",table.surreal,table.postgres,proof.resolved_native_overlaps,proof.proven_native_target_only,proof.unknown_target_only);
+    }
+    if let Some(proof) = &table.reset_union {
+        let _ = writeln!(
+            out,
+            "reset protection: compared {} retained native {}",
+            proof.compared, proof.retained_native_protections
+        );
+    }
 }
 
 fn run_text(report: &RunReport) -> String {
@@ -510,6 +536,7 @@ fn run_text(report: &RunReport) -> String {
         );
     }
     for table in &report.parity {
+        write_family_proof(&mut out, table);
         if table.missing > 0 || table.differing > 0 || table.extra > 0 {
             let _ = writeln!(
                 out,
@@ -860,6 +887,9 @@ mod tests {
                 divergent_ids: vec![id.clone()],
                 omitted_divergent_ids: 0,
                 withheld_non_uuid_keys: 0,
+                asset_union: None,
+                reset_union: None,
+                template_pins: None,
             }],
             unresolved_references: vec![],
         };
@@ -900,6 +930,9 @@ mod tests {
                 divergent_ids: vec![id.clone()],
                 omitted_divergent_ids: 0,
                 withheld_non_uuid_keys: 0,
+                asset_union: None,
+                reset_union: None,
+                template_pins: None,
             }],
             unresolved_references: vec![],
         };
@@ -1008,6 +1041,9 @@ mod tests {
                 divergent_ids: vec![],
                 omitted_divergent_ids: 0,
                 withheld_non_uuid_keys: 0,
+                asset_union: None,
+                reset_union: None,
+                template_pins: None,
             }],
             unresolved_references: vec![],
         };
@@ -1039,6 +1075,9 @@ mod tests {
                 divergent_ids: vec![],
                 omitted_divergent_ids: 3,
                 withheld_non_uuid_keys: 1,
+                asset_union: None,
+                reset_union: None,
+                template_pins: None,
             }],
             unresolved_references: vec![store::postgres_mirror::records::UnresolvedReference {
                 table: "relationship",

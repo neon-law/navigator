@@ -49,6 +49,13 @@ pub(crate) mod captions;
 /// PostgreSQL-authoritative matter records whenever the host is configured.
 pub mod matter;
 
+pub(crate) mod assets;
+pub(crate) mod notation_documents;
+#[cfg(test)]
+mod notation_tests;
+/// PostgreSQL Notation creation, clause ordering, and atomic draft reset.
+pub(crate) mod notations;
+
 /// PostgreSQL Project participation ledger, preparatory to application authority.
 pub mod participation;
 
@@ -597,3 +604,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod signature_reference_migration_tests;

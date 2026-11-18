@@ -6,6 +6,11 @@ async fn only_completed_docusign_uuids_make_postgres_projects_official() {
     let Some((pg, project, notation)) = notation_fixture().await else {
         return;
     };
+    crate::postgres::fixtures::activate_family(
+        &pg,
+        crate::postgres_backfill::family::Family::Notation,
+    )
+    .await;
     let disconnected = crate::surreal::SurrealDb::uninitialized();
     PostgresDb::with_test_db(pg.clone(), async {
         let envelope = Uuid::now_v7().to_string();
@@ -93,6 +98,11 @@ async fn terminal_signatures_cannot_be_completed_or_reclassified() {
     let Some((pg, _, notation)) = notation_fixture().await else {
         return;
     };
+    crate::postgres::fixtures::activate_family(
+        &pg,
+        crate::postgres_backfill::family::Family::Notation,
+    )
+    .await;
     let disconnected = crate::surreal::SurrealDb::uninitialized();
     let provider = crate::signatures::SignatureProvider::DocuSign;
     PostgresDb::with_test_db(pg.clone(), async {
@@ -132,6 +142,11 @@ async fn postgres_uploads_require_verified_evidence_and_retry_without_duplicate_
     let Some((pg, project, _)) = notation_fixture().await else {
         return;
     };
+    crate::postgres::fixtures::activate_family(
+        &pg,
+        crate::postgres_backfill::family::Family::Notation,
+    )
+    .await;
     let root = tempfile::tempdir().unwrap();
     let storage: Arc<dyn StorageService> = Arc::new(
         cloud::FsStorage::new(root.path().to_path_buf())
@@ -228,15 +243,17 @@ async fn postgres_uploads_require_verified_evidence_and_retry_without_duplicate_
         .unwrap()
         .0
         .contains(&project));
-    // Reconciliation cannot erase an authoritative onboarding row when the old engine has no row.
+    // Active import is refused before Source access and leaves the native row intact.
     let disconnected = crate::surreal::SurrealDb::uninitialized();
-    crate::postgres_mirror::mirror(
-        &disconnected,
-        &pg,
-        &crate::postgres_mirror::MirrorKey::Asset(rows[0].id),
-    )
-    .await
-    .unwrap();
+    assert!(matches!(
+        crate::postgres_mirror::mirror(
+            &disconnected,
+            &pg,
+            &crate::postgres_mirror::MirrorKey::Asset(rows[0].id)
+        )
+        .await,
+        Err(crate::postgres_mirror::MirrorError::MatterAuthority)
+    ));
     assert_eq!(documents(&pg, project).await.unwrap().len(), 3);
     pg.pool().close().await;
 }
@@ -246,6 +263,11 @@ async fn configured_signature_writes_never_fall_back_to_another_engine() {
     let Some((pg, _, notation)) = notation_fixture().await else {
         return;
     };
+    crate::postgres::fixtures::activate_family(
+        &pg,
+        crate::postgres_backfill::family::Family::Notation,
+    )
+    .await;
     let disconnected = crate::surreal::SurrealDb::uninitialized();
     let provider = crate::signatures::SignatureProvider::DocuSign;
     let envelope = Uuid::now_v7().to_string();

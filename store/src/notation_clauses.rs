@@ -1,18 +1,17 @@
 //! Helpers for the `notation_clauses` table — per-notation custom prose a
 //! lawyer adds to a single matter's assembled document.
 //!
-//! # This table lives in SurrealDB
-//!
-//! `notation_clauses` moved with wave five of #1093 (ENG-121), in the same
-//! slice as [`crate::notations`] — a clause always addresses a notation,
-//! so the two ported together.
+//! Commands use PostgreSQL whenever its host is configured; see
+//! [storage models](../../docs/storage-models.md#matter-records).
 //!
 //! Kept beside the other orchestration helpers so `web` reaches them
 //! without re-importing the entity. The render-time splice lives in `web`
 //! (it assembles the template body); this module owns the rows.
 
+use crate::postgres::matter;
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
@@ -32,7 +31,7 @@ pub const CUSTOM_CLAUSES_MARKER: &str = "{{custom_clauses}}";
 /// The application-facing shape: plain Rust types, no engine handles.
 /// [`NotationClauseRow`] is the seam that turns it into (and back out of)
 /// what the SDK reads and writes.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NotationClause {
     pub id: Uuid,
     pub notation_id: Uuid,
@@ -138,6 +137,15 @@ pub async fn find_by_id(
     db: &SurrealDb,
     id: Uuid,
 ) -> Result<Option<NotationClause>, surrealdb::Error> {
+    if let Some(pg) = matter::authority_for(TABLE)
+        .await
+        .map_err(crate::surreal::postgres_error)?
+    {
+        return matter::find(&pg, TABLE, json!({"id": id}))
+            .await
+            .map_err(crate::surreal::postgres_error);
+    }
+
     let response = db
         .query(format!("SELECT {SELECT} FROM ONLY $id LIMIT 1"))
         .bind(("id", record_id(TABLE, id)))
@@ -155,6 +163,20 @@ pub async fn for_notation(
     db: &SurrealDb,
     notation_id: Uuid,
 ) -> Result<Vec<NotationClause>, surrealdb::Error> {
+    if let Some(pg) = matter::authority_for(TABLE)
+        .await
+        .map_err(crate::surreal::postgres_error)?
+    {
+        return matter::select(
+            &pg,
+            TABLE,
+            json!({"notation_id": notation_id}),
+            &["position", "id"],
+        )
+        .await
+        .map_err(crate::surreal::postgres_error);
+    }
+
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE notation_id = $notation \
@@ -182,6 +204,20 @@ pub async fn append(
     body_markdown: &str,
     authored_by: Option<Uuid>,
 ) -> Result<Uuid, surrealdb::Error> {
+    if let Some(pg) = matter::authority_for(TABLE)
+        .await
+        .map_err(crate::surreal::postgres_error)?
+    {
+        return crate::postgres::notations::append_clause(
+            &pg,
+            notation_id,
+            body_markdown,
+            authored_by,
+        )
+        .await
+        .map_err(crate::surreal::postgres_error);
+    }
+
     let next_position = for_notation(db, notation_id)
         .await?
         .last()
@@ -229,6 +265,22 @@ pub async fn update_body(
     id: Uuid,
     body_markdown: &str,
 ) -> Result<Option<NotationClause>, surrealdb::Error> {
+    if let Some(pg) = matter::authority_for(TABLE)
+        .await
+        .map_err(crate::surreal::postgres_error)?
+    {
+        return Ok(matter::update(
+            &pg,
+            TABLE,
+            json!({"id": id}),
+            json!({"body_markdown": body_markdown, "updated_at": Utc::now()}),
+        )
+        .await
+        .map_err(crate::surreal::postgres_error)?
+        .into_iter()
+        .next());
+    }
+
     if find_by_id(db, id).await?.is_none() {
         return Ok(None);
     }
@@ -259,6 +311,16 @@ pub async fn update_body(
 ///
 /// Propagates any database error.
 pub async fn delete(db: &SurrealDb, id: Uuid) -> Result<bool, surrealdb::Error> {
+    if let Some(pg) = matter::authority_for(TABLE)
+        .await
+        .map_err(crate::surreal::postgres_error)?
+    {
+        return Ok(matter::delete(&pg, TABLE, json!({"id": id}))
+            .await
+            .map_err(crate::surreal::postgres_error)?
+            != 0);
+    }
+
     let mut response = db
         .query("DELETE $id RETURN BEFORE")
         .bind(("id", record_id(TABLE, id)))
@@ -288,6 +350,15 @@ pub async fn delete(db: &SurrealDb, id: Uuid) -> Result<bool, surrealdb::Error> 
 ///
 /// Propagates any database error.
 pub async fn move_clause(db: &SurrealDb, id: Uuid, up: bool) -> Result<bool, surrealdb::Error> {
+    if let Some(pg) = matter::authority_for(TABLE)
+        .await
+        .map_err(crate::surreal::postgres_error)?
+    {
+        return crate::postgres::notations::move_clause(&pg, id, up)
+            .await
+            .map_err(crate::surreal::postgres_error);
+    }
+
     let Some(target) = find_by_id(db, id).await? else {
         return Ok(false);
     };
@@ -340,6 +411,18 @@ pub async fn move_clause(db: &SurrealDb, id: Uuid, up: bool) -> Result<bool, sur
 ///
 /// Propagates any database error.
 pub async fn exists_for(db: &SurrealDb, notation_id: Uuid) -> Result<bool, surrealdb::Error> {
+    if let Some(pg) = matter::authority_for(TABLE)
+        .await
+        .map_err(crate::surreal::postgres_error)?
+    {
+        return Ok(
+            matter::find::<NotationClause>(&pg, TABLE, json!({"notation_id": notation_id}))
+                .await
+                .map_err(crate::surreal::postgres_error)?
+                .is_some(),
+        );
+    }
+
     let mut response = db
         .query(format!(
             "SELECT VALUE id FROM {TABLE} WHERE notation_id = $notation LIMIT 1"

@@ -13,12 +13,10 @@
 //! is never rewritten — a re-parse or an attorney edit always appends a
 //! child.
 //!
-//! # This table lives in SurrealDB
-//!
-//! `notation_document` and `notation_document_version` are defined in
-//! `store/src/schema/navigator.surql`. See `docs/notation.md` for the
-//! document-source vocabulary and the anchor-durability decision this
-//! module's `anchor_manifest_asset_id` column exists to store.
+//! PostgreSQL owns these identities and versions after the Notation family's
+//! verified scoped enrollment. Compatibility reads and writes remain available
+//! only without configured PostgreSQL; provisional imports fail closed.
+//! See `docs/notation.md` for the document-source vocabulary.
 //!
 //! # Content never enters Git, logs, or the workflow journal
 //!
@@ -180,6 +178,10 @@ const VERSION_SELECT: &str = "id, document_id, parent_version_id, markdown_asset
 /// Why a `notation_documents` command refused.
 #[derive(Debug, thiserror::Error)]
 pub enum NotationDocumentError {
+    #[error("PostgreSQL notation document operation failed")]
+    Postgres(#[from] sqlx::Error),
+    #[error(transparent)]
+    Authority(#[from] crate::postgres::matter::MatterAuthorityError),
     #[error("database: {0}")]
     Db(#[from] surrealdb::Error),
     #[error("notation: {0}")]
@@ -279,6 +281,15 @@ async fn find_document_by_notation(
     db: &SurrealDb,
     notation_id: Uuid,
 ) -> Result<Option<NotationDocument>, NotationDocumentError> {
+    if let Some(pg) = crate::postgres::matter::authority_for(DOCUMENT_TABLE).await? {
+        return Ok(crate::postgres::matter::find(
+            &pg,
+            DOCUMENT_TABLE,
+            serde_json::json!({"notation_id":notation_id}),
+        )
+        .await?);
+    }
+
     let response = db
         .query(format!(
             "SELECT {DOCUMENT_SELECT} FROM {DOCUMENT_TABLE} WHERE notation_id = $notation LIMIT 1"
@@ -310,6 +321,15 @@ async fn find_version_by_id_unscoped(
     db: &SurrealDb,
     version_id: Uuid,
 ) -> Result<Option<NotationDocumentVersion>, NotationDocumentError> {
+    if let Some(pg) = crate::postgres::matter::authority_for(VERSION_TABLE).await? {
+        return Ok(crate::postgres::matter::find(
+            &pg,
+            VERSION_TABLE,
+            serde_json::json!({"id":version_id}),
+        )
+        .await?);
+    }
+
     let response = db
         .query(format!("SELECT {VERSION_SELECT} FROM ONLY $id LIMIT 1"))
         .bind(("id", record_id(VERSION_TABLE, version_id)))
@@ -349,6 +369,19 @@ pub async fn history(
     project_id: Uuid,
     notation_id: Uuid,
 ) -> Result<Vec<NotationDocumentVersion>, NotationDocumentError> {
+    if let Some(pg) = crate::postgres::matter::authority_for(VERSION_TABLE).await? {
+        let Some(document) = find_document(db, project_id, notation_id).await? else {
+            return Ok(Vec::new());
+        };
+        return Ok(crate::postgres::matter::select(
+            &pg,
+            VERSION_TABLE,
+            serde_json::json!({"document_id":document.id}),
+            &["inserted_at DESC", "id DESC"],
+        )
+        .await?);
+    }
+
     let Some(document) = find_document(db, project_id, notation_id).await? else {
         return Ok(Vec::new());
     };
@@ -372,6 +405,16 @@ pub async fn versions_of(
     db: &SurrealDb,
     document_id: Uuid,
 ) -> Result<Vec<NotationDocumentVersion>, NotationDocumentError> {
+    if let Some(pg) = crate::postgres::matter::authority_for(VERSION_TABLE).await? {
+        return Ok(crate::postgres::matter::select(
+            &pg,
+            VERSION_TABLE,
+            serde_json::json!({"document_id":document_id}),
+            &["inserted_at", "id"],
+        )
+        .await?);
+    }
+
     let response = db
         .query(format!(
             "SELECT {VERSION_SELECT} FROM {VERSION_TABLE} \
@@ -403,6 +446,10 @@ pub async fn restore_archived_document(
     db: &SurrealDb,
     document: &NotationDocument,
 ) -> Result<crate::assets::RowRestore, NotationDocumentError> {
+    if let Some(pg) = crate::postgres::matter::authority_for(DOCUMENT_TABLE).await? {
+        return crate::postgres::notation_documents::restore_document(&pg, document).await;
+    }
+
     let response = db
         .query(format!("SELECT {DOCUMENT_SELECT} FROM $id"))
         .bind(("id", record_id(DOCUMENT_TABLE, document.id)))
@@ -456,6 +503,10 @@ pub async fn restore_archived_version(
     db: &SurrealDb,
     version: &NotationDocumentVersion,
 ) -> Result<crate::assets::RowRestore, NotationDocumentError> {
+    if let Some(pg) = crate::postgres::matter::authority_for(VERSION_TABLE).await? {
+        return crate::postgres::notation_documents::restore_version(&pg, version).await;
+    }
+
     let response = db
         .query(format!("SELECT {VERSION_SELECT} FROM $id"))
         .bind(("id", record_id(VERSION_TABLE, version.id)))
@@ -771,6 +822,11 @@ async fn create_document(
     notation_id: Uuid,
     original_asset_id: Uuid,
 ) -> Result<NotationDocument, NotationDocumentError> {
+    if let Some(pg) = crate::postgres::matter::authority_for(DOCUMENT_TABLE).await? {
+        return crate::postgres::notation_documents::create(&pg, notation_id, original_asset_id)
+            .await;
+    }
+
     let id = Uuid::now_v7();
     let mut response = db
         .query(format!(
@@ -816,6 +872,21 @@ async fn append_version(
     authored_by_person_id: Uuid,
     status: &str,
 ) -> Result<NotationDocumentVersion, NotationDocumentError> {
+    if let Some(pg) = crate::postgres::matter::authority_for(VERSION_TABLE).await? {
+        return crate::postgres::notation_documents::append(
+            &pg,
+            document,
+            expected_parent,
+            markdown_asset_id,
+            anchor_manifest_asset_id,
+            parser_version,
+            schema_version,
+            authored_by_person_id,
+            status,
+        )
+        .await;
+    }
+
     let id = Uuid::now_v7();
     let mut response = db
         .query(format!(
@@ -1355,7 +1426,12 @@ pub async fn comments_for_version(
     notation_id: Uuid,
     version_id: Uuid,
 ) -> Result<Vec<NotationDocumentComment>, NotationDocumentError> {
-    resolve_scoped_notation(db, project_id, notation_id).await?;
+    if find_version(db, project_id, notation_id, version_id)
+        .await?
+        .is_none()
+    {
+        return Ok(Vec::new());
+    }
     let response = db
         .query(format!(
             "SELECT {COMMENT_SELECT} FROM {COMMENT_TABLE} \
@@ -1379,6 +1455,9 @@ pub async fn carry_comments_to_version(
     child_version_id: Uuid,
     anchors: &[String],
 ) -> Result<Vec<NotationDocumentComment>, NotationDocumentError> {
+    find_version(db, project_id, notation_id, child_version_id)
+        .await?
+        .ok_or(NotationDocumentError::VersionNotFound(child_version_id))?;
     let comments = comments_for_version(db, project_id, notation_id, parent_version_id).await?;
     let mut carried = Vec::with_capacity(comments.len());
     for comment in comments {
