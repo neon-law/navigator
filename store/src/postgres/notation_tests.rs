@@ -267,3 +267,57 @@ async fn notation_delete_uncommitted_removes_only_its_own_row() {
     })
     .await;
 }
+
+/// The daily draft reset's authority write: the notation row and its
+/// `notation_event` and `answer` dependents go in one transaction, the
+/// `notation_clause` dependents cascade at the foreign key, and a second
+/// delete is a no-op that reports it — the rerun-safe outcome.
+#[tokio::test]
+async fn notation_delete_removes_dependents_once_and_reports_a_repeat() {
+    let Some((pg, project, person, template)) = fixture().await else {
+        return;
+    };
+    with_test_db(pg.clone(), async {
+        let new = NewNotation::new(template, person, project, "BEGIN");
+        let notation = create(&pg, Uuid::now_v7(), &new, pins()).await.unwrap();
+        // A clause and an event name the draft: the clause cascades at the
+        // foreign key, the event goes with the transaction's own delete.
+        sqlx::query(
+            "INSERT INTO notation_clause (id, notation_id, position, body_markdown, \
+             inserted_at, updated_at) \
+             VALUES ($1, $2, 0, 'Draft clause.', now(), now())",
+        )
+        .bind(Uuid::now_v7())
+        .bind(notation.id)
+        .execute(pg.pool())
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO notation_event (id, notation_id, acting_person_id, template_version_id, \
+             machine_kind, from_state, to_state, condition, recorded_at) \
+             VALUES ($1, $2, $3, $4, 'questionnaire', 'BEGIN', 'client_name', '', now())",
+        )
+        .bind(Uuid::now_v7())
+        .bind(notation.id)
+        .bind(person)
+        .bind(template)
+        .execute(pg.pool())
+        .await
+        .unwrap();
+
+        assert!(delete(&pg, notation.id).await.unwrap());
+        assert!(!delete(&pg, notation.id).await.unwrap());
+
+        assert!(find_by_id(&pg, notation.id).await.unwrap().is_none());
+        let dependents: i64 = sqlx::query_scalar(
+            "SELECT (SELECT count(*) FROM notation_clause WHERE notation_id = $1) + \
+             (SELECT count(*) FROM notation_event WHERE notation_id = $1)",
+        )
+        .bind(notation.id)
+        .fetch_one(pg.pool())
+        .await
+        .unwrap();
+        assert_eq!(dependents, 0, "the dependents went with the row");
+    })
+    .await;
+}

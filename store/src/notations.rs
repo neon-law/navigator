@@ -520,6 +520,19 @@ pub async fn find_by_id(db: &SurrealDb, id: Uuid) -> Result<Option<Notation>, No
     if let Some(pg) = authority::authority().await? {
         return Ok(authority::find_by_id(&pg, id).await?);
     }
+    find_by_id_source(db, id).await
+}
+
+/// The Notation read straight from SurrealDB, bypassing the PostgreSQL
+/// dispatch — the mirror's and shadow reads' source reader.
+///
+/// # Errors
+///
+/// [`NotationError::Db`] if the lookup fails.
+pub(crate) async fn find_by_id_source(
+    db: &SurrealDb,
+    id: Uuid,
+) -> Result<Option<Notation>, NotationError> {
     let response = db
         .query(format!("SELECT {SELECT} FROM ONLY $id LIMIT 1"))
         .bind(("id", record_id(TABLE, id)))
@@ -685,6 +698,16 @@ pub async fn list_all(db: &SurrealDb) -> Result<Vec<Notation>, NotationError> {
     if let Some(pg) = authority::authority().await? {
         return Ok(authority::list_all(&pg).await?);
     }
+    list_all_source(db).await
+}
+
+/// Every Notation read straight from SurrealDB, bypassing the PostgreSQL
+/// dispatch — the mirror's source reader.
+///
+/// # Errors
+///
+/// [`NotationError::Db`] if the lookup fails.
+pub(crate) async fn list_all_source(db: &SurrealDb) -> Result<Vec<Notation>, NotationError> {
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} ORDER BY inserted_at DESC"

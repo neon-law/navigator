@@ -14,10 +14,13 @@
 //!
 //! Before a row is upserted, each Person, Entity, Project, Notation Package,
 //! Question, Template version, or Notation it names is mirrored when
-//! PostgreSQL does not hold it. A Notation that SurrealDB no longer has takes its PostgreSQL events
-//! and answers with it: each is mirrored again first, so one SurrealDB still
-//! holds keeps the Notation in place and both are reported. Template foreign
-//! keys retain the exact versions pinned by Notations and Notation Events.
+//! PostgreSQL does not hold it — except the Notation itself, which
+//! PostgreSQL holds authoritatively: outside the first Mirror Backfill the
+//! mirror neither copies, overwrites, nor deletes its row, and a dependent
+//! that names a Notation PostgreSQL lacks reports
+//! `MirrorError::NotationAuthority` instead of resurrecting one. Template
+//! foreign keys retain the exact versions pinned by Notations and Notation
+//! Events.
 //!
 //! Reports name rows by key only, never by an answer's value or an event's
 //! payload.
@@ -475,11 +478,27 @@ async fn mirror_notation(
     pg: &PostgresDb,
     id: Uuid,
 ) -> Result<Mirrored, MirrorError> {
-    if let Some(notation) = crate::notations::find_by_id(surreal, id)
+    // The Notation's SurrealDB row, read raw: `find_by_id` answers from
+    // PostgreSQL when it is the authority, and the mirror reads SurrealDB.
+    if let Some(notation) = crate::notations::find_by_id_source(surreal, id)
         .await
         .map_err(source)?
     {
+        // PostgreSQL holds the Notation authoritatively once the first
+        // Mirror Backfill has run: the mirror leaves its row alone, and only
+        // the dependents that name it follow SurrealDB through their own
+        // mirror calls. A queued replay of a SurrealDB-era write must not
+        // overwrite the authoritative state with the stale copy.
+        if !super::initial_copy() {
+            return Ok(Mirrored::Unchanged);
+        }
         return upsert_notation(surreal, pg, &NotationImage::from_source(&notation)).await;
+    }
+    // A Notation SurrealDB no longer has is no evidence against the row
+    // PostgreSQL holds authoritatively: the daily draft reset deletes that
+    // row itself, and a replay of the SurrealDB delete must not erase it.
+    if !super::initial_copy() {
+        return Ok(Mirrored::Unchanged);
     }
     // The Notation is gone from SurrealDB. Each PostgreSQL event and answer
     // that names it follows SurrealDB first, so only dependents SurrealDB
@@ -557,7 +576,14 @@ async fn ensure_notation(
     if present(pg, NOTATION_PRESENT, id).await? {
         return Ok(());
     }
-    if let Some(notation) = crate::notations::find_by_id(surreal, id)
+    // Outside the first Mirror Backfill a Notation row PostgreSQL lacks is
+    // authoritative data that never made it across, not something SurrealDB
+    // can repair: the dependent's mirror reports it and leaves the row
+    // alone, so a replay can never resurrect a deleted Notation.
+    if !super::initial_copy() {
+        return Err(MirrorError::NotationAuthority);
+    }
+    if let Some(notation) = crate::notations::find_by_id_source(surreal, id)
         .await
         .map_err(source)?
     {
@@ -679,28 +705,40 @@ fn keyed<S, I>(
 ///
 /// Either store could not be read.
 pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
-    let notations = crate::notations::list_all(surreal).await.map_err(source)?;
+    let notations = crate::notations::list_all_source(surreal)
+        .await
+        .map_err(source)?;
     let events: Vec<EventSource> =
         source_rows(surreal, EVENT_SOURCE_FIELDS, crate::notation_events::TABLE).await?;
     let answers: Vec<AnswerSource> =
         source_rows(surreal, ANSWER_SOURCE_FIELDS, crate::answers::TABLE).await?;
 
-    let tables = vec![
-        compare(
-            "notation",
-            &images(
-                &notations,
-                |row| MirrorKey::Notation(row.id),
-                |row| Ok(NotationImage::from_source(row)),
-            ),
-            &target(
-                pg,
-                NOTATION_SELECT.as_str(),
-                NotationImage::from_row,
-                |row| MirrorKey::Notation(row.id),
-            )
-            .await?,
+    // PostgreSQL holds the Notation authoritatively: before the first
+    // Mirror Backfill SurrealDB is still the evidence both ways, and after
+    // it only the rows SurrealDB has that PostgreSQL lacks are divergent —
+    // a row SurrealDB lacks is no evidence against PostgreSQL's copy.
+    let notation = compare(
+        "notation",
+        &images(
+            &notations,
+            |row| MirrorKey::Notation(row.id),
+            |row| Ok(NotationImage::from_source(row)),
         ),
+        &target(
+            pg,
+            NOTATION_SELECT.as_str(),
+            NotationImage::from_row,
+            |row| MirrorKey::Notation(row.id),
+        )
+        .await?,
+    );
+    let notation = if super::compares_authoritative(pg).await? {
+        notation
+    } else {
+        super::only_missing(pg, notation).await?
+    };
+    let tables = vec![
+        notation,
         compare(
             "notation_event",
             &keyed(

@@ -157,6 +157,22 @@ pub async fn delete_draft(db: &SurrealDb, id: Uuid) -> Result<ResetOutcome, Nota
     if !draft_facts(db, id, &notation.state).await? {
         return Ok(ResetOutcome::Kept);
     }
+    // PostgreSQL holds the Notation authoritatively when it is configured:
+    // its row goes first, and the outcome reports what it did. Deleting
+    // what is already gone stays a no-op, so a rerun after a crash is safe.
+    // The SurrealDB copy follows for PG-less deployments and the mirror's
+    // source reads; the fenced workflow mirror reconciles the dependents.
+    let pg = crate::postgres::notation::authority()
+        .await
+        .map_err(crate::notations::NotationError::from)?;
+    if let Some(pg) = pg {
+        if !crate::postgres::notation::delete(&pg, id)
+            .await
+            .map_err(crate::notations::NotationError::from)?
+        {
+            return Ok(ResetOutcome::AlreadyGone);
+        }
+    }
     db.query(
         "BEGIN TRANSACTION; \
          DELETE answer WHERE notation_id = $notation; \

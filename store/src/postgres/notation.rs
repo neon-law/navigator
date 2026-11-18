@@ -170,6 +170,35 @@ pub(crate) async fn delete_uncommitted(
     Ok(())
 }
 
+/// Delete one Notation row outright — the daily draft reset's write. Its
+/// PostgreSQL `answer` and `notation_event` dependents go in the same
+/// transaction, the same set the SurrealDB reset deletes; `notation_clause`
+/// cascades at the foreign key. A draft's other possible references —
+/// `attestation` restricts, `signature` is `NOT VALID` and a draft has
+/// none — refuse the delete, which is the reset's conservative outcome.
+/// Deleting an already-gone row is a no-op, and the result reports it so
+/// the reset's rerun-safe `AlreadyGone` outcome survives the authority.
+pub(crate) async fn delete(
+    pg: &PostgresDb,
+    id: uuid::Uuid,
+) -> Result<bool, NotationAuthorityError> {
+    let mut tx = pg.pool().begin().await?;
+    sqlx::query("DELETE FROM answer WHERE notation_id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM notation_event WHERE notation_id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    let deleted = sqlx::query("DELETE FROM notation WHERE id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(deleted.rows_affected() > 0)
+}
+
 /// Resolve a notation by id.
 pub(crate) async fn find_by_id(
     pg: &PostgresDb,

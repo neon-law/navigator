@@ -10,6 +10,14 @@ async fn mirrored(surreal: &SurrealDb, pg: &PostgresDb, key: &MirrorKey) -> Mirr
     super::super::mirror(surreal, pg, key).await.unwrap()
 }
 
+/// Mirror a Notation key as the first Mirror Backfill would: the one copy
+/// that may write PostgreSQL's authoritative notation rows from SurrealDB.
+async fn mirrored_on_backfill(surreal: &SurrealDb, pg: &PostgresDb, key: &MirrorKey) -> Mirrored {
+    super::super::during_initial_copy(super::super::mirror(surreal, pg, key))
+        .await
+        .unwrap()
+}
+
 /// Every list-shaped notation read compares equal once the mirror has
 /// copied the rows, and a row the mirror has not copied is a mismatch.
 #[tokio::test]
@@ -25,8 +33,8 @@ async fn the_notation_list_shapes_shadow_a_match_after_the_mirror() {
     let template = draft(&surreal).await;
     let a = open(&surreal, template, client, project_a).await;
     let b = open(&surreal, template, client, project_b).await;
-    mirrored(&surreal, &pg, &MirrorKey::Notation(a)).await;
-    mirrored(&surreal, &pg, &MirrorKey::Notation(b)).await;
+    mirrored_on_backfill(&surreal, &pg, &MirrorKey::Notation(a)).await;
+    mirrored_on_backfill(&surreal, &pg, &MirrorKey::Notation(b)).await;
     let row_a = crate::notations::find_by_id(&surreal, a)
         .await
         .unwrap()
@@ -129,7 +137,7 @@ async fn notation_clauses_keep_author_and_render_order_across_edits() {
     let client = person(&surreal, Role::Client).await;
     let project = matter(&surreal, &pg, "Synthetic Clause Matter").await;
     let notation = open(&surreal, draft(&surreal).await, client, project).await;
-    mirrored(&surreal, &pg, &MirrorKey::Notation(notation)).await;
+    mirrored_on_backfill(&surreal, &pg, &MirrorKey::Notation(notation)).await;
 
     let lawyer = person(&surreal, Role::Lawyer).await;
     let (first, second) = append_and_check_notation_clauses(&surreal, &pg, notation, lawyer).await;
@@ -238,16 +246,29 @@ async fn delete_notation_and_check_clause_cascade(
     pg: &PostgresDb,
     notation: Uuid,
 ) {
-    assert_eq!(
+    // The reset's authority scope: PostgreSQL holds the notation row, so
+    // the delete goes through it — row and dependents in one transaction.
+    let outcome = crate::postgres::notation::with_test_db(pg.clone(), async {
         crate::notation_reset::delete_draft(surreal, notation)
             .await
-            .unwrap(),
-        crate::notation_reset::ResetOutcome::Deleted
-    );
+            .unwrap()
+    })
+    .await;
+    assert_eq!(outcome, crate::notation_reset::ResetOutcome::Deleted);
+    // A replay of the SurrealDB-era delete is fenced: the notation is gone
+    // from SurrealDB, and that is no evidence against PostgreSQL's copy —
+    // the reset already deleted it through the authority.
     assert_eq!(
         mirrored(surreal, pg, &MirrorKey::Notation(notation)).await,
-        Mirrored::Deleted
+        Mirrored::Unchanged
     );
+    let row_gone =
+        sqlx::query_scalar::<_, bool>("SELECT NOT EXISTS (SELECT 1 FROM notation WHERE id = $1)")
+            .bind(notation)
+            .fetch_one(&pg.0)
+            .await
+            .unwrap();
+    assert!(row_gone, "the authority delete removed the notation row");
     let parent_removed = super::super::notation_clauses::parity(surreal, pg)
         .await
         .unwrap();
@@ -393,7 +414,7 @@ async fn answer_mirror_preserves_microsecond_chronology_and_uuid_ties() {
     let client = person(&surreal, Role::Client).await;
     let project = matter(&surreal, &pg, "Synthetic Answer Chronology").await;
     let notation = open(&surreal, draft(&surreal).await, client, project).await;
-    mirrored(&surreal, &pg, &MirrorKey::Notation(notation)).await;
+    mirrored_on_backfill(&surreal, &pg, &MirrorKey::Notation(notation)).await;
     let question = question(&surreal).await;
 
     let older_v4 = Uuid::parse_str("f0000000-0000-4000-8000-000000000001").unwrap();
@@ -483,7 +504,10 @@ async fn notations_events_and_answers_converge_with_order_and_provenance() {
     let other = open(&surreal, template, client, theirs).await;
     for id in [notation, other] {
         let key = MirrorKey::Notation(id);
-        assert_eq!(mirrored(&surreal, &pg, &key).await, Mirrored::Written);
+        assert_eq!(
+            mirrored_on_backfill(&surreal, &pg, &key).await,
+            Mirrored::Written
+        );
         assert_eq!(mirrored(&surreal, &pg, &key).await, Mirrored::Unchanged);
     }
     // Notation isolation: each Project reads only its own.
@@ -496,8 +520,25 @@ async fn notations_events_and_answers_converge_with_order_and_provenance() {
     crate::notations::update_state(&surreal, notation, "lawyer_review")
         .await
         .unwrap();
+    // A queued replay of the SurrealDB-era write is fenced: it does not
+    // overwrite the authoritative row with SurrealDB's newer state.
     assert_eq!(
         mirrored(&surreal, &pg, &MirrorKey::Notation(notation)).await,
+        Mirrored::Unchanged
+    );
+    let held: String = sqlx::query_scalar("SELECT state FROM notation WHERE id = $1")
+        .bind(notation)
+        .fetch_one(&pg.0)
+        .await
+        .unwrap();
+    assert_ne!(
+        held, "lawyer_review",
+        "the authoritative state outlives a SurrealDB update"
+    );
+    // The first Mirror Backfill takes SurrealDB as its evidence, so the
+    // backfill copy is what moves the authoritative row.
+    assert_eq!(
+        mirrored_on_backfill(&surreal, &pg, &MirrorKey::Notation(notation)).await,
         Mirrored::Written
     );
 
@@ -604,16 +645,22 @@ async fn notations_events_and_answers_converge_with_order_and_provenance() {
         MirrorKey::NotationEvent(reset_event),
         MirrorKey::Answer(reset_answer),
     ] {
-        mirrored(&surreal, &pg, &key).await;
+        if matches!(key, MirrorKey::Notation(_)) {
+            mirrored_on_backfill(&surreal, &pg, &key).await;
+        } else {
+            mirrored(&surreal, &pg, &key).await;
+        }
     }
-    assert_eq!(
+    let outcome = crate::postgres::notation::with_test_db(pg.clone(), async {
         crate::notation_reset::delete_draft(&surreal, reset)
             .await
-            .unwrap(),
-        crate::notation_reset::ResetOutcome::Deleted
-    );
+            .unwrap()
+    })
+    .await;
+    assert_eq!(outcome, crate::notation_reset::ResetOutcome::Deleted);
     let key = MirrorKey::Notation(reset);
-    assert_eq!(mirrored(&surreal, &pg, &key).await, Mirrored::Deleted);
+    // The reset deleted the authoritative row itself; the queued replay of
+    // its SurrealDB-era delete is fenced, so it reports no change.
     assert_eq!(mirrored(&surreal, &pg, &key).await, Mirrored::Unchanged);
     let report = parity(&surreal, &pg).await.unwrap();
     assert!(report.is_clean(), "{report:?}");
@@ -631,7 +678,7 @@ async fn parity_names_divergent_workflow_rows_and_reconcile_repairs_them() {
     let client = person(&surreal, Role::Client).await;
     let project = matter(&surreal, &pg, "Synthetic Matter").await;
     let notation = open(&surreal, template, client, project).await;
-    mirrored(&surreal, &pg, &MirrorKey::Notation(notation)).await;
+    mirrored_on_backfill(&surreal, &pg, &MirrorKey::Notation(notation)).await;
     // Never mirrored: missing.
     let event = transition(&surreal, notation, MACHINE_QUESTIONNAIRE, "BEGIN", "END").await;
     let answer = crate::answers::record(
@@ -688,8 +735,26 @@ async fn parity_names_divergent_workflow_rows_and_reconcile_repairs_them() {
     assert!(!format!("{report:?}").contains("Synthetic"));
 
     let repaired = reconcile(&surreal, &pg).await.unwrap();
-    assert!(repaired.is_clean(), "{repaired:?}");
-    assert_eq!(rows(&repaired), [1, 1, 1]);
+    // The Notation row is PostgreSQL's own: reconcile cannot repair its
+    // drift from SurrealDB, and the SurrealDB state does not overwrite
+    // PostgreSQL's — the first Mirror Backfill settles that copy. The
+    // dependents, which follow SurrealDB, are repaired.
+    assert_eq!(
+        repaired.tables[0].divergent,
+        [MirrorKey::Notation(notation)]
+    );
+    assert_eq!(repaired.tables[1].divergent, []);
+    assert_eq!(repaired.tables[2].divergent, []);
+    let authoritative_state: String =
+        sqlx::query_scalar("SELECT state FROM notation WHERE id = $1")
+            .bind(notation)
+            .fetch_one(&pg.0)
+            .await
+            .unwrap();
+    assert_eq!(
+        authoritative_state, "END",
+        "reconcile leaves the authoritative row PostgreSQL holds"
+    );
     let replay = reconcile(&surreal, &pg).await.unwrap();
     assert_eq!(replay, repaired);
 }
@@ -710,7 +775,7 @@ async fn workflow_template_versions_are_mirrored_and_retained() {
     let client = person(&surreal, Role::Client).await;
     let project = matter(&surreal, &pg, "Synthetic Matter").await;
     let notation = open(&surreal, template, client, project).await;
-    mirrored(&surreal, &pg, &MirrorKey::Notation(notation)).await;
+    mirrored_on_backfill(&surreal, &pg, &MirrorKey::Notation(notation)).await;
     let event = transition(&surreal, notation, MACHINE_WORKFLOW, "BEGIN", "END").await;
     surreal
         .query("UPDATE $id SET template_version_id = $template")
@@ -819,7 +884,7 @@ async fn a_shadowed_notation_read_matches_its_mirror_and_flags_drift() {
     let client = person(&surreal, Role::Client).await;
     let project = matter(&surreal, &pg, "Synthetic Shadow Matter").await;
     let notation = open(&surreal, template, client, project).await;
-    mirrored(&surreal, &pg, &MirrorKey::Notation(notation)).await;
+    mirrored_on_backfill(&surreal, &pg, &MirrorKey::Notation(notation)).await;
     let source = crate::notations::find_by_id(&surreal, notation)
         .await
         .unwrap();
@@ -838,4 +903,80 @@ async fn a_shadowed_notation_read_matches_its_mirror_and_flags_drift() {
             .unwrap()
             .equal
     );
+}
+
+/// A queued mirror replay around a reset neither resurrects a deleted
+/// Notation in PostgreSQL nor erases one because SurrealDB no longer holds
+/// its copy, and a dependent naming a Notation PostgreSQL lacks reports the
+/// authority error instead of resurrecting the row from SurrealDB.
+#[tokio::test]
+async fn a_queued_replay_neither_resurrects_nor_erases_the_authoritative_notation() {
+    let Some((options, database)) = fresh_schema().await else {
+        return;
+    };
+    let pg = connect(&options, &database).await;
+    let surreal = mem_surreal().await;
+    let client = person(&surreal, Role::Client).await;
+    let project = matter(&surreal, &pg, "Synthetic Replay Matter").await;
+    let notation = open(&surreal, draft(&surreal).await, client, project).await;
+    mirrored_on_backfill(&surreal, &pg, &MirrorKey::Notation(notation)).await;
+
+    // The PostgreSQL row is deleted out from under a still-queued replay of
+    // the notation's SurrealDB-era writes — the reset's authority delete
+    // landing before a mirror completion the queue already held.
+    sqlx::query("DELETE FROM notation WHERE id = $1")
+        .bind(notation)
+        .execute(&pg.0)
+        .await
+        .unwrap();
+    assert_eq!(
+        mirrored(&surreal, &pg, &MirrorKey::Notation(notation)).await,
+        Mirrored::Unchanged
+    );
+    let resurrected: i64 = sqlx::query_scalar("SELECT count(*) FROM notation WHERE id = $1")
+        .bind(notation)
+        .fetch_one(&pg.0)
+        .await
+        .unwrap();
+    assert_eq!(resurrected, 0, "the replay did not resurrect the row");
+
+    // The mirror side: PostgreSQL holds the row while a queued replay of
+    // the SurrealDB delete lands. SurrealDB lacking the copy is no
+    // evidence against the authoritative row.
+    let replayed = open(&surreal, draft(&surreal).await, client, project).await;
+    mirrored_on_backfill(&surreal, &pg, &MirrorKey::Notation(replayed)).await;
+    surreal
+        .query("DELETE $id")
+        .bind(("id", crate::surreal::record_id("notation", replayed)))
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
+    assert_eq!(
+        mirrored(&surreal, &pg, &MirrorKey::Notation(replayed)).await,
+        Mirrored::Unchanged
+    );
+    let survived: i64 = sqlx::query_scalar("SELECT count(*) FROM notation WHERE id = $1")
+        .bind(replayed)
+        .fetch_one(&pg.0)
+        .await
+        .unwrap();
+    assert_eq!(survived, 1, "the replay did not erase the row");
+
+    // A dependent naming a Notation PostgreSQL lacks is refused: the mirror
+    // never resurrects the parent to admit the dependent. The event names
+    // the first notation, whose PostgreSQL row the replay did not
+    // resurrect.
+    let event = transition(&surreal, notation, MACHINE_QUESTIONNAIRE, "BEGIN", "END").await;
+    let error = super::super::mirror(&surreal, &pg, &MirrorKey::NotationEvent(event))
+        .await
+        .unwrap_err();
+    assert!(matches!(error, MirrorError::NotationAuthority), "{error:?}");
+    let dependent: i64 = sqlx::query_scalar("SELECT count(*) FROM notation_event WHERE id = $1")
+        .bind(event)
+        .fetch_one(&pg.0)
+        .await
+        .unwrap();
+    assert_eq!(dependent, 0, "the dependent stayed out of PostgreSQL");
+    pg.0.close().await;
 }

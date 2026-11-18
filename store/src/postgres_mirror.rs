@@ -502,6 +502,10 @@ pub enum MirrorError {
     InboxAuthority,
     #[error("PostgreSQL holds the matter records; only the first Mirror Backfill copies them from SurrealDB")]
     MatterAuthority,
+    #[error(
+        "PostgreSQL holds the Notation; only the first Mirror Backfill copies it from SurrealDB"
+    )]
+    NotationAuthority,
     #[error("a graph row SurrealDB lacks is not deleted while PostgreSQL holds the graph tables or is configured but unreachable")]
     GraphAuthority,
     #[error("the SurrealDB source row carries an unreadable timestamp")]
@@ -526,6 +530,7 @@ impl MirrorError {
             Self::Family(_)
             | Self::InboxAuthority
             | Self::MatterAuthority
+            | Self::NotationAuthority
             | Self::GraphAuthority
             | Self::SourceTimestamp
             | Self::SourceDate
