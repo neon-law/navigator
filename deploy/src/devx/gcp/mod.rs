@@ -1571,6 +1571,10 @@ mod tests {
         ))
         .expect("read DEPLOY.md");
 
+        assert!(
+            cloud_operations.contains("Restate operator"),
+            "cloud-operations.md must name its compatibility-hosting owner",
+        );
         for (surface, prose) in [
             ("cloud-operations.md", cloud_operations.as_str()),
             ("DEPLOY.md", deploy_workshop.as_str()),
@@ -1581,7 +1585,6 @@ mod tests {
                 "`hudson ops dns setup`",
                 "TLS and Gateway",
                 "`hudson ops ship`",
-                "Restate operator",
                 "`hudson ops secrets apply`",
             ] {
                 assert!(prose.contains(expected), "{surface} must name {expected}");
@@ -1760,7 +1763,7 @@ mod tests {
             "never creates a cloud bucket per Project",
             "The retired Portal's objects remain under a `{project-code}/portal/` prefix",
             "The documents bucket stores Project-scoped content-addressed `projects/<code>/documents/<sha>` objects",
-            "Surreal asset rows carry the Project association",
+            "PostgreSQL Asset records carry the Project association",
         ] {
             assert!(
                 prose.contains(observed),
