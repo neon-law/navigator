@@ -143,6 +143,19 @@ status. A pending envelope keeps a pitch pending. On completion, Navigator files
 Completion with their DocuSign envelope ID and records the provider's completion date. A verified Connect completion
 updates the linked envelope, and rerunning the command refreshes it directly from DocuSign.
 
+## Upload an executed onboarding letter
+
+To file a letter already executed in the Firm's DocuSign account, supply its envelope UUID.
+
+```bash
+navigator site document upload --host "$host" --project "$project" \
+  --file onboarding_signed.pdf --kind onboarding \
+  --signing-method docusign --signed-on 2026-11-17 --envelope-id "$envelope_id"
+```
+
+Navigator verifies completion through the Firm's account before filing the document, and writes `docusign_envelope_id`
+to its pointer. The [Official](glossary/official.md) rule governs active Project status.
+
 ## Authentication: JWT grant
 
 The provider authenticates with **JWT grant** — it signs a short-lived RSA assertion with the firm's integration key and

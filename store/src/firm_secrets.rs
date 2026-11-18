@@ -759,7 +759,55 @@ pub async fn resolve_firm_credential(
     kms: &dyn RuntimeKms,
 ) -> Result<ResolvedCredential, SecretStoreError> {
     validate_kind(provider, kind)?;
-    let mut response = surreal
+    let row = if kind == IntegrationSecretKind::DocuSignConnection {
+        use sqlx::Row;
+        let pg = crate::postgres::PostgresDb::from_env()
+            .await
+            .map_err(|_| not_configured(provider, kind))?;
+        let row = sqlx::query(
+            "SELECT * FROM firm_integration_secret
+             WHERE firm_id=$1 AND provider=$2 AND kind=$3 AND status='active'
+             ORDER BY version DESC LIMIT 1",
+        )
+        .bind(firm_id)
+        .bind(provider.as_str())
+        .bind(kind.as_str())
+        .fetch_optional(pg.pool())
+        .await
+        .map_err(|_| not_configured(provider, kind))?
+        .ok_or_else(|| not_configured(provider, kind))?;
+        let field = |name| {
+            row.try_get::<String, _>(name)
+                .map_err(|_| not_configured(provider, kind))
+        };
+        SecretRow {
+            firm_id: record_id(FIRM_TABLE, firm_id),
+            provider: provider.as_str().into(),
+            kind: kind.as_str().into(),
+            version: row
+                .try_get("version")
+                .map_err(|_| not_configured(provider, kind))?,
+            ciphertext: field("ciphertext")?,
+            wrapped_dek: field("wrapped_dek")?,
+            kms_key_version: field("kms_key_version")?,
+            kms_context: field("kms_context")?,
+            status: field("status")?,
+            actor_id: record_id(
+                "person",
+                row.try_get("actor_id")
+                    .map_err(|_| not_configured(provider, kind))?,
+            ),
+            created_at: row
+                .try_get::<chrono::DateTime<chrono::Utc>, _>("created_at")
+                .map_err(|_| not_configured(provider, kind))?
+                .to_rfc3339(),
+            updated_at: row
+                .try_get::<chrono::DateTime<chrono::Utc>, _>("updated_at")
+                .map_err(|_| not_configured(provider, kind))?
+                .to_rfc3339(),
+        }
+    } else {
+        let mut response = surreal
         .query(format!(
             "SELECT firm_id, provider, kind, version, ciphertext, wrapped_dek, kms_key_version, \
              kms_context, status, actor_id, created_at, updated_at FROM {TABLE} WHERE firm_id = $firm_id \
@@ -771,11 +819,11 @@ pub async fn resolve_firm_credential(
         .await
         .and_then(surrealdb::IndexedResults::check)
         .map_err(|error| classify_query_error(error, provider, kind))?;
-    let rows: Vec<SecretRow> = response.take(0)?;
-    let row = rows
-        .into_iter()
-        .next()
-        .ok_or_else(|| not_configured(provider, kind))?;
+        let rows: Vec<SecretRow> = response.take(0)?;
+        rows.into_iter()
+            .next()
+            .ok_or_else(|| not_configured(provider, kind))?
+    };
     let context = KmsContext::new(firm_id, provider.as_str(), kind.as_str());
     if row.kms_context != context.aad() {
         return Err(SecretStoreError::Kms(KmsError::ContextMismatch));

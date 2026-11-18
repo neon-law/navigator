@@ -1,11 +1,9 @@
 //! Read a Project's onboarding status (`pitch` | `official`) through its
 //! authenticated, matter-scoped API.
 //!
-//! The status is derived server-side from the signature records: `official`
-//! only once the matter's onboarding notation has a provider-confirmed
-//! completed envelope on a loop Navigator itself sent. Everything else —
-//! no envelope yet, one still outstanding, one declined or voided — is
-//! `pitch`.
+//! The status is derived server-side from completed `DocuSign` evidence. Navigator
+//! must hold the onboarding envelope UUID and verify completion in the Firm account.
+//! Envelopes can originate in Navigator or be adopted from the Firm's `DocuSign` app.
 
 use std::path::Path;
 use std::process::ExitCode;

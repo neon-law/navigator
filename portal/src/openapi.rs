@@ -218,6 +218,8 @@ fn upload_session_request(document: &Value) -> Value {
                 "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
             }},
             "signing": {"$ref": "#/components/schemas/DocumentSigning"},
+            "envelope_id": {"type": "string", "format": "uuid",
+                "description": "Required for DocuSign-signed onboarding. Verified as completed in the Firm account."},
             "notarization": {"type": "array", "items": {"$ref": "#/components/schemas/DocumentNotarization"}},
             "declared_size": {"type": "integer", "minimum": 1, "maximum": store::documents::MAX_STREAMING_UPLOAD_BYTES},
             "declared_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
@@ -2175,15 +2177,17 @@ fn canonical_document(base: &str) -> Value {
           "get": {
             "summary": "Read every matter's lifecycle fields (admin)",
               "description":
-              "Returns one minimal row per matter with its `code`, `status`, `closed_at`, `closure_reason`, and \
+              "Returns one minimal row per matter with its `code`, `status`, `closed_at`, `closure_reason`, `lifecycle`, and \
                derived `source_state`. This is a deployment-wide oversight read, not a \
                participation-scoped matter read, and returns no matter content — no repository \
                URL, no Drive folder id. Authorization: admin-tier only (`owner`/`admin`).",
             "responses": {
               "200": { "description": "The lifecycle rows", "content": { "application/json": {
-                "schema": { "type": "array", "items": { "type": "object", "required": ["code", "status", "brand", "firm_id", "closed_at", "closure_reason", "source_state"], "properties": {
+                "schema": { "type": "array", "items": { "type": "object", "required": ["code", "status", "lifecycle", "brand", "firm_id", "closed_at", "closure_reason", "source_state"], "properties": {
                   "code": { "type": "string" },
                   "status": { "type": "string", "enum": ["open", "closed", "archived"] },
+                  "lifecycle": { "type": "string", "enum": ["pitch", "active", "closed", "archived"],
+                    "description": "Active requires verified completed DocuSign onboarding." },
                   "brand": { "type": "string", "description": "The house brand the Project belongs to." },
                   "firm_id": { "type": ["string", "null"], "format": "uuid", "description": "The owning Firm, or null when the Project has not been assigned." },
                   "closed_at": { "type": ["string", "null"], "format": "date-time" },
@@ -4690,6 +4694,8 @@ fn canonical_document(base: &str) -> Value {
                     "description": { "type": "string" },
                     "folder": { "type": "string", "description": "The matter folder the document is filed in (LAW-241), spelled exactly as the Firm's matter folders spell it. An unknown value is refused with `400 invalid_folder` and writes nothing." },
                     "signing": { "$ref": "#/components/schemas/DocumentSigning" },
+                    "envelope_id": { "type": "string", "format": "uuid",
+                      "description": "Required for DocuSign-signed onboarding. Verified as completed in the Firm account." },
                     "notarization": { "type": "array", "items": { "$ref": "#/components/schemas/DocumentNotarization" } }
                   }
                 }
@@ -4750,6 +4756,8 @@ fn canonical_document(base: &str) -> Value {
                     "derived_from": { "type": "object", "description": "Exhibit provenance; raw uploads carry none" },
                     "transcript_quality": { "type": "string" },
                     "signing": { "$ref": "#/components/schemas/DocumentSigning" },
+                    "envelope_id": { "type": "string", "format": "uuid",
+                      "description": "Required for DocuSign-signed onboarding. Verified as completed in the Firm account." },
                     "notarization": { "type": "array", "items": { "$ref": "#/components/schemas/DocumentNotarization" } },
                     "folder": { "type": "string", "description": "The matter folder the document is filed in (LAW-241), spelled exactly as the Firm's matter folders spell it. An unknown value is refused with `400 invalid_folder` and opens no session." },
                     "declared_size": { "type": "integer", "description": "The byte size of the whole file, as the client counts it; at most the streaming cap" },

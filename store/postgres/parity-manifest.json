@@ -5828,9 +5828,16 @@
           "state": "TEXT",
           "updated_at": "TIMESTAMPTZ"
         },
-        "foreign_keys": [],
+        "foreign_keys": [
+          [
+            "notation_id",
+            "notation"
+          ]
+        ],
         "name": "signature",
-        "references": []
+        "references": [
+          "notation"
+        ]
       },
       "social_account": {
         "columns": {

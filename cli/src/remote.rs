@@ -1220,6 +1220,7 @@ pub struct LiveDocumentSummary {
 /// every upload that is not an executed document.
 #[derive(Debug, Clone, Default)]
 pub struct DocumentExecution {
+    pub envelope_id: Option<Uuid>,
     pub receipt: Option<model::documents::ReceiptMetadata>,
     pub signing: Option<model::documents::Signing>,
     pub notarization: Vec<model::documents::Notarization>,
@@ -1228,6 +1229,15 @@ pub struct DocumentExecution {
 
 impl DocumentExecution {
     fn add_to(&self, body: &mut serde_json::Value) -> Result<()> {
+        model::documents::validate_onboarding_envelope(
+            body["kind"].as_str().unwrap_or_default(),
+            self.signing,
+            self.envelope_id,
+        )
+        .map_err(anyhow::Error::msg)?;
+        if let Some(id) = self.envelope_id {
+            body["envelope_id"] = serde_json::json!(id);
+        }
         if let Some(signing) = self.signing {
             body["signing"] = serde_json::to_value(signing).context("encode signing")?;
         }
@@ -1874,6 +1884,12 @@ impl DocumentClient {
         transcript_quality: Option<&str>,
         execution: &DocumentExecution,
     ) -> Result<model::document_pointers::DocumentPointer> {
+        model::documents::validate_onboarding_envelope(
+            kind,
+            execution.signing,
+            execution.envelope_id,
+        )
+        .map_err(anyhow::Error::msg)?;
         if matches!(upload_lane_for(bytes.len(), kind), UploadLane::Streaming)
             && bytes.len() > model::documents::MAX_STREAMING_UPLOAD_BYTES
         {
@@ -2714,6 +2730,14 @@ pub async fn document_upload(
     execution: &DocumentExecution,
     folder: Option<model::document_pointers::MatterFolder>,
 ) -> ExitCode {
+    if let Err(error) = model::documents::validate_onboarding_envelope(
+        kind,
+        execution.signing,
+        execution.envelope_id,
+    ) {
+        eprintln!("{error}");
+        return ExitCode::FAILURE;
+    }
     document_upload_from(
         Path::new("."),
         host,
@@ -2866,6 +2890,14 @@ pub async fn document_upload_directory(
     execution: &DocumentExecution,
     folder: Option<model::document_pointers::MatterFolder>,
 ) -> ExitCode {
+    if let Err(error) = model::documents::validate_onboarding_envelope(
+        kind,
+        execution.signing,
+        execution.envelope_id,
+    ) {
+        eprintln!("{error}");
+        return ExitCode::FAILURE;
+    }
     document_upload_directory_from(
         Path::new("."),
         host,
@@ -7810,11 +7842,13 @@ mod tests {
                 "content_type": "text/plain",
                 "kind": "onboarding",
                 "visibility": "internal",
+                "envelope_id": Uuid::from_u128(123),
                 "signing": signing,
                 "notarization": notarization,
             })))
             .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
                 "kind": "onboarding",
+                "docusign_envelope_id": Uuid::from_u128(123),
                 "visibility": "internal",
                 "current_version": {
                     "version": 1,
@@ -7840,6 +7874,7 @@ mod tests {
         .unwrap();
 
         let execution = DocumentExecution {
+            envelope_id: Some(Uuid::from_u128(123)),
             receipt: None,
             signing: Some(store::documents::Signing {
                 method: store::documents::SigningMethod::Docusign,
@@ -7876,6 +7911,7 @@ mod tests {
             &std::fs::read_to_string(dir.path().join("blobs/note.txt.yaml")).unwrap(),
         )
         .unwrap();
+        assert_eq!(pointer.docusign_envelope_id, execution.envelope_id);
         assert_eq!(pointer.signing, execution.signing);
         assert_eq!(pointer.notarization, execution.notarization);
     }
@@ -12292,6 +12328,7 @@ mod tests {
             commission_expires: chrono::NaiveDate::from_ymd_opt(2029, 1, 1).unwrap(),
         };
         let execution = DocumentExecution {
+            envelope_id: None,
             receipt: None,
             signing: Some(signing),
             notarization: vec![notarization.clone()],

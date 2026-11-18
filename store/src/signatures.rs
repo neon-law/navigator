@@ -2,10 +2,8 @@
 //! correlated back from the provider by `(provider, provider_id)`, and
 //! every query against the table.
 //!
-//! # This table lives in SurrealDB
-//!
-//! `signatures` moved with wave five of #1093 (ENG-121), in the
-//! satellite-ring slice.
+//! Configured deployments correlate requests and record execution in PostgreSQL.
+//! The compatibility engine is used only by processes without a PostgreSQL host.
 //!
 //! A Notation's document is sent to an e-signature provider (DocuSign); the
 //! provider issues an opaque request id (an envelope id). This row records

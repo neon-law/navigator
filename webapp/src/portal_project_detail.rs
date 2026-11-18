@@ -622,7 +622,11 @@ pub async fn get_project_detail() -> Result<ProjectDetailView, ServerFnError> {
         id: project.id.to_string(),
         code: project.code,
         name: project.name,
-        status: project.status,
+        status: store::projects::execution_lifecycle_label(
+            &project.status,
+            onboarding_status == store::projects::OnboardingStatus::Official,
+        )
+        .into(),
         onboarding_status: onboarding_status.label().to_string(),
         invoices,
         trust,

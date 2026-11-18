@@ -101,6 +101,9 @@ pub fn embedded_migrator() -> Migrator {
             .collect(),
     )
 }
+#[cfg(any(test, feature = "test-support"))]
+tokio::task_local! { static TEST_POSTGRES: PostgresDb; }
+
 #[derive(Clone)]
 pub struct PostgresDb(pub(crate) PgPool);
 impl std::fmt::Debug for PostgresDb {
@@ -118,6 +121,12 @@ pub enum PostgresError {
     Migration,
 }
 impl PostgresDb {
+    /// Scope a PostgreSQL integration fixture without changing process-wide configuration.
+    #[cfg(any(test, feature = "test-support"))]
+    pub async fn with_test_db<T>(pg: Self, future: impl std::future::Future<Output = T>) -> T {
+        TEST_POSTGRES.scope(pg, future).await
+    }
+
     /// The bounded pool, for read-only consumers such as the archive export.
     #[must_use]
     pub const fn pool(&self) -> &PgPool {
@@ -188,13 +197,23 @@ impl PostgresDb {
     /// Connect with verify-full TLS. Plaintext is an explicit loopback-only test option.
     pub async fn from_env() -> Result<Self, PostgresError> {
         static POOL: tokio::sync::OnceCell<PostgresDb> = tokio::sync::OnceCell::const_new();
-        POOL.get_or_try_init(Self::connect_env).await.cloned()
+        #[cfg(any(test, feature = "test-support"))]
+        if let Ok(pg) = TEST_POSTGRES.try_with(Clone::clone) {
+            return Ok(pg);
+        }
+        POOL.get_or_try_init(|| Box::pin(Self::connect_env()))
+            .await
+            .cloned()
     }
     /// The process's PostgreSQL store when `NAVIGATOR_POSTGRES_HOST` is set,
     /// for the tables born in PostgreSQL. `None` selects their SurrealDB
     /// fallback; a configured but unreachable server is an error, never a
     /// silent fall back.
     pub async fn configured() -> Result<Option<Self>, PostgresError> {
+        #[cfg(any(test, feature = "test-support"))]
+        if let Ok(pg) = TEST_POSTGRES.try_with(Clone::clone) {
+            return Ok(Some(pg));
+        }
         if std::env::var_os("NAVIGATOR_POSTGRES_HOST").is_none() {
             return Ok(None);
         }

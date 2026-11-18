@@ -42,6 +42,16 @@ transition records the known starting state. Status reads use the PostgreSQL pro
 lifecycle command also refreshes the SurrealDB compatibility projection. If that refresh fails, retry the same
 transition to repair it. Keep lifecycle authority enabled once a deployment has recorded transitions.
 
+## Onboarding execution
+
+Onboarding filing and the Project's [Official](glossary/official.md) reading require PostgreSQL. Filing commits the
+document, its execution evidence, and revision visibility in one PostgreSQL transaction after object storage accepts the
+bytes. Signature requests and provider completion updates use PostgreSQL whenever its host is configured. The
+compatibility mirror preserves PostgreSQL onboarding documents and signature records.
+
+Apply the signature Notation-reference migration before deploying these writers. Existing Project, Notation, Template,
+and encrypted Firm DocuSign connection records must be present in PostgreSQL before execution can be verified.
+
 ## Matter records
 
 Wherever `NAVIGATOR_POSTGRES_HOST` is set, the owning modules of `statutory_deadline`, `notation_draft`, `estate_asset`,

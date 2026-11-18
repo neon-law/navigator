@@ -1941,6 +1941,7 @@ async fn reconcile_project_repositories_door(
 
 #[derive(Debug, Serialize)]
 struct ProjectLifecycleEntry {
+    lifecycle: String,
     code: String,
     status: String,
     brand: String,
@@ -1974,9 +1975,17 @@ async fn project_lifecycle_door(
     let projects = store::projects::all(&state.surreal)
         .await
         .map_err(|error| ApiError::Db(error.to_string()))?;
+    let official = store::projects::onboarding_official_sets(&state.surreal, &projects)
+        .await
+        .map_err(ApiError::Db)?;
     let lifecycle = projects
         .into_iter()
         .map(|project| ProjectLifecycleEntry {
+            lifecycle: store::projects::execution_lifecycle_label(
+                &project.status,
+                official.contains(&project.id),
+            )
+            .into(),
             source_state: store::project_surfaces::source_state(&project),
             code: project.code,
             status: project.status,
@@ -2160,13 +2169,16 @@ async fn project_status_door(
         store::projects::matter_lifecycle_sets(&state.surreal, std::slice::from_ref(&project))
             .await
             .map_err(ApiError::Db)?;
+    let onboarding_status = store::projects::onboarding_status(&state.surreal, id)
+        .await
+        .map_err(ApiError::Db)?;
     let lifecycle = store::projects::matter_lifecycle(
         if project.status == "archived" {
             "closed"
         } else {
             &project.status
         },
-        !opening.contains(&id),
+        onboarding_status != store::projects::OnboardingStatus::Official,
         !closing.contains(&id),
     );
     let documents = store::assets::for_project(&state.surreal, id)
@@ -2177,13 +2189,10 @@ async fn project_status_door(
         .map(|asset| serde_json::json!({"id": asset.id, "visibility": asset.visibility}))
         .collect::<Vec<_>>();
     let missing = if lifecycle == store::projects::MatterLifecycle::NeedsOnboarding {
-        vec!["File an onboarding document or produce the onboarding notation's instruments."]
+        vec!["Verify a completed onboarding envelope in the Firm's DocuSign account."]
     } else {
         Vec::new()
     };
-    let onboarding_status = store::projects::onboarding_status(&state.surreal, id)
-        .await
-        .map_err(ApiError::Db)?;
     let remotes = repository_remotes(&state, &project).await?;
     let mut adopted_envelopes = Vec::new();
     let mut envelopes = Vec::new();
@@ -6035,6 +6044,7 @@ struct UploadDocumentRequest {
     /// byte is stored.
     #[serde(default)]
     signing: Option<store::documents::Signing>,
+    envelope_id: Option<Uuid>,
     /// The notarial acknowledgments on an executed document. Optional; each
     /// entry is validated before any byte is stored.
     #[serde(default)]
@@ -6055,6 +6065,63 @@ struct UploadDocumentRequest {
     /// chain. Absent — an old CLI — files exactly as before, no CAS.
     #[serde(default)]
     expected_head: Option<store::assets::ExpectedHead>,
+}
+
+/// Reserve provider evidence for server writes and verify completion in the Firm account.
+async fn verified_upload_metadata(
+    state: &ApiState,
+    project_id: Uuid,
+    kind: &str,
+    signing: Option<store::documents::Signing>,
+    envelope_id: Option<Uuid>,
+    mut metadata: Option<serde_json::Value>,
+) -> Result<Option<serde_json::Value>, ApiError> {
+    use crate::signature_adoption::internal;
+    use store::assets::VERIFIED_ONBOARDING_ENVELOPE_KEY;
+    use store::document_pointers::DOCUSIGN_ENVELOPE_METADATA_KEY;
+
+    if let Some(fields) = metadata.as_mut().and_then(serde_json::Value::as_object_mut) {
+        fields.remove(VERIFIED_ONBOARDING_ENVELOPE_KEY);
+        fields.remove(DOCUSIGN_ENVELOPE_METADATA_KEY);
+    }
+    store::documents::validate_onboarding_envelope(kind, signing, envelope_id)
+        .map_err(ApiError::EnvelopeAdoption)?;
+    let Some(id) = envelope_id else {
+        return Ok(metadata);
+    };
+    let db = &state.surreal;
+    let scoped = state
+        .signature_provider
+        .for_project(db, project_id)
+        .await
+        .map_err(internal)?;
+    let provider =
+        crate::firm_docusign::resolved(scoped.as_ref(), state.signature_provider.as_ref());
+    let envelope = provider
+        .read_external_envelope(id)
+        .await
+        .map_err(internal)?;
+    if envelope.envelope_id != id || envelope.status != "completed" {
+        return Err(ApiError::EnvelopeAdoption(
+            "The DocuSign envelope must be completed.",
+        ));
+    }
+    crate::signature_adoption::validate(&envelope)?;
+    let fields = metadata
+        .get_or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .ok_or(ApiError::EnvelopeAdoption(
+            "Document metadata must be an object.",
+        ))?;
+    fields.insert(
+        DOCUSIGN_ENVELOPE_METADATA_KEY.to_string(),
+        serde_json::json!(id),
+    );
+    fields.insert(
+        VERIFIED_ONBOARDING_ENVELOPE_KEY.to_string(),
+        serde_json::json!(id),
+    );
+    Ok(metadata)
 }
 
 fn invalid_document_slug_response(filename: &str, slug: &str) -> Option<Response> {
@@ -6394,6 +6461,15 @@ async fn upload_document_door(
             })
         })
         .or(inherited_source);
+    let metadata = verified_upload_metadata(
+        &state,
+        id,
+        kind,
+        input.signing,
+        input.envelope_id,
+        input.metadata,
+    )
+    .await?;
     let args = store::documents::IngestArgs {
         project_id: id,
         source: store::documents::source::UPLOAD,
@@ -6420,7 +6496,7 @@ async fn upload_document_door(
         &store::documents::DocumentIdentity {
             slug: Some(slug),
             published_at: None,
-            metadata: input.metadata.clone(),
+            metadata,
             derived_from,
             transcript_quality: if kind == "transcript" {
                 input.transcript_quality.as_deref()
@@ -6468,6 +6544,7 @@ struct CreateUploadSessionRequest {
     derived_from: Option<store::documents::DerivedFrom>,
     transcript_quality: Option<String>,
     signing: Option<store::documents::Signing>,
+    envelope_id: Option<Uuid>,
     #[serde(default)]
     notarization: Vec<store::documents::Notarization>,
     /// The matter folder the document is filed in (LAW-241), spelled
@@ -6798,7 +6875,16 @@ async fn create_upload_session_door(
     if let Some(response) = invalid_document_slug_response(filename, &slug) {
         return Ok(response);
     }
-    let args = streaming_session_args(
+    let metadata = verified_upload_metadata(
+        &state,
+        id,
+        kind,
+        input.signing,
+        input.envelope_id,
+        input.metadata.clone(),
+    )
+    .await?;
+    let mut args = streaming_session_args(
         id,
         &input,
         filename,
@@ -6807,6 +6893,7 @@ async fn create_upload_session_door(
         derived_from,
         folder.map(store::document_pointers::MatterFolder::as_str),
     );
+    args.metadata = metadata;
     match store::documents::create_upload_session(&state.surreal, &args).await {
         Ok(session) => {
             let status = if session.received_bytes > 0 {
@@ -11710,6 +11797,7 @@ mod tests {
                 derived_from: None,
                 transcript_quality: Some("machine".into()),
                 signing: None,
+                envelope_id: None,
                 notarization: vec![],
                 folder: None,
                 declared_size: bytes.len(),
@@ -16438,6 +16526,7 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
                 derived_from: None,
                 transcript_quality: None,
                 signing: None,
+                envelope_id: None,
                 notarization: Vec::new(),
                 evidence: None,
                 folder: Some("Discovery".to_string()),
@@ -16504,6 +16593,7 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
                 derived_from: None,
                 transcript_quality: None,
                 signing: None,
+                envelope_id: None,
                 notarization: Vec::new(),
                 evidence: None,
                 folder: None,
@@ -16567,6 +16657,7 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
                 derived_from: None,
                 transcript_quality: None,
                 signing: None,
+                envelope_id: None,
                 notarization: Vec::new(),
                 evidence: None,
                 folder: Some("Left Drawer".to_string()),

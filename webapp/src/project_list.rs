@@ -313,10 +313,13 @@ pub async fn get_project_list() -> Result<ProjectListView, ServerFnError> {
     );
     // A failed lifecycle lookup propagates rather than badging every matter
     // as a pitch.
-    let (has_engagement, has_closing) = store::projects::matter_lifecycle_sets(&surreal, &matters)
+    let (_, has_closing) = store::projects::matter_lifecycle_sets(&surreal, &matters)
         .await
         .map_err(loader_error)?;
 
+    let has_engagement = store::projects::onboarding_official_sets(&surreal, &matters)
+        .await
+        .map_err(loader_error)?;
     let mut rows: Vec<ProjectRow> = matters
         .into_iter()
         .map(|m| {

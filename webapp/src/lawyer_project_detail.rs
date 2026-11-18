@@ -547,6 +547,9 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
     let entity_id = entity.as_ref().map(|entity| entity.id.to_string());
     let entity_name = entity.map(|entity| entity.name);
     let (repository_url, last_committed_at) = project_source(&surreal, &project).await;
+    let onboarding_status = store::projects::onboarding_status(&surreal, id)
+        .await
+        .map_err(server_error)?;
     let (has_engagement, has_closing) =
         store::projects::matter_lifecycle_sets(&surreal, std::slice::from_ref(&project))
             .await
@@ -840,7 +843,11 @@ pub async fn get_lawyer_project_detail() -> Result<LawyerDetailView, ServerFnErr
         id: project.id.to_string(),
         code: project.code,
         name: project.name,
-        status: project.status,
+        status: store::projects::execution_lifecycle_label(
+            &project.status,
+            onboarding_status == store::projects::OnboardingStatus::Official,
+        )
+        .into(),
         brand: project.brand,
         entity_id,
         entity_name,
@@ -1199,7 +1206,7 @@ pub fn LawyerProjectDetail() -> Element {
                         // by the lawyer DRI, never fired from a button here. Every firm
                         // participant reads where to ask — the accountability marker
                         // decides who acts on the request, not who may raise it.
-                        if view.status == "open" {
+                        if matches!(view.status.as_str(), "active" | "pitch") {
                             section { class: "lawyer-detail__section project-close",
                                 p { class: "nav-muted",
                                     "To close this project, email the lawyer DRI"

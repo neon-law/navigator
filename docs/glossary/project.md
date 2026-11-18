@@ -8,6 +8,9 @@ Has a `status` (`open`, `closed`, `archived`) and is **always opened against an 
 organization, or a `Human` entity for a solo natural person. The `entity_id` FK is `NOT NULL`: a matter without an
 entity is a bug.
 
+An open Project reads `active` only under the [Official](official.md) onboarding execution rule. Until that rule is
+satisfied, it reads [Pitch](pitch.md). The stored `status` remains the operational open/closed/archived state.
+
 Opening a Project requires an attesting attorney on the lawyer tier (`owner`, `admin`, or `lawyer`) to serve as its
 lawyer DRI. The shared opening command checks that tier before it writes the Project or its participation rows. Any such
 attorney may be the lawyer DRI on any [Firm](firm.md) or [Brand](brand.md) in the deployment.

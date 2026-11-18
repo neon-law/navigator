@@ -247,8 +247,9 @@ pub fn parse_schema(sql: &str) -> Result<BTreeMap<String, Table>, Error> {
                     continue;
                 }
             }
+            let foreign_key_words = words.strip_suffix(&["NOT", "VALID"]).unwrap_or(&words);
             if let [name, "ADD", "CONSTRAINT", _, "FOREIGN", "KEY", column, "REFERENCES", target] =
-                words.as_slice()
+                foreign_key_words
             {
                 let column = column
                     .strip_prefix('(')
@@ -1036,6 +1037,15 @@ mod tests {
     const PARITY_MANIFEST: &str = include_str!("../postgres/parity-manifest.json");
 
     #[test]
+    fn not_valid_foreign_key_preserves_the_parent_reference() {
+        let schema = parse_schema("CREATE TABLE notation (\n id UUID PRIMARY KEY\n);\nCREATE TABLE signature (\n notation_id UUID\n);\nALTER TABLE signature ADD CONSTRAINT signature_notation_id_fkey FOREIGN KEY (notation_id) REFERENCES notation(id) NOT VALID;\n").unwrap();
+        assert!(schema["signature"]
+            .foreign_keys
+            .contains(&("notation_id".into(), "notation".into())));
+        assert!(parse_schema("CREATE TABLE signature (\n id UUID PRIMARY KEY\n);\nALTER TABLE signature ADD CONSTRAINT bad FOREIGN KEY (missing) REFERENCES notation(id) NOT VALID;\n").is_err());
+    }
+
+    #[test]
     fn inbox_tables_preserve_every_source_column() {
         let target = parse_schema(canonical_schema()).expect("canonical schema parses");
         for name in [
@@ -1676,6 +1686,10 @@ mod tests {
                 include_str!(
                     "../postgres/migrations/20261117150000_add_signature_authority_constraints.sql"
                 ),
+            ),
+            (
+                "20261117160000_signature_notation_reference.sql",
+                include_str!("../postgres/migrations/20261117160000_signature_notation_reference.sql"),
             ),
         ])
         .expect("timestamped migration assembles");

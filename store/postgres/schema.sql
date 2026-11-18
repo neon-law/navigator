@@ -4938,3 +4938,6 @@ CREATE INDEX notarization_notation
     ON "notarization" (notation_id, inserted_at);
 CREATE INDEX verification_citation
     ON "verification" (citation_id, id);
+
+-- Migration: 20261117160000_signature_notation_reference.sql
+ALTER TABLE signature ADD CONSTRAINT signature_notation_id_fkey FOREIGN KEY (notation_id) REFERENCES notation(id) NOT VALID;
