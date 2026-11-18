@@ -4,7 +4,7 @@
 //! The release rehearsal uses the same pinned browser, Nextest `ci`
 //! profile, serial execution, and stack budget as the integration job.
 //! Nextest records a test that passes on retry as `FLAKY` in its output
-//! and JUnit report; exhausted retries fail the gate.
+//! and `JUnit` report; exhausted retries fail the gate.
 //!
 //! This command assembles that harness against the caller's worktree:
 //!
