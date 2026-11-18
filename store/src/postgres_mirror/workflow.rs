@@ -794,8 +794,9 @@ pub(crate) async fn template_pin_parity(
     })
 }
 
-/// Notations whose compatibility-owned document or rendered-Asset protection
-/// differs from PostgreSQL. Activation requires this list to be empty.
+/// Compare reset protection for each captured Source Notation, including parents
+/// not copied yet. PG-only Notations remain subject to strict table parity.
+/// Activation requires the differences to be empty.
 /// Signature evidence stays on its existing PostgreSQL authority.
 pub(crate) async fn reset_fact_differences(
     surreal: &SurrealDb,
@@ -806,32 +807,35 @@ pub(crate) async fn reset_fact_differences(
         compared: 0,
         retained_native_protections: 0,
     };
-    let mut after: Option<Uuid> = None;
+    let mut start = 0usize;
     loop {
-        let ids: Vec<Uuid> = sqlx::query_scalar(
-            "SELECT id FROM notation WHERE ($1::uuid IS NULL OR id>$1) ORDER BY id LIMIT 256",
-        )
-        .bind(after)
-        .fetch_all(pg.pool())
-        .await?;
+        let ids: Vec<surrealdb::types::RecordId> = surreal
+            .query("SELECT VALUE id FROM notation ORDER BY id LIMIT 256 START $start")
+            .bind(("start", start))
+            .await
+            .and_then(surrealdb::IndexedResults::check)
+            .map_err(source)?
+            .take(0)
+            .map_err(source)?;
         if ids.is_empty() {
             break;
         }
-        for id in &ids {
-            let (source_document, _) = crate::notation_reset::source_facts(surreal, *id)
+        for record in &ids {
+            let id = record_uuid(record).ok_or(MirrorError::Source)?;
+            let (source_document, _) = crate::notation_reset::source_facts(surreal, id)
                 .await
                 .map_err(source)?;
-            let (target_document, _) = crate::postgres::notations::draft_facts(pg, *id).await?;
+            let (target_document, _) = crate::postgres::notations::draft_facts(pg, id).await?;
             proof.compared += 1;
             if source_document != target_document {
-                if target_document && super::documents::native_protects(pg, *id).await? {
+                if target_document && super::documents::native_protects(pg, id).await? {
                     proof.retained_native_protections += 1;
                 } else {
-                    differences.push(*id);
+                    differences.push(id);
                 }
             }
         }
-        after = ids.last().copied();
+        start = start.checked_add(ids.len()).ok_or(MirrorError::Source)?;
     }
     Ok((differences, proof))
 }

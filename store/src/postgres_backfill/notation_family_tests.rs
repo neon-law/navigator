@@ -216,3 +216,244 @@ async fn unknown_assets_block_and_native_union_seals_after_fresh_or_completed_gl
     handoff_case(true, false).await;
     handoff_case(true, true).await;
 }
+
+// Frozen source rows are independent of the initially empty PostgreSQL Note table.
+// This adapter exercises the real ledger/copy/replay contract without an engine.
+struct FrozenSourceNotes {
+    rows: Vec<serde_json::Value>,
+    receipt: SourceReceipt,
+    unavailable: AtomicBool,
+}
+
+fn note_images(
+    rows: Vec<serde_json::Value>,
+) -> std::collections::BTreeMap<crate::postgres_mirror::MirrorKey, serde_json::Value> {
+    rows.into_iter()
+        .map(|row| {
+            let id: Uuid = serde_json::from_value(row["id"].clone()).unwrap();
+            (crate::postgres_mirror::MirrorKey::Notation(id), row)
+        })
+        .collect()
+}
+
+impl Source for FrozenSourceNotes {
+    fn snapshot<'a>(&'a self, pg: &'a PostgresDb, family: Family) -> SourceOp<'a, Snapshot> {
+        Box::pin(async move {
+            assert!(
+                !self.unavailable.load(Ordering::SeqCst),
+                "sealed replay must not read Source"
+            );
+            let projection = crate::postgres::matter::row_json("notation").unwrap();
+            let rows: Vec<serde_json::Value> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+                "SELECT {projection} FROM notation r"
+            )))
+            .fetch_all(pg.pool())
+            .await?;
+            let notes = crate::postgres_mirror::records::compare_record_rows(
+                "notation",
+                note_images(self.rows.clone()),
+                note_images(rows),
+            );
+            let mut tables = Vec::new();
+            for table in family.tables() {
+                if *table == "notation" {
+                    tables.push(notes.clone());
+                } else {
+                    let target: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+                        "SELECT count(*) FROM {table}"
+                    )))
+                    .fetch_one(pg.pool())
+                    .await?;
+                    tables.push(crate::postgres_mirror::TableParity {
+                        table,
+                        source_rows: 0,
+                        target_rows: usize::try_from(target).unwrap(),
+                        divergent: vec![],
+                    });
+                }
+            }
+            Ok(Snapshot {
+                tables,
+                raw_counts: self
+                    .receipt
+                    .table_counts
+                    .iter()
+                    .map(|(table, count)| (table.clone(), usize::try_from(*count).unwrap()))
+                    .collect(),
+                schema_sha256: self.receipt.schema_sha256.clone(),
+                export_sha256: self.receipt.export_sha256.clone(),
+                export_bytes: self.receipt.export_bytes,
+                references: vec![],
+                reset_fact_differences: vec![],
+                foreign_keys_hold: foreign_keys_hold(pg, family).await?,
+                asset_union: Some(AssetUnionProof {
+                    full_metadata_compared: true,
+                    ..Default::default()
+                }),
+                reset_union: Some(ResetUnionProof {
+                    compared: self.rows.len(),
+                    retained_native_protections: 0,
+                }),
+                template_pins: Some(TemplatePinProof {
+                    compared: 1,
+                    differences: 0,
+                }),
+            })
+        })
+    }
+
+    fn write<'a>(
+        &'a self,
+        pg: &'a PostgresDb,
+        key: &'a crate::postgres_mirror::MirrorKey,
+    ) -> SourceOp<'a, ()> {
+        Box::pin(async move {
+            let row = note_images(self.rows.clone())
+                .remove(key)
+                .ok_or(crate::postgres_mirror::MirrorError::Source)?;
+            let _: serde_json::Value =
+                crate::postgres::matter::upsert_on(pg.pool(), "notation", row)
+                    .await
+                    .expect("valid captured Note fixture");
+            Ok(())
+        })
+    }
+}
+
+async fn frozen_source_notes(
+    pg: &PostgresDb,
+    target_only: bool,
+) -> (FrozenSourceNotes, Uuid, Vec<u8>) {
+    use sha2::Digest;
+    let (_, existing, _) = crate::postgres::fixtures::workflow_fixture(pg).await;
+    let projection = crate::postgres::matter::row_json("notation").unwrap();
+    let row: serde_json::Value = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT {projection} FROM notation r WHERE id=$1"
+    )))
+    .bind(existing)
+    .fetch_one(pg.pool())
+    .await
+    .unwrap();
+    let rows: Vec<_> = (0..2)
+        .map(|_| {
+            let mut row = row.clone();
+            row["id"] = serde_json::json!(Uuid::new_v4());
+            row
+        })
+        .collect();
+    if !target_only {
+        sqlx::query("DELETE FROM notation WHERE id=$1")
+            .bind(existing)
+            .execute(pg.pool())
+            .await
+            .unwrap();
+    }
+    let bytes = serde_json::to_vec(&rows).unwrap();
+    let receipt = SourceReceipt {
+        format_version: 1,
+        consistency: "operator_quiesced".into(),
+        export_bytes: u64::try_from(bytes.len()).unwrap(),
+        export_sha256: hex::encode(sha2::Sha256::digest(&bytes)),
+        schema_sha256: "ab".repeat(32),
+        table_counts: Family::Notation
+            .tables()
+            .iter()
+            .map(|table| ((*table).into(), if *table == "notation" { 2 } else { 0 }))
+            .collect(),
+    };
+    (
+        FrozenSourceNotes {
+            rows,
+            receipt,
+            unavailable: AtomicBool::new(false),
+        },
+        existing,
+        bytes,
+    )
+}
+
+#[tokio::test]
+async fn source_only_notations_enroll_then_replay_without_source() {
+    for target_only in [false, true] {
+        let (options, database) = crate::postgres_mirror::tests::fresh_schema()
+            .await
+            .expect("required PostgreSQL");
+        let pg = crate::postgres_mirror::tests::connect(&options, &database).await;
+        let (source, existing, bytes) = frozen_source_notes(&pg, target_only).await;
+        activate_fixture(&pg, Family::Satellites).await;
+        let satellite: serde_json::Value = sqlx::query_scalar(
+            "SELECT source_receipt FROM mirror_backfill_run WHERE scope='satellites:1'",
+        )
+        .fetch_one(pg.pool())
+        .await
+        .unwrap();
+        let initial = source.snapshot(&pg, Family::Notation).await.unwrap();
+        let notes = initial
+            .tables
+            .iter()
+            .find(|table| table.table == "notation")
+            .unwrap();
+        assert_eq!(
+            (notes.source_rows, notes.target_rows),
+            (2, usize::from(target_only))
+        );
+        assert!(initial.representable(Family::Notation, &source.receipt));
+        let run = Uuid::new_v4();
+        enroll(
+            &pg,
+            run,
+            Family::Notation,
+            1,
+            source.receipt.clone().verify_export(&bytes).unwrap(),
+        )
+        .await
+        .unwrap();
+        let advanced = during_import(
+            run,
+            Family::Notation,
+            advance_with(&source, &pg, run, None, true),
+        )
+        .await
+        .unwrap();
+        assert_eq!(advanced.snapshot.unwrap().clean(), !target_only);
+        if target_only {
+            assert!(matches!(
+                require_scope(&pg, Family::Notation).await,
+                Err(FamilyError::NotActive)
+            ));
+            let kept: bool =
+                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM notation WHERE id=$1)")
+                    .bind(existing)
+                    .fetch_one(pg.pool())
+                    .await
+                    .unwrap();
+            assert!(
+                kept,
+                "PG-only history must be retained while it blocks activation"
+            );
+        } else {
+            require_scope(&pg, Family::Notation).await.unwrap();
+            source.unavailable.store(true, Ordering::SeqCst);
+            assert!(during_import(
+                run,
+                Family::Notation,
+                advance_with(&source, &pg, run, None, true)
+            )
+            .await
+            .unwrap()
+            .snapshot
+            .is_none());
+        }
+        let after: serde_json::Value = sqlx::query_scalar(
+            "SELECT source_receipt FROM mirror_backfill_run WHERE scope='satellites:1'",
+        )
+        .fetch_one(pg.pool())
+        .await
+        .unwrap();
+        assert_eq!(
+            after, satellite,
+            "an existing scope's sealed capture is unchanged"
+        );
+        pg.pool().close().await;
+    }
+}

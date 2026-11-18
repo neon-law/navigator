@@ -343,3 +343,167 @@ async fn a_shadowed_notation_read_matches_its_mirror_and_flags_drift() {
             .equal
     );
 }
+
+async fn source_reset_fixture(pg: &PostgresDb) -> (SurrealDb, [Uuid; 2]) {
+    let surreal = mem_surreal().await;
+    let client = person(&surreal, Role::Client).await;
+    let project = matter(&surreal, pg, "Synthetic reset census").await;
+    let template = draft(&surreal).await;
+    let first = open(&surreal, template, client, project).await;
+    let second = open(&surreal, template, client, project).await;
+    (surreal, [first, second])
+}
+
+async fn source_reset_asset(surreal: &SurrealDb, notation: Uuid) -> Uuid {
+    let asset = crate::test_support::seed_body_asset(surreal, b"synthetic reset fact").await;
+    surreal
+        .query("UPDATE $id SET storage_key=$key")
+        .bind(("id", record_id("asset", asset)))
+        .bind(("key", format!("notations/{notation}/synthetic.txt")))
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
+    asset
+}
+
+#[tokio::test]
+async fn source_only_notation_reset_census_precedes_parent_copy() {
+    let Some((options, database)) = fresh_schema().await else {
+        return;
+    };
+    let pg = connect(&options, &database).await;
+    let (surreal, ids) = source_reset_fixture(&pg).await;
+    let asset = source_reset_asset(&surreal, ids[0]).await;
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM notation")
+        .fetch_one(pg.pool())
+        .await
+        .unwrap();
+    assert_eq!(
+        count, 0,
+        "the captured Notes genuinely exist only in Source"
+    );
+    let (differences, proof) = reset_fact_differences(&surreal, &pg).await.unwrap();
+    assert_eq!(proof.compared, ids.len());
+    assert_eq!(proof.retained_native_protections, 0);
+    assert_eq!(
+        differences,
+        vec![ids[0]],
+        "Source protection must be imported"
+    );
+
+    mirrored(&surreal, &pg, &MirrorKey::Notation(ids[0])).await;
+    mirrored(&surreal, &pg, &MirrorKey::Asset(asset)).await;
+    let (differences, proof) = reset_fact_differences(&surreal, &pg).await.unwrap();
+    assert!(differences.is_empty());
+    assert_eq!(
+        proof.compared, 2,
+        "a still-missing unprotected parent is counted"
+    );
+    mirrored(&surreal, &pg, &MirrorKey::Notation(ids[1])).await;
+    let (differences, proof) = reset_fact_differences(&surreal, &pg).await.unwrap();
+    assert!(differences.is_empty());
+    assert_eq!((proof.compared, proof.retained_native_protections), (2, 0));
+    let original = super::super::from_source(crate::notations::find_by_id(&surreal, ids[0]))
+        .await
+        .unwrap()
+        .unwrap();
+    for _ in 0..255 {
+        open(
+            &surreal,
+            original.template_id,
+            original.person_id,
+            original.project_id,
+        )
+        .await;
+    }
+    let (differences, proof) = reset_fact_differences(&surreal, &pg).await.unwrap();
+    assert!(differences.is_empty());
+    assert_eq!(
+        proof.compared, 257,
+        "the census crosses its bounded page boundary"
+    );
+    pg.pool().close().await;
+}
+
+#[tokio::test]
+async fn native_reset_protection_does_not_mask_source_or_pg_only_drift() {
+    let Some((options, database)) = fresh_schema().await else {
+        return;
+    };
+    let pg = connect(&options, &database).await;
+    let (surreal, ids) = source_reset_fixture(&pg).await;
+    for id in ids {
+        mirrored(&surreal, &pg, &MirrorKey::Notation(id)).await;
+    }
+    sqlx::query("UPDATE template SET kind='onboarding' WHERE id=(SELECT template_id FROM notation WHERE id=$1)")
+        .bind(ids[0]).execute(pg.pool()).await.unwrap();
+    let envelope = Uuid::new_v4();
+    sqlx::query("INSERT INTO signature(id,notation_id,provider,provider_id,state,signed_at,inserted_at,updated_at) VALUES($1,$2,'docusign',$3,'completed',now(),now(),now())")
+        .bind(Uuid::new_v4()).bind(ids[0]).bind(envelope.to_string()).execute(pg.pool()).await.unwrap();
+    sqlx::query("INSERT INTO asset(id,storage_key,content_type,byte_size,sha256_hex,kind,project_id,metadata,inserted_at,updated_at) SELECT $1,$2,'application/pdf',1,$3,'onboarding',project_id,$4,now(),now() FROM notation WHERE id=$5")
+        .bind(Uuid::new_v4()).bind(format!("notations/{}/signed.pdf",ids[0])).bind("a".repeat(64))
+        .bind(serde_json::json!({"docusign_envelope_id":envelope.to_string(),"verified_onboarding_envelope_id":envelope.to_string()}))
+        .bind(ids[0]).execute(pg.pool()).await.unwrap();
+    let (differences, proof) = reset_fact_differences(&surreal, &pg).await.unwrap();
+    assert!(differences.is_empty());
+    assert_eq!((proof.compared, proof.retained_native_protections), (2, 1));
+
+    let unknown = Uuid::new_v4();
+    sqlx::query("INSERT INTO asset(id,storage_key,content_type,byte_size,sha256_hex,kind,project_id,metadata,inserted_at,updated_at) SELECT $1,$2,'application/pdf',1,$3,'onboarding',project_id,$4,now(),now() FROM notation WHERE id=$5")
+        .bind(unknown).bind(format!("notations/{}/unknown.pdf",ids[1])).bind("b".repeat(64))
+        .bind(serde_json::json!({"docusign_envelope_id":envelope.to_string(),"verified_onboarding_envelope_id":envelope.to_string()}))
+        .bind(ids[1]).execute(pg.pool()).await.unwrap();
+    let (differences, proof) = reset_fact_differences(&surreal, &pg).await.unwrap();
+    assert_eq!(
+        differences,
+        vec![ids[1]],
+        "one Note cannot borrow another Note's native evidence"
+    );
+    assert_eq!(proof.retained_native_protections, 1);
+    sqlx::query("DELETE FROM asset WHERE id=$1")
+        .bind(unknown)
+        .execute(pg.pool())
+        .await
+        .unwrap();
+
+    source_reset_asset(&surreal, ids[1]).await;
+    let (differences, proof) = reset_fact_differences(&surreal, &pg).await.unwrap();
+    assert_eq!(
+        differences,
+        vec![ids[1]],
+        "native protection cannot hide missing Source protection"
+    );
+    assert_eq!((proof.compared, proof.retained_native_protections), (2, 1));
+    let (_, extra, _) = crate::postgres::fixtures::workflow_fixture(&pg).await;
+    let (_, proof) = reset_fact_differences(&surreal, &pg).await.unwrap();
+    assert_eq!(
+        proof.compared, 2,
+        "PG-only Notes do not change the captured Source census"
+    );
+    let source_notes = super::super::from_source(crate::notations::list_all(&surreal))
+        .await
+        .unwrap();
+    let notes = compare(
+        "notation",
+        &images(
+            &source_notes,
+            |row| MirrorKey::Notation(row.id),
+            |row| Ok(NotationImage::from_source(row)),
+        ),
+        &target(
+            &pg,
+            NOTATION_SELECT.as_str(),
+            NotationImage::from_row,
+            |row| MirrorKey::Notation(row.id),
+        )
+        .await
+        .unwrap(),
+    );
+    assert_eq!((notes.source_rows, notes.target_rows), (2, 3));
+    assert!(
+        notes.divergent.contains(&MirrorKey::Notation(extra)),
+        "strict table parity refuses PG-only history"
+    );
+    pg.pool().close().await;
+}
