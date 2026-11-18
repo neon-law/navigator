@@ -220,7 +220,10 @@ async fn execute_family(
         args.resume.is_none() || args.enrollment.refresh_capture == receipt.is_some(),
         "pending capture replacement requires --refresh-capture"
     );
-    let surreal = store::surreal::connect_from_env()
+    // Family proofs fingerprint export bytes through the same backup surface as strict captures.
+    let config = store::surreal::SurrealConfig::from_env()
+        .map_err(|_| anyhow::anyhow!("SurrealDB is unavailable"))?;
+    let surreal = crate::surreal_archive::connect_http(&config)
         .await
         .map_err(|_| anyhow::anyhow!("SurrealDB is unavailable"))?;
     match (args.resume, receipt) {
