@@ -616,7 +616,8 @@ pub async fn for_firm_since(
         return Ok(Vec::new());
     }
     let project_ids: Vec<Uuid> = brand_by_project.keys().copied().collect();
-    let lawyer_dris = crate::projects::dri_names_by_project(db, "is_lawyer_dri").await?;
+    let lawyer_dris =
+        crate::projects::dri_names_by_project(db, crate::projects::DriSide::Lawyer).await?;
 
     Ok(for_projects(db, &project_ids)
         .await?

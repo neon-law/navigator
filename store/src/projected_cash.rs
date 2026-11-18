@@ -404,7 +404,8 @@ pub async fn firm_rollup(
         .filter(|project| project.firm_id == Some(firm_id))
         .collect();
     let pending_matters = pending_projections(surreal, pg, viewer, &projects, on).await?;
-    let lead_lawyers = crate::projects::dri_names_by_project(surreal, "is_lawyer_dri").await?;
+    let lead_lawyers =
+        crate::projects::dri_names_by_project(surreal, crate::projects::DriSide::Lawyer).await?;
     let mut brand_names: BTreeMap<&str, String> = BTreeMap::new();
     for (project, _) in &pending_matters {
         if !brand_names.contains_key(project.brand.as_str()) {

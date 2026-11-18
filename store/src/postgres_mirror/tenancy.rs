@@ -789,6 +789,16 @@ async fn upsert_firm_brand(pg: &PostgresDb, row: &FirmBrandImage) -> Result<Mirr
     Ok(changed(stale + written, Mirrored::Written))
 }
 
+/// Write one whole Project row, every column as given, the way an archive
+/// restore puts back a row it has checked no other Project holds.
+pub(crate) async fn put_project(
+    pg: &PostgresDb,
+    project: &crate::projects::Project,
+) -> Result<(), MirrorError> {
+    upsert_project(pg, &ProjectImage::from_source(project)?).await?;
+    Ok(())
+}
+
 async fn upsert_project(pg: &PostgresDb, project: &ProjectImage) -> Result<Mirrored, MirrorError> {
     let mut tx = pg.0.begin().await?;
     let stale = sqlx::query(
