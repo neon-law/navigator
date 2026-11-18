@@ -641,8 +641,8 @@ const MERGE_UNIQUE_LINKS: &[(&str, &[&str])] = &[
 /// Fold `drop_id` into `keep_id` in one transaction: every PostgreSQL row
 /// that links the dropped Person moves to the kept Person, the kept Person
 /// takes each provider subject it lacks and every mailbox claim, and the
-/// dropped row is deleted last. Links are read from the catalog's foreign
-/// keys, so a table added later moves without a list to update.
+/// dropped row is deleted last. Links come from catalog foreign keys and the
+/// canonical import metadata for authoritative tables that accept historical orphans.
 async fn demote_merged_calendar_primary(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     keep_id: Uuid,
@@ -660,12 +660,12 @@ async fn demote_merged_calendar_primary(
     Ok(())
 }
 
-pub(crate) async fn merge(
+/// Commit the canonical relational merge before compatibility projection.
+pub(crate) async fn merge_rows(
     pg: &PostgresDb,
-    db: &SurrealDb,
     keep_id: Uuid,
     drop_id: Uuid,
-) -> Result<(), PersonError> {
+) -> Result<Vec<Uuid>, PersonError> {
     let mut tx = pg.0.begin().await.map_err(database)?;
     let mut locked = [keep_id, drop_id];
     locked.sort();
@@ -713,7 +713,7 @@ pub(crate) async fn merge(
     .execute(&mut *tx)
     .await
     .map_err(database)?;
-    let links: Vec<(String, String)> = sqlx::query_as(
+    let mut links: Vec<(String, String)> = sqlx::query_as(
         "SELECT c.conrelid::regclass::text, a.attname::text FROM pg_constraint c \
          JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey) \
          WHERE c.contype = 'f' AND c.confrelid = 'person'::regclass ORDER BY 1, 2",
@@ -721,6 +721,12 @@ pub(crate) async fn merge(
     .fetch_all(&mut *tx)
     .await
     .map_err(database)?;
+    links.extend(
+        crate::postgres_mirror::records::authoritative_person_links()
+            .map(|(table, column)| (table.to_owned(), column.to_owned())),
+    );
+    links.sort();
+    links.dedup();
     for (table, column) in links {
         sqlx::query(AssertSqlSafe(format!(
             "UPDATE {table} SET {column} = $1 WHERE {column} = $2"
@@ -751,6 +757,16 @@ pub(crate) async fn merge(
         .await
         .map_err(database)?;
     tx.commit().await.map_err(database)?;
+    Ok(phones)
+}
+
+pub(crate) async fn merge(
+    pg: &PostgresDb,
+    db: &SurrealDb,
+    keep_id: Uuid,
+    drop_id: Uuid,
+) -> Result<(), PersonError> {
+    let phones = merge_rows(pg, keep_id, drop_id).await?;
     sync_current_surreal(pg, db, drop_id).await?;
     sync_current_surreal(pg, db, keep_id).await?;
     for phone in phones {

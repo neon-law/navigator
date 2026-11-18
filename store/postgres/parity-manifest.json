@@ -4367,7 +4367,8 @@
           "inserted_at": "TIMESTAMPTZ",
           "mirror": "TEXT",
           "run_id": "UUID",
-          "updated_at": "TIMESTAMPTZ"
+          "updated_at": "TIMESTAMPTZ",
+          "verification": "JSONB"
         },
         "foreign_keys": [
           [
@@ -4407,6 +4408,9 @@
           "completed_at": "TIMESTAMPTZ",
           "id": "UUID",
           "inserted_at": "TIMESTAMPTZ",
+          "scope": "TEXT",
+          "source_receipt": "JSONB",
+          "source_receipt_history": "JSONB",
           "status": "TEXT",
           "updated_at": "TIMESTAMPTZ"
         },

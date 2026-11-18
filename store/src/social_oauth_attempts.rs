@@ -1,7 +1,9 @@
 //! Short-lived, single-use OAuth handshakes for social account connections.
 
+use crate::postgres::matter;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, Duration, Utc};
+use serde_json::json;
 use sha2::{Digest, Sha256};
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
@@ -13,7 +15,7 @@ use crate::surreal::{record_id, record_uuid, SurrealDb};
 const TABLE: &str = "social_oauth_attempt";
 const LIFETIME: Duration = Duration::minutes(10);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct SocialOAuthAttempt {
     pub state: String,
     pub pkce_verifier: String,
@@ -57,6 +59,8 @@ impl AttemptRow {
 
 #[derive(Debug, thiserror::Error)]
 pub enum SocialOAuthAttemptError {
+    #[error(transparent)]
+    Postgres(#[from] matter::MatterAuthorityError),
     #[error("database: {0}")]
     Db(String),
     #[error("not allowed")]
@@ -97,6 +101,34 @@ pub async fn begin(
         return Err(SocialOAuthAttemptError::Denied);
     }
 
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        sqlx::query(
+            "DELETE FROM social_oauth_attempt WHERE expires_at <= $1 OR consumed_at IS NOT NULL",
+        )
+        .bind(now)
+        .execute(pg.pool())
+        .await
+        .map_err(matter::MatterAuthorityError::from)?;
+        let state = random_token();
+        let verifier = random_token();
+        let expires_at = now + LIFETIME;
+        let row = json!({"id": Uuid::now_v7(), "state_hash": state_hash(&state), "firm_id": firm_id,
+            "brand_key": brand_key, "provider": provider, "actor_person_id": actor_person_id,
+            "pkce_verifier": verifier, "expires_at": expires_at, "consumed_at": null, "inserted_at": now,
+            "provider_account_id": null, "instagram_account_id": null});
+        matter::upsert::<serde_json::Value>(&pg, TABLE, &row).await?;
+        return Ok(SocialOAuthAttempt {
+            state,
+            pkce_verifier: verifier,
+            firm_id,
+            brand_key: brand_key.to_owned(),
+            provider: provider.to_owned(),
+            provider_account_id: None,
+            instagram_account_id: None,
+            actor_person_id,
+            expires_at,
+        });
+    }
     db.query("DELETE social_oauth_attempt WHERE expires_at <= $now OR consumed_at IS NOT NONE")
         .bind(("now", surrealdb::types::Datetime::from(now)))
         .await
@@ -143,6 +175,17 @@ pub async fn bind_account(
     attempt: &SocialOAuthAttempt,
     provider_account_id: &str,
 ) -> Result<(), SocialOAuthAttemptError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        matter::update::<serde_json::Value>(
+            &pg,
+            TABLE,
+            json!({"state_hash": state_hash(&attempt.state), "consumed_at": null}),
+            json!({"provider_account_id": provider_account_id}),
+        )
+        .await?;
+        return Ok(());
+    }
+
     db.query("UPDATE social_oauth_attempt SET provider_account_id = $account WHERE state_hash = $hash AND consumed_at IS NONE")
         .bind(("hash", state_hash(&attempt.state)))
         .bind(("account", provider_account_id.to_string()))
@@ -162,6 +205,16 @@ pub async fn bind_instagram(
     if attempt.provider != "facebook" {
         return Err(SocialOAuthAttemptError::UnsupportedProvider);
     }
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        matter::update::<serde_json::Value>(
+            &pg,
+            TABLE,
+            json!({"state_hash": state_hash(&attempt.state), "consumed_at": null}),
+            json!({"instagram_account_id": identity}),
+        )
+        .await?;
+        return Ok(());
+    }
     db.query("UPDATE social_oauth_attempt SET instagram_account_id = $identity WHERE state_hash = $hash AND consumed_at IS NONE")
         .bind(("identity", identity.to_string())).bind(("hash", state_hash(&attempt.state))).await?.check()?;
     Ok(())
@@ -180,6 +233,16 @@ pub async fn consume(
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
     {
         return Err(SocialOAuthAttemptError::InvalidState);
+    }
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        let value = matter::consume_oauth(&pg, &state_hash(state), now)
+            .await?
+            .ok_or(SocialOAuthAttemptError::InvalidState)?;
+        let mut value = value;
+        value["state"] = json!(state);
+        return serde_json::from_value(value)
+            .map_err(matter::MatterAuthorityError::from)
+            .map_err(SocialOAuthAttemptError::from);
     }
     let state_hash = state_hash(state);
     let mut response = db

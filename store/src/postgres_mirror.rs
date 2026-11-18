@@ -485,6 +485,10 @@ pub enum MirrorOutcome {
 /// Why one mirror failed. Carries no row values.
 #[derive(Debug, thiserror::Error)]
 pub enum MirrorError {
+    /// A scoped family import or authority receipt is unavailable.
+    #[error(transparent)]
+    Family(#[from] crate::postgres_backfill::family::FamilyError),
+
     #[error("the SurrealDB source row could not be read")]
     Source,
     /// Where a comparison failed: the mirror group or table being read.
@@ -519,7 +523,8 @@ impl MirrorError {
         match self {
             Self::Source | Self::Unavailable | Self::Timeout => true,
             Self::At { cause, .. } => cause.retryable(),
-            Self::InboxAuthority
+            Self::Family(_)
+            | Self::InboxAuthority
             | Self::MatterAuthority
             | Self::GraphAuthority
             | Self::SourceTimestamp
@@ -621,7 +626,7 @@ pub(crate) async fn during_initial_copy<T>(future: impl std::future::Future<Outp
 /// PostgreSQL could not be read.
 pub async fn backfilled(pg: &PostgresDb) -> Result<bool, MirrorError> {
     Ok(sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM mirror_backfill_run WHERE status = 'completed')",
+        "SELECT EXISTS (SELECT 1 FROM mirror_backfill_run WHERE scope = 'global' AND status = 'completed')",
     )
     .fetch_one(&pg.0)
     .await?)
@@ -1277,6 +1282,7 @@ pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport
 ///
 /// Either store could not be read for the comparison.
 pub async fn reconcile(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
+    crate::postgres_backfill::family::require_supported_scopes(pg).await?;
     let before = parity(surreal, pg).await?;
     for key in before.divergent() {
         if let Err(error) = mirror(surreal, pg, key).await {
@@ -1611,6 +1617,7 @@ pub async fn reconcile_all(
     surreal: &SurrealDb,
     pg: &PostgresDb,
 ) -> Result<Vec<MirrorParity>, MirrorError> {
+    crate::postgres_backfill::family::require_supported_scopes(pg).await?;
     for mirror in MIRRORS {
         (mirror.reconcile)(surreal, pg)
             .await

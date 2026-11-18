@@ -7,20 +7,17 @@
 //! `serde_json::Value`. A playbook is scoped to the client Entity, so one
 //! playbook serves every matter for that client.
 //!
-//! # This table lives in SurrealDB
-//!
-//! `playbooks` moved with wave five of #1093 (ENG-121), in the
-//! playbooks-and-contract-reviews slice. Unlike most tables in this wave,
-//! `playbook_entity_name` (its `(entity_id, name)` uniqueness) **is** a real
-//! `UNIQUE` index in the Surreal schema, so [`create`] can rely on the
-//! engine to refuse a duplicate rather than reading first.
+//! Commands use PostgreSQL whenever its host is configured; see
+//! [storage models](../../docs/storage-models.md#matter-records).
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::postgres::matter;
 use crate::surreal::{record_id, record_uuid, SurrealDb};
+use serde_json::json;
 
 const TABLE: &str = "playbook";
 const ENTITY_TABLE: &str = "entity";
@@ -50,7 +47,7 @@ pub struct Position {
 
 /// One `playbook` row: a client Entity's stored contract-negotiation
 /// positions.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Playbook {
     pub id: Uuid,
     pub entity_id: Uuid,
@@ -108,6 +105,8 @@ fn many(mut response: surrealdb::IndexedResults) -> Result<Vec<Playbook>, surrea
 /// Why a playbook command refused.
 #[derive(Debug, thiserror::Error)]
 pub enum PlaybookError {
+    #[error(transparent)]
+    Postgres(#[from] matter::MatterAuthorityError),
     #[error("database: {0}")]
     Db(#[from] surrealdb::Error),
     /// A write reported success but returned no row, or returned one this
@@ -147,6 +146,26 @@ pub struct NewPlaybook<'a> {
 /// [`PlaybookError::DuplicateName`] if `(entity_id, name)` already has a
 /// playbook, or a database error.
 pub async fn create(db: &SurrealDb, new: &NewPlaybook<'_>) -> Result<Uuid, PlaybookError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        let now = chrono::Utc::now();
+        let row = Playbook {
+            id: Uuid::now_v7(),
+            entity_id: new.entity_id,
+            name: new.name.to_owned(),
+            positions: serde_json::to_value(new.positions)?,
+            active: true,
+            inserted_at: now,
+            updated_at: now,
+        };
+        return match matter::upsert::<Playbook>(&pg, TABLE, &row).await {
+            Ok(stored) => Ok(stored.id),
+            Err(matter::MatterAuthorityError::Conflict(_)) => {
+                Err(PlaybookError::DuplicateName(new.name.to_owned()))
+            }
+            Err(error) => Err(error.into()),
+        };
+    }
+
     let positions = serde_json::to_value(new.positions)?;
     let id = Uuid::now_v7();
     match db
@@ -184,6 +203,10 @@ pub async fn create(db: &SurrealDb, new: &NewPlaybook<'_>) -> Result<Uuid, Playb
 ///
 /// Propagates any database error.
 pub async fn by_id(db: &SurrealDb, id: Uuid) -> Result<Option<Playbook>, PlaybookError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return Ok(matter::find(&pg, TABLE, json!({"id": id})).await?);
+    }
+
     let response = db
         .query(format!("SELECT {SELECT} FROM ONLY $id LIMIT 1"))
         .bind(("id", record_id(TABLE, id)))
@@ -198,6 +221,10 @@ pub async fn by_id(db: &SurrealDb, id: Uuid) -> Result<Option<Playbook>, Playboo
 ///
 /// Propagates any database error.
 pub async fn for_entity(db: &SurrealDb, entity_id: Uuid) -> Result<Vec<Playbook>, PlaybookError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return Ok(matter::select(&pg, TABLE, json!({"entity_id": entity_id}), &["name"]).await?);
+    }
+
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE entity_id = $entity ORDER BY name ASC"
@@ -215,6 +242,10 @@ pub async fn for_entity(db: &SurrealDb, entity_id: Uuid) -> Result<Vec<Playbook>
 ///
 /// Propagates any database error.
 pub async fn all(db: &SurrealDb) -> Result<Vec<Playbook>, PlaybookError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return Ok(matter::select(&pg, TABLE, json!({}), &["name"]).await?);
+    }
+
     let response = db
         .query(format!("SELECT {SELECT} FROM {TABLE} ORDER BY name ASC"))
         .await
@@ -233,6 +264,20 @@ pub async fn update_positions(
     id: Uuid,
     positions: &[Position],
 ) -> Result<(), PlaybookError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        let changed: Vec<Playbook> = matter::update(
+            &pg,
+            TABLE,
+            json!({"id": id}),
+            json!({"positions": positions, "updated_at": chrono::Utc::now()}),
+        )
+        .await?;
+        if changed.is_empty() {
+            return Err(PlaybookError::NotFound(id));
+        }
+        return Ok(());
+    }
+
     let value = serde_json::to_value(positions)?;
     let mut response = db
         .query(format!(

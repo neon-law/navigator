@@ -44,9 +44,31 @@ pub struct BackfillArgs {
     /// Continue the run with this id from its checkpoints.
     #[arg(long, value_name = "RUN_ID")]
     resume: Option<Uuid>,
+    #[command(flatten)]
+    enrollment: FamilyArgs,
     /// Print one JSON object instead of text.
     #[arg(long)]
     json: bool,
+}
+
+/// Explicit capture and activation options belonging to one immutable family.
+#[derive(Debug, Args)]
+struct FamilyArgs {
+    /// Enroll the exact versioned family, such as satellites:1 (never a backend toggle).
+    #[arg(long, conflicts_with = "dry_run")]
+    family: Option<String>,
+    /// The canonical strict export captured while all compatibility writers remain stopped.
+    #[arg(long, requires_all = ["family", "capture_receipt"])]
+    capture: Option<std::path::PathBuf>,
+    /// The existing archive receipt paired with --capture.
+    #[arg(long, requires_all = ["family", "capture"])]
+    capture_receipt: Option<std::path::PathBuf>,
+    /// Replace a rejected pending capture after a new verified frozen export.
+    #[arg(long, requires_all = ["resume", "capture"])]
+    refresh_capture: bool,
+    /// Activate this family only after complete final parity and reference verification.
+    #[arg(long, requires = "family")]
+    activate: bool,
 }
 
 const UNAVAILABLE: u8 = 2;
@@ -112,12 +134,24 @@ pub fn run(args: &BackfillArgs) -> ExitCode {
 }
 
 async fn execute(args: &BackfillArgs) -> anyhow::Result<Outcome> {
-    let surreal = store::surreal::connect_from_env()
-        .await
-        .map_err(|_| anyhow::anyhow!("SurrealDB is unavailable"))?;
     let pg = PostgresDb::from_env()
         .await
         .map_err(|_| anyhow::anyhow!("PostgreSQL is unavailable"))?;
+    if let Some(scope) = &args.enrollment.family {
+        return execute_family(args, &pg, scope).await.map(Outcome::Run);
+    }
+    if let Some(run) = args.resume {
+        anyhow::ensure!(
+            store::postgres_backfill::report(&pg, run).await?.scope == "global",
+            "scoped run requires its explicit --family"
+        );
+    }
+    if !args.dry_run {
+        store::postgres_backfill::family::require_supported_scopes(&pg).await?;
+    }
+    let surreal = store::surreal::connect_from_env()
+        .await
+        .map_err(|_| anyhow::anyhow!("SurrealDB is unavailable"))?;
     Ok(if args.dry_run {
         let plan = store::postgres_backfill::plan(&surreal, &pg, args.batch_size).await?;
         let assets = if args.verify_assets {
@@ -150,6 +184,77 @@ async fn execute(args: &BackfillArgs) -> anyhow::Result<Outcome> {
                 .await?,
         )
     })
+}
+
+async fn execute_family(
+    args: &BackfillArgs,
+    pg: &PostgresDb,
+    scope: &str,
+) -> anyhow::Result<RunReport> {
+    use store::postgres_backfill::{self, family::Family};
+    let family = Family::from_scope(scope)
+        .ok_or_else(|| anyhow::anyhow!("unknown immutable family scope"))?;
+    if let Some(run) = args.resume {
+        if let Some(report) = postgres_backfill::completed_family_report(pg, family, run).await? {
+            anyhow::ensure!(
+                !args.enrollment.refresh_capture && args.enrollment.capture.is_none(),
+                "activated captures are immutable"
+            );
+            return Ok(report);
+        }
+    }
+    let receipt = match (&args.enrollment.capture, &args.enrollment.capture_receipt) {
+        (Some(export), Some(receipt)) => {
+            let receipt: store::postgres_backfill::family::SourceReceipt =
+                serde_json::from_reader(std::fs::File::open(receipt)?)?;
+            Some(receipt.verify_export_reader(std::fs::File::open(export)?)?)
+        }
+        (None, None) => None,
+        _ => anyhow::bail!("capture export and receipt must be supplied together"),
+    };
+    anyhow::ensure!(
+        args.resume.is_some() || receipt.is_some(),
+        "new family enrollment requires a verified capture"
+    );
+    anyhow::ensure!(
+        args.resume.is_none() || args.enrollment.refresh_capture == receipt.is_some(),
+        "pending capture replacement requires --refresh-capture"
+    );
+    let surreal = store::surreal::connect_from_env()
+        .await
+        .map_err(|_| anyhow::anyhow!("SurrealDB is unavailable"))?;
+    match (args.resume, receipt) {
+        (Some(run), Some(receipt)) => Ok(postgres_backfill::refresh_family(
+            &surreal,
+            pg,
+            family,
+            run,
+            receipt,
+            args.max_batches,
+            args.enrollment.activate,
+        )
+        .await?),
+        (Some(run), None) => Ok(postgres_backfill::resume_family(
+            &surreal,
+            pg,
+            family,
+            run,
+            args.max_batches,
+            args.enrollment.activate,
+        )
+        .await?),
+        (None, Some(receipt)) => Ok(postgres_backfill::start_family(
+            &surreal,
+            pg,
+            family,
+            receipt,
+            args.batch_size,
+            args.max_batches,
+            args.enrollment.activate,
+        )
+        .await?),
+        (None, None) => anyhow::bail!("new family enrollment requires a verified capture"),
+    }
 }
 
 fn error_json(error: &anyhow::Error) -> serde_json::Value {
@@ -320,6 +425,8 @@ fn run_json(report: &RunReport) -> serde_json::Value {
     json!({
         "mode": "backfill",
         "run_id": report.run_id,
+        "scope": report.scope,
+        "parity_basis": if report.scope == "global" { "live_source" } else { "verified_capture" },
         "status": report.status.label(),
         "clean": report.is_clean(),
         "batch_size": report.batch_size,
@@ -342,6 +449,7 @@ fn run_json(report: &RunReport) -> serde_json::Value {
             "field": reference.field,
             "source_orphans": reference.source_orphans,
             "postgres_missing": reference.postgres_missing,
+            "newly_target_missing": reference.newly_target_missing,
         })).collect::<Vec<_>>(),
         "parity": report.parity.iter().map(|table| json!({
             "mirror": table.mirror,
@@ -428,11 +536,30 @@ fn run_text(report: &RunReport) -> String {
         }
     }
     let _ = match (report.status, report.failures.len()) {
+        (RunStatus::Paused, _) if report.scope != "global" => write!(
+            out,
+            "paused: resume with --family {} --resume {}",
+            report.scope, report.run_id
+        ),
         (RunStatus::Paused, _) => write!(out, "paused: resume with --resume {}", report.run_id),
+        (RunStatus::Completed, 0) if report.is_clean() && report.scope != "global" => {
+            write!(
+                out,
+                "completed: verified capture parity for scope {}",
+                report.scope
+            )
+        }
         (RunStatus::Completed, 0) if report.is_clean() => {
             write!(out, "completed: all mirrored tables are in parity")
         }
         (RunStatus::Completed, 0) => write!(out, "completed with parity mismatches"),
+        (RunStatus::Completed, failed) if report.scope != "global" => {
+            write!(
+                out,
+                "completed with {failed} recorded failure(s) for capture scope {}",
+                report.scope
+            )
+        }
         (RunStatus::Completed, failed) => {
             write!(out, "completed with {failed} row(s) still missing")
         }
@@ -484,6 +611,54 @@ mod tests {
                 .verify_assets
         );
         assert!(Cli::try_parse_from(["backfill", "--resume", "not-a-uuid"]).is_err());
+    }
+
+    #[test]
+    fn family_flags_require_explicit_scope_and_paired_capture() {
+        assert!(Cli::try_parse_from(["backfill", "--activate"]).is_err());
+        assert!(Cli::try_parse_from([
+            "backfill",
+            "--family",
+            "satellites:1",
+            "--capture",
+            "synthetic.surql"
+        ])
+        .is_err());
+        assert!(
+            Cli::try_parse_from(["backfill", "--family", "satellites:1", "--refresh-capture"])
+                .is_err()
+        );
+        let run = Uuid::new_v4().to_string();
+        let args = Cli::try_parse_from([
+            "backfill",
+            "--family",
+            "satellites:1",
+            "--resume",
+            &run,
+            "--activate",
+        ])
+        .unwrap()
+        .args;
+        assert!(args.enrollment.activate);
+        assert!(
+            args.enrollment.capture.is_none(),
+            "completed replay needs no capture file"
+        );
+        let refresh = Cli::try_parse_from([
+            "backfill",
+            "--family",
+            "satellites:1",
+            "--resume",
+            &run,
+            "--refresh-capture",
+            "--capture",
+            "synthetic.surql",
+            "--capture-receipt",
+            "synthetic.receipt.json",
+        ])
+        .unwrap()
+        .args;
+        assert!(refresh.enrollment.refresh_capture);
     }
 
     #[test]
@@ -632,6 +807,7 @@ mod tests {
                 field: "out",
                 source_orphans: 1,
                 postgres_missing: 1,
+                newly_target_missing: 0,
             }],
             tables: vec![TablePlan {
                 mirror: "identity",
@@ -655,6 +831,7 @@ mod tests {
         assert!(plan_text(&plan, None).contains("relationship.out: 1 source orphan(s)"));
 
         let report = RunReport {
+            scope: "global".into(),
             run_id: Uuid::nil(),
             status: RunStatus::Completed,
             batch_size: 2,
@@ -705,6 +882,7 @@ mod tests {
     fn parity_mismatches_make_a_completed_report_unclean() {
         let id = Uuid::new_v4().to_string();
         let report = RunReport {
+            scope: "global".into(),
             run_id: Uuid::nil(),
             status: RunStatus::Completed,
             batch_size: 10,
@@ -806,6 +984,7 @@ mod tests {
     #[test]
     fn a_clean_run_reports_parity_and_omitted_keys_are_counted() {
         let clean = RunReport {
+            scope: "global".into(),
             run_id: Uuid::nil(),
             status: RunStatus::Completed,
             batch_size: 10,
@@ -839,6 +1018,15 @@ mod tests {
         assert!(text.ends_with("completed: all mirrored tables are in parity"));
         assert_eq!(run_json(&clean)["clean"], true);
 
+        let mut scoped = clean.clone();
+        scoped.scope = "satellites:1".into();
+        assert_eq!(run_json(&scoped)["scope"], "satellites:1");
+        assert_eq!(run_json(&scoped)["parity_basis"], "verified_capture");
+        assert!(run_text(&scoped)
+            .ends_with("completed: verified capture parity for scope satellites:1"));
+        scoped.status = RunStatus::Paused;
+        assert!(run_text(&scoped).contains("--family satellites:1 --resume"));
+
         let divergent = RunReport {
             parity: vec![store::postgres_backfill::ParityTableReport {
                 mirror: "identity".into(),
@@ -857,6 +1045,7 @@ mod tests {
                 field: "in",
                 source_orphans: 2,
                 postgres_missing: 0,
+                newly_target_missing: 0,
             }],
             ..clean
         };

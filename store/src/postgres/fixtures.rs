@@ -63,3 +63,10 @@ pub(crate) async fn firm_for_notation(pg: &PostgresDb, notation: Uuid) -> (Uuid,
         .bind(firm).bind(notation).fetch_one(pg.pool()).await.unwrap();
     (firm, project)
 }
+
+pub(crate) async fn activate_family(
+    pg: &PostgresDb,
+    family: crate::postgres_backfill::family::Family,
+) {
+    crate::postgres_backfill::family::activate_fixture(pg, family).await;
+}

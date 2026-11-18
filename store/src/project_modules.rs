@@ -14,9 +14,11 @@
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::postgres::matter;
 use crate::projects;
 use crate::relationship_logs::{self, NewRelationshipLog};
 use crate::surreal::{record_id, record_uuid, SurrealDb};
+use serde_json::json;
 
 /// A per-matter capability.
 ///
@@ -72,6 +74,8 @@ impl Module {
 /// Errors from the ledger commands.
 #[derive(Debug, thiserror::Error)]
 pub enum ModuleError {
+    #[error(transparent)]
+    Postgres(#[from] matter::MatterAuthorityError),
     /// A stored value is outside [`Module`], which means a row was written
     /// around the `CHECK`.
     #[error("`{0}` is not a recognized module")]
@@ -86,8 +90,8 @@ pub enum ModuleError {
     WriteReturnedNothing,
 }
 
-/// One enabled capability in the SurrealDB project-module ledger.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// One enabled capability in the Project module ledger.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct ProjectModule {
     pub id: Uuid,
     pub project_id: Uuid,
@@ -132,8 +136,8 @@ const SELECT: &str =
 /// and writes no second audit entry, so a double-submitted lawyer form does
 /// not manufacture a toggle that did not happen.
 ///
-/// The ledger state and its relationship audit are both written in
-/// SurrealDB, on the one handle.
+/// With PostgreSQL configured, the ledger state and its Relationship Log audit
+/// commit in one transaction.
 ///
 /// # Errors
 /// Propagates any database error.
@@ -143,6 +147,12 @@ pub async fn enable(
     module: Module,
     actor_person_id: Option<Uuid>,
 ) -> Result<ProjectModule, ModuleError> {
+    if let Some(pg) = matter::authority_for("project_module").await? {
+        return matter::toggle_module(&pg, project_id, module, actor_person_id, true)
+            .await?
+            .ok_or(ModuleError::WriteReturnedNothing);
+    }
+
     if let Some(existing) = find(surreal, project_id, module).await? {
         return Ok(existing);
     }
@@ -210,6 +220,14 @@ pub async fn disable(
     module: Module,
     actor_person_id: Option<Uuid>,
 ) -> Result<bool, ModuleError> {
+    if let Some(pg) = matter::authority_for("project_module").await? {
+        return Ok(
+            matter::toggle_module(&pg, project_id, module, actor_person_id, false)
+                .await?
+                .is_some(),
+        );
+    }
+
     let Some(existing) = find(surreal, project_id, module).await? else {
         return Ok(false);
     };
@@ -247,6 +265,20 @@ pub async fn list_for_project(
     surreal: &SurrealDb,
     project_id: Uuid,
 ) -> Result<Vec<Module>, ModuleError> {
+    if let Some(pg) = matter::authority_for("project_module").await? {
+        let rows: Vec<ProjectModule> = matter::select(
+            &pg,
+            "project_module",
+            json!({"project_id": project_id}),
+            &["module"],
+        )
+        .await?;
+        return rows
+            .into_iter()
+            .map(|row| Module::parse(&row.module).ok_or(ModuleError::UnknownModule(row.module)))
+            .collect();
+    }
+
     let mut response = surreal
         .query(format!(
             "SELECT {SELECT} FROM project_module WHERE project_id = $project_id ORDER BY module"
@@ -279,6 +311,15 @@ async fn find(
     project_id: Uuid,
     module: Module,
 ) -> Result<Option<ProjectModule>, ModuleError> {
+    if let Some(pg) = matter::authority_for("project_module").await? {
+        return Ok(matter::find(
+            &pg,
+            "project_module",
+            json!({"project_id": project_id, "module": module.as_str()}),
+        )
+        .await?);
+    }
+
     let mut response = surreal
         .query(format!(
             "SELECT {SELECT} FROM ONLY project_module WHERE project_id = $project_id AND module = $module LIMIT 1"
@@ -293,9 +334,8 @@ async fn find(
 
 /// Append the audit entry for a toggle.
 ///
-/// The entry and the module row it describes are written to one engine,
-/// so a toggle cannot land with its trail missing, nor a trail with its
-/// toggle missing.
+/// PostgreSQL toggles append their audit inside the ledger transaction; this
+/// helper serves the compatibility accessor.
 async fn log_toggle(
     surreal: &SurrealDb,
     project_id: Uuid,

@@ -11607,6 +11607,8 @@ dependencies = [
  "chrono-tz",
  "cloud",
  "csv",
+ "futures",
+ "hex",
  "include_dir",
  "mail-parser",
  "model",

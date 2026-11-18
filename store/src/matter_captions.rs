@@ -8,10 +8,11 @@
 //! block removes it. The shape is [`word::matter::Matter`], the same value a
 //! pleading's caption is composed from.
 //!
-//! SurrealDB is authoritative. Each successful write or removal mirrors the
-//! Project's caption to PostgreSQL when the opt-in mirror is configured
-//! ([`crate::postgres_mirror::matter_pages_captions`]).
+//! PostgreSQL is authoritative whenever its host is configured. The Project/Firm
+//! ownership constraint applies to every replacement, and a source mirror cannot
+//! overwrite or remove an authoritative caption.
 
+use crate::postgres::{captions, matter as authority};
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 use word::matter::{Counsel, Matter, Party};
@@ -161,6 +162,23 @@ pub async fn replace_for_project(
     project_id: Uuid,
     matter: Option<&Matter>,
 ) -> Result<Option<MatterCaption>, surrealdb::Error> {
+    if let Some(pg) = authority::authority_for(TABLE)
+        .await
+        .map_err(crate::surreal::postgres_error)?
+    {
+        return if let Some(matter) = matter.filter(|matter| !matter.is_empty()) {
+            captions::replace(&pg, project_id, matter)
+                .await
+                .map(Some)
+                .map_err(crate::surreal::postgres_error)
+        } else {
+            captions::delete(&pg, project_id)
+                .await
+                .map_err(crate::surreal::postgres_error)?;
+            Ok(None)
+        };
+    }
+
     let Some(matter) = matter.filter(|matter| !matter.is_empty()) else {
         delete_for_project(surreal, project_id).await?;
         return Ok(None);
@@ -209,6 +227,15 @@ pub async fn for_project(
     surreal: &SurrealDb,
     project_id: Uuid,
 ) -> Result<Option<MatterCaption>, surrealdb::Error> {
+    if let Some(pg) = authority::authority_for(TABLE)
+        .await
+        .map_err(crate::surreal::postgres_error)?
+    {
+        return captions::find(&pg, project_id)
+            .await
+            .map_err(crate::surreal::postgres_error);
+    }
+
     let mut response = surreal
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE project_id = $project LIMIT 1"
@@ -230,6 +257,15 @@ pub async fn delete_for_project(
     surreal: &SurrealDb,
     project_id: Uuid,
 ) -> Result<(), surrealdb::Error> {
+    if let Some(pg) = authority::authority_for(TABLE)
+        .await
+        .map_err(crate::surreal::postgres_error)?
+    {
+        return captions::delete(&pg, project_id)
+            .await
+            .map_err(crate::surreal::postgres_error);
+    }
+
     surreal
         .query(format!("DELETE {TABLE} WHERE project_id = $project"))
         .bind(("project", project(project_id)))

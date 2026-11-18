@@ -28,6 +28,9 @@
 //! Only one backfill advances at a time: a run holds a PostgreSQL advisory
 //! lock for as long as it writes.
 
+/// Versioned table enrollment and PostgreSQL-only activation guards.
+pub mod family;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::time::Duration;
@@ -504,6 +507,9 @@ const MAX_PARITY_IDS: usize = 50;
 pub enum BackfillError {
     #[error("{0}")]
     Mirror(#[from] MirrorError),
+    /// Scoped historical import or activation is incomplete.
+    #[error(transparent)]
+    Family(#[from] family::FamilyError),
     #[error("another backfill is advancing; retry when it finishes")]
     Busy,
     #[error("no backfill run {0}")]
@@ -709,6 +715,13 @@ async fn mirror_coverage(
                 .map_err(|error| error.at(format!("mirror {}", group.name)))?;
             covered.extend(report.tables.iter().map(|table| table.table));
         }
+        for family in family::Family::all() {
+            for table in family.tables() {
+                if family::active_for_table(pg, table).await? {
+                    covered.insert(*table);
+                }
+            }
+        }
         Ok(covered)
     })
     .await
@@ -863,6 +876,8 @@ pub struct ParityTableReport {
 /// A run's state, read back from its checkpoints.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunReport {
+    /// Global import or an immutable versioned family scope.
+    pub scope: String,
     pub run_id: Uuid,
     pub status: RunStatus,
     pub batch_size: usize,
@@ -888,7 +903,15 @@ impl RunReport {
                 .parity
                 .iter()
                 .all(|table| table.missing == 0 && table.differing == 0 && table.extra == 0)
-            && self.unresolved_references.is_empty()
+            && if self.scope == "global" {
+                self.unresolved_references.is_empty()
+            } else {
+                family::Family::from_scope(&self.scope).is_some()
+                    && self
+                        .unresolved_references
+                        .iter()
+                        .all(|reference| reference.newly_target_missing == 0)
+            }
     }
 }
 
@@ -905,21 +928,27 @@ pub async fn start(
     batch_size: usize,
     max_batches: Option<usize>,
 ) -> Result<RunReport, BackfillError> {
+    family::require_supported_scopes(pg).await?;
     let size = i32::try_from(batch_size)
         .ok()
         .filter(|size| *size > 0)
         .ok_or(BackfillError::BatchSize)?;
     let run_id = Uuid::new_v4();
-    locked(surreal, pg, run_id, async {
-        sqlx::query(
+    locked(
+        surreal,
+        pg,
+        run_id,
+        Box::pin(async {
+            sqlx::query(
             "INSERT INTO mirror_backfill_run (id, batch_size, status) VALUES ($1, $2, 'running')",
         )
         .bind(run_id)
         .bind(size)
         .execute(&pg.0)
         .await?;
-        Box::pin(advance(surreal, pg, run_id, max_batches)).await
-    })
+            Box::pin(advance(surreal, pg, run_id, max_batches)).await
+        }),
+    )
     .await
 }
 
@@ -936,6 +965,15 @@ pub async fn resume(
     run_id: Uuid,
     max_batches: Option<usize>,
 ) -> Result<RunReport, BackfillError> {
+    family::require_supported_scopes(pg).await?;
+    let scope: String = sqlx::query_scalar("SELECT scope FROM mirror_backfill_run WHERE id = $1")
+        .bind(run_id)
+        .fetch_optional(&pg.0)
+        .await?
+        .ok_or(BackfillError::UnknownRun(run_id))?;
+    if scope != "global" {
+        return Err(family::FamilyError::Receipt.into());
+    }
     locked(
         surreal,
         pg,
@@ -952,36 +990,51 @@ async fn locked(
     run_id: Uuid,
     work: impl std::future::Future<Output = Result<usize, BackfillError>>,
 ) -> Result<RunReport, BackfillError> {
-    let mut lock = pg.0.acquire().await?;
-    let held: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
-        .bind(LOCK)
-        .fetch_one(&mut *lock)
-        .await?;
-    if !held {
-        return Err(BackfillError::Busy);
-    }
-    let first = !crate::postgres_mirror::backfilled(pg).await?;
-    let advanced = first_copy(first, async {
-        let covered = mirror_coverage(surreal, pg).await?;
-        ensure_source_coverage(surreal, &covered).await?;
-        let batches = work.await?;
-        let parity = parity_report(surreal, pg).await?;
-        let unresolved_references =
-            crate::postgres_mirror::records::unresolved_references(surreal, pg).await?;
-        Ok::<_, BackfillError>((batches, parity, unresolved_references))
+    let (batches, parity, unresolved_references) = with_import_lock(pg, async {
+        let first = !crate::postgres_mirror::backfilled(pg).await?;
+        first_copy(first, async {
+            let covered = mirror_coverage(surreal, pg).await?;
+            ensure_source_coverage(surreal, &covered).await?;
+            let batches = work.await?;
+            let parity = parity_report(surreal, pg).await?;
+            let references =
+                crate::postgres_mirror::records::unresolved_references(surreal, pg).await?;
+            Ok((batches, parity, references))
+        })
+        .await
     })
-    .await;
-    let released = sqlx::query("SELECT pg_advisory_unlock($1)")
-        .bind(LOCK)
-        .execute(&mut *lock)
-        .await;
-    let (batches, parity, unresolved_references) = advanced?;
-    released?;
+    .await?;
     let mut report = report(pg, run_id).await?;
     report.batches_this_invocation = batches;
     report.parity = parity;
     report.unresolved_references = unresolved_references;
     Ok(report)
+}
+
+/// The existing importer lease closes on cancellation, including an unread lock response.
+async fn with_import_lock<T>(
+    pg: &PostgresDb,
+    work: impl Future<Output = Result<T, BackfillError>>,
+) -> Result<T, BackfillError> {
+    let mut lease = pg.0.acquire().await?;
+    lease.close_on_drop();
+    let held: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
+        .bind(LOCK)
+        .fetch_one(&mut *lease)
+        .await?;
+    if !held {
+        return Err(BackfillError::Busy);
+    }
+    let result = work.await;
+    let released = sqlx::query("SELECT pg_advisory_unlock($1)")
+        .bind(LOCK)
+        .execute(&mut *lease)
+        .await;
+    let closed = lease.close().await;
+    let value = result?;
+    released?;
+    closed?;
+    Ok(value)
 }
 
 /// Compare every mirrored table after a run, preserving only report-safe row
@@ -1380,11 +1433,12 @@ async fn touch(pg: &PostgresDb, run_id: Uuid) -> Result<(), BackfillError> {
 ///
 /// An unknown run, or PostgreSQL could not be read.
 pub async fn report(pg: &PostgresDb, run_id: Uuid) -> Result<RunReport, BackfillError> {
-    let run = sqlx::query("SELECT batch_size, status FROM mirror_backfill_run WHERE id = $1")
-        .bind(run_id)
-        .fetch_optional(&pg.0)
-        .await?
-        .ok_or(BackfillError::UnknownRun(run_id))?;
+    let run =
+        sqlx::query("SELECT batch_size, status, scope FROM mirror_backfill_run WHERE id = $1")
+            .bind(run_id)
+            .fetch_optional(&pg.0)
+            .await?
+            .ok_or(BackfillError::UnknownRun(run_id))?;
     let status = if run.try_get::<String, _>("status")? == "completed" {
         RunStatus::Completed
     } else {
@@ -1431,6 +1485,7 @@ pub async fn report(pg: &PostgresDb, run_id: Uuid) -> Result<RunReport, Backfill
         (&left.mirror, &left.table, &left.id).cmp(&(&right.mirror, &right.table, &right.id))
     });
     Ok(RunReport {
+        scope: run.try_get("scope")?,
         run_id,
         status,
         batch_size: count(run.try_get("batch_size")?),
@@ -1442,6 +1497,408 @@ pub async fn report(pg: &PostgresDb, run_id: Uuid) -> Result<RunReport, Backfill
     })
 }
 
+/// Fingerprint the strict archive's canonical export without buffering source contents.
+pub use archive_source::fingerprint as source_archive_fingerprint;
+/// Canonical live source census and schema fingerprint shared with operational exports.
+pub use archive_source::inventory as source_archive_inventory;
+/// Canonical raw source row census, including empty declared tables.
+pub use archive_source::table_counts as source_archive_table_counts;
+
+mod archive_source {
+    use futures::StreamExt;
+
+    use crate::surreal::SurrealDb;
+    use anyhow::{bail, Context, Result};
+    use std::collections::BTreeMap;
+    /// Count every live and canonical source table.
+    ///
+    /// # Errors
+    /// Schema inventory or a raw count is unavailable.
+    pub async fn table_counts(db: &SurrealDb) -> Result<BTreeMap<String, i64>> {
+        let mut counts = BTreeMap::new();
+        for table in live_table_names(db).await? {
+            // `GROUP ALL` makes one count of the table; without it `count()` is
+            // one `1` per row, which is not a single value to read back. An
+            // empty table yields no row at all.
+            let mut response = db
+                .query("SELECT VALUE count() FROM type::table($table) GROUP ALL")
+                .bind(("table", table.clone()))
+                .await
+                .with_context(|| format!("count rows in {table}"))?;
+            let count: Vec<i64> = response
+                .take(0)
+                .with_context(|| format!("read row count for {table}"))?;
+            counts.insert(table, count.first().copied().unwrap_or_default());
+        }
+        Ok(counts)
+    }
+
+    async fn live_table_names(db: &SurrealDb) -> Result<Vec<String>> {
+        let info = read_database_info(db).await?;
+        let inventory = info
+            .get("tables")
+            .and_then(serde_json::Value::as_object)
+            .context("SurrealDB INFO FOR DB omitted its tables inventory")?;
+        let mut tables: std::collections::BTreeSet<String> =
+            crate::schema::table_names().into_iter().collect();
+        if let Some(table) = inventory.keys().find(|table| !safe_identifier(table)) {
+            bail!("live SurrealDB table name is outside the supported identifier form: {table:?}");
+        }
+        tables.extend(inventory.keys().cloned());
+        Ok(tables.into_iter().collect())
+    }
+
+    /// Read the canonical complete schema fingerprint and raw table census.
+    ///
+    /// # Errors
+    /// A source schema or count cannot be read or represented.
+    pub async fn inventory(db: &SurrealDb) -> Result<(BTreeMap<String, i64>, String)> {
+        let database_info = read_database_info(db).await?;
+        let tables = live_table_names(db).await?;
+        let mut complete_schema = serde_json::Map::new();
+        complete_schema.insert("database".into(), database_info);
+        for table in &tables {
+            let quoted = format!("`{table}`");
+            let mut response = db
+                .query(format!("INFO FOR TABLE {quoted}"))
+                .await
+                .with_context(|| format!("read schema for SurrealDB table {table}"))?;
+            let rows: Vec<serde_json::Value> = response
+                .take::<Vec<serde_json::Value>>(0)
+                .with_context(|| format!("decode schema for SurrealDB table {table}"))?
+                .into_iter()
+                .map(|row| {
+                    // SurrealDB 4 reports a per-table `migrations` block whose
+                    // `generation` advances with every definition statement. A
+                    // restored database replays the export's DDL and then
+                    // re-applies the Navigator schema, so its generation
+                    // legitimately differs from the source's; the fingerprint
+                    // covers schema shape, not definition history.
+                    let mut row = row;
+                    if let Some(info) = row.as_object_mut() {
+                        info.remove("migrations");
+                    }
+                    row
+                })
+                .collect();
+            complete_schema.insert(table.clone(), serde_json::Value::Array(rows));
+        }
+        let schema_sha256 = sha256(&serde_json::to_vec(&complete_schema)?);
+        Ok((table_counts(db).await?, schema_sha256))
+    }
+
+    async fn read_database_info(db: &SurrealDb) -> Result<serde_json::Value> {
+        let mut response = db
+            .query("INFO FOR DB")
+            .await
+            .context("read SurrealDB database schema")?;
+        let rows: Vec<serde_json::Value> = response
+            .take(0)
+            .context("decode SurrealDB database schema")?;
+        let info = rows
+            .into_iter()
+            .next()
+            .context("SurrealDB returned no database schema inventory")?;
+        if !info.get("tables").is_some_and(serde_json::Value::is_object) {
+            bail!("SurrealDB returned no live table inventory");
+        }
+        Ok(info)
+    }
+
+    fn safe_identifier(value: &str) -> bool {
+        !value.is_empty()
+            && value.len() <= 128
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    }
+
+    /// Fingerprint the same derived-free export bytes the strict archive captures.
+    ///
+    /// # Errors
+    /// Export transport, section framing, or byte accounting fails.
+    pub async fn fingerprint(db: &SurrealDb) -> Result<(u64, String)> {
+        use sha2::Digest;
+        let mut stream = db
+            .export(())
+            .await
+            .context("start canonical source export")?;
+        let mut filter = crate::schema::export_filter::ExportFilter::new(
+            crate::schema::derived_tables()
+                .into_iter()
+                .map(|table| table.name),
+        );
+        let mut hash = sha2::Sha256::new();
+        let mut count = Some(0_u64);
+        let mut emit = |bytes: &[u8]| {
+            hash.update(bytes);
+            count = count.and_then(|count| {
+                u64::try_from(bytes.len())
+                    .ok()
+                    .and_then(|len| count.checked_add(len))
+            });
+        };
+        while let Some(chunk) = stream.next().await {
+            filter.feed(&chunk.context("read canonical source export")?, &mut emit)?;
+        }
+        filter.finish(&mut emit)?;
+        let count = count
+            .filter(|count| *count > 0)
+            .context("canonical source export has no usable bytes")?;
+        Ok((count, hex::encode(hash.finalize())))
+    }
+
+    fn sha256(bytes: &[u8]) -> String {
+        use sha2::Digest;
+        hex::encode(sha2::Sha256::digest(bytes))
+    }
+}
+
 #[cfg(test)]
 #[path = "postgres_backfill_tests.rs"]
 mod tests;
+
+struct FamilySource<'a> {
+    surreal: &'a SurrealDb,
+}
+
+impl family::Source for FamilySource<'_> {
+    fn snapshot<'a>(
+        &'a self,
+        pg: &'a PostgresDb,
+        selected: family::Family,
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<family::Snapshot, BackfillError>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            let before = source_archive_inventory(self.surreal)
+                .await
+                .map_err(|_| BackfillError::SourceInventory)?;
+            let mut tables = Vec::new();
+            for name in selected.tables() {
+                match *name {
+                    "attestation" => tables.extend(
+                        crate::postgres_mirror::attestations::parity(self.surreal, pg)
+                            .await?
+                            .tables,
+                    ),
+                    "matter_caption" => tables.push(
+                        crate::postgres_mirror::matter_pages_captions::caption_parity(
+                            self.surreal,
+                            pg,
+                        )
+                        .await?,
+                    ),
+                    name => tables.push(
+                        crate::postgres_mirror::records::scoped_table_parity(
+                            self.surreal,
+                            pg,
+                            name,
+                        )
+                        .await?,
+                    ),
+                }
+            }
+            let references = crate::postgres_mirror::records::scoped_references(
+                self.surreal,
+                pg,
+                selected.tables(),
+            )
+            .await?;
+            let reset_fact_differences = Vec::new();
+            let (export_bytes, export_sha256) = source_archive_fingerprint(self.surreal)
+                .await
+                .map_err(|_| BackfillError::SourceInventory)?;
+            let after = source_archive_inventory(self.surreal)
+                .await
+                .map_err(|_| BackfillError::SourceInventory)?;
+            if before != after {
+                return Err(family::FamilyError::Receipt.into());
+            }
+            let raw_counts = after
+                .0
+                .into_iter()
+                .map(|(name, count)| {
+                    Ok((
+                        name,
+                        usize::try_from(count).map_err(|_| family::FamilyError::Receipt)?,
+                    ))
+                })
+                .collect::<Result<_, BackfillError>>()?;
+            Ok(family::Snapshot {
+                tables,
+                references,
+                reset_fact_differences,
+                raw_counts,
+                schema_sha256: after.1,
+                export_bytes,
+                export_sha256,
+                foreign_keys_hold: family::foreign_keys_hold(pg, selected).await?,
+            })
+        })
+    }
+
+    fn write<'a>(
+        &'a self,
+        pg: &'a PostgresDb,
+        key: &'a MirrorKey,
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<(), BackfillError>> + Send + 'a>> {
+        Box::pin(async move {
+            mirror(self.surreal, pg, key).await?;
+            Ok(())
+        })
+    }
+}
+
+/// Copy a verified, quiesced family capture through its existing mirror seams.
+/// Activation is explicit and requires fresh complete preservation proofs.
+///
+/// # Errors
+/// The capture, registry, importer lease, source, or PostgreSQL cannot be verified.
+pub async fn start_family(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+    selected: family::Family,
+    receipt: family::VerifiedSourceReceipt,
+    batch_size: usize,
+    max_batches: Option<usize>,
+    activate: bool,
+) -> Result<RunReport, BackfillError> {
+    let size = i32::try_from(batch_size)
+        .ok()
+        .filter(|size| *size > 0)
+        .ok_or(BackfillError::BatchSize)?;
+    let run = Uuid::new_v4();
+    with_import_lock(
+        pg,
+        Box::pin(async {
+            family::enroll(pg, run, selected, size, receipt).await?;
+            resume_family_locked(surreal, pg, selected, run, max_batches, activate).await
+        }),
+    )
+    .await
+}
+
+/// Validate a completed scoped run using PostgreSQL alone.
+///
+/// # Errors
+/// The run belongs to another scope or its immutable completion evidence is invalid.
+pub async fn completed_family_report(
+    pg: &PostgresDb,
+    selected: family::Family,
+    run: Uuid,
+) -> Result<Option<RunReport>, BackfillError> {
+    if family::enrolled_family(pg, run).await? != selected {
+        return Err(family::FamilyError::Receipt.into());
+    }
+    let mut report = report(pg, run).await?;
+    if report.status != RunStatus::Completed {
+        return Ok(None);
+    }
+    (report.parity, report.unresolved_references) =
+        family::completed_proof(pg, selected, run).await?;
+    Ok(Some(report))
+}
+
+/// Refresh a pending capture under the existing importer lease and resume it.
+///
+/// # Errors
+/// The run is active, the replacement capture is stale, or import cannot advance.
+pub async fn refresh_family(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+    selected: family::Family,
+    run: Uuid,
+    receipt: family::VerifiedSourceReceipt,
+    max_batches: Option<usize>,
+    activate: bool,
+) -> Result<RunReport, BackfillError> {
+    if family::enrolled_family(pg, run).await? != selected {
+        return Err(family::FamilyError::Receipt.into());
+    }
+    with_import_lock(
+        pg,
+        Box::pin(async {
+            let source = FamilySource { surreal };
+            family::during_import(
+                run,
+                selected,
+                family::refresh_capture_with(&source, pg, run, receipt),
+            )
+            .await?;
+            resume_family_locked(surreal, pg, selected, run, max_batches, activate).await
+        }),
+    )
+    .await
+}
+
+/// Advance a pending scoped import; a completed receipt is read without Source access.
+///
+/// # Errors
+/// The requested scope/receipt, importer lease, source, or PostgreSQL cannot be verified.
+pub async fn resume_family(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+    selected: family::Family,
+    run: Uuid,
+    max_batches: Option<usize>,
+    activate: bool,
+) -> Result<RunReport, BackfillError> {
+    if family::enrolled_family(pg, run).await? != selected {
+        return Err(family::FamilyError::Receipt.into());
+    }
+    with_import_lock(
+        pg,
+        Box::pin(resume_family_locked(
+            surreal,
+            pg,
+            selected,
+            run,
+            max_batches,
+            activate,
+        )),
+    )
+    .await
+}
+
+async fn resume_family_locked(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+    selected: family::Family,
+    run: Uuid,
+    max_batches: Option<usize>,
+    activate: bool,
+) -> Result<RunReport, BackfillError> {
+    if let Some(report) = completed_family_report(pg, selected, run).await? {
+        return Ok(report);
+    }
+    let source = FamilySource { surreal };
+    let advancement = family::during_import(
+        run,
+        selected,
+        family::advance_with(&source, pg, run, max_batches, activate),
+    )
+    .await?;
+    let mut report = report(pg, run).await?;
+    report.batches_this_invocation = advancement.batches;
+    if let Some(snapshot) = advancement.snapshot {
+        for table in &snapshot.tables {
+            let drift = crate::postgres_mirror::drift(pg, table).await?;
+            let (divergent_ids, omitted_divergent_ids, withheld_non_uuid_keys) =
+                safe_key_sample(&table.divergent);
+            report.parity.push(ParityTableReport {
+                mirror: selected.scope().to_owned(),
+                table: table.table.to_owned(),
+                surreal: table.source_rows,
+                postgres: table.target_rows,
+                missing: drift.missing,
+                differing: drift.differing,
+                extra: drift.extra,
+                divergent_ids,
+                omitted_divergent_ids,
+                withheld_non_uuid_keys,
+            });
+        }
+        report.unresolved_references = snapshot.references;
+    }
+    Ok(report)
+}

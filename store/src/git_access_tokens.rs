@@ -7,15 +7,17 @@ use chrono::{DateTime, Utc};
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::postgres::matter;
 use crate::projects;
 use crate::surreal::{record_id, record_uuid, SurrealDb};
+use serde_json::json;
 
 /// Clone / fetch — read access to a repository.
 pub const SCOPE_READ: &str = "read";
 /// Push — write access; a strict superset of [`SCOPE_READ`].
 pub const SCOPE_WRITE: &str = "write";
 
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct GitAccessToken {
     pub id: Uuid,
     pub person_id: Uuid,
@@ -60,6 +62,8 @@ const TOKEN_SELECT: &str =
 /// Errors minting or validating a token.
 #[derive(Debug, thiserror::Error)]
 pub enum TokenError {
+    #[error(transparent)]
+    Postgres(#[from] matter::MatterAuthorityError),
     #[error("database: {0}")]
     Db(#[from] surrealdb::Error),
     #[error(transparent)]
@@ -97,6 +101,20 @@ pub async fn mint(
             return Err(projects::ProjectStoreError::NoSuchProject(project_id).into());
         }
     }
+    if let Some(pg) = matter::authority_for("git_access_token").await? {
+        let now = Utc::now().to_rfc3339();
+        let row = GitAccessToken {
+            id: Uuid::now_v7(),
+            person_id,
+            project_id,
+            token_hash: hash_token(plaintext),
+            scope: scope.to_owned(),
+            expires_at: expires_at.to_rfc3339(),
+            inserted_at: now.clone(),
+            updated_at: now,
+        };
+        return Ok(matter::upsert(&pg, "git_access_token", &row).await?);
+    }
     let now = Utc::now().to_rfc3339();
     let id = Uuid::now_v7();
     let mut response = surreal
@@ -125,6 +143,18 @@ pub async fn validate(
     plaintext: &str,
     now: DateTime<Utc>,
 ) -> Result<Option<GitAccessToken>, TokenError> {
+    if let Some(pg) = matter::authority_for("git_access_token").await? {
+        let token: Option<GitAccessToken> = matter::find(
+            &pg,
+            "git_access_token",
+            json!({"token_hash": hash_token(plaintext)}),
+        )
+        .await?;
+        return Ok(token.filter(|token| {
+            DateTime::parse_from_rfc3339(&token.expires_at).is_ok_and(|expiry| expiry > now)
+        }));
+    }
+
     let mut response = surreal
         .query(format!(
             "SELECT {TOKEN_SELECT} FROM ONLY git_access_token WHERE token_hash = $token_hash LIMIT 1"
@@ -141,6 +171,11 @@ pub async fn validate(
 
 /// Revoke a token by id. Deleting an absent row is intentionally a no-op.
 pub async fn revoke(surreal: &SurrealDb, token_id: Uuid) -> Result<(), TokenError> {
+    if let Some(pg) = matter::authority_for("git_access_token").await? {
+        matter::delete(&pg, "git_access_token", json!({"id": token_id})).await?;
+        return Ok(());
+    }
+
     surreal
         .query("DELETE $id")
         .bind(("id", record_id("git_access_token", token_id)))

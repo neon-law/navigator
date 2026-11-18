@@ -13,22 +13,13 @@ use std::path::Path;
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use futures::StreamExt;
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use store::surreal::{SurrealConfig, SurrealDb};
 use uuid::Uuid;
 
 const ARCHIVE_PREFIX: &str = "surreal-backups";
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ArchiveReceipt {
-    format_version: u32,
-    consistency: String,
-    export_bytes: u64,
-    export_sha256: String,
-    schema_sha256: String,
-    table_counts: BTreeMap<String, i64>,
-}
+use store::postgres_backfill::family::SourceReceipt as ArchiveReceipt;
 
 /// Write an operational `SurrealQL` export to the configured archive lane.
 pub fn export() -> Result<()> {
@@ -179,90 +170,11 @@ fn without_derived_tables(export: &[u8]) -> Result<Vec<u8>> {
 }
 
 async fn table_counts(db: &SurrealDb) -> Result<BTreeMap<String, i64>> {
-    let mut counts = BTreeMap::new();
-    for table in live_table_names(db).await? {
-        // `GROUP ALL` makes one count of the table; without it `count()` is
-        // one `1` per row, which is not a single value to read back. An
-        // empty table yields no row at all.
-        let mut response = db
-            .query("SELECT VALUE count() FROM type::table($table) GROUP ALL")
-            .bind(("table", table.clone()))
-            .await
-            .with_context(|| format!("count rows in {table}"))?;
-        let count: Vec<i64> = response
-            .take(0)
-            .with_context(|| format!("read row count for {table}"))?;
-        counts.insert(table, count.first().copied().unwrap_or_default());
-    }
-    Ok(counts)
-}
-
-async fn live_table_names(db: &SurrealDb) -> Result<Vec<String>> {
-    let info = read_database_info(db).await?;
-    let inventory = info
-        .get("tables")
-        .and_then(serde_json::Value::as_object)
-        .context("SurrealDB INFO FOR DB omitted its tables inventory")?;
-    let mut tables: std::collections::BTreeSet<String> =
-        store::schema::table_names().into_iter().collect();
-    if let Some(table) = inventory.keys().find(|table| !safe_identifier(table)) {
-        bail!("live SurrealDB table name is outside the supported identifier form: {table:?}");
-    }
-    tables.extend(inventory.keys().cloned());
-    Ok(tables.into_iter().collect())
+    store::postgres_backfill::source_archive_table_counts(db).await
 }
 
 async fn archive_inventory(db: &SurrealDb) -> Result<(BTreeMap<String, i64>, String)> {
-    let database_info = read_database_info(db).await?;
-    let tables = live_table_names(db).await?;
-    let mut complete_schema = serde_json::Map::new();
-    complete_schema.insert("database".into(), database_info);
-    for table in &tables {
-        let quoted = format!("`{table}`");
-        let mut response = db
-            .query(format!("INFO FOR TABLE {quoted}"))
-            .await
-            .with_context(|| format!("read schema for SurrealDB table {table}"))?;
-        let rows: Vec<serde_json::Value> = response
-            .take::<Vec<serde_json::Value>>(0)
-            .with_context(|| format!("decode schema for SurrealDB table {table}"))?
-            .into_iter()
-            .map(|row| {
-                // SurrealDB 4 reports a per-table `migrations` block whose
-                // `generation` advances with every definition statement. A
-                // restored database replays the export's DDL and then
-                // re-applies the Navigator schema, so its generation
-                // legitimately differs from the source's; the fingerprint
-                // covers schema shape, not definition history.
-                let mut row = row;
-                if let Some(info) = row.as_object_mut() {
-                    info.remove("migrations");
-                }
-                row
-            })
-            .collect();
-        complete_schema.insert(table.clone(), serde_json::Value::Array(rows));
-    }
-    let schema_sha256 = sha256(&serde_json::to_vec(&complete_schema)?);
-    Ok((table_counts(db).await?, schema_sha256))
-}
-
-async fn read_database_info(db: &SurrealDb) -> Result<serde_json::Value> {
-    let mut response = db
-        .query("INFO FOR DB")
-        .await
-        .context("read SurrealDB database schema")?;
-    let rows: Vec<serde_json::Value> = response
-        .take(0)
-        .context("decode SurrealDB database schema")?;
-    let info = rows
-        .into_iter()
-        .next()
-        .context("SurrealDB returned no database schema inventory")?;
-    if !info.get("tables").is_some_and(serde_json::Value::is_object) {
-        bail!("SurrealDB returned no live table inventory");
-    }
-    Ok(info)
+    store::postgres_backfill::source_archive_inventory(db).await
 }
 
 fn sha256(bytes: &[u8]) -> String {
@@ -298,23 +210,12 @@ fn strict_consistency_requested() -> Result<bool> {
     }
 }
 
-fn safe_identifier(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 128
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
-}
-
 fn verify_receipt(export: &[u8], receipt: &ArchiveReceipt) -> Result<()> {
-    if receipt.format_version != 1
-        || consistency_label(&receipt.consistency).is_err()
-        || receipt.export_bytes != export.len() as u64
-        || receipt.export_sha256 != sha256(export)
-    {
-        bail!("SurrealDB export does not match its archive receipt");
-    }
-    Ok(())
+    receipt
+        .clone()
+        .verify_export(export)
+        .map(|_| ())
+        .map_err(|_| anyhow::anyhow!("SurrealDB export does not match its archive receipt"))
 }
 
 fn consistency_label(consistency: &str) -> Result<&'static str> {

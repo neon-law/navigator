@@ -217,18 +217,12 @@ rules = { path = "rules" }
 project-scaffold = { path = "project-scaffold" }
 store = { path = "store" }
 typesafe = { path = "typesafe" }
-# SurrealDB, the store the workspace is porting onto (#1093). `store`
-# is its only consumer;
-# stay load-bearing until cutover. The crate default (`protocol-ws` +
-# `rustls`) is the remote client every deployment uses — the KIND
-# dependency tier locally, Surreal Cloud in production. The embedded
-# `kv-mem` engine is NOT enabled here: `store`'s `test-support` feature
-# turns it on, so the one-engine-per-test lane never compiles a whole
-# database into a production binary.
 # `EnumIter` over the closed question-type registry. The derive is
 # compiler-maintained, so a variant added without a matching token is a
 # build failure rather than a silently narrowed questionnaire vocabulary.
 strum = { version = "0.28", features = ["derive"] }
+# Remote protocols for legacy SurrealDB compatibility. The store crate also
+# enables kv-mem unconditionally for compatibility fixtures.
 surrealdb = { version = "4.0.1", default-features = false, features = ["protocol-http", "protocol-ws", "rustls"] }
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "net", "process"] }

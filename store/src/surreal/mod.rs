@@ -297,6 +297,12 @@ pub async fn connect(config: &SurrealConfig) -> Result<SurrealDb, SurrealError> 
     Ok(SurrealDb(Arc::new(db)))
 }
 
+/// Preserve legacy accessor error signatures while their storage authority moves.
+/// Never include SQL, credentials, or row content in an SDK-facing error.
+pub(crate) fn postgres_error(_: crate::postgres::matter::MatterAuthorityError) -> surrealdb::Error {
+    surrealdb::Error::internal("PostgreSQL authority operation failed".to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use surrealdb::types::{AuthError, ConnectionError, NotAllowedError};

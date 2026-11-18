@@ -11,8 +11,10 @@
 //! - A notice that carries no decision (`submitted`, `unknown`) never replaces
 //!   a recorded decision (`accepted`, `rejected`).
 
+use crate::postgres::matter;
 use chrono::NaiveDate;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
@@ -35,7 +37,7 @@ pub const STATUSES: &[&str] = &[
 /// said something changed but not what, so a person has to look.
 pub const UNKNOWN_NOTE: &str = "status unknown — log in to the EFSP to read it";
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EfilingTransaction {
     pub id: Uuid,
     pub project_id: Uuid,
@@ -107,6 +109,8 @@ const SELECT: &str = "id, project_id, transaction_id, efsp, court, case_number, 
 
 #[derive(Debug, thiserror::Error)]
 pub enum EfilingError {
+    #[error(transparent)]
+    Postgres(#[from] matter::MatterAuthorityError),
     #[error("database: {0}")]
     Db(#[from] surrealdb::Error),
     #[error("{0}")]
@@ -177,6 +181,16 @@ pub async fn list(
     surreal: &SurrealDb,
     project_id: Uuid,
 ) -> Result<Vec<EfilingTransaction>, EfilingError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return Ok(matter::select(
+            &pg,
+            TABLE,
+            json!({"project_id": project_id}),
+            &["updated_at DESC", "id"],
+        )
+        .await?);
+    }
+
     let mut response = surreal
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE project_id = $project_id \
@@ -195,6 +209,15 @@ pub async fn find(
     project_id: Uuid,
     transaction_id: &str,
 ) -> Result<Option<EfilingTransaction>, EfilingError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return Ok(matter::find(
+            &pg,
+            TABLE,
+            json!({"project_id": project_id, "transaction_id": transaction_id}),
+        )
+        .await?);
+    }
+
     let mut response = surreal
         .query(format!(
             "SELECT {SELECT} FROM ONLY {TABLE} \
@@ -218,6 +241,10 @@ pub async fn record(
     surreal: &SurrealDb,
     report: &EfilingReport,
 ) -> Result<EfilingTransaction, EfilingError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return record_postgres(&pg, report).await;
+    }
+
     let transaction_id =
         normalize_transaction_id(&report.transaction_id).map_err(EfilingError::Invalid)?;
     if crate::projects::find_by_id(surreal, report.project_id)
@@ -244,6 +271,63 @@ pub async fn record(
     )
     .await?;
     persist(surreal, merged).await
+}
+
+async fn record_postgres(
+    pg: &crate::postgres::PostgresDb,
+    report: &EfilingReport,
+) -> Result<EfilingTransaction, EfilingError> {
+    let transaction =
+        normalize_transaction_id(&report.transaction_id).map_err(EfilingError::Invalid)?;
+    let mut tx = pg
+        .pool()
+        .begin()
+        .await
+        .map_err(matter::MatterAuthorityError::from)?;
+    let project: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM project WHERE id = $1 FOR UPDATE")
+            .bind(report.project_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(matter::MatterAuthorityError::from)?;
+    if project.is_none() {
+        return Err(EfilingError::Invalid("no such Project".to_owned()));
+    }
+    let existing: Option<serde_json::Value> = sqlx::query_scalar("SELECT to_jsonb(t) FROM efiling_transactions t WHERE project_id = $1 AND transaction_id = $2")
+        .bind(report.project_id).bind(&transaction).fetch_optional(&mut *tx).await.map_err(matter::MatterAuthorityError::from)?;
+    let existing: Option<EfilingTransaction> = existing
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(matter::MatterAuthorityError::from)?;
+    let row = merge(report, transaction, existing.as_ref())?;
+    for (name, asset) in [
+        ("submitted document", row.submitted_document_id),
+        ("conformed document", row.conformed_document_id),
+    ] {
+        if let Some(asset) = asset {
+            let owner: Option<Option<Uuid>> =
+                sqlx::query_scalar("SELECT project_id FROM asset WHERE id = $1 FOR SHARE")
+                    .bind(asset)
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .map_err(matter::MatterAuthorityError::from)?;
+            if owner != Some(Some(report.project_id)) {
+                return Err(EfilingError::Invalid(format!(
+                    "{name} is not on this Project"
+                )));
+            }
+        }
+    }
+    let stored = matter::upsert_on(
+        &mut *tx,
+        TABLE,
+        serde_json::to_value(row).map_err(matter::MatterAuthorityError::from)?,
+    )
+    .await?;
+    tx.commit()
+        .await
+        .map_err(matter::MatterAuthorityError::from)?;
+    Ok(stored)
 }
 
 /// Fold one report into the stored row (or a new one), enforcing that only an

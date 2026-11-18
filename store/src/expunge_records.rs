@@ -7,18 +7,18 @@
 //! write/read seam for that audit log; the `portal::expunge` orchestrator
 //! calls [`record`] after the repo rewrite + LFS deletion.
 //!
-//! # This table lives in SurrealDB
-//!
-//! `expunge_records` moved with wave six of #1093 (ENG-160), in the
-//! expungement slice alongside [`crate::expunge_requests`].
+//! Commands use PostgreSQL whenever its host is configured; see
+//! [storage models](../../docs/storage-models.md#matter-records).
 
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use surrealdb::types::SurrealValue;
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::postgres::matter;
 use crate::surreal::{record_id, record_uuid, SurrealDb};
+use serde_json::json;
 
 /// What can go wrong reading or writing the audit trail.
 ///
@@ -27,6 +27,8 @@ use crate::surreal::{record_id, record_uuid, SurrealDb};
 /// crate — the same shape [`crate::persons::PersonError`] uses.
 #[derive(Debug, Error)]
 pub enum ExpungeRecordError {
+    #[error(transparent)]
+    Postgres(#[from] matter::MatterAuthorityError),
     /// A database operation failed.
     #[error("database: {0}")]
     Db(#[from] surrealdb::Error),
@@ -55,7 +57,7 @@ pub const CATEGORY_RETENTION: &str = "retention";
 /// The application-facing shape: plain Rust types, no engine handles.
 /// [`ExpungeRecordRow`] is the seam that turns it into (and back out of)
 /// what the SDK reads and writes.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExpungeRecord {
     pub id: Uuid,
     /// The matter whose repo was rewritten.
@@ -143,6 +145,34 @@ pub struct NewExpunge<'a> {
 /// [`ExpungeRecordError::BadCategory`] when the caller passes a category
 /// outside the `CATEGORY_*` set, or any other database error.
 pub async fn record(db: &SurrealDb, new: &NewExpunge<'_>) -> Result<Uuid, ExpungeRecordError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        if ![
+            CATEGORY_PRIVILEGE,
+            CATEGORY_SEALING,
+            CATEGORY_CLIENT_REQUEST,
+            CATEGORY_RETENTION,
+        ]
+        .contains(&new.category)
+        {
+            return Err(ExpungeRecordError::BadCategory(new.category.to_owned()));
+        }
+        let now = Utc::now();
+        let row = ExpungeRecord {
+            id: Uuid::now_v7(),
+            project_id: new.project_id,
+            path: new.path.to_owned(),
+            category: new.category.to_owned(),
+            authorized_by_person_id: new.authorized_by_person_id,
+            head_before: new.head_before.map(str::to_owned),
+            head_after: new.head_after.map(str::to_owned),
+            note: new.note.map(str::to_owned),
+            inserted_at: now,
+            updated_at: now,
+        };
+        let stored: ExpungeRecord = matter::upsert(&pg, TABLE, &row).await?;
+        return Ok(stored.id);
+    }
+
     let id = Uuid::now_v7();
     let mut response = db
         .query(format!(
@@ -182,6 +212,10 @@ pub async fn record(db: &SurrealDb, new: &NewExpunge<'_>) -> Result<Uuid, Expung
 ///
 /// Propagates any database error.
 pub async fn by_id(db: &SurrealDb, id: Uuid) -> Result<Option<ExpungeRecord>, ExpungeRecordError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return Ok(matter::find(&pg, TABLE, json!({"id": id})).await?);
+    }
+
     let mut response = db
         .query(format!("SELECT {SELECT} FROM $id"))
         .bind(("id", record_id(TABLE, id)))
@@ -201,6 +235,10 @@ pub async fn for_project(
     db: &SurrealDb,
     project_id: Uuid,
 ) -> Result<Vec<ExpungeRecord>, ExpungeRecordError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return Ok(matter::select(&pg, TABLE, json!({"project_id": project_id}), &["id"]).await?);
+    }
+
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE project_id = $project ORDER BY id ASC"
@@ -227,6 +265,14 @@ pub async fn exists_for_project(
     db: &SurrealDb,
     project_id: Uuid,
 ) -> Result<bool, ExpungeRecordError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return Ok(
+            matter::find::<ExpungeRecord>(&pg, TABLE, json!({"project_id": project_id}))
+                .await?
+                .is_some(),
+        );
+    }
+
     let mut response = db
         .query(format!(
             "SELECT VALUE id FROM {TABLE} WHERE project_id = $project LIMIT 1"

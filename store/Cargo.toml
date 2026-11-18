@@ -34,6 +34,8 @@ cloud.workspace = true
 # RFC 4180 reader for the LinkedIn data-export `messages.csv` (LAW-238
 # D1): quoted CONTENT fields with embedded newlines are the export's norm.
 csv.workspace = true
+futures.workspace = true
+hex.workspace = true
 # `nef` shares MIME parsing between docket ingestion and Inbox processing.
 mail-parser.workspace = true
 # `source_pages` locates a quote in a stored PDF asset and lifts the pages
@@ -60,15 +62,9 @@ serde_json.workspace = true
 sqlx = { workspace = true, features = ["migrate"] }
 serde_yaml.workspace = true
 sha2.workspace = true
-# The SurrealDB client for the store the workspace is porting onto
-# (#1093 phase 1). `store::surreal` owns the connection and
-# `store::schema` the idempotent DEFINE apply; nothing else in the
-# workspace depends on it yet.
-# `kv-mem` is not test-only: `store::conflicts` runs each pre-matter
-# conflict check against an embedded in-memory engine — the transient
-# graph view the check has always built, now in the shape and query
-# language the persistent store will use (#1093). Persistent data still
-# travels over the wire to the dependency tier or Surreal Cloud.
+# Legacy transport and schema compatibility. kv-mem remains enabled for
+# compatibility fixtures, so normal store builds still compile the engine.
+# Conflict checks use PostgreSQL AGE or remote SurrealDB traversal.
 surrealdb = { workspace = true, features = ["kv-mem"] }
 # The TLS provider `store::surreal::install_tls_provider` registers. Pinned to
 # the same 0.23 rustls surrealdb links, so the provider lands in the instance

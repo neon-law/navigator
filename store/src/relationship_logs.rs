@@ -156,6 +156,28 @@ pub enum RelationshipLogError {
     Engine(String),
 }
 
+/// Append an audit entry in the caller's PostgreSQL transaction.
+pub(crate) async fn record_on<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    id: Uuid,
+    input: &NewRelationshipLog,
+) -> Result<RelationshipLog, sqlx::Error> {
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "INSERT INTO relationship_log (id, actor_person_id, subject_type, subject_id, \
+         action, detail, project_id) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING {SELECT}"
+    )))
+    .bind(id)
+    .bind(input.actor_person_id)
+    .bind(&input.subject_type)
+    .bind(input.subject_id)
+    .bind(&input.action)
+    .bind(&input.detail)
+    .bind(input.project_id)
+    .fetch_one(executor)
+    .await?;
+    from_pg(&row)
+}
+
 /// Append one entry to the trail.
 ///
 /// # Errors
@@ -169,20 +191,7 @@ pub async fn record(
 ) -> Result<RelationshipLog, RelationshipLogError> {
     let id = Uuid::now_v7();
     if let Some(pg) = authority().await? {
-        let row = sqlx::query(sqlx::AssertSqlSafe(format!(
-            "INSERT INTO relationship_log (id, actor_person_id, subject_type, subject_id, \
-             action, detail, project_id) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING {SELECT}"
-        )))
-        .bind(id)
-        .bind(input.actor_person_id)
-        .bind(&input.subject_type)
-        .bind(input.subject_id)
-        .bind(&input.action)
-        .bind(&input.detail)
-        .bind(input.project_id)
-        .fetch_one(&pg.0)
-        .await?;
-        return Ok(from_pg(&row)?);
+        return Ok(record_on(&pg.0, id, input).await?);
     }
     let mut response = retry::writing(|| {
         db.query(format!(

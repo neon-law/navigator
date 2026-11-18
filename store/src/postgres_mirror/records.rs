@@ -5,9 +5,9 @@
 //! table each link names, and which carry timestamps. A row keeps its record
 //! UUID as `id`. A source field without a declared preservation mapping is refused.
 //! Parity compares whole rows as JSON, timestamps at
-//! PostgreSQL's microsecond precision. The upsert writes only when a column
-//! differs, so a replay changes nothing. A row SurrealDB no longer has is
-//! removed from PostgreSQL.
+//! PostgreSQL's microsecond precision. Compatibility rows update only when a column differs;
+//! a missing source row removes their copy. Authoritative tables accept only missing
+//! rows during the first backfill and retain their PostgreSQL contents on every replay.
 //!
 //! The tables form named groups, one [`super::MIRRORS`] entry each:
 //!
@@ -901,26 +901,78 @@ pub struct UnresolvedReference {
     pub field: &'static str,
     pub source_orphans: usize,
     pub postgres_missing: usize,
+    /// References whose source parent exists but whose PostgreSQL parent is missing.
+    pub newly_target_missing: usize,
+}
+
+impl UnresolvedReference {
+    /// Classify each exact reference before aggregation; an old source orphan
+    /// cannot mask a different parent lost from PostgreSQL.
+    pub(crate) fn observe(&mut self, source_parent_exists: bool, target_parent_exists: bool) {
+        self.source_orphans += usize::from(!source_parent_exists);
+        self.postgres_missing += usize::from(!target_parent_exists);
+        self.newly_target_missing += usize::from(source_parent_exists && !target_parent_exists);
+    }
+}
+
+fn reference_counter<'a>(
+    counts: &'a mut BTreeMap<(&'static str, &'static str), UnresolvedReference>,
+    (table, field): (&'static str, &'static str),
+) -> &'a mut UnresolvedReference {
+    counts.entry((table, field)).or_insert(UnresolvedReference {
+        table,
+        field,
+        source_orphans: 0,
+        postgres_missing: 0,
+        newly_target_missing: 0,
+    })
 }
 
 /// Count dangling concrete and tagged record links without rewriting them.
-#[allow(clippy::too_many_lines)] // Each declared reference family shares one fail-closed inventory pass.
 pub async fn unresolved_references(
     surreal: &SurrealDb,
     pg: &PostgresDb,
 ) -> Result<Vec<UnresolvedReference>, MirrorError> {
+    reference_inventory(surreal, pg, None).await
+}
+
+/// Inspect only enrolled child tables and the parents their registered fields require.
+pub(crate) async fn scoped_references(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+    tables: &[&str],
+) -> Result<Vec<UnresolvedReference>, MirrorError> {
+    reference_inventory(surreal, pg, Some(tables)).await
+}
+
+#[allow(clippy::too_many_lines)] // Each declared reference family shares one fail-closed inventory pass.
+async fn reference_inventory(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+    filter: Option<&[&str]>,
+) -> Result<Vec<UnresolvedReference>, MirrorError> {
+    let selected: Vec<_> = TABLES
+        .iter()
+        .filter(|table| filter.is_none_or(|names| names.contains(&table.name)))
+        .collect();
     let mut parent_tables = std::collections::BTreeSet::new();
-    for table in TABLES {
+    for table in &selected {
         for (_, parent) in table.references {
             parent_tables.insert(*parent);
         }
     }
-    for (_, _, parents) in TAGGED_REFERENCES {
+    for (_, _, parents) in TAGGED_REFERENCES
+        .iter()
+        .filter(|(table, _, _)| filter.is_none_or(|names| names.contains(table)))
+    {
         parent_tables.extend(*parents);
     }
 
     let mut natural_parent_tables = std::collections::BTreeSet::new();
-    for (_, _, parent) in NATURAL_REFERENCES {
+    for (_, _, parent) in NATURAL_REFERENCES
+        .iter()
+        .filter(|(table, _, _)| filter.is_none_or(|names| names.contains(table)))
+    {
         natural_parent_tables.insert(*parent);
     }
 
@@ -966,8 +1018,8 @@ pub async fn unresolved_references(
         );
     }
 
-    let mut counts = BTreeMap::<(&'static str, &'static str), (usize, usize)>::new();
-    for table in TABLES {
+    let mut counts = BTreeMap::<(&'static str, &'static str), UnresolvedReference>::new();
+    for table in &selected {
         let rows = source(surreal, table).await?;
         for (record_key, row) in &rows {
             for (source_table, field, parent) in NATURAL_REFERENCES
@@ -984,9 +1036,8 @@ pub async fn unresolved_references(
                     .get(parent)
                     .is_some_and(|ids| ids.contains(value));
                 if source_orphan || target_missing {
-                    let status = counts.entry((*source_table, *field)).or_default();
-                    status.0 += usize::from(source_orphan);
-                    status.1 += usize::from(target_missing);
+                    reference_counter(&mut counts, (*source_table, *field))
+                        .observe(!source_orphan, !target_missing);
                 }
             }
             for (field, parent) in table.references {
@@ -1027,24 +1078,12 @@ pub async fn unresolved_references(
                         &target_parent_ids,
                     );
                 } else {
-                    let status = counts.entry((*source_table, *field)).or_default();
-                    status.0 += 1;
-                    status.1 += 1;
+                    reference_counter(&mut counts, (*source_table, *field)).observe(false, false);
                 }
             }
         }
     }
-    Ok(counts
-        .into_iter()
-        .map(
-            |((table, field), (source_orphans, postgres_missing))| UnresolvedReference {
-                table,
-                field,
-                source_orphans,
-                postgres_missing,
-            },
-        )
-        .collect())
+    Ok(counts.into_values().collect())
 }
 
 fn is_firm_anchor_sentinel(key: &MirrorKey, value: &Value) -> bool {
@@ -1063,7 +1102,7 @@ fn is_firm_anchor_sentinel(key: &MirrorKey, value: &Value) -> bool {
 }
 
 fn note_reference(
-    counts: &mut BTreeMap<(&'static str, &'static str), (usize, usize)>,
+    counts: &mut BTreeMap<(&'static str, &'static str), UnresolvedReference>,
     key: (&'static str, &'static str),
     id: Option<Uuid>,
     parent: &str,
@@ -1075,9 +1114,7 @@ fn note_reference(
     let target_missing =
         id.is_none_or(|id| !target.get(parent).is_some_and(|ids| ids.contains(&id)));
     if source_orphan || target_missing {
-        let status = counts.entry(key).or_default();
-        status.0 += usize::from(source_orphan);
-        status.1 += usize::from(target_missing);
+        reference_counter(counts, key).observe(!source_orphan, !target_missing);
     }
 }
 
@@ -1091,7 +1128,44 @@ pub(super) fn table(name: &str) -> Result<&'static Table, MirrorError> {
 
 /// The PostgreSQL columns of a registered table, `id` first.
 pub(crate) fn columns(name: &str) -> Option<&'static [&'static str]> {
-    table(name).ok().map(|table| table.columns)
+    match name {
+        "attestation" => Some(super::attestations::COLUMNS),
+        _ => table(name).ok().map(|table| table.columns),
+    }
+}
+
+/// Person links in authoritative record tables that deliberately accept historical orphans.
+/// These use the same preservation metadata as import, without adding foreign keys.
+pub(crate) fn authoritative_person_links() -> impl Iterator<Item = (&'static str, &'static str)> {
+    TABLES
+        .iter()
+        .filter(|table| authoritative(table))
+        .flat_map(|table| {
+            table.references.iter().filter_map(move |(column, target)| {
+                (*target == "person").then_some((table.name, *column))
+            })
+        })
+}
+
+/// Recover a declared reference field from the canonical preservation metadata.
+pub(crate) fn reference_field(name: &str, field: &str) -> Option<&'static str> {
+    TABLES
+        .iter()
+        .filter(|table| table.name == name)
+        .flat_map(|table| table.references.iter().map(|(column, _)| *column))
+        .chain(
+            TAGGED_REFERENCES
+                .iter()
+                .filter(|(table, _, _)| *table == name)
+                .map(|(_, column, _)| *column),
+        )
+        .chain(
+            NATURAL_REFERENCES
+                .iter()
+                .filter(|(table, _, _)| *table == name)
+                .map(|(_, column, _)| *column),
+        )
+        .find(|column| *column == field)
 }
 
 fn authoritative(table: &Table) -> bool {
@@ -1106,7 +1180,18 @@ fn authoritative(table: &Table) -> bool {
 /// PostgreSQL holds the matter records authoritatively, so a SurrealDB row
 /// is no evidence for them: outside the first Mirror Backfill the mirror
 /// neither writes nor deletes one.
-fn require_source_authority(table: &Table) -> Result<(), MirrorError> {
+async fn require_source_authority(pg: &PostgresDb, table: &Table) -> Result<(), MirrorError> {
+    if crate::postgres_backfill::family::Family::for_table(table.name).is_some() {
+        return match crate::postgres_backfill::family::import_mode(pg, table.name).await? {
+            crate::postgres_backfill::family::ImportMode::Refuse => {
+                Err(MirrorError::MatterAuthority)
+            }
+            _ => Ok(()),
+        };
+    }
+    if crate::postgres_backfill::family::active_for_table(pg, table.name).await? {
+        return Err(MirrorError::MatterAuthority);
+    }
     if authoritative(table) && !super::initial_copy() {
         Err(MirrorError::MatterAuthority)
     } else {
@@ -1240,6 +1325,18 @@ pub(super) fn normalize_surreal(
             }
         }
     }
+    let mut missing_json = Vec::new();
+    if let surrealdb::types::Value::Object(fields) = &row {
+        for column in table.columns {
+            if json_column(table, column)?
+                && fields
+                    .get(*column)
+                    .is_none_or(|value| matches!(value, surrealdb::types::Value::None))
+            {
+                missing_json.push(*column);
+            }
+        }
+    }
     let mut row = row.into_json_value();
     if let Some((id, kind)) = natural_id {
         let fields = row.as_object_mut().ok_or(MirrorError::Source)?;
@@ -1254,7 +1351,12 @@ pub(super) fn normalize_surreal(
             fields.insert(name.to_owned(), value);
         }
     }
-    normalize(table, row)
+    if let Some(fields) = row.as_object_mut() {
+        for column in missing_json {
+            fields.remove(column);
+        }
+    }
+    normalized_record(table.name, row)
 }
 
 fn normalize_typed_record_links(value: &surrealdb::types::Value) -> Value {
@@ -1316,6 +1418,9 @@ fn normalize(table: &'static Table, row: Value) -> Result<(MirrorKey, Value), Mi
         .and_then(Value::as_str)
         .map(str::to_owned);
     for name in table.columns {
+        if json_column(table, name)? && !fields.contains_key(*name) {
+            continue;
+        }
         let value = fields.entry(*name).or_insert(Value::Null);
         if value.is_null() {
             continue;
@@ -1412,8 +1517,10 @@ async fn target(
     table: &'static Table,
 ) -> Result<BTreeMap<MirrorKey, Value>, MirrorError> {
     // `table.name` is one of the static names above, never input.
+    let projection =
+        crate::postgres::matter::row_json(table.name).map_err(|_| MirrorError::MatterAuthority)?;
     let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "SELECT to_jsonb(t) AS row FROM \"{}\" AS t",
+        "SELECT {projection} AS row FROM \"{}\" AS r",
         table.name
     )))
     .fetch_all(&pg.0)
@@ -1426,7 +1533,38 @@ async fn target(
         .collect()
 }
 
-fn upsert_sql(table: &Table) -> String {
+fn json_column(table: &Table, column: &str) -> Result<bool, MirrorError> {
+    crate::postgres::matter::json_column(table.name, column)
+        .map_err(|_| MirrorError::MatterAuthority)
+}
+
+fn insert_projection(table: &Table) -> Result<String, MirrorError> {
+    table
+        .columns
+        .iter()
+        .map(|column| {
+            Ok(if json_column(table, column)? {
+                format!("$1::jsonb -> '{column}'")
+            } else {
+                format!("r.\"{column}\"")
+            })
+        })
+        .collect::<Result<Vec<_>, MirrorError>>()
+        .map(|columns| columns.join(","))
+}
+
+fn upsert_sql(table: &Table) -> Result<String, MirrorError> {
+    let projection = insert_projection(table)?;
+    let columns = table
+        .columns
+        .iter()
+        .map(|column| format!("\"{column}\""))
+        .collect::<Vec<_>>()
+        .join(",");
+    if authoritative(table) && !crate::postgres_backfill::family::importing(table.name) {
+        let name = table.name;
+        return Ok(format!("INSERT INTO \"{name}\" ({columns}) SELECT {projection} FROM jsonb_populate_record(NULL::\"{name}\", $1::jsonb) r ON CONFLICT (id) DO NOTHING"));
+    }
     let rest = &table.columns[1..];
     let updates = rest
         .iter()
@@ -1449,10 +1587,10 @@ fn upsert_sql(table: &Table) -> String {
     } else {
         "(\"id\")"
     };
-    format!(
-        "INSERT INTO \"{name}\" SELECT * FROM jsonb_populate_record(NULL::\"{name}\", $1::jsonb) \
+    Ok(format!(
+        "INSERT INTO \"{name}\" ({columns}) SELECT {projection} FROM jsonb_populate_record(NULL::\"{name}\", $1::jsonb) r \
          ON CONFLICT {conflict} DO UPDATE SET {updates} WHERE ROW({current}) IS DISTINCT FROM ROW({excluded})"
-    )
+    ))
 }
 
 /// The parent row a record link names, as the mirror that owns it keys it.
@@ -1533,6 +1671,10 @@ pub async fn mirror(
             return Ok(Mirrored::Unchanged);
         }
         let Some(row) = source_one(surreal, table, id).await? else {
+            if authoritative(table) {
+                return Ok(Mirrored::Unchanged);
+            }
+
             return Ok(Mirrored::Unchanged);
         };
         return insert_product(&pg.0, row).await;
@@ -1545,8 +1687,11 @@ pub async fn mirror(
     {
         return Ok(Mirrored::Unchanged);
     }
-    require_source_authority(table)?;
+    require_source_authority(pg, table).await?;
     let Some(row) = source_one(surreal, table, id).await? else {
+        if crate::postgres_backfill::family::Family::for_table(table.name).is_some() {
+            return Err(MirrorError::Source);
+        }
         refuse_graph_delete(table).await?;
         // `table.name` is one of the static names above, never input.
         let deleted = if MIXED_KEY_TABLES.contains(&table.name) {
@@ -1568,12 +1713,10 @@ pub async fn mirror(
         };
         return Ok(changed(deleted.rows_affected(), Mirrored::Deleted));
     };
-    ensure_parents(surreal, pg, table, &row).await?;
-    let written = sqlx::query(sqlx::AssertSqlSafe(upsert_sql(table)))
-        .bind(row)
-        .execute(&pg.0)
-        .await?;
-    Ok(changed(written.rows_affected(), Mirrored::Written))
+    if !crate::postgres_backfill::family::importing(table.name) {
+        ensure_parents(surreal, pg, table, &row).await?;
+    }
+    copy_record(pg, table.name, row).await
 }
 
 /// Mirror a row whose SurrealDB record key is a domain-provided string.
@@ -1584,7 +1727,7 @@ pub async fn mirror_string(
     id: &str,
 ) -> Result<Mirrored, MirrorError> {
     let table = table(table_name)?;
-    require_source_authority(table)?;
+    require_source_authority(pg, table).await?;
     if !STRING_KEY_TABLES.contains(&table.name) && !MIXED_KEY_TABLES.contains(&table.name) {
         return Err(MirrorError::Source);
     }
@@ -1605,11 +1748,7 @@ pub async fn mirror_string(
         return Ok(changed(deleted.rows_affected(), Mirrored::Deleted));
     };
     ensure_parents(surreal, pg, table, &row).await?;
-    let written = sqlx::query(sqlx::AssertSqlSafe(upsert_sql(table)))
-        .bind(row)
-        .execute(&pg.0)
-        .await?;
-    Ok(changed(written.rows_affected(), Mirrored::Written))
+    copy_record(pg, table.name, row).await
 }
 
 fn tables(group: &str) -> impl Iterator<Item = &'static Table> + '_ {
@@ -1620,6 +1759,97 @@ fn comparable(rows: BTreeMap<MirrorKey, Value>) -> BTreeMap<MirrorKey, Columns> 
     rows.into_iter()
         .map(|(key, row)| (key, Columns::Record(row)))
         .collect()
+}
+
+/// Existing PostgreSQL Person rewrites cannot be adjudicated by a legacy refresh.
+async fn preserve_person_references(
+    pg: &PostgresDb,
+    table: &Table,
+    row: &Value,
+) -> Result<(), MirrorError> {
+    if !crate::postgres_backfill::family::importing(table.name)
+        || !table
+            .references
+            .iter()
+            .any(|(_, parent)| *parent == "person")
+    {
+        return Ok(());
+    }
+    let id = row
+        .get("id")
+        .and_then(Value::as_str)
+        .and_then(|id| Uuid::parse_str(id).ok())
+        .ok_or(MirrorError::Source)?;
+    let projection =
+        crate::postgres::matter::row_json(table.name).map_err(|_| MirrorError::Source)?;
+    let previous: Option<Value> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT {projection} FROM \"{}\" r WHERE id = $1",
+        table.name
+    )))
+    .bind(id)
+    .fetch_optional(pg.pool())
+    .await?;
+    if previous.is_some_and(|previous| {
+        table
+            .references
+            .iter()
+            .any(|(field, parent)| *parent == "person" && previous.get(*field) != row.get(*field))
+    }) {
+        return Err(MirrorError::MatterAuthority);
+    }
+    Ok(())
+}
+
+/// Copy a normalized source record through the same preservation guard as the importer.
+pub(crate) async fn copy_record(
+    pg: &PostgresDb,
+    name: &str,
+    row: Value,
+) -> Result<Mirrored, MirrorError> {
+    let table = table(name)?;
+    require_source_authority(pg, table).await?;
+    preserve_person_references(pg, table, &row).await?;
+    let written = sqlx::query(sqlx::AssertSqlSafe(upsert_sql(table)?))
+        .bind(row)
+        .execute(pg.pool())
+        .await?;
+    Ok(changed(written.rows_affected(), Mirrored::Written))
+}
+
+/// The canonical whole-row normalization used by import and typed parity.
+pub(crate) fn normalized_record(name: &str, row: Value) -> Result<(MirrorKey, Value), MirrorError> {
+    normalize(table(name)?, row)
+}
+
+/// PostgreSQL rows with SQL NULL distinguished from explicit JSONB null.
+pub(crate) async fn target_record_rows(
+    pg: &PostgresDb,
+    name: &str,
+) -> Result<BTreeMap<MirrorKey, Value>, MirrorError> {
+    target(pg, table(name)?).await
+}
+
+/// Compare already-normalized rows through the mirror's existing value comparison.
+pub(crate) fn compare_record_rows(
+    name: &'static str,
+    source: BTreeMap<MirrorKey, Value>,
+    target: BTreeMap<MirrorKey, Value>,
+) -> super::TableParity {
+    super::compare(name, &comparable(source), &comparable(target))
+}
+
+/// Full enrolled-table parity; selected import is the only refresh permission.
+pub(crate) async fn scoped_table_parity(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+    name: &'static str,
+) -> Result<super::TableParity, MirrorError> {
+    let table = table(name)?;
+    Ok(compare_record_rows(
+        name,
+        source(surreal, table).await?,
+        target_record_rows(pg, name).await?,
+    ))
 }
 
 /// Compare every row of one group's tables.
@@ -1635,6 +1865,13 @@ pub async fn parity(
     let mut reports = Vec::new();
     let mut compares_authoritative = None;
     for table in tables(group) {
+        if crate::postgres_backfill::family::active_for_table(pg, table.name).await? {
+            continue;
+        }
+        if crate::postgres_backfill::family::importing(table.name) {
+            reports.push(scoped_table_parity(surreal, pg, table.name).await?);
+            continue;
+        }
         let authoritative = authoritative(table) || crate::postgres_graph::holds(table.name).await;
         if authoritative {
             if compares_authoritative.is_none() {

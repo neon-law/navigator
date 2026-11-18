@@ -2,13 +2,11 @@
 //! [Matter Pages](../../../docs/glossary/matter-page.md) and
 //! [Matter Caption](../../../docs/glossary/matter-caption.md).
 //!
-//! `navigator project sync` replaces a Project's whole page set and its one
-//! caption at once, so both mirror per Project: [`MirrorKey::MatterPages`]
-//! names every page of one Project and [`MirrorKey::MatterCaption`] its
-//! caption. Every row keeps its Surreal record UUID. A mirror writes the
-//! Project's whole set in one transaction and removes the pages SurrealDB no
-//! longer holds, so a page dropped from the manifest, or a caption cleared by
-//! an explicit empty block, leaves PostgreSQL too.
+//! The Page mirror replaces a Project's whole page set transactionally and removes
+//! pages absent from its source. Matter Captions are PostgreSQL-authoritative:
+//! their first backfill inserts missing captions, and later source reads cannot
+//! overwrite or delete them. [`MirrorKey::MatterPages`] identifies the page set;
+//! [`MirrorKey::MatterCaption`] identifies the Project's caption.
 //!
 //! Each row carries its Project's Firm under a compound Project/Firm foreign
 //! key, so PostgreSQL refuses a row whose Firm is not its Project's. A Project
@@ -27,6 +25,7 @@ use super::{
 };
 use crate::matter_captions::{CounselRow, PartyRow};
 use crate::postgres::PostgresDb;
+use crate::postgres_backfill::family::{self, ImportMode};
 use crate::surreal::{record_id, record_uuid, SurrealDb};
 
 /// One Matter Page as both stores compare it.
@@ -62,6 +61,7 @@ pub(super) struct CaptionImage {
     department: String,
     filed_on: String,
     trial_on: Option<String>,
+    signed_on: Option<String>,
     parties: Vec<Party>,
     counsel: Counsel,
     synced_at: DateTime<Utc>,
@@ -96,6 +96,7 @@ struct CaptionSource {
     department: String,
     filed_on: String,
     trial_on: Option<String>,
+    signed_on: Option<String>,
     parties: Vec<PartyRow>,
     counsel: CounselRow,
     synced_at: String,
@@ -147,6 +148,7 @@ impl TryFrom<CaptionSource> for CaptionImage {
             department: row.department,
             filed_on: row.filed_on,
             trial_on: row.trial_on,
+            signed_on: row.signed_on,
             parties: row.parties.into_iter().map(Party::from).collect(),
             counsel: row.counsel.into(),
             synced_at: synced(&row.synced_at)?,
@@ -158,7 +160,7 @@ const PAGE_SOURCE: &str = "SELECT id, project_id, project_id.firm_id AS firm_id,
      title, draft, document_revision, media, position, client_sections, lawyer_sections, clerk_sections, synced_at \
      FROM matter_page";
 const CAPTION_SOURCE: &str = "SELECT id, project_id, project_id.firm_id AS firm_id, court, \
-     case_number, judicial_officer, department, filed_on, trial_on, parties, counsel, synced_at \
+     case_number, judicial_officer, department, filed_on, trial_on, signed_on, parties, counsel, synced_at \
      FROM matter_caption";
 
 /// Run one source `SELECT`, every row or one Project's.
@@ -247,6 +249,7 @@ fn caption_from_row(row: &PgRow) -> Result<CaptionImage, sqlx::Error> {
         department: row.try_get("department")?,
         filed_on: row.try_get("filed_on")?,
         trial_on: row.try_get("trial_on")?,
+        signed_on: row.try_get("signed_on")?,
         parties: parties.0,
         counsel: counsel.0,
         synced_at: row.try_get("synced_at")?,
@@ -310,7 +313,7 @@ pub(crate) async fn project_page_entries(
 async fn target_captions(pg: &PostgresDb) -> Result<BTreeMap<Uuid, CaptionImage>, MirrorError> {
     let rows = sqlx::query(
         "SELECT id, project_id, firm_id, court, case_number, judicial_officer, department, \
-         filed_on, trial_on, parties, counsel, synced_at FROM matter_caption",
+         filed_on, trial_on, signed_on, parties, counsel, synced_at FROM matter_caption",
     )
     .fetch_all(&pg.0)
     .await?;
@@ -364,21 +367,7 @@ const PAGE_UPSERT: &str = "INSERT INTO matter_page (id, project_id, firm_id, slu
      EXCLUDED.title, EXCLUDED.draft, EXCLUDED.position, EXCLUDED.client_sections, \
      EXCLUDED.lawyer_sections, EXCLUDED.clerk_sections, EXCLUDED.synced_at, EXCLUDED.document_revision, EXCLUDED.media)";
 
-const CAPTION_UPSERT: &str = "INSERT INTO matter_caption (id, project_id, firm_id, court, \
-     case_number, judicial_officer, department, filed_on, trial_on, parties, counsel, synced_at) \
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
-     ON CONFLICT (id) DO UPDATE SET project_id = EXCLUDED.project_id, \
-     firm_id = EXCLUDED.firm_id, court = EXCLUDED.court, case_number = EXCLUDED.case_number, \
-     judicial_officer = EXCLUDED.judicial_officer, department = EXCLUDED.department, \
-     filed_on = EXCLUDED.filed_on, trial_on = EXCLUDED.trial_on, parties = EXCLUDED.parties, \
-     counsel = EXCLUDED.counsel, synced_at = EXCLUDED.synced_at \
-     WHERE (matter_caption.project_id, matter_caption.firm_id, matter_caption.court, \
-     matter_caption.case_number, matter_caption.judicial_officer, matter_caption.department, \
-     matter_caption.filed_on, matter_caption.trial_on, matter_caption.parties, \
-     matter_caption.counsel, matter_caption.synced_at) \
-     IS DISTINCT FROM (EXCLUDED.project_id, EXCLUDED.firm_id, EXCLUDED.court, \
-     EXCLUDED.case_number, EXCLUDED.judicial_officer, EXCLUDED.department, EXCLUDED.filed_on, \
-     EXCLUDED.trial_on, EXCLUDED.parties, EXCLUDED.counsel, EXCLUDED.synced_at)";
+const CAPTION_UPSERT: &str = "INSERT INTO matter_caption (id, project_id, firm_id, court, case_number, judicial_officer, department, filed_on, trial_on, parties, counsel, synced_at, signed_on) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) ON CONFLICT (project_id) DO UPDATE SET id=EXCLUDED.id, firm_id=EXCLUDED.firm_id, court=EXCLUDED.court, case_number=EXCLUDED.case_number, judicial_officer=EXCLUDED.judicial_officer, department=EXCLUDED.department, filed_on=EXCLUDED.filed_on, trial_on=EXCLUDED.trial_on, parties=EXCLUDED.parties, counsel=EXCLUDED.counsel, synced_at=EXCLUDED.synced_at, signed_on=EXCLUDED.signed_on";
 
 /// Make PostgreSQL hold exactly the Project's source pages, in one
 /// transaction: pages the source no longer holds go, the rest upsert by id.
@@ -436,23 +425,26 @@ async fn write_caption(
     project_id: Uuid,
     caption: Option<&CaptionImage>,
 ) -> Result<Mirrored, MirrorError> {
-    let Some(caption) = caption else {
-        let deleted = sqlx::query("DELETE FROM matter_caption WHERE project_id = $1")
-            .bind(project_id)
-            .execute(&pg.0)
-            .await?;
-        return Ok(changed(deleted.rows_affected(), Mirrored::Deleted));
+    let mode = family::import_mode(pg, "matter_caption").await?;
+    if mode == ImportMode::Refuse {
+        return Err(MirrorError::MatterAuthority);
+    }
+    let caption = caption.ok_or(MirrorError::Source)?;
+    let firm_id = if mode == ImportMode::InsertMissing {
+        ensure_owner(surreal, pg, project_id, caption.firm_id).await?
+    } else {
+        caption.firm_id.ok_or(MirrorError::Source)?
     };
-    let firm_id = ensure_owner(surreal, pg, project_id, caption.firm_id).await?;
+    let statement = if mode == ImportMode::InsertMissing {
+        let (insert, _) = CAPTION_UPSERT
+            .split_once(" ON CONFLICT")
+            .ok_or(MirrorError::Source)?;
+        format!("{insert} ON CONFLICT (project_id) DO NOTHING")
+    } else {
+        CAPTION_UPSERT.to_owned()
+    };
     let mut tx = pg.0.begin().await?;
-    // A sync gives the caption a new id; the Project's previous row goes.
-    let replaced = sqlx::query("DELETE FROM matter_caption WHERE project_id = $1 AND id <> $2")
-        .bind(project_id)
-        .bind(caption.id)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
-    let written = sqlx::query(CAPTION_UPSERT)
+    let written = sqlx::query(sqlx::AssertSqlSafe(statement))
         .bind(caption.id)
         .bind(caption.project_id)
         .bind(firm_id)
@@ -465,11 +457,12 @@ async fn write_caption(
         .bind(Json(&caption.parties))
         .bind(Json(&caption.counsel))
         .bind(caption.synced_at)
+        .bind(&caption.signed_on)
         .execute(&mut *tx)
         .await?
         .rows_affected();
     tx.commit().await?;
-    Ok(changed(written + replaced, Mirrored::Written))
+    Ok(changed(written, Mirrored::Written))
 }
 
 /// Mirror one Project's page set or caption, removing what SurrealDB no
@@ -488,6 +481,9 @@ pub(super) async fn mirror(
             write_pages(surreal, pg, *project_id, &pages).await
         }
         MirrorKey::MatterCaption(project_id) => {
+            if family::import_mode(pg, "matter_caption").await? == ImportMode::Refuse {
+                return Err(MirrorError::MatterAuthority);
+            }
             let caption = source_captions(surreal, Some(*project_id))
                 .await?
                 .remove(project_id);
@@ -524,20 +520,31 @@ fn keyed_captions(captions: BTreeMap<Uuid, CaptionImage>) -> BTreeMap<MirrorKey,
 /// diverges as a whole: a missing, extra, reordered, or changed page names
 /// its Project. Reports name keys only.
 pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
-    Ok(ParityReport {
-        tables: vec![
-            super::compare(
-                "matter_page",
-                &keyed_pages(source_pages(surreal, None).await?),
-                &keyed_pages(target_pages(pg, None).await?),
-            ),
-            super::compare(
-                "matter_caption",
-                &keyed_captions(source_captions(surreal, None).await?),
-                &keyed_captions(target_captions(pg).await?),
-            ),
-        ],
-    })
+    let mut tables = vec![super::compare(
+        "matter_page",
+        &keyed_pages(source_pages(surreal, None).await?),
+        &keyed_pages(target_pages(pg, None).await?),
+    )];
+    if !family::active_for_table(pg, "matter_caption").await? {
+        if family::importing("matter_caption") {
+            tables.push(caption_parity(surreal, pg).await?);
+        } else if super::compares_authoritative(pg).await? {
+            tables.push(super::only_missing(pg, caption_parity(surreal, pg).await?).await?);
+        }
+    }
+    Ok(ParityReport { tables })
+}
+
+/// Compare the enrolled caption without reading unrelated Matter Pages.
+pub(crate) async fn caption_parity(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+) -> Result<super::TableParity, MirrorError> {
+    Ok(super::compare(
+        "matter_caption",
+        &keyed_captions(source_captions(surreal, None).await?),
+        &keyed_captions(target_captions(pg).await?),
+    ))
 }
 
 /// Re-mirror every divergent Project, then compare again. A Project that

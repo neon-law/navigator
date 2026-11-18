@@ -8,18 +8,18 @@
 //! [`deny`]. The executed expunge is always category `client_request`.
 //! See [`crate::expunge_records`] and the design §9.
 //!
-//! # This table lives in SurrealDB
-//!
-//! `expunge_requests` moved with wave six of #1093 (ENG-160), in the
-//! expungement slice alongside [`crate::expunge_records`].
+//! Commands use PostgreSQL whenever its host is configured; see
+//! [storage models](../../docs/storage-models.md#matter-records).
 
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use surrealdb::types::SurrealValue;
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::postgres::matter;
 use crate::surreal::{record_id, record_uuid, SurrealDb};
+use serde_json::json;
 
 /// What can go wrong reading or writing a deletion request.
 ///
@@ -28,6 +28,8 @@ use crate::surreal::{record_id, record_uuid, SurrealDb};
 /// crate — the same shape [`crate::persons::PersonError`] uses.
 #[derive(Debug, Error)]
 pub enum ExpungeRequestError {
+    #[error(transparent)]
+    Postgres(#[from] matter::MatterAuthorityError),
     /// A database operation failed.
     #[error("database: {0}")]
     Db(#[from] surrealdb::Error),
@@ -46,7 +48,7 @@ pub const STATUS_AUTHORIZED: &str = "authorized";
 pub const STATUS_DENIED: &str = "denied";
 
 /// One client deletion request.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExpungeRequest {
     pub id: Uuid,
     /// The matter the document belongs to.
@@ -128,6 +130,24 @@ pub async fn create(
     db: &SurrealDb,
     new: &NewExpungeRequest<'_>,
 ) -> Result<Uuid, ExpungeRequestError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        let now = Utc::now();
+        let row = ExpungeRequest {
+            id: Uuid::now_v7(),
+            project_id: new.project_id,
+            asset_id: new.asset_id,
+            requested_by_person_id: new.requested_by_person_id,
+            status: STATUS_PENDING.to_owned(),
+            note: new.note.map(str::to_owned),
+            resolved_by_person_id: None,
+            expunge_record_id: None,
+            inserted_at: now,
+            updated_at: now,
+        };
+        let stored: ExpungeRequest = matter::upsert(&pg, TABLE, &row).await?;
+        return Ok(stored.id);
+    }
+
     let id = Uuid::now_v7();
     let mut response = db
         .query(format!(
@@ -164,6 +184,10 @@ pub async fn by_id(
     db: &SurrealDb,
     id: Uuid,
 ) -> Result<Option<ExpungeRequest>, ExpungeRequestError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return Ok(matter::find(&pg, TABLE, json!({"id": id})).await?);
+    }
+
     let mut response = db
         .query(format!("SELECT {SELECT} FROM $id"))
         .bind(("id", record_id(TABLE, id)))
@@ -182,6 +206,15 @@ pub async fn pending_for_document(
     db: &SurrealDb,
     asset_id: Uuid,
 ) -> Result<Option<ExpungeRequest>, ExpungeRequestError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return Ok(matter::find(
+            &pg,
+            TABLE,
+            json!({"asset_id": asset_id, "status": STATUS_PENDING}),
+        )
+        .await?);
+    }
+
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} \
@@ -201,6 +234,10 @@ pub async fn pending_for_document(
 /// # Errors
 /// Propagates any database error.
 pub async fn list_pending(db: &SurrealDb) -> Result<Vec<ExpungeRequest>, ExpungeRequestError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return Ok(matter::select(&pg, TABLE, json!({"status": STATUS_PENDING}), &["id"]).await?);
+    }
+
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE status = $status ORDER BY id ASC"
@@ -228,6 +265,14 @@ pub async fn exists_for_project(
     db: &SurrealDb,
     project_id: Uuid,
 ) -> Result<bool, ExpungeRequestError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return Ok(
+            matter::find::<ExpungeRequest>(&pg, TABLE, json!({"project_id": project_id}))
+                .await?
+                .is_some(),
+        );
+    }
+
     let mut response = db
         .query(format!(
             "SELECT VALUE id FROM {TABLE} WHERE project_id = $project LIMIT 1"
@@ -291,6 +336,19 @@ async fn resolve(
     resolved_by_person_id: Uuid,
     expunge_record_id: Option<Uuid>,
 ) -> Result<Option<ExpungeRequest>, ExpungeRequestError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return Ok(matter::update(
+            &pg,
+            TABLE,
+            json!({"id": id, "status": STATUS_PENDING}),
+            json!({"status": status, "resolved_by_person_id": resolved_by_person_id,
+                "expunge_record_id": expunge_record_id, "updated_at": Utc::now()}),
+        )
+        .await?
+        .into_iter()
+        .next());
+    }
+
     let mut response = db
         .query(format!(
             "UPDATE $id SET \

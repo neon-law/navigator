@@ -4,7 +4,9 @@ description: "The saved progress of one mirror group within a Mirror Backfill ru
 ---
 
 A checkpoint belongs to a [Mirror Backfill](mirror-backfill.md) run and mirror group. It records batch, applied, and
-failed counts, timestamps, and completion so the run can resume its recorded work.
+failed counts, timestamps, and completion so the run can resume its recorded work. In a scoped run, `mirror` names the
+exact enrolled table and `verification` seals its capture-bound row counts, content differences, reference diagnostics,
+and constraint proof. These checkpoints remain with the completed run as authority evidence.
 
 The table is `mirror_backfill_checkpoint`.
 
