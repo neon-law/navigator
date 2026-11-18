@@ -68,6 +68,66 @@ pub(super) fn validate_published_port(ports: &serde_json::Value, expected: u16) 
     Ok(())
 }
 
+/// Admit this fixture's node-facing transport; TLS and database roles still authenticate clients.
+pub(super) fn host_ingress(
+    cfg: &KindConfig,
+    node: &serde_json::Value,
+    container: &serde_json::Value,
+) -> Result<serde_json::Value> {
+    validate_published_port(&container["NetworkSettings"]["Ports"], cfg.postgres_port)?;
+    let name = format!("{}-control-plane", cfg.cluster);
+    ensure!(
+        node["metadata"]["name"].as_str() == Some(name.as_str())
+            && container["Name"].as_str() == Some(format!("/{name}").as_str())
+            && container["Config"]["Labels"]["io.x-k8s.kind.cluster"].as_str()
+                == Some(cfg.cluster.as_str())
+            && container["Config"]["Labels"]["io.x-k8s.kind.role"].as_str()
+                == Some("control-plane"),
+        "PostgreSQL fixture ingress requires its verified KIND control-plane target"
+    );
+    let mut ips = Vec::new();
+    for address in node["status"]["addresses"]
+        .as_array()
+        .context("fixture node omitted its addresses")?
+    {
+        if address["type"].as_str() == Some("InternalIP") {
+            let ip: std::net::IpAddr = address["address"]
+                .as_str()
+                .context("fixture node address is invalid")?
+                .parse()
+                .context("fixture node address is invalid")?;
+            if let std::net::IpAddr::V4(ip) = ip {
+                ips.push(ip);
+            }
+        }
+    }
+    ensure!(
+        ips.len() == 1 && ips[0].is_private(),
+        "fixture node requires one private InternalIPv4"
+    );
+    let ip = ips[0];
+    let networks = container["NetworkSettings"]["Networks"]
+        .as_object()
+        .context("fixture Docker node omitted its networks")?;
+    ensure!(
+        networks.values().any(|network| network["IPAddress"]
+            .as_str()
+            .and_then(|value| value.parse::<std::net::Ipv4Addr>().ok())
+            == Some(ip)),
+        "fixture node address does not match its owned Docker target"
+    );
+    Ok(serde_json::json!({
+        "apiVersion":"networking.k8s.io/v1", "kind":"NetworkPolicy",
+        "metadata":{"name":"navigator-postgres-fixture-host","namespace":cfg.namespace},
+        "spec":{
+            "podSelector":{"matchLabels":{"app":"navigator-postgres"}},
+            "policyTypes":["Ingress"],
+            "ingress":[{"from":[{"ipBlock":{"cidr":format!("{ip}/32")}}],
+                "ports":[{"protocol":"TCP","port":5432}]}]
+        }
+    }))
+}
+
 pub(super) fn ca_path(root: &Path) -> PathBuf {
     root.join(".devx/postgres/ca.crt")
 }
@@ -198,6 +258,54 @@ mod tests {
             let redirected = serde_json::json!({"31532/tcp":[{"HostIp":host,"HostPort":"21503"}]});
             assert!(validate_published_port(&redirected, 21503).is_err());
         }
+    }
+
+    #[test]
+    fn host_ingress_is_bound_to_the_owned_node_and_one_database_port() {
+        let mut cfg = KindConfig::from_env();
+        cfg.cluster = "fixture-owner".into();
+        cfg.namespace = "navigator".into();
+        cfg.postgres_port = 21503;
+        let mut node = serde_json::json!({"metadata":{"name":"fixture-owner-control-plane"},
+            "status":{"addresses":[{"type":"InternalIP","address":"192.168.49.2"}]}});
+        let mut container = serde_json::json!({
+            "Name":"/fixture-owner-control-plane",
+            "Config":{"Labels":{"io.x-k8s.kind.cluster":"fixture-owner","io.x-k8s.kind.role":"control-plane"}},
+            "NetworkSettings":{
+                "Ports":{"31532/tcp":[{"HostIp":"127.0.0.1","HostPort":"21503"}]},
+                "Networks":{"kind":{"IPAddress":"192.168.49.2"}}
+            }
+        });
+        let policy = host_ingress(&cfg, &node, &container).unwrap();
+        assert_eq!(policy["metadata"]["namespace"], "navigator");
+        assert_eq!(
+            policy["spec"]["policyTypes"],
+            serde_json::json!(["Ingress"])
+        );
+        assert_eq!(
+            policy["spec"]["ingress"],
+            serde_json::json!([{
+                "from":[{"ipBlock":{"cidr":"192.168.49.2/32"}}],
+                "ports":[{"protocol":"TCP","port":5432}]
+            }])
+        );
+        for invalid in [
+            "not-an-ip",
+            "192.168.49.3",
+            "192.0.2.1",
+            "127.0.0.1",
+            "0.0.0.0",
+            "192.168.49.2/32",
+        ] {
+            node["status"]["addresses"][0]["address"] = serde_json::json!(invalid);
+            assert!(host_ingress(&cfg, &node, &container).is_err());
+        }
+        node["status"]["addresses"][0]["address"] = serde_json::json!("192.168.49.2");
+        node["metadata"]["name"] = serde_json::json!("another-control-plane");
+        assert!(host_ingress(&cfg, &node, &container).is_err());
+        node["metadata"]["name"] = serde_json::json!("fixture-owner-control-plane");
+        container["Config"]["Labels"]["io.x-k8s.kind.cluster"] = serde_json::json!("another-owner");
+        assert!(host_ingress(&cfg, &node, &container).is_err());
     }
 
     #[test]

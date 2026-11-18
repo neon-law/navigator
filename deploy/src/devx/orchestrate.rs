@@ -63,6 +63,31 @@ pub(super) fn up_in(root: &Path, cfg: &KindConfig) -> Result<()> {
     wait_rollout("statefulset", "seaweedfs", cfg)?;
     hydrate_seaweedfs_environment(cfg)?;
     bootstrap_postgres_in(root, cfg, "navigator")?;
+    restore_dependency_forwards(root, cfg)?;
+
+    // The tier is reachable now, so the schema can be applied before
+    // anything is told the environment is ready. Idempotent: a reused
+    // cluster converges on the current definitions.
+    super::surreal::apply_schema(cfg, "navigator")?;
+
+    // Development always refreshes every sample matter's application before
+    // the environment is written. The generated variable below then points the
+    // host-side web process at this exact set of staged bundles.
+    super::sample_project::run_for_root(false, root)?;
+
+    let mut environment = render_env(cfg, root);
+    environment.push_str(&super::postgres_fixture::read_environment(root)?);
+    state.write_env(&environment)?;
+
+    print_chrome_summary(cfg);
+    Ok(())
+}
+
+/// Restore only this verified tier's host transports, without rebuilding or importing data.
+pub(super) fn restore_dependency_forwards(root: &Path, cfg: &KindConfig) -> Result<()> {
+    super::worktree_env::verify_postgres_fixture_target(root, cfg)?;
+    verify_fixture_port(cfg)?;
+    let state = StateDir::new(root)?;
     wait_for_dep_rollouts(cfg)?;
 
     eprintln!("==> opening port-forwards");
@@ -97,9 +122,8 @@ pub(super) fn up_in(root: &Path, cfg: &KindConfig) -> Result<()> {
             cfg,
             &state,
         )?);
-        // SurrealDB, the store the workspace is porting onto (#1093).
-        // The in-cluster worker reaches the same engine through the
-        // Service; this forward is what lets host `web` join it.
+        // Legacy compatibility callers and the worker share this service.
+        // This forward lets the host application reach that same fixture.
         pids.push(port_forward(
             "svc/surreal",
             cfg.surreal_port,
@@ -134,21 +158,6 @@ pub(super) fn up_in(root: &Path, cfg: &KindConfig) -> Result<()> {
     wait_for_tcp("127.0.0.1", cfg.surreal_port)?;
     wait_for_tcp("127.0.0.1", cfg.openobserve_otlp_port)?;
 
-    // The tier is reachable now, so the schema can be applied before
-    // anything is told the environment is ready. Idempotent: a reused
-    // cluster converges on the current definitions.
-    super::surreal::apply_schema(cfg, "navigator")?;
-
-    // Development always refreshes every sample matter's application before
-    // the environment is written. The generated variable below then points the
-    // host-side web process at this exact set of staged bundles.
-    super::sample_project::run_for_root(false, root)?;
-
-    let mut environment = render_env(cfg, root);
-    environment.push_str(&super::postgres_fixture::read_environment(root)?);
-    state.write_env(&environment)?;
-
-    print_chrome_summary(cfg);
     Ok(())
 }
 
@@ -1549,27 +1558,28 @@ pub(super) fn postgres_bootstrap(path: Option<&Path>, cfg: &KindConfig) -> Resul
     bootstrap_postgres_in(&root, &cfg, "navigator")
 }
 
-pub(in crate::devx) fn verify_fixture_port(cfg: &KindConfig) -> Result<()> {
+pub(in crate::devx) fn verify_fixture_port(cfg: &KindConfig) -> Result<serde_json::Value> {
     let published = Command::new("docker")
-        .args(["inspect", "--format", "{{json .NetworkSettings.Ports}}"])
+        .args(["inspect", "--format", "{{json .}}"])
         .arg(format!("{}-control-plane", cfg.cluster))
         .output()?;
     anyhow::ensure!(
         published.status.success(),
         "inspect the owned KIND node's published ports"
     );
+    let container: serde_json::Value = serde_json::from_slice(&published.stdout)?;
     super::postgres_fixture::validate_published_port(
-        &serde_json::from_slice(&published.stdout)?,
+        &container["NetworkSettings"]["Ports"],
         cfg.postgres_port,
     )?;
-    Ok(())
+    Ok(container)
 }
 
 fn fixture_kube(
     root: &Path,
     cfg: &KindConfig,
     database: &str,
-) -> Result<super::forgejo::cluster::Kube> {
+) -> Result<(super::forgejo::cluster::Kube, serde_json::Value)> {
     use super::forgejo::cluster::Kube;
     require_tools(&["kind", "kubectl", "docker", "openssl"])?;
     super::worktree_env::verify_postgres_fixture_target(root, cfg)?;
@@ -1581,7 +1591,7 @@ fn fixture_kube(
                 .any(|name| name == cfg.cluster),
         "PostgreSQL fixture requires this task's existing KIND cluster"
     );
-    verify_fixture_port(cfg)?;
+    let container = verify_fixture_port(cfg)?;
     let kube = Kube::new(cfg);
     let read = |kind: &str| -> Result<serde_json::Value> {
         Ok(serde_json::from_str(
@@ -1603,13 +1613,22 @@ fn fixture_kube(
             "navigator-postgres",
         )?;
     }
-    Ok(kube)
+    Ok((kube, container))
 }
 
 fn bootstrap_postgres_in(root: &Path, cfg: &KindConfig, database: &str) -> Result<()> {
     use super::forgejo::cluster::prepare_postgres;
-    let kube = fixture_kube(root, cfg, database)?;
+    let (kube, container) = fixture_kube(root, cfg, database)?;
     let held = hold_fixture_writers(root, cfg, &kube)?;
+    let node: serde_json::Value = serde_json::from_str(&kube.output(&[
+        "get",
+        "node",
+        &format!("{}-control-plane", cfg.cluster),
+        "-o",
+        "json",
+    ])?)?;
+    let ingress = super::postgres_fixture::host_ingress(cfg, &node, &container)?;
+    kube.apply(&ingress.to_string())?;
     let state = StateDir::new(root)?;
     state.kill_pids();
     state.write_pids(&[])?;

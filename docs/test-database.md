@@ -28,6 +28,11 @@ Hudson lifecycle provisions the pinned retained PostgreSQL image with TLS and ap
 `.devx/postgres/env` and includes it in `.devx/env`, so host fixture helpers and the in-cluster application use the same
 database. In-cluster clients mount the CA certificate; server keys stay with PostgreSQL.
 
+KIND adds a separate ingress rule for PostgreSQL port 5432 from its verified control-plane InternalIPv4 `/32`, matched
+to the owned Docker node. NodePort SNAT can represent multiple clients; this rule admits node-facing transport, not an
+exclusive host identity. Verified TLS and database credentials remain required. The labeled-pod policy and hosted
+policies are unchanged.
+
 Before enrollment, Hudson holds web and worker replicas and waits for their pods to stop. A fresh memory-backed legacy
 source is captured with its real strict-export receipt, imported, and enrolled before ordinary sample seeding. A valid
 existing enrollment is reused. Nonempty unactivated history or partial enrollment requires explicit recovery; the

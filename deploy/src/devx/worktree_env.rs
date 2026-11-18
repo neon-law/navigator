@@ -467,7 +467,6 @@ fn up_dev(root: &Path, no_deps: bool, runtime: Runtime, base_cfg: &KindConfig) -
                 super::up_in(root, &cfg)?;
                 sample_project_refreshed = true;
             }
-            ensure_worktree_deps_ready(&cfg)?;
             // Pin this worktree's isolated KIND context before touching the cluster.
             // The fresh-boot branch above reaches it through `up_in` →
             // `configure_worktree_kubeconfig`, but a reused cluster skips `up_in`
@@ -475,7 +474,7 @@ fn up_dev(root: &Path, no_deps: bool, runtime: Runtime, base_cfg: &KindConfig) -
             // bare `kubectl`, inheriting whatever context is ambient. On an operator
             // pointed at prod that is a `kubectl exec` in the production cluster, so
             // the pin is unconditional here rather than gated on the boot branch.
-            super::configure_worktree_kubeconfig(root, &cfg)?;
+            ensure_kind_transports(root, &cfg, no_deps)?;
             // Unconditional for the same reason as the kubeconfig pin above: the
             // fresh-boot branch aligns Rauthy inside `up_in`, but a *reused* cluster
             // skips `up_in` entirely. Re-applying an unchanged public URL starts no
@@ -832,6 +831,15 @@ fn gate_members(cfg: &KindConfig) -> [(&'static str, u16); 10] {
         ("ClamAV", cfg.clamav_port),
         ("SurrealDB", cfg.surreal_port),
     ]
+}
+
+fn ensure_kind_transports(root: &Path, cfg: &KindConfig, no_deps: bool) -> Result<()> {
+    super::configure_worktree_kubeconfig(root, cfg)?;
+    super::orchestrate::verify_fixture_port(cfg)?;
+    if no_deps && !worktree_deps_ready(cfg) {
+        super::orchestrate::restore_dependency_forwards(root, cfg)?;
+    }
+    ensure_worktree_deps_ready(cfg)
 }
 
 fn kind_fixture_ready(root: &Path, cfg: &KindConfig) -> bool {
