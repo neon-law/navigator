@@ -11,6 +11,10 @@ pub enum Family {
     Satellites,
     /// Remaining application catalogs, intake, service, and approval records.
     Application,
+    /// Person identity and mailbox claims.
+    Identity,
+    /// Firm, Brand, Project, and participation authority.
+    Tenancy,
     /// Notation writers and their canonical document and Asset protection facts.
     Notation,
 }
@@ -19,7 +23,13 @@ impl Family {
     /// Every registered family required before application readiness or workflow effects.
     #[must_use]
     pub const fn all() -> &'static [Self] {
-        &[Self::Satellites, Self::Notation, Self::Application]
+        &[
+            Self::Satellites,
+            Self::Notation,
+            Self::Identity,
+            Self::Tenancy,
+            Self::Application,
+        ]
     }
 
     /// The immutable version of this family's import contract.
@@ -29,6 +39,8 @@ impl Family {
             Self::Satellites => "satellites:1",
             Self::Notation => "notation:1",
             Self::Application => "application:1",
+            Self::Identity => "identity:1",
+            Self::Tenancy => "tenancy:1",
         }
     }
 
@@ -50,6 +62,25 @@ impl Family {
                 "project_module",
                 "social_oauth_attempt",
                 "testimonial",
+            ],
+            Self::Identity => &[
+                "entity",
+                "person",
+                "person_mailbox",
+                "address",
+                "credential",
+                "email_token",
+                "person_delegate",
+                "external_identity",
+                "person_phone",
+            ],
+            Self::Tenancy => &[
+                "firm",
+                "brand",
+                "firm_brand",
+                "person_firm_role",
+                "project",
+                "person_project_role",
             ],
             Self::Application => &[
                 "template",
@@ -580,7 +611,7 @@ impl Snapshot {
             && self.tables.len() == expected.len()
             && actual == expected
             && match family {
-                Family::Satellites | Family::Application => {
+                Family::Satellites | Family::Application | Family::Identity | Family::Tenancy => {
                     self.asset_union.is_none()
                         && self.reset_union.is_none()
                         && self.template_pins.is_none()
@@ -923,7 +954,7 @@ impl Verification {
                 self.target_rows == captured && self.asset_union.is_none()
             }
             && match family {
-                Family::Satellites | Family::Application => {
+                Family::Satellites | Family::Application | Family::Identity | Family::Tenancy => {
                     self.reset_union.is_none() && self.template_pins.is_none()
                 }
                 Family::Notation => {

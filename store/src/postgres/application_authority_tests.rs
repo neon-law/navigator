@@ -39,3 +39,48 @@ async fn application_history_rejects_unenrolled_database() {
         Err(PostgresError::History)
     ));
 }
+
+#[tokio::test]
+async fn people_create_alias_and_merge_do_not_require_source() {
+    let (options, database) = crate::postgres_mirror::tests::fresh_schema()
+        .await
+        .expect("required PostgreSQL application fixture");
+    let pg = crate::postgres_mirror::tests::connect(&options, &database).await;
+    super::fixtures::activate_application(&pg).await;
+    PostgresDb::with_test_db(pg.clone(), async {
+        let source = crate::surreal::SurrealDb::uninitialized();
+        let keep = crate::persons::create(
+            &source,
+            &crate::persons::NewPerson::new("Synthetic Keep", "keep@example.invalid"),
+        )
+        .await
+        .unwrap();
+        let drop = crate::persons::create(
+            &source,
+            &crate::persons::NewPerson::new("Synthetic Drop", "drop@example.invalid"),
+        )
+        .await
+        .unwrap();
+        crate::persons::add_alias(&source, drop.id, "alias@example.invalid")
+            .await
+            .unwrap();
+        let report = crate::person_merge::merge(&source, keep.id, drop.id)
+            .await
+            .unwrap();
+        assert_eq!(report.kept_id, keep.id);
+        assert!(report.emails.contains(&"alias@example.invalid".into()));
+        assert!(crate::persons::find_by_id(&source, drop.id)
+            .await
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            crate::persons::find_by_email_ci(&source, "ALIAS@example.invalid")
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            keep.id
+        );
+    })
+    .await;
+}

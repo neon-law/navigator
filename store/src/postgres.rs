@@ -226,7 +226,9 @@ impl PostgresDb {
         if crate::postgres_mirror::reading_source() {
             return Ok(None);
         }
-        Self::from_env().await.map(Some)
+        let pg = Self::from_env().await?;
+        pg.require_application_history().await?;
+        Ok(Some(pg))
     }
 
     /// Require the existing global import and every current scoped activation.
