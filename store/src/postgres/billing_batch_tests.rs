@@ -13,7 +13,7 @@ async fn billing_batch_retries_keep_the_frozen_attempt_and_refuse_stale_fee_comp
     let pg = connect(&options, &database).await;
     let (actor, notation, _) = workflow_fixture(&pg).await;
     let (_, project) = firm_for_notation(&pg, notation).await;
-    let now = chrono::Utc::now();
+    let now = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
     let batch = MatterBillingBatch {
         id: Uuid::new_v4(),
         project_id: project,
@@ -63,10 +63,14 @@ async fn billing_batch_retries_keep_the_frozen_attempt_and_refuse_stale_fee_comp
         Err(BillingBatchError::PendingExists)
     ));
     let first = batches::start_attempt(&pg, batch.id, now).await.unwrap();
+    assert_eq!(first.first_attempted_at, Some(now));
     let retry = batches::start_attempt(&pg, batch.id, now + chrono::Duration::hours(1))
         .await
         .unwrap();
     assert_eq!(retry.first_attempted_at, first.first_attempted_at);
+    batches::attach_invoice(&pg, batch.id, "synthetic-invoice")
+        .await
+        .unwrap();
     batches::attach_invoice(&pg, batch.id, "synthetic-invoice")
         .await
         .unwrap();
