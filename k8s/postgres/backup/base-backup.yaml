@@ -35,7 +35,7 @@ spec:
               type: RuntimeDefault
           initContainers:
             - name: basebackup
-              image: navigator/postgres:16.15-age1.6.0-vector0.8.7
+              image: navigator/postgres:16.16-age1.6.0-vector0.8.7
               imagePullPolicy: IfNotPresent
               command:
                 - /bin/sh
