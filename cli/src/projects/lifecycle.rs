@@ -289,6 +289,52 @@ fn template_path(root: &Path, kind: &str) -> Result<PathBuf> {
     Ok(root.join(template_relative(root, kind)?))
 }
 
+/// Resolve direct GitHub URLs and `OpenSSH` aliases using the local SSH configuration.
+pub(super) async fn github_origin(dir: &Path, remote: &str) -> Option<(String, String)> {
+    if let Ok(repository) = github_owner_name(remote) {
+        return Some(repository);
+    }
+    let (host, path) = ssh_origin_parts(remote)?;
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        tokio::process::Command::new("ssh")
+            .args(["-G", "--", host.as_str()])
+            .current_dir(dir)
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let config = std::str::from_utf8(&output.stdout).ok()?;
+    let hostname = config
+        .lines()
+        .find_map(|line| line.strip_prefix("hostname "))?;
+    github_ssh_repository(hostname, &path)
+}
+
+fn ssh_origin_parts(remote: &str) -> Option<(String, String)> {
+    if remote.starts_with("ssh://") {
+        let url = url::Url::parse(remote).ok()?;
+        return Some((
+            url.host_str()?.to_owned(),
+            url.path().trim_start_matches('/').to_owned(),
+        ));
+    }
+    let (host, path) = remote.strip_prefix("git@")?.split_once(':')?;
+    Some((host.to_owned(), path.to_owned()))
+}
+
+fn github_ssh_repository(hostname: &str, path: &str) -> Option<(String, String)> {
+    if !matches!(hostname, "github.com" | "ssh.github.com") {
+        return None;
+    }
+    github_owner_name(&format!("https://github.com/{path}")).ok()
+}
+
 /// Only tests compare a checkout's letter Draft against the unedited stub
 /// the shared scaffold wrote; production commands write through
 /// [`write_template_stub`] and never re-derive the path.
@@ -717,6 +763,18 @@ mod tests {
             &["push", "--quiet", "--set-upstream", "origin", "main"],
         );
         git_ok(root, &["fetch", "--quiet", "origin", "main"]);
+    }
+
+    #[test]
+    fn ssh_alias_parity_resolves_only_github_hosts() {
+        let (host, path) = super::ssh_origin_parts("ssh://git@work-forge:443/example/matter.git")
+            .expect("SSH alias URL");
+        assert_eq!(host, "work-forge");
+        assert_eq!(
+            super::github_ssh_repository("ssh.github.com", &path),
+            Some(("example".into(), "matter".into()))
+        );
+        assert_eq!(super::github_ssh_repository("forge.example", &path), None);
     }
 
     #[test]

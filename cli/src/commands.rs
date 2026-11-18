@@ -1354,6 +1354,14 @@ pub enum ProjectJjCmd {
 
 #[derive(Subcommand)]
 pub enum ProjectRepositoryCmd {
+    /// Synchronize Forgejo after a GitHub review merged outside the push verb.
+    Reconcile {
+        #[arg(long, default_value = ".")]
+        dir: PathBuf,
+        /// Merged GitHub pull request number.
+        #[arg(long)]
+        review: u64,
+    },
     /// Restore missing or drifted canonical Agent Skills, `AGENTS.md`, and
     /// the root `.gitignore` lines this release requires.
     SyncSkills {
@@ -3028,6 +3036,15 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
             },
         },
         ProjectsCmd::Repository { action } => match action {
+            ProjectRepositoryCmd::Reconcile { dir, review } => {
+                match projects::push::reconcile(&dir, review).await {
+                    Ok(()) => ExitCode::SUCCESS,
+                    Err(error) => {
+                        eprintln!("navigator: {error:#}");
+                        ExitCode::from(2)
+                    }
+                }
+            }
             ProjectRepositoryCmd::SyncSkills { dir } => {
                 match projects::repository::repair_skills(&dir) {
                     Ok(repaired) => {

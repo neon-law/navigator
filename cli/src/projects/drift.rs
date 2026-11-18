@@ -897,59 +897,13 @@ async fn check_forge_parity(dir: &Path, repository: &str, findings: &mut Vec<Fin
     }
 }
 
-// OpenSSH aliases can select an account-specific key for the same GitHub host.
-async fn github_origin(dir: &Path, remote: &str) -> Option<(String, String)> {
-    if let Ok(repository) = super::lifecycle::github_owner_name(remote) {
-        return Some(repository);
-    }
-    let (host, path) = ssh_origin_parts(remote)?;
-    let output = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        tokio::process::Command::new("ssh")
-            .args(["-G", "--", host.as_str()])
-            .current_dir(dir)
-            .kill_on_drop(true)
-            .output(),
-    )
-    .await
-    .ok()?
-    .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let config = std::str::from_utf8(&output.stdout).ok()?;
-    let hostname = config
-        .lines()
-        .find_map(|line| line.strip_prefix("hostname "))?;
-    github_ssh_repository(hostname, &path)
-}
-
-fn ssh_origin_parts(remote: &str) -> Option<(String, String)> {
-    if remote.starts_with("ssh://") {
-        let url = url::Url::parse(remote).ok()?;
-        return Some((
-            url.host_str()?.to_owned(),
-            url.path().trim_start_matches('/').to_owned(),
-        ));
-    }
-    let (host, path) = remote.strip_prefix("git@")?.split_once(':')?;
-    Some((host.to_owned(), path.to_owned()))
-}
-
-fn github_ssh_repository(hostname: &str, path: &str) -> Option<(String, String)> {
-    if !matches!(hostname, "github.com" | "ssh.github.com") {
-        return None;
-    }
-    super::lifecycle::github_owner_name(&format!("https://github.com/{path}")).ok()
-}
-
 async fn review_forge_refs(
     dir: &Path,
     repository: &str,
     findings: &mut Vec<Finding>,
 ) -> Result<bool, ForgeParityProblem> {
     let origin_url = remote_url(dir, "origin", true).await?;
-    let Some((owner, name)) = github_origin(dir, &origin_url).await else {
+    let Some((owner, name)) = super::lifecycle::github_origin(dir, &origin_url).await else {
         return Ok(false);
     };
     let (origin_fetch, mirror_fetch) = tokio::try_join!(
@@ -1030,18 +984,6 @@ mod tests {
     use std::path::Path;
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
-
-    #[test]
-    fn ssh_alias_parity_resolves_only_github_hosts() {
-        let (host, path) = super::ssh_origin_parts("ssh://git@work-forge:443/example/matter.git")
-            .expect("SSH alias URL");
-        assert_eq!(host, "work-forge");
-        assert_eq!(
-            super::github_ssh_repository("ssh.github.com", &path),
-            Some(("example".into(), "matter".into()))
-        );
-        assert_eq!(super::github_ssh_repository("forge.example", &path), None);
-    }
 
     #[tokio::test]
     async fn forge_parity_reports_configuration_access_and_main_differences(
