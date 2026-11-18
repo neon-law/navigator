@@ -289,6 +289,13 @@ pub trait BillingProvider: Send + Sync {
         request: &RepeatingInvoiceRequest,
     ) -> Result<String, BillingError>;
 
+    /// Stop future invoices from one repeating schedule. A provider must confirm deletion.
+    async fn cancel_repeating_invoice(&self, _id: &str) -> Result<DateTime<Utc>, BillingError> {
+        Err(BillingError::Provider(
+            "recurring cancellation unavailable".into(),
+        ))
+    }
+
     /// List accounts-receivable invoices. Read-only. The nightly ingest
     /// uses this to discover invoices raised in Xero that have no local
     /// mirror yet. Pagination is the provider's problem; the caller sees
@@ -1055,6 +1062,43 @@ impl BillingProvider for XeroBillingProvider {
             .ok_or_else(|| BillingError::Provider("xero returned no repeating invoice".to_string()))
     }
 
+    async fn cancel_repeating_invoice(&self, id: &str) -> Result<DateTime<Utc>, BillingError> {
+        let id = Uuid::parse_str(id)
+            .map_err(|_| BillingError::Provider("invalid repeating invoice identity".into()))?;
+        let url = format!(
+            "{}/RepeatingInvoices/{id}",
+            self.base_url.trim_end_matches('/')
+        );
+        let schedule: serde_json::Value = self.send_json(self.http.get(&url)).await?;
+        let boundary = schedule["RepeatingInvoices"]
+            .as_array()
+            .and_then(|rows| {
+                rows.iter()
+                    .find(|row| row["RepeatingInvoiceID"].as_str() == Some(id.to_string().as_str()))
+            })
+            .and_then(|row| row["Schedule"]["NextScheduledDate"].as_str())
+            .and_then(parse_xero_datetime)
+            .ok_or_else(|| {
+                BillingError::Provider(
+                    "the current subscription period requires reconciliation".into(),
+                )
+            })?;
+        let result: serde_json::Value = self.send_json(self.http.post(&url)
+            .json(&serde_json::json!({"RepeatingInvoices":[{"RepeatingInvoiceID":id,"Status":"DELETED"}]}))).await?;
+        let confirmed = result["RepeatingInvoices"].as_array().is_some_and(|rows| {
+            rows.iter().any(|row| {
+                row["RepeatingInvoiceID"].as_str() == Some(id.to_string().as_str())
+                    && row["Status"].as_str() == Some("DELETED")
+            })
+        });
+        if !confirmed {
+            return Err(BillingError::Provider(
+                "repeating invoice cancellation not confirmed".into(),
+            ));
+        }
+        Ok(boundary)
+    }
+
     async fn ensure_contact(&self, request: &ContactRequest) -> Result<ContactId, BillingError> {
         if let Some(existing) = self.find_contact_by_email(&request.email).await? {
             return Ok(existing);
@@ -1599,6 +1643,47 @@ mod tests {
 
     fn xero(base_url: String) -> XeroBillingProvider {
         XeroBillingProvider::new(base_url, "tenant-guid", "TOKEN")
+    }
+
+    #[tokio::test]
+    async fn recurring_cancellation_requires_xeros_deleted_confirmation() {
+        for confirmed in [true, false] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path(format!("/RepeatingInvoices/{ID42}")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(
+                    serde_json::json!({"RepeatingInvoices":[{
+                        "RepeatingInvoiceID":ID42,"Schedule":{"NextScheduledDate":"2026-12-01"}
+                    }]}),
+                ))
+                .mount(&server)
+                .await;
+            Mock::given(method("POST")).and(path(format!("/RepeatingInvoices/{ID42}")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "RepeatingInvoices":[{"RepeatingInvoiceID":ID42, "Status":if confirmed {"DELETED"} else {"AUTHORISED"}}]
+                }))).expect(1).mount(&server).await;
+            assert_eq!(
+                xero(server.uri())
+                    .cancel_repeating_invoice(&ID42.to_string())
+                    .await
+                    .is_ok(),
+                confirmed
+            );
+            let requests = server.received_requests().await.unwrap();
+            let body: serde_json::Value = serde_json::from_slice(
+                &requests
+                    .iter()
+                    .find(|request| request.method.as_str() == "POST")
+                    .unwrap()
+                    .body,
+            )
+            .unwrap();
+            assert_eq!(body["RepeatingInvoices"][0]["Status"], "DELETED");
+            assert_eq!(
+                body["RepeatingInvoices"][0]["RepeatingInvoiceID"],
+                ID42.to_string()
+            );
+        }
     }
 
     #[test]

@@ -6,11 +6,9 @@ Hi `{{client_name}}`,
 
 Welcome to {{brand}}. Your account at `{{client_email}}` is live.
 
-Here's what to do next:
+Sign in to your account at <{{site_url}}/auth/login>.
 
-- Reply to this email if you'd like to talk to an attorney about a specific matter. We answer every inbound message and
-  a human will read yours.
-- Browse our services at <{{site_url}}> — flat-fee work, no hourly billing.
+For help with your account, reply to this email and a human will read it.
 
 If this signup wasn't you, just reply and let us know — we'll close the account.
 

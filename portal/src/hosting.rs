@@ -1194,6 +1194,7 @@ async fn dbos_schedules(
             Arc::new(crate::purchases::StoreActivationSource::new(
                 pg,
                 rt.state.billing_provider.clone(),
+                rt.state.surreal.clone(),
             )),
         ))
     } else {

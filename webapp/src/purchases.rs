@@ -23,6 +23,8 @@ pub enum OfferingAction {
     Invoiced { pay_url: Option<String> },
     /// Paid and in force.
     Active,
+    /// This account may manage its purchases but cannot place a new order.
+    Unavailable,
 }
 
 /// One Offering as this Client sees it.
@@ -33,6 +35,11 @@ pub struct OfferingRow {
     pub blurb: String,
     /// The price as published, with its cadence, e.g. `$29 a month`.
     pub price: String,
+    pub recurring: bool,
+    pub renewal_terms: Option<String>,
+    pub cancel_purchase_id: Option<String>,
+    pub cancellation_pending: bool,
+    pub paid_through: Option<String>,
     pub action: OfferingAction,
     /// Shown to a Client who could earn a complimentary consultation by
     /// signing in with Google.
@@ -42,6 +49,14 @@ pub struct OfferingRow {
 /// The page copy and every Offering row.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
 pub struct PurchasePageContent {
+    #[serde(default)]
+    pub renewal_consent_label: String,
+    #[serde(default)]
+    pub cancel_label: String,
+    #[serde(default)]
+    pub renewal_stopped: String,
+    #[serde(default)]
+    pub paid_through_label: String,
     pub title: String,
     pub intro: String,
     pub complimentary: String,
@@ -149,11 +164,23 @@ pub fn PurchasePage(
 #[component]
 fn OfferingDecision(row: OfferingRow, content: PurchasePageContent, csrf_token: String) -> Element {
     match row.action.clone() {
+        OfferingAction::Unavailable => rsx! { p { role: "status", "{content.refusal}" } },
         OfferingAction::Buy => rsx! {
             p { class: "purchases__price", "{row.price}" }
             form { method: "post", action: "/purchases/{row.id}",
                 input { r#type: "hidden", name: "_csrf", value: "{csrf_token}" }
-                button { class: "nav-btn nav-btn--primary", r#type: "submit",
+                if row.recurring {
+                    if let Some(terms) = row.renewal_terms.as_ref() {
+                        p { id: "renewal-{row.id}", class: "purchases__renewal", "{terms}" }
+                        label {
+                            input { r#type: "checkbox", name: "renewal_consent", value: "accepted", required: true, "aria-describedby": "renewal-{row.id}" }
+                            "{content.renewal_consent_label}"
+                        }
+                    } else {
+                        p { role: "status", "{content.refusal}" }
+                    }
+                }
+                button { class: "nav-btn nav-btn--primary", r#type: "submit", disabled: row.recurring && row.renewal_terms.is_none(),
                     "{content.buy_label} · {row.price}"
                 }
             }
@@ -176,6 +203,20 @@ fn OfferingDecision(row: OfferingRow, content: PurchasePageContent, csrf_token: 
         },
         OfferingAction::Active => rsx! {
             p { class: "purchases__status", role: "status", "{content.active}" }
+            if let Some(terms) = row.renewal_terms.as_ref() {
+                p { class: "purchases__renewal", "{terms}" }
+            }
+            if let Some(end) = row.paid_through.as_ref() {
+                p { "{content.paid_through_label}" " {end} UTC" }
+            }
+            if row.cancellation_pending {
+                p { role: "status", "{content.renewal_stopped}" }
+            } else if let Some(id) = row.cancel_purchase_id.as_ref() {
+                form { method: "post", action: "/purchases/{id}/cancel",
+                    input { r#type: "hidden", name: "_csrf", value: "{csrf_token}" }
+                    button { r#type: "submit", class: "nav-btn nav-btn--secondary", "{content.cancel_label}" }
+                }
+            }
             if row.id == "consultation" {
                 a { class: "nav-btn nav-btn--primary", href: "/consultation", "{content.book_label}" }
             }
@@ -189,6 +230,10 @@ mod tests {
 
     fn content(action: OfferingAction, google_hint: Option<String>) -> PurchasePageContent {
         PurchasePageContent {
+            renewal_consent_label: "I agree to renewal and cancellation terms".into(),
+            cancel_label: "Cancel renewal".into(),
+            renewal_stopped: "Renewal stopped".into(),
+            paid_through_label: "Paid access ends".into(),
             title: "Consultations and plans".into(),
             intro: "Intro copy".into(),
             complimentary: "Complimentary copy".into(),
@@ -204,6 +249,11 @@ mod tests {
                 name: "Consultation".into(),
                 blurb: "Blurb".into(),
                 price: "$100".into(),
+                recurring: false,
+                renewal_terms: None,
+                cancel_purchase_id: None,
+                cancellation_pending: false,
+                paid_through: None,
                 action,
                 google_hint,
             }],
@@ -240,6 +290,32 @@ mod tests {
         assert!(html.contains("Buy · $100"), "{html}");
         assert!(html.contains("Sign in with Google"), "{html}");
         assert!(!html.contains("Complimentary copy"), "{html}");
+    }
+
+    #[test]
+    fn recurring_terms_and_consent_are_inside_the_purchase_form_next_to_the_button() {
+        let mut page = content(OfferingAction::Buy, None);
+        let row = &mut page.offerings[0];
+        row.recurring = true;
+        row.renewal_terms = Some("Renews monthly. Cancel online before the next invoice.".into());
+        let html = render(page.clone());
+        let form = html
+            .split("<form")
+            .nth(1)
+            .unwrap()
+            .split("</form>")
+            .next()
+            .unwrap();
+        let terms = form.find("Renews monthly.").unwrap();
+        let consent = form.find("name=\"renewal_consent\"").unwrap();
+        let button = form.find("<button").unwrap();
+        assert!(terms < consent && consent < button);
+        assert!(form.contains("required"));
+        assert!(!form.contains("disabled"));
+        page.offerings[0].renewal_terms = None;
+        let html = render(page);
+        assert!(html.contains("disabled"));
+        assert!(!html.contains("name=\"renewal_consent\""));
     }
 
     #[test]

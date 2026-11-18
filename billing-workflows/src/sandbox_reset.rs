@@ -24,7 +24,7 @@ use chrono::Datelike;
 use restate_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 use store::postgres::PostgresDb;
-use store::purchases::{self, PurchaseState};
+use store::purchases;
 use store::sandbox_usage;
 use store::surreal::SurrealDb;
 
@@ -167,7 +167,7 @@ pub async fn grant_active_subscribers(
 fn subscriber_ids(purchases: &[store::purchases::Purchase]) -> Vec<uuid::Uuid> {
     let mut people: Vec<uuid::Uuid> = purchases
         .iter()
-        .filter(|purchase| purchase.state == PurchaseState::Active)
+        .filter(|purchase| purchase.is_active(chrono::Utc::now()))
         .map(|purchase| purchase.person_id)
         .collect();
     people.sort();
@@ -358,6 +358,7 @@ mod tests {
     use billing::StubBillingProvider;
     use sqlx::postgres::{PgConnectOptions, PgSslMode};
     use sqlx::{AssertSqlSafe, PgPool};
+    use store::purchases::PurchaseState;
     use store::purchases::{Cadence, NewPurchase};
     use store::sandbox_usage::MeterDecision;
     use store::surreal::test_support::mem;

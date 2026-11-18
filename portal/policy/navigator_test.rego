@@ -65,10 +65,18 @@ test_client_reads_and_buys_on_the_purchase_page if {
 	authz.allow with input as {"path": ["purchases", "consultation"], "method": "POST", "session": client_session}
 }
 
-test_only_clients_reach_the_purchase_page if {
-	not authz.allow with input as {"path": ["purchases"], "method": "GET", "session": lawyer_session}
-	not authz.allow with input as {"path": ["purchases"], "method": "GET", "session": clerk_session}
+test_every_tier_can_read_its_own_purchases if {
+	authz.allow with input as {"path": ["purchases"], "method": "GET", "session": lawyer_session}
+	authz.allow with input as {"path": ["purchases"], "method": "GET", "session": clerk_session}
 	not authz.allow with input as {"path": ["purchases"], "method": "GET", "session": null}
+}
+
+test_cancellation_admits_every_authenticated_tier_and_no_other_method if {
+    every session in [client_session, clerk_session, lawyer_session, admin_session, owner_session] {
+        authz.allow with input as {"path": ["purchases", "synthetic-id", "cancel"], "method": "POST", "session": session}
+    }
+    not authz.allow with input as {"path": ["purchases", "synthetic-id", "cancel"], "method": "POST", "session": null}
+    not authz.allow with input as {"path": ["purchases", "synthetic-id", "cancel"], "method": "GET", "session": client_session}
 }
 
 test_purchase_rules_are_exact if {

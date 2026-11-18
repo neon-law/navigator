@@ -225,8 +225,8 @@ pub enum OfferingCadence {
     Year,
 }
 
-/// Something a signed-in Client may buy online. Xero invoices it; the
-/// Purchase turns on once the invoice is paid.
+/// Something a signed-in Client may buy online. Consultations use Xero;
+/// recurring plans use hosted Stripe Checkout and verified payment.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct OfferingCopy {
     /// Stable identifier, recorded on each Purchase and used in its URL.
@@ -236,6 +236,10 @@ pub struct OfferingCopy {
     /// The published price, a dollar figure such as `$29`.
     pub amount: String,
     pub cadence: OfferingCadence,
+    /// Attorney-approved renewal and cancellation terms shown at checkout.
+    /// Recurring checkout is unavailable while these are absent.
+    #[serde(default)]
+    pub renewal_terms: Option<String>,
     /// The Xero chart-of-accounts code the revenue posts to.
     pub account_code: String,
     /// Waived for a Client who signed in with Google using their address.
@@ -254,6 +258,14 @@ impl OfferingCopy {
 /// The purchase page's copy and the Offerings it sells.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct PurchaseCopy {
+    #[serde(default)]
+    pub renewal_consent_label: String,
+    #[serde(default)]
+    pub cancel_label: String,
+    #[serde(default)]
+    pub renewal_stopped: String,
+    #[serde(default)]
+    pub paid_through_label: String,
     pub title: String,
     pub intro: String,
     /// Shown to a Client whose consultation is complimentary.

@@ -220,6 +220,7 @@ pub mod social_oauth;
 pub mod social_webhooks;
 pub mod ssh_keys;
 pub mod start_door;
+mod subscription_purchases;
 pub mod template_api;
 pub mod template_gallery;
 mod template_paths;

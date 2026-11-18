@@ -1,4 +1,4 @@
-//! Stripe draft invoicing on the account authenticated by a Firm's own key.
+//! Stripe draft invoices and hosted subscriptions on the account authenticated by a Firm's own key.
 
 use reqwest::{Client, Method, Url};
 use serde::Deserialize;
@@ -183,7 +183,11 @@ impl<'a> StripeInvoiceClient<'a> {
             .base
             .join(path)
             .map_err(|_| provider_error("Stripe API path invalid"))?;
-        let mut request = self.client.request(method, url).bearer_auth(self.key);
+        let mut request = self
+            .client
+            .request(method, url)
+            .bearer_auth(self.key)
+            .header("Stripe-Version", "2026-10-28.endive");
         if let Some(key) = key {
             request = request.header("Idempotency-Key", key).form(fields);
         }
@@ -282,5 +286,412 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(draft.0, "in_synthetic");
+    }
+}
+
+/// The server-owned subscription offer presented by hosted Checkout.
+pub struct SubscriptionCheckout<'a> {
+    pub purchase_id: Uuid,
+    pub email: &'a str,
+    pub name: &'a str,
+    pub amount_cents: i64,
+    pub interval: &'a str,
+    pub terms: &'a str,
+    pub site_url: &'a str,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CheckoutSession {
+    pub id: String,
+    pub livemode: bool,
+    pub status: String,
+    pub payment_status: String,
+    pub client_reference_id: String,
+    pub customer: Option<String>,
+    pub subscription: Option<String>,
+    pub url: Option<String>,
+    pub consent: Option<CheckoutConsent>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CheckoutConsent {
+    pub terms_of_service: Option<String>,
+}
+
+impl CheckoutSession {
+    #[must_use]
+    pub fn payment_url(&self) -> Option<&str> {
+        self.url
+            .as_deref()
+            .filter(|url| trusted_stripe_url(url, "checkout.stripe.com"))
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Subscription {
+    pub id: String,
+    pub livemode: bool,
+    pub customer: String,
+    pub status: String,
+    pub cancel_at_period_end: bool,
+    pub items: SubscriptionItems,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SubscriptionItems {
+    pub data: Vec<SubscriptionItem>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SubscriptionItem {
+    pub current_period_end: i64,
+    pub price: SubscriptionPrice,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SubscriptionPrice {
+    pub unit_amount: Option<i64>,
+    pub currency: String,
+    pub recurring: SubscriptionInterval,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SubscriptionInterval {
+    pub interval: String,
+    pub interval_count: u32,
+}
+
+impl StripeInvoiceClient<'_> {
+    /// Host the payment form at Stripe; the application never handles card data.
+    pub async fn create_subscription_checkout(
+        &self,
+        offer: &SubscriptionCheckout<'_>,
+    ) -> Result<CheckoutSession, BillingError> {
+        if offer.amount_cents <= 0
+            || !matches!(offer.interval, "month" | "year")
+            || offer.terms.trim().is_empty()
+        {
+            return Err(provider_error("subscription terms or price missing"));
+        }
+        let customer: StripeObject = self
+            .call(
+                Method::POST,
+                "customers",
+                Some(&format!("{}/customer", offer.purchase_id)),
+                &[
+                    ("email", offer.email),
+                    ("invoice_settings[footer]", offer.terms),
+                    (
+                        "metadata[navigator_purchase_id]",
+                        &offer.purchase_id.to_string(),
+                    ),
+                ],
+            )
+            .await?;
+        if customer.livemode != self.live_mode() || !stripe_identifier(&customer.id, "cus_") {
+            return Err(provider_error("Stripe returned an invalid customer"));
+        }
+        let site = offer.site_url.trim_end_matches('/');
+        let fields = [
+            ("mode", "subscription".to_string()),
+            ("client_reference_id", offer.purchase_id.to_string()),
+            ("customer", customer.id),
+            ("line_items[0][quantity]", "1".to_string()),
+            ("line_items[0][price_data][currency]", "usd".to_string()),
+            ("line_items[0][price_data][unit_amount]", offer.amount_cents.to_string()),
+            ("line_items[0][price_data][recurring][interval]", offer.interval.to_string()),
+            ("line_items[0][price_data][product_data][name]", offer.name.to_string()),
+            ("custom_text[submit][message]", offer.terms.to_string()),
+            ("consent_collection[terms_of_service]", "required".to_string()),
+            ("custom_text[terms_of_service_acceptance][message]", format!("I agree to the [terms]({site}/terms), including the renewal and cancellation terms shown above.")),
+            ("success_url", format!("{site}/purchases")),
+            ("cancel_url", format!("{site}/purchases")),
+            ("subscription_data[metadata][navigator_purchase_id]", offer.purchase_id.to_string()),
+        ];
+        let borrowed: Vec<_> = fields
+            .iter()
+            .map(|(key, value)| (*key, value.as_str()))
+            .collect();
+        let session: CheckoutSession = self
+            .call(
+                Method::POST,
+                "checkout/sessions",
+                Some(&format!("{}/checkout", offer.purchase_id)),
+                &borrowed,
+            )
+            .await?;
+        if session.livemode != self.live_mode()
+            || session.client_reference_id != offer.purchase_id.to_string()
+            || !session.id.starts_with("cs_")
+            || session.status != "open"
+            || !session
+                .url
+                .as_deref()
+                .is_some_and(|url| trusted_stripe_url(url, "checkout.stripe.com"))
+        {
+            return Err(provider_error("Stripe returned an invalid checkout"));
+        }
+        Ok(session)
+    }
+
+    pub async fn checkout_session(&self, id: &str) -> Result<CheckoutSession, BillingError> {
+        if !stripe_identifier(id, "cs_") {
+            return Err(provider_error("invalid checkout identity"));
+        }
+        let session: CheckoutSession = self
+            .call(Method::GET, &format!("checkout/sessions/{id}"), None, &[])
+            .await?;
+        if session.id != id || session.livemode != self.live_mode() {
+            return Err(provider_error("checkout identity mismatch"));
+        }
+        Ok(session)
+    }
+
+    pub async fn subscription(&self, id: &str) -> Result<Subscription, BillingError> {
+        if !stripe_identifier(id, "sub_") {
+            return Err(provider_error("invalid subscription identity"));
+        }
+        let subscription: Subscription = self
+            .call(Method::GET, &format!("subscriptions/{id}"), None, &[])
+            .await?;
+        self.check_subscription(id, subscription)
+    }
+
+    /// Stop future renewals without ending the already paid period.
+    pub async fn cancel_subscription(
+        &self,
+        purchase: Uuid,
+        id: &str,
+    ) -> Result<Subscription, BillingError> {
+        if !stripe_identifier(id, "sub_") {
+            return Err(provider_error("invalid subscription identity"));
+        }
+        let subscription: Subscription = self
+            .call(
+                Method::POST,
+                &format!("subscriptions/{id}"),
+                Some(&format!("{purchase}/cancel")),
+                &[("cancel_at_period_end", "true")],
+            )
+            .await?;
+        let subscription = self.check_subscription(id, subscription)?;
+        if !subscription.cancel_at_period_end {
+            return Err(provider_error("subscription cancellation not confirmed"));
+        }
+        Ok(subscription)
+    }
+
+    fn live_mode(&self) -> bool {
+        self.key.starts_with("sk_live_") || self.key.starts_with("rk_live_")
+    }
+
+    fn check_subscription(
+        &self,
+        id: &str,
+        subscription: Subscription,
+    ) -> Result<Subscription, BillingError> {
+        if subscription.id != id
+            || subscription.livemode != self.live_mode()
+            || !stripe_identifier(&subscription.customer, "cus_")
+        {
+            return Err(provider_error("subscription identity mismatch"));
+        }
+        Ok(subscription)
+    }
+}
+
+fn stripe_identifier(value: &str, prefix: &str) -> bool {
+    value.starts_with(prefix)
+        && value.len() > prefix.len()
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+}
+
+fn trusted_stripe_url(value: &str, host: &str) -> bool {
+    Url::parse(value).is_ok_and(|url| {
+        url.scheme() == "https"
+            && url.host_str() == Some(host)
+            && url.username().is_empty()
+            && url.password().is_none()
+    })
+}
+
+#[cfg(test)]
+mod subscription_tests {
+    use super::*;
+    use serde_json::json;
+    use wiremock::{
+        matchers::{method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
+
+    fn session(purchase: Uuid) -> serde_json::Value {
+        json!({"id":"cs_test_checkout", "livemode":false, "status":"open", "payment_status":"unpaid",
+            "client_reference_id":purchase.to_string(), "customer":null, "subscription":null,
+            "url":"https://checkout.stripe.com/c/pay/cs_test_checkout"})
+    }
+
+    async fn mount_customer(server: &MockServer) {
+        Mock::given(method("POST"))
+            .and(path("/v1/customers"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"id":"cus_synthetic", "livemode":false})),
+            )
+            .mount(server)
+            .await;
+    }
+
+    fn subscription() -> serde_json::Value {
+        json!({"id":"sub_synthetic", "livemode":false, "customer":"cus_synthetic", "status":"active",
+            "cancel_at_period_end":true, "items":{"data":[{"current_period_end":1900000000,
+            "price":{"unit_amount":2900, "currency":"usd", "recurring":{"interval":"month","interval_count":1}}}]}})
+    }
+
+    #[tokio::test]
+    async fn hosted_checkout_requires_terms_and_places_them_beside_payment_with_explicit_consent() {
+        let server = MockServer::start().await;
+        let purchase = Uuid::now_v7();
+        mount_customer(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/v1/checkout/sessions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(session(purchase)))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut stripe = StripeInvoiceClient::new("sk_test_synthetic", false).unwrap();
+        stripe.base = Url::parse(&format!("{}/v1/", server.uri())).unwrap();
+        let mut offer = SubscriptionCheckout {
+            purchase_id: purchase,
+            email: "client@example.com",
+            name: "Monthly plan",
+            amount_cents: 2900,
+            interval: "month",
+            terms: "Renews at $29 monthly. Cancel renewal online before the next charge.",
+            site_url: "https://app.example",
+        };
+        assert!(stripe
+            .create_subscription_checkout(&offer)
+            .await
+            .unwrap()
+            .payment_url()
+            .is_some());
+        let requests = server.received_requests().await.unwrap();
+        let checkout_request = requests
+            .iter()
+            .find(|request| request.url.path().ends_with("/checkout/sessions"))
+            .unwrap();
+        let body = std::str::from_utf8(&checkout_request.body).unwrap();
+        let url = Url::parse(&format!("https://example.com/?{body}")).unwrap();
+        let fields: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
+        assert_eq!(fields["mode"], "subscription");
+        assert_eq!(fields["line_items[0][price_data][unit_amount]"], "2900");
+        assert_eq!(
+            fields["line_items[0][price_data][recurring][interval]"],
+            "month"
+        );
+        assert_eq!(fields["custom_text[submit][message]"], offer.terms);
+        assert_eq!(fields["consent_collection[terms_of_service]"], "required");
+        assert_eq!(fields["client_reference_id"], purchase.to_string());
+        assert!(checkout_request.headers.contains_key("idempotency-key"));
+        let customer_request = requests
+            .iter()
+            .find(|request| request.url.path().ends_with("/customers"))
+            .unwrap();
+        let customer_body = std::str::from_utf8(&customer_request.body).unwrap();
+        let customer_fields: std::collections::HashMap<_, _> =
+            Url::parse(&format!("https://example.com/?{customer_body}"))
+                .unwrap()
+                .query_pairs()
+                .into_owned()
+                .collect();
+        assert_eq!(customer_fields["invoice_settings[footer]"], offer.terms);
+        assert!(!body.contains("card"));
+        offer.terms = " ";
+        assert!(stripe.create_subscription_checkout(&offer).await.is_err());
+        offer.terms = "Terms";
+        offer.interval = "day";
+        assert!(stripe.create_subscription_checkout(&offer).await.is_err());
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn checkout_refuses_a_foreign_reference_or_offsite_payment_url() {
+        for invalid in ["reference", "url", "mode"] {
+            let server = MockServer::start().await;
+            let purchase = Uuid::now_v7();
+            mount_customer(&server).await;
+            let mut result = session(purchase);
+            match invalid {
+                "reference" => result["client_reference_id"] = json!(Uuid::now_v7().to_string()),
+                "url" => result["url"] = json!("https://checkout.stripe.com.example/steal"),
+                _ => result["livemode"] = json!(true),
+            }
+            Mock::given(method("POST"))
+                .and(path("/v1/checkout/sessions"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(result))
+                .mount(&server)
+                .await;
+            let mut stripe = StripeInvoiceClient::new("sk_test_synthetic", false).unwrap();
+            stripe.base = Url::parse(&format!("{}/v1/", server.uri())).unwrap();
+            assert!(stripe
+                .create_subscription_checkout(&SubscriptionCheckout {
+                    purchase_id: purchase,
+                    email: "client@example.com",
+                    name: "Plan",
+                    amount_cents: 2900,
+                    interval: "month",
+                    terms: "Terms",
+                    site_url: "https://app.example"
+                })
+                .await
+                .is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn cancel_stops_renewal_at_period_end_and_rejects_unconfirmed_or_foreign_results() {
+        for invalid in [None, Some("confirmation"), Some("identity"), Some("mode")] {
+            let server = MockServer::start().await;
+            let mut result = subscription();
+            match invalid {
+                Some("confirmation") => result["cancel_at_period_end"] = json!(false),
+                Some("identity") => result["id"] = json!("sub_other"),
+                Some("mode") => result["livemode"] = json!(true),
+                _ => {}
+            }
+            Mock::given(method("POST"))
+                .and(path("/v1/subscriptions/sub_synthetic"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(result))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let mut stripe = StripeInvoiceClient::new("sk_test_synthetic", false).unwrap();
+            stripe.base = Url::parse(&format!("{}/v1/", server.uri())).unwrap();
+            let response = stripe
+                .cancel_subscription(Uuid::now_v7(), "sub_synthetic")
+                .await;
+            assert_eq!(response.is_ok(), invalid.is_none());
+            let requests = server.received_requests().await.unwrap();
+            assert_eq!(
+                std::str::from_utf8(&requests[0].body).unwrap(),
+                "cancel_at_period_end=true"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn provider_identifiers_cannot_escape_the_subscription_path() {
+        let stripe = StripeInvoiceClient::new("sk_test_synthetic", false).unwrap();
+        assert!(stripe.subscription("sub_../customers").await.is_err());
+        assert!(stripe
+            .checkout_session("cs_?expand=customer")
+            .await
+            .is_err());
+        assert!(stripe
+            .cancel_subscription(Uuid::now_v7(), "sub_../other")
+            .await
+            .is_err());
     }
 }

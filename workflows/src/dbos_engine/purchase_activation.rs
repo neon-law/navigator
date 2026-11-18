@@ -1,13 +1,11 @@
 //! DBOS schedule that turns paid Purchases on.
 //!
-//! A Client's Purchase is `invoiced` until Xero reports its invoice paid.
-//! Every five minutes this schedule reads a batch of invoiced Purchases,
-//! least recently checked first, and asks Xero about each in its own step.
-//! A paid one becomes active, and a subscription's renewals are handed to a
-//! Xero repeating invoice keyed on the Purchase id, so a step re-run after a
-//! crash never sets up a second one. The queue is the `purchase` table, so a
-//! pod loss leaves nothing behind: the next slot reads the same rows.
-//! Journals carry Purchase ids and reasons, never client content.
+//! Every five minutes this schedule refreshes pending payments and Stripe
+//! renewals, least recently checked first. Each provider read and resulting
+//! store write runs inside the existing durable step. Xero invoices activate
+//! after payment; Stripe subscriptions also require a verified paid-through
+//! boundary. The queue survives pod loss. Journals carry Purchase identifiers
+//! and reasons, never client content.
 
 use std::sync::Arc;
 use std::time::Duration;

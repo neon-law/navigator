@@ -194,3 +194,271 @@ async fn for_offerings_lists_same_day_legal_purchases_in_every_state_and_no_othe
         .iter()
         .all(|p| purchases::SAME_DAY_LEGAL_OFFERINGS.contains(&p.offering.as_str())));
 }
+
+#[tokio::test]
+async fn stripe_checkout_retains_consent_and_only_verified_paid_time_grants_access() {
+    let Some(pg) = database().await else { return };
+    let now = Utc::now();
+    let new = plan(Uuid::new_v4());
+    let firm = Uuid::new_v4();
+    let terms = "$29 each month until cancelled online before the next charge.";
+    let row = purchases::open_stripe(
+        &pg,
+        &new,
+        now,
+        purchases::StripeAdmission {
+            firm_id: firm,
+            account_id: "acct_synthetic",
+            terms,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(!row.is_active(now));
+    let binding = row.stripe.as_ref().unwrap();
+    assert_eq!(binding.renewal_terms, terms);
+    assert_eq!(
+        binding.consented_at.timestamp_micros(),
+        now.timestamp_micros()
+    );
+    assert_eq!(binding.firm_id, firm);
+    assert!(purchases::open_stripe(
+        &pg,
+        &new,
+        now,
+        purchases::StripeAdmission {
+            firm_id: firm,
+            account_id: "acct_synthetic",
+            terms: "Changed terms"
+        }
+    )
+    .await
+    .is_err());
+    let checkout = purchases::record_stripe_checkout(
+        &pg,
+        row.id,
+        "cs_test_synthetic",
+        "https://checkout.stripe.com/c/pay/synthetic",
+        now,
+    )
+    .await
+    .unwrap();
+    assert_eq!(checkout.state, PurchaseState::Invoiced);
+    assert!(!checkout.is_active(now));
+    let end = now + TimeDelta::days(30);
+    let active = purchases::sync_stripe(
+        &pg,
+        row.id,
+        purchases::StripeObservation {
+            customer: "cus_synthetic",
+            subscription: "sub_synthetic",
+            paid_through: end,
+            cancelling: false,
+        },
+        now,
+    )
+    .await
+    .unwrap();
+    assert!(active.is_active(end - TimeDelta::seconds(1)));
+    assert!(!active.is_active(end));
+    let attempted = now + TimeDelta::minutes(5);
+    purchases::touch(&pg, row.id, attempted).await.unwrap();
+    let refreshed_queue = purchases::payment_refresh_queue(&pg, 10).await.unwrap();
+    assert_eq!(refreshed_queue.len(), 1);
+    assert_eq!(refreshed_queue[0].id, row.id);
+    assert_eq!(
+        refreshed_queue[0].updated_at.timestamp_micros(),
+        attempted.timestamp_micros()
+    );
+    assert!(purchases::sync_stripe(
+        &pg,
+        row.id,
+        purchases::StripeObservation {
+            customer: "cus_other",
+            subscription: "sub_other",
+            paid_through: end,
+            cancelling: false,
+        },
+        now
+    )
+    .await
+    .is_err());
+    let cancelling = purchases::sync_stripe(
+        &pg,
+        row.id,
+        purchases::StripeObservation {
+            customer: "cus_synthetic",
+            subscription: "sub_synthetic",
+            paid_through: end,
+            cancelling: true,
+        },
+        now,
+    )
+    .await
+    .unwrap();
+    assert!(cancelling.is_active(now));
+    assert!(cancelling.stripe.unwrap().cancel_at_period_end);
+    let first = purchases::get(&pg, row.id)
+        .await
+        .unwrap()
+        .renewal_cancelled_at;
+    purchases::record_renewal_cancelled(&pg, row.id, now + TimeDelta::hours(1))
+        .await
+        .unwrap();
+    assert_eq!(
+        purchases::get(&pg, row.id)
+            .await
+            .unwrap()
+            .renewal_cancelled_at,
+        first
+    );
+    pg.pool().close().await;
+}
+
+#[tokio::test]
+async fn concurrent_monthly_and_yearly_stripe_checkouts_reserve_only_one_subscription() {
+    let Some(pg) = database().await else { return };
+    let now = Utc::now();
+    let monthly = plan(Uuid::new_v4());
+    let mut annual = plan(monthly.person_id);
+    annual.offering = "delete-your-data-annual".into();
+    annual.cadence = Cadence::Year;
+    let firm = Uuid::new_v4();
+    let (a, b) = tokio::join!(
+        purchases::open_stripe(
+            &pg,
+            &monthly,
+            now,
+            purchases::StripeAdmission {
+                firm_id: firm,
+                account_id: "acct_synthetic",
+                terms: "Monthly terms"
+            }
+        ),
+        purchases::open_stripe(
+            &pg,
+            &annual,
+            now,
+            purchases::StripeAdmission {
+                firm_id: firm,
+                account_id: "acct_synthetic",
+                terms: "Annual terms"
+            }
+        ),
+    );
+    assert_ne!(a.is_ok(), b.is_ok());
+    assert_eq!(
+        purchases::for_person(&pg, monthly.person_id)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    pg.pool().close().await;
+}
+
+#[tokio::test]
+async fn cancelling_a_xero_schedule_preserves_its_period_without_granting_access_forever() {
+    let Some(pg) = database().await else { return };
+    let now = Utc::now();
+    let row = purchases::open(&pg, &plan(Uuid::new_v4()), now)
+        .await
+        .unwrap();
+    purchases::record_invoice(
+        &pg,
+        row.id,
+        "contact-synthetic",
+        "invoice-synthetic",
+        None,
+        now,
+    )
+    .await
+    .unwrap();
+    purchases::activate(&pg, row.id, Some("repeating-synthetic"), now)
+        .await
+        .unwrap();
+    let end = now + TimeDelta::days(7);
+    purchases::record_xero_cancelled(&pg, row.id, end, now)
+        .await
+        .unwrap();
+    let cancelled = purchases::get(&pg, row.id).await.unwrap();
+    assert!(cancelled.is_active(end - TimeDelta::seconds(1)));
+    assert!(!cancelled.is_active(end));
+    assert!(cancelled.renewal_cancelled_at.is_some());
+    purchases::record_xero_cancelled(&pg, row.id, end + TimeDelta::days(30), now)
+        .await
+        .unwrap();
+    assert_eq!(
+        purchases::get(&pg, row.id).await.unwrap().access_ends_at,
+        cancelled.access_ends_at
+    );
+    pg.pool().close().await;
+}
+
+#[tokio::test]
+async fn an_expired_unpaid_checkout_releases_only_its_own_reservation() {
+    let Some(pg) = database().await else { return };
+    let now = Utc::now();
+    let new = plan(Uuid::new_v4());
+    let firm = Uuid::new_v4();
+    let admission = || purchases::StripeAdmission {
+        firm_id: firm,
+        account_id: "acct_synthetic",
+        terms: "Monthly terms",
+    };
+    let first = purchases::open_stripe(&pg, &new, now, admission())
+        .await
+        .unwrap();
+    purchases::record_stripe_checkout(
+        &pg,
+        first.id,
+        "cs_test_expired",
+        "https://checkout.stripe.com/c/pay/expired",
+        now,
+    )
+    .await
+    .unwrap();
+    assert!(
+        purchases::expire_stripe_checkout(&pg, first.id, "cs_test_other", now)
+            .await
+            .is_err()
+    );
+    let expired = purchases::expire_stripe_checkout(&pg, first.id, "cs_test_expired", now)
+        .await
+        .unwrap();
+    assert_eq!(expired.state, PurchaseState::Expired);
+    assert!(!expired.is_active(now));
+    assert_eq!(expired.stripe.unwrap().renewal_terms, "Monthly terms");
+    let retry = purchases::open_stripe(&pg, &new, now, admission())
+        .await
+        .unwrap();
+    assert_ne!(first.id, retry.id);
+    purchases::record_stripe_checkout(
+        &pg,
+        retry.id,
+        "cs_test_retry",
+        "https://checkout.stripe.com/c/pay/retry",
+        now,
+    )
+    .await
+    .unwrap();
+    purchases::sync_stripe(
+        &pg,
+        retry.id,
+        purchases::StripeObservation {
+            customer: "cus_synthetic",
+            subscription: "sub_synthetic",
+            paid_through: now + TimeDelta::days(30),
+            cancelling: false,
+        },
+        now,
+    )
+    .await
+    .unwrap();
+    assert!(
+        purchases::expire_stripe_checkout(&pg, retry.id, "cs_test_retry", now)
+            .await
+            .is_err()
+    );
+    pg.pool().close().await;
+}

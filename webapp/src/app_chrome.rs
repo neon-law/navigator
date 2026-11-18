@@ -91,6 +91,7 @@ pub fn app_destinations(role: ViewerRole) -> Vec<AppNavLink> {
             crate::brand_blog_posts::APP_PATH,
         ));
     }
+    destinations.push(AppNavLink::new("Purchases", "/purchases"));
     destinations.push(AppNavLink::new("Profile", APP_PROFILE_HREF));
     destinations.push(AppNavLink::new("Sign out", APP_SIGN_OUT_HREF));
     destinations
@@ -410,11 +411,18 @@ mod tests {
     fn a_client_is_offered_no_firm_workspace() {
         assert_eq!(
             labels(ViewerRole::Client),
-            ["Projects", "Profile", "Sign out"]
+            ["Projects", "Purchases", "Profile", "Sign out"]
         );
         assert_eq!(
             labels(ViewerRole::Clerk),
-            ["Projects", "Team", "Inbox", "Profile", "Sign out"]
+            [
+                "Projects",
+                "Team",
+                "Inbox",
+                "Purchases",
+                "Profile",
+                "Sign out"
+            ]
         );
     }
 
@@ -426,18 +434,42 @@ mod tests {
         for role in [ViewerRole::Clerk, ViewerRole::Lawyer] {
             assert_eq!(
                 labels(role),
-                ["Projects", "Team", "Inbox", "Profile", "Sign out"],
+                [
+                    "Projects",
+                    "Team",
+                    "Inbox",
+                    "Purchases",
+                    "Profile",
+                    "Sign out"
+                ],
                 "rank {}",
                 role.authority_rank()
             );
         }
         assert_eq!(
             labels(ViewerRole::Admin),
-            ["Projects", "Team", "Inbox", "Content", "Profile", "Sign out"]
+            [
+                "Projects",
+                "Team",
+                "Inbox",
+                "Content",
+                "Purchases",
+                "Profile",
+                "Sign out"
+            ]
         );
         assert_eq!(
             labels(ViewerRole::Owner),
-            ["Projects", "Team", "Inbox", "Firm", "Content", "Profile", "Sign out"]
+            [
+                "Projects",
+                "Team",
+                "Inbox",
+                "Firm",
+                "Content",
+                "Purchases",
+                "Profile",
+                "Sign out"
+            ]
         );
     }
 
@@ -460,6 +492,7 @@ mod tests {
                 "/app/inbox",
                 "/app/owner",
                 "/app/admin/blog",
+                "/purchases",
                 "/app/profile",
                 "/auth/logout"
             ]
@@ -588,6 +621,7 @@ mod tests {
                 crate::inbox::INBOX_PATH,
                 APP_OWNER_HREF,
                 crate::brand_blog_posts::APP_PATH,
+                "/purchases",
                 crate::clause_library::CLAUSES_PATH,
                 APP_PROFILE_HREF,
             ]
@@ -599,6 +633,7 @@ mod tests {
                 APP_TEAM_HREF,
                 crate::inbox::INBOX_PATH,
                 crate::brand_blog_posts::APP_PATH,
+                "/purchases",
                 crate::clause_library::CLAUSES_PATH,
                 APP_PROFILE_HREF,
             ]
@@ -606,7 +641,7 @@ mod tests {
     }
 
     /// A client's palette is what their own navbar already shows, minus Sign
-    /// out: the one destination every tier has and Profile. Never a firm home,
+    /// out: Projects, Purchases, and Profile. Never a firm home,
     /// the inbox, or an admin door — the palette must not advertise a 403.
     #[test]
     fn a_client_palette_lists_no_firm_or_admin_destination() {
@@ -614,7 +649,7 @@ mod tests {
             .into_iter()
             .map(|link| link.href)
             .collect();
-        assert_eq!(hrefs, [APP_PROJECTS_HREF, APP_PROFILE_HREF]);
+        assert_eq!(hrefs, [APP_PROJECTS_HREF, "/purchases", APP_PROFILE_HREF]);
     }
 
     /// The clause library is an admin destination: no tier below admin is

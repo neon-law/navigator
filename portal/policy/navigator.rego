@@ -224,13 +224,13 @@ route_allow if {
     is_lawyer(input.session)
 }
 
-# The purchase page belongs to clients: they read it and buy one Offering at
-# a time. A firm account has no Purchases of its own to make here.
+# Every signed-in Person can manage their own purchases, including after a
+# role change. New purchases remain client-only; handlers enforce ownership.
 route_allow if {
     input.path[0] == "purchases"
     count(input.path) == 1
     input.method == "GET"
-    input.session.role == "client"
+    is_authenticated(input.session)
 }
 
 route_allow if {
@@ -238,6 +238,15 @@ route_allow if {
     count(input.path) == 2
     input.method == "POST"
     input.session.role == "client"
+}
+
+# Cancellation remains available to the owner of a Purchase at every tier.
+route_allow if {
+    count(input.path) == 3
+    input.path[0] == "purchases"
+    input.path[2] == "cancel"
+    input.method == "POST"
+    is_authenticated(input.session)
 }
 
 # The Legal Sandbox is the subscriber's own workspace: a client reads the
