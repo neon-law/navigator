@@ -8,100 +8,128 @@ description: Follow a fictional probate workflow and see how Navigator makes inf
 
 Cloud Native PDX · Portland, Oregon
 
-## A law firm as a software problem
+## Sample Navigator
 
 ### What Navigator does
 
-- Intake before a matter opens
-- Case management, documents, and Project repositories
-- Communications and publishing
-- An AI agent harness with tools and rules for working across those systems
+- MCP tools for agentic lawyering
+- Project repositories, with Jujutsu for local matter work
+- An omnichannel inbox for firm communications
+- Private matter records and participation-scoped access
 
 ---
 
-Navigator is an open-source platform for running a law firm. We want lawyers to spend more time with clients by making
-the repeatable work around a matter easier to do.
-
-Think of the Project repository as the agent’s mise en place. Agents organize source material and prepare drafts.
-Lawyers review the work and advise clients. Each Project has a Git repository. Jujutsu (`jj`) can work with Git
-repositories, so it can be part of a contributor’s local workflow.
+Navigator is an open-source platform for running a law firm. What can we automate today to save time tomorrow?
 
 ### Live demo — Oregon probate
 
-- Open a fictional Vesta Estate Planning Project in staging.
-- Fill out a questionnaire together and generate an unsigned draft Notation.
-- Follow the draft into the Project for lawyer review.
+- In this fictional example, Bigfoot died.
+- One of their four children, Littlefoot, contacts our firm.
 
 ---
 
-Use fictional answers. Open the Oregon Judicial Department packet as the source for the example. Keep a completed
-staging example ready for the walkthrough.
+Littlefoot was the primary caregiver and worries about what his siblings will inherit. What facts would a lawyer need
+before advising him? Use synthetic answers and an unsigned draft. The packet's eligibility requirements need separate
+review; caregiving alone does not establish inheritance rights.
 
 [Oregon Judicial Department packet](https://www.courts.oregon.gov/forms/Documents/ProbateSimpleEstate.pdf)
 
-### Project access
+### Booking the appointment
 
-- Add a demo participant.
-- Open the Project from their session.
-- Remove them and check access again.
-
----
-
-Show the same Project repository on this machine and in staging Forgejo. Rehearse the questionnaire and access paths
-from a fresh test session before sharing attendee links.
-
-## The machine is made of decisions
-
-### Follow the draft through the stack
-
-- PostgreSQL holds durable application records.
-- OpenTelemetry helps us trace work across services.
-- Lawyers review the draft before it goes further.
+- Review a synthetic message on `/app/inbox`.
+- Use the firm's approved booking link.
+- Obtain the required consent before recording a real meeting.
+- Keep the transcript on the Project's approved private Notion page.
 
 ---
 
-Trace the probate example through the stack. Show what the trace can tell us without recording client answers.
+Show the information the fictional contact actually supplied. Do not imply that every connected service automatically
+shares the matter's data.
 
-### Rehearse a restore
+### Intake & Retainer
 
-- Keep each account's records identifiable and exportable.
-- Consider storing backups in AWS for a service running in Google Cloud.
-- Rehearse a restore and inventory the credentials and services it needs.
-
----
-
-Use the cross-cloud backup as a design scenario. A backup gives us something to restore. A rehearsal tells us what else
-the service needs to come back.
-
-### Pass the decisions on
-
-- Put the lessons in agent instructions, shared tools, and checks.
-- Give the next agent a concrete example it can inspect.
-- Give the next engineer a way to verify the result.
+Intake and Retainer are Notations
 
 ---
 
-I spent years learning these decisions by doing the work. This repository is where I put them so the next person or
-agent can start there. Show one rule from the demo and the check that would catch a change to it.
+Our computable contract format uses Markdown with YAML frontmatter to declare required questions and workflow steps.
 
-### Choose what to build
+### Fill a notation questionnaire from a transcript
 
-- Own the legal workflow and the records it produces.
-- Use existing services for banking, payroll, accounting, invoicing, and social scheduling.
-- Use the receiving email address or phone number to identify the brand. Let a person assign the Project.
+Use a synthetic transcript to prepare answers to the notation's questions. Leave missing facts unanswered for the lawyer
+to resolve before deciding whether the Oregon procedure fits.
 
 ---
 
-If the staging Inbox is ready, show a synthetic message. The audience should see where it arrived and who decides which
-Project it belongs to.
+We use LLMs where they help. Smaller models can reduce cost and make more computing environments practical; choose a
+model only after checking its capability and the provider's privacy terms for the task.
 
-## Take something with you
+We build ordinary Rust automation for repeatable work so it does not need an LLM call.
 
-### Point your agent at Navigator
+### Convention over Configuration
+
+- File & folder naming
+- jj branch and pr
+- Clause library & glossary
+
+---
+
+I learned this from Ruby on Rails: shared conventions help the next person find the work. Project repositories keep
+document pointers; the legal-document bytes stay in Navigator-managed storage.
+
+### Navigator, the CLI
+
+`brew install neon-law/navigator/navigator`
+
+---
+
+The CLI exposes authorized operations against the selected Navigator site. Access still depends on the caller's role and
+Project participation. Show a supported read command; do not imply that installing the CLI enables court filing.
+
+### navigator.yaml
+
+```yaml
+version: 26.11.18
+project:
+  name: sample-estate
+  host: staging.example.test
+```
+
+---
+
+This illustrates the nested manifest shape. Keep the sample checkout's actual pinned CLI version and deployment host.
+The host selects the site; it does not by itself establish the Firm, Brand, scope of representation, or access rights.
+
+### Navigator, the MCP
+
+```text
+Draft correspondence to fictional client Littlefoot about the probate questions we still need answered.
+```
+
+- Prepare a first-pass email.
+- Review it through the legal council lenses.
+- Leave the draft for the lawyer to review and send.
+- File correspondence through the matter's approved communication workflow.
+
+---
+
+Show the draft and the facts supporting it. The council is a drafting review, not an independent lawyer or a substitute
+for the responsible lawyer's judgment. Keep the demonstration unsent.
+
+## Please leave a star
+
+### github.com/neon-law/navigator
 
 Browse the repo. Borrow what fits.
 
-If it helps you build something, I’d appreciate a GitHub star.
+---
+
+Open the public repository and point to one convention the audience can inspect and reuse. Keep the fictional matter's
+documents and private deployment configuration out of the public repository.
+
+### Thank you
+
+If it helps you build something, we’d appreciate a GitHub star.
 
 [github.com/neon-law/navigator](https://github.com/neon-law/navigator)
 

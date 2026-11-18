@@ -338,7 +338,7 @@ fn no_deck_calls_the_forge_an_enterprise_or_the_cli_private() {
             "{deck} calls the `navigator` CLI private — its source has been public since #7",
         );
 
-        if *deck == DEPLOY || *deck == RUST_IN_PEACE {
+        if *deck == DEPLOY {
             continue;
         }
         // Reference destinations are citations, not claims about the forge.

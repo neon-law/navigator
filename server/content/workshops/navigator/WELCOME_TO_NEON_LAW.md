@@ -41,8 +41,8 @@ things get contentious.
 
 ---
 
-We use transparent, metered-based billing to grow with you. A flat membership fee, and pricing you can always view
-before you engage with us.
+Our ongoing-counsel offer starts at $50 per active day. Additional flat fees may apply and are quoted in the engagement
+letter. We agree on the scope and pricing before you engage us.
 
 ### Common contracts
 
@@ -50,7 +50,7 @@ before you engage with us.
 
 ---
 
-We believe common contracts like NDA's MSA's and employment agreements should be treated like cryptography. Don't do
+We believe common contracts like NDAs, MSAs, and employment agreements should be treated like cryptography. Don't do
 anything weird in both your written word and in real life.
 
 ### Shared standards
@@ -77,8 +77,8 @@ lawyering system. I learned a lot over the years, and carry those lessons in our
 
 ---
 
-Navigator is built in rust, uses best cloud native practices, grounds itself with a solid ontology, and allows us to say
-nimble while honoring the sacred privacy covenant of attorney client privilege.
+Navigator is built in Rust, with a shared ontology and access controls that help us handle legal work. Attorney-client
+privilege depends on the communication and circumstances; software alone does not establish it.
 
 ### Let's meet
 
@@ -87,7 +87,7 @@ nimble while honoring the sacred privacy covenant of attorney client privilege.
 ---
 
 If you are looking for an efficient legal team to help your business thrive, I invite you to book a meeting with me. We
-serve Californians, Nevadans, Washingtonians, and New Yorkers.
+discuss your matter, the scope of work, and whether we can represent you in the relevant jurisdiction.
 
 ### Thank you
 
