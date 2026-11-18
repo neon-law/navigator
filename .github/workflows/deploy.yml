@@ -592,7 +592,9 @@ jobs:
     # 45, only later; a merely slow cold build now finishes instead of
     # being thrown away. Over-provisioning costs wall-clock solely on runs
     # that were already failing, so the asymmetry favors the larger number.
-    timeout-minutes: 90
+    # 150 since deploy run 44385191458: the neon-server image finished at
+    # 1h29m and died saving it, one minute short of a 90-minute cap.
+    timeout-minutes: 150
     strategy:
       # One red build means the e2e can't run — stop the sibling too.
       fail-fast: true
@@ -875,9 +877,10 @@ jobs:
     # stand-up + e2e/browser/accessibility suite (~15 min); a wedged
     # dependency (e.g. Restate not provisioning) used to leave the `e2e`
     # waits and smoke checks spinning until someone cancelled it by hand —
-    # one such run burned 2h15m. 60 min leaves wide headroom while capping
-    # a wedge at a bounded, log-bearing failure.
-    timeout-minutes: 60
+    # one such run burned 2h15m. Healthy runs now take ~50 min with the
+    # PostgreSQL bootstrap and the full browser suite, so 90 keeps headroom
+    # while still capping a wedge at a bounded, log-bearing failure.
+    timeout-minutes: 90
     env:
       CHROME_FOR_TESTING_VERSION: 150.0.7871.46
       # KIND's default 2 MiB test stack overflows
@@ -1673,7 +1676,7 @@ jobs:
     #
     # A cap this leg finishes inside by seconds detects nothing. Give it the
     # same room `build` has and let the runner below make it fast.
-    timeout-minutes: 90
+    timeout-minutes: 150
     strategy:
       fail-fast: false
       matrix:
