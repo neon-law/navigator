@@ -151,7 +151,7 @@ pub async fn upload(
     let Some(artifact) = form.into_artifact() else {
         return Redirect::to(&redirect_back).into_response();
     };
-    let Ok(contract_text) = contract_text_for_review(&artifact).await else {
+    let Ok(contract_text) = contract_text_for_review(&artifact) else {
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
             "This document could not be read for review.",
@@ -192,9 +192,7 @@ pub async fn upload(
     }
 }
 
-async fn contract_text_for_review(
-    artifact: &ParsedArtifact,
-) -> Result<String, ContractReviewError> {
+fn contract_text_for_review(artifact: &ParsedArtifact) -> Result<String, ContractReviewError> {
     if let ParsedArtifact::File {
         bytes, filename, ..
     } = artifact
@@ -629,8 +627,8 @@ mod tests {
         assert!(ContractForm::default().into_artifact().is_none());
     }
 
-    #[tokio::test]
-    async fn docx_review_reads_visible_word_text() {
+    #[test]
+    fn docx_review_reads_visible_word_text() {
         let document = concat!(
             r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">"#,
             "<w:body><w:p><w:r><w:t>kept</w:t></w:r>",
@@ -652,27 +650,25 @@ mod tests {
                 .into(),
             filename: "synthetic.docx".into(),
         };
-        let text = super::contract_text_for_review(&artifact)
-            .await
-            .expect("a readable package");
+        let text = super::contract_text_for_review(&artifact).expect("a readable package");
         assert_eq!(text, "kept added");
         assert!(!text.contains("removed"));
     }
 
-    #[tokio::test]
-    async fn a_non_docx_capture_is_reviewed_as_its_own_text() {
+    #[test]
+    fn a_non_docx_capture_is_reviewed_as_its_own_text() {
         let file = ParsedArtifact::File {
             bytes: b"SUPPLY AGREEMENT".to_vec(),
             content_type: "text/plain".into(),
             filename: "supply.txt".into(),
         };
         assert_eq!(
-            super::contract_text_for_review(&file).await.unwrap(),
+            super::contract_text_for_review(&file).unwrap(),
             "SUPPLY AGREEMENT"
         );
         let paste = ParsedArtifact::Text("pasted body".into());
         assert_eq!(
-            super::contract_text_for_review(&paste).await.unwrap(),
+            super::contract_text_for_review(&paste).unwrap(),
             "pasted body"
         );
         assert_eq!(paste.default_filename(), "inbound-contract.txt");
