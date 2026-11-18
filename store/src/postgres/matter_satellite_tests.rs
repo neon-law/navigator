@@ -216,7 +216,7 @@ async fn git_tokens_store_hashes_and_refuse_expiry_and_revocation() {
     activate_family(&pg, Family::Satellites).await;
     let unavailable = crate::surreal::SurrealDb::uninitialized();
     with_test_db(pg.clone(), async {
-        let now = chrono::Utc::now();
+        let now = chrono::DateTime::from_timestamp(1_800_000_000, 0).unwrap();
         let expires = now + chrono::Duration::minutes(10);
         let (person, _, _) = workflow_fixture(&pg).await;
         let row = git_access_tokens::mint(
@@ -891,7 +891,7 @@ async fn contract_review_patches_keep_findings_and_do_not_touch_another_review()
 }
 
 #[tokio::test]
-async fn testimonial_consent_requires_client_dri_and_publication_requires_matter_staff() {
+async fn testimonial_consent_requires_client_dri_and_publication_requires_matter_lawyer() {
     use crate::{persons::Role, testimonials as testimonial};
     let Some((options, database)) = fresh_schema().await else {
         return;
