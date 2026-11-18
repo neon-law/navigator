@@ -384,7 +384,9 @@ on PostgreSQL.
 | --- | --- |
 | `entities` | `entities::find_by_id` |
 | `firms` | `firms::find_by_id` |
-| `notations` | `notations::find_by_id`, `find_by_project_template_person`, `list_by_project`, `list_by_projects`, `list_by_person`, `list_all`, and `exists_for_project` |
+| `notations` | `notations::find_by_id`, `find_by_project_template_person` |
+| `notations` | `notations::list_by_project`, `list_by_projects`, `list_by_person` |
+| `notations` | `notations::list_all`, `exists_for_project` |
 | `projects` | `projects::find_by_id`, `projects::find_by_code` |
 
 | Setting | Effect |
