@@ -1,13 +1,10 @@
 //! `dev browser-e2e` — reproduce `deploy.yml`'s `integration` browser
 //! gate locally with one command.
 //!
-//! The nightly deploy's `integration` job is the gate that keeps
-//! failing on browser/accessibility regressions, but until now there
-//! was no single command that ran that same gate on a dev box — so a
-//! `serious` axe violation only surfaced after a `YY.M.D` tag was cut.
-//! Reproducing it meant hand-assembling the harness the CI job wires
-//! automatically: the pinned Chrome build, chromedriver, the store
-//! reachability, the Lawyer grant, and the exact env the suites read.
+//! The release rehearsal uses the same pinned browser, Nextest `ci`
+//! profile, serial execution, and stack budget as the integration job.
+//! Nextest records a test that passes on retry as `FLAKY` in its output
+//! and JUnit report; exhausted retries fail the gate.
 //!
 //! This command assembles that harness against the caller's worktree:
 //!
@@ -18,21 +15,17 @@
 //!    on the host — this command does not manage either lifecycle),
 //! 4. `grant-lawyer` against the caller's store (the worktree
 //!    database the host `web` actually reads), and
-//! 5. run `browser_e2e`, `accessibility_e2e`, and `notation_preview_layout` with the CI env
+//! 5. run `browser_e2e`, `accessibility_e2e`, and `notation_preview_layout` through Nextest's `ci` profile with the CI env
 //!    (`CHROME_BINARY` / `WEBDRIVER_URL` / `NAV_BASE_URL` /
 //!    `NAV_REQUIRE_HARNESS=1`) so a "harness
 //!    unreachable" self-skip panics instead of passing green.
 //!
-//! Login-gated suites reach this bar on a worktree only because the
-//! KIND Rauthy client now registers a trailing-wildcard
-//! `http://localhost:*` redirect (see
-//! `k8s/overlays/kind/rauthy/local-fixture.yaml`); before that fix every
-//! derived worktree port 400'd at the redirect and the browser walk
-//! timed out.
+//! The KIND Rauthy client registers the worktree's loopback redirect
+//! through `k8s/overlays/kind/rauthy/local-fixture.yaml`.
 //!
 //! ## Testing
 //!
-//! The orchestration shells out to `chromedriver`/`cargo test` against
+//! The orchestration shells out to `chromedriver`/`cargo nextest` against
 //! a live cluster, so it isn't unit-tested (same policy as
 //! `super::e2e`). The pure decision logic that can drift — base-URL
 //! resolution, the assembled test env, and URL host/port parsing — is
@@ -70,7 +63,7 @@ const SUITES: [&str; 3] = [
 /// `dev browser-e2e`: run the deploy.yml browser gate against the
 /// caller's worktree.
 pub fn run_browser_e2e(base_url: Option<&str>) -> Result<()> {
-    require_tools(&["cargo"])?;
+    require_tools(&["cargo", "cargo-nextest"])?;
     let base_url = resolve_base_url(base_url, std::env::var("PORT").ok().as_deref())?;
 
     // The browser walk hits the host web server, which must already be up.
@@ -93,7 +86,8 @@ pub fn run_browser_e2e(base_url: Option<&str>) -> Result<()> {
     // `web` was started with.
     e2e::grant_lawyer_at()?;
 
-    let env = cargo_test_env(&cft.chrome, &webdriver_url, &base_url);
+    let stack = std::env::var("RUST_MIN_STACK").ok();
+    let env = cargo_test_env(&cft.chrome, &webdriver_url, &base_url, stack.as_deref());
     eprintln!(
         "=== axe policy ({AXE_POLICY_SUITE}): {}; text over no declared background fails; \
          /design audited in light and dark ===",
@@ -101,11 +95,23 @@ pub fn run_browser_e2e(base_url: Option<&str>) -> Result<()> {
     );
     for suite in SUITES {
         eprintln!(
-            "=== cargo test -p server --test {suite} (pinned Chrome, NAV_REQUIRE_HARNESS=1) ==="
+            "=== cargo nextest run -p server --test {suite} (ci profile, pinned Chrome, NAV_REQUIRE_HARNESS=1) ==="
         );
         let mut cmd = Command::new("cargo");
-        cmd.args(["test", "-p", "server", "--test", suite])
-            .args(["--", "--test-threads=1"]);
+        cmd.args([
+            "nextest",
+            "run",
+            "-p",
+            "server",
+            "--test",
+            suite,
+            "--profile",
+            "ci",
+            "--no-fail-fast",
+            "--test-threads",
+            "1",
+            "--no-capture",
+        ]);
         for (key, value) in &env {
             cmd.env(key, value);
         }
@@ -141,12 +147,15 @@ fn cargo_test_env(
     chrome: &Path,
     webdriver_url: &str,
     base_url: &str,
+    stack: Option<&str>,
 ) -> Vec<(&'static str, String)> {
     vec![
         ("CHROME_BINARY", chrome.display().to_string()),
         ("WEBDRIVER_URL", webdriver_url.to_string()),
         ("NAV_BASE_URL", base_url.to_string()),
         ("NAV_REQUIRE_HARNESS", "1".to_string()),
+        // Match the release gate's stack budget for the practice preview fixture.
+        ("RUST_MIN_STACK", stack.unwrap_or("33554432").to_string()),
     ]
 }
 
@@ -335,6 +344,7 @@ mod tests {
             Path::new("/cache/chrome"),
             "http://127.0.0.1:9611",
             "http://localhost:3091",
+            None,
         );
         let get = |k: &str| {
             env.iter()
@@ -345,6 +355,16 @@ mod tests {
         assert_eq!(get("WEBDRIVER_URL"), Some("http://127.0.0.1:9611"));
         assert_eq!(get("NAV_BASE_URL"), Some("http://localhost:3091"));
         assert_eq!(get("NAV_REQUIRE_HARNESS"), Some("1"));
+        assert_eq!(get("RUST_MIN_STACK"), Some("33554432"));
+        let overridden = cargo_test_env(
+            Path::new("/cache/chrome"),
+            "http://127.0.0.1:9611",
+            "http://localhost:3091",
+            Some("67108864"),
+        );
+        assert!(overridden
+            .iter()
+            .any(|(key, value)| *key == "RUST_MIN_STACK" && value == "67108864"));
     }
 
     #[test]
