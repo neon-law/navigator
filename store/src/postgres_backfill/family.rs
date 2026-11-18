@@ -9,6 +9,8 @@ use uuid::Uuid;
 pub enum Family {
     /// Independent matter, review, credential, and publication satellites.
     Satellites,
+    /// Remaining application catalogs, intake, service, and approval records.
+    Application,
     /// Notation writers and their canonical document and Asset protection facts.
     Notation,
 }
@@ -17,7 +19,7 @@ impl Family {
     /// Every registered family required before application readiness or workflow effects.
     #[must_use]
     pub const fn all() -> &'static [Self] {
-        &[Self::Satellites, Self::Notation]
+        &[Self::Satellites, Self::Notation, Self::Application]
     }
 
     /// The immutable version of this family's import contract.
@@ -26,6 +28,7 @@ impl Family {
         match self {
             Self::Satellites => "satellites:1",
             Self::Notation => "notation:1",
+            Self::Application => "application:1",
         }
     }
 
@@ -47,6 +50,19 @@ impl Family {
                 "project_module",
                 "social_oauth_attempt",
                 "testimonial",
+            ],
+            Self::Application => &[
+                "template",
+                "mailroom",
+                "letter",
+                "lead",
+                "lead_consent",
+                "project_deadlines",
+                "project_service",
+                "summary_sender_approval",
+                "summary_sender_approval_event",
+                "inbox_triage",
+                "deployment_secret_change",
             ],
             Self::Notation => &[
                 "notation",
@@ -564,7 +580,7 @@ impl Snapshot {
             && self.tables.len() == expected.len()
             && actual == expected
             && match family {
-                Family::Satellites => {
+                Family::Satellites | Family::Application => {
                     self.asset_union.is_none()
                         && self.reset_union.is_none()
                         && self.template_pins.is_none()
@@ -907,7 +923,9 @@ impl Verification {
                 self.target_rows == captured && self.asset_union.is_none()
             }
             && match family {
-                Family::Satellites => self.reset_union.is_none() && self.template_pins.is_none(),
+                Family::Satellites | Family::Application => {
+                    self.reset_union.is_none() && self.template_pins.is_none()
+                }
                 Family::Notation => {
                     self.reset_facts_checked
                         && self.reset_union.as_ref().is_some_and(|proof| {

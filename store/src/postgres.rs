@@ -132,6 +132,8 @@ pub enum PostgresError {
     Connection,
     #[error("PostgreSQL migration failed")]
     Migration,
+    #[error("PostgreSQL application history has not been activated")]
+    History,
 }
 impl PostgresDb {
     /// Scope a PostgreSQL integration fixture without changing process-wide configuration.
@@ -218,19 +220,27 @@ impl PostgresDb {
             .await
             .cloned()
     }
-    /// The process's PostgreSQL store when `NAVIGATOR_POSTGRES_HOST` is set,
-    /// for the tables born in PostgreSQL. `None` selects their SurrealDB
-    /// fallback; a configured but unreachable server is an error, never a
-    /// silent fall back.
+    /// PostgreSQL serves application calls. Only an explicit importer Source
+    /// read can select the compatibility accessor; missing configuration fails closed.
     pub async fn configured() -> Result<Option<Self>, PostgresError> {
-        #[cfg(any(test, feature = "test-support"))]
-        if let Ok(pg) = TEST_POSTGRES.try_with(Clone::clone) {
-            return Ok(Some(pg));
-        }
-        if std::env::var_os("NAVIGATOR_POSTGRES_HOST").is_none() {
+        if crate::postgres_mirror::reading_source() {
             return Ok(None);
         }
         Self::from_env().await.map(Some)
+    }
+
+    /// Require the existing global import and every current scoped activation.
+    /// Importers connect directly and never use this application admission check.
+    pub(crate) async fn require_application_history(&self) -> Result<(), PostgresError> {
+        if !crate::postgres_mirror::backfilled(self)
+            .await
+            .map_err(|_| PostgresError::History)?
+        {
+            return Err(PostgresError::History);
+        }
+        crate::postgres_backfill::family::require_runtime_scopes(self)
+            .await
+            .map_err(|_| PostgresError::History)
     }
     async fn connect_env() -> Result<Self, PostgresError> {
         let get = |key: &str| std::env::var(key).map_err(|_| PostgresError::Configuration);
@@ -607,3 +617,6 @@ mod tests {
 
 #[cfg(test)]
 mod signature_reference_migration_tests;
+
+#[cfg(test)]
+mod application_authority_tests;
