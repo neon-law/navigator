@@ -65,7 +65,6 @@ pub mod tenancy;
 #[cfg(test)]
 mod tenancy_tests;
 
-
 #[cfg(test)]
 mod projects_tests;
 
