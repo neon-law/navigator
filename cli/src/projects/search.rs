@@ -70,6 +70,7 @@ struct Report {
     coverage: Coverage,
 }
 
+#[must_use]
 pub fn run(
     pattern: &str,
     dir: &Path,
@@ -173,7 +174,7 @@ fn search(
                     court_only,
                     &mut cache,
                     &mut report,
-                )?;
+                );
             }
         }
     }
@@ -188,11 +189,11 @@ fn search_file(
     court_only: bool,
     cache: &mut BTreeMap<(String, [u8; 32]), Extracted>,
     report: &mut Report,
-) -> Result<()> {
+) {
     let relative = path.strip_prefix(root).unwrap_or(path);
     let record = classify(relative);
     if court_only && record != Record::Court {
-        return Ok(());
+        return;
     }
     let kind = extension(path);
     let bytes = match fs::read(path) {
@@ -204,7 +205,7 @@ fn search_file(
                 kind,
                 reason: format!("read error: {error}"),
             });
-            return Ok(());
+            return;
         }
     };
     let digest: [u8; 32] = Sha256::digest(&bytes).into();
@@ -213,10 +214,10 @@ fn search_file(
         cache.insert(cache_key.clone(), extract(path, &bytes));
     }
     let Some(extracted) = cache.get(&cache_key) else {
-        return Ok(());
+        return;
     };
     let Some(parts) = searchable_parts(extracted, relative, &kind, report) else {
-        return Ok(());
+        return;
     };
     *report
         .coverage
@@ -238,7 +239,6 @@ fn search_file(
         part
     });
     append_hits(report, relative, record, &kind, matcher, context, parts);
-    Ok(())
 }
 
 fn searchable_parts(
