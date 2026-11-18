@@ -1,11 +1,11 @@
-//! `hudson mail packet`: hand a rendered, signed packet to the
+//! `navigator mail packet`: hand a rendered, signed packet to the
 //! Firm's mail-center vendor for printing and physical mail (LAW-311).
 //!
 //! Phase 1 of the mailroom: the job goes to the vendor as an **unsent**
 //! Gmail draft — the PDFs attached, and a job sheet in the body naming the
 //! recipient's address block, the service level, the printing instructions,
 //! and the mail-by date — for the lawyer to review and send. The draft is
-//! logged on the matter as an outbound Communication with the role `other`.
+//! filed as a Communication only after the lawyer sends it and mail sync observes it.
 //! Navigator never sends it.
 //!
 //! A packet must be the signed revision. A PDF still stamped as a preview,
@@ -159,8 +159,8 @@ fn pointer_records_signing(pdf: &Path) -> bool {
     let Ok(pdf) = std::fs::canonicalize(pdf) else {
         return false;
     };
-    let Some(root) =
-        cli::projects::matter::find_manifest(&pdf).and_then(|m| m.parent().map(Path::to_path_buf))
+    let Some(root) = crate::projects::matter::find_manifest(&pdf)
+        .and_then(|m| m.parent().map(Path::to_path_buf))
     else {
         return false;
     };

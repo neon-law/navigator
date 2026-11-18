@@ -154,6 +154,7 @@ fn mail_help_exposes_only_draft_only_actions() {
             "save",
             "search",
             "setup",
+            "sync",
             "help"
         ]
     );
@@ -948,6 +949,7 @@ fn ops_help_lists_operator_members() {
             "forgejo",
             "gcp",
             "github",
+            "gmail-client",
             "host",
             "logs",
             "lsp",

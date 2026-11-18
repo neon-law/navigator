@@ -41,24 +41,24 @@ deployment; HTTP is allowed for a local loopback fixture.
 
 ## Import Gmail messages for review
 
-Preview the direct import using a Message ID from `hudson mail inbox-preview`. The preview checks the configured Google
-account and prints the proposed operation. Pass `--apply` to copy that Message into the Navigator Inbox.
+Preview the direct import using a Message ID from `navigator mail inbox-preview`. The preview checks the configured
+Google account and prints the proposed operation. Pass `--apply` to copy that Message into the Navigator Inbox.
 
 ```sh
-hudson mail import-inbox 18fa3bc2d4e5f6a7 --mailbox lawyer@example.test --apply
+navigator mail import-inbox 18fa3bc2d4e5f6a7 --mailbox lawyer@example.test --apply
 ```
 
 Use `--thread` to copy all non-draft Messages from one thread in Gmail timestamp order.
 
 ```sh
-hudson mail import-inbox 112210f47de98115 --thread --mailbox lawyer@example.test --apply
+navigator mail import-inbox 112210f47de98115 --thread --mailbox lawyer@example.test --apply
 ```
 
 The command verifies the Gmail mailbox before reading the selected thread and keeps the Gmail thread ID on the Inbox
 import. Omit `--apply` to check the mailbox without reading the thread or writing records. If a Message fails to import,
 retry the same thread to finish it. Earlier Messages retain their Inbox IDs.
 
-Save each Gmail Message with `hudson mail save`. Import its RFC 5322 file through the authenticated Inbox route.
+Save each Gmail Message with `navigator mail save`. Import its RFC 5322 file through the authenticated Inbox route.
 
 ```sh
 hudson inbox import --source gmail --mailbox lawyer@example.test --file mail/example.eml

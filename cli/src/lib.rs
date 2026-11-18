@@ -39,3 +39,7 @@ pub use commands::{
     append_skill_pin_findings, cli_version, diagnostic_line, fix_directory, gate_root,
     navigator_command, published_cli_version, run_gate, run_tracked_files_gate,
 };
+
+pub mod inbox_import;
+pub mod mail;
+pub use commands::{concise_help, parse_asset_kind, HostOpt};

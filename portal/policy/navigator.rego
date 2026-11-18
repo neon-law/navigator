@@ -2198,3 +2198,15 @@ route_allow if {
     input.method == "POST"
     is_lawyer(input.session)
 }
+
+# A lawyer reads only their own mail signature; the handler checks the account.
+route_allow if {
+    input.path == ["app", "api", "mail-signature"]
+    input.method == "GET"
+    is_lawyer(input.session)
+}
+
+ci_matter_content_denied if {
+    input.session.source == "ci"
+    input.path == ["app", "api", "mail-signature"]
+}

@@ -177,6 +177,7 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
                 .layer(DefaultBodyLimit::max(crate::private_chart::MAX_BODY_BYTES)),
         ),
         ("POST", "/app/api/people", post(create_person)),
+        ("GET", "/app/api/mail-signature", get(mail_signature)),
         ("POST", "/app/api/firms/{id}/people", post(create_firm_person)),
         ("POST", "/app/api/people/merge", post(merge_people)),
         ("GET", "/app/api/people/{id}", get(get_person)),
@@ -1431,6 +1432,33 @@ async fn create_person(
         Ok(created) => (StatusCode::CREATED, Json(created)).into_response(),
         Err(e) => mutation_error(e),
     }
+}
+
+#[derive(Deserialize)]
+struct MailSignatureQuery {
+    account: String,
+}
+
+async fn mail_signature(
+    State(surreal): State<store::surreal::SurrealDb>,
+    LawyerSession(session): LawyerSession,
+    Query(query): Query<MailSignatureQuery>,
+) -> Result<Json<store::mail_signatures::MailSignature>, ApiError> {
+    let person_id = session.person_id.ok_or(ApiError::Forbidden)?;
+    let account = store::persons::find_by_any_email(&surreal, &query.account)
+        .await
+        .map_err(|_| ApiError::Db("Person lookup failed".into()))?;
+    if account.is_none_or(|person| person.id != person_id) {
+        return Err(ApiError::NotFound);
+    }
+    let pg = store::postgres::PostgresDb::from_env()
+        .await
+        .map_err(|_| ApiError::Db("Signature storage unavailable".into()))?;
+    let signature = store::mail_signatures::for_person(&surreal, &pg, person_id)
+        .await
+        .map_err(|_| ApiError::Db("Signature read failed".into()))?
+        .ok_or(ApiError::NotFound)?;
+    Ok(Json(signature))
 }
 
 pub(crate) fn may_create_person_role(
@@ -7323,6 +7351,10 @@ pub(crate) async fn file_mail_attachments(
 /// Request body for `POST /app/api/projects/{id}/mail/eml`.
 #[derive(Deserialize)]
 struct EmlUploadRequest {
+    /// Provider message ID, scoped by the filing mailbox for Gmail deduplication.
+    gmail_message_id: Option<String>,
+    /// Gmail's SENT label determines direction independently of sending aliases.
+    gmail_sent: Option<bool>,
     /// The raw RFC 822 message, base64-encoded: bytes the caller already
     /// holds (a saved copy, a downloaded export), so no per-machine Gmail
     /// OAuth grant is involved in filing.
@@ -7428,7 +7460,7 @@ async fn eml_upload_door(
         Some(mailbox) => Some(mailbox),
         None => filing_lawyer_mailbox(&state.surreal, &lawyer).await?,
     };
-    let parsed = match crate::eml_filing::parse_eml(&raw, mailbox.as_deref()) {
+    let mut parsed = match crate::eml_filing::parse_eml(&raw, mailbox.as_deref()) {
         Ok(parsed) => parsed,
         Err(error) => {
             return Ok(bad_request(
@@ -7437,6 +7469,21 @@ async fn eml_upload_door(
             ));
         }
     };
+    if input.gmail_sent.is_some() && input.gmail_message_id.is_none() {
+        return Ok(bad_request(
+            "invalid_message_id",
+            "Gmail direction requires a Gmail message ID",
+        ));
+    }
+    if let Some(message_id) = input.gmail_message_id.as_deref() {
+        parsed.source_ref = match gmail_source_ref(message_id, mailbox.as_deref()) {
+            Ok(source_ref) => source_ref,
+            Err((code, reason)) => return Ok(bad_request(code, reason)),
+        };
+        if let Some(sent) = input.gmail_sent {
+            parsed.direction = if sent { "outbound" } else { "inbound" };
+        }
+    }
     let has_attachments = !parsed.attachments.is_empty();
     let kind = input
         .kind
@@ -7457,15 +7504,7 @@ async fn eml_upload_door(
     } else {
         store::documents::visibility::INTERNAL
     };
-    let attachments: Vec<EmlUploadAttachment> = parsed
-        .attachments
-        .iter()
-        .map(|attachment| EmlUploadAttachment {
-            filename: attachment.filename.clone(),
-            content_type: attachment.content_type.clone(),
-            size_bytes: attachment.bytes.len(),
-        })
-        .collect();
+    let attachments = eml_attachments(&parsed);
     if input.dry_run {
         return Ok((
             StatusCode::OK,
@@ -7481,7 +7520,33 @@ async fn eml_upload_door(
         )
             .into_response());
     }
-    file_parsed_eml(&state, id, &lawyer, parsed, kind, visibility, attachments).await
+    Box::pin(file_parsed_eml(
+        &state, id, &lawyer, parsed, kind, visibility, &raw,
+    ))
+    .await
+}
+
+fn gmail_source_ref(
+    message_id: &str,
+    mailbox: Option<&str>,
+) -> Result<String, (&'static str, &'static str)> {
+    let mailbox = mailbox
+        .filter(|mailbox| !mailbox.trim().is_empty())
+        .ok_or((
+            "mailbox_required",
+            "Gmail filing requires the source mailbox",
+        ))?;
+    if !(8..=128).contains(&message_id.len())
+        || !message_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+    {
+        return Err(("invalid_message_id", "Gmail message ID is invalid"));
+    }
+    Ok(format!(
+        "gmail:{}:{message_id}",
+        mailbox.trim().to_ascii_lowercase()
+    ))
 }
 
 /// The signed-in lawyer's own address, the mailbox a request without one
@@ -7498,6 +7563,18 @@ async fn filing_lawyer_mailbox(
     Ok(lawyer.0.email.clone())
 }
 
+fn eml_attachments(parsed: &crate::eml_filing::ParsedEml) -> Vec<EmlUploadAttachment> {
+    parsed
+        .attachments
+        .iter()
+        .map(|attachment| EmlUploadAttachment {
+            filename: attachment.filename.clone(),
+            content_type: attachment.content_type.clone(),
+            size_bytes: attachment.bytes.len(),
+        })
+        .collect()
+}
+
 /// The filing half of the .eml door: ingest the parsed message as a
 /// Communication, file its attachments, and report the outcome. Validation
 /// and the dry-run report stay in the handler above.
@@ -7508,8 +7585,9 @@ async fn file_parsed_eml(
     parsed: crate::eml_filing::ParsedEml,
     kind: Option<&str>,
     visibility: &'static str,
-    attachments: Vec<EmlUploadAttachment>,
+    raw: &[u8],
 ) -> Result<Response, ApiError> {
+    let attachments = eml_attachments(&parsed);
     let (channel, direction) = if parsed.direction == "outbound" {
         (
             store::communications::channel::EMAIL_OUTBOUND,
@@ -7526,6 +7604,15 @@ async fn file_parsed_eml(
     } else {
         &parsed.from
     };
+    // Keep the request future small while the raw source is ingested.
+    let raw_asset = Box::pin(store::assets::ingest_content(
+        &state.surreal,
+        &state.storage,
+        raw,
+        "message/rfc822",
+    ))
+    .await
+    .map_err(|error| ApiError::Db(error.to_string()))?;
     let author_person_id = lawyer.0.person_id.ok_or(ApiError::NotFound)?;
     let ingested = store::communications::ingest_email(
         &state.surreal,
@@ -7538,7 +7625,7 @@ async fn file_parsed_eml(
             subject: parsed.subject.as_deref(),
             body: &parsed.body,
             source_ref: Some(&parsed.source_ref),
-            asset_id: None,
+            asset_id: Some(raw_asset),
             occurred_at: &parsed.at,
         },
         store::communications::EmailDetails::default(),
@@ -7554,41 +7641,15 @@ async fn file_parsed_eml(
             document_slug: None,
         })
         .collect();
-    let filed = if parsed.attachments.is_empty() {
-        Vec::new()
-    } else {
-        let message_id_slug: String = parsed
-            .message_ref
-            .chars()
-            .map(|c| {
-                if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
-                    c
-                } else {
-                    '-'
-                }
-            })
-            .collect();
-        let kind = kind.expect("invariant: kind_required returned early without one");
-        let skip =
-            attachments_on_file(state, project_id, &message_id_slug, &parsed, &mut skipped).await?;
-        file_mail_attachments(
-            state,
-            project_id,
-            kind,
-            visibility,
-            &MailAttachmentSource {
-                exactly_once: false,
-                attachment_kinds: None,
-                skip: &skip,
-                message_id: &message_id_slug,
-                sender: &parsed.from,
-                received_at: &parsed.at,
-                subject: parsed.subject.as_deref().unwrap_or(""),
-            },
-            &parsed.attachments,
-        )
-        .await?
-    };
+    let filed = Box::pin(file_eml_documents(
+        state,
+        project_id,
+        &parsed,
+        kind,
+        visibility,
+        &mut skipped,
+    ))
+    .await?;
     let status = if ingested.deduped {
         StatusCode::OK
     } else {
@@ -7607,6 +7668,52 @@ async fn file_parsed_eml(
         }),
     )
         .into_response())
+}
+
+async fn file_eml_documents(
+    state: &ApiState,
+    project_id: Uuid,
+    parsed: &crate::eml_filing::ParsedEml,
+    kind: Option<&str>,
+    visibility: &'static str,
+    skipped: &mut Vec<EmlSkippedAttachment>,
+) -> Result<Vec<store::document_pointers::DocumentPointer>, ApiError> {
+    let filed = if parsed.attachments.is_empty() {
+        Vec::new()
+    } else {
+        let message_id_slug: String = parsed
+            .message_ref
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
+                    c
+                } else {
+                    '-'
+                }
+            })
+            .collect();
+        let kind = kind.expect("invariant: kind_required returned early without one");
+        let skip =
+            attachments_on_file(state, project_id, &message_id_slug, parsed, skipped).await?;
+        Box::pin(file_mail_attachments(
+            state,
+            project_id,
+            kind,
+            visibility,
+            &MailAttachmentSource {
+                exactly_once: false,
+                attachment_kinds: None,
+                skip: &skip,
+                message_id: &message_id_slug,
+                sender: &parsed.from,
+                received_at: &parsed.at,
+                subject: parsed.subject.as_deref().unwrap_or(""),
+            },
+            &parsed.attachments,
+        ))
+        .await?
+    };
+    Ok(filed)
 }
 
 /// The part indexes of `parsed` whose bytes a live document on the matter
@@ -12428,6 +12535,41 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
         })
     }
 
+    #[tokio::test]
+    async fn mail_signature_refuses_another_person_before_reading_signature_storage() {
+        let db = store::surreal::test_support::mem().await;
+        let actor = store::test_support::ensure_person(
+            &db,
+            &store::persons::NewPerson::with_role(
+                "Signature owner",
+                "owner@example.test",
+                store::persons::Role::Lawyer,
+            ),
+        )
+        .await;
+        let other = store::test_support::ensure_person(
+            &db,
+            &store::persons::NewPerson::with_role(
+                "Other lawyer",
+                "other@example.test",
+                store::persons::Role::Lawyer,
+            ),
+        )
+        .await;
+        let mut session =
+            crate::SessionData::fresh("signature-owner", store::persons::Role::Lawyer);
+        session.person_id = Some(actor.id);
+        let response = super::mail_signature(
+            State(db),
+            LawyerSession(session),
+            Query(super::MailSignatureQuery {
+                account: other.email,
+            }),
+        )
+        .await;
+        assert!(matches!(response, Err(ApiError::NotFound)));
+    }
+
     fn eml_request(
         raw: &[u8],
         mailbox: Option<String>,
@@ -12435,6 +12577,8 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
         dry_run: bool,
     ) -> EmlUploadRequest {
         EmlUploadRequest {
+            gmail_message_id: None,
+            gmail_sent: None,
             raw_base64: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, raw),
             mailbox,
             kind,
@@ -12449,6 +12593,7 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
         let project_id = store::test_support::seed_project_surreal(&db, "eml-door").await;
         let (state, session) = eml_lawyer_state(&db, project_id, "aries@neonlaw.com").await;
 
+        let storage = state.storage.clone();
         // The request carries only bytes and a session — no Gmail OAuth
         // account, client id, or Keychain refresh token anywhere in the
         // flow, which is the point of the door.
@@ -12474,6 +12619,17 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
             .await
             .unwrap();
         assert_eq!(filed.len(), 1);
+        let asset_id = filed[0]
+            .asset_id
+            .expect("raw source is linked to the Communication");
+        let asset = store::assets::find_by_id(&db, asset_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            storage.get(&asset.storage_key).await.unwrap().bytes,
+            EML_PLAIN.as_bytes()
+        );
         assert_eq!(
             filed[0].source_ref.as_deref(),
             Some("eml:abc-123@example.test")
@@ -12491,11 +12647,19 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
         let (state, session) = eml_lawyer_state(&db, project_id, "aries@neonlaw.com").await;
 
         for expected_status in [StatusCode::CREATED, StatusCode::OK] {
+            let mut request = eml_request(
+                EML_PLAIN.as_bytes(),
+                Some("lawyer@example.test".into()),
+                None,
+                false,
+            );
+            request.gmail_message_id = Some("message-123".into());
+            request.gmail_sent = Some(false);
             let response = eml_upload_door(
                 State(state.clone()),
                 LawyerSession(session.clone()),
                 Path(project_id),
-                Json(eml_request(EML_PLAIN.as_bytes(), None, None, false)),
+                Json(request),
             )
             .await
             .expect("each upload of the same message succeeds");
@@ -12514,6 +12678,11 @@ Content-Disposition: attachment; filename=\"order.pdf\"\r\n\
             .await
             .unwrap();
         assert_eq!(filed.len(), 1, "the replay wrote no second row");
+        assert_eq!(
+            filed[0].source_ref.as_deref(),
+            Some("gmail:lawyer@example.test:message-123")
+        );
+        assert!(filed[0].asset_id.is_some());
     }
 
     #[tokio::test]
@@ -12797,50 +12966,54 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
 
     #[tokio::test]
     async fn eml_door_files_the_lawyers_own_message_to_a_non_participant_as_outbound() {
-        let db = store::surreal::test_support::mem().await;
-        let project_id = store::test_support::seed_project_surreal(&db, "eml-door-out").await;
-        let (state, session) = eml_lawyer_state(&db, project_id, "aries@neonlaw.com").await;
+        for from_alias in [false, true] {
+            let db = store::surreal::test_support::mem().await;
+            let project_id = store::test_support::seed_project_surreal(&db, "eml-door-out").await;
+            let (state, session) = eml_lawyer_state(&db, project_id, "aries@neonlaw.com").await;
 
-        // No mailbox in the request: the signed-in lawyer's own address
-        // decides direction, so a saved copy of their sent mail files as
-        // outbound with no Gmail grant.
-        let response = eml_upload_door(
-            State(state),
-            LawyerSession(session),
-            Path(project_id),
-            Json(eml_request(
-                EML_OUTBOUND_TO_OUTSIDER.as_bytes(),
-                None,
-                Some("letter".to_string()),
-                false,
-            )),
-        )
-        .await
-        .expect("the lawyer's sent message files");
+            let raw = if from_alias {
+                EML_OUTBOUND_TO_OUTSIDER.replace("aries@neonlaw.com", "sender-alias@example.test")
+            } else {
+                EML_OUTBOUND_TO_OUTSIDER.to_owned()
+            };
+            let mut request = eml_request(raw.as_bytes(), None, Some("letter".to_string()), false);
+            if from_alias {
+                request.gmail_message_id = Some("sent-alias-123".into());
+                request.gmail_sent = Some(true);
+            }
+            let response = eml_upload_door(
+                State(state),
+                LawyerSession(session),
+                Path(project_id),
+                Json(request),
+            )
+            .await
+            .expect("the lawyer's sent message files");
 
-        assert_eq!(response.status(), StatusCode::CREATED);
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["direction"], "outbound");
-        assert_eq!(json["filed"].as_array().map(Vec::len), Some(1));
-        let filed = store::communications::for_project(&db, project_id)
-            .await
-            .unwrap();
-        assert_eq!(filed.len(), 1);
-        assert_eq!(
-            filed[0].channel,
-            store::communications::channel::EMAIL_OUTBOUND
-        );
-        assert_eq!(
-            store::assets::for_project(&db, project_id)
+            assert_eq!(response.status(), StatusCode::CREATED);
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
                 .await
-                .unwrap()
-                .len(),
-            1,
-            "the PDF files as an Asset"
-        );
+                .unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(json["direction"], "outbound");
+            assert_eq!(json["filed"].as_array().map(Vec::len), Some(1));
+            let filed = store::communications::for_project(&db, project_id)
+                .await
+                .unwrap();
+            assert_eq!(filed.len(), 1);
+            assert_eq!(
+                filed[0].channel,
+                store::communications::channel::EMAIL_OUTBOUND
+            );
+            assert_eq!(
+                store::assets::for_project(&db, project_id)
+                    .await
+                    .unwrap()
+                    .len(),
+                1,
+                "the PDF files as an Asset"
+            );
+        }
     }
 
     #[tokio::test]

@@ -283,8 +283,8 @@ fn hex_digest(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::run_upload;
-    use crate::credentials::{self, Credentials, HostCredential};
     use base64::Engine as _;
+    use cli::credentials::{self, Credentials, HostCredential};
     use std::process::ExitCode;
     use std::sync::LazyLock;
     use wiremock::matchers::{body_json, method, path};

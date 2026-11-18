@@ -39,9 +39,9 @@ fixtures, or duplicate another check. Keep coverage for authorization, isolation
 
 A command that works on a Project's matter (its documents, mail, notations, pages, or glossary terms) belongs in
 `navigator`, the toolchain a Project repository names and Homebrew installs. A command that deploys Navigator or
-configures the Firm (letterheads, social accounts, OAuth clients, secrets) belongs in `hudson`. `hudson preview`,
-`hudson notation`, and `hudson mail` still link the web renderer, Typst, or the store, so they wait in `hudson` until
-their reads go through the site API.
+configures the Firm (letterheads, social accounts, OAuth clients, secrets) belongs in `hudson`. `hudson preview` and
+`hudson notation` still link the web renderer, Typst, or the store, so they wait in `hudson` until their reads go
+through the site API.
 
 ## Find the term first
 

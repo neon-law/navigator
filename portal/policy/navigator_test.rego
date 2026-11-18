@@ -3491,3 +3491,16 @@ test_lawyer_refreshes_matter_envelopes if {
 test_client_cannot_refresh_matter_envelopes if {
     not authz.allow with input as {"path": ["app", "api", "projects", "p1", "envelopes", "refresh"], "method": "POST", "session": client_session}
 }
+
+test_mail_signature_requires_a_lawyer_session if {
+    path := ["app", "api", "mail-signature"]
+    authz.allow with input as {"path": path, "method": "GET", "session": lawyer_session}
+    not authz.allow with input as {"path": path, "method": "GET", "session": clerk_session}
+    not authz.allow with input as {"path": path, "method": "GET", "session": client_session}
+    not authz.allow with input as {"path": path, "method": "GET", "session": null}
+}
+
+test_ci_cannot_read_mail_signatures if {
+    session := object.union(owner_session, {"source": "ci"})
+    not authz.allow with input as {"path": ["app", "api", "mail-signature"], "method": "GET", "session": session}
+}

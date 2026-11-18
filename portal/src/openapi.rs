@@ -770,6 +770,19 @@ fn canonical_document(base: &str) -> Value {
         { "sessionCookie": [] }
       ],
       "paths": {
+        "/app/api/mail-signature": {
+          "get": {
+            "summary": "Read the signed-in lawyer's stored mail signature",
+            "parameters": [{"name": "account", "in": "query", "required": true, "schema": {"type": "string"}}],
+            "responses": {
+              "200": {"description": "The sending account's signature body and revision"},
+              "401": {"description": "Authentication required"},
+              "403": {"description": "Lawyer tier required"},
+              "404": {"description": "Account does not belong to this person, or no signature exists"},
+              "500": {"description": "Signature storage is unavailable"}
+            }
+          }
+        },
         "/app/api/people": {
           "get": {
             "summary": "List people, one keyset page at a time",
@@ -5270,6 +5283,8 @@ fn canonical_document(base: &str) -> Value {
                   "required": ["raw_base64"],
                   "properties": {
                     "raw_base64": { "type": "string", "description": "The raw .eml message, base64-encoded" },
+                    "gmail_message_id": { "type": "string", "description": "Optional Gmail message ID, deduplicated within the source mailbox" },
+                    "gmail_sent": { "type": "boolean", "description": "The Gmail SENT label, used for direction even when the sender uses an alias" },
                     "mailbox": { "type": "string", "description": "The firm mailbox filing the message; matching From marks it outbound" },
                     "kind": {
                       "type": "string",

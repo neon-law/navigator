@@ -3,15 +3,20 @@
 The `cli` crate builds the lean `navigator` command a lawyer's Mac and every Project repository's CI install: Projects,
 their Jujutsu repositories, the offline `validate` gate, and the site session and `seeds/` import those commands use.
 Its rules live in the crate's library, so a host other than the terminal links the same code. It reads the domain types
-through the `model` crate rather than `store` or `cloud`, so it never compiles a database driver or Typst.
+through the `model` crate rather than `store` or `cloud`. Mail signatures are read through the authenticated site API;
+signed-packet inspection shares the PDF helpers.
 
 Two more binaries live beside it. `hudson` (the `deploy` crate) is the operator CLI: the local KIND loop (`dev`),
-production operations (`ops`), and the site, mail, notation, forms, and firm commands; it also carries every `navigator`
+production operations (`ops`), and the site, notation, forms, and firm commands; it also carries every `navigator`
 command. `scorpio` (the `scorpio` crate) is the Ephemeris CLI. Each builds in its own release job, so the `navigator`
 archive never compiles the web client, the cloud SDKs, or the Arrow and Iceberg stack.
 
 The local staging lifecycle (`hudson dev staging`) runs under the `NAVIGATOR_ENVIRONMENT=dev` application profile;
 staging is a lifecycle target, not an application environment.
+
+`navigator mail` searches, reads, drafts, and files matter email. `navigator mail sync --project <code> --host <host>
+--kind letter --watch` files labeled conversations and sent follow-ups without sending email. Gmail client-secret
+provisioning belongs to `hudson ops gmail-client`.
 
 Run `navigator --help` for the current command surface. Use [AGENTS.md](../AGENTS.md) for the local development loop,
 [agent workflows](../docs/agent-workflows.md) for repository work, and [cloud operations](../docs/cloud-operations.md)
