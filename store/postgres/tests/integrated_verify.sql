@@ -2,8 +2,13 @@ LOAD 'age';
 SET search_path = ag_catalog, public;
 DO $$
 BEGIN
-    IF current_setting('server_version_num') <> '160015'
-       OR NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname='age' AND extversion='1.6.0')
+    -- The image digest pins the exact matrix and moves every week with the
+    -- base image's PostgreSQL minor, so this holds only what a weekly refresh
+    -- must not change: the major, and each extension at its image's version.
+    IF current_setting('server_version_num')::int / 10000 <> 16
+       OR NOT EXISTS (
+           SELECT 1 FROM pg_available_extensions WHERE name = 'age' AND installed_version = default_version
+       )
        OR NOT EXISTS (
            SELECT 1 FROM pg_available_extensions WHERE name = 'vector' AND installed_version = default_version
        ) THEN
