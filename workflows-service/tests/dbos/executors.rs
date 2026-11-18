@@ -18,6 +18,52 @@ use workflows::{CapturingNotifier, Notifier, NotifyError};
 
 use crate::support::{database, TestDatabase, APP_VERSION, DEADLINE};
 
+#[tokio::test]
+async fn worker_refuses_launch_before_scope_activation() {
+    let Some(database) = database().await else {
+        return;
+    };
+    let postgres = database.store().await;
+    let result = Box::pin(tokio::time::timeout(
+        DEADLINE,
+        store::postgres::PostgresDb::with_test_db(
+            postgres.clone(),
+            workflows_service::host::run(std::future::pending()),
+        ),
+    ))
+    .await
+    .expect("missing activation must fail before worker startup");
+    let error = result.expect_err("an unactivated PostgreSQL fixture cannot launch a worker");
+    assert!(matches!(
+        error.downcast_ref::<store::postgres_backfill::family::FamilyError>(),
+        Some(store::postgres_backfill::family::FamilyError::NotActive)
+    ));
+
+    let name: String = sqlx::query_scalar("SELECT current_database()::text")
+        .fetch_one(&database.pool)
+        .await
+        .unwrap();
+    let admin_database =
+        std::env::var("NAVIGATOR_TEST_POSTGRES_DATABASE").unwrap_or_else(|_| "smoke".into());
+    let admin = sqlx::PgPool::connect_with(
+        database
+            .pool
+            .connect_options()
+            .as_ref()
+            .clone()
+            .database(&admin_database),
+    )
+    .await
+    .unwrap();
+    postgres.pool().close().await;
+    database.pool.close().await;
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP DATABASE {name}")))
+        .execute(&admin)
+        .await
+        .unwrap();
+    admin.close().await;
+}
+
 fn beat_instant() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 10, 13, 12, 0, 1).unwrap()
 }
