@@ -16,6 +16,7 @@ use serde::Serialize;
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::postgres::review as authority;
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 
 /// The table these rows live in.
@@ -86,6 +87,35 @@ impl ReviewDocumentRow {
     }
 }
 
+/// The row as PostgreSQL's `to_jsonb` serves it, under the `postgres::review`
+/// authority.
+#[derive(serde::Deserialize)]
+struct PgReviewDocumentRow {
+    id: Uuid,
+    notation_id: Uuid,
+    kind: String,
+    title: String,
+    body_html: String,
+    status: String,
+    inserted_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+impl From<PgReviewDocumentRow> for ReviewDocument {
+    fn from(row: PgReviewDocumentRow) -> Self {
+        ReviewDocument {
+            id: row.id,
+            notation_id: row.notation_id,
+            kind: row.kind,
+            title: row.title,
+            body_html: row.body_html,
+            status: row.status,
+            inserted_at: row.inserted_at,
+            updated_at: row.updated_at,
+        }
+    }
+}
+
 /// The projection every read shares, so one field list describes the row
 /// and a new column cannot reach [`ReviewDocumentRow`] from only one query.
 const SELECT: &str = "id, notation_id, kind, title, body_html, status, inserted_at, updated_at";
@@ -111,6 +141,9 @@ pub enum ReviewDocumentError {
     Db(#[from] surrealdb::Error),
     #[error("notation: {0}")]
     Notation(#[from] crate::notations::NotationError),
+    /// PostgreSQL, under the review authority, failed.
+    #[error(transparent)]
+    Postgres(#[from] authority::ReviewAuthorityError),
     /// A write reported success but returned no row, or returned one this
     /// module could not read back.
     #[error("writing a review document returned no usable row")]
@@ -179,6 +212,24 @@ pub async fn create(
     db: &SurrealDb,
     new: &NewReviewDocument<'_>,
 ) -> Result<Uuid, ReviewDocumentError> {
+    if let Some(pg) = authority::authority().await? {
+        let row = serde_json::json!({
+            "id": Uuid::now_v7(), "notation_id": new.notation_id,
+            "kind": new.kind, "title": new.title,
+            "body_html": new.body_html, "status": STATUS_DRAFT,
+        });
+        let query = sqlx::query(
+            "INSERT INTO review_document SELECT * FROM \
+             jsonb_populate_record(NULL::review_document, \
+             $1 || jsonb_build_object('inserted_at', now(), 'updated_at', now())) \
+             RETURNING review_document.id",
+        )
+        .bind(row);
+        let id: Uuid = authority::maybe_scalar(&pg, query)
+            .await?
+            .ok_or(ReviewDocumentError::WriteReturnedNothing)?;
+        return Ok(id);
+    }
     let id = Uuid::now_v7();
     let mut response = db
         .query(format!(
@@ -214,6 +265,17 @@ pub async fn find_by_notation_kind(
     notation_id: Uuid,
     kind: &str,
 ) -> Result<Option<ReviewDocument>, ReviewDocumentError> {
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "SELECT to_jsonb(review_document) AS row FROM review_document \
+             WHERE notation_id = $1 AND kind = $2 LIMIT 1",
+        )
+        .bind(notation_id)
+        .bind(kind);
+        return Ok(authority::maybe::<PgReviewDocumentRow>(&pg, query)
+            .await?
+            .map(Into::into));
+    }
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE notation_id = $notation AND kind = $kind LIMIT 1"
@@ -262,6 +324,21 @@ pub async fn upsert_draft(
         }
         match create(db, new).await {
             Ok(id) => return Ok(id),
+            Err(ReviewDocumentError::Postgres(error))
+                if error.violates("review_document_notation_kind") =>
+            {
+                if remaining == 0 {
+                    // One more read: the winner's row is there now.
+                    if let Some(existing) =
+                        find_by_notation_kind(db, new.notation_id, new.kind).await?
+                    {
+                        return Ok(existing.id);
+                    }
+                    return Err(ReviewDocumentError::Postgres(error));
+                }
+                tokio::time::sleep(rand::random_range(std::time::Duration::ZERO..=backoff)).await;
+                backoff *= 2;
+            }
             Err(ReviewDocumentError::Db(error)) if is_notation_kind_conflict(&error) => {
                 if remaining == 0 {
                     // One more read: the winner's row is there now.
@@ -287,6 +364,19 @@ async fn update_content(
     title: &str,
     body_html: &str,
 ) -> Result<(), ReviewDocumentError> {
+    if let Some(pg) = authority::authority().await? {
+        sqlx::query(
+            "UPDATE review_document SET title = $2, body_html = $3, updated_at = now() \
+             WHERE id = $1",
+        )
+        .bind(id)
+        .bind(title)
+        .bind(body_html)
+        .execute(pg.pool())
+        .await
+        .map_err(authority::ReviewAuthorityError::from)?;
+        return Ok(());
+    }
     writing(|| {
         db.query(format!(
             "UPDATE $id SET title = $title, body_html = $body_html, updated_at = time::now() \
@@ -309,6 +399,15 @@ pub async fn by_id(
     db: &SurrealDb,
     id: Uuid,
 ) -> Result<Option<ReviewDocument>, ReviewDocumentError> {
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "SELECT to_jsonb(review_document) AS row FROM review_document WHERE id = $1",
+        )
+        .bind(id);
+        return Ok(authority::maybe::<PgReviewDocumentRow>(&pg, query)
+            .await?
+            .map(Into::into));
+    }
     let response = db
         .query(format!("SELECT {SELECT} FROM ONLY $id LIMIT 1"))
         .bind(("id", record_id(TABLE, id)))
@@ -326,6 +425,18 @@ pub async fn for_notation(
     db: &SurrealDb,
     notation_id: Uuid,
 ) -> Result<Vec<ReviewDocument>, ReviewDocumentError> {
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "SELECT to_jsonb(review_document) AS row FROM review_document \
+             WHERE notation_id = $1 ORDER BY id ASC",
+        )
+        .bind(notation_id);
+        return Ok(authority::rows::<PgReviewDocumentRow>(&pg, query)
+            .await?
+            .into_iter()
+            .map(Into::into)
+            .collect());
+    }
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE notation_id = $notation ORDER BY id ASC"
@@ -371,6 +482,16 @@ pub async fn notations_with_drafts(
     if notation_ids.is_empty() {
         return Ok(std::collections::HashSet::new());
     }
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "SELECT DISTINCT notation_id FROM review_document WHERE notation_id = ANY($1)",
+        )
+        .bind(notation_ids.to_vec());
+        return Ok(authority::scalars::<Uuid>(&pg, query)
+            .await?
+            .into_iter()
+            .collect());
+    }
     let keys: Vec<surrealdb::types::RecordId> = notation_ids
         .iter()
         .map(|id| record_id(crate::notations::TABLE, *id))
@@ -412,6 +533,19 @@ pub async fn client_visible_for_project(
     if notation_ids.is_empty() {
         return Ok(Vec::new());
     }
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "SELECT to_jsonb(review_document) AS row FROM review_document \
+             WHERE notation_id = ANY($1) AND status <> $2 ORDER BY id ASC",
+        )
+        .bind(notation_ids.clone())
+        .bind(STATUS_DRAFT);
+        return Ok(authority::rows::<PgReviewDocumentRow>(&pg, query)
+            .await?
+            .into_iter()
+            .map(Into::into)
+            .collect());
+    }
     let keys: Vec<surrealdb::types::RecordId> = notation_ids
         .iter()
         .map(|id| record_id(crate::notations::TABLE, *id))
@@ -440,6 +574,17 @@ pub async fn set_status(
     id: Uuid,
     status: &str,
 ) -> Result<Option<ReviewDocument>, ReviewDocumentError> {
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "UPDATE review_document SET status = $2, updated_at = now() WHERE id = $1 \
+             RETURNING to_jsonb(review_document) AS row",
+        )
+        .bind(id)
+        .bind(status);
+        return Ok(authority::maybe::<PgReviewDocumentRow>(&pg, query)
+            .await?
+            .map(Into::into));
+    }
     let mut response = writing(|| {
         db.query(format!(
             "UPDATE $id SET status = $status, updated_at = time::now() RETURN {SELECT}"
