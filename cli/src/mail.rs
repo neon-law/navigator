@@ -1399,7 +1399,10 @@ fn is_gmail_id(id: &str) -> bool {
 }
 
 /// The Communication request body for one filed message. Pure, so the Gmail
-/// and .eml paths cannot drift apart.
+/// and .eml paths cannot drift apart. `sent` is Gmail's `SENT` label, the
+/// direction the `mail/eml` door also honors: a message the mailbox sent from
+/// a verified send-as alias carries it even though `From` names the alias.
+#[allow(clippy::too_many_arguments)]
 fn communication_request(
     mailbox: &str,
     from: &str,
@@ -1408,13 +1411,15 @@ fn communication_request(
     at: &str,
     body: &str,
     message_id: &str,
+    sent: bool,
 ) -> serde_json::Value {
-    let direction =
-        if email_from_address(from).as_deref() == Some(mailbox.to_ascii_lowercase().as_str()) {
-            "outbound"
-        } else {
-            "inbound"
-        };
+    let direction = if sent
+        || email_from_address(from).as_deref() == Some(mailbox.to_ascii_lowercase().as_str())
+    {
+        "outbound"
+    } else {
+        "inbound"
+    };
     let counterparty = if direction == "inbound" { from } else { to };
     json!({
         "channel": if direction == "inbound" { "email_inbound" } else { "email_outbound" },
@@ -3276,6 +3281,7 @@ async fn file_message(target: &FileTarget<'_>, message: &GmailMessage, body: &st
         &now_or_message_date(message)?,
         body,
         &message.id,
+        message.label_ids.iter().any(|label| label == "SENT"),
     );
     post_communication(target, &request).await
 }
@@ -3673,6 +3679,7 @@ MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n\
             "2026-10-30T14:03:00+00:00",
             "Can I sign electronically?",
             "<abc-123@example.test>",
+            false,
         );
         assert_eq!(inbound["channel"], "email_inbound");
         assert_eq!(inbound["direction"], "inbound");
@@ -3690,10 +3697,32 @@ MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n\
             "2026-10-30T14:03:00+00:00",
             "Draft is ready for your review.",
             "18fa3bc2d4e5f6a7",
+            false,
         );
         assert_eq!(outbound["channel"], "email_outbound");
         assert_eq!(outbound["direction"], "outbound");
         assert_eq!(outbound["counterparty"], "client@example.test");
+    }
+
+    #[test]
+    fn a_sent_message_from_a_send_as_alias_files_outbound() {
+        let sent = communication_request(
+            "lawyer@neonlaw.test",
+            "Lawyer <lawyer@firm-alias.test>",
+            "client@example.test",
+            Some("RE: Engagement"),
+            "2026-11-18T17:35:45+00:00",
+            "Here is what I need.",
+            "18fa3bc2d4e5f6a8",
+            true,
+        );
+        assert_eq!(sent["channel"], "email_outbound");
+        assert_eq!(sent["direction"], "outbound");
+        assert_eq!(sent["counterparty"], "client@example.test");
+        assert_eq!(
+            sent["source_ref"],
+            "gmail:lawyer@neonlaw.test:18fa3bc2d4e5f6a8"
+        );
     }
 
     #[test]
