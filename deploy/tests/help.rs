@@ -963,6 +963,7 @@ fn ops_help_lists_operator_members() {
             "secrets",
             "ship",
             "surreal-archive",
+            "surreal-free-tests",
             "help",
         ]
     );
