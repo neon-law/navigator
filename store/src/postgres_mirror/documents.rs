@@ -1,14 +1,11 @@
 //! Asset rows in the PostgreSQL mirror: document assets and bare content
 //! assets alike.
 //!
-//! PostgreSQL owns onboarding Assets. The mirror preserves existing onboarding
-//! rows and imports missing ones only during the initial copy. Imported
-//! metadata carries no provider-verification stamp.
-//!
-//! The same contract as the tenancy mirror: SurrealDB is read back after its
-//! write, and PostgreSQL's copy is upserted or deleted to match. Each row
-//! keeps its Surreal record UUID as its PostgreSQL `id`, so a revision chain
-//! (`project_id`, `slug`, newest id first) reads the same in both stores.
+//! Existing PostgreSQL rows are preserved. The frozen scoped import inserts
+//! source-only identities and compares all columns against the native union.
+//! Independently verified onboarding metadata may retain its native visibility,
+//! timestamp, and verification marker; unexplained differences block activation.
+//! Completed enrollment refuses legacy imports before reading Source rows.
 //!
 //! The row is read raw rather than through [`crate::assets::Asset`]: the
 //! JSON columns (`metadata`, `derived_from`, `signing`, `notarization`,
@@ -34,12 +31,12 @@ use sqlx::Row;
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
-use super::tenancy::{compare, remirror, select_sql, source, target, upsert_sql};
+use super::tenancy::{compare, remirror, select_sql, source, target};
 use super::{changed, identity, micros, MirrorError, MirrorKey, Mirrored, ParityReport};
 use crate::postgres::PostgresDb;
 use crate::surreal::{record_id, record_uuid, SurrealDb};
 
-const ASSET_COLUMNS: &[&str] = &[
+pub(super) const ASSET_COLUMNS: &[&str] = &[
     "id",
     "storage_key",
     "secondary_storage_key",
@@ -76,7 +73,16 @@ const ASSET_COLUMNS: &[&str] = &[
     "updated_at",
 ];
 
-static ASSET_UPSERT: LazyLock<String> = LazyLock::new(|| upsert_sql("asset", ASSET_COLUMNS));
+static ASSET_INSERT: LazyLock<String> = LazyLock::new(|| {
+    let values = (1..=ASSET_COLUMNS.len())
+        .map(|index| format!("${index}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "INSERT INTO asset ({}) VALUES ({values}) ON CONFLICT (id) DO NOTHING",
+        ASSET_COLUMNS.join(", ")
+    )
+});
 static ASSET_SELECT: LazyLock<String> = LazyLock::new(|| select_sql("asset", ASSET_COLUMNS));
 static COMPAT_ASSET_SELECT: LazyLock<String> = LazyLock::new(|| {
     format!(
@@ -91,11 +97,18 @@ const ASSET_SOURCE_FIELDS: &str = "id, storage_key, secondary_storage_key, conte
     visibility, slug, published_at, source_message_id, source_sender, source_received_at, \
     source_subject, metadata, derived_from, transcript_quality, signing, notarization, evidence, \
     folder, deleted_at, purge_after, deleted_by_person_id, deleted_commit_sha, legal_hold_at, purged_at, \
-    inserted_at, updated_at";
+    inserted_at, updated_at, metadata IS NONE AS metadata_is_none, \
+    derived_from IS NONE AS derived_from_is_none, signing IS NONE AS signing_is_none, \
+    notarization IS NONE AS notarization_is_none, evidence IS NONE AS evidence_is_none";
 
 /// The asset row as SurrealDB stores it.
 #[derive(SurrealValue)]
 struct AssetSource {
+    metadata_is_none: bool,
+    derived_from_is_none: bool,
+    signing_is_none: bool,
+    notarization_is_none: bool,
+    evidence_is_none: bool,
     id: surrealdb::types::RecordId,
     storage_key: String,
     secondary_storage_key: Option<String>,
@@ -182,9 +195,10 @@ fn instant(at: Option<surrealdb::types::Datetime>) -> Option<DateTime<Utc>> {
     at.map(|at| micros(at.into()))
 }
 
-/// A JSON column whose value is JSON `null` reads as absent in both stores.
-fn json(value: Option<Json>) -> Option<Json> {
-    value.filter(|value| !value.is_null())
+/// Surreal's typed optional projection collapses NULL and NONE; the raw
+/// presence projection keeps explicit caller JSON null distinct from absence.
+fn source_json(value: Option<Json>, absent: bool) -> Option<Json> {
+    (!absent).then(|| value.unwrap_or(Json::Null))
 }
 
 impl AssetImage {
@@ -209,12 +223,12 @@ impl AssetImage {
             source_sender: row.source_sender,
             source_received_at: row.source_received_at,
             source_subject: row.source_subject,
-            metadata: json(row.metadata),
-            derived_from: json(row.derived_from),
+            metadata: source_json(row.metadata, row.metadata_is_none),
+            derived_from: source_json(row.derived_from, row.derived_from_is_none),
             transcript_quality: row.transcript_quality,
-            signing: json(row.signing),
-            notarization: json(row.notarization),
-            evidence: json(row.evidence),
+            signing: source_json(row.signing, row.signing_is_none),
+            notarization: source_json(row.notarization, row.notarization_is_none),
+            evidence: source_json(row.evidence, row.evidence_is_none),
             folder: row.folder,
             deleted_at: instant(row.deleted_at),
             purge_after: instant(row.purge_after),
@@ -230,7 +244,7 @@ impl AssetImage {
     fn from_row(row: &sqlx::postgres::PgRow) -> Result<Self, sqlx::Error> {
         let jsonb = |column: &str| -> Result<Option<Json>, sqlx::Error> {
             let value: Option<Jsonb<Json>> = row.try_get(column)?;
-            Ok(json(value.map(|value| value.0)))
+            Ok(value.map(|value| value.0))
         };
         Ok(Self {
             id: row.try_get("id")?,
@@ -307,47 +321,46 @@ pub(super) async fn mirror(
         // `super::mirror` routes only asset keys here.
         return Err(MirrorError::Source);
     };
-    let authoritative: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM asset WHERE id=$1 AND kind='onboarding')")
-            .bind(id)
-            .fetch_one(pg.pool())
-            .await?;
-    if authoritative {
+    use crate::postgres_backfill::family::{self, ImportMode};
+    let mode = family::import_mode(pg, "asset").await?;
+    if mode == ImportMode::Refuse {
+        return Err(MirrorError::MatterAuthority);
+    }
+    let row = source_asset(surreal, *id)
+        .await?
+        .ok_or(MirrorError::Source)?;
+    let held: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM asset WHERE id=$1)")
+        .bind(id)
+        .fetch_one(pg.pool())
+        .await?;
+    if held {
         return Ok(Mirrored::Unchanged);
     }
-    let Some(row) = source_asset(surreal, *id).await? else {
-        let deleted = sqlx::query("DELETE FROM asset WHERE id = $1")
-            .bind(id)
-            .execute(&pg.0)
-            .await?;
-        return Ok(changed(deleted.rows_affected(), Mirrored::Deleted));
-    };
     let mut image = AssetImage::from_source(row)?;
     if image.kind.as_deref() == Some("onboarding") {
-        if !super::initial_copy() {
-            return Ok(Mirrored::Unchanged);
-        }
         if let Some(metadata) = image.metadata.as_mut().and_then(Json::as_object_mut) {
             metadata.remove(crate::assets::VERIFIED_ONBOARDING_ENVELOPE_KEY);
         }
     }
-    if let Some(project) = image.project_id {
-        let held: bool = sqlx::query_scalar(PROJECT_PRESENT)
-            .bind(project)
-            .fetch_one(&pg.0)
-            .await?;
-        if !held {
-            super::tenancy::mirror(surreal, pg, &MirrorKey::Project(project)).await?;
+    if mode == ImportMode::InsertMissing {
+        if let Some(project) = image.project_id {
+            let held: bool = sqlx::query_scalar(PROJECT_PRESENT)
+                .bind(project)
+                .fetch_one(&pg.0)
+                .await?;
+            if !held {
+                super::tenancy::mirror(surreal, pg, &MirrorKey::Project(project)).await?;
+            }
         }
-    }
-    if let Some(person) = image.deleted_by_person_id {
-        identity::ensure(surreal, pg, MirrorKey::Person(person)).await?;
+        if let Some(person) = image.deleted_by_person_id {
+            identity::ensure(surreal, pg, MirrorKey::Person(person)).await?;
+        }
     }
     upsert_asset(pg, &image).await
 }
 
 async fn upsert_asset(pg: &PostgresDb, asset: &AssetImage) -> Result<Mirrored, MirrorError> {
-    let written = sqlx::query(ASSET_UPSERT.as_str())
+    let written = sqlx::query(ASSET_INSERT.as_str())
         .bind(asset.id)
         .bind(&asset.storage_key)
         .bind(&asset.secondary_storage_key)
@@ -393,6 +406,15 @@ async fn upsert_asset(pg: &PostgresDb, asset: &AssetImage) -> Result<Mirrored, M
 ///
 /// Either store could not be read.
 pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
+    if crate::postgres_backfill::family::active_for_table(pg, "asset").await? {
+        return Ok(ParityReport { tables: Vec::new() });
+    }
+    if crate::postgres_backfill::family::importing("asset") {
+        let (table, _) = scoped_parity(surreal, pg).await?;
+        return Ok(ParityReport {
+            tables: vec![table],
+        });
+    }
     let mut assets: BTreeMap<MirrorKey, Option<AssetImage>> = BTreeMap::new();
     for row in source_assets(surreal).await? {
         // A record whose key is not a native UUID has no PostgreSQL identity.
@@ -417,6 +439,245 @@ pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport
     Ok(ParityReport { tables })
 }
 
+/// Full Asset union accounting for the scoped handoff. PostgreSQL-only rows
+/// are accepted only with independent native onboarding evidence.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct AssetUnionProof {
+    pub source_only_remaining: usize,
+    pub compared_overlaps: usize,
+    pub resolved_native_overlaps: usize,
+    pub unresolved_overlaps: usize,
+    pub proven_native_target_only: usize,
+    pub unknown_target_only: usize,
+    pub full_metadata_compared: bool,
+}
+
+async fn native_onboarding(pg: &PostgresDb, row: &AssetImage) -> Result<bool, MirrorError> {
+    if row.kind.as_deref() != Some("onboarding") {
+        return Ok(false);
+    }
+    let Some(project) = row.project_id else {
+        return Ok(false);
+    };
+    let Some(envelope) = crate::assets::verified_onboarding_envelope(row.metadata.as_ref()) else {
+        return Ok(false);
+    };
+    let parents: std::collections::BTreeSet<_> = [
+        Some(row.storage_key.as_str()),
+        row.secondary_storage_key.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(crate::postgres::assets::notation_parent)
+    .collect();
+    // A receipt that names only the Project cannot prove a Note-scoped Asset.
+    // Each scoped key must resolve to the completed envelope on that same Note.
+    if !parents.is_empty() {
+        for notation in parents {
+            let proven: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM signature s JOIN notation n ON n.id=s.notation_id \
+                 JOIN template t ON t.id=n.template_id JOIN project p ON p.id=n.project_id \
+                 WHERE n.id=$1 AND n.project_id=$2 AND t.kind='onboarding' \
+                 AND s.provider='docusign' AND s.provider_id=$3 AND s.state='completed' \
+                 AND s.signed_at IS NOT NULL)",
+            )
+            .bind(notation)
+            .bind(project)
+            .bind(envelope.to_string())
+            .fetch_one(pg.pool())
+            .await?;
+            if !proven {
+                return Ok(false);
+            }
+        }
+        return Ok(true);
+    }
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM signature s JOIN notation n ON n.id=s.notation_id \
+         JOIN template t ON t.id=n.template_id JOIN project p ON p.id=n.project_id \
+         WHERE n.project_id=$1 AND t.kind='onboarding' AND s.provider='docusign' \
+         AND s.provider_id=$2 AND s.state='completed' AND s.signed_at IS NOT NULL) \
+         OR EXISTS(SELECT 1 FROM docusign_completion c JOIN project p ON p.id=c.project_id \
+         WHERE c.project_id=$1 AND c.envelope_id=$3 AND c.status='filed' AND c.firm_id=p.firm_id)",
+    )
+    .bind(project)
+    .bind(envelope.to_string())
+    .bind(envelope)
+    .fetch_one(pg.pool())
+    .await?)
+}
+
+fn resolved_native_difference(source: &AssetImage, target: &AssetImage) -> bool {
+    let mut retained = target.clone();
+    retained.visibility.clone_from(&source.visibility);
+    retained.updated_at = source.updated_at;
+    if let Some(metadata) = retained.metadata.as_mut().and_then(Json::as_object_mut) {
+        metadata.remove(crate::assets::VERIFIED_ONBOARDING_ENVELOPE_KEY);
+    }
+    // Source verification markers are never trusted or imported.
+    let mut source = source.clone();
+    if let Some(metadata) = source.metadata.as_mut().and_then(Json::as_object_mut) {
+        metadata.remove(crate::assets::VERIFIED_ONBOARDING_ENVELOPE_KEY);
+    }
+    retained == source
+}
+
+async fn compare_union(
+    pg: &PostgresDb,
+    source: BTreeMap<Uuid, AssetImage>,
+    target: BTreeMap<Uuid, AssetImage>,
+) -> Result<(super::TableParity, AssetUnionProof), MirrorError> {
+    let mut proof = AssetUnionProof {
+        full_metadata_compared: true,
+        ..Default::default()
+    };
+    let mut divergent = Vec::new();
+    for (id, row) in &source {
+        match target.get(id) {
+            None => {
+                proof.source_only_remaining += 1;
+                divergent.push(MirrorKey::Asset(*id));
+            }
+            Some(held) => {
+                proof.compared_overlaps += 1;
+                if row != held {
+                    if resolved_native_difference(row, held) && native_onboarding(pg, held).await? {
+                        proof.resolved_native_overlaps += 1;
+                    } else {
+                        proof.unresolved_overlaps += 1;
+                        divergent.push(MirrorKey::Asset(*id));
+                    }
+                }
+            }
+        }
+    }
+    for (id, row) in &target {
+        if !source.contains_key(id) {
+            if native_onboarding(pg, row).await? {
+                proof.proven_native_target_only += 1;
+            } else {
+                proof.unknown_target_only += 1;
+                divergent.push(MirrorKey::Asset(*id));
+            }
+        }
+    }
+    divergent.sort();
+    Ok((
+        super::TableParity {
+            table: "asset",
+            source_rows: source.len(),
+            target_rows: target.len(),
+            divergent,
+        },
+        proof,
+    ))
+}
+
+/// Asset references share the existing preservation proof without enrolling
+/// Asset in the generic row writer, which cannot apply its native union policy.
+pub(crate) const REFERENCES: &[(&str, &str)] = &[
+    ("project_id", "project"),
+    ("deleted_by_person_id", "person"),
+    ("storage_key", "notation"),
+    ("secondary_storage_key", "notation"),
+];
+
+pub(crate) async fn scoped_references(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+) -> Result<Vec<super::records::UnresolvedReference>, MirrorError> {
+    let mut source_parents = BTreeMap::new();
+    let mut target_parents = BTreeMap::new();
+    for parent in ["project", "person", "notation"] {
+        let source =
+            super::select_table(surreal, parent, format!("SELECT VALUE id FROM `{parent}`"))
+                .await?;
+        let source = source
+            .iter()
+            .map(|id| {
+                // Decode the RecordId itself rather than trusting a printable key.
+                let surrealdb::types::Value::RecordId(id) = id else {
+                    return Err(MirrorError::Source);
+                };
+                record_uuid(id).ok_or(MirrorError::Source)
+            })
+            .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
+        source_parents.insert(parent, source);
+        let target: Vec<Uuid> =
+            sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT id FROM {parent}")))
+                .fetch_all(pg.pool())
+                .await?;
+        target_parents.insert(
+            parent,
+            target
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>(),
+        );
+    }
+    let mut counts: BTreeMap<&str, super::records::UnresolvedReference> = BTreeMap::new();
+    for row in source_assets(surreal).await? {
+        let row = AssetImage::from_source(row)?;
+        for (field, parent, id) in [
+            ("project_id", "project", row.project_id),
+            ("deleted_by_person_id", "person", row.deleted_by_person_id),
+            (
+                "storage_key",
+                "notation",
+                crate::postgres::assets::notation_parent(&row.storage_key),
+            ),
+            (
+                "secondary_storage_key",
+                "notation",
+                row.secondary_storage_key
+                    .as_deref()
+                    .and_then(crate::postgres::assets::notation_parent),
+            ),
+        ] {
+            let Some(id) = id else { continue };
+            let source_has = source_parents[parent].contains(&id);
+            let target_has = target_parents[parent].contains(&id);
+            if !source_has || !target_has {
+                counts
+                    .entry(field)
+                    .or_insert(super::records::UnresolvedReference {
+                        table: "asset",
+                        field,
+                        source_orphans: 0,
+                        postgres_missing: 0,
+                        newly_target_missing: 0,
+                    })
+                    .observe(source_has, target_has);
+            }
+        }
+    }
+    Ok(counts.into_values().collect())
+}
+
+/// Compare the complete frozen Source against the preserved native Asset union.
+/// Malformed identities and decoding errors fail the handoff rather than vanish.
+pub(crate) async fn scoped_parity(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+) -> Result<(super::TableParity, AssetUnionProof), MirrorError> {
+    let mut images = BTreeMap::new();
+    for row in source_assets(surreal).await? {
+        let row = AssetImage::from_source(row)?;
+        if images.insert(row.id, row).is_some() {
+            return Err(MirrorError::Source);
+        }
+    }
+    let targets = sqlx::query(ASSET_SELECT.as_str())
+        .fetch_all(pg.pool())
+        .await?
+        .iter()
+        .map(AssetImage::from_row)
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .map(|row| (row.id, row))
+        .collect();
+    compare_union(pg, images, targets).await
+}
+
 /// Re-mirror every divergent asset row from SurrealDB, then compare again.
 /// A row that fails both passes stays in the returned report.
 ///
@@ -432,3 +693,7 @@ pub async fn reconcile(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityRep
 #[cfg(test)]
 #[path = "documents_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "asset_union_tests.rs"]
+mod union_tests;

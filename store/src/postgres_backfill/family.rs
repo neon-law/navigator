@@ -9,13 +9,15 @@ use uuid::Uuid;
 pub enum Family {
     /// Independent matter, review, credential, and publication satellites.
     Satellites,
+    /// Notation writers and their canonical document and Asset protection facts.
+    Notation,
 }
 
 impl Family {
     /// Every registered family required before application readiness or workflow effects.
     #[must_use]
     pub const fn all() -> &'static [Self] {
-        &[Self::Satellites]
+        &[Self::Satellites, Self::Notation]
     }
 
     /// The immutable version of this family's import contract.
@@ -23,6 +25,7 @@ impl Family {
     pub const fn scope(self) -> &'static str {
         match self {
             Self::Satellites => "satellites:1",
+            Self::Notation => "notation:1",
         }
     }
 
@@ -44,6 +47,16 @@ impl Family {
                 "project_module",
                 "social_oauth_attempt",
                 "testimonial",
+            ],
+            Self::Notation => &[
+                "notation",
+                "answer",
+                "notation_event",
+                "notation_clause",
+                "notation_source",
+                "asset",
+                "notation_document",
+                "notation_document_version",
             ],
         }
     }

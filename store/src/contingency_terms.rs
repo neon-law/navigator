@@ -140,6 +140,12 @@ pub async fn record(
     if !crate::firm_side::is_firm_side(pg, author_person_id, project_id).await? {
         return Err(ContingencyTermError::NotFirmSide);
     }
+    crate::postgres_backfill::family::require_scope(
+        pg,
+        crate::postgres_backfill::family::Family::Notation,
+    )
+    .await
+    .map_err(|error| sqlx::Error::Configuration(Box::new(error)))?;
     let mut tx = pg.0.begin().await?;
     let on_matter: bool =
         sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM notation WHERE id=$1 AND project_id=$2)")
@@ -384,6 +390,11 @@ pub(crate) mod tests {
 
         /// A Notation on `project_id`, as its PostgreSQL mirror row.
         pub(crate) async fn fee_agreement(pg: &PostgresDb, m: &Matter) -> Uuid {
+            crate::postgres::fixtures::activate_family(
+                pg,
+                crate::postgres_backfill::family::Family::Notation,
+            )
+            .await;
             let template: Uuid = sqlx::query_scalar(
                 "INSERT INTO template (id,code,title,respondent_type,is_current,inserted_at,updated_at) \
                  VALUES ($1,'synthetic-fee-agreement','Synthetic Fee Agreement','person',false,now(),now()) \

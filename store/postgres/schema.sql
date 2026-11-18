@@ -4942,6 +4942,14 @@ CREATE INDEX verification_citation
 -- Migration: 20261117160000_signature_notation_reference.sql
 ALTER TABLE signature ADD CONSTRAINT signature_notation_id_fkey FOREIGN KEY (notation_id) REFERENCES notation(id) NOT VALID;
 
+-- Migration: 20261117170000_notation_document_authority.sql
+-- Canonical writers serialize with reset through the Notation parent.
+-- Imported historical orphans remain representable; physical reference
+-- validation follows the scoped import's reference proof.
+CREATE UNIQUE INDEX notation_document_notation ON notation_document (notation_id);
+CREATE INDEX notation_document_version_document
+    ON notation_document_version (document_id, inserted_at, id);
+
 -- Migration: 20261117190000_add_satellite_authority_constraints.sql
 -- Preserve source uniqueness at the PostgreSQL command boundary. Historical
 -- record links remain importable without requiring their parent to exist.

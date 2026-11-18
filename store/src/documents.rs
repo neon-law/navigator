@@ -1343,10 +1343,20 @@ async fn ingest_bytes_as_inner(
     asset_id: Option<Uuid>,
     bytes: &[u8],
 ) -> Result<IngestedDocument, IngestError> {
+    if !rules::kind::Kind::parse(args.kind).is_some_and(|k| k.valid_for(rules::kind::Lane::Asset)) {
+        return Err(IngestError::InvalidKind(args.kind.to_string()));
+    }
+    crate::document_pointers::MatterFolder::parse_checked_folder(identity.folder)?;
+    let pg = crate::postgres::matter::authority_for("asset")
+        .await
+        .map_err(crate::assets::AssetError::from)?;
     if args.kind == "onboarding" {
-        let pg = PostgresDb::from_env()
-            .await
-            .map_err(|error| crate::assets::AssetError::Postgres(error.to_string()))?;
+        let pg = match pg {
+            Some(pg) => pg,
+            None => PostgresDb::from_env()
+                .await
+                .map_err(|error| crate::assets::AssetError::Postgres(error.to_string()))?,
+        };
         let filed = Box::pin(crate::onboarding::file_document(
             &pg, storage, args, identity, None, bytes,
         ))
@@ -1374,13 +1384,12 @@ async fn ingest_bytes_as_inner(
             }
         };
     }
-    if !rules::kind::Kind::parse(args.kind).is_some_and(|k| k.valid_for(rules::kind::Lane::Asset)) {
-        return Err(IngestError::InvalidKind(args.kind.to_string()));
+    if let Some(pg) = pg {
+        return crate::postgres::assets::ingest_document(
+            &pg, storage, args, identity, provenance, asset_id, bytes,
+        )
+        .await;
     }
-    // LAW-241: a folder that is not one of the Firm's matter folders is
-    // refused before anything is stored — validation runs before the
-    // storage write, so a refused ingest leaves no bytes and no row.
-    crate::document_pointers::MatterFolder::parse_checked_folder(identity.folder)?;
 
     let sha_hex = sha256_hex(bytes);
     let byte_size = i64::try_from(bytes.len()).unwrap_or(i64::MAX);

@@ -27,11 +27,14 @@ use crate::postgres::PostgresDb;
 
 /// The tables whose owning module dispatches here.
 pub(crate) const TABLES: &[&str] = &[
+    "asset",
     "notation",
     "answer",
     "notation_event",
     "notation_clause",
     "notation_source",
+    "notation_document",
+    "notation_document_version",
     "cap_table_holding",
     "estate_asset",
     "expunge_record",
@@ -462,6 +465,26 @@ pub(crate) async fn upsert_on<'e, T: DeserializeOwned>(
     table: &str,
     row: Value,
 ) -> Result<T, MatterAuthorityError> {
+    write_record_on(executor, table, row, false)
+        .await?
+        .ok_or_else(|| sqlx::Error::RowNotFound.into())
+}
+
+/// Insert an immutable identity without replacing a concurrent existing row.
+pub(crate) async fn insert_on<'e, T: DeserializeOwned>(
+    executor: impl sqlx::PgExecutor<'e>,
+    table: &str,
+    row: Value,
+) -> Result<Option<T>, MatterAuthorityError> {
+    write_record_on(executor, table, row, true).await
+}
+
+async fn write_record_on<'e, T: DeserializeOwned>(
+    executor: impl sqlx::PgExecutor<'e>,
+    table: &str,
+    row: Value,
+    preserve_existing: bool,
+) -> Result<Option<T>, MatterAuthorityError> {
     let (table, columns) = registered(table)?;
     let row = object(row);
     for name in row.keys() {
@@ -490,15 +513,20 @@ pub(crate) async fn upsert_on<'e, T: DeserializeOwned>(
         .collect::<Vec<_>>()
         .join(", ");
     let projection = row_json(table)?;
+    let conflict = if preserve_existing {
+        "DO NOTHING".to_owned()
+    } else {
+        format!("DO UPDATE SET {updates}")
+    };
     let sql = format!(
         "INSERT INTO \"{table}\" AS r ({names}) SELECT {values} FROM jsonb_populate_record(NULL::\"{table}\", $1::jsonb) AS f \
-         ON CONFLICT (\"id\") DO UPDATE SET {updates} RETURNING {projection} AS row"
+         ON CONFLICT (\"id\") {conflict} RETURNING {projection} AS row"
     );
     let stored = sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(Value::Object(row))
-        .fetch_one(executor)
+        .fetch_optional(executor)
         .await?;
-    decode(&stored)
+    stored.as_ref().map(decode).transpose()
 }
 
 /// Atomically patch the matching rows without replacing unrelated columns.

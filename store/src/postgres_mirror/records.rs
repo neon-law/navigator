@@ -942,7 +942,11 @@ pub(crate) async fn scoped_references(
     pg: &PostgresDb,
     tables: &[&str],
 ) -> Result<Vec<UnresolvedReference>, MirrorError> {
-    reference_inventory(surreal, pg, Some(tables)).await
+    let mut references = reference_inventory(surreal, pg, Some(tables)).await?;
+    if tables.contains(&"asset") {
+        references.extend(super::documents::scoped_references(surreal, pg).await?);
+    }
+    Ok(references)
 }
 
 #[allow(clippy::too_many_lines)] // Each declared reference family shares one fail-closed inventory pass.
@@ -1130,6 +1134,7 @@ pub(super) fn table(name: &str) -> Result<&'static Table, MirrorError> {
 pub(crate) fn columns(name: &str) -> Option<&'static [&'static str]> {
     match name {
         "attestation" => Some(super::attestations::COLUMNS),
+        "asset" => Some(super::documents::ASSET_COLUMNS),
         "notation" => Some(super::workflow::NOTATION_COLUMNS),
         "notation_event" => Some(super::workflow::EVENT_COLUMNS),
         "answer" => Some(super::workflow::ANSWER_COLUMNS),
@@ -1153,6 +1158,11 @@ pub(crate) fn authoritative_person_links() -> impl Iterator<Item = (&'static str
 
 /// Recover a declared reference field from the canonical preservation metadata.
 pub(crate) fn reference_field(name: &str, field: &str) -> Option<&'static str> {
+    if name == "asset" {
+        return super::documents::REFERENCES
+            .iter()
+            .find_map(|(column, _)| (*column == field).then_some(*column));
+    }
     TABLES
         .iter()
         .filter(|table| table.name == name)

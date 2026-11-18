@@ -1692,6 +1692,10 @@ mod tests {
                 include_str!("../postgres/migrations/20261117160000_signature_notation_reference.sql"),
             ),
             (
+                "20261117170000_notation_document_authority.sql",
+                include_str!("../postgres/migrations/20261117170000_notation_document_authority.sql"),
+            ),
+            (
                 "20261117190000_add_satellite_authority_constraints.sql",
                 include_str!("../postgres/migrations/20261117190000_add_satellite_authority_constraints.sql"),
             ),

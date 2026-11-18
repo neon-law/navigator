@@ -13,6 +13,19 @@ const DRAFT_FACTS_SQL: &str = "SELECT
                OR starts_with(secondary_storage_key,$2))),
     EXISTS(SELECT 1 FROM signature WHERE notation_id=$1)";
 
+/// Hold a live parent while committing canonical document or asset facts.
+/// Importers keep their historical-orphan contract and do not use this writer seam.
+pub(crate) async fn lock_parent(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    id: Uuid,
+) -> Result<(), MatterAuthorityError> {
+    sqlx::query("SELECT id FROM notation WHERE id=$1 FOR KEY SHARE")
+        .bind(id)
+        .fetch_one(&mut **tx)
+        .await?;
+    Ok(())
+}
+
 /// Copy the Template pins in the insert that opens the Notation.
 pub(crate) async fn create(pg: &PostgresDb, new: &NewNotation) -> Result<Notation, NotationError> {
     let row = sqlx::query(
@@ -20,7 +33,7 @@ pub(crate) async fn create(pg: &PostgresDb, new: &NewNotation) -> Result<Notatio
          (id,template_id,package_id,person_id,entity_id,project_id,state,delivery,
           questionnaire_snapshot,template_source_commit_sha,template_body_sha256)
          SELECT $1,t.id,$3,$4,$5,$6,$7,$8,$9,t.source_commit_sha,t.body_sha256
-         FROM template t WHERE t.id=$2 RETURNING to_jsonb(n) AS row",
+         FROM template t WHERE t.id=$2 RETURNING to_jsonb(n) - CASE WHEN n.questionnaire_snapshot IS NULL THEN ARRAY['questionnaire_snapshot'] ELSE ARRAY[]::text[] END AS row",
     )
     .bind(Uuid::now_v7())
     .bind(new.template_id)
@@ -40,6 +53,11 @@ pub(crate) async fn create(pg: &PostgresDb, new: &NewNotation) -> Result<Notatio
 /// Re-check the live predicate under the parent lock and delete the graph together.
 pub(crate) async fn delete_draft(pg: &PostgresDb, id: Uuid) -> Result<ResetOutcome, sqlx::Error> {
     let mut tx = pg.pool().begin().await?;
+    // A writer may hold the parent until its document/asset fact commits.
+    // After waiting for that lock, the next statement must see its commit.
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+        .execute(&mut *tx)
+        .await?;
     let state: Option<String> =
         sqlx::query_scalar("SELECT state FROM notation WHERE id=$1 FOR UPDATE")
             .bind(id)
@@ -99,16 +117,9 @@ pub(crate) async fn restore_archived(
     let mut expected = archived.clone();
     expected.inserted_at = expected.inserted_at.trunc_subsecs(6);
     expected.updated_at = expected.updated_at.trunc_subsecs(6);
-    expected.questionnaire_snapshot = expected
-        .questionnaire_snapshot
-        .filter(|value| !value.is_null());
-    let inserted = sqlx::query(
-        "INSERT INTO notation SELECT * FROM jsonb_populate_record(NULL::notation,$1)
-         ON CONFLICT(id) DO NOTHING RETURNING to_jsonb(notation) AS row",
-    )
-    .bind(sqlx::types::Json(&expected))
-    .fetch_optional(pg.pool())
-    .await?;
+    let encoded = serde_json::to_value(&expected).map_err(MatterAuthorityError::from)?;
+    let inserted: Option<Notation> =
+        crate::postgres::matter::insert_on(pg.pool(), "notation", encoded).await?;
     if inserted.is_some() {
         return Ok(crate::assets::RowRestore::Created);
     }

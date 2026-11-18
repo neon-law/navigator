@@ -617,6 +617,12 @@ pub async fn template_effect(
     firm_id: Uuid,
     template_codes: &[String],
 ) -> Result<Vec<TemplateEffect>, PlanMetricsError> {
+    crate::postgres_backfill::family::require_scope(
+        pg,
+        crate::postgres_backfill::family::Family::Notation,
+    )
+    .await
+    .map_err(|error| sqlx::Error::Configuration(Box::new(error)))?;
     let rows = sqlx::query(
         "WITH codes AS (SELECT unnest($1::text[]) AS code), \
          scope AS ( \
@@ -1632,6 +1638,11 @@ mod database {
         notation(&pg, letter_v2, scribe, other_type, stamp(502)).await;
         let _ = entry(&pg, other_type, a.attorney, 10, 20_000, Some(draft)).await;
 
+        crate::postgres::fixtures::activate_family(
+            &pg,
+            crate::postgres_backfill::family::Family::Notation,
+        )
+        .await;
         let effects = template_effect(&pg, a.firm_id, &["demand-letter".to_owned()])
             .await
             .unwrap_or_else(|error| panic!("template effect: {error}"));
