@@ -169,10 +169,6 @@ fn without_derived_tables(export: &[u8]) -> Result<Vec<u8>> {
     Ok(store::schema::strip_derived_tables(text).into_bytes())
 }
 
-async fn table_counts(db: &SurrealDb) -> Result<BTreeMap<String, i64>> {
-    store::postgres_backfill::source_archive_table_counts(db).await
-}
-
 async fn archive_inventory(db: &SurrealDb) -> Result<(BTreeMap<String, i64>, String)> {
     store::postgres_backfill::source_archive_inventory(db).await
 }
@@ -311,7 +307,7 @@ mod tests {
 
     use super::{
         archive_inventory, archive_key, export_bytes, http_endpoint, key_component,
-        restore_and_verify, table_counts, verify_strict_snapshot, ArchiveReceipt,
+        restore_and_verify, verify_strict_snapshot, ArchiveReceipt,
     };
     use store::surreal::{SurrealAuth, SurrealConfig};
 
@@ -446,7 +442,7 @@ mod tests {
             "the export leaves the view out"
         );
 
-        let expected = table_counts(&source).await.unwrap();
+        let expected = archive_inventory(&source).await.unwrap().0;
         let (_, schema_sha256) = archive_inventory(&source).await.unwrap();
         let stable_reexport = export_bytes(&source).await.unwrap();
         verify_strict_snapshot(
@@ -470,12 +466,12 @@ mod tests {
 
         let file = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(file.path(), &export).unwrap();
-        let before_mutation = table_counts(&source).await.unwrap();
+        let before_mutation = archive_inventory(&source).await.unwrap().0;
         source
             .query("UPDATE template SET title = 'changed after archive' WHERE code = 'lease'")
             .await
             .unwrap();
-        assert_eq!(table_counts(&source).await.unwrap(), before_mutation);
+        assert_eq!(archive_inventory(&source).await.unwrap().0, before_mutation);
         let mutated_export = export_bytes(&source).await.unwrap();
         assert!(
             verify_strict_snapshot(
@@ -556,7 +552,7 @@ mod tests {
         let source = super::connect_http(&server.config).await.unwrap();
         let export = export_bytes(&source).await.unwrap();
         assert!(!String::from_utf8_lossy(&export).contains("TABLE: draft"));
-        let expected = table_counts(&source).await.unwrap();
+        let expected = archive_inventory(&source).await.unwrap().0;
         let (_, schema_sha256) = archive_inventory(&source).await.unwrap();
         let second_export = export_bytes(&source).await.unwrap();
         let after = archive_inventory(&source).await.unwrap();
@@ -579,7 +575,7 @@ mod tests {
             .query("UPDATE template SET title = 'changed after archive' WHERE code = 'lease'")
             .await
             .unwrap();
-        assert_eq!(table_counts(&source).await.unwrap(), expected);
+        assert_eq!(archive_inventory(&source).await.unwrap().0, expected);
         let scratch_namespace = format!("restore_{}", Uuid::now_v7().simple());
         let scratch = super::connect_http(&SurrealConfig {
             namespace: scratch_namespace.clone(),

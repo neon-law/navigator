@@ -1501,8 +1501,6 @@ pub async fn report(pg: &PostgresDb, run_id: Uuid) -> Result<RunReport, Backfill
 pub use archive_source::fingerprint as source_archive_fingerprint;
 /// Canonical live source census and schema fingerprint shared with operational exports.
 pub use archive_source::inventory as source_archive_inventory;
-/// Canonical raw source row census, including empty declared tables.
-pub use archive_source::table_counts as source_archive_table_counts;
 
 mod archive_source {
     use futures::StreamExt;
