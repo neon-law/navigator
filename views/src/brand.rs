@@ -1209,6 +1209,12 @@ impl BrandKey {
         format!("https://{}", self.hosts()[0])
     }
 
+    /// The production URL where this Brand's clients sign in to their Projects.
+    #[must_use]
+    pub fn client_portal_href(self) -> String {
+        format!("{}/app/projects", self.public_home_href())
+    }
+
     /// This key's home in the deployment named by `deployment_host`.
     ///
     /// Persistent staging runs the production runtime profile, so the

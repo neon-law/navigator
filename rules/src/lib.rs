@@ -119,10 +119,10 @@ pub mod template_catalog;
 pub mod workflow_steps;
 
 /// The `{{firm.<field>}}` bindings a render fills from the Project's Brand
-/// rather than from a questionnaire answer: the Firm's legal name, and its
-/// office for the template's jurisdiction (LAW-329).
+/// rather than from a questionnaire answer.
 pub const FIRM_RENDER_BINDINGS: &[&str] = &[
     "legal_name",
+    "portal_url",
     "office.address",
     "office.phone",
     "office.email",

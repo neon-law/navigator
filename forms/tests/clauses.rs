@@ -3,12 +3,18 @@
 use std::collections::BTreeMap;
 
 #[test]
+fn onboarding_clause_compilation_expands_references_and_is_idempotent() {
+    let source = include_str!("../../templates/notations/neon_law/onboarding__letter.md");
+    let snapshot = rules::clauses::compile(source).unwrap();
+    let (_, body) = rules::frontmatter::split(&snapshot).unwrap();
+    assert!(!body.contains("{{>"));
+    assert!(snapshot.contains("clause_sources:"));
+    assert_eq!(rules::clauses::compile(&snapshot).unwrap(), snapshot);
+}
+
+#[test]
 fn clause_extraction_preserves_the_existing_body_bytes() {
     for (source, expected) in [
-        (
-            include_str!("../../templates/notations/neon_law/onboarding__letter.md"),
-            "7f225ebe2ca99284dae4ec69b8049fa546e3be16871f81626f751f166754b54e",
-        ),
         (
             include_str!("../../templates/notations/neon_law/engagement_letter__nevada.md"),
             "6e9fe493afc9080af2388b56f1251aaf7653acf44f7e5c49f12c5559d1143875",

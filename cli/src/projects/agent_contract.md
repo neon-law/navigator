@@ -5,6 +5,15 @@
 **Every email must remain a draft. An agent never sends, replies to, or forwards email.** The lawyer reviews each draft
 and sends it personally. A request to send, reply, or forward means prepare a draft for lawyer review instead.
 
+## Signature requests
+
+* Prepare a DocuSign signature request with `navigator notation envelope prepare <notation-id>`.
+* Use the sender view to review the signing fields with the lawyer.
+* Send only after the lawyer explicitly approves the document, recipients, and signing fields. Run
+  `navigator notation envelope send <notation-id>`.
+* Verify the envelope ID and status with `navigator notation envelope status <notation-id>`.
+* To have DocuSign email the client an engagement letter, start with `navigator project onboard --delivery emailed`.
+
 This repository is the source of one Navigator Project, named in `navigator.yaml`. Git is its history: every change to
 the matter's pages, Drafts, and document pointers is a reviewed commit. Declare the change in YAML or Markdown; do not
 write application code. When a declaration cannot say what the matter needs, open a Linear issue for a new Section or
