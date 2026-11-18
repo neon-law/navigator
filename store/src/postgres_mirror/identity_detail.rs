@@ -1,27 +1,9 @@
-//! What a Person or an Entity holds beside its own row, in the PostgreSQL
-//! mirror: Address, Credential, Email Token, Entity Role, Person Delegate,
-//! Person External Identity, and Person Mailbox rows.
+//! Typed identity-detail imports and content-free mailbox reconciliation.
 //!
-//! The same contract as the identity mirror: SurrealDB is read back after
-//! its write, and PostgreSQL's copy is upserted or deleted to match. A row
-//! with a record UUID keeps it as its PostgreSQL `id`. Two rows have none:
-//!
-//! - An Entity Role is a Surreal relation edge. Its identity is the Person,
-//!   the Entity, and the role, which is the edge's unique index.
-//! - A Person Mailbox claim is keyed by the mailbox, a lowercased email.
-//!   An email never names a row in a report or a log, so the mirror keys
-//!   claims by their Person and copies all of that Person's claims at once.
-//!
-//! Before a row is upserted, each Person, Entity, or Jurisdiction it names
-//! is mirrored first when PostgreSQL does not hold it. A reference
-//! SurrealDB cannot supply is refused with SQLSTATE 23503 and reported by
-//! [`parity`]. A unique value PostgreSQL holds under another id (a licence
-//! pair, a token hash, an external account) is refused with SQLSTATE 23505,
-//! and [`reconcile`] retries it after the stale row is removed.
-//!
-//! An Email Token row carries the SHA-256 hex of its token, never the token.
-//! Delegation instants are RFC 3339 text in SurrealDB; one that does not
-//! parse is refused, never given a substitute time.
+//! Captured rows insert only missing identities. Existing PostgreSQL rows and
+//! mailbox owners remain unchanged on drift or replay. Mailbox comparisons count
+//! individual claims while reporting only their Person UUIDs. The separate
+//! Entity Role adapter retains its graph-authority contract.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -50,8 +32,7 @@ trait Detail: Sized + PartialEq {
     const SOURCE_FIELDS: &'static str;
 
     fn key(id: Uuid) -> MirrorKey;
-    /// `None` for a record whose key is not a native UUID: no workspace
-    /// writer mints one, and it has no PostgreSQL identity.
+    /// Decode the UUID identity required by a captured row.
     fn record(source: &Self::Source) -> Option<Uuid>;
     fn from_source(source: Self::Source) -> Result<Self, MirrorError>;
     fn from_row(row: &PgRow) -> Result<Self, sqlx::Error>;
@@ -584,7 +565,7 @@ impl Detail for ExternalIdentityImage {
 }
 
 /// SurrealDB's rows of one table, or the one row `id` names. Each keeps
-/// its key; a row whose image cannot be built has none.
+/// its key; an unreadable image remains a divergent keyed row.
 async fn sources<D: Detail>(
     surreal: &SurrealDb,
     id: Option<Uuid>,
@@ -599,10 +580,14 @@ async fn sources<D: Detail>(
         .and_then(surrealdb::IndexedResults::check)
         .map_err(source)?;
     let rows: Vec<D::Source> = response.take(0).map_err(source)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(|row| D::record(&row).map(|id| (id, D::from_source(row))))
-        .collect())
+    let mut images = BTreeMap::new();
+    for row in rows {
+        let id = D::record(&row).ok_or(MirrorError::Source)?;
+        if images.insert(id, D::from_source(row)).is_some() {
+            return Err(MirrorError::Source);
+        }
+    }
+    Ok(images.into_iter().collect())
 }
 
 /// Make PostgreSQL's copy of one UUID-keyed row match SurrealDB's.
@@ -769,8 +754,8 @@ struct MailboxSource {
 }
 
 /// Every mailbox claim in SurrealDB, by the Person holding it, or only
-/// `person`'s. A claim whose key or holder is not in the shape the Person
-/// writers mint has no PostgreSQL identity and is skipped.
+/// `person`'s. An unreadable natural key or holder refuses the capture instead
+/// of silently lowering its census.
 async fn source_claims(
     surreal: &SurrealDb,
     person: Option<Uuid>,
@@ -792,8 +777,11 @@ async fn source_claims(
         let (RecordIdKey::String(mailbox), Some(holder)) =
             (&row.id.key, record_uuid(&row.person_id))
         else {
-            continue;
+            return Err(MirrorError::Source);
         };
+        if mailbox.is_empty() || *mailbox != mailbox.trim().to_lowercase() {
+            return Err(MirrorError::Source);
+        }
         claims.entry(holder).or_default().insert(mailbox.clone());
     }
     Ok(claims)
@@ -835,23 +823,46 @@ async fn compare_mailboxes(
     surreal: &SurrealDb,
     pg: &PostgresDb,
 ) -> Result<super::TableParity, MirrorError> {
-    let source: BTreeMap<MirrorKey, Option<BTreeSet<String>>> = source_claims(surreal, None)
-        .await?
-        .into_iter()
-        .map(|(person, claims)| (MirrorKey::PersonMailbox(person), Some(claims)))
-        .collect();
-    let mut target: BTreeMap<MirrorKey, BTreeSet<String>> = BTreeMap::new();
+    let source = source_claims(surreal, None).await?;
+    let mut target: BTreeMap<Uuid, BTreeSet<String>> = BTreeMap::new();
     for row in sqlx::query("SELECT id, person_id FROM person_mailbox")
         .fetch_all(&pg.0)
         .await?
     {
-        let person: Uuid = row.try_get("person_id")?;
         target
-            .entry(MirrorKey::PersonMailbox(person))
+            .entry(row.try_get("person_id")?)
             .or_default()
             .insert(row.try_get("id")?);
     }
-    Ok(compare("person_mailbox", &source, &target))
+    let mut claims = BTreeMap::<&String, (Option<Uuid>, Option<Uuid>)>::new();
+    for (person, mailboxes) in &source {
+        for mailbox in mailboxes {
+            claims.entry(mailbox).or_default().0 = Some(*person);
+        }
+    }
+    for (person, mailboxes) in &target {
+        for mailbox in mailboxes {
+            claims.entry(mailbox).or_default().1 = Some(*person);
+        }
+    }
+    let mut divergent: Vec<_> = claims
+        .into_values()
+        .filter_map(|(source, target)| {
+            if source == target {
+                None
+            } else {
+                source.or(target).map(MirrorKey::PersonMailbox)
+            }
+        })
+        .collect();
+    // Keep one entry per differing natural claim, without exposing mailbox order.
+    divergent.sort();
+    Ok(super::TableParity {
+        table: "person_mailbox",
+        source_rows: source.values().map(BTreeSet::len).sum(),
+        target_rows: target.values().map(BTreeSet::len).sum(),
+        divergent,
+    })
 }
 
 /// Make PostgreSQL's copy of one identity-detail row match SurrealDB's.
@@ -886,19 +897,46 @@ pub(super) async fn mirror(
     }
 }
 
-/// Compare every identity-detail row in both stores. Run it after
-/// [`super::identity::parity`]: each row names a Person, Entity, or
-/// Jurisdiction.
+/// Compare only the six detail tables in the pending identity scope.
+pub(crate) async fn scoped_parity(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+) -> Result<ParityReport, MirrorError> {
+    Ok(ParityReport {
+        tables: vec![
+            compare_detail::<AddressImage>(surreal, pg).await?,
+            compare_detail::<CredentialImage>(surreal, pg).await?,
+            compare_detail::<EmailTokenImage>(surreal, pg).await?,
+            compare_detail::<DelegateImage>(surreal, pg).await?,
+            compare_detail::<ExternalIdentityImage>(surreal, pg).await?,
+            compare_mailboxes(surreal, pg).await?,
+        ],
+    })
+}
+
+async fn pending_detail<D: Detail>(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+) -> Result<Option<super::TableParity>, MirrorError> {
+    if crate::postgres_backfill::family::active_for_table(pg, D::TABLE).await? {
+        return Ok(None);
+    }
+    compare_detail::<D>(surreal, pg).await.map(Some)
+}
+
+/// Compare identity detail history not already held by scoped authority.
 ///
 /// # Errors
-///
-/// Either store could not be read.
+/// Either store or the persisted ownership ledger could not be read.
 pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
-    let mut tables = vec![
-        compare_detail::<AddressImage>(surreal, pg).await?,
-        compare_detail::<CredentialImage>(surreal, pg).await?,
-        compare_detail::<EmailTokenImage>(surreal, pg).await?,
-    ];
+    let mut tables: Vec<_> = [
+        pending_detail::<AddressImage>(surreal, pg).await?,
+        pending_detail::<CredentialImage>(surreal, pg).await?,
+        pending_detail::<EmailTokenImage>(surreal, pg).await?,
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
     let graph_authoritative = crate::postgres_graph::holds("entity_role");
     if !graph_authoritative || super::compares_authoritative(pg).await? {
         let entity_roles = compare_entity_roles(surreal, pg).await?;
@@ -908,11 +946,17 @@ pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport
             entity_roles
         });
     }
-    tables.extend([
-        compare_detail::<DelegateImage>(surreal, pg).await?,
-        compare_detail::<ExternalIdentityImage>(surreal, pg).await?,
-        compare_mailboxes(surreal, pg).await?,
-    ]);
+    tables.extend(
+        [
+            pending_detail::<DelegateImage>(surreal, pg).await?,
+            pending_detail::<ExternalIdentityImage>(surreal, pg).await?,
+        ]
+        .into_iter()
+        .flatten(),
+    );
+    if !crate::postgres_backfill::family::active_for_table(pg, "person_mailbox").await? {
+        tables.push(compare_mailboxes(surreal, pg).await?);
+    }
     Ok(ParityReport { tables })
 }
 
