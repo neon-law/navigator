@@ -72,43 +72,7 @@ fn top_level_help_is_a_terse_legal_safe_headline() {
 fn top_level_help_keeps_orchestration_nested_under_groups() {
     let output = help(&["--help"]);
 
-    assert_eq!(
-        command_names(&output),
-        vec![
-            // These, and nothing else. Each names what it owns, so the top
-            // layer IS the mental model rather than two dozen flat rows an
-            // operator has to scan.
-            "assumptions",
-            "clause",
-            "dev",
-            "downloads",
-            "forms",
-            "glossary",
-            "inbox",
-            "journal",
-            "legal-plans",
-            "lsp",
-            "mail",
-            "notation",
-            "ops",
-            "person",
-            "pii",
-            "preview",
-            "project",
-            "quickstart",
-            "same-day",
-            "scraper",
-            "site",
-            "validate",
-            "help",
-        ]
-    );
-
-    // The one door a newcomer is told to open after `brew install`.
-    assert!(output
-        .lines()
-        .any(|l| l.trim_start().starts_with("quickstart ")
-            && l.contains("Run all of Navigator on this machine")));
+    assert_eq!(command_names(&output), vec!["dev", "ops", "help"]);
 
     // Billing operations belong in the portal, not the notation author's CLI.
     assert!(!command_names(&output).contains(&"coupon"));
@@ -121,10 +85,6 @@ fn top_level_help_keeps_orchestration_nested_under_groups() {
     assert!(output.lines().any(
         |l| l.trim_start().starts_with("ops ") && l.contains("Production and cloud operations")
     ));
-    assert!(output
-        .lines()
-        .any(|l| l.trim_start().starts_with("validate ")
-            && l.contains("Validate Markdown and YAML files")));
     assert!(command_names(&output)
         .iter()
         .all(|name| !name.starts_with("start-")));

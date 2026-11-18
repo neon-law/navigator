@@ -1117,7 +1117,7 @@ pub enum RenderCmd {
         /// Path to the notation template (`.md`) the document was rendered
         /// from. Updated in place without `--dry-run`.
         file: PathBuf,
-        /// Path to the edited Word document (`hudson notation word`'s
+        /// Path to the edited Word document (`navigator notation word`'s
         /// output, edited in Word and re-saved). Must end in `.docx`.
         edited: PathBuf,
         /// Print the block-level diff without writing.
@@ -1126,7 +1126,7 @@ pub enum RenderCmd {
     },
 }
 
-/// Manage a Person directly in the store.
+/// Run the local notation rendering and authoring commands.
 #[must_use]
 pub fn run(action: RenderCmd) -> ExitCode {
     let runtime = || tokio::runtime::Runtime::new().expect("tokio runtime");

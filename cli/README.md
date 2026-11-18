@@ -1,15 +1,14 @@
 # Navigator CLI
 
-The `cli` crate builds the lean `navigator` command a lawyer's Mac and every Project repository's CI install: Projects,
-their Jujutsu repositories, the offline `validate` gate, and the site session and `seeds/` import those commands use.
-Its rules live in the crate's library, so a host other than the terminal links the same code. It reads the domain types
-through the `model` crate rather than `store` or `cloud`. Mail signatures are read through the authenticated site API;
-signed-packet inspection shares the PDF helpers.
+The `cli` crate builds `navigator`, the application command a lawyer's Mac and every Project repository's CI install.
+It handles Projects, Jujutsu repositories, validation, site sessions, People and Firm administration, mail, Inbox,
+Downloads, Legal Plans, and local draft rendering. Its rules live in the crate's library. Connection-free domain types
+come from `model`; rendering uses the shared PDF and Word engines, including Typst. The binary links no database driver,
+cloud SDK, web client, or durable workflow runtime.
 
-Two more binaries live beside it. `hudson` (the `deploy` crate) is the operator CLI: the local KIND loop (`dev`),
-production operations (`ops`), and the site, notation, forms, and firm commands; it also carries every `navigator`
-command. `scorpio` (the `scorpio` crate) is the Ephemeris CLI. Each builds in its own release job, so the `navigator`
-archive never compiles the web client, the cloud SDKs, or the Arrow and Iceberg stack.
+`hudson` (the `deploy` crate) is the operator CLI for local development (`dev`) and production operations (`ops`). It
+retains hidden application compatibility commands during the transition. `scorpio` is the Ephemeris CLI. Each binary
+builds in its own release job.
 
 The local staging lifecycle (`hudson dev staging`) runs under the `NAVIGATOR_ENVIRONMENT=dev` application profile;
 staging is a lifecycle target, not an application environment.
@@ -127,44 +126,33 @@ import stops there and prints `committed N of M records`.
 
 ## `drafts` and `templates` are `notation`, spelled the way you reach for it
 
-`hudson drafts …` and `hudson templates …` are visible aliases of `hudson notation …` — the same group, same
-subcommands, same dispatch. `hudson drafts preview`, `hudson templates preview`, and `hudson notation preview` run
-identically; so do `pdf` and `word`. Use whichever noun fits.
+`navigator drafts` and `navigator templates` are visible aliases of `navigator notation`: the same group and dispatch.
+Use whichever noun fits.
 
-## Reading a template the way a reader will
+## Previewing an uncommitted draft
 
 ```bash
-hudson notation preview templates/notations/neon_law/onboarding__letter.md
-hudson notation preview onboarding                 # a name, looked up under templates/
+navigator notation preview templates/notations/neon_law/onboarding__letter.md --no-open
 ```
 
-A name is looked up in three places, in order: a Project repository's flat `templates/`, Navigator's own nested
-`templates/notations/`, and the catalog compiled into the binary. A checkout always wins, so an author previews the file
-under their cursor; the bundled tier is what lets the command work in a directory that has no templates at all. The
-printed provenance line says which one answered.
+This renders a local review PDF from the file under your cursor, even before a source commit exists. Use `--out` to
+choose its location and `--answer` or `--answers-file` for questionnaire answers. Without `--no-open`, the command opens
+the PDF. It creates no Notation, workflow instance, or source edit.
 
-Run from a Project repository (`navigator.yaml` two directories up), this pushes the template as a **draft** to that
-Project's real portal and opens a browser at it — the production show page, production chrome, and production
-questionnaire engine, not a local imitation. The draft is stored and addressable but explicitly **not run**: no
-Notation, no workflow instance, no PDF.
-
-Outside a Project repository, or without a login, pass `--offline` to render the same show page locally instead as a
-**lint**, not a preview: nothing is pushed and nothing is stored. It binds only to `127.0.0.1`, always on an OS-assigned
-port chosen at random so two lints can run at once, and prints the URL. Stepping the questions is hydration, so it needs
-the Dioxus client bundle `hudson dev build-webapp` stages; without one the page still renders every question and the
-graph, and the command says so rather than leaving a dead "Next" button unexplained.
+The hidden `hudson notation preview` compatibility command retains the older live questionnaire preview. Local Matter
+Page preview remains in Hudson until its reads can use the site API.
 
 ## Rendering a template to PDF or Word
 
 ```bash
-hudson notation pdf templates/notations/neon_law/onboarding__letter.md --out /tmp/onboarding.pdf --preview
-hudson notation word templates/notations/neon_law/onboarding__letter.md --out /tmp/onboarding.docx --preview
+navigator notation pdf templates/notations/neon_law/onboarding__letter.md --out /tmp/onboarding.pdf --preview
+navigator notation word templates/notations/neon_law/onboarding__letter.md --out /tmp/onboarding.docx --preview
 ```
 
 Both validate the file against the same rule set as `navigator project gate` first, resolve the render frame from the
 template's own `kind:`/`output:` frontmatter, fill any `{{code}}` placeholders passed with `--answer`, and compile the
 result in pure Rust. See [`pdf/README.md`](../pdf/README.md) for the render pipeline and output formats.
 
-You do not need a site to work locally. Use `navigator project gate`, the `hudson notation` authoring commands, and the
+You do not need a site to work locally. Use `navigator project gate`, the `navigator notation` authoring commands, and the
 KIND-backed `hudson dev` loop; seed a local catalog with `hudson site seed` when that command's local store and storage
 environment are available, or import deployment data with `navigator site import` after logging in.
