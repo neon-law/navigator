@@ -3135,7 +3135,6 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
                     json,
                     record.as_deref() == Some("court"),
                 )
-                .await
             }
         }
     }
