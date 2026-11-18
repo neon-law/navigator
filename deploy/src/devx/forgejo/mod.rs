@@ -13,7 +13,7 @@
 //! See `docs/forgejo-kind.md`.
 
 pub(in crate::devx) mod bundle;
-mod cluster;
+pub(in crate::devx) mod cluster;
 pub(in crate::devx) mod controller;
 mod kubeapi;
 pub(in crate::devx) mod logs;

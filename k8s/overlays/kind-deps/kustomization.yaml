@@ -12,6 +12,9 @@ kind: Kustomization
 
 namespace: navigator
 
+components:
+  - ../../components/kind-postgres
+
 resources:
   - ../../staging
   - ../kind/seaweedfs

@@ -51,6 +51,7 @@ mod native;
 // its staging helper is crate-reachable.
 mod observability;
 mod orchestrate;
+mod postgres_fixture;
 mod postgres_volume;
 mod quickstart;
 pub(crate) mod registry;
@@ -1015,6 +1016,9 @@ fn dispatch_with_dns_provider(
         crate::Command::Dev(crate::DevCmd::Undeploy) => undeploy(&cfg),
         crate::Command::Dev(crate::DevCmd::E2e) => e2e::run_e2e(&cfg),
         crate::Command::Dev(crate::DevCmd::SeaweedfsBootstrap) => seaweedfs::bootstrap(&cfg),
+        crate::Command::Dev(crate::DevCmd::PostgresBootstrap) => {
+            orchestrate::postgres_bootstrap(&cfg)
+        }
         crate::Command::Dev(crate::DevCmd::GrantLawyer) => e2e::grant_lawyer(&cfg),
         crate::Command::Dev(crate::DevCmd::SampleProject {
             project,
@@ -2735,10 +2739,9 @@ fn navigator_web_rauthy_patch(rauthy_port: u16) -> String {
 /// `hudson dev staging reset` would silently fall back to the ambient
 /// kubeconfig instead of the task-owned cluster. Single quotes are literal in
 /// both consumers (unlike double quotes, which still expand `$`); a directory
-/// containing a literal single quote is the one unsupported shape and is never
-/// produced by a worktree path we create.
+/// containing apostrophes remains literal in both shell and dotenv readers.
 fn shell_single_quote(value: &str) -> String {
-    format!("'{value}'")
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 fn render_env(cfg: &KindConfig, root: &Path) -> String {

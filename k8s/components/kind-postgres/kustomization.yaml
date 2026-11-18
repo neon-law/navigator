@@ -1,0 +1,257 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - ../../overlays/kind/postgres
+patches:
+  - target:
+      kind: Deployment
+      name: navigator-web
+    patch: |-
+      [
+        {
+          "op": "add",
+          "path": "/spec/template/metadata/labels/navigator.neonlaw.org~1postgres-client",
+          "value": "true"
+        },
+        {
+          "op": "add",
+          "path": "/spec/template/spec/containers/0/env/-",
+          "value": {
+            "name": "NAVIGATOR_POSTGRES_HOST",
+            "valueFrom": {
+              "configMapKeyRef": {
+                "name": "navigator-postgres-client",
+                "key": "host"
+              }
+            }
+          }
+        },
+        {
+          "op": "add",
+          "path": "/spec/template/spec/containers/0/env/-",
+          "value": {
+            "name": "NAVIGATOR_POSTGRES_PORT",
+            "valueFrom": {
+              "configMapKeyRef": {
+                "name": "navigator-postgres-client",
+                "key": "port"
+              }
+            }
+          }
+        },
+        {
+          "op": "add",
+          "path": "/spec/template/spec/containers/0/env/-",
+          "value": {
+            "name": "NAVIGATOR_POSTGRES_DATABASE",
+            "valueFrom": {
+              "configMapKeyRef": {
+                "name": "navigator-postgres-client",
+                "key": "database"
+              }
+            }
+          }
+        },
+        {
+          "op": "add",
+          "path": "/spec/template/spec/containers/0/env/-",
+          "value": {
+            "name": "NAVIGATOR_POSTGRES_SSLMODE",
+            "valueFrom": {
+              "configMapKeyRef": {
+                "name": "navigator-postgres-client",
+                "key": "sslmode"
+              }
+            }
+          }
+        },
+        {
+          "op": "add",
+          "path": "/spec/template/spec/containers/0/env/-",
+          "value": {
+            "name": "NAVIGATOR_POSTGRES_USER",
+            "value": "navigator_app"
+          }
+        },
+        {
+          "op": "add",
+          "path": "/spec/template/spec/containers/0/env/-",
+          "value": {
+            "name": "NAVIGATOR_POSTGRES_PASSWORD",
+            "valueFrom": {
+              "secretKeyRef": {
+                "name": "navigator-postgres-app",
+                "key": "password"
+              }
+            }
+          }
+        },
+        {
+          "op": "add",
+          "path": "/spec/template/spec/containers/0/env/-",
+          "value": {
+            "name": "NAVIGATOR_POSTGRES_ROOT_CERT",
+            "value": "/etc/navigator/postgres/app/ca.crt"
+          }
+        },
+        {
+          "op": "add",
+          "path": "/spec/template/spec/containers/0/env/-",
+          "value": {
+            "name": "NAVIGATOR_KIND_FIXTURE_READY",
+            "valueFrom": {
+              "configMapKeyRef": {
+                "name": "navigator-kind-postgres-ready",
+                "key": "ready"
+              }
+            }
+          }
+        },
+        {
+          "op": "add",
+          "path": "/spec/template/spec/containers/0/volumeMounts/-",
+          "value": {
+            "name": "postgres-app",
+            "mountPath": "/etc/navigator/postgres/app",
+            "readOnly": true
+          }
+        },
+        {
+          "op": "add",
+          "path": "/spec/template/spec/volumes/-",
+          "value": {
+            "name": "postgres-app",
+            "secret": {
+              "secretName": "navigator-postgres-app",
+              "defaultMode": 292,
+            "items": [{"key": "ca.crt", "path": "ca.crt"}]
+            }
+          }
+        }
+      ]
+  - target:
+      kind: RestateDeployment
+      name: workflows-service
+    patch: |-
+      [
+        {
+          "op": "add",
+          "path": "/spec/template/metadata/labels/navigator.neonlaw.org~1postgres-client",
+          "value": "true"
+        },
+        {
+          "op": "add",
+          "path": "/spec/template/spec/containers/0/env/-",
+          "value": {
+            "name": "NAVIGATOR_POSTGRES_HOST",
+            "valueFrom": {
+              "configMapKeyRef": {
+                "name": "navigator-postgres-client",
+                "key": "host"
+              }
+            }
+          }
+        },
+        {
+          "op": "add",
+          "path": "/spec/template/spec/containers/0/env/-",
+          "value": {
+            "name": "NAVIGATOR_POSTGRES_PORT",
+            "valueFrom": {
+              "configMapKeyRef": {
+                "name": "navigator-postgres-client",
+                "key": "port"
+              }
+            }
+          }
+        },
+        {
+          "op": "add",
+          "path": "/spec/template/spec/containers/0/env/-",
+          "value": {
+            "name": "NAVIGATOR_POSTGRES_DATABASE",
+            "valueFrom": {
+              "configMapKeyRef": {
+                "name": "navigator-postgres-client",
+                "key": "database"
+              }
+            }
+          }
+        },
+        {
+          "op": "add",
+          "path": "/spec/template/spec/containers/0/env/-",
+          "value": {
+            "name": "NAVIGATOR_POSTGRES_SSLMODE",
+            "valueFrom": {
+              "configMapKeyRef": {
+                "name": "navigator-postgres-client",
+                "key": "sslmode"
+              }
+            }
+          }
+        },
+        {
+          "op": "add",
+          "path": "/spec/template/spec/containers/0/env/-",
+          "value": {
+            "name": "NAVIGATOR_POSTGRES_USER",
+            "value": "navigator_app"
+          }
+        },
+        {
+          "op": "add",
+          "path": "/spec/template/spec/containers/0/env/-",
+          "value": {
+            "name": "NAVIGATOR_POSTGRES_PASSWORD",
+            "valueFrom": {
+              "secretKeyRef": {
+                "name": "navigator-postgres-app",
+                "key": "password"
+              }
+            }
+          }
+        },
+        {
+          "op": "add",
+          "path": "/spec/template/spec/containers/0/env/-",
+          "value": {
+            "name": "NAVIGATOR_POSTGRES_ROOT_CERT",
+            "value": "/etc/navigator/postgres/app/ca.crt"
+          }
+        },
+        {
+          "op": "add",
+          "path": "/spec/template/spec/containers/0/env/-",
+          "value": {
+            "name": "NAVIGATOR_KIND_FIXTURE_READY",
+            "valueFrom": {
+              "configMapKeyRef": {
+                "name": "navigator-kind-postgres-ready",
+                "key": "ready"
+              }
+            }
+          }
+        },
+        {
+          "op": "add",
+          "path": "/spec/template/spec/containers/0/volumeMounts/-",
+          "value": {
+            "name": "postgres-app",
+            "mountPath": "/etc/navigator/postgres/app",
+            "readOnly": true
+          }
+        },
+        {
+          "op": "add",
+          "path": "/spec/template/spec/volumes/-",
+          "value": {
+            "name": "postgres-app",
+            "secret": {
+              "secretName": "navigator-postgres-app",
+              "defaultMode": 292,
+            "items": [{"key": "ca.crt", "path": "ca.crt"}]
+            }
+          }
+        }
+      ]

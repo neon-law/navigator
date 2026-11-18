@@ -62,6 +62,7 @@ pub(super) fn up_in(root: &Path, cfg: &KindConfig) -> Result<()> {
     align_rauthy_public_url(cfg)?;
     wait_rollout("statefulset", "seaweedfs", cfg)?;
     hydrate_seaweedfs_environment(cfg)?;
+    bootstrap_postgres_in(root, cfg, "navigator")?;
     wait_for_dep_rollouts(cfg)?;
 
     eprintln!("==> opening port-forwards");
@@ -80,6 +81,13 @@ pub(super) fn up_in(root: &Path, cfg: &KindConfig) -> Result<()> {
             8080,
             cfg.restate_admin_port,
             9070,
+            &state,
+        )?);
+        pids.push(port_forward(
+            "svc/navigator-postgres",
+            cfg.postgres_port,
+            5432,
+            cfg,
             &state,
         )?);
         pids.push(port_forward(
@@ -143,7 +151,9 @@ pub(super) fn up_in(root: &Path, cfg: &KindConfig) -> Result<()> {
     // host-side web process at this exact set of staged bundles.
     super::sample_project::run_for_root(false, root)?;
 
-    state.write_env(&render_env(cfg, root))?;
+    let mut environment = render_env(cfg, root);
+    environment.push_str(&super::postgres_fixture::read_environment(root)?);
+    state.write_env(&environment)?;
 
     print_chrome_summary(cfg);
     Ok(())
@@ -409,6 +419,7 @@ pub(super) fn deploy(cfg: &KindConfig, tag_override: Option<&str>) -> Result<()>
     align_rauthy_in_cluster_client(cfg)?;
     wait_rollout("statefulset", "seaweedfs", cfg)?;
     seaweedfs::provision(&cfg.namespace)?;
+    bootstrap_postgres_in(&root, cfg, "navigator")?;
     eprintln!("==> waiting for navigator-web rollout");
     run(Command::new("kubectl")
         .arg("--namespace")
@@ -1202,6 +1213,8 @@ fn port_forward(
 ) -> Result<u32> {
     spawn_port_forward(
         &[
+            "--context",
+            &cfg.kind_context(),
             "--namespace",
             &cfg.namespace,
             "port-forward",
@@ -1520,12 +1533,277 @@ impl StateDir {
     }
 
     fn write_env(&self, body: &str) -> Result<()> {
-        fs::write(self.env_path(), body)
-            .with_context(|| format!("write {}", self.env_path().display()))
+        write_fixture_private(&self.env_path(), body.as_bytes())
     }
 
     fn clear(&self) {
         let _ = fs::remove_file(self.pids_path());
         let _ = fs::remove_file(self.env_path());
     }
+}
+
+/// Prepare the one synthetic PostgreSQL store shared by KIND and host fixtures.
+pub(super) fn postgres_bootstrap(cfg: &KindConfig) -> Result<()> {
+    let root = workspace_root()?;
+    configure_worktree_kubeconfig(&root, cfg)?;
+    bootstrap_postgres_in(&root, cfg, "navigator")
+}
+
+fn bootstrap_postgres_in(root: &Path, cfg: &KindConfig, database: &str) -> Result<()> {
+    use super::forgejo::cluster::{prepare_postgres, Kube};
+    require_tools(&["kind", "kubectl", "openssl"])?;
+    super::worktree_env::verify_postgres_fixture_target(root, cfg)?;
+    let clusters = Command::new("kind").args(["get", "clusters"]).output()?;
+    anyhow::ensure!(
+        clusters.status.success()
+            && String::from_utf8_lossy(&clusters.stdout)
+                .lines()
+                .any(|name| name == cfg.cluster),
+        "PostgreSQL fixture requires this task's existing KIND cluster"
+    );
+    let kube = Kube::new(cfg);
+    let read = |kind: &str| -> Result<serde_json::Value> {
+        Ok(serde_json::from_str(
+            &kube.output(&["get", kind, "-o", "json"])?,
+        )?)
+    };
+    super::postgres_fixture::validate_store_identity(
+        &read("configmap/navigator-surreal")?,
+        &read("service/surreal")?,
+        &read("deployment/surreal")?,
+        &cfg.namespace,
+        database,
+        "surreal",
+        super::surreal::SERVICE_PORT,
+    )?;
+    if kube.succeeds(&["get", "service/navigator-postgres"]) {
+        super::postgres_fixture::validate_local_service(
+            &read("service/navigator-postgres")?,
+            "navigator-postgres",
+        )?;
+    }
+    let held = hold_fixture_writers(root, cfg, &kube)?;
+    let state = StateDir::new(root)?;
+    state.kill_pids();
+    state.write_pids(&[])?;
+    let credentials = prepare_postgres(cfg)?;
+    let directory = root.join(".devx/postgres");
+    fs::create_dir_all(&directory)?;
+    write_fixture_private(
+        &super::postgres_fixture::ca_path(root),
+        credentials.ca.as_bytes(),
+    )?;
+    kube.run(&[
+        "delete",
+        "job",
+        "navigator-postgres-roles",
+        "--ignore-not-found",
+        "--wait=true",
+    ])?;
+    let rendered = super::forgejo::cluster::kustomize(root, "k8s/overlays/kind/postgres")?;
+    kube.apply(&rendered)?;
+    kube.wait_rollout("statefulset/navigator-postgres", "300s")?;
+    kube.wait_job("navigator-postgres-roles")?;
+    kube.wait_rollout("deployment/surreal", "300s")?;
+    kube.wait_rollout("statefulset/seaweedfs", "300s")?;
+    let mut all_pids = state.read_pids()?;
+    for (service, local, remote) in [
+        ("service/navigator-postgres", cfg.postgres_port, 5432),
+        (
+            "service/surreal",
+            cfg.surreal_port,
+            super::surreal::SERVICE_PORT,
+        ),
+        ("service/navigator-seaweedfs", cfg.seaweedfs_s3_port, 8333),
+    ] {
+        all_pids.push(port_forward(service, local, remote, cfg, &state)?);
+        state.write_pids(&all_pids)?;
+    }
+    wait_for_tcp("127.0.0.1", cfg.postgres_port)?;
+    wait_for_tcp("127.0.0.1", cfg.surreal_port)?;
+    wait_for_tcp("127.0.0.1", cfg.seaweedfs_s3_port)?;
+    hydrate_seaweedfs_environment(cfg)?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(enroll_fixture(root, cfg, database, &credentials))?;
+    StateDir::kill(&all_pids[all_pids.len() - 2..]);
+    all_pids.truncate(all_pids.len() - 2);
+    state.write_pids(&all_pids)?;
+    let environment = credentials.environment(cfg, root);
+    write_fixture_private(
+        &super::postgres_fixture::environment_path(root),
+        super::postgres_fixture::render_environment(&environment).as_bytes(),
+    )?;
+    kube.apply(
+        &serde_json::json!({
+            "apiVersion":"v1", "kind":"ConfigMap",
+            "metadata":{"name":"navigator-kind-postgres-ready","namespace":cfg.namespace},
+            "data":{"ready":"true"}
+        })
+        .to_string(),
+    )?;
+    for (resource, replicas) in held {
+        kube.run(&["scale", &resource, &format!("--replicas={replicas}")])?;
+    }
+    fs::remove_file(directory.join("held-writers.json"))?;
+    Ok(())
+}
+
+pub(super) fn write_fixture_private(path: &Path, bytes: &[u8]) -> Result<()> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    file.write_all(bytes)?;
+    Ok(())
+}
+
+fn hold_fixture_writers(
+    root: &Path,
+    cfg: &KindConfig,
+    kube: &super::forgejo::cluster::Kube,
+) -> Result<std::collections::BTreeMap<String, u32>> {
+    let directory = root.join(".devx/postgres");
+    fs::create_dir_all(&directory)?;
+    let path = directory.join("held-writers.json");
+    let namespace: serde_json::Value =
+        serde_json::from_str(&kube.output(&["get", "namespace", &cfg.namespace, "-o", "json"])?)?;
+    let namespace_uid = namespace["metadata"]["uid"]
+        .as_str()
+        .context("KIND namespace has no identity")?;
+    let mut snapshot = if path.exists() {
+        serde_json::from_slice::<super::postgres_fixture::HeldWriters>(&fs::read(&path)?)?
+    } else {
+        super::postgres_fixture::HeldWriters::new(
+            cfg,
+            namespace_uid,
+            std::collections::BTreeMap::new(),
+        )
+    };
+    snapshot.validate(cfg, namespace_uid)?;
+    let held = &mut snapshot.replicas;
+    for resource in [
+        "deployment/navigator-web",
+        "restatedeployment/workflows-service",
+    ] {
+        if !kube.succeeds(&["get", resource]) {
+            continue;
+        }
+        let value: serde_json::Value =
+            serde_json::from_str(&kube.output(&["get", resource, "-o", "json"])?)?;
+        let replicas = value["spec"]["replicas"]
+            .as_u64()
+            .and_then(|n| u32::try_from(n).ok())
+            .unwrap_or(1);
+        held.entry(resource.into()).or_insert(replicas);
+    }
+    write_fixture_private(&path, &serde_json::to_vec(&snapshot)?)?;
+    let held = snapshot.replicas;
+    for resource in held.keys() {
+        kube.run(&["scale", resource, "--replicas=0"])?;
+    }
+    let deadline = Instant::now() + Duration::from_secs(180);
+    loop {
+        let pods: serde_json::Value = serde_json::from_str(&kube.output(&[
+            "get",
+            "pods",
+            "-l",
+            "app in (navigator-web,workflows-service)",
+            "-o",
+            "json",
+        ])?)?;
+        let mut observed = true;
+        for resource in held.keys() {
+            let state: serde_json::Value =
+                serde_json::from_str(&kube.output(&["get", resource, "-o", "json"])?)?;
+            observed &= super::postgres_fixture::writer_observed_stopped(&state);
+        }
+        if observed && pods["items"].as_array().is_some_and(Vec::is_empty) {
+            break;
+        }
+        if Instant::now() >= deadline {
+            bail!("KIND application writers did not stop; capture refused");
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    Ok(held)
+}
+
+async fn enroll_fixture(
+    root: &Path,
+    cfg: &KindConfig,
+    database: &str,
+    credentials: &super::postgres_fixture::Credentials,
+) -> Result<()> {
+    use store::postgres_backfill::{self, family};
+    let pg = store::postgres::PostgresDb::connect(credentials.options(cfg, root)).await?;
+    pg.migrate_embedded(None)
+        .await
+        .context("migrate the synthetic PostgreSQL store")?;
+    for item in
+        dotenvy::from_read_iter(super::render_env_for(cfg, database, cfg.web_port, root).as_bytes())
+    {
+        let (key, value) = item?;
+        env::set_var(key, value);
+    }
+    for (key, value) in credentials.environment(cfg, root) {
+        env::set_var(key, value);
+    }
+    let ready = family::require_runtime_scopes(&pg).await;
+    if ready.is_err() {
+        anyhow::ensure!(
+            std::net::TcpStream::connect(("127.0.0.1", cfg.web_port)).is_err(),
+            "stop the task host web before capturing PostgreSQL fixture history"
+        );
+        let enrolled: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM mirror_backfill_run WHERE scope <> 'global')",
+        )
+        .fetch_one(pg.pool())
+        .await?;
+        anyhow::ensure!(!enrolled, "existing family history needs explicit operator recovery; fixture bootstrap will not replace it");
+        let config = super::surreal::host_config(cfg, database);
+        let source = crate::surreal_archive::connect_http(&config).await?;
+        let (counts, _) = postgres_backfill::source_archive_inventory(&source).await?;
+        super::postgres_fixture::require_fresh_source(&counts)?;
+        store::schema::apply(&source).await?;
+        let (bytes, receipt) = crate::surreal_archive::capture_quiesced(&source).await?;
+        super::postgres_fixture::require_fresh_source(&receipt.table_counts)?;
+        write_fixture_private(&root.join(".devx/postgres/capture.surql"), &bytes)?;
+        write_fixture_private(
+            &root.join(".devx/postgres/capture.receipt.json"),
+            &serde_json::to_vec(&receipt)?,
+        )?;
+        let global = postgres_backfill::start(&source, &pg, 500, None).await?;
+        anyhow::ensure!(
+            global.is_clean(),
+            "synthetic global import did not verify cleanly"
+        );
+        for family in family::Family::all() {
+            let proof = receipt.clone().verify_export(&bytes)?;
+            let report =
+                postgres_backfill::start_family(&source, &pg, *family, proof, 500, None, true)
+                    .await?;
+            anyhow::ensure!(
+                report.is_clean(),
+                "synthetic scoped import did not verify cleanly"
+            );
+        }
+    }
+    family::require_runtime_scopes(&pg).await?;
+    // Only after real activation may ordinary accessors seed the sample portfolio.
+    let source = store::surreal::connect(&super::surreal::host_config(cfg, database)).await?;
+    let storage = cloud::from_env().await?;
+    store::seed::seed_environment(
+        &source,
+        &storage,
+        store::DeploymentEnvironment::Dev,
+        store::seed::BrandSeed::Neon,
+    )
+    .await?;
+    Ok(())
 }

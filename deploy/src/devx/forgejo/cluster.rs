@@ -22,37 +22,37 @@ use super::{
 };
 
 /// `kubectl`, pinned to one KIND context and namespace.
-pub(super) struct Kube {
+pub(in crate::devx) struct Kube {
     context: String,
     namespace: String,
 }
 
 impl Kube {
-    pub(super) fn selected(context: &str, namespace: &str) -> Self {
+    pub(in crate::devx) fn selected(context: &str, namespace: &str) -> Self {
         Self {
             context: context.to_owned(),
             namespace: namespace.to_owned(),
         }
     }
 
-    pub(super) fn new(cfg: &KindConfig) -> Self {
+    pub(in crate::devx) fn new(cfg: &KindConfig) -> Self {
         Self {
             context: cfg.kind_context(),
             namespace: cfg.namespace.clone(),
         }
     }
 
-    pub(super) fn command(&self) -> Command {
+    pub(in crate::devx) fn command(&self) -> Command {
         let mut command = Command::new("kubectl");
         command.args(["--context", &self.context, "--namespace", &self.namespace]);
         command
     }
 
-    pub(super) fn namespace(&self) -> &str {
+    pub(in crate::devx) fn namespace(&self) -> &str {
         &self.namespace
     }
 
-    pub(super) fn run(&self, args: &[&str]) -> Result<()> {
+    pub(in crate::devx) fn run(&self, args: &[&str]) -> Result<()> {
         let status = self
             .command()
             .args(args)
@@ -65,11 +65,15 @@ impl Kube {
     }
 
     /// Run and capture stdout; stderr is reported only on failure.
-    pub(super) fn output(&self, args: &[&str]) -> Result<String> {
+    pub(in crate::devx) fn output(&self, args: &[&str]) -> Result<String> {
         self.output_with_stdin(args, None)
     }
 
-    pub(super) fn output_with_stdin(&self, args: &[&str], stdin: Option<&[u8]>) -> Result<String> {
+    pub(in crate::devx) fn output_with_stdin(
+        &self,
+        args: &[&str],
+        stdin: Option<&[u8]>,
+    ) -> Result<String> {
         let mut child = self
             .command()
             .args(args)
@@ -100,7 +104,7 @@ impl Kube {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     }
 
-    pub(super) fn succeeds(&self, args: &[&str]) -> bool {
+    pub(in crate::devx) fn succeeds(&self, args: &[&str]) -> bool {
         self.command()
             .args(args)
             .stdout(Stdio::null())
@@ -110,12 +114,12 @@ impl Kube {
     }
 
     /// `kubectl apply -f -`, returning what changed.
-    pub(super) fn apply(&self, manifest: &str) -> Result<String> {
+    pub(in crate::devx) fn apply(&self, manifest: &str) -> Result<String> {
         self.output_with_stdin(&["apply", "-f", "-"], Some(manifest.as_bytes()))
     }
 
     /// A Secret's decoded data, or `None` when it does not exist.
-    pub(super) fn secret(&self, name: &str) -> Result<Option<BTreeMap<String, String>>> {
+    pub(in crate::devx) fn secret(&self, name: &str) -> Result<Option<BTreeMap<String, String>>> {
         if !self.succeeds(&["get", "secret", name]) {
             return Ok(None);
         }
@@ -139,7 +143,7 @@ impl Kube {
     }
 
     /// Exec into the Forgejo container as its own user.
-    pub(super) fn forgejo(&self, args: &[&str], stdin: Option<&[u8]>) -> Result<String> {
+    pub(in crate::devx) fn forgejo(&self, args: &[&str], stdin: Option<&[u8]>) -> Result<String> {
         let mut command_line = vec![
             "exec",
             if stdin.is_some() { "-i" } else { "--quiet" },
@@ -157,7 +161,7 @@ impl Kube {
         self.output_with_stdin(&command_line, stdin)
     }
 
-    pub(super) fn wait_rollout(&self, resource: &str, timeout: &str) -> Result<()> {
+    pub(in crate::devx) fn wait_rollout(&self, resource: &str, timeout: &str) -> Result<()> {
         self.run(&[
             "rollout",
             "status",
@@ -166,7 +170,7 @@ impl Kube {
         ])
     }
 
-    pub(super) fn wait_job(&self, job: &str) -> Result<()> {
+    pub(in crate::devx) fn wait_job(&self, job: &str) -> Result<()> {
         if self.succeeds(&[
             "wait",
             "--for=condition=complete",
@@ -181,7 +185,7 @@ impl Kube {
 }
 
 /// A Secret manifest from string data.
-pub(super) fn secret_manifest(
+pub(in crate::devx) fn secret_manifest(
     name: &str,
     namespace: &str,
     secret_type: &str,
@@ -271,7 +275,7 @@ pub(in crate::devx) fn up(cfg: &KindConfig) -> Result<()> {
     Ok(())
 }
 
-fn kustomize(root: &Path, overlay: &str) -> Result<String> {
+pub(in crate::devx) fn kustomize(root: &Path, overlay: &str) -> Result<String> {
     let output = Command::new("kubectl")
         .arg("kustomize")
         .arg(root.join(overlay))
@@ -372,41 +376,9 @@ fn ensure_signing_key(kube: &Kube) -> Result<()> {
 /// server keeps the certificate it started with.
 fn apply_secrets(cfg: &KindConfig, kube: &Kube, seed: &Seed) -> Result<()> {
     let namespace = kube.namespace();
-    let ca = if let Some(tls) = kube.secret("navigator-postgres-tls")? {
-        tls.get("tls.crt")
-            .cloned()
-            .context("navigator-postgres-tls has no tls.crt")?
-    } else {
-        let (cert, key) = server_certificate(namespace)?;
-        kube.apply(&secret_manifest(
-            "navigator-postgres-tls",
-            namespace,
-            "kubernetes.io/tls",
-            &BTreeMap::from([
-                ("tls.crt".to_owned(), cert.clone()),
-                ("tls.key".to_owned(), key),
-            ]),
-        )?)?;
-        cert
-    };
+    let ca = apply_postgres_secrets(kube, seed)?;
     let one = |key: &str, value: &str| BTreeMap::from([(key.to_owned(), value.to_owned())]);
-    let login = |password: &str| {
-        BTreeMap::from([
-            ("password".to_owned(), password.to_owned()),
-            ("ca.crt".to_owned(), ca.clone()),
-        ])
-    };
     let secrets = [
-        (
-            "navigator-postgres-auth",
-            one("password", &seed.postgres_password),
-        ),
-        ("navigator-postgres-app", login(&seed.app_password)),
-        (
-            "navigator-postgres-migrator",
-            login(&seed.migrator_password),
-        ),
-        ("navigator-postgres-backup", login(&seed.backup_password)),
         (
             "navigator-forgejo-database",
             one("password", &seed.database_password),
@@ -441,6 +413,54 @@ fn apply_secrets(cfg: &KindConfig, kube: &Kube, seed: &Seed) -> Result<()> {
     Ok(())
 }
 
+/// Reuse the tier's synthetic PostgreSQL material without deploying Forgejo.
+pub(in crate::devx) fn prepare_postgres(
+    cfg: &KindConfig,
+) -> Result<crate::devx::postgres_fixture::Credentials> {
+    let kube = Kube::new(cfg);
+    let seed = ensure_seed(&kube)?;
+    let ca = apply_postgres_secrets(&kube, &seed)?;
+    Ok(crate::devx::postgres_fixture::Credentials {
+        app_password: seed.app_password,
+        owner_password: seed.migrator_password,
+        ca,
+    })
+}
+
+fn apply_postgres_secrets(kube: &Kube, seed: &Seed) -> Result<String> {
+    let namespace = kube.namespace();
+    let ca = if let Some(tls) = kube.secret("navigator-postgres-tls")? {
+        tls.get("tls.crt")
+            .cloned()
+            .context("navigator-postgres-tls has no tls.crt")?
+    } else {
+        let (cert, key) = server_certificate(namespace)?;
+        kube.apply(&secret_manifest(
+            "navigator-postgres-tls",
+            namespace,
+            "kubernetes.io/tls",
+            &BTreeMap::from([
+                ("tls.crt".to_owned(), cert.clone()),
+                ("tls.key".to_owned(), key),
+            ]),
+        )?)?;
+        cert
+    };
+    for (name, password) in [
+        ("navigator-postgres-auth", &seed.postgres_password),
+        ("navigator-postgres-app", &seed.app_password),
+        ("navigator-postgres-migrator", &seed.migrator_password),
+        ("navigator-postgres-backup", &seed.backup_password),
+    ] {
+        let mut data = BTreeMap::from([("password".to_owned(), password.clone())]);
+        if name != "navigator-postgres-auth" {
+            data.insert("ca.crt".to_owned(), ca.clone());
+        }
+        kube.apply(&secret_manifest(name, namespace, "Opaque", &data)?)?;
+    }
+    Ok(ca)
+}
+
 /// A self-signed server certificate whose SAN covers the names clients
 /// verify (`verify-full`): the Service and its namespace-qualified form.
 fn server_certificate(namespace: &str) -> Result<(String, String)> {
@@ -452,7 +472,7 @@ fn server_certificate(namespace: &str) -> Result<(String, String)> {
         .args(["-subj", "/CN=navigator-postgres"])
         .arg("-addext")
         .arg(format!(
-            "subjectAltName=DNS:navigator-postgres,DNS:navigator-postgres.{namespace}.svc.cluster.local"
+            "subjectAltName=DNS:navigator-postgres,DNS:navigator-postgres.{namespace}.svc.cluster.local,DNS:localhost,IP:127.0.0.1"
         ))
         .arg("-keyout")
         .arg(&key)

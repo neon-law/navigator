@@ -512,6 +512,8 @@ fn up_dev(root: &Path, no_deps: bool, runtime: Runtime, base_cfg: &KindConfig) -
     let mut env_body = super::render_env_for(&cfg, &db_name, cfg.web_port, root);
     if runtime == Runtime::Native {
         super::native::append_environment(&mut env_body, slot, &db_name);
+    } else {
+        env_body.push_str(&super::postgres_fixture::read_environment(root)?);
     }
     write_worktree_env(root, &env_body)?;
 
@@ -964,6 +966,48 @@ fn read_descriptor(root: &Path) -> Option<WorktreeEnv> {
     serde_json::from_str(&body).ok()
 }
 
+/// Refuse another worktree's coordinates before a fixture can hold its writers.
+pub(super) fn verify_postgres_fixture_target(root: &Path, cfg: &KindConfig) -> Result<()> {
+    anyhow::ensure!(
+        cfg.namespace == super::DEFAULT_NAMESPACE,
+        "the synthetic PostgreSQL fixture uses the canonical KIND namespace"
+    );
+    if descriptor_path(root).exists() {
+        let descriptor = read_descriptor(root).context("fixture worktree descriptor is invalid")?;
+        let slot = descriptor
+            .dev_slot()
+            .context("fixture requires a development worktree slot")?;
+        anyhow::ensure!(
+            descriptor.runtime == Runtime::Kind
+                && descriptor.db_name.as_deref() == Some("navigator"),
+            "fixture requires this worktree's KIND database"
+        );
+        let expected = worktree_kind_config(cfg, root, slot);
+        anyhow::ensure!(
+            expected.cluster == cfg.cluster
+                && expected.postgres_port == cfg.postgres_port
+                && expected.surreal_port == cfg.surreal_port,
+            "fixture coordinates do not match the worktree descriptor"
+        );
+        let RegistryLoad::Loaded(registry) = load_cluster_registry(&host_cluster_registry_path())
+        else {
+            bail!("fixture KIND ownership registry is unavailable");
+        };
+        anyhow::ensure!(
+            registry
+                .get(&cfg.cluster)
+                .is_some_and(|owner| owner == root),
+            "fixture KIND cluster belongs to another worktree"
+        );
+    } else {
+        anyhow::ensure!(
+            cfg.cluster == super::DEFAULT_CLUSTER_NAME,
+            "an isolated fixture requires its worktree descriptor"
+        );
+    }
+    Ok(())
+}
+
 pub(super) fn is_native(root: &Path) -> bool {
     read_descriptor(root)
         .is_some_and(|descriptor| descriptor.mode == "dev" && descriptor.runtime == Runtime::Native)
@@ -994,8 +1038,7 @@ fn write_descriptor(root: &Path, desc: &WorktreeEnv) -> Result<()> {
 fn write_worktree_env(root: &Path, body: &str) -> Result<()> {
     std::fs::create_dir_all(devx_dir(root))
         .with_context(|| format!("create {}", devx_dir(root).display()))?;
-    std::fs::write(env_path(root), body)
-        .with_context(|| format!("write {}", env_path(root).display()))
+    super::orchestrate::write_fixture_private(&env_path(root), body.as_bytes())
 }
 
 fn remove_worktree_state(root: &Path) {
