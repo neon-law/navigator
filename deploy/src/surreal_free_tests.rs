@@ -513,4 +513,48 @@ mod tests {
             .contains("(package(server) & kind(test) & binary(=api_project_notations))"));
         assert!(!selection.nextest_filter.contains("surreal_free_tests::"));
     }
+    #[test]
+    fn compatibility_tests_do_not_suppress_mock_http_tiktok_tests() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let selection = select(root).unwrap();
+        assert!(selection
+            .nextest_filter
+            .contains("test(/^social_oauth::tests::/)"));
+        assert!(!selection.nextest_filter.contains("test(/^social_oauth::/)"));
+    }
+
+    #[test]
+    fn compatibility_tests_do_not_suppress_engine_free_firm_slug_tests() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let selection = select(root).unwrap();
+        assert!(selection.nextest_filter.contains("test(/^firms::tests::/)"));
+        assert!(!selection.nextest_filter.contains("test(/^firms::/)"));
+    }
+
+    #[test]
+    fn engine_orchestration_does_not_suppress_engine_free_scraper_tests() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let selection = select(root).unwrap();
+        assert!(
+            selection
+                .nextest_filter
+                .contains("test(/^scraper::tests::/)"),
+            "engine-backed orchestration stays excluded"
+        );
+        assert!(
+            !selection.nextest_filter.contains("test(/^scraper::/)"),
+            "engine-free adapter, retry, session, and filing tests remain selected"
+        );
+    }
+    #[test]
+    fn project_compatibility_does_not_suppress_native_postgres_journeys() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let selection = select(root).unwrap();
+        assert!(selection
+            .nextest_filter
+            .contains("test(/^postgres::projects_tests::compatibility::/)"));
+        assert!(!selection
+            .nextest_filter
+            .contains("test(/^postgres::projects_tests::/)"));
+    }
 }
