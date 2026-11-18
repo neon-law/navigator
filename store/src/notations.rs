@@ -43,6 +43,7 @@ use serde_json::Value as Json;
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::postgres_shadow::{notation_exists_read, notation_rows_read, NotationShape};
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 
 /// The table these rows live in.
@@ -527,7 +528,9 @@ pub async fn list_by_project(
         ))
         .await
         .and_then(surrealdb::IndexedResults::check)?;
-    many(response)
+    let rows = many(response)?;
+    notation_rows_read(NotationShape::ByProject(project_id), &rows);
+    Ok(rows)
 }
 
 /// Every notation across several Projects, newest first — the batched
@@ -556,7 +559,9 @@ pub async fn list_by_projects(
         .bind(("projects", keys))
         .await
         .and_then(surrealdb::IndexedResults::check)?;
-    many(response)
+    let rows = many(response)?;
+    notation_rows_read(NotationShape::ByProjects(project_ids.to_vec()), &rows);
+    Ok(rows)
 }
 
 /// How far a state has progressed through its workflow — used only to pick
@@ -634,7 +639,9 @@ pub async fn list_by_person(
         .bind(("person", record_id(PERSON_TABLE, person_id)))
         .await
         .and_then(surrealdb::IndexedResults::check)?;
-    many(response)
+    let rows = many(response)?;
+    notation_rows_read(NotationShape::ByPerson(person_id), &rows);
+    Ok(rows)
 }
 
 /// Every notation in the workspace, newest first — the lawyer "Notations"
@@ -650,7 +657,9 @@ pub async fn list_all(db: &SurrealDb) -> Result<Vec<Notation>, NotationError> {
         ))
         .await
         .and_then(surrealdb::IndexedResults::check)?;
-    many(response)
+    let rows = many(response)?;
+    notation_rows_read(NotationShape::All, &rows);
+    Ok(rows)
 }
 
 /// The one notation (if any) already open for this exact
@@ -683,7 +692,16 @@ pub async fn find_by_project_template_person(
         .bind(("person", record_id(PERSON_TABLE, person_id)))
         .await
         .and_then(surrealdb::IndexedResults::check)?;
-    one(response)
+    let notation = one(response)?;
+    notation_rows_read(
+        NotationShape::ByProjectTemplatePerson {
+            project_id,
+            template_id,
+            person_id,
+        },
+        notation.as_slice(),
+    );
+    Ok(notation)
 }
 
 /// Whether any notation exists on this Project — the matter-delete guard.
@@ -703,7 +721,9 @@ pub async fn exists_for_project(db: &SurrealDb, project_id: Uuid) -> Result<bool
         .await
         .and_then(surrealdb::IndexedResults::check)?;
     let ids: Vec<surrealdb::types::RecordId> = response.take(0)?;
-    Ok(!ids.is_empty())
+    let exists = !ids.is_empty();
+    notation_exists_read(project_id, exists);
+    Ok(exists)
 }
 
 /// Transition a notation's workflow `state`. Returns the updated row.

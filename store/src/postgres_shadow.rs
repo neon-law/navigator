@@ -418,6 +418,68 @@ pub(crate) fn notation_read(id: Uuid, result: Option<&crate::notations::Notation
     );
 }
 
+/// A notations read shape beyond `find_by_id` whose PostgreSQL answer is
+/// shadowed. Each variant names the SurrealDB read; the shadow re-runs
+/// the equivalent PostgreSQL query and compares the rows through the
+/// mirror's Notation image.
+#[derive(Debug, Clone)]
+pub(crate) enum NotationShape {
+    /// `list_by_project` — every notation on one Project.
+    ByProject(Uuid),
+    /// `list_by_projects` — the batched across-Projects read.
+    ByProjects(Vec<Uuid>),
+    /// `list_by_person` — every notation a Person is the respondent on.
+    ByPerson(Uuid),
+    /// `list_all` — the workspace-wide directory listing.
+    All,
+    /// `find_by_project_template_person` — the idempotent seed's
+    /// find-or-create probe, one row or none.
+    ByProjectTemplatePerson {
+        project_id: Uuid,
+        template_id: Uuid,
+        person_id: Uuid,
+    },
+}
+
+/// Shadow one of the notations list/read shapes ([`NotationShape`]).
+/// The SurrealDB rows are what the caller is about to return; the
+/// verdict lands on the `notation` table's tally beside `find_by_id`'s.
+pub(crate) fn notation_rows_read(shape: NotationShape, result: &[crate::notations::Notation]) {
+    let Some(draw) = draw(ShadowStore::Notations) else {
+        return;
+    };
+    let source = result.to_vec();
+    let id = result.first().map(|row| row.id);
+    let _ = observe_with(
+        config(),
+        draw,
+        ShadowStore::Notations,
+        "notation",
+        id,
+        move |pg| async move {
+            crate::postgres_mirror::workflow::shadow_notation_rows(&pg, shape, &source).await
+        },
+    );
+}
+
+/// Shadow an `exists_for_project` read — the matter-delete guard. The
+/// compared value is a boolean, so the verdict carries no row values.
+pub(crate) fn notation_exists_read(project_id: Uuid, result: bool) {
+    let Some(draw) = draw(ShadowStore::Notations) else {
+        return;
+    };
+    let _ = observe_with(
+        config(),
+        draw,
+        ShadowStore::Notations,
+        "notation",
+        Some(project_id),
+        move |pg| async move {
+            crate::postgres_mirror::workflow::shadow_notation_exists(&pg, project_id, result).await
+        },
+    );
+}
+
 /// Shadow an `inbox::conversation_by_id` read (LAW-238 D0 cutover evidence).
 pub(crate) fn conversation_read(id: Uuid, result: Option<&crate::inbox::Conversation>) {
     let Some(draw) = draw(ShadowStore::InboxConversations) else {
