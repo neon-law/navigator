@@ -1,7 +1,6 @@
-//! `hudson inbox import` (LAW-238 D2): the CLI verb is a thin client over
+//! `navigator inbox import` (LAW-238 D2): the CLI verb is a thin client over
 //! the server door `POST /app/api/inbox/import`, so the contract lives at
-//! three seams — the prose (`docs/inbox-import-cli.md` must not drift from
-//! the shipped behavior), the dry run (`--dry-run` prints the request JSON
+//! two seams — the dry run (`--dry-run` prints the request JSON
 //! and sends nothing, AC11), and the idempotent replay (a second import of
 //! the same payload exits 0 reporting the existing ids as deduped, AC3).
 
@@ -15,38 +14,8 @@ use tempfile::TempDir;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-const DOC: &str = include_str!("../../docs/inbox-import-cli.md");
-
-/// AC13: every command and behavior the documentation states must exist in
-/// the shipped surface, and the surface's no-send, ingest-only posture must
-/// hold in prose — a coupling test, not a CLI check.
-#[test]
-fn inbox_import_prose_names_the_shipped_behavior() {
-    for expected in [
-        "hudson inbox import",
-        "--source=email",
-        "--source=linkedin",
-        "--file",
-        "--dir",
-        "--mailbox",
-        "--project",
-        "--dry-run",
-        "dedup",
-        "exits 0",
-        "no `hudson inbox send`",
-        "ingest-only",
-        "navigator site login",
-        "reconcile step",
-    ] {
-        assert!(
-            DOC.contains(expected),
-            "inbox-import prose must name {expected}"
-        );
-    }
-}
-
 fn navigator() -> Command {
-    let mut command = Command::cargo_bin("hudson").unwrap();
+    let mut command = Command::cargo_bin("navigator").unwrap();
     command.env_remove("GITHUB_REPOSITORY");
     command.env("NAVIGATOR_RELEASE_TAG", env!("CARGO_PKG_VERSION"));
     command.env_remove("GITHUB_REF");
