@@ -1671,6 +1671,12 @@ mod tests {
                     "../postgres/migrations/20261117140000_add_review_authority_constraints.sql"
                 ),
             ),
+            (
+                "20261117150000_add_signature_authority_constraints.sql",
+                include_str!(
+                    "../postgres/migrations/20261117150000_add_signature_authority_constraints.sql"
+                ),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

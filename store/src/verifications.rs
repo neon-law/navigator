@@ -28,6 +28,8 @@ const TABLE: &str = "verification";
 const CITATION_TABLE: &str = "citation";
 const PERSON_TABLE: &str = "person";
 
+use crate::postgres::signatures as authority;
+
 /// Why a verification command refused.
 #[derive(Debug, thiserror::Error)]
 pub enum VerificationError {
@@ -42,6 +44,9 @@ pub enum VerificationError {
     UnknownStatus(String),
     #[error("database: {0}")]
     Db(#[from] surrealdb::Error),
+    /// PostgreSQL, under the signature authority, failed.
+    #[error(transparent)]
+    Postgres(#[from] authority::SignatureFamilyError),
     /// A write reported success but returned no row, or returned one this
     /// module could not read back.
     #[error("writing a verification returned no usable row")]
@@ -108,6 +113,37 @@ fn many(mut response: surrealdb::IndexedResults) -> Result<Vec<Verification>, su
         .collect())
 }
 
+/// The row as PostgreSQL's `to_jsonb` serves it, under the
+/// `postgres::signatures` authority.
+#[derive(serde::Deserialize)]
+struct PgVerificationRow {
+    id: Uuid,
+    citation_id: Uuid,
+    revision_sha: String,
+    status_citation: String,
+    status_quote: String,
+    status_proposition: String,
+    verifier_person_id: Uuid,
+    inserted_at: chrono::DateTime<chrono::Utc>,
+    updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<PgVerificationRow> for Verification {
+    fn from(row: PgVerificationRow) -> Self {
+        Verification {
+            id: row.id,
+            citation_id: row.citation_id,
+            revision_sha: row.revision_sha,
+            status_citation: row.status_citation,
+            status_quote: row.status_quote,
+            status_proposition: row.status_proposition,
+            verifier_person_id: row.verifier_person_id,
+            inserted_at: row.inserted_at,
+            updated_at: row.updated_at,
+        }
+    }
+}
+
 /// Record a verification of `citation_id` against `revision_sha`.
 ///
 /// All three axes start [`AxisStatus::Unverified`]. Callers move each one
@@ -128,6 +164,29 @@ pub async fn record(
     // string satisfies a NOT NULL constraint and names no revision.
     if revision_sha.trim().is_empty() {
         return Err(VerificationError::MissingRevision);
+    }
+
+    if let Some(pg) = authority::authority().await? {
+        let unverified = AxisStatus::Unverified.as_str().to_string();
+        let row = serde_json::json!({
+            "id": Uuid::now_v7(), "citation_id": citation_id,
+            "revision_sha": revision_sha,
+            "status_citation": unverified,
+            "status_quote": unverified,
+            "status_proposition": unverified,
+            "verifier_person_id": verifier_person_id,
+        });
+        let query = sqlx::query(
+            "INSERT INTO verification SELECT * FROM \
+             jsonb_populate_record(NULL::verification, \
+             $1 || jsonb_build_object('inserted_at', now(), 'updated_at', now())) \
+             RETURNING to_jsonb(verification) AS row",
+        )
+        .bind(row);
+        return authority::maybe::<PgVerificationRow>(&pg, query)
+            .await?
+            .map(Verification::from)
+            .ok_or(VerificationError::WriteReturnedNothing);
     }
 
     let id = Uuid::now_v7();
@@ -155,7 +214,15 @@ pub async fn record(
         .ok_or(VerificationError::WriteReturnedNothing)
 }
 
-async fn find_by_id(db: &SurrealDb, id: Uuid) -> Result<Option<Verification>, surrealdb::Error> {
+async fn find_by_id(db: &SurrealDb, id: Uuid) -> Result<Option<Verification>, VerificationError> {
+    if let Some(pg) = authority::authority().await? {
+        let query =
+            sqlx::query("SELECT to_jsonb(verification) AS row FROM verification WHERE id = $1")
+                .bind(id);
+        return Ok(authority::maybe::<PgVerificationRow>(&pg, query)
+            .await?
+            .map(Verification::from));
+    }
     let mut response = db
         .query(format!("SELECT {SELECT} FROM ONLY $id LIMIT 1"))
         .bind(("id", record_id(TABLE, id)))
@@ -190,6 +257,20 @@ pub async fn set_axis(
         Axis::Quote => "status_quote",
         Axis::Proposition => "status_proposition",
     };
+    if let Some(pg) = authority::authority().await? {
+        // The field name comes from the closed `Axis` set above, never
+        // from caller input, so the interpolation is a vocabulary lookup.
+        let query = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "UPDATE verification SET {field} = $1, updated_at = now() \
+             WHERE id = $2 RETURNING to_jsonb(verification) AS row"
+        )))
+        .bind(status.as_str().to_string())
+        .bind(verification_id);
+        return authority::maybe::<PgVerificationRow>(&pg, query)
+            .await?
+            .map(Verification::from)
+            .ok_or(VerificationError::WriteReturnedNothing);
+    }
     let mut response = db
         .query(format!(
             "UPDATE $id SET {field} = $status, updated_at = time::now() RETURN {SELECT}"
@@ -225,6 +306,18 @@ pub async fn for_citation(
     db: &SurrealDb,
     citation_id: Uuid,
 ) -> Result<Vec<Verification>, VerificationError> {
+    if let Some(pg) = authority::authority().await? {
+        let query = sqlx::query(
+            "SELECT to_jsonb(verification) AS row FROM verification \
+             WHERE citation_id = $1 ORDER BY id DESC",
+        )
+        .bind(citation_id);
+        return Ok(authority::rows::<PgVerificationRow>(&pg, query)
+            .await?
+            .into_iter()
+            .map(Verification::from)
+            .collect());
+    }
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE citation_id = $citation ORDER BY id DESC"
@@ -272,6 +365,22 @@ pub async fn stale_after_revision(
     citation_id: Uuid,
     current_revision_sha: &str,
 ) -> Result<Vec<StaleTransition>, VerificationError> {
+    if let Some(pg) = authority::authority().await? {
+        return Ok(
+            authority::sweep_stale(&pg, citation_id, current_revision_sha)
+                .await?
+                .into_iter()
+                .map(
+                    |(axis, verification_id, from_revision_sha)| StaleTransition {
+                        verification_id,
+                        citation_id,
+                        axis,
+                        from_revision_sha,
+                    },
+                )
+                .collect(),
+        );
+    }
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} \
