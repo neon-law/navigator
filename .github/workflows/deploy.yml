@@ -571,7 +571,7 @@ jobs:
       || github.event_name == 'schedule'
       || startsWith(github.ref_name, 'kind-ci/')
       || (vars.DEPLOY_EXPECTED_REPOSITORY != '' && github.repository != vars.DEPLOY_EXPECTED_REPOSITORY)
-    # Every leg runs on a Blacksmith four-vCPU runner. Runner capacity and disk
+    # Each leg uses the Blacksmith capacity declared below. Runner capacity and disk
     # sizing are selected for the Rust and image-build workload; the small
     # `ubuntu-latest` disk ran out before rustup finished.
     runs-on: ${{ matrix.runner }}
