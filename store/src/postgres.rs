@@ -79,9 +79,9 @@ mod inbox_tests;
 static MIGRATIONS: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/postgres/migrations");
 
 #[cfg(test)]
-pub(crate) mod fixtures;
-#[cfg(test)]
 mod billing_batch_tests;
+#[cfg(test)]
+pub(crate) mod fixtures;
 
 /// The checked-in migrations, parsed as SQLx parses a directory:
 /// `<version>_<description>.sql`, with underscores read as spaces.
