@@ -32,6 +32,8 @@ jobs:
     - name: Prove claim retention and TLS
       run: |
         set -euo pipefail
+        # Read the pin rather than repeat it: the weekly pin pull request cannot edit a workflow file.
+        image="$(awk '/newName:/ {name=$2} /digest: sha256:/ {print name "@" $2; exit}' k8s/postgres/kustomization.yaml)"
         for lane in staging production; do
           kubectl kustomize "examples/deploy/k8s/gke/postgres/$lane" > "/tmp/$lane.yaml"
           if [[ "$lane" == staging ]]; then
@@ -42,7 +44,7 @@ jobs:
             capacity=100Gi
           fi
           grep -q "namespace: $namespace" "/tmp/$lane.yaml"
-          grep -q 'image: ghcr.io/neon-law/navigator/postgres@sha256:a3f6db0888d3d68c0ccadf936784768ecda4131b58fba30d631d69ff58337a8e' "/tmp/$lane.yaml"
+          grep -qF "image: $image" "/tmp/$lane.yaml"
           grep -q "storage: $capacity" "/tmp/$lane.yaml"
           grep -q 'reclaimPolicy: Retain' "/tmp/$lane.yaml"
           grep -q 'whenDeleted: Retain' "/tmp/$lane.yaml"

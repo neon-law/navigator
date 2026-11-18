@@ -1488,10 +1488,18 @@ fn postgres_image_is_published_weekly_from_this_repository_and_pinned_back() {
     let schedule = workflow["on"]["schedule"][0]["cron"]
         .as_str()
         .expect("postgres-image.yml runs on a schedule");
-    let fields: Vec<&str> = schedule.split_whitespace().collect();
-    assert_eq!(fields.len(), 5, "cron {schedule}");
-    assert_eq!(&fields[2..4], ["*", "*"], "weekly, not monthly: {schedule}");
-    assert!(fields[4].parse::<u8>().is_ok(), "one weekday: {schedule}");
+    assert_eq!(schedule, "55 5 * * 0", "weekly, Sundays at 05:55 UTC");
+    // The App that opens the weekly pin pull request holds no `workflows`
+    // permission, so no workflow may repeat the digest the pin moves.
+    for entry in std::fs::read_dir(workspace().join(".github/workflows")).expect("workflows") {
+        let path = entry.expect("workflow entry").path();
+        let text = std::fs::read_to_string(&path).expect("read workflow");
+        assert!(
+            !text.contains("navigator/postgres@sha256:"),
+            "{} repeats the PostgreSQL digest; read it from k8s/postgres/kustomization.yaml",
+            path.display()
+        );
+    }
     for required in [
         "context: images/postgres",
         "REGISTRY: ghcr.io/${{ github.repository_owner }}/navigator/postgres",

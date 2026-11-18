@@ -1,14 +1,15 @@
 name: PostgreSQL image
 # Builds `images/postgres`, tests each architecture's candidate, and publishes
-# the tested manifests to ghcr.io/<owner>/navigator/postgres. The Monday run
-# rebuilds without cache so Debian security fixes reach a new image every week;
+# the tested manifests to ghcr.io/<owner>/navigator/postgres. The Sunday 05:55
+# UTC run rebuilds without cache and bumps upstream PostgreSQL, AGE, and
+# pgvector, so security fixes reach GKE and KIND every week;
 # a change to the recipe publishes on merge. Each publish is then dogfooded:
 # `scripts/postgres-image-pin.sh` moves every Navigator pin to the new digest
 # and the pull request it opens runs the compatibility and persistence gates
 # against exactly what was published.
 on:
   schedule:
-    - cron: '17 9 * * 1'
+    - cron: '55 5 * * 0'
   workflow_dispatch:
   push:
     branches: [main]
