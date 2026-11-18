@@ -1,5 +1,3 @@
-# Privacy Policy
-
 _Last updated: November 5, 2026._
 
 Privacy is a fundamental human right. This policy explains what we collect, why we collect it, who we share it with, and
