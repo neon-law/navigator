@@ -4,3 +4,14 @@ namespace: navigator
 resources:
   - ../../kind-postgres-persistence
   - ../../../postgres/access
+patches:
+  - target:
+      kind: Service
+      name: navigator-postgres
+    patch: |-
+      - op: add
+        path: /spec/type
+        value: NodePort
+      - op: add
+        path: /spec/ports/0/nodePort
+        value: 31532

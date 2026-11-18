@@ -2625,6 +2625,8 @@ fn render_kind_config(template: &str, cfg: &KindConfig) -> String {
                 Some(cfg.ingress_http_port)
             } else if trimmed.contains("containerPort: 443") {
                 Some(cfg.ingress_https_port)
+            } else if trimmed.contains("containerPort: 31532") {
+                Some(cfg.postgres_port)
             } else if trimmed.contains(&format!("containerPort: {DEFAULT_RAUTHY_HOST_PORT}")) {
                 Some(cfg.rauthy_port)
             } else {
@@ -4422,10 +4424,15 @@ admin_base_url = "https://production-env.example.invalid:9070"
         cfg.ingress_http_port = 18080;
         cfg.ingress_https_port = 18443;
         cfg.rauthy_port = 31080;
+        cfg.postgres_port = 21537;
         let rendered = render_kind_config(COMMITTED_KIND_CONFIG, &cfg);
         assert!(rendered.contains("hostPort: 18080"));
         assert!(rendered.contains("hostPort: 18443"));
         assert!(rendered.contains("hostPort: 31080"));
+        assert!(rendered.contains("hostPort: 21537"));
+        assert!(rendered.contains("containerPort: 31532"));
+        assert!(rendered.contains("listenAddress: \"127.0.0.1\""));
+        assert!(!rendered.contains("hostPort: 15432"));
         assert!(!rendered.contains("hostPort: 8080"));
         assert!(!rendered.contains("hostPort: 8443"));
         assert!(!rendered.contains("hostPort: 30080"));

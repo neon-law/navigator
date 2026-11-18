@@ -55,6 +55,19 @@ impl HeldWriters {
     }
 }
 
+/// The host must reach this KIND node directly, without a pooled stream tunnel.
+pub(super) fn validate_published_port(ports: &serde_json::Value, expected: u16) -> Result<()> {
+    ensure!(
+        ports["31532/tcp"].as_array().is_some_and(|bindings| {
+            bindings.len() == 1
+                && bindings[0]["HostIp"].as_str() == Some("127.0.0.1")
+                && bindings[0]["HostPort"].as_str() == Some(expected.to_string().as_str())
+        }),
+        "KIND PostgreSQL requires its task-owned loopback mapping; recreate only this synthetic tier with the current KIND configuration"
+    );
+    Ok(())
+}
+
 pub(super) fn ca_path(root: &Path) -> PathBuf {
     root.join(".devx/postgres/ca.crt")
 }
@@ -174,6 +187,18 @@ pub(super) fn render_environment(values: &BTreeMap<String, String>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn postgres_mapping_refuses_missing_shared_or_redirected_bindings() {
+        let valid = serde_json::json!({"31532/tcp":[{"HostIp":"127.0.0.1","HostPort":"21503"}]});
+        validate_published_port(&valid, 21503).unwrap();
+        assert!(validate_published_port(&valid, 21504).is_err());
+        assert!(validate_published_port(&serde_json::json!({}), 21503).is_err());
+        for host in ["0.0.0.0", "::", "192.0.2.1"] {
+            let redirected = serde_json::json!({"31532/tcp":[{"HostIp":host,"HostPort":"21503"}]});
+            assert!(validate_published_port(&redirected, 21503).is_err());
+        }
+    }
 
     #[test]
     fn interrupted_holds_refuse_changed_target_or_namespace_identity() {

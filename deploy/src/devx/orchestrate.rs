@@ -84,13 +84,6 @@ pub(super) fn up_in(root: &Path, cfg: &KindConfig) -> Result<()> {
             &state,
         )?);
         pids.push(port_forward(
-            "svc/navigator-postgres",
-            cfg.postgres_port,
-            5432,
-            cfg,
-            &state,
-        )?);
-        pids.push(port_forward(
             "svc/clamav",
             cfg.clamav_port,
             3310,
@@ -1256,27 +1249,7 @@ fn spawn_port_forward(args: &[&str], state: &StateDir) -> Result<u32> {
     let log_offset = state.log_size();
     let log = state.open_log()?;
     let log_err = log.try_clone()?;
-    // A completed TLS session can reset kubectl's stream. Supervise the
-    // transport, never the capture or migration operation using it.
-    let mut cmd = if args.contains(&"service/navigator-postgres") {
-        let mut command = Command::new("sh");
-        command.args([
-            "-c",
-            r#"child=
-trap 'if [ -n "$child" ]; then kill -TERM "$child" 2>/dev/null; wait "$child" 2>/dev/null; fi; exit 0' TERM INT
-while :; do
-    kubectl "$@" &
-    child=$!
-    wait "$child"
-    child=
-    sleep 1
-done"#,
-            "hudson-postgres-forward",
-        ]);
-        command
-    } else {
-        Command::new("kubectl")
-    };
+    let mut cmd = Command::new("kubectl");
     cmd.args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::from(log))
@@ -1576,9 +1549,13 @@ pub(super) fn postgres_bootstrap(path: Option<&Path>, cfg: &KindConfig) -> Resul
     bootstrap_postgres_in(&root, &cfg, "navigator")
 }
 
-fn bootstrap_postgres_in(root: &Path, cfg: &KindConfig, database: &str) -> Result<()> {
-    use super::forgejo::cluster::{prepare_postgres, Kube};
-    require_tools(&["kind", "kubectl", "openssl"])?;
+fn fixture_kube(
+    root: &Path,
+    cfg: &KindConfig,
+    database: &str,
+) -> Result<super::forgejo::cluster::Kube> {
+    use super::forgejo::cluster::Kube;
+    require_tools(&["kind", "kubectl", "docker", "openssl"])?;
     super::worktree_env::verify_postgres_fixture_target(root, cfg)?;
     let clusters = Command::new("kind").args(["get", "clusters"]).output()?;
     anyhow::ensure!(
@@ -1588,6 +1565,18 @@ fn bootstrap_postgres_in(root: &Path, cfg: &KindConfig, database: &str) -> Resul
                 .any(|name| name == cfg.cluster),
         "PostgreSQL fixture requires this task's existing KIND cluster"
     );
+    let published = Command::new("docker")
+        .args(["inspect", "--format", "{{json .NetworkSettings.Ports}}"])
+        .arg(format!("{}-control-plane", cfg.cluster))
+        .output()?;
+    anyhow::ensure!(
+        published.status.success(),
+        "inspect the owned KIND node's published ports"
+    );
+    super::postgres_fixture::validate_published_port(
+        &serde_json::from_slice(&published.stdout)?,
+        cfg.postgres_port,
+    )?;
     let kube = Kube::new(cfg);
     let read = |kind: &str| -> Result<serde_json::Value> {
         Ok(serde_json::from_str(
@@ -1609,6 +1598,12 @@ fn bootstrap_postgres_in(root: &Path, cfg: &KindConfig, database: &str) -> Resul
             "navigator-postgres",
         )?;
     }
+    Ok(kube)
+}
+
+fn bootstrap_postgres_in(root: &Path, cfg: &KindConfig, database: &str) -> Result<()> {
+    use super::forgejo::cluster::prepare_postgres;
+    let kube = fixture_kube(root, cfg, database)?;
     let held = hold_fixture_writers(root, cfg, &kube)?;
     let state = StateDir::new(root)?;
     state.kill_pids();
@@ -1635,7 +1630,6 @@ fn bootstrap_postgres_in(root: &Path, cfg: &KindConfig, database: &str) -> Resul
     kube.wait_rollout("statefulset/seaweedfs", "300s")?;
     let mut all_pids = state.read_pids()?;
     for (service, local, remote) in [
-        ("service/navigator-postgres", cfg.postgres_port, 5432),
         (
             "service/surreal",
             cfg.surreal_port,
@@ -1761,6 +1755,25 @@ fn hold_fixture_writers(
     Ok(held)
 }
 
+/// Before schema installation, census only tables that actually exist.
+async fn fixture_source_counts(
+    source: &store::surreal::SurrealDb,
+) -> Result<std::collections::BTreeMap<String, i64>> {
+    let mut response = source.query("RETURN (INFO FOR DB).tables").await?;
+    let tables: Option<std::collections::BTreeMap<String, String>> = response.take(0)?;
+    let tables = tables.context("synthetic source omitted its live table inventory")?;
+    let mut counts = std::collections::BTreeMap::new();
+    for table in tables.keys() {
+        let mut response = source
+            .query("SELECT VALUE count() FROM type::table($table) GROUP ALL")
+            .bind(("table", table.clone()))
+            .await?;
+        let rows: Vec<i64> = response.take(0)?;
+        counts.insert(table.clone(), rows.first().copied().unwrap_or_default());
+    }
+    Ok(counts)
+}
+
 async fn enroll_fixture(
     root: &Path,
     cfg: &KindConfig,
@@ -1795,7 +1808,7 @@ async fn enroll_fixture(
         anyhow::ensure!(!enrolled, "existing family history needs explicit operator recovery; fixture bootstrap will not replace it");
         let config = super::surreal::host_config(cfg, database);
         let source = crate::surreal_archive::connect_http(&config).await?;
-        let (counts, _) = postgres_backfill::source_archive_inventory(&source).await?;
+        let counts = fixture_source_counts(&source).await?;
         super::postgres_fixture::require_fresh_source(&counts)?;
         store::schema::apply(&source).await?;
         let (bytes, receipt) = crate::surreal_archive::capture_quiesced(&source).await?;

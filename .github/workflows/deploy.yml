@@ -1095,6 +1095,13 @@ jobs:
           tag: "${{ needs.release-version.outputs.tag }}"
           stage: "integration"
           step: "wait for rollouts, ClamAV readiness, and run attachment smoke checks"
+      - uses: ./.github/actions/slack-progress
+        timeout-minutes: 90
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          tag: "${{ needs.release-version.outputs.tag }}"
+          stage: "integration"
+          step: "bootstrap the shared synthetic PostgreSQL fixture"
       - name: bootstrap the shared synthetic PostgreSQL fixture
         timeout-minutes: 90
         run: cargo run -p hudson -- dev postgres-bootstrap

@@ -72,7 +72,7 @@ with Docker Desktop, which is exactly why the remaining tools are easy to miss:
 - **`openssl`** — the PostgreSQL fixture uses it to generate the task-owned TLS certificate before the application
   starts. No plaintext connection exception is needed.
 - **`helm`, any release with OCI registry support** — the lane uses it for one thing, `helm upgrade --install` of the
-  Restate Operator chart from `oci://ghcr.io/restatedev/restate-operator-helm` at `deploy/src/devx/orchestrate.rs:698`.
+  Restate Operator chart from `oci://ghcr.io/restatedev/restate-operator-helm` at `deploy/src/devx/orchestrate.rs:691`.
   Nothing in this repository pins it and CI takes whatever its runner image ships, so there is no version to cite here
   the way there is for the tools above; v4.2.4 is known to pull the pinned chart.
 

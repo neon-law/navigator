@@ -89,6 +89,7 @@ cluster. Restart the compiled `web` process after changing routes, handlers, vie
 | Rauthy | `30080` |
 | SeaweedFS | `30900` |
 | SurrealDB | `18000` |
+| PostgreSQL TLS | `15432` |
 | `web`, default brand | `3001` |
 | `web`, `delete-your-data` | `3011` |
 
@@ -98,7 +99,8 @@ brand ports move with that slot. Always read the values from that worktree's `.d
 
 PostgreSQL is the storage authority. KIND provisions the pinned retained PostgreSQL image, TLS certificate, and
 application roles through the same fixture seam as Forgejo. `.devx/env` contains the application role and a loopback
-`verify-full` connection; `.devx/postgres/ca.crt` is the trusted certificate. Keep these ignored files private.
+`verify-full` connection; `.devx/postgres/ca.crt` is the trusted certificate. KIND maps its PostgreSQL NodePort to
+loopback directly so closing one database session cannot interrupt another pooled connection. Keep these files private.
 
 The lifecycle holds web and worker replicas before PostgreSQL enrollment. For a fresh, memory-backed legacy store, it
 verifies an actual strict schema-only export, imports it, and enrolls the required PostgreSQL scopes before normal
