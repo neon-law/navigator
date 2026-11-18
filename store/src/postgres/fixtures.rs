@@ -38,7 +38,7 @@ pub(crate) async fn workflow_fixture(pg: &PostgresDb) -> (Uuid, Uuid, Uuid) {
         .bind(project).bind(project.to_string()).bind(entity).execute(pg.pool()).await.unwrap();
     sqlx::query("INSERT INTO template(id, code, title, respondent_type, is_current, inserted_at, updated_at) VALUES ($1, $2, 'Synthetic', 'person', true, now(), now())")
         .bind(template).bind(template.to_string()).execute(pg.pool()).await.unwrap();
-    sqlx::query("INSERT INTO notation(id, template_id, person_id, project_id, state) VALUES ($1, $2, $3, $4, 'draft')")
+    sqlx::query("INSERT INTO notation(id, template_id, person_id, project_id, state) VALUES ($1, $2, $3, $4, 'BEGIN')")
         .bind(notation).bind(template).bind(person).bind(project).execute(pg.pool()).await.unwrap();
     sqlx::query(
         "INSERT INTO question(id, code, prompt, answer_type) VALUES ($1, $2, 'Synthetic', 'text')",

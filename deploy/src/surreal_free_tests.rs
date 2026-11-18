@@ -546,4 +546,15 @@ mod tests {
             "engine-free adapter, retry, session, and filing tests remain selected"
         );
     }
+    #[test]
+    fn project_compatibility_does_not_suppress_native_postgres_journeys() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let selection = select(root).unwrap();
+        assert!(selection
+            .nextest_filter
+            .contains("test(/^postgres::projects_tests::compatibility::/)"));
+        assert!(!selection
+            .nextest_filter
+            .contains("test(/^postgres::projects_tests::/)"));
+    }
 }
