@@ -380,6 +380,7 @@ jobs:
       # 590 GB volume; the post-clippy relocate is the fallback if attach
       # is later still.
       - name: place the build directory on the largest disk
+        id: place
         run: |
           set -euo pipefail
           # `df -P | awk` rather than `df --output=avail`: GNU df rejects
@@ -430,8 +431,12 @@ jobs:
               sudo chown "$(id -u):$(id -g)" "${dest}"
               echo "CARGO_TARGET_DIR=${dest}" >> "${GITHUB_ENV}"
               echo "build directory -> ${dest} ($((dest_avail / 1024 / 1024)) GiB free)"
+              # rust-cache `path.join`s its target onto the workspace root,
+              # so an absolute directory must be handed over as a relative one.
+              echo "cache-target=$(realpath --relative-to="${GITHUB_WORKSPACE}" "${dest}")" >> "${GITHUB_OUTPUT}"
           else
               echo "build directory -> workspace default (root is the larger disk)"
+              echo "cache-target=target" >> "${GITHUB_OUTPUT}"
           fi
       # Depth 2, not 1. On a `pull_request` event this checks out
       # `refs/pull/<n>/merge`, whose first parent is the base tip and whose
@@ -479,47 +484,35 @@ jobs:
       # it did, because these are byte-for-byte the artifacts the job would
       # otherwise produce in the same paths.
       #
-      # That quota is the whole story of whether this step does anything. It is
-      # 10 GB for the entire repository, and `deploy.yml` used to spend it all:
-      # eleven `mode=max` buildx exports left 66 of 68 live entries as
-      # `buildkit-blob-*` totalling 9.51 GB, so this 2.19 GB archive was
-      # evicted as fast as it was written. Measured on run 144149466 the
-      # restore took 0.16 s and returned nothing, and the repository held zero
-      # `v0-rust-*` entries — every PR push was compiling the third-party graph
-      # from scratch and then uploading 2.19 GB nothing would ever read. The
-      # publish jobs now cache into Artifact Registry instead, which leaves the
-      # quota to this.
+      # On a Blacksmith runner this action is transparently served by
+      # Blacksmith's colocated cache (25 GB per repository, free, LRU after 7
+      # idle days), not the repository's 10 GB GitHub Actions quota.
       #
-      # This step both restores AND saves. The gate owns its cache end to end,
-      # so there is no second workflow writing the entry it reads and no pair of
-      # files that have to agree.
+      # `workspaces` MUST name the directory the build actually uses. The
+      # action defaults to `./target`, and the step above moves the build to
+      # the large disk, so without it the action archived an empty `./target`
+      # and saved only `~/.cargo` (235 MB, run 44371787937): every run, hit or
+      # miss, recompiled the whole third-party graph for ~26 minutes.
       #
-      # The cost, stated plainly rather than discovered later: Actions caches are
-      # scoped per ref, so an entry written by one pull request is readable only
-      # by that pull request. The FIRST push of a new branch is therefore always
-      # cold — ~6 min of test build plus the dependency share of clippy and the
-      # CLI build — and every later push of that branch restores it.
+      # The cache is branch-scoped unless "branch scoping" is turned off in the
+      # Blacksmith dashboard (Settings > Caching). `main` never runs this
+      # workflow, so with scoping on there is no default-branch entry to fall
+      # back to and the first push of every pull request starts cold.
       #
-      # What it buys is a quota nothing has to share. ~1.6 GB per active branch
-      # against 10 GB for the whole repository is roughly six live branches
-      # before eviction begins, which is exactly why the `deploy.yml` rule below
-      # still matters: one unread `mode=max` export is enough to starve all of
-      # them.
-      #
-      # It authenticates the way the first-party action does — the
-      # runner-injected `ACTIONS_RUNTIME_TOKEN` — so nothing here reaches
-      # api.github.com. The key it derives already covers the rustc version, the
-      # lock file, and `CARGO_TARGET_DIR`, so it follows the build directory
-      # wherever the step above put it.
+      # This step both restores AND saves; the post step saves only on success.
       - name: cache the Rust dependencies
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
+          workspaces: ". -> ${{ steps.place.outputs.cache-target }}"
           # `shared-key`, NOT `key`. `key` is added to an automatic per-job key
           # (`add-job-id-key` defaults to true), which would scope the entry to
           # this job id and make it unreadable the moment the job is renamed.
           # `shared-key` replaces that automatic part, so the entry this job
           # writes is the entry it reads on the next push of the same branch.
           shared-key: workspace
+          # A red test run still compiled a good dependency graph; keep it so
+          # the fixing push does not start cold.
+          cache-on-failure: true
       - name: cargo fmt
         run: cargo fmt --all -- --check
       # The wasm client build, which nothing else in this workflow compiles.
@@ -911,8 +904,40 @@ jobs:
           #     local `cargo llvm-cov --workspace` lane reads lower than this
           #     job — so dropping them would both narrow the gate and move the
           #     percentage it is compared against.
-          # shellcheck disable=SC2046 # one runner per line
-          cargo test -p features $(cat /tmp/surreal-free/features-args)
+          #
+          # The `features` binaries run straight out of the workspace build
+          # above, NOT through `cargo test -p features`. `-p` resolves features
+          # for that one package, which differs from the workspace's unified
+          # set, so it recompiled the dependency graph — surrealdb-core
+          # included — for 17.5 minutes (run 44371787937). `cargo test
+          # --workspace --no-run` matches the nextest build's fingerprints, so
+          # it compiles nothing and only reports where each binary is. Each is
+          # run from `features/`, the directory `cargo test` would use.
+          cargo test --workspace --no-run --message-format=json > /tmp/test-artifacts.json
+          features_bin() {
+              jq -r --arg kind "$1" --arg name "$2" '
+                  select(.reason == "compiler-artifact" and .executable != null
+                      and (.manifest_path | endswith("/features/Cargo.toml"))
+                      and (.target.kind | index($kind))
+                      and ($name == "" or .target.name == $name))
+                  | .executable' /tmp/test-artifacts.json
+          }
+          # `|| [ -n ]`: the file has no trailing newline, and a bare `read`
+          # would silently drop its last target.
+          while read -r arg || [ -n "${arg}" ]; do
+              case "${arg}" in
+                  --lib) bin="$(features_bin lib "")" ;;
+                  --test=*) bin="$(features_bin test "${arg#--test=}")" ;;
+                  "") continue ;;
+                  *) echo "::error::unknown features argument ${arg}"; exit 1 ;;
+              esac
+              if [ "$(printf '%s\n' "${bin}" | grep -c .)" -ne 1 ]; then
+                  echo "::error::features ${arg} did not resolve to exactly one binary: ${bin:-<none>}"
+                  exit 1
+              fi
+              echo "features ${arg}: ${bin}"
+              (cd features && "${bin}")
+          done < /tmp/surreal-free/features-args
           cargo test --workspace --doc
           # THE COVERAGE GATE. `--fail-under-lines` exits non-zero when total
           # workspace line coverage is under the floor, which fails this job and
