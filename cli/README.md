@@ -1,7 +1,7 @@
 # Navigator CLI
 
-The `cli` crate builds `navigator`, the application command a lawyer's Mac and every Project repository's CI install.
-It handles Projects, Jujutsu repositories, validation, site sessions, People and Firm administration, mail, Inbox,
+The `cli` crate builds `navigator`, the application command a lawyer's Mac and every Project repository's CI install. It
+handles Projects, Jujutsu repositories, validation, site sessions, People and Firm administration, mail, Inbox,
 Downloads, Legal Plans, and local draft rendering. Its rules live in the crate's library. Connection-free domain types
 come from `model`; rendering uses the shared PDF and Word engines, including Typst. The binary links no database driver,
 cloud SDK, web client, or durable workflow runtime.
@@ -153,6 +153,6 @@ Both validate the file against the same rule set as `navigator project gate` fir
 template's own `kind:`/`output:` frontmatter, fill any `{{code}}` placeholders passed with `--answer`, and compile the
 result in pure Rust. See [`pdf/README.md`](../pdf/README.md) for the render pipeline and output formats.
 
-You do not need a site to work locally. Use `navigator project gate`, the `navigator notation` authoring commands, and the
-KIND-backed `hudson dev` loop; seed a local catalog with `hudson site seed` when that command's local store and storage
-environment are available, or import deployment data with `navigator site import` after logging in.
+You do not need a site to work locally. Use `navigator project gate`, the `navigator notation` authoring commands, and
+the KIND-backed `hudson dev` loop; seed a local catalog with `hudson site seed` when that command's local store and
+storage environment are available, or import deployment data with `navigator site import` after logging in.
