@@ -47,7 +47,7 @@ cargo install cargo-nextest --locked --version 0.9.140   # pinned by .github/wor
 cargo install cargo-llvm-cov --locked --version 0.8.7    # pinned by .github/workflows/ci.yml
 ```
 
-The versions matter rather than being tidiness: the 70.0% workspace line floor is a merge gate, so a drifting version
+The versions matter rather than being tidiness: the 87.0% workspace line floor is a merge gate, so a drifting version
 measures against a different denominator than CI does. `--locked` is required, not advisable — `cargo-nextest` fails to
 compile without it.
 
@@ -65,8 +65,8 @@ The cluster lane refuses to start unless all four of these are on `PATH` — `de
 with `require_tools(&["kind", "kubectl", "docker", "helm"])`. Docker and `kubectl` are already above and both arrive
 with Docker Desktop, which is exactly why the remaining two are easy to miss:
 
-- **`kind`, at v0.32.0** — the version `.github/workflows/deploy.yml:903` pins for the KIND integration gate, in
-  lockstep with the `kindest/node:v1.36.1` digest pinned at `.github/workflows/deploy.yml:910`. Take that version rather
+- **`kind`, at v0.32.0** — the version `.github/workflows/deploy.yml:927` pins for the KIND integration gate, in
+  lockstep with the `kindest/node:v1.36.1` digest pinned at `.github/workflows/deploy.yml:934`. Take that version rather
   than the latest release: the workflow records that v0.32.0's `kind load` is what understands the containerd config v4
   the v1.36.1 node writes, and that the two are meant to be bumped together.
 - **`helm`, any release with OCI registry support** — the lane uses it for one thing, `helm upgrade --install` of the

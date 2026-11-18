@@ -548,6 +548,10 @@ fn the_release_tag_is_created_between_the_proof_and_the_publish() {
         "release-tag must wait for integration: a ref created before the proof is a name spent \
          on an unproved tree"
     );
+    assert!(
+        proof.contains(&"cli-glossary".to_string()),
+        "release-tag must wait for the database-free CLI glossary proof"
+    );
     assert_eq!(
         tag_job["if"].as_str(),
         Some("needs.release-version.outputs.publishable == 'true'"),
