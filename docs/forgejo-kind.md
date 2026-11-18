@@ -126,8 +126,9 @@ It ends with the allowlist empty and purges its accounts at the start of the nex
 
 [`forgejo-postgres.yml`](../.github/workflows/forgejo-postgres.yml) renders the GKE overlays, creates a task-owned KIND
 cluster from [`k8s/kind-forgejo-config.yaml`](../k8s/kind-forgejo-config.yaml), builds the CLI, and runs `dev forgejo
-up` and `dev forgejo smoke`. The cluster maps Rauthy's NodePort to `localhost:30080`, the issuer the tier advertises. It
-runs on changes to the Forgejo, PostgreSQL, and Rauthy KIND manifests, the GKE Forgejo overlays, or
+up` and `dev forgejo smoke`. The cluster maps Rauthy's NodePort to `localhost:30080`, the issuer the tier advertises,
+and PostgreSQL TLS to loopback port `15432`. The shared verifier binds its host ingress to the owned control-plane
+address. It runs on changes to the Forgejo, PostgreSQL, and Rauthy KIND manifests, the GKE Forgejo overlays, or
 `deploy/src/devx/forgejo/`. It is not a required check.
 
 To reproduce it without a tier, create the same cluster and point the CLI at it. If `localhost:30080` is taken, map

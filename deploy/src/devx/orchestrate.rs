@@ -1616,10 +1616,11 @@ fn fixture_kube(
     Ok((kube, container))
 }
 
-fn bootstrap_postgres_in(root: &Path, cfg: &KindConfig, database: &str) -> Result<()> {
-    use super::forgejo::cluster::prepare_postgres;
-    let (kube, container) = fixture_kube(root, cfg, database)?;
-    let held = hold_fixture_writers(root, cfg, &kube)?;
+pub(in crate::devx) fn apply_postgres_host_ingress(
+    cfg: &KindConfig,
+    kube: &super::forgejo::cluster::Kube,
+    container: &serde_json::Value,
+) -> Result<()> {
     let node: serde_json::Value = serde_json::from_str(&kube.output(&[
         "get",
         "node",
@@ -1627,8 +1628,16 @@ fn bootstrap_postgres_in(root: &Path, cfg: &KindConfig, database: &str) -> Resul
         "-o",
         "json",
     ])?)?;
-    let ingress = super::postgres_fixture::host_ingress(cfg, &node, &container)?;
+    let ingress = super::postgres_fixture::host_ingress(cfg, &node, container)?;
     kube.apply(&ingress.to_string())?;
+    Ok(())
+}
+
+fn bootstrap_postgres_in(root: &Path, cfg: &KindConfig, database: &str) -> Result<()> {
+    use super::forgejo::cluster::prepare_postgres;
+    let (kube, container) = fixture_kube(root, cfg, database)?;
+    let held = hold_fixture_writers(root, cfg, &kube)?;
+    apply_postgres_host_ingress(cfg, &kube, &container)?;
     let state = StateDir::new(root)?;
     state.kill_pids();
     state.write_pids(&[])?;
@@ -1809,6 +1818,12 @@ async fn enroll_fixture(
     pg.migrate_embedded(None)
         .await
         .context("migrate the synthetic PostgreSQL store")?;
+    store::clauses::seed(
+        &pg,
+        &rules::clauses::library_clauses().map_err(anyhow::Error::msg)?,
+    )
+    .await
+    .context("seed the canonical PostgreSQL Clause catalog")?;
     for item in
         dotenvy::from_read_iter(super::render_env_for(cfg, database, cfg.web_port, root).as_bytes())
     {

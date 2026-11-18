@@ -8,6 +8,49 @@ use sqlx::postgres::{PgConnectOptions, PgSslMode};
 
 use super::KindConfig;
 
+/// Kubernetes terminal conditions, independent of a retriable failed Pod count.
+#[derive(Debug, PartialEq, Eq)]
+pub(in crate::devx) enum JobState {
+    Pending,
+    Complete,
+    Failed,
+}
+
+pub(in crate::devx) fn job_state(job: &serde_json::Value) -> Result<JobState> {
+    let Some(conditions) = job.pointer("/status/conditions") else {
+        return Ok(JobState::Pending);
+    };
+    let conditions = conditions
+        .as_array()
+        .context("Job conditions are not an array")?;
+    let has = |kind| {
+        conditions
+            .iter()
+            .any(|c| c["type"] == kind && c["status"] == "True")
+    };
+    match (has("Complete"), has("Failed")) {
+        (true, false) => Ok(JobState::Complete),
+        (false, true) => Ok(JobState::Failed),
+        (false, false) => Ok(JobState::Pending),
+        (true, true) => anyhow::bail!("Job reports conflicting terminal conditions"),
+    }
+}
+
+/// Retain existing TLS material; older local fixtures trust their leaf directly.
+pub(in crate::devx) fn trust_anchor(tls: &BTreeMap<String, String>) -> Result<&str> {
+    ensure!(
+        tls.get("tls.key").is_some_and(|key| !key.is_empty()),
+        "existing PostgreSQL TLS key is missing"
+    );
+    let leaf = tls
+        .get("tls.crt")
+        .filter(|cert| !cert.is_empty())
+        .context("existing PostgreSQL TLS certificate is missing")?;
+    let ca = tls.get("ca.crt").unwrap_or(leaf);
+    ensure!(!ca.is_empty(), "existing PostgreSQL TLS root is empty");
+    Ok(ca)
+}
+
 // Deliberately no Debug: these values never belong in command diagnostics.
 pub(in crate::devx) struct Credentials {
     pub app_password: String,
@@ -431,5 +474,43 @@ quote' $HOME `printf forbidden` \ ""#
             .unwrap();
         assert!(output.status.success());
         assert_eq!(output.stdout, credentials.app_password.as_bytes());
+    }
+    #[test]
+    fn jobs_allow_failed_pod_retries_and_use_terminal_conditions() {
+        use serde_json::json;
+        assert_eq!(job_state(&json!({})).unwrap(), JobState::Pending);
+        assert_eq!(
+            job_state(&json!({"status":{"failed":1}})).unwrap(),
+            JobState::Pending
+        );
+        assert_eq!(
+            job_state(
+                &json!({"status":{"failed":1,"conditions":[{"type":"Complete","status":"True"}]}})
+            )
+            .unwrap(),
+            JobState::Complete
+        );
+        assert_eq!(
+            job_state(&json!({"status":{"conditions":[{"type":"Failed","status":"True"}]}}))
+                .unwrap(),
+            JobState::Failed
+        );
+        assert!(job_state(&json!({"status":{"conditions":[{"type":"Failed","status":"True"},{"type":"Complete","status":"True"}]}})).is_err());
+        assert!(job_state(&json!({"status":{"conditions":{}}})).is_err());
+    }
+
+    #[test]
+    fn existing_tls_keeps_its_root_or_legacy_leaf_without_rotation() {
+        let mut tls = BTreeMap::from([
+            ("tls.crt".into(), "legacy-leaf".into()),
+            ("tls.key".into(), "private-key".into()),
+        ]);
+        assert_eq!(trust_anchor(&tls).unwrap(), "legacy-leaf");
+        tls.insert("ca.crt".into(), "separate-root".into());
+        assert_eq!(trust_anchor(&tls).unwrap(), "separate-root");
+        tls.insert("ca.crt".into(), String::new());
+        assert!(trust_anchor(&tls).is_err());
+        tls.remove("tls.key");
+        assert!(trust_anchor(&tls).is_err());
     }
 }

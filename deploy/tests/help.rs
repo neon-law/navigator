@@ -413,6 +413,7 @@ fn dev_help_lists_local_loop_members() {
             "kind",
             "kustomize",
             "logs",
+            "postgres-bootstrap",
             "sample-project",
             "seaweedfs-bootstrap",
             "sendgrid-openapi",
