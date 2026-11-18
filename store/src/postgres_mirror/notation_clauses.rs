@@ -11,9 +11,10 @@ use uuid::Uuid;
 use super::tenancy::{compare, remirror, select_sql, target, upsert_sql};
 use super::{changed, identity, micros, MirrorError, MirrorKey, Mirrored, ParityReport};
 use crate::postgres::PostgresDb;
+use crate::postgres_backfill::family::{self, ImportMode};
 use crate::surreal::{record_id, record_uuid, SurrealDb};
 
-const COLUMNS: &[&str] = &[
+pub(super) const COLUMNS: &[&str] = &[
     "id",
     "notation_id",
     "position",
@@ -112,29 +113,34 @@ pub(super) async fn mirror(
     pg: &PostgresDb,
     id: Uuid,
 ) -> Result<Mirrored, MirrorError> {
+    let mode = family::import_mode(pg, "notation_clause").await?;
+    if mode == ImportMode::Refuse {
+        return Err(MirrorError::MatterAuthority);
+    }
     let Some(row) = source_row(surreal, id).await? else {
-        let result = sqlx::query("DELETE FROM notation_clause WHERE id = $1")
-            .bind(id)
-            .execute(&pg.0)
-            .await?;
-        return Ok(changed(result.rows_affected(), Mirrored::Deleted));
+        return Err(MirrorError::Source);
     };
     let image = row.image()?;
     crate::postgres_mirror::workflow::mirror(surreal, pg, &MirrorKey::Notation(image.notation_id))
         .await?;
-    if let Some(person) = image.authored_by_person_id {
-        identity::ensure(surreal, pg, MirrorKey::Person(person)).await?;
+    if mode == ImportMode::InsertMissing {
+        if let Some(person) = image.authored_by_person_id {
+            identity::ensure(surreal, pg, MirrorKey::Person(person)).await?;
+        }
     }
-    let written = sqlx::query(UPSERT.as_str())
-        .bind(image.id)
-        .bind(image.notation_id)
-        .bind(image.position)
-        .bind(&image.body_markdown)
-        .bind(image.authored_by_person_id)
-        .bind(image.inserted_at)
-        .bind(image.updated_at)
-        .execute(&pg.0)
-        .await?;
+    let written = sqlx::query(super::held_write(
+        mode == ImportMode::InsertMissing,
+        UPSERT.as_str(),
+    ))
+    .bind(image.id)
+    .bind(image.notation_id)
+    .bind(image.position)
+    .bind(&image.body_markdown)
+    .bind(image.authored_by_person_id)
+    .bind(image.inserted_at)
+    .bind(image.updated_at)
+    .execute(&pg.0)
+    .await?;
     Ok(changed(written.rows_affected(), Mirrored::Written))
 }
 
@@ -142,6 +148,11 @@ pub(super) async fn parity(
     surreal: &SurrealDb,
     pg: &PostgresDb,
 ) -> Result<ParityReport, MirrorError> {
+    if family::active_for_table(pg, "notation_clause").await?
+        || (!family::importing("notation_clause") && !super::compares_authoritative(pg).await?)
+    {
+        return Ok(ParityReport { tables: vec![] });
+    }
     let mut source = BTreeMap::new();
     for row in rows(surreal).await? {
         let image = row.image()?;
@@ -151,9 +162,12 @@ pub(super) async fn parity(
         MirrorKey::NotationClause(row.id)
     })
     .await?;
-    Ok(ParityReport {
-        tables: vec![compare("notation_clause", &source, &target)],
-    })
+    let tables = vec![compare("notation_clause", &source, &target)];
+    if family::importing("notation_clause") {
+        Ok(ParityReport { tables })
+    } else {
+        super::held_parity(pg, true, tables).await
+    }
 }
 
 pub(super) async fn reconcile(

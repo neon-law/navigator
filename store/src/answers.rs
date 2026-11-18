@@ -1,12 +1,8 @@
 //! One respondent's answer to one question, and every query against the
 //! table.
 //!
-//! # This table lives in SurrealDB
-//!
-//! `answers` moved with wave five of #1093 (ENG-121), together with
-//! [`crate::questions`]: `answers.question_id` couples them, so porting one
-//! without the other would leave the walker's hottest read spanning two
-//! engines.
+//! Commands use PostgreSQL whenever its host is configured; see
+//! [storage models](../../docs/storage-models.md#matter-records).
 //!
 //! # Append-only
 //!
@@ -50,11 +46,12 @@
 //! is this seam's, like append-only above.
 
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as Json};
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::postgres::matter;
 use crate::surreal::{record_id, record_uuid, SurrealDb};
 
 /// The table these rows live in.
@@ -107,7 +104,7 @@ pub fn display_value(value: &Json) -> String {
 /// The application-facing shape: plain Rust types, no engine handles.
 /// [`AnswerRow`] is the seam that turns it into (and back out of) what the
 /// SDK reads and writes.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Answer {
     pub id: Uuid,
     pub question_id: Uuid,
@@ -180,6 +177,8 @@ const SELECT: &str = "id, question_id, person_id, notation_id, state_name, value
 /// Errors reading or writing an answer.
 #[derive(Debug, thiserror::Error)]
 pub enum AnswerError {
+    #[error(transparent)]
+    Postgres(#[from] matter::MatterAuthorityError),
     /// A database operation failed.
     #[error("database: {0}")]
     Db(#[from] surrealdb::Error),
@@ -273,6 +272,23 @@ fn many(mut response: surrealdb::IndexedResults) -> Result<Vec<Answer>, AnswerEr
 /// [`AnswerError::Db`] if the insert fails — including the schema ASSERT
 /// refusing a `source` outside `lawyer`/`client`/`extracted`.
 pub async fn record(db: &SurrealDb, new: &NewAnswer) -> Result<Answer, AnswerError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        let now = Utc::now();
+        let row = Answer {
+            id: Uuid::new_v4(),
+            question_id: new.question_id,
+            person_id: new.person_id,
+            notation_id: new.notation_id,
+            state_name: new.state_name.clone(),
+            value: new.value.clone(),
+            source: new.source.clone(),
+            authored_by_person_id: new.authored_by_person_id,
+            inserted_at: now,
+            updated_at: now,
+        };
+        return Ok(matter::upsert(&pg, TABLE, &row).await?);
+    }
+
     let id = Uuid::new_v4();
     let mut response = db
         .query(format!(
@@ -329,6 +345,11 @@ pub async fn latest_for_state(
     person_id: Uuid,
     notation_id: Uuid,
 ) -> Result<Option<Answer>, AnswerError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        let rows = matter::select(&pg, TABLE, json!({"question_id": question_id, "state_name": state_name, "person_id": person_id, "notation_id": notation_id}), &["inserted_at DESC", "id DESC"]).await?;
+        return Ok(rows.into_iter().next());
+    }
+
     let response = db
         .query(format!(
             "SELECT {SELECT}, time::floor(inserted_at, 1us) AS chronology_at FROM ONLY {TABLE} \
@@ -355,6 +376,17 @@ pub async fn latest_for_state(
 ///
 /// [`AnswerError::Db`] if the lookup fails.
 pub async fn for_notation(db: &SurrealDb, notation_id: Uuid) -> Result<Vec<Answer>, AnswerError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        let rows = matter::select(
+            &pg,
+            TABLE,
+            json!({"notation_id": notation_id}),
+            &["inserted_at", "id"],
+        )
+        .await?;
+        return Ok(rows);
+    }
+
     let response = db
         .query(format!(
             "SELECT {SELECT}, time::floor(inserted_at, 1us) AS chronology_at FROM {TABLE} \
@@ -378,6 +410,17 @@ pub async fn for_person_in_notation(
     person_id: Uuid,
     notation_id: Uuid,
 ) -> Result<Vec<Answer>, AnswerError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        let rows = matter::select(
+            &pg,
+            TABLE,
+            json!({"person_id": person_id, "notation_id": notation_id}),
+            &["inserted_at", "id"],
+        )
+        .await?;
+        return Ok(rows);
+    }
+
     let response = db
         .query(format!(
             "SELECT {SELECT}, time::floor(inserted_at, 1us) AS chronology_at FROM {TABLE} \
@@ -403,6 +446,14 @@ pub async fn for_question_and_person(
     person_id: Uuid,
     state_name: Option<&str>,
 ) -> Result<Vec<Answer>, AnswerError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        let mut filter = json!({"question_id": question_id, "person_id": person_id});
+        if let Some(state) = state_name {
+            filter["state_name"] = json!(state);
+        }
+        return Ok(matter::select(&pg, TABLE, filter, &["inserted_at", "id"]).await?);
+    }
+
     let narrowed = if state_name.is_some() {
         " AND state_name = $state_name"
     } else {
@@ -432,6 +483,17 @@ pub async fn latest_for_person(
     db: &SurrealDb,
     person_id: Uuid,
 ) -> Result<Option<Answer>, AnswerError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        let rows = matter::select(
+            &pg,
+            TABLE,
+            json!({"person_id": person_id}),
+            &["inserted_at DESC", "id DESC"],
+        )
+        .await?;
+        return Ok(rows.into_iter().next());
+    }
+
     let response = db
         .query(format!(
             "SELECT {SELECT}, time::floor(inserted_at, 1us) AS chronology_at FROM ONLY {TABLE} \
@@ -456,6 +518,16 @@ pub async fn exists_for_state(
     notation_id: Uuid,
     state_name: &str,
 ) -> Result<bool, AnswerError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return Ok(matter::find::<Answer>(
+            &pg,
+            TABLE,
+            json!({"notation_id": notation_id, "state_name": state_name}),
+        )
+        .await?
+        .is_some());
+    }
+
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM ONLY {TABLE} \
@@ -481,6 +553,16 @@ pub async fn exists_with_value(
     person_id: Uuid,
     value: &Json,
 ) -> Result<bool, AnswerError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return Ok(matter::find::<Answer>(
+            &pg,
+            TABLE,
+            json!({"question_id": question_id, "person_id": person_id, "value": value}),
+        )
+        .await?
+        .is_some());
+    }
+
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM ONLY {TABLE} \
@@ -502,6 +584,11 @@ pub async fn exists_with_value(
 ///
 /// [`AnswerError::Db`] if the lookup fails.
 pub async fn list_all(db: &SurrealDb) -> Result<Vec<Answer>, AnswerError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        let rows = matter::select(&pg, TABLE, json!({}), &["inserted_at", "id"]).await?;
+        return Ok(rows);
+    }
+
     let response = db
         .query(format!(
             "SELECT {SELECT}, time::floor(inserted_at, 1us) AS chronology_at FROM {TABLE} \

@@ -49,6 +49,9 @@ pub(crate) mod captions;
 /// PostgreSQL-authoritative matter records whenever the host is configured.
 pub mod matter;
 
+/// PostgreSQL Notation creation, clause ordering, and atomic draft reset.
+pub(crate) mod notations;
+
 /// PostgreSQL Project participation ledger, preparatory to application authority.
 pub mod participation;
 

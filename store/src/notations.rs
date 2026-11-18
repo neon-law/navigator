@@ -1,41 +1,13 @@
-//! One filled-in template — the notation core — and every query against
-//! the table.
+//! A Template filled in for a Person inside a Project.
 //!
-//! # This table lives in SurrealDB
+//! A completed scoped Mirror Backfill enrolls the Notation family before its
+//! configured PostgreSQL reads and writes are admitted. Answers, events, clauses,
+//! and ordered sources share that authority.
 //!
-//! `notations` moved with wave five of #1093 (ENG-121), the heaviest slice
-//! of the notation group: `template_id`, `person_id`, `entity_id`, and
-//! `project_id` are real `record<…>` links now that every table they name
-//! is Surreal-resident, but the engine does not validate a link, so every
-//! read-back a caller relied on the (already-dropped) foreign keys for
-//! still has to happen in Rust — see [`find_by_id`] and its callers.
-//!
-//! One thing this module owns beyond CRUD: **rendered-document storage
-//! keys** — the per-notation object-store convention every writer and
-//! reader of the signing walk shares.
-//!
-//! # No delete — except undoing our own aborted create
-//!
-//! A real notation is never deleted, only state-transitioned. The one
-//! exception is [`delete_uncommitted`]: a self-serve intake creates its
-//! Notation before running the conflict check, and a blocking conflict
-//! refuses the matter before the client has ever seen it — the row was
-//! never a legal record to begin with, so the caller's own compensation
-//! for its own aborted request is not the same operation as deleting a
-//! filed notation, and callers must not reach for it for anything else.
-//!
-//! # No unique index, no write retry
-//!
-//! Unlike [`crate::templates`] or [`crate::mailrooms`], `notation` carries
-//! no unique index — every row is addressed by its own fresh id, never a
-//! natural key two writers could race on. [`create`] therefore does not
-//! retry a transaction conflict, the same reasoning [`crate::answers`]
-//! gives for its own append: there is no row for two writers to contend
-//! over. The single-row updates below (`update_state`,
-//! `update_questionnaire_snapshot`) act on an id the caller already
-//! resolved, and a lost race there is a genuinely concurrent edit of the
-//! same row — worth retrying, the way every other store module's `writing`
-//! helper does.
+//! Creation copies the Template pins and questionnaire snapshot. State
+//! reconciliation changes only the state the caller observed. Uncommitted-create
+//! compensation and the daily draft reset are the deletion seams; the reset
+//! rechecks document and signature protection under the PostgreSQL parent lock.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -43,6 +15,7 @@ use serde_json::Value as Json;
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::postgres::matter;
 use crate::postgres_shadow::{notation_exists_read, notation_rows_read, NotationShape};
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 
@@ -106,6 +79,11 @@ pub struct Notation {
     /// once at creation; render/step/fill resolve against it so a later
     /// template edit can't re-route this Notation. `None` for a Notation
     /// created with no snapshot.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::postgres::matter::present_json"
+    )]
     pub questionnaire_snapshot: Option<Json>,
     /// Commit SHA in the Project's repo holding this notation's rendered
     /// document. `None` until the durable commit step lands.
@@ -134,6 +112,7 @@ struct NotationRow {
     state: String,
     delivery: String,
     questionnaire_snapshot: Option<Json>,
+    questionnaire_snapshot_is_none: bool,
     git_commit_sha: Option<String>,
     template_source_commit_sha: Option<String>,
     template_body_sha256: Option<String>,
@@ -154,7 +133,11 @@ impl NotationRow {
             project_id: record_uuid(&self.project_id)?,
             state: self.state,
             delivery: self.delivery,
-            questionnaire_snapshot: self.questionnaire_snapshot,
+            questionnaire_snapshot: if self.questionnaire_snapshot_is_none {
+                None
+            } else {
+                Some(self.questionnaire_snapshot.unwrap_or(Json::Null))
+            },
             git_commit_sha: self.git_commit_sha,
             template_source_commit_sha: self.template_source_commit_sha,
             template_body_sha256: self.template_body_sha256,
@@ -168,7 +151,8 @@ impl NotationRow {
 /// and a new column cannot reach [`NotationRow`] from only one query.
 const SELECT: &str =
     "id, template_id, package_id, person_id, entity_id, project_id, state, delivery, \
-     questionnaire_snapshot, git_commit_sha, template_source_commit_sha, template_body_sha256, \
+     questionnaire_snapshot, questionnaire_snapshot IS NONE AS questionnaire_snapshot_is_none, \
+     git_commit_sha, template_source_commit_sha, template_body_sha256, \
      inserted_at, updated_at";
 
 /// Everything [`create`] needs to open a Notation.
@@ -235,12 +219,16 @@ impl NewNotation {
 /// Errors reading or writing a notation.
 #[derive(Debug, thiserror::Error)]
 pub enum NotationError {
+    #[error("notation {0} is protected from deletion")]
+    ProtectedFromDeletion(Uuid),
     #[error("PostgreSQL notation operation failed")]
     Postgres(#[from] sqlx::Error),
     #[error("PostgreSQL notation configuration is unavailable")]
     Configuration(#[from] crate::postgres::PostgresError),
     #[error("database: {0}")]
     Db(#[from] surrealdb::Error),
+    #[error(transparent)]
+    Authority(#[from] matter::MatterAuthorityError),
     #[error("notation {0} not found")]
     NotFound(Uuid),
     /// A write reported success but returned no row, or returned one this
@@ -249,7 +237,7 @@ pub enum NotationError {
     WriteReturnedNothing,
 }
 
-fn postgres_notation(row: &sqlx::postgres::PgRow) -> Result<Notation, NotationError> {
+pub(crate) fn postgres_notation(row: &sqlx::postgres::PgRow) -> Result<Notation, NotationError> {
     use sqlx::Row;
     serde_json::from_value(row.try_get("row")?).map_err(|_| NotationError::WriteReturnedNothing)
 }
@@ -292,6 +280,9 @@ pub async fn restore_archived(
     db: &SurrealDb,
     notation: &Notation,
 ) -> Result<crate::assets::RowRestore, NotationError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return crate::postgres::notations::restore_archived(&pg, notation).await;
+    }
     if let Some(existing) = find_by_id(db, notation.id).await? {
         return Ok(if &existing == notation {
             crate::assets::RowRestore::Identical
@@ -365,6 +356,9 @@ pub async fn restore_archived(
 /// [`NotationError::WriteReturnedNothing`] if it reports success but
 /// returns no row.
 pub async fn create(db: &SurrealDb, new: &NewNotation) -> Result<Notation, NotationError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return crate::postgres::notations::create(&pg, new).await;
+    }
     let id = Uuid::now_v7();
     let mut response = db
         .query(format!(
@@ -464,6 +458,15 @@ pub async fn pinned_body(
 ///
 /// [`NotationError::Db`] if the delete fails.
 pub async fn delete_uncommitted(db: &SurrealDb, id: Uuid) -> Result<(), NotationError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return match crate::postgres::notations::delete_draft(&pg, id).await? {
+            crate::notation_reset::ResetOutcome::Deleted
+            | crate::notation_reset::ResetOutcome::AlreadyGone => Ok(()),
+            crate::notation_reset::ResetOutcome::Kept => {
+                Err(NotationError::ProtectedFromDeletion(id))
+            }
+        };
+    }
     db.query("DELETE $id")
         .bind(("id", record_id(TABLE, id)))
         .await
@@ -478,8 +481,8 @@ pub async fn delete_uncommitted(db: &SurrealDb, id: Uuid) -> Result<(), Notation
 ///
 /// [`NotationError::Db`] if the lookup fails.
 pub async fn find_by_id(db: &SurrealDb, id: Uuid) -> Result<Option<Notation>, NotationError> {
-    if let Some(pg) = crate::postgres::PostgresDb::configured().await? {
-        return sqlx::query("SELECT to_jsonb(n) AS row FROM notation n WHERE id=$1")
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return sqlx::query("SELECT to_jsonb(n) - CASE WHEN n.questionnaire_snapshot IS NULL THEN ARRAY['questionnaire_snapshot'] ELSE ARRAY[]::text[] END AS row FROM notation n WHERE id=$1")
             .bind(id)
             .fetch_optional(pg.pool())
             .await?
@@ -506,9 +509,9 @@ pub async fn list_by_project(
     db: &SurrealDb,
     project_id: Uuid,
 ) -> Result<Vec<Notation>, NotationError> {
-    if let Some(pg) = crate::postgres::PostgresDb::configured().await? {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
         return sqlx::query(
-            "SELECT to_jsonb(n) AS row FROM notation n WHERE project_id=$1 ORDER BY inserted_at,id",
+            "SELECT to_jsonb(n) - CASE WHEN n.questionnaire_snapshot IS NULL THEN ARRAY['questionnaire_snapshot'] ELSE ARRAY[]::text[] END AS row FROM notation n WHERE project_id=$1 ORDER BY inserted_at,id",
         )
         .bind(project_id)
         .fetch_all(pg.pool())
@@ -544,6 +547,10 @@ pub async fn list_by_projects(
     db: &SurrealDb,
     project_ids: &[Uuid],
 ) -> Result<Vec<Notation>, NotationError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return sqlx::query("SELECT to_jsonb(n) - CASE WHEN n.questionnaire_snapshot IS NULL THEN ARRAY['questionnaire_snapshot'] ELSE ARRAY[]::text[] END AS row FROM notation n WHERE project_id=ANY($1) ORDER BY inserted_at DESC,id DESC")
+            .bind(project_ids).fetch_all(pg.pool()).await?.iter().map(postgres_notation).collect();
+    }
     if project_ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -631,6 +638,15 @@ pub async fn list_by_person(
     db: &SurrealDb,
     person_id: Uuid,
 ) -> Result<Vec<Notation>, NotationError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return Ok(matter::select(
+            &pg,
+            TABLE,
+            serde_json::json!({"person_id": person_id}),
+            &["inserted_at DESC", "id DESC"],
+        )
+        .await?);
+    }
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE person_id = $person \
@@ -651,6 +667,15 @@ pub async fn list_by_person(
 ///
 /// [`NotationError::Db`] if the lookup fails.
 pub async fn list_all(db: &SurrealDb) -> Result<Vec<Notation>, NotationError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return Ok(matter::select(
+            &pg,
+            TABLE,
+            serde_json::json!({}),
+            &["inserted_at DESC", "id DESC"],
+        )
+        .await?);
+    }
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} ORDER BY inserted_at DESC"
@@ -675,8 +700,8 @@ pub async fn find_by_project_template_person(
     template_id: Uuid,
     person_id: Uuid,
 ) -> Result<Option<Notation>, NotationError> {
-    if let Some(pg) = crate::postgres::PostgresDb::configured().await? {
-        return sqlx::query("SELECT to_jsonb(n) AS row FROM notation n WHERE project_id=$1 AND template_id=$2 AND person_id=$3 ORDER BY inserted_at DESC LIMIT 1").bind(project_id).bind(template_id).bind(person_id).fetch_optional(pg.pool()).await?.as_ref().map(postgres_notation).transpose();
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return sqlx::query("SELECT to_jsonb(n) - CASE WHEN n.questionnaire_snapshot IS NULL THEN ARRAY['questionnaire_snapshot'] ELSE ARRAY[]::text[] END AS row FROM notation n WHERE project_id=$1 AND template_id=$2 AND person_id=$3 ORDER BY inserted_at DESC LIMIT 1").bind(project_id).bind(template_id).bind(person_id).fetch_optional(pg.pool()).await?.as_ref().map(postgres_notation).transpose();
     }
     let response = db
         .query(format!(
@@ -710,6 +735,14 @@ pub async fn find_by_project_template_person(
 ///
 /// [`NotationError::Db`] if the lookup fails.
 pub async fn exists_for_project(db: &SurrealDb, project_id: Uuid) -> Result<bool, NotationError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return Ok(
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM notation WHERE project_id=$1)")
+                .bind(project_id)
+                .fetch_one(pg.pool())
+                .await?,
+        );
+    }
     let mut response = db
         .query(format!(
             "SELECT VALUE id FROM {TABLE} WHERE project_id = $project LIMIT 1"
@@ -737,6 +770,18 @@ pub async fn update_state(
     id: Uuid,
     new_state: &str,
 ) -> Result<Notation, NotationError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return matter::update(
+            &pg,
+            TABLE,
+            serde_json::json!({"id": id}),
+            serde_json::json!({"state": new_state, "updated_at": Utc::now()}),
+        )
+        .await?
+        .into_iter()
+        .next()
+        .ok_or(NotationError::NotFound(id));
+    }
     let mut response = writing(|| {
         db.query(format!(
             "UPDATE $id SET state = $state, updated_at = time::now() RETURN {SELECT}"
@@ -760,6 +805,16 @@ pub async fn reconcile_state(
     observed_state: &str,
     current_state: &str,
 ) -> Result<(), NotationError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        let _: Vec<Notation> = matter::update(
+            &pg,
+            TABLE,
+            serde_json::json!({"id": id, "state": observed_state}),
+            serde_json::json!({"state": current_state, "updated_at": Utc::now()}),
+        )
+        .await?;
+        return Ok(());
+    }
     let mut response = writing(|| {
         db.query(format!(
             "UPDATE $id SET state = $current, updated_at = time::now() WHERE state = $observed RETURN {SELECT}"
@@ -790,6 +845,18 @@ pub async fn update_questionnaire_snapshot(
     id: Uuid,
     snapshot: Json,
 ) -> Result<Notation, NotationError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return matter::update(
+            &pg,
+            TABLE,
+            serde_json::json!({"id": id}),
+            serde_json::json!({"questionnaire_snapshot": snapshot, "updated_at": Utc::now()}),
+        )
+        .await?
+        .into_iter()
+        .next()
+        .ok_or(NotationError::NotFound(id));
+    }
     let mut response = writing(|| {
         db.query(format!(
             "UPDATE $id SET questionnaire_snapshot = $snapshot, updated_at = time::now() \

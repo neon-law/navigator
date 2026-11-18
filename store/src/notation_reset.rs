@@ -22,9 +22,9 @@
 //! preview — is a draft by construction: it never has a Notation, a workflow
 //! instance, or a journal, so every one of them is reset.
 //!
-//! # The delete is a transaction and re-checks the predicate
+//! # The PostgreSQL delete is a transaction and re-checks the predicate
 //!
-//! [`delete_draft`] re-reads the Notation and applies [`is_draft`] again
+//! The PostgreSQL [`delete_draft`] re-reads the Notation and applies [`is_draft`] again
 //! inside the delete, so a Notation that advanced to `lawyer_review` between
 //! discovery and deletion is kept. The dependents — `answer`,
 //! `notation_event`, `notation_clause`, `notation_source` — and the Notation
@@ -36,6 +36,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::notations::{progress_rank, TABLE as NOTATION_TABLE};
+use crate::postgres::matter;
 use crate::surreal::{record_id, record_uuid, SurrealDb};
 
 /// Errors from the reset's reads and deletes.
@@ -43,6 +44,10 @@ use crate::surreal::{record_id, record_uuid, SurrealDb};
 pub enum NotationResetError {
     #[error("database: {0}")]
     Db(#[from] surrealdb::Error),
+    #[error("PostgreSQL draft operation failed")]
+    Postgres(#[from] sqlx::Error),
+    #[error(transparent)]
+    Authority(#[from] matter::MatterAuthorityError),
     #[error("notation: {0}")]
     Notation(#[from] crate::notations::NotationError),
 }
@@ -101,6 +106,13 @@ pub async fn list_drafts(db: &SurrealDb) -> Result<Vec<Uuid>, NotationResetError
 ///
 /// [`NotationResetError`] when the read fails.
 pub async fn list_preview_drafts(db: &SurrealDb) -> Result<Vec<Uuid>, NotationResetError> {
+    if let Some(pg) = matter::authority().await? {
+        return Ok(
+            sqlx::query_scalar("SELECT id FROM notation_draft ORDER BY id")
+                .fetch_all(pg.pool())
+                .await?,
+        );
+    }
     let mut response = db
         .query(format!(
             "SELECT VALUE id FROM {} ORDER BY id ASC",
@@ -118,6 +130,19 @@ async fn draft_facts(
     notation_id: Uuid,
     state: &str,
 ) -> Result<bool, NotationResetError> {
+    let (document, signature) = if let Some(pg) = matter::authority_for(NOTATION_TABLE).await? {
+        crate::postgres::notations::draft_facts(&pg, notation_id).await?
+    } else {
+        source_facts(db, notation_id).await?
+    };
+    Ok(is_draft(state, document, signature))
+}
+
+/// Raw compatibility facts used by the scoped backfill's reset-safety parity.
+pub(crate) async fn source_facts(
+    db: &SurrealDb,
+    notation_id: Uuid,
+) -> Result<(bool, bool), NotationResetError> {
     let notation = record_id(NOTATION_TABLE, notation_id);
     let prefix = format!("notations/{notation_id}/");
     let mut response = db
@@ -136,8 +161,7 @@ async fn draft_facts(
     let documents: Vec<surrealdb::types::RecordId> = response.take(0)?;
     let rendered: Vec<surrealdb::types::RecordId> = response.take(1)?;
     let signatures: Vec<surrealdb::types::RecordId> = response.take(2)?;
-    Ok(is_draft(
-        state,
+    Ok((
         !documents.is_empty() || !rendered.is_empty(),
         !signatures.is_empty(),
     ))
@@ -151,6 +175,9 @@ async fn draft_facts(
 /// [`NotationResetError`] when a read or the delete fails. A missing
 /// Notation is [`ResetOutcome::AlreadyGone`], not an error.
 pub async fn delete_draft(db: &SurrealDb, id: Uuid) -> Result<ResetOutcome, NotationResetError> {
+    if let Some(pg) = matter::authority_for(NOTATION_TABLE).await? {
+        return Ok(crate::postgres::notations::delete_draft(&pg, id).await?);
+    }
     let Some(notation) = crate::notations::find_by_id(db, id).await? else {
         return Ok(ResetOutcome::AlreadyGone);
     };
@@ -180,6 +207,15 @@ pub async fn delete_draft(db: &SurrealDb, id: Uuid) -> Result<ResetOutcome, Nota
 ///
 /// [`NotationResetError`] when the delete fails.
 pub async fn delete_preview_draft(db: &SurrealDb, id: Uuid) -> Result<(), NotationResetError> {
+    if let Some(pg) = matter::authority().await? {
+        matter::delete(
+            &pg,
+            crate::notation_drafts::TABLE,
+            serde_json::json!({"id": id}),
+        )
+        .await?;
+        return Ok(());
+    }
     db.query("DELETE $id")
         .bind(("id", record_id(crate::notation_drafts::TABLE, id)))
         .await

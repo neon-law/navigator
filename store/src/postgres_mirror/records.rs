@@ -1130,6 +1130,10 @@ pub(super) fn table(name: &str) -> Result<&'static Table, MirrorError> {
 pub(crate) fn columns(name: &str) -> Option<&'static [&'static str]> {
     match name {
         "attestation" => Some(super::attestations::COLUMNS),
+        "notation" => Some(super::workflow::NOTATION_COLUMNS),
+        "notation_event" => Some(super::workflow::EVENT_COLUMNS),
+        "answer" => Some(super::workflow::ANSWER_COLUMNS),
+        "notation_clause" => Some(super::notation_clauses::COLUMNS),
         _ => table(name).ok().map(|table| table.columns),
     }
 }

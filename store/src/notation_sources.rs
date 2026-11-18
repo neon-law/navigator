@@ -5,6 +5,8 @@
 //! never a copied message body. Questionnaire sources have no communication
 //! row and use their stable questionnaire reference instead.
 
+use crate::postgres::matter;
+use serde_json::json;
 use uuid::Uuid;
 
 use crate::surreal::{record_id, SurrealDb};
@@ -36,6 +38,25 @@ pub struct NewNotationSource {
 ///
 /// Propagates database failures, including duplicate review positions.
 pub async fn attach(db: &SurrealDb, source: &NewNotationSource) -> Result<(), surrealdb::Error> {
+    if let Some(pg) = matter::authority_for(TABLE)
+        .await
+        .map_err(crate::surreal::postgres_error)?
+    {
+        let now = chrono::Utc::now();
+        let _: serde_json::Value = matter::upsert(
+            &pg,
+            TABLE,
+            &json!({
+                "id": Uuid::now_v7(), "notation_id": source.notation_id, "kind": source.kind,
+                "communication_id": source.communication_id, "source_ref": source.source_ref,
+                "position": source.position, "inserted_at": now, "updated_at": now
+            }),
+        )
+        .await
+        .map_err(crate::surreal::postgres_error)?;
+        return Ok(());
+    }
+
     let id = Uuid::now_v7();
     db.query(
         "CREATE $id SET notation_id = $notation_id, kind = $kind, \

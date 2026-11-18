@@ -26,8 +26,10 @@
 //! event can carry client answer content, so it must never be logged or
 //! traced, and storing it as an inert string is what keeps that true.
 
+use crate::postgres::matter;
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
@@ -48,7 +50,7 @@ pub const MACHINE_WORKFLOW: &str = "workflow";
 /// The application-facing shape: plain Rust types, no engine handles.
 /// [`NotationEventRow`] is the seam that turns it into (and back out of)
 /// what the SDK reads and writes.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NotationEvent {
     pub id: Uuid,
     pub notation_id: Uuid,
@@ -138,6 +140,8 @@ pub struct TransitionRecord<'a> {
 /// Errors reading or writing the journal.
 #[derive(Debug, thiserror::Error)]
 pub enum NotationEventError {
+    #[error(transparent)]
+    Postgres(#[from] matter::MatterAuthorityError),
     #[error("database: {0}")]
     Db(#[from] surrealdb::Error),
     #[error("notation: {0}")]
@@ -175,17 +179,45 @@ pub async fn append_event(
     db: &SurrealDb,
     record: TransitionRecord<'_>,
 ) -> Result<NotationEvent, NotationEventError> {
-    let notation = crate::notations::find_by_id(db, record.notation_id)
-        .await?
-        .ok_or(crate::notations::NotationError::NotFound(
-            record.notation_id,
-        ))?;
-    let acting_person_id = resolve_acting_person(&record, notation.person_id);
+    let authority = matter::authority_for(TABLE).await?;
+    let (respondent, template_id) = if let Some(pg) = &authority {
+        crate::postgres::notations::notation_context(pg, record.notation_id)
+            .await?
+            .ok_or(crate::notations::NotationError::NotFound(
+                record.notation_id,
+            ))?
+    } else {
+        let notation = crate::notations::find_by_id(db, record.notation_id)
+            .await?
+            .ok_or(crate::notations::NotationError::NotFound(
+                record.notation_id,
+            ))?;
+        (notation.person_id, notation.template_id)
+    };
+    let acting_person_id = resolve_acting_person(&record, respondent);
     let payload = record.payload_json.or_else(|| {
         (record.machine_kind == MACHINE_WORKFLOW)
-            .then(|| workflow_payload(acting_person_id, notation.template_id))
+            .then(|| workflow_payload(acting_person_id, template_id))
     });
 
+    if let Some(pg) = authority {
+        let now = Utc::now();
+        let event = NotationEvent {
+            id: Uuid::now_v7(),
+            notation_id: record.notation_id,
+            acting_person_id,
+            template_version_id: template_id,
+            machine_kind: record.machine_kind.to_owned(),
+            from_state: record.from_state.to_owned(),
+            to_state: record.to_state.to_owned(),
+            condition: record.condition.to_owned(),
+            payload,
+            recorded_at: record.recorded_at.to_owned(),
+            inserted_at: now,
+            updated_at: now,
+        };
+        return Ok(matter::upsert(&pg, TABLE, &event).await?);
+    }
     let id = Uuid::now_v7();
     let mut response = db
         .query(format!(
@@ -207,10 +239,7 @@ pub async fn append_event(
             record_id(crate::notations::TABLE, record.notation_id),
         ))
         .bind(("acting_person_id", record_id("person", acting_person_id)))
-        .bind((
-            "template_version_id",
-            record_id("template", notation.template_id),
-        ))
+        .bind(("template_version_id", record_id("template", template_id)))
         .bind(("machine_kind", record.machine_kind.to_string()))
         .bind(("from_state", record.from_state.to_string()))
         .bind(("to_state", record.to_state.to_string()))
@@ -244,6 +273,18 @@ pub async fn latest_for_kind(
     notation_id: Uuid,
     machine_kind: &str,
 ) -> Result<Option<NotationEvent>, NotationEventError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return Ok(matter::select(
+            &pg,
+            TABLE,
+            json!({"notation_id": notation_id, "machine_kind": machine_kind}),
+            &["id DESC"],
+        )
+        .await?
+        .into_iter()
+        .next());
+    }
+
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} \
@@ -283,6 +324,10 @@ pub async fn for_notation(
     db: &SurrealDb,
     notation_id: Uuid,
 ) -> Result<Vec<NotationEvent>, NotationEventError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return Ok(matter::select(&pg, TABLE, json!({"notation_id": notation_id}), &["id"]).await?);
+    }
+
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE notation_id = $notation ORDER BY id ASC"

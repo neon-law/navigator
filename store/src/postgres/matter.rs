@@ -27,6 +27,11 @@ use crate::postgres::PostgresDb;
 
 /// The tables whose owning module dispatches here.
 pub(crate) const TABLES: &[&str] = &[
+    "notation",
+    "answer",
+    "notation_event",
+    "notation_clause",
+    "notation_source",
     "cap_table_holding",
     "estate_asset",
     "expunge_record",

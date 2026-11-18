@@ -1,26 +1,11 @@
-//! Notation, Notation Event, and answer rows in the PostgreSQL mirror.
+//! Historical Notation family import and parity.
 //!
-//! The same contract as the tenancy mirror: SurrealDB is read back after its
-//! write, and PostgreSQL's copy is upserted or deleted to match. Each row
-//! keeps its Surreal record UUID as its PostgreSQL `id`. Notation Event ids
-//! are UUIDv7, so `ORDER BY id` is insertion order in both stores. Answers
-//! order by `inserted_at` at PostgreSQL's microsecond precision, then by id
-//! for deterministic ties, so the latest answer reads the same in each store.
+//! A matching pending scoped import may refresh its frozen source rows. The
+//! first global copy inserts only missing identities before enrollment. Completed
+//! enrollment refuses source reads and mutations, including deletion replay.
 //!
-//! Notation Events and answers are append-only at their command seams. A
-//! correction is a new row; the mirror copies every row and never folds
-//! one into another. An answer keeps its respondent (`person_id`) and its
-//! author (`authored_by_person_id`) apart.
-//!
-//! Before a row is upserted, each Person, Entity, Project, Notation Package,
-//! Question, Template version, or Notation it names is mirrored when
-//! PostgreSQL does not hold it. A Notation that SurrealDB no longer has takes its PostgreSQL events
-//! and answers with it: each is mirrored again first, so one SurrealDB still
-//! holds keeps the Notation in place and both are reported. Template foreign
-//! keys retain the exact versions pinned by Notations and Notation Events.
-//!
-//! Reports name rows by key only, never by an answer's value or an event's
-//! payload.
+//! Events retain their actor and Template pins; answers keep their respondent
+//! separate from their author. Reports contain keys, never payloads.
 
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
@@ -35,10 +20,11 @@ use uuid::Uuid;
 use super::tenancy::{compare, images, remirror, select_sql, source, target, upsert_sql};
 use super::{changed, identity, micros, MirrorError, MirrorKey, Mirrored, ParityReport};
 use crate::postgres::PostgresDb;
+use crate::postgres_backfill::family::{self, ImportMode};
 use crate::postgres_shadow::{compare_row, Comparison, NotationShape, ShadowKey};
 use crate::surreal::{record_id, record_uuid, SurrealDb};
 
-const NOTATION_COLUMNS: &[&str] = &[
+pub(super) const NOTATION_COLUMNS: &[&str] = &[
     "id",
     "template_id",
     "package_id",
@@ -54,7 +40,7 @@ const NOTATION_COLUMNS: &[&str] = &[
     "inserted_at",
     "updated_at",
 ];
-const EVENT_COLUMNS: &[&str] = &[
+pub(super) const EVENT_COLUMNS: &[&str] = &[
     "id",
     "notation_id",
     "acting_person_id",
@@ -68,7 +54,7 @@ const EVENT_COLUMNS: &[&str] = &[
     "inserted_at",
     "updated_at",
 ];
-const ANSWER_COLUMNS: &[&str] = &[
+pub(super) const ANSWER_COLUMNS: &[&str] = &[
     "id",
     "question_id",
     "person_id",
@@ -209,11 +195,6 @@ const PROJECT_PRESENT: &str = "SELECT EXISTS (SELECT 1 FROM project WHERE id = $
 const PACKAGE_PRESENT: &str = "SELECT EXISTS (SELECT 1 FROM notation_package WHERE id = $1)";
 const QUESTION_PRESENT: &str = "SELECT EXISTS (SELECT 1 FROM question WHERE id = $1)";
 
-/// A JSON column whose value is JSON `null` reads as absent in both stores.
-fn json(value: Option<Json>) -> Option<Json> {
-    value.filter(|value| !value.is_null())
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct NotationImage {
     id: Uuid,
@@ -243,7 +224,7 @@ impl NotationImage {
             project_id: row.project_id,
             state: row.state.clone(),
             delivery: row.delivery.clone(),
-            questionnaire_snapshot: json(row.questionnaire_snapshot.clone()),
+            questionnaire_snapshot: row.questionnaire_snapshot.clone(),
             git_commit_sha: row.git_commit_sha.clone(),
             template_source_commit_sha: row.template_source_commit_sha.clone(),
             template_body_sha256: row.template_body_sha256.clone(),
@@ -263,7 +244,7 @@ impl NotationImage {
             project_id: row.try_get("project_id")?,
             state: row.try_get("state")?,
             delivery: row.try_get("delivery")?,
-            questionnaire_snapshot: json(snapshot.map(|value| value.0)),
+            questionnaire_snapshot: snapshot.map(|value| value.0),
             git_commit_sha: row.try_get("git_commit_sha")?,
             template_source_commit_sha: row.try_get("template_source_commit_sha")?,
             template_body_sha256: row.try_get("template_body_sha256")?,
@@ -450,9 +431,12 @@ async fn present(pg: &PostgresDb, sql: &'static str, id: Uuid) -> Result<bool, M
     Ok(sqlx::query_scalar(sql).bind(id).fetch_one(&pg.0).await?)
 }
 
-async fn delete(pg: &PostgresDb, sql: &'static str, id: Uuid) -> Result<Mirrored, MirrorError> {
-    let deleted = sqlx::query(sql).bind(id).execute(&pg.0).await?;
-    Ok(changed(deleted.rows_affected(), Mirrored::Deleted))
+/// Select permission before reading any compatibility row.
+async fn source_write_mode(pg: &PostgresDb, table: &str) -> Result<ImportMode, MirrorError> {
+    match family::import_mode(pg, table).await? {
+        ImportMode::Refuse => Err(MirrorError::MatterAuthority),
+        mode => Ok(mode),
+    }
 }
 
 /// Make PostgreSQL's copy of one workflow row match SurrealDB's.
@@ -475,80 +459,63 @@ async fn mirror_notation(
     pg: &PostgresDb,
     id: Uuid,
 ) -> Result<Mirrored, MirrorError> {
-    if let Some(notation) = crate::notations::find_by_id(surreal, id)
+    let mode = source_write_mode(pg, "notation").await?;
+    let notation = super::from_source(crate::notations::find_by_id(surreal, id))
         .await
         .map_err(source)?
-    {
-        return upsert_notation(surreal, pg, &NotationImage::from_source(&notation)).await;
-    }
-    // The Notation is gone from SurrealDB. Each PostgreSQL event and answer
-    // that names it follows SurrealDB first, so only dependents SurrealDB
-    // also removed go, and one it still holds keeps the Notation in place.
-    let events: Vec<Uuid> =
-        sqlx::query_scalar("SELECT id FROM notation_event WHERE notation_id = $1")
-            .bind(id)
-            .fetch_all(&pg.0)
-            .await?;
-    let answers: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM answer WHERE notation_id = $1")
-        .bind(id)
-        .fetch_all(&pg.0)
-        .await?;
-    let mut removed = false;
-    for event in events {
-        removed |= mirror_event(surreal, pg, event).await? == Mirrored::Deleted;
-    }
-    for answer in answers {
-        removed |= mirror_answer(surreal, pg, answer).await? == Mirrored::Deleted;
-    }
-    let notation = delete(pg, "DELETE FROM notation WHERE id = $1", id).await?;
-    Ok(if removed { Mirrored::Deleted } else { notation })
+        .ok_or(MirrorError::Source)?;
+    upsert_notation(surreal, pg, &NotationImage::from_source(&notation), mode).await
 }
 
-/// Upsert a Notation after mirroring each Project, Notation Package, Person,
-/// and Entity it names that PostgreSQL does not hold.
+/// Import a Notation. Scoped refresh requires its out-of-family parents
+/// already to exist under their own PostgreSQL authorities.
 async fn upsert_notation(
     surreal: &SurrealDb,
     pg: &PostgresDb,
     notation: &NotationImage,
+    mode: ImportMode,
 ) -> Result<Mirrored, MirrorError> {
-    if !present(pg, PROJECT_PRESENT, notation.project_id).await? {
-        super::tenancy::mirror(surreal, pg, &MirrorKey::Project(notation.project_id)).await?;
-    }
-    if let Some(package) = notation.package_id {
-        if !present(pg, PACKAGE_PRESENT, package).await? {
-            // A missing parent is copied even into the authoritative catalog.
-            let key = MirrorKey::NotationPackage(package);
-            super::during_initial_copy(super::catalog::mirror(surreal, pg, &key)).await?;
+    if mode == ImportMode::InsertMissing {
+        if !present(pg, PROJECT_PRESENT, notation.project_id).await? {
+            super::tenancy::mirror(surreal, pg, &MirrorKey::Project(notation.project_id)).await?;
+        }
+        if let Some(package) = notation.package_id {
+            if !present(pg, PACKAGE_PRESENT, package).await? {
+                // A missing parent is copied even into the authoritative catalog.
+                let key = MirrorKey::NotationPackage(package);
+                super::during_initial_copy(super::catalog::mirror(surreal, pg, &key)).await?;
+            }
+        }
+        ensure_template(surreal, pg, notation.template_id).await?;
+        identity::ensure(surreal, pg, MirrorKey::Person(notation.person_id)).await?;
+        if let Some(entity) = notation.entity_id {
+            identity::ensure(surreal, pg, MirrorKey::Entity(entity)).await?;
         }
     }
-    ensure_template(surreal, pg, notation.template_id).await?;
-    identity::ensure(surreal, pg, MirrorKey::Person(notation.person_id)).await?;
-    if let Some(entity) = notation.entity_id {
-        identity::ensure(surreal, pg, MirrorKey::Entity(entity)).await?;
-    }
-    let written = sqlx::query(NOTATION_UPSERT.as_str())
-        .bind(notation.id)
-        .bind(notation.template_id)
-        .bind(notation.package_id)
-        .bind(notation.person_id)
-        .bind(notation.entity_id)
-        .bind(notation.project_id)
-        .bind(&notation.state)
-        .bind(&notation.delivery)
-        .bind(notation.questionnaire_snapshot.as_ref().map(Jsonb))
-        .bind(&notation.git_commit_sha)
-        .bind(&notation.template_source_commit_sha)
-        .bind(&notation.template_body_sha256)
-        .bind(notation.inserted_at)
-        .bind(notation.updated_at)
-        .execute(&pg.0)
-        .await?;
+    let written = sqlx::query(super::held_write(
+        mode == ImportMode::InsertMissing,
+        NOTATION_UPSERT.as_str(),
+    ))
+    .bind(notation.id)
+    .bind(notation.template_id)
+    .bind(notation.package_id)
+    .bind(notation.person_id)
+    .bind(notation.entity_id)
+    .bind(notation.project_id)
+    .bind(&notation.state)
+    .bind(&notation.delivery)
+    .bind(notation.questionnaire_snapshot.as_ref().map(Jsonb))
+    .bind(&notation.git_commit_sha)
+    .bind(&notation.template_source_commit_sha)
+    .bind(&notation.template_body_sha256)
+    .bind(notation.inserted_at)
+    .bind(notation.updated_at)
+    .execute(&pg.0)
+    .await?;
     Ok(changed(written.rows_affected(), Mirrored::Written))
 }
 
-/// Mirror the Notation an event or answer names when PostgreSQL lacks it.
-/// One SurrealDB no longer has is left absent, and the foreign key refuses
-/// the dependent row.
+/// Import a missing same-family Notation through the selected import mode.
 async fn ensure_notation(
     surreal: &SurrealDb,
     pg: &PostgresDb,
@@ -557,12 +524,7 @@ async fn ensure_notation(
     if present(pg, NOTATION_PRESENT, id).await? {
         return Ok(());
     }
-    if let Some(notation) = crate::notations::find_by_id(surreal, id)
-        .await
-        .map_err(source)?
-    {
-        upsert_notation(surreal, pg, &NotationImage::from_source(&notation)).await?;
-    }
+    mirror_notation(surreal, pg, id).await?;
     Ok(())
 }
 
@@ -588,6 +550,7 @@ async fn mirror_event(
     pg: &PostgresDb,
     id: Uuid,
 ) -> Result<Mirrored, MirrorError> {
+    let mode = source_write_mode(pg, "notation_event").await?;
     let row: Option<EventSource> = source_row(
         surreal,
         EVENT_SOURCE_FIELDS,
@@ -596,27 +559,32 @@ async fn mirror_event(
     )
     .await?;
     let Some(row) = row else {
-        return delete(pg, "DELETE FROM notation_event WHERE id = $1", id).await;
+        return Err(MirrorError::Source);
     };
     let event = EventImage::from_source(&row)?;
     ensure_notation(surreal, pg, event.notation_id).await?;
-    ensure_template(surreal, pg, event.template_version_id).await?;
-    identity::ensure(surreal, pg, MirrorKey::Person(event.acting_person_id)).await?;
-    let written = sqlx::query(EVENT_UPSERT.as_str())
-        .bind(event.id)
-        .bind(event.notation_id)
-        .bind(event.acting_person_id)
-        .bind(event.template_version_id)
-        .bind(&event.machine_kind)
-        .bind(&event.from_state)
-        .bind(&event.to_state)
-        .bind(&event.condition)
-        .bind(&event.payload)
-        .bind(&event.recorded_at)
-        .bind(event.inserted_at)
-        .bind(event.updated_at)
-        .execute(&pg.0)
-        .await?;
+    if mode == ImportMode::InsertMissing {
+        ensure_template(surreal, pg, event.template_version_id).await?;
+        identity::ensure(surreal, pg, MirrorKey::Person(event.acting_person_id)).await?;
+    }
+    let written = sqlx::query(super::held_write(
+        mode == ImportMode::InsertMissing,
+        EVENT_UPSERT.as_str(),
+    ))
+    .bind(event.id)
+    .bind(event.notation_id)
+    .bind(event.acting_person_id)
+    .bind(event.template_version_id)
+    .bind(&event.machine_kind)
+    .bind(&event.from_state)
+    .bind(&event.to_state)
+    .bind(&event.condition)
+    .bind(&event.payload)
+    .bind(&event.recorded_at)
+    .bind(event.inserted_at)
+    .bind(event.updated_at)
+    .execute(&pg.0)
+    .await?;
     Ok(changed(written.rows_affected(), Mirrored::Written))
 }
 
@@ -625,13 +593,16 @@ async fn mirror_answer(
     pg: &PostgresDb,
     id: Uuid,
 ) -> Result<Mirrored, MirrorError> {
+    let mode = source_write_mode(pg, "answer").await?;
     let row: Option<AnswerSource> =
         source_row(surreal, ANSWER_SOURCE_FIELDS, crate::answers::TABLE, id).await?;
     let Some(row) = row else {
-        return delete(pg, "DELETE FROM answer WHERE id = $1", id).await;
+        return Err(MirrorError::Source);
     };
     let answer = AnswerImage::from_source(&row)?;
-    if !present(pg, QUESTION_PRESENT, answer.question_id).await? {
+    if mode == ImportMode::InsertMissing
+        && !present(pg, QUESTION_PRESENT, answer.question_id).await?
+    {
         // A missing parent is copied even into the authoritative catalog.
         let key = MirrorKey::Question(answer.question_id);
         super::during_initial_copy(super::catalog::mirror(surreal, pg, &key)).await?;
@@ -639,23 +610,28 @@ async fn mirror_answer(
     if let Some(notation) = answer.notation_id {
         ensure_notation(surreal, pg, notation).await?;
     }
-    identity::ensure(surreal, pg, MirrorKey::Person(answer.person_id)).await?;
-    if let Some(author) = answer.authored_by_person_id {
-        identity::ensure(surreal, pg, MirrorKey::Person(author)).await?;
+    if mode == ImportMode::InsertMissing {
+        identity::ensure(surreal, pg, MirrorKey::Person(answer.person_id)).await?;
+        if let Some(author) = answer.authored_by_person_id {
+            identity::ensure(surreal, pg, MirrorKey::Person(author)).await?;
+        }
     }
-    let written = sqlx::query(ANSWER_UPSERT.as_str())
-        .bind(answer.id)
-        .bind(answer.question_id)
-        .bind(answer.person_id)
-        .bind(answer.notation_id)
-        .bind(&answer.state_name)
-        .bind(answer.value.as_ref().map(Jsonb))
-        .bind(&answer.source)
-        .bind(answer.authored_by_person_id)
-        .bind(answer.inserted_at)
-        .bind(answer.updated_at)
-        .execute(&pg.0)
-        .await?;
+    let written = sqlx::query(super::held_write(
+        mode == ImportMode::InsertMissing,
+        ANSWER_UPSERT.as_str(),
+    ))
+    .bind(answer.id)
+    .bind(answer.question_id)
+    .bind(answer.person_id)
+    .bind(answer.notation_id)
+    .bind(&answer.state_name)
+    .bind(answer.value.as_ref().map(Jsonb))
+    .bind(&answer.source)
+    .bind(answer.authored_by_person_id)
+    .bind(answer.inserted_at)
+    .bind(answer.updated_at)
+    .execute(&pg.0)
+    .await?;
     Ok(changed(written.rows_affected(), Mirrored::Written))
 }
 
@@ -679,13 +655,22 @@ fn keyed<S, I>(
 ///
 /// Either store could not be read.
 pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
-    let notations = crate::notations::list_all(surreal).await.map_err(source)?;
+    if family::active_for_table(pg, "notation").await? {
+        return Ok(ParityReport { tables: Vec::new() });
+    }
+    let importing = family::importing("notation");
+    if !importing && !super::compares_authoritative(pg).await? {
+        return Ok(ParityReport { tables: Vec::new() });
+    }
+    let notations = super::from_source(crate::notations::list_all(surreal))
+        .await
+        .map_err(source)?;
     let events: Vec<EventSource> =
         source_rows(surreal, EVENT_SOURCE_FIELDS, crate::notation_events::TABLE).await?;
     let answers: Vec<AnswerSource> =
         source_rows(surreal, ANSWER_SOURCE_FIELDS, crate::answers::TABLE).await?;
 
-    let tables = vec![
+    let mut tables = vec![
         compare(
             "notation",
             &images(
@@ -728,6 +713,11 @@ pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport
             .await?,
         ),
     ];
+    if !importing {
+        for report in &mut tables {
+            *report = super::only_missing(pg, report.clone()).await?;
+        }
+    }
     Ok(ParityReport { tables })
 }
 
@@ -741,6 +731,39 @@ pub async fn reconcile(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityRep
     let before = parity(surreal, pg).await?;
     remirror(surreal, pg, &before).await;
     parity(surreal, pg).await
+}
+
+/// Notations whose compatibility-owned document or rendered-Asset protection
+/// differs from PostgreSQL. Activation requires this list to be empty.
+/// Signature evidence stays on its existing PostgreSQL authority.
+pub(crate) async fn reset_fact_differences(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+) -> Result<Vec<Uuid>, MirrorError> {
+    let mut differences = Vec::new();
+    let mut after: Option<Uuid> = None;
+    loop {
+        let ids: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM notation WHERE ($1::uuid IS NULL OR id>$1) ORDER BY id LIMIT 256",
+        )
+        .bind(after)
+        .fetch_all(pg.pool())
+        .await?;
+        if ids.is_empty() {
+            break;
+        }
+        for id in &ids {
+            let (source_document, _) = crate::notation_reset::source_facts(surreal, *id)
+                .await
+                .map_err(source)?;
+            let (target_document, _) = crate::postgres::notations::draft_facts(pg, *id).await?;
+            if source_document != target_document {
+                differences.push(*id);
+            }
+        }
+        after = ids.last().copied();
+    }
+    Ok(differences)
 }
 
 #[cfg(test)]
