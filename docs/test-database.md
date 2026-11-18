@@ -17,7 +17,7 @@ Start the fixture locally the way CI does (the `start PostgreSQL for covered jou
 ```bash
 docker run -d --name test-postgres --shm-size=256m -p 127.0.0.1:25432:5432 \
   -e POSTGRES_PASSWORD=synthetic -e POSTGRES_DB=smoke \
-  ghcr.io/neon-law/navigator/postgres@sha256:a3f6db0888d3d68c0ccadf936784768ecda4131b58fba30d631d69ff58337a8e
+  ghcr.io/neon-law/navigator/postgres@sha256:c97c87cfd0925a9a7d96adcedfbd2008a6f2c1c76c2bb0e957bf98e730d27e8a
 docker exec -i test-postgres psql -U postgres -d smoke -v ON_ERROR_STOP=1 < store/postgres/schema.sql
 ```
 

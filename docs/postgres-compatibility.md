@@ -22,7 +22,7 @@ Apache AGE 1.6.0, pgvector 0.8.7, SQLx 0.9.0, and the native DBOS 0.6.0 syntheti
 The image pins are read from the recipe and overlay:
 
 - Base digest: `sha256:0ea6700a3b4f0ae6ce746519073558aed4d88a79d8d07622a9a644946c7319c4`
-- Target digest: `sha256:a3f6db0888d3d68c0ccadf936784768ecda4131b58fba30d631d69ff58337a8e`
+- Target digest: `sha256:c97c87cfd0925a9a7d96adcedfbd2008a6f2c1c76c2bb0e957bf98e730d27e8a`
 
 Run the focused Rust tests with `NAVIGATOR_TEST_POSTGRES_PORT` set to the isolated fixture's loopback port and
 `NAV_REQUIRE_POSTGRES=1`. Build the test application, then run:
