@@ -2,7 +2,7 @@
 //! Each test skips when `NAVIGATOR_TEST_POSTGRES_PORT` is unset.
 use super::*;
 use crate::notarizations;
-use crate::postgres_mirror::tests::{connect, fresh_schema};
+use crate::postgres_mirror::tests::{connect, fresh_schema, notation_fixture};
 use crate::signatures::{
     by_provider, completed_for_notation, completed_for_notations, for_notation,
     latest_for_notation, record_request, record_signer_completion, stamp_declined, stamp_expired,
@@ -27,11 +27,12 @@ fn surreal() -> SurrealDb {
 
 #[tokio::test]
 async fn signature_record_request_is_idempotent_in_postgres() {
-    let Some(pg) = database().await else { return };
+    let Some((pg, _, notation_id)) = notation_fixture().await else {
+        return;
+    };
     let db = surreal();
 
     with_test_db(pg, async {
-        let notation_id = Uuid::new_v4();
         let first = record_request(&db, notation_id, SignatureProvider::DocuSign, "env-1")
             .await
             .unwrap();
@@ -63,11 +64,12 @@ async fn signature_record_request_is_idempotent_in_postgres() {
 
 #[tokio::test]
 async fn signature_stamp_signed_marks_completion_and_is_a_no_op_for_unknown_envelopes() {
-    let Some(pg) = database().await else { return };
+    let Some((pg, _, notation_id)) = notation_fixture().await else {
+        return;
+    };
     let db = surreal();
 
     with_test_db(pg, async {
-        let notation_id = Uuid::new_v4();
         record_request(&db, notation_id, SignatureProvider::DocuSign, "env-1")
             .await
             .unwrap();
@@ -107,11 +109,12 @@ async fn signature_stamp_signed_marks_completion_and_is_a_no_op_for_unknown_enve
 
 #[tokio::test]
 async fn signer_completion_records_each_role_once_while_the_envelope_is_live() {
-    let Some(pg) = database().await else { return };
+    let Some((pg, _, notation_id)) = notation_fixture().await else {
+        return;
+    };
     let db = surreal();
 
     with_test_db(pg, async {
-        let notation_id = Uuid::new_v4();
         assert!(
             !record_signer_completion(&db, SignatureProvider::DocuSign, "env-1", "client")
                 .await
@@ -156,7 +159,9 @@ async fn signer_completion_records_each_role_once_while_the_envelope_is_live() {
 
 #[tokio::test]
 async fn terminal_stamps_are_readable_but_not_completed_and_monotonic() {
-    let Some(pg) = database().await else { return };
+    let Some((pg, _, notation_id)) = notation_fixture().await else {
+        return;
+    };
     let db = surreal();
 
     with_test_db(pg, async {
@@ -165,7 +170,6 @@ async fn terminal_stamps_are_readable_but_not_completed_and_monotonic() {
             ("voided", SignatureState::Voided),
             ("expired", SignatureState::Expired),
         ] {
-            let notation_id = Uuid::new_v4();
             record_request(&db, notation_id, SignatureProvider::DocuSign, provider_id)
                 .await
                 .unwrap();
@@ -215,11 +219,13 @@ async fn terminal_stamps_are_readable_but_not_completed_and_monotonic() {
 
 #[tokio::test]
 async fn a_provider_timestamp_that_does_not_parse_is_refused() {
-    let Some(pg) = database().await else { return };
+    let Some((pg, _, notation_id)) = notation_fixture().await else {
+        return;
+    };
     let db = surreal();
 
     with_test_db(pg, async {
-        record_request(&db, Uuid::new_v4(), SignatureProvider::DocuSign, "env-1")
+        record_request(&db, notation_id, SignatureProvider::DocuSign, "env-1")
             .await
             .unwrap();
         let error = stamp_signed(&db, SignatureProvider::DocuSign, "env-1", "not a timestamp")

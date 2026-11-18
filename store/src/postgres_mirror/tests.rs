@@ -4,6 +4,45 @@ use crate::test_support;
 use sqlx::postgres::{PgConnectOptions, PgSslMode};
 use std::process::Command;
 
+pub(crate) async fn notation_fixture() -> Option<(PostgresDb, Uuid, Uuid)> {
+    let (options, database) = fresh_schema().await?;
+    let pg = connect(&options, &database).await;
+    let jurisdiction = Uuid::now_v7();
+    let entity_type = Uuid::now_v7();
+    let entity = Uuid::now_v7();
+    let project = Uuid::now_v7();
+    let person = Uuid::now_v7();
+    let template = Uuid::now_v7();
+    let notation = Uuid::now_v7();
+    sqlx::query("INSERT INTO jurisdiction(id,name) VALUES ($1,'Synthetic Jurisdiction')")
+        .bind(jurisdiction)
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO entity_type(id,name) VALUES ($1,'Synthetic Entity')")
+        .bind(entity_type)
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO entity(id,name,entity_type_id,jurisdiction_id) VALUES ($1,'Synthetic Entity',$2,$3)")
+        .bind(entity).bind(entity_type).bind(jurisdiction).execute(pg.pool()).await.unwrap();
+    sqlx::query("INSERT INTO project(id,code,name,status,entity_id) VALUES ($1,'synthetic-onboarding','Synthetic Project','open',$2)")
+        .bind(project).bind(entity).execute(pg.pool()).await.unwrap();
+    sqlx::query(
+        "INSERT INTO person(id,name,email) VALUES ($1,'Synthetic Client','client@example.com')",
+    )
+    .bind(person)
+    .execute(pg.pool())
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO template(id,code,title,respondent_type,is_current,kind,inserted_at,updated_at)
+                 VALUES ($1,'onboarding','Synthetic Onboarding','person',true,'onboarding',now(),now())")
+        .bind(template).execute(pg.pool()).await.unwrap();
+    sqlx::query("INSERT INTO notation(id,template_id,person_id,project_id,state) VALUES ($1,$2,$3,$4,'END')")
+        .bind(notation).bind(template).bind(person).bind(project).execute(pg.pool()).await.unwrap();
+    Some((pg, project, notation))
+}
+
 const BRAND: &str = "synthetic-mirror";
 
 fn quick_completion() -> CompletionPolicy {
