@@ -71,7 +71,7 @@ impl Family {
                 "credential",
                 "email_token",
                 "person_delegate",
-                "external_identity",
+                "person_external_identity",
                 "person_phone",
             ],
             Self::Tenancy => &[
