@@ -14,7 +14,7 @@ use crate::{
     surreal::{record_id, record_uuid, SurrealDb},
 };
 
-const COLUMNS: &[&str] = &[
+pub(super) const COLUMNS: &[&str] = &[
     "id",
     "notation_id",
     "chain",
@@ -117,6 +117,11 @@ pub(super) async fn mirror(
     pg: &PostgresDb,
     id: Uuid,
 ) -> Result<Mirrored, MirrorError> {
+    use crate::postgres_backfill::family::{self, ImportMode};
+    let mode = family::import_mode(pg, "attestation").await?;
+    if mode == ImportMode::Refuse {
+        return Err(MirrorError::MatterAuthority);
+    }
     let mut result = surreal
         .query(format!("SELECT {SOURCE_FIELDS} FROM ONLY $id LIMIT 1"))
         .bind(("id", record_id("attestation", id)))
@@ -125,36 +130,43 @@ pub(super) async fn mirror(
         .map_err(|_| MirrorError::Source)?;
     let row: Option<SourceRow> = result.take(0).map_err(|_| MirrorError::Source)?;
     let Some(row) = row else {
-        let deleted = sqlx::query("DELETE FROM attestation WHERE id=$1")
-            .bind(id)
-            .execute(&pg.0)
-            .await?;
-        return Ok(changed(deleted.rows_affected(), Mirrored::Deleted));
+        return Err(MirrorError::Source);
     };
     let image = row.image()?;
-    super::workflow::mirror(surreal, pg, &MirrorKey::Notation(image.notation_id)).await?;
-    let written = sqlx::query(UPSERT.as_str())
-        .bind(image.id)
-        .bind(image.notation_id)
-        .bind(&image.chain)
-        .bind(&image.sha256)
-        .bind(&image.status)
-        .bind(&image.pda)
-        .bind(&image.tx_signature)
-        .bind(&image.firm_wallet)
-        .bind(&image.client_wallet)
-        .bind(image.recorded_at)
-        .bind(image.inserted_at)
-        .bind(image.updated_at)
-        .execute(&pg.0)
-        .await?;
+    if mode == ImportMode::InsertMissing {
+        super::workflow::mirror(surreal, pg, &MirrorKey::Notation(image.notation_id)).await?;
+    }
+    let written = sqlx::query(super::held_write(
+        mode == ImportMode::InsertMissing,
+        UPSERT.as_str(),
+    ))
+    .bind(image.id)
+    .bind(image.notation_id)
+    .bind(&image.chain)
+    .bind(&image.sha256)
+    .bind(&image.status)
+    .bind(&image.pda)
+    .bind(&image.tx_signature)
+    .bind(&image.firm_wallet)
+    .bind(&image.client_wallet)
+    .bind(image.recorded_at)
+    .bind(image.inserted_at)
+    .bind(image.updated_at)
+    .execute(&pg.0)
+    .await?;
     Ok(changed(written.rows_affected(), Mirrored::Written))
 }
 
-pub(super) async fn parity(
+pub(crate) async fn parity(
     surreal: &SurrealDb,
     pg: &PostgresDb,
 ) -> Result<ParityReport, MirrorError> {
+    use crate::postgres_backfill::family;
+    if family::active_for_table(pg, "attestation").await?
+        || (!family::importing("attestation") && !super::held_compared(pg, true).await?)
+    {
+        return Ok(ParityReport { tables: vec![] });
+    }
     let mut source = BTreeMap::new();
     for row in rows(surreal).await? {
         let image = row.image()?;
@@ -165,6 +177,11 @@ pub(super) async fn parity(
     })
     .await?;
     let mut report = compare("attestation", &source, &target);
+    if family::importing("attestation") {
+        return Ok(ParityReport {
+            tables: vec![report],
+        });
+    }
     // A durable source attestation whose source Notation disappeared is not
     // eligible for mirroring; keep the missing dependency visible and retain it.
     for (key, image) in &source {
@@ -185,9 +202,7 @@ pub(super) async fn parity(
     }
     report.divergent.sort();
     report.divergent.dedup();
-    Ok(ParityReport {
-        tables: vec![report],
-    })
+    super::held_parity(pg, true, vec![report]).await
 }
 
 pub(super) async fn reconcile(

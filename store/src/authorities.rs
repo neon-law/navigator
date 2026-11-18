@@ -11,17 +11,9 @@
 //! it excludes dispositions that record firm reasoning. See
 //! [`client_visible_uses`].
 //!
-//! # This table group lives in SurrealDB
-//!
-//! `authorities`, `authority_uses`, and `citations` moved with wave five
-//! of #1093 (ENG-121), in the citation-apparatus slice. Matter scoping
-//! flows through `authority_use.project_id` alone: `citation` carries no
-//! `project_id` of its own, resolving its matter only by following
-//! `authority_use_id`, and `authority` carries none at all, being global
-//! reference data. Neither the Rust layer nor the Surreal schema
-//! denormalizes a `project_id` onto either row — see
-//! `store/src/schema/navigator.surql`'s comments on `citation` and
-//! `authority`.
+//! PostgreSQL holds the global Authority catalog and, whenever its host is configured,
+//! each Project's uses and citations. Matter scoping follows `authority_use.project_id`;
+//! a citation names its Project through `authority_use_id`.
 //!
 //! "One posture per matter per authority" is a convention here rather than
 //! an index: the Surreal schema's
@@ -44,8 +36,9 @@ use serde_json::Value as Json;
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
-use crate::postgres::catalog;
+use crate::postgres::{catalog, matter};
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
+use serde_json::json;
 
 const AUTHORITY_TABLE: &str = "authority";
 const AUTHORITY_USE_TABLE: &str = "authority_use";
@@ -54,6 +47,8 @@ const CITATION_TABLE: &str = "citation";
 /// Why a citation-apparatus command refused.
 #[derive(Debug, thiserror::Error)]
 pub enum AuthorityError {
+    #[error(transparent)]
+    Matter(#[from] matter::MatterAuthorityError),
     /// The class is outside [`AuthorityClass`].
     #[error("`{0}` is not a recognized authority class")]
     UnknownClass(String),
@@ -494,7 +489,7 @@ pub fn class_of(row: &Authority) -> Result<AuthorityClass, AuthorityError> {
 pub const POSITIONS: &[&str] = &["ours", "adverse", "neutral"];
 
 /// One matter's use of a global [`Authority`].
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AuthorityUse {
     pub id: Uuid,
     pub project_id: Uuid,
@@ -551,6 +546,19 @@ async fn find_use(
     project_id: Uuid,
     authority_id: Uuid,
 ) -> Result<Option<AuthorityUse>, surrealdb::Error> {
+    if let Some(pg) = matter::authority_for(AUTHORITY_USE_TABLE)
+        .await
+        .map_err(crate::surreal::postgres_error)?
+    {
+        return matter::find(
+            &pg,
+            AUTHORITY_USE_TABLE,
+            json!({"project_id": project_id, "authority_id": authority_id}),
+        )
+        .await
+        .map_err(crate::surreal::postgres_error);
+    }
+
     let mut response = db
         .query(format!(
             "SELECT {AUTHORITY_USE_SELECT} FROM {AUTHORITY_USE_TABLE} \
@@ -592,6 +600,26 @@ pub async fn cite_in_matter(
         return Err(AuthorityError::UnknownPosition(position.to_string()));
     }
 
+    if let Some(pg) = matter::authority_for(AUTHORITY_USE_TABLE).await? {
+        let existing: Option<AuthorityUse> = matter::find(
+            &pg,
+            AUTHORITY_USE_TABLE,
+            json!({"project_id": project_id, "authority_id": authority_id}),
+        )
+        .await?;
+        let now = chrono::Utc::now();
+        let row = AuthorityUse {
+            id: existing.as_ref().map_or_else(Uuid::now_v7, |row| row.id),
+            project_id,
+            authority_id,
+            position: position.to_owned(),
+            disposition: disposition.as_str().to_owned(),
+            role: role.map(str::to_owned),
+            inserted_at: existing.map_or(now, |row| row.inserted_at),
+            updated_at: now,
+        };
+        return Ok(matter::upsert(&pg, AUTHORITY_USE_TABLE, &row).await?);
+    }
     let existing = find_use(db, project_id, authority_id).await?;
     let id = existing.as_ref().map_or_else(Uuid::now_v7, |u| u.id);
     let mut response = writing(|| {
@@ -628,6 +656,16 @@ pub async fn uses_for_project(
     db: &SurrealDb,
     project_id: Uuid,
 ) -> Result<Vec<AuthorityUse>, AuthorityError> {
+    if let Some(pg) = matter::authority_for(AUTHORITY_USE_TABLE).await? {
+        return Ok(matter::select(
+            &pg,
+            AUTHORITY_USE_TABLE,
+            json!({"project_id": project_id}),
+            &["id DESC"],
+        )
+        .await?);
+    }
+
     let response = db
         .query(format!(
             "SELECT {AUTHORITY_USE_SELECT} FROM {AUTHORITY_USE_TABLE} \
@@ -662,6 +700,25 @@ pub async fn client_visible_uses(
     db: &SurrealDb,
     project_id: Uuid,
 ) -> Result<Vec<AuthorityUse>, AuthorityError> {
+    if let Some(pg) = matter::authority_for(AUTHORITY_USE_TABLE).await? {
+        let allowed = Disposition::client_visible();
+        let rows: Vec<AuthorityUse> = matter::select(
+            &pg,
+            AUTHORITY_USE_TABLE,
+            json!({"project_id": project_id}),
+            &["id DESC"],
+        )
+        .await?;
+        return Ok(rows
+            .into_iter()
+            .filter(|row| {
+                allowed
+                    .iter()
+                    .any(|value| value.as_str() == row.disposition)
+            })
+            .collect());
+    }
+
     let allowed: Vec<String> = Disposition::client_visible()
         .into_iter()
         .map(|d| d.as_str().to_string())
@@ -697,13 +754,23 @@ pub fn disposition_of(row: &AuthorityUse) -> Result<Disposition, AuthorityError>
 
 /// One Locator: an assertion citing an authority at a specific place,
 /// pinned to both the source and the firm's own draft.
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Citation {
     pub id: Uuid,
     pub authority_use_id: Uuid,
     pub quote: String,
     pub why: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::postgres::matter::present_json"
+    )]
     pub source_pin: Option<Json>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::postgres::matter::present_json"
+    )]
     pub draft_pin: Option<Json>,
     pub inserted_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
@@ -769,6 +836,21 @@ pub struct NewCitation<'a> {
 /// # Errors
 /// Propagates any database error.
 pub async fn cite(db: &SurrealDb, new: &NewCitation<'_>) -> Result<Citation, AuthorityError> {
+    if let Some(pg) = matter::authority_for(CITATION_TABLE).await? {
+        let now = chrono::Utc::now();
+        let row = Citation {
+            id: Uuid::now_v7(),
+            authority_use_id: new.authority_use_id,
+            quote: new.quote.to_owned(),
+            why: new.why.to_owned(),
+            source_pin: new.source_pin.clone(),
+            draft_pin: new.draft_pin.clone(),
+            inserted_at: now,
+            updated_at: now,
+        };
+        return Ok(matter::upsert(&pg, CITATION_TABLE, &row).await?);
+    }
+
     let id = Uuid::now_v7();
     let mut response = db
         .query(format!(
@@ -801,6 +883,16 @@ pub async fn citations_for_use(
     db: &SurrealDb,
     authority_use_id: Uuid,
 ) -> Result<Vec<Citation>, AuthorityError> {
+    if let Some(pg) = matter::authority_for(CITATION_TABLE).await? {
+        return Ok(matter::select(
+            &pg,
+            CITATION_TABLE,
+            json!({"authority_use_id": authority_use_id}),
+            &["id DESC"],
+        )
+        .await?);
+    }
+
     let response = db
         .query(format!(
             "SELECT {CITATION_SELECT} FROM {CITATION_TABLE} \
@@ -815,15 +907,18 @@ pub async fn citations_for_use(
 /// Delete every `authority_use`, `citation`, and `verification` row that
 /// belongs to `project_id`, deepest first.
 ///
-/// The chain is `authority_uses → citations → verifications`, and
-/// Surreal cascades none of it, so a matter delete walks it
-/// explicitly here. The delete itself runs inside one `BEGIN`/`COMMIT` —
-/// see `store::notation_clauses::move_clause` for why a multi-statement
-/// Surreal query is not one transaction on its own.
+/// The chain is `authority_uses → citations → verifications`. The command
+/// deletes it deepest first in one PostgreSQL transaction when configured,
+/// retaining the compatibility transaction for a process without PostgreSQL.
 ///
 /// # Errors
 /// Propagates any database error.
 pub async fn delete_for_project(db: &SurrealDb, project_id: Uuid) -> Result<(), AuthorityError> {
+    if let Some(pg) = matter::authority_for(CITATION_TABLE).await? {
+        matter::delete_authority_uses(&pg, project_id).await?;
+        return Ok(());
+    }
+
     let uses = uses_for_project(db, project_id).await?;
     if uses.is_empty() {
         return Ok(());

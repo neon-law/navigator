@@ -4941,3 +4941,26 @@ CREATE INDEX verification_citation
 
 -- Migration: 20261117160000_signature_notation_reference.sql
 ALTER TABLE signature ADD CONSTRAINT signature_notation_id_fkey FOREIGN KEY (notation_id) REFERENCES notation(id) NOT VALID;
+
+-- Migration: 20261117190000_add_satellite_authority_constraints.sql
+-- Preserve source uniqueness at the PostgreSQL command boundary. Historical
+-- record links remain importable without requiring their parent to exist.
+ALTER TABLE expunge_record ADD CONSTRAINT expunge_record_category CHECK (category IN ('privilege', 'sealing', 'client_request', 'retention'));
+ALTER TABLE expunge_request ADD CONSTRAINT expunge_request_status CHECK (status IN ('pending', 'authorized', 'denied'));
+CREATE UNIQUE INDEX efiling_transaction_id ON efiling_transactions(project_id, transaction_id);
+ALTER TABLE efiling_transactions ADD CONSTRAINT efiling_transaction_status CHECK (status IN ('submitted', 'accepted', 'rejected', 'unknown'));
+CREATE UNIQUE INDEX social_oauth_attempt_state ON social_oauth_attempt(state_hash);
+ALTER TABLE social_oauth_attempt ADD CONSTRAINT social_oauth_provider CHECK (provider IN ('facebook', 'instagram', 'threads', 'youtube', 'linkedin', 'x', 'tiktok'));
+-- Optional citation pins preserve absent SQL NULL separately from explicit JSON null.
+ALTER TABLE citation ALTER COLUMN source_pin DROP NOT NULL;
+ALTER TABLE citation ALTER COLUMN draft_pin DROP NOT NULL;
+
+-- Migration: 20261117200000_scope_mirror_backfill_runs.sql
+-- Scoped enrollments share the existing run/checkpoint ledger and importer lock.
+-- Global completion is deliberately distinct from family activation.
+ALTER TABLE mirror_backfill_run ADD COLUMN scope TEXT NOT NULL DEFAULT 'global' CHECK (scope <> '');
+ALTER TABLE mirror_backfill_run ADD COLUMN source_receipt JSONB;
+ALTER TABLE mirror_backfill_run ADD COLUMN source_receipt_history JSONB NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(source_receipt_history) = 'array');
+ALTER TABLE mirror_backfill_run ADD CONSTRAINT mirror_backfill_scope_receipt CHECK ((scope = 'global' AND source_receipt IS NULL) OR (scope <> 'global' AND source_receipt IS NOT NULL AND jsonb_typeof(source_receipt) = 'object'));
+ALTER TABLE mirror_backfill_checkpoint ADD COLUMN verification JSONB CHECK (verification IS NULL OR jsonb_typeof(verification) = 'object');
+CREATE INDEX mirror_backfill_run_scope ON mirror_backfill_run (scope, status);

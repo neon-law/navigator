@@ -12,8 +12,7 @@
 //!
 //! # Storage and scope
 //!
-//! SurrealDB determines each command's write outcome. Successful creates and
-//! updates project through the opt-in PostgreSQL mirror. Matter scoping flows through
+//! Commands read and write PostgreSQL whenever its host is configured. Matter scoping flows through
 //! `notation_id → notation.project_id`; this table carries no `project_id`
 //! of its own — every caller that needs project-level authorization
 //! resolves the notation first, the same shape `store::authorities`
@@ -24,7 +23,9 @@ use serde_json::Value as Json;
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::postgres::matter;
 use crate::surreal::{record_id, record_uuid, SurrealDb};
+use serde_json::json;
 
 const TABLE: &str = "contract_review";
 const NOTATION_TABLE: &str = "notation";
@@ -59,7 +60,7 @@ pub struct Finding {
 }
 
 /// One `contract_review` row.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ContractReview {
     pub id: Uuid,
     pub notation_id: Uuid,
@@ -118,6 +119,8 @@ fn one(
 /// Why a contract-review command refused.
 #[derive(Debug, thiserror::Error)]
 pub enum ContractReviewError {
+    #[error(transparent)]
+    Postgres(#[from] matter::MatterAuthorityError),
     #[error("database: {0}")]
     Db(#[from] surrealdb::Error),
     /// A write reported success but returned no row, or returned one this
@@ -151,6 +154,23 @@ pub struct NewContractReview {
 ///
 /// Propagates any database error.
 pub async fn create(db: &SurrealDb, new: &NewContractReview) -> Result<Uuid, ContractReviewError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        let now = chrono::Utc::now();
+        let row = ContractReview {
+            id: Uuid::now_v7(),
+            notation_id: new.notation_id,
+            playbook_id: new.playbook_id,
+            asset_id: new.asset_id,
+            status: STATUS_PENDING.to_owned(),
+            risk_summary: None,
+            findings: json!([]),
+            inserted_at: now,
+            updated_at: now,
+        };
+        let stored: ContractReview = matter::upsert(&pg, TABLE, &row).await?;
+        return Ok(stored.id);
+    }
+
     let id = Uuid::now_v7();
     let mut response = db
         .query(format!(
@@ -187,6 +207,10 @@ pub async fn by_id(
     db: &SurrealDb,
     id: Uuid,
 ) -> Result<Option<ContractReview>, ContractReviewError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return Ok(matter::find(&pg, TABLE, json!({"id": id})).await?);
+    }
+
     let response = db
         .query(format!("SELECT {SELECT} FROM ONLY $id LIMIT 1"))
         .bind(("id", record_id(TABLE, id)))
@@ -237,6 +261,18 @@ pub async fn latest_for_notation(
     db: &SurrealDb,
     notation_id: Uuid,
 ) -> Result<Option<ContractReview>, ContractReviewError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        return Ok(matter::select(
+            &pg,
+            TABLE,
+            json!({"notation_id": notation_id}),
+            &["id DESC"],
+        )
+        .await?
+        .into_iter()
+        .next());
+    }
+
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE notation_id = $notation \
@@ -261,6 +297,15 @@ pub async fn record_analysis(
     risk_summary: &str,
     findings: &[Finding],
 ) -> Result<(), ContractReviewError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        let changed: Vec<ContractReview> = matter::update(&pg, TABLE, json!({"id": id}),
+            json!({"risk_summary": risk_summary, "findings": findings, "status": STATUS_ANALYZED, "updated_at": chrono::Utc::now()})).await?;
+        if changed.is_empty() {
+            return Err(ContractReviewError::NotFound(id));
+        }
+        return Ok(());
+    }
+
     let value = serde_json::to_value(findings)?;
     let mut response = db
         .query(format!(
@@ -293,6 +338,20 @@ pub async fn update_findings(
     id: Uuid,
     findings: &[Finding],
 ) -> Result<(), ContractReviewError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        let changed: Vec<ContractReview> = matter::update(
+            &pg,
+            TABLE,
+            json!({"id": id}),
+            json!({"findings": findings, "updated_at": chrono::Utc::now()}),
+        )
+        .await?;
+        if changed.is_empty() {
+            return Err(ContractReviewError::NotFound(id));
+        }
+        return Ok(());
+    }
+
     let value = serde_json::to_value(findings)?;
     let mut response = db
         .query(format!(
@@ -321,6 +380,20 @@ pub async fn update_risk_summary(
     id: Uuid,
     risk_summary: &str,
 ) -> Result<(), ContractReviewError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        let changed: Vec<ContractReview> = matter::update(
+            &pg,
+            TABLE,
+            json!({"id": id}),
+            json!({"risk_summary": risk_summary, "updated_at": chrono::Utc::now()}),
+        )
+        .await?;
+        if changed.is_empty() {
+            return Err(ContractReviewError::NotFound(id));
+        }
+        return Ok(());
+    }
+
     let mut response = db
         .query(format!(
             "UPDATE $id SET risk_summary = $risk_summary, updated_at = time::now() \
@@ -344,6 +417,20 @@ pub async fn update_risk_summary(
 /// [`ContractReviewError::NotFound`] if the id is unknown, or a database
 /// error.
 pub async fn set_status(db: &SurrealDb, id: Uuid, status: &str) -> Result<(), ContractReviewError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        let changed: Vec<ContractReview> = matter::update(
+            &pg,
+            TABLE,
+            json!({"id": id}),
+            json!({"status": status, "updated_at": chrono::Utc::now()}),
+        )
+        .await?;
+        if changed.is_empty() {
+            return Err(ContractReviewError::NotFound(id));
+        }
+        return Ok(());
+    }
+
     let mut response = db
         .query(format!(
             "UPDATE $id SET status = $status, updated_at = time::now() RETURN {SELECT}"

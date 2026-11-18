@@ -91,6 +91,15 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
     crate::config::enforce_deployment_invariants(cfg.environment, |k| std::env::var(k).ok())
         .context("deployment environment invariants")?;
 
+    if let Some(postgres) = store::postgres::PostgresDb::configured()
+        .await
+        .context("connecting PostgreSQL for runtime readiness")?
+    {
+        store::postgres_backfill::family::require_runtime_scopes(&postgres)
+            .await
+            .context("verifying PostgreSQL runtime activation receipts")?;
+    }
+
     // The second store. Its schema is applied rather than migrated —
     // one idempotent `DEFINE` file converged on every boot, which is
     // what `store::schema::apply` documents itself for. There is no

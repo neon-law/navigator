@@ -21,6 +21,9 @@
 //! Bump [`SCHEMA_VERSION`] in the same change that edits the `.surql`
 //! file.
 
+/// Canonical export section selection for buffered capture and streaming verification.
+pub(crate) mod export_filter;
+
 use std::collections::BTreeMap;
 
 use surrealdb::types::{ErrorDetails, NotFoundError, RecordId, SurrealValue};
@@ -244,30 +247,12 @@ pub fn base_table_names() -> Vec<String> {
 /// from those records. An export already stripped passes through unchanged.
 #[must_use]
 pub fn strip_derived_tables(export: &str) -> String {
-    let derived: Vec<String> = derived_tables().into_iter().map(|view| view.name).collect();
-    let mut kept = String::with_capacity(export.len());
-    let mut skipping = false;
-    for line in export.split_inclusive('\n') {
-        // A section is introduced by a banner: a row of dashes, the header,
-        // and another row of dashes. The dashes carry no name, so they leave
-        // the current section as it was.
-        let header = line
-            .trim_end()
-            .strip_prefix("-- ")
-            .filter(|header| !header.starts_with('-'));
-        if let Some(header) = header {
-            // `-- TABLE: draft` and `-- TABLE DATA: draft` open a derived
-            // table's sections; any other section header ends them.
-            skipping = header
-                .strip_prefix("TABLE DATA: ")
-                .or_else(|| header.strip_prefix("TABLE: "))
-                .is_some_and(|name| derived.iter().any(|view| view == name));
-        }
-        if !skipping {
-            kept.push_str(line);
-        }
-    }
-    kept
+    let mut sections =
+        export_filter::Sections::new(derived_tables().into_iter().map(|view| view.name));
+    export
+        .split_inclusive('\n')
+        .filter(|line| sections.retain(line))
+        .collect()
 }
 
 /// Every field a table declares in the shipped schema, as

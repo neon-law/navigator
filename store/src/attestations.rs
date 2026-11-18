@@ -2,10 +2,8 @@
 //! attestation (the Neon Law Node product), and every query against the
 //! table.
 //!
-//! # This table lives in SurrealDB
-//!
-//! `attestations` moved with wave five of #1093 (ENG-121), in the
-//! satellite-ring slice.
+//! Commands use PostgreSQL whenever its host is configured; see
+//! [storage models](../../docs/storage-models.md#matter-records).
 //!
 //! Written by the workflow worker inside the `onchain__record_attestation`
 //! step's `ctx.run`. The row is the **system of record**: written
@@ -23,8 +21,10 @@
 //! specifically because the only writer is a journaled `ctx.run` step keyed
 //! on one notation at a time; it is not a general concurrency guarantee.
 
+use crate::postgres::matter;
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
@@ -45,7 +45,7 @@ pub const STATUS_FAILED: &str = "failed";
 /// The application-facing shape: plain Rust types, no engine handles.
 /// [`AttestationRow`] is the seam that turns it into (and back out of) what
 /// the SDK reads and writes.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Attestation {
     pub id: Uuid,
     pub notation_id: Uuid,
@@ -127,6 +127,8 @@ pub struct NewAttestation<'a> {
 /// Errors reading or writing an attestation.
 #[derive(Debug, thiserror::Error)]
 pub enum AttestationError {
+    #[error(transparent)]
+    Postgres(#[from] matter::MatterAuthorityError),
     #[error("database: {0}")]
     Db(#[from] surrealdb::Error),
     /// A write reported success but returned no row, or returned one this
@@ -149,6 +151,15 @@ pub async fn by_notation(
     db: &SurrealDb,
     notation_id: Uuid,
 ) -> Result<Option<Attestation>, surrealdb::Error> {
+    if let Some(pg) = matter::authority_for(TABLE)
+        .await
+        .map_err(crate::surreal::postgres_error)?
+    {
+        return matter::find(&pg, TABLE, json!({"notation_id": notation_id}))
+            .await
+            .map_err(crate::surreal::postgres_error);
+    }
+
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE notation_id = $notation LIMIT 1"
@@ -174,6 +185,27 @@ pub async fn record(
     db: &SurrealDb,
     new: &NewAttestation<'_>,
 ) -> Result<Attestation, AttestationError> {
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        let existing: Option<Attestation> =
+            matter::find(&pg, TABLE, json!({"notation_id": new.notation_id})).await?;
+        let now = Utc::now();
+        let row = Attestation {
+            id: existing.as_ref().map_or_else(Uuid::new_v4, |row| row.id),
+            notation_id: new.notation_id,
+            chain: new.chain.to_owned(),
+            sha256: new.sha256.to_owned(),
+            status: new.status.to_owned(),
+            pda: new.pda.map(str::to_owned),
+            tx_signature: new.tx_signature.map(str::to_owned),
+            firm_wallet: new.firm_wallet.map(str::to_owned),
+            client_wallet: new.client_wallet.map(str::to_owned),
+            recorded_at: new.recorded_at.map(str::to_owned),
+            inserted_at: existing.map_or(now, |row| row.inserted_at),
+            updated_at: now,
+        };
+        return Ok(matter::upsert(&pg, TABLE, &row).await?);
+    }
+
     let existing = by_notation(db, new.notation_id).await?;
     let id = existing.as_ref().map_or_else(Uuid::new_v4, |a| a.id);
     let mut response = db

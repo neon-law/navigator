@@ -1138,6 +1138,7 @@ erDiagram
         string mirror
         uuid run_id
         datetime updated_at
+        json verification
     }
     mirror_backfill_failure {
         uuid id
@@ -1153,6 +1154,9 @@ erDiagram
         datetime completed_at
         uuid id
         datetime inserted_at
+        string scope
+        json source_receipt
+        json source_receipt_history
         string status
         datetime updated_at
     }

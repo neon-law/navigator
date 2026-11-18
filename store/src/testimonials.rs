@@ -1,5 +1,7 @@
 //! Public testimonial reads and the replay-safe canonical seeder seam.
 
+use crate::postgres::matter;
+use serde_json::json;
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
@@ -8,7 +10,7 @@ use crate::projects;
 use crate::surreal::{record_id, record_uuid, SurrealDb};
 
 /// A testimonial row returned to an authenticated matter surface.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
 pub struct Testimonial {
     pub id: Uuid,
     pub project_id: Uuid,
@@ -72,6 +74,8 @@ impl TestimonialRow {
 
 #[derive(Debug, thiserror::Error)]
 pub enum TestimonialError {
+    #[error(transparent)]
+    Postgres(#[from] matter::MatterAuthorityError),
     #[error("database: {0}")]
     Db(#[from] surrealdb::Error),
     #[error("resolve the testimonial senders: {0}")]
@@ -106,6 +110,18 @@ pub async fn for_person_project(
     person_id: Uuid,
     project_id: Uuid,
 ) -> Result<Option<Testimonial>, TestimonialError> {
+    if let Some(pg) = matter::authority_for("testimonial").await? {
+        return Ok(matter::select(
+            &pg,
+            "testimonial",
+            json!({"project_id": project_id, "person_id": person_id}),
+            &["updated_at DESC"],
+        )
+        .await?
+        .into_iter()
+        .next());
+    }
+
     let mut response = surreal
         .query(format!(
             "SELECT {SELECT} FROM testimonial WHERE project_id = $project_id \
@@ -156,6 +172,32 @@ pub async fn save_for_client_dri(
         .map_or_else(Uuid::now_v7, |testimonial| testimonial.id);
     let now = chrono::Utc::now().to_rfc3339();
     let consented_at = input.request_public.then(|| now.clone());
+    if let Some(pg) = matter::authority_for("testimonial").await? {
+        return if existing.is_some() {
+            matter::update(
+                &pg,
+                "testimonial",
+                json!({"id": id}),
+                json!({"quote": quote,
+                "attribution_label": attribution_label, "consented_at": consented_at,
+                "published_at": null, "updated_at": now}),
+            )
+            .await?
+            .into_iter()
+            .next()
+            .ok_or(TestimonialError::WriteReturnedNothing)
+        } else {
+            Ok(matter::upsert(
+                &pg,
+                "testimonial",
+                &json!({"id": id, "project_id": project_id,
+                "person_id": person_id, "quote": quote, "attribution_label": attribution_label,
+                "consented_at": consented_at, "published_at": null, "display_order": 0,
+                "inserted_at": now, "updated_at": now}),
+            )
+            .await?)
+        };
+    }
     let query = if existing.is_some() {
         format!(
             "UPDATE $id SET quote = $quote, attribution_label = $attribution_label, \
@@ -252,6 +294,10 @@ async fn find_by_id(
     surreal: &SurrealDb,
     testimonial_id: Uuid,
 ) -> Result<Option<Testimonial>, TestimonialError> {
+    if let Some(pg) = matter::authority_for("testimonial").await? {
+        return Ok(matter::find(&pg, "testimonial", json!({"id": testimonial_id})).await?);
+    }
+
     let mut response = surreal
         .query(format!("SELECT {SELECT} FROM ONLY $id"))
         .bind(("id", record_id("testimonial", testimonial_id)))
@@ -266,6 +312,17 @@ async fn update_publication(
     testimonial_id: Uuid,
     published_at: Option<String>,
 ) -> Result<Testimonial, TestimonialError> {
+    if let Some(pg) = matter::authority_for("testimonial").await? {
+        let value: Option<serde_json::Value> = sqlx::query_scalar("UPDATE testimonial AS t SET published_at = $2, updated_at = now() WHERE id = $1 AND ($2::timestamptz IS NULL OR consented_at IS NOT NULL) RETURNING to_jsonb(t)")
+            .bind(testimonial_id).bind(published_at.as_deref().map(chrono::DateTime::parse_from_rfc3339).transpose().map_err(|_| TestimonialError::WriteReturnedNothing)?)
+            .fetch_optional(pg.pool()).await.map_err(matter::MatterAuthorityError::from)?;
+        return value
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(matter::MatterAuthorityError::from)?
+            .ok_or(TestimonialError::NotConsented);
+    }
+
     let mut response = surreal
         .query(format!(
             "UPDATE $id SET published_at = $published_at, updated_at = $now RETURN {SELECT}"
@@ -288,6 +345,37 @@ pub async fn find_or_create(
     surreal: &SurrealDb,
     input: &NewTestimonial<'_>,
 ) -> Result<(), TestimonialError> {
+    if let Some(pg) = matter::authority_for("testimonial").await? {
+        let filter = json!({"project_id": input.project_id, "person_id": input.person_id, "quote": input.quote});
+        if matter::find::<Testimonial>(&pg, "testimonial", filter.clone())
+            .await?
+            .is_some()
+        {
+            return Ok(());
+        }
+        if projects::find_by_id(surreal, input.project_id)
+            .await?
+            .is_none()
+        {
+            return Err(projects::ProjectStoreError::NoSuchProject(input.project_id).into());
+        }
+        let now = chrono::Utc::now();
+        let result = matter::upsert::<Testimonial>(&pg, "testimonial", &json!({"id": Uuid::now_v7(),
+            "project_id": input.project_id, "person_id": input.person_id, "quote": input.quote,
+            "attribution_label": input.attribution_label, "consented_at": input.consented_at,
+            "published_at": input.published_at, "display_order": input.display_order, "inserted_at": now, "updated_at": now})).await;
+        return match result {
+            Ok(_) => Ok(()),
+            Err(matter::MatterAuthorityError::Conflict(_)) => {
+                matter::find::<Testimonial>(&pg, "testimonial", filter)
+                    .await?
+                    .ok_or(TestimonialError::WriteReturnedNothing)
+                    .map(|_| ())
+            }
+            Err(error) => Err(error.into()),
+        };
+    }
+
     if find_replay(surreal, input).await?.is_some() {
         return Ok(());
     }
@@ -340,6 +428,12 @@ pub async fn published_for_home(
     surreal: &SurrealDb,
     limit: u64,
 ) -> Result<Vec<PublishedTestimonial>, TestimonialError> {
+    if let Some(pg) = matter::authority_for("testimonial").await? {
+        return matter::published_testimonials(&pg, None, Some(limit))
+            .await
+            .map_err(TestimonialError::from);
+    }
+
     let query = format!(
         "SELECT {SELECT} FROM testimonial WHERE consented_at != NONE AND published_at != NONE \
          ORDER BY display_order, published_at DESC LIMIT $limit"
@@ -370,6 +464,12 @@ pub async fn published_for_brand(
     brand: &str,
     limit: Option<u64>,
 ) -> Result<Vec<PublishedTestimonial>, TestimonialError> {
+    if let Some(pg) = matter::authority_for("testimonial").await? {
+        return matter::published_testimonials(&pg, Some(brand), limit)
+            .await
+            .map_err(TestimonialError::from);
+    }
+
     let limit_clause = if limit.is_none() {
         String::new()
     } else {

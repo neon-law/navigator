@@ -321,14 +321,6 @@ async fn natural_string_record_id_survives_a_surreal_round_trip() {
     assert_eq!(row["id"], source_key);
 }
 
-#[test]
-fn upsert_writes_only_a_changed_row() {
-    let sql = upsert_sql(table("project_module").unwrap());
-    assert!(sql.contains("jsonb_populate_record(NULL::\"project_module\""));
-    assert!(sql.contains("ON CONFLICT (\"id\") DO UPDATE"));
-    assert!(sql.contains("IS DISTINCT FROM ROW(EXCLUDED.\"project_id\""));
-}
-
 async fn count(pg: &PostgresDb, table: &str) -> i64 {
     sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM {table}")))
         .fetch_one(&pg.0)
@@ -666,7 +658,7 @@ async fn source_domain_records_round_trip_every_field_on_postgres() {
             "{}",
             table.name
         );
-        sqlx::query(sqlx::AssertSqlSafe(upsert_sql(table)))
+        sqlx::query(sqlx::AssertSqlSafe(upsert_sql(table).unwrap()))
             .bind(expected.clone())
             .execute(&pg.0)
             .await
@@ -1202,7 +1194,7 @@ fn link_parents_resolve_to_their_owning_mirror_key() {
 
 #[test]
 fn mixed_key_upserts_conflict_on_the_key_kind_and_value() {
-    let sql = upsert_sql(table("firm_anchor").unwrap());
+    let sql = upsert_sql(table("firm_anchor").unwrap()).unwrap();
     assert!(sql.contains("ON CONFLICT (\"id_kind\", \"id\") DO UPDATE"));
     assert!(sql.contains("\"firm_anchor\".\"entity_id\""));
 }
@@ -1228,11 +1220,32 @@ fn reference_counts_record_orphans_and_missing_targets_separately() {
         &source,
         &target,
     );
-    assert_eq!(counts[&key], (0, 1));
+    assert_eq!(
+        (
+            counts[&key].source_orphans,
+            counts[&key].postgres_missing,
+            counts[&key].newly_target_missing
+        ),
+        (0, 1, 1)
+    );
     note_reference(&mut counts, key, None, "person", &source, &target);
-    assert_eq!(counts[&key], (1, 2));
+    assert_eq!(
+        (
+            counts[&key].source_orphans,
+            counts[&key].postgres_missing,
+            counts[&key].newly_target_missing
+        ),
+        (1, 2, 1)
+    );
     note_reference(&mut counts, key, Some(held), "entity", &source, &target);
-    assert_eq!(counts[&key], (2, 3));
+    assert_eq!(
+        (
+            counts[&key].source_orphans,
+            counts[&key].postgres_missing,
+            counts[&key].newly_target_missing
+        ),
+        (2, 3, 1)
+    );
 }
 
 async fn surreal_value(

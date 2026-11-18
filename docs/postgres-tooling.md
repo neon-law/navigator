@@ -131,7 +131,8 @@ configuration; authority cutover takes precedence over the source mirror. The mi
   bundle and account metadata as SurrealDB stored them. It preserves ciphertext and wrapped-key bytes, and never
   decrypts them. Firm, Brand, and connected or revoking Person links remain explicit. The saved-selection mirror
   preserves the chosen Brand/provider destination without credentials or publishing authority; disconnecting the account
-  leaves that selection intact. The one-use Social OAuth Attempt, including its PKCE verifier, stays in SurrealDB.
+  leaves that selection intact. The one-use Social OAuth Attempt follows the [scoped PostgreSQL
+  authority](#scoped-family-enrollment).
 - **Catalog:** `authority`, `glossary_term`, `question`, `notation_package`, `notation_package_template`, and
   `notation_rate`. These are shared catalogs owned by no Firm or Project. The Authority, glossary, Question, and
   Notation package writers in `store::authorities`, `store::glossary`, `store::questions`, and
@@ -212,10 +213,11 @@ reconciliation CronJob every five minutes. It uses the existing CLI image, verif
 Concurrent scheduled runs are forbidden; failed or overdue recovery raises a critical monitoring rule. Alert routing and
 kube-state metrics must be operational in the deployment.
 
-The tables PostgreSQL holds authoritatively (the catalogs above, and the matter records and the Brand and social content
-in [storage models](storage-models.md)) are never repaired from SurrealDB. Until a Mirror Backfill has completed against
-the database, their parity names each SurrealDB row PostgreSQL lacks, so reconciliation stays unclean and a ship stops
-before `web` reads an empty table. After it, SurrealDB is no evidence for them and parity skips them.
+Existing authorities with the global-import contract (the catalogs, matter records, and Brand and social content
+described in storage models) are never repaired from SurrealDB after their first global Mirror Backfill. Before that
+global completion, parity reports source rows PostgreSQL lacks; afterward it skips them. The thirteen satellite tables
+instead require their own [scoped enrollment](#scoped-family-enrollment): global completion does not activate them, and
+an activated receipt prevents replay even before any global run completes.
 
 Durable source rows and target drift allow the recurring scan to rediscover missing, differing, and extra mutable rows
 after an application process exits. This is eventual convergence when both stores recover and writes settle, not a
@@ -236,11 +238,12 @@ connected or revoking Person are mirrored. Ciphertext and wrapped data keys are 
 decrypts them. The stable source key, KMS context, key version, status, and timestamps remain part of parity. The saved
 Social Account Selection is mirrored separately by `social_account_selections`; it preserves the Brand/provider record
 key and selected destination without credentials or publishing authority. A cancelled or disconnected Social Account
-does not remove that saved selection. The one-use OAuth Attempt and PKCE verifier remain in SurrealDB.
-`postgres_mirror::identity::parity` and `identity::reconcile` compare and repair every identity row; run them after the
-tenancy pair. They name rows by key only. A Person whose email or sign-in subject PostgreSQL still holds under another
-id is refused, not overwritten, and converges once that other row is mirrored. Surreal timestamps are RFC 3339 text; a
-row whose timestamp does not parse is refused and reported, never given a substitute time.
+does not remove that saved selection. After `satellites:1` activation, `social_oauth_attempt` uses PostgreSQL; callback
+consumption returns the verifier once and erases its stored value atomically. `postgres_mirror::identity::parity` and
+`identity::reconcile` compare and repair every identity row; run them after the tenancy pair. They name rows by key
+only. A Person whose email or sign-in subject PostgreSQL still holds under another id is refused, not overwritten, and
+converges once that other row is mirrored. Surreal timestamps are RFC 3339 text; a row whose timestamp does not parse is
+refused and reported, never given a substitute time.
 
 `postgres_mirror::documents::parity` and `documents::reconcile` compare and repair every asset row; run them after the
 tenancy pair. An asset row copies its checksum, storage keys, revision identity (`project_id`, `slug`, ordered by id),
@@ -308,15 +311,15 @@ target-only row when SurrealDB no longer holds the reference. A Project Referenc
 
 ## Mirror backfill
 
-A [Mirror Backfill](glossary/mirror-backfill.md) copies the rows SurrealDB holds and PostgreSQL lacks: history written
-before a deployment turned the mirror on, or a write whose projection failed and was never repaired. It writes each row
-through the same per-row mirror the write hook and `reconcile` use, so a backfilled row is the row the mirror would have
-written. It never overwrites a differing row or deletes a PostgreSQL-only row; those stay with `ops postgres mirror
-reconcile`.
+An unscoped [Mirror Backfill](glossary/mirror-backfill.md) copies the rows SurrealDB holds and PostgreSQL lacks: history
+written before a deployment turned the mirror on, or a write whose projection failed and was never repaired. It writes
+each row through the same per-row mirror the write hook and `reconcile` use, so a backfilled row is the row the mirror
+would have written. It never overwrites a differing row or deletes a PostgreSQL-only row; those stay with `ops postgres
+mirror reconcile`.
 
-The first backfill against a database, the one before any run has completed, is also the only copy into the tables
-PostgreSQL holds authoritatively: catalogs, matter records, Brand and social content, communications, Inbox and email
-history, and the historical Product catalog. It writes the SurrealDB rows those tables lack and leaves every row
+The first global backfill against a database, before any global run has completed, is also the only global copy into the
+tables PostgreSQL holds authoritatively: catalogs, matter records, Brand and social content, communications, Inbox and
+email history, and the historical Product catalog. It writes the SurrealDB rows those tables lack and leaves every row
 PostgreSQL holds. Its completion lets `ops ship` cut a deployment over. Later runs leave those tables alone, so a row
 deleted in PostgreSQL stays deleted.
 
@@ -364,6 +367,62 @@ failures or parity drift, 2 when a store is unavailable or the run could not adv
 write mirror and recurring reconciliation.
 
 Before relying on a backfill report, run `ops postgres mirror parity` and require a clean result.
+
+### Scoped family enrollment
+
+`satellites:1` enrolls exactly `attestation`, `authority_use`, `citation`, `contract_review`, `efiling_transactions`,
+`expunge_record`, `expunge_request`, `git_access_token`, `matter_caption`, `playbook`, `project_module`,
+`social_oauth_attempt`, and `testimonial`. This scope is independent of global completion. Notation, document, Asset,
+and encrypted deployment-change ownership retain their existing contracts.
+
+Apply the checked-in PostgreSQL migrations through the existing operator migration command before enrollment. Use the
+importer binary before launching application or worker binaries that require the new scope. PostgreSQL connections and
+operator commands remain available while application readiness refuses missing, malformed, or ambiguous receipts. A
+configured database is never permission to hide unimported history.
+
+Startup rejects completed scopes outside its registered versions. Mutating global imports and reconciliation also reject
+unsupported scopes or invalid completed receipts, while a fresh global import remains available before family
+activation. Use operator and writer binaries that understand every activated scope; read-only reports and recovery
+inspection remain available.
+
+1. Stop every old application, worker, scheduler, and other writer, including Person merge operations. Maintain that
+   freeze through final verification and activation; a PostgreSQL importer lease serializes importers, not old writers.
+   A reused development environment is not evidence of quiescence.
+2. Produce a strict operational export with the existing archive procedure and its operator-quiesced assertion. Obtain
+   the matching export and receipt from that archive. The assertion records capture conditions; it does not stop
+   writers.
+3. Run the bounded import using that pair. It verifies the actual export bytes, then compares the live frozen export,
+   schema, raw census, decoded rows, complete content, references, and target constraints. Source-only rows import in
+   registered dependency order; pending differences refresh. Target-only identities and conflicting PostgreSQL Person
+   references require explicit review and block completion; they are never automatically deleted or overwritten.
+4. Continue with the recorded run id until its final verified capture has no blocking differences. Activate explicitly
+   while all writers remain frozen, deploy only the guarded writer version, and then resume traffic and workers. This is
+   an operational sequence, not a cross-database transaction or permission for a mixed-version writer window.
+
+```bash
+hudson ops postgres backfill --family satellites:1 \
+  --capture /path/to/capture.surql --capture-receipt /path/to/capture.receipt.json --max-batches 20 --json
+hudson ops postgres backfill --family satellites:1 --resume <run-id> --max-batches 20 --json
+hudson ops postgres backfill --family satellites:1 --resume <run-id> --activate --json
+```
+
+If the source changed after capture, reestablish the writer freeze and produce a fresh strict pair. Replace only a
+pending capture with `--resume <run-id> --refresh-capture --capture ... --capture-receipt ...`. This retains the old
+content-free receipt in history and invalidates prior verification while preserving applied progress. Repeating the
+identical verified pair is idempotent. Activation makes both the capture and its enrollment immutable.
+
+Completed scoped replay validates the exact persisted receipt using PostgreSQL alone; it needs neither source access nor
+capture files. Reports identify the scope and sealed capture basis and retain historical orphan diagnostics. A later
+source import, reconciliation, or first global import cannot overwrite or resurrect activated PostgreSQL rows.
+
+For a fresh, task-owned synthetic development database, complete the same quiesced enrollment before starting a
+configured application or worker. Ordinary environment provisioning and sample seeding do not bypass readiness or
+activate a scope automatically. A legacy-only development process retains its existing bootstrap contract.
+
+Retain completed scoped runs, checkpoints, receipt history, and failure evidence with the canonical PostgreSQL backup.
+The existing Iceberg recovery drill restores these actual ledger tables, rejects missing or partial authority proof, and
+verifies readiness after the complete proof is restored. Losing receipt metadata must fail closed; recreating a
+completed receipt from source history would risk replaying deleted native rows.
 
 `--verify-assets` also checks retained Asset bytes and public/private object-key references from both stores. Each
 object read or metadata check has a 120-second deadline. A timeout counts as unreadable and fails verification, while

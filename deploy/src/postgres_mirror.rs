@@ -248,8 +248,11 @@ fn unavailable_json(mode: Mode, error: &anyhow::Error) -> serde_json::Value {
 }
 
 async fn measure(mode: Mode) -> anyhow::Result<Report> {
-    let surreal = connect_surreal().await?;
     let pg = PostgresDb::from_env().await?;
+    if mode == Mode::Reconcile {
+        store::postgres_backfill::family::require_supported_scopes(&pg).await?;
+    }
+    let surreal = connect_surreal().await?;
     let before = store::postgres_mirror::parity_all(&surreal, &pg).await?;
     let before_rows = table_rows(&pg, &before).await?;
     let reconciled = (mode == Mode::Reconcile).then(|| divergent_rows(&before));

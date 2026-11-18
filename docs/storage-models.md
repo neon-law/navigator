@@ -54,21 +54,39 @@ and encrypted Firm DocuSign connection records must be present in PostgreSQL bef
 
 ## Matter records
 
-Wherever `NAVIGATOR_POSTGRES_HOST` is set, the owning modules of `statutory_deadline`, `notation_draft`, `estate_asset`,
-`cap_table_holding`, `fiduciary_role`, and `git_repository` read and write PostgreSQL through `store::postgres::matter`,
-a generic accessor over the records mirror's table registry. Writes land only in PostgreSQL. The records mirror refuses
-to repair those tables from SurrealDB, because a missing SurrealDB row is not deletion evidence; only the first [Mirror
-Backfill](postgres-tooling.md#mirror-backfill) copies SurrealDB's rows in. Reference checks still read the Project,
-Person, Entity, and Notation from their own authorities, and the Project mirror supplies the parent rows.
+With PostgreSQL configured, newly enrolled matter accessors require their completed versioned [Mirror
+Backfill](glossary/mirror-backfill.md) receipt and then read and write PostgreSQL only. Missing or invalid historical
+import evidence blocks application readiness and operations. The generic `store::postgres::matter` seam owns statutory
+deadlines, Notation drafts, estate assets, cap-table holdings, fiduciary roles, Git repositories and access tokens,
+expunge records and requests, playbooks, contract reviews, authority uses, citations, attestations, Project modules,
+testimonials, and social OAuth attempts. `store::postgres::captions` owns Matter Caption replacement with the
+Project/Firm constraint. Parent authorization and identity reads retain their own authorities.
+
+Configured PostgreSQL failures return errors. Atomic patches preserve unrelated columns, JSONB values retain JSON null,
+and capability toggles commit with their Relationship Log audit. OAuth callback consumption returns its verifier once
+and erases the stored verifier in the same statement. Person merges discover orphan-tolerant links through the canonical
+record metadata as well as catalog foreign keys.
+
+Compatibility mirrors cannot overwrite or delete activated rows. Existing authorities retain their first-global-import
+contract; the thirteen satellite tables use explicit versioned enrollment, including databases whose global import
+already completed. See the [scoped enrollment procedure](postgres-tooling.md#scoped-family-enrollment). The encrypted
+deployment-change accessor retains its compatibility authority: its authenticated timestamp requires exact source
+preservation before cutover.
 
 ## Catalogs
 
 Wherever `NAVIGATOR_POSTGRES_HOST` is set, the shared catalogs (Authorities, Entity Types, Glossary Terms,
 Jurisdictions, Notation packages and their templates, Notation rates, and Questions) are read and written in PostgreSQL
-through `store::postgres::catalog`, on the same terms as the matter records.
+through `store::postgres::catalog`, retaining their existing first-global-import contract.
 
 Every deployment sets the host. A process without it, today only the SurrealDB test harness, still reads both from
 SurrealDB.
+
+## Signatures and verifications
+
+`store::postgres::signatures` owns provider Signature envelopes, Notarizations, and citation Verifications whenever the
+PostgreSQL host is configured. Provider request indexes resolve replay races, and independent verification axes retain
+the draft revision they attest to. These accessors share the configured-backend failure and insert-only import rules.
 
 ## Communications and email
 
