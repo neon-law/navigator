@@ -1,9 +1,9 @@
 //! Grounding tests for the environment tables in the Operating workshop.
 //!
 //! The workshop is the operator's teaching surface; `.env.example` is the
-//! detailed committed contract. These checks keep every variable needed to
-//! bring up local KIND, start `web` / `workflows-service`, and provision or
-//! ship the reference GKE deployment visible in both places.
+//! detailed committed contract. The workshop covers PostgreSQL, AGE, and DBOS;
+//! compatibility-backend variables remain in the independent environment-reader
+//! audit rather than in this topology's teaching inventory.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -157,9 +157,6 @@ const LOCAL_CONTROL_VARS: &[&str] = &[
     "NAVIGATOR_KIND_DEPS_OVERLAY",
     "NAVIGATOR_KIND_OVERLAY",
     "NAVIGATOR_GKE_OVERLAY",
-    "NAVIGATOR_KIND_SURREAL_PORT",
-    "NAVIGATOR_KIND_RESTATE_INGRESS_PORT",
-    "NAVIGATOR_KIND_RESTATE_ADMIN_PORT",
     "NAVIGATOR_KIND_RAUTHY_PORT",
     "NAVIGATOR_KIND_SEAWEEDFS_S3_PORT",
     "NAVIGATOR_KIND_WEB_PORT",
@@ -181,17 +178,11 @@ const GENERATED_LOCAL_VARS: &[&str] = &[
     "NAVIGATOR_ENVIRONMENT",
     "NAVIGATOR_CI_HARNESS",
     "NAVIGATOR_GIT_REPO_ROOT",
-    "NAVIGATOR_SURREAL_ENDPOINT",
-    "NAVIGATOR_SURREAL_NAMESPACE",
-    "NAVIGATOR_SURREAL_DATABASE",
-    "NAVIGATOR_SURREAL_USER",
-    "NAVIGATOR_SURREAL_PASSWORD",
     "NAVIGATOR_STORAGE_BACKEND",
     "NAVIGATOR_STORAGE_ENDPOINT",
     "NAVIGATOR_STORAGE_BUCKET",
     "NAVIGATOR_ASSETS_BUCKET",
     "NAVIGATOR_APPLICATIONS_BUCKET",
-    "NAVIGATOR_SURREAL_ARCHIVES_BUCKET",
     "NAVIGATOR_LFS_BUCKET",
     "NAVIGATOR_STORAGE_REGION",
     "NAVIGATOR_STORAGE_ACCESS_KEY",
@@ -210,7 +201,6 @@ const GENERATED_LOCAL_VARS: &[&str] = &[
     "OAUTH_CLIENT_SECRET",
     "OAUTH_REDIRECT_URI",
     "SESSION_SECRET",
-    "RESTATE_BROKER_URL",
     "SENDGRID_API_KEY",
     "SENDGRID_INBOUND_SECRET",
     "OTEL_EXPORTER_OTLP_ENDPOINT",
@@ -252,9 +242,6 @@ const DEPLOYED_RUNTIME_VARS: &[&str] = &[
     "NAVIGATOR_IDENTITY_PLATFORM_ENDPOINT",
     "NAVIGATOR_GCP_METADATA_ENDPOINT",
     "NAVIGATOR_RATE_LIMIT_PER_MIN",
-    "RESTATE_AUTH_TOKEN",
-    "RESTATE_SERVICE",
-    "RESTATE_INGRESS_URL",
     "WORKFLOWS_SERVICE_LISTEN",
     "NAVIGATOR_EMAIL_BACKEND",
     "SENDGRID_FROM_EMAIL",
@@ -317,8 +304,6 @@ const PROVISION_AND_SHIP_VARS: &[&str] = &[
     "NAVIGATOR_PRIMARY_DOMAIN",
     "NAVIGATOR_WEB_SECRET_NAME",
     "NAVIGATOR_WORKFLOWS_URL",
-    "RESTATE_ADMIN_URL",
-    "RESTATE_ADMIN_TOKEN",
 ];
 
 #[test]
@@ -344,12 +329,15 @@ fn operating_workshop_and_env_contract_list_every_startup_variable() {
 }
 
 #[test]
-fn operating_workshop_lists_every_committed_environment_variable() {
+fn operating_workshop_lists_environment_variables_for_its_topology() {
     let workshop = environment_matrix();
     let env_example = repo_file(".env.example");
     let variables = environment_keys(&env_example);
 
-    for variable in &variables {
+    for variable in variables
+        .iter()
+        .filter(|variable| !variable.contains("SURREAL") && !variable.contains("RESTATE"))
+    {
         assert!(
             workshop.contains(variable),
             "Operating workshop Environment Matrix must list `{variable}` from .env.example",

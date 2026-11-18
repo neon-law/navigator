@@ -8,8 +8,9 @@ description: Stand up and operate your own Neon Law Navigator instance on Google
 
 Our firm runs Neon Law Navigator on Google Cloud. This workshop is for **admin** users with a clone of the public source
 repository, [neon-law/navigator](https://github.com/neon-law/navigator): the people who own billing, secrets, OIDC,
-runtime configuration, and release verification. It stands up your **own** instance — the same Rust stack our attorneys
-use, on your own Google Cloud project, for your own community.
+runtime configuration, and release verification. Its deployment contract is **PostgreSQL with AGE and DBOS**. It stands
+up your **own** instance — the same Rust stack our attorneys use, on your own Google Cloud project, for your own
+community.
 
 One command does most of the work: `hudson ops gcp setup`, a provisioner written in Rust that talks to Google's REST
 APIs directly and ships with a dry-run so you can read the whole plan before a single packet leaves your laptop.
@@ -26,12 +27,10 @@ stack we run. Let's stand it up.
 > your font files, and follow the [TrashType terms](https://trashtype.com/legal).
 > Otherwise, replace GORP with a typeface you are licensed to serve before launch.
 >
-> **Start locally with an authorized checkout.** You do not need a cloud account to see Neon Law Navigator run.
-> `cargo run -p hudson -- dev up` brings the whole stack up locally in
-> [KIND](https://kind.sigs.k8s.io/) (the store, OIDC, storage, the workflow broker, embedded Rego), then
-> `source .devx/env` and
-> `cargo run -p neon` serves it on `localhost`. Boot it locally, inspect the canonical seed, and only
-> come back here when you want it on the public internet. The full local loop is in the checkout's `AGENTS.md`.
+> **Start locally with an authorized checkout.** Prepare the PostgreSQL-with-AGE fixture described in
+> `docs/test-database.md`, then configure separate application and DBOS logins using the Environment Matrix below.
+> Run the application from the selected checkout with its task-owned configuration. Verify the release's combined-host
+> prerequisites before using this topology for a live deployment; the DBOS runbook describes the cutover checks.
 
 **Set a budget alert before you provision.** The alert notifies you at the configured thresholds. Charges continue while
 resources run.
@@ -157,7 +156,8 @@ the bounded retry count, and retries the idempotent insert for up to two minutes
 because they may be real IAM or organization-policy problems. If a terminal or network interruption stops setup after
 GCP accepted a write, run the exact same deployment command again. Existing resources return idempotent conflicts. The
 pipeline generates no credential of its own, so a run — first or tenth — prints no secret for you to record. The store
-is SurrealDB, and its endpoint and root credentials come from your store provider.
+is PostgreSQL with AGE. Application and DBOS connections use separate database roles from the private deployment
+configuration.
 
 Live setup prints nineteen secret-free stages, including the project and exact resource name:
 
@@ -308,8 +308,8 @@ registry project is a separate publishing resource, not an application environme
 Read the deployment matrix from the private operator configuration. A row's hostname is configuration, not code —
 `NAVIGATOR_PUBLIC_HOST` in its `config.toml` — so the public URL can change without renaming a crate, image, or
 deployment. Keep each production brand's resource prefix, database, cluster, namespace, runtime identity, Secret, and
-Restate journal isolated. Staging proves the common application; brand route tests prove the public face shipped by each
-immutable image.
+DBOS schema and executor identities isolated. Staging proves the common application; brand route tests prove the public
+face shipped by each immutable image.
 
 ### The `/app` mount and HTTP route ownership
 
@@ -373,7 +373,7 @@ Six unconditional private buckets — assets, documents, exports, logs, PostgreS
 optional archive and telemetry lanes when named. Project growth adds rows and logical key space; it never creates a
 cloud bucket per Project. The retired Portal's objects remain under a `{project-code}/portal/` prefix in the
 applications bucket until an operator deletes them by hand. The documents bucket stores Project-scoped content-addressed
-`projects/<code>/documents/<sha>` objects, while Surreal asset rows carry the Project association, visibility, and
+`projects/<code>/documents/<sha>` objects, while PostgreSQL Asset records carry the Project association, visibility, and
 provenance used for authorization. Marketing bytes remain available through the same-origin `/assets/*` application
 route while the bucket itself stays private and does not grant `allUsers`.
 
@@ -382,8 +382,8 @@ existing fleet membership is not supported`. Navigator treats only that exact re
 continues; unrelated Fleet errors still stop setup.
 
 Infrastructure is not deployment. A completed setup provisions infrastructure but not a running application. Ship an
-immutable release and prove `/readyz`, `/version`, certificate readiness, Restate registration, and the browser surface
-before recording the release handoff.
+immutable release and prove `/readyz`, `/version`, certificate readiness, DBOS readiness and recovery, and the browser
+surface before recording the release handoff.
 
 For a prefix `<name>`, set `NAVIGATOR_GKE_CLUSTER_NAME=<name>`, `NAVIGATOR_GKE_CONTEXT=gke_<project>_<region>_<name>`,
 `NAVIGATOR_K8S_NAMESPACE=<name>`, `NAVIGATOR_VPC_NAME=<name>-vpc`, `NAVIGATOR_SUBNETWORK_NAME=<name>-subnet`,
@@ -397,8 +397,8 @@ organization's naming convention.
 Also set `NAVIGATOR_GCP_PROJECT_ID`, `NAVIGATOR_GCP_LOCATION`, `NAVIGATOR_PUBLIC_HOST`, `NAVIGATOR_WORKFLOWS_HOST`,
 `NAV_BASE_URL=https://$NAVIGATOR_PUBLIC_HOST`, `NAVIGATOR_WORKFLOWS_URL=https://$NAVIGATOR_WORKFLOWS_HOST/`,
 `NAVIGATOR_WEB_IMAGE`, and `NAVIGATOR_ASSET_BASE_URL=$NAV_BASE_URL/assets` in that row's
-`$NAVIGATOR_DEPLOYMENTS_DIR/deployments/<row>/config.toml`. Set that row's own `NAVIGATOR_SURREAL_*` coordinates and
-credentials in its encrypted `secrets.enc.yaml`.
+`$NAVIGATOR_DEPLOYMENTS_DIR/deployments/<row>/config.toml`. Set that row's own `NAVIGATOR_POSTGRES_*` and
+`NAVIGATOR_DBOS_*` coordinates and credentials in its encrypted `secrets.enc.yaml`.
 
 Keep the mail rail complete in every deployment's encrypted `secrets.enc.yaml`: `SENDGRID_API_KEY`,
 `SENDGRID_FROM_EMAIL`, `SENDGRID_INBOUND_SECRET`, `SENDGRID_INBOUND_PUBLIC_KEY`, `SENDGRID_EVENTS_SECRET`, and
@@ -609,9 +609,9 @@ Portal; a Project's `cd.yml` still calls `project-publish.yml`, which is kept as
 ### A document's bytes and authorization are separate
 
 Inside the documents bucket, the storage key is content-addressed: `store::documents::ingest_bytes` writes bytes at
-`blobs/<sha256>`. The Surreal `asset` row is the Project-scoped record: it carries the Project association, provenance,
-visibility, and the reference to that object. The portal checks that row before streaming a document, so clients never
-receive bucket credentials or direct object URLs.
+`blobs/<sha256>`. The PostgreSQL Asset record is the Project-scoped record: it carries the Project association,
+provenance, visibility, and the reference to that object. The portal checks that row before streaming a document, so
+clients never receive bucket credentials or direct object URLs.
 
 The ingest deduplication decision is scoped to the Project, even though the key shape is not: an existing matching asset
 on the same Project avoids a second write, while a matching asset on another Project does not authorize reuse of its
@@ -620,7 +620,7 @@ references the object before deleting its bytes. That reference check keeps a de
 bytes still needed by another.
 
 This is why Project growth does not require a documents bucket per Project. The bucket is a private deployment lane; the
-Surreal record supplies the Project boundary, and the application supplies the authorization boundary.
+PostgreSQL record supplies the Project boundary, and the application supplies the authorization boundary.
 
 ---
 
@@ -722,15 +722,15 @@ the cloud/cluster boundary. Finish the deployment through these adjacent owners:
 | --- | --- |
 | DNS | Run `hudson ops dns setup`; DNS may be outside GCP, while setup owns only the stable Gateway IP. |
 | TLS and Gateway manifests | `hudson ops ship` renders and applies Gateway, certificate, and routes. |
-| Restate | Apply the Restate operator and manifests, then let `ops ship` re-register the worker. |
+| DBOS | Apply database roles, configure the executor, and verify workflow registration and recovery. |
 | Secret values | `hudson ops secrets apply` decrypts and writes Secret Manager and the Kubernetes Secret. |
 
 ---
 
 Setup completes when the cloud substrate exists, not when all adjacent operator actions have run. Emphasize that DNS is
-external to the cloud substrate, `ops ship` owns rendered Gateway and TLS manifests, Restate needs its operator before
-the worker can register, and `ops secrets apply` is the one command that handles decrypted values. This division keeps
-setup idempotent and keeps credential payloads out of `ops ship`.
+external to the cloud substrate, `ops ship` owns rendered Gateway and TLS manifests, DBOS needs its database roles and
+workflow registration before the executor starts accepting work, and `ops secrets apply` is the one command that handles
+decrypted values. This division keeps setup idempotent and keeps credential payloads out of `ops ship`.
 
 ## Operate Forgejo beside Navigator
 
@@ -952,7 +952,8 @@ data, credentials, and release automation separate when reasoning about a deploy
 
 | Switch | What the operator controls |
 | --- | --- |
-| `NAVIGATOR_WORKFLOW_ENGINE` | Selects the worker engine. `dbos` starts the DBOS worker alongside Restate. |
+| `NAVIGATOR_WORKFLOW_ENGINE` | Set `dbos` for the workflow host. |
+| `NAVIGATOR_WORKFLOWS_IN_WEB` | Set `true` to host application and workflow listeners in one container. |
 | `NAVIGATOR_DBOS_ENABLED` | Hosts the DBOS executor in web. Requires a separate DBOS database login. |
 | `NAVIGATOR_DBOS_ARCHIVES_ENABLED` | Selects DBOS for the archive schedule. |
 | `NAVIGATOR_DBOS_BILLING_CANARY_ENABLED` | Registers the weekly billing canary in the enabled DBOS host. |
@@ -1032,8 +1033,6 @@ development with no `.env`; add only the sandbox values you actually intend to o
 | Dependency overlay | `NAVIGATOR_KIND_DEPS_OVERLAY` | deps-only KIND |
 | Full KIND overlay | `NAVIGATOR_KIND_OVERLAY` | full KIND |
 | GKE overlay | `NAVIGATOR_GKE_OVERLAY` | example GKE manifests |
-| Second store port | `NAVIGATOR_KIND_SURREAL_PORT` | `18000` |
-| Restate ports | `NAVIGATOR_KIND_RESTATE_INGRESS_PORT`, `NAVIGATOR_KIND_RESTATE_ADMIN_PORT` | `9080`, `9070` |
 | Identity port | `NAVIGATOR_KIND_RAUTHY_PORT` | `30080` |
 | Storage port | `NAVIGATOR_KIND_SEAWEEDFS_S3_PORT` | `30900` |
 | Web port | `NAVIGATOR_KIND_WEB_PORT` | `3001` |
@@ -1064,18 +1063,22 @@ unset, empty, or invalid local ports use the defaults shown. The `NAVIGATOR_SEAW
 the CLI reads generated bucket-scoped credentials and writes them into `.devx/env`. They are not user-supplied
 overrides. Keep generated credentials out of source control.
 
-### Local runtime: what `.devx/env` generates
+### Local runtime: application and workflow connections
 
 | Concern | Generated environment variables |
 | --- | --- |
 | Profile and listener | `PORT`, `NAVIGATOR_ENVIRONMENT`, `NAVIGATOR_CI_HARNESS` |
 | Repository writer | `NAVIGATOR_GIT_REPO_ROOT` |
-| Store | `NAVIGATOR_SURREAL_ENDPOINT`, `NAVIGATOR_SURREAL_NAMESPACE`, `NAVIGATOR_SURREAL_DATABASE` |
-| Store credentials | `NAVIGATOR_SURREAL_USER`, `NAVIGATOR_SURREAL_PASSWORD` |
+| PostgreSQL connection | `NAVIGATOR_POSTGRES_HOST`, `NAVIGATOR_POSTGRES_PORT`, `NAVIGATOR_POSTGRES_DATABASE` |
+| PostgreSQL login | `NAVIGATOR_POSTGRES_USER`, `NAVIGATOR_POSTGRES_PASSWORD` |
+| PostgreSQL TLS | `NAVIGATOR_POSTGRES_SSLMODE`, `NAVIGATOR_POSTGRES_ROOT_CERT` |
+| DBOS connection | `NAVIGATOR_DBOS_HOST`, `NAVIGATOR_DBOS_PORT`, `NAVIGATOR_DBOS_DATABASE` |
+| DBOS login | `NAVIGATOR_DBOS_USER`, `NAVIGATOR_DBOS_PASSWORD` |
+| DBOS TLS | `NAVIGATOR_DBOS_SSLMODE`, `NAVIGATOR_DBOS_ROOT_CERT` |
+| DBOS identity | `NAVIGATOR_DBOS_EXECUTOR_ID` |
 | Storage driver | `NAVIGATOR_STORAGE_BACKEND`, `NAVIGATOR_STORAGE_ENDPOINT` |
 | Storage buckets | `NAVIGATOR_STORAGE_BUCKET`, `NAVIGATOR_ASSETS_BUCKET`, `NAVIGATOR_LFS_BUCKET` |
 | Applications bucket | `NAVIGATOR_APPLICATIONS_BUCKET` |
-| SurrealDB operational archive bucket | `NAVIGATOR_SURREAL_ARCHIVES_BUCKET` |
 | Iceberg-archive bucket | `NAVIGATOR_ARCHIVES_BUCKET` |
 | Cloud-only archive buckets (`ops gcp setup`, not locally generated) | `NAVIGATOR_TELEMETRY_BUCKET` |
 | Storage region | `NAVIGATOR_STORAGE_REGION` |
@@ -1089,7 +1092,6 @@ overrides. Keep generated credentials out of source control.
 | Microsoft tenant gate | `OAUTH_MICROSOFT_ALLOWED_TENANTS`, `OAUTH_MICROSOFT_ISSUER_URL` |
 | Sign in with Apple | `OAUTH_APPLE_CLIENT_ID`, `OAUTH_APPLE_TEAM_ID`, `OAUTH_APPLE_KEY_ID`, `OAUTH_APPLE_PRIVATE_KEY` |
 | Lead form hCaptcha | `HCAPTCHA_SITEKEY`, `HCAPTCHA_SECRET` |
-| Policy and workflows | `RESTATE_BROKER_URL` |
 | Attachment scanner | `NAVIGATOR_CLAMD_ADDR` |
 | Harness-only integration placeholders | `SENDGRID_API_KEY`, `SENDGRID_INBOUND_SECRET` |
 | Harness sink URL | `SENDGRID_BASE_URL`, `NAVIGATOR_SENDGRID_HARNESS_SECRET` |
@@ -1099,61 +1101,42 @@ overrides. Keep generated credentials out of source control.
 
 ---
 
-Do not edit `.devx/env`; the next `hudson dev up` overwrites it. The file is a connection descriptor for the host-side
-`web`, not a secret store. In the default loop the host `web` and in-cluster worker share the `navigator` database. A
-worktree environment can use another database and port, but Restate-backed flows require the worker and web database
-coordinates to agree; `hudson dev worktree-env status` reports a mismatch.
+Use the task-owned environment for local connections. Keep generated descriptors separate from the operator secret
+store, and verify their selected topology before starting the application. In the default loop the host `web` and
+in-cluster worker share the `navigator` database. A worktree environment uses isolated database and listener
+coordinates; verify the application and DBOS connections before starting workflows; `hudson dev worktree-env status`
+reports a mismatch.
 
-### The store: PostgreSQL and the compatibility lane
+### PostgreSQL with AGE and DBOS
 
-| Question | Current contract |
+| Responsibility | PostgreSQL boundary |
 | --- | --- |
-| New storage | PostgreSQL |
-| Existing compatibility domains | SurrealDB until their accessors migrate |
-| PostgreSQL schema | Versioned SQL migrations under `store/postgres/` |
-| New storage tests | PostgreSQL fixture in `docs/test-database.md` |
-| SurrealDB compatibility definitions | `store/src/schema/navigator.surql` |
-| Authorization | Application roles, participation, and embedded Rego |
+| Application records | Application schema and scoped accessors |
+| Graph | AGE within PostgreSQL |
+| Durable workflow checkpoints | SDK-managed `dbos` schema |
+| Application login | No write access to the DBOS schema |
+| DBOS login | Owns DBOS state; no access to application tables |
+| Migrations | Explicit operator step before application traffic |
 
 ---
 
-Follow the PostgreSQL skill for new storage and migrations. Check the selected domain's accessor before deciding which
-database owns a read or write; the presence of a compatibility mirror does not make both copies authoritative. The
-embedded SurrealDB harness is deprecated, and its memory-backed behavior does not establish deployed persistence or
-recovery. Keep each task's test database and services isolated, and use `worktree-env down` to remove task-owned
-resources. Follow `docs/test-database.md` for the PostgreSQL fixture.
+Apply the versioned application migrations with the selected release's migration binary. Let the DBOS SDK manage its own
+schema. Operators may inspect workflow state but must not repair SDK rows by hand. Use the PostgreSQL fixture in
+`docs/test-database.md`, and verify AGE extension availability before graph-dependent routes are enabled.
 
-### Where SurrealDB authorization lives
+### Application authorization above PostgreSQL
 
-| Layer | Decides | During and after the port |
-| --- | --- | --- |
-| `persons.role` | The tier: owner, admin, lawyer, clerk, client | Unchanged — the sole tier answer |
-| `person_project_roles.participation` | Per-matter scope | Unchanged — the sole scope answer |
-| Embedded Rego | Renders the decision per request | Compiled at web-process boot |
-| Surreal `PERMISSIONS` | Per-row engine enforcement | Explicit `NONE`; every process signs in as root |
+- `persons.role` supplies the application role.
+- Project participation supplies matter scope.
+- Embedded Rego evaluates admission and protected operations.
+- Database credentials identify services, not end users.
 
 ---
 
-The schema carries `PERMISSIONS NONE`, so Navigator's authorization lives above the database. SurrealDB does have an
-opinion — every table carries a `PERMISSIONS` clause the engine evaluates per row against the authenticated session — so
-adopting it forced a decision rather than inheriting one.
-
-The decision is that authorization stays above the database. Every table says `PERMISSIONS NONE` out loud even though
-that is also the engine's default, because an omitted clause and a deliberate one are otherwise indistinguishable, and a
-test fails if a table ever lands without one. Be precise about what `NONE` buys: it denies every non-root session
-outright, and root bypasses it — so the security property comes from the connection, and the clause is a fail-closed
-backstop for a session that does not exist yet.
-
-Mirroring the role-and-participation model into per-table `PERMISSIONS FOR select` expressions was the rejected
-alternative, and the conflict check is why. That traversal walks from a proposed client across matters the requesting
-person has no part in — which is exactly what imputed firm-wide conflict checking under Model Rule 1.10 means — so a
-mirrored policy would need a carve-out at its first real query. Two languages that must agree is also the expensive
-failure: a rule that drifts is either over-disclosure, a confidentiality breach, or under-disclosure, which in a
-conflict check means a _missed_ conflict. Neither shows up as an error.
-
-What reopens it: the first surface that hands query power closer to a user — a folder read daemon, an MCP tool issuing
-SurrealQL, a debugging console — does not get the root credential. It lands its own scoped non-root session and settles
-that credential in each deployment's `secrets.enc.yaml` at the same time.
+A successful database connection does not grant a person access to every matter. The application checks identity, role,
+and participation before reading or changing a record. Keep application, migration, backup and DBOS roles separate. Do
+not hand database credentials to a browser, an agent tool, or an untrusted workflow runner. Preserve firm-wide conflict
+checks through their authorized accessor without widening the caller's ordinary matter access.
 
 ### Deployed runtime: core web and worker wiring
 
@@ -1161,9 +1144,17 @@ that credential in each deployment's `secrets.enc.yaml` at the same time.
 | --- | --- |
 | Profile fence | `NAVIGATOR_ENVIRONMENT`, `NAVIGATOR_CI_HARNESS`, `NAVIGATOR_CREDENTIAL_ENVIRONMENT` |
 | Sample matters | `NAVIGATOR_SIMULATED_MATTERS` |
+| PostgreSQL | `NAVIGATOR_POSTGRES_HOST`, `NAVIGATOR_POSTGRES_PORT`, `NAVIGATOR_POSTGRES_DATABASE` |
+| Application login | `NAVIGATOR_POSTGRES_USER`, `NAVIGATOR_POSTGRES_PASSWORD` |
+| Application TLS | `NAVIGATOR_POSTGRES_SSLMODE`, `NAVIGATOR_POSTGRES_ROOT_CERT` |
+| DBOS connection | `NAVIGATOR_DBOS_HOST`, `NAVIGATOR_DBOS_PORT`, `NAVIGATOR_DBOS_DATABASE` |
+| DBOS login | `NAVIGATOR_DBOS_USER`, `NAVIGATOR_DBOS_PASSWORD` |
+| DBOS TLS | `NAVIGATOR_DBOS_SSLMODE`, `NAVIGATOR_DBOS_ROOT_CERT` |
+| DBOS executor | `NAVIGATOR_DBOS_EXECUTOR_ID` |
+| Workflow ingress | `NAVIGATOR_DBOS_INGRESS_URL`, `NAVIGATOR_DBOS_INGRESS_TOKEN` |
+| Workflow health listener | `WORKFLOWS_SERVICE_HEALTH_LISTEN` |
 | HTTP identity | `PORT`, `NAV_BASE_URL`, `CANONICAL_HOST`, `NAVIGATOR_RATE_LIMIT_PER_MIN` |
 | Branding and public assets | `NAVIGATOR_CUSTOM_BRANDING`, `NAVIGATOR_ASSET_BASE_URL` |
-| Store | `NAVIGATOR_SURREAL_ENDPOINT`, `NAVIGATOR_SURREAL_NAMESPACE`, `NAVIGATOR_SURREAL_DATABASE` |
 | Storage driver | `NAVIGATOR_STORAGE_BACKEND`, `NAVIGATOR_STORAGE_ENDPOINT`, `NAVIGATOR_STORAGE_REGION` |
 | Documents/exports | `NAVIGATOR_DOCUMENTS_BUCKET`, `NAVIGATOR_STORAGE_BUCKET`, `NAVIGATOR_EXPORTS_BUCKET` |
 | Other buckets | `NAVIGATOR_ASSETS_BUCKET`, `NAVIGATOR_LFS_BUCKET` |
@@ -1177,8 +1168,6 @@ that credential in each deployment's `secrets.enc.yaml` at the same time.
 | Iceberg-archive bucket | `NAVIGATOR_ARCHIVES_BUCKET` |
 | Iceberg-archive S3 key | `NAVIGATOR_ARCHIVES_ACCESS_KEY`, `NAVIGATOR_ARCHIVES_SECRET_KEY` |
 | Sessions | `SESSION_SECRET` |
-| Restate client | `RESTATE_BROKER_URL`, `RESTATE_AUTH_TOKEN`, `RESTATE_SERVICE` |
-| Trigger ingress | `RESTATE_INGRESS_URL` |
 | Worker listener | `WORKFLOWS_SERVICE_LISTEN` |
 | Telemetry and log filtering | `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `RUST_LOG` |
 | Image-baked release identity | `NAVIGATOR_RELEASE_TAG`, `NAVIGATOR_GIT_SHA`, `NAVIGATOR_BUILD_TIME` |
@@ -1353,7 +1342,7 @@ an explicit capability choice, not evidence that an invoice reached the ledger.
 | GitHub token fallback | `NAVIGATOR_GITHUB_TOKEN` (or `GITHUB_TOKEN`) |
 | GitHub endpoint | `NAVIGATOR_GITHUB_API_BASE` |
 | GitHub webhook receiver | `NAVIGATOR_GITHUB_WEBHOOK_SECRET`, `NAVIGATOR_GITHUB_CANONICAL_REPOSITORY` |
-| Receiver identity and Restate submit | `NAVIGATOR_GITHUB_APP_LOGIN`, `RESTATE_INGRESS_URL`, `RESTATE_AUTH_TOKEN` |
+| Receiver identity | `NAVIGATOR_GITHUB_APP_LOGIN` |
 | GitHub concurrency cap | `NAVIGATOR_GITHUB_MAX_CONCURRENT` |
 | GitHub revision cap | `NAVIGATOR_GITHUB_MAX_REVISE_ROUNDS` |
 | GitHub daily token cap | `NAVIGATOR_GITHUB_MAX_DAILY_TOKENS` |
@@ -1381,30 +1370,10 @@ the read-only files baked into the image. Navigator MCP uses `NullRouter` withou
 `StubContractReviewer` without the same Vertex coordinates. The on-chain backend defaults to `null`, recording no
 transaction. Scheduled cost and billing diagnostics stay disabled when their table or recipient variables are absent.
 
-The GitHub webhook receiver is the exception to that degrade-quietly pattern, and where it runs is deliberate. It is
-served at `POST workflows.<domain>/webhooks/github/{secret}` by `workflows-service`, on its own Axum listener
-(`WORKFLOWS_WEBHOOK_LISTEN`, `9082`) beside the worker's Restate endpoint; the Envoy sidecar routes `/webhooks/github/*`
-to that listener and every other path to the Restate leg. It runs on the `workflows` host, not on `www`, because `www`
-remains behind the firm's Tailscale tailnet perimeter — and GitHub, an external sender that cannot join a tailnet, can
-only reach a public host. That split is the rule worth remembering: the tailnet protects the human surface (`www`, the
-portal, the workbench), while a machine caller's endpoint stays public and is authenticated by the signature it carries,
-not by the network it arrives from. GitHub signs each delivery, so the receiver verifies `X-Hub-Signature-256` against
-the raw body — which is why the Envoy leg to it stays HTTP/1.1 end to end and forwards the bytes unaltered.
-
-Startup still requires the webhook secret, canonical repository, GitHub org, and app login, and `RESTATE_INGRESS_URL`
-plus `RESTATE_AUTH_TOKEN`: a receiver that cannot verify a delivery or reach the Restate ingress has no safe reduced
-mode. It is still one worker process — there is no separate receiver container — but it now owns a second listener port
-that Envoy fronts, rather than sharing `web`'s. The DevX Slack services `DevxIssueTriage` and `devx-pr` fold into
-`workflows-service` alongside the legal workflows and the receiver; they alone read `SLACK_WEBHOOK_URL` and fail closed
-when Slack is absent so Restate can retry instead of acknowledging a lost engineering notice. Only rows with the
-explicit `NAVIGATOR_GITHUB_AUTOMATION_HOME` capability may mount the receiver or bind the GitHub services. Those rows
-also require positive `NAVIGATOR_GITHUB_MAX_CONCURRENT`, `NAVIGATOR_GITHUB_MAX_REVISE_ROUNDS`, and
-`NAVIGATOR_GITHUB_MAX_DAILY_TOKENS` values; the singleton `devx-guardrails/global` object serializes reservations,
-defers work at the concurrency cap, and pauses new token reservations through the UTC-day reset. Unmarked rows do not
-bind that object or read these limits.
-
-The receiver watches the canonical source repository and the organization configured for the marked row. A delivery is
-accepted when it comes from that canonical repository or a repository owned by the configured organization.
+Enable optional webhook automation only after its DBOS adapter and authenticated ingress are verified for the selected
+release. Verify the provider signature over the raw delivery bytes, bind the authorized repository, and use a stable
+workflow identity to suppress duplicate effects. An untrusted event cannot select another Firm or Project. Keep
+concurrency and token budgets bounded, and keep credentials and matter content out of notices.
 
 ### Provision and ship: variables read by the operator CLI
 
@@ -1425,13 +1394,12 @@ accepted when it comes from that canonical repository or a repository owned by t
 | Public hosts | `NAVIGATOR_PUBLIC_HOST`, `NAVIGATOR_WORKFLOWS_HOST`, `GOOGLE_OAUTH_REQUIRED_HD` |
 | Runtime Secret | `NAVIGATOR_WEB_SECRET_NAME` |
 | Worker registration | `NAVIGATOR_WORKFLOWS_URL` |
-| Restate admin | `RESTATE_ADMIN_URL`, `RESTATE_ADMIN_TOKEN` |
 
 ---
 
 These values belong to the deployment operator, not an application admin. Provisioning consumes the cloud and cluster
-coordinates; shipping consumes the already-provisioned target plus image, public identity, Secret, and Restate wiring.
-Keep the distinction visible when debugging: changing an admin role cannot repair a missing GKE context or Secret.
+coordinates; shipping consumes the already-provisioned target plus image, public identity, Secret, and DBOS wiring. Keep
+the distinction visible when debugging: changing an admin role cannot repair a missing GKE context or Secret.
 
 ### Ancillary operations and opt-in test controls
 
@@ -1444,7 +1412,6 @@ Keep the distinction visible when debugging: changing an admin role cannot repai
 | Browser-driver override | `WEBDRIVER_URL`, `WEBDRIVER_HEADED` |
 | Deterministic GCP test token | `DEVX_GCP_FAKE_TOKEN`, `ARCHIVES_FAKE_TOKEN` |
 | Browser gate | `NAV_REQUIRE_HARNESS`, `NAV_REASK_SHOTS` |
-| Server-mode store lane | `NAV_REQUIRE_SURREAL` |
 
 The DNSimple CLI transaction uses operator-shell variables `DNS_SIMPLE` (or legacy `DNSIMPLE_API_TOKEN`),
 `DNSIMPLE_TOKEN`, `DNS_ACCT`, and `DNS_ZONE`. None belongs in a deployment config.
@@ -1452,7 +1419,7 @@ The DNSimple CLI transaction uses operator-shell variables `DNS_SIMPLE` (or lega
 ---
 
 `hudson ops gcp setup` consumes the target and resource names; `hudson ops ship` consumes the target, public identity,
-immutable brand image, OAuth client IDs, Secret name, and Restate coordinates. `ops gcp setup` flags override their
+immutable brand image, OAuth client IDs, Secret name, and DBOS coordinates. `ops gcp setup` flags override their
 clap-bound environment variables; `ops ship` reads nothing from the environment — its required `--deployment` flag
 selects one site's private config before it renders, diffs, and applies the GKE manifests. `ops ship` accepts exact
 `production` (or empty/unset) for every persistent hosted deployment. Exact `dev` belongs to the disposable `navigator
@@ -1493,10 +1460,11 @@ kubectl logs deploy/navigator-web -n navigator
 
 ---
 
-The boot-invariant set includes `NAVIGATOR_SURREAL_ENDPOINT`, `RESTATE_BROKER_URL`, storage configuration,
-`SESSION_SECRET`, the `SENDGRID_*` keys, and `DOCUSIGN_HMAC_KEY`. The Environment Matrix above lists every startup key
-by owning process and lifecycle; `.env.example` remains the per-variable contract with defaults, secret classification,
-and provider-specific notes. See [`docs/oss-install.md`](/docs/oss-install) §4 and `.env.example`.
+For this topology, verify application and DBOS database connections, authenticated workflow ingress, storage
+configuration, `SESSION_SECRET`, the `SENDGRID_*` keys, and `DOCUSIGN_HMAC_KEY`. The Environment Matrix above lists
+every startup key by owning process and lifecycle; `.env.example` remains the per-variable contract with defaults,
+secret classification, and provider-specific notes. See [`docs/oss-install.md`](/docs/oss-install) §4 and
+`.env.example`.
 
 Two rules keep client data safe, and the deploy will not let you skip them. First, **plaintext secrets never live in the
 manifest tree** — key material is SOPS-encrypted per value in the private row's `secrets.enc.yaml`, decrypted only by
@@ -1685,7 +1653,8 @@ stack runs on) and **feature vendors** (each lights up one capability and stubs 
 | Service | What it gives you | Kind | At boot |
 | --- | --- | --- | --- |
 | Google Cloud | Storage, OIDC, archive | platform | required — provisioned by `hudson ops gcp setup` |
-| Restate Cloud | Durable workflow execution (`workflows-service`) | platform | required — the workflow broker |
+| PostgreSQL with AGE | Application records and graph | platform | required |
+| DBOS | Durable workflow execution and checkpoints | platform | required |
 | Vertex AI | Inbound contract review | feature | optional — the stub reviewer until configured |
 | GitHub | Private per-Project repositories | platform | required in the requested cloud topology |
 | DocuSign | E-signature | feature | CI-harness stub; required in a normal dev deployment and production |
@@ -1702,9 +1671,9 @@ endpoint. The single-node SeaweedFS shape in KIND is disposable developer infras
 Two things worth saying out loud for a copyist:
 
 - **Non-production boots with the canonical catalog; deployed integrations fail closed.** The explicit local CI harness
-  needs none of the feature vendors: it captures email and uses in-process stubs, while SeaweedFS, SurrealDB, Rauthy,
-  and Restate run in KIND. Cloud staging and production instead require configured SendGrid and DocuSign accounts at
-  boot. Test-only records stay inside the harness's isolated database schema.
+  needs none of the feature vendors: it captures email and uses in-process stubs, while PostgreSQL with AGE, Rauthy, and
+  SeaweedFS provide the local dependencies. Cloud staging and production require configured SendGrid and DocuSign
+  accounts at boot. Test-only records stay inside the harness's isolated database schema.
 - **One provider attachment per deployment.** Staging attachments point only at sandboxes and production attachments
   point only at live accounts. A provider tenant may hold several attachments when that is its native model, but
   credentials, webhooks, senders, data partitions, and smoke evidence remain per deployment. That convention lives in
@@ -1716,28 +1685,23 @@ Keep invoice issuance, payment collection, and accounting reconciliation distinc
 invoice drafts; existing Xero paths still serve accounting and billing reads and writes. Check the configured route
 before generating a bill, and verify the provider's actual result rather than inferring success from configuration.
 
-### The two service deployments
+### One application container with DBOS
 
-A production install runs one Rust application in two operational roles:
+The application container serves the portal and the authenticated DBOS workflow listener. PostgreSQL with AGE and
+private object storage remain independent services.
 
-- `navigator-web` — the public portal, Navigator MCP/API routes, webhooks, health probes, embedded Rego authorization,
-  and client-facing Documents/Engagements/Invoices views.
-- `workflows-service` — the durable Restate worker that renders documents, advances workflows, sends emails, and runs
-  the background side effects the portal schedules.
-
-The split keeps the portal stateless: every side effect that needs durable retries belongs to the worker rather than to
-a request handler. Lawyer and admin users with Project access work the matter through the firm workbench, over the
-participation-scoped list that surface resolves for them. Clients use the portal file surface: they see only Projects
-where they have a `person_project_roles` row, and the portal renders reviewed documents, Engagements, and invoices
-without exposing storage vocabulary or GCS credentials.
+```text
+NAVIGATOR_WORKFLOWS_IN_WEB=true
+NAVIGATOR_DBOS_ENABLED=true
+NAVIGATOR_WORKFLOW_ENGINE=dbos
+```
 
 ---
 
-Pause here and make the deployment shape concrete. `navigator-web` is horizontally scalable because it stores state in
-the store, Restate, and GCS — no role owns a mounted filesystem, so nothing in the serving path is a single writer.
-`workflows-service` is separate because side effects need durable retries and clean worker ownership. The private
-documents bucket stays private in both roles; client access is checked by Navigator before bytes are streamed back
-through the portal.
+Enable each workflow's DBOS switch and required credentials explicitly. Use a unique executor identity per concurrent
+pod. Register workflows before accepting starts, verify application-version compatibility, and reconcile pending runs
+before changing executor identities. Cohosting does not transfer ownership of work from another executor. Verify the
+selected release's combined-host cutover prerequisites before changing a live deployment; see `docs/dbos-durability.md`.
 
 ### Security architecture
 
@@ -1750,11 +1714,11 @@ flowchart TB
 
   subgraph gke["GKE namespace"]
     web["navigator-web\nportal, Navigator MCP, APIs"]
-    worker["workflows-service\nDurable worker"]
+    worker["DBOS executor\nin the application container"]
   end
 
   subgraph data["Private data plane"]
-    pg["SurrealDB\nroles + project access"]
+    pg["PostgreSQL + AGE\napplication records + graph\nDBOS checkpoints"]
     docs["GCS documents bucket\nprivate blobs"]
     assets["GCS assets bucket\nprivate marketing objects\nserved through /assets"]
   end
@@ -2143,14 +2107,14 @@ never ship another organization's bundled legal terms under your own name.
 ### First-ship lessons
 
 A first ship to a cold cluster can expose ordering assumptions. Secret preflight, namespace creation, CSI projection,
-cluster add-ons, and Restate registration each have distinct readiness requirements. Follow the current `hudson ops`
-command sequence and stop when a preflight fails; do not seed plaintext Secrets or bypass CLI checks with manual cluster
-commands.
+cluster add-ons, and DBOS readiness and recovery each have distinct readiness requirements. Follow the current `hudson
+ops` command sequence and stop when a preflight fails; do not seed plaintext Secrets or bypass CLI checks with manual
+cluster commands.
 
 Before a live ship, confirm that the selected row's approved external configuration contains the required encrypted
 secret objects and capability settings, that its image exists, and that cluster add-ons needed by admission are ready.
-The offline example plan does not perform those live checks. After a real ship, verify rollout, Restate registration,
-`/readyz`, `/version`, certificate readiness, DNS, and the browser surface before recording completion.
+The offline example plan does not perform those live checks. After a real ship, verify rollout, DBOS readiness and
+recovery, `/readyz`, `/version`, certificate readiness, DNS, and the browser surface before recording completion.
 
 ---
 

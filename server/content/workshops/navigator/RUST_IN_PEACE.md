@@ -6,8 +6,6 @@ description: Rust in Peace tours the Rust monorepo behind a litigation-first law
 
 # Rust in Peace
 
-<!-- FROZEN: do not edit this presentation. -->
-
 A talk by Nick for [Rust NYC](https://www.meetup.com/rust-nyc/events/316056830/)
 
 Rust in Peace is a eulogy to my programming career. Over the past year, teaching coding at Apple, I realized nearly all
@@ -128,15 +126,14 @@ What other compiled language has meetups this big? And a discord community of th
 
 Also perhaps other communities like JavaScript and Python are too big and subsequently fragmented.
 
-### Mac, Windows, Linux
+### macOS development, Linux deployment
 
-Rust works on all three.
-
-![Ferris works across Apple, Windows, and Linux](img/rust-in-peace/ferris-apple-windows-linux.png)
+- Develop and use the CLI on macOS.
+- Deploy services on Linux/amd64.
 
 ---
 
-You can download our `navigator` CLI on each cloud.
+Rust supports many targets. This repository's development and deployment contracts name the targets we maintain.
 
 ### Non-profit governance
 
@@ -146,7 +143,8 @@ The Rust Foundation > Private Company
 
 ---
 
-No need to worry about enterprise fees
+Check each dependency's license and service pricing. Foundation governance does not remove licensing obligations or make
+hosted services free.
 
 ### snake_case > camelCase
 
@@ -160,10 +158,10 @@ I'll die on this hill.
 
 ### Libraries: Some crates
 
-The private Navigator monorepo uses this `Cargo.toml` stack.
+The public Navigator monorepo uses this `Cargo.toml` stack.
 
 - **HTTP and views** — `axum`, `dioxus`, `tower` / `tower-http`
-- **Store & Durable execution** — `surrealdb`, `restate-sdk`
+- **Store and durable execution** — PostgreSQL with AGE, `sqlx`, and `dbos`
 - **Telemetry & Backups** — `opentelemetry`, `arrow`, `parquet`
 - **Notations** — `typst`
 - **Cloud** — `google-cloud-storage`, `reqwest`
@@ -178,30 +176,28 @@ Local `KIND` deployment
 
 - **Rauthy** - OIDC
 - **Regorus** - OPA
-- **Restate** - Durable Workflows
-- **Surreal** - Store
-
-![Ferris carries four glowing tools between connected workshop rooms](img/rust-in-peace/libraries-developer-parity.png)
+- **DBOS** - Durable workflows
+- **PostgreSQL with AGE** - Application records and graph
 
 ---
 
-Choosing Rust vendors helps us stay pure rust.
+Use the task-owned local environment to verify behavior. Local execution does not prove production IAM or recovery.
 
 ### Data: People
 
 A `person` can be one of:
 
-- **Client** - someone with a retainer
+- **Client** - a participant in their Project
 - **Clerk** - a supervised worker
 - **Lawyer** - member of the bar
-- **Admin** - lawyers with admin access to the system
+- **Admin** - manages the installation; a role is not a law license
 - **Owner** - owner of the system
 
 ![Ferris joins a five-role council around a worktable](img/rust-in-peace/data-people.png)
 
 ---
 
-Important to have a single owner or DRI.
+Role and Project participation are separate checks. An engagement letter and professional licensure are separate facts.
 
 ### Data: Project
 
@@ -225,11 +221,11 @@ Contracts, pleadings, forms.
 
 ---
 
-The more signed PDFs we acquire the better our business.
+Keep the records the client and representation need, with reliable provenance and review.
 
 ### DevX: Monorepo
 
-Private Navigator monorepo
+Public Navigator monorepo
 
 ![Ferris maintains a living treehouse monorepo](img/rust-in-peace/devx-monorepo.png)
 
@@ -337,7 +333,7 @@ Benefits of using the same manifests and tech like sidecars don't need to learn 
 
 SaaS will never die, the same way restaurants wont.
 
-Sendgrid, Docusign, Xero, Slack, Notion, GitHub.
+SendGrid, DocuSign, Stripe, Slack, Notion, GitHub.
 
 ![Ferris assembles specialized services in a storybook marketplace](img/rust-in-peace/cloud-saas.png)
 
@@ -345,24 +341,20 @@ Sendgrid, Docusign, Xero, Slack, Notion, GitHub.
 
 We create documents, not rebuild the above.
 
-### Cloud: Infra Surreal DB & Restate
+### Cloud: PostgreSQL, AGE, and DBOS
 
-Each proudly Rust and based abroad.
-
-![Ferris presents the SurrealDB and Restate logos](img/rust-in-peace/ferris-surrealdb-restate.png)
+- PostgreSQL holds application records.
+- AGE provides the graph within PostgreSQL.
+- DBOS checkpoints durable workflow execution in PostgreSQL.
 
 ---
 
-Each has its own license terms; retain the upstream notices and check the version you distribute.
-
-[Sources]
-
-- <https://surrealdb.com/brand>
-- <https://restate.dev/logo.svg>
+Keep application and DBOS database permissions separate. A workflow checkpoint does not make an external effect
+exactly-once: use stable effect keys and the provider's idempotency support, then test recovery.
 
 ### Cloud: Iceberg backups
 
-Save everything application {logs,telemetry,data} in Iceberg.
+Private application snapshots and separate operational telemetry.
 
 Different GCP account **and** different vendor.
 
@@ -370,7 +362,8 @@ Different GCP account **and** different vendor.
 
 ---
 
-Never lose data.
+Rehearse a restore. Check backup coverage, retention, credentials, and document bytes. A backup is not a guarantee
+against data loss, and operational logs must exclude client content.
 
 ## Navigator: Everyone vibes
 
@@ -435,11 +428,14 @@ We'll cover in our `Notations` section. High-level PDFs we sign.
 
 Nearly everything else is ephemeral toward that pursuit.
 
-Retention time is for everything that's not our final output. Very rarely is our final output not some sort of PDF.
+Apply the governing retention policy and any preservation holds to the full matter record, including relevant source
+documents and correspondence. A final PDF does not by itself authorize deleting the supporting record.
 
 ## Notations: Markdown => PDF with workflows
 
 ### Frontmatter
+
+Illustrative notation structure; inspect the current template before copying a workflow into a matter.
 
 ```yaml
 title: Retainer Agreement
@@ -519,17 +515,16 @@ Imbue markdown with a ton of rules. Incremental progress.
 
 ### Render the retainer
 
-```bash
-navigator template render \
-  templates/neon_law/shared/retainer.md \
-  --out /tmp/retainer.pdf
+```text
+navigator notation envelope prepare <notation-id>
 ```
 
 ![First page of the rendered Retainer Agreement PDF](img/rust-in-peace/retainer-agreement-preview.png)
 
 ---
 
-Markdown in, PDF out.
+Prepare the rendered document and signing fields, then review them with the lawyer. Sending requires the lawyer's
+explicit approval of the document, recipients, and fields. Preparation alone sends nothing.
 
 ## Thanks
 

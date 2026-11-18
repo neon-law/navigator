@@ -208,14 +208,15 @@ else.
 ### Join a presentation
 
 We give talks on how and why we build this. [Rust in Peace](/presentations/rust-in-peace), our Rust NYC talk, dissects
-deterministic legal workflows — and every code slide is an exact copy of the shipped repository.
+deterministic legal workflows, with source-attributed snippets checked against the repository.
 
 ---
 
 Presentations go deeper into the engineering and the argument behind it. [Rust in Peace](/presentations/rust-in-peace)
-walks the path from statute to Cucumber feature to template to notation, one attorney-gated step at a time, with a build
-test that fails if any slide drifts from the real source. More talks are on the way. Come to one, push back on the
-design, and tell us where it breaks — that pressure is how the architecture earns its keep.
+walks the path from statute to Cucumber feature to template to notation, one attorney-gated step at a time. A build test
+checks source-attributed snippets against their cited files; illustrative examples are labeled separately. More talks
+are on the way. Come to one, push back on the design, and tell us where it breaks — that pressure is how the
+architecture earns its keep.
 
 ## Put It to Work
 

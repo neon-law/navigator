@@ -316,7 +316,7 @@ fn deployment_workshop_describes_deployment_scoped_bucket_lanes() {
         "never creates a cloud bucket per Project",
         "The retired Portal's objects remain under a `{project-code}/portal/` prefix",
         "Project-scoped content-addressed `projects/<code>/documents/<sha>` objects",
-        "Surreal asset rows carry the Project association",
+        "PostgreSQL Asset records carry the Project association",
         "does not grant `allUsers`",
     ] {
         assert!(
