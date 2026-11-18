@@ -3483,3 +3483,11 @@ test_evidence_invitation_management_requires_lawyer_tier if {
     not authz.allow with input as {"path": path, "method": "GET", "session": client_session}
     not authz.allow with input as {"path": path, "method": "POST", "session": clerk_session}
 }
+
+test_lawyer_refreshes_matter_envelopes if {
+    authz.allow with input as {"path": ["app", "api", "projects", "p1", "envelopes", "refresh"], "method": "POST", "session": lawyer_session}
+}
+
+test_client_cannot_refresh_matter_envelopes if {
+    not authz.allow with input as {"path": ["app", "api", "projects", "p1", "envelopes", "refresh"], "method": "POST", "session": client_session}
+}

@@ -521,9 +521,10 @@ fn regorus_matches_every_checked_in_policy_decision() {
     // + 2 for envelope adoption: Lawyer admitted and Client denied.
     // + 2 for evidence invitation recipient and lawyer route admission.
     // 688 + 2 + 2 = 692.
+    // Envelope refresh covers lawyer admission and client denial.
     assert_eq!(
         test_names.len(),
-        692,
+        694,
         "the policy decision inventory changed; review every new or removed rule"
     );
 

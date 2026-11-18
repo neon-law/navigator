@@ -3645,6 +3645,21 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/projects/{id}/envelopes/refresh": {
+          "post": {
+            "summary": "Refresh the Project's known DocuSign envelopes",
+            "description": "Requires firm-side Project participation. Reads the Firm account, records provider timestamps and signers, and files completed documents. Never sends an envelope.",
+            "parameters": [{ "name": "id", "in": "path", "required": true,
+              "schema": { "type": "string", "format": "uuid" } }],
+            "responses": {
+              "200": { "description": "Refreshed envelope and signer evidence" },
+              "401": { "description": "No authenticated session" },
+              "403": { "description": "Lawyer tier required" },
+              "404": { "description": "Project outside the caller's participation" },
+              "500": { "description": "Provider or persistence failed; retry to refresh remaining envelopes" }
+            }
+          }
+        },
         "/app/api/projects/{id}/envelope-adoptions": {
           "post": {
             "summary": "Adopt an envelope sent from the Firm's DocuSign account",

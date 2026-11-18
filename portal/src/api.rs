@@ -1020,6 +1020,11 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
         ),
         (
             "POST",
+            "/app/api/projects/{id}/envelopes/refresh",
+            post(refresh_project_envelopes),
+        ),
+        (
+            "POST",
             "/app/api/projects/{id}/envelope-adoptions",
             post(adopt_envelope),
         ),
@@ -2153,14 +2158,34 @@ async fn project_status_door(
         .map_err(ApiError::Db)?;
     let remotes = repository_remotes(&state, &project).await?;
     let mut adopted_envelopes = Vec::new();
+    let mut envelopes = Vec::new();
     for notation in store::notations::list_by_project(&state.surreal, id).await? {
         if let Some(envelope) =
             crate::signature_adoption::evidence(state.storage.as_ref(), notation.id).await?
         {
-            adopted_envelopes.push(serde_json::json!({
-                "notation_id": notation.id,
-                "envelope": envelope,
-            }));
+            let entry = serde_json::json!({"notation_id": notation.id, "envelope": envelope});
+            envelopes.push(entry.clone());
+            adopted_envelopes.push(entry);
+        } else {
+            let signature = crate::signature_status::status_for_notation(
+                &state.surreal,
+                &state.storage,
+                &notation,
+            )
+            .await;
+            if signature.signature_request_id.is_some() {
+                envelopes.push(serde_json::json!({
+                    "notation_id": notation.id,
+                    "envelope": {
+                        "envelopeId": signature.signature_request_id,
+                        "status": signature.state,
+                        "updatedAt": signature.updated_at,
+                        "signers": signature.signers.iter().map(|signer| serde_json::json!({
+                            "name": signer.role, "status": if signer.signed { "completed" } else { "pending" }
+                        })).collect::<Vec<_>>()
+                    }
+                }));
+            }
         }
     }
     Ok(Json(serde_json::json!({
@@ -2179,6 +2204,7 @@ async fn project_status_door(
             "execution_verified": onboarding_status == store::projects::OnboardingStatus::Official
         },
         "repository_remotes": remotes,
+        "envelopes": envelopes,
         "adopted_envelopes": adopted_envelopes,
         "missing": missing
     }))
@@ -4626,6 +4652,60 @@ struct AdoptEnvelopeRequest {
     template_code: String,
     source: String,
     commit_sha: String,
+}
+
+/// Refresh only envelopes already correlated to this participating Project.
+async fn refresh_project_envelopes(
+    State(state): State<ApiState>,
+    lawyer: LawyerSession,
+    Path(id): Path<Uuid>,
+) -> Result<Response, ApiError> {
+    use crate::signature_adoption::{internal, lock, reconcile};
+    if !participates_as_firm(&state, &lawyer, id).await {
+        return Err(ApiError::NotFound);
+    }
+    let scoped = state
+        .signature_provider
+        .for_project(&state.surreal, id)
+        .await
+        .map_err(internal)?;
+    let provider =
+        crate::firm_docusign::resolved(scoped.as_ref(), state.signature_provider.as_ref());
+    let lane = lock().await?;
+    let mut refreshed = Vec::new();
+    for notation in store::notations::list_by_project(&state.surreal, id).await? {
+        let Some(signature) = store::signatures::latest_for_notation(&state.surreal, notation.id)
+            .await
+            .map_err(internal)?
+        else {
+            continue;
+        };
+        let envelope_id = signature.provider_id.parse().map_err(internal)?;
+        let envelope = provider
+            .read_external_envelope(envelope_id)
+            .await
+            .map_err(internal)?;
+        if envelope.envelope_id != envelope_id {
+            return Err(ApiError::EnvelopeAdoption(
+                "DocuSign returned a different envelope",
+            ));
+        }
+        // An unsent provider draft remains a draft, never a recorded send.
+        if matches!(envelope.status.as_str(), "created" | "draft") {
+            continue;
+        }
+        reconcile(
+            &state.surreal,
+            &state.storage,
+            provider,
+            notation.id,
+            &envelope,
+        )
+        .await?;
+        refreshed.push(serde_json::json!({"notation_id": notation.id, "envelope": envelope}));
+    }
+    lane.commit().await.map_err(internal)?;
+    Ok(Json(serde_json::json!({"envelopes": refreshed})).into_response())
 }
 
 async fn adopt_envelope(
@@ -14629,6 +14709,11 @@ Content-Disposition: attachment; filename=\"records.pdf\"\r\n\
                 Some(
                     serde_json::json!({ "template_code": "nda", "client_email": "c@example.com" }),
                 ),
+            ),
+            (
+                "POST",
+                format!("/app/api/projects/{p}/envelopes/refresh"),
+                Some(serde_json::json!({})),
             ),
             (
                 "POST",

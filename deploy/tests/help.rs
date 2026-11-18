@@ -281,6 +281,7 @@ fn projects_help_lists_the_project_workspace_verbs() {
             "drift",
             "drive-ingest",
             "efiling",
+            "envelope",
             "feedback-check",
             "finance",
             "gate",

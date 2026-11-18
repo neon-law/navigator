@@ -2186,3 +2186,15 @@ ci_matter_content_denied if {
     input.session.source == "ci"
     evidence_share_management
 }
+
+# Refresh already-correlated envelopes; the handler enforces matter participation.
+route_allow if {
+    count(input.path) == 6
+    input.path[0] == "app"
+    input.path[1] == "api"
+    input.path[2] == "projects"
+    input.path[4] == "envelopes"
+    input.path[5] == "refresh"
+    input.method == "POST"
+    is_lawyer(input.session)
+}

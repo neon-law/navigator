@@ -735,6 +735,11 @@ pub enum FinanceCmd {
 
 #[derive(Subcommand)]
 pub enum ProjectsCmd {
+    /// Register and refresh `DocuSign` envelopes recorded on this matter.
+    Envelope {
+        #[command(subcommand)]
+        action: ProjectEnvelopeCmd,
+    },
     /// Check a draft issue for client or matter identifiers before filing it
     /// in an outside tracker. Runs locally; the text is never sent anywhere.
     /// Exits non-zero and names each placeholder to use when it finds any.
@@ -1332,6 +1337,26 @@ pub enum SurfacesCmd {
         /// Emit the per-Project outcomes as JSON.
         #[arg(long)]
         json: bool,
+        #[command(flatten)]
+        host: HostOpt,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ProjectEnvelopeCmd {
+    /// Adopt an envelope sent from `DocuSign` using the published Draft.
+    Register {
+        envelope_id: uuid::Uuid,
+        #[arg(long)]
+        project: String,
+        #[arg(long)]
+        draft: String,
+        #[command(flatten)]
+        host: HostOpt,
+    },
+    /// Refresh recorded `DocuSign` envelopes on this matter.
+    Status {
+        project_code: String,
         #[command(flatten)]
         host: HostOpt,
     },
@@ -2297,6 +2322,20 @@ impl ClosureReasonArg {
 #[allow(clippy::too_many_lines)]
 pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
     match action {
+        ProjectsCmd::Envelope { action } => match action {
+            ProjectEnvelopeCmd::Register {
+                envelope_id,
+                project,
+                draft,
+                host,
+            } => {
+                remote::notation_adopt_envelope(host.host.as_deref(), &project, &draft, envelope_id)
+                    .await
+            }
+            ProjectEnvelopeCmd::Status { project_code, host } => {
+                projects::status::refresh_envelopes(host.host.as_deref(), &project_code).await
+            }
+        },
         ProjectsCmd::FeedbackCheck {
             file,
             terms,
