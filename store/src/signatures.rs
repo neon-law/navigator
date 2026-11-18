@@ -309,6 +309,7 @@ pub async fn record_request(
             Err(error) if error.violates("signature_provider_request") => {
                 by_provider(db, provider, provider_id)
                     .await?
+                    .filter(|signature| signature.notation_id == notation_id)
                     .ok_or(SignatureError::WriteReturnedNothing)
             }
             Err(error) => Err(error.into()),
@@ -339,6 +340,7 @@ pub async fn record_request(
         Err(error) if is_provider_request_conflict(&error) => {
             by_provider(db, provider, provider_id)
                 .await?
+                .filter(|request| request.notation_id == notation_id)
                 .ok_or(SignatureError::WriteReturnedNothing)
         }
         Err(error) => Err(SignatureError::Db(error)),
