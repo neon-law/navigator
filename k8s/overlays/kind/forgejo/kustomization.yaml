@@ -3,15 +3,14 @@ kind: Kustomization
 
 # Opt-in KIND Forgejo: the retained PostgreSQL server (1 GiB), its
 # least-privilege roles, Forgejo's own login and database, Forgejo, and one
-# Actions runner. Applied by `navigator dev forgejo up` onto a tier that
+# Actions runner. Applied by `hudson dev forgejo up` onto a tier that
 # already runs Rauthy; that command also provisions every synthetic Secret
 # these manifests read. See docs/forgejo-kind.md.
 
 namespace: navigator
 
 resources:
-  - ../../kind-postgres-persistence
-  - ../../../postgres/access
+  - ../postgres
   - ../../../forgejo/database
   - ../../../forgejo
   - ../../../forgejo/runner

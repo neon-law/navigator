@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use base64::engine::general_purpose::STANDARD;
@@ -22,37 +23,37 @@ use super::{
 };
 
 /// `kubectl`, pinned to one KIND context and namespace.
-pub(super) struct Kube {
+pub(in crate::devx) struct Kube {
     context: String,
     namespace: String,
 }
 
 impl Kube {
-    pub(super) fn selected(context: &str, namespace: &str) -> Self {
+    pub(in crate::devx) fn selected(context: &str, namespace: &str) -> Self {
         Self {
             context: context.to_owned(),
             namespace: namespace.to_owned(),
         }
     }
 
-    pub(super) fn new(cfg: &KindConfig) -> Self {
+    pub(in crate::devx) fn new(cfg: &KindConfig) -> Self {
         Self {
             context: cfg.kind_context(),
             namespace: cfg.namespace.clone(),
         }
     }
 
-    pub(super) fn command(&self) -> Command {
+    pub(in crate::devx) fn command(&self) -> Command {
         let mut command = Command::new("kubectl");
         command.args(["--context", &self.context, "--namespace", &self.namespace]);
         command
     }
 
-    pub(super) fn namespace(&self) -> &str {
+    pub(in crate::devx) fn namespace(&self) -> &str {
         &self.namespace
     }
 
-    pub(super) fn run(&self, args: &[&str]) -> Result<()> {
+    pub(in crate::devx) fn run(&self, args: &[&str]) -> Result<()> {
         let status = self
             .command()
             .args(args)
@@ -65,11 +66,15 @@ impl Kube {
     }
 
     /// Run and capture stdout; stderr is reported only on failure.
-    pub(super) fn output(&self, args: &[&str]) -> Result<String> {
+    pub(in crate::devx) fn output(&self, args: &[&str]) -> Result<String> {
         self.output_with_stdin(args, None)
     }
 
-    pub(super) fn output_with_stdin(&self, args: &[&str], stdin: Option<&[u8]>) -> Result<String> {
+    pub(in crate::devx) fn output_with_stdin(
+        &self,
+        args: &[&str],
+        stdin: Option<&[u8]>,
+    ) -> Result<String> {
         let mut child = self
             .command()
             .args(args)
@@ -100,7 +105,7 @@ impl Kube {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     }
 
-    pub(super) fn succeeds(&self, args: &[&str]) -> bool {
+    pub(in crate::devx) fn succeeds(&self, args: &[&str]) -> bool {
         self.command()
             .args(args)
             .stdout(Stdio::null())
@@ -110,12 +115,12 @@ impl Kube {
     }
 
     /// `kubectl apply -f -`, returning what changed.
-    pub(super) fn apply(&self, manifest: &str) -> Result<String> {
+    pub(in crate::devx) fn apply(&self, manifest: &str) -> Result<String> {
         self.output_with_stdin(&["apply", "-f", "-"], Some(manifest.as_bytes()))
     }
 
     /// A Secret's decoded data, or `None` when it does not exist.
-    pub(super) fn secret(&self, name: &str) -> Result<Option<BTreeMap<String, String>>> {
+    pub(in crate::devx) fn secret(&self, name: &str) -> Result<Option<BTreeMap<String, String>>> {
         if !self.succeeds(&["get", "secret", name]) {
             return Ok(None);
         }
@@ -139,7 +144,7 @@ impl Kube {
     }
 
     /// Exec into the Forgejo container as its own user.
-    pub(super) fn forgejo(&self, args: &[&str], stdin: Option<&[u8]>) -> Result<String> {
+    pub(in crate::devx) fn forgejo(&self, args: &[&str], stdin: Option<&[u8]>) -> Result<String> {
         let mut command_line = vec![
             "exec",
             if stdin.is_some() { "-i" } else { "--quiet" },
@@ -157,7 +162,7 @@ impl Kube {
         self.output_with_stdin(&command_line, stdin)
     }
 
-    pub(super) fn wait_rollout(&self, resource: &str, timeout: &str) -> Result<()> {
+    pub(in crate::devx) fn wait_rollout(&self, resource: &str, timeout: &str) -> Result<()> {
         self.run(&[
             "rollout",
             "status",
@@ -166,22 +171,53 @@ impl Kube {
         ])
     }
 
-    pub(super) fn wait_job(&self, job: &str) -> Result<()> {
-        if self.succeeds(&[
-            "wait",
-            "--for=condition=complete",
-            &format!("job/{job}"),
-            "--timeout=300s",
-        ]) {
-            return Ok(());
+    pub(in crate::devx) fn wait_job(&self, job: &str) -> Result<()> {
+        use super::super::postgres_fixture::{job_state, JobState};
+        let deadline = Instant::now() + Duration::from_secs(300);
+        let result = (|| loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            anyhow::ensure!(
+                !remaining.is_zero(),
+                "job/{job} did not complete within 300 seconds"
+            );
+            let request_timeout = format!(
+                "--request-timeout={}ms",
+                remaining.as_millis().clamp(1, 10_000)
+            );
+            let state: serde_json::Value = serde_json::from_str(&self.output(&[
+                &request_timeout,
+                "get",
+                &format!("job/{job}"),
+                "-o",
+                "json",
+            ])?)?;
+            match job_state(&state)? {
+                JobState::Complete => return Ok(()),
+                JobState::Failed => bail!("job/{job} failed"),
+                JobState::Pending => {}
+            }
+            if Instant::now() >= deadline {
+                bail!("job/{job} did not complete within 300 seconds");
+            }
+            std::thread::sleep(
+                Duration::from_secs(1).min(deadline.saturating_duration_since(Instant::now())),
+            );
+        })();
+        if result.is_err() {
+            let _ = self.run(&["--request-timeout=10s", "describe", &format!("job/{job}")]);
+            let _ = self.run(&[
+                "--request-timeout=10s",
+                "logs",
+                &format!("job/{job}"),
+                "--all-containers",
+            ]);
         }
-        let _ = self.run(&["logs", &format!("job/{job}"), "--all-containers"]);
-        bail!("job/{job} did not complete");
+        result
     }
 }
 
 /// A Secret manifest from string data.
-pub(super) fn secret_manifest(
+pub(in crate::devx) fn secret_manifest(
     name: &str,
     namespace: &str,
     secret_type: &str,
@@ -199,7 +235,7 @@ pub(super) fn secret_manifest(
 
 /// `dev forgejo up`.
 pub(in crate::devx) fn up(cfg: &KindConfig) -> Result<()> {
-    super::super::require_tools(&["kubectl", "openssl", "ssh-keygen"])?;
+    super::super::require_tools(&["kubectl", "docker", "openssl", "ssh-keygen"])?;
     let root = super::super::workspace_root()?;
     let kube = Kube::new(cfg);
     if !kube.succeeds(&["get", "namespace", kube.namespace()]) {
@@ -211,6 +247,8 @@ pub(in crate::devx) fn up(cfg: &KindConfig) -> Result<()> {
         );
     }
 
+    let container = super::super::orchestrate::verify_fixture_port(cfg)?;
+    super::super::orchestrate::apply_postgres_host_ingress(cfg, &kube, &container)?;
     ensure_rauthy(&root, cfg, &kube)?;
     let seed = ensure_seed(&kube)?;
     ensure_signing_key(&kube)?;
@@ -263,15 +301,12 @@ pub(in crate::devx) fn up(cfg: &KindConfig) -> Result<()> {
         root_url(cfg.forgejo_port),
         super::super::rauthy_origin(cfg.rauthy_port),
     );
-    let pid = port_forward(&root, cfg, "navigator-postgres", cfg.postgres_port, 5432)?;
-    eprintln!(
-        "==> PostgreSQL is at 127.0.0.1:{} (TLS only; kubectl port-forward pid {pid})",
-        cfg.postgres_port
-    );
+    super::super::orchestrate::verify_fixture_port(cfg)?;
+    eprintln!("==> PostgreSQL uses the tier's verified loopback TLS mapping");
     Ok(())
 }
 
-fn kustomize(root: &Path, overlay: &str) -> Result<String> {
+pub(in crate::devx) fn kustomize(root: &Path, overlay: &str) -> Result<String> {
     let output = Command::new("kubectl")
         .arg("kustomize")
         .arg(root.join(overlay))
@@ -372,41 +407,9 @@ fn ensure_signing_key(kube: &Kube) -> Result<()> {
 /// server keeps the certificate it started with.
 fn apply_secrets(cfg: &KindConfig, kube: &Kube, seed: &Seed) -> Result<()> {
     let namespace = kube.namespace();
-    let ca = if let Some(tls) = kube.secret("navigator-postgres-tls")? {
-        tls.get("tls.crt")
-            .cloned()
-            .context("navigator-postgres-tls has no tls.crt")?
-    } else {
-        let (cert, key) = server_certificate(namespace)?;
-        kube.apply(&secret_manifest(
-            "navigator-postgres-tls",
-            namespace,
-            "kubernetes.io/tls",
-            &BTreeMap::from([
-                ("tls.crt".to_owned(), cert.clone()),
-                ("tls.key".to_owned(), key),
-            ]),
-        )?)?;
-        cert
-    };
+    let ca = apply_postgres_secrets(kube, seed)?;
     let one = |key: &str, value: &str| BTreeMap::from([(key.to_owned(), value.to_owned())]);
-    let login = |password: &str| {
-        BTreeMap::from([
-            ("password".to_owned(), password.to_owned()),
-            ("ca.crt".to_owned(), ca.clone()),
-        ])
-    };
     let secrets = [
-        (
-            "navigator-postgres-auth",
-            one("password", &seed.postgres_password),
-        ),
-        ("navigator-postgres-app", login(&seed.app_password)),
-        (
-            "navigator-postgres-migrator",
-            login(&seed.migrator_password),
-        ),
-        ("navigator-postgres-backup", login(&seed.backup_password)),
         (
             "navigator-forgejo-database",
             one("password", &seed.database_password),
@@ -441,35 +444,187 @@ fn apply_secrets(cfg: &KindConfig, kube: &Kube, seed: &Seed) -> Result<()> {
     Ok(())
 }
 
-/// A self-signed server certificate whose SAN covers the names clients
-/// verify (`verify-full`): the Service and its namespace-qualified form.
-fn server_certificate(namespace: &str) -> Result<(String, String)> {
+/// Reuse the tier's synthetic PostgreSQL material without deploying Forgejo.
+pub(in crate::devx) fn prepare_postgres(
+    cfg: &KindConfig,
+) -> Result<crate::devx::postgres_fixture::Credentials> {
+    let kube = Kube::new(cfg);
+    let existing_seed = kube.secret(SEED_SECRET)?;
+    let seed = existing_seed.as_ref().map(Seed::from_map).transpose()?;
+    for (name, expected) in [
+        (
+            "navigator-postgres-auth",
+            seed.as_ref().map(|s| &s.postgres_password),
+        ),
+        (
+            "navigator-postgres-app",
+            seed.as_ref().map(|s| &s.app_password),
+        ),
+        (
+            "navigator-postgres-migrator",
+            seed.as_ref().map(|s| &s.migrator_password),
+        ),
+        (
+            "navigator-postgres-backup",
+            seed.as_ref().map(|s| &s.backup_password),
+        ),
+    ] {
+        if let Some(secret) = kube.secret(name)? {
+            anyhow::ensure!(
+                expected.is_some_and(|password| secret.get("password") == Some(password)),
+                "existing synthetic PostgreSQL credentials require explicit recovery; bootstrap will not replace them"
+            );
+        }
+    }
+    let seed = match seed {
+        Some(seed) => seed,
+        None => ensure_seed(&kube)?,
+    };
+    let ca = apply_postgres_secrets(&kube, &seed)?;
+    Ok(crate::devx::postgres_fixture::Credentials {
+        app_password: seed.app_password,
+        owner_password: seed.migrator_password,
+        ca,
+    })
+}
+
+fn apply_postgres_secrets(kube: &Kube, seed: &Seed) -> Result<String> {
+    let namespace = kube.namespace();
+    let ca = if let Some(tls) = kube.secret("navigator-postgres-tls")? {
+        super::super::postgres_fixture::trust_anchor(&tls)?.to_owned()
+    } else {
+        let material = server_certificate(namespace)?;
+        kube.apply(&secret_manifest(
+            "navigator-postgres-tls",
+            namespace,
+            "kubernetes.io/tls",
+            &BTreeMap::from([
+                ("tls.crt".to_owned(), material.certificate),
+                ("tls.key".to_owned(), material.key),
+                ("ca.crt".to_owned(), material.ca.clone()),
+            ]),
+        )?)?;
+        material.ca
+    };
+    for (name, password) in [
+        ("navigator-postgres-auth", &seed.postgres_password),
+        ("navigator-postgres-app", &seed.app_password),
+        ("navigator-postgres-migrator", &seed.migrator_password),
+        ("navigator-postgres-backup", &seed.backup_password),
+    ] {
+        let mut data = BTreeMap::from([("password".to_owned(), password.clone())]);
+        if name != "navigator-postgres-auth" {
+            data.insert("ca.crt".to_owned(), ca.clone());
+        }
+        kube.apply(&secret_manifest(name, namespace, "Opaque", &data)?)?;
+    }
+    Ok(ca)
+}
+
+struct ServerCertificate {
+    ca: String,
+    certificate: String,
+    key: String,
+}
+
+/// Explicit CA and server constraints avoid platform-dependent OpenSSL defaults.
+fn server_certificate(namespace: &str) -> Result<ServerCertificate> {
     let dir = tempfile::tempdir().context("create a certificate scratch directory")?;
-    let cert = dir.path().join("tls.crt");
-    let key = dir.path().join("tls.key");
-    let status = Command::new("openssl")
-        .args(["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "3650"])
-        .args(["-subj", "/CN=navigator-postgres"])
-        .arg("-addext")
-        .arg(format!(
-            "subjectAltName=DNS:navigator-postgres,DNS:navigator-postgres.{namespace}.svc.cluster.local"
-        ))
-        .arg("-keyout")
-        .arg(&key)
-        .arg("-out")
-        .arg(&cert)
+    issue_server_certificate(namespace, dir.path(), Path::new("openssl"))
+}
+
+fn issue_server_certificate(
+    namespace: &str,
+    directory: &Path,
+    openssl: &Path,
+) -> Result<ServerCertificate> {
+    let path = |name: &str| directory.join(name);
+    let config = path("ca.cnf");
+    std::fs::write(&config, "[req]\nprompt=no\ndistinguished_name=dn\nx509_extensions=ca\n[dn]\nCN=navigator-postgres-ca\n[ca]\nbasicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\nsubjectKeyIdentifier=hash\n")?;
+    let ca = path("ca.crt");
+    let ca_key = path("ca.key");
+    let certificate = path("tls.crt");
+    let key = path("tls.key");
+    let csr = path("tls.csr");
+    let extensions = path("server.ext");
+    std::fs::write(&extensions, format!(
+        "basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\nsubjectAltName=DNS:navigator-postgres,DNS:navigator-postgres.{namespace}.svc,DNS:navigator-postgres.{namespace}.svc.cluster.local,DNS:localhost,IP:127.0.0.1\n"
+    ))?;
+    certificate_command(
+        Command::new(openssl)
+            .args([
+                "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-sha256", "-days", "3650",
+                "-config",
+            ])
+            .arg(&config)
+            .arg("-keyout")
+            .arg(&ca_key)
+            .arg("-out")
+            .arg(&ca),
+    )?;
+    certificate_command(
+        Command::new(openssl)
+            .args([
+                "req",
+                "-newkey",
+                "rsa:2048",
+                "-nodes",
+                "-sha256",
+                "-subj",
+                "/CN=navigator-postgres",
+                "-config",
+            ])
+            .arg(&config)
+            .arg("-keyout")
+            .arg(&key)
+            .arg("-out")
+            .arg(&csr),
+    )?;
+    certificate_command(
+        Command::new(openssl)
+            .args(["x509", "-req", "-sha256", "-days", "3650", "-in"])
+            .arg(&csr)
+            .arg("-CA")
+            .arg(&ca)
+            .arg("-CAkey")
+            .arg(&ca_key)
+            .arg("-CAcreateserial")
+            .arg("-extfile")
+            .arg(&extensions)
+            .arg("-out")
+            .arg(&certificate),
+    )?;
+    certificate_command(
+        Command::new(openssl)
+            .arg("verify")
+            .arg("-CAfile")
+            .arg(&ca)
+            .arg(&certificate),
+    )?;
+    Ok(ServerCertificate {
+        ca: std::fs::read_to_string(ca).context("read public root certificate")?,
+        certificate: std::fs::read_to_string(certificate).context("read server certificate")?,
+        key: std::fs::read_to_string(key).context("read server key")?,
+    })
+}
+
+fn certificate_command(command: &mut Command) -> Result<()> {
+    let status = command
+        .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
-        .context("spawn openssl")?;
-    if !status.success() {
-        bail!("openssl could not create the synthetic PostgreSQL certificate");
-    }
-    Ok((
-        std::fs::read_to_string(&cert).context("read certificate")?,
-        std::fs::read_to_string(&key).context("read key")?,
-    ))
+        .context("run openssl for the synthetic PostgreSQL certificate")?;
+    anyhow::ensure!(
+        status.success(),
+        "openssl could not create the synthetic PostgreSQL certificate"
+    );
+    Ok(())
 }
+
+#[cfg(test)]
+#[path = "tls_tests.rs"]
+mod tls_tests;
 
 fn pid_file(root: &Path, service: &str) -> PathBuf {
     root.join(".devx")

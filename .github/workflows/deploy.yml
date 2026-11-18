@@ -571,7 +571,7 @@ jobs:
       || github.event_name == 'schedule'
       || startsWith(github.ref_name, 'kind-ci/')
       || (vars.DEPLOY_EXPECTED_REPOSITORY != '' && github.repository != vars.DEPLOY_EXPECTED_REPOSITORY)
-    # Every leg runs on a Blacksmith four-vCPU runner. Runner capacity and disk
+    # Each leg uses the Blacksmith capacity declared below. Runner capacity and disk
     # sizing are selected for the Rust and image-build workload; the small
     # `ubuntu-latest` disk ran out before rustup finished.
     runs-on: ${{ matrix.runner }}
@@ -1081,103 +1081,6 @@ jobs:
           webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
           tag: "${{ needs.release-version.outputs.tag }}"
           stage: "integration"
-          step: "provision PostgreSQL and point web at it"
-      # PostgreSQL is the authority for every domain ported off SurrealDB, so
-      # a KIND `web` without it answers those routes with 500s. This stands up
-      # the same `k8s/postgres` StatefulSet, login roles, and migrate Job a
-      # hosted deployment runs, then applies the hosted `web` connection patch.
-      # A per-run CA signs a server certificate with a `localhost` SAN, so the
-      # host-side fixtures reach it through the port-forward below with
-      # verify-full. The two must differ: sqlx's rustls-webpki never accepts a
-      # trust anchor as the server's own certificate, though psql does.
-      # The passwords are synthetic: this cluster lives for one job.
-      - name: provision PostgreSQL and point web at it
-        timeout-minutes: 90
-        run: |
-          set -euo pipefail
-          openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj /CN=navigator-postgres-ca \
-              -keyout /tmp/navigator-postgres-ca.key -out /tmp/navigator-postgres-ca.crt
-          openssl req -newkey rsa:2048 -nodes -subj /CN=navigator-postgres \
-              -keyout /tmp/navigator-postgres.key -out /tmp/navigator-postgres.csr
-          printf '%s\n' \
-              'subjectAltName=DNS:navigator-postgres.navigator.svc.cluster.local,DNS:localhost' \
-              'basicConstraints=critical,CA:FALSE' \
-              'keyUsage=critical,digitalSignature,keyEncipherment' \
-              'extendedKeyUsage=serverAuth' > /tmp/navigator-postgres.ext
-          openssl x509 -req -in /tmp/navigator-postgres.csr -days 2 \
-              -CA /tmp/navigator-postgres-ca.crt -CAkey /tmp/navigator-postgres-ca.key -CAcreateserial \
-              -extfile /tmp/navigator-postgres.ext -out /tmp/navigator-postgres.crt
-          openssl verify -CAfile /tmp/navigator-postgres-ca.crt /tmp/navigator-postgres.crt
-          kubectl -n navigator create secret tls navigator-postgres-tls \
-              --cert=/tmp/navigator-postgres.crt --key=/tmp/navigator-postgres.key
-          kubectl -n navigator create secret generic navigator-postgres-auth \
-              --from-literal=password=synthetic-postgres
-          for login in app migrator backup; do
-            kubectl -n navigator create secret generic "navigator-postgres-${login}" \
-                --from-literal=password="synthetic-${login}" \
-                --from-file=ca.crt=/tmp/navigator-postgres-ca.crt
-          done
-          kubectl apply -k k8s/overlays/kind-postgres-persistence
-          kubectl -n navigator rollout status statefulset/navigator-postgres --timeout=300s
-          # Stop at the Job's first verdict: waiting only for `complete` sits
-          # out the whole timeout behind a Job that has already failed.
-          run_job() {
-            for _ in $(seq 1 120); do
-              status=$(kubectl -n navigator get "job/$1" \
-                  -o jsonpath='{.status.succeeded}/{.status.failed}')
-              case "$status" in
-                1/*) return 0 ;;
-                */[1-9]*) break ;;
-              esac
-              sleep 5
-            done
-            kubectl -n navigator describe "job/$1" >&2
-            kubectl -n navigator logs "job/$1" --all-containers >&2 || true
-            exit 1
-          }
-          kubectl apply -k k8s/postgres/access
-          run_job navigator-postgres-roles
-          kubectl kustomize k8s/postgres/migrate \
-            | sed 's|image: navigator-migrate|image: navigator-web:dev|' \
-            | kubectl apply -f -
-          run_job navigator-migrate
-          kubectl -n navigator patch deployment navigator-web \
-              --patch-file examples/deploy/k8s/gke/postgres/web/web-postgres.yaml
-      - uses: ./.github/actions/slack-progress
-        timeout-minutes: 90
-        with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          tag: "${{ needs.release-version.outputs.tag }}"
-          stage: "integration"
-          step: "port-forward in-cluster PostgreSQL"
-      # Supervised for the same reason as the SurrealDB forward below. The
-      # browser fixtures write the records `web` reads through it.
-      - name: port-forward in-cluster PostgreSQL
-        timeout-minutes: 90
-        run: |
-          nohup bash -c '
-              while true; do
-                  kubectl --namespace navigator port-forward \
-                      service/navigator-postgres 15432:5432
-                  echo "postgres port-forward exited ($?) — respawning"
-                  sleep 1
-              done' > /tmp/postgres-port-forward.log 2>&1 &
-          for i in $(seq 1 30); do
-              if (exec 3<>/dev/tcp/127.0.0.1/15432) 2>/dev/null; then
-                  echo "postgres port-forward up after $i attempt(s)"
-                  exit 0
-              fi
-              sleep 1
-          done
-          echo "postgres port-forward never came up" >&2
-          cat /tmp/postgres-port-forward.log
-          exit 1
-      - uses: ./.github/actions/slack-progress
-        timeout-minutes: 90
-        with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          tag: "${{ needs.release-version.outputs.tag }}"
-          stage: "integration"
           step: "bootstrap SeaweedFS object storage"
       # The CLI generates random, bucket-scoped credentials and creates the
       # navigator-seaweedfs-s3 Secret, including the server's s3.json config.
@@ -1185,6 +1088,16 @@ jobs:
       - name: bootstrap SeaweedFS object storage
         timeout-minutes: 90
         run: cargo run -p hudson -- dev seaweedfs-bootstrap
+      - uses: ./.github/actions/slack-progress
+        timeout-minutes: 90
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          tag: "${{ needs.release-version.outputs.tag }}"
+          stage: "integration"
+          step: "bootstrap the shared synthetic PostgreSQL fixture"
+      - name: bootstrap the shared synthetic PostgreSQL fixture
+        timeout-minutes: 90
+        run: cargo run -p hudson -- dev postgres-bootstrap
       - uses: ./.github/actions/slack-progress
         timeout-minutes: 90
         with:
@@ -1277,13 +1190,11 @@ jobs:
           NAVIGATOR_SURREAL_DATABASE: navigator
           NAVIGATOR_SURREAL_USER: root
           NAVIGATOR_SURREAL_PASSWORD: root
-          NAVIGATOR_POSTGRES_HOST: localhost
-          NAVIGATOR_POSTGRES_PORT: "15432"
-          NAVIGATOR_POSTGRES_DATABASE: navigator
-          NAVIGATOR_POSTGRES_USER: navigator_app
-          NAVIGATOR_POSTGRES_PASSWORD: synthetic-app
-          NAVIGATOR_POSTGRES_ROOT_CERT: /tmp/navigator-postgres-ca.crt
-        run: cargo run -p hudson -- dev grant-lawyer
+        run: |
+          set -a
+          source .devx/postgres/env
+          set +a
+          cargo run -p hudson -- dev grant-lawyer
       - uses: ./.github/actions/slack-progress
         timeout-minutes: 90
         with:
@@ -1466,12 +1377,6 @@ jobs:
           NAVIGATOR_SURREAL_DATABASE: navigator
           NAVIGATOR_SURREAL_USER: root
           NAVIGATOR_SURREAL_PASSWORD: root
-          NAVIGATOR_POSTGRES_HOST: localhost
-          NAVIGATOR_POSTGRES_PORT: "15432"
-          NAVIGATOR_POSTGRES_DATABASE: navigator
-          NAVIGATOR_POSTGRES_USER: navigator_app
-          NAVIGATOR_POSTGRES_PASSWORD: synthetic-app
-          NAVIGATOR_POSTGRES_ROOT_CERT: /tmp/navigator-postgres-ca.crt
           # Point the host document-storage lane at the port-forwarded SeaweedFS
           # so the download-all-documents fixture writes blobs the in-cluster
           # `web` can read back — the same store, same `navigator-documents`
@@ -1486,6 +1391,9 @@ jobs:
           NAVIGATOR_DOCUMENTS_BUCKET: navigator-documents
         run: |
           set -euo pipefail
+          set -a
+          source .devx/postgres/env
+          set +a
           NAVIGATOR_STORAGE_ACCESS_KEY="$(kubectl --namespace navigator get secret navigator-seaweedfs-s3 \
               --output jsonpath='{.data.access_key}' | base64 --decode)"
           NAVIGATOR_STORAGE_SECRET_KEY="$(kubectl --namespace navigator get secret navigator-seaweedfs-s3 \
@@ -1496,13 +1404,13 @@ jobs:
           # and redact them from that file, so a test that prints its
           # environment cannot publish them. awk reads them from ENVIRON, so no
           # value ever rides an argv.
-          for value in "${NAVIGATOR_STORAGE_ACCESS_KEY}" "${NAVIGATOR_STORAGE_SECRET_KEY}"; do
+          for value in "${NAVIGATOR_STORAGE_ACCESS_KEY}" "${NAVIGATOR_STORAGE_SECRET_KEY}" "${NAVIGATOR_POSTGRES_PASSWORD}"; do
             echo "::add-mask::${value}"
           done
           cargo nextest run -p server --profile ci --no-fail-fast \
               --test browser_e2e --test accessibility_e2e --test notation_preview_layout \
               --no-capture 2>&1 \
-            | awk 'BEGIN { n = split("NAVIGATOR_STORAGE_ACCESS_KEY NAVIGATOR_STORAGE_SECRET_KEY", names, " ") }
+            | awk 'BEGIN { n = split("NAVIGATOR_STORAGE_ACCESS_KEY NAVIGATOR_STORAGE_SECRET_KEY NAVIGATOR_POSTGRES_PASSWORD", names, " ") }
                 { line = $0
                   for (i = 1; i <= n; i++) {
                     secret = ENVIRON[names[i]]
@@ -1552,7 +1460,6 @@ jobs:
             target/nextest/ci/junit.xml
             /tmp/e2e.log
             /tmp/surreal-port-forward.log
-            /tmp/postgres-port-forward.log
             /tmp/seaweedfs-port-forward.log
             /tmp/chromedriver.log
             /tmp/navigator-screenshots/

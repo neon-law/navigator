@@ -24,7 +24,7 @@ use super::orchestrate::{require_tools, run, workspace_root};
 pub fn build(release: bool) -> Result<()> {
     require_tools(&["dx"]).context(
         "the Dioxus CLI `dx` is required to build the wasm client; install it with \
-         `cargo install dioxus-cli --version 0.7.9 --locked`",
+         `cargo install dioxus-cli --version 0.7.10 --locked`",
     )?;
     let root = workspace_root()?;
 

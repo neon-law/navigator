@@ -459,7 +459,7 @@ fn up_dev(root: &Path, no_deps: bool, runtime: Runtime, base_cfg: &KindConfig) -
     // schema apply, and the rendered environment are identical work.
     match runtime {
         Runtime::Kind => {
-            if !no_deps && (!worktree_deps_ready(&cfg) || !super::rauthy_deployment_exists(&cfg)) {
+            if !no_deps && !kind_fixture_ready(root, &cfg) {
                 eprintln!(
                     "==> isolated deps need reconciliation for {}; applying its KIND fixture",
                     cfg.cluster
@@ -467,7 +467,6 @@ fn up_dev(root: &Path, no_deps: bool, runtime: Runtime, base_cfg: &KindConfig) -
                 super::up_in(root, &cfg)?;
                 sample_project_refreshed = true;
             }
-            ensure_worktree_deps_ready(&cfg)?;
             // Pin this worktree's isolated KIND context before touching the cluster.
             // The fresh-boot branch above reaches it through `up_in` →
             // `configure_worktree_kubeconfig`, but a reused cluster skips `up_in`
@@ -475,7 +474,7 @@ fn up_dev(root: &Path, no_deps: bool, runtime: Runtime, base_cfg: &KindConfig) -
             // bare `kubectl`, inheriting whatever context is ambient. On an operator
             // pointed at prod that is a `kubectl exec` in the production cluster, so
             // the pin is unconditional here rather than gated on the boot branch.
-            super::configure_worktree_kubeconfig(root, &cfg)?;
+            ensure_kind_transports(root, &cfg, no_deps)?;
             // Unconditional for the same reason as the kubeconfig pin above: the
             // fresh-boot branch aligns Rauthy inside `up_in`, but a *reused* cluster
             // skips `up_in` entirely. Re-applying an unchanged public URL starts no
@@ -512,6 +511,8 @@ fn up_dev(root: &Path, no_deps: bool, runtime: Runtime, base_cfg: &KindConfig) -
     let mut env_body = super::render_env_for(&cfg, &db_name, cfg.web_port, root);
     if runtime == Runtime::Native {
         super::native::append_environment(&mut env_body, slot, &db_name);
+    } else {
+        env_body.push_str(&super::postgres_fixture::read_environment(root)?);
     }
     write_worktree_env(root, &env_body)?;
 
@@ -832,6 +833,22 @@ fn gate_members(cfg: &KindConfig) -> [(&'static str, u16); 10] {
     ]
 }
 
+fn ensure_kind_transports(root: &Path, cfg: &KindConfig, no_deps: bool) -> Result<()> {
+    super::configure_worktree_kubeconfig(root, cfg)?;
+    super::orchestrate::verify_fixture_port(cfg)?;
+    if no_deps && !worktree_deps_ready(cfg) {
+        super::orchestrate::restore_dependency_forwards(root, cfg)?;
+    }
+    ensure_worktree_deps_ready(cfg)
+}
+
+fn kind_fixture_ready(root: &Path, cfg: &KindConfig) -> bool {
+    worktree_deps_ready(cfg)
+        && super::rauthy_deployment_exists(cfg)
+        && super::postgres_fixture::environment_path(root).is_file()
+        && port_listening(cfg.postgres_port)
+}
+
 fn worktree_deps_ready(cfg: &KindConfig) -> bool {
     gate_members(cfg)
         .into_iter()
@@ -964,6 +981,62 @@ fn read_descriptor(root: &Path) -> Option<WorktreeEnv> {
     serde_json::from_str(&body).ok()
 }
 
+/// Refuse another worktree's coordinates before a fixture can hold its writers.
+pub(super) fn postgres_fixture_config(root: &Path, base: &KindConfig) -> Result<KindConfig> {
+    let cfg = if descriptor_path(root).exists() {
+        let descriptor = read_descriptor(root).context("fixture worktree descriptor is invalid")?;
+        let slot = descriptor
+            .dev_slot()
+            .context("fixture requires a development worktree slot")?;
+        worktree_kind_config(base, root, slot)
+    } else {
+        base.clone()
+    };
+    verify_postgres_fixture_target(root, &cfg)?;
+    Ok(cfg)
+}
+
+pub(super) fn verify_postgres_fixture_target(root: &Path, cfg: &KindConfig) -> Result<()> {
+    anyhow::ensure!(
+        cfg.namespace == super::DEFAULT_NAMESPACE,
+        "the synthetic PostgreSQL fixture uses the canonical KIND namespace"
+    );
+    if descriptor_path(root).exists() {
+        let descriptor = read_descriptor(root).context("fixture worktree descriptor is invalid")?;
+        let slot = descriptor
+            .dev_slot()
+            .context("fixture requires a development worktree slot")?;
+        anyhow::ensure!(
+            descriptor.runtime == Runtime::Kind
+                && descriptor.db_name.as_deref() == Some("navigator"),
+            "fixture requires this worktree's KIND database"
+        );
+        let expected = worktree_kind_config(cfg, root, slot);
+        anyhow::ensure!(
+            expected.cluster == cfg.cluster
+                && expected.postgres_port == cfg.postgres_port
+                && expected.surreal_port == cfg.surreal_port,
+            "fixture coordinates do not match the worktree descriptor"
+        );
+        let RegistryLoad::Loaded(registry) = load_cluster_registry(&host_cluster_registry_path())
+        else {
+            bail!("fixture KIND ownership registry is unavailable");
+        };
+        anyhow::ensure!(
+            registry
+                .get(&cfg.cluster)
+                .is_some_and(|owner| owner == root),
+            "fixture KIND cluster belongs to another worktree"
+        );
+    } else {
+        anyhow::ensure!(
+            cfg.cluster == super::DEFAULT_CLUSTER_NAME,
+            "an isolated fixture requires its worktree descriptor"
+        );
+    }
+    Ok(())
+}
+
 pub(super) fn is_native(root: &Path) -> bool {
     read_descriptor(root)
         .is_some_and(|descriptor| descriptor.mode == "dev" && descriptor.runtime == Runtime::Native)
@@ -994,8 +1067,7 @@ fn write_descriptor(root: &Path, desc: &WorktreeEnv) -> Result<()> {
 fn write_worktree_env(root: &Path, body: &str) -> Result<()> {
     std::fs::create_dir_all(devx_dir(root))
         .with_context(|| format!("create {}", devx_dir(root).display()))?;
-    std::fs::write(env_path(root), body)
-        .with_context(|| format!("write {}", env_path(root).display()))
+    super::orchestrate::write_fixture_private(&env_path(root), body.as_bytes())
 }
 
 fn remove_worktree_state(root: &Path) {

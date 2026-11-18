@@ -10,9 +10,10 @@ cargo run -p hudson -- dev forgejo smoke      # prove it end to end
 ```
 
 `up` leaves Forgejo at `http://localhost:3300/` (`NAVIGATOR_KIND_FORGEJO_PORT`) and PostgreSQL at `127.0.0.1:15432`
-(`NAVIGATOR_KIND_POSTGRES_PORT`, TLS only) through port-forwards. A worktree tier's `.devx/env` moves both onto its
-slot. Their pids are in `.devx/<service>-port-forward.pid`; re-run `up` after a restart or sleep. Sign in through the
-tier's Rauthy as `forge-allowed@example.test` once the allowlist names `example.test` (see [Admission](#admission)).
+(`NAVIGATOR_KIND_POSTGRES_PORT`, TLS only). Forgejo uses a port-forward; PostgreSQL uses the tier's verified direct
+loopback mapping. A worktree tier's `.devx/env` moves both onto its slot. The Forgejo forward's pid is in
+`.devx/navigator-forgejo-port-forward.pid`; re-run `up` after a restart or sleep. Sign in through the tier's Rauthy as
+`forge-allowed@example.test` once the allowlist names `example.test` (see [Admission](#admission)).
 
 ## What `up` deploys
 
@@ -37,8 +38,8 @@ revokes `PUBLIC` there, and grants it nothing on `navigator`. Forgejo connects w
 
 The first `up` generates synthetic credentials once and keeps them in the `navigator-forgejo-kind` Secret: the
 PostgreSQL passwords, Forgejo's keys, and the runner's registration secret. Every other Secret is derived from it, so
-re-running `up` converges instead of rotating. The PostgreSQL server certificate is a self-signed synthetic one,
-generated once with `openssl`. The base `app.ini` is the deployment template rendered by the same code as `ops secrets
+re-running `up` converges instead of rotating. A per-tier synthetic CA signs new PostgreSQL server certificates;
+retained TLS material is reused. The base `app.ini` is the deployment template rendered by the same code as `ops secrets
 apply --service forgejo`, with three KIND differences: a loopback `ROOT_URL`, Actions on, and an instance signing key.
 `up` generates that synthetic SSH key once into the `navigator-forgejo-signing` Secret and mounts it read-only; Forgejo
 signs authorized initial commits, API edits and merges with it. The instance signing policy is `always` for these
@@ -125,8 +126,9 @@ It ends with the allowlist empty and purges its accounts at the start of the nex
 
 [`forgejo-postgres.yml`](../.github/workflows/forgejo-postgres.yml) renders the GKE overlays, creates a task-owned KIND
 cluster from [`k8s/kind-forgejo-config.yaml`](../k8s/kind-forgejo-config.yaml), builds the CLI, and runs `dev forgejo
-up` and `dev forgejo smoke`. The cluster maps Rauthy's NodePort to `localhost:30080`, the issuer the tier advertises. It
-runs on changes to the Forgejo, PostgreSQL, and Rauthy KIND manifests, the GKE Forgejo overlays, or
+up` and `dev forgejo smoke`. The cluster maps Rauthy's NodePort to `localhost:30080`, the issuer the tier advertises,
+and PostgreSQL TLS to loopback port `15432`. The shared verifier binds its host ingress to the owned control-plane
+address. It runs on changes to the Forgejo, PostgreSQL, and Rauthy KIND manifests, the GKE Forgejo overlays, or
 `deploy/src/devx/forgejo/`. It is not a required check.
 
 To reproduce it without a tier, create the same cluster and point the CLI at it. If `localhost:30080` is taken, map

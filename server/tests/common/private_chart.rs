@@ -20,7 +20,7 @@ async fn fixture() -> String {
             code: format!("chart-browser-{}", Uuid::now_v7()),
             name: "Synthetic reflection".into(),
             status: "open".into(),
-            entity_id: store::test_support::seed_entity(&db).await,
+            entity_id: super::seed_browser_entity(&db).await,
             ..Default::default()
         },
     )

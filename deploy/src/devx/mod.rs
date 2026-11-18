@@ -51,6 +51,7 @@ mod native;
 // its staging helper is crate-reachable.
 mod observability;
 mod orchestrate;
+mod postgres_fixture;
 mod postgres_volume;
 mod quickstart;
 pub(crate) mod registry;
@@ -1015,6 +1016,9 @@ fn dispatch_with_dns_provider(
         crate::Command::Dev(crate::DevCmd::Undeploy) => undeploy(&cfg),
         crate::Command::Dev(crate::DevCmd::E2e) => e2e::run_e2e(&cfg),
         crate::Command::Dev(crate::DevCmd::SeaweedfsBootstrap) => seaweedfs::bootstrap(&cfg),
+        crate::Command::Dev(crate::DevCmd::PostgresBootstrap { path }) => {
+            orchestrate::postgres_bootstrap(path.as_deref(), &cfg)
+        }
         crate::Command::Dev(crate::DevCmd::GrantLawyer) => e2e::grant_lawyer(&cfg),
         crate::Command::Dev(crate::DevCmd::SampleProject {
             project,
@@ -2621,6 +2625,8 @@ fn render_kind_config(template: &str, cfg: &KindConfig) -> String {
                 Some(cfg.ingress_http_port)
             } else if trimmed.contains("containerPort: 443") {
                 Some(cfg.ingress_https_port)
+            } else if trimmed.contains("containerPort: 31532") {
+                Some(cfg.postgres_port)
             } else if trimmed.contains(&format!("containerPort: {DEFAULT_RAUTHY_HOST_PORT}")) {
                 Some(cfg.rauthy_port)
             } else {
@@ -2735,10 +2741,9 @@ fn navigator_web_rauthy_patch(rauthy_port: u16) -> String {
 /// `hudson dev staging reset` would silently fall back to the ambient
 /// kubeconfig instead of the task-owned cluster. Single quotes are literal in
 /// both consumers (unlike double quotes, which still expand `$`); a directory
-/// containing a literal single quote is the one unsupported shape and is never
-/// produced by a worktree path we create.
+/// containing apostrophes remains literal in both shell and dotenv readers.
 fn shell_single_quote(value: &str) -> String {
-    format!("'{value}'")
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 fn render_env(cfg: &KindConfig, root: &Path) -> String {
@@ -2836,7 +2841,7 @@ fn render_env_for(cfg: &KindConfig, db_name: &str, web_port: u16, root: &Path) -
             cfg.openobserve_otlp_port.to_string(),
         ),
         // The opt-in `dev forgejo up` reads these from the sourced tier, so a
-        // worktree's Forgejo and PostgreSQL forwards move with its slot.
+        // worktree's Forgejo forward and PostgreSQL mapping move with its slot.
         ("NAVIGATOR_KIND_FORGEJO_PORT", cfg.forgejo_port.to_string()),
         (
             "NAVIGATOR_KIND_POSTGRES_PORT",
@@ -4419,10 +4424,15 @@ admin_base_url = "https://production-env.example.invalid:9070"
         cfg.ingress_http_port = 18080;
         cfg.ingress_https_port = 18443;
         cfg.rauthy_port = 31080;
+        cfg.postgres_port = 21537;
         let rendered = render_kind_config(COMMITTED_KIND_CONFIG, &cfg);
         assert!(rendered.contains("hostPort: 18080"));
         assert!(rendered.contains("hostPort: 18443"));
         assert!(rendered.contains("hostPort: 31080"));
+        assert!(rendered.contains("hostPort: 21537"));
+        assert!(rendered.contains("containerPort: 31532"));
+        assert!(rendered.contains("listenAddress: \"127.0.0.1\""));
+        assert!(!rendered.contains("hostPort: 15432"));
         assert!(!rendered.contains("hostPort: 8080"));
         assert!(!rendered.contains("hostPort: 8443"));
         assert!(!rendered.contains("hostPort: 30080"));

@@ -53,6 +53,53 @@ mod inbox_triage;
 #[path = "common/private_chart.rs"]
 mod private_chart;
 
+/// Browser fixtures use the live catalog so their record links satisfy PostgreSQL constraints.
+async fn seed_browser_entity(db: &store::surreal::SurrealDb) -> Uuid {
+    let entity_type = store::entity_types::find_by_name(db, "C-Corp")
+        .await
+        .expect("browser Entity type lookup")
+        .expect("the seeded C-Corp Entity type");
+    let jurisdiction = store::jurisdictions::find_by_code(db, "NV")
+        .await
+        .expect("browser jurisdiction lookup")
+        .expect("the seeded Nevada jurisdiction");
+    store::entities::create(
+        db,
+        &store::entities::NewEntity {
+            name: format!("Browser Entity {}", Uuid::now_v7()),
+            entity_type_id: entity_type.id,
+            jurisdiction_id: jurisdiction.id,
+            phone: None,
+            url: None,
+            xero_id: None,
+            firm_anchor_key: None,
+        },
+    )
+    .await
+    .expect("create the browser Entity with existing parents")
+    .id
+}
+
+async fn seed_browser_project_on_firm(
+    db: &store::surreal::SurrealDb,
+    firm_id: Option<Uuid>,
+    name: &str,
+) -> store::projects::Project {
+    store::projects::create(
+        db,
+        &store::projects::NewProject {
+            code: store::projects::code_from_name(name, Uuid::now_v7()),
+            name: name.to_owned(),
+            status: "open".into(),
+            entity_id: seed_browser_entity(db).await,
+            firm_id,
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("create the browser Project with an existing Entity")
+}
+
 /// Same Day Legal's origin for the browser suite, e.g. `http://localhost:<port>`.
 const SAME_DAY_LEGAL_BASE_URL_ENV: &str = "NAV_SAME_DAY_LEGAL_BASE_URL";
 
@@ -1073,7 +1120,7 @@ async fn client_can_continue_pending_intake_from_the_matter_page() {
             code: format!("client-intake-{unique}"),
             name: format!("Client Intake {unique}"),
             status: "open".into(),
-            entity_id: store::test_support::seed_entity(&surreal).await,
+            entity_id: seed_browser_entity(&surreal).await,
             ..Default::default()
         },
     )
@@ -2729,7 +2776,7 @@ async fn client_walks_the_whole_intake_with_the_keyboard_alone() {
             code: format!("keys-intake-{unique}"),
             name: format!("Keys Intake {unique}"),
             status: "open".into(),
-            entity_id: store::test_support::seed_entity(&surreal).await,
+            entity_id: seed_browser_entity(&surreal).await,
             ..Default::default()
         },
     )
@@ -3469,9 +3516,7 @@ async fn seed_inbox_filing_review(db: &store::surreal::SurrealDb) -> (Uuid, Uuid
         .await
         .unwrap();
     }
-    let project =
-        store::test_support::seed_project_on_firm(db, Some(firm_id), "Synthetic Inbox Filing")
-            .await;
+    let project = seed_browser_project_on_firm(db, Some(firm_id), "Synthetic Inbox Filing").await;
     store::projects::add_participation(db, project.id, lawyer.id, "lawyer")
         .await
         .unwrap();
@@ -3709,8 +3754,7 @@ async fn project_inbox_opens_a_full_email_thread_with_application_chrome() {
         .await
         .unwrap()
         .unwrap();
-    let project =
-        store::test_support::seed_project_on_firm(&db, Some(firm), "Synthetic Email Thread").await;
+    let project = seed_browser_project_on_firm(&db, Some(firm), "Synthetic Email Thread").await;
     store::projects::add_participation(&db, project.id, lawyer.id, "lawyer")
         .await
         .unwrap();
@@ -4221,7 +4265,7 @@ async fn admin_edits_matter_participation_from_the_project_workbench() {
             code: format!("participation-e2e-{unique}"),
             name: format!("Participation E2E Matter {unique}"),
             status: "open".into(),
-            entity_id: store::test_support::seed_entity(&surreal).await,
+            entity_id: seed_browser_entity(&surreal).await,
             firm_id: Some(firm_id),
             ..Default::default()
         },
@@ -4378,7 +4422,7 @@ async fn seed_lawyer_upload_project(surreal: &store::surreal::SurrealDb) -> Stri
         .expect("look up the browser-harness lawyer person")
         .expect("lawyer@neonlaw.com must exist — `navigator dev grant-lawyer`");
 
-    let entity_id = store::test_support::seed_entity(surreal).await;
+    let entity_id = seed_browser_entity(surreal).await;
     let unique = Uuid::now_v7();
     let project = store::projects::create(
         surreal,
@@ -4768,7 +4812,7 @@ async fn notation_questionnaire_has_no_horizontal_overflow_at_any_checked_width(
             code: format!("overflow-check-{unique}"),
             name: format!("Overflow Check {unique}"),
             status: "open".into(),
-            entity_id: store::test_support::seed_entity(&surreal).await,
+            entity_id: seed_browser_entity(&surreal).await,
             ..Default::default()
         },
     )
@@ -5304,7 +5348,7 @@ async fn clients_sharing_a_project_can_see_each_others_avatar() {
         .expect("look up the browser-harness client person")
         .expect("the browser harness requires the seeded client");
     let unique = Uuid::now_v7();
-    let entity_id = store::test_support::seed_entity(&surreal).await;
+    let entity_id = seed_browser_entity(&surreal).await;
     let project = store::projects::create(
         &surreal,
         &store::projects::NewProject {
@@ -5363,7 +5407,7 @@ async fn clients_on_different_projects_cannot_see_each_others_avatar() {
         .await
         .expect("connect to the port-forwarded SurrealDB");
     let unique = Uuid::now_v7();
-    let entity_id = store::test_support::seed_entity(&surreal).await;
+    let entity_id = seed_browser_entity(&surreal).await;
     let project = store::projects::create(
         &surreal,
         &store::projects::NewProject {

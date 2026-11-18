@@ -27,26 +27,7 @@ pub fn export() -> Result<()> {
         let strict = strict_consistency_requested()?;
         let config = SurrealConfig::from_env().context("read SurrealDB coordinates")?;
         let db = connect_http(&config).await?;
-        let (counts, schema_sha256) = archive_inventory(&db).await?;
-        let bytes = export_bytes(&db).await?;
-        if strict {
-            let second_export = export_bytes(&db).await?;
-            let after = archive_inventory(&db).await?;
-            verify_strict_snapshot(&counts, &schema_sha256, &bytes, &after, &second_export)?;
-        }
-        let receipt = ArchiveReceipt {
-            format_version: 1,
-            consistency: if strict {
-                "operator_quiesced"
-            } else {
-                "best_effort"
-            }
-            .into(),
-            export_bytes: bytes.len() as u64,
-            export_sha256: sha256(&bytes),
-            schema_sha256: schema_sha256.clone(),
-            table_counts: counts,
-        };
+        let (bytes, receipt) = capture(&db, strict).await?;
         let key = archive_key(&config);
         let storage = cloud::surreal_archives_from_env()
             .await
@@ -67,6 +48,45 @@ pub fn export() -> Result<()> {
         println!("surreal archive written: {key} ({} bytes)", bytes.len());
         Ok(())
     })
+}
+
+/// Produce a real strict capture for an explicitly quiesced synthetic fixture.
+pub(crate) async fn capture_quiesced(
+    db: &SurrealDb,
+) -> Result<(Vec<u8>, store::postgres_backfill::family::SourceReceipt)> {
+    let (bytes, receipt) = capture(db, true).await?;
+    let receipt = serde_json::from_value(serde_json::to_value(receipt)?)?;
+    Ok((bytes, receipt))
+}
+
+async fn capture(db: &SurrealDb, strict: bool) -> Result<(Vec<u8>, ArchiveReceipt)> {
+    let (table_counts, schema_sha256) = archive_inventory(db).await?;
+    let bytes = export_bytes(db).await?;
+    if strict {
+        let second_export = export_bytes(db).await?;
+        let after = archive_inventory(db).await?;
+        verify_strict_snapshot(
+            &table_counts,
+            &schema_sha256,
+            &bytes,
+            &after,
+            &second_export,
+        )?;
+    }
+    let receipt = ArchiveReceipt {
+        format_version: 1,
+        consistency: if strict {
+            "operator_quiesced"
+        } else {
+            "best_effort"
+        }
+        .into(),
+        export_bytes: bytes.len() as u64,
+        export_sha256: sha256(&bytes),
+        schema_sha256,
+        table_counts,
+    };
+    Ok((bytes, receipt))
 }
 
 /// Restore one export into a one-off namespace and prove it is recoverable.
@@ -245,7 +265,7 @@ async fn remove_namespace(db: &SurrealDb, namespace: &str) -> Result<()> {
     Ok(())
 }
 
-async fn connect_http(config: &SurrealConfig) -> Result<SurrealDb> {
+pub(crate) async fn connect_http(config: &SurrealConfig) -> Result<SurrealDb> {
     let endpoint = http_endpoint(&config.endpoint)?;
     store::surreal::connect(&SurrealConfig {
         endpoint,

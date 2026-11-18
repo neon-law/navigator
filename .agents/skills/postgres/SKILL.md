@@ -70,23 +70,20 @@ Build the recipe from the repository root:
 docker build -f images/postgres/Containerfile -t navigator-postgres:local images/postgres
 ```
 
-Run the published image in this worktree's KIND tier, beside the existing SurrealDB and Restate dependencies:
+The normal KIND lifecycle provisions the pinned retained PostgreSQL image with TLS and application roles:
 
 ```bash
-NAVIGATOR_KIND_DEPS_OVERLAY=k8s/overlays/kind-postgres-spike \
-  cargo run -p hudson -- dev worktree-env up --runtime kind --path "$PWD"
+cargo run -p hudson -- dev worktree-env up --runtime kind --path "$PWD"
 set -a; source .devx/env; set +a
-kubectl --kubeconfig .devx/kubeconfig --context "kind-$NAVIGATOR_KIND_CLUSTER" \
-  -n navigator rollout status statefulset/postgres-spike --timeout=180s
-kubectl --kubeconfig .devx/kubeconfig --context "kind-$NAVIGATOR_KIND_CLUSTER" \
-  -n navigator port-forward service/postgres-spike :5432
 ```
 
-Read the loopback port from the port-forward output. The database is `smoke`, user `postgres`. Tear down only your own
-tier with `cargo run -p hudson -- dev worktree-env down --path "$PWD"`. [kind-local-dev](../kind-local-dev/SKILL.md)
-covers the rest of the tier.
+Use the application-role connection in `.devx/env`; it verifies the loopback server against the task-owned CA. The
+bootstrap holds writers, verifies and enrolls a fresh synthetic legacy source, then seeds through the normal accessors.
+It refuses nonempty history without valid enrollment rather than replacing its proof. See
+[kind-local-dev](../kind-local-dev/SKILL.md) for lifecycle and retry boundaries. Tear down only your own tier with
+`cargo run -p hudson -- dev worktree-env down --path "$PWD"`.
 
-For the TLS and SCRAM shape of the retained StatefulSet, use `k8s/overlays/kind-postgres-persistence`.
+The standalone persistence and restore drill remains in `k8s/overlays/kind-postgres-persistence`;
 `postgres-persistence.yml` shows the synthetic Secrets it needs.
 
 ## What is still open
