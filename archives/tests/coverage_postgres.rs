@@ -3,6 +3,8 @@ use archives::coverage::{export_pair, inventory, CoverageManifest, DatabaseSourc
 use cloud::{FsStorage, ObjectListing, StorageError, StorageService, StoredObject};
 use futures::TryStreamExt;
 use sqlx::{postgres::PgConnectOptions, PgPool};
+use store::postgres::PostgresDb;
+use store::postgres_backfill::family::{require_scope, Family, FamilyError, SourceReceipt};
 
 use arrow_array58::{
     Array, BinaryArray, BooleanArray, Int32Array, Int64Array, RecordBatch, StringArray,
@@ -13,6 +15,81 @@ use std::fmt::Write as _;
 const NAV_SCHEMA: &str = "CREATE TABLE public.probe (id bigint PRIMARY KEY, status text); CREATE TABLE public.empty (id bigint); CREATE VIEW public.derived AS SELECT * FROM public.probe";
 const FORGE_SCHEMA: &str = "CREATE SCHEMA forge; CREATE TABLE forge.repository (id bigint PRIMARY KEY, name text, private boolean, payload bytea, metadata jsonb)";
 const GRAPH_SCHEMA: &str = "CREATE EXTENSION age; LOAD 'age'; SET search_path = ag_catalog, public; SELECT create_graph('coverage_graph'); SELECT create_vlabel('coverage_graph', 'Probe'); SELECT create_elabel('coverage_graph', 'Link')";
+
+async fn ledger_schema(pool: &PgPool) {
+    for sql in [
+        include_str!("../../store/postgres/migrations/20261021160000_create_mirror_backfill.sql"),
+        include_str!(
+            "../../store/postgres/migrations/20261117200000_scope_mirror_backfill_runs.sql"
+        ),
+    ] {
+        sqlx::raw_sql(sql).execute(pool).await.unwrap();
+    }
+}
+
+async fn seed_scoped_ledger(pool: &PgPool) {
+    let family = Family::Satellites;
+    let receipt = SourceReceipt {
+        format_version: 1,
+        consistency: "operator_quiesced".into(),
+        export_bytes: 321,
+        export_sha256: "ab".repeat(32),
+        schema_sha256: "cd".repeat(32),
+        table_counts: family
+            .tables()
+            .iter()
+            .map(|name| ((*name).into(), 2))
+            .collect(),
+    };
+    receipt.validate(family).unwrap();
+    let receipt = serde_json::to_value(receipt).unwrap();
+    let mut previous = receipt.clone();
+    previous["export_sha256"] = serde_json::json!("ef".repeat(32));
+    let run = uuid::Uuid::new_v4();
+    sqlx::query("INSERT INTO mirror_backfill_run (id,batch_size,status,completed_at,scope,source_receipt,source_receipt_history) VALUES ($1,7,'completed',now(),$2,$3,$4)")
+        .bind(run).bind(family.scope()).bind(receipt).bind(serde_json::json!([previous]))
+        .execute(pool).await.unwrap();
+    for table in family.tables() {
+        let verification = serde_json::json!({
+            "source_rows": 2, "target_rows": 2, "differences": 0,
+            "references_checked": true, "foreign_keys_checked": true,
+            "references": [], "reset_facts_checked": false, "reset_fact_differences": 0
+        });
+        sqlx::query("INSERT INTO mirror_backfill_checkpoint (run_id,mirror,batches,applied,completed_at,verification) VALUES ($1,$2,1,2,now(),$3)")
+            .bind(run).bind(format!("table:{table}")).bind(verification).execute(pool).await.unwrap();
+    }
+    sqlx::query("INSERT INTO mirror_backfill_failure (id,run_id,mirror,row_table,row_id,reason) VALUES ($1,$2,'table:attestation','attestation',$3,'synthetic interrupted attempt')")
+        .bind(uuid::Uuid::new_v4()).bind(run).bind(uuid::Uuid::new_v4().to_string())
+        .execute(pool).await.unwrap();
+}
+
+async fn assert_ledger_preserved(source: &PgPool, target: &PgPool) {
+    for table in [
+        "mirror_backfill_run",
+        "mirror_backfill_checkpoint",
+        "mirror_backfill_failure",
+    ] {
+        let statement = format!("SELECT to_jsonb(r) FROM {table} r ORDER BY to_jsonb(r)::text");
+        let original: Vec<serde_json::Value> =
+            sqlx::query_scalar(sqlx::AssertSqlSafe(statement.as_str()))
+                .fetch_all(source)
+                .await
+                .unwrap();
+        let restored: Vec<serde_json::Value> =
+            sqlx::query_scalar(sqlx::AssertSqlSafe(statement.as_str()))
+                .fetch_all(target)
+                .await
+                .unwrap();
+        assert!(
+            !original.is_empty(),
+            "the recovery fixture must exercise {table}"
+        );
+        assert_eq!(
+            original, restored,
+            "all scoped proof fields survive {table} recovery"
+        );
+    }
+}
 
 async fn database(admin: &PgPool, name: &str) -> PgPool {
     sqlx::raw_sql(sqlx::AssertSqlSafe(format!("CREATE DATABASE {name}")))
@@ -138,7 +215,22 @@ async fn postgres_paired_sources_fail_closed_and_rehydrate_from_iceberg() {
     // are deliberately different, so a public-only restore cannot pass.
     for pool in [&navigator, &target_nav] {
         sqlx::raw_sql(NAV_SCHEMA).execute(pool).await.unwrap();
+        ledger_schema(pool).await;
     }
+    seed_scoped_ledger(&navigator).await;
+    let source_ledger = PostgresDb::connect(navigator.connect_options().as_ref().clone())
+        .await
+        .unwrap();
+    let target_ledger = PostgresDb::connect(target_nav.connect_options().as_ref().clone())
+        .await
+        .unwrap();
+    require_scope(&source_ledger, Family::Satellites)
+        .await
+        .unwrap();
+    assert!(matches!(
+        require_scope(&target_ledger, Family::Satellites).await,
+        Err(FamilyError::NotActive)
+    ));
     let postgis_available: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'postgis')",
     )
@@ -318,7 +410,12 @@ async fn postgres_paired_sources_fail_closed_and_rehydrate_from_iceberg() {
             .zip(&db.schemas)
             .zip(&db.iceberg_metadata_keys)
             .collect::<Vec<_>>();
-        ordered.sort_by_key(|((_, schema), _)| schema.relation.name != "workflow_status");
+        ordered.sort_by_key(|((_, schema), _)| match schema.relation.name.as_str() {
+            "workflow_status" => 0,
+            "mirror_backfill_run" => 1,
+            "mirror_backfill_checkpoint" | "mirror_backfill_failure" => 2,
+            _ => 3,
+        });
         for ((entry, schema), metadata_key) in ordered {
             let object = storage.get(&entry.key).await.unwrap();
             let hash =
@@ -468,8 +565,23 @@ async fn postgres_paired_sources_fail_closed_and_rehydrate_from_iceberg() {
                     query.execute(target).await.unwrap();
                 }
             }
+            if schema.relation.name == "mirror_backfill_run" {
+                assert!(
+                    matches!(
+                        require_scope(&target_ledger, Family::Satellites).await,
+                        Err(FamilyError::Receipt)
+                    ),
+                    "a restored run without all checkpoint proofs must not activate authority"
+                );
+            }
         }
     }
+    assert_ledger_preserved(&navigator, &target_nav).await;
+    require_scope(&target_ledger, Family::Satellites)
+        .await
+        .unwrap();
+    source_ledger.pool().close().await;
+    target_ledger.pool().close().await;
     // Service-owned indexes and foreign keys are installed after its rows,
     // as in PostgreSQL's native pre-data/data/post-data restore procedure.
     apply_fixture_dump(&target_forge, "NAVIGATOR_TEST_FORGEJO_POST_SCHEMA").await;
