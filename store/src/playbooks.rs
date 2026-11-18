@@ -53,7 +53,8 @@ pub struct Playbook {
     pub entity_id: Uuid,
     pub name: String,
     /// The JSONB positions array — see [`positions_of`] for the typed
-    /// view.
+    /// view. SQL NULL retains the legacy JSON-null view without rewriting storage.
+    #[serde(default)]
     pub positions: Json,
     pub active: bool,
     pub inserted_at: chrono::DateTime<chrono::Utc>,

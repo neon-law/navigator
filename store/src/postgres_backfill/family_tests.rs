@@ -386,6 +386,77 @@ async fn pending_capture_refresh_preserves_progress_and_active_capture_is_immuta
 }
 
 #[tokio::test]
+async fn absent_optional_json_survives_import_and_remains_readable() {
+    let pg = fixture().await;
+    let source = source(&pg).await;
+    let id = {
+        let mut rows = source.rows.lock().unwrap();
+        rows[0].as_object_mut().unwrap().remove("positions");
+        Uuid::parse_str(rows[0]["id"].as_str().unwrap()).unwrap()
+    };
+    let run = enroll(&pg, &source).await;
+    advance(&pg, &source, run, None, true).await.unwrap();
+    super::require_scope(&pg, Family::Satellites).await.unwrap();
+    let unavailable = crate::surreal::SurrealDb::uninitialized();
+    let row = crate::postgres::matter::with_test_db(
+        pg.clone(),
+        crate::playbooks::by_id(&unavailable, id),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(row.positions, Value::Null);
+    let absent: bool = sqlx::query_scalar("SELECT positions IS NULL FROM playbook WHERE id = $1")
+        .bind(id)
+        .fetch_one(pg.pool())
+        .await
+        .unwrap();
+    assert!(
+        absent,
+        "reading the public Json view must not turn SQL absence into JSON null"
+    );
+    pg.pool().close().await;
+}
+
+#[tokio::test]
+async fn a_refreshed_empty_capture_does_not_delete_target_only_history() {
+    let pg = fixture().await;
+    let source = source(&pg).await;
+    let run = enroll(&pg, &source).await;
+    advance(&pg, &source, run, None, false).await.unwrap();
+    source.rows.lock().unwrap().clear();
+    let (capture, bytes) = source.capture();
+    crate::postgres_backfill::with_import_lock(
+        &pg,
+        super::refresh_capture_with(&source, &pg, run, capture.verify_export(&bytes).unwrap()),
+    )
+    .await
+    .unwrap();
+    let blocked = advance(&pg, &source, run, None, true).await.unwrap();
+    assert!(!blocked.snapshot.unwrap().clean());
+    let retained: String = sqlx::query_scalar("SELECT name FROM playbook")
+        .fetch_one(pg.pool())
+        .await
+        .unwrap();
+    assert_eq!(retained, "Synthetic import");
+    assert!(matches!(
+        super::require_runtime_scopes(&pg).await,
+        Err(FamilyError::NotActive)
+    ));
+    let failures: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM mirror_backfill_failure WHERE run_id = $1")
+            .bind(run)
+            .fetch_one(pg.pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        failures, 1,
+        "source absence is reviewed drift, never permission to delete"
+    );
+    pg.pool().close().await;
+}
+
+#[tokio::test]
 async fn a_completed_global_run_does_not_skip_new_family_history_or_its_batch_limit() {
     let pg = fixture().await;
     sqlx::query("INSERT INTO mirror_backfill_run(id,batch_size,status,completed_at) VALUES ($1,1,'completed',now())")
