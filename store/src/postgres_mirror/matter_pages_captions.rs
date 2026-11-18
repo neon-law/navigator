@@ -2,8 +2,8 @@
 //! [Matter Pages](../../../docs/glossary/matter-page.md) and
 //! [Matter Caption](../../../docs/glossary/matter-caption.md).
 //!
-//! The Page mirror replaces a Project's whole page set transactionally and removes
-//! pages absent from its source. Matter Captions are PostgreSQL-authoritative:
+//! Captured Page imports preserve target-only identities and report them as drift.
+//! Native manifest replacement owns removal. Matter Captions are PostgreSQL-authoritative:
 //! their first backfill inserts missing captions, and later source reads cannot
 //! overwrite or delete them. [`MirrorKey::MatterPages`] identifies the page set;
 //! [`MirrorKey::MatterCaption`] identifies the Project's caption.
@@ -12,7 +12,7 @@
 //! key, so PostgreSQL refuses a row whose Firm is not its Project's. A Project
 //! with no Firm is refused before any write and stays in the parity report.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use sqlx::{postgres::PgRow, types::Json, Row};
@@ -275,41 +275,6 @@ async fn target_pages(
     ))
 }
 
-/// Read the synced page entries from the PostgreSQL projection in manifest order.
-pub(crate) async fn project_page_entries(
-    pg: &PostgresDb,
-    project_id: Uuid,
-) -> Result<Vec<rules::pages::PageEntry>, MirrorError> {
-    let mut pages = target_pages(pg, Some(project_id)).await?;
-    Ok(pages
-        .remove(&project_id)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|page| {
-            let lenses = [
-                (rules::dashboard::Lens::Client, page.client_sections),
-                (rules::dashboard::Lens::Lawyer, page.lawyer_sections),
-                (rules::dashboard::Lens::Clerk, page.clerk_sections),
-            ]
-            .into_iter()
-            .filter_map(|(lens, sections)| Some((lens.as_str().to_string(), sections?)))
-            .collect();
-            rules::pages::PageEntry {
-                slug: page.slug,
-                kind: page.kind,
-                title: page.title,
-                draft: page.draft,
-                document_revision: page.document_revision,
-                media: page
-                    .media
-                    .and_then(|value| serde_json::from_value(value).ok())
-                    .unwrap_or_default(),
-                lenses,
-            }
-        })
-        .collect())
-}
-
 async fn target_captions(pg: &PostgresDb) -> Result<BTreeMap<Uuid, CaptionImage>, MirrorError> {
     let rows = sqlx::query(
         "SELECT id, project_id, firm_id, court, case_number, judicial_officer, department, \
@@ -369,32 +334,69 @@ const PAGE_UPSERT: &str = "INSERT INTO matter_page (id, project_id, firm_id, slu
 
 const CAPTION_UPSERT: &str = "INSERT INTO matter_caption (id, project_id, firm_id, court, case_number, judicial_officer, department, filed_on, trial_on, parties, counsel, synced_at, signed_on) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) ON CONFLICT (project_id) DO UPDATE SET id=EXCLUDED.id, firm_id=EXCLUDED.firm_id, court=EXCLUDED.court, case_number=EXCLUDED.case_number, judicial_officer=EXCLUDED.judicial_officer, department=EXCLUDED.department, filed_on=EXCLUDED.filed_on, trial_on=EXCLUDED.trial_on, parties=EXCLUDED.parties, counsel=EXCLUDED.counsel, synced_at=EXCLUDED.synced_at, signed_on=EXCLUDED.signed_on";
 
-/// Make PostgreSQL hold exactly the Project's source pages, in one
-/// transaction: pages the source no longer holds go, the rest upsert by id.
+/// Copy captured identities without treating Source absence as deletion evidence.
 async fn write_pages(
     surreal: &SurrealDb,
     pg: &PostgresDb,
     project_id: Uuid,
     pages: &[PageImage],
+    mode: ImportMode,
 ) -> Result<Mirrored, MirrorError> {
-    let firm_id = match pages.first() {
-        Some(page) => Some(ensure_owner(surreal, pg, project_id, page.firm_id).await?),
-        None => None,
+    let source_project = crate::projects::find_by_id_in_surreal(surreal, project_id)
+        .await
+        .map_err(|_| MirrorError::Source)?
+        .ok_or(MirrorError::Source)?;
+    let firm = source_project.firm_id.ok_or(MirrorError::Source)?;
+    if pages
+        .iter()
+        .any(|page| page.project_id != project_id || page.firm_id != Some(firm))
+    {
+        return Err(MirrorError::Source);
+    }
+    let project_key = MirrorKey::Project(project_id);
+    if !super::held_by_target(pg, &project_key).await? {
+        if mode != ImportMode::InsertMissing {
+            return Err(MirrorError::Source);
+        }
+        for key in [MirrorKey::Firm(firm), project_key] {
+            if !super::held_by_target(pg, &key).await? {
+                Box::pin(super::mirror(surreal, pg, &key)).await?;
+            }
+        }
+    }
+    let mut tx = pg.pool().begin().await?;
+    let target_firm: Option<Uuid> =
+        sqlx::query_scalar("SELECT firm_id FROM project WHERE id=$1 FOR UPDATE")
+            .bind(project_id)
+            .fetch_one(&mut *tx)
+            .await?;
+    if target_firm != Some(firm) {
+        return Err(MirrorError::Source);
+    }
+    let statement = if mode == ImportMode::InsertMissing {
+        let (insert, _) = PAGE_UPSERT
+            .split_once(" ON CONFLICT")
+            .ok_or(MirrorError::Source)?;
+        format!("{insert} ON CONFLICT(id) DO NOTHING")
+    } else {
+        PAGE_UPSERT.to_owned()
     };
-    let keep: Vec<Uuid> = pages.iter().map(|page| page.id).collect();
-    let mut tx = pg.0.begin().await?;
-    let removed = sqlx::query("DELETE FROM matter_page WHERE project_id = $1 AND id <> ALL($2)")
-        .bind(project_id)
-        .bind(&keep)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
     let mut written = 0;
     for page in pages {
-        written += sqlx::query(PAGE_UPSERT)
+        let wrong_owner: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM matter_page WHERE id=$1 AND project_id<>$2)",
+        )
+        .bind(page.id)
+        .bind(project_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        if wrong_owner {
+            return Err(MirrorError::Source);
+        }
+        written += sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
             .bind(page.id)
-            .bind(page.project_id)
-            .bind(firm_id)
+            .bind(project_id)
+            .bind(firm)
             .bind(&page.slug)
             .bind(&page.kind)
             .bind(&page.title)
@@ -411,14 +413,9 @@ async fn write_pages(
             .rows_affected();
     }
     tx.commit().await?;
-    Ok(match (written, removed) {
-        (0, 0) => Mirrored::Unchanged,
-        (0, _) => Mirrored::Deleted,
-        _ => Mirrored::Written,
-    })
+    Ok(changed(written, Mirrored::Written))
 }
 
-/// Make PostgreSQL hold exactly the Project's source caption, or none.
 async fn write_caption(
     surreal: &SurrealDb,
     pg: &PostgresDb,
@@ -465,8 +462,7 @@ async fn write_caption(
     Ok(changed(written, Mirrored::Written))
 }
 
-/// Mirror one Project's page set or caption, removing what SurrealDB no
-/// longer holds.
+/// Import one Project's captured page set or caption under its receipt.
 pub(super) async fn mirror(
     surreal: &SurrealDb,
     pg: &PostgresDb,
@@ -474,11 +470,18 @@ pub(super) async fn mirror(
 ) -> Result<Mirrored, MirrorError> {
     match key {
         MirrorKey::MatterPages(project_id) => {
-            let pages = source_pages(surreal, Some(*project_id))
-                .await?
-                .remove(project_id)
-                .unwrap_or_default();
-            write_pages(surreal, pg, *project_id, &pages).await
+            let mode = family::import_mode(pg, "matter_page").await?;
+            if mode == ImportMode::Refuse {
+                return Err(MirrorError::MatterAuthority);
+            }
+            super::from_source(async {
+                let pages = source_pages(surreal, Some(*project_id))
+                    .await?
+                    .remove(project_id)
+                    .unwrap_or_default();
+                write_pages(surreal, pg, *project_id, &pages, mode).await
+            })
+            .await
         }
         MirrorKey::MatterCaption(project_id) => {
             if family::import_mode(pg, "matter_caption").await? == ImportMode::Refuse {
@@ -520,11 +523,7 @@ fn keyed_captions(captions: BTreeMap<Uuid, CaptionImage>) -> BTreeMap<MirrorKey,
 /// diverges as a whole: a missing, extra, reordered, or changed page names
 /// its Project. Reports name keys only.
 pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
-    let mut tables = vec![super::compare(
-        "matter_page",
-        &keyed_pages(source_pages(surreal, None).await?),
-        &keyed_pages(target_pages(pg, None).await?),
-    )];
+    let mut tables = vec![scoped_page_parity(surreal, pg).await?];
     if !family::active_for_table(pg, "matter_caption").await? {
         if family::importing("matter_caption") {
             tables.push(caption_parity(surreal, pg).await?);
@@ -533,6 +532,83 @@ pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport
         }
     }
     Ok(ParityReport { tables })
+}
+
+/// Compare full Page images and count Page rows rather than Project groups.
+pub(crate) async fn scoped_page_parity(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+) -> Result<super::TableParity, MirrorError> {
+    let source = source_pages(surreal, None).await?;
+    let target = target_pages(pg, None).await?;
+    let source_rows = source.values().map(Vec::len).sum();
+    let target_rows = target.values().map(Vec::len).sum();
+    let mut report = super::compare("matter_page", &keyed_pages(source), &keyed_pages(target));
+    report.source_rows = source_rows;
+    report.target_rows = target_rows;
+    Ok(report)
+}
+
+async fn source_parent_ids(
+    surreal: &SurrealDb,
+    table: &'static str,
+) -> Result<BTreeSet<Uuid>, MirrorError> {
+    super::select_table(surreal, table, format!("SELECT VALUE id FROM `{table}`"))
+        .await?
+        .into_iter()
+        .map(|value| {
+            let surrealdb::types::Value::RecordId(id) = value else {
+                return Err(MirrorError::Source);
+            };
+            record_uuid(&id).ok_or(MirrorError::Source)
+        })
+        .collect()
+}
+
+/// Count each Page's Project link and derived `project_id.firm_id` owner proof.
+/// `firm_id` names the canonical PostgreSQL foreign key, never a Source Page field.
+pub(crate) async fn scoped_page_references(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+) -> Result<Vec<super::records::UnresolvedReference>, MirrorError> {
+    let source_projects = source_parent_ids(surreal, "project").await?;
+    let source_firms = source_parent_ids(surreal, "firm").await?;
+    let projects: Vec<(Uuid, Option<Uuid>)> = sqlx::query_as("SELECT id,firm_id FROM project")
+        .fetch_all(pg.pool())
+        .await?;
+    let projects: BTreeMap<_, _> = projects.into_iter().collect();
+    let firms: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM firm")
+        .fetch_all(pg.pool())
+        .await?;
+    let firms: BTreeSet<_> = firms.into_iter().collect();
+    let mut counts = ["project_id", "firm_id"].map(|field| super::records::UnresolvedReference {
+        table: "matter_page",
+        field,
+        source_orphans: 0,
+        postgres_missing: 0,
+        newly_target_missing: 0,
+    });
+    for page in source_pages(surreal, None).await?.into_values().flatten() {
+        let source_project = source_projects.contains(&page.project_id);
+        let target_project = projects.contains_key(&page.project_id);
+        if !source_project || !target_project {
+            counts[0].observe(source_project, target_project);
+        }
+        let source_owner = source_project
+            && page
+                .firm_id
+                .is_some_and(|firm| source_firms.contains(&firm));
+        let target_owner = page.firm_id.is_some_and(|firm| {
+            projects.get(&page.project_id) == Some(&Some(firm)) && firms.contains(&firm)
+        });
+        if !source_owner || !target_owner {
+            counts[1].observe(source_owner, target_owner);
+        }
+    }
+    Ok(counts
+        .into_iter()
+        .filter(|count| count.source_orphans != 0 || count.postgres_missing != 0)
+        .collect())
 }
 
 /// Compare the enrolled caption without reading unrelated Matter Pages.

@@ -1306,7 +1306,7 @@ pub const DECISION_REJECTED: &str = "rejected";
 pub const DECISION_EDITED: &str = "edited";
 
 /// One comment anchored to a block within a specific document version.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NotationDocumentComment {
     pub id: Uuid,
     pub version_id: Uuid,
@@ -1320,53 +1320,10 @@ pub struct NotationDocumentComment {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(SurrealValue)]
-struct CommentRow {
-    id: surrealdb::types::RecordId,
-    version_id: surrealdb::types::RecordId,
-    anchor: String,
-    person_id: surrealdb::types::RecordId,
-    body: String,
-    decision: Option<String>,
-    resolved: bool,
-    inserted_at: surrealdb::types::Datetime,
-    updated_at: surrealdb::types::Datetime,
-}
-
-impl CommentRow {
-    fn into_comment(self) -> Option<NotationDocumentComment> {
-        Some(NotationDocumentComment {
-            id: record_uuid(&self.id)?,
-            version_id: record_uuid(&self.version_id)?,
-            anchor: self.anchor,
-            person_id: record_uuid(&self.person_id)?,
-            body: self.body,
-            decision: self.decision,
-            resolved: self.resolved,
-            inserted_at: self.inserted_at.into(),
-            updated_at: self.updated_at.into(),
-        })
-    }
-}
-
-const COMMENT_SELECT: &str =
-    "id, version_id, anchor, person_id, body, decision, resolved, inserted_at, updated_at";
-
-fn one_comment(
-    mut response: surrealdb::IndexedResults,
-) -> Result<Option<NotationDocumentComment>, NotationDocumentError> {
-    let row: Option<CommentRow> = response.take(0)?;
-    Ok(row.and_then(CommentRow::into_comment))
-}
-
-fn many_comments(
-    mut response: surrealdb::IndexedResults,
-) -> Result<Vec<NotationDocumentComment>, NotationDocumentError> {
-    let rows: Vec<CommentRow> = response.take(0)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(CommentRow::into_comment)
-        .collect())
+async fn comment_authority() -> Result<crate::postgres::PostgresDb, NotationDocumentError> {
+    crate::postgres::matter::authority_for(COMMENT_TABLE)
+        .await?
+        .ok_or_else(|| crate::postgres::matter::MatterAuthorityError::Unavailable.into())
 }
 
 /// Attach a comment to `anchor` within `version_id`. Anyone with write
@@ -1387,32 +1344,26 @@ pub async fn add_comment(
     person_id: Uuid,
     body: &str,
 ) -> Result<Uuid, NotationDocumentError> {
-    find_version(db, project_id, notation_id, version_id)
-        .await?
-        .ok_or(NotationDocumentError::VersionNotFound(version_id))?;
-    let id = Uuid::now_v7();
-    let mut response = db
-        .query(format!(
-            "CREATE $id SET \
-             version_id = $version_id, \
-             anchor = $anchor, \
-             person_id = $person_id, \
-             body = $body, \
-             decision = NONE, \
-             resolved = false \
-             RETURN {COMMENT_SELECT}"
-        ))
-        .bind(("id", record_id(COMMENT_TABLE, id)))
-        .bind(("version_id", record_id(VERSION_TABLE, version_id)))
-        .bind(("anchor", anchor.to_string()))
-        .bind(("person_id", record_id("person", person_id)))
-        .bind(("body", body.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let row: Option<CommentRow> = response.take(0)?;
-    row.and_then(CommentRow::into_comment)
-        .map(|c| c.id)
-        .ok_or(NotationDocumentError::WriteReturnedNothing)
+    let pg = comment_authority().await?;
+    let _ = db;
+    let now = Utc::now();
+    crate::postgres::notation_document_comments::add(
+        &pg,
+        project_id,
+        notation_id,
+        NotationDocumentComment {
+            id: Uuid::now_v7(),
+            version_id,
+            anchor: anchor.to_owned(),
+            person_id,
+            body: body.to_owned(),
+            decision: None,
+            resolved: false,
+            inserted_at: now,
+            updated_at: now,
+        },
+    )
+    .await
 }
 
 /// Every comment anchored to `version_id`, oldest first.
@@ -1426,21 +1377,10 @@ pub async fn comments_for_version(
     notation_id: Uuid,
     version_id: Uuid,
 ) -> Result<Vec<NotationDocumentComment>, NotationDocumentError> {
-    if find_version(db, project_id, notation_id, version_id)
-        .await?
-        .is_none()
-    {
-        return Ok(Vec::new());
-    }
-    let response = db
-        .query(format!(
-            "SELECT {COMMENT_SELECT} FROM {COMMENT_TABLE} \
-             WHERE version_id = $version ORDER BY inserted_at ASC, id ASC"
-        ))
-        .bind(("version", record_id(VERSION_TABLE, version_id)))
+    let pg = comment_authority().await?;
+    let _ = db;
+    crate::postgres::notation_document_comments::list(&pg, project_id, notation_id, version_id)
         .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    many_comments(response)
 }
 
 /// Carry comments forward when an attorney saves a child version. Anchors
@@ -1455,38 +1395,17 @@ pub async fn carry_comments_to_version(
     child_version_id: Uuid,
     anchors: &[String],
 ) -> Result<Vec<NotationDocumentComment>, NotationDocumentError> {
-    find_version(db, project_id, notation_id, child_version_id)
-        .await?
-        .ok_or(NotationDocumentError::VersionNotFound(child_version_id))?;
-    let comments = comments_for_version(db, project_id, notation_id, parent_version_id).await?;
-    let mut carried = Vec::with_capacity(comments.len());
-    for comment in comments {
-        let resolved = anchors.iter().any(|anchor| anchor == &comment.anchor);
-        let decision = resolved.then(|| comment.decision.clone()).flatten();
-        let id = Uuid::now_v7();
-        let mut response = db
-            .query(format!(
-                "CREATE $id SET version_id = $version_id, anchor = $anchor, \
-                 person_id = $person_id, body = $body, decision = $decision, \
-                 resolved = $resolved RETURN {COMMENT_SELECT}"
-            ))
-            .bind(("id", record_id(COMMENT_TABLE, id)))
-            .bind(("version_id", record_id(VERSION_TABLE, child_version_id)))
-            .bind(("anchor", comment.anchor.clone()))
-            .bind(("person_id", record_id("person", comment.person_id)))
-            .bind(("body", comment.body.clone()))
-            .bind(("decision", decision))
-            .bind(("resolved", resolved))
-            .await
-            .and_then(surrealdb::IndexedResults::check)?;
-        carried.push(
-            response
-                .take::<Option<CommentRow>>(0)?
-                .and_then(CommentRow::into_comment)
-                .ok_or(NotationDocumentError::WriteReturnedNothing)?,
-        );
-    }
-    Ok(carried)
+    let pg = comment_authority().await?;
+    let _ = db;
+    crate::postgres::notation_document_comments::carry(
+        &pg,
+        project_id,
+        notation_id,
+        parent_version_id,
+        child_version_id,
+        anchors,
+    )
+    .await
 }
 
 /// Why [`decide_comment`] refused.
@@ -1521,48 +1440,13 @@ pub async fn decide_comment(
     if ![DECISION_ACCEPTED, DECISION_REJECTED, DECISION_EDITED].contains(&decision) {
         return Err(DecideCommentError::InvalidDecision(decision.to_string()));
     }
-    resolve_scoped_notation(db, project_id, notation_id).await?;
-    let response = db
-        .query(format!("SELECT {COMMENT_SELECT} FROM ONLY $id LIMIT 1"))
-        .bind(("id", record_id(COMMENT_TABLE, comment_id)))
+    let pg = comment_authority()
         .await
-        .and_then(surrealdb::IndexedResults::check)
-        .map_err(NotationDocumentError::from)?;
-    let comment = one_comment(response)?.ok_or(DecideCommentError::NotFound(comment_id))?;
-    if find_version(db, project_id, notation_id, comment.version_id)
-        .await
-        .map_err(DecideCommentError::Document)?
-        .is_none()
-    {
-        return Err(DecideCommentError::NotFound(comment_id));
-    }
-    if comment.decision.is_some() {
-        return Err(DecideCommentError::AlreadyDecided(comment_id));
-    }
-
-    let mut response = db
-        .query(format!(
-            "UPDATE $id SET decision = $decision, resolved = true, updated_at = time::now() \
-             RETURN {COMMENT_SELECT}"
-        ))
-        .bind(("id", record_id(COMMENT_TABLE, comment_id)))
-        .bind(("decision", decision.to_string()))
-        .await
-        .and_then(surrealdb::IndexedResults::check)
-        .map_err(NotationDocumentError::from)?;
-    let row: Option<CommentRow> = response.take(0).map_err(NotationDocumentError::from)?;
-    row.and_then(CommentRow::into_comment)
-        .ok_or(NotationDocumentError::WriteReturnedNothing)?;
-
-    let payload = serde_json::json!({
-        "comment_id": comment_id,
-        "version_id": comment.version_id,
-        "anchor": comment.anchor,
-        "decision": decision,
-    })
-    .to_string();
-    crate::notation_events::append_event(
-        db,
+        .map_err(DecideCommentError::Document)?;
+    let _ = db;
+    crate::postgres::notation_document_comments::decide(
+        &pg,
+        project_id,
         crate::notation_events::TransitionRecord {
             notation_id,
             acting_person_id: Some(acting_person_id),
@@ -1570,13 +1454,12 @@ pub async fn decide_comment(
             from_state: "pending",
             to_state: decision,
             condition: "decided",
-            payload_json: Some(payload),
+            payload_json: None,
             recorded_at,
         },
+        comment_id,
     )
     .await
-    .map_err(NotationDocumentError::from)?;
-    Ok(())
 }
 
 /// Whether every comment anchored to `version_id` carries a decision — the
@@ -2435,379 +2318,5 @@ mod protected_token_tests {
             new,
             &[ProtectedTokenKind::Currency]
         ));
-    }
-}
-
-#[cfg(test)]
-mod comment_tests {
-    use super::{
-        add_comment, all_comments_decided, append_edit, carry_comments_to_version,
-        comments_for_version, decide_comment, AppendEdit, DecideCommentError, ImportRoot,
-        DECISION_ACCEPTED,
-    };
-    use crate::surreal::test_support::mem;
-    use uuid::Uuid;
-
-    async fn fs_storage() -> std::sync::Arc<dyn cloud::StorageService> {
-        let dir =
-            std::env::temp_dir().join(format!("navigator-notation-comments-{}", Uuid::now_v7()));
-        std::sync::Arc::new(cloud::FsStorage::new(dir).await.unwrap())
-    }
-
-    async fn seeded_version(
-        surreal: &crate::surreal::SurrealDb,
-        storage: &std::sync::Arc<dyn cloud::StorageService>,
-    ) -> (Uuid, Uuid, Uuid, Uuid) {
-        let notation_id = crate::test_support::seed_notation(surreal).await;
-        let notation = crate::notations::find_by_id(surreal, notation_id)
-            .await
-            .unwrap()
-            .unwrap();
-        let original_asset_id = crate::assets::ingest_content(
-            surreal,
-            storage,
-            b"fake docx",
-            "application/octet-stream",
-        )
-        .await
-        .unwrap();
-        let version = super::import_root(
-            surreal,
-            storage,
-            ImportRoot {
-                project_id: notation.project_id,
-                notation_id,
-                original_asset_id,
-                markdown: b"# Hello",
-                anchor_manifest: b"{\"blocks\":[]}",
-                parser_version: "word-crate-1",
-                schema_version: 1,
-                authored_by_person_id: notation.person_id,
-                recorded_at: "2026-09-19T10:00:00+00:00",
-            },
-        )
-        .await
-        .unwrap()
-        .into_model();
-        (
-            notation_id,
-            notation.project_id,
-            notation.person_id,
-            version.id,
-        )
-    }
-
-    #[tokio::test]
-    async fn a_comment_can_be_added_and_read_back() {
-        let surreal = mem().await;
-        let storage = fs_storage().await;
-        let (notation_id, project_id, person_id, version_id) =
-            seeded_version(&surreal, &storage).await;
-
-        let comment_id = add_comment(
-            &surreal,
-            project_id,
-            notation_id,
-            version_id,
-            "p0",
-            person_id,
-            "consider a mutual cap here",
-        )
-        .await
-        .unwrap();
-
-        let comments = comments_for_version(&surreal, project_id, notation_id, version_id)
-            .await
-            .unwrap();
-        assert_eq!(comments.len(), 1);
-        assert_eq!(comments[0].id, comment_id);
-        assert_eq!(comments[0].anchor, "p0");
-        assert!(comments[0].decision.is_none());
-        assert!(!comments[0].resolved);
-    }
-
-    #[tokio::test]
-    async fn deciding_a_comment_records_the_decision_and_journals_identifiers_only() {
-        let surreal = mem().await;
-        let storage = fs_storage().await;
-        let (notation_id, project_id, person_id, version_id) =
-            seeded_version(&surreal, &storage).await;
-        let comment_id = add_comment(
-            &surreal,
-            project_id,
-            notation_id,
-            version_id,
-            "p0",
-            person_id,
-            "the confidential deviation text",
-        )
-        .await
-        .unwrap();
-
-        decide_comment(
-            &surreal,
-            project_id,
-            notation_id,
-            comment_id,
-            DECISION_ACCEPTED,
-            person_id,
-            "2026-09-19T11:00:00+00:00",
-        )
-        .await
-        .unwrap();
-
-        let comments = comments_for_version(&surreal, project_id, notation_id, version_id)
-            .await
-            .unwrap();
-        assert_eq!(comments[0].decision.as_deref(), Some(DECISION_ACCEPTED));
-        assert!(comments[0].resolved);
-
-        let events: Vec<_> = crate::notation_events::for_notation(&surreal, notation_id)
-            .await
-            .unwrap()
-            .into_iter()
-            .filter(|e| e.machine_kind == super::MACHINE_DOCUMENT_REVIEW)
-            .collect();
-        assert_eq!(events.len(), 1);
-        let payload = events[0].payload.as_deref().unwrap();
-        assert!(!payload.contains("confidential deviation"));
-        let value: serde_json::Value = serde_json::from_str(payload).unwrap();
-        assert_eq!(value["decision"], DECISION_ACCEPTED);
-        assert_eq!(value["comment_id"], comment_id.to_string());
-    }
-
-    #[tokio::test]
-    async fn a_comment_cannot_be_decided_twice() {
-        let surreal = mem().await;
-        let storage = fs_storage().await;
-        let (notation_id, project_id, person_id, version_id) =
-            seeded_version(&surreal, &storage).await;
-        let comment_id = add_comment(
-            &surreal,
-            project_id,
-            notation_id,
-            version_id,
-            "p0",
-            person_id,
-            "note",
-        )
-        .await
-        .unwrap();
-        decide_comment(
-            &surreal,
-            project_id,
-            notation_id,
-            comment_id,
-            DECISION_ACCEPTED,
-            person_id,
-            "2026-09-19T11:00:00+00:00",
-        )
-        .await
-        .unwrap();
-
-        let err = decide_comment(
-            &surreal,
-            project_id,
-            notation_id,
-            comment_id,
-            "rejected",
-            person_id,
-            "2026-09-19T11:05:00+00:00",
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(err, DecideCommentError::AlreadyDecided(id) if id == comment_id));
-    }
-
-    #[tokio::test]
-    async fn all_comments_decided_is_false_until_every_comment_has_a_decision() {
-        let surreal = mem().await;
-        let storage = fs_storage().await;
-        let (notation_id, project_id, person_id, version_id) =
-            seeded_version(&surreal, &storage).await;
-        assert!(
-            all_comments_decided(&surreal, project_id, notation_id, version_id)
-                .await
-                .unwrap(),
-            "no comments at all counts as nothing left to act on"
-        );
-
-        let a = add_comment(
-            &surreal,
-            project_id,
-            notation_id,
-            version_id,
-            "p0",
-            person_id,
-            "first",
-        )
-        .await
-        .unwrap();
-        add_comment(
-            &surreal,
-            project_id,
-            notation_id,
-            version_id,
-            "p1",
-            person_id,
-            "second",
-        )
-        .await
-        .unwrap();
-        assert!(
-            !all_comments_decided(&surreal, project_id, notation_id, version_id)
-                .await
-                .unwrap()
-        );
-
-        decide_comment(
-            &surreal,
-            project_id,
-            notation_id,
-            a,
-            DECISION_ACCEPTED,
-            person_id,
-            "2026-09-19T11:00:00+00:00",
-        )
-        .await
-        .unwrap();
-        assert!(
-            !all_comments_decided(&surreal, project_id, notation_id, version_id)
-                .await
-                .unwrap(),
-            "one of two comments is still undecided"
-        );
-    }
-
-    #[tokio::test]
-    async fn an_invalid_decision_string_is_refused() {
-        let surreal = mem().await;
-        let storage = fs_storage().await;
-        let (notation_id, project_id, person_id, version_id) =
-            seeded_version(&surreal, &storage).await;
-        let comment_id = add_comment(
-            &surreal,
-            project_id,
-            notation_id,
-            version_id,
-            "p0",
-            person_id,
-            "note",
-        )
-        .await
-        .unwrap();
-        assert!(matches!(
-            decide_comment(
-                &surreal,
-                project_id,
-                notation_id,
-                comment_id,
-                "maybe",
-                person_id,
-                "2026-09-19T11:00:00+00:00",
-            )
-            .await,
-            Err(DecideCommentError::InvalidDecision(_))
-        ));
-    }
-
-    #[tokio::test]
-    async fn comments_are_carried_only_when_their_anchor_survives() {
-        let surreal = mem().await;
-        let storage = fs_storage().await;
-        let (notation_id, project_id, person_id, version_id) =
-            seeded_version(&surreal, &storage).await;
-        add_comment(
-            &surreal,
-            project_id,
-            notation_id,
-            version_id,
-            "kept",
-            person_id,
-            "keep this thread",
-        )
-        .await
-        .unwrap();
-        add_comment(
-            &surreal,
-            project_id,
-            notation_id,
-            version_id,
-            "removed",
-            person_id,
-            "this anchor disappeared",
-        )
-        .await
-        .unwrap();
-        let child = append_edit(
-            &surreal,
-            &storage,
-            AppendEdit {
-                project_id,
-                notation_id,
-                expected_parent_version_id: version_id,
-                markdown: b"# changed",
-                anchor_manifest: b"[]",
-                parser_version: "word-crate-1",
-                schema_version: 1,
-                authored_by_person_id: person_id,
-                recorded_at: "2026-09-19T12:00:00+00:00",
-            },
-        )
-        .await
-        .unwrap();
-        let carried = carry_comments_to_version(
-            &surreal,
-            project_id,
-            notation_id,
-            version_id,
-            child.id,
-            &["kept".to_string()],
-        )
-        .await
-        .unwrap();
-        assert_eq!(carried.len(), 2);
-        assert!(carried.iter().any(|comment| {
-            comment.anchor == "kept" && comment.resolved && comment.decision.is_none()
-        }));
-        assert!(carried.iter().any(|comment| {
-            comment.anchor == "removed" && !comment.resolved && comment.decision.is_none()
-        }));
-    }
-
-    #[tokio::test]
-    async fn a_comment_id_cannot_be_decided_through_another_notation_scope() {
-        let surreal = mem().await;
-        let storage = fs_storage().await;
-        let (notation_id, project_id, person_id, version_id) =
-            seeded_version(&surreal, &storage).await;
-        let comment_id = add_comment(
-            &surreal,
-            project_id,
-            notation_id,
-            version_id,
-            "p0",
-            person_id,
-            "scoped comment",
-        )
-        .await
-        .unwrap();
-        let other_notation_id = crate::test_support::seed_notation(&surreal).await;
-        let other = crate::notations::find_by_id(&surreal, other_notation_id)
-            .await
-            .unwrap()
-            .unwrap();
-        let error = decide_comment(
-            &surreal,
-            other.project_id,
-            other_notation_id,
-            comment_id,
-            DECISION_ACCEPTED,
-            person_id,
-            "2026-09-19T12:00:00+00:00",
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(error, DecideCommentError::NotFound(id) if id == comment_id));
     }
 }

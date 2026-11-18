@@ -1474,6 +1474,9 @@ pub(crate) async fn scoped_references(
     if tables.contains(&"asset") {
         references.extend(super::documents::scoped_references(surreal, pg).await?);
     }
+    if tables.contains(&"matter_page") {
+        references.extend(super::matter_pages_captions::scoped_page_references(surreal, pg).await?);
+    }
     Ok(references)
 }
 

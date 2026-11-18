@@ -633,3 +633,9 @@ mod application_authority_tests;
 
 /// PostgreSQL immutable Template versions.
 pub(crate) mod templates;
+
+/// Version-scoped native comment and review writes.
+pub(crate) mod notation_document_comments;
+
+/// Project-scoped native manifest persistence.
+pub(crate) mod matter_pages;
