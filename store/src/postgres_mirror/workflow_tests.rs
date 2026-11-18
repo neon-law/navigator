@@ -10,6 +10,115 @@ async fn mirrored(surreal: &SurrealDb, pg: &PostgresDb, key: &MirrorKey) -> Mirr
     super::super::mirror(surreal, pg, key).await.unwrap()
 }
 
+/// Every list-shaped notation read compares equal once the mirror has
+/// copied the rows, and a row the mirror has not copied is a mismatch.
+#[tokio::test]
+async fn the_notation_list_shapes_shadow_a_match_after_the_mirror() {
+    let Some((options, database)) = fresh_schema().await else {
+        return;
+    };
+    let pg = connect(&options, &database).await;
+    let surreal = mem_surreal().await;
+    let client = person(&surreal, Role::Client).await;
+    let project_a = matter(&surreal, &pg, "Synthetic Shadow Matter A").await;
+    let project_b = matter(&surreal, &pg, "Synthetic Shadow Matter B").await;
+    let template = draft(&surreal).await;
+    let a = open(&surreal, template, client, project_a).await;
+    let b = open(&surreal, template, client, project_b).await;
+    mirrored(&surreal, &pg, &MirrorKey::Notation(a)).await;
+    mirrored(&surreal, &pg, &MirrorKey::Notation(b)).await;
+    let row_a = crate::notations::find_by_id(&surreal, a)
+        .await
+        .unwrap()
+        .unwrap();
+    let row_b = crate::notations::find_by_id(&surreal, b)
+        .await
+        .unwrap()
+        .unwrap();
+
+    for (shape, source) in [
+        (NotationShape::ByProject(project_a), vec![row_a.clone()]),
+        (
+            NotationShape::ByProjects(vec![project_a, project_b]),
+            vec![row_b.clone(), row_a.clone()],
+        ),
+        (
+            NotationShape::ByPerson(client),
+            vec![row_a.clone(), row_b.clone()],
+        ),
+        (NotationShape::All, vec![row_a.clone(), row_b.clone()]),
+        (
+            NotationShape::ByProjectTemplatePerson {
+                project_id: project_a,
+                template_id: template,
+                person_id: client,
+            },
+            vec![row_a.clone()],
+        ),
+        (
+            // The probe reads one row or none; a triple naming no
+            // notation compares two empty answers.
+            NotationShape::ByProjectTemplatePerson {
+                project_id: project_a,
+                template_id: Uuid::now_v7(),
+                person_id: client,
+            },
+            Vec::new(),
+        ),
+    ] {
+        let label = format!("{shape:?}");
+        let comparison = shadow_notation_rows(&pg, shape, &source).await.unwrap();
+        assert!(comparison.equal, "shape {label} diverges");
+    }
+
+    // The delete guard's boolean agrees for a Project whose notation the
+    // mirror holds and for one it holds nothing for.
+    assert!(
+        shadow_notation_exists(&pg, project_a, true)
+            .await
+            .unwrap()
+            .equal
+    );
+    assert!(
+        shadow_notation_exists(&pg, Uuid::now_v7(), false)
+            .await
+            .unwrap()
+            .equal
+    );
+
+    // A row SurrealDB still holds but the mirror has not copied yet —
+    // the window the shadow exists to catch — is a mismatch, and the
+    // exists probe reports the mirrored truth.
+    open(&surreal, template, client, project_a).await;
+    let rows = crate::notations::list_by_project(&surreal, project_a)
+        .await
+        .unwrap();
+    let comparison = shadow_notation_rows(&pg, NotationShape::ByProject(project_a), &rows)
+        .await
+        .unwrap();
+    assert!(!comparison.equal);
+    // The mirrored row keeps the boolean probe in agreement: Surreal's
+    // answer (true) matches PostgreSQL's mirrored truth (true) even
+    // while the row shapes diverge.
+    assert!(
+        shadow_notation_exists(&pg, project_a, true)
+            .await
+            .unwrap()
+            .equal
+    );
+    // A Project whose only notation is not yet mirrored drifts the
+    // other way: SurrealDB answers true where PostgreSQL holds nothing.
+    let project_c = matter(&surreal, &pg, "Synthetic Shadow Matter C").await;
+    open(&surreal, template, client, project_c).await;
+    assert!(
+        !shadow_notation_exists(&pg, project_c, true)
+            .await
+            .unwrap()
+            .equal
+    );
+    pg.0.close().await;
+}
+
 #[tokio::test]
 async fn notation_clauses_keep_author_and_render_order_across_edits() {
     let Some((options, database)) = fresh_schema().await else {
