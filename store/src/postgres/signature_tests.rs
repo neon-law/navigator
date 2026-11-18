@@ -301,11 +301,12 @@ async fn verification_records_unverified_axes_and_transitions_stale_in_postgres(
 
 #[tokio::test]
 async fn notarization_records_idempotently_stamps_and_names_its_asset_in_postgres() {
-    let Some(pg) = database().await else { return };
+    let Some((pg, _, notation_id)) = notation_fixture().await else {
+        return;
+    };
     let db = surreal();
 
     with_test_db(pg, async {
-        let notation_id = Uuid::new_v4();
         let first =
             notarizations::record_request(&db, notation_id, SignatureProvider::DocuSign, "nz-1")
                 .await
@@ -348,11 +349,13 @@ async fn notarization_records_idempotently_stamps_and_names_its_asset_in_postgre
 
 #[tokio::test]
 async fn a_notarization_timestamp_that_does_not_parse_is_refused() {
-    let Some(pg) = database().await else { return };
+    let Some((pg, _, notation_id)) = notation_fixture().await else {
+        return;
+    };
     let db = surreal();
 
     with_test_db(pg, async {
-        notarizations::record_request(&db, Uuid::new_v4(), SignatureProvider::DocuSign, "nz-1")
+        notarizations::record_request(&db, notation_id, SignatureProvider::DocuSign, "nz-1")
             .await
             .unwrap();
         let error = notarizations::stamp_notarized(
@@ -367,6 +370,81 @@ async fn a_notarization_timestamp_that_does_not_parse_is_refused() {
             matches!(error, notarizations::NotarizationError::InvalidTimestamp(_)),
             "{error:?}"
         );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn provider_envelope_replay_cannot_cross_project_notations() {
+    let Some((pg, original_project, original)) = notation_fixture().await else {
+        return;
+    };
+    let db = surreal();
+    let other_project = Uuid::new_v4();
+    let other_project_notation = Uuid::new_v4();
+    sqlx::query("INSERT INTO project(id,code,name,status,entity_id) SELECT $1,$2,'Synthetic Other','open',entity_id FROM project WHERE id=$3")
+        .bind(other_project).bind(other_project.to_string()).bind(original_project).execute(pg.pool()).await.unwrap();
+    sqlx::query("INSERT INTO notation(id,template_id,person_id,project_id,state) SELECT $1,template_id,person_id,$2,'BEGIN' FROM notation WHERE id=$3")
+        .bind(other_project_notation).bind(other_project).bind(original).execute(pg.pool()).await.unwrap();
+    with_test_db(pg, async {
+        let first = record_request(
+            &db,
+            original,
+            SignatureProvider::DocuSign,
+            "shared-envelope",
+        )
+        .await
+        .unwrap();
+        let replay = record_request(
+            &db,
+            other_project_notation,
+            SignatureProvider::DocuSign,
+            "shared-envelope",
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(replay, SignatureError::WriteReturnedNothing));
+        assert_eq!(
+            by_provider(&db, SignatureProvider::DocuSign, "shared-envelope")
+                .await
+                .unwrap(),
+            Some(first)
+        );
+        assert!(for_notation(&db, other_project_notation)
+            .await
+            .unwrap()
+            .is_empty());
+
+        let first = notarizations::record_request(
+            &db,
+            original,
+            SignatureProvider::DocuSign,
+            "shared-notarization",
+        )
+        .await
+        .unwrap();
+        let replay = notarizations::record_request(
+            &db,
+            other_project_notation,
+            SignatureProvider::DocuSign,
+            "shared-notarization",
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(
+            replay,
+            notarizations::NotarizationError::WriteReturnedNothing
+        ));
+        assert_eq!(
+            notarizations::by_provider(&db, SignatureProvider::DocuSign, "shared-notarization")
+                .await
+                .unwrap(),
+            Some(first)
+        );
+        assert!(notarizations::for_notation(&db, other_project_notation)
+            .await
+            .unwrap()
+            .is_empty());
     })
     .await;
 }
