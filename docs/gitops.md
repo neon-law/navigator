@@ -423,8 +423,8 @@ The `ci` job is the required status check — see [One required check, named `ci
 everywhere](#one-required-check-named-ci-everywhere). It aggregates `changes`, `gate`, `rust`, and `clippy`, and fails
 unless `changes` and `gate` succeeded and the scoped test jobs succeeded or were skipped. It tests each dependency's
 result explicitly rather than relying on a bare `needs:`, because a skipped required check is not a red one: GitHub
-reports no result at all, so the gate would quietly stop blocking exactly when the job it guards had failed. A
-copy-only PR can skip the scoped tests and still post `ci`.
+reports no result at all, so the gate would quietly stop blocking exactly when the job it guards had failed. A copy-only
+PR can skip the scoped tests and still post `ci`.
 
 `deploy.yml` has no `pull_request` trigger, so no PR depends on the release workflow's script and image builds. UI and
 browser changes are verified locally before opening a PR — see the `web-preview` and
