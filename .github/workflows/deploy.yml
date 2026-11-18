@@ -615,25 +615,12 @@ jobs:
           # `publish` already made exactly this move for the same pair; see the
           # `alias` note in its matrix.
           #
-          # Four vCPU, and UNLIKE the gate this is not measured. The gate's
-          # 4-vCPU move (see ci.yml) came in at 1.14x the wall clock because
-          # more than half of that job is test EXECUTION bounded by
-          # `--test-threads 4`, which ignores cores. This leg has no such half:
-          # it is a buildx compile of the whole Rust and Dioxus application,
-          # nearly all of it parallel, so it is the shape where halving the
-          # cores can approach 2x and save nothing.
-          #
-          # It is safe to try at 4 and cheap to read back. Blacksmith bills
-          # linearly in cores, so the downside is bounded at "same money, longer
-          # wait" — and the timeout above has the room: measured warm at 24 min
-          # (main) and 32 min (tag), so even a full 2x lands inside the 90-min
-          # cap. Compare a tag run against those figures; if the ratio is at or
-          # near 2x, put this leg back on `blacksmith-8vcpu-ubuntu-2404`, where
-          # the same money buys half the wait.
+          # The full application release build requires the larger runner's
+          # memory; the four-vCPU runner exhausts memory compiling portal.
           - image: neon-server
             dockerfile: images/Containerfile.neon
             alias: navigator-web
-            runner: blacksmith-4vcpu-ubuntu-2404
+            runner: blacksmith-8vcpu-ubuntu-2404
           #
           # `ci_cache_scope` is deliberately absent from the `neon-server` leg
           # above, and that absence is what keeps this matrix off the Actions
@@ -1688,23 +1675,12 @@ jobs:
           # extra repository at the manifest this leg just pushed, so the two
           # tags are identical by construction rather than by coincidence.
           #
-          # Four vCPU, for the reason `build`'s leg has it: this compiles the
-          # full Rust and Dioxus application, and it does so COLD. Run
-          # 33256595378 built the identical image from the identical
-          # Containerfile in 21m0s under `build` on the Blacksmith machine and
-          # 44m17s here on the free two-vCPU `ubuntu-latest` one. `build` was
-          # moved off `ubuntu-latest` for this exact failure (run 32185875546);
-          # this leg was left behind. The cheaper runner was not buying a
-          # cheaper release, it was buying a release that died on the clock.
-          #
-          # Blacksmith bills linearly in cores, so the metered time is roughly
-          # unchanged while the wall clock halves. Every other leg here reads a
-          # warm cache in under three minutes on the same four-vCPU
-          # Blacksmith runner.
+          # Match the CI image build's memory capacity for the same full
+          # application release compilation.
           - image: neon-server
             dockerfile: images/Containerfile.neon
             alias: navigator-web
-            runner: blacksmith-4vcpu-ubuntu-2404
+            runner: blacksmith-8vcpu-ubuntu-2404
           # `ci_cache_scope` names the `build`-stage Actions cache this leg may
           # additionally read, so a tag run compiles these crates once instead
           # of twice. Set it only where the two jobs feed the builder stage
