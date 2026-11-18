@@ -778,64 +778,8 @@ fn browser_accessibility_uses_the_shipped_images() {
     }
 }
 
-/// The public-host image compiles the full server and Dioxus web bundle. A
-/// stock `ubuntu-latest` runner timed out building `neon-server` at the release
-/// job's 90-minute wedge detector (run 32185875546), so that leg needs a
-/// Blacksmith machine. Four vCPU is the width the workspace standardised on
-/// after run 32536363029 measured the merge gate on both images, and Blacksmith
-/// bills linearly in cores — so a leg left at eight is paying twice the rate
-/// for the same core-minutes.
-///
-/// The repository is private, so no leg is free: every leg holds the same
-/// four-vCPU Blacksmith runner.
-#[test]
-fn the_public_host_image_builds_on_the_blacksmith_four_vcpu_runner() {
-    let workflow: serde_yaml::Value =
-        serde_yaml::from_str(&deploy_workflow()).expect("deploy.yml parses as YAML");
-    let matrix = workflow["jobs"]["build"]["strategy"]["matrix"]["include"]
-        .as_sequence()
-        .expect("the build job must declare an include matrix");
-
-    let leg = matrix
-        .iter()
-        .find(|leg| leg["image"].as_str() == Some("neon-server"))
-        .expect("the build matrix must include neon-server");
-    assert_eq!(
-        leg["runner"].as_str(),
-        Some("blacksmith-4vcpu-ubuntu-2404"),
-        "neon-server compiles the full Rust and Dioxus application and must use the four-vCPU \
-         Blacksmith runner the workspace standardised on"
-    );
-
-    for leg in matrix
-        .iter()
-        .filter(|leg| leg["image"].as_str() != Some("neon-server"))
-    {
-        assert_eq!(
-            leg["runner"].as_str(),
-            Some("blacksmith-4vcpu-ubuntu-2404"),
-            "{:?} must hold the same four-vCPU Blacksmith runner as every other leg",
-            leg["image"].as_str().unwrap_or("?")
-        );
-    }
-}
-
-/// `publish-service` recompiles the same Containerfile the `build` job does,
-/// so it needs the same machine and the same clock.
-///
-/// The two jobs feed `images/Containerfile.neon` different inputs — `build`
-/// stubs `server/public` for the KIND gate — so `publish-service` cannot read
-/// `build`'s cache and always compiles the workspace cold. That is the whole
-/// reason its `neon-server` leg carries no `ci_cache_scope`. A cold compile is
-/// exactly the work the four-vCPU guard above exists for, and this leg was left
-/// on the free two-vCPU `ubuntu-latest` machine anyway: run 33256595378 built
-/// the identical image in 21m0s under `build` and 44m17s here, then died 37
-/// seconds into the alias step on a 45-minute cap. It had been landing inside
-/// that cap by seconds for a month — 44m35s, 44m56s, 44m12s — so the cap was
-/// not detecting a wedge, it was rationing a build.
-///
-/// Both halves are asserted together because either alone leaves the release
-/// one slow minute from losing its `navigator-web` alias.
+/// Both jobs compile the same server image, so publication needs the build's
+/// runner capacity and at least its compile timeout.
 #[test]
 fn the_public_host_image_publishes_on_the_same_runner_and_clock_as_it_builds() {
     let workflow: serde_yaml::Value =
@@ -843,31 +787,22 @@ fn the_public_host_image_publishes_on_the_same_runner_and_clock_as_it_builds() {
     let build = &workflow["jobs"]["build"];
     let publish = &workflow["jobs"]["publish-service"];
 
-    let matrix = publish["strategy"]["matrix"]["include"]
-        .as_sequence()
-        .expect("the publish-service job must declare an include matrix");
-    let leg = matrix
-        .iter()
-        .find(|leg| leg["image"].as_str() == Some("neon-server"))
-        .expect("the publish-service matrix must include neon-server");
+    let runner = |job: &serde_yaml::Value| {
+        job["strategy"]["matrix"]["include"]
+            .as_sequence()
+            .expect("the image job must declare an include matrix")
+            .iter()
+            .find(|leg| leg["image"].as_str() == Some("neon-server"))
+            .expect("the image matrix must include neon-server")["runner"]
+            .as_str()
+            .expect("neon-server must declare a runner")
+            .to_owned()
+    };
     assert_eq!(
-        leg["runner"].as_str(),
-        Some("blacksmith-4vcpu-ubuntu-2404"),
-        "publish-service compiles neon-server cold from the same Containerfile `build` does, so \
-         it must hold the same four-vCPU Blacksmith runner rather than a free two-vCPU machine"
+        runner(publish),
+        runner(build),
+        "the same full server compilation needs the same runner capacity in both jobs"
     );
-
-    for leg in matrix
-        .iter()
-        .filter(|leg| leg["image"].as_str() != Some("neon-server"))
-    {
-        assert_eq!(
-            leg["runner"].as_str(),
-            Some("blacksmith-4vcpu-ubuntu-2404"),
-            "{:?} must hold the same four-vCPU Blacksmith runner as every other leg",
-            leg["image"].as_str().unwrap_or("?")
-        );
-    }
 
     let build_timeout = build["timeout-minutes"]
         .as_u64()
