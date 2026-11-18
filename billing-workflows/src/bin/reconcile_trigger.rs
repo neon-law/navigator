@@ -7,7 +7,7 @@
 //! Restate during the transition.
 //!
 //! Auth + env handling are identical to the canary trigger
-//! (`src/bin/trigger.rs`): the shared trigger helpers attach only the
+//! (`src/bin/billing_canary_trigger.rs`): the shared trigger helpers attach only the
 //! credential for the selected ingress.
 
 use anyhow::{Context, Result};

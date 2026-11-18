@@ -4,7 +4,7 @@ fn trigger(flag: &str) -> std::process::Output {
     let directory =
         std::env::temp_dir().join(format!("navigator-canary-trigger-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir(&directory).unwrap();
-    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_trigger"));
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_billing-canary-trigger"));
     command
         .current_dir(&directory)
         .env_clear()
