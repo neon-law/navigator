@@ -8,7 +8,7 @@ async fn main() -> anyhow::Result<()> {
     let _ = dotenvy::from_path(".devx/env");
     let telemetry = telemetry::init("navigator-workflows-service");
     telemetry::register_nightly_project_update();
-    let result = workflows_service::host::run(shutdown_signal()).await;
+    let result = Box::pin(workflows_service::host::run(shutdown_signal())).await;
     telemetry.shutdown();
     result
 }
