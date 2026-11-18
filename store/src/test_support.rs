@@ -148,6 +148,7 @@ pub struct ServerSurreal {
 /// and no endpoint is set, or when connecting or applying the schema
 /// fails.
 pub async fn server_surreal(database: &str) -> Option<ServerSurreal> {
+    crate::surreal::test_support::refuse_when_forbidden();
     let config = match crate::surreal::SurrealConfig::from_env() {
         Ok(config) => crate::surreal::SurrealConfig {
             database: database.to_string(),

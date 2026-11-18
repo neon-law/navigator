@@ -27,12 +27,12 @@ const BASELINE: &[(&str, usize)] = &[
     ("import", 5),
     ("mcp", 42),
     ("neon", 4),
-    ("portal", 349),
+    ("portal", 348),
     ("server", 161),
     ("store", 1317),
     ("webapp", 28),
     ("workflows", 16),
-    ("workflows-service", 108),
+    ("workflows-service", 107),
 ];
 
 /// Calls that name the embedded engine wherever they appear.
@@ -120,6 +120,7 @@ fn counts() -> BTreeMap<String, usize> {
         let relative = path.strip_prefix(&root).expect("file under the repo root");
         if relative == Path::new("store/src/surreal/test_support.rs")
             || relative == Path::new("cli/tests/embedded_surreal_ratchet.rs")
+            || relative == Path::new("deploy/src/surreal_free_tests.rs")
         {
             continue;
         }

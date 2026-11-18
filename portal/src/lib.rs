@@ -2871,7 +2871,9 @@ mod probe_context_tests {
             .finish();
         let _guard = tracing::subscriber::set_default(subscriber);
 
-        let db = store::surreal::test_support::mem().await;
+        // No engine answers this handle: a probe that reached the store
+        // would fail instead of passing.
+        let db = store::surreal::SurrealDb::uninitialized();
         let app = Router::new()
             .route("/health", get(probe))
             .route("/readyz", get(probe))
@@ -3972,13 +3974,14 @@ mod readyz_tests {
     }
 
     /// `/app/readyz` names Project repository storage when
-    /// `NAVIGATOR_GIT_REPO_ROOT` is unset, and answers `200` once that
-    /// env and the database ping are both satisfied. Both cases run in
-    /// one test because the env var is process-global.
+    /// `NAVIGATOR_GIT_REPO_ROOT` is unset, and stops naming it once that
+    /// env is set. Both cases run in one test because the env var is
+    /// process-global. The store handle answers nothing, so readiness stays
+    /// degraded on its ping; only the repository line is under test.
     #[tokio::test]
     async fn readyz_reports_unconfigured_repo_storage() {
         let state =
-            crate::test_support::app_state(crate::test_support::embedded_surreal().await).await;
+            crate::test_support::app_state(store::surreal::SurrealDb::uninitialized()).await;
         let app = Router::new()
             .route("/app/readyz", get(readyz))
             .with_state(state);
@@ -4000,9 +4003,11 @@ mod readyz_tests {
         ));
         std::fs::create_dir_all(&root).unwrap();
         std::env::set_var(repos::REPO_ROOT_ENV, &root);
-        let (status, body) = get_readyz(app).await;
-        assert_eq!(status, axum::http::StatusCode::OK);
-        assert_eq!(body, "ready");
+        let (_, body) = get_readyz(app).await;
+        assert!(
+            !body.contains("git repo storage:"),
+            "readyz must stop naming a configured Project repository store: {body}"
+        );
 
         match previous {
             Some(value) => std::env::set_var(repos::REPO_ROOT_ENV, value),

@@ -434,7 +434,8 @@ pub(crate) async fn unlaunched_workflow() -> NightlyWorkflow {
     register(
         &dbos,
         Context::new(
-            store::test_support::mem_surreal().await,
+            // Never launched, so never reads its store.
+            store::surreal::SurrealDb::uninitialized(),
             Arc::new(workflows::CapturingSlackBot::new()),
             Arc::new(crate::firm_slack::SharedSlackBot(Arc::new(
                 workflows::CapturingSlackBot::new(),

@@ -129,9 +129,27 @@ pub async fn seed_compiled_brands(db: &SurrealDb) {
     }
 }
 
+/// Panic when `NAVIGATOR_FORBID_SURREAL=1`.
+///
+/// CI no longer tests SurrealDB: `hudson ops surreal-free-tests` leaves out
+/// every test in a file that names it, and sets this variable so a test that
+/// reaches an engine some other way fails instead of running.
+///
+/// # Panics
+///
+/// When `NAVIGATOR_FORBID_SURREAL=1`.
+pub fn refuse_when_forbidden() {
+    assert!(
+        std::env::var("NAVIGATOR_FORBID_SURREAL").as_deref() != Ok("1"),
+        "this test starts SurrealDB, which CI no longer tests; \
+         `hudson ops surreal-free-tests` should have left it out"
+    );
+}
+
 /// [`mem`] without the schema — for tests that exercise the schema
 /// apply itself and need to observe an empty database first.
 pub async fn unmigrated() -> SurrealDb {
+    refuse_when_forbidden();
     let database = format!("test_{}", NEXT_DATABASE.fetch_add(1, Ordering::Relaxed));
     connect(&SurrealConfig {
         // Named, never defaulted: `store::surreal` refuses to guess an

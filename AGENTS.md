@@ -72,8 +72,9 @@ applied to this one. To send something, prepare the draft and hand it to the law
 
 Write the least amount of code the behavior needs: delete dead code instead of annotating it, consolidate duplicated
 helpers into the sanctioned seams, and name a test before the change that satisfies it. CI holds the workspace at a
-91.0% line-coverage floor and that floor is never lowered — a subtraction lands only with coverage re-verified
-(`docs/agent-workflows.md` explains the measurement).
+70.0% line-coverage floor, measured without SurrealDB, and that floor only goes up — ENG-1375 raises it to 95.0% as
+domains leave SurrealDB. A subtraction lands only with coverage re-verified (`docs/agent-workflows.md` explains the
+measurement).
 
 ## Helpful commands
 

@@ -89,6 +89,13 @@ pub fn bearer_header_with_person(role: store::persons::Role, person_id: uuid::Uu
 /// API and `kv-mem` is a non-optional `store` dependency, so this costs
 /// nothing extra to build.
 pub async fn embedded_surreal() -> store::surreal::SurrealDb {
+    // `store::surreal::test_support::refuse_when_forbidden`, inlined: that
+    // module sits behind the feature this one avoids (see above).
+    assert!(
+        std::env::var("NAVIGATOR_FORBID_SURREAL").as_deref() != Ok("1"),
+        "this test starts SurrealDB, which CI no longer tests; \
+         `hudson ops surreal-free-tests` should have left it out"
+    );
     let db = store::surreal::connect(&store::surreal::SurrealConfig {
         // Named, never defaulted — `store::surreal` refuses to guess an
         // endpoint, and a test is just another caller that says which
