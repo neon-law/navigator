@@ -372,9 +372,10 @@ Before relying on a backfill report, run `ops postgres mirror parity` and requir
 `social_oauth_attempt`, and `testimonial`. This scope is independent of global completion. Notation, document, Asset,
 and encrypted deployment-change ownership retain their existing contracts.
 
-Use the importer binary before launching application or worker binaries that require the new scope. PostgreSQL
-connections and operator commands remain available while application readiness refuses missing, malformed, or ambiguous
-receipts. A configured database is never permission to hide unimported history.
+Apply the checked-in PostgreSQL migrations through the existing operator migration command before enrollment. Use the
+importer binary before launching application or worker binaries that require the new scope. PostgreSQL connections and
+operator commands remain available while application readiness refuses missing, malformed, or ambiguous receipts. A
+configured database is never permission to hide unimported history.
 
 Startup rejects completed scopes outside its registered versions. Mutating global imports and reconciliation also reject
 unsupported scopes or invalid completed receipts, while a fresh global import remains available before family
