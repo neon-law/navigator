@@ -10,9 +10,10 @@ cargo run -p hudson -- dev forgejo smoke      # prove it end to end
 ```
 
 `up` leaves Forgejo at `http://localhost:3300/` (`NAVIGATOR_KIND_FORGEJO_PORT`) and PostgreSQL at `127.0.0.1:15432`
-(`NAVIGATOR_KIND_POSTGRES_PORT`, TLS only) through port-forwards. A worktree tier's `.devx/env` moves both onto its
-slot. Their pids are in `.devx/<service>-port-forward.pid`; re-run `up` after a restart or sleep. Sign in through the
-tier's Rauthy as `forge-allowed@example.test` once the allowlist names `example.test` (see [Admission](#admission)).
+(`NAVIGATOR_KIND_POSTGRES_PORT`, TLS only). Forgejo uses a port-forward; PostgreSQL uses the tier's verified direct
+loopback mapping. A worktree tier's `.devx/env` moves both onto its slot. The Forgejo forward's pid is in
+`.devx/navigator-forgejo-port-forward.pid`; re-run `up` after a restart or sleep. Sign in through the tier's Rauthy as
+`forge-allowed@example.test` once the allowlist names `example.test` (see [Admission](#admission)).
 
 ## What `up` deploys
 

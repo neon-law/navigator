@@ -267,11 +267,8 @@ pub(in crate::devx) fn up(cfg: &KindConfig) -> Result<()> {
         root_url(cfg.forgejo_port),
         super::super::rauthy_origin(cfg.rauthy_port),
     );
-    let pid = port_forward(&root, cfg, "navigator-postgres", cfg.postgres_port, 5432)?;
-    eprintln!(
-        "==> PostgreSQL is at 127.0.0.1:{} (TLS only; kubectl port-forward pid {pid})",
-        cfg.postgres_port
-    );
+    super::super::orchestrate::verify_fixture_port(cfg)?;
+    eprintln!("==> PostgreSQL uses the tier's verified loopback TLS mapping");
     Ok(())
 }
 

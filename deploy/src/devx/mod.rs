@@ -2841,7 +2841,7 @@ fn render_env_for(cfg: &KindConfig, db_name: &str, web_port: u16, root: &Path) -
             cfg.openobserve_otlp_port.to_string(),
         ),
         // The opt-in `dev forgejo up` reads these from the sourced tier, so a
-        // worktree's Forgejo and PostgreSQL forwards move with its slot.
+        // worktree's Forgejo forward and PostgreSQL mapping move with its slot.
         ("NAVIGATOR_KIND_FORGEJO_PORT", cfg.forgejo_port.to_string()),
         (
             "NAVIGATOR_KIND_POSTGRES_PORT",

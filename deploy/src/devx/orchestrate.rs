@@ -1549,6 +1549,22 @@ pub(super) fn postgres_bootstrap(path: Option<&Path>, cfg: &KindConfig) -> Resul
     bootstrap_postgres_in(&root, &cfg, "navigator")
 }
 
+pub(in crate::devx) fn verify_fixture_port(cfg: &KindConfig) -> Result<()> {
+    let published = Command::new("docker")
+        .args(["inspect", "--format", "{{json .NetworkSettings.Ports}}"])
+        .arg(format!("{}-control-plane", cfg.cluster))
+        .output()?;
+    anyhow::ensure!(
+        published.status.success(),
+        "inspect the owned KIND node's published ports"
+    );
+    super::postgres_fixture::validate_published_port(
+        &serde_json::from_slice(&published.stdout)?,
+        cfg.postgres_port,
+    )?;
+    Ok(())
+}
+
 fn fixture_kube(
     root: &Path,
     cfg: &KindConfig,
@@ -1565,18 +1581,7 @@ fn fixture_kube(
                 .any(|name| name == cfg.cluster),
         "PostgreSQL fixture requires this task's existing KIND cluster"
     );
-    let published = Command::new("docker")
-        .args(["inspect", "--format", "{{json .NetworkSettings.Ports}}"])
-        .arg(format!("{}-control-plane", cfg.cluster))
-        .output()?;
-    anyhow::ensure!(
-        published.status.success(),
-        "inspect the owned KIND node's published ports"
-    );
-    super::postgres_fixture::validate_published_port(
-        &serde_json::from_slice(&published.stdout)?,
-        cfg.postgres_port,
-    )?;
+    verify_fixture_port(cfg)?;
     let kube = Kube::new(cfg);
     let read = |kind: &str| -> Result<serde_json::Value> {
         Ok(serde_json::from_str(
