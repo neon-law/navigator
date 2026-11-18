@@ -630,3 +630,6 @@ mod signature_reference_migration_tests;
 
 #[cfg(test)]
 mod application_authority_tests;
+
+/// PostgreSQL immutable Template versions.
+pub(crate) mod templates;
