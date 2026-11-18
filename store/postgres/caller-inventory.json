@@ -2361,6 +2361,7 @@
       "deploy/src/devx/deployments.rs",
       "deploy/src/devx/dns.rs",
       "deploy/src/devx/e2e.rs",
+      "deploy/src/devx/forgejo/smoke.rs",
       "deploy/src/devx/gcp/artifact_registry.rs",
       "deploy/src/devx/gcp/gke.rs",
       "deploy/src/devx/gcp/secret_manager.rs",

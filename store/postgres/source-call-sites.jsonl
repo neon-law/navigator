@@ -340,8 +340,8 @@
 {"file":"deploy/src/assets.rs","line":1258,"function":"embedded_asset_refs","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"deploy/src/assets.rs","line":1259,"function":"embedded_asset_refs","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"deploy/src/assets.rs","line":1260,"function":"embedded_asset_refs","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"deploy/src/assets.rs","line":3718,"function":"orphan_keys_reports_the_unreferenced_and_ignores_other_prefixes","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"deploy/src/assets.rs","line":4020,"function":"emitted_font_keys","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"deploy/src/assets.rs","line":3715,"function":"orphan_keys_reports_the_unreferenced_and_ignores_other_prefixes","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"deploy/src/assets.rs","line":4017,"function":"emitted_font_keys","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"deploy/src/assumptions.rs","line":40,"function":"run","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
 {"file":"deploy/src/blog.rs","line":155,"function":"preflight","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"deploy/src/devx/call_script.rs","line":296,"function":"flow_sid_for_number","operation":"query","sql_operations":[],"tables":[],"transaction":false}
@@ -1004,9 +1004,9 @@
 {"file":"portal/src/webhook_auth.rs","line":70,"function":"verify_hmac_sha256_hex","operation":"update","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/webhook_auth.rs","line":81,"function":"sign_hmac_sha256_b64","operation":"update","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/webhook_auth.rs","line":92,"function":"sign_hmac_sha256_hex","operation":"update","sql_operations":[],"tables":[],"transaction":false}
-{"file":"portal/src/workshops/loader.rs","line":237,"function":"render_markdown","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"portal/src/workshops/loader.rs","line":238,"function":"render_markdown","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
-{"file":"portal/src/workshops/loader.rs","line":239,"function":"render_markdown","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"portal/src/workshops/loader.rs","line":232,"function":"render_markdown","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"portal/src/workshops/loader.rs","line":233,"function":"render_markdown","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
+{"file":"portal/src/workshops/loader.rs","line":234,"function":"render_markdown","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/x_activity.rs","line":38,"function":"response_token","operation":"update","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/x_activity.rs","line":64,"function":"verify_signature","operation":"update","sql_operations":[],"tables":[],"transaction":false}
 {"file":"portal/src/x_activity.rs","line":375,"function":"signed","operation":"update","sql_operations":[],"tables":[],"transaction":false}

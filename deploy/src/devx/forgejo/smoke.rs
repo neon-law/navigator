@@ -383,23 +383,37 @@ fn psql(kube: &Kube, database: &str, sql: &str) -> Result<String> {
 
 /// Connect as the `forgejo` login over TCP inside the server pod.
 fn as_forgejo(kube: &Kube, seed: &Seed, database: &str, sslmode: &str) -> Result<String> {
+    let tls = kube
+        .secret("navigator-postgres-tls")?
+        .context("the PostgreSQL TLS Secret is missing")?;
+    super::super::postgres_fixture::trust_anchor(&tls)?;
+    let root = if tls.contains_key("ca.crt") {
+        "/etc/postgres/tls/ca.crt"
+    } else {
+        "/etc/postgres/tls/tls.crt"
+    };
     let dsn = format!(
         "host=navigator-postgres.{namespace}.svc.cluster.local hostaddr=127.0.0.1 \
-         dbname={database} user=forgejo sslmode={sslmode} sslrootcert=/etc/postgres/tls/tls.crt",
+         dbname={database} user=forgejo sslmode={sslmode} sslrootcert={root}",
         namespace = kube.namespace()
     );
-    let password = format!("PGPASSWORD={}", seed.database_password);
-    kube.output(&[
-        "exec",
-        POSTGRES_POD,
-        "--",
-        "env",
-        &password,
-        "psql",
-        &dsn,
-        "-Atc",
-        "SELECT 1",
-    ])
+    // Keep credentials out of kubectl arguments and its failure diagnostics.
+    kube.output_with_stdin(
+        &[
+            "exec",
+            "-i",
+            POSTGRES_POD,
+            "--",
+            "sh",
+            "-c",
+            "PGPASSWORD=$(cat; printf x); PGPASSWORD=${PGPASSWORD%x}; export PGPASSWORD; exec psql \"$@\"",
+            "forgejo-login-probe",
+            &dsn,
+            "-Atc",
+            "SELECT 1",
+        ],
+        Some(seed.database_password.as_bytes()),
+    )
 }
 
 fn database_proofs(kube: &Kube, seed: &Seed) -> Result<()> {
@@ -2347,4 +2361,68 @@ async fn git_refs_status(http: &reqwest::Client, forge: &str, token: &str) -> Re
         .context("GET info/refs")?
         .status()
         .as_u16())
+}
+
+#[cfg(test)]
+mod login_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn rejected_database_probe_keeps_password_out_of_diagnostics() {
+        const CHILD: &str = "NAVIGATOR_TEST_FORGEJO_LOGIN_CHILD";
+        const PASSWORD: &str = "synthetic-probe-password\nwith trailing newline\n";
+        if std::env::var_os(CHILD).is_some() {
+            let mut seed = Seed::generate();
+            seed.database_password = PASSWORD.into();
+            let error = as_forgejo(
+                &Kube::selected("synthetic-context", "synthetic-namespace"),
+                &seed,
+                "forgejo",
+                "verify-full",
+            )
+            .expect_err("synthetic login is refused");
+            let diagnostic = format!("{error:#}");
+            assert!(!diagnostic.contains("synthetic-probe-password"));
+            assert!(diagnostic.contains("synthetic login refused"));
+            return;
+        }
+        let dir = tempfile::tempdir().expect("private test directory");
+        let kubectl = dir.path().join("kubectl");
+        std::fs::write(
+            &kubectl,
+            r#"#!/bin/sh
+case "$*" in
+  *"get secret"*)
+    printf '%s' '{"data":{"ca.crt":"Y2E=","tls.crt":"bGVhZg==","tls.key":"a2V5"}}'
+    exit 0 ;;
+esac
+password=$(cat; printf x)
+password=${password%x}
+[ "$password" = 'synthetic-probe-password
+with trailing newline
+' ] || {
+  printf '%s' 'synthetic input missing' >&2
+  exit 24
+}
+printf '%s' 'synthetic login refused' >&2
+exit 23
+"#,
+        )
+        .expect("write synthetic kubectl");
+        std::fs::set_permissions(&kubectl, std::fs::Permissions::from_mode(0o700))
+            .expect("executable synthetic kubectl");
+        let path = std::env::join_paths(std::iter::once(dir.path().to_path_buf()).chain(
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+        ))
+        .expect("child path");
+        let output = Command::new(std::env::current_exe().expect("test executable"))
+            .args(["--exact", "devx::forgejo::smoke::login_tests::rejected_database_probe_keeps_password_out_of_diagnostics", "--nocapture"])
+            .env(CHILD, "1").env("PATH", path).output().expect("run isolated probe");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
