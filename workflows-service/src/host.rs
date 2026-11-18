@@ -231,6 +231,14 @@ async fn run_host(
 ) -> anyhow::Result<()> {
     let environment =
         store::DeploymentEnvironment::from_env().context("parse NAVIGATOR_ENVIRONMENT")?;
+    if let Some(postgres) = store::postgres::PostgresDb::configured()
+        .await
+        .context("connecting PostgreSQL for runtime readiness")?
+    {
+        store::postgres_backfill::family::require_runtime_scopes(&postgres)
+            .await
+            .context("verifying PostgreSQL runtime activation receipts")?;
+    }
     // Drives `DriDigest` and `GeneralNag` staging disclosure and the
     // production-only open-matters follow-up — the same flag the site-wide
     // "simulated projects" banner reads.
