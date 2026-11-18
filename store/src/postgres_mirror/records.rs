@@ -1175,6 +1175,7 @@ fn authoritative(table: &Table) -> bool {
         || crate::postgres::cases::TABLES.contains(&table.name)
         || crate::postgres::review::TABLES.contains(&table.name)
         || crate::postgres::signatures::TABLES.contains(&table.name)
+        || crate::postgres::notation::TABLES.contains(&table.name)
 }
 
 /// PostgreSQL holds the matter records authoritatively, so a SurrealDB row

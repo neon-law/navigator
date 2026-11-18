@@ -1,7 +1,14 @@
 //! One filled-in template — the notation core — and every query against
 //! the table.
 //!
-//! # This table lives in SurrealDB
+//! # This table's authority
+//!
+//! When `NAVIGATOR_POSTGRES_HOST` is set, PostgreSQL is authoritative for
+//! the `notation` table ([`authority`]): every read and write below
+//! dispatches there, a PostgreSQL failure is returned rather than falling
+//! back, and the mirror stops copying SurrealDB rows over the
+//! authoritative ones. Without a PostgreSQL host the SurrealDB path is the
+//! fallback.
 //!
 //! `notations` moved with wave five of #1093 (ENG-121), the heaviest slice
 //! of the notation group: `template_id`, `person_id`, `entity_id`, and
@@ -43,6 +50,7 @@ use serde_json::Value as Json;
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::postgres::notation as authority;
 use crate::postgres_shadow::{notation_exists_read, notation_rows_read, NotationShape};
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 
@@ -239,6 +247,14 @@ pub enum NotationError {
     Postgres(#[from] sqlx::Error),
     #[error("PostgreSQL notation configuration is unavailable")]
     Configuration(#[from] crate::postgres::PostgresError),
+    #[error("notation authority: {0}")]
+    Authority(#[from] authority::NotationAuthorityError),
+    /// The `TemplateError` is boxed because it is a large enum and this
+    /// one nests inside callers' own error enums (`NotationDocumentError`,
+    /// then `DecideCommentError`), which would push some call sites past
+    /// clippy's `result_large_err` threshold.
+    #[error("template lookup: {0}")]
+    Template(Box<crate::templates::TemplateError>),
     #[error("database: {0}")]
     Db(#[from] surrealdb::Error),
     #[error("notation {0} not found")]
@@ -249,9 +265,10 @@ pub enum NotationError {
     WriteReturnedNothing,
 }
 
-fn postgres_notation(row: &sqlx::postgres::PgRow) -> Result<Notation, NotationError> {
-    use sqlx::Row;
-    serde_json::from_value(row.try_get("row")?).map_err(|_| NotationError::WriteReturnedNothing)
+impl From<crate::templates::TemplateError> for NotationError {
+    fn from(err: crate::templates::TemplateError) -> Self {
+        Self::Template(Box::new(err))
+    }
 }
 
 /// Run a write under the shared retry policy
@@ -292,6 +309,16 @@ pub async fn restore_archived(
     db: &SurrealDb,
     notation: &Notation,
 ) -> Result<crate::assets::RowRestore, NotationError> {
+    if let Some(pg) = authority::authority().await? {
+        return Ok(match authority::find_by_id(&pg, notation.id).await? {
+            Some(existing) if &existing == notation => crate::assets::RowRestore::Identical,
+            Some(_) => crate::assets::RowRestore::Conflict,
+            None => {
+                authority::restore_archived(&pg, notation).await?;
+                crate::assets::RowRestore::Created
+            }
+        });
+    }
     if let Some(existing) = find_by_id(db, notation.id).await? {
         return Ok(if &existing == notation {
             crate::assets::RowRestore::Identical
@@ -366,6 +393,15 @@ pub async fn restore_archived(
 /// returns no row.
 pub async fn create(db: &SurrealDb, new: &NewNotation) -> Result<Notation, NotationError> {
     let id = Uuid::now_v7();
+    if let Some(pg) = authority::authority().await? {
+        // The pinned template version's fields are copied onto the row, so
+        // the Notation carries the exact Draft it was opened from. The
+        // template stays a SurrealDB record until that table is ported.
+        let template = crate::templates::find_by_id(db, new.template_id).await?;
+        return Ok(
+            authority::create(&pg, id, new, authority::template_pins(template.as_ref())).await?,
+        );
+    }
     let mut response = db
         .query(format!(
             "CREATE $id SET \
@@ -464,6 +500,9 @@ pub async fn pinned_body(
 ///
 /// [`NotationError::Db`] if the delete fails.
 pub async fn delete_uncommitted(db: &SurrealDb, id: Uuid) -> Result<(), NotationError> {
+    if let Some(pg) = authority::authority().await? {
+        return Ok(authority::delete_uncommitted(&pg, id).await?);
+    }
     db.query("DELETE $id")
         .bind(("id", record_id(TABLE, id)))
         .await
@@ -478,14 +517,8 @@ pub async fn delete_uncommitted(db: &SurrealDb, id: Uuid) -> Result<(), Notation
 ///
 /// [`NotationError::Db`] if the lookup fails.
 pub async fn find_by_id(db: &SurrealDb, id: Uuid) -> Result<Option<Notation>, NotationError> {
-    if let Some(pg) = crate::postgres::PostgresDb::configured().await? {
-        return sqlx::query("SELECT to_jsonb(n) AS row FROM notation n WHERE id=$1")
-            .bind(id)
-            .fetch_optional(pg.pool())
-            .await?
-            .as_ref()
-            .map(postgres_notation)
-            .transpose();
+    if let Some(pg) = authority::authority().await? {
+        return Ok(authority::find_by_id(&pg, id).await?);
     }
     let response = db
         .query(format!("SELECT {SELECT} FROM ONLY $id LIMIT 1"))
@@ -506,16 +539,8 @@ pub async fn list_by_project(
     db: &SurrealDb,
     project_id: Uuid,
 ) -> Result<Vec<Notation>, NotationError> {
-    if let Some(pg) = crate::postgres::PostgresDb::configured().await? {
-        return sqlx::query(
-            "SELECT to_jsonb(n) AS row FROM notation n WHERE project_id=$1 ORDER BY inserted_at,id",
-        )
-        .bind(project_id)
-        .fetch_all(pg.pool())
-        .await?
-        .iter()
-        .map(postgres_notation)
-        .collect();
+    if let Some(pg) = authority::authority().await? {
+        return Ok(authority::list_by_project(&pg, project_id).await?);
     }
     let response = db
         .query(format!(
@@ -546,6 +571,9 @@ pub async fn list_by_projects(
 ) -> Result<Vec<Notation>, NotationError> {
     if project_ids.is_empty() {
         return Ok(Vec::new());
+    }
+    if let Some(pg) = authority::authority().await? {
+        return Ok(authority::list_by_projects(&pg, project_ids).await?);
     }
     let keys: Vec<surrealdb::types::RecordId> = project_ids
         .iter()
@@ -631,6 +659,9 @@ pub async fn list_by_person(
     db: &SurrealDb,
     person_id: Uuid,
 ) -> Result<Vec<Notation>, NotationError> {
+    if let Some(pg) = authority::authority().await? {
+        return Ok(authority::list_by_person(&pg, person_id).await?);
+    }
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE person_id = $person \
@@ -651,6 +682,9 @@ pub async fn list_by_person(
 ///
 /// [`NotationError::Db`] if the lookup fails.
 pub async fn list_all(db: &SurrealDb) -> Result<Vec<Notation>, NotationError> {
+    if let Some(pg) = authority::authority().await? {
+        return Ok(authority::list_all(&pg).await?);
+    }
     let response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} ORDER BY inserted_at DESC"
@@ -675,8 +709,14 @@ pub async fn find_by_project_template_person(
     template_id: Uuid,
     person_id: Uuid,
 ) -> Result<Option<Notation>, NotationError> {
-    if let Some(pg) = crate::postgres::PostgresDb::configured().await? {
-        return sqlx::query("SELECT to_jsonb(n) AS row FROM notation n WHERE project_id=$1 AND template_id=$2 AND person_id=$3 ORDER BY inserted_at DESC LIMIT 1").bind(project_id).bind(template_id).bind(person_id).fetch_optional(pg.pool()).await?.as_ref().map(postgres_notation).transpose();
+    if let Some(pg) = authority::authority().await? {
+        return Ok(authority::find_by_project_template_person(
+            &pg,
+            project_id,
+            template_id,
+            person_id,
+        )
+        .await?);
     }
     let response = db
         .query(format!(
@@ -710,6 +750,9 @@ pub async fn find_by_project_template_person(
 ///
 /// [`NotationError::Db`] if the lookup fails.
 pub async fn exists_for_project(db: &SurrealDb, project_id: Uuid) -> Result<bool, NotationError> {
+    if let Some(pg) = authority::authority().await? {
+        return Ok(authority::exists_for_project(&pg, project_id).await?);
+    }
     let mut response = db
         .query(format!(
             "SELECT VALUE id FROM {TABLE} WHERE project_id = $project LIMIT 1"
@@ -737,6 +780,11 @@ pub async fn update_state(
     id: Uuid,
     new_state: &str,
 ) -> Result<Notation, NotationError> {
+    if let Some(pg) = authority::authority().await? {
+        return authority::update_state(&pg, id, new_state)
+            .await?
+            .ok_or(NotationError::NotFound(id));
+    }
     let mut response = writing(|| {
         db.query(format!(
             "UPDATE $id SET state = $state, updated_at = time::now() RETURN {SELECT}"
@@ -760,6 +808,10 @@ pub async fn reconcile_state(
     observed_state: &str,
     current_state: &str,
 ) -> Result<(), NotationError> {
+    if let Some(pg) = authority::authority().await? {
+        authority::reconcile_state(&pg, id, observed_state, current_state).await?;
+        return Ok(());
+    }
     let mut response = writing(|| {
         db.query(format!(
             "UPDATE $id SET state = $current, updated_at = time::now() WHERE state = $observed RETURN {SELECT}"
@@ -790,6 +842,11 @@ pub async fn update_questionnaire_snapshot(
     id: Uuid,
     snapshot: Json,
 ) -> Result<Notation, NotationError> {
+    if let Some(pg) = authority::authority().await? {
+        return authority::update_questionnaire_snapshot(&pg, id, &snapshot)
+            .await?
+            .ok_or(NotationError::NotFound(id));
+    }
     let mut response = writing(|| {
         db.query(format!(
             "UPDATE $id SET questionnaire_snapshot = $snapshot, updated_at = time::now() \

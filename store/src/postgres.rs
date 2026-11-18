@@ -18,6 +18,9 @@ pub mod catalog;
 pub mod communications;
 /// PostgreSQL authority for a Person's and an Entity's identity detail.
 pub mod identity;
+/// PostgreSQL authority for the Notation record — automatic on a configured
+/// host.
+pub mod notation;
 pub mod notation_creation_attempts;
 pub mod people;
 /// PostgreSQL authority for the review surface — review documents and
