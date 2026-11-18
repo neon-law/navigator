@@ -236,11 +236,12 @@ connected or revoking Person are mirrored. Ciphertext and wrapped data keys are 
 decrypts them. The stable source key, KMS context, key version, status, and timestamps remain part of parity. The saved
 Social Account Selection is mirrored separately by `social_account_selections`; it preserves the Brand/provider record
 key and selected destination without credentials or publishing authority. A cancelled or disconnected Social Account
-does not remove that saved selection. The one-use OAuth Attempt and PKCE verifier remain in SurrealDB.
-`postgres_mirror::identity::parity` and `identity::reconcile` compare and repair every identity row; run them after the
-tenancy pair. They name rows by key only. A Person whose email or sign-in subject PostgreSQL still holds under another
-id is refused, not overwritten, and converges once that other row is mirrored. Surreal timestamps are RFC 3339 text; a
-row whose timestamp does not parse is refused and reported, never given a substitute time.
+does not remove that saved selection. After `satellites:1` activation, `social_oauth_attempt` uses PostgreSQL; callback
+consumption returns the verifier once and erases its stored value atomically. `postgres_mirror::identity::parity` and
+`identity::reconcile` compare and repair every identity row; run them after the tenancy pair. They name rows by key
+only. A Person whose email or sign-in subject PostgreSQL still holds under another id is refused, not overwritten, and
+converges once that other row is mirrored. Surreal timestamps are RFC 3339 text; a row whose timestamp does not parse is
+refused and reported, never given a substitute time.
 
 `postgres_mirror::documents::parity` and `documents::reconcile` compare and repair every asset row; run them after the
 tenancy pair. An asset row copies its checksum, storage keys, revision identity (`project_id`, `slug`, ordered by id),
