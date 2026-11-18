@@ -60,11 +60,10 @@ SurrealDB, Rauthy, SeaweedFS, Restate, and OpenObserve in one KIND dependency ti
 dependency wires it into that loop in the same pull request, with a KIND manifest beside the existing ones, so the whole
 stack still comes up locally.
 
-That rule is what keeps production portable. In production, persistent state lives on managed services — a hosted
-SurrealDB, Cloud Storage for documents — and each one has a cloud-agnostic stand-in inside KIND, so the topology you
-test locally is the topology a firm deploys. And because the full stack runs on a laptop, you never need a cloud account
-or someone else's cloud bill to verify your work: in any clone, run `dev up` and prove the change against the running
-stack. An authorized lawyer then opens the pull request.
+That rule keeps the local dependencies reproducible. PostgreSQL owns new storage, SurrealDB supports the compatibility
+lane, and object storage holds document bytes. Use the local stand-ins to test the application's behavior, then verify
+the selected deployment's managed services separately. A laptop test does not prove cloud IAM, backups, or production
+availability. An authorized contributor opens the pull request after the relevant checks pass.
 
 ### View content images locally
 
@@ -148,26 +147,20 @@ checkout before changing the real setting; contributors normally work through a 
 
 ### Work with the store
 
-SurrealDB holds every table. `dev up` writes its whole connection contract into `.devx/env`, and nothing defaults: a
-process that is not configured fails loudly instead of quietly connecting to the wrong store.
+PostgreSQL is the authority for new storage. SurrealDB remains a compatibility lane for domains still using it. `dev up`
+writes the worktree's connection contract into `.devx/env`; use that environment for the selected checkout.
 
-- Connection: `NAVIGATOR_SURREAL_ENDPOINT`, `_NAMESPACE`, `_DATABASE`.
-- Schema: one idempotent `DEFINE` file, applied whole on every boot.
-- Tests: an embedded engine per test — no container, no port, nothing to reclaim.
+- PostgreSQL schema and migrations live under `store/postgres/`.
+- New storage tests use the PostgreSQL fixture described in `docs/test-database.md`.
+- SurrealDB compatibility configuration uses `NAVIGATOR_SURREAL_ENDPOINT`, `_NAMESPACE`, and `_DATABASE`.
 
 ---
 
-The shape worth internalizing is that the schema is a *statement of the present*, not a history.
-`store/src/schema/navigator.surql` is one file of `DEFINE` statements describing the tables that should exist, applied
-whole on every boot. You change it by editing the file, not by appending a step to a chain — and because applying a file
-converges definitions but cannot perform a data change, you bump `SCHEMA_VERSION` in the same commit so a database
-prepared by a different build reports as drifted instead of silently disagreeing. The local engine is memory-backed, so
-its rows reset when the pod restarts and the schema re-applies at boot. That is deliberate, not a rough edge.
-
-Tests need no database at all. `store::test_support::mem_surreal()` starts an engine inside the test process with the
-schema applied, so there is no container, no port, and nothing to reclaim afterwards. Reach for
-`store::surreal::record_id` whenever you turn a `Uuid` into a record id — SurrealDB will accept a string that merely
-looks like a UUID, and a link written that way resolves to nothing without ever raising an error.
+Read `docs/test-database.md` before adding a storage test, and follow the PostgreSQL skill for schema changes and
+migrations. Keep authorization, isolation, and migration behavior covered. The embedded SurrealDB harness is deprecated;
+use it only when maintaining the existing compatibility lane. That lane's definitions live in
+`store/src/schema/navigator.surql`. Do not treat its embedded test engine as proof of persistence or recovery in a
+deployed database.
 
 ### Add a fillable government PDF
 
@@ -208,8 +201,9 @@ You do not need a GitHub account or a single line of code to make Neon Law Navig
 Navigator](/workshops/use-the-navigator) workshop closes by asking you to send the markdown of the template you built
 and the one kaizen improvement you found — that is this contribution. Every template a lawyer shares raises the floor of
 competence for the next lawyer who joins. Send the craft, never a client's file: sharing a template or a checklist
-grants Neon Law IP LLC a license to use it, and anything that lands in the repository is the source intellectual
-property of Neon Law IP LLC.
+offers it for inclusion under MIT OR Apache-2.0, subject to the contributor terms. Contributors retain their copyright;
+submission does not assign ownership to Neon Law IP LLC. Check `CONTRIBUTORS.md` before sharing work owned by someone
+else.
 
 ### Join a presentation
 

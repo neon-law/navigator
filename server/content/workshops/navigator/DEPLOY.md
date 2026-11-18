@@ -19,7 +19,7 @@ storage buckets, with optional archive and telemetry lanes — so it is not free
 you begin. This is a deployment guide for admin users standing up infrastructure. With that said: you can run the same
 stack we run. Let's stand it up.
 
-> **Bring your own typeface license.** Neon Law Navigator source code is owned by Neon Law IP LLC.
+> **Bring your own typeface license.** First-party source uses MIT OR Apache-2.0; contributors retain their copyright.
 > [GORP Serif](https://trashtype.com/fonts/gorp) is proprietary font software licensed separately from TrashType and is
 > not covered by the repository's code licenses.
 > If your deployment serves GORP, obtain and maintain the appropriate TrashType license, keep its license notice with
@@ -883,21 +883,17 @@ planes, and public hosts. It never becomes a weaker runtime profile. Set both `N
 `NAVIGATOR_CREDENTIAL_ENVIRONMENT` to `production` in the selected row's private `config.toml`; the runtime also fences
 provider endpoints, so the proving ring keeps production boot checks while its isolated data plane holds sample matters.
 
-The data rule is small but not flat: every boot applies the same embedded, environment-blind canonical seed —
-jurisdictions above all, the reference table every entity and licensure record points at — and a boot carrying sample
-matters additionally and idempotently applies the compiled fixture (three synthetic matters, their participants, and the
-rows used by the portal walkthrough). Tests may add rows inside their isolated schemas.
+Every boot applies the canonical reference seed and the selected Brand's baseline. Only a `dev` profile inserts the
+compiled sample-matter fixture. Tests may add records inside their isolated schemas.
 
 ### The deployment that says its matters are sample
 
 `NAVIGATOR_SIMULATED_MATTERS` is the second selector, and it answers a different question from the first. The profile
 above decides which runtime wiring a boot gets; this decides whether the matters in front of a visitor are invented.
 
-Left unset or empty it follows the profile: a `dev` boot carries sample matters because that is all a `dev` boot has,
-and a `production` boot does not, because production is where the real files are. Exactly `true` or `false` overrides
-that in both directions, and every other value — `TRUE`, `1`, `yes`, a case or whitespace variant — is rejected rather
-than resolved to the permissive answer. That exactness is the point: a typo that quietly read as `true` would seed
-invented clients into a database of real ones.
+Left unset or empty, the simulated-matters announcement follows the profile. Exactly `true` or `false` overrides that
+announcement; other values are rejected. This setting does not insert, replace, or remove matter records. The boot
+profile alone controls sample-fixture insertion.
 
 The override that matters is `true` under a `production` profile. A hosted demonstration row may use a `production`
 runtime profile, so it must explicitly enable simulated matters in its own
@@ -907,10 +903,9 @@ runtime profile, so it must explicitly enable simulated matters in its own
 NAVIGATOR_SIMULATED_MATTERS = "true"
 ```
 
-Two things follow from that value. `store::seed` applies the sample-matter fixture, so the row carries
-`sample-litigation`, `sample-transactional`, and `sample-estate` rather than an empty portfolio. And every page
-publishes a site-wide banner saying the matters are sample — which is why a staging host is safe to hand to another
-operator, because a demo matter cannot be mistaken for a real file.
+The value enables the site-wide sample-matters announcement. It does not populate `sample-litigation`,
+`sample-transactional`, or `sample-estate` on a production-profile boot. Verify the demonstration portfolio separately
+before sharing a hosted row; a banner is not proof that its data is synthetic.
 
 It is a **coordinate, not a credential**, so it lives in `config.toml` beside the buckets and hostnames rather than in
 that deployment's `secrets.enc.yaml`. Adding it needs no SOPS re-encryption on either row.
@@ -936,7 +931,7 @@ The banner is the part worth dwelling on. It distinguishes a demo environment fr
 | `NAVIGATOR_ENVIRONMENT` | Runtime profile. Exact `dev` or `production`. Empty or unset selects production. |
 | `NAVIGATOR_CREDENTIAL_ENVIRONMENT` | Credential profile. Persistent hosted rows use `production`. |
 | `NAVIGATOR_STAGING` | Exact `true` marks staging and blocks social writes. Unset or `false` leaves it off. |
-| `NAVIGATOR_SIMULATED_MATTERS` | Exact `true` seeds sample matters. Unset follows the runtime profile. |
+| `NAVIGATOR_SIMULATED_MATTERS` | Exact `true` announces simulated matters; it does not insert fixture rows. |
 | `NAVIGATOR_CI_HARNESS` | `1` selects the dev test harness. Production rejects it. |
 | `NAVIGATOR_DEV_RELOAD` | `1` serves the reload script under exact `dev`. |
 | `NAVIGATOR_FORGEJO_ACTIONS_ENABLED` | `true` opts the deployment into managed Forgejo Actions. |
@@ -1109,29 +1104,24 @@ Do not edit `.devx/env`; the next `hudson dev up` overwrites it. The file is a c
 worktree environment can use another database and port, but Restate-backed flows require the worker and web database
 coordinates to agree; `hudson dev worktree-env status` reports a mismatch.
 
-### The store: SurrealDB
+### The store: PostgreSQL and the compatibility lane
 
-| Question | SurrealDB |
+| Question | Current contract |
 | --- | --- |
-| Owns the data | Yes — every table |
-| Local shape | KIND pod, `surreal start memory` |
-| Schema | One idempotent `DEFINE` file plus `schema_version` |
-| Tests | Embedded `kv-mem` engine per test |
-| Deployed | Surreal Cloud |
-| Row-level permissions | `PERMISSIONS NONE` on every table, deliberately |
+| New storage | PostgreSQL |
+| Existing compatibility domains | SurrealDB until their accessors migrate |
+| PostgreSQL schema | Versioned SQL migrations under `store/postgres/` |
+| New storage tests | PostgreSQL fixture in `docs/test-database.md` |
+| SurrealDB compatibility definitions | `store/src/schema/navigator.surql` |
+| Authorization | Application roles, participation, and embedded Rego |
 
 ---
 
-Three choices are worth knowing because they change what you operate. **The schema is applied, not migrated:** every
-boot runs one idempotent `DEFINE` file and records a version record, so a process notices it is looking at a database
-some other build prepared instead of discovering it one confusing query at a time. Backfills are explicit one-shot jobs
-rather than migration steps. **The local engine is memory-backed:** its data resets with the pod, deliberately — boot
-re-applies the schema and re-runs the canonical seed. **Tests use an engine inside the test process:** no container, no
-port, no shared server, so two tests cannot collide and there is nothing to reclaim afterwards.
-
-Per-worktree isolation comes from the cluster boundary, not from anything extra: `dev worktree-env up` already keys a
-KIND cluster to the worktree path, so its Surreal pod is private by construction and `worktree-env down` removes it with
-the cluster.
+Follow the PostgreSQL skill for new storage and migrations. Check the selected domain's accessor before deciding which
+database owns a read or write; the presence of a compatibility mirror does not make both copies authoritative. The
+embedded SurrealDB harness is deprecated, and its memory-backed behavior does not establish deployed persistence or
+recovery. Keep each task's test database and services isolated, and use `worktree-env down` to remove task-owned
+resources. Follow `docs/test-database.md` for the PostgreSQL fixture.
 
 ### Where SurrealDB authorization lives
 
@@ -1473,7 +1463,7 @@ dev staging` lane, not a persistent hosted row.
 | Surface | Local dev | Disposable `dev staging` | Persistent hosted rows |
 | --- | --- | --- | --- |
 | **Canonical database seed** | Always runs | Always runs | Always runs |
-| **Sample-matter fixture** | Always runs (`dev`) | Always runs (`dev`) | Only rows configured with simulated matters |
+| **Sample-matter fixture** | Always runs (`dev`) | Always runs (`dev`) | Never inserted by production boot |
 | **Test-local database fixtures** | Browser/E2E harness only | Integration harness only | Never |
 | Email | `CapturingEmail` by default | Non-production SendGrid | Production SendGrid |
 | E-signature | Stub IDs and documents | Non-binding DocuSign demo | Live DocuSign |
@@ -1483,19 +1473,11 @@ dev staging` lane, not a persistent hosted row.
 
 ---
 
-The canonical seed is not gated by environment: every `web` boot applies the SurrealDB schema and idempotently inserts
-the bundled catalog and firm-owned baseline rows in every deployment, production included. Jurisdictions are the
-clearest example of the distinction this table encodes. The full reference set — all 248 rows of
-`store/seeds/Jurisdiction.yaml`, every US state plus DC and every sovereign a matter can touch — is seeded on **every**
-boot in **every** environment, because an entity's domicile and an attorney's licensure must resolve wherever the
-application runs; since ENG-20 those rows live in SurrealDB, but the rule is engine-blind. The sample-matter fixture —
-three synthetic Projects, their participants, and their walkthrough rows — is the second, idempotent layer. It is
-applied wherever `NAVIGATOR_SIMULATED_MATTERS` resolves true: every `dev` boot, whether local KIND or the disposable
-staging lane, and any hosted row explicitly configured to enable simulated matters. A hosted row without that setting
-does not receive the fixture. All deployments receive the same canonical reference data. Both layers are applied by one
-environment-aware orchestration call (`store::seed::seed_environment`), so a reset or recreate restores the same
-baseline automatically. Provider simulation is a separate axis: the test harness permits fakes, while non-harness dev
-uses sandbox integrations. Test suites add further records inside isolated test schemas.
+`store::seed::seed_environment` applies the canonical catalog and the selected Brand's baseline in every profile. It
+inserts sample Projects, participants, and walkthrough records only on `dev`. Production-profile boot never inserts that
+fixture, even when `NAVIGATOR_SIMULATED_MATTERS=true` announces a separately prepared demonstration portfolio. Provider
+simulation is independent: the test harness permits fakes, while non-harness dev uses sandbox integrations. Test suites
+add further records inside isolated test schemas.
 
 ## Configure the Trust Boundaries
 
@@ -1708,6 +1690,7 @@ stack runs on) and **feature vendors** (each lights up one capability and stubs 
 | GitHub | Private per-Project repositories | platform | required in the requested cloud topology |
 | DocuSign | E-signature | feature | CI-harness stub; required in a normal dev deployment and production |
 | Xero | Accounting / billing (`ACCREC` invoices) | feature | `StubBillingProvider` until `XERO_*` is complete |
+| Stripe | Unsent invoice drafts | feature | Firm credential and route gate required |
 | SendGrid | Outbound + inbound email | feature | CI-harness capture; otherwise required |
 
 ---
@@ -1729,9 +1712,9 @@ Two things worth saying out loud for a copyist:
   [`docs/third-party-integrations.md`](/docs/third-party-integrations), and
   [`docs/docusign-esignature.md`](/docs/docusign-esignature).
 
-One boundary worth naming: **Xero reconciles against the firm's bank (Mercury) inside Xero** — Neon Law Navigator never
-speaks to Mercury. Our only integration edge is the Xero API. That is the shape to copy: integrate the system of record,
-not everything it in turn connects to.
+Keep invoice issuance, payment collection, and accounting reconciliation distinct. Navigator's Stripe path prepares
+invoice drafts; existing Xero paths still serve accounting and billing reads and writes. Check the configured route
+before generating a bill, and verify the provider's actual result rather than inferring success from configuration.
 
 ### The two service deployments
 
@@ -1804,13 +1787,55 @@ backend, not a client-facing sharing product. A disclosed client sees reviewed m
 them through the portal. A disclosed Lawyer/admin user sees more of the matter because their role allows legal editing
 and history — through the same portal, not a separate privileged tier.
 
-## Route invoices and client funds
+## Operate billing
 
-### Classify the payment
+### Choose the payor and submission channel
 
-- Earned fees go to the Firm's operating account.
-- Advances held for the client go to an approved trust account under the applicable rules.
-- IOLTA pools eligible nominal or short-term client funds.
+| Billing work | Payor | Submission channel |
+| --- | --- | --- |
+| Direct invoice | Client or another agreed payor | Stripe invoice |
+| Covered legal-plan service | Legal plan | Provider portal or the plan's required claim form |
+| Other billing request | Agreed payor | Its required website, upload, or manual process |
+
+---
+
+Identify who owes the amount and how that payor accepts a bill. A legal-plan claim is a request for payment under the
+plan's benefits, rather than a client invoice with a different address. Verify the plan's authorization, covered
+service, fee schedule, and required submission channel. Bill uncovered work separately only under the applicable
+approval and fee agreement. Keep the same service from appearing in both a plan claim and a direct client invoice.
+
+### Prepare and review the bill
+
+- Check service dates, Time Entries, Project Costs, and agreed amounts against the matter record.
+- For Stripe, review the unsent draft, billed party, due date, lines, and payment destination.
+- For a portal or form, check required fields, supporting documents, and the provider's attestation.
+- Resolve missing information before submitting.
+
+---
+
+Use a separate Stripe account for each payout destination: operating or the applicable state's approved trust account.
+Review the destination before sending an invoice. Navigator currently supports operating and Nevada draft routes; do not
+assume another state's route is available merely because its Stripe account exists.
+
+### Submit once and reconcile payment
+
+- Distinguish a prepared draft from a confirmed submission.
+- Record the external invoice or claim reference and submission date on the private matter record.
+- Follow denied, corrected, and partially paid submissions through to resolution.
+- Match payments to the billed work and confirm settlement to the intended bank account.
+
+---
+
+A prepared bill is not a confirmed submission, and a submitted claim is not a confirmed payment. Check the provider's
+history before retrying an uncertain submission. Retain the external reference when correcting a claim, and reconcile
+partial payments against the original billed work. The current legal-plan CLI links and reads plan metadata; submit
+claims through the provider's verified portal or form workflow. Email submissions remain drafts for the lawyer to send.
+
+### Classify client funds before collection
+
+- Distinguish earned fees from advances held for a client.
+- Verify the approved account for the applicable jurisdiction.
+- Check the destination before sharing a payment link.
 
 ---
 
@@ -2037,7 +2062,7 @@ terminal. It authenticates like `gcloud auth login` and lands a short-lived (~8h
 ```bash
 cargo install --path cli          # installs `navigator` on your PATH
 # …or skip installing — run it straight from the source tree:
-cargo run -p cli -- login --host www.your-domain.example   # `cargo run -p cli -- <args>` == `navigator <args>`
+cargo run -p cli -- site login --host www.your-domain.example
 ```
 
 ---
