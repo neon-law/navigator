@@ -122,6 +122,19 @@ async fn only_completed_docusign_uuids_make_postgres_projects_official() {
             .await
             .unwrap()
             .is_empty());
+    })
+    .await;
+    pg.pool().close().await;
+}
+
+#[tokio::test]
+async fn terminal_signatures_cannot_be_completed_or_reclassified() {
+    let Some((pg, _, notation)) = fixture().await else {
+        return;
+    };
+    let disconnected = crate::surreal::SurrealDb::uninitialized();
+    let provider = crate::signatures::SignatureProvider::DocuSign;
+    PostgresDb::with_test_db(pg.clone(), async {
         let declined = Uuid::now_v7().to_string();
         crate::signatures::record_request(&disconnected, notation, provider, &declined)
             .await
