@@ -1333,7 +1333,7 @@ mod tests {
         let (status, location, _) = send(
             &app,
             "POST",
-            "/purchases/delete-your-data-monthly",
+            "/purchases/consultation",
             &bearer(Some(person.id), Role::Client),
         )
         .await;
