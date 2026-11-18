@@ -31,7 +31,7 @@
 //! indistinguishably. `project_codes` on the reconciliation report carries the
 //! codes themselves, which is exactly the question and nothing more.
 //!
-//! It is deliberately *not* `GET /app/api/projects`. That route returns the
+//! The rowless-repository check does not use `GET /app/api/projects`. That route returns the
 //! caller's own matters — `model::access::visible_projects` scopes to
 //! participation rows for every firm tier, Owner and Admin included — so a
 //! repository whose row exists but the caller does not participate in would
@@ -137,6 +137,8 @@ impl ScannedRepository {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum Finding {
+    /// A participating active Project has no local checkout.
+    MissingCheckout { code: String },
     /// A repository whose code no live row carries.
     RepositoryHasNoRow { repository: String, code: String },
     /// A repository that declares it is meant to have no row, and why.
@@ -218,6 +220,7 @@ impl Finding {
             | Self::ForgejoBranch { .. }
             | Self::GitHubBranch { .. } => Status::Warn,
             Self::RepositoryHasNoRow { .. }
+            | Self::MissingCheckout { .. }
             | Self::DuplicateCode { .. }
             | Self::UnreadableManifest { .. }
             | Self::ForgeParity { .. } => Status::Fail,
@@ -228,6 +231,7 @@ impl Finding {
     #[must_use]
     pub fn kind(&self) -> &'static str {
         match self {
+            Self::MissingCheckout { .. } => "missing-checkout",
             Self::RepositoryHasNoRow { .. } => "repository-has-no-row",
             Self::RowlessByDeclaration { .. } => "rowless-by-declaration",
             Self::ManifestDisagreesWithName { .. } => "manifest-disagrees-with-name",
@@ -245,7 +249,8 @@ impl Finding {
     #[must_use]
     pub fn subject(&self) -> &str {
         match self {
-            Self::RepositoryHasNoRow { code, .. }
+            Self::MissingCheckout { code }
+            | Self::RepositoryHasNoRow { code, .. }
             | Self::RowlessByDeclaration { code, .. }
             | Self::DuplicateCode { code, .. } => code,
             Self::ManifestDisagreesWithName { repository, .. }
@@ -264,6 +269,9 @@ impl Finding {
     #[must_use]
     pub fn detail(&self) -> String {
         match self {
+            Self::MissingCheckout { code } => {
+                format!("active Project `{code}` has no checkout; run navigator sync")
+            }
             Self::RepositoryHasNoRow { repository, code } => format!(
                 "`{repository}` declares Project `{code}`, which no live row carries; \
                  a portal published under `{code}/portal/` would mount nowhere"
@@ -443,6 +451,23 @@ pub fn analyze(repositories: &[ScannedRepository], live_codes: &[String]) -> Rep
         findings,
         repositories: repositories.len(),
         live_codes: live.len(),
+    }
+}
+
+fn report_missing_checkouts(
+    repositories: &[ScannedRepository],
+    active: &[String],
+    findings: &mut Vec<Finding>,
+) {
+    let present: BTreeSet<_> = repositories
+        .iter()
+        .filter(|r| r.manifest_error.is_none())
+        .filter_map(|r| r.declared_code.as_deref())
+        .collect();
+    for code in active.iter().collect::<BTreeSet<_>>() {
+        if !present.contains(code.as_str()) {
+            findings.push(Finding::MissingCheckout { code: code.clone() });
+        }
     }
 }
 
@@ -726,6 +751,19 @@ pub async fn run(
     };
 
     let mut report = analyze(&repositories, &live_codes);
+    let active = match async {
+        let (base, token) = crate::remote::resolve(host)?;
+        super::watch::active_codes(&base, &token).await
+    }
+    .await
+    {
+        Ok(active) => active,
+        Err(error) => {
+            eprintln!("navigator: could not check active Project checkout coverage: {error:#}");
+            return ExitCode::from(2);
+        }
+    };
+    report_missing_checkouts(&repositories, &active, &mut report.findings);
     let forge_coverage = if forge_parity {
         Some(report_fleet_forge_parity(dir, &repositories, &live_codes, &mut report.findings).await)
     } else {
@@ -1190,6 +1228,20 @@ mod tests {
 
     fn kinds_of(findings: &[&Finding]) -> Vec<&'static str> {
         findings.iter().map(|finding| finding.kind()).collect()
+    }
+
+    #[test]
+    fn missing_active_checkouts_fail_even_when_the_local_fleet_is_empty() {
+        let mut findings = Vec::new();
+        super::report_missing_checkouts(&[], &live(&["pitch", "open"]), &mut findings);
+        assert_eq!(
+            kinds(&findings),
+            vec!["missing-checkout", "missing-checkout"]
+        );
+        assert!(findings.iter().all(|f| f.status() == Status::Fail));
+        findings.clear();
+        super::report_missing_checkouts(&[repository("open")], &live(&["open"]), &mut findings);
+        assert!(findings.is_empty());
     }
 
     #[test]

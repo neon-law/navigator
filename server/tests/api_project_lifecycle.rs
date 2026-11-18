@@ -235,6 +235,8 @@ async fn matter_status_requires_participation_and_reports_filed_onboarding() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = json(response).await;
     assert_eq!(body["status"], "pitch");
+    assert!(body["repository_remotes"].is_object());
+    assert!(body["repository_remotes"]["origin"].is_null());
     assert_eq!(body["onboarding"]["filed"], false);
     assert!(!body["missing"].as_array().unwrap().is_empty());
     let asset = Uuid::now_v7();

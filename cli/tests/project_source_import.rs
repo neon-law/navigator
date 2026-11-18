@@ -4,6 +4,7 @@
 //! rather than mutating the test process's environment.
 
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Command as StdCommand, Output};
 
@@ -390,7 +391,7 @@ async fn mount_reconcile(server: &MockServer, project_id: Uuid, response: Respon
 
 #[tokio::test(flavor = "multi_thread")]
 #[allow(clippy::too_many_lines)]
-async fn resume_writes_a_repository_less_tree_then_provisions_and_imports_it() {
+async fn resume_imports_before_attempting_the_work_checkout_and_reports_a_retry() {
     let server = MockServer::start().await;
     let host = server.uri();
     let login = TempDir::new().unwrap();
@@ -452,8 +453,87 @@ async fn resume_writes_a_repository_less_tree_then_provisions_and_imports_it() {
         ResponseTemplate::new(202).set_body_json(serde_json::json!({"id": "import-3"})),
     )
     .await;
-    let provisioned = scaffold(&credentials, &host, &dir, &["--resume", CODE]);
-    assert!(provisioned.success, "{}", provisioned.stderr);
+    let repository = "https://forge.example.test/firm/sample-import";
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/app/api/projects/{project_id}/source-imports/import-3"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "state": "committed", "commit_sha": "fixture-commit", "repository_url": repository
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/app/api/projects"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!([{
+                "id": project_id, "code": CODE, "status": "pitch", "repository_url": repository,
+                "firm_id":"00000000-0000-0000-0000-000000000001", "brand":"sample"
+            }])),
+        )
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/app/api/projects/{project_id}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "repository_remotes": {"origin": repository}
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    // The process boundary records the clone attempt and refuses it without contacting a forge.
+    let bin = login.path().join("bin");
+    fs::create_dir(&bin).unwrap();
+    let jj = bin.join("jj");
+    fs::write(
+        &jj,
+        r#"#!/bin/sh
+{ pwd; printf '%s\n' "$@"; } > "$NAVIGATOR_TEST_JJ_LOG"
+exit 7
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&jj, fs::Permissions::from_mode(0o700)).unwrap();
+    let attempted = login.path().join("checkout-attempt.txt");
+    let provisioned = run(command(&credentials)
+        .args(["project", "scaffold", "--host", &host, "--dir"])
+        .arg(&dir)
+        .args(["--resume", CODE])
+        .env("HOME", login.path())
+        .env(
+            "PATH",
+            format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+        )
+        .env("NAVIGATOR_TEST_JJ_LOG", &attempted));
+    assert!(!provisioned.success);
+    assert!(
+        provisioned.stderr.contains("checkout setup is incomplete"),
+        "{}",
+        provisioned.stderr
+    );
+    assert!(
+        provisioned.stderr.contains("retry navigator sync"),
+        "{}",
+        provisioned.stderr
+    );
+    let attempted = fs::read_to_string(attempted).unwrap();
+    assert!(attempted.contains(repository), "{attempted}");
+    assert!(
+        attempted.contains("git\nclone\n--colocate\n--\n"),
+        "{attempted}"
+    );
+    assert!(attempted.starts_with(
+        login
+            .path()
+            .join("Work")
+            .canonicalize()
+            .unwrap()
+            .to_str()
+            .unwrap()
+    ));
+    assert!(!login.path().join("Work").join(CODE).exists());
     for expected in [
         "repository: Created (https://forge.example.test/firm/sample-import)",
         "repository detail: created on the firm forge",

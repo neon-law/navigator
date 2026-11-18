@@ -279,7 +279,12 @@ async fn run_inner(
     if provisioned != ExitCode::SUCCESS {
         return Ok(provisioned);
     }
-    Ok(crate::projects::source_import::run(host, &code, directory, None, false).await)
+    let imported = crate::projects::source_import::run(host, &code, directory, None, true).await;
+    if imported != ExitCode::SUCCESS {
+        return Ok(imported);
+    }
+    super::watch::sync_project(host, &code).await?;
+    Ok(ExitCode::SUCCESS)
 }
 
 /// Record the opened row's actual ownership, including a resumed scaffold.

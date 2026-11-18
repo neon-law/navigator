@@ -88,7 +88,7 @@ enum Command {
         #[arg(long, hide = true)]
         ci: bool,
     },
-    /// Preview the Jujutsu checkouts needed for active Projects on a host.
+    /// Synchronize Jujutsu checkouts for participating open and pitch Projects.
     Sync {
         /// Target Navigator host.
         #[arg(long)]
@@ -97,7 +97,7 @@ enum Command {
         #[arg(long)]
         dir: Option<PathBuf>,
         /// Report checkout state without changing files or contacting the forge.
-        #[arg(long, required = true)]
+        #[arg(long)]
         dry_run: bool,
     },
     /// Interact with a project hosted on a navigator site.
@@ -418,11 +418,9 @@ fn run() -> ExitCode {
             errors_only,
             ci: _,
         } => run_validate(&dir, fix, errors_only),
-        Command::Sync {
-            host,
-            dir,
-            dry_run: _,
-        } => runtime().block_on(projects::watch::run_preview(dir, &host)),
+        Command::Sync { host, dir, dry_run } => {
+            runtime().block_on(projects::watch::run_sync(dir, &host, dry_run))
+        }
         Command::Projects { action } => runtime().block_on(run_projects(action)),
         Command::Notation {
             action: NotationCmd::Envelope { action },
@@ -922,7 +920,7 @@ pub enum ProjectsCmd {
         #[command(subcommand)]
         action: DocumentsCmd,
     },
-    /// Watch open Projects, fetch remote bookmarks, and download document revisions.
+    /// Watch participating open and pitch Projects, fetch bookmarks, and download document revisions.
     Watch {
         /// Directory holding one checkout per Project.
         #[arg(long)]
@@ -2890,7 +2888,7 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
             brand,
             host,
         } => {
-            remote::projects_create_named(
+            let result = remote::projects_create_named(
                 host.host.as_deref(),
                 &name,
                 &code,
@@ -2903,7 +2901,15 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
                 firm.as_deref(),
                 brand.as_deref(),
             )
-            .await
+            .await;
+            if result == ExitCode::SUCCESS && !closed {
+                if let Err(error) = projects::watch::sync_project(host.host.as_deref(), &code).await
+                {
+                    eprintln!("navigator: {error:#}");
+                    return ExitCode::FAILURE;
+                }
+            }
+            result
         }
         ProjectsCmd::ImportSource {
             project_code,
@@ -5132,6 +5138,19 @@ pub fn print_error_recap(errors: &[GateError]) {
 mod gate_helpers_tests {
     use super::*;
     use std::fmt::Write as _;
+
+    #[test]
+    fn sync_can_apply_or_preview_the_same_active_inventory() {
+        assert!(Cli::try_parse_from(["navigator", "sync", "--host", "site.example.test"]).is_ok());
+        assert!(Cli::try_parse_from([
+            "navigator",
+            "sync",
+            "--host",
+            "site.example.test",
+            "--dry-run"
+        ])
+        .is_ok());
+    }
 
     #[test]
     fn relationship_add_requires_a_scope_and_an_existing_subject() {

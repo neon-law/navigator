@@ -2072,9 +2072,39 @@ async fn get_project_door(
         .ok()
         .flatten()
         .ok_or(ApiError::NotFound)?;
-    let payload =
+    let remotes = if authed.0.role == store::persons::Role::Client {
+        None
+    } else {
+        Some(repository_remotes(&state, &project).await?)
+    };
+    let mut payload =
         project_payload(authed.0.role, project).map_err(|error| ApiError::Db(error.to_string()))?;
+    if let Some(remotes) = remotes {
+        payload["repository_remotes"] = remotes;
+    }
     Ok((StatusCode::OK, Json(payload)).into_response())
+}
+
+async fn repository_remotes(
+    state: &ApiState,
+    project: &store::projects::Project,
+) -> Result<serde_json::Value, ApiError> {
+    let forgejo_url = if let Some(firm_id) = project.firm_id {
+        let firm = store::firms::find_by_id(&state.surreal, firm_id)
+            .await
+            .map_err(|error| ApiError::Db(error.to_string()))?;
+        match (firm, std::env::var("NAVIGATOR_FORGEJO_ROOT_URL").ok()) {
+            (Some(firm), Some(root)) if !root.trim().is_empty() => {
+                let path = store::firms::forgejo::repository_path(&firm, project)
+                    .map_err(|error| ApiError::Db(error.to_string()))?;
+                Some(format!("{}/{path}.git", root.trim_end_matches('/')))
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
+    Ok(serde_json::json!({"origin": project.repository_url, "forgejo": forgejo_url}))
 }
 
 /// Live lifecycle evidence for a firm-side participant. Filing establishes
@@ -2121,6 +2151,7 @@ async fn project_status_door(
     let onboarding_status = store::projects::onboarding_status(&state.surreal, id)
         .await
         .map_err(ApiError::Db)?;
+    let remotes = repository_remotes(&state, &project).await?;
     let mut adopted_envelopes = Vec::new();
     for notation in store::notations::list_by_project(&state.surreal, id).await? {
         if let Some(envelope) =
@@ -2147,6 +2178,7 @@ async fn project_status_door(
             "documents": documents,
             "execution_verified": onboarding_status == store::projects::OnboardingStatus::Official
         },
+        "repository_remotes": remotes,
         "adopted_envelopes": adopted_envelopes,
         "missing": missing
     }))
