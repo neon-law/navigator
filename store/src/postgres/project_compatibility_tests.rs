@@ -1,5 +1,5 @@
 use super::{fixture, insert_person, Fixture};
-use crate::projects::Project;
+use crate::projects::{NewProject, Project};
 use uuid::Uuid;
 
 async fn surreal_project(surreal: &crate::surreal::SurrealDb, id: Uuid) -> Option<Project> {
