@@ -3,12 +3,12 @@ use crate::postgres_mirror::tests::{connect, fresh_schema};
 use crate::projects::{NewProject, Project};
 use uuid::Uuid;
 
-struct Fixture {
-    pg: PostgresDb,
-    input: NewProject,
+pub(super) struct Fixture {
+    pub(super) pg: PostgresDb,
+    pub(super) input: NewProject,
 }
 
-async fn fixture() -> Option<Fixture> {
+pub(super) async fn fixture() -> Option<Fixture> {
     let (options, database) = fresh_schema().await?;
     let pg = connect(&options, &database).await;
     let jurisdiction = Uuid::new_v4();
@@ -496,7 +496,7 @@ async fn lifecycle_history_and_current_project_state_commit_together() {
     assert_eq!(events[2].attesting_person_id, Some(actor));
 }
 
-async fn insert_person(pg: &PostgresDb, role: &str) -> Uuid {
+pub(super) async fn insert_person(pg: &PostgresDb, role: &str) -> Uuid {
     let id = Uuid::new_v4();
     sqlx::query("INSERT INTO person (id,name,email,role) VALUES ($1,$2,$3,$4)")
         .bind(id)

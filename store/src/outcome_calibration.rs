@@ -397,7 +397,8 @@ pub async fn firm_calibration(
     viewer: Uuid,
     firm_id: Uuid,
 ) -> Result<OutcomeCalibration, CalibrationError> {
-    let mut lead_lawyers = crate::projects::dri_names_by_project(surreal, "is_lawyer_dri").await?;
+    let mut lead_lawyers =
+        crate::projects::dri_names_by_project(surreal, crate::projects::DriSide::Lawyer).await?;
     let matters: Vec<(Uuid, Vec<String>)> = crate::projects::all(surreal)
         .await?
         .into_iter()

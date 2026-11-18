@@ -5,8 +5,8 @@
 
 use super::PostgresDb;
 use crate::projects::{NewProject, Project};
-use chrono::{DateTime, SecondsFormat, Utc};
-use sqlx::Row;
+use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
+use sqlx::{Postgres, QueryBuilder, Row};
 use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
@@ -27,6 +27,8 @@ pub enum ProjectError {
     NoSuchFirm,
     #[error("the Project Jurisdiction does not exist")]
     NoSuchJurisdiction,
+    #[error("the Firm no longer wears the Project Brand")]
+    FirmBrandChanged,
     #[error("the concurrent Project could not be found")]
     WriteReturnedNothing,
     #[error("PostgreSQL Project operation failed")]
@@ -324,4 +326,125 @@ async fn record_repository_on(
     let result = row(&result)?;
     tx.commit().await?;
     Ok(Some(result))
+}
+
+/// One column a sparse Project update writes. The name is always one of this
+/// crate's own column names, never request input.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Column<'a> {
+    Text(&'static str, Option<&'a str>),
+    Id(&'static str, Option<Uuid>),
+    Date(&'static str, Option<NaiveDate>),
+}
+
+/// Update only `columns` on one Project and return the committed row, or
+/// `None` when no Project has that id. With `within_firm`, the update applies
+/// only while the Project still belongs to that Firm and the Firm still wears
+/// that Brand, so a concurrent move between Firms is never overwritten.
+pub(crate) async fn update_on(
+    pg: &PostgresDb,
+    id: Uuid,
+    columns: &[Column<'_>],
+    within_firm: Option<(Uuid, &str)>,
+) -> Result<Option<Project>, ProjectError> {
+    let mut builder =
+        QueryBuilder::<Postgres>::new("UPDATE project SET updated_at=clock_timestamp()");
+    for column in columns {
+        match *column {
+            Column::Text(name, value) => builder.push(format_args!(", {name}=")).push_bind(value),
+            Column::Id(name, value) => builder.push(format_args!(", {name}=")).push_bind(value),
+            Column::Date(name, value) => builder.push(format_args!(", {name}=")).push_bind(value),
+        };
+    }
+    builder.push(" WHERE id=").push_bind(id);
+    if let Some((firm_id, brand)) = within_firm {
+        builder
+            .push(" AND firm_id=")
+            .push_bind(firm_id)
+            .push(" AND EXISTS (SELECT 1 FROM firm_brand WHERE firm_brand.firm_id=")
+            .push_bind(firm_id)
+            .push(" AND firm_brand.brand_key=")
+            .push_bind(brand)
+            .push(")");
+    }
+    builder.push(" RETURNING *");
+    builder
+        .build()
+        .fetch_optional(pg.pool())
+        .await
+        .map_err(write_error)?
+        .as_ref()
+        .map(row)
+        .transpose()
+}
+
+/// Delete one Project with no participation left on it. `false` when no
+/// Project has that id; a row still referenced elsewhere is a database error.
+pub(crate) async fn delete_on(pg: &PostgresDb, id: Uuid) -> Result<bool, ProjectError> {
+    Ok(sqlx::query("DELETE FROM project WHERE id=$1")
+        .bind(id)
+        .execute(pg.pool())
+        .await?
+        .rows_affected()
+        > 0)
+}
+
+/// A matter being opened: the Project row and who is accountable for it.
+pub(crate) struct OpenMatter<'a> {
+    pub project: &'a NewProject,
+    pub closed_at: Option<&'a str>,
+    pub lawyer: Uuid,
+    pub lawyer_participation: &'a str,
+    pub client: Uuid,
+}
+
+/// Open a matter in one transaction: the Project, the attesting lawyer's
+/// Lawyer DRI row, and the client's Client DRI row. The Firm must still wear
+/// the Brand when the transaction commits.
+pub(crate) async fn open_on(
+    pg: &PostgresDb,
+    open: &OpenMatter<'_>,
+) -> Result<Project, ProjectError> {
+    let input = open.project;
+    let mut tx = pg.pool().begin().await?;
+    let wearer: Option<Uuid> =
+        sqlx::query_scalar("SELECT firm_id FROM firm_brand WHERE brand_key=$1 FOR KEY SHARE")
+            .bind(&input.brand)
+            .fetch_optional(&mut *tx)
+            .await?;
+    if wearer.is_none() || wearer != input.firm_id {
+        return Err(ProjectError::FirmBrandChanged);
+    }
+    let project = sqlx::query(
+        "INSERT INTO project (id,code,name,status,brand,entity_id,firm_id,jurisdiction_id,description,closed_at) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *",
+    )
+    .bind(Uuid::new_v4())
+    .bind(&input.code)
+    .bind(&input.name)
+    .bind(&input.status)
+    .bind(&input.brand)
+    .bind(input.entity_id)
+    .bind(input.firm_id)
+    .bind(input.jurisdiction_id)
+    .bind(&input.description)
+    .bind(open.closed_at)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(write_error)?;
+    let project = row(&project)?;
+    sqlx::query(
+        "INSERT INTO person_project_role (id,person_id,project_id,participation,is_lawyer_dri,is_client_dri) \
+         VALUES ($1,$2,$4,$3,true,false), ($5,$6,$4,'client',false,true)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(open.lawyer)
+    .bind(open.lawyer_participation)
+    .bind(project.id)
+    .bind(Uuid::new_v4())
+    .bind(open.client)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(project)
 }

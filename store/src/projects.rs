@@ -773,6 +773,44 @@ async fn mirrored(
     }
 }
 
+/// Write `columns` to the PostgreSQL Project first, then copy the committed row
+/// into the SurrealDB compatibility copy. `None` when no Project has that id.
+async fn patch_in_postgres(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+    project_id: Uuid,
+    columns: &[crate::postgres::projects::Column<'_>],
+    within_firm: Option<(Uuid, &str)>,
+) -> Result<Option<Project>, ProjectStoreError> {
+    let Some(project) = Box::pin(crate::postgres::projects::update_on(
+        pg,
+        project_id,
+        columns,
+        within_firm,
+    ))
+    .await?
+    else {
+        return Ok(None);
+    };
+    Box::pin(project_into_surreal(surreal, &project)).await?;
+    Ok(Some(project))
+}
+
+/// [`patch_in_postgres`] under tenancy authority; `None` leaves the caller on
+/// its SurrealDB write.
+async fn patch_under_authority(
+    surreal: &SurrealDb,
+    project_id: Uuid,
+    columns: &[crate::postgres::projects::Column<'_>],
+) -> Result<Option<Option<Project>>, ProjectCommandError> {
+    let Some(pg) = authority().await? else {
+        return Ok(None);
+    };
+    Ok(Some(
+        patch_in_postgres(surreal, &pg, project_id, columns, None).await?,
+    ))
+}
+
 /// Publish a Project and every participation on it, parent first.
 async fn mirror_project_with_participations(
     surreal: &SurrealDb,
@@ -1140,7 +1178,7 @@ pub async fn matter_directory(
         return Ok(Vec::new());
     }
 
-    let dris_by_project = dri_names_by_project(surreal, "is_lawyer_dri").await?;
+    let dris_by_project = dri_names_by_project(surreal, DriSide::Lawyer).await?;
     Ok(projects
         .into_iter()
         .map(|project| MatterDirectoryEntry {
@@ -1210,8 +1248,7 @@ pub async fn matter_directory_for(
 /// Every project's names on one DRI side, keyed by project id, for every
 /// project that has at least one. One round trip per table, not one per
 /// matter: every flagged row, then the persons they name — the same batching
-/// `matter_lifecycle_sets` uses. `flag_column` is always one of this module's
-/// own two DRI column names, never external input.
+/// `matter_lifecycle_sets` uses.
 ///
 /// A flagged row naming a person who is no longer there drops out rather than
 /// becoming a name the caller cannot produce. The set has no inherent order,
@@ -1219,19 +1256,18 @@ pub async fn matter_directory_for(
 /// order.
 pub(crate) async fn dri_names_by_project(
     surreal: &SurrealDb,
-    flag_column: &str,
+    side: DriSide,
 ) -> Result<std::collections::HashMap<Uuid, Vec<String>>, ProjectStoreError> {
-    let mut response = surreal
-        .query(format!(
-            "SELECT {PERSON_PROJECT_ROLE_SELECT} FROM {PERSON_PROJECT_ROLE_TABLE} \
-             WHERE {flag_column} = true"
-        ))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<PersonProjectRoleRow> = response.take(0)?;
     let mut ids_by_project: std::collections::HashMap<Uuid, Vec<Uuid>> =
         std::collections::HashMap::new();
-    for row in rows.into_iter().filter_map(PersonProjectRoleRow::into_role) {
+    for row in all_participations(surreal)
+        .await?
+        .into_iter()
+        .filter(|row| match side {
+            DriSide::Lawyer => row.is_lawyer_dri,
+            DriSide::Client => row.is_client_dri,
+        })
+    {
         ids_by_project
             .entry(row.project_id)
             .or_default()
@@ -1450,8 +1486,8 @@ pub async fn dri_digest(surreal: &SurrealDb) -> Result<Vec<ProjectDriSummary>, P
     if projects.is_empty() {
         return Ok(Vec::new());
     }
-    let lawyer_by_project = dri_names_by_project(surreal, "is_lawyer_dri").await?;
-    let client_by_project = dri_names_by_project(surreal, "is_client_dri").await?;
+    let lawyer_by_project = dri_names_by_project(surreal, DriSide::Lawyer).await?;
+    let client_by_project = dri_names_by_project(surreal, DriSide::Client).await?;
     Ok(projects
         .into_iter()
         .map(|project| ProjectDriSummary {
@@ -1673,6 +1709,20 @@ pub async fn restore_archived(
     if find_by_code(surreal, &project.code).await?.is_some() {
         return Ok(crate::assets::RowRestore::Conflict);
     }
+    if let Some(pg) = authority().await? {
+        Box::pin(crate::postgres_mirror::tenancy::put_project(&pg, project)).await?;
+        Box::pin(project_into_surreal(surreal, project)).await?;
+        return Ok(crate::assets::RowRestore::Created);
+    }
+    restore_archived_in_surreal(surreal, project).await?;
+    Ok(crate::assets::RowRestore::Created)
+}
+
+/// Create one archived Project row in SurrealDB and publish it to PostgreSQL.
+async fn restore_archived_in_surreal(
+    surreal: &SurrealDb,
+    project: &Project,
+) -> Result<(), ProjectStoreError> {
     let mut response = writing_project(|| {
         surreal
             .query(format!(
@@ -1759,7 +1809,7 @@ pub async fn restore_archived(
     mirrored(surreal, row.and_then(ProjectRow::into_project))
         .await?
         .ok_or(ProjectStoreError::WriteReturnedNothing)?;
-    Ok(crate::assets::RowRestore::Created)
+    Ok(())
 }
 
 /// Whether a Project other than `project_id` records `drive_folder_id`. The
@@ -2700,6 +2750,18 @@ pub async fn set_drive_folder_id(
         })
         .transpose()?;
 
+    if let Some(patched) = patch_under_authority(
+        surreal,
+        project_id,
+        &[crate::postgres::projects::Column::Text(
+            "drive_folder_id",
+            drive_folder_id.as_deref(),
+        )],
+    )
+    .await?
+    {
+        return Ok(patched);
+    }
     if find_by_id(surreal, project_id)
         .await
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?
@@ -2735,6 +2797,18 @@ pub async fn set_internal_slack_channel_id(
     let channel_id = channel_id.trim();
     if channel_id.is_empty() || !channel_id.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
         return Err(ProjectCommandError::Invalid(SLACK_CHANNEL_ID_INVALID));
+    }
+    if let Some(patched) = patch_under_authority(
+        surreal,
+        project_id,
+        &[crate::postgres::projects::Column::Text(
+            "internal_slack_channel_id",
+            Some(channel_id),
+        )],
+    )
+    .await?
+    {
+        return Ok(patched);
     }
     if find_by_id(surreal, project_id)
         .await
@@ -2777,6 +2851,18 @@ pub async fn set_internal_slack_channel_url(
     if channel_url.is_empty() || !is_valid_resource_url(channel_url) {
         return Err(ProjectCommandError::Invalid(SLACK_CHANNEL_URL_INVALID));
     }
+    if let Some(patched) = patch_under_authority(
+        surreal,
+        project_id,
+        &[crate::postgres::projects::Column::Text(
+            "internal_slack_channel_url",
+            Some(channel_url),
+        )],
+    )
+    .await?
+    {
+        return Ok(patched);
+    }
     if find_by_id(surreal, project_id)
         .await
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?
@@ -2818,6 +2904,21 @@ pub async fn set_internal_slack_channel(
     let channel_url = channel_url.trim();
     if channel_url.is_empty() || !is_valid_resource_url(channel_url) {
         return Err(ProjectCommandError::Invalid(SLACK_CHANNEL_URL_INVALID));
+    }
+    if let Some(patched) = patch_under_authority(
+        surreal,
+        project_id,
+        &[
+            crate::postgres::projects::Column::Text("internal_slack_channel_id", Some(channel_id)),
+            crate::postgres::projects::Column::Text(
+                "internal_slack_channel_url",
+                Some(channel_url),
+            ),
+        ],
+    )
+    .await?
+    {
+        return Ok(patched);
     }
     if find_by_id(surreal, project_id)
         .await
@@ -2872,6 +2973,18 @@ pub async fn set_jurisdiction(
         {
             return Err(ProjectCommandError::Invalid(JURISDICTION_UNKNOWN));
         }
+    }
+    if let Some(patched) = patch_under_authority(
+        surreal,
+        project_id,
+        &[crate::postgres::projects::Column::Id(
+            "jurisdiction_id",
+            jurisdiction_id,
+        )],
+    )
+    .await?
+    {
+        return Ok(patched);
     }
     if find_by_id(surreal, project_id)
         .await
@@ -2935,23 +3048,25 @@ pub async fn set_client_dri_person_id(
         {
             return Err(ProjectCommandError::Invalid("no such person"));
         }
-        let mut designated = surreal
-            .query(format!(
-                "SELECT VALUE id FROM ONLY {PERSON_PROJECT_ROLE_TABLE} \
-                 WHERE person_id = $person_id AND project_id = $project_id \
-                 AND is_client_dri = true LIMIT 1"
-            ))
-            .bind(("person_id", record_id("person", person_id)))
-            .bind(("project_id", record_id(PROJECT_TABLE, project_id)))
+        let on_this_matter = participation_for_person(surreal, person_id, project_id)
             .await
-            .and_then(surrealdb::IndexedResults::check)
-            .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-        let on_this_matter: Option<surrealdb::types::RecordId> = designated
-            .take(0)
-            .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-        if on_this_matter.is_none() {
+            .map_err(|error| ProjectCommandError::Db(error.to_string()))?
+            .is_some_and(|row| row.is_client_dri);
+        if !on_this_matter {
             return Err(ProjectCommandError::Invalid(CLIENT_DRI_NOT_ON_PROJECT));
         }
+    }
+    if let Some(patched) = patch_under_authority(
+        surreal,
+        project_id,
+        &[crate::postgres::projects::Column::Id(
+            "client_dri_person_id",
+            person_id,
+        )],
+    )
+    .await?
+    {
+        return Ok(patched);
     }
     if find_by_id(surreal, project_id)
         .await
@@ -3115,6 +3230,29 @@ pub async fn set_plan_columns(
             None => return Err(ProjectCommandError::Invalid(PLAN_UNKNOWN)),
         }
     }
+    if let Some(authority) = authority().await? {
+        use crate::postgres::projects::Column::{Date, Id, Text};
+        let date = |text: &Option<String>| text.as_deref().and_then(|text| text.parse().ok());
+        return Ok(patch_in_postgres(
+            surreal,
+            &authority,
+            project_id,
+            &[
+                Id("legal_plan_id", columns.legal_plan_id),
+                Text("plan_member_id", columns.plan_member_id.as_deref()),
+                Text("plan_case_number", columns.plan_case_number.as_deref()),
+                Text("benefit_code", columns.benefit_code.as_deref()),
+                Text("plan_matter_type", columns.plan_matter_type.as_deref()),
+                Text("plan_state", columns.plan_state.as_deref()),
+                Date("plan_assigned_on", date(&columns.plan_assigned_on)),
+                Date("plan_accepted_on", date(&columns.plan_accepted_on)),
+                Date("plan_closed_on", date(&columns.plan_closed_on)),
+                Text("kit_version", columns.kit_version.as_deref()),
+            ],
+            None,
+        )
+        .await?);
+    }
     let mut response = surreal
         .query(format!(
             "UPDATE $id SET legal_plan_id = $legal_plan_id, \
@@ -3157,6 +3295,18 @@ pub async fn set_private_notion_page_url(
     let page_url = page_url.trim();
     if page_url.is_empty() || !is_valid_resource_url(page_url) {
         return Err(ProjectCommandError::Invalid(NOTION_PAGE_URL_INVALID));
+    }
+    if let Some(patched) = patch_under_authority(
+        surreal,
+        project_id,
+        &[crate::postgres::projects::Column::Text(
+            "private_notion_page_url",
+            Some(page_url),
+        )],
+    )
+    .await?
+    {
+        return Ok(patched);
     }
     if find_by_id(surreal, project_id)
         .await
@@ -3223,6 +3373,15 @@ async fn set_optional_column(
     column: &'static str,
     value: Option<&str>,
 ) -> Result<Option<Project>, ProjectCommandError> {
+    if let Some(patched) = patch_under_authority(
+        surreal,
+        project_id,
+        &[crate::postgres::projects::Column::Text(column, value)],
+    )
+    .await?
+    {
+        return Ok(patched);
+    }
     if find_by_id(surreal, project_id)
         .await
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?
@@ -3380,6 +3539,18 @@ pub async fn set_repository_url(
         })
         .transpose()?;
 
+    if let Some(patched) = patch_under_authority(
+        surreal,
+        project_id,
+        &[crate::postgres::projects::Column::Text(
+            "repository_url",
+            repository_url.as_deref(),
+        )],
+    )
+    .await?
+    {
+        return Ok(patched);
+    }
     if find_by_id(surreal, project_id)
         .await
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?
@@ -3768,6 +3939,49 @@ pub async fn change_brand(
     .await
 }
 
+/// [`update_project_inner`]'s write, PostgreSQL first.
+async fn update_project_in_postgres(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+    id: Uuid,
+    input: &UpdateProjectCommand,
+    firm_brand: Option<&(Uuid, String)>,
+    keep_firm: bool,
+) -> Result<Project, ProjectCommandError> {
+    use crate::postgres::projects::Column::{Id, Text};
+    // A blank submission clears the column rather than storing "".
+    let texts: Vec<(&'static str, Option<String>)> = optional_text_columns(input)
+        .into_iter()
+        .filter_map(|(column, value)| {
+            value.map(|value| (column, crate::people_commands::none_if_blank(Some(value))))
+        })
+        .collect();
+    let mut columns = Vec::new();
+    if let Some(name) = input.name.as_deref() {
+        columns.push(Text("name", Some(name.trim())));
+    }
+    if let Some(entity_id) = input.entity_id {
+        columns.push(Id("entity_id", Some(entity_id)));
+    }
+    if let Some((firm_id, brand)) = firm_brand {
+        if !keep_firm {
+            columns.push(Id("firm_id", Some(*firm_id)));
+        }
+        columns.push(Text("brand", Some(brand)));
+    }
+    columns.extend(
+        texts
+            .iter()
+            .map(|(column, value)| Text(column, value.as_deref())),
+    );
+    let within_firm = firm_brand
+        .filter(|_| keep_firm)
+        .map(|(firm_id, brand)| (*firm_id, brand.as_str()));
+    patch_in_postgres(surreal, pg, id, &columns, within_firm)
+        .await?
+        .ok_or(ProjectCommandError::NotFound)
+}
+
 async fn update_project_inner(
     surreal: &SurrealDb,
     id: Uuid,
@@ -3780,6 +3994,10 @@ async fn update_project_inner(
     // The optional text columns are handled from one table, so a column is set
     // and bound from the same row rather than from two `if` blocks a hundred
     // lines apart that have to be kept in step.
+    if let Some(pg) = authority().await? {
+        return update_project_in_postgres(surreal, &pg, id, input, firm_brand.as_ref(), keep_firm)
+            .await;
+    }
     let text_columns = optional_text_columns(input);
     let mut assignments = vec!["updated_at = $updated_at".to_string()];
     if input.name.is_some() {
@@ -3954,13 +4172,21 @@ pub async fn delete_project_with_surreal(
     crate::cap_table_holdings::delete_for_project(surreal, id)
         .await
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
+    let pg = authority().await?;
+    if let Some(pg) = &pg {
+        Box::pin(crate::postgres::projects::delete_on(pg, id))
+            .await
+            .map_err(ProjectStoreError::from)?;
+    }
     surreal
         .query("DELETE $id")
         .bind(("id", record_id(PROJECT_TABLE, id)))
         .await
         .and_then(surrealdb::IndexedResults::check)
         .map_err(|error| ProjectCommandError::Db(error.to_string()))?;
-    publish(surreal, [MirrorKey::Project(id)]).await?;
+    if pg.is_none() {
+        publish(surreal, [MirrorKey::Project(id)]).await?;
+    }
     Ok(project)
 }
 
@@ -4256,6 +4482,40 @@ async fn resolve_open_firm(
     Ok(firm_id)
 }
 
+/// Open a matter PostgreSQL-first, then copy the Project and both DRI rows into
+/// the SurrealDB compatibility copy.
+async fn open_matter_in_postgres(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+    open: &crate::postgres::projects::OpenMatter<'_>,
+) -> Result<Project, OpenMatterError> {
+    use crate::postgres::projects::ProjectError;
+    let db = |error: ProjectStoreError| OpenMatterError::Db(error.to_string());
+    let created = Box::pin(crate::postgres::projects::open_on(pg, open))
+        .await
+        .map_err(|error| match error {
+            ProjectError::CodeTaken => OpenMatterError::CodeConflict,
+            ProjectError::FirmBrandChanged => OpenMatterError::Invalid(
+                "Firm and brand changed while opening the matter; retry the request.",
+            ),
+            other => OpenMatterError::Db(other.to_string()),
+        })?;
+    Box::pin(project_into_surreal(surreal, &created))
+        .await
+        .map_err(db)?;
+    let roles = Box::pin(crate::postgres::participation::for_project_on(
+        pg, created.id,
+    ))
+    .await
+    .map_err(|error| OpenMatterError::Db(error.to_string()))?;
+    for role in roles {
+        Box::pin(participation_into_surreal(surreal, &role))
+            .await
+            .map_err(db)?;
+    }
+    Ok(created)
+}
+
 pub async fn open_matter(
     surreal: &SurrealDb,
     input: &OpenMatterCommand,
@@ -4269,7 +4529,6 @@ pub async fn open_matter(
     if name.is_empty() {
         return Err(OpenMatterError::Invalid("Name is required."));
     }
-    let project_id = Uuid::now_v7();
     // The code is required, not blank, and is stored exactly as supplied —
     // normalized for case and whitespace, never generated or appended to. It
     // is a coordinate the caller already committed to in a repository's
@@ -4305,9 +4564,55 @@ pub async fn open_matter(
     }
     let (status, closed_at) = initial_status_and_closed_at(input.closed_at)?;
 
+    let project = NewProject {
+        code,
+        name: name.to_string(),
+        status: status.to_string(),
+        brand: input.brand.clone(),
+        entity_id: input.entity_id,
+        firm_id: Some(firm_id),
+        jurisdiction_id: input.jurisdiction_id,
+        description: crate::people_commands::none_if_blank(input.description.as_deref()),
+    };
+    let open = crate::postgres::projects::OpenMatter {
+        project: &project,
+        closed_at: closed_at.as_deref(),
+        lawyer: input.acting_person_id,
+        lawyer_participation: attester_participation,
+        client: input.client_id,
+    };
+    let created = match authority()
+        .await
+        .map_err(|error| OpenMatterError::Db(error.to_string()))?
+    {
+        Some(pg) => Box::pin(open_matter_in_postgres(surreal, &pg, &open)).await?,
+        None => Box::pin(open_matter_in_surreal(surreal, &open)).await?,
+    };
+    // The attestation is the record that the conflict check was run and
+    // cleared — the record the firm's `@cleared` discipline rests on. It
+    // lands where the graph lives: under the AGE engine its PostgreSQL row
+    // names the Project by foreign key, so the matter's PostgreSQL copy
+    // lands first. A failure of either is the caller's error.
+    record_open_attestation(
+        surreal,
+        created.id,
+        input.acting_person_id,
+        conflict.is_clear(),
+        &conflict.summary_lines(),
+    )
+    .await?;
+    Ok(created)
+}
+
+/// Open a matter in one SurrealDB transaction, then publish the Project and
+/// both DRI rows to PostgreSQL.
+async fn open_matter_in_surreal(
+    surreal: &SurrealDb,
+    open: &crate::postgres::projects::OpenMatter<'_>,
+) -> Result<Project, OpenMatterError> {
+    let project_id = Uuid::now_v7();
     let now = chrono::Utc::now().to_rfc3339();
-    let description = crate::people_commands::none_if_blank(input.description.as_deref());
-    let jurisdiction_id = jurisdiction_record(input.jurisdiction_id);
+    let jurisdiction_id = jurisdiction_record(open.project.jurisdiction_id);
     let mut response = writing_project(|| {
         surreal
             .query(format!(
@@ -4330,18 +4635,18 @@ pub async fn open_matter(
             .bind(("project", record_id(PROJECT_TABLE, project_id)))
             .bind(("lawyer_role", record_id(PERSON_PROJECT_ROLE_TABLE, Uuid::now_v7())))
             .bind(("client_role", record_id(PERSON_PROJECT_ROLE_TABLE, Uuid::now_v7())))
-            .bind(("code", code.clone()))
-            .bind(("name", name.to_string()))
-            .bind(("status", status.to_string()))
-            .bind(("closed_at", closed_at.clone()))
-            .bind(("brand", input.brand.clone()))
-            .bind(("firm_id", record_id(crate::firms::TABLE, firm_id)))
-            .bind(("entity_id", record_id(ENTITY_TABLE, input.entity_id)))
+            .bind(("code", open.project.code.clone()))
+            .bind(("name", open.project.name.clone()))
+            .bind(("status", open.project.status.clone()))
+            .bind(("closed_at", open.closed_at.map(str::to_string)))
+            .bind(("brand", open.project.brand.clone()))
+            .bind(("firm_id", open.project.firm_id.map(|id| record_id(crate::firms::TABLE, id))))
+            .bind(("entity_id", record_id(ENTITY_TABLE, open.project.entity_id)))
             .bind(("jurisdiction_id", jurisdiction_id.clone()))
-            .bind(("description", description.clone()))
-            .bind(("attester", record_id("person", input.acting_person_id)))
-            .bind(("attester_participation", attester_participation.to_string()))
-            .bind(("client", record_id("person", input.client_id)))
+            .bind(("description", open.project.description.clone()))
+            .bind(("attester", record_id("person", open.lawyer)))
+            .bind(("attester_participation", open.lawyer_participation.to_string()))
+            .bind(("client", record_id("person", open.client)))
             .bind(("now", now.clone()))
     })
     .await
@@ -4358,23 +4663,9 @@ pub async fn open_matter(
         .and_then(ProjectRow::into_project)
         .ok_or_else(|| OpenMatterError::Db("opening a matter returned no project".into()))?;
 
-    // The attestation is the record that the conflict check was run and
-    // cleared — the record the firm's `@cleared` discipline rests on. It
-    // lands where the graph lives: under the AGE engine its PostgreSQL row
-    // names the Project by foreign key, so the matter's PostgreSQL copy
-    // lands first. A failure of either is the caller's error.
     mirror_project_with_participations(surreal, project_id)
         .await
         .map_err(|error| OpenMatterError::Db(error.to_string()))?;
-    record_open_attestation(
-        surreal,
-        project_id,
-        input.acting_person_id,
-        conflict.is_clear(),
-        &conflict.summary_lines(),
-    )
-    .await?;
-
     Ok(created)
 }
 
