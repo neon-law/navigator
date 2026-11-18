@@ -33907,7 +33907,8 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ----------------------------------------------------------------------------------------
-nix 0.31.3
+nix 0.31.4
+nix 0.32.0
 
 The MIT License (MIT)
 
