@@ -418,7 +418,37 @@ pub(in crate::devx) fn prepare_postgres(
     cfg: &KindConfig,
 ) -> Result<crate::devx::postgres_fixture::Credentials> {
     let kube = Kube::new(cfg);
-    let seed = ensure_seed(&kube)?;
+    let existing_seed = kube.secret(SEED_SECRET)?;
+    let seed = existing_seed.as_ref().map(Seed::from_map).transpose()?;
+    for (name, expected) in [
+        (
+            "navigator-postgres-auth",
+            seed.as_ref().map(|s| &s.postgres_password),
+        ),
+        (
+            "navigator-postgres-app",
+            seed.as_ref().map(|s| &s.app_password),
+        ),
+        (
+            "navigator-postgres-migrator",
+            seed.as_ref().map(|s| &s.migrator_password),
+        ),
+        (
+            "navigator-postgres-backup",
+            seed.as_ref().map(|s| &s.backup_password),
+        ),
+    ] {
+        if let Some(secret) = kube.secret(name)? {
+            anyhow::ensure!(
+                expected.is_some_and(|password| secret.get("password") == Some(password)),
+                "existing synthetic PostgreSQL credentials require explicit recovery; bootstrap will not replace them"
+            );
+        }
+    }
+    let seed = match seed {
+        Some(seed) => seed,
+        None => ensure_seed(&kube)?,
+    };
     let ca = apply_postgres_secrets(&kube, &seed)?;
     Ok(crate::devx::postgres_fixture::Credentials {
         app_password: seed.app_password,

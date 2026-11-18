@@ -1541,7 +1541,11 @@ enum DevCmd {
     /// CI calls it after `kubectl apply -k`.
     SeaweedfsBootstrap,
     /// Initialize the task-owned KIND PostgreSQL fixture before application writers start.
-    PostgresBootstrap,
+    PostgresBootstrap {
+        /// Checkout whose task-owned KIND fixture is initialized.
+        #[arg(long)]
+        path: Option<PathBuf>,
+    },
     /// Pre-seed the Lawyer demo user (`lawyer@neonlaw.com`) with the
     /// `lawyer` role so the browser e2e's admin-gated walk can run.
     /// Native Rust.

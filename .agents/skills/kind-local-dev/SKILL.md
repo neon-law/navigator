@@ -7,9 +7,9 @@ description: >-
 
 # KIND-based local development
 
-The `navigator` CLI (`cli::devx`) drives both the host-`web` loop and the full-stack KIND flow; there is no Makefile.
-Install Docker, KIND, `kubectl`, Helm, and the Restate CLI; `docker info` must succeed. Do not add shell-script wrappers
-or substitute one-off local containers for the Kubernetes topology. In-cluster Store specifics are in
+The `hudson` CLI (`deploy::devx`) drives the host-`web` loop and the full-stack KIND flow; there is no Makefile. Install
+Docker, KIND, `kubectl`, Helm, and the Restate CLI; `docker info` must succeed. Do not add shell-script wrappers or
+substitute one-off local containers for the Kubernetes topology. In-cluster Store specifics are in
 [`docs/test-database.md`](../../../docs/test-database.md); the cluster config and its `extraPortMappings` are in
 [`k8s/kind-config.yaml`](../../../k8s/kind-config.yaml).
 
@@ -78,7 +78,7 @@ set -a; source .devx/env; set +a
 cargo run -p neon
 ```
 
-It deploys SurrealDB, Rauthy, SeaweedFS, Restate, `workflows-service`, and telemetry in KIND, restores the host
+It deploys PostgreSQL, SurrealDB, Rauthy, SeaweedFS, Restate, `workflows-service`, and telemetry in KIND, restores host
 port-forwards, and writes `.devx/env`. Re-run it after sleep or reboot to re-arm dead port-forwards; it reuses the
 cluster. Restart the compiled `web` process after changing routes, handlers, views, or content.
 
@@ -96,24 +96,26 @@ No local DNS serves the brand hostnames, so `web` answers each brand on its own 
 selects a free slot in the `20000`–`21599` ranges (skipping slots held by stopped or orphaned clusters), and its three
 brand ports move with that slot. Always read the values from that worktree's `.devx/env`.
 
-SurrealDB is the store. Its connection contract is `NAVIGATOR_SURREAL_ENDPOINT`, `_NAMESPACE`, and `_DATABASE`, written
-into `.devx/env`. Its schema is applied, not migrated: one idempotent `DEFINE` file (`store/src/schema/navigator.surql`)
-plus a `schema_version` record.
+PostgreSQL is the storage authority. KIND provisions the pinned retained PostgreSQL image, TLS certificate, and
+application roles through the same fixture seam as Forgejo. `.devx/env` contains the application role and a loopback
+`verify-full` connection; `.devx/postgres/ca.crt` is the trusted certificate. Keep these ignored files private.
 
-PostgreSQL is replacing SurrealDB; the app does not connect to it yet. To run the image beside the existing tier, start
-the worktree on the Postgres overlay and port-forward to an ephemeral loopback port:
+The lifecycle holds web and worker replicas before PostgreSQL enrollment. For a fresh, memory-backed legacy store, it
+verifies an actual strict schema-only export, imports it, and enrolls the required PostgreSQL scopes before normal
+sample seeding. Existing valid enrollment is reused. Nonempty history without enrollment, partial enrollment, or a
+changed namespace identity requires the explicit frozen-source recovery procedure; startup does not reset history or
+replace receipts. An interrupted bootstrap leaves writers held for a safe retry.
+
+`dev up`, `dev deploy`, and KIND `worktree-env up` use this bridge. The deploy browser gate invokes the same boundary
+before starting its application:
 
 ```bash
-NAVIGATOR_KIND_DEPS_OVERLAY=k8s/overlays/kind-postgres-spike \
-  cargo run -p hudson -- dev worktree-env up --runtime kind --path "$PWD"
-set -a; source .devx/env; set +a
-kubectl --kubeconfig .devx/kubeconfig --context "kind-$NAVIGATOR_KIND_CLUSTER" \
-  -n navigator rollout status statefulset/postgres-spike --timeout=180s
-kubectl --kubeconfig .devx/kubeconfig --context "kind-$NAVIGATOR_KIND_CLUSTER" \
-  -n navigator port-forward service/postgres-spike :5432
+cargo run -p hudson -- dev postgres-bootstrap --path "$PWD"
 ```
 
-The image and its pin are in the [`postgres`](../postgres/SKILL.md) skill.
+The legacy connection remains in `.devx/env` as `NAVIGATOR_SURREAL_ENDPOINT`, `_NAMESPACE`, and `_DATABASE` for
+remaining compatibility callers. Its idempotent schema is `store/src/schema/navigator.surql` with a `schema_version`
+record. The PostgreSQL image and its pin are in the [`postgres`](../postgres/SKILL.md) skill.
 
 Forgejo is opt-in the same way: `cargo run -p hudson -- dev forgejo up` adds the retained PostgreSQL server, Forgejo,
 and an Actions runner to the sourced tier, signing in through its Rauthy; `dev forgejo smoke` proves it. See

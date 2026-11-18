@@ -1088,6 +1088,11 @@ pub(super) fn down_in(root: &Path, cfg: &KindConfig) -> Result<()> {
             .arg(cluster))?;
     }
     state.clear();
+    let postgres_state = root.join(".devx/postgres");
+    if postgres_state.exists() {
+        fs::remove_dir_all(postgres_state)
+            .context("remove the deleted KIND fixture's PostgreSQL state")?;
+    }
     Ok(())
 }
 
@@ -1251,7 +1256,27 @@ fn spawn_port_forward(args: &[&str], state: &StateDir) -> Result<u32> {
     let log_offset = state.log_size();
     let log = state.open_log()?;
     let log_err = log.try_clone()?;
-    let mut cmd = Command::new("kubectl");
+    // A completed TLS session can reset kubectl's stream. Supervise the
+    // transport, never the capture or migration operation using it.
+    let mut cmd = if args.contains(&"service/navigator-postgres") {
+        let mut command = Command::new("sh");
+        command.args([
+            "-c",
+            r#"child=
+trap 'if [ -n "$child" ]; then kill -TERM "$child" 2>/dev/null; wait "$child" 2>/dev/null; fi; exit 0' TERM INT
+while :; do
+    kubectl "$@" &
+    child=$!
+    wait "$child"
+    child=
+    sleep 1
+done"#,
+            "hudson-postgres-forward",
+        ]);
+        command
+    } else {
+        Command::new("kubectl")
+    };
     cmd.args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::from(log))
@@ -1271,6 +1296,7 @@ fn spawn_port_forward(args: &[&str], state: &StateDir) -> Result<u32> {
     // listening on that port.
     std::thread::sleep(Duration::from_millis(800));
     if let Some(err) = state.log_tail_error(log_offset)? {
+        StateDir::kill(&[pid]);
         bail!("kubectl port-forward {args:?} failed: {err}");
     }
     Ok(pid)
@@ -1543,10 +1569,11 @@ impl StateDir {
 }
 
 /// Prepare the one synthetic PostgreSQL store shared by KIND and host fixtures.
-pub(super) fn postgres_bootstrap(cfg: &KindConfig) -> Result<()> {
-    let root = workspace_root()?;
-    configure_worktree_kubeconfig(&root, cfg)?;
-    bootstrap_postgres_in(&root, cfg, "navigator")
+pub(super) fn postgres_bootstrap(path: Option<&Path>, cfg: &KindConfig) -> Result<()> {
+    let root = checkout_root(path)?;
+    let cfg = super::worktree_env::postgres_fixture_config(&root, cfg)?;
+    configure_worktree_kubeconfig(&root, &cfg)?;
+    bootstrap_postgres_in(&root, &cfg, "navigator")
 }
 
 fn bootstrap_postgres_in(root: &Path, cfg: &KindConfig, database: &str) -> Result<()> {

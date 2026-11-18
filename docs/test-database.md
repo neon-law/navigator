@@ -21,6 +21,26 @@ docker run -d --name test-postgres --shm-size=256m -p 127.0.0.1:25432:5432 \
 docker exec -i test-postgres psql -U postgres -d smoke -v ON_ERROR_STOP=1 < store/postgres/schema.sql
 ```
 
+## The KIND application database
+
+KIND browser tests use the application database, separately from the disposable unit-test fixture above. The normal
+Hudson lifecycle provisions the pinned retained PostgreSQL image with TLS and application roles. It writes a private
+`.devx/postgres/env` and includes it in `.devx/env`, so host fixture helpers and the in-cluster application use the same
+database. In-cluster clients mount the CA certificate; server keys stay with PostgreSQL.
+
+Before enrollment, Hudson holds web and worker replicas and waits for their pods to stop. A fresh memory-backed legacy
+source is captured with its real strict-export receipt, imported, and enrolled before ordinary sample seeding. A valid
+existing enrollment is reused. Nonempty unactivated history or partial enrollment requires explicit recovery; the
+fixture never fabricates empty receipts or resets retained history. An interrupted attempt keeps writers held.
+
+```bash
+cargo run -p hudson -- dev worktree-env up --runtime kind --path "$PWD"
+set -a; source .devx/env; set +a
+```
+
+The deploy browser job calls the same `hudson dev postgres-bootstrap` boundary after applying its dependencies, then
+sources the private application-role environment for the app and host browser helpers.
+
 ## The embedded SurrealDB harness (deprecated)
 
 `store::test_support::mem_surreal()` (and `store::surreal::test_support::mem()`, and `features::shared_surreal()`)

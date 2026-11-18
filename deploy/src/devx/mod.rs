@@ -1016,8 +1016,8 @@ fn dispatch_with_dns_provider(
         crate::Command::Dev(crate::DevCmd::Undeploy) => undeploy(&cfg),
         crate::Command::Dev(crate::DevCmd::E2e) => e2e::run_e2e(&cfg),
         crate::Command::Dev(crate::DevCmd::SeaweedfsBootstrap) => seaweedfs::bootstrap(&cfg),
-        crate::Command::Dev(crate::DevCmd::PostgresBootstrap) => {
-            orchestrate::postgres_bootstrap(&cfg)
+        crate::Command::Dev(crate::DevCmd::PostgresBootstrap { path }) => {
+            orchestrate::postgres_bootstrap(path.as_deref(), &cfg)
         }
         crate::Command::Dev(crate::DevCmd::GrantLawyer) => e2e::grant_lawyer(&cfg),
         crate::Command::Dev(crate::DevCmd::SampleProject {

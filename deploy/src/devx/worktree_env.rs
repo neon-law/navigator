@@ -459,7 +459,7 @@ fn up_dev(root: &Path, no_deps: bool, runtime: Runtime, base_cfg: &KindConfig) -
     // schema apply, and the rendered environment are identical work.
     match runtime {
         Runtime::Kind => {
-            if !no_deps && (!worktree_deps_ready(&cfg) || !super::rauthy_deployment_exists(&cfg)) {
+            if !no_deps && !kind_fixture_ready(root, &cfg) {
                 eprintln!(
                     "==> isolated deps need reconciliation for {}; applying its KIND fixture",
                     cfg.cluster
@@ -834,6 +834,13 @@ fn gate_members(cfg: &KindConfig) -> [(&'static str, u16); 10] {
     ]
 }
 
+fn kind_fixture_ready(root: &Path, cfg: &KindConfig) -> bool {
+    worktree_deps_ready(cfg)
+        && super::rauthy_deployment_exists(cfg)
+        && super::postgres_fixture::environment_path(root).is_file()
+        && port_listening(cfg.postgres_port)
+}
+
 fn worktree_deps_ready(cfg: &KindConfig) -> bool {
     gate_members(cfg)
         .into_iter()
@@ -967,6 +974,20 @@ fn read_descriptor(root: &Path) -> Option<WorktreeEnv> {
 }
 
 /// Refuse another worktree's coordinates before a fixture can hold its writers.
+pub(super) fn postgres_fixture_config(root: &Path, base: &KindConfig) -> Result<KindConfig> {
+    let cfg = if descriptor_path(root).exists() {
+        let descriptor = read_descriptor(root).context("fixture worktree descriptor is invalid")?;
+        let slot = descriptor
+            .dev_slot()
+            .context("fixture requires a development worktree slot")?;
+        worktree_kind_config(base, root, slot)
+    } else {
+        base.clone()
+    };
+    verify_postgres_fixture_target(root, &cfg)?;
+    Ok(cfg)
+}
+
 pub(super) fn verify_postgres_fixture_target(root: &Path, cfg: &KindConfig) -> Result<()> {
     anyhow::ensure!(
         cfg.namespace == super::DEFAULT_NAMESPACE,
