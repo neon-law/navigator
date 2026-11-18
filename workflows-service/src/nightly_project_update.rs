@@ -316,8 +316,7 @@ impl NightlyProjectUpdateReport {
         }
     }
 
-    fn fail(&mut self, tag: Tag, error: &TerminalError) {
-        let message = error.message();
+    fn fail(&mut self, tag: Tag, message: &str) {
         self.note_cause(tag, failure_reason(message), 1, message);
         match tag {
             Tag::Membership => self.membership_failures += 1,
@@ -332,7 +331,7 @@ impl NightlyProjectUpdateReport {
 pub async fn sweep<F, Fut>(roster: &[RosterEntry], mut call: F) -> NightlyProjectUpdateReport
 where
     F: FnMut(Tag, Uuid) -> Fut,
-    Fut: Future<Output = Result<TagOutcome, TerminalError>>,
+    Fut: Future<Output = Result<TagOutcome, String>>,
 {
     let mut report = NightlyProjectUpdateReport {
         projects: roster.len(),
@@ -352,7 +351,7 @@ where
                     tracing::error!(
                         project_id = %entry.project_id,
                         tag = tag.name(),
-                        reason = failure_reason(error.message()),
+                        reason = failure_reason(&error),
                         %error,
                         "Nightly Project Update child failed"
                     );
@@ -491,6 +490,7 @@ impl NightlyProjectUpdateService {
                     .await
                     .map(|Json(outcome)| TagOutcome::Repository(outcome)),
             }
+            .map_err(|error| error.message().to_owned())
         })
         .await;
 
@@ -698,7 +698,7 @@ pub(crate) async fn sweep_in_process(
             .await
             .map(TagOutcome::Repository),
         }
-        .map_err(|error| TerminalError::new(format!("{error:?}")))
+        .map_err(|error| format!("{error:?}"))
     })
     .await
 }
@@ -760,7 +760,7 @@ mod tests {
             ran.borrow_mut().push((id, tag));
             async move {
                 match tag {
-                    Tag::Membership if id == failing => Err(TerminalError::new("Slack down")),
+                    Tag::Membership if id == failing => Err("Slack down".to_owned()),
                     Tag::Membership => Ok(TagOutcome::Membership(MembershipOutcome {
                         channels: 1,
                         invited: 2,
@@ -782,7 +782,7 @@ mod tests {
         assert_eq!(report.membership_failures, 1);
         assert_eq!(report.failed_projects, 1);
         assert_eq!(report.failure_causes.len(), 1);
-        assert!(report.failure_causes[0].example.contains("Slack down"));
+        assert_eq!(report.failure_causes[0].example, "Slack down");
         assert_eq!((report.slack_failures, report.repository_failures), (0, 0));
         assert_eq!(
             report.notices_posted, 2,
@@ -846,7 +846,7 @@ mod tests {
         let failing = roster[0].project_id;
         let report = sweep(&roster, |tag, id| async move {
             match tag {
-                Tag::Repository if id == failing => Err(TerminalError::new("forge down")),
+                Tag::Repository if id == failing => Err("forge down".to_owned()),
                 Tag::Membership => Ok(TagOutcome::Membership(MembershipOutcome::default())),
                 Tag::Slack => Ok(TagOutcome::Slack(SlackOutcome::default())),
                 Tag::Repository => Ok(TagOutcome::Repository(RepositoryOutcome {
@@ -867,7 +867,7 @@ mod tests {
         let failing = roster[0].project_id;
         let report = sweep(&roster, |tag, id| async move {
             match tag {
-                Tag::Slack if id == failing => Err(TerminalError::new("missing_scope")),
+                Tag::Slack if id == failing => Err("missing_scope".to_owned()),
                 Tag::Membership => Ok(TagOutcome::Membership(MembershipOutcome::default())),
                 Tag::Slack => Ok(TagOutcome::Slack(SlackOutcome {
                     canvases_edited: 1,
@@ -1163,9 +1163,9 @@ mod tests {
         let healthy = roster[0].project_id;
         let report = sweep(&roster, |tag, id| async move {
             match tag {
-                Tag::Membership if id != healthy => Err(TerminalError::new(
-                    "Slack channel name is taken by a channel this bot cannot see; invite the bot to that private channel or archive it",
-                )),
+                Tag::Membership if id != healthy => Err(
+                    "Slack channel name is taken by a channel this bot cannot see; invite the bot to that private channel or archive it".to_owned(),
+                ),
                 Tag::Membership => Ok(TagOutcome::Membership(MembershipOutcome::default())),
                 Tag::Slack if id == healthy => Ok(TagOutcome::Slack(SlackOutcome {
                     canvas_failures: 1,
@@ -1203,7 +1203,7 @@ mod tests {
     fn the_update_lists_five_causes_and_summarizes_the_rest() {
         let mut report = NightlyProjectUpdateReport::default();
         for n in 0..7 {
-            report.fail(Tag::Repository, &TerminalError::new(format!("forge {n}")));
+            report.fail(Tag::Repository, &format!("forge {n}"));
         }
         assert_eq!(report.failure_causes.len(), 1, "one bounded cause");
         report.failure_causes = (0..7)
