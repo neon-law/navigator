@@ -131,7 +131,8 @@ configuration; authority cutover takes precedence over the source mirror. The mi
   bundle and account metadata as SurrealDB stored them. It preserves ciphertext and wrapped-key bytes, and never
   decrypts them. Firm, Brand, and connected or revoking Person links remain explicit. The saved-selection mirror
   preserves the chosen Brand/provider destination without credentials or publishing authority; disconnecting the account
-  leaves that selection intact. The one-use Social OAuth Attempt, including its PKCE verifier, stays in SurrealDB.
+  leaves that selection intact. The one-use Social OAuth Attempt follows the [scoped PostgreSQL
+  authority](#scoped-family-enrollment).
 - **Catalog:** `authority`, `glossary_term`, `question`, `notation_package`, `notation_package_template`, and
   `notation_rate`. These are shared catalogs owned by no Firm or Project. The Authority, glossary, Question, and
   Notation package writers in `store::authorities`, `store::glossary`, `store::questions`, and
@@ -212,10 +213,11 @@ reconciliation CronJob every five minutes. It uses the existing CLI image, verif
 Concurrent scheduled runs are forbidden; failed or overdue recovery raises a critical monitoring rule. Alert routing and
 kube-state metrics must be operational in the deployment.
 
-The tables PostgreSQL holds authoritatively (the catalogs above, and the matter records and the Brand and social content
-in [storage models](storage-models.md)) are never repaired from SurrealDB. Until a Mirror Backfill has completed against
-the database, their parity names each SurrealDB row PostgreSQL lacks, so reconciliation stays unclean and a ship stops
-before `web` reads an empty table. After it, SurrealDB is no evidence for them and parity skips them.
+Existing authorities with the global-import contract (the catalogs, matter records, and Brand and social content
+described in storage models) are never repaired from SurrealDB after their first global Mirror Backfill. Before that
+global completion, parity reports source rows PostgreSQL lacks; afterward it skips them. The thirteen satellite tables
+instead require their own [scoped enrollment](#scoped-family-enrollment): global completion does not activate them, and
+an activated receipt prevents replay even before any global run completes.
 
 Durable source rows and target drift allow the recurring scan to rediscover missing, differing, and extra mutable rows
 after an application process exits. This is eventual convergence when both stores recover and writes settle, not a
