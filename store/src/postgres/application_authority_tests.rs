@@ -539,3 +539,167 @@ async fn activated_identity_cannot_be_resurrected_by_global_source_import() {
     })
     .await;
 }
+
+fn native_deadline(project_id: uuid::Uuid) -> crate::project_deadlines::NewDeadline {
+    crate::project_deadlines::NewDeadline {
+        project_id,
+        title: Some("Synthetic deadline".into()),
+        description: None,
+        due_at: "2026-12-01T12:00:00Z".into(),
+        authority_kind: "statute".into(),
+        authority: "Synthetic authority".into(),
+        source: "lawyer".into(),
+        source_document_id: None,
+        owner_person_id: None,
+        calendar_role: "firm".into(),
+        category: Some("court".into()),
+        internal_lead_days: Some(14),
+        client_lead_days: Some(7),
+        replay_key: Some("synthetic-deadline".into()),
+    }
+}
+
+async fn wait_for_deadline_writers(pg: &PostgresDb, project: uuid::Uuid, count: i64) {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let waiting: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND NOT granted AND classid::bigint=1312902739 AND objid::bigint=(hashtext($1::text)::bigint & 4294967295)")
+                .bind(project).fetch_one(pg.pool()).await.unwrap();
+            if waiting >= count { break; }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    }).await.expect("deadline operations reach the cooperating Project lock");
+}
+
+#[tokio::test]
+async fn deadline_concurrent_identical_replay_keeps_calendar_revision() {
+    let (pg, _, _, project, _) = application_fixture().await;
+    let input = native_deadline(project);
+    let mut lease = pg.pool().begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(1312902739,hashtext($1::text))")
+        .bind(project)
+        .execute(&mut *lease)
+        .await
+        .unwrap();
+    let spawn = |input| {
+        let pg = pg.clone();
+        tokio::spawn(PostgresDb::with_test_db(pg, async move {
+            crate::project_deadlines::create(&crate::surreal::SurrealDb::uninitialized(), &input)
+                .await
+        }))
+    };
+    let left = spawn(input.clone());
+    let right = spawn(input.clone());
+    wait_for_deadline_writers(&pg, project, 2).await;
+    lease.commit().await.unwrap();
+    let left = left.await.unwrap().unwrap();
+    let right = right.await.unwrap().unwrap();
+    assert_eq!(left, right);
+    assert_eq!(left.calendar_sequence, Some(0));
+    PostgresDb::with_test_db(pg, async {
+        assert_eq!(
+            crate::project_deadlines::create(&crate::surreal::SurrealDb::uninitialized(), &input)
+                .await
+                .unwrap(),
+            left
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn deadline_changed_replay_advances_revision_and_preserves_cancellation() {
+    use crate::project_deadlines as deadlines;
+    let (pg, _, _, project, _) = application_fixture().await;
+    PostgresDb::with_test_db(pg, async {
+        let source = crate::surreal::SurrealDb::uninitialized();
+        let mut input = native_deadline(project);
+        let first = deadlines::create(&source, &input).await.unwrap();
+        input.due_at = "2026-12-02T12:00:00Z".into();
+        let changed = deadlines::create(&source, &input).await.unwrap();
+        assert_eq!(changed.id, first.id);
+        assert_eq!(changed.calendar_sequence, Some(1));
+        let cancelled = deadlines::cancel(&source, project, first.id).await.unwrap();
+        assert_eq!(cancelled.calendar_sequence, Some(2));
+        assert!(deadlines::create(&source, &input).await.is_err());
+        assert_eq!(
+            deadlines::find(&source, project, first.id).await.unwrap(),
+            Some(cancelled)
+        );
+        assert!(deadlines::find(&source, uuid::Uuid::new_v4(), first.id)
+            .await
+            .unwrap()
+            .is_none());
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn deadline_cancellation_race_refuses_stale_write() {
+    use crate::project_deadlines as deadlines;
+    let (pg, _, _, project, _) = application_fixture().await;
+    let source = crate::surreal::SurrealDb::uninitialized();
+    let created = PostgresDb::with_test_db(
+        pg.clone(),
+        deadlines::create(&source, &native_deadline(project)),
+    )
+    .await
+    .unwrap();
+    let id = created.id;
+    let mut lease = pg.pool().begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(1312902739,hashtext($1::text))")
+        .bind(project)
+        .execute(&mut *lease)
+        .await
+        .unwrap();
+    let cancel = tokio::spawn(PostgresDb::with_test_db(pg.clone(), async move {
+        deadlines::cancel(&crate::surreal::SurrealDb::uninitialized(), project, id).await
+    }));
+    wait_for_deadline_writers(&pg, project, 1).await;
+    let update = tokio::spawn(PostgresDb::with_test_db(pg.clone(), async move {
+        deadlines::update(
+            &crate::surreal::SurrealDb::uninitialized(),
+            project,
+            id,
+            &deadlines::DeadlinePatch {
+                title: Some(Some("Stale edit".into())),
+                ..Default::default()
+            },
+        )
+        .await
+    }));
+    wait_for_deadline_writers(&pg, project, 2).await;
+    lease.commit().await.unwrap();
+    let cancelled = cancel.await.unwrap().unwrap();
+    assert!(matches!(
+        update.await.unwrap(),
+        Err(deadlines::DeadlineError::Conflict)
+    ));
+    PostgresDb::with_test_db(pg, async {
+        assert_eq!(
+            deadlines::find(&source, project, id).await.unwrap(),
+            Some(cancelled)
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn deadline_identical_replay_compares_the_stored_instant_and_precision() {
+    use crate::project_deadlines as deadlines;
+    let (pg, _, _, project, _) = application_fixture().await;
+    PostgresDb::with_test_db(pg, async {
+        let source = crate::surreal::SurrealDb::uninitialized();
+        let mut input = native_deadline(project);
+        input.due_at = "2026-12-01T04:00:00.123456789-08:00".into();
+        let first = deadlines::create(&source, &input).await.unwrap();
+        assert_eq!(first.calendar_sequence, Some(0));
+        assert_eq!(deadlines::create(&source, &input).await.unwrap(), first);
+        input.due_at = "2026-12-01T12:00:00.123457Z".into();
+        assert_eq!(deadlines::create(&source, &input).await.unwrap(), first);
+        input.due_at = "2026-12-01T12:00:00.123458Z".into();
+        let changed = deadlines::create(&source, &input).await.unwrap();
+        assert_eq!(changed.id, first.id);
+        assert_eq!(changed.calendar_sequence, Some(1));
+    })
+    .await;
+}

@@ -722,6 +722,24 @@ pub async fn reopen(
     transition(surreal, project_id, id, STATUS_OPEN).await
 }
 
+fn same_payload(row: &Deadline, stored: &StoredDeadline<'_>, status: &str, same_due: bool) -> bool {
+    let n = stored.normalized;
+    row.title == n.title
+        && row.description == n.description
+        && same_due
+        && row.authority_kind == n.authority_kind
+        && row.authority == n.authority
+        && row.source == n.source
+        && row.calendar_role == n.calendar_role
+        && row.category == n.category
+        && row.internal_lead_days == n.internal_lead_days
+        && row.client_lead_days == n.client_lead_days
+        && row.replay_key == n.replay_key
+        && row.source_document_id == stored.source_document_id
+        && row.owner_person_id == stored.owner_person_id
+        && row.status == status
+}
+
 /// A Project lock serializes replay identity, lifecycle checks, and calendar revision.
 async fn persist_postgres(
     pg: &crate::postgres::PostgresDb,
@@ -737,9 +755,10 @@ async fn persist_postgres(
         .execute(&mut *tx)
         .await
         .map_err(PgError::from)?;
-    let old: Option<serde_json::Value> = sqlx::query_scalar("SELECT to_jsonb(d) FROM project_deadlines d WHERE project_id=$1 AND (id=$2 OR ($3::text IS NOT NULL AND replay_key=$3)) ORDER BY id LIMIT 1 FOR UPDATE")
-        .bind(project).bind(requested_id).bind(&n.replay_key)
+    let old: Option<(serde_json::Value, bool)> = sqlx::query_as("SELECT to_jsonb(d), d.due_at IS NOT DISTINCT FROM $4::timestamptz FROM project_deadlines d WHERE project_id=$1 AND (id=$2 OR ($3::text IS NOT NULL AND replay_key=$3)) ORDER BY id LIMIT 1 FOR UPDATE")
+        .bind(project).bind(requested_id).bind(&n.replay_key).bind(&n.due_at)
         .fetch_optional(&mut *tx).await.map_err(PgError::from)?;
+    let (old, same_due) = old.map_or((None, false), |(row, same_due)| (Some(row), same_due));
     let old: Option<Deadline> = old
         .map(serde_json::from_value)
         .transpose()
@@ -771,6 +790,13 @@ async fn persist_postgres(
     } else {
         stored.status
     };
+    // Identical retries do not create another calendar notification revision.
+    if let Some(existing) = old
+        .as_ref()
+        .filter(|row| same_payload(row, stored, status, same_due))
+    {
+        return Ok(existing.clone());
+    }
     let sequence = old
         .as_ref()
         .map(|row| {
