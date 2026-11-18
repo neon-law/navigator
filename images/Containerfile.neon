@@ -178,8 +178,10 @@ COPY .agents           .agents
 # The same image carries `navigator-migrate`, the PostgreSQL migration
 # entrypoint the `navigator-migrate` Job runs before `web` rolls
 # (`k8s/postgres/migrate/`), so a release migrates with the code it ships.
-RUN cargo build --release --target "$(cat /tmp/rust-target)" -p neon \
-    && cargo build --release --target "$(cat /tmp/rust-target)" -p store --bin navigator-migrate \
+# One invocation, so `store` and its dependencies resolve one feature set and
+# compile once: a separate `-p store` build recompiled them for 17 minutes and
+# pushed the image past the build job's 90-minute cap (deploy run 44350693129).
+RUN cargo build --release --target "$(cat /tmp/rust-target)" -p neon --bin neon -p store --bin navigator-migrate \
     && cp "target/$(cat /tmp/rust-target)/release/neon" /usr/local/bin/neon \
     && cp "target/$(cat /tmp/rust-target)/release/navigator-migrate" /usr/local/bin/navigator-migrate
 

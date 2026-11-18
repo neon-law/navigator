@@ -412,10 +412,8 @@ fn the_site_image_ships_the_postgres_migration_entrypoint() {
         "store declares the navigator-migrate binary"
     );
     assert!(
-        body.contains(
-            "cargo build --release --target \"$(cat /tmp/rust-target)\" -p store --bin navigator-migrate"
-        ),
-        "{} must build the navigator-migrate binary",
+        body.contains("-p neon --bin neon -p store --bin navigator-migrate"),
+        "{} must build navigator-migrate in the same cargo invocation as neon, so store compiles once",
         path.display()
     );
     assert!(
