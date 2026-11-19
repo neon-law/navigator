@@ -300,6 +300,13 @@ async fn transition(
     request: TransitionRequest,
 ) -> dbos::Result<TransitionReport, NotationTransitionError> {
     let notation_id = request.notation_id;
+    store::durable_object_handover::require_native_ownership(&context.postgres)
+        .await
+        .map_err(|_| {
+            dbos::Error::Application(NotationTransitionError::Terminal(
+                "Retained object handover is not active".to_owned(),
+            ))
+        })?;
 
     // The lane: one advisory lock per notation, held across the whole
     // transition. Re-acquired on recovery; the guard's rollback releases it

@@ -17,7 +17,7 @@ use std::sync::Arc;
 use restate_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 use tracing::Instrument;
-use workflows::{project_channel_name, SlackBot, SlackBotError, SlackChannel};
+use workflows::{SlackBot, SlackBotError, SlackChannel, project_channel_name};
 
 use crate::firm_slack::ProjectSlackBots;
 
@@ -330,9 +330,24 @@ pub(crate) async fn ensure_channel(
     project: &store::projects::Project,
     simulated: bool,
 ) -> Result<ChannelOutcome, LaneError> {
+    ensure_channel_using(ChannelStore::Facade(surreal), slack, project, simulated).await
+}
+
+#[derive(Clone, Copy)]
+enum ChannelStore<'a> {
+    Facade(&'a store::surreal::SurrealDb),
+    Postgres(&'a store::postgres::PostgresDb),
+}
+
+async fn ensure_channel_using(
+    storage: ChannelStore<'_>,
+    slack: &Arc<dyn SlackBot>,
+    project: &store::projects::Project,
+    simulated: bool,
+) -> Result<ChannelOutcome, LaneError> {
     if let Some(channel_id) = &project.internal_slack_channel_id {
         if project.internal_slack_channel_url.is_none() {
-            record_channel(surreal, project.id, channel_id).await?;
+            record_channel(storage, project.id, channel_id).await?;
         }
         return Ok(ChannelOutcome::Existing(channel_id.clone()));
     }
@@ -357,7 +372,7 @@ pub(crate) async fn ensure_channel(
             Err(error) => return Err(LaneError::Slack(error.to_string())),
         }
     };
-    record_channel(surreal, project.id, &channel.id).await?;
+    record_channel(storage, project.id, &channel.id).await?;
     Ok(if adopted {
         ChannelOutcome::Adopted(channel.id)
     } else {
@@ -368,17 +383,19 @@ pub(crate) async fn ensure_channel(
 /// Write the channel id and its canonical `https://slack.com/archives/{id}`
 /// URL as one Project-row update.
 async fn record_channel(
-    surreal: &store::surreal::SurrealDb,
+    storage: ChannelStore<'_>,
     project_id: uuid::Uuid,
     channel_id: &str,
 ) -> Result<(), LaneError> {
-    store::projects::set_internal_slack_channel(
-        surreal,
-        project_id,
-        channel_id,
-        &cloud::slack_channel_url(channel_id),
-    )
-    .await
+    let url = cloud::slack_channel_url(channel_id);
+    match storage {
+        ChannelStore::Facade(surreal) => {
+            store::projects::set_internal_slack_channel(surreal, project_id, channel_id, &url).await
+        }
+        ChannelStore::Postgres(pg) => {
+            store::projects::set_internal_slack_channel_on(pg, project_id, channel_id, &url).await
+        }
+    }
     .map_err(|error| project_command_error(&error))?
     .ok_or_else(|| {
         LaneError::ProjectGone("Project disappeared while saving Slack channel".to_string())
@@ -439,6 +456,27 @@ pub(crate) async fn main_push_destination(
     let channel = ensure_channel(surreal, slack, &project, simulated).await?;
     Ok(MainPushDestination {
         channel_id: channel.channel_id().to_string(),
+        repository_url: project.repository_url,
+    })
+}
+
+/// Native execution uses its explicit pool for both lookup and channel persistence.
+pub(crate) async fn main_push_destination_on(
+    pg: &store::postgres::PostgresDb,
+    slack: &Arc<dyn SlackBot>,
+    project_id: uuid::Uuid,
+    simulated: bool,
+) -> Result<MainPushDestination, LaneError> {
+    let project = store::postgres::projects::find_by_id_on(pg, project_id)
+        .await
+        .map_err(|_| LaneError::Store("Project Slack lookup unavailable".to_owned()))?
+        .ok_or_else(|| {
+            LaneError::ProjectGone("Project no longer exists for Slack notice".to_owned())
+        })?;
+    let channel =
+        ensure_channel_using(ChannelStore::Postgres(pg), slack, &project, simulated).await?;
+    Ok(MainPushDestination {
+        channel_id: channel.channel_id().to_owned(),
         repository_url: project.repository_url,
     })
 }
@@ -641,13 +679,13 @@ impl ProjectSlackService {
 #[cfg(test)]
 mod tests {
     use super::{
-        admit_main_push, client_project_view_span, ensure_internal_channel, main_push_span,
-        post_client_view_notice, project_command_error, project_id, project_store_error,
-        render_main_push, CiOutcome, LaneError, MainPushOutcome, MainPushRequest,
-        ProjectSlackService, CLIENT_PROJECT_VIEW_MESSAGE,
+        CLIENT_PROJECT_VIEW_MESSAGE, CiOutcome, LaneError, MainPushOutcome, MainPushRequest,
+        ProjectSlackService, admit_main_push, client_project_view_span, ensure_internal_channel,
+        main_push_span, post_client_view_notice, project_command_error, project_id,
+        project_store_error, render_main_push,
     };
     use std::sync::Arc;
-    use store::projects::{create, set_internal_slack_channel_id, NewProject, ProjectCommandError};
+    use store::projects::{NewProject, ProjectCommandError, create, set_internal_slack_channel_id};
     use store::test_support::{mem_surreal, seed_entity};
     use uuid::Uuid;
     use workflows::CapturingSlackBot;

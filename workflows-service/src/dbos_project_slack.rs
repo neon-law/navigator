@@ -12,9 +12,10 @@
 //!   the run. Distinct events for one Project wait for the lock instead of
 //!   interleaving channel creation and posts.
 //!
-//! Channel ids live on the Project row in `SurrealDB`, so no K/V state
-//! migrates: the DBOS path reads and writes the same row the Restate object
-//! does. The Restate object remains registered until cutover.
+//! Project channel metadata lives in PostgreSQL. Retained posted-event history
+//! and client-view posting evidence pass through the explicit object handover.
+//! Native ownership and delivery admission are checked before provider access;
+//! the provider's existing durable checkpoint precedes the PG-only receipt step.
 
 use std::sync::Arc;
 
@@ -25,8 +26,8 @@ use sqlx::Connection;
 use store::surreal::SurrealDb;
 
 use crate::project_slack::{
-    ensure_internal_channel, main_push_destination, render_main_push, LaneError, MainPushRequest,
-    CLIENT_PROJECT_VIEW_MESSAGE,
+    CLIENT_PROJECT_VIEW_MESSAGE, LaneError, MainPushRequest, main_push_destination_on,
+    render_main_push,
 };
 
 /// The registered workflow's name. Distinct from every other DBOS workflow
@@ -121,9 +122,8 @@ pub fn parse_workflow_id(workflow_id: &str) -> Option<(uuid::Uuid, LaneKey)> {
 /// collision would need two live Projects whose UUIDs agree in the low 64
 /// bits.
 #[must_use]
-#[allow(clippy::cast_possible_truncation)]
 pub fn lane_lock_key(project_id: uuid::Uuid) -> i64 {
-    project_id.as_u128() as i64
+    store::project_slack_deliveries::lane_key(project_id)
 }
 
 /// A Project's serialization lane: a PostgreSQL session advisory lock held
@@ -274,35 +274,48 @@ async fn run_lane(
     project_id: uuid::Uuid,
     request: LaneRequest,
 ) -> dbos::Result<(), LaneError> {
+    let (kind, key) = delivery_identity(&request);
+    if store::project_slack_deliveries::admission(&context.postgres, project_id, kind, &key)
+        .await
+        .map_err(|error| dbos::Error::Application(delivery_error(error)))?
+        == store::project_slack_deliveries::Admission::Posted
+    {
+        return Ok(());
+    }
     match request {
         LaneRequest::ClientView => {
             let surreal = context.surreal.clone();
             let bots = Arc::clone(&context.bots);
             let simulated = context.simulated;
+            let postgres = context.postgres.clone();
             let channel_id: String =
                 dbos::step_with("ensure-channel", lane_step_options(), move || {
                     let surreal = surreal.clone();
                     let bots = Arc::clone(&bots);
+                    let postgres = postgres.clone();
                     async move {
                         let slack = bots
-                            .for_project(&surreal, project_id)
+                            .for_project_on(&postgres, &surreal, project_id)
                             .await
                             .map_err(dbos::Error::Application)?;
-                        ensure_internal_channel(&surreal, &slack, project_id, simulated)
+                        main_push_destination_on(&postgres, &slack, project_id, simulated)
                             .await
+                            .map(|destination| destination.channel_id)
                             .map_err(dbos::Error::Application)
                     }
                 })
                 .await?;
             let surreal = context.surreal.clone();
             let bots = Arc::clone(&context.bots);
+            let postgres = context.postgres.clone();
             dbos::step_with("post-client-view", lane_step_options(), move || {
                 let surreal = surreal.clone();
                 let bots = Arc::clone(&bots);
                 let channel_id = channel_id.clone();
+                let postgres = postgres.clone();
                 async move {
                     let slack = bots
-                        .for_project(&surreal, project_id)
+                        .for_project_on(&postgres, &surreal, project_id)
                         .await
                         .map_err(dbos::Error::Application)?;
                     slack
@@ -314,22 +327,23 @@ async fn run_lane(
                 }
             })
             .await?;
-            Ok(())
         }
         LaneRequest::MainPush(event) => {
             let surreal = context.surreal.clone();
             let bots = Arc::clone(&context.bots);
             let simulated = context.simulated;
+            let postgres = context.postgres.clone();
             let destination =
                 dbos::step_with("resolve-destination", lane_step_options(), move || {
                     let surreal = surreal.clone();
                     let bots = Arc::clone(&bots);
+                    let postgres = postgres.clone();
                     async move {
                         let slack = bots
-                            .for_project(&surreal, project_id)
+                            .for_project_on(&postgres, &surreal, project_id)
                             .await
                             .map_err(dbos::Error::Application)?;
-                        main_push_destination(&surreal, &slack, project_id, simulated)
+                        main_push_destination_on(&postgres, &slack, project_id, simulated)
                             .await
                             .map_err(dbos::Error::Application)
                     }
@@ -339,14 +353,16 @@ async fn run_lane(
             let surreal = context.surreal.clone();
             let bots = Arc::clone(&context.bots);
             let channel_id = destination.channel_id;
+            let postgres = context.postgres.clone();
             dbos::step_with("post-main-push", lane_step_options(), move || {
                 let surreal = surreal.clone();
                 let bots = Arc::clone(&bots);
                 let channel_id = channel_id.clone();
                 let message = message.clone();
+                let postgres = postgres.clone();
                 async move {
                     let slack = bots
-                        .for_project(&surreal, project_id)
+                        .for_project_on(&postgres, &surreal, project_id)
                         .await
                         .map_err(dbos::Error::Application)?;
                     slack
@@ -358,8 +374,38 @@ async fn run_lane(
                 }
             })
             .await?;
-            Ok(())
         }
+    }
+    let postgres = context.postgres.clone();
+    dbos::step_with("record-posted", lane_step_options(), move || {
+        let postgres = postgres.clone();
+        let key = key.clone();
+        async move {
+            store::project_slack_deliveries::record_posted(&postgres, project_id, kind, &key)
+                .await
+                .map_err(|error| dbos::Error::Application(delivery_error(error)))
+        }
+    })
+    .await
+}
+
+/// The canonical delivery identity shared with pre-start ingress admission.
+pub(crate) fn delivery_identity(request: &LaneRequest) -> (&'static str, String) {
+    match request {
+        LaneRequest::ClientView => ("client_view", CLIENT_VIEW_LANE.to_owned()),
+        LaneRequest::MainPush(event) => (
+            "main_push",
+            format!("{}:{}", event.short_sha, event.run_attempt),
+        ),
+    }
+}
+
+fn delivery_error(error: store::project_slack_deliveries::DeliveryError) -> LaneError {
+    match error {
+        store::project_slack_deliveries::DeliveryError::Storage => {
+            LaneError::Store("Project Slack delivery storage unavailable".to_owned())
+        }
+        _ => LaneError::Refused(error.to_string()),
     }
 }
 
@@ -380,8 +426,8 @@ fn lane_step_options() -> dbos::StepOptions<LaneError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        client_view_workflow_id, enabled, lane_lock_key, main_push_workflow_id, parse_workflow_id,
-        LaneKey, LaneRequest, CLIENT_VIEW_LANE, ENABLED_ENV, WORKFLOW,
+        CLIENT_VIEW_LANE, ENABLED_ENV, LaneKey, LaneRequest, WORKFLOW, client_view_workflow_id,
+        enabled, lane_lock_key, main_push_workflow_id, parse_workflow_id,
     };
     use crate::project_slack::{CiOutcome, LaneError, MainPushRequest};
     use uuid::Uuid;

@@ -206,6 +206,7 @@ async fn write_on(
     upsert: bool,
 ) -> Result<Project, ProjectError> {
     let mut tx = pg.pool().begin().await?;
+    crate::durable_object_handover::hold_creation_epoch(&mut tx).await?;
     let brand: Option<String> =
         sqlx::query_scalar("SELECT brand_key FROM brand WHERE brand_key=$1 FOR KEY SHARE")
             .bind(&input.brand)
@@ -239,6 +240,9 @@ async fn write_on(
         .await
         .map_err(write_error)?;
     let result = row(&result)?;
+    if !upsert {
+        crate::project_slack_deliveries::initialize_fresh(&mut tx, result.id).await?;
+    }
     tx.commit().await?;
     Ok(result)
 }
@@ -407,6 +411,7 @@ pub(crate) async fn open_on(
 ) -> Result<Project, ProjectError> {
     let input = open.project;
     let mut tx = pg.pool().begin().await?;
+    crate::durable_object_handover::hold_creation_epoch(&mut tx).await?;
     let wearer: Option<Uuid> =
         sqlx::query_scalar("SELECT firm_id FROM firm_brand WHERE brand_key=$1 FOR KEY SHARE")
             .bind(&input.brand)
@@ -445,6 +450,7 @@ pub(crate) async fn open_on(
     .bind(open.client)
     .execute(&mut *tx)
     .await?;
+    crate::project_slack_deliveries::initialize_fresh(&mut tx, project.id).await?;
     tx.commit().await?;
     Ok(project)
 }

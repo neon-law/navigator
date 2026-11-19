@@ -930,6 +930,25 @@ impl PostgresFixture {
         admin_options: sqlx::postgres::PgConnectOptions,
         fixture_options: sqlx::postgres::PgConnectOptions,
     ) -> anyhow::Result<Self> {
+        Self::create_owned(admin_options, fixture_options, true).await
+    }
+
+    /// Create a fresh application fixture without native object ownership, for
+    /// exercising the real retained-source handover rather than bypassing it.
+    ///
+    /// # Errors
+    /// Returns exclusive resource construction or application fixture failures.
+    pub async fn create_capture_target(
+        options: sqlx::postgres::PgConnectOptions,
+    ) -> anyhow::Result<Self> {
+        Self::create_owned(options.clone(), options, false).await
+    }
+
+    async fn create_owned(
+        admin_options: sqlx::postgres::PgConnectOptions,
+        fixture_options: sqlx::postgres::PgConnectOptions,
+        native_objects: bool,
+    ) -> anyhow::Result<Self> {
         let admin = crate::postgres::PostgresDb::connect(admin_options)
             .await
             .context("connect synthetic fixture administration")?;
@@ -938,7 +957,7 @@ impl PostgresFixture {
             .execute(admin.pool())
             .await
             .context("create owned synthetic fixture database")?;
-        let prepared = prepare_postgres_fixture(fixture_options.database(&database))
+        let prepared = prepare_postgres_fixture(fixture_options.database(&database), native_objects)
             .await
             .with_context(|| format!("initialize owned synthetic fixture {database}"));
         match prepared {
@@ -1002,6 +1021,7 @@ async fn drop_postgres_fixture(
 
 async fn prepare_postgres_fixture(
     options: sqlx::postgres::PgConnectOptions,
+    native_objects: bool,
 ) -> anyhow::Result<crate::postgres::PostgresDb> {
     let pg = crate::postgres::PostgresDb::connect(options)
         .await
@@ -1011,6 +1031,10 @@ async fn prepare_postgres_fixture(
             .execute(pg.pool()).await.context("initialize synthetic fixture AGE extension")?;
         sqlx::raw_sql(crate::postgres_schema::canonical_schema())
             .execute(pg.pool()).await.context("apply synthetic fixture canonical schema")?;
+        if native_objects {
+            crate::durable_object_handover::initialize_fresh_native(&pg).await
+                .context("initialize exclusively fresh native object ownership")?;
+        }
         sqlx::query("INSERT INTO mirror_backfill_run(id,batch_size,status,scope,completed_at) VALUES ($1,1,'completed','global',now())")
             .bind(Uuid::new_v4()).execute(pg.pool()).await
             .context("initialize fresh synthetic fixture global history")?;

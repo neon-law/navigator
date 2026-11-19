@@ -280,3 +280,5 @@ pub mod communication_dashboard;
 pub mod fi_import;
 
 pub use model::workflow_engine;
+pub mod durable_object_handover;
+pub mod project_slack_deliveries;

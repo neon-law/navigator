@@ -913,7 +913,6 @@ trait ProjectSlackStarter: Send + Sync {
 struct DbosProjectSlackStarter {
     workflow: ProjectSlackWorkflow,
     dbos: dbos::DBOS,
-    surreal: SurrealDb,
     postgres: store::postgres::PostgresDb,
 }
 
@@ -925,10 +924,17 @@ impl ProjectSlackStarter for DbosProjectSlackStarter {
         project_id: uuid::Uuid,
         request: LaneRequest,
     ) -> Result<(), StartError> {
-        store::projects::find_by_id(&self.surreal, project_id)
+        store::postgres::projects::find_by_id_on(&self.postgres, project_id)
             .await
             .map_err(|_| StartError::StartFailed)?
             .ok_or(StartError::ProjectNotFound)?;
+        let (kind,key)=dbos_project_slack::delivery_identity(&request);
+        store::project_slack_deliveries::admission(&self.postgres,project_id,kind,&key)
+            .await.map_err(|error|match error {
+                store::project_slack_deliveries::DeliveryError::Unresolved
+                    | store::project_slack_deliveries::DeliveryError::InvalidEvent => StartError::Conflict,
+                _ => StartError::StartFailed,
+            })?;
         claim_request_identity::<(), LaneError, LaneRequest>(
             &self.postgres,
             &self.dbos,
@@ -959,7 +965,7 @@ impl ProjectSlackIngress {
         token: String,
         workflow: ProjectSlackWorkflow,
         dbos: dbos::DBOS,
-        surreal: SurrealDb,
+        _surreal: SurrealDb,
         postgres: store::postgres::PostgresDb,
     ) -> Self {
         Self {
@@ -967,7 +973,6 @@ impl ProjectSlackIngress {
             starter: Arc::new(DbosProjectSlackStarter {
                 workflow,
                 dbos,
-                surreal,
                 postgres,
             }),
         }
@@ -1135,6 +1140,9 @@ async fn notation_run(
     notation_id: uuid::Uuid,
     operation: crate::dbos_notation::Operation,
 ) -> Result<Json<NotationStateResponse>, (StatusCode, String)> {
+    store::durable_object_handover::require_native_ownership(&state.inner.postgres)
+        .await
+        .map_err(|_| (StatusCode::SERVICE_UNAVAILABLE, "handover unavailable".to_owned()))?;
     let report = state
         .inner
         .workflow
@@ -1244,6 +1252,9 @@ async fn notation_approve(
     let notation_id = notation_id_for(&notation_id)?;
     let body: NotationApprovalBody =
         serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    store::durable_object_handover::require_native_ownership(&state.inner.postgres)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     let workflow_id = notation_approval_id(notation_id, body.review_revision);
     state
         .inner
@@ -1291,6 +1302,9 @@ async fn notation_approval_progress(
     let notation_id = notation_id_for(&notation_id)?;
     let body: ApprovalProgressRequest =
         serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    store::durable_object_handover::require_native_ownership(&state.inner.postgres)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     let workflow_id = notation_approval_id(notation_id, body.review_revision);
     let handle = state
         .inner
@@ -1353,6 +1367,9 @@ async fn notation_current_state(
     }
     enforce_bodyless(&headers, &body)?;
     let notation_id = notation_id_for(&notation_id)?;
+    store::durable_object_handover::require_native_ownership(&state.inner.postgres)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     let machine = store::notation_machine_state::read(
         &state.inner.postgres,
         notation_id,
@@ -1379,7 +1396,10 @@ async fn notation_events(
     }
     enforce_bodyless(&headers, &body)?;
     let notation_id = notation_id_for(&notation_id)?;
-    let events = store::notation_events::for_notation(&state.inner.surreal, notation_id)
+    store::durable_object_handover::require_native_ownership(&state.inner.postgres)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let events = store::notation_events::for_notation_on(&state.inner.postgres, notation_id)
         .await
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     Ok(Json(NotationEventsResponse {

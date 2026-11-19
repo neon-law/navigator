@@ -344,7 +344,7 @@ pub async fn for_notation(
     notation_id: Uuid,
 ) -> Result<Vec<NotationEvent>, NotationEventError> {
     if let Some(pg) = matter::authority_for(TABLE).await? {
-        return Ok(matter::select(&pg, TABLE, json!({"notation_id": notation_id}), &["id"]).await?);
+        return for_notation_on(&pg, notation_id).await;
     }
 
     let response = db
@@ -355,6 +355,17 @@ pub async fn for_notation(
         .await
         .and_then(surrealdb::IndexedResults::check)?;
     many(response)
+}
+
+/// Read the canonical event ordering from the native runtime's explicit pool.
+///
+/// # Errors
+/// Refuses incomplete application history and propagates native read failures.
+pub async fn for_notation_on(
+    pg:&crate::postgres::PostgresDb,notation_id:Uuid,
+)->Result<Vec<NotationEvent>,NotationEventError> {
+    pg.require_application_history().await.map_err(|_|matter::MatterAuthorityError::Unavailable)?;
+    Ok(matter::select(pg,TABLE,json!({"notation_id":notation_id}),&["id"]).await?)
 }
 
 /// Resolve the Person a transition is attributed to when no
