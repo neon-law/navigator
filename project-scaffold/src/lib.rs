@@ -84,6 +84,8 @@ pub const FORGEJO_REQUIRED_CHECK: &str = "gate / gate (pull_request)";
 /// findings before any correction is applied.
 /// `court-filing-drafts` (LAW-239) marks every draft of a court filing
 /// counsel will sign and clears the marks to finalize it.
+/// `matter-calendar-events` names every matter calendar after its Project
+/// code and titles each event with that code, a colon, and then the event.
 pub const SYNCED_SKILLS: &[(&str, &str)] = &[
     (
         "council",
@@ -165,6 +167,10 @@ pub const SYNCED_SKILLS: &[(&str, &str)] = &[
     (
         "court-filing-drafts",
         include_str!("../../.agents/skills/court-filing-drafts/SKILL.md"),
+    ),
+    (
+        "matter-calendar-events",
+        include_str!("../../.agents/skills/matter-calendar-events/SKILL.md"),
     ),
 ];
 
