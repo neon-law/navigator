@@ -99,8 +99,8 @@
 {"file":"archives/src/workflow.rs","line":1429,"function":"a_denied_bucket_probe_fails_the_run_and_the_digest_names_every_table","operation":"query","sql_operations":["CREATE"],"tables":["person"],"transaction":false}
 {"file":"archives/src/workflow.rs","line":1508,"function":"a_run_with_only_empty_tables_still_succeeds","operation":"query","sql_operations":["DELETE"],"tables":[],"transaction":false}
 {"file":"archives/src/workflow.rs","line":1700,"function":"promotion_authors_iceberg_metadata_for_a_store_table_and_chains_a_second_run","operation":"query","sql_operations":["CREATE"],"tables":["person"],"transaction":false}
-{"file":"billing-workflows/src/sandbox_reset.rs","line":391,"function":"database","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
-{"file":"billing-workflows/src/sandbox_reset.rs","line":391,"function":"database","operation":"query","sql_operations":["CREATE"],"tables":[],"transaction":false}
+{"file":"billing-workflows/src/sandbox_reset.rs","line":390,"function":"database","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
+{"file":"billing-workflows/src/sandbox_reset.rs","line":390,"function":"database","operation":"query","sql_operations":["CREATE"],"tables":[],"transaction":false}
 {"file":"billing/src/lib.rs","line":356,"function":"set_invoice_status","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"billing/src/lib.rs","line":823,"function":"find_contact_by_email","operation":"query","sql_operations":[],"tables":[],"transaction":false}
 {"file":"billing/src/lib.rs","line":888,"function":"fetch_accrec_page","operation":"query","sql_operations":[],"tables":[],"transaction":false}
@@ -2813,10 +2813,10 @@
 {"file":"store/src/notation_machine_state.rs","line":349,"function":"commit","operation":"commit","sql_operations":[],"tables":[],"transaction":true}
 {"file":"store/src/notation_machine_state.rs","line":418,"function":"pg","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
 {"file":"store/src/notation_machine_state.rs","line":418,"function":"pg","operation":"query","sql_operations":["CREATE"],"tables":[],"transaction":false}
-{"file":"store/src/notation_machine_state.rs","line":555,"function":"lane_serializes_holders_and_times_out_bounded","operation":"commit","sql_operations":[],"tables":[],"transaction":true}
-{"file":"store/src/notation_machine_state.rs","line":564,"function":"lane_serializes_holders_and_times_out_bounded","operation":"commit","sql_operations":[],"tables":[],"transaction":true}
-{"file":"store/src/notation_machine_state.rs","line":584,"function":"lane_serializes_holders_and_times_out_bounded","operation":"commit","sql_operations":[],"tables":[],"transaction":true}
-{"file":"store/src/notation_machine_state.rs","line":598,"function":"dropping_a_lane_guard_releases_the_lock","operation":"commit","sql_operations":[],"tables":[],"transaction":true}
+{"file":"store/src/notation_machine_state.rs","line":557,"function":"lane_serializes_holders_and_times_out_bounded","operation":"commit","sql_operations":[],"tables":[],"transaction":true}
+{"file":"store/src/notation_machine_state.rs","line":566,"function":"lane_serializes_holders_and_times_out_bounded","operation":"commit","sql_operations":[],"tables":[],"transaction":true}
+{"file":"store/src/notation_machine_state.rs","line":582,"function":"lane_serializes_holders_and_times_out_bounded","operation":"commit","sql_operations":[],"tables":[],"transaction":true}
+{"file":"store/src/notation_machine_state.rs","line":596,"function":"dropping_a_lane_guard_releases_the_lock","operation":"commit","sql_operations":[],"tables":[],"transaction":true}
 {"file":"store/src/notation_machine_state/operations.rs","line":31,"function":"admit","operation":"begin","sql_operations":[],"tables":[],"transaction":true}
 {"file":"store/src/notation_machine_state/operations.rs","line":32,"function":"admit","operation":"execute","sql_operations":[],"tables":[],"transaction":false}
 {"file":"store/src/notation_machine_state/operations.rs","line":32,"function":"admit","operation":"query","sql_operations":["INSERT"],"tables":[],"transaction":false}
