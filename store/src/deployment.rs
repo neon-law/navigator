@@ -349,6 +349,15 @@ pub fn harness_relaxations_apply<F: Fn(&str) -> Option<String>>(
     environment == DeploymentEnvironment::Dev && ci_harness_enabled(get)
 }
 
+/// The standalone broker requirement shared by startup and manifest preflight.
+/// Other requirements are never discarded even if an alternative mentions Restate.
+#[must_use]
+pub fn is_restate_broker_requirement(requirement: &Requirement) -> bool {
+    requirement.any_of.len() == 1
+        && requirement.any_of[0].len() == 1
+        && requirement.any_of[0][0] == "RESTATE_BROKER_URL"
+}
+
 pub fn applicable_web_requirements<F: Fn(&str) -> Option<String>>(
     environment: DeploymentEnvironment,
     get: &F,
@@ -358,12 +367,7 @@ pub fn applicable_web_requirements<F: Fn(&str) -> Option<String>>(
     let dbos_only = crate::workflow_engine::dbos_only(get)?;
     Ok(WEB_REQUIREMENTS
         .iter()
-        .filter(|requirement| {
-            !(dbos_only
-                && requirement.any_of.len() == 1
-                && requirement.any_of[0].len() == 1
-                && requirement.any_of[0][0] == "RESTATE_BROKER_URL")
-        })
+        .filter(|requirement| !dbos_only || !is_restate_broker_requirement(requirement))
         .filter(|requirement| !harness || !requirement.integration)
         .filter(|requirement| requirement.scope.applies(capabilities))
         .filter(|requirement| {
