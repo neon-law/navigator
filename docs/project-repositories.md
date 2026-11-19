@@ -753,6 +753,14 @@ resolves the given code to an id through `GET /app/api/projects` (the same looku
 never opens a database connection of its own, even against a local deployment. Project participation is never copied
 onto the forge.
 
+For a GitHub-backed Project whose secondary mirror is missing, run `navigator project repository repair-mirror --dir
+<checkout> [--host <site>]`. The admin API checks the caller's `use_integrations` access on the owning Firm, then
+creates or adopts the private Forgejo repository with that Firm's credential and returns Forgejo's verified repository
+URL. The CLI confirms that `origin` is the Project's GitHub source before adding the `forgejo` remote. It refuses to
+replace a different existing `forgejo` remote. GitHub remains the source repository and CI/CD provider. Project status
+reports the Forgejo URL only after verifying the repository with the same Firm-scoped credential; `forgejo_status`
+distinguishes `verified`, `missing`, `unavailable`, `not_configured`, and `not_authorized` from the GitHub `origin`.
+
 ## The branch contract
 
 Every Project repository follows one branch contract:

@@ -2486,6 +2486,22 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/project-forgejo-mirrors/{id}": {
+          "post": {
+            "summary": "Create or adopt a GitHub Project's Forgejo mirror",
+            "description": "Creates or adopts the owning Firm's private Forgejo repository for a GitHub-backed Project and returns Forgejo's verified repository URL and organization. The GitHub repository URL and CI/CD provider remain unchanged. The caller must be Owner or Admin and hold `use_integrations` on the Project's Firm. A missing Forgejo root URL or Firm token fails without changing the GitHub source.",
+            "parameters": [
+              { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+            ],
+            "responses": {
+              "200": { "description": "The verified Forgejo repository URL", "content": { "application/json": { "schema": { "type": "object" } } } },
+              "401": { "description": "No authenticated session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "403": { "description": "Authenticated caller is not admin-tier", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "404": { "description": "Project is unavailable or the caller lacks Firm integration access", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "500": { "description": "Forgejo provisioning failed", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }
+            }
+          }
+        },
         "/app/api/projects/{id}/status": {
           "get": {
             "summary": "Read live matter lifecycle and onboarding evidence",
@@ -6975,6 +6991,10 @@ mod tests {
         assert!(ops.contains(&(
             "POST".to_string(),
             "/app/api/project-surfaces/{id}".to_string()
+        )));
+        assert!(ops.contains(&(
+            "POST".to_string(),
+            "/app/api/project-forgejo-mirrors/{id}".to_string()
         )));
         assert!(ops.contains(&(
             "POST".to_string(),

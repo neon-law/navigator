@@ -1446,6 +1446,14 @@ pub enum ProjectJjCmd {
 
 #[derive(Subcommand)]
 pub enum ProjectRepositoryCmd {
+    /// Provision or adopt the Forgejo mirror for a GitHub-backed checkout.
+    RepairMirror {
+        /// Existing Project repository root. Defaults to the current directory.
+        #[arg(long, default_value = ".")]
+        dir: PathBuf,
+        #[command(flatten)]
+        host: HostOpt,
+    },
     /// Synchronize Forgejo after a GitHub review merged outside the push verb.
     Reconcile {
         #[arg(long, default_value = ".")]
@@ -3150,6 +3158,9 @@ pub async fn run_projects(action: ProjectsCmd) -> ExitCode {
             },
         },
         ProjectsCmd::Repository { action } => match action {
+            ProjectRepositoryCmd::RepairMirror { dir, host } => {
+                projects::mirror_repair::run(&dir, host.host.as_deref()).await
+            }
             ProjectRepositoryCmd::Reconcile { dir, review } => {
                 match projects::push::reconcile(&dir, review).await {
                     Ok(()) => ExitCode::SUCCESS,

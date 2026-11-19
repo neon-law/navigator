@@ -514,6 +514,11 @@ fn api_operation_table() -> Vec<(&'static str, &'static str, MethodRouter<ApiSta
             "/app/api/project-lifecycle",
             get(project_lifecycle_door),
         ),
+        (
+            "POST",
+            "/app/api/project-forgejo-mirrors/{id}",
+            post(repair_project_forgejo_mirror_door),
+        ),
         // Own noun, same reason as `project-repositories`: the `projects`
         // GET rule admits any authenticated caller up to five segments, and
         // an admin-only reconcile nested there would be policy-reachable by
@@ -2056,6 +2061,79 @@ async fn reconcile_project_surfaces_door(
     Ok((StatusCode::OK, Json(surfaces)).into_response())
 }
 
+/// `POST /app/api/project-forgejo-mirrors/{id}` — create or adopt the
+/// Forgejo mirror for a GitHub-backed Project and return Forgejo's verified
+/// repository URL. The Project's GitHub `repository_url` is never changed.
+async fn repair_project_forgejo_mirror_door(
+    State(state): State<ApiState>,
+    AdminSession(session): AdminSession,
+    Path(id): Path<Uuid>,
+) -> Result<Response, ApiError> {
+    let project = store::projects::find_by_id(&state.surreal, id)
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))?
+        .ok_or(ApiError::NotFound)?;
+    if !project
+        .repository_url
+        .as_deref()
+        .is_some_and(|url| !url.trim().is_empty())
+    {
+        return Err(ApiError::NotFound);
+    }
+    if cloud::ForgeBackend::from_lookup(|key| std::env::var(key).ok())
+        .map_err(|error| ApiError::Db(error.to_string()))?
+        != cloud::ForgeBackend::GitHub
+    {
+        return Err(ApiError::NotFound);
+    }
+    let firm_id = project.firm_id.ok_or(ApiError::NotFound)?;
+    let allowed = store::firm_capability::allowed_firm_ids(
+        &state.surreal,
+        session.role,
+        session.person_id,
+        store::firm_capability::FirmCapability::UseIntegrations,
+    )
+    .await
+    .map_err(|error| ApiError::Db(error.to_string()))?;
+    if !allowed.contains(&firm_id) {
+        return Err(ApiError::NotFound);
+    }
+
+    let kms = crate::integrations::runtime_kms_from_env().await;
+    let forge =
+        store::project_surfaces::forgejo_for_project(&state.surreal, id, kms.as_ref(), |key| {
+            std::env::var(key).ok()
+        })
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))?;
+    let existing = cloud::ForgeService::find_repository(&forge, &project.code)
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))?;
+    let repository = cloud::ForgeService::ensure_repository(&forge, &project.code)
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))?;
+    let firm = store::firms::find_by_id(&state.surreal, firm_id)
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))?
+        .ok_or(ApiError::NotFound)?;
+    let path = store::firms::forgejo::repository_path(&firm, &project)
+        .map_err(|error| ApiError::Db(error.to_string()))?;
+    if !is_verified_forgejo_repository_url(&repository.url, &path.owner, &path.repository) {
+        return Err(ApiError::NotFound);
+    }
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "repository_url": repository.url,
+            "forgejo_owner": path.owner,
+            "mirror_status": if existing.is_some() { "present" } else { "created" },
+            "source_repository_url": project.repository_url,
+            "ci_provider": "github"
+        })),
+    )
+        .into_response())
+}
+
 /// `GET /app/api/project-surfaces/{id}` — read only the nonsecret coordinates
 /// used by `navigator project set --from-live` and the Project gate.
 async fn read_project_handles_door(
@@ -2152,7 +2230,7 @@ async fn get_project_door(
     let remotes = if authed.0.role == store::persons::Role::Client {
         None
     } else {
-        Some(repository_remotes(&state, &project).await?)
+        Some(repository_remotes(&state, &project, &authed.0).await?)
     };
     let mut payload =
         project_payload(authed.0.role, project).map_err(|error| ApiError::Db(error.to_string()))?;
@@ -2165,23 +2243,100 @@ async fn get_project_door(
 async fn repository_remotes(
     state: &ApiState,
     project: &store::projects::Project,
+    viewer: &crate::SessionData,
 ) -> Result<serde_json::Value, ApiError> {
-    let forgejo_url = if let Some(firm_id) = project.firm_id {
-        let firm = store::firms::find_by_id(&state.surreal, firm_id)
+    let mut forgejo_url = None;
+    let mut forgejo_status = "not_configured";
+    let is_github = cloud::ForgeBackend::from_lookup(|key| std::env::var(key).ok())
+        .is_ok_and(|backend| backend == cloud::ForgeBackend::GitHub);
+    if is_github
+        && project
+            .repository_url
+            .as_deref()
+            .is_some_and(|url| !url.trim().is_empty())
+    {
+        if let Some(firm_id) = project.firm_id {
+            let access = store::firm_capability::resolve(
+                &state.surreal,
+                viewer.role,
+                viewer.person_id,
+                firm_id,
+                store::firm_capability::FirmCapability::UseIntegrations,
+            )
             .await
             .map_err(|error| ApiError::Db(error.to_string()))?;
-        match (firm, std::env::var("NAVIGATOR_FORGEJO_ROOT_URL").ok()) {
-            (Some(firm), Some(root)) if !root.trim().is_empty() => {
-                let path = store::firms::forgejo::repository_path(&firm, project)
-                    .map_err(|error| ApiError::Db(error.to_string()))?;
-                Some(format!("{}/{path}.git", root.trim_end_matches('/')))
+            if !access.is_allowed() {
+                forgejo_status = "not_authorized";
+            } else if std::env::var("NAVIGATOR_FORGEJO_ROOT_URL")
+                .ok()
+                .is_none_or(|root| root.trim().is_empty())
+            {
+                forgejo_status = "not_configured";
+            } else {
+                let kms = crate::integrations::runtime_kms_from_env().await;
+                match store::project_surfaces::forgejo_for_project(
+                    &state.surreal,
+                    project.id,
+                    kms.as_ref(),
+                    |key| std::env::var(key).ok(),
+                )
+                .await
+                {
+                    Ok(forge) => {
+                        match cloud::ForgeService::find_repository(&forge, &project.code).await {
+                            Ok(Some(repository)) => {
+                                let firm = store::firms::find_by_id(&state.surreal, firm_id)
+                                    .await
+                                    .map_err(|error| ApiError::Db(error.to_string()))?;
+                                if firm.is_some_and(|firm| {
+                                    store::firms::forgejo::repository_path(&firm, project)
+                                        .is_ok_and(|path| {
+                                            is_verified_forgejo_repository_url(
+                                                &repository.url,
+                                                &path.owner,
+                                                &path.repository,
+                                            )
+                                        })
+                                }) {
+                                    forgejo_url = Some(repository.url);
+                                    forgejo_status = "verified";
+                                } else {
+                                    forgejo_status = "unavailable";
+                                }
+                            }
+                            Ok(None) => forgejo_status = "missing",
+                            Err(_) => forgejo_status = "unavailable",
+                        }
+                    }
+                    Err(_) => forgejo_status = "unavailable",
+                }
             }
-            _ => None,
         }
-    } else {
-        None
+    }
+    Ok(serde_json::json!({
+        "origin": project.repository_url,
+        "forgejo": forgejo_url,
+        "forgejo_status": forgejo_status
+    }))
+}
+
+fn is_verified_forgejo_repository_url(value: &str, owner: &str, project: &str) -> bool {
+    let Ok(url) = url::Url::parse(value) else {
+        return false;
     };
-    Ok(serde_json::json!({"origin": project.repository_url, "forgejo": forgejo_url}))
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let internal_http =
+        host == "localhost" || host == "127.0.0.1" || host.ends_with(".svc.cluster.local");
+    let path = url.path().trim_end_matches('/');
+    let repository_path = format!("/{owner}/{project}");
+    (url.scheme() == "https" || (url.scheme() == "http" && internal_http))
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.query().is_none()
+        && url.fragment().is_none()
+        && (path.ends_with(&repository_path) || path.ends_with(&format!("{repository_path}.git")))
 }
 
 /// The Drive folder a Project links, if any.
@@ -2244,7 +2399,7 @@ async fn project_status_door(
             project.code
         ));
     }
-    let remotes = repository_remotes(&state, &project).await?;
+    let remotes = repository_remotes(&state, &project, &lawyer.0).await?;
     let mut adopted_envelopes = Vec::new();
     let mut envelopes = Vec::new();
     for notation in store::notations::list_by_project(&state.surreal, id).await? {
@@ -10813,6 +10968,35 @@ mod tests {
     use axum::Json;
     use std::collections::BTreeSet;
     use uuid::Uuid;
+
+    #[test]
+    fn forgejo_repository_url_must_match_the_firm_project_and_safe_transport() {
+        assert!(super::is_verified_forgejo_repository_url(
+            "https://forge.example.test/firm/project",
+            "firm",
+            "project"
+        ));
+        assert!(super::is_verified_forgejo_repository_url(
+            "http://127.0.0.1:3000/firm/project",
+            "firm",
+            "project"
+        ));
+        assert!(!super::is_verified_forgejo_repository_url(
+            "https://forge.example.test/other/project",
+            "firm",
+            "project"
+        ));
+        assert!(!super::is_verified_forgejo_repository_url(
+            "http://forge.example.test/firm/project",
+            "firm",
+            "project"
+        ));
+        assert!(!super::is_verified_forgejo_repository_url(
+            "https://user:secret@forge.example.test/firm/project",
+            "firm",
+            "project"
+        ));
+    }
 
     #[test]
     fn client_notation_list_and_id_visibility_keep_only_client_visible_kinds() {

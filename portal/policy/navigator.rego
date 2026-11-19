@@ -1664,6 +1664,17 @@ route_allow if {
 	is_admin(input.session)
 }
 
+# Create or adopt a missing Forgejo mirror for a GitHub-backed Project.
+# Firm credentials are used only after the handler checks `use_integrations`.
+route_allow if {
+	input.path[0] == "app"
+	input.path[1] == "api"
+	input.path[2] == "project-forgejo-mirrors"
+	count(input.path) == 4
+	input.method == "POST"
+	is_admin(input.session)
+}
+
 # Read the nonsecret manifest coordinates for a single matter. The handler
 # enforces participation and document-token Project scope; clients never see
 # private Slack/Notion coordinates through this door.
