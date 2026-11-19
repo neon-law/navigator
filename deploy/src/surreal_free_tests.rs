@@ -26,9 +26,10 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 
-/// The engine-starting helpers (`cli/tests/embedded_surreal_ratchet.rs` counts
-/// the same ones), plus a direct `mem://` connection. A bare `mem()` is matched
-/// separately, because `self.mem()` and `cache::mem()` are not the engine.
+/// Engine-starting helpers, a direct `mem://` connection, and the verified
+/// Source-export fixture. The export fixture uses an engine created by another
+/// helper, so its callers still require the compatibility lane. A bare `mem()`
+/// is matched separately: `self.mem()` and `cache::mem()` are not the engine.
 const ENGINE_CALLS: &[&str] = &[
     "mem_surreal(",
     "shared_surreal(",
@@ -36,6 +37,7 @@ const ENGINE_CALLS: &[&str] = &[
     "server_surreal(",
     "unmigrated(",
     "test_support::mem(",
+    "verified_family_capture(",
     "\"mem://\"",
 ];
 
