@@ -217,9 +217,9 @@ pub struct Harness {
 impl Harness {
     #[allow(clippy::too_many_lines)]
     pub async fn start(cfg: &KindConfig, root: &Path, fx: Fixtures, admin: String) -> Result<Self> {
-        let db = store::surreal::connect_from_env()
+        let db = crate::application_store()
             .await
-            .context("connect to SurrealDB")?;
+            .context("verify PostgreSQL application authority")?;
         let storage = cloud::from_env()
             .await
             .context("configure object storage")?;

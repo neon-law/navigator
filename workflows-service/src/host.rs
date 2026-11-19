@@ -231,14 +231,9 @@ async fn run_host(
 ) -> anyhow::Result<()> {
     let environment =
         store::DeploymentEnvironment::from_env().context("parse NAVIGATOR_ENVIRONMENT")?;
-    if let Some(postgres) = store::postgres::PostgresDb::configured()
+    store::postgres::PostgresDb::application()
         .await
-        .context("connecting PostgreSQL for runtime readiness")?
-    {
-        store::postgres_backfill::family::require_runtime_scopes(&postgres)
-            .await
-            .context("verifying PostgreSQL runtime activation receipts")?;
-    }
+        .context("verify PostgreSQL worker authority")?;
     // Drives `DriDigest` and `GeneralNag` staging disclosure and the
     // production-only open-matters follow-up — the same flag the site-wide
     // "simulated projects" banner reads.
@@ -366,12 +361,7 @@ async fn run_host(
             || social_publisher_enabled
             || social_reconciler_enabled
         {
-            let surreal = store::surreal::connect_from_env()
-                .await
-                .context("connect to SurrealDB for DBOS daily workflows")?;
-            store::schema::apply(&surreal)
-                .await
-                .context("apply SurrealDB schema for DBOS daily workflows")?;
+            let surreal = store::surreal::SurrealDb::uninitialized();
             Some(surreal)
         } else {
             None
@@ -557,9 +547,7 @@ async fn run_host(
     crate::asset_config::validate_for_deployment(|key| std::env::var(key).ok())
         .context("validate deployment asset base URL")?;
 
-    let surreal = store::surreal::connect_from_env()
-        .await
-        .context("connect to SurrealDB")?;
+    let surreal = store::surreal::SurrealDb::uninitialized();
 
     // Every worker send — the workflow-driven template mail and the
     // Notation service's client mail — journals one `sent_email` row, the

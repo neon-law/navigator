@@ -15,9 +15,7 @@ async fn assigned_voice_call_offers_notes_without_an_external_reply_form() {
         return;
     };
     login_as_lawyer(&browser).await;
-    let db = store::surreal::connect_from_env()
-        .await
-        .expect("local store");
+    let db = super::postgres_browser_store().await.expect("local store");
     let firm = store::firms::firm_id_for_brand_key(&db, "neon")
         .await
         .unwrap()
@@ -104,9 +102,7 @@ async fn private_social_assignment_waits_for_human_privilege_review() {
         return;
     };
     login_as_lawyer(&browser).await;
-    let db = store::surreal::connect_from_env()
-        .await
-        .expect("local store");
+    let db = super::postgres_browser_store().await.expect("local store");
     let firm = store::firms::firm_id_for_brand_key(&db, "neon")
         .await
         .expect("Brand lookup")

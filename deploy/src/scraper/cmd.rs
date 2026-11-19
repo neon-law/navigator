@@ -186,7 +186,7 @@ async fn sites_listing(firm_id: Uuid) -> ExitCode {
         Ok(ok) => ok,
         Err(code) => return code,
     };
-    let surreal = match store::surreal::connect_from_env().await {
+    let surreal = match crate::application_store().await {
         Ok(db) => db,
         Err(error) => return exit_failure("connecting to the store", error),
     };
@@ -295,7 +295,7 @@ async fn run_site(
             Err(error) => return exit_failure("planning the run", error),
         };
 
-    let surreal = match store::surreal::connect_from_env().await {
+    let surreal = match crate::application_store().await {
         Ok(db) => db,
         Err(error) => return exit_failure("connecting to the store", error),
     };

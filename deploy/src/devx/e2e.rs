@@ -10,11 +10,8 @@
 //! and Restate for protocol readiness, hits `/app/health` through the ingress,
 //! and confirms the seed data landed. `grant_lawyer` pre-seeds the Lawyer
 //! demo user, writing the singular `persons.role` column, so the browser
-//! e2e's admin-gated walk can reach `/admin`; it connects to the
-//! `NAVIGATOR_SURREAL_*` coordinates the sourced `.devx/env` names — the
-//! same ones the running `web` reads — so the lawyer row lands where `web`
-//! looks for it. That is one shared `navigator` database, not a private
-//! one; see [`super::restate_db`].
+//! e2e's admin-gated walk can reach `/admin`. It requires activated
+//! PostgreSQL history from the sourced `.devx/env`, matching the running app.
 //!
 //! ## Testing
 //!
@@ -36,19 +33,12 @@ use super::{require_tools, use_kind_context, wait_for_condition, wait_rollout, K
 /// canonical seed in `store/seeds/`; a smaller count means seeding
 /// silently failed.
 ///
-/// Both witnesses read `SurrealDB`, because the canonical seed writes
-/// nowhere else — `seed_canonical_into` takes a Surreal handle and a
-/// storage service, and every seeder it calls is a Surreal write.
-///
-/// A witness pointed at an engine that does not hold its table can only
-/// ever report 0, which fails the release on a correctly seeded stack.
+/// Both witnesses read PostgreSQL through the same accessors as the application.
 const MIN_QUESTIONS: i64 = 8;
 /// The bundled template catalog carries 20+ current rows.
 const MIN_TEMPLATES: i64 = 8;
 /// `clamd`'s in-cluster port, the remote half of its forward.
 const CLAMAV_PORT: u16 = 3310;
-/// `SurrealDB`'s in-cluster Service port.
-const SURREAL_SERVICE_PORT: u16 = super::surreal::SERVICE_PORT;
 /// Every workload the applied tier deploys, waited on before the checks
 /// that depend on it. A member joins this list the day it joins the tier:
 /// the deploy workflow applies `k8s/overlays/kind` wholesale, so an
@@ -73,14 +63,7 @@ fn seed_counts_ok(questions: i64, templates: i64) -> bool {
 /// admin-gated walk can run.
 const LAWYER_EMAIL: &str = "lawyer@neonlaw.com";
 
-/// Find-or-promote the Lawyer demo person in `surreal`.
-///
-/// A find-then-write rather than an upsert: `SurrealDB` has no
-/// `ON CONFLICT`, so both halves are spelled out — insert when absent,
-/// force `role = 'lawyer'` when present. The lookup is case-insensitive
-/// through the stored `email_lower` field, so a row seeded as
-/// `Lawyer@NeonLaw.com` is promoted rather than colliding on the unique
-/// index.
+/// Find or promote the synthetic Lawyer through the authoritative Person accessor.
 async fn grant_lawyer_in(surreal: &store::surreal::SurrealDb) -> Result<()> {
     match store::persons::find_by_email_ci(surreal, LAWYER_EMAIL)
         .await
@@ -135,7 +118,7 @@ pub fn run_e2e(cfg: &KindConfig) -> Result<()> {
     check_health()?;
 
     eprintln!("=== confirming seed data populated ===");
-    check_seed(cfg)?;
+    check_seed()?;
 
     eprintln!("=== all checks passed ===");
     Ok(())
@@ -228,15 +211,15 @@ pub fn grant_lawyer_at() -> Result<()> {
 }
 
 fn grant_lawyer_from_env() -> Result<()> {
-    eprintln!("=== granting lawyer the lawyer role in NAVIGATOR_SURREAL_ENDPOINT ===");
+    eprintln!("=== granting lawyer the lawyer role in PostgreSQL ===");
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .context("create tokio runtime")?;
     runtime.block_on(async {
-        let surreal = store::surreal::connect_from_env()
+        let surreal = crate::application_store()
             .await
-            .context("connect to SurrealDB")?;
+            .context("verify PostgreSQL application authority")?;
         grant_lawyer_in(&surreal).await?;
         eprintln!("{LAWYER_EMAIL} role=lawyer");
         Ok(())
@@ -345,11 +328,13 @@ fn check_health() -> Result<()> {
     }
 }
 
-/// Confirm the seed data populated past the minimum row counts. Both
-/// witnesses — `questions` and `templates` — are canonical-seed tables in
-/// `SurrealDB`, so either coming up short means seeding silently failed.
-fn check_seed(cfg: &KindConfig) -> Result<()> {
-    let (q, e) = count_seeded_rows(cfg)?;
+/// Confirm the canonical Question and current Template catalogs were seeded.
+fn check_seed() -> Result<()> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("create tokio runtime")?;
+    let (q, e) = runtime.block_on(count_seeded_rows())?;
     if !seed_counts_ok(q, e) {
         bail!("expected at least {MIN_QUESTIONS} questions and {MIN_TEMPLATES} templates; got q={q} e={e}");
     }
@@ -357,41 +342,15 @@ fn check_seed(cfg: &KindConfig) -> Result<()> {
     Ok(())
 }
 
-/// Count the seeded questions and current templates in the in-cluster
-/// `SurrealDB`, as `(questions, templates)`. One forward and one
-/// connection serve both reads.
-///
-/// The deploy workflow opens its own Surreal port-forward, but only for
-/// the browser gate several steps later — this check runs before that,
-/// so it opens and drops its own. Binding is harmless when a local `dev
-/// up` already owns the port for the same Service: kubectl exits on the
-/// conflict and the existing forward answers the query, exactly as the
-/// `ClamAV` probe above relies on.
-fn count_seeded_rows(cfg: &KindConfig) -> Result<(i64, i64)> {
-    let _forward = start_port_forward(
-        cfg,
-        "service/surreal",
-        cfg.surreal_port,
-        SURREAL_SERVICE_PORT,
-    )?;
-    super::wait_for_tcp("127.0.0.1", cfg.surreal_port)?;
-    let config = super::surreal::host_config(cfg, SURREAL_SEED_DATABASE);
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("create tokio runtime")?;
-    runtime.block_on(async {
-        let db = store::surreal::connect(&config)
-            .await
-            .with_context(|| format!("connect to SurrealDB at {}", config.endpoint))?;
-        let questions = store::questions::list_all(&db)
-            .await
-            .context("count the seeded questions")?;
-        let templates = store::templates::list_current(&db)
-            .await
-            .context("count the seeded templates")?;
-        Ok((witnessed(questions.len()), witnessed(templates.len())))
-    })
+async fn count_seeded_rows() -> Result<(i64, i64)> {
+    let db = crate::application_store().await?;
+    let questions = store::questions::list_all(&db)
+        .await
+        .context("count the seeded questions")?;
+    let templates = store::templates::list_current(&db)
+        .await
+        .context("count the seeded templates")?;
+    Ok((witnessed(questions.len()), witnessed(templates.len())))
 }
 
 /// Narrow a row count to the `i64` the minimums compare against. A count
@@ -399,10 +358,6 @@ fn count_seeded_rows(cfg: &KindConfig) -> Result<(i64, i64)> {
 fn witnessed(rows: usize) -> i64 {
     i64::try_from(rows).unwrap_or(i64::MAX)
 }
-
-/// The database the canonical seed writes into. `dev up` applies the
-/// schema to the same name.
-const SURREAL_SEED_DATABASE: &str = "navigator";
 
 #[cfg(test)]
 mod tests {
@@ -507,52 +462,37 @@ mod tests {
         assert_eq!(witnessed(38), 38);
     }
 
-    /// Both seed witnesses are counted through the engine the canonical
-    /// seed writes to.
-    ///
-    /// `seed_canonical_into` takes a Surreal handle, and every seeder it
-    /// calls is a Surreal write, so a witness reading anywhere else counts
-    /// rows the seed never created and reports 0 against a healthy stack —
-    /// a green seed behind a red gate. Asserted against the module's own
-    /// runtime source, everything above the test module, because the
-    /// connection this names is opened against a live cluster that a unit
-    /// test has no way to reach.
-    #[test]
-    fn the_seed_check_counts_both_witnesses_through_surrealdb() {
-        let source = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/devx/e2e.rs"),
-        )
-        .expect("read this module's own source");
-        let (runtime, _tests) = source
-            .split_once("#[cfg(test)]")
-            .expect("this module carries a test module");
-        let counting = runtime
-            .split_once("fn count_seeded_rows")
-            .expect("this module counts the seeded rows")
-            .1;
-
-        for call in [
-            // The handle both counts are issued against.
-            "store::surreal::connect(&config)",
-            // The two witnesses, each through its typed store accessor.
-            "store::questions::list_all(&db)",
-            "store::templates::list_current(&db)",
-        ] {
-            assert!(
-                counting.contains(call),
-                "`count_seeded_rows` must reach its witnesses with `{call}`; the canonical seed \
-                 writes to SurrealDB alone, so a count issued against another engine reports 0 \
-                 and fails the gate on a correctly seeded stack"
-            );
-        }
-    }
-
-    /// Both witnesses have to reach the engine that actually holds the
-    /// rows, at the Service port the KIND manifest publishes.
-    #[test]
-    fn the_seed_witnesses_target_the_surreal_service_port() {
-        assert_eq!(SURREAL_SERVICE_PORT, super::super::surreal::SERVICE_PORT);
-        assert_eq!(SURREAL_SEED_DATABASE, "navigator");
+    #[tokio::test]
+    async fn seed_witnesses_read_native_rows_and_count_only_current_templates() {
+        store::test_support::with_postgres(async {
+            assert_eq!(count_seeded_rows().await.unwrap(), (0, 0));
+            let db = store::surreal::SurrealDb::uninitialized();
+            store::questions::create(
+                &db,
+                &store::questions::NewQuestion::new("synthetic_question", "Synthetic?", "string"),
+            )
+            .await
+            .unwrap();
+            for title in ["First", "Second"] {
+                store::templates::save_version(
+                    &db,
+                    None,
+                    "synthetic_template",
+                    store::templates::Version {
+                        title: title.into(),
+                        respondent_type: "person".into(),
+                        asset_id: None,
+                        form_code: None,
+                        kind: None,
+                        source_commit_sha: None,
+                    },
+                )
+                .await
+                .unwrap();
+            }
+            assert_eq!(count_seeded_rows().await.unwrap(), (1, 1));
+        })
+        .await;
     }
 
     /// Two witnesses, so both must clear: a stack where only one table
@@ -574,16 +514,19 @@ mod tests {
     /// The grant seeds the row when the mailbox is absent.
     #[tokio::test]
     async fn grant_lawyer_seeds_the_lawyer_person() {
-        let surreal = store::surreal::test_support::mem().await;
+        store::test_support::with_postgres(async {
+            let surreal = store::surreal::SurrealDb::uninitialized();
 
-        grant_lawyer_in(&surreal).await.unwrap();
+            grant_lawyer_in(&surreal).await.unwrap();
 
-        let row = store::persons::find_by_email_ci(&surreal, LAWYER_EMAIL)
-            .await
-            .unwrap()
-            .expect("the grant seeds the mailbox");
-        assert_eq!(row.role, store::persons::Role::Lawyer);
-        assert_eq!(row.email, LAWYER_EMAIL);
+            let row = store::persons::find_by_email_ci(&surreal, LAWYER_EMAIL)
+                .await
+                .unwrap()
+                .expect("the grant seeds the mailbox");
+            assert_eq!(row.role, store::persons::Role::Lawyer);
+            assert_eq!(row.email, LAWYER_EMAIL);
+        })
+        .await;
     }
 
     /// …and promotes it when it is already there, at whatever casing.
@@ -594,31 +537,34 @@ mod tests {
     /// attempt a second create the unique index would reject.
     #[tokio::test]
     async fn grant_lawyer_folds_a_case_variant_row_instead_of_colliding() {
-        let surreal = store::surreal::test_support::mem().await;
-        store::persons::create(
-            &surreal,
-            &store::persons::NewPerson::with_role(
-                "Lawyer",
-                "Lawyer@NeonLaw.com",
-                store::persons::Role::Client,
-            ),
-        )
-        .await
-        .unwrap();
+        store::test_support::with_postgres(async {
+            let surreal = store::surreal::SurrealDb::uninitialized();
+            store::persons::create(
+                &surreal,
+                &store::persons::NewPerson::with_role(
+                    "Lawyer",
+                    "Lawyer@NeonLaw.com",
+                    store::persons::Role::Client,
+                ),
+            )
+            .await
+            .unwrap();
 
-        grant_lawyer_in(&surreal).await.unwrap();
+            grant_lawyer_in(&surreal).await.unwrap();
 
-        let rows = store::persons::list_directory(&surreal).await.unwrap();
-        assert_eq!(
-            rows.len(),
-            1,
-            "the grant must fold the case-variant mailbox, not add a row"
-        );
-        assert_eq!(
-            rows[0].email, "Lawyer@NeonLaw.com",
-            "the stored casing is preserved"
-        );
-        assert_eq!(rows[0].role, store::persons::Role::Lawyer);
+            let rows = store::persons::list_directory(&surreal).await.unwrap();
+            assert_eq!(
+                rows.len(),
+                1,
+                "the grant must fold the case-variant mailbox, not add a row"
+            );
+            assert_eq!(
+                rows[0].email, "Lawyer@NeonLaw.com",
+                "the stored casing is preserved"
+            );
+            assert_eq!(rows[0].role, store::persons::Role::Lawyer);
+        })
+        .await;
     }
 
     #[test]

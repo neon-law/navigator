@@ -12,7 +12,7 @@ pub fn health() -> Result<()> {
         .enable_all()
         .build()?;
     runtime.block_on(async {
-        let db = store::surreal::connect_from_env().await?;
+        let db = crate::application_store().await?;
         let overdue = store::email_receipts::list_overdue(
             &db,
             chrono::Utc::now() - chrono::Duration::minutes(5),
@@ -52,9 +52,9 @@ pub fn quarantined() -> Result<()> {
 }
 
 async fn quarantined_async() -> Result<()> {
-    let surreal = store::surreal::connect_from_env()
+    let surreal = crate::application_store()
         .await
-        .context("connect to SurrealDB")?;
+        .context("verify PostgreSQL application authority")?;
     let deliveries =
         store::email_deliveries::list_by_state(&surreal, store::email_deliveries::UNKNOWN)
             .await
@@ -99,9 +99,9 @@ async fn reconcile_confirmed_async(
     channel_id: String,
     timestamp: String,
 ) -> Result<()> {
-    let surreal = store::surreal::connect_from_env()
+    let surreal = crate::application_store()
         .await
-        .context("connect to SurrealDB")?;
+        .context("verify PostgreSQL application authority")?;
     let delivery = store::email_deliveries::reconcile_confirmed(
         &surreal,
         receipt_id,
@@ -128,9 +128,9 @@ pub fn authorize_resend(receipt: Uuid, actor: String) -> Result<()> {
 }
 
 async fn authorize_resend_async(receipt_id: Uuid, actor: String) -> Result<()> {
-    let surreal = store::surreal::connect_from_env()
+    let surreal = crate::application_store()
         .await
-        .context("connect to SurrealDB")?;
+        .context("verify PostgreSQL application authority")?;
     let delivery = store::email_deliveries::authorize_resend(&surreal, receipt_id, &actor)
         .await
         .context("authorize the resend")?;

@@ -34,35 +34,29 @@ async fn postgres() -> Option<(PostgresDb, sqlx::PgPool)> {
     let setup = sqlx::PgPool::connect_with(options.clone().database(&database))
         .await
         .unwrap();
-    let pg = PostgresDb::connect(options.database(&database))
+    sqlx::raw_sql("CREATE EXTENSION IF NOT EXISTS age; LOAD 'age';")
+        .execute(&setup)
         .await
         .unwrap();
+    let pg = PostgresDb::connect(
+        options
+            .options([("session_preload_libraries", "age")])
+            .database(&database),
+    )
+    .await
+    .unwrap();
     pg.migrate_embedded(None).await.unwrap();
     Some((pg, setup))
 }
 async fn firm(db: &store::surreal::SurrealDb) -> Uuid {
-    let admin = store::persons::create(
-        db,
-        &store::persons::NewPerson::with_role(
-            "Synthetic administrator",
-            format!("admin-{}@example.com", Uuid::now_v7()),
-            store::persons::Role::Admin,
-        ),
-    )
-    .await
-    .unwrap();
-    store::firms::create(
-        db,
-        &store::firms::NewFirm {
-            name: "Synthetic accounting firm".into(),
-            status: "active".into(),
-            entity_id: store::test_support::seed_entity(db).await,
-            admin_dri_person_id: admin.id,
-        },
-    )
-    .await
-    .unwrap()
-    .id
+    // The explicit importer reads historical Source rows, independent of
+    // ordinary application accessors and their PostgreSQL admission checks.
+    let id = Uuid::now_v7();
+    db.query("CREATE $id SET name='Synthetic accounting firm', slug=$slug, status='active', inserted_at='2026-10-10T00:00:00Z', updated_at='2026-10-10T00:00:00Z'")
+        .bind(("id", store::surreal::record_id("firm", id)))
+        .bind(("slug", format!("synthetic-{}", id.simple())))
+        .await.unwrap().check().unwrap();
+    id
 }
 
 fn entry(firm: Uuid, key: &str) -> JournalEntry {
@@ -193,6 +187,35 @@ async fn startup_import_preserves_identity_timestamps_and_reversal_order_then_re
         .unwrap();
     let count: Vec<Count> = source.take(0).unwrap();
     assert_eq!(count[0].total, 2);
+
+    // A selected Firm's explicit import must not parse or import another
+    // Firm's malformed history, and must leave the Source unchanged.
+    let selected = self::firm(&db).await;
+    let selected_entry = entry(selected, "selected-firm");
+    legacy(&db, &selected_entry, Some("2026-10-11T01:05:00Z")).await;
+    let outside = self::firm(&db).await;
+    db.query("CREATE journal_entry SET firm_id=$firm, command_key='unreviewed-outside-firm', payload='not-json', inserted_at='2026-10-11T01:05:00Z'")
+        .bind(("firm", outside.to_string())).await.unwrap().check().unwrap();
+    let report = store::journal_startup_migration::import_firm(&db, &pg, selected)
+        .await
+        .unwrap();
+    assert_eq!(report.imported, 1);
+    assert!(report.triage.is_empty());
+    assert_eq!(entries(&pg, selected).await.unwrap(), vec![selected_entry]);
+    assert!(entries(&pg, outside).await.unwrap().is_empty());
+    assert_eq!(
+        store::journal_startup_migration::import_firm(&db, &pg, selected)
+            .await
+            .unwrap()
+            .imported,
+        0
+    );
+    let mut source = db
+        .query("SELECT count() AS total FROM journal_entry GROUP ALL")
+        .await
+        .unwrap();
+    let count: Vec<Count> = source.take(0).unwrap();
+    assert_eq!(count[0].total, 4);
 }
 
 #[tokio::test]

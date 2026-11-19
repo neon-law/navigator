@@ -1051,8 +1051,3 @@ async fn surreal_journal_store_posts_reads_and_feeds_the_postgres_import() {
         Err(JournalError::RequiresPostgres)
     ));
 }
-#[test]
-fn journal_store_selection_follows_the_postgres_host() {
-    assert_eq!(JournalStore::selected_backend(false), "surrealdb");
-    assert_eq!(JournalStore::selected_backend(true), "postgresql");
-}

@@ -36,9 +36,9 @@ pub fn run(receipt: Uuid, after_failed_result: Option<&str>) -> Result<()> {
 }
 
 async fn redrive(receipt_id: Uuid, after_failed_result: Option<&str>) -> Result<()> {
-    let surreal = store::surreal::connect_from_env()
+    let surreal = crate::application_store()
         .await
-        .context("connect to SurrealDB")?;
+        .context("verify PostgreSQL application authority")?;
     let config = workflows::EmailSummaryConfig::from_env()
         .context("configure inbound email summary lane")?
         .with_context(|| "NAVIGATOR_SUMMARY_ENABLED is not set; nothing to redrive against")?;

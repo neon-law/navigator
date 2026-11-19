@@ -898,3 +898,58 @@ pub async fn ingest_fi_message_on(
         }
     }
 }
+
+/// Each actor walk uses its own enrolled PostgreSQL database, with no Source handle.
+pub fn with_postgres(
+    test: impl std::future::Future<Output = ()>,
+) -> impl std::future::Future<Output = ()> {
+    let test = Box::pin(test);
+    async move {
+        use crate::postgres::PostgresDb;
+        use sqlx::postgres::{PgConnectOptions, PgSslMode};
+        let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
+            assert_ne!(std::env::var("NAV_REQUIRE_POSTGRES").as_deref(), Ok("1"));
+            return;
+        };
+        let options = PgConnectOptions::new()
+            .host("127.0.0.1")
+            .port(port.parse().unwrap())
+            .username("postgres")
+            .password("synthetic")
+            .ssl_mode(PgSslMode::Disable)
+            .options([("session_preload_libraries", "age")]);
+        let admin_database =
+            std::env::var("NAVIGATOR_TEST_POSTGRES_DATABASE").unwrap_or_else(|_| "smoke".into());
+        let admin = PostgresDb::connect(options.clone().database(&admin_database))
+            .await
+            .unwrap();
+        let database = format!("native_test_{}", Uuid::now_v7().simple());
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {database}")))
+            .execute(admin.pool())
+            .await
+            .unwrap();
+        let pg = PostgresDb::connect(options.database(&database))
+            .await
+            .unwrap();
+        sqlx::raw_sql("CREATE EXTENSION IF NOT EXISTS age; LOAD 'age';")
+            .execute(pg.pool())
+            .await
+            .unwrap();
+        sqlx::raw_sql(crate::postgres_schema::canonical_schema())
+            .execute(pg.pool())
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO mirror_backfill_run(id,batch_size,status,scope,completed_at) VALUES ($1,1,'completed','global',now())")
+        .bind(Uuid::new_v4()).execute(pg.pool()).await.unwrap();
+        for family in crate::postgres_backfill::family::Family::all() {
+            seed_postgres_family(&pg, *family).await;
+        }
+        PostgresDb::with_test_db(pg.clone(), test).await;
+        pg.pool().close().await;
+        sqlx::query(sqlx::AssertSqlSafe(format!("DROP DATABASE {database}")))
+            .execute(admin.pool())
+            .await
+            .unwrap();
+        admin.pool().close().await;
+    }
+}

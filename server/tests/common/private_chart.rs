@@ -7,9 +7,7 @@ use features::webdriver::{base_url, login_as_client, new_client_or_skip};
 use uuid::Uuid;
 
 async fn fixture() -> String {
-    let db = store::surreal::connect_from_env()
-        .await
-        .expect("task store");
+    let db = super::postgres_browser_store().await.expect("task store");
     let client = store::persons::find_by_email_ci(&db, "client@neonlaw.com")
         .await
         .expect("fixture client lookup")

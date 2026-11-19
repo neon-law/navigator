@@ -4188,6 +4188,36 @@ pub async fn seed_no_charge_fee_clause(
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn startup_seed_replays_on_postgres_without_a_source_handle() {
+        crate::test_support::with_postgres(async {
+            let source = crate::surreal::SurrealDb::uninitialized();
+            let root = tempfile::tempdir().unwrap();
+            let storage: std::sync::Arc<dyn cloud::StorageService> =
+                std::sync::Arc::new(cloud::FsStorage::new(root.path()).await.unwrap());
+            for environment in [
+                crate::DeploymentEnvironment::Production,
+                crate::DeploymentEnvironment::Dev,
+            ] {
+                Box::pin(super::seed_environment_with(
+                    &source,
+                    &storage,
+                    environment,
+                    super::BrandSeed::Neon,
+                ))
+                .await
+                .unwrap();
+            }
+            let pg = crate::postgres::PostgresDb::application().await.unwrap();
+            let projects: i64 = sqlx::query_scalar("SELECT count(*) FROM project")
+                .fetch_one(pg.pool())
+                .await
+                .unwrap();
+            assert_eq!(projects, 3);
+        })
+        .await;
+    }
+
     /// The reference seeds converge under the PostgreSQL catalog authority:
     /// a second boot writes nothing and SurrealDB receives no row.
     #[tokio::test]

@@ -25,43 +25,24 @@ pub enum JournalError {
 /// The environment variable whose presence selects the PostgreSQL journal.
 pub const POSTGRES_HOST_ENV: &str = "NAVIGATOR_POSTGRES_HOST";
 
-/// Where Journal Entries live. PostgreSQL when [`POSTGRES_HOST_ENV`] is set;
-/// otherwise SurrealDB's `journal_entry` table, the same rows the PostgreSQL
-/// startup import copies once PostgreSQL is configured. Both stores run the
-/// same command checks; reconciliation evidence, audits, and signals exist
-/// only in PostgreSQL.
+/// Immutable Journal Entries. Ordinary applications use PostgreSQL; the
+/// explicitly constructed legacy variant remains available to migration tools.
 #[derive(Debug, Clone)]
 pub enum JournalStore {
     Postgres(PostgresDb),
     Surreal(SurrealDb),
 }
 impl JournalStore {
-    /// The backend name for a deployment with or without a PostgreSQL host.
-    #[must_use]
-    pub fn selected_backend(postgres_configured: bool) -> &'static str {
-        if postgres_configured {
-            "postgresql"
-        } else {
-            "surrealdb"
-        }
-    }
-    /// Whether this process is configured for the PostgreSQL journal.
-    #[must_use]
-    pub fn postgres_configured() -> bool {
-        std::env::var_os(POSTGRES_HOST_ENV).is_some()
-    }
-    /// Select the store from the environment. A configured but unreachable
-    /// PostgreSQL is an error, never a silent fall back to SurrealDB.
-    pub async fn from_env(surreal: &SurrealDb) -> Result<Self, crate::postgres::PostgresError> {
-        if Self::postgres_configured() {
-            Ok(Self::Postgres(PostgresDb::from_env().await?))
-        } else {
-            Ok(Self::Surreal(surreal.clone()))
-        }
+    /// Require PostgreSQL and its complete application activation history.
+    pub async fn from_env(_surreal: &SurrealDb) -> Result<Self, crate::postgres::PostgresError> {
+        Ok(Self::Postgres(PostgresDb::application().await?))
     }
     #[must_use]
     pub fn backend(&self) -> &'static str {
-        Self::selected_backend(matches!(self, Self::Postgres(_)))
+        match self {
+            Self::Postgres(_) => "postgresql",
+            Self::Surreal(_) => "surrealdb",
+        }
     }
     /// The PostgreSQL journal, for commands that exist only there.
     pub fn postgres(&self) -> Result<&PostgresDb, JournalError> {
@@ -1924,6 +1905,36 @@ pub async fn signals(
 #[cfg(test)]
 mod tests {
     use super::{Reconciliation, SourceReference, Unit, parse_decimal, quantity};
+
+    #[tokio::test]
+    async fn journal_environment_requires_activated_postgres_without_source() {
+        use crate::postgres::{PostgresDb, PostgresError};
+        let Some((options, database)) = crate::postgres_mirror::tests::fresh_schema().await else {
+            return;
+        };
+        let pg = crate::postgres_mirror::tests::connect(&options, &database).await;
+        let source = crate::surreal::SurrealDb::uninitialized();
+        PostgresDb::with_test_db(pg.clone(), async {
+            assert!(matches!(
+                super::JournalStore::from_env(&source).await,
+                Err(PostgresError::History)
+            ));
+            crate::postgres::fixtures::activate_application(&pg).await;
+            let journal = super::JournalStore::from_env(&source).await.unwrap();
+            assert!(journal.entries(uuid::Uuid::nil()).await.unwrap().is_empty());
+            sqlx::query(
+                "UPDATE mirror_backfill_run SET status = 'running', completed_at = NULL WHERE scope = 'application:1'",
+            )
+            .execute(pg.pool())
+            .await
+            .unwrap();
+            assert!(matches!(
+                super::JournalStore::from_env(&source).await,
+                Err(PostgresError::History)
+            ));
+        })
+        .await;
+    }
 
     fn reference() -> SourceReference {
         SourceReference {

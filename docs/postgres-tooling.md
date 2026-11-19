@@ -48,6 +48,12 @@ Run it as a Job, with a migration role's credentials, and start services only af
 migrate` calls the same runner. Every migration lets SQLx own its transaction, lock and `_sqlx_migrations` row: no file
 contains `BEGIN`/`COMMIT` or writes a ledger of its own.
 
+Ordinary web and worker startup requires activated PostgreSQL history. It neither opens SurrealDB nor applies schema or
+imports Journal Entries. To import one Firm's timestamped Journal Entries, run `hudson journal --firm <uuid>
+import-legacy` with operator PostgreSQL and read-only SurrealDB source credentials. The bounded import retains
+identities and insertion timestamps, refuses conflicting content, and reports timestamp or reversal triage without
+inventing evidence. `journal migration-triage` remains an authenticated, Firm-authorized read of that explicit source.
+
 ## Adopting a database installed from `schema.sql`
 
 A database built by piping `schema.sql` through `psql` has the tables but no `_sqlx_migrations` rows, so the runner
