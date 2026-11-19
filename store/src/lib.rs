@@ -136,6 +136,7 @@ pub mod finance_aggregate;
 pub mod firm_assumptions;
 pub mod firm_capability;
 pub mod firm_digest;
+pub mod firm_esign;
 pub mod firm_journal;
 pub mod firm_library;
 pub mod firm_secrets;

@@ -4733,6 +4733,24 @@ pub async fn onboarding_official_sets(
         .map_err(|error| error.to_string())
 }
 
+/// The latest unexecuted onboarding e-signature request for each of `projects` that has one.
+///
+/// # Errors
+///
+/// PostgreSQL configuration and query failures are returned to the caller.
+pub async fn onboarding_esign_pending(
+    _surreal: &crate::surreal::SurrealDb,
+    projects: &[Project],
+) -> Result<std::collections::HashMap<Uuid, crate::onboarding::EsignSummary>, String> {
+    let pg = crate::postgres::PostgresDb::from_env()
+        .await
+        .map_err(|error| error.to_string())?;
+    let ids: Vec<_> = projects.iter().map(|project| project.id).collect();
+    crate::onboarding::pending_esign(&pg, &ids)
+        .await
+        .map_err(|error| error.to_string())
+}
+
 /// Projects with filed opening and closing documents, read from PostgreSQL.
 ///
 /// A classified Asset or a Notation with a produced review document establishes
