@@ -1,4 +1,4 @@
-//! Frozen Source extraction, first-copy retention, and immutable pin admission.
+//! Tests template extraction, first-copy retention, and immutable pin admission.
 use super::*;
 use crate::postgres::fixtures::workflow_fixture;
 use crate::postgres_mirror::tests::{connect, fresh_schema, synthetic_entity};
