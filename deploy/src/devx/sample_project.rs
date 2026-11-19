@@ -217,8 +217,8 @@ pub(super) fn resolve_repo(project_code: &str, explicit: Option<&str>) -> Result
             .build()
             .context("create tokio runtime")?;
         runtime.block_on(async {
-            let surreal = store::surreal::connect_from_env().await.context(
-                "connect to SurrealDB to read the Project's repository URL — source \
+            let surreal = crate::application_store().await.context(
+                "verify PostgreSQL application authority to read the Project's repository URL — source \
                  this worktree's `.devx/env` first, or pass `--repo`",
             )?;
             Ok(

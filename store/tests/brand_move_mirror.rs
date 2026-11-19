@@ -1,68 +1,16 @@
-//! A Brand move in `SurrealDB` must converge both PostgreSQL ownership rows.
-use std::process::Command;
-
-use sqlx::postgres::{PgConnectOptions, PgSslMode};
+//! Native Brand moves preserve both ownership rows, retries, and atomic rollback.
 use sqlx::Row;
 use store::persons::{NewPerson, Role};
 use store::postgres::PostgresDb;
-use store::postgres_mirror::{mirror, MirrorKey};
 use store::surreal::SurrealDb;
 use uuid::Uuid;
 
-/// The write hook caches a process-wide pool and reads environment flags.
-/// Isolate the enabled-mirror scenario in a child rather than changing another test's store.
 #[tokio::test]
-async fn source_brand_move_converges_owner_and_seat() {
-    let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
-        assert_ne!(std::env::var("NAV_REQUIRE_POSTGRES").as_deref(), Ok("1"));
-        return;
-    };
-    let options = PgConnectOptions::new()
-        .host("127.0.0.1")
-        .port(port.parse().unwrap())
-        .username("postgres")
-        .password("synthetic")
-        .ssl_mode(PgSslMode::Disable);
-    let admin_database =
-        std::env::var("NAVIGATOR_TEST_POSTGRES_DATABASE").unwrap_or_else(|_| "smoke".to_string());
-    let admin = sqlx::PgPool::connect_with(options.clone().database(&admin_database))
-        .await
-        .unwrap();
-    let database = format!("brand_move_{}", Uuid::now_v7().simple());
-    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {database}")))
-        .execute(&admin)
-        .await
-        .unwrap();
-    admin.close().await;
-    let pg = PostgresDb::connect(options.database(&database))
-        .await
-        .unwrap();
-    pg.migrate_embedded(None).await.unwrap();
-    pg.pool().close().await;
-
-    let output = Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "brand_move_mirror_probe", "--nocapture"])
-        .env("NAVIGATOR_BRAND_MOVE_MIRROR_PROBE", "1")
-        .env("NAVIGATOR_POSTGRES_TENANCY_AUTHORITY", "false")
-        .env("NAVIGATOR_POSTGRES_PEOPLE_AUTHORITY", "false")
-        .env("NAVIGATOR_POSTGRES_HOST", "127.0.0.1")
-        .env("NAVIGATOR_POSTGRES_PORT", port)
-        .env("NAVIGATOR_POSTGRES_USER", "postgres")
-        .env("NAVIGATOR_POSTGRES_PASSWORD", "synthetic")
-        .env("NAVIGATOR_POSTGRES_DATABASE", database)
-        .env("NAVIGATOR_POSTGRES_SSLMODE", "disable")
-        .env_remove("NAVIGATOR_POSTGRES_ROOT_CERT")
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "isolated Brand move probe failed: {}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+async fn native_brand_move_preserves_owner_seat_and_atomic_retries() {
+    store::test_support::with_postgres(native_brand_move_probe()).await;
 }
 
-async fn practice(db: &SurrealDb, label: &str) -> store::firms::Firm {
+async fn practice(db: &SurrealDb, label: &str) -> (store::firms::Firm, Uuid) {
     let suffix = Uuid::now_v7().simple().to_string();
     let jurisdiction = store::jurisdictions::create(
         db,
@@ -101,7 +49,7 @@ async fn practice(db: &SurrealDb, label: &str) -> store::firms::Firm {
     )
     .await
     .unwrap();
-    store::firms::create(
+    let firm = store::firms::create(
         db,
         &store::firms::NewFirm {
             name: format!("Synthetic {label} {suffix}"),
@@ -111,7 +59,8 @@ async fn practice(db: &SurrealDb, label: &str) -> store::firms::Firm {
         },
     )
     .await
-    .unwrap()
+    .unwrap();
+    (firm, admin.id)
 }
 
 /// Both ownership rows, including their identities and owner timestamp, scoped
@@ -143,54 +92,38 @@ async fn assert_ownership(pg: &PostgresDb, brand_id: Uuid, expected: Uuid) {
     assert_eq!(snapshot.seat, expected);
 }
 
-#[tokio::test]
 #[expect(
     clippy::too_many_lines,
-    reason = "one isolated ownership lifecycle proves projection, retries and final-write rollback"
+    reason = "one ownership lifecycle proves retries, ownership repair and final-write rollback"
 )]
-async fn brand_move_mirror_probe() {
-    if std::env::var("NAVIGATOR_BRAND_MOVE_MIRROR_PROBE").as_deref() != Ok("1") {
-        return;
-    }
-    let source = store::test_support::mem_surreal().await;
-    let from = practice(&source, "Source").await;
-    let target = practice(&source, "Target").await;
-    store::firms::attach_brand(&source, Role::Owner, None, from.id, "neon")
-        .await
-        .unwrap();
-    let brand = store::brands::find_by_key(&source, "neon")
-        .await
-        .unwrap()
-        .unwrap();
-    // The compiled fixture Brand starts without this synthetic Firm owner.
-    // Establish the pre-move state before mirroring its FK-dependent row.
-    source
-        .query("UPDATE $brand SET firm_id = $firm")
-        .bind(("brand", store::surreal::record_id("brand", brand.id)))
-        .bind(("firm", store::surreal::record_id("firm", from.id)))
-        .await
-        .unwrap()
-        .check()
-        .unwrap();
-    assert_eq!(
-        store::brands::find_by_key(&source, "neon")
-            .await
-            .unwrap()
-            .unwrap()
-            .firm_id,
-        Some(from.id)
-    );
-    let pg = PostgresDb::from_env().await.unwrap();
-    for key in [
-        MirrorKey::Firm(from.id),
-        MirrorKey::Brand(brand.id),
-        MirrorKey::FirmBrand {
-            brand_key: "neon".to_string(),
+async fn native_brand_move_probe() {
+    let db = SurrealDb::uninitialized();
+    let (from, admin_id) = practice(&db, "Origin").await;
+    let (target, _) = practice(&db, "Target").await;
+    let brand = store::brands::create(
+        &db,
+        Role::Admin,
+        Some(admin_id),
+        &store::brands::NewBrand {
+            name: "Synthetic Native Brand".into(),
+            key: "neon".into(),
+            firm_id: Some(from.id),
+            ..Default::default()
         },
-    ] {
-        mirror(&source, &pg, &key).await.unwrap();
-    }
-    store::firms::move_brand(&source, Role::Owner, None, "neon", target.id)
+    )
+    .await
+    .unwrap();
+    store::firms::attach_brand(&db, Role::Owner, None, from.id, "neon")
+        .await
+        .unwrap();
+    let pg = PostgresDb::application().await.unwrap();
+    assert_ownership(&pg, brand.id, from.id).await;
+    assert!(matches!(
+        store::firms::move_brand(&db, Role::Client, None, "neon", target.id).await,
+        Err(store::firms::FirmError::NotAuthorized)
+    ));
+    assert_ownership(&pg, brand.id, from.id).await;
+    store::firms::move_brand(&db, Role::Owner, None, "neon", target.id)
         .await
         .unwrap();
     for _ in 0..2 {
@@ -207,12 +140,12 @@ async fn brand_move_mirror_probe() {
         assert_eq!(owner, Some(target.id));
         assert_eq!(seat, target.id);
         assert_eq!(
-            store::firms::firm_id_for_brand_key(&source, "neon")
+            store::firms::firm_id_for_brand_key(&db, "neon")
                 .await
                 .unwrap(),
             Some(target.id)
         );
-        store::firms::move_brand(&source, Role::Owner, None, "neon", target.id)
+        store::firms::move_brand(&db, Role::Owner, None, "neon", target.id)
             .await
             .unwrap();
     }
@@ -222,17 +155,7 @@ async fn brand_move_mirror_probe() {
         .unwrap();
     assert_eq!(seats, 1, "repeated moves retain one ownership seat");
 
-    // Simulate a committed source move whose optional projections never
-    // converged. Repeating the same source command must repair both copies
-    // without writing the source owner timestamp or replacing its seat.
-    let source_brand_before = store::brands::find_by_key(&source, "neon")
-        .await
-        .unwrap()
-        .unwrap();
-    let source_seat_before = store::firms::firm_brand_for_key(&source, "neon")
-        .await
-        .unwrap()
-        .unwrap();
+    // An ownership command repairs both canonical rows when they drift together.
     let mut drift = pg.pool().begin().await.unwrap();
     sqlx::query("UPDATE brand SET firm_id=$2 WHERE id=$1")
         .bind(brand.id)
@@ -248,29 +171,20 @@ async fn brand_move_mirror_probe() {
         .unwrap();
     drift.commit().await.unwrap();
     assert_ownership(&pg, brand.id, from.id).await;
-    store::firms::move_brand(&source, Role::Owner, None, "neon", target.id)
+    store::firms::move_brand(&db, Role::Owner, None, "neon", target.id)
         .await
         .unwrap();
     assert_ownership(&pg, brand.id, target.id).await;
+    let repaired = ownership_snapshot(&pg, brand.id).await;
+    store::firms::move_brand(&db, Role::Owner, None, "neon", target.id)
+        .await
+        .unwrap();
     assert_eq!(
-        store::brands::find_by_key(&source, "neon")
-            .await
-            .unwrap()
-            .unwrap(),
-        source_brand_before,
-        "projection repair must preserve the source Brand and its timestamps"
-    );
-    assert_eq!(
-        store::firms::firm_brand_for_key(&source, "neon")
-            .await
-            .unwrap()
-            .unwrap(),
-        source_seat_before,
-        "projection repair must preserve the source seat identity and timestamps"
+        ownership_snapshot(&pg, brand.id).await,
+        repaired,
+        "an identical repaired move preserves its seat identity and owner timestamp"
     );
 
-    // Exercise the public PostgreSQL command itself without enabling the
-    // incomplete tenancy cutover. It uses this probe's same cached pool.
     store::postgres::tenancy::move_brand("neon", from.id)
         .await
         .unwrap();
@@ -324,6 +238,14 @@ async fn brand_move_mirror_probe() {
         .unwrap();
     // A compiled reseed seats the brand on the firm the seed names and keeps
     // the website an Owner already stored.
+    store::brands::set_website_url(
+        &db,
+        Role::Owner,
+        brand.id,
+        Some("https://owner.example.test"),
+    )
+    .await
+    .unwrap();
     let before_reseed = store::postgres::tenancy::brand_by_key("neon")
         .await
         .unwrap()

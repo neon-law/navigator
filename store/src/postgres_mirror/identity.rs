@@ -1,25 +1,10 @@
-//! Person, Entity, Entity Type, and Jurisdiction rows in the PostgreSQL
-//! mirror.
+//! Typed Person and Entity history imports and their catalog references.
 //!
-//! The same contract as the tenancy mirror: SurrealDB is read back after its
-//! write, and PostgreSQL's copy is upserted or deleted to match. Each row
-//! keeps its Surreal record UUID as its PostgreSQL `id`.
-//!
-//! An Entity names an Entity Type and a Jurisdiction. Those reference rows
-//! have no write hook of their own: mirroring an Entity first mirrors each
-//! one PostgreSQL does not yet hold, and [`reconcile`] settles the rest. A
-//! link SurrealDB cannot resolve is refused with SQLSTATE 23503 and reported
-//! by [`parity`].
-//!
-//! A unique value (an email, a sign-in subject, a reference name) that
-//! PostgreSQL holds under another id is never cleared here: that row may be
-//! one whose own change has not been mirrored yet. The upsert is refused
-//! with SQLSTATE 23505, and [`reconcile`] retries it after the other row
-//! converges.
-//!
-//! Reports name rows by key only, never by name or email.
+//! Identity imports insert missing rows without overwriting PostgreSQL contents.
+//! Catalog parents copy only during the first global import; completed history
+//! never resurrects a deleted parent. Reports expose UUID keys, not row values.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
 
 use chrono::{DateTime, Utc};
@@ -30,7 +15,6 @@ use uuid::Uuid;
 use super::tenancy::{compare, images, remirror, select_sql, source, target, upsert_sql};
 use super::{changed, micros, MirrorError, MirrorKey, Mirrored, ParityReport};
 use crate::postgres::PostgresDb;
-use crate::postgres_shadow::{compare_row, Comparison, ShadowKey};
 use crate::surreal::{record_id, record_uuid, SurrealDb};
 
 const JURISDICTION_COLUMNS: &[&str] = &[
@@ -92,27 +76,6 @@ static ENTITY_TYPE_SELECT: LazyLock<String> =
     LazyLock::new(|| select_sql("entity_type", ENTITY_TYPE_COLUMNS));
 static ENTITY_SELECT: LazyLock<String> = LazyLock::new(|| select_sql("entity", ENTITY_COLUMNS));
 static PERSON_SELECT: LazyLock<String> = LazyLock::new(|| select_sql("person", PERSON_COLUMNS));
-static ENTITY_BY_ID: LazyLock<String> =
-    LazyLock::new(|| format!("{} WHERE id = $1", select_sql("entity", ENTITY_COLUMNS)));
-
-/// Compare one Entity read by id with PostgreSQL's row, through the
-/// mirror's Entity image.
-pub(crate) async fn shadow_entity(
-    pg: &PostgresDb,
-    id: Uuid,
-    source: Option<&crate::entities::Entity>,
-) -> Result<Comparison, MirrorError> {
-    compare_row(
-        pg,
-        ENTITY_BY_ID.as_str(),
-        ShadowKey::Id(id),
-        source.map(EntityImage::from_source),
-        EntityImage::from_row,
-        |image| image.id,
-    )
-    .await
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct JurisdictionImage {
     id: Uuid,
@@ -282,11 +245,9 @@ struct PersonImage {
 }
 
 impl PersonImage {
-    /// `None` for a record whose key is not a native UUID; no workspace
-    /// writer mints one, and it has no PostgreSQL identity.
-    fn from_source(row: PersonSource) -> Option<Self> {
-        Some(Self {
-            id: record_uuid(&row.id)?,
+    fn from_source(row: PersonSource) -> Result<Self, MirrorError> {
+        Ok(Self {
+            id: record_uuid(&row.id).ok_or(MirrorError::Source)?,
             name: row.name,
             given_name: row.given_name,
             family_name: row.family_name,
@@ -343,7 +304,7 @@ async fn source_person(surreal: &SurrealDb, id: Uuid) -> Result<Option<PersonIma
         .and_then(surrealdb::IndexedResults::check)
         .map_err(source)?;
     let row: Option<PersonSource> = response.take(0).map_err(source)?;
-    Ok(row.and_then(PersonImage::from_source))
+    row.map(PersonImage::from_source).transpose()
 }
 
 async fn source_people(surreal: &SurrealDb) -> Result<Vec<PersonImage>, MirrorError> {
@@ -353,10 +314,7 @@ async fn source_people(surreal: &SurrealDb) -> Result<Vec<PersonImage>, MirrorEr
         .and_then(surrealdb::IndexedResults::check)
         .map_err(source)?;
     let rows: Vec<PersonSource> = response.take(0).map_err(source)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(PersonImage::from_source)
-        .collect())
+    rows.into_iter().map(PersonImage::from_source).collect()
 }
 
 /// Make PostgreSQL's copy of one identity row match SurrealDB's.
@@ -365,6 +323,10 @@ pub(super) async fn mirror(
     pg: &PostgresDb,
     key: &MirrorKey,
 ) -> Result<Mirrored, MirrorError> {
+    if !super::source_import_allowed(pg, key.table()).await? {
+        return Ok(Mirrored::Unchanged);
+    }
+
     if key.held_by_people_authority() {
         return Ok(Mirrored::Unchanged);
     }
@@ -390,7 +352,7 @@ async fn mirror_inner(
                 .await
                 .map_err(source)?;
             let Some(entity) = source else {
-                return delete(pg, "DELETE FROM entity WHERE id = $1", *id).await;
+                return Ok(Mirrored::Unchanged);
             };
             let image = EntityImage::from_source(&entity);
             if !present(pg, ENTITY_TYPE_PRESENT, image.entity_type_id).await? {
@@ -403,7 +365,7 @@ async fn mirror_inner(
         }
         MirrorKey::Person(id) => match source_person(surreal, *id).await? {
             Some(person) => upsert_person(pg, &person).await,
-            None => delete(pg, "DELETE FROM person WHERE id = $1", *id).await,
+            None => Ok(Mirrored::Unchanged),
         },
         // `super::mirror` routes only identity keys here.
         _ => Err(MirrorError::Source),
@@ -425,8 +387,12 @@ pub(super) async fn ensure(
         _ => return Ok(()),
     };
     if !present(pg, sql, id).await? {
-        // A missing parent is copied even into the authoritative catalog.
-        super::during_initial_copy(mirror(surreal, pg, &key)).await?;
+        // Preserve the caller's actual import authority; missing parents cannot
+        // escalate a scoped enrollment into the first global copy.
+        mirror(surreal, pg, &key).await?;
+        if !present(pg, sql, id).await? {
+            return Err(MirrorError::Target("23503".into()));
+        }
     }
     Ok(())
 }
@@ -442,21 +408,20 @@ async fn present(pg: &PostgresDb, sql: &'static str, id: Uuid) -> Result<bool, M
     Ok(Box::pin(sqlx::query_scalar(sql).bind(id).fetch_one(&pg.0)).await?)
 }
 
-async fn delete(pg: &PostgresDb, sql: &'static str, id: Uuid) -> Result<Mirrored, MirrorError> {
-    let deleted = sqlx::query(sql).bind(id).execute(&pg.0).await?;
-    Ok(changed(deleted.rows_affected(), Mirrored::Deleted))
-}
-
 async fn mirror_jurisdiction(
     surreal: &SurrealDb,
     pg: &PostgresDb,
     id: Uuid,
 ) -> Result<Mirrored, MirrorError> {
+    if !super::initial_copy() || super::backfilled(pg).await? {
+        return Err(MirrorError::MatterAuthority);
+    }
+
     let source = super::from_source(crate::jurisdictions::find_by_id(surreal, id))
         .await
         .map_err(source)?;
     let Some(row) = source else {
-        return delete(pg, "DELETE FROM jurisdiction WHERE id = $1", id).await;
+        return Ok(Mirrored::Unchanged);
     };
     let row = JurisdictionImage::from_source(&row);
     let written = sqlx::query(JURISDICTION_UPSERT.as_str())
@@ -476,11 +441,15 @@ async fn mirror_entity_type(
     pg: &PostgresDb,
     id: Uuid,
 ) -> Result<Mirrored, MirrorError> {
+    if !super::initial_copy() || super::backfilled(pg).await? {
+        return Err(MirrorError::MatterAuthority);
+    }
+
     let source = super::from_source(crate::entity_types::find_by_id(surreal, id))
         .await
         .map_err(source)?;
     let Some(row) = source else {
-        return delete(pg, "DELETE FROM entity_type WHERE id = $1", id).await;
+        return Ok(Mirrored::Unchanged);
     };
     let row = EntityTypeImage::from_source(&row);
     let written = sqlx::query(ENTITY_TYPE_UPSERT.as_str())
@@ -542,16 +511,85 @@ fn infallible<S, I>(image: impl Fn(&S) -> I) -> impl Fn(&S) -> Result<I, MirrorE
     move |row| Ok(image(row))
 }
 
-/// Compare every Jurisdiction, Entity Type, Entity, and Person in both
-/// stores, references before the rows that name them.
+async fn entity_parity(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+) -> Result<super::TableParity, MirrorError> {
+    let entities = super::from_source(crate::entities::all(surreal))
+        .await
+        .map_err(source)?;
+    let keys: Vec<surrealdb::types::RecordId> = surreal
+        .query("SELECT VALUE id FROM entity")
+        .await
+        .and_then(surrealdb::IndexedResults::check)
+        .map_err(source)?
+        .take(0)
+        .map_err(source)?;
+    let ids = keys
+        .iter()
+        .map(|id| record_uuid(id).ok_or(MirrorError::Source))
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    if ids.len() != keys.len() || ids != entities.iter().map(|row| row.id).collect() {
+        return Err(MirrorError::Source);
+    }
+    Ok(compare(
+        "entity",
+        &images(
+            &entities,
+            |row| MirrorKey::Entity(row.id),
+            infallible(EntityImage::from_source),
+        ),
+        &target(pg, ENTITY_SELECT.as_str(), EntityImage::from_row, |row| {
+            MirrorKey::Entity(row.id)
+        })
+        .await?,
+    ))
+}
+
+async fn person_parity(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+) -> Result<super::TableParity, MirrorError> {
+    let rows = source_people(surreal).await?;
+    let count = rows.len();
+    let people: BTreeMap<_, _> = rows
+        .into_iter()
+        .map(|row| (MirrorKey::Person(row.id), Some(row)))
+        .collect();
+    if people.len() != count {
+        return Err(MirrorError::Source);
+    }
+    Ok(compare(
+        "person",
+        &people,
+        &target(pg, PERSON_SELECT.as_str(), PersonImage::from_row, |row| {
+            MirrorKey::Person(row.id)
+        })
+        .await?,
+    ))
+}
+
+/// Full identity comparison for the exact pending scoped import.
+pub(crate) async fn scoped_parity(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+) -> Result<ParityReport, MirrorError> {
+    Ok(ParityReport {
+        tables: vec![
+            entity_parity(surreal, pg).await?,
+            person_parity(surreal, pg).await?,
+        ],
+    })
+}
+
+/// Compare catalog history and identity rows not already held by scoped authority.
 ///
 /// # Errors
-///
-/// Either store could not be read.
+/// Either store or the persisted ownership ledger could not be read.
 pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
-    let authoritative = super::compares_authoritative(pg).await?;
-    let (jurisdictions, entity_types) = if authoritative {
-        super::from_source(async {
+    let mut tables = Vec::with_capacity(4);
+    if super::compares_authoritative(pg).await? {
+        let (jurisdictions, entity_types) = super::from_source(async {
             Ok::<_, MirrorError>((
                 crate::jurisdictions::list_all(surreal)
                     .await
@@ -561,77 +599,49 @@ pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport
                     .map_err(source)?,
             ))
         })
-        .await?
-    } else {
-        (Vec::new(), Vec::new())
-    };
-    let entities = crate::entities::all(surreal).await.map_err(source)?;
-    let people = source_people(surreal).await?;
-    let people: BTreeMap<MirrorKey, Option<PersonImage>> = people
-        .into_iter()
-        .map(|person| (MirrorKey::Person(person.id), Some(person)))
-        .collect();
-
-    let catalog = [
-        compare(
-            "jurisdiction",
-            &images(
-                &jurisdictions,
-                |row| MirrorKey::Jurisdiction(row.id),
-                infallible(JurisdictionImage::from_source),
+        .await?;
+        let catalog = [
+            compare(
+                "jurisdiction",
+                &images(
+                    &jurisdictions,
+                    |row| MirrorKey::Jurisdiction(row.id),
+                    infallible(JurisdictionImage::from_source),
+                ),
+                &target(
+                    pg,
+                    JURISDICTION_SELECT.as_str(),
+                    JurisdictionImage::from_row,
+                    |row| MirrorKey::Jurisdiction(row.id),
+                )
+                .await?,
             ),
-            &target(
-                pg,
-                JURISDICTION_SELECT.as_str(),
-                JurisdictionImage::from_row,
-                |row| MirrorKey::Jurisdiction(row.id),
-            )
-            .await?,
-        ),
-        compare(
-            "entity_type",
-            &images(
-                &entity_types,
-                |row| MirrorKey::EntityType(row.id),
-                infallible(EntityTypeImage::from_source),
+            compare(
+                "entity_type",
+                &images(
+                    &entity_types,
+                    |row| MirrorKey::EntityType(row.id),
+                    infallible(EntityTypeImage::from_source),
+                ),
+                &target(
+                    pg,
+                    ENTITY_TYPE_SELECT.as_str(),
+                    EntityTypeImage::from_row,
+                    |row| MirrorKey::EntityType(row.id),
+                )
+                .await?,
             ),
-            &target(
-                pg,
-                ENTITY_TYPE_SELECT.as_str(),
-                EntityTypeImage::from_row,
-                |row| MirrorKey::EntityType(row.id),
-            )
-            .await?,
-        ),
-    ];
-    let mut tables = Vec::with_capacity(4);
-    if authoritative {
+        ];
         for table in catalog {
             tables.push(super::only_missing(pg, table).await?);
         }
     }
-    tables.extend([
-        compare(
-            "entity",
-            &images(
-                &entities,
-                |row| MirrorKey::Entity(row.id),
-                infallible(EntityImage::from_source),
-            ),
-            &target(pg, ENTITY_SELECT.as_str(), EntityImage::from_row, |row| {
-                MirrorKey::Entity(row.id)
-            })
-            .await?,
-        ),
-        compare(
-            "person",
-            &people,
-            &target(pg, PERSON_SELECT.as_str(), PersonImage::from_row, |row| {
-                MirrorKey::Person(row.id)
-            })
-            .await?,
-        ),
-    ]);
+    if !crate::postgres_backfill::family::active_for_table(pg, "entity").await? {
+        tables.push(entity_parity(surreal, pg).await?);
+    }
+    if !crate::postgres_backfill::family::active_for_table(pg, "person").await? {
+        tables.push(person_parity(surreal, pg).await?);
+    }
     Ok(ParityReport { tables })
 }
 
@@ -650,3 +660,7 @@ pub async fn reconcile(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityRep
 #[cfg(test)]
 #[path = "identity_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "identity_admission_tests.rs"]
+mod admission_tests;

@@ -41,6 +41,203 @@ pub(super) struct Table {
 
 pub(super) const TABLES: &[Table] = &[
     Table {
+        name: "mailroom",
+        group: "application_scoped",
+        columns: &["id", "name", "address_id", "inserted_at", "updated_at"],
+        references: &[("address_id", "address")],
+        timestamps: &["inserted_at", "updated_at"],
+    },
+    Table {
+        name: "letter",
+        group: "application_scoped",
+        columns: &[
+            "id",
+            "mailroom_id",
+            "project_id",
+            "direction",
+            "sender",
+            "recipient",
+            "summary",
+            "inserted_at",
+            "updated_at",
+        ],
+        references: &[("mailroom_id", "mailroom"), ("project_id", "project")],
+        timestamps: &["inserted_at", "updated_at"],
+    },
+    Table {
+        name: "lead",
+        group: "application_scoped",
+        columns: &[
+            "id",
+            "email",
+            "email_lower",
+            "phone",
+            "brand_key",
+            "source_path",
+            "consent_version",
+            "consented_at",
+            "status",
+            "unsubscribed_at",
+            "person_id",
+            "submissions",
+            "inserted_at",
+            "updated_at",
+        ],
+        references: &[("person_id", "person")],
+        timestamps: &[
+            "consented_at",
+            "unsubscribed_at",
+            "inserted_at",
+            "updated_at",
+        ],
+    },
+    Table {
+        name: "lead_consent",
+        group: "application_scoped",
+        columns: &[
+            "id",
+            "lead_id",
+            "consented_at",
+            "phone",
+            "source_path",
+            "sms_consent_version",
+            "sms_policy_version",
+            "sms_opt_in",
+            "call_consent_version",
+            "call_opt_in",
+        ],
+        references: &[("lead_id", "lead")],
+        timestamps: &["consented_at"],
+    },
+    Table {
+        name: "project_deadlines",
+        group: "application_scoped",
+        columns: &[
+            "id",
+            "project_id",
+            "due_at",
+            "authority_kind",
+            "authority",
+            "source",
+            "source_document_id",
+            "owner_person_id",
+            "status",
+            "calendar_role",
+            "internal_lead_days",
+            "client_lead_days",
+            "replay_key",
+            "inserted_at",
+            "updated_at",
+            "title",
+            "calendar_sequence",
+            "description",
+            "category",
+        ],
+        references: &[("project_id", "project"), ("owner_person_id", "person")],
+        timestamps: &["due_at", "inserted_at", "updated_at"],
+    },
+    Table {
+        name: "project_service",
+        group: "application_scoped",
+        columns: &[
+            "id",
+            "project_id",
+            "document_id",
+            "recipient",
+            "recipient_person_id",
+            "recipient_entity_id",
+            "counsel_for",
+            "method",
+            "served_on",
+            "address",
+            "declarant",
+            "declarant_person_id",
+            "letter_id",
+            "sent_email_id",
+            "inserted_at",
+            "updated_at",
+        ],
+        references: &[
+            ("project_id", "project"),
+            ("document_id", "asset"),
+            ("recipient_person_id", "person"),
+            ("recipient_entity_id", "entity"),
+            ("declarant_person_id", "person"),
+            ("letter_id", "letter"),
+            ("sent_email_id", "sent_email"),
+        ],
+        timestamps: &["inserted_at", "updated_at"],
+    },
+    Table {
+        name: "summary_sender_approval",
+        group: "application_scoped",
+        columns: &[
+            "id",
+            "firm_id",
+            "project_id",
+            "provider_account",
+            "person_id",
+            "sender_email",
+            "status",
+            "updated_at",
+        ],
+        references: &[
+            ("firm_id", "firm"),
+            ("project_id", "project"),
+            ("person_id", "person"),
+        ],
+        timestamps: &["updated_at"],
+    },
+    Table {
+        name: "summary_sender_approval_event",
+        group: "application_scoped",
+        columns: &[
+            "id",
+            "firm_id",
+            "actor_person_id",
+            "project_id",
+            "provider_account",
+            "sender_email",
+            "person_id",
+            "action",
+            "inserted_at",
+        ],
+        references: &[
+            ("firm_id", "firm"),
+            ("actor_person_id", "person"),
+            ("project_id", "project"),
+            ("person_id", "person"),
+        ],
+        timestamps: &["inserted_at"],
+    },
+    Table {
+        name: "inbox_triage",
+        group: "application_scoped",
+        columns: &[
+            "id",
+            "message_id",
+            "firm_id",
+            "suggested_project_id",
+            "project_confidence",
+            "privilege",
+            "privilege_confidence",
+            "rationale",
+            "model_id",
+            "prompt_version",
+            "raw_output",
+            "disposition",
+            "labeled_example",
+            "inserted_at",
+            "updated_at",
+        ],
+        references: &[
+            ("message_id", "message"),
+            ("firm_id", "firm"),
+            ("suggested_project_id", "project"),
+        ],
+        timestamps: &["inserted_at", "updated_at"],
+    },
+    Table {
         name: "product",
         group: "source_domain_records",
         columns: &[
@@ -195,6 +392,7 @@ pub(super) const TABLES: &[Table] = &[
             "actor_id",
             "ciphertext",
             "inserted_at",
+            "inserted_at_text",
             "key",
             "kms_key_version",
             "request_id",
@@ -863,10 +1061,384 @@ pub(super) const TABLES: &[Table] = &[
         references: &[("person_id", "person"), ("project_id", "project")],
         timestamps: &["expires_at", "inserted_at", "updated_at"],
     },
+    Table {
+        name: "entity",
+        group: "identity_scoped",
+        columns: &[
+            "id",
+            "name",
+            "entity_type_id",
+            "jurisdiction_id",
+            "phone",
+            "url",
+            "avatar_url",
+            "xero_id",
+            "metadata",
+            "firm_anchor_key",
+            "inserted_at",
+            "updated_at",
+        ],
+        references: &[
+            ("entity_type_id", "entity_type"),
+            ("jurisdiction_id", "jurisdiction"),
+        ],
+        timestamps: &["inserted_at", "updated_at"],
+    },
+    Table {
+        name: "person",
+        group: "identity_scoped",
+        columns: &[
+            "id",
+            "name",
+            "given_name",
+            "family_name",
+            "middle_name",
+            "email",
+            "oidc_subject",
+            "microsoft_subject",
+            "apple_subject",
+            "role",
+            "title",
+            "phone",
+            "xero_contact_id",
+            "profile_image_url",
+            "linkedin_url",
+            "email_confirmed",
+            "is_admitted",
+            "inserted_at",
+            "updated_at",
+        ],
+        references: &[],
+        timestamps: &["inserted_at", "updated_at"],
+    },
+    Table {
+        name: "address",
+        group: "identity_scoped",
+        columns: &[
+            "id",
+            "person_id",
+            "entity_id",
+            "line1",
+            "line2",
+            "city",
+            "region",
+            "postal_code",
+            "country",
+            "inserted_at",
+            "updated_at",
+        ],
+        references: &[("person_id", "person"), ("entity_id", "entity")],
+        timestamps: &["inserted_at", "updated_at"],
+    },
+    Table {
+        name: "credential",
+        group: "identity_scoped",
+        columns: &[
+            "id",
+            "person_id",
+            "jurisdiction_id",
+            "license_number",
+            "inserted_at",
+            "updated_at",
+        ],
+        references: &[("person_id", "person"), ("jurisdiction_id", "jurisdiction")],
+        timestamps: &["inserted_at", "updated_at"],
+    },
+    Table {
+        name: "email_token",
+        group: "identity_scoped",
+        columns: &[
+            "id",
+            "person_id",
+            "email",
+            "purpose",
+            "token_hash",
+            "expires_at",
+            "used_at",
+            "inserted_at",
+            "updated_at",
+        ],
+        references: &[("person_id", "person")],
+        timestamps: &["expires_at", "used_at", "inserted_at", "updated_at"],
+    },
+    Table {
+        name: "person_delegate",
+        group: "identity_scoped",
+        columns: &[
+            "id",
+            "delegate_person_id",
+            "subject_person_id",
+            "basis",
+            "instrument_reference",
+            "granted_by_person_id",
+            "granted_at",
+            "subject_notified_at",
+            "subject_notified_channel",
+            "revoked_at",
+            "revoked_by_person_id",
+            "inserted_at",
+            "updated_at",
+        ],
+        references: &[
+            ("delegate_person_id", "person"),
+            ("subject_person_id", "person"),
+            ("granted_by_person_id", "person"),
+            ("revoked_by_person_id", "person"),
+        ],
+        timestamps: &[
+            "granted_at",
+            "subject_notified_at",
+            "revoked_at",
+            "inserted_at",
+            "updated_at",
+        ],
+    },
+    Table {
+        name: "person_external_identity",
+        group: "identity_scoped",
+        columns: &[
+            "id",
+            "person_id",
+            "system",
+            "external_id",
+            "handle",
+            "inserted_at",
+            "updated_at",
+        ],
+        references: &[("person_id", "person")],
+        timestamps: &["inserted_at", "updated_at"],
+    },
+    Table {
+        name: "person_mailbox",
+        group: "identity_scoped",
+        columns: &["id", "person_id"],
+        references: &[("person_id", "person")],
+        timestamps: &[],
+    },
+    Table {
+        name: "firm",
+        group: "tenancy_scoped",
+        columns: &[
+            "id",
+            "name",
+            "slug",
+            "status",
+            "entity_id",
+            "portal_theme_brand_key",
+            "inserted_at",
+            "updated_at",
+        ],
+        references: &[("entity_id", "entity")],
+        timestamps: &["inserted_at", "updated_at"],
+    },
+    Table {
+        name: "brand",
+        group: "tenancy_scoped",
+        columns: &[
+            "id",
+            "name",
+            "brand_key",
+            "firm_id",
+            "primary_color",
+            "accent_color",
+            "typeface",
+            "is_law_firm",
+            "legal_entity",
+            "logo_object_key",
+            "logo_content_type",
+            "font_family",
+            "font_object_key",
+            "font_licence",
+            "website_url",
+            "inserted_at",
+            "updated_at",
+        ],
+        references: &[("firm_id", "firm")],
+        timestamps: &["inserted_at", "updated_at"],
+    },
+    Table {
+        name: "firm_brand",
+        group: "tenancy_scoped",
+        columns: &["id", "firm_id", "brand_key", "inserted_at", "updated_at"],
+        references: &[("firm_id", "firm")],
+        timestamps: &["inserted_at", "updated_at"],
+    },
+    Table {
+        name: "project",
+        group: "tenancy_scoped",
+        columns: &[
+            "id",
+            "code",
+            "name",
+            "status",
+            "brand",
+            "entity_id",
+            "firm_id",
+            "jurisdiction_id",
+            "description",
+            "drive_folder_id",
+            "repository_url",
+            "git_initialized_at",
+            "forge_provisioned_at",
+            "closed_at",
+            "closure_reason",
+            "internal_slack_channel_url",
+            "external_slack_channel_url",
+            "internal_slack_channel_id",
+            "private_notion_page_url",
+            "shared_notion_page_url",
+            "calendar_id",
+            "booking_url",
+            "onboarding_jurisdiction",
+            "client_dri_person_id",
+            "legal_plan_id",
+            "plan_member_id",
+            "plan_case_number",
+            "benefit_code",
+            "plan_matter_type",
+            "plan_state",
+            "plan_assigned_on",
+            "plan_accepted_on",
+            "plan_closed_on",
+            "kit_version",
+            "inserted_at",
+            "updated_at",
+        ],
+        references: &[
+            ("entity_id", "entity"),
+            ("firm_id", "firm"),
+            ("jurisdiction_id", "jurisdiction"),
+            ("client_dri_person_id", "person"),
+            ("legal_plan_id", "legal_plan"),
+        ],
+        timestamps: &["inserted_at", "updated_at"],
+    },
+    Table {
+        name: "person_firm_role",
+        group: "tenancy_scoped",
+        columns: &[
+            "id",
+            "person_id",
+            "firm_id",
+            "membership",
+            "is_dri",
+            "inserted_at",
+            "updated_at",
+        ],
+        references: &[("person_id", "person"), ("firm_id", "firm")],
+        timestamps: &["inserted_at", "updated_at"],
+    },
+    Table {
+        name: "person_project_role",
+        group: "tenancy_scoped",
+        columns: &[
+            "id",
+            "person_id",
+            "project_id",
+            "participation",
+            "is_lawyer_dri",
+            "is_client_dri",
+            "inserted_at",
+            "updated_at",
+        ],
+        references: &[("person_id", "person"), ("project_id", "project")],
+        timestamps: &["inserted_at", "updated_at"],
+    },
+    Table {
+        name: "template",
+        group: "application_scoped",
+        columns: &[
+            "id",
+            "code",
+            "title",
+            "respondent_type",
+            "project_id",
+            "firm_id",
+            "is_current",
+            "asset_id",
+            "form_code",
+            "kind",
+            "source_commit_sha",
+            "body_sha256",
+            "current_key",
+            "inserted_at",
+            "updated_at",
+        ],
+        references: &[
+            ("project_id", "project"),
+            ("firm_id", "firm"),
+            ("asset_id", "asset"),
+        ],
+        timestamps: &["inserted_at", "updated_at"],
+    },
+    Table {
+        name: "sent_email",
+        group: "application_scoped",
+        columns: &[
+            "id",
+            "recipient",
+            "subject",
+            "sender",
+            "project_id",
+            "template_slug",
+            "body",
+            "outcome",
+            "sg_message_id",
+            "sent_at",
+            "inserted_at",
+            "updated_at",
+        ],
+        references: &[("project_id", "project")],
+        timestamps: &["sent_at", "inserted_at", "updated_at"],
+    },
+    Table {
+        name: "matter_page",
+        group: "application_scoped",
+        columns: &[
+            "id",
+            "project_id",
+            "firm_id",
+            "slug",
+            "kind",
+            "title",
+            "draft",
+            "position",
+            "client_sections",
+            "lawyer_sections",
+            "clerk_sections",
+            "synced_at",
+            "document_revision",
+            "media",
+        ],
+        references: &[("project_id", "project"), ("firm_id", "firm")],
+        timestamps: &["synced_at"],
+    },
+    Table {
+        name: "firm_integration_secret",
+        group: "application_scoped",
+        columns: &[
+            "id",
+            "firm_id",
+            "provider",
+            "kind",
+            "version",
+            "ciphertext",
+            "wrapped_dek",
+            "kms_key_version",
+            "kms_context",
+            "status",
+            "actor_id",
+            "created_at",
+            "updated_at",
+        ],
+        references: &[("firm_id", "firm"), ("actor_id", "person")],
+        timestamps: &["created_at", "updated_at"],
+    },
 ];
 
 /// Surreal record tables whose primary key is a domain-provided string.
 const STRING_KEY_TABLES: &[&str] = &[
+    "person_mailbox",
     "finance_aggregate",
     "iolta_account",
     "iolta_allocation",
@@ -946,6 +1518,12 @@ pub(crate) async fn scoped_references(
     if tables.contains(&"asset") {
         references.extend(super::documents::scoped_references(surreal, pg).await?);
     }
+    if tables.contains(&"matter_page") {
+        references.extend(super::matter_pages_captions::scoped_page_references(surreal, pg).await?);
+    }
+    if tables.contains(&"sent_email") {
+        references.extend(super::sent_emails::scoped_references(surreal, pg).await?);
+    }
     Ok(references)
 }
 
@@ -957,7 +1535,13 @@ async fn reference_inventory(
 ) -> Result<Vec<UnresolvedReference>, MirrorError> {
     let selected: Vec<_> = TABLES
         .iter()
-        .filter(|table| filter.is_none_or(|names| names.contains(&table.name)))
+        .filter(|table| {
+            !matches!(table.name, "matter_page" | "sent_email")
+                && filter.map_or_else(
+                    || !table.group.ends_with("_scoped"),
+                    |names| names.contains(&table.name),
+                )
+        })
         .collect();
     let mut parent_tables = std::collections::BTreeSet::new();
     for table in &selected {
@@ -1216,8 +1800,8 @@ async fn require_source_authority(pg: &PostgresDb, table: &Table) -> Result<(), 
 /// A row SurrealDB lacks is no evidence against a graph table PostgreSQL
 /// holds ([`crate::postgres_graph::holds`]): the mirror still copies the
 /// Surreal-era rows across, but never deletes.
-async fn refuse_graph_delete(table: &Table) -> Result<(), MirrorError> {
-    if crate::postgres_graph::holds(table.name).await {
+fn refuse_graph_delete(table: &Table) -> Result<(), MirrorError> {
+    if crate::postgres_graph::holds(table.name) {
         Err(MirrorError::GraphAuthority)
     } else {
         Ok(())
@@ -1311,23 +1895,7 @@ pub(super) fn normalize_surreal(
     } else {
         None
     };
-    if let surrealdb::types::Value::Object(fields) = &row {
-        let count = fields
-            .keys()
-            .filter(|name| {
-                // id_kind is generated from the typed source key, not copied from a source field.
-                let mapped = table.columns.contains(&name.as_str())
-                    && !(name.as_str() == "id_kind" && MIXED_KEY_TABLES.contains(&table.name));
-                !(mapped || used_identity_alias && name.as_str() == "__surreal_key")
-            })
-            .count();
-        if count > 0 {
-            return Err(MirrorError::UnmappedSourceFields {
-                table: table.name,
-                count,
-            });
-        }
-    }
+    require_mapped_fields(table, &row, used_identity_alias)?;
     let mut tagged_values = BTreeMap::<&str, Value>::new();
     if let surrealdb::types::Value::Object(fields) = &row {
         for (_, field, _) in TAGGED_REFERENCES
@@ -1352,6 +1920,10 @@ pub(super) fn normalize_surreal(
         }
     }
     let mut row = row.into_json_value();
+    if table.name == "deployment_secret_change" {
+        preserve_deployment_change_context(&mut row)?;
+    }
+
     if let Some((id, kind)) = natural_id {
         let fields = row.as_object_mut().ok_or(MirrorError::Source)?;
         fields.insert("id".to_owned(), Value::String(id));
@@ -1371,6 +1943,45 @@ pub(super) fn normalize_surreal(
         }
     }
     normalized_record(table.name, row)
+}
+
+fn require_mapped_fields(
+    table: &Table,
+    row: &surrealdb::types::Value,
+    used_identity_alias: bool,
+) -> Result<(), MirrorError> {
+    if let surrealdb::types::Value::Object(fields) = row {
+        let count = fields
+            .keys()
+            .filter(|name| {
+                // id_kind is generated from the typed source key, not copied from a source field.
+                let mapped = table.columns.contains(&name.as_str())
+                    && !(name.as_str() == "id_kind" && MIXED_KEY_TABLES.contains(&table.name));
+                // Person's derived lowercase index is represented by PostgreSQL citext.
+                let derived = table.name == "person" && name.as_str() == "email_lower";
+                !(mapped || derived || used_identity_alias && name.as_str() == "__surreal_key")
+            })
+            .count();
+        if count > 0 {
+            return Err(MirrorError::UnmappedSourceFields {
+                table: table.name,
+                count,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn preserve_deployment_change_context(row: &mut Value) -> Result<(), MirrorError> {
+    let fields = row.as_object_mut().ok_or(MirrorError::Source)?;
+    let timestamp = fields
+        .get("inserted_at")
+        .and_then(Value::as_str)
+        .filter(|value| DateTime::parse_from_rfc3339(value).is_ok())
+        .ok_or(MirrorError::Source)?
+        .to_owned();
+    fields.insert("inserted_at_text".into(), Value::String(timestamp));
+    Ok(())
 }
 
 fn normalize_typed_record_links(value: &surrealdb::types::Value) -> Value {
@@ -1575,9 +2186,40 @@ fn upsert_sql(table: &Table) -> Result<String, MirrorError> {
         .map(|column| format!("\"{column}\""))
         .collect::<Vec<_>>()
         .join(",");
+    if table.name == "deployment_secret_change" {
+        // Only an identical captured encrypted row can supply previously absent
+        // authenticated timestamp bytes. PostgreSQL timestamps cannot reconstruct them.
+        let compared = table
+            .columns
+            .iter()
+            .filter(|column| **column != "inserted_at_text")
+            .map(|column| format!("\"deployment_secret_change\".\"{column}\""))
+            .collect::<Vec<_>>()
+            .join(",");
+        let captured = table
+            .columns
+            .iter()
+            .filter(|column| **column != "inserted_at_text")
+            .map(|column| format!("EXCLUDED.\"{column}\""))
+            .collect::<Vec<_>>()
+            .join(",");
+        return Ok(format!(
+            "INSERT INTO deployment_secret_change ({columns}) SELECT {projection} FROM jsonb_populate_record(NULL::deployment_secret_change, $1::jsonb) r ON CONFLICT (id) DO UPDATE SET inserted_at_text=EXCLUDED.inserted_at_text WHERE deployment_secret_change.inserted_at_text IS NULL AND EXCLUDED.inserted_at_text IS NOT NULL AND ROW({compared}) IS NOT DISTINCT FROM ROW({captured})"
+        ));
+    }
+    if crate::postgres_backfill::family::Family::for_table(table.name)
+        == Some(crate::postgres_backfill::family::Family::Application)
+    {
+        let name = table.name;
+        return Ok(format!(
+            "INSERT INTO \"{name}\" ({columns}) SELECT {projection} FROM jsonb_populate_record(NULL::\"{name}\", $1::jsonb) r ON CONFLICT DO NOTHING"
+        ));
+    }
     if authoritative(table) && !crate::postgres_backfill::family::importing(table.name) {
         let name = table.name;
-        return Ok(format!("INSERT INTO \"{name}\" ({columns}) SELECT {projection} FROM jsonb_populate_record(NULL::\"{name}\", $1::jsonb) r ON CONFLICT (id) DO NOTHING"));
+        return Ok(format!(
+            "INSERT INTO \"{name}\" ({columns}) SELECT {projection} FROM jsonb_populate_record(NULL::\"{name}\", $1::jsonb) r ON CONFLICT (id) DO NOTHING"
+        ));
     }
     let rest = &table.columns[1..];
     let updates = rest
@@ -1648,7 +2290,7 @@ async fn ensure_parents(
             // A parent PostgreSQL lacks is copied even into a table it holds
             // authoritatively: an insert can overwrite or delete nothing.
             let key = parent(parent_table, id)?;
-            Box::pin(super::during_initial_copy(super::mirror(surreal, pg, &key))).await?;
+            Box::pin(super::mirror(surreal, pg, &key)).await?;
         }
     }
     Ok(())
@@ -1706,7 +2348,7 @@ pub async fn mirror(
         if crate::postgres_backfill::family::Family::for_table(table.name).is_some() {
             return Err(MirrorError::Source);
         }
-        refuse_graph_delete(table).await?;
+        refuse_graph_delete(table)?;
         // `table.name` is one of the static names above, never input.
         let deleted = if MIXED_KEY_TABLES.contains(&table.name) {
             sqlx::query(sqlx::AssertSqlSafe(format!(
@@ -1746,7 +2388,7 @@ pub async fn mirror_string(
         return Err(MirrorError::Source);
     }
     let Some(row) = source_one_string(surreal, table, id).await? else {
-        refuse_graph_delete(table).await?;
+        refuse_graph_delete(table)?;
         let statement = if MIXED_KEY_TABLES.contains(&table.name) {
             format!(
                 "DELETE FROM \"{}\" WHERE id_kind = 'string' AND id = $1",
@@ -1886,7 +2528,7 @@ pub async fn parity(
             reports.push(scoped_table_parity(surreal, pg, table.name).await?);
             continue;
         }
-        let authoritative = authoritative(table) || crate::postgres_graph::holds(table.name).await;
+        let authoritative = authoritative(table) || crate::postgres_graph::holds(table.name);
         if authoritative {
             if compares_authoritative.is_none() {
                 compares_authoritative = Some(super::compares_authoritative(pg).await?);

@@ -500,15 +500,21 @@ pub enum MirrorError {
     },
     #[error("SurrealDB Inbox repair is disabled while PostgreSQL holds the Inbox")]
     InboxAuthority,
-    #[error("PostgreSQL holds the matter records; only the first Mirror Backfill copies them from SurrealDB")]
+    #[error(
+        "PostgreSQL holds the matter records; only the first Mirror Backfill copies them from SurrealDB"
+    )]
     MatterAuthority,
-    #[error("a graph row SurrealDB lacks is not deleted while PostgreSQL holds the graph tables or is configured but unreachable")]
+    #[error(
+        "a graph row SurrealDB lacks is not deleted while PostgreSQL holds the graph tables or is configured but unreachable"
+    )]
     GraphAuthority,
     #[error("the SurrealDB source row carries an unreadable timestamp")]
     SourceTimestamp,
     #[error("the SurrealDB source row carries an unreadable date")]
     SourceDate,
-    #[error("the SurrealDB source row in table {table} has {count} unmapped field(s); update its PostgreSQL import mapping")]
+    #[error(
+        "the SurrealDB source row in table {table} has {count} unmapped field(s); update its PostgreSQL import mapping"
+    )]
     UnmappedSourceFields { table: &'static str, count: usize },
     #[error("PostgreSQL is unavailable")]
     Unavailable,
@@ -602,8 +608,10 @@ pub(crate) fn reading_source() -> bool {
 
 /// Run `future` reading the catalog modules from SurrealDB, the mirror's
 /// source; see [`reading_source`].
-pub(crate) async fn from_source<T>(future: impl std::future::Future<Output = T>) -> T {
-    READING_SOURCE.scope((), future).await
+pub(crate) fn from_source<T>(
+    future: impl std::future::Future<Output = T>,
+) -> impl std::future::Future<Output = T> {
+    Box::pin(READING_SOURCE.scope((), future))
 }
 
 /// Whether this task is the first Mirror Backfill, the one copy that may
@@ -614,8 +622,10 @@ pub(crate) fn initial_copy() -> bool {
 }
 
 /// Run `future` as the first Mirror Backfill; see [`initial_copy`].
-pub(crate) async fn during_initial_copy<T>(future: impl std::future::Future<Output = T>) -> T {
-    INITIAL_COPY.scope((), future).await
+pub(crate) fn during_initial_copy<T>(
+    future: impl std::future::Future<Output = T>,
+) -> impl std::future::Future<Output = T> {
+    Box::pin(INITIAL_COPY.scope((), future))
 }
 
 /// Whether a Mirror Backfill has completed against this PostgreSQL: the
@@ -789,6 +799,48 @@ pub async fn mirror(
     pg: &PostgresDb,
     key: &MirrorKey,
 ) -> Result<Mirrored, MirrorError> {
+    from_source(Box::pin(mirror_source(surreal, pg, key))).await
+}
+
+/// Persisted ownership fences imports independently from Source read dispatch.
+/// Unregistered groups retain their existing global-import admission checks.
+pub(crate) fn source_import_allowed<'a>(
+    pg: &'a PostgresDb,
+    table: &'a str,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<bool, MirrorError>> + Send + 'a>> {
+    Box::pin(async move {
+        use crate::postgres_backfill::family::{self, Family, ImportMode};
+        if family::active_for_table(pg, table).await? {
+            return Ok(false);
+        }
+        if Family::for_table(table).is_some() {
+            return Ok(family::import_mode(pg, table).await? != ImportMode::Refuse);
+        }
+        Ok(true)
+    })
+}
+
+async fn mirror_record(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+    table: &'static str,
+    id: Uuid,
+) -> Result<Mirrored, MirrorError> {
+    // Journal copies require the immutable captured component, never a live generic row read.
+    if table == "journal_entry" {
+        return Err(MirrorError::MatterAuthority);
+    }
+    records::mirror(surreal, pg, table, id).await
+}
+
+async fn mirror_source(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+    key: &MirrorKey,
+) -> Result<Mirrored, MirrorError> {
+    if !source_import_allowed(pg, key.table()).await? {
+        return Ok(Mirrored::Unchanged);
+    }
     match key {
         MirrorKey::SentEmail(id) => sent_emails::mirror(surreal, pg, *id).await,
         key @ (MirrorKey::InboxConversation(_)
@@ -876,7 +928,7 @@ pub async fn mirror(
         MirrorKey::MatterPages(_) | MirrorKey::MatterCaption(_) => {
             matter_pages_captions::mirror(surreal, pg, key).await
         }
-        MirrorKey::Record { table, id } => records::mirror(surreal, pg, table, *id).await,
+        MirrorKey::Record { table, id } => mirror_record(surreal, pg, table, *id).await,
         MirrorKey::RecordString { table, id } => {
             records::mirror_string(surreal, pg, table, id).await
         }
@@ -1560,7 +1612,7 @@ impl Mirror {
         surreal: &SurrealDb,
         pg: &PostgresDb,
     ) -> Result<ParityReport, MirrorError> {
-        (self.parity)(surreal, pg).await
+        from_source((self.parity)(surreal, pg)).await
     }
 }
 
@@ -1875,3 +1927,6 @@ fn row_id(key: &MirrorKey) -> Option<Uuid> {
 mod blog_videos_tests;
 #[cfg(test)]
 pub(crate) mod tests;
+
+#[cfg(test)]
+mod application_replay_tests;

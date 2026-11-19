@@ -204,8 +204,6 @@ pub mod postgres_graph_views;
 pub mod postgres_mirror;
 /// PostgreSQL schema history and deterministic parity artifacts.
 pub mod postgres_schema;
-/// Sampled comparisons of SurrealDB reads with their PostgreSQL equivalents.
-pub mod postgres_shadow;
 pub mod posts;
 /// The private-terms record checks the Pre-Filing PII Check refuses on, run
 /// in report mode for the admin-tier reconciliation door.

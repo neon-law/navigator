@@ -238,7 +238,7 @@ async fn the_age_engine_holds_the_graph_tables_and_the_mirror_stands_down() {
             mirror(&surreal, &pg, &rows.person_key).await,
             Err(MirrorError::GraphAuthority)
         ));
-        assert!(crate::postgres_graph::holds("relationship_log").await);
+        assert!(crate::postgres_graph::holds("relationship_log"));
 
         // References write and read PostgreSQL only, idempotently.
         let signatory = Party::person(rows.person_id);

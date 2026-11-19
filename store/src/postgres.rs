@@ -1,31 +1,30 @@
-//! PostgreSQL runtime connection for the Firm journal. Credentials are discrete
+//! PostgreSQL application admission and explicit operator connections.
+//! Ordinary access requires complete authority history. Credentials are discrete
 //! environment values and never form a printable connection string.
 use include_dir::{include_dir, Dir};
 use sqlx::migrate::{Migration, MigrationType, Migrator};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgSslMode};
 use sqlx::{AssertSqlSafe, PgPool, SqlSafeStr};
 /// PostgreSQL authority for the accounting domain — Xero invoices, IOLTA
-/// accounts and withdrawals, and the finance aggregate — automatic on a
-/// configured host.
+/// accounts and withdrawals, and the finance aggregate.
 pub mod accounting;
 /// PostgreSQL authority for the litigation domain — cases, docket entries,
-/// discovery, and filings — automatic on a configured host.
+/// discovery, and filings.
 pub mod cases;
-/// PostgreSQL authority for the shared catalogs, behind an opt-in switch.
+/// PostgreSQL authority for the shared catalogs.
 pub mod catalog;
-/// PostgreSQL authority for Communications and the email tables, behind an
-/// opt-in switch.
+/// PostgreSQL authority for Communications and the email tables.
 pub mod communications;
 /// PostgreSQL authority for a Person's and an Entity's identity detail.
 pub mod identity;
 pub mod notation_creation_attempts;
 pub mod people;
 /// PostgreSQL authority for the review surface — review documents and
-/// document comments — automatic on a configured host.
+/// document comments.
 pub mod review;
 
 /// PostgreSQL authority for the provider-envelope family — signatures,
-/// verifications, and notarizations — automatic on a configured host.
+/// verifications, and notarizations.
 pub mod signatures;
 
 /// Consuming a journaled Forgejo push receipt: analysis on the row, the
@@ -41,12 +40,12 @@ pub mod forgejo_push_webhook_journal;
 #[cfg(test)]
 mod forgejo_push_webhook_journal_tests;
 
-/// PostgreSQL-authoritative Inbox slice (LAW-238 D0): ingest, dedup, threading,
-/// attribution, and the reads the renderers use, behind an opt-in cutover flag.
+/// PostgreSQL-authoritative Inbox ingest, deduplication, threading,
+/// attribution, and renderer reads.
 pub mod inbox;
 
 pub(crate) mod captions;
-/// PostgreSQL-authoritative matter records whenever the host is configured.
+/// PostgreSQL-authoritative matter records.
 pub mod matter;
 
 pub(crate) mod assets;
@@ -59,9 +58,13 @@ pub(crate) mod notations;
 /// PostgreSQL Project participation ledger, preparatory to application authority.
 pub mod participation;
 
+pub(crate) mod firm_secrets;
+pub(crate) mod leads;
+pub(crate) mod project_deadlines;
 pub mod project_lifecycle;
 /// Native Project records; application authority remains guarded.
 pub mod projects;
+pub(crate) mod summary_sender_approvals;
 
 /// PostgreSQL authority for Posts, Blog Videos, Social Handles, Social
 /// Publications, Social Accounts, and their saved selections.
@@ -132,12 +135,17 @@ pub enum PostgresError {
     Connection,
     #[error("PostgreSQL migration failed")]
     Migration,
+    #[error("PostgreSQL application history has not been activated")]
+    History,
 }
 impl PostgresDb {
     /// Scope a PostgreSQL integration fixture without changing process-wide configuration.
     #[cfg(any(test, feature = "test-support"))]
-    pub async fn with_test_db<T>(pg: Self, future: impl std::future::Future<Output = T>) -> T {
-        TEST_POSTGRES.scope(pg, future).await
+    pub fn with_test_db<T>(
+        pg: Self,
+        future: impl std::future::Future<Output = T>,
+    ) -> impl std::future::Future<Output = T> {
+        Box::pin(TEST_POSTGRES.scope(pg, future))
     }
 
     /// The bounded pool, for read-only consumers such as the archive export.
@@ -218,19 +226,37 @@ impl PostgresDb {
             .await
             .cloned()
     }
-    /// The process's PostgreSQL store when `NAVIGATOR_POSTGRES_HOST` is set,
-    /// for the tables born in PostgreSQL. `None` selects their SurrealDB
-    /// fallback; a configured but unreachable server is an error, never a
-    /// silent fall back.
+    /// PostgreSQL serves application calls. Only an explicit importer Source
+    /// read can select the compatibility accessor; missing configuration fails closed.
     pub async fn configured() -> Result<Option<Self>, PostgresError> {
-        #[cfg(any(test, feature = "test-support"))]
-        if let Ok(pg) = TEST_POSTGRES.try_with(Clone::clone) {
-            return Ok(Some(pg));
-        }
-        if std::env::var_os("NAVIGATOR_POSTGRES_HOST").is_none() {
+        if crate::postgres_mirror::reading_source() {
             return Ok(None);
         }
-        Self::from_env().await.map(Some)
+        Box::pin(Self::application()).await.map(Some)
+    }
+
+    /// Connect an application only after its complete historical enrollment.
+    /// Operators and migrations use `from_env` before activation instead.
+    pub async fn application() -> Result<Self, PostgresError> {
+        let pg = Self::from_env().await?;
+        Box::pin(pg.require_application_history()).await?;
+        Ok(pg)
+    }
+
+    /// Require the existing global import and every current scoped activation.
+    /// Importers connect directly and never use this application admission check.
+    pub(crate) async fn require_application_history(&self) -> Result<(), PostgresError> {
+        if !crate::postgres_mirror::backfilled(self)
+            .await
+            .map_err(|_| PostgresError::History)?
+        {
+            return Err(PostgresError::History);
+        }
+        Box::pin(crate::postgres_backfill::family::require_runtime_scopes(
+            self,
+        ))
+        .await
+        .map_err(|_| PostgresError::History)
     }
     async fn connect_env() -> Result<Self, PostgresError> {
         let get = |key: &str| std::env::var(key).map_err(|_| PostgresError::Configuration);
@@ -607,3 +633,15 @@ mod tests {
 
 #[cfg(test)]
 mod signature_reference_migration_tests;
+
+#[cfg(test)]
+mod application_authority_tests;
+
+/// PostgreSQL immutable Template versions.
+pub(crate) mod templates;
+
+/// Version-scoped native comment and review writes.
+pub(crate) mod notation_document_comments;
+
+/// Project-scoped native manifest persistence.
+pub(crate) mod matter_pages;

@@ -58,6 +58,8 @@ use axum::{
 use base64::Engine as _;
 use dioxus_server::{render_handler, FullstackState, ServeConfig};
 
+use crate::dioxus_render::state as fullstack_state;
+
 /// The single low-risk page Phase 0 renders through Dioxus.
 pub const DIOXUS_DEMO_PATH: &str = "/dioxus-demo";
 
@@ -129,7 +131,7 @@ pub fn router() -> Option<Router> {
                 DIOXUS_DEMO_PATH,
                 get(render_handler).layer(from_fn(dioxus_document_head)),
             )
-            .with_state(FullstackState::new(ServeConfig::new(), webapp::App)),
+            .with_state(fullstack_state(ServeConfig::new(), webapp::App)),
     )
 }
 
@@ -262,7 +264,7 @@ pub fn same_day_preview_router() -> Router {
                 .layer(from_fn(dioxus_document_head))
                 .layer(from_fn(preview_provenance_notice)),
         )
-        .with_state(FullstackState::new(config, webapp::mobile::MobileApp));
+        .with_state(fullstack_state(config, webapp::mobile::MobileApp));
     if let Some(dir) = bundle {
         router = router.merge(bundle_assets_router(&dir));
     }
@@ -1255,7 +1257,7 @@ pub fn projects_router(
 
     Router::<FullstackState>::new()
         .route(PROJECTS_PATH, page())
-        .with_state(FullstackState::new(cfg, webapp::matter_surface::Projects))
+        .with_state(fullstack_state(cfg, webapp::matter_surface::Projects))
         .route_layer(from_fn_with_state(
             (sessions, policy),
             crate::policy::require_policy,
@@ -1303,7 +1305,7 @@ pub fn lawyer_dashboard_router(
                 .layer(from_fn(inject_dri_view))
                 .layer(from_fn(dioxus_document_head)),
         )
-        .with_state(FullstackState::new(
+        .with_state(fullstack_state(
             cfg,
             webapp::lawyer_dashboard::LawyerDashboard,
         ))
@@ -1343,7 +1345,7 @@ pub fn notation_outline_router(
                 .layer(from_fn(inject_person_id))
                 .layer(from_fn(dioxus_document_head)),
         )
-        .with_state(FullstackState::new(
+        .with_state(fullstack_state(
             cfg,
             webapp::notation_outline::NotationOutline,
         ))
@@ -1387,7 +1389,7 @@ where
                 .layer(from_fn(inject_app_brand_mark))
                 .layer(from_fn(dioxus_document_head)),
         )
-        .with_state(FullstackState::new(cfg, component))
+        .with_state(fullstack_state(cfg, component))
         .route_layer(from_fn_with_state(
             (sessions, policy),
             crate::policy::require_policy,
@@ -1440,7 +1442,7 @@ pub fn app_forms_router(
                 .layer(from_fn(inject_dri_view))
                 .layer(from_fn(dioxus_document_head)),
         )
-        .with_state(FullstackState::new(cfg, webapp::gov_forms::GovForms))
+        .with_state(fullstack_state(cfg, webapp::gov_forms::GovForms))
         .layer(axum::Extension(rows))
         .route_layer(from_fn_with_state(
             (sessions, policy),
@@ -1509,10 +1511,7 @@ pub fn project_detail_router(
         router = router.route(&path, show_page());
     }
     router
-        .with_state(FullstackState::new(
-            cfg,
-            webapp::matter_surface::ProjectDetail,
-        ))
+        .with_state(fullstack_state(cfg, webapp::matter_surface::ProjectDetail))
         .route_layer(from_fn_with_state(
             (sessions, policy),
             crate::policy::require_policy,
@@ -1679,7 +1678,7 @@ where
                 ))
                 .layer(from_fn(dioxus_document_head)),
         )
-        .with_state(FullstackState::new(cfg, component))
+        .with_state(fullstack_state(cfg, component))
         .route_layer(from_fn_with_state(
             (sessions, policy),
             crate::policy::require_policy,
@@ -1744,7 +1743,7 @@ pub fn conversation_router(
 
     Router::<FullstackState>::new()
         .route(CONVERSATION_PATH, gated())
-        .with_state(FullstackState::new(cfg, webapp::conversation::Conversation))
+        .with_state(fullstack_state(cfg, webapp::conversation::Conversation))
         .route_layer(from_fn_with_state(
             (sessions, policy),
             crate::policy::require_policy,
@@ -1796,7 +1795,7 @@ pub fn matter_page_router(
                 // confirms the path shape: any other method is a plain 404.
                 .fallback(|| async { axum::http::StatusCode::NOT_FOUND }),
         )
-        .with_state(FullstackState::new(cfg, webapp::sections::page::MatterPage))
+        .with_state(fullstack_state(cfg, webapp::sections::page::MatterPage))
         .route_layer(from_fn_with_state(
             (sessions, policy),
             crate::policy::require_policy,
@@ -1922,10 +1921,7 @@ pub fn client_intake_router(
                 ))
                 .layer(from_fn(dioxus_document_head)),
         )
-        .with_state(FullstackState::new(
-            cfg,
-            webapp::client_intake::ClientIntake,
-        ))
+        .with_state(fullstack_state(cfg, webapp::client_intake::ClientIntake))
         .route_layer(from_fn_with_state(
             (sessions, policy),
             crate::policy::require_policy,
@@ -2003,10 +1999,7 @@ pub fn clause_editor_router(
                 .layer(from_fn(dioxus_document_head))
                 .layer(from_fn_with_state(state, clause_editor_json_or_render)),
         )
-        .with_state(FullstackState::new(
-            cfg,
-            webapp::clause_editor::ClauseEditor,
-        ))
+        .with_state(fullstack_state(cfg, webapp::clause_editor::ClauseEditor))
         .route_layer(from_fn_with_state(
             (sessions, policy),
             crate::policy::require_policy,
@@ -2079,7 +2072,7 @@ pub fn walker_step_router(
                 .layer(from_fn(dioxus_document_head))
                 .layer(from_fn_with_state(state, inject_walker_step)),
         )
-        .with_state(FullstackState::new(cfg, webapp::walker_step::WalkerStep))
+        .with_state(fullstack_state(cfg, webapp::walker_step::WalkerStep))
         .route_layer(from_fn_with_state(
             (sessions, policy),
             crate::policy::require_policy,
@@ -2153,10 +2146,7 @@ pub fn intake_review_router(
                 .layer(from_fn(dioxus_document_head))
                 .layer(from_fn_with_state(state, inject_intake_review)),
         )
-        .with_state(FullstackState::new(
-            cfg,
-            webapp::intake_review::IntakeReview,
-        ))
+        .with_state(fullstack_state(cfg, webapp::intake_review::IntakeReview))
         .route_layer(from_fn_with_state(
             (sessions, policy),
             crate::policy::require_policy,
@@ -2222,7 +2212,7 @@ pub fn reask_router(
                 .layer(from_fn(dioxus_document_head))
                 .layer(from_fn_with_state(state, inject_reask)),
         )
-        .with_state(FullstackState::new(cfg, webapp::reask::Reask))
+        .with_state(fullstack_state(cfg, webapp::reask::Reask))
         .route_layer(from_fn_with_state(
             (sessions, policy),
             crate::policy::require_policy,
@@ -2255,7 +2245,7 @@ pub fn legal_page_router(path: &'static str, content: webapp::legal_page::LegalC
                 .layer(from_fn(dioxus_document_head))
                 .layer(from_fn(inject_public_utility)),
         )
-        .with_state(FullstackState::new(cfg, webapp::legal_page::LegalPage))
+        .with_state(fullstack_state(cfg, webapp::legal_page::LegalPage))
 }
 
 /// Build a host's two legal-document routers (`/privacy`, `/terms`) from that
@@ -2324,7 +2314,7 @@ pub fn review_router(
                 ))
                 .layer(from_fn(dioxus_document_head)),
         )
-        .with_state(FullstackState::new(cfg, webapp::review::Review))
+        .with_state(fullstack_state(cfg, webapp::review::Review))
         .route_layer(from_fn_with_state(
             (sessions, policy),
             crate::policy::require_policy,
@@ -2385,7 +2375,7 @@ pub fn entity_types_router(
                 .layer(from_fn(dioxus_document_head))
                 .layer(from_fn(reject_unadvertised_entity_types_sort)),
         )
-        .with_state(FullstackState::new(
+        .with_state(fullstack_state(
             cfg,
             webapp::entity_types::LawyerEntityTypes,
         ))
@@ -2450,7 +2440,7 @@ pub fn graph_views_router(
                 .layer(from_fn(inject_app_brand_mark))
                 .layer(from_fn(dioxus_document_head)),
         )
-        .with_state(FullstackState::new(
+        .with_state(fullstack_state(
             ServeConfig::new().context_providers(context.clone()),
             webapp::graph_views::ProjectGraphPage,
         ));
@@ -2463,7 +2453,7 @@ pub fn graph_views_router(
                 .layer(from_fn(inject_app_brand_mark))
                 .layer(from_fn(dioxus_document_head)),
         )
-        .with_state(FullstackState::new(
+        .with_state(fullstack_state(
             ServeConfig::new().context_providers(context.clone()),
             webapp::graph_views::LawyerGraphPage,
         ));
@@ -2475,7 +2465,7 @@ pub fn graph_views_router(
                 .layer(from_fn(inject_app_brand_mark))
                 .layer(from_fn(dioxus_document_head)),
         )
-        .with_state(FullstackState::new(
+        .with_state(fullstack_state(
             ServeConfig::new().context_providers(context),
             webapp::graph_views::FirmGraphPage,
         ));
@@ -2518,7 +2508,7 @@ pub fn expunge_queue_router(
                 .layer(from_fn(inject_csrf_token))
                 .layer(from_fn(dioxus_document_head)),
         )
-        .with_state(FullstackState::new(
+        .with_state(fullstack_state(
             cfg,
             webapp::expunge_requests::LawyerExpungeQueue,
         ))
@@ -2569,7 +2559,7 @@ pub fn contract_review_router(
                 .layer(from_fn(inject_csrf_token))
                 .layer(from_fn(dioxus_document_head)),
         )
-        .with_state(FullstackState::new(
+        .with_state(fullstack_state(
             cfg,
             webapp::contract_review::LawyerContractReview,
         ))
@@ -2609,7 +2599,7 @@ pub fn notation_document_review_router(
                 .layer(from_fn(inject_csrf_token))
                 .layer(from_fn(dioxus_document_head)),
         )
-        .with_state(FullstackState::new(
+        .with_state(fullstack_state(
             cfg,
             webapp::notation_document_review::LawyerNotationDocumentReview,
         ))
@@ -2779,7 +2769,7 @@ where
                 ))
                 .layer(from_fn(dioxus_document_head)),
         )
-        .with_state(FullstackState::new(cfg, component))
+        .with_state(fullstack_state(cfg, component))
         .route_layer(from_fn_with_state(
             (sessions, policy),
             crate::policy::require_policy,
@@ -2929,10 +2919,7 @@ pub fn entity_list_router(
                 .layer(from_fn(dioxus_document_head))
                 .layer(from_fn(reject_unadvertised_entity_list_sort)),
         )
-        .with_state(FullstackState::new(
-            cfg,
-            webapp::entity_list::LawyerEntityList,
-        ))
+        .with_state(fullstack_state(cfg, webapp::entity_list::LawyerEntityList))
         .route_layer(from_fn_with_state(
             (sessions, policy),
             crate::policy::require_policy,
@@ -2977,7 +2964,7 @@ pub fn admin_people_router(
                 .layer(from_fn(dioxus_document_head))
                 .layer(from_fn(reject_unadvertised_sort)),
         )
-        .with_state(FullstackState::new(cfg, webapp::people::AdminPeople))
+        .with_state(fullstack_state(cfg, webapp::people::AdminPeople))
         .route_layer(from_fn_with_state(
             (sessions, policy),
             crate::policy::require_policy,
@@ -3067,7 +3054,7 @@ where
                 .layer(from_fn(inject_app_brand_mark))
                 .layer(from_fn(dioxus_document_head)),
         )
-        .with_state(FullstackState::new(cfg, component))
+        .with_state(fullstack_state(cfg, component))
         .route_layer(from_fn_with_state(
             (sessions, policy),
             crate::policy::require_policy,
@@ -3164,7 +3151,7 @@ where
                     reject_unadvertised_listing_sort,
                 )),
         )
-        .with_state(FullstackState::new(cfg, component))
+        .with_state(fullstack_state(cfg, component))
         .route_layer(from_fn_with_state(
             (sessions, policy),
             crate::policy::require_policy,
@@ -3191,7 +3178,7 @@ pub fn design_router() -> Router {
                 .layer(from_fn(dioxus_document_head))
                 .layer(from_fn(reject_unadvertised_design_sort)),
         )
-        .with_state(FullstackState::new(
+        .with_state(fullstack_state(
             ServeConfig::new(),
             webapp::design::DesignGallery,
         ))
@@ -3238,7 +3225,7 @@ pub fn blog_index_router(db: store::surreal::SurrealDb) -> Router {
                 .layer(from_fn(inject_public_utility))
                 .layer(from_fn_with_state(db, inject_brand_blog_index)),
         )
-        .with_state(FullstackState::new(
+        .with_state(fullstack_state(
             ServeConfig::new(),
             webapp::blog_index::BlogIndexPage,
         ))
@@ -3261,7 +3248,7 @@ pub fn blog_post_router(db: store::surreal::SurrealDb) -> Router {
                 // Outermost: redirect / 404 / inject before any rendering work.
                 .layer(from_fn_with_state(db, inject_blog_post)),
         )
-        .with_state(FullstackState::new(
+        .with_state(fullstack_state(
             ServeConfig::new(),
             webapp::blog_post::BlogPostEntry,
         ))
@@ -3432,10 +3419,7 @@ pub fn template_gallery_router(content: webapp::template_gallery::GalleryContent
                 .layer(from_fn(dioxus_document_head))
                 .layer(from_fn(inject_public_utility)),
         )
-        .with_state(FullstackState::new(
-            cfg,
-            webapp::template_gallery::GalleryEntry,
-        ))
+        .with_state(fullstack_state(cfg, webapp::template_gallery::GalleryEntry))
 }
 
 /// One template's detail page (#956 Phase 4). [`inject_template_entry`] owns
@@ -3453,7 +3437,7 @@ pub fn template_entry_router() -> Router {
                 // Outermost: redirect / download / 404 / inject first.
                 .layer(from_fn(inject_template_entry)),
         )
-        .with_state(FullstackState::new(
+        .with_state(fullstack_state(
             ServeConfig::new(),
             webapp::template_gallery::TemplateDetailEntry,
         ))
@@ -3561,7 +3545,7 @@ pub fn marketing_page_router(
                     crate::lead_capture::inject_page_context,
                 )),
         )
-        .with_state(FullstackState::new(
+        .with_state(fullstack_state(
             cfg,
             webapp::marketing_page::MarketingPageEntry,
         ))
@@ -3620,7 +3604,7 @@ pub fn catalog_index_router(
                 .layer(from_fn(inject_public_utility))
                 .layer(from_fn_with_state(content, inject_catalog_index)),
         )
-        .with_state(FullstackState::new(
+        .with_state(fullstack_state(
             cfg,
             webapp::catalog_index::CatalogIndexEntry,
         ))
@@ -3643,7 +3627,7 @@ pub fn notations_about_router(content: webapp::notations_about::NotationsAboutCo
                 .layer(from_fn(inject_public_utility))
                 .layer(from_fn_with_state(content, inject_notations_about)),
         )
-        .with_state(FullstackState::new(
+        .with_state(fullstack_state(
             ServeConfig::new(),
             webapp::notations_about::NotationsAboutEntry,
         ))
@@ -3916,7 +3900,7 @@ pub fn free_resources_index_router(
                 .layer(from_fn(dioxus_document_head))
                 .layer(from_fn(inject_public_utility)),
         )
-        .with_state(FullstackState::new(
+        .with_state(fullstack_state(
             cfg,
             webapp::free_resources::FreeResourcesIndexEntry,
         ))
@@ -3942,7 +3926,7 @@ pub fn free_resources_jurisdiction_router(
                 .layer(from_fn(dioxus_document_head))
                 .layer(from_fn(inject_public_utility)),
         )
-        .with_state(FullstackState::new(
+        .with_state(fullstack_state(
             cfg,
             webapp::free_resources::FreeResourcesJurisdictionEntry,
         ))
@@ -4139,7 +4123,7 @@ pub fn notation_preview_router(
         ),
         None => router,
     };
-    router.with_state(FullstackState::new(ServeConfig::new(), webapp::App))
+    router.with_state(fullstack_state(ServeConfig::new(), webapp::App))
 }
 
 /// Resolve the requested bundled document from the `{slug}` path segment and
@@ -4249,7 +4233,7 @@ pub fn catalog_material_router(path: &str, workshops: crate::WorkshopIndex) -> R
                 .layer(from_fn(inject_public_utility))
                 .layer(from_fn_with_state(workshops, inject_catalog_material)),
         )
-        .with_state(FullstackState::new(
+        .with_state(fullstack_state(
             ServeConfig::new(),
             webapp::catalog_material::CatalogMaterialEntry,
         ))
@@ -4302,7 +4286,7 @@ pub fn catalog_slides_router(
                     inject_catalog_slides,
                 )),
         )
-        .with_state(FullstackState::new(
+        .with_state(fullstack_state(
             ServeConfig::new(),
             webapp::catalog_slides::CatalogSlidesEntry,
         ))
@@ -4381,7 +4365,7 @@ pub fn catalog_step_router(
                     inject_catalog_step,
                 )),
         )
-        .with_state(FullstackState::new(
+        .with_state(fullstack_state(
             ServeConfig::new(),
             webapp::catalog_step::CatalogStepEntry,
         ))
@@ -4434,7 +4418,7 @@ pub fn catalog_display_router(
                     inject_catalog_display,
                 )),
         )
-        .with_state(FullstackState::new(
+        .with_state(fullstack_state(
             ServeConfig::new(),
             webapp::catalog_display::CatalogDisplayEntry,
         ))
@@ -4481,7 +4465,7 @@ pub fn certificate_sent_router(path: &str, workshops: crate::WorkshopIndex) -> R
                 .layer(from_fn(inject_public_utility))
                 .layer(from_fn_with_state(workshops, inject_certificate_sent)),
         )
-        .with_state(FullstackState::new(
+        .with_state(fullstack_state(
             ServeConfig::new(),
             webapp::catalog_certificate_sent::CertificateSentEntry,
         ))
@@ -4627,7 +4611,7 @@ pub fn glossary_router() -> Router {
                 .layer(from_fn(inject_public_utility))
                 .layer(from_fn(inject_glossary)),
         )
-        .with_state(FullstackState::new(
+        .with_state(fullstack_state(
             ServeConfig::new(),
             webapp::glossary_page::GlossaryPageEntry,
         ))
@@ -4726,7 +4710,7 @@ pub fn app_team_router(
                 .layer(from_fn(inject_viewer_role))
                 .layer(from_fn(inject_app_brand_mark)),
         )
-        .with_state(FullstackState::new(
+        .with_state(fullstack_state(
             ServeConfig::new(),
             webapp::team_home::TeamHome,
         ))
@@ -4771,7 +4755,7 @@ pub fn app_brands_router(
                 .layer(from_fn(inject_person_id))
                 .layer(from_fn(inject_app_brand_mark)),
         )
-        .with_state(FullstackState::new(cfg, webapp::brands_home::BrandsHome))
+        .with_state(fullstack_state(cfg, webapp::brands_home::BrandsHome))
         .route_layer(from_fn_with_state(
             (sessions, policy),
             crate::policy::require_policy,
@@ -4803,7 +4787,7 @@ pub fn app_brands_edit_router(
                 .layer(from_fn(inject_csrf_token))
                 .layer(from_fn(inject_app_brand_mark)),
         )
-        .with_state(FullstackState::new(cfg, webapp::brands_edit::BrandsEdit))
+        .with_state(fullstack_state(cfg, webapp::brands_edit::BrandsEdit))
         .route_layer(from_fn_with_state(
             (sessions, policy),
             crate::policy::require_policy,
@@ -5009,7 +4993,7 @@ pub fn app_owner_router(
                 .layer(from_fn(inject_viewer_role))
                 .layer(from_fn(inject_app_brand_mark)),
         )
-        .with_state(FullstackState::new(cfg, webapp::owner_home::OwnerHome))
+        .with_state(fullstack_state(cfg, webapp::owner_home::OwnerHome))
         .route_layer(from_fn_with_state(
             (sessions, policy),
             crate::policy::require_policy,
@@ -5196,7 +5180,7 @@ pub fn app_profile_router(
                 .layer(from_fn(inject_csrf_token))
                 .layer(from_fn(inject_app_brand_mark)),
         )
-        .with_state(FullstackState::new(cfg, webapp::profile::Profile))
+        .with_state(fullstack_state(cfg, webapp::profile::Profile))
         .route_layer(from_fn_with_state(
             (sessions, policy),
             crate::policy::require_policy,
@@ -5234,7 +5218,7 @@ pub fn firm_show_router(
                 .layer(from_fn(inject_person_id))
                 .layer(from_fn(inject_app_brand_mark)),
         )
-        .with_state(FullstackState::new(cfg, webapp::firm_show::FirmShow))
+        .with_state(fullstack_state(cfg, webapp::firm_show::FirmShow))
         .route_layer(from_fn_with_state(
             (sessions, policy),
             crate::policy::require_policy,
@@ -5292,7 +5276,7 @@ pub fn testimonials_router(path: &str, surreal: store::surreal::SurrealDb) -> Ro
                 .layer(from_fn(dioxus_document_head))
                 .layer(from_fn(inject_public_utility)),
         )
-        .with_state(FullstackState::new(
+        .with_state(fullstack_state(
             cfg,
             webapp::testimonials_page::TestimonialsPageEntry,
         ))
@@ -5332,7 +5316,7 @@ pub fn home_router(
                     crate::lead_capture::inject_page_context,
                 )),
         )
-        .with_state(FullstackState::new(cfg, webapp::home::HomePageEntry))
+        .with_state(fullstack_state(cfg, webapp::home::HomePageEntry))
 }
 
 /// The firm `/disputes` page — the disputes practice. Static like
@@ -5356,7 +5340,7 @@ pub fn litigation_router(
                 .layer(from_fn(dioxus_document_head))
                 .layer(from_fn(inject_public_utility)),
         )
-        .with_state(FullstackState::new(
+        .with_state(fullstack_state(
             cfg,
             webapp::litigation_page::LitigationPageEntry,
         ))
@@ -5381,7 +5365,7 @@ pub fn transactional_router(
                 .layer(from_fn(dioxus_document_head))
                 .layer(from_fn(inject_public_utility)),
         )
-        .with_state(FullstackState::new(
+        .with_state(fullstack_state(
             cfg,
             webapp::transactional_page::TransactionalPageEntry,
         ))
@@ -5418,10 +5402,7 @@ pub fn contact_router(
                     crate::lead_capture::inject_page_context,
                 )),
         )
-        .with_state(FullstackState::new(
-            cfg,
-            webapp::contact_page::ContactPageEntry,
-        ))
+        .with_state(fullstack_state(cfg, webapp::contact_page::ContactPageEntry))
 }
 
 /// The neutral destination after an anonymous lead form submission. It shares
@@ -5441,7 +5422,7 @@ pub fn contact_sent_router(path: &str, content: webapp::contact_page::ContactCon
                 .layer(from_fn(dioxus_document_head))
                 .layer(from_fn(inject_public_utility)),
         )
-        .with_state(FullstackState::new(
+        .with_state(fullstack_state(
             cfg,
             webapp::contact_page::ContactSentPageEntry,
         ))
@@ -5463,7 +5444,7 @@ pub fn team_index_router(path: &str, content: webapp::team_page::TeamIndexConten
                 .layer(from_fn(dioxus_document_head))
                 .layer(from_fn(inject_public_utility)),
         )
-        .with_state(FullstackState::new(cfg, webapp::team_page::TeamIndexEntry))
+        .with_state(fullstack_state(cfg, webapp::team_page::TeamIndexEntry))
 }
 
 /// Nick's individual public profile.
@@ -5481,10 +5462,7 @@ pub fn team_profile_router(path: &str, content: webapp::team_page::TeamProfileCo
                 .layer(from_fn(dioxus_document_head))
                 .layer(from_fn(inject_public_utility)),
         )
-        .with_state(FullstackState::new(
-            cfg,
-            webapp::team_page::TeamProfileEntry,
-        ))
+        .with_state(fullstack_state(cfg, webapp::team_page::TeamProfileEntry))
 }
 
 /// The Vesta `/world` calculated astrocartography page. Content-backed like
@@ -5517,7 +5495,7 @@ pub fn world_router(path: &str, content: webapp::world_page::WorldContent) -> Ro
             router = router.route(function.path(), function.method_router());
         }
     }
-    router.with_state(FullstackState::new(ServeConfig::new(), webapp::App))
+    router.with_state(fullstack_state(ServeConfig::new(), webapp::App))
 }
 
 /// Hand the resolved [`webapp::world_page::WorldContent`] to the render task

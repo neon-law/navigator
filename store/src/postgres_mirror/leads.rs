@@ -248,7 +248,7 @@ fn consent_from_row(row: &PgRow) -> Result<ConsentImage, sqlx::Error> {
 }
 
 async fn upsert_lead(pg: &PostgresDb, row: &LeadImage) -> Result<Mirrored, MirrorError> {
-    let result = sqlx::query("INSERT INTO lead (id,email,email_lower,phone,brand_key,source_path,consent_version,consented_at,status,unsubscribed_at,person_id,submissions,inserted_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT (id) DO UPDATE SET email=EXCLUDED.email,email_lower=EXCLUDED.email_lower,phone=EXCLUDED.phone,brand_key=EXCLUDED.brand_key,source_path=EXCLUDED.source_path,consent_version=EXCLUDED.consent_version,consented_at=EXCLUDED.consented_at,status=EXCLUDED.status,unsubscribed_at=EXCLUDED.unsubscribed_at,person_id=EXCLUDED.person_id,submissions=EXCLUDED.submissions,inserted_at=EXCLUDED.inserted_at,updated_at=EXCLUDED.updated_at WHERE (lead.email,lead.email_lower,lead.phone,lead.brand_key,lead.source_path,lead.consent_version,lead.consented_at,lead.status,lead.unsubscribed_at,lead.person_id,lead.submissions,lead.inserted_at,lead.updated_at) IS DISTINCT FROM (EXCLUDED.email,EXCLUDED.email_lower,EXCLUDED.phone,EXCLUDED.brand_key,EXCLUDED.source_path,EXCLUDED.consent_version,EXCLUDED.consented_at,EXCLUDED.status,EXCLUDED.unsubscribed_at,EXCLUDED.person_id,EXCLUDED.submissions,EXCLUDED.inserted_at,EXCLUDED.updated_at)")
+    let result = sqlx::query("INSERT INTO lead (id,email,email_lower,phone,brand_key,source_path,consent_version,consented_at,status,unsubscribed_at,person_id,submissions,inserted_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT (id) DO NOTHING")
         .bind(row.id).bind(&row.email).bind(&row.email_lower).bind(&row.phone).bind(&row.brand_key).bind(&row.source_path)
         .bind(&row.consent_version).bind(micros(row.consented_at)).bind(&row.status).bind(row.unsubscribed_at.map(micros))
         .bind(row.person_id).bind(row.submissions).bind(micros(row.inserted_at)).bind(micros(row.updated_at)).execute(&pg.0).await?;
@@ -271,16 +271,7 @@ async fn mirror_lead(
     id: Uuid,
 ) -> Result<Mirrored, MirrorError> {
     let Some(row) = source_lead(surreal, id).await? else {
-        // Consent rows are independent immutable evidence. Removing this
-        // projection never cascades into the evidence ledger.
-        return Ok(changed(
-            sqlx::query("DELETE FROM lead WHERE id=$1")
-                .bind(id)
-                .execute(&pg.0)
-                .await?
-                .rows_affected(),
-            Mirrored::Deleted,
-        ));
+        return Ok(Mirrored::Unchanged);
     };
     upsert_lead(pg, &row).await
 }
@@ -307,6 +298,12 @@ pub async fn mirror(
     pg: &PostgresDb,
     key: &MirrorKey,
 ) -> Result<Mirrored, MirrorError> {
+    if !matches!(key, MirrorKey::Lead(_) | MirrorKey::LeadConsent(_)) {
+        return Err(MirrorError::Source);
+    }
+    if !super::source_import_allowed(pg, key.table()).await? {
+        return Ok(Mirrored::Unchanged);
+    }
     match key {
         MirrorKey::Lead(id) => mirror_lead(surreal, pg, *id).await,
         MirrorKey::LeadConsent(id) => mirror_consent(surreal, pg, *id).await,
@@ -315,6 +312,9 @@ pub async fn mirror(
 }
 
 pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
+    if crate::postgres_backfill::family::active_for_table(pg, "lead").await? {
+        return Ok(ParityReport { tables: vec![] });
+    }
     Ok(ParityReport {
         tables: vec![
             super::compare(
@@ -332,6 +332,9 @@ pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport
 }
 
 pub async fn reconcile(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
+    if crate::postgres_backfill::family::active_for_table(pg, "lead").await? {
+        return Ok(ParityReport { tables: vec![] });
+    }
     let source = source_leads(surreal).await?;
     let target = target_leads(pg).await?;
     let keys: Vec<_> = source

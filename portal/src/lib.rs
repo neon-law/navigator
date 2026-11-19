@@ -141,6 +141,7 @@ pub mod contract_review_walk;
 pub mod conversation;
 pub mod csrf;
 pub mod dioxus_app;
+mod dioxus_render;
 pub mod document_integrations;
 pub mod documents;
 pub mod docusign_auth;
@@ -3827,20 +3828,19 @@ async fn health() -> impl IntoResponse {
 }
 
 /// Readiness probe: the pod is ready to take traffic when its database is
-/// reachable, PostgreSQL answers when `NAVIGATOR_POSTGRES_HOST` configures it,
+/// reachable with valid PostgreSQL activation history,
 /// and Project repository storage is configured (`NAVIGATOR_GIT_REPO_ROOT`).
 /// The authorization policy is compiled at boot, so it is not a runtime
 /// network dependency. The DBOS executor needs no probe here: with
 /// `NAVIGATOR_DBOS_ENABLED=true` a failed launch refuses the boot.
-async fn readyz(State(state): State<AppState>) -> impl IntoResponse {
+async fn readyz(State(_state): State<AppState>) -> impl IntoResponse {
     let mut failures: Vec<String> = Vec::new();
-    if let Err(e) = store::surreal::ping(&state.surreal).await {
-        failures.push(format!("surreal: {e}"));
-    }
-    let postgres = postgres_readiness(
-        store::firm_journal::JournalStore::postgres_configured(),
-        async { store::postgres::PostgresDb::from_env().await?.ping().await },
-    );
+    let postgres = postgres_readiness(async {
+        store::postgres::PostgresDb::application()
+            .await?
+            .ping()
+            .await
+    });
     if let Some(failure) = postgres.await {
         failures.push(failure);
     }
@@ -3860,15 +3860,11 @@ async fn readyz(State(state): State<AppState>) -> impl IntoResponse {
 /// keeps the kubelet's one-second default timeout, so this stays under it.
 const POSTGRES_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(750);
 
-/// `None` when PostgreSQL is not configured or `probe` answers in time;
+/// `None` when PostgreSQL and its activation history answer in time;
 /// otherwise the readiness failure line naming it.
 async fn postgres_readiness(
-    configured: bool,
     probe: impl std::future::Future<Output = Result<(), store::postgres::PostgresError>>,
 ) -> Option<String> {
-    if !configured {
-        return None;
-    }
     match tokio::time::timeout(POSTGRES_READY_TIMEOUT, probe).await {
         Ok(Ok(())) => None,
         Ok(Err(e)) => Some(format!("postgres: {e}")),
@@ -3921,22 +3917,32 @@ mod readyz_tests {
     use super::{postgres_readiness, readyz};
     use store::postgres::PostgresError;
 
-    /// An unconfigured PostgreSQL is never probed, so a deployment without it
-    /// keeps answering `ready`.
     #[tokio::test]
-    async fn postgres_readiness_skips_an_unconfigured_database() {
-        let probe = async { panic!("an unconfigured PostgreSQL must not be probed") };
-        assert_eq!(postgres_readiness(false, probe).await, None);
+    async fn postgres_readiness_refuses_missing_configuration() {
+        let failure = postgres_readiness(async { Err(PostgresError::Configuration) }).await;
+        assert_eq!(
+            failure.as_deref(),
+            Some("postgres: PostgreSQL configuration is unavailable or invalid")
+        );
+    }
+
+    #[tokio::test]
+    async fn postgres_readiness_refuses_unactivated_history() {
+        let failure = postgres_readiness(async { Err(PostgresError::History) }).await;
+        assert_eq!(
+            failure.as_deref(),
+            Some("postgres: PostgreSQL application history has not been activated")
+        );
     }
 
     #[tokio::test]
     async fn postgres_readiness_passes_a_database_that_answers() {
-        assert_eq!(postgres_readiness(true, async { Ok(()) }).await, None);
+        assert_eq!(postgres_readiness(async { Ok(()) }).await, None);
     }
 
     #[tokio::test]
     async fn postgres_readiness_names_an_unavailable_database() {
-        let failure = postgres_readiness(true, async { Err(PostgresError::Connection) }).await;
+        let failure = postgres_readiness(async { Err(PostgresError::Connection) }).await;
         assert_eq!(
             failure.as_deref(),
             Some("postgres: PostgreSQL is unavailable")
@@ -3947,7 +3953,7 @@ mod readyz_tests {
     /// holding the request until the kubelet gives up.
     #[tokio::test]
     async fn postgres_readiness_times_out_a_silent_database() {
-        let failure = postgres_readiness(true, std::future::pending()).await;
+        let failure = postgres_readiness(std::future::pending()).await;
         assert_eq!(failure.as_deref(), Some("postgres: no answer within 750ms"));
     }
     use axum::body::Body;
@@ -3982,8 +3988,8 @@ mod readyz_tests {
     /// `/app/readyz` names Project repository storage when
     /// `NAVIGATOR_GIT_REPO_ROOT` is unset, and stops naming it once that
     /// env is set. Both cases run in one test because the env var is
-    /// process-global. The store handle answers nothing, so readiness stays
-    /// degraded on its ping; only the repository line is under test.
+    /// process-global. PostgreSQL is unconfigured, so readiness stays
+    /// degraded; only the repository line is under test.
     #[tokio::test]
     async fn readyz_reports_unconfigured_repo_storage() {
         let state =

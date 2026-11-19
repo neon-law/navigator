@@ -21,7 +21,6 @@ use super::tenancy::{compare, images, remirror, select_sql, source, target, upse
 use super::{changed, identity, micros, MirrorError, MirrorKey, Mirrored, ParityReport};
 use crate::postgres::PostgresDb;
 use crate::postgres_backfill::family::{self, ImportMode};
-use crate::postgres_shadow::{compare_row, Comparison, NotationShape, ShadowKey};
 use crate::surreal::{record_id, record_uuid, SurrealDb};
 
 pub(super) const NOTATION_COLUMNS: &[&str] = &[
@@ -74,118 +73,6 @@ static EVENT_UPSERT: LazyLock<String> =
 static ANSWER_UPSERT: LazyLock<String> = LazyLock::new(|| upsert_sql("answer", ANSWER_COLUMNS));
 static NOTATION_SELECT: LazyLock<String> =
     LazyLock::new(|| select_sql("notation", NOTATION_COLUMNS));
-static NOTATION_BY_ID: LazyLock<String> =
-    LazyLock::new(|| format!("{} WHERE id = $1", select_sql("notation", NOTATION_COLUMNS)));
-
-static NOTATION_BY_PROJECT: LazyLock<String> = LazyLock::new(|| {
-    format!(
-        "{} WHERE project_id = $1 ORDER BY inserted_at DESC",
-        select_sql("notation", NOTATION_COLUMNS)
-    )
-});
-static NOTATION_BY_PROJECTS: LazyLock<String> = LazyLock::new(|| {
-    format!(
-        "{} WHERE project_id = ANY($1) ORDER BY inserted_at DESC",
-        select_sql("notation", NOTATION_COLUMNS)
-    )
-});
-static NOTATION_BY_PERSON: LazyLock<String> = LazyLock::new(|| {
-    format!(
-        "{} WHERE person_id = $1 ORDER BY inserted_at DESC",
-        select_sql("notation", NOTATION_COLUMNS)
-    )
-});
-static NOTATION_BY_PROJECT_TEMPLATE_PERSON: LazyLock<String> = LazyLock::new(|| {
-    format!(
-        "{} WHERE project_id = $1 AND template_id = $2 AND person_id = $3 LIMIT 1",
-        select_sql("notation", NOTATION_COLUMNS)
-    )
-});
-const NOTATION_EXISTS_FOR_PROJECT: &str =
-    "SELECT EXISTS (SELECT 1 FROM notation WHERE project_id = $1)";
-
-/// Compare one Notation read by id with PostgreSQL's row, through the
-/// mirror's Notation image.
-pub(crate) async fn shadow_notation(
-    pg: &PostgresDb,
-    id: Uuid,
-    source: Option<&crate::notations::Notation>,
-) -> Result<Comparison, MirrorError> {
-    compare_row(
-        pg,
-        NOTATION_BY_ID.as_str(),
-        ShadowKey::Id(id),
-        source.map(NotationImage::from_source),
-        NotationImage::from_row,
-        |image| image.id,
-    )
-    .await
-}
-
-/// Compare one of the notations list shapes ([`NotationShape`]) with
-/// PostgreSQL's rows, through the mirror's Notation image.
-///
-/// Both engines order these reads by `inserted_at DESC`, but timestamps
-/// compare at PostgreSQL's microsecond precision, so rows written within
-/// the same microsecond can read in a different relative order per
-/// engine. The verdict is therefore over the row set itself, ordered by
-/// id — the same normalization `ops postgres mirror parity` applies.
-pub(crate) async fn shadow_notation_rows(
-    pg: &PostgresDb,
-    shape: NotationShape,
-    source: &[crate::notations::Notation],
-) -> Result<Comparison, MirrorError> {
-    let mut source_rows: Vec<NotationImage> =
-        source.iter().map(NotationImage::from_source).collect();
-    source_rows.sort_by_key(|image| image.id);
-    let query = match shape {
-        NotationShape::ByProject(project_id) => {
-            sqlx::query(NOTATION_BY_PROJECT.as_str()).bind(project_id)
-        }
-        NotationShape::ByProjects(project_ids) => {
-            sqlx::query(NOTATION_BY_PROJECTS.as_str()).bind(project_ids)
-        }
-        NotationShape::ByPerson(person_id) => {
-            sqlx::query(NOTATION_BY_PERSON.as_str()).bind(person_id)
-        }
-        NotationShape::All => sqlx::query(NOTATION_SELECT.as_str()),
-        NotationShape::ByProjectTemplatePerson {
-            project_id,
-            template_id,
-            person_id,
-        } => sqlx::query(NOTATION_BY_PROJECT_TEMPLATE_PERSON.as_str())
-            .bind(project_id)
-            .bind(template_id)
-            .bind(person_id),
-    };
-    let mut target_rows: Vec<NotationImage> = query
-        .fetch_all(&pg.0)
-        .await?
-        .iter()
-        .map(NotationImage::from_row)
-        .collect::<Result<Vec<_>, _>>()?;
-    target_rows.sort_by_key(|image| image.id);
-    Ok(Comparison {
-        id: source_rows.first().map(|image| image.id),
-        equal: source_rows == target_rows,
-    })
-}
-
-/// Compare an `exists_for_project` read with PostgreSQL's answer.
-pub(crate) async fn shadow_notation_exists(
-    pg: &PostgresDb,
-    project_id: Uuid,
-    source: bool,
-) -> Result<Comparison, MirrorError> {
-    let target: bool = sqlx::query_scalar(NOTATION_EXISTS_FOR_PROJECT)
-        .bind(project_id)
-        .fetch_one(&pg.0)
-        .await?;
-    Ok(Comparison {
-        id: Some(project_id),
-        equal: source == target,
-    })
-}
 static EVENT_SELECT: LazyLock<String> =
     LazyLock::new(|| select_sql("notation_event", EVENT_COLUMNS));
 static ANSWER_SELECT: LazyLock<String> = LazyLock::new(|| select_sql("answer", ANSWER_COLUMNS));
@@ -481,9 +368,9 @@ async fn upsert_notation(
         }
         if let Some(package) = notation.package_id {
             if !present(pg, PACKAGE_PRESENT, package).await? {
-                // A missing parent is copied even into the authoritative catalog.
+                // Only the genuine first global import may supply this parent.
                 let key = MirrorKey::NotationPackage(package);
-                super::during_initial_copy(super::catalog::mirror(surreal, pg, &key)).await?;
+                super::catalog::mirror(surreal, pg, &key).await?;
             }
         }
         ensure_template(surreal, pg, notation.template_id).await?;
@@ -603,9 +490,9 @@ async fn mirror_answer(
     if mode == ImportMode::InsertMissing
         && !present(pg, QUESTION_PRESENT, answer.question_id).await?
     {
-        // A missing parent is copied even into the authoritative catalog.
+        // After global completion, a missing native parent must remain a refusal.
         let key = MirrorKey::Question(answer.question_id);
-        super::during_initial_copy(super::catalog::mirror(surreal, pg, &key)).await?;
+        super::catalog::mirror(surreal, pg, &key).await?;
     }
     if let Some(notation) = answer.notation_id {
         ensure_notation(surreal, pg, notation).await?;

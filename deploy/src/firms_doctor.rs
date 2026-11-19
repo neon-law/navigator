@@ -1,7 +1,7 @@
 //! `hudson ops firms doctor` — the deployment-wide Admin-DRI invariant
 //! report (ENG-499).
 //!
-//! Read-only: it connects to the `SurrealDB` the sourced `.devx/env` names —
+//! Read-only: it validates PostgreSQL authority from the sourced `.devx/env` —
 //! the same store `web` reads — and prints which active Firms do not hold
 //! exactly one eligible Admin DRI. It never appoints, clears, or otherwise
 //! repairs a row; [`store::firms::appoint_admin_dri`] is the only writer, and
@@ -36,9 +36,9 @@ pub fn run() -> ExitCode {
 }
 
 async fn diagnose() -> Result<Vec<store::firms::AdminDriStatus>> {
-    let surreal = store::surreal::connect_from_env()
+    let surreal = crate::application_store()
         .await
-        .context("connect to SurrealDB")?;
+        .context("verify PostgreSQL application authority")?;
     store::firms::admin_dri_invariant_report(&surreal)
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))

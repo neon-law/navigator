@@ -158,7 +158,8 @@ pub async fn create_project_notation(
         .map_err(CreateProjectNotationError::Session)
     }
     .await;
-    if let Some(db) = database.as_ref() {
+    {
+        let db = &database;
         let recorded = match &outcome {
             Ok(opened) => {
                 attempts::link_retry(

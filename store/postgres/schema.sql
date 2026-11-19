@@ -4998,3 +4998,7 @@ ALTER TABLE purchase ADD CONSTRAINT purchase_stripe_activation CHECK ( stripe_ac
 -- A Client cannot open monthly and yearly Stripe checkout concurrently.
 CREATE UNIQUE INDEX purchase_one_stripe_subscription ON purchase (person_id)
     WHERE stripe_account_id IS NOT NULL AND renewal_cancelled_at IS NULL AND state <> 'expired';
+
+-- Migration: 20261118210000_preserve_deployment_change_context.sql
+-- The authenticated envelope includes the exact timestamp spelling, not its instant.
+ALTER TABLE deployment_secret_change ADD COLUMN inserted_at_text TEXT;

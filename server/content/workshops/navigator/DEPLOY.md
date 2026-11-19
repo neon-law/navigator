@@ -1080,6 +1080,7 @@ overrides. Keep generated credentials out of source control.
 | Storage buckets | `NAVIGATOR_STORAGE_BUCKET`, `NAVIGATOR_ASSETS_BUCKET`, `NAVIGATOR_LFS_BUCKET` |
 | Applications bucket | `NAVIGATOR_APPLICATIONS_BUCKET` |
 | Iceberg-archive bucket | `NAVIGATOR_ARCHIVES_BUCKET` |
+| Archive source (`postgres` by default) | `NAVIGATOR_ARCHIVE_SOURCE` |
 | Cloud-only archive buckets (`ops gcp setup`, not locally generated) | `NAVIGATOR_TELEMETRY_BUCKET` |
 | Storage region | `NAVIGATOR_STORAGE_REGION` |
 | Documents credentials | `NAVIGATOR_STORAGE_ACCESS_KEY`, `NAVIGATOR_STORAGE_SECRET_KEY` |

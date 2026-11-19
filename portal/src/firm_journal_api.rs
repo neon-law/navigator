@@ -27,9 +27,7 @@ async fn authorize(
     }
     Ok(())
 }
-/// The configured journal store. Without a PostgreSQL host this is SurrealDB;
-/// with one, an unreachable PostgreSQL fails the request rather than splitting
-/// the journal across stores.
+/// The PostgreSQL journal, admitted only with complete application history.
 async fn journal_store(state: &ApiState) -> Result<journal::JournalStore, ApiError> {
     journal::JournalStore::from_env(&state.surreal)
         .await
@@ -132,8 +130,13 @@ pub(super) async fn migration_triage(
     Path(firm): Path<Uuid>,
 ) -> Result<Response, ApiError> {
     authorize(&state, &session, firm).await?;
+    // This authenticated, Firm-authorized migration endpoint is the only
+    // request path that opens the explicitly configured legacy source.
+    let Ok(source) = store::surreal::connect_from_env().await else {
+        return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
+    };
     Ok(
-        match store::journal_startup_migration::triage(&state.surreal, firm).await {
+        match store::journal_startup_migration::triage(&source, firm).await {
             Ok(rows) => Json(rows).into_response(),
             Err(error) => journal_error(&error),
         },
@@ -1664,6 +1667,28 @@ mod tests {
         foreign_project: Uuid,
     }
 
+    async fn door_entity() -> Uuid {
+        let pg = store::postgres::PostgresDb::application().await.unwrap();
+        let kind = Uuid::now_v7();
+        let jurisdiction = Uuid::now_v7();
+        let entity = Uuid::now_v7();
+        sqlx::query("INSERT INTO entity_type(id,name) VALUES ($1,$2)")
+            .bind(kind)
+            .bind(kind.to_string())
+            .execute(pg.pool())
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO jurisdiction(id,name) VALUES ($1,$2)")
+            .bind(jurisdiction)
+            .bind(jurisdiction.to_string())
+            .execute(pg.pool())
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO entity(id,name,entity_type_id,jurisdiction_id) VALUES ($1,'Synthetic Entity',$2,$3)")
+            .bind(entity).bind(kind).bind(jurisdiction).execute(pg.pool()).await.unwrap();
+        entity
+    }
+
     async fn door_firm(surreal: &store::surreal::SurrealDb, label: &str) -> Uuid {
         let admin = store::persons::create(
             surreal,
@@ -1680,7 +1705,7 @@ mod tests {
             &store::firms::NewFirm {
                 name: format!("Synthetic journal firm {label} {}", Uuid::now_v7()),
                 status: "active".into(),
-                entity_id: store::test_support::seed_entity(surreal).await,
+                entity_id: door_entity().await,
                 admin_dri_person_id: admin.id,
             },
         )
@@ -1697,7 +1722,7 @@ mod tests {
                 name: "Synthetic journal matter".into(),
                 status: "open".into(),
                 firm_id: Some(firm),
-                entity_id: store::test_support::seed_entity(surreal).await,
+                entity_id: door_entity().await,
                 ..Default::default()
             },
         )
@@ -1707,7 +1732,16 @@ mod tests {
     }
 
     async fn door_fixture() -> DoorFixture {
-        let surreal = store::test_support::mem_surreal().await;
+        let surreal = store::surreal::SurrealDb::uninitialized();
+        sqlx::query("INSERT INTO brand(name,brand_key) VALUES ('Synthetic Brand','neon')")
+            .execute(
+                store::postgres::PostgresDb::application()
+                    .await
+                    .unwrap()
+                    .pool(),
+            )
+            .await
+            .unwrap();
         let firm = door_firm(&surreal, "own").await;
         let other = door_firm(&surreal, "other").await;
         let project = door_project(&surreal, firm).await;
@@ -1744,7 +1778,7 @@ mod tests {
         }
     }
 
-    /// A balanced two-posting receipt the SurrealDB journal accepts.
+    /// A balanced two-posting receipt.
     fn door_entry(firm: Uuid, actor: Uuid, key: &str) -> JournalEntry {
         let posting = |account: &str, ownership, quantity: &str, category| journal::Posting {
             account: account.into(),
@@ -1785,277 +1819,294 @@ mod tests {
 
     #[tokio::test]
     async fn journal_doors_hide_an_unknown_firm_and_one_the_actor_cannot_manage() {
-        let fixture = door_fixture().await;
-        let owner = door_bearer(fixture.owner, Role::Owner);
-        let unknown = format!("/app/api/firms/{}/journal", Uuid::now_v7());
-        let (status, _) = door(&fixture.app, "GET", &unknown, &owner, None).await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "an unknown Firm");
-        let lawyer = door_bearer(fixture.lawyer, Role::Lawyer);
-        for path in ["", "/statement", "/audits", "/signals", "/migration-triage"] {
-            let uri = format!("/app/api/firms/{}/journal{path}", fixture.firm);
-            let (status, _) = door(&fixture.app, "GET", &uri, &lawyer, None).await;
-            assert_eq!(status, StatusCode::NOT_FOUND, "{path} for a non-member");
-        }
+        store::test_support::with_postgres(async {
+            let fixture = door_fixture().await;
+            let owner = door_bearer(fixture.owner, Role::Owner);
+            let unknown = format!("/app/api/firms/{}/journal", Uuid::now_v7());
+            let (status, _) = door(&fixture.app, "GET", &unknown, &owner, None).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "an unknown Firm");
+            let lawyer = door_bearer(fixture.lawyer, Role::Lawyer);
+            for path in ["", "/statement", "/audits", "/signals", "/migration-triage"] {
+                let uri = format!("/app/api/firms/{}/journal{path}", fixture.firm);
+                let (status, _) = door(&fixture.app, "GET", &uri, &lawyer, None).await;
+                assert_eq!(status, StatusCode::NOT_FOUND, "{path} for a non-member");
+            }
+        })
+        .await;
     }
 
     #[tokio::test]
-    async fn journal_reads_answer_from_surreal_and_postgres_only_reads_refuse() {
-        let fixture = door_fixture().await;
-        let owner = door_bearer(fixture.owner, Role::Owner);
-        let base = format!("/app/api/firms/{}/journal", fixture.firm);
+    async fn journal_reads_use_postgres_and_require_explicit_source_for_triage() {
+        store::test_support::with_postgres(async {
+            let fixture = door_fixture().await;
+            let owner = door_bearer(fixture.owner, Role::Owner);
+            let base = format!("/app/api/firms/{}/journal", fixture.firm);
 
-        let (status, body) = door(&fixture.app, "GET", &base, &owner, None).await;
-        assert_eq!(status, StatusCode::OK, "{body}");
-        assert_eq!(body, "[]");
+            let (status, body) = door(&fixture.app, "GET", &base, &owner, None).await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            assert_eq!(body, "[]");
 
-        let (status, body) = door(
-            &fixture.app,
-            "GET",
-            &format!("{base}/statement"),
-            &owner,
-            None,
-        )
+            let (status, body) = door(
+                &fixture.app,
+                "GET",
+                &format!("{base}/statement"),
+                &owner,
+                None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            let statement: serde_json::Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(statement["firm_id"], fixture.firm.to_string());
+            assert!(statement["project_id"].is_null());
+            assert_eq!(statement["complete_account_reconciliation"], false);
+
+            let own = format!("{base}/statement?project_id={}", fixture.project);
+            let (status, body) = door(&fixture.app, "GET", &own, &owner, None).await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            let statement: serde_json::Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(statement["project_id"], fixture.project.to_string());
+            for project in [fixture.foreign_project, Uuid::now_v7()] {
+                let uri = format!("{base}/statement?project_id={project}");
+                let (status, _) = door(&fixture.app, "GET", &uri, &owner, None).await;
+                assert_eq!(status, StatusCode::NOT_FOUND, "a Project outside the Firm");
+            }
+
+            for path in ["/audits", "/signals?after=3"] {
+                let (status, body) =
+                    door(&fixture.app, "GET", &format!("{base}{path}"), &owner, None).await;
+                assert_eq!(status, StatusCode::OK, "{path}: {body}");
+                assert_eq!(body, "[]");
+            }
+
+            let (status, body) = door(
+                &fixture.app,
+                "GET",
+                &format!("{base}/migration-triage"),
+                &owner,
+                None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+        })
         .await;
-        assert_eq!(status, StatusCode::OK, "{body}");
-        let statement: serde_json::Value = serde_json::from_str(&body).unwrap();
-        assert_eq!(statement["firm_id"], fixture.firm.to_string());
-        assert!(statement["project_id"].is_null());
-        assert_eq!(statement["complete_account_reconciliation"], false);
-
-        let own = format!("{base}/statement?project_id={}", fixture.project);
-        let (status, body) = door(&fixture.app, "GET", &own, &owner, None).await;
-        assert_eq!(status, StatusCode::OK, "{body}");
-        let statement: serde_json::Value = serde_json::from_str(&body).unwrap();
-        assert_eq!(statement["project_id"], fixture.project.to_string());
-        for project in [fixture.foreign_project, Uuid::now_v7()] {
-            let uri = format!("{base}/statement?project_id={project}");
-            let (status, _) = door(&fixture.app, "GET", &uri, &owner, None).await;
-            assert_eq!(status, StatusCode::NOT_FOUND, "a Project outside the Firm");
-        }
-
-        for path in ["/audits", "/signals?after=3"] {
-            let (status, body) =
-                door(&fixture.app, "GET", &format!("{base}{path}"), &owner, None).await;
-            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{path}");
-            assert!(body.contains("journal_requires_postgresql"), "{body}");
-        }
-
-        let (status, body) = door(
-            &fixture.app,
-            "GET",
-            &format!("{base}/migration-triage"),
-            &owner,
-            None,
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK, "{body}");
-        assert_eq!(body, "[]");
     }
 
     #[tokio::test]
     async fn journal_commands_bind_firm_and_actor_and_map_store_refusals() {
-        let fixture = door_fixture().await;
-        let owner = door_bearer(fixture.owner, Role::Owner);
-        let base = format!("/app/api/firms/{}/journal", fixture.firm);
-        let preview = format!("{base}/preview");
+        store::test_support::with_postgres(async {
+            let fixture = door_fixture().await;
+            let owner = door_bearer(fixture.owner, Role::Owner);
+            let base = format!("/app/api/firms/{}/journal", fixture.firm);
+            let preview = format!("{base}/preview");
 
-        let foreign_firm = door_entry(Uuid::now_v7(), fixture.owner, "door:foreign-firm");
-        let foreign_actor = door_entry(fixture.firm, Uuid::now_v7(), "door:foreign-actor");
-        for entry in [&foreign_firm, &foreign_actor] {
-            for uri in [&base, &preview] {
-                let body = serde_json::to_value(entry).unwrap();
-                let (status, _) = door(&fixture.app, "POST", uri, &owner, Some(&body)).await;
-                assert_eq!(status, StatusCode::FORBIDDEN, "{uri} {}", entry.key);
+            let foreign_firm = door_entry(Uuid::now_v7(), fixture.owner, "door:foreign-firm");
+            let foreign_actor = door_entry(fixture.firm, Uuid::now_v7(), "door:foreign-actor");
+            for entry in [&foreign_firm, &foreign_actor] {
+                for uri in [&base, &preview] {
+                    let body = serde_json::to_value(entry).unwrap();
+                    let (status, _) = door(&fixture.app, "POST", uri, &owner, Some(&body)).await;
+                    assert_eq!(status, StatusCode::FORBIDDEN, "{uri} {}", entry.key);
+                }
             }
-        }
 
-        let mut unbalanced = door_entry(fixture.firm, fixture.owner, "door:unbalanced");
-        unbalanced.postings.truncate(1);
-        let body = serde_json::to_value(&unbalanced).unwrap();
-        let (status, text) = door(&fixture.app, "POST", &base, &owner, Some(&body)).await;
-        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{text}");
-        assert!(text.contains("journal_command_refused"), "{text}");
+            let mut unbalanced = door_entry(fixture.firm, fixture.owner, "door:unbalanced");
+            unbalanced.postings.truncate(1);
+            let body = serde_json::to_value(&unbalanced).unwrap();
+            let (status, text) = door(&fixture.app, "POST", &base, &owner, Some(&body)).await;
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{text}");
+            assert!(text.contains("journal_command_refused"), "{text}");
 
-        let entry = door_entry(fixture.firm, fixture.owner, "door:receipt");
-        let body = serde_json::to_value(&entry).unwrap();
-        let (status, text) = door(&fixture.app, "POST", &preview, &owner, Some(&body)).await;
-        assert_eq!(status, StatusCode::OK, "{text}");
-        let previewed: serde_json::Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(previewed["id"], entry.id.to_string());
-        assert_eq!(previewed["preview"], true);
-        let (_, listed) = door(&fixture.app, "GET", &base, &owner, None).await;
-        assert_eq!(listed, "[]", "a preview persists nothing");
+            let entry = door_entry(fixture.firm, fixture.owner, "door:receipt");
+            let body = serde_json::to_value(&entry).unwrap();
+            let (status, text) = door(&fixture.app, "POST", &preview, &owner, Some(&body)).await;
+            assert_eq!(status, StatusCode::OK, "{text}");
+            let previewed: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(previewed["id"], entry.id.to_string());
+            assert_eq!(previewed["preview"], true);
+            let (_, listed) = door(&fixture.app, "GET", &base, &owner, None).await;
+            assert_eq!(listed, "[]", "a preview persists nothing");
 
-        let (status, text) = door(&fixture.app, "POST", &base, &owner, Some(&body)).await;
-        assert_eq!(status, StatusCode::CREATED, "{text}");
-        let posted: serde_json::Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(posted["id"], entry.id.to_string());
-        assert_eq!(posted["preview"], false);
-        let (_, listed) = door(&fixture.app, "GET", &base, &owner, None).await;
-        let listed: Vec<JournalEntry> = serde_json::from_str(&listed).unwrap();
-        assert_eq!(listed, vec![entry.clone()]);
+            let (status, text) = door(&fixture.app, "POST", &base, &owner, Some(&body)).await;
+            assert_eq!(status, StatusCode::CREATED, "{text}");
+            let posted: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(posted["id"], entry.id.to_string());
+            assert_eq!(posted["preview"], false);
+            let (_, listed) = door(&fixture.app, "GET", &base, &owner, None).await;
+            let listed: Vec<JournalEntry> = serde_json::from_str(&listed).unwrap();
+            assert_eq!(listed, vec![entry.clone()]);
 
-        let mut changed = entry.clone();
-        changed.memo = "A different economic event".into();
-        let body = serde_json::to_value(&changed).unwrap();
-        let (status, text) = door(&fixture.app, "POST", &base, &owner, Some(&body)).await;
-        assert_eq!(status, StatusCode::CONFLICT, "{text}");
+            let mut changed = entry.clone();
+            changed.memo = "A different economic event".into();
+            let body = serde_json::to_value(&changed).unwrap();
+            let (status, text) = door(&fixture.app, "POST", &base, &owner, Some(&body)).await;
+            assert_eq!(status, StatusCode::CONFLICT, "{text}");
 
-        let (status, text) = door(
-            &fixture.app,
-            "GET",
-            &format!("{base}/statement"),
-            &owner,
-            None,
-        )
+            let (status, text) = door(
+                &fixture.app,
+                "GET",
+                &format!("{base}/statement"),
+                &owner,
+                None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{text}");
+            let statement: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert!(
+                statement["lines"].as_array().is_some_and(|l| !l.is_empty()),
+                "{text}"
+            );
+        })
         .await;
-        assert_eq!(status, StatusCode::OK, "{text}");
-        let statement: serde_json::Value = serde_json::from_str(&text).unwrap();
-        assert!(
-            statement["lines"].as_array().is_some_and(|l| !l.is_empty()),
-            "{text}"
-        );
     }
 
     #[tokio::test]
     async fn reconciliation_binds_every_approval_and_proposal_to_the_actor() {
-        let fixture = door_fixture().await;
-        let owner = door_bearer(fixture.owner, Role::Owner);
-        let uri = format!("/app/api/firms/{}/journal/reconcile", fixture.firm);
-        let request = |firm: Uuid, approver: Uuid, proposer: Uuid| {
-            serde_json::json!({
-                "id": Uuid::now_v7(),
-                "scope": {
-                    "firm_id": firm,
-                    "period_start": "2026-10-01T00:00:00Z",
-                    "period_end": "2026-10-31T00:00:00Z",
-                    "sources": [],
-                    "complete_statement_document_id": null
-                },
-                "mode": "preview",
-                "snapshots": [],
-                "proposed_entries": [door_entry(fixture.firm, proposer, "door:proposal")],
-                "approvals": [{
-                    "actor_id": approver,
-                    "approved_at": "2026-10-31T00:00:00Z",
-                    "command_digest": "synthetic-digest"
-                }]
-            })
-        };
-        let stranger = Uuid::now_v7();
-        for (label, body) in [
-            (
-                "another Firm",
-                request(Uuid::now_v7(), fixture.owner, fixture.owner),
-            ),
-            (
-                "another approver",
-                request(fixture.firm, stranger, fixture.owner),
-            ),
-            (
-                "another proposer",
-                request(fixture.firm, fixture.owner, stranger),
-            ),
-        ] {
+        store::test_support::with_postgres(async {
+            let fixture = door_fixture().await;
+            let owner = door_bearer(fixture.owner, Role::Owner);
+            let uri = format!("/app/api/firms/{}/journal/reconcile", fixture.firm);
+            let request = |firm: Uuid, approver: Uuid, proposer: Uuid| {
+                serde_json::json!({
+                    "id": Uuid::now_v7(),
+                    "scope": {
+                        "firm_id": firm,
+                        "period_start": "2026-10-01T00:00:00Z",
+                        "period_end": "2026-10-31T00:00:00Z",
+                        "sources": [],
+                        "complete_statement_document_id": null
+                    },
+                    "mode": "preview",
+                    "snapshots": [],
+                    "proposed_entries": [door_entry(fixture.firm, proposer, "door:proposal")],
+                    "approvals": [{
+                        "actor_id": approver,
+                        "approved_at": "2026-10-31T00:00:00Z",
+                        "command_digest": "synthetic-digest"
+                    }]
+                })
+            };
+            let stranger = Uuid::now_v7();
+            for (label, body) in [
+                (
+                    "another Firm",
+                    request(Uuid::now_v7(), fixture.owner, fixture.owner),
+                ),
+                (
+                    "another approver",
+                    request(fixture.firm, stranger, fixture.owner),
+                ),
+                (
+                    "another proposer",
+                    request(fixture.firm, fixture.owner, stranger),
+                ),
+            ] {
+                let (status, text) = door(&fixture.app, "POST", &uri, &owner, Some(&body)).await;
+                assert_eq!(status, StatusCode::FORBIDDEN, "{label}: {text}");
+            }
+            let body = request(fixture.firm, fixture.owner, fixture.owner);
             let (status, text) = door(&fixture.app, "POST", &uri, &owner, Some(&body)).await;
-            assert_eq!(status, StatusCode::FORBIDDEN, "{label}: {text}");
-        }
-        let body = request(fixture.firm, fixture.owner, fixture.owner);
-        let (status, text) = door(&fixture.app, "POST", &uri, &owner, Some(&body)).await;
-        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{text}");
-        assert!(text.contains("journal_requires_postgresql"), "{text}");
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{text}");
+            assert!(text.contains("journal_command_refused"), "{text}");
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn provider_evidence_doors_scope_the_project_and_refuse_without_credentials() {
-        let fixture = door_fixture().await;
-        let owner = door_bearer(fixture.owner, Role::Owner);
-        let base = format!("/app/api/firms/{}/journal", fixture.firm);
-        let mercury = |project: Uuid| {
-            serde_json::json!({
-                "project_id": project,
-                "account_id": Uuid::now_v7(),
-                "transaction_id": Uuid::now_v7(),
-                "journal_account": "operating"
-            })
-        };
-        let xero = |project: Uuid| {
-            serde_json::json!({
-                "project_id": project,
-                "account_id": null,
-                "object_id": Uuid::now_v7(),
-                "object_type": "invoice",
-                "journal_account": null
-            })
-        };
-        let solana = |project: Uuid| {
-            serde_json::json!({
-                "project_id": project,
-                "network": "synthetic-network",
-                "wallet": "synthetic-wallet",
-                "signature": "synthetic-signature",
-                "locator": null,
-                "journal_account": null
-            })
-        };
-        let doors: [(&str, &DoorBody, &str); 3] = [
-            ("mercury", &mercury, "bank_evidence_unavailable"),
-            ("xero", &xero, "accounting_evidence_unavailable"),
-            ("solana", &solana, "chain_evidence_unavailable"),
-        ];
-        for (path, body, refusal) in doors {
-            let uri = format!("{base}/{path}");
-            for project in [fixture.foreign_project, Uuid::now_v7()] {
-                let (status, text) =
-                    door(&fixture.app, "POST", &uri, &owner, Some(&body(project))).await;
-                assert_eq!(status, StatusCode::NOT_FOUND, "{path}: {text}");
+        store::test_support::with_postgres(async {
+            let fixture = door_fixture().await;
+            let owner = door_bearer(fixture.owner, Role::Owner);
+            let base = format!("/app/api/firms/{}/journal", fixture.firm);
+            let mercury = |project: Uuid| {
+                serde_json::json!({
+                    "project_id": project,
+                    "account_id": Uuid::now_v7(),
+                    "transaction_id": Uuid::now_v7(),
+                    "journal_account": "operating"
+                })
+            };
+            let xero = |project: Uuid| {
+                serde_json::json!({
+                    "project_id": project,
+                    "account_id": null,
+                    "object_id": Uuid::now_v7(),
+                    "object_type": "invoice",
+                    "journal_account": null
+                })
+            };
+            let solana = |project: Uuid| {
+                serde_json::json!({
+                    "project_id": project,
+                    "network": "synthetic-network",
+                    "wallet": "synthetic-wallet",
+                    "signature": "synthetic-signature",
+                    "locator": null,
+                    "journal_account": null
+                })
+            };
+            let doors: [(&str, &DoorBody, &str); 3] = [
+                ("mercury", &mercury, "bank_evidence_unavailable"),
+                ("xero", &xero, "accounting_evidence_unavailable"),
+                ("solana", &solana, "chain_evidence_unavailable"),
+            ];
+            for (path, body, refusal) in doors {
+                let uri = format!("{base}/{path}");
+                for project in [fixture.foreign_project, Uuid::now_v7()] {
+                    let (status, text) =
+                        door(&fixture.app, "POST", &uri, &owner, Some(&body(project))).await;
+                    assert_eq!(status, StatusCode::NOT_FOUND, "{path}: {text}");
+                }
+                let (status, text) = door(
+                    &fixture.app,
+                    "POST",
+                    &uri,
+                    &owner,
+                    Some(&body(fixture.project)),
+                )
+                .await;
+                assert_eq!(status, StatusCode::BAD_GATEWAY, "{path}: {text}");
+                assert!(text.contains(refusal), "{path}: {text}");
             }
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_bulk_mercury_import_refuses_a_reversed_window_and_a_missing_credential() {
+        store::test_support::with_postgres(async {
+            let fixture = door_fixture().await;
+            let owner = door_bearer(fixture.owner, Role::Owner);
+            let uri = format!("/app/api/firms/{}/journal/mercury/import", fixture.firm);
+            let window = |start: &str, end: &str| {
+                serde_json::json!({
+                    "account_id": Uuid::now_v7(),
+                    "start": start,
+                    "end": end,
+                    "dry_run": true
+                })
+            };
             let (status, text) = door(
                 &fixture.app,
                 "POST",
                 &uri,
                 &owner,
-                Some(&body(fixture.project)),
+                Some(&window("2026-10-31", "2026-10-01")),
             )
             .await;
-            assert_eq!(status, StatusCode::BAD_GATEWAY, "{path}: {text}");
-            assert!(text.contains(refusal), "{path}: {text}");
-        }
-    }
-
-    #[tokio::test]
-    async fn a_bulk_mercury_import_refuses_a_reversed_window_and_a_missing_credential() {
-        let fixture = door_fixture().await;
-        let owner = door_bearer(fixture.owner, Role::Owner);
-        let uri = format!("/app/api/firms/{}/journal/mercury/import", fixture.firm);
-        let window = |start: &str, end: &str| {
-            serde_json::json!({
-                "account_id": Uuid::now_v7(),
-                "start": start,
-                "end": end,
-                "dry_run": true
-            })
-        };
-        let (status, text) = door(
-            &fixture.app,
-            "POST",
-            &uri,
-            &owner,
-            Some(&window("2026-10-31", "2026-10-01")),
-        )
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{text}");
+            assert!(text.contains("window_end_precedes_start"), "{text}");
+            let (status, text) = door(
+                &fixture.app,
+                "POST",
+                &uri,
+                &owner,
+                Some(&window("2026-10-01", "2026-10-31")),
+            )
+            .await;
+            assert_eq!(status, StatusCode::BAD_GATEWAY, "{text}");
+            assert!(text.contains("bank_credential_unavailable"), "{text}");
+        })
         .await;
-        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{text}");
-        assert!(text.contains("window_end_precedes_start"), "{text}");
-        let (status, text) = door(
-            &fixture.app,
-            "POST",
-            &uri,
-            &owner,
-            Some(&window("2026-10-01", "2026-10-31")),
-        )
-        .await;
-        assert_eq!(status, StatusCode::BAD_GATEWAY, "{text}");
-        assert!(text.contains("bank_credential_unavailable"), "{text}");
     }
 
     #[tokio::test]

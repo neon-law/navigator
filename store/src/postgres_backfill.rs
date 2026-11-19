@@ -659,9 +659,9 @@ pub async fn plan(
 /// [`crate::postgres_mirror::initial_copy`].
 async fn first_copy<T>(first: bool, work: impl Future<Output = T>) -> T {
     if first {
-        crate::postgres_mirror::during_initial_copy(work).await
+        crate::postgres_mirror::during_initial_copy(crate::postgres_mirror::from_source(work)).await
     } else {
-        work.await
+        crate::postgres_mirror::from_source(work).await
     }
 }
 
@@ -877,6 +877,12 @@ pub struct ParityTableReport {
     pub reset_union: Option<family::ResetUnionProof>,
     /// Referenced Template pins checked against the frozen capture.
     pub template_pins: Option<family::TemplatePinProof>,
+    /// Verified lifecycle ownership retained on overlapping Project rows.
+    pub project_lifecycle: Option<family::ProjectLifecycleProof>,
+    /// Exact retained/purged audit coverage for the captured rows.
+    pub sent_email_union: Option<family::SentEmailUnionProof>,
+    /// Full immutable Journal projection and captured-history integrity.
+    pub journal_handoff: Option<crate::journal_startup_migration::JournalHandoff>,
 }
 
 /// A run's state, read back from its checkpoints.
@@ -996,7 +1002,7 @@ async fn locked(
     run_id: Uuid,
     work: impl std::future::Future<Output = Result<usize, BackfillError>>,
 ) -> Result<RunReport, BackfillError> {
-    let (batches, parity, unresolved_references) = with_import_lock(pg, async {
+    let (batches, parity, unresolved_references) = Box::pin(with_import_lock(pg, async {
         let first = !crate::postgres_mirror::backfilled(pg).await?;
         first_copy(first, async {
             let covered = mirror_coverage(surreal, pg).await?;
@@ -1008,7 +1014,7 @@ async fn locked(
             Ok((batches, parity, references))
         })
         .await
-    })
+    }))
     .await?;
     let mut report = report(pg, run_id).await?;
     report.batches_this_invocation = batches;
@@ -1073,6 +1079,9 @@ async fn parity_report(
                 asset_union: None,
                 reset_union: None,
                 template_pins: None,
+                project_lifecycle: None,
+                sent_email_union: None,
+                journal_handoff: None,
             });
         }
     }
@@ -1667,6 +1676,27 @@ mod tests;
 
 struct FamilySource<'a> {
     surreal: &'a SurrealDb,
+    journal: tokio::sync::OnceCell<CapturedJournal>,
+}
+
+struct CapturedJournal {
+    rows: Vec<crate::journal_startup_migration::CapturedJournalRow>,
+    fingerprint: (u64, String),
+}
+
+struct FamilyComparisons {
+    tables: Vec<crate::postgres_mirror::TableParity>,
+    asset_union: Option<family::AssetUnionProof>,
+    project_lifecycle: Option<family::ProjectLifecycleProof>,
+    sent_email_union: Option<family::SentEmailUnionProof>,
+    journal_handoff: Option<crate::journal_startup_migration::JournalHandoff>,
+}
+
+fn journal_error(error: crate::firm_journal::JournalError) -> BackfillError {
+    match error {
+        crate::firm_journal::JournalError::Postgres(error) => MirrorError::from(error).into(),
+        _ => family::FamilyError::Receipt.into(),
+    }
 }
 
 impl FamilySource<'_> {
@@ -1674,15 +1704,121 @@ impl FamilySource<'_> {
         &self,
         pg: &PostgresDb,
         selected: family::Family,
-    ) -> Result<
-        (
-            Vec<crate::postgres_mirror::TableParity>,
-            Option<family::AssetUnionProof>,
-        ),
-        BackfillError,
-    > {
+    ) -> Result<FamilyComparisons, BackfillError> {
+        let mut result = self.base_comparisons(pg, selected).await?;
+        if selected == family::Family::Tenancy {
+            return Ok(result);
+        }
+        for name in selected.tables() {
+            match *name {
+                "entity"
+                | "person"
+                | "address"
+                | "credential"
+                | "email_token"
+                | "person_delegate"
+                | "person_external_identity"
+                | "person_mailbox"
+                | "notation"
+                | "answer"
+                | "notation_event"
+                | "notation_clause" => {}
+                "asset" => {
+                    let (table, proof) =
+                        crate::postgres_mirror::documents::scoped_parity(self.surreal, pg).await?;
+                    result.tables.push(table);
+                    result.asset_union = Some(proof);
+                }
+                "sent_email" => {
+                    let (table, proof) =
+                        crate::postgres_mirror::sent_emails::scoped_parity(self.surreal, pg)
+                            .await?;
+                    result.tables.push(table);
+                    result.sent_email_union = Some(proof);
+                }
+                "journal_entry" => {
+                    let proof = crate::journal_startup_migration::handoff_captured(
+                        self.journal_rows().await?,
+                        pg,
+                    )
+                    .await
+                    .map_err(journal_error)?;
+                    let divergent = proof
+                        .differences
+                        .iter()
+                        .filter_map(|difference| difference.entry_id)
+                        .collect::<std::collections::BTreeSet<_>>()
+                        .into_iter()
+                        .map(|id| MirrorKey::Record {
+                            table: "journal_entry",
+                            id,
+                        })
+                        .collect();
+                    result.tables.push(crate::postgres_mirror::TableParity {
+                        table: "journal_entry",
+                        source_rows: proof.source_rows,
+                        target_rows: proof.target_rows,
+                        divergent,
+                    });
+                    result.journal_handoff = Some(proof);
+                }
+                "template" => result.tables.push(
+                    crate::postgres_mirror::templates::scoped_parity(self.surreal, pg).await?,
+                ),
+                "matter_page" => result.tables.push(
+                    crate::postgres_mirror::matter_pages_captions::scoped_page_parity(
+                        self.surreal,
+                        pg,
+                    )
+                    .await?,
+                ),
+                "attestation" => result.tables.extend(
+                    crate::postgres_mirror::attestations::parity(self.surreal, pg)
+                        .await?
+                        .tables,
+                ),
+                "matter_caption" => result.tables.push(
+                    crate::postgres_mirror::matter_pages_captions::caption_parity(self.surreal, pg)
+                        .await?,
+                ),
+                name => result.tables.push(
+                    crate::postgres_mirror::records::scoped_table_parity(self.surreal, pg, name)
+                        .await?,
+                ),
+            }
+        }
+        Ok(result)
+    }
+
+    async fn base_comparisons(
+        &self,
+        pg: &PostgresDb,
+        selected: family::Family,
+    ) -> Result<FamilyComparisons, BackfillError> {
         let mut tables = Vec::new();
-        let mut asset_union = None;
+        if selected == family::Family::Tenancy {
+            let (report, proof) =
+                crate::postgres_mirror::tenancy::scoped_parity(self.surreal, pg).await?;
+            return Ok(FamilyComparisons {
+                tables: report.tables,
+                asset_union: None,
+                project_lifecycle: Some(proof),
+                sent_email_union: None,
+                journal_handoff: None,
+            });
+        }
+        if selected == family::Family::Identity {
+            tables.extend(
+                crate::postgres_mirror::identity::scoped_parity(self.surreal, pg)
+                    .await?
+                    .tables,
+            );
+            tables.extend(
+                crate::postgres_mirror::identity_detail::scoped_parity(self.surreal, pg)
+                    .await?
+                    .tables,
+            );
+        }
         if selected == family::Family::Notation {
             tables.extend(
                 crate::postgres_mirror::workflow::parity(self.surreal, pg)
@@ -1695,31 +1831,42 @@ impl FamilySource<'_> {
                     .tables,
             );
         }
-        for name in selected.tables() {
-            match *name {
-                "notation" | "answer" | "notation_event" | "notation_clause" => {}
-                "asset" => {
-                    let (table, proof) =
-                        crate::postgres_mirror::documents::scoped_parity(self.surreal, pg).await?;
-                    tables.push(table);
-                    asset_union = Some(proof);
+        Ok(FamilyComparisons {
+            tables,
+            asset_union: None,
+            project_lifecycle: None,
+            sent_email_union: None,
+            journal_handoff: None,
+        })
+    }
+
+    async fn journal_rows(
+        &self,
+    ) -> Result<&[crate::journal_startup_migration::CapturedJournalRow], BackfillError> {
+        // Writer quiescence is the admission contract. Equal bookends bind this
+        // once-read vector to the receipt; they do not establish an atomic Source snapshot.
+        let rows = self
+            .journal
+            .get_or_try_init(|| async {
+                let before = source_archive_fingerprint(self.surreal)
+                    .await
+                    .map_err(|_| BackfillError::SourceInventory)?;
+                let rows = crate::journal_startup_migration::capture(self.surreal)
+                    .await
+                    .map_err(journal_error)?;
+                let after = source_archive_fingerprint(self.surreal)
+                    .await
+                    .map_err(|_| BackfillError::SourceInventory)?;
+                if before != after {
+                    return Err(family::FamilyError::Receipt.into());
                 }
-                "attestation" => tables.extend(
-                    crate::postgres_mirror::attestations::parity(self.surreal, pg)
-                        .await?
-                        .tables,
-                ),
-                "matter_caption" => tables.push(
-                    crate::postgres_mirror::matter_pages_captions::caption_parity(self.surreal, pg)
-                        .await?,
-                ),
-                name => tables.push(
-                    crate::postgres_mirror::records::scoped_table_parity(self.surreal, pg, name)
-                        .await?,
-                ),
-            }
-        }
-        Ok((tables, asset_union))
+                Ok::<_, BackfillError>(CapturedJournal {
+                    rows,
+                    fingerprint: after,
+                })
+            })
+            .await?;
+        Ok(rows.rows.as_slice())
     }
 }
 
@@ -1730,11 +1877,11 @@ impl family::Source for FamilySource<'_> {
         selected: family::Family,
     ) -> std::pin::Pin<Box<dyn Future<Output = Result<family::Snapshot, BackfillError>> + Send + 'a>>
     {
-        Box::pin(async move {
+        Box::pin(crate::postgres_mirror::from_source(async move {
             let before = source_archive_inventory(self.surreal)
                 .await
                 .map_err(|_| BackfillError::SourceInventory)?;
-            let (tables, asset_union) = self.comparisons(pg, selected).await?;
+            let comparisons = self.comparisons(pg, selected).await?;
             let references = crate::postgres_mirror::records::scoped_references(
                 self.surreal,
                 pg,
@@ -1755,6 +1902,14 @@ impl family::Source for FamilySource<'_> {
             let after = source_archive_inventory(self.surreal)
                 .await
                 .map_err(|_| BackfillError::SourceInventory)?;
+            if selected == family::Family::Application
+                && self.journal.get().is_none_or(|captured| {
+                    captured.fingerprint.0 != export_bytes
+                        || captured.fingerprint.1 != export_sha256
+                })
+            {
+                return Err(family::FamilyError::Receipt.into());
+            }
             if before != after {
                 return Err(family::FamilyError::Receipt.into());
             }
@@ -1769,7 +1924,10 @@ impl family::Source for FamilySource<'_> {
                 })
                 .collect::<Result<_, BackfillError>>()?;
             Ok(family::Snapshot {
-                asset_union,
+                project_lifecycle: comparisons.project_lifecycle,
+                asset_union: comparisons.asset_union,
+                sent_email_union: comparisons.sent_email_union,
+                journal_handoff: comparisons.journal_handoff,
                 reset_union,
                 template_pins: if selected == family::Family::Notation {
                     Some(
@@ -1779,7 +1937,7 @@ impl family::Source for FamilySource<'_> {
                 } else {
                     None
                 },
-                tables,
+                tables: comparisons.tables,
                 references,
                 reset_fact_differences,
                 raw_counts,
@@ -1788,7 +1946,7 @@ impl family::Source for FamilySource<'_> {
                 export_sha256,
                 foreign_keys_hold: family::foreign_keys_hold(pg, selected).await?,
             })
-        })
+        }))
     }
 
     fn write<'a>(
@@ -1797,7 +1955,21 @@ impl family::Source for FamilySource<'_> {
         key: &'a MirrorKey,
     ) -> std::pin::Pin<Box<dyn Future<Output = Result<(), BackfillError>> + Send + 'a>> {
         Box::pin(async move {
-            mirror(self.surreal, pg, key).await?;
+            if let MirrorKey::Record {
+                table: "journal_entry",
+                id,
+            } = key
+            {
+                crate::journal_startup_migration::import_captured_event(
+                    self.journal_rows().await?,
+                    pg,
+                    *id,
+                )
+                .await
+                .map_err(journal_error)?;
+            } else {
+                mirror(self.surreal, pg, key).await?;
+            }
             Ok(())
         })
     }
@@ -1872,7 +2044,10 @@ pub async fn refresh_family(
     with_import_lock(
         pg,
         Box::pin(async {
-            let source = FamilySource { surreal };
+            let source = FamilySource {
+                surreal,
+                journal: tokio::sync::OnceCell::new(),
+            };
             family::during_import(
                 run,
                 selected,
@@ -1925,7 +2100,10 @@ async fn resume_family_locked(
     if let Some(report) = completed_family_report(pg, selected, run).await? {
         return Ok(report);
     }
-    let source = FamilySource { surreal };
+    let source = FamilySource {
+        surreal,
+        journal: tokio::sync::OnceCell::new(),
+    };
     let advancement = family::during_import(
         run,
         selected,
@@ -1936,48 +2114,106 @@ async fn resume_family_locked(
     report.batches_this_invocation = advancement.batches;
     if let Some(snapshot) = advancement.snapshot {
         for table in &snapshot.tables {
-            let (missing, differing, extra) = if table.table == "asset" {
-                let proof = snapshot
-                    .asset_union
-                    .as_ref()
-                    .ok_or(family::FamilyError::Receipt)?;
-                (
-                    proof.source_only_remaining,
-                    proof.unresolved_overlaps,
-                    proof.unknown_target_only,
-                )
-            } else {
-                let drift = crate::postgres_mirror::drift(pg, table).await?;
-                (drift.missing, drift.differing, drift.extra)
-            };
-            let (divergent_ids, omitted_divergent_ids, withheld_non_uuid_keys) =
-                safe_key_sample(&table.divergent);
-            report.parity.push(ParityTableReport {
-                mirror: selected.scope().to_owned(),
-                table: table.table.to_owned(),
-                surreal: table.source_rows,
-                postgres: table.target_rows,
-                missing,
-                differing,
-                extra,
-                divergent_ids,
-                omitted_divergent_ids,
-                withheld_non_uuid_keys,
-                asset_union: snapshot
-                    .asset_union
-                    .clone()
-                    .filter(|_| table.table == "asset"),
-                reset_union: snapshot
-                    .reset_union
-                    .clone()
-                    .filter(|_| table.table == "notation"),
-                template_pins: snapshot
-                    .template_pins
-                    .clone()
-                    .filter(|_| table.table == "notation"),
-            });
+            report
+                .parity
+                .push(scoped_table_report(pg, selected, &snapshot, table).await?);
         }
         report.unresolved_references = snapshot.references;
     }
     Ok(report)
 }
+
+async fn scoped_table_report(
+    pg: &PostgresDb,
+    selected: family::Family,
+    snapshot: &family::Snapshot,
+    table: &crate::postgres_mirror::TableParity,
+) -> Result<ParityTableReport, BackfillError> {
+    let (missing, differing, extra) = if table.table == "asset" {
+        let proof = snapshot
+            .asset_union
+            .as_ref()
+            .ok_or(family::FamilyError::Receipt)?;
+        (
+            proof.source_only_remaining,
+            proof.unresolved_overlaps,
+            proof.unknown_target_only,
+        )
+    } else if let Some(proof) = snapshot
+        .sent_email_union
+        .as_ref()
+        .filter(|_| table.table == "sent_email")
+    {
+        (proof.source_only_remaining, proof.differing_overlaps, 0)
+    } else if let Some(proof) = snapshot
+        .journal_handoff
+        .as_ref()
+        .filter(|_| table.table == "journal_entry")
+    {
+        (
+            proof.source_only_remaining,
+            proof
+                .unresolved_source_rows
+                .saturating_sub(proof.source_only_remaining)
+                .saturating_add(proof.target_integrity_failures),
+            0,
+        )
+    } else if let Some(proof) = snapshot
+        .project_lifecycle
+        .as_ref()
+        .filter(|_| table.table == "project")
+    {
+        (
+            proof.source_only_remaining,
+            proof.unresolved_overlaps,
+            proof.target_only,
+        )
+    } else {
+        let drift = crate::postgres_mirror::drift(pg, table).await?;
+        (drift.missing, drift.differing, drift.extra)
+    };
+    let (divergent_ids, omitted_divergent_ids, withheld_non_uuid_keys) =
+        safe_key_sample(&table.divergent);
+    Ok(ParityTableReport {
+        mirror: selected.scope().to_owned(),
+        table: table.table.to_owned(),
+        surreal: table.source_rows,
+        postgres: table.target_rows,
+        missing,
+        differing,
+        extra,
+        divergent_ids,
+        omitted_divergent_ids,
+        withheld_non_uuid_keys,
+        asset_union: snapshot
+            .asset_union
+            .clone()
+            .filter(|_| table.table == "asset"),
+        reset_union: snapshot
+            .reset_union
+            .clone()
+            .filter(|_| table.table == "notation"),
+        template_pins: snapshot
+            .template_pins
+            .clone()
+            .filter(|_| table.table == "notation"),
+        project_lifecycle: snapshot
+            .project_lifecycle
+            .clone()
+            .filter(|_| table.table == "project"),
+        sent_email_union: snapshot
+            .sent_email_union
+            .clone()
+            .filter(|_| table.table == "sent_email"),
+        journal_handoff: snapshot
+            .journal_handoff
+            .clone()
+            .filter(|_| table.table == "journal_entry"),
+    })
+}
+
+#[cfg(test)]
+mod application_family_tests;
+
+#[cfg(test)]
+mod application_native_boundary_tests;

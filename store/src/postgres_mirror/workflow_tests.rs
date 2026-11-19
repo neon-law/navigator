@@ -41,114 +41,27 @@ async fn assert_template_pin_repair(surreal: &SurrealDb, pg: &PostgresDb, templa
     );
 }
 
-/// Every list-shaped notation read compares equal once the mirror has
-/// copied the rows, and a row the mirror has not copied is a mismatch.
 #[tokio::test]
-async fn the_notation_list_shapes_shadow_a_match_after_the_mirror() {
-    let Some((options, database)) = fresh_schema().await else {
-        return;
-    };
-    let pg = connect(&options, &database).await;
-    let surreal = mem_surreal().await;
-    let client = person(&surreal, Role::Client).await;
-    let project_a = matter(&surreal, &pg, "Synthetic Shadow Matter A").await;
-    let project_b = matter(&surreal, &pg, "Synthetic Shadow Matter B").await;
-    let template = draft(&surreal).await;
-    let a = open(&surreal, template, client, project_a).await;
-    let b = open(&surreal, template, client, project_b).await;
-    assert_template_pin_repair(&surreal, &pg, template).await;
-    mirrored(&surreal, &pg, &MirrorKey::Notation(a)).await;
-    mirrored(&surreal, &pg, &MirrorKey::Notation(b)).await;
-    let row_a = crate::notations::find_by_id(&surreal, a)
-        .await
-        .unwrap()
-        .unwrap();
-    let row_b = crate::notations::find_by_id(&surreal, b)
-        .await
-        .unwrap()
-        .unwrap();
-
-    for (shape, source) in [
-        (NotationShape::ByProject(project_a), vec![row_a.clone()]),
-        (
-            NotationShape::ByProjects(vec![project_a, project_b]),
-            vec![row_b.clone(), row_a.clone()],
-        ),
-        (
-            NotationShape::ByPerson(client),
-            vec![row_a.clone(), row_b.clone()],
-        ),
-        (NotationShape::All, vec![row_a.clone(), row_b.clone()]),
-        (
-            NotationShape::ByProjectTemplatePerson {
-                project_id: project_a,
-                template_id: template,
-                person_id: client,
-            },
-            vec![row_a.clone()],
-        ),
-        (
-            // The probe reads one row or none; a triple naming no
-            // notation compares two empty answers.
-            NotationShape::ByProjectTemplatePerson {
-                project_id: project_a,
-                template_id: Uuid::now_v7(),
-                person_id: client,
-            },
-            Vec::new(),
-        ),
-    ] {
-        let label = format!("{shape:?}");
-        let comparison = shadow_notation_rows(&pg, shape, &source).await.unwrap();
-        assert!(comparison.equal, "shape {label} diverges");
-    }
-
-    // The delete guard's boolean agrees for a Project whose notation the
-    // mirror holds and for one it holds nothing for.
-    assert!(
-        shadow_notation_exists(&pg, project_a, true)
-            .await
-            .unwrap()
-            .equal
-    );
-    assert!(
-        shadow_notation_exists(&pg, Uuid::now_v7(), false)
-            .await
-            .unwrap()
-            .equal
-    );
-
-    // A row SurrealDB still holds but the mirror has not copied yet —
-    // the window the shadow exists to catch — is a mismatch, and the
-    // exists probe reports the mirrored truth.
-    open(&surreal, template, client, project_a).await;
-    let rows = crate::notations::list_by_project(&surreal, project_a)
-        .await
-        .unwrap();
-    let comparison = shadow_notation_rows(&pg, NotationShape::ByProject(project_a), &rows)
-        .await
-        .unwrap();
-    assert!(!comparison.equal);
-    // The mirrored row keeps the boolean probe in agreement: Surreal's
-    // answer (true) matches PostgreSQL's mirrored truth (true) even
-    // while the row shapes diverge.
-    assert!(
-        shadow_notation_exists(&pg, project_a, true)
-            .await
-            .unwrap()
-            .equal
-    );
-    // A Project whose only notation is not yet mirrored drifts the
-    // other way: SurrealDB answers true where PostgreSQL holds nothing.
-    let project_c = matter(&surreal, &pg, "Synthetic Shadow Matter C").await;
-    open(&surreal, template, client, project_c).await;
-    assert!(
-        !shadow_notation_exists(&pg, project_c, true)
-            .await
-            .unwrap()
-            .equal
-    );
-    pg.0.close().await;
+async fn captured_notation_template_pins_detect_drift_until_target_repair() {
+    super::super::from_source(super::super::during_initial_copy(async {
+        let Some((options, database)) = fresh_schema().await else {
+            return;
+        };
+        let pg = connect(&options, &database).await;
+        let source = mem_surreal().await;
+        let client = person(&source, Role::Client).await;
+        let project = matter(&source, &pg, "Synthetic Captured Pins").await;
+        let template = Uuid::now_v7();
+        let code = format!("captured-pin-{template}");
+        source.query("CREATE $id SET code=$code,title='Captured',respondent_type='person',is_current=true,current_key=$key")
+            .bind(("id", record_id("template", template)))
+            .bind(("code", code.clone()))
+            .bind(("key",crate::templates::current_key_in(crate::templates::Scope::Shared,&code)))
+            .await.unwrap().check().unwrap();
+        open(&source, template, client, project).await;
+        assert_template_pin_repair(&source, &pg, template).await;
+        pg.pool().close().await;
+    })).await;
 }
 
 async fn person(surreal: &SurrealDb, role: Role) -> Uuid {
@@ -310,38 +223,6 @@ async fn answer_mirror_preserves_microsecond_chronology_and_uuid_ties() {
     let report = parity(&surreal, &pg).await.unwrap();
     assert!(report.is_clean(), "{report:?}");
     pg.0.close().await;
-}
-
-#[tokio::test]
-async fn a_shadowed_notation_read_matches_its_mirror_and_flags_drift() {
-    let Some((options, database)) = fresh_schema().await else {
-        return;
-    };
-    let pg = connect(&options, &database).await;
-    let surreal = mem_surreal().await;
-    let template = draft(&surreal).await;
-    let client = person(&surreal, Role::Client).await;
-    let project = matter(&surreal, &pg, "Synthetic Shadow Matter").await;
-    let notation = open(&surreal, template, client, project).await;
-    mirrored(&surreal, &pg, &MirrorKey::Notation(notation)).await;
-    let source = crate::notations::find_by_id(&surreal, notation)
-        .await
-        .unwrap();
-    let read = shadow_notation(&pg, notation, source.as_ref())
-        .await
-        .unwrap();
-    assert_eq!((read.id, read.equal), (Some(notation), true));
-    sqlx::query("UPDATE notation SET state = 'END' WHERE id = $1")
-        .bind(notation)
-        .execute(&pg.0)
-        .await
-        .unwrap();
-    assert!(
-        !shadow_notation(&pg, notation, source.as_ref())
-            .await
-            .unwrap()
-            .equal
-    );
 }
 
 async fn source_reset_fixture(pg: &PostgresDb) -> (SurrealDb, [Uuid; 2]) {

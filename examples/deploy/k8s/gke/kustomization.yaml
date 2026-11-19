@@ -20,7 +20,6 @@ kind: Kustomization
 #   to save ~$15/mo. No WAF / rate-limit at the LB today.
 
 resources:
-  # NAVIGATOR_POSTGRES_MIRROR_RESOURCE
   # NAVIGATOR_ARCHIVES_COVERAGE_RESOURCE
   - ../exports
   - ../../../../k8s/base
@@ -58,6 +57,11 @@ patches:
   # NAVIGATOR_DBOS_WEB_PATCH
   # NAVIGATOR_ARCHIVES_WEB_PATCH
   - path: patches/workflows-env.yaml
+    target:
+      kind: Deployment
+      name: workflows-service
+  # Apply after workflows-env.yaml replaces the worker environment list.
+  - path: postgres/worker/worker-postgres.yaml
     target:
       kind: Deployment
       name: workflows-service

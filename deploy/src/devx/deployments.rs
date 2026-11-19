@@ -444,6 +444,7 @@ impl Deployment {
             .chain(self.encrypted_keys.iter())
             .cloned()
             .chain(ship::INLINE_ENV_WEB_KEYS.iter().map(ToString::to_string))
+            .chain(ship::POSTGRES_WEB_KEYS.iter().map(ToString::to_string))
             .collect()
     }
 }

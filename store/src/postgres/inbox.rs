@@ -944,8 +944,7 @@ async fn create_conversation_on(
 // ---------------------------------------------------------------------------
 
 async fn project_message_on(
-    // Unused while the Communication spine is SurrealDB-authoritative; kept
-    // in the signature so the spine's own cutover needs no call-site churn.
+    // Communication accessors use the shared application authority context.
     _pg: &PostgresDb,
     db: &SurrealDb,
     conversation: &crate::inbox::Conversation,

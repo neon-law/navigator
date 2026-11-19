@@ -1,35 +1,16 @@
-//! The SurrealDB connection — the store the workspace is porting onto
-//! (#1093).
+//! Explicit SurrealDB connections for captured-history imports, exports, recovery,
+//! and compatibility tests. Ordinary application traffic requires validated
+//! PostgreSQL history and carries an inert handle where an accessor retains this
+//! parameter; that handle opens no engine or network session.
 //!
-//! This module is the whole of Navigator's knowledge of how to reach
-//! Surreal: one [`SurrealConfig`] resolved from `NAVIGATOR_SURREAL_*`,
-//! one [`connect`] that selects namespace and database, and nothing
-//! else. Query modules land in the later slices ([#1143] is the
-//! foundation).
+//! [`connect_from_env`] requires `NAVIGATOR_SURREAL_*` only when an explicit
+//! compatibility operation invokes it. It selects the requested namespace and
+//! database over WebSocket, HTTP, or the embedded test engine. Missing Source
+//! configuration never selects another engine.
 //!
-//! # One engine
-//!
-//! This is the only store Navigator opens. A binary with no
-//! `NAVIGATOR_SURREAL_*` coordinates fails loudly at boot rather than
-//! falling back to anything.
-//!
-//! # One endpoint, three topologies
-//!
-//! [`surrealdb::engine::any::connect`] resolves the scheme at runtime,
-//! so the same call site serves every environment:
-//!
-//! - `ws://localhost:<port>` — the KIND dependency tier, port-forwarded
-//!   to the host. `dev up` and `dev worktree-env up` write this into
-//!   `.devx/env`.
-//! - `wss://…` — Surreal Cloud, from phase 5.
-//! - `mem://` — an engine inside the calling process: one per test in
-//!   [`test_support`](crate::surreal::test_support), and one per
-//!   pre-matter conflict check in [`crate::conflicts`], which builds
-//!   its graph there and drops it with the check. Reachable only
-//!   because it is *named*; it is never a default, so nothing reaches
-//!   an in-process engine by failing to configure a real one.
-//!
-//! [#1143]: https://github.com/neon-law-source-code/navigator/issues/1143
+//! [`record_id`] and [`record_uuid`] convert domain identities without opening
+//! a connection. Operational export and recovery retain their independent
+//! quiescence, storage, and capture-verification requirements.
 
 mod config;
 mod record;
@@ -57,8 +38,8 @@ use surrealdb::types::ConnectionError;
 use surrealdb::Surreal;
 use thiserror::Error;
 
-/// A connected SurrealDB client with its namespace and database already
-/// selected.
+/// A shared compatibility client, connected for an explicit operation or inert
+/// for PostgreSQL-backed accessors.
 ///
 /// The SDK gives every clone of [`Surreal`] a separate remote session.  Web
 /// state is cloned by Axum extractors and Dioxus context providers, so exposing
@@ -75,7 +56,8 @@ impl std::fmt::Debug for SurrealDb {
 }
 
 impl SurrealDb {
-    /// A handle with no engine behind it, for error-path tests.
+    /// An inert compatibility handle that opens no engine or network session.
+    /// PostgreSQL-backed accessors retain it only as an API parameter.
     #[must_use]
     pub fn uninitialized() -> Self {
         Self(Arc::new(Surreal::init()))
@@ -86,6 +68,14 @@ impl Deref for SurrealDb {
     type Target = Surreal<Any>;
 
     fn deref(&self) -> &Self::Target {
+        // Unit native-lane proof must catch attempted SDK access even when a
+        // best-effort caller would otherwise swallow an uninitialized-engine error.
+        #[cfg(test)]
+        assert_ne!(
+            std::env::var("NAVIGATOR_FORBID_SURREAL").as_deref(),
+            Ok("1"),
+            "Source SDK access is forbidden in the PostgreSQL-only test lane"
+        );
         &self.0
     }
 }

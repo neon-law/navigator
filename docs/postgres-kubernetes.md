@@ -1,15 +1,16 @@
 # PostgreSQL on Kubernetes
 
-These overlays run Navigator's PostgreSQL database beside SurrealDB and Restate. The release workflow applies the
-PostgreSQL server, client roles, and Navigator migrations before Forgejo or Navigator workloads. `web` connects to
-PostgreSQL only in a deployment that opts in. A deployment without PostgreSQL renders and boots as before.
+These overlays run Navigator's PostgreSQL database. The release workflow applies the server, client roles, and
+migrations before Forgejo or Navigator workloads. Ordinary application and worker startup require completed PostgreSQL
+authority history. Explicit captured import and recovery commands retain their compatibility connections.
 
 | Overlay | Applies | When |
 | --- | --- | --- |
 | `examples/deploy/k8s/gke/postgres/<env>` | PostgreSQL, archive, backups (100 GiB) | Before app and Forgejo |
 | `examples/deploy/k8s/gke/postgres/access/<env>` | Navigator client roles | After server readiness |
 | `examples/deploy/k8s/gke/postgres/migrate/<env>` | `navigator-migrate` Job | After roles, before workloads |
-| `examples/deploy/k8s/gke/postgres/mirror/<env>` | `navigator-postgres-mirror-reconcile` Job | On demand |
+| `examples/deploy/k8s/gke/postgres/admission/<env>` | Application readiness Job | Before application rollout |
+| `examples/deploy/k8s/gke/postgres/mirror/<env>` | `navigator-postgres-mirror-reconcile` Job | Explicit operator use |
 | `examples/deploy/k8s/gke/postgres/restore-drill/<env>` | Point-in-time restore drill Job | On demand |
 | `k8s/overlays/kind-postgres-persistence` | Server only (1 GiB) | Synthetic persistence and TLS tests |
 | `k8s/overlays/kind/forgejo` | Server, roles, Forgejo, runner | [`dev forgejo up`](forgejo-kind.md) |
@@ -76,16 +77,16 @@ that signs in as the bootstrap superuser.
 | Login | Used by | May |
 | --- | --- | --- |
 | `navigator_owner` | Migration Job, Mirror Backfill | Own the database and schema, run DDL, rebuild the graph |
-| `navigator_app` | `web`, mirror Job | Connect; `SELECT`, `INSERT`, `UPDATE`, `DELETE` rows and use sequences |
+| `navigator_app` | `web`, worker, mirror Job | Connect; `SELECT`, `INSERT`, `UPDATE`, `DELETE` rows and use sequences |
 | `navigator_backup` | WAL archive, base backups | `REPLICATION` only; no database privileges |
 | `navigator_dbos` | `web` with DBOS on | Own `dbos`; database `CONNECT` and `CREATE`; nothing on `public` |
 | `navigator_archive` | `web` with Archives on DBOS | `pg_read_all_data`; `CONNECT` on both databases; no writes |
 
 `PUBLIC` loses its default database and schema rights. The runtime login cannot create, alter, or truncate objects and
-cannot read the migration bookkeeping tables. No role is granted Apache AGE's `ag_catalog`, so graph access stays denied
-until a change grants it deliberately. No application login has rights on `dbos`. The DBOS login holds database `CREATE`
-because its SDK runs `CREATE SCHEMA IF NOT EXISTS dbos` on every launch, and PostgreSQL checks that right first. It
-exists only once its Secret does. Forgejo's database and login are separate
+cannot read the migration bookkeeping tables. The owner and app logins have AGE schema `USAGE`; the owner can read its
+catalog tables, while direct catalog-table `SELECT` is revoked from the app. No application login has rights on `dbos`.
+The DBOS login holds database `CREATE` because its SDK runs `CREATE SCHEMA IF NOT EXISTS dbos` on every launch, and
+PostgreSQL checks that right first. It exists only once its Secret does. Forgejo's database and login are separate
 ([`forgejo-deployment.md`](forgejo-deployment.md)). The Job runs `roles.sql` with terse errors and server statement
 logging off, so a failure never prints a password. It is deleted an hour after it finishes; re-applying the overlay
 re-runs it.
@@ -98,7 +99,7 @@ and server certificate. It adds the four client keys as a set. Each projects to 
 | --- | --- | --- |
 | `navigator-postgres-auth` | `password` | Server, roles Job |
 | `navigator-postgres-tls` | `tls.crt`, `tls.key` | Server |
-| `navigator-postgres-app` | `password`, `ca.crt` | `web` (opt-in), mirror Job, roles Job |
+| `navigator-postgres-app` | `password`, `ca.crt` | `web`, worker, readiness Job, mirror Job, roles Job |
 | `navigator-postgres-migrator` | `password`, `ca.crt` | `navigator-migrate`, roles Job |
 | `navigator-postgres-backup` | `password`, `ca.crt` | WAL archive, base backups, roles Job |
 | `navigator-postgres-dbos` | `password`, `ca.crt` | `web` (DBOS opt-in), roles Job (optional mount) |
@@ -151,39 +152,31 @@ Run `hudson ops postgres backfill` as `navigator_owner`. In a one-off Job, use t
 calls `graph_clear_navigator()`, which requires the migration login. Parity and routine reconcile use `navigator_app`.
 See the [graph backfill runbook](age-graph-runbook.md#3-backfill-and-parity).
 
-`web` mirrors every SurrealDB write it still makes into PostgreSQL. `ops ship` runs the one-shot reconcile Job after the
-Forgejo step and before it applies the application, stops the ship unless the Job exits clean, and installs recurring
-recovery with a monitoring Rule. Recovery provides eventual convergence after failures; it does not commit the two
-databases atomically. The [mirror tooling guide](postgres-tooling.md#postgresql-mirror-tables-and-reconciliation)
-describes coverage and recovery limits. A missed write, or a row written before the mirror was on, leaves drift. The
-operator command measures and repairs that drift:
+Ordinary reads and writes use PostgreSQL. `ops ship` runs the release-pinned PostgreSQL application readiness Job after
+Forgejo and before application rollout. Readiness requires completed global history and every registered scoped receipt.
+Failure or timeout blocks rollout and preserves recovery. Successful admission retires only the obsolete automatic
+mirror-recovery CronJob and monitoring Rule.
+
+Captured Source transfer remains an explicit operator phase. Establish writer quiescence, obtain the strict capture and
+receipt pair, and complete global and scoped enrollment before starting the guarded application. Persisted ownership
+prevents later Source import or reconciliation from overwriting or resurrecting native rows. The [mirror tooling
+guide](postgres-tooling.md#scoped-family-enrollment) describes dependency, parity, and activation checks.
 
 ```bash
-hudson ops postgres mirror parity [--json]              # read only
-hudson ops postgres mirror reconcile --dry-run [--json] # read only
-hudson ops postgres mirror reconcile [--json]           # re-mirror from SurrealDB
+hudson ops postgres mirror parity [--json]              # explicit read-only diagnostics
+hudson ops postgres mirror reconcile --dry-run [--json] # inspect eligible compatibility work
+hudson ops postgres ready --json                       # PostgreSQL-only application admission
 ```
 
-PostgreSQL holds the shared catalogs and the matter records authoritatively, and the mirror never repairs them from
-SurrealDB. Until a [Mirror Backfill](postgres-tooling.md#mirror-backfill) has completed against a deployment's
-PostgreSQL, parity reports each catalog or matter-record row SurrealDB holds and PostgreSQL lacks, so reconcile stays
-unclean and the ship stops before `web` reads an empty table. Run `hudson ops postgres backfill` once; it is the one
-copy that writes those tables. After it completes, SurrealDB is no evidence for them and parity skips them.
-
-`ops ship` renders the People, Project lifecycle, and tenancy authority settings a deployment still sets into the web
-Deployment's PostgreSQL patch. The three `NAVIGATOR_POSTGRES_*_AUTHORITY` switches accept `1`, `0`, `true`, or `false`.
-Each domain's runtime applies its own cutover prerequisites.
-
-It reads the same `NAVIGATOR_SURREAL_*` and `NAVIGATOR_POSTGRES_*` variables `web` reads. Each table reports its
-SurrealDB and PostgreSQL row counts and its missing, extra, and differing rows. Divergent rows are named by UUID only. A
-Social Handle or `firm_brand` row is keyed by its Brand key, so it is counted and never named. Reconcile runs parents
-first: identity, then tenancy, then post. When a stale parent is still referenced, it retries once in the reverse order.
-A second run over matching stores writes nothing. The exit status is 0 when both stores match, 1 when drift remains, and
-2 when a store could not be read.
+The explicit compatibility commands require Source configuration when they inspect captured history; ordinary startup
+and readiness do not. Reports contain ids, counts, and sanitized differences. Completed-scope replay verifies persisted
+receipts through PostgreSQL alone. Neither deployment settings nor a successful row count substitute for the exact
+registered authority history.
 
 `k8s/postgres/mirror/mirror-reconcile-job.yaml` runs `reconcile --json` once, as `navigator_app`. It reads SurrealDB
 through the deployment Secret's `NAVIGATOR_SURREAL_*` keys. The image is the placeholder `navigator-surreal-archive`.
-That is the release image that carries the `navigator` CLI. Pin it to the release being reconciled, then create the Job:
+That is the release image that carries the `hudson` operator CLI. Pin it to the release being inspected, then create the
+Job:
 
 ```bash
 kubectl kustomize examples/deploy/k8s/gke/postgres/mirror/<env> | place \
@@ -300,6 +293,11 @@ Physical recovery evidence and archive export evidence are separate. An archive 
 trigger submission. Verify runtime source configuration, completed generation manifests, table outcomes, and independent
 rehydration before calling PostgreSQL or Forgejo Iceberg exports recoverable.
 
+Scheduled Iceberg exports default to PostgreSQL and require completed application storage handoff before publication.
+`NAVIGATOR_ARCHIVE_SOURCE=all` includes SurrealDB for migration or recovery; it does not certify that handoff. Physical
+base backups, WAL archiving, the restore drill, and raw PostgreSQL export helpers do not require application admission
+or a reachable SurrealDB server. See [archive source selection](iceberg-archive.md#postgresql-coverage-generations).
+
 ## Rollout runbook
 
 Staging first. Production starts only after staging passes every step and its restore drill succeeds. Each step names
@@ -348,13 +346,14 @@ its environment's context, namespace, and deployment row.
 
    A Job's pod template is immutable, so the first line removes the completed Jobs a release leaves behind, as `ops
    ship` does.
-6. **Backfill, then ship.** Run `hudson ops postgres backfill` against the deployment until it completes, then ship the
-   release: `hudson ops ship --deployment <name> --tag <release>`. The ship's reconcile Job stays unclean, and stops the
-   ship before `web` is applied, until a backfill has completed.
-7. **Verify.** The `web` log shows the import and triage counts; then smoke the journal through the deployment's API:
+6. **Enroll, then ship.** Under the documented writer freeze, complete global and every required scoped enrollment
+   using the verified capture and receipt. Resolve Journal timestamp or history triage through explicit operator
+   commands; ordinary boot does not import legacy rows. Then run `hudson ops ship --deployment <name> --tag <release>`.
+   Its PostgreSQL-only readiness Job blocks application rollout until the current binary's exact history is complete.
+7. **Verify.** Check readiness, then read the Journal through the deployment's authenticated API:
 
    ```bash
-   kubectl --context <context> -n "$NS" logs deploy/navigator-web | grep 'legacy journal import completed'
+   kubectl --context <context> -n "$NS" get job navigator-postgres-application-readiness
    hudson journal --firm <firm-id> --host <deployment-host> list
    ```
 
@@ -384,7 +383,7 @@ Focused CI checks a new pod UID, unchanged PVC UID, and retained SQL and AGE dat
 zero, deletes/recreates the StatefulSet, verifies retention, accepts TLS, and rejects unencrypted access. KIND proves
 claim lifecycle; GKE CSI provisioning and cross-zone recovery require separate environment drills. Manifest tests in
 `cli/tests/staging_manifests.rs` hold the roles, migration, mirror, backup, and drill contracts, and the
-staging/production equivalence; `deploy/src/devx/ship.rs` tests hold the `web` opt-in.
+staging/production equivalence; `deploy/src/devx/ship.rs` tests hold mandatory PostgreSQL readiness before rollout.
 
 See [GKE disks](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/persistent-volumes/regional-pd),
 [StatefulSet retention contract](https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/), and

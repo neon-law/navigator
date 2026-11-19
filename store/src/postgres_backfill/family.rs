@@ -9,6 +9,12 @@ use uuid::Uuid;
 pub enum Family {
     /// Independent matter, review, credential, and publication satellites.
     Satellites,
+    /// Remaining application catalogs, intake, service, and approval records.
+    Application,
+    /// Person identity and mailbox claims.
+    Identity,
+    /// Firm, Brand, Project, and participation authority.
+    Tenancy,
     /// Notation writers and their canonical document and Asset protection facts.
     Notation,
 }
@@ -17,7 +23,13 @@ impl Family {
     /// Every registered family required before application readiness or workflow effects.
     #[must_use]
     pub const fn all() -> &'static [Self] {
-        &[Self::Satellites, Self::Notation]
+        &[
+            Self::Satellites,
+            Self::Notation,
+            Self::Identity,
+            Self::Tenancy,
+            Self::Application,
+        ]
     }
 
     /// The immutable version of this family's import contract.
@@ -26,6 +38,9 @@ impl Family {
         match self {
             Self::Satellites => "satellites:1",
             Self::Notation => "notation:1",
+            Self::Application => "application:1",
+            Self::Identity => "identity:1",
+            Self::Tenancy => "tenancy:1",
         }
     }
 
@@ -47,6 +62,43 @@ impl Family {
                 "project_module",
                 "social_oauth_attempt",
                 "testimonial",
+            ],
+            Self::Identity => &[
+                "entity",
+                "person",
+                "person_mailbox",
+                "address",
+                "credential",
+                "email_token",
+                "person_delegate",
+                "person_external_identity",
+                "person_phone",
+            ],
+            Self::Tenancy => &[
+                "firm",
+                "brand",
+                "firm_brand",
+                "person_firm_role",
+                "project",
+                "person_project_role",
+            ],
+            Self::Application => &[
+                "template",
+                "mailroom",
+                "letter",
+                "lead",
+                "lead_consent",
+                "project_deadlines",
+                "project_service",
+                "summary_sender_approval",
+                "summary_sender_approval_event",
+                "inbox_triage",
+                "deployment_secret_change",
+                "matter_page",
+                "notation_document_comment",
+                "firm_integration_secret",
+                "sent_email",
+                "journal_entry",
             ],
             Self::Notation => &[
                 "notation",
@@ -328,6 +380,9 @@ pub(super) async fn completed_proof(
             template_pins: (*table == "notation")
                 .then_some(proof.template_pins)
                 .flatten(),
+            project_lifecycle: proof.project_lifecycle,
+            sent_email_union: proof.sent_email_union,
+            journal_handoff: proof.journal_handoff,
         });
     }
     Ok((tables, references))
@@ -337,35 +392,46 @@ pub(super) async fn completed_proof(
 ///
 /// # Errors
 /// PostgreSQL could not read the ledger or the pending import receipt is invalid.
-pub async fn import_mode(pg: &PostgresDb, table: &str) -> Result<ImportMode, FamilyError> {
-    if active_for_table(pg, table).await? {
-        return Ok(ImportMode::Refuse);
-    }
-    if Family::for_table(table).is_none() {
-        return Ok(ImportMode::Refuse);
-    }
-    let scope = IMPORTING.try_with(|scope| *scope).ok();
-    if let Some((run, family)) = scope.filter(|(_, family)| family.tables().contains(&table)) {
-        let pending: bool = sqlx::query_scalar(
-            "SELECT EXISTS (SELECT 1 FROM mirror_backfill_run r \
+#[must_use]
+pub fn import_mode<'a>(
+    pg: &'a PostgresDb,
+    table: &'a str,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ImportMode, FamilyError>> + Send + 'a>>
+{
+    Box::pin(async move {
+        if active_for_table(pg, table).await? {
+            return Ok(ImportMode::Refuse);
+        }
+        if Family::for_table(table).is_none() {
+            return Ok(ImportMode::Refuse);
+        }
+        let scope = IMPORTING.try_with(|scope| *scope).ok();
+        if let Some((run, family)) = scope.filter(|(_, family)| family.tables().contains(&table)) {
+            let pending: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM mirror_backfill_run r \
              JOIN mirror_backfill_checkpoint c ON c.run_id = r.id \
              WHERE r.id = $1 AND r.scope = $2 AND r.status = 'running' AND c.mirror = $3)",
-        )
-        .bind(run)
-        .bind(family.scope())
-        .bind(checkpoint(table))
-        .fetch_one(&pg.0)
-        .await?;
-        return if pending {
-            Ok(ImportMode::Refresh)
+            )
+            .bind(run)
+            .bind(family.scope())
+            .bind(checkpoint(table))
+            .fetch_one(&pg.0)
+            .await?;
+            return if pending {
+                Ok(if matches!(family, Family::Identity | Family::Tenancy) {
+                    ImportMode::InsertMissing
+                } else {
+                    ImportMode::Refresh
+                })
+            } else {
+                Err(FamilyError::Receipt)
+            };
+        }
+        Ok(if crate::postgres_mirror::initial_copy() {
+            ImportMode::InsertMissing
         } else {
-            Err(FamilyError::Receipt)
-        };
-    }
-    Ok(if crate::postgres_mirror::initial_copy() {
-        ImportMode::InsertMissing
-    } else {
-        ImportMode::Refuse
+            ImportMode::Refuse
+        })
     })
 }
 
@@ -514,6 +580,92 @@ impl AssetUnionProof {
     }
 }
 
+/// Exact captured audit coverage, including rows removed by a proven UTC-day purge.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SentEmailUnionProof {
+    pub compared_overlaps: usize,
+    pub source_only_remaining: usize,
+    pub excluded_purged: usize,
+    pub differing_overlaps: usize,
+    pub native_target_only: usize,
+    pub full_metadata_compared: bool,
+}
+
+impl SentEmailUnionProof {
+    pub(crate) fn valid(&self, source: usize, target: usize, differences: usize) -> bool {
+        self.full_metadata_compared
+            && self
+                .compared_overlaps
+                .checked_add(self.source_only_remaining)
+                .and_then(|count| count.checked_add(self.excluded_purged))
+                == Some(source)
+            && self.compared_overlaps.checked_add(self.native_target_only) == Some(target)
+            && self.differing_overlaps <= self.compared_overlaps
+            && self
+                .source_only_remaining
+                .checked_add(self.differing_overlaps)
+                == Some(differences)
+    }
+}
+
+fn journal_representable(
+    proof: &crate::journal_startup_migration::JournalHandoff,
+    source: usize,
+    target: usize,
+) -> bool {
+    proof.source_rows == source
+        && proof.target_rows == target
+        && proof
+            .compared_overlaps
+            .checked_add(proof.source_only_remaining)
+            == Some(source)
+        && proof
+            .compared_overlaps
+            .checked_add(proof.native_target_only)
+            == Some(target)
+        && proof.represented_source_rows <= proof.compared_overlaps
+        && proof
+            .represented_source_rows
+            .checked_add(proof.unresolved_source_rows)
+            == Some(source)
+        && proof.target_integrity_failures <= target
+}
+
+/// Exact Project overlap accounting after validating the complete lifecycle ledger.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectLifecycleProof {
+    pub source_only_remaining: usize,
+    pub compared_overlaps: usize,
+    pub retained_native_projections: usize,
+    pub unresolved_overlaps: usize,
+    pub target_only: usize,
+    pub full_metadata_compared: bool,
+    pub ledger_projections_checked: bool,
+}
+
+impl ProjectLifecycleProof {
+    fn valid(&self, source: usize, target: usize, differences: usize) -> bool {
+        self.full_metadata_compared
+            && self.ledger_projections_checked
+            && self
+                .source_only_remaining
+                .checked_add(self.compared_overlaps)
+                == Some(source)
+            && self.compared_overlaps.checked_add(self.target_only) == Some(target)
+            && self
+                .retained_native_projections
+                .checked_add(self.unresolved_overlaps)
+                .is_some_and(|count| count <= self.compared_overlaps)
+            && self
+                .source_only_remaining
+                .checked_add(self.unresolved_overlaps)
+                .and_then(|count| count.checked_add(self.target_only))
+                == Some(differences)
+    }
+}
+
 /// Extra PostgreSQL reset protection proven by independently native Assets.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -551,6 +703,9 @@ pub(super) struct Snapshot {
     pub asset_union: Option<AssetUnionProof>,
     pub reset_union: Option<ResetUnionProof>,
     pub template_pins: Option<TemplatePinProof>,
+    pub project_lifecycle: Option<ProjectLifecycleProof>,
+    pub sent_email_union: Option<SentEmailUnionProof>,
+    pub journal_handoff: Option<crate::journal_startup_migration::JournalHandoff>,
 }
 
 impl Snapshot {
@@ -563,11 +718,48 @@ impl Snapshot {
             && self.export_bytes == receipt.export_bytes
             && self.tables.len() == expected.len()
             && actual == expected
+            && if family == Family::Application {
+                self.tables
+                    .iter()
+                    .find(|table| table.table == "sent_email")
+                    .zip(self.sent_email_union.as_ref())
+                    .is_some_and(|(table, proof)| {
+                        proof.valid(table.source_rows, table.target_rows, table.divergent.len())
+                    })
+                    && self
+                        .tables
+                        .iter()
+                        .find(|table| table.table == "journal_entry")
+                        .zip(self.journal_handoff.as_ref())
+                        .is_some_and(|(table, proof)| {
+                            journal_representable(proof, table.source_rows, table.target_rows)
+                        })
+            } else {
+                self.sent_email_union.is_none() && self.journal_handoff.is_none()
+            }
             && match family {
-                Family::Satellites => {
+                Family::Satellites | Family::Application | Family::Identity => {
                     self.asset_union.is_none()
                         && self.reset_union.is_none()
                         && self.template_pins.is_none()
+                        && self.project_lifecycle.is_none()
+                }
+                Family::Tenancy => {
+                    self.asset_union.is_none()
+                        && self.reset_union.is_none()
+                        && self.template_pins.is_none()
+                        && self
+                            .tables
+                            .iter()
+                            .find(|table| table.table == "project")
+                            .zip(self.project_lifecycle.as_ref())
+                            .is_some_and(|(table, proof)| {
+                                proof.valid(
+                                    table.source_rows,
+                                    table.target_rows,
+                                    table.divergent.len(),
+                                )
+                            })
                 }
                 Family::Notation => {
                     self.tables
@@ -583,7 +775,8 @@ impl Snapshot {
                         })
                 }
             }
-            && (family != Family::Notation || self.template_pins.is_some())
+            && (family != Family::Notation
+                || (self.template_pins.is_some() && self.project_lifecycle.is_none()))
             && self.tables.iter().all(|table| {
                 table.divergent.iter().all(|key| key.table() == table.table)
                     && self.raw_counts.get(table.table) == Some(&table.source_rows)
@@ -603,6 +796,14 @@ impl Snapshot {
                         self.asset_union.as_ref().is_some_and(|proof| {
                             proof.valid(table.source_rows, table.target_rows, 0)
                         })
+                    } else if table.table == "sent_email" {
+                        self.sent_email_union.as_ref().is_some_and(|proof| {
+                            proof.valid(table.source_rows, table.target_rows, 0)
+                        })
+                    } else if table.table == "journal_entry" {
+                        self.journal_handoff
+                            .as_ref()
+                            .is_some_and(crate::journal_startup_migration::JournalHandoff::is_clean)
                     } else {
                         table.source_rows == table.target_rows
                     }
@@ -612,6 +813,12 @@ impl Snapshot {
                 .iter()
                 .all(|reference| reference.newly_target_missing == 0)
             && self.reset_fact_differences.is_empty()
+            && self.project_lifecycle.as_ref().is_none_or(|proof| {
+                self.tables
+                    .iter()
+                    .find(|table| table.table == "project")
+                    .is_some_and(|table| proof.valid(table.source_rows, table.target_rows, 0))
+            })
             && self.template_pins.as_ref().is_none_or(|proof| {
                 proof.clean(self.raw_counts.get("notation").copied().unwrap_or_default())
             })
@@ -675,6 +882,13 @@ pub(super) struct Advancement {
     pub snapshot: Option<Snapshot>,
 }
 
+fn configured_batch_size(raw: i32) -> Result<usize, super::BackfillError> {
+    usize::try_from(raw)
+        .ok()
+        .filter(|size| *size > 0)
+        .ok_or(super::BackfillError::BatchSize)
+}
+
 /// Advance only this persisted enrollment; a completed receipt is read-only.
 /// The caller holds the existing advisory lock and establishes `during_import`.
 pub(super) async fn advance_with(
@@ -703,10 +917,7 @@ pub(super) async fn advance_with(
     let receipt: SourceReceipt =
         serde_json::from_value(row.try_get("source_receipt")?).map_err(|_| FamilyError::Receipt)?;
     receipt.validate(family)?;
-    let batch_size = usize::try_from(row.try_get::<i32, _>("batch_size")?)
-        .ok()
-        .filter(|size| *size > 0)
-        .ok_or(super::BackfillError::BatchSize)?;
+    let batch_size = configured_batch_size(row.try_get("batch_size")?)?;
     let initial = source.snapshot(pg, family).await?;
     if !initial.representable(family, &receipt) {
         return Err(FamilyError::Receipt.into());
@@ -746,32 +957,9 @@ pub(super) async fn advance_with(
         // quiescence, not that lock, excludes old source application writes.
         let mut tx = pg.0.begin().await?;
         for table in &final_snapshot.tables {
-            let proof = serde_json::to_value(Verification {
-                source_rows: table.source_rows,
-                target_rows: table.target_rows,
-                differences: 0,
-                references_checked: true,
-                foreign_keys_checked: true,
-                references: final_snapshot
-                    .references
-                    .iter()
-                    .filter(|reference| reference.table == table.table)
-                    .map(|reference| ReferenceVerification {
-                        field: reference.field.to_owned(),
-                        source_orphans: reference.source_orphans,
-                        postgres_missing: reference.postgres_missing,
-                        newly_target_missing: reference.newly_target_missing,
-                    })
-                    .collect(),
-                reset_facts_checked: family == Family::Notation,
-                reset_fact_differences: final_snapshot.reset_fact_differences.len(),
-                asset_union: (table.table == "asset")
-                    .then(|| final_snapshot.asset_union.clone())
-                    .flatten(),
-                reset_union: final_snapshot.reset_union.clone(),
-                template_pins: final_snapshot.template_pins.clone(),
-            })
-            .map_err(|_| FamilyError::Receipt)?;
+            let proof =
+                serde_json::to_value(completion_verification(&final_snapshot, family, table))
+                    .map_err(|_| FamilyError::Receipt)?;
             sqlx::query("UPDATE mirror_backfill_checkpoint SET completed_at = now(), verification = $3, failed = 0, updated_at = now() WHERE run_id = $1 AND mirror = $2")
                 .bind(run).bind(checkpoint(table.table)).bind(proof).execute(&mut *tx).await?;
         }
@@ -787,6 +975,50 @@ pub(super) async fn advance_with(
         batches,
         snapshot: Some(final_snapshot),
     })
+}
+
+fn completion_verification(
+    snapshot: &Snapshot,
+    family: Family,
+    table: &crate::postgres_mirror::TableParity,
+) -> Verification {
+    Verification {
+        source_rows: table.source_rows,
+        target_rows: table.target_rows,
+        differences: 0,
+        references_checked: true,
+        foreign_keys_checked: true,
+        references: snapshot
+            .references
+            .iter()
+            .filter(|reference| reference.table == table.table)
+            .map(|reference| ReferenceVerification {
+                field: reference.field.to_owned(),
+                source_orphans: reference.source_orphans,
+                postgres_missing: reference.postgres_missing,
+                newly_target_missing: reference.newly_target_missing,
+            })
+            .collect(),
+        reset_facts_checked: family == Family::Notation,
+        reset_fact_differences: snapshot.reset_fact_differences.len(),
+        asset_union: (table.table == "asset")
+            .then(|| snapshot.asset_union.clone())
+            .flatten(),
+        reset_union: snapshot.reset_union.clone(),
+        template_pins: snapshot.template_pins.clone(),
+        project_lifecycle: snapshot
+            .project_lifecycle
+            .clone()
+            .filter(|_| table.table == "project"),
+        sent_email_union: snapshot
+            .sent_email_union
+            .clone()
+            .filter(|_| table.table == "sent_email"),
+        journal_handoff: snapshot
+            .journal_handoff
+            .clone()
+            .filter(|_| table.table == "journal_entry"),
+    }
 }
 
 async fn apply_row(
@@ -894,6 +1126,12 @@ struct Verification {
     reset_union: Option<ResetUnionProof>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     template_pins: Option<TemplatePinProof>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    project_lifecycle: Option<ProjectLifecycleProof>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sent_email_union: Option<SentEmailUnionProof>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    journal_handoff: Option<crate::journal_startup_migration::JournalHandoff>,
 }
 
 impl Verification {
@@ -903,13 +1141,43 @@ impl Verification {
                 self.asset_union
                     .as_ref()
                     .is_some_and(|proof| proof.valid(captured, self.target_rows, self.differences))
+            } else if family == Family::Application && table == "sent_email" {
+                self.asset_union.is_none()
+                    && self.sent_email_union.as_ref().is_some_and(|proof| {
+                        proof.valid(captured, self.target_rows, self.differences)
+                    })
+            } else if family == Family::Application && table == "journal_entry" {
+                self.asset_union.is_none()
+                    && self.journal_handoff.as_ref().is_some_and(|proof| {
+                        journal_representable(proof, captured, self.target_rows) && proof.is_clean()
+                    })
             } else {
                 self.target_rows == captured && self.asset_union.is_none()
             }
+            && (family == Family::Application && table == "sent_email"
+                || self.sent_email_union.is_none())
+            && (family == Family::Application && table == "journal_entry"
+                || self.journal_handoff.is_none())
             && match family {
-                Family::Satellites => self.reset_union.is_none() && self.template_pins.is_none(),
+                Family::Satellites | Family::Application | Family::Identity => {
+                    self.reset_union.is_none()
+                        && self.template_pins.is_none()
+                        && self.project_lifecycle.is_none()
+                }
+                Family::Tenancy => {
+                    self.reset_union.is_none()
+                        && self.template_pins.is_none()
+                        && if table == "project" {
+                            self.project_lifecycle.as_ref().is_some_and(|proof| {
+                                proof.valid(captured, self.target_rows, self.differences)
+                            })
+                        } else {
+                            self.project_lifecycle.is_none()
+                        }
+                }
                 Family::Notation => {
-                    self.reset_facts_checked
+                    self.project_lifecycle.is_none()
+                        && self.reset_facts_checked
                         && self.reset_union.as_ref().is_some_and(|proof| {
                             proof.retained_native_protections <= proof.compared
                         })
@@ -975,36 +1243,74 @@ pub(crate) async fn activate_fixture(pg: &PostgresDb, family: Family) {
         .bind(run).bind(family.scope()).bind(serde_json::to_value(&receipt).unwrap()).execute(&mut *tx).await.unwrap();
     for table in family.tables() {
         let count = usize::try_from(receipt.table_counts[*table]).unwrap();
-        let proof = Verification {
-            source_rows: count,
-            target_rows: count,
-            differences: 0,
-            references_checked: true,
-            foreign_keys_checked: true,
-            references: vec![],
-            reset_facts_checked: family == Family::Notation,
-            reset_fact_differences: 0,
-            asset_union: (family == Family::Notation && *table == "asset").then_some(
-                AssetUnionProof {
-                    compared_overlaps: count,
-                    full_metadata_compared: true,
-                    ..Default::default()
-                },
-            ),
-            reset_union: (family == Family::Notation).then(|| ResetUnionProof {
-                compared: usize::try_from(receipt.table_counts["notation"]).unwrap(),
-                retained_native_protections: 0,
-            }),
-            template_pins: (family == Family::Notation).then(|| TemplatePinProof {
-                compared: usize::try_from(template_count).unwrap(),
-                differences: 0,
-            }),
-        };
+        let proof = fixture_verification(pg, family, table, count, &receipt, template_count).await;
         sqlx::query("INSERT INTO mirror_backfill_checkpoint (run_id, mirror, completed_at, verification) VALUES ($1, $2, now(), $3)")
             .bind(run).bind(checkpoint(table)).bind(serde_json::to_value(proof).unwrap()).execute(&mut *tx).await.unwrap();
     }
     tx.commit().await.unwrap();
     require_scope(pg, family).await.unwrap();
+}
+
+#[cfg(any(test, feature = "test-support"))]
+async fn fixture_verification(
+    pg: &PostgresDb,
+    family: Family,
+    table: &str,
+    count: usize,
+    receipt: &SourceReceipt,
+    template_count: i64,
+) -> Verification {
+    Verification {
+        source_rows: count,
+        target_rows: count,
+        differences: 0,
+        references_checked: true,
+        foreign_keys_checked: true,
+        references: vec![],
+        reset_facts_checked: family == Family::Notation,
+        reset_fact_differences: 0,
+        asset_union: (family == Family::Notation && table == "asset").then_some(AssetUnionProof {
+            compared_overlaps: count,
+            full_metadata_compared: true,
+            ..Default::default()
+        }),
+        reset_union: (family == Family::Notation).then(|| ResetUnionProof {
+            compared: usize::try_from(receipt.table_counts["notation"]).unwrap(),
+            retained_native_protections: 0,
+        }),
+        template_pins: (family == Family::Notation).then(|| TemplatePinProof {
+            compared: usize::try_from(template_count).unwrap(),
+            differences: 0,
+        }),
+        project_lifecycle: (family == Family::Tenancy && table == "project").then_some(
+            ProjectLifecycleProof {
+                compared_overlaps: count,
+                full_metadata_compared: true,
+                ledger_projections_checked: true,
+                ..Default::default()
+            },
+        ),
+        sent_email_union: (family == Family::Application && table == "sent_email").then_some(
+            SentEmailUnionProof {
+                compared_overlaps: count,
+                full_metadata_compared: true,
+                ..Default::default()
+            },
+        ),
+        journal_handoff: if family == Family::Application && table == "journal_entry" {
+            assert_eq!(
+                count, 0,
+                "Journal fixture enrollment precedes native records"
+            );
+            Some(
+                crate::journal_startup_migration::handoff_captured(&[], pg)
+                    .await
+                    .unwrap(),
+            )
+        } else {
+            None
+        },
+    }
 }
 
 /// Check actual enrolled rows, including constraints marked NOT VALID.
@@ -1080,3 +1386,6 @@ mod tests;
 #[cfg(test)]
 #[path = "notation_family_tests.rs"]
 mod notation_tests;
+
+#[cfg(test)]
+mod journal_component_tests;

@@ -8,6 +8,13 @@
       "table": "cap_table_holding"
     },
     {
+      "extra_column": "inserted_at_text",
+      "extra_table": null,
+      "missing_column": null,
+      "missing_table": null,
+      "table": "deployment_secret_change"
+    },
+    {
       "extra_column": "entity_id",
       "extra_table": null,
       "missing_column": null,
@@ -2709,6 +2716,7 @@
           "ciphertext": "TEXT",
           "id": "UUID",
           "inserted_at": "TIMESTAMPTZ",
+          "inserted_at_text": "TEXT",
           "key": "TEXT",
           "kms_key_version": "TEXT",
           "request_id": "TEXT",

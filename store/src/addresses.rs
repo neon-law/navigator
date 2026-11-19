@@ -26,7 +26,7 @@ use uuid::Uuid;
 use sqlx::{postgres::PgRow, AssertSqlSafe, Row};
 
 use crate::persons::{self, PersonError};
-use crate::postgres::identity::{self as authority, AuthorityError, ADDRESS};
+use crate::postgres::identity::{self as authority, AuthorityError};
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 
 /// The table these rows live in.
@@ -217,7 +217,7 @@ pub async fn create(db: &SurrealDb, new: &NewAddress) -> Result<Address, Address
         .await
         .map_err(AuthorityError::from)?;
         let address = from_pg(&row).map_err(AuthorityError::from)?;
-        authority::project(&pg, db, &ADDRESS, id).await?;
+
         return Ok(address);
     }
     let mut response = writing(|| {

@@ -112,11 +112,6 @@ pub static WEB_REQUIREMENTS: &[Requirement] = &[
     // deployment, so a deployment missing the coordinate is a real gap `ops ship`
     // must refuse rather than a lane it may decline.
     required!("NAVIGATOR_APPLICATIONS_BUCKET"),
-    // Operational SurrealDB exports have a separate confidentiality and
-    // retention boundary from client documents. A missing dedicated bucket
-    // must stop boot and `ops ship`; it must never degrade to a generic
-    // storage or documents bucket.
-    required!("NAVIGATOR_SURREAL_ARCHIVES_BUCKET"),
     required!("NAVIGATOR_CLAMD_ADDR"),
     required!(integration "NAVIGATOR_EMAIL_BACKEND"),
     required!(integration "NAVIGATOR_SIGNATURE_PROVIDER"),
@@ -320,34 +315,13 @@ pub static WEB_REQUIREMENTS: &[Requirement] = &[
         integration: true,
         scope: RequirementScope::SmsTestRecipientsHome,
     },
-    // The SurrealDB coordinates. `web` fails closed on a missing endpoint —
-    // `portal::hosting` calls `store::surreal::connect_from_env` with no
-    // fallback, and the person directory lives in that engine, so a
-    // deployment without one does not degrade: it cannot authenticate anyone.
-    //
-    // These are coordinates, not key material, so each deployment supplies
-    // them from its plaintext `config.toml` rather than the Secret rail. They
-    // are listed here so `ops ship` refuses a deployment that is missing one,
-    // instead of the absence surfacing as a crash-looping pod — which is what
-    // happened while `web` required the handle and this list did not mention
-    // it. The root credentials are a separate entry and land with the database
-    // user (ENG-18).
-    required!("NAVIGATOR_SURREAL_ENDPOINT"),
-    required!("NAVIGATOR_SURREAL_NAMESPACE"),
-    required!("NAVIGATOR_SURREAL_DATABASE"),
-    // The sign-in credentials. A managed engine rejects an anonymous
-    // connection, so these are as fatal as the endpoint — and the
-    // failure is worse, because `connect` succeeds and the first query
-    // is what fails. Required as a pair: half a login is not a login.
-    // `NAVIGATOR_SURREAL_AUTH_SCOPE` is deliberately absent — it
-    // defaults to `root`, and a deployment naming a different scope is
-    // choosing, not satisfying an invariant.
-    Requirement {
-        any_of: &[&["NAVIGATOR_SURREAL_USER", "NAVIGATOR_SURREAL_PASSWORD"]],
-        trigger: None,
-        integration: false,
-        scope: RequirementScope::EveryDeployment,
-    },
+    required!("NAVIGATOR_POSTGRES_HOST"),
+    required!("NAVIGATOR_POSTGRES_PORT"),
+    required!("NAVIGATOR_POSTGRES_DATABASE"),
+    required!("NAVIGATOR_POSTGRES_USER"),
+    required!("NAVIGATOR_POSTGRES_PASSWORD"),
+    // Legacy source coordinates are required only by explicit import/archive
+    // operators; ordinary application boot uses PostgreSQL authority.
 ];
 
 #[must_use]

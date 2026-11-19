@@ -20,8 +20,8 @@
 //!    runs on the merge commit. A red one stays open through an immediate and
 //!    the owner's forced merge; a draft is refused until it is marked ready. Signed direct pushes by the account and an
 //!    administrator, and an Actions job token's push, are rejected.
-//! 8. Repository path: a synthetic Firm and Project seeded in an in-memory
-//!    store map through `store::firms::forgejo::repository_path`; the Firm's
+//! 8. Repository path: a synthetic Firm and Project seeded in an isolated PostgreSQL
+//!    fixture map through `store::firms::forgejo::repository_path`; the Firm's
 //!    organization and the Project's private repository are created, and the
 //!    API and database return exactly `<firm-slug>/<project-code>`.
 //! 9. Retention: the commit, the repository row, and the claim survive pod
@@ -32,10 +32,11 @@
 //! and credential is synthetic. Shells out to `kubectl` and `git`
 //! and talks HTTP to a port-forward, so it is excluded from the coverage gate.
 
-use std::io::{BufRead, BufReader};
+use std::collections::VecDeque;
+use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, ensure, Context, Result};
@@ -85,6 +86,7 @@ jobs:\n  proof:\n    runs-on: self-hosted\n    steps:\n      \
 struct Forward {
     child: Child,
     origin: String,
+    stderr: Arc<Mutex<VecDeque<u8>>>,
 }
 
 impl Forward {
@@ -101,9 +103,13 @@ impl Forward {
             .args(port_forward_args(target, port))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn()
             .context("spawn kubectl port-forward")?;
+        let stderr = Arc::new(Mutex::new(VecDeque::new()));
+        let errors = child.stderr.take().context("port-forward stderr")?;
+        let captured = Arc::clone(&stderr);
+        std::thread::spawn(move || capture_forward_stderr(errors, &captured));
         let stdout = child.stdout.take().context("port-forward stdout")?;
         let mut lines = BufReader::new(stdout).lines();
         let port = loop {
@@ -120,7 +126,45 @@ impl Forward {
         Ok(Self {
             child,
             origin: format!("http://127.0.0.1:{port}"),
+            stderr,
         })
+    }
+
+    /// Observe the owned child before Drop terminates it; never format its command or environment.
+    fn failure_context(&mut self, phase: &str) -> String {
+        let status = match self.child.try_wait() {
+            Ok(Some(status)) => status.to_string(),
+            Ok(None) => "running".into(),
+            Err(_) => "status unavailable".into(),
+        };
+        let stderr = self.stderr.lock().map_or_else(
+            |_| "stderr unavailable".into(),
+            |tail| {
+                String::from_utf8_lossy(&tail.iter().copied().collect::<Vec<_>>())
+                    .trim()
+                    .to_owned()
+            },
+        );
+        format!("{phase}; owned forward {status}; stderr tail: {stderr}")
+    }
+}
+
+/// Retain only the final diagnostic bytes, even for a long-lived forwarding process.
+fn capture_forward_stderr(mut input: impl Read, output: &Mutex<VecDeque<u8>>) {
+    let mut chunk = [0; 512];
+    while let Ok(count) = input.read(&mut chunk) {
+        if count == 0 {
+            break;
+        }
+        let Ok(mut tail) = output.lock() else {
+            break;
+        };
+        for byte in &chunk[..count] {
+            if tail.len() >= 8192 {
+                tail.pop_front();
+            }
+            tail.push_back(*byte);
+        }
     }
 }
 
@@ -232,7 +276,7 @@ pub(in crate::devx) fn smoke(
     runtime.block_on(squash_merge_proofs(&kube, &http, &forward.origin, &token))?;
 
     step("repository path: a seeded Firm's organization holds its Project's repository");
-    let path = runtime.block_on(seeded_repository_path())?;
+    let path = runtime.block_on(seeded_repository_path(&kube, &seed))?;
     ensure!(
         path.to_string() == format!("example-law-pc/{SMOKE_PROJECT}"),
         "the seeded Firm and Project map to {path}"
@@ -1420,7 +1464,26 @@ struct SeededProject {
 /// Firm/Project fixture every repository-path consumer uses. The push
 /// pipeline resolves the Project from this same graph by its code.
 async fn seed_firm_project(surreal: &store::surreal::SurrealDb) -> Result<SeededProject> {
-    let entity_id = store::test_support::seed_entity(surreal).await;
+    let jurisdiction = store::jurisdictions::create(
+        surreal,
+        &store::jurisdictions::NewJurisdiction::new("Synthetic State", "SS", "state"),
+    )
+    .await?;
+    let kind = store::entity_types::create(surreal, "Synthetic Company").await?;
+    let entity_id = store::entities::create(
+        surreal,
+        &store::entities::NewEntity {
+            name: "Synthetic Forgejo Entity".into(),
+            entity_type_id: kind.id,
+            jurisdiction_id: jurisdiction.id,
+            phone: None,
+            url: None,
+            xero_id: None,
+            firm_anchor_key: None,
+        },
+    )
+    .await?
+    .id;
     let admin = store::persons::create(
         surreal,
         &store::persons::NewPerson::with_role(
@@ -1442,11 +1505,24 @@ async fn seed_firm_project(surreal: &store::surreal::SurrealDb) -> Result<Seeded
     )
     .await
     .context("seed the synthetic Firm")?;
+    let brand = store::brands::create(
+        surreal,
+        store::persons::Role::Admin,
+        Some(admin.id),
+        &store::brands::NewBrand {
+            name: "Synthetic Forgejo Brand".into(),
+            key: "forgejo-smoke".into(),
+            firm_id: Some(firm.id),
+            ..Default::default()
+        },
+    )
+    .await?;
     let project = store::projects::create(
         surreal,
         &store::projects::NewProject {
             code: SMOKE_PROJECT.to_owned(),
             name: "Sample Litigation".to_owned(),
+            brand: brand.key,
             status: "open".to_owned(),
             entity_id,
             firm_id: Some(firm.id),
@@ -1461,9 +1537,138 @@ async fn seed_firm_project(surreal: &store::surreal::SurrealDb) -> Result<Seeded
     })
 }
 
-async fn seeded_repository_path() -> Result<store::firms::forgejo::RepositoryPath> {
-    let surreal = store::test_support::mem_surreal().await;
-    Ok(seed_firm_project(&surreal).await?.path)
+async fn seeded_repository_path(
+    kube: &Kube,
+    seed: &Seed,
+) -> Result<store::firms::forgejo::RepositoryPath> {
+    let mut fixture = SmokePostgres::create(kube, seed).await?;
+    let source = store::surreal::SurrealDb::uninitialized();
+    let seeded = store::postgres::PostgresDb::with_test_db(
+        fixture.fixture.postgres().clone(),
+        seed_firm_project(&source),
+    )
+    .await
+    .with_context(|| {
+        fixture
+            .forward
+            .failure_context("seed the native smoke Firm, Brand, and Project")
+    });
+    let closed = fixture.close().await;
+    let seeded = seeded.map_err(|error| match &closed {
+        Ok(()) => error,
+        Err(cleanup) => error.context(format!(
+            "owned smoke fixture cleanup also failed: {cleanup:#}"
+        )),
+    });
+    let path = seeded?.path;
+    closed?;
+    Ok(path)
+}
+
+/// The smoke owns this new database and independent administrative/data forwards.
+/// A data connection's close must not interrupt DROP through a shared forwarding session.
+struct SmokePostgres {
+    fixture: store::test_support::PostgresFixture,
+    forward: Forward,
+    admin_forward: Forward,
+}
+
+fn smoke_postgres_options(forward: &Forward, seed: &Seed) -> Result<PgConnectOptions> {
+    let port = reqwest::Url::parse(&forward.origin)?
+        .port()
+        .context("PostgreSQL forward port")?;
+    Ok(PgConnectOptions::new()
+        .host("127.0.0.1")
+        .port(port)
+        .username("postgres")
+        .password(&seed.postgres_password)
+        .database("postgres")
+        .ssl_mode(PgSslMode::Require)
+        .options([("session_preload_libraries", "age")]))
+}
+
+impl SmokePostgres {
+    async fn create(kube: &Kube, seed: &Seed) -> Result<Self> {
+        let mut admin_forward = Forward::open_target(kube, POSTGRES_POD, 5432)?;
+        let mut forward = Forward::open_target(kube, POSTGRES_POD, 5432)?;
+        let fixture = store::test_support::PostgresFixture::create_with_connections(
+            smoke_postgres_options(&admin_forward, seed)?,
+            smoke_postgres_options(&forward, seed)?,
+        )
+        .await
+        .with_context(|| {
+            admin_forward.failure_context("initialize smoke PostgreSQL administration")
+        })
+        .with_context(|| forward.failure_context("initialize smoke PostgreSQL data"))?;
+        let grants = grant_smoke_runtime(&fixture)
+            .await
+            .context("grant fresh smoke PostgreSQL runtime access");
+        if let Err(error) = grants {
+            let cleanup = fixture.close().await;
+            let original = match cleanup {
+                Ok(()) => error,
+                Err(cleanup) => error.context(format!(
+                    "owned smoke fixture cleanup also failed: {cleanup:#}"
+                )),
+            };
+            return Err(original
+                .context(admin_forward.failure_context("configure smoke PostgreSQL administration"))
+                .context(forward.failure_context("configure smoke PostgreSQL data")));
+        }
+        Ok(Self {
+            fixture,
+            forward,
+            admin_forward,
+        })
+    }
+
+    async fn close(mut self) -> Result<()> {
+        let closed = self
+            .fixture
+            .close()
+            .await
+            .with_context(|| {
+                self.admin_forward
+                    .failure_context("close smoke PostgreSQL administration")
+            })
+            .with_context(|| self.forward.failure_context("close smoke PostgreSQL data"));
+        drop(self.forward);
+        drop(self.admin_forward);
+        closed
+    }
+}
+
+/// Apply the existing runtime rails only inside the exclusively minted fixture.
+/// The bootstrap login remains distinct from the receiver's unprivileged login.
+async fn grant_smoke_runtime(fixture: &store::test_support::PostgresFixture) -> Result<()> {
+    let pg = fixture.postgres();
+    let roles: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM pg_roles WHERE rolname IN ('navigator_owner','navigator_app')",
+    )
+    .fetch_one(pg.pool())
+    .await?;
+    ensure!(
+        roles == 2,
+        "KIND PostgreSQL runtime roles have not been provisioned"
+    );
+    let database = fixture.database();
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!("REVOKE ALL ON DATABASE {database} FROM PUBLIC; GRANT CONNECT ON DATABASE {database} TO navigator_app; ALTER ROLE navigator_app IN DATABASE {database} SET session_preload_libraries='age';")))
+        .execute(pg.pool()).await?;
+    sqlx::raw_sql("GRANT USAGE ON SCHEMA public,ag_catalog TO navigator_owner,navigator_app;
+        GRANT SELECT ON ALL TABLES IN SCHEMA ag_catalog TO navigator_owner;
+        GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA public TO navigator_owner,navigator_app;
+        GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO navigator_owner,navigator_app;
+        REVOKE INSERT,UPDATE,DELETE ON public.spatial_ref_sys FROM navigator_app;
+        DO $$ DECLARE migration_table text; BEGIN
+          IF to_regclass('public.astrocartography_reference_geometry') IS NOT NULL THEN
+            REVOKE INSERT,UPDATE,DELETE ON public.astrocartography_reference_geometry FROM navigator_app;
+          END IF;
+          FOR migration_table IN SELECT relname FROM pg_class WHERE relnamespace='public'::regnamespace AND relname IN ('_sqlx_migrations','schema_migrations') LOOP
+            EXECUTE format('REVOKE ALL ON TABLE public.%I FROM navigator_app',migration_table);
+          END LOOP;
+        END $$;")
+        .execute(pg.pool()).await?;
+    Ok(())
 }
 
 /// Grant or revoke site administration for the smoke account.
@@ -1690,6 +1895,7 @@ fn push_change(
 /// push is one receipt — the event key's unique index enforces it.
 async fn wait_for_push_receipt(
     kube: &Kube,
+    database: &str,
     path: &store::firms::forgejo::RepositoryPath,
 ) -> Result<PushReceiptRow> {
     let sql = format!(
@@ -1700,7 +1906,7 @@ async fn wait_for_push_receipt(
     );
     let deadline = Instant::now() + RECEIPT_DEADLINE;
     loop {
-        let rows = psql(kube, "navigator", &sql)?;
+        let rows = psql(kube, database, &sql)?;
         let lines: Vec<&str> = rows.lines().collect();
         match lines.as_slice() {
             [] => {}
@@ -1731,7 +1937,6 @@ async fn wait_for_push_receipt(
 /// PostgreSQL pod and published through a Service with manual Endpoints —
 /// because CI runners blackhole pod-to-host traffic across the Docker
 /// bridge gateway. The journal row is the evidence.
-#[allow(clippy::too_many_lines)]
 async fn push_webhook_proof(
     kube: &Kube,
     http: &reqwest::Client,
@@ -1739,6 +1944,35 @@ async fn push_webhook_proof(
     token: &str,
     path: &store::firms::forgejo::RepositoryPath,
     seed: &Seed,
+) -> Result<()> {
+    let fixture = SmokePostgres::create(kube, seed).await?;
+    let proof = push_webhook_proof_on(kube, http, forge, token, path, seed, &fixture).await;
+    let stopped = stop_receiver(kube);
+    let closed = fixture.close().await;
+    runtime_block_on_delete_firm_repository(http, forge, token, path).await;
+    let mut failures = Vec::new();
+    for (phase, result) in [
+        ("push proof", proof),
+        ("receiver cleanup", stopped),
+        ("database cleanup", closed),
+    ] {
+        if let Err(error) = result {
+            failures.push(format!("{phase}: {error:#}"));
+        }
+    }
+    ensure!(failures.is_empty(), "{}", failures.join("\n"));
+    Ok(())
+}
+
+#[allow(clippy::too_many_lines)]
+async fn push_webhook_proof_on(
+    kube: &Kube,
+    http: &reqwest::Client,
+    forge: &str,
+    token: &str,
+    path: &store::firms::forgejo::RepositoryPath,
+    seed: &Seed,
+    fixture: &SmokePostgres,
 ) -> Result<()> {
     let path_secret = random_hex();
     let hmac_key = random_hex();
@@ -1748,7 +1982,9 @@ async fn push_webhook_proof(
     // the only place the cluster can execute it from.
     let staged = stage_receiver_binary()?;
     let config = ReceiverConfig {
-        postgres_password: seed.postgres_password.clone(),
+        app_password: seed.app_password.clone(),
+        database: fixture.fixture.database().to_owned(),
+        root_cert: receiver_root_cert(kube)?,
         path_secret: path_secret.clone(),
         hmac_key: hmac_key.clone(),
         forge_token: token.to_owned(),
@@ -1897,19 +2133,9 @@ async fn push_webhook_proof(
     )
     .await?;
     push_change(token, forge, path)?;
-    let row = wait_for_push_receipt(kube, path).await?;
+    let row = wait_for_push_receipt(kube, fixture.fixture.database(), path).await?;
     assert_analyzed_push_receipt(&row, SMOKE_CHANGE_ID, PUSH_DESCRIPTION)
         .map_err(anyhow::Error::msg)?;
-    // Best-effort teardown: the receiver is the proof's fixture.
-    let _ = kube.output(&[
-        "exec",
-        POSTGRES_POD,
-        "--",
-        "bash",
-        "-c",
-        &format!("kill $(cat {RECEIVER_PID} 2>/dev/null)"),
-    ]);
-    runtime_block_on_delete_firm_repository(http, forge, token, path).await;
     eprintln!("    a real push landed as a journaled, analyzed receipt");
     Ok(())
 }
@@ -2003,13 +2229,16 @@ fn serve_receiver_mode(config_path: &std::path::Path) -> Result<()> {
     let raw = std::fs::read_to_string(config_path)
         .with_context(|| format!("read the receiver config at {}", config_path.display()))?;
     let config: ReceiverConfig = serde_json::from_str(&raw).context("parse the receiver config")?;
+    if std::env::var("NAVIGATOR_SMOKE_RECEIVER_NATIVE").as_deref() != Ok("1") {
+        return receiver_process(&config);
+    }
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .context("build the receiver's runtime")?;
     runtime.block_on(async move {
-        let journal = receiver_journal(&config).await?;
-        let surreal = store::test_support::mem_surreal().await;
+        let journal = receiver_journal().await?;
+        let surreal = store::surreal::SurrealDb::uninitialized();
         let seeded = seed_firm_project(&surreal).await?;
         store::projects::set_internal_slack_channel_id(&surreal, seeded.project_id, SLACK_CHANNEL)
             .await
@@ -2048,51 +2277,94 @@ fn serve_receiver_mode(config_path: &std::path::Path) -> Result<()> {
             }
         });
         axum::serve(listener, portal::router(state))
+            .with_graceful_shutdown(portal::hosting::shutdown_signal())
             .await
             .context("the push receiver stopped")
     })
 }
 
 /// The receiver's configuration, marshalled into the hosting pod as JSON:
-/// the journal's bootstrap password, the webhook's two secrets, and the
+/// the minted fixture database, its runtime login and TLS root, the webhook's two secrets, and the
 /// Forgejo token the analysis reads pushed changes with.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct ReceiverConfig {
-    postgres_password: String,
+    app_password: String,
+    database: String,
+    root_cert: String,
     path_secret: String,
     hmac_key: String,
     forge_token: String,
 }
 
-/// The push journal's lane for the in-pod receiver: the `navigator`
-/// database on the pod's own PostgreSQL, over loopback. The connection is
-/// encrypted but its identity is not verified — the same self-signed
-/// certificate the loopback forward tolerated, pinned by the pod boundary
-/// itself. `dev forgejo up` provisions the database empty; the receiver
-/// migrates it.
-async fn receiver_journal(config: &ReceiverConfig) -> Result<Arc<store::postgres::PostgresDb>> {
-    let options = PgConnectOptions::new()
-        .host("127.0.0.1")
-        .port(5432)
-        .username("postgres")
-        .password(&config.postgres_password)
-        .database("navigator")
-        .ssl_mode(PgSslMode::Require);
-    // PostgresDb::connect maps every failure to "PostgreSQL is
-    // unavailable"; probe once with the raw connection so a refused
-    // handshake reports its real cause.
-    let probe = <sqlx::postgres::PgConnection as sqlx::Connection>::connect_with(&options)
-        .await
-        .context("probe the push journal's PostgreSQL lane")?;
-    drop(probe);
-    let journal = store::postgres::PostgresDb::connect(options)
-        .await
-        .context("connect the push journal's PostgreSQL lane")?;
-    journal
-        .migrate_embedded(None)
-        .await
-        .context("migrate the push journal's PostgreSQL lane")?;
-    Ok(Arc::new(journal))
+/// The receiver opens only an already-enrolled fixture through normal application admission.
+async fn receiver_journal() -> Result<Arc<store::postgres::PostgresDb>> {
+    Ok(Arc::new(
+        store::postgres::PostgresDb::application()
+            .await
+            .context("admit the receiver's PostgreSQL fixture")?,
+    ))
+}
+
+fn receiver_root_cert(kube: &Kube) -> Result<String> {
+    let tls = kube
+        .secret("navigator-postgres-tls")?
+        .context("PostgreSQL TLS Secret is missing")?;
+    super::super::postgres_fixture::trust_anchor(&tls)?;
+    Ok(if tls.contains_key("ca.crt") {
+        "/etc/postgres/tls/ca.crt"
+    } else {
+        "/etc/postgres/tls/tls.crt"
+    }
+    .into())
+}
+
+/// Re-exec with explicit native coordinates before constructing Tokio or spawning
+/// handlers. `exec` preserves the PID recorded by the task-owned smoke launcher.
+fn receiver_process(config: &ReceiverConfig) -> Result<()> {
+    use std::os::unix::process::CommandExt as _;
+    let mut command = Command::new(std::env::current_exe()?);
+    command
+        .args(std::env::args_os().skip(1))
+        .env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("NAVIGATOR_SMOKE_RECEIVER_NATIVE", "1")
+        .env("NAVIGATOR_POSTGRES_HOST", "127.0.0.1")
+        .env("NAVIGATOR_POSTGRES_PORT", "5432")
+        .env("NAVIGATOR_POSTGRES_USER", "navigator_app")
+        .env("NAVIGATOR_POSTGRES_PASSWORD", &config.app_password)
+        .env("NAVIGATOR_POSTGRES_DATABASE", &config.database)
+        .env("NAVIGATOR_POSTGRES_SSLMODE", "verify-full")
+        .env("NAVIGATOR_POSTGRES_ROOT_CERT", &config.root_cert);
+    Err(command.exec()).context("start the native receiver process")
+}
+
+fn stop_receiver(kube: &Kube) -> Result<()> {
+    let script = format!(
+        r#"if test -r {RECEIVER_PID}; then
+        pid=$(cat {RECEIVER_PID});
+        drained() {{
+            if ! kill -0 "$pid" 2>/dev/null; then return 0; fi;
+            read -r ignored comm state rest < /proc/$pid/stat && test "$state" = Z;
+        }}
+        if drained; then rm -f {RECEIVER_PID}; exit 0; fi;
+        test "$(readlink /proc/$pid/exe)" = "{RECEIVER_BINARY}" || exit 1;
+        kill -TERM "$pid" 2>/dev/null || true;
+        for ((i=0;i<50;i++)); do
+            if drained; then rm -f {RECEIVER_PID}; exit 0; fi;
+            sleep 0.1;
+        done;
+        # A graceful failure stays a failure even when forced cleanup succeeds.
+        test "$(readlink /proc/$pid/exe)" = "{RECEIVER_BINARY}" || exit 1;
+        kill -KILL "$pid" 2>/dev/null || true;
+        for ((i=0;i<50;i++)); do
+            if drained; then rm -f {RECEIVER_PID}; exit 1; fi;
+            sleep 0.1;
+        done; exit 1;
+    fi"#
+    );
+    kube.output(&["exec", POSTGRES_POD, "--", "bash", "-c", &script])
+        .context("drain the owned push receiver before fixture cleanup")?;
+    Ok(())
 }
 
 /// Delete the Firm repository at the end of the push-webhook proof — the
@@ -2424,5 +2696,29 @@ exit 23
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+}
+
+#[cfg(test)]
+#[path = "smoke_postgres_tests.rs"]
+mod postgres_tests;
+
+#[cfg(test)]
+mod forward_diagnostics_tests {
+    #[test]
+    fn forwarding_stderr_keeps_the_last_error_without_unbounded_old_output() {
+        let mut input = b"obsolete startup diagnostic\n".to_vec();
+        input.extend(vec![b'x'; 20_000]);
+        input.extend_from_slice(b"\nfinal transport diagnostic");
+        let output = super::Mutex::new(super::VecDeque::new());
+        super::capture_forward_stderr(std::io::Cursor::new(input), &output);
+        let bytes: Vec<u8> = output.into_inner().unwrap().into_iter().collect();
+        assert!(
+            bytes.len() <= 8192,
+            "owned forward diagnostics must stay bounded"
+        );
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(text.ends_with("final transport diagnostic"));
+        assert!(!text.contains("obsolete startup diagnostic"));
     }
 }

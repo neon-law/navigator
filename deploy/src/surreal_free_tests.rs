@@ -26,9 +26,10 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 
-/// The engine-starting helpers (`cli/tests/embedded_surreal_ratchet.rs` counts
-/// the same ones), plus a direct `mem://` connection. A bare `mem()` is matched
-/// separately, because `self.mem()` and `cache::mem()` are not the engine.
+/// Engine-starting helpers, a direct `mem://` connection, and the verified
+/// Source-export fixture. The export fixture uses an engine created by another
+/// helper, so its callers still require the compatibility lane. A bare `mem()`
+/// is matched separately: `self.mem()` and `cache::mem()` are not the engine.
 const ENGINE_CALLS: &[&str] = &[
     "mem_surreal(",
     "shared_surreal(",
@@ -36,6 +37,7 @@ const ENGINE_CALLS: &[&str] = &[
     "server_surreal(",
     "unmigrated(",
     "test_support::mem(",
+    "verified_family_capture(",
     "\"mem://\"",
 ];
 
@@ -471,6 +473,53 @@ mod tests {
             "fn f(_db: &store::surreal::SurrealDb) {}\nlet m = self.mem();"
         ));
         assert!(!starts_engine("// let db = mem_surreal().await;"));
+    }
+
+    #[test]
+    fn captured_exports_require_source_but_native_receipts_do_not() {
+        for call in [
+            "verified_family_capture(&source).await",
+            "crate::postgres_mirror::tests::verified_family_capture(&source).await",
+            // A module alias preserves the called function's existing name.
+            "capture::verified_family_capture(&source).await",
+        ] {
+            assert!(starts_engine(call), "actual Source export: {call}");
+        }
+        assert!(!starts_engine("receipt.verify_export(&bytes)"));
+        assert!(!starts_engine("PostgresFixture::create(options).await"));
+        assert!(!starts_engine(
+            "use crate::postgres_mirror::tests::verified_family_capture;"
+        ));
+    }
+
+    #[test]
+    fn captured_application_modules_preserve_native_postgres_siblings() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let selection = select(root).unwrap();
+        for module in [
+            "postgres_backfill::application_family_tests",
+            "postgres_backfill::application_native_boundary_tests",
+        ] {
+            assert!(
+                selection.nextest_filter.contains(&format!(
+                    "(package(store) & not kind(test) & test(/^{module}::/))"
+                )),
+                "captured nonempty Source history must stay in the compatibility lane: {module}"
+            );
+        }
+        for native in [
+            "postgres_backfill",
+            "postgres_backfill::family::tests",
+            "postgres_backfill::family::journal_component_tests",
+            "postgres::application_authority_tests",
+        ] {
+            assert!(
+                !selection
+                    .nextest_filter
+                    .contains(&format!("test(/^{native}::/)")),
+                "native PostgreSQL boundary must remain selected: {native}"
+            );
+        }
     }
 
     #[test]

@@ -897,7 +897,7 @@ async fn testimonial_consent_requires_client_dri_and_publication_requires_matter
         return;
     };
     let pg = connect(&options, &database).await;
-    activate_family(&pg, Family::Satellites).await;
+    crate::postgres::fixtures::activate_application(&pg).await;
     let (client, notation, _) = workflow_fixture(&pg).await;
     let (_, project) = firm_for_notation(&pg, notation).await;
     let (lawyer, _, _) = workflow_fixture(&pg).await;
@@ -1123,8 +1123,11 @@ async fn completed_family_receipt_fences_global_first_copy_and_runtime_replay() 
             MirrorKey::MatterCaption(Uuid::new_v4()),
         ] {
             assert!(
-                mirror::mirror(&unavailable, &pg, &key).await.is_err(),
-                "an unavailable compatibility client is never queried"
+                matches!(
+                    mirror::mirror(&unavailable, &pg, &key).await,
+                    Ok(mirror::Mirrored::Unchanged)
+                ),
+                "completed ownership holds replay before the unavailable Source"
             );
         }
     })

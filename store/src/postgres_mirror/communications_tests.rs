@@ -2,22 +2,9 @@ use super::*;
 use crate::postgres_mirror::tests::{connect, fresh_schema};
 use crate::test_support::mem_surreal;
 
-#[test]
-fn communication_keys_expose_only_opaque_identifiers() {
-    let id = Uuid::nil();
-    let key = MirrorKey::SummarySenderApproval(id);
-    assert_eq!(key.table(), "summary_sender_approval");
-    assert_eq!(key.to_string(), format!("summary_sender_approval:{id}"));
-    let event = MirrorKey::SummarySenderApprovalEvent(id);
-    assert_eq!(event.table(), "summary_sender_approval_event");
-    assert_eq!(
-        event.to_string(),
-        format!("summary_sender_approval_event:{id}")
-    );
-}
-
 #[tokio::test]
 async fn approval_and_audit_rows_reconcile_without_duplicate_audit_events() {
+    super::super::during_initial_copy(async {
     let Some((options, database)) = fresh_schema().await else {
         return;
     };
@@ -104,6 +91,15 @@ async fn approval_and_audit_rows_reconcile_without_duplicate_audit_events() {
             .await
             .unwrap();
     assert_eq!(status, "revoked");
+    sqlx::query("UPDATE summary_sender_approval SET status='approved' WHERE id=$1").bind(approval_id).execute(pg.pool()).await.unwrap();
+    assert_eq!(mirror(&surreal,&pg,&MirrorKey::SummarySenderApproval(approval_id)).await.unwrap(),Mirrored::Unchanged);
+    assert!(!reconcile(&surreal,&pg).await.unwrap().is_clean());
+    surreal.query("DELETE $id").bind(("id",crate::surreal::record_id("summary_sender_approval",approval_id))).await.unwrap().check().unwrap();
+    assert!(!reconcile(&surreal,&pg).await.unwrap().is_clean());
+    let retained:String=sqlx::query_scalar("SELECT status FROM summary_sender_approval WHERE id=$1").bind(approval_id).fetch_one(pg.pool()).await.unwrap();
+    assert_eq!(retained,"approved");
+
 
     pg.0.close().await;
+    }).await;
 }

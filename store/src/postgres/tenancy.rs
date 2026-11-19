@@ -1,18 +1,14 @@
 //! PostgreSQL authority for Firms, Brands, Firm Brands, Firm memberships,
 //! Projects and Project participation.
 //!
-//! These are canonical tenancy rows, not mirror payloads. The authority
-//! switch is opt-in per deployment; once enabled, configuration and database
-//! errors are returned to callers and never fall back to SurrealDB. Projects
-//! and their participation ledger keep a SurrealDB compatibility projection
-//! (see `crate::projects`) for the readers that have not moved yet.
+//! These canonical rows require PostgreSQL configuration and completed historical
+//! enrollment. Application operations return admission and database failures;
+//! they do not copy writes into the legacy import source.
 
 use crate::{brands, firms};
 use chrono::{DateTime, Utc};
 use sqlx::Row;
 use uuid::Uuid;
-
-const AUTHORITY_ENV: &str = "NAVIGATOR_POSTGRES_TENANCY_AUTHORITY";
 
 #[cfg(test)]
 tokio::task_local! {
@@ -32,27 +28,13 @@ pub enum TenancyError {
     InvalidRow,
 }
 
-/// Resolve the switch strictly: unset/off means legacy mode, on means
-/// PostgreSQL authority, and unknown values fail closed.
-pub(crate) fn enabled() -> Result<bool, TenancyError> {
+/// Source selection is confined to the explicit importer context.
+pub(crate) fn enabled() -> bool {
     #[cfg(test)]
     if let Ok(enabled) = TEST_TENANCY_AUTHORITY.try_with(|enabled| *enabled) {
-        return Ok(enabled);
+        return enabled;
     }
-    let value = match std::env::var(AUTHORITY_ENV) {
-        Err(std::env::VarError::NotPresent) => return Ok(false),
-        Err(std::env::VarError::NotUnicode(_)) => return Err(TenancyError::Configuration),
-        Ok(value) => value,
-    };
-    enabled_value(Some(&value))
-}
-
-fn enabled_value(value: Option<&str>) -> Result<bool, TenancyError> {
-    match value {
-        None | Some("0" | "false") => Ok(false),
-        Some("1" | "true") => Ok(true),
-        Some(_) => Err(TenancyError::Configuration),
-    }
+    !crate::postgres_mirror::reading_source()
 }
 
 pub(crate) async fn db() -> Result<crate::postgres::PostgresDb, TenancyError> {
@@ -60,7 +42,9 @@ pub(crate) async fn db() -> Result<crate::postgres::PostgresDb, TenancyError> {
     if let Ok(pg) = TEST_TENANCY_DB.try_with(Clone::clone) {
         return Ok(pg);
     }
-    Ok(crate::postgres::PostgresDb::from_env().await?)
+    crate::postgres::PostgresDb::configured()
+        .await?
+        .ok_or(TenancyError::Configuration)
 }
 
 #[cfg(test)]
@@ -556,11 +540,7 @@ pub async fn attach_brand(firm_id: Uuid, brand_key: &str) -> Result<(), firms::F
     if find_firm_on(&pg, firm_id).await?.is_none() {
         return Err(firms::FirmError::NoSuchFirm(firm_id));
     }
-    let brand_exists: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM brand WHERE brand_key=$1)")
-            .bind(brand_key)
-            .fetch_one(pg.pool())
-            .await?;
+    let brand_exists = brand_key_exists_on(&pg, brand_key).await?;
     if !brand_exists {
         return Err(firms::FirmError::UnknownBrand(brand_key.to_string()));
     }
@@ -595,6 +575,18 @@ pub async fn firm_brand_keys(firm_id: Uuid) -> Result<Vec<String>, TenancyError>
         .fetch_all(pg.pool())
         .await
         .map_err(Into::into)
+}
+
+pub(crate) async fn visible_person_ids(firms: &[Uuid]) -> Result<Vec<Uuid>, TenancyError> {
+    let pg = db().await?;
+    sqlx::query_scalar("SELECT person_id FROM person_firm_role WHERE firm_id=ANY($1::uuid[]) UNION SELECT r.person_id FROM person_project_role r JOIN project p ON p.id=r.project_id WHERE p.firm_id=ANY($1::uuid[]) ORDER BY person_id")
+        .bind(firms).fetch_all(pg.pool()).await.map_err(Into::into)
+}
+
+pub(crate) async fn backfill_unowned_projects(fallback: Option<Uuid>) -> Result<u64, TenancyError> {
+    let pg = db().await?;
+    Ok(sqlx::query("WITH owners AS (SELECT p.id,COALESCE(b.firm_id,$1::uuid) AS firm_id FROM project p LEFT JOIN firm_brand b ON b.brand_key=p.brand WHERE p.firm_id IS NULL) UPDATE project p SET firm_id=o.firm_id FROM owners o WHERE p.id=o.id AND p.firm_id IS NULL AND o.firm_id IS NOT NULL")
+        .bind(fallback).execute(pg.pool()).await?.rows_affected())
 }
 
 pub async fn firm_for_brand_key(brand_key: &str) -> Result<Option<Uuid>, TenancyError> {
@@ -760,6 +752,21 @@ pub async fn brand_by_key(key: &str) -> Result<Option<brands::Brand>, TenancyErr
     let row = sqlx::query("SELECT id,name,brand_key,firm_id,primary_color,accent_color,typeface,is_law_firm,legal_entity,logo_object_key,logo_content_type,font_family,font_object_key,font_licence,website_url,inserted_at,updated_at FROM brand WHERE brand_key=$1 LIMIT 1")
         .bind(key).fetch_optional(pg.pool()).await?;
     row.as_ref().map(brand).transpose()
+}
+
+pub(crate) async fn brand_key_exists(key: &str) -> Result<bool, TenancyError> {
+    brand_key_exists_on(&db().await?, key).await
+}
+
+async fn brand_key_exists_on(
+    pg: &crate::postgres::PostgresDb,
+    key: &str,
+) -> Result<bool, TenancyError> {
+    sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM brand WHERE brand_key=$1)")
+        .bind(key)
+        .fetch_one(pg.pool())
+        .await
+        .map_err(Into::into)
 }
 
 pub async fn brands_for_firm(firm_id: Uuid) -> Result<Vec<brands::Brand>, TenancyError> {
@@ -1135,22 +1142,4 @@ async fn brand_list(
         _ => return Err(TenancyError::Configuration),
     };
     rows.iter().map(brand).collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn tenancy_authority_switch_parses_strictly() {
-        assert!(!enabled_value(None).unwrap());
-        assert!(!enabled_value(Some("0")).unwrap());
-        assert!(!enabled_value(Some("false")).unwrap());
-        assert!(enabled_value(Some("1")).unwrap());
-        assert!(enabled_value(Some("true")).unwrap());
-        assert!(matches!(
-            enabled_value(Some("yes")),
-            Err(TenancyError::Configuration)
-        ));
-    }
 }

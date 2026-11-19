@@ -4,10 +4,11 @@
 //! days. Complete, cancel, and reopen change `status`; they keep the row.
 
 use chrono::{DateTime, FixedOffset};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
+use crate::postgres::project_deadlines::{Normalized, StoredDeadline};
 use crate::surreal::{record_id, record_uuid, SurrealDb};
 pub use model::project_deadlines::CATEGORIES;
 
@@ -25,7 +26,7 @@ const AUTHORITY_KINDS: &[&str] = &[
 pub const MAX_TITLE_CHARS: usize = 200;
 const CALENDAR_ROLES: &[&str] = &["firm", "opponent", "hearing"];
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Deadline {
     pub id: Uuid,
     pub project_id: Uuid,
@@ -108,6 +109,10 @@ const SELECT: &str =
 
 #[derive(Debug, thiserror::Error)]
 pub enum DeadlineError {
+    #[error(transparent)]
+    Postgres(#[from] crate::postgres::matter::MatterAuthorityError),
+    #[error("deadline changed concurrently; retry the operation")]
+    Conflict,
     #[error("database: {0}")]
     Db(#[from] surrealdb::Error),
     #[error("{0}")]
@@ -154,20 +159,6 @@ pub struct DeadlinePatch {
     pub category: Option<Option<String>>,
     pub internal_lead_days: Option<Option<i64>>,
     pub client_lead_days: Option<Option<i64>>,
-}
-
-struct Normalized {
-    title: Option<String>,
-    description: Option<String>,
-    due_at: String,
-    authority_kind: String,
-    authority: String,
-    source: String,
-    calendar_role: String,
-    category: Option<String>,
-    internal_lead_days: Option<i64>,
-    client_lead_days: Option<i64>,
-    replay_key: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -346,6 +337,16 @@ async fn require_links(
 
 /// Deadlines on one Project, earliest due instant first.
 pub async fn list(surreal: &SurrealDb, project_id: Uuid) -> Result<Vec<Deadline>, DeadlineError> {
+    if let Some(pg) = crate::postgres::matter::authority_for("project_deadlines").await? {
+        return Ok(crate::postgres::matter::select(
+            &pg,
+            "project_deadlines",
+            serde_json::json!({"project_id": project_id}),
+            &["due_at", "id"],
+        )
+        .await?);
+    }
+
     let mut response = surreal
         .query(format!(
             "SELECT {SELECT} FROM project_deadlines WHERE project_id = $project_id \
@@ -366,6 +367,15 @@ pub async fn find(
     project_id: Uuid,
     id: Uuid,
 ) -> Result<Option<Deadline>, DeadlineError> {
+    if let Some(pg) = crate::postgres::matter::authority_for("project_deadlines").await? {
+        return Ok(crate::postgres::matter::find(
+            &pg,
+            "project_deadlines",
+            serde_json::json!({"id": id, "project_id": project_id}),
+        )
+        .await?);
+    }
+
     let mut response = surreal
         .query(format!(
             "SELECT {SELECT} FROM ONLY project_deadlines \
@@ -384,6 +394,15 @@ async fn find_replay(
     project_id: Uuid,
     replay_key: &str,
 ) -> Result<Option<Deadline>, DeadlineError> {
+    if let Some(pg) = crate::postgres::matter::authority_for("project_deadlines").await? {
+        return Ok(crate::postgres::matter::find(
+            &pg,
+            "project_deadlines",
+            serde_json::json!({"project_id": project_id, "replay_key": replay_key}),
+        )
+        .await?);
+    }
+
     let mut response = surreal
         .query(format!(
             "SELECT {SELECT} FROM ONLY project_deadlines \
@@ -397,26 +416,23 @@ async fn find_replay(
     Ok(row.and_then(DeadlineRow::into_deadline))
 }
 
-#[derive(Clone, Copy)]
-struct StoredDeadline<'a> {
-    normalized: &'a Normalized,
-    source_document_id: Option<Uuid>,
-    owner_person_id: Option<Uuid>,
-    status: &'a str,
-    inserted_at: &'a str,
-}
-
 async fn persist(
     surreal: &SurrealDb,
     id: Uuid,
     project_id: Uuid,
     stored: &StoredDeadline<'_>,
 ) -> Result<Deadline, DeadlineError> {
+    if let Some(pg) = crate::postgres::matter::authority_for("project_deadlines").await? {
+        return crate::postgres::project_deadlines::persist(&pg, id, project_id, stored).await;
+    }
+
     let StoredDeadline {
         normalized,
         source_document_id,
         owner_person_id,
         status,
+        expected_status: _,
+        expected_updated_at: _,
         inserted_at,
     } = *stored;
     let now = chrono::Utc::now().to_rfc3339();
@@ -515,6 +531,8 @@ pub async fn create(surreal: &SurrealDb, new: &NewDeadline) -> Result<Deadline, 
                     normalized: &normalized,
                     source_document_id: new.source_document_id,
                     owner_person_id: new.owner_person_id,
+                    expected_status: Some(&existing.status),
+                    expected_updated_at: Some(&existing.updated_at),
                     status: &existing.status,
                     inserted_at: &existing.inserted_at,
                 },
@@ -531,6 +549,8 @@ pub async fn create(surreal: &SurrealDb, new: &NewDeadline) -> Result<Deadline, 
             normalized: &normalized,
             source_document_id: new.source_document_id,
             owner_person_id: new.owner_person_id,
+            expected_status: None,
+            expected_updated_at: None,
             status: STATUS_OPEN,
             inserted_at: &inserted_at,
         },
@@ -592,6 +612,8 @@ pub async fn update(
             normalized: &normalized,
             source_document_id,
             owner_person_id,
+            expected_status: Some(&existing.status),
+            expected_updated_at: Some(&existing.updated_at),
             status: &existing.status,
             inserted_at: &existing.inserted_at,
         },
@@ -641,6 +663,8 @@ async fn transition(
             normalized: &normalized,
             source_document_id: existing.source_document_id,
             owner_person_id: existing.owner_person_id,
+            expected_status: Some(&existing.status),
+            expected_updated_at: Some(&existing.updated_at),
             status: next,
             inserted_at: &existing.inserted_at,
         },

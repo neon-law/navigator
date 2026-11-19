@@ -308,7 +308,6 @@ mod tests {
             ("NAVIGATOR_CLAMD_ADDR", "clamav:3310"),
             ("NAVIGATOR_STORAGE_BACKEND", "gcs"),
             ("NAVIGATOR_APPLICATIONS_BUCKET", "proj-applications"),
-            ("NAVIGATOR_SURREAL_ARCHIVES_BUCKET", "proj-surreal-archives"),
             ("SLACK_BOT_TOKEN", "xoxb-test"),
             ("NAVIGATOR_EMAIL_BACKEND", "sendgrid"),
             ("NAVIGATOR_SIGNATURE_PROVIDER", "docusign"),
@@ -331,15 +330,11 @@ mod tests {
             ("RESTATE_AUTH_TOKEN", "key_test"),
             ("RESTATE_IDENTITY_KEY", "publickeyv1_test-identity-key"),
             ("GOOGLE_OAUTH_CLIENT_IDS", "123.apps.googleusercontent.com"),
-            ("NAVIGATOR_SURREAL_ENDPOINT", "wss://example.surreal.cloud"),
-            ("NAVIGATOR_SURREAL_NAMESPACE", "navigator"),
-            ("NAVIGATOR_SURREAL_DATABASE", "navigator"),
-            ("NAVIGATOR_SURREAL_USER", "admin"),
-            ("NAVIGATOR_SURREAL_PASSWORD", "secret"),
-            (
-                "NAVIGATOR_SURREAL_ARCHIVES_BUCKET",
-                "example-surreal-archives",
-            ),
+            ("NAVIGATOR_POSTGRES_HOST", "postgres.example.invalid"),
+            ("NAVIGATOR_POSTGRES_PORT", "5432"),
+            ("NAVIGATOR_POSTGRES_DATABASE", "navigator"),
+            ("NAVIGATOR_POSTGRES_USER", "navigator_app"),
+            ("NAVIGATOR_POSTGRES_PASSWORD", "secret"),
         ]));
         assert!(result.is_ok(), "{result:?}");
     }
@@ -361,18 +356,6 @@ mod tests {
     }
 
     #[test]
-    fn prod_invariants_require_the_surreal_archive_bucket() {
-        let mut pairs = full_with_jwks();
-        pairs.retain(|(key, _)| *key != "NAVIGATOR_SURREAL_ARCHIVES_BUCKET");
-
-        let err = production_invariants(lookup(&pairs)).unwrap_err();
-        assert!(err
-            .violations
-            .iter()
-            .any(|violation| violation.starts_with("NAVIGATOR_SURREAL_ARCHIVES_BUCKET")));
-    }
-
-    #[test]
     fn prod_invariants_require_the_google_oauth_client_allowlist() {
         // Unset, `google_oauth` degrades to a pass-through and
         // `mcp_principal` never injects a `Principal` — so Navigator MCP's
@@ -383,7 +366,6 @@ mod tests {
             ("NAVIGATOR_CLAMD_ADDR", "clamav:3310"),
             ("NAVIGATOR_STORAGE_BACKEND", "gcs"),
             ("NAVIGATOR_APPLICATIONS_BUCKET", "proj-applications"),
-            ("NAVIGATOR_SURREAL_ARCHIVES_BUCKET", "proj-surreal-archives"),
             ("SLACK_BOT_TOKEN", "xoxb-test"),
             ("NAVIGATOR_EMAIL_BACKEND", "sendgrid"),
             ("NAVIGATOR_SIGNATURE_PROVIDER", "docusign"),
@@ -405,11 +387,11 @@ mod tests {
             ("RESTATE_INGRESS_URL", "https://ingress.restate.cloud:8080"),
             ("RESTATE_AUTH_TOKEN", "key_test"),
             ("RESTATE_IDENTITY_KEY", "publickeyv1_test-identity-key"),
-            ("NAVIGATOR_SURREAL_ENDPOINT", "wss://example.surreal.cloud"),
-            ("NAVIGATOR_SURREAL_NAMESPACE", "navigator"),
-            ("NAVIGATOR_SURREAL_DATABASE", "navigator"),
-            ("NAVIGATOR_SURREAL_USER", "admin"),
-            ("NAVIGATOR_SURREAL_PASSWORD", "secret"),
+            ("NAVIGATOR_POSTGRES_HOST", "postgres.example.invalid"),
+            ("NAVIGATOR_POSTGRES_PORT", "5432"),
+            ("NAVIGATOR_POSTGRES_DATABASE", "navigator"),
+            ("NAVIGATOR_POSTGRES_USER", "navigator_app"),
+            ("NAVIGATOR_POSTGRES_PASSWORD", "secret"),
         ];
         let err = production_invariants(lookup(&base)).unwrap_err();
         assert_eq!(err.violations.len(), 1);
@@ -553,21 +535,14 @@ mod tests {
             ("OIDC_AUDIENCE", "navigator-web"),
             ("OIDC_ISSUER", "https://idp"),
             ("GOOGLE_OAUTH_CLIENT_IDS", "123.apps.googleusercontent.com"),
-            // The SurrealDB coordinates. `web` fails closed without the
+            // PostgreSQL coordinates. `web` fails closed without the
             // endpoint, so a production-shaped fixture carries all three the
             // way a real deployment's `config.toml` does.
-            (
-                "NAVIGATOR_SURREAL_ENDPOINT",
-                "wss://example-instance.aws-usw2.surreal.cloud",
-            ),
-            ("NAVIGATOR_SURREAL_NAMESPACE", "navigator"),
-            ("NAVIGATOR_SURREAL_DATABASE", "navigator"),
-            ("NAVIGATOR_SURREAL_USER", "admin"),
-            ("NAVIGATOR_SURREAL_PASSWORD", "secret"),
-            (
-                "NAVIGATOR_SURREAL_ARCHIVES_BUCKET",
-                "example-surreal-archives",
-            ),
+            ("NAVIGATOR_POSTGRES_HOST", "postgres.example.invalid"),
+            ("NAVIGATOR_POSTGRES_PORT", "5432"),
+            ("NAVIGATOR_POSTGRES_DATABASE", "navigator"),
+            ("NAVIGATOR_POSTGRES_USER", "navigator_app"),
+            ("NAVIGATOR_POSTGRES_PASSWORD", "secret"),
         ]
     }
 
@@ -660,7 +635,6 @@ mod tests {
             ("NAVIGATOR_CLAMD_ADDR", "clamav:3310"),
             ("NAVIGATOR_STORAGE_BACKEND", "fs"),
             ("NAVIGATOR_APPLICATIONS_BUCKET", "proj-applications"),
-            ("NAVIGATOR_SURREAL_ARCHIVES_BUCKET", "proj-surreal-archives"),
             ("SLACK_BOT_TOKEN", "xoxb-test"),
             ("NAVIGATOR_EMAIL_BACKEND", "sendgrid"),
             ("NAVIGATOR_SIGNATURE_PROVIDER", "docusign"),
@@ -683,11 +657,11 @@ mod tests {
             ("RESTATE_AUTH_TOKEN", "key_test"),
             ("RESTATE_IDENTITY_KEY", "publickeyv1_test-identity-key"),
             ("GOOGLE_OAUTH_CLIENT_IDS", "123.apps.googleusercontent.com"),
-            ("NAVIGATOR_SURREAL_ENDPOINT", "wss://example.surreal.cloud"),
-            ("NAVIGATOR_SURREAL_NAMESPACE", "navigator"),
-            ("NAVIGATOR_SURREAL_DATABASE", "navigator"),
-            ("NAVIGATOR_SURREAL_USER", "admin"),
-            ("NAVIGATOR_SURREAL_PASSWORD", "secret"),
+            ("NAVIGATOR_POSTGRES_HOST", "postgres.example.invalid"),
+            ("NAVIGATOR_POSTGRES_PORT", "5432"),
+            ("NAVIGATOR_POSTGRES_DATABASE", "navigator"),
+            ("NAVIGATOR_POSTGRES_USER", "navigator_app"),
+            ("NAVIGATOR_POSTGRES_PASSWORD", "secret"),
         ]))
         .unwrap_err();
         assert_eq!(err.violations.len(), 1);
@@ -712,7 +686,6 @@ mod tests {
             ("NAVIGATOR_CLAMD_ADDR", "clamav:3310"),
             ("NAVIGATOR_STORAGE_BACKEND", "gcs"),
             ("NAVIGATOR_APPLICATIONS_BUCKET", "proj-applications"),
-            ("NAVIGATOR_SURREAL_ARCHIVES_BUCKET", "proj-surreal-archives"),
             ("SLACK_BOT_TOKEN", "xoxb-test"),
             ("NAVIGATOR_EMAIL_BACKEND", "sendgrid"),
             ("NAVIGATOR_SIGNATURE_PROVIDER", "docusign"),
@@ -735,11 +708,11 @@ mod tests {
             ("RESTATE_AUTH_TOKEN", "key_test"),
             ("RESTATE_IDENTITY_KEY", "publickeyv1_test-identity-key"),
             ("GOOGLE_OAUTH_CLIENT_IDS", "123.apps.googleusercontent.com"),
-            ("NAVIGATOR_SURREAL_ENDPOINT", "wss://example.surreal.cloud"),
-            ("NAVIGATOR_SURREAL_NAMESPACE", "navigator"),
-            ("NAVIGATOR_SURREAL_DATABASE", "navigator"),
-            ("NAVIGATOR_SURREAL_USER", "admin"),
-            ("NAVIGATOR_SURREAL_PASSWORD", "secret"),
+            ("NAVIGATOR_POSTGRES_HOST", "postgres.example.invalid"),
+            ("NAVIGATOR_POSTGRES_PORT", "5432"),
+            ("NAVIGATOR_POSTGRES_DATABASE", "navigator"),
+            ("NAVIGATOR_POSTGRES_USER", "navigator_app"),
+            ("NAVIGATOR_POSTGRES_PASSWORD", "secret"),
         ]
     }
 
@@ -789,16 +762,15 @@ mod tests {
             ("NAVIGATOR_CLAMD_ADDR", "clamav:3310"),
             ("NAVIGATOR_STORAGE_BACKEND", "gcs"),
             ("NAVIGATOR_APPLICATIONS_BUCKET", "proj-applications"),
-            ("NAVIGATOR_SURREAL_ARCHIVES_BUCKET", "proj-surreal-archives"),
             ("SESSION_SECRET", SECRET32),
-            // Not integration-tier: `web` cannot boot without a Surreal
+            // Not integration-tier: `web` cannot boot without a PostgreSQL
             // handle, so the harness supplies the coordinates exactly as
             // `.github/workflows/ci.yml` does for the server-mode lane.
-            ("NAVIGATOR_SURREAL_ENDPOINT", "ws://127.0.0.1:8000"),
-            ("NAVIGATOR_SURREAL_NAMESPACE", "navigator"),
-            ("NAVIGATOR_SURREAL_DATABASE", "navigator"),
-            ("NAVIGATOR_SURREAL_USER", "admin"),
-            ("NAVIGATOR_SURREAL_PASSWORD", "secret"),
+            ("NAVIGATOR_POSTGRES_HOST", "postgres.example.invalid"),
+            ("NAVIGATOR_POSTGRES_PORT", "5432"),
+            ("NAVIGATOR_POSTGRES_DATABASE", "navigator"),
+            ("NAVIGATOR_POSTGRES_USER", "navigator_app"),
+            ("NAVIGATOR_POSTGRES_PASSWORD", "secret"),
             ("NAVIGATOR_CI_HARNESS", "1"),
         ];
         assert!(

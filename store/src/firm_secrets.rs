@@ -205,6 +205,8 @@ impl Drop for ResolvedCredential {
 /// Errors never carry the submitted value or decrypted provider bytes.
 #[derive(Debug, thiserror::Error)]
 pub enum SecretStoreError {
+    #[error("PostgreSQL credential authority is unavailable")]
+    Postgres,
     #[error("database: {0}")]
     Db(#[from] surrealdb::Error),
     #[error("firm secret authorization denied")]
@@ -462,6 +464,15 @@ async fn write_secret(
     {
         return Err(SecretStoreError::NotAuthorized);
     }
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE)
+        .await
+        .map_err(|_| SecretStoreError::Postgres)?
+    {
+        return crate::postgres::firm_secrets::write_secret(
+            &pg, firm_id, provider, kind, actor_id, value, kms,
+        )
+        .await;
+    }
     let mut versions = surreal
         .query(format!(
             "SELECT VALUE version FROM {TABLE} WHERE firm_id = $firm_id AND \
@@ -534,6 +545,18 @@ pub async fn metadata_for_firm(
     )
     .await?;
     validate_kind(provider, kind)?;
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE)
+        .await
+        .map_err(|_| SecretStoreError::Postgres)?
+    {
+        let row = sqlx::query("SELECT firm_id,provider,kind,version,kms_key_version,status,actor_id,created_at,updated_at FROM firm_integration_secret WHERE firm_id=$1 AND provider=$2 AND kind=$3 AND status='active' ORDER BY version DESC LIMIT 1")
+            .bind(firm_id).bind(provider.as_str()).bind(kind.as_str()).fetch_optional(pg.pool()).await.map_err(|_| SecretStoreError::Postgres)?;
+        return row
+            .as_ref()
+            .map(metadata_from_pg)
+            .transpose()?
+            .ok_or_else(|| not_configured(provider, kind));
+    }
     let mut response = surreal
         .query(format!(
             "SELECT firm_id, provider, kind, version, kms_key_version, status, actor_id, \
@@ -572,6 +595,14 @@ pub async fn list_metadata_for_firm(
         FirmCapability::ViewIntegrationSecretMetadata,
     )
     .await?;
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE)
+        .await
+        .map_err(|_| SecretStoreError::Postgres)?
+    {
+        let rows = sqlx::query("SELECT firm_id,provider,kind,version,kms_key_version,status,actor_id,created_at,updated_at FROM firm_integration_secret WHERE firm_id=$1 AND status='active' ORDER BY provider,kind,version DESC")
+            .bind(firm_id).fetch_all(pg.pool()).await.map_err(|_| SecretStoreError::Postgres)?;
+        return rows.iter().map(metadata_from_pg).collect();
+    }
     let mut response = surreal
         .query(format!(
             "SELECT firm_id, provider, kind, version, kms_key_version, status, actor_id, \
@@ -605,6 +636,18 @@ pub async fn revoke(
     )
     .await?;
     validate_kind(provider, kind)?;
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE)
+        .await
+        .map_err(|_| SecretStoreError::Postgres)?
+    {
+        let changed = sqlx::query("UPDATE firm_integration_secret SET status='revoked',updated_at=now() WHERE firm_id=$1 AND provider=$2 AND kind=$3 AND status='active'")
+            .bind(firm_id).bind(provider.as_str()).bind(kind.as_str()).execute(pg.pool()).await.map_err(|_| SecretStoreError::Postgres)?.rows_affected();
+        return if changed == 0 {
+            Err(not_configured(provider, kind))
+        } else {
+            Ok(())
+        };
+    }
     let now = chrono::Utc::now().to_rfc3339();
     let mut response = surreal
         .query(format!(
@@ -646,6 +689,18 @@ pub async fn revoke_twilio_auth_token_by_ref(
         FirmCapability::ManageIntegrationSecrets,
     )
     .await?;
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE)
+        .await
+        .map_err(|_| SecretStoreError::Postgres)?
+    {
+        let changed = sqlx::query("UPDATE firm_integration_secret SET status='revoked',updated_at=now() WHERE id=$1 AND firm_id=$2 AND provider='twilio' AND kind='twilio_auth_token' AND status='active'")
+            .bind(secret_ref).bind(firm_id).execute(pg.pool()).await.map_err(|_| SecretStoreError::Postgres)?.rows_affected();
+        return if changed == 0 {
+            Err(SecretStoreError::MissingRef(secret_ref))
+        } else {
+            Ok(())
+        };
+    }
     let mut response = surreal
         .query(format!(
             "UPDATE {TABLE} SET status = 'revoked', updated_at = $now \
@@ -713,6 +768,13 @@ pub async fn stripe_credential_configured(
     if !stripe_billing_enabled(kind) {
         return Ok(false);
     }
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE)
+        .await
+        .map_err(|_| SecretStoreError::Postgres)?
+    {
+        return sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM firm_integration_secret WHERE firm_id=$1 AND provider='stripe' AND kind=$2 AND status='active')")
+            .bind(firm_id).bind(kind.as_str()).fetch_one(pg.pool()).await.map_err(|_| SecretStoreError::Postgres);
+    }
     let mut response = match surreal
         .query(format!(
             "SELECT VALUE version FROM {TABLE} WHERE firm_id = $firm_id AND provider = 'stripe' \
@@ -759,53 +821,14 @@ pub async fn resolve_firm_credential(
     kms: &dyn RuntimeKms,
 ) -> Result<ResolvedCredential, SecretStoreError> {
     validate_kind(provider, kind)?;
-    let row = if kind == IntegrationSecretKind::DocuSignConnection {
-        use sqlx::Row;
-        let pg = crate::postgres::PostgresDb::from_env()
-            .await
-            .map_err(|_| not_configured(provider, kind))?;
-        let row = sqlx::query(
-            "SELECT * FROM firm_integration_secret
-             WHERE firm_id=$1 AND provider=$2 AND kind=$3 AND status='active'
-             ORDER BY version DESC LIMIT 1",
-        )
-        .bind(firm_id)
-        .bind(provider.as_str())
-        .bind(kind.as_str())
-        .fetch_optional(pg.pool())
+    let row = if let Some(pg) = crate::postgres::matter::authority_for(TABLE)
         .await
-        .map_err(|_| not_configured(provider, kind))?
-        .ok_or_else(|| not_configured(provider, kind))?;
-        let field = |name| {
-            row.try_get::<String, _>(name)
-                .map_err(|_| not_configured(provider, kind))
-        };
-        SecretRow {
-            firm_id: record_id(FIRM_TABLE, firm_id),
-            provider: provider.as_str().into(),
-            kind: kind.as_str().into(),
-            version: row
-                .try_get("version")
-                .map_err(|_| not_configured(provider, kind))?,
-            ciphertext: field("ciphertext")?,
-            wrapped_dek: field("wrapped_dek")?,
-            kms_key_version: field("kms_key_version")?,
-            kms_context: field("kms_context")?,
-            status: field("status")?,
-            actor_id: record_id(
-                "person",
-                row.try_get("actor_id")
-                    .map_err(|_| not_configured(provider, kind))?,
-            ),
-            created_at: row
-                .try_get::<chrono::DateTime<chrono::Utc>, _>("created_at")
-                .map_err(|_| not_configured(provider, kind))?
-                .to_rfc3339(),
-            updated_at: row
-                .try_get::<chrono::DateTime<chrono::Utc>, _>("updated_at")
-                .map_err(|_| not_configured(provider, kind))?
-                .to_rfc3339(),
-        }
+        .map_err(|_| SecretStoreError::Postgres)?
+    {
+        let row = sqlx::query("SELECT * FROM firm_integration_secret WHERE firm_id=$1 AND provider=$2 AND kind=$3 AND status='active' ORDER BY version DESC LIMIT 1")
+            .bind(firm_id).bind(provider.as_str()).bind(kind.as_str()).fetch_optional(pg.pool()).await.map_err(|_| SecretStoreError::Postgres)?
+            .ok_or_else(|| not_configured(provider,kind))?;
+        secret_from_pg(&row)?
     } else {
         let mut response = surreal
         .query(format!(
@@ -869,19 +892,31 @@ pub async fn resolve_twilio_auth_token_by_ref(
     secret_ref: Uuid,
     kms: &dyn RuntimeKms,
 ) -> Result<(ResolvedCredential, Uuid), SecretStoreError> {
-    let mut response = surreal
-        .query(format!(
+    let row = if let Some(pg) = crate::postgres::matter::authority_for(TABLE)
+        .await
+        .map_err(|_| SecretStoreError::Postgres)?
+    {
+        let row = sqlx::query("SELECT * FROM firm_integration_secret WHERE id=$1")
+            .bind(secret_ref)
+            .fetch_optional(pg.pool())
+            .await
+            .map_err(|_| SecretStoreError::Postgres)?
+            .ok_or(SecretStoreError::MissingRef(secret_ref))?;
+        secret_from_pg(&row)?
+    } else {
+        let mut response = surreal
+            .query(format!(
             "SELECT firm_id, provider, kind, version, ciphertext, wrapped_dek, kms_key_version, \
              kms_context, status, actor_id, created_at, updated_at FROM {TABLE} WHERE id = $id"
         ))
-        .bind(("id", record_id(TABLE, secret_ref)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
-    let rows: Vec<SecretRow> = response.take(0)?;
-    let row = rows
-        .into_iter()
-        .next()
-        .ok_or(SecretStoreError::MissingRef(secret_ref))?;
+            .bind(("id", record_id(TABLE, secret_ref)))
+            .await
+            .and_then(surrealdb::IndexedResults::check)?;
+        let rows: Vec<SecretRow> = response.take(0)?;
+        rows.into_iter()
+            .next()
+            .ok_or(SecretStoreError::MissingRef(secret_ref))?
+    };
     let provider = parse_provider(&row.provider).ok_or(SecretStoreError::InvalidKind)?;
     let kind = parse_kind(&row.kind).ok_or(SecretStoreError::InvalidKind)?;
     validate_kind(provider, kind)?;
@@ -916,6 +951,68 @@ pub async fn resolve_twilio_auth_token_by_ref(
         })
         .map_err(|_| SecretStoreError::InvalidValue)?;
     Ok((credential, firm_id))
+}
+
+fn metadata_from_pg(row: &sqlx::postgres::PgRow) -> Result<SecretMetadata, SecretStoreError> {
+    use sqlx::Row;
+    let provider: String = row
+        .try_get("provider")
+        .map_err(|_| SecretStoreError::Postgres)?;
+    let kind: String = row
+        .try_get("kind")
+        .map_err(|_| SecretStoreError::Postgres)?;
+    Ok(SecretMetadata {
+        firm_id: row
+            .try_get("firm_id")
+            .map_err(|_| SecretStoreError::Postgres)?,
+        provider: parse_provider(&provider).ok_or(SecretStoreError::InvalidKind)?,
+        kind: parse_kind(&kind).ok_or(SecretStoreError::InvalidKind)?,
+        version: row
+            .try_get("version")
+            .map_err(|_| SecretStoreError::Postgres)?,
+        status: row
+            .try_get("status")
+            .map_err(|_| SecretStoreError::Postgres)?,
+        kms_key_version: row
+            .try_get("kms_key_version")
+            .map_err(|_| SecretStoreError::Postgres)?,
+        actor_id: row
+            .try_get("actor_id")
+            .map_err(|_| SecretStoreError::Postgres)?,
+        created_at: row
+            .try_get::<chrono::DateTime<chrono::Utc>, _>("created_at")
+            .map_err(|_| SecretStoreError::Postgres)?
+            .to_rfc3339(),
+        updated_at: row
+            .try_get::<chrono::DateTime<chrono::Utc>, _>("updated_at")
+            .map_err(|_| SecretStoreError::Postgres)?
+            .to_rfc3339(),
+    })
+}
+
+fn secret_from_pg(row: &sqlx::postgres::PgRow) -> Result<SecretRow, SecretStoreError> {
+    use sqlx::Row;
+    let m = metadata_from_pg(row)?;
+    Ok(SecretRow {
+        firm_id: record_id(FIRM_TABLE, m.firm_id),
+        provider: m.provider.as_str().into(),
+        kind: m.kind.as_str().into(),
+        version: m.version,
+        ciphertext: row
+            .try_get("ciphertext")
+            .map_err(|_| SecretStoreError::Postgres)?,
+        wrapped_dek: row
+            .try_get("wrapped_dek")
+            .map_err(|_| SecretStoreError::Postgres)?,
+        kms_key_version: m.kms_key_version,
+        kms_context: row
+            .try_get("kms_context")
+            .map_err(|_| SecretStoreError::Postgres)?,
+        status: m.status,
+        actor_id: record_id("person", m.actor_id),
+        created_at: m.created_at,
+        updated_at: m.updated_at,
+    })
 }
 
 #[cfg(test)]

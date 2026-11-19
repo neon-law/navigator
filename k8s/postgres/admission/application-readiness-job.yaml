@@ -1,0 +1,89 @@
+# Read-only application-history admission for the exact release binary.
+# Missing, incomplete, or unknown history blocks rollout; imports are explicit operators.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: navigator-postgres-application-readiness
+  labels:
+    app: navigator-postgres-application-readiness
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels:
+        app: navigator-postgres-application-readiness
+        navigator.neonlaw.org/postgres-client: "true"
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: admission
+          image: navigator-surreal-archive # pin-exempt: placeholder the operator replaces with the release image
+          imagePullPolicy: IfNotPresent
+          args:
+            - ops
+            - postgres
+            - ready
+            - --json
+          env:
+            - name: NAVIGATOR_POSTGRES_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: navigator-postgres-client
+                  key: host
+            - name: NAVIGATOR_POSTGRES_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: navigator-postgres-client
+                  key: port
+            - name: NAVIGATOR_POSTGRES_DATABASE
+              valueFrom:
+                configMapKeyRef:
+                  name: navigator-postgres-client
+                  key: database
+            - name: NAVIGATOR_POSTGRES_SSLMODE
+              valueFrom:
+                configMapKeyRef:
+                  name: navigator-postgres-client
+                  key: sslmode
+            - name: NAVIGATOR_POSTGRES_ROOT_CERT
+              value: /etc/navigator/postgres/ca.crt
+            - name: NAVIGATOR_POSTGRES_USER
+              value: navigator_app
+            - name: NAVIGATOR_POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: navigator-postgres-app
+                  key: password
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: ca
+              mountPath: /etc/navigator/postgres
+              readOnly: true
+      volumes:
+        - name: ca
+          secret:
+            secretName: navigator-postgres-app
+            items:
+              - key: ca.crt
+                path: ca.crt
+            defaultMode: 0444

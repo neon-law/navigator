@@ -156,10 +156,21 @@ async fn ensure_parent(
         _ => return Err(MirrorError::Source),
     };
     if !exists {
+        if super::backfilled(pg).await?
+            || crate::postgres_backfill::family::active_for_table(pg, table).await?
+        {
+            return Err(MirrorError::MatterAuthority);
+        }
         match key {
-            MirrorKey::Project(_) => super::tenancy::mirror(surreal, pg, &key).await?,
-            MirrorKey::Asset(_) => super::documents::mirror(surreal, pg, &key).await?,
-            MirrorKey::Person(_) => super::identity::mirror(surreal, pg, &key).await?,
+            MirrorKey::Project(_) => {
+                super::from_source(super::tenancy::mirror(surreal, pg, &key)).await?
+            }
+            MirrorKey::Asset(_) => {
+                super::from_source(super::documents::mirror(surreal, pg, &key)).await?
+            }
+            MirrorKey::Person(_) => {
+                super::from_source(super::identity::mirror(surreal, pg, &key)).await?
+            }
             _ => return Err(MirrorError::Source),
         };
     }
@@ -203,7 +214,7 @@ fn from_row(row: &PgRow) -> Result<DeadlineImage, sqlx::Error> {
     })
 }
 async fn upsert(pg: &PostgresDb, row: &DeadlineImage) -> Result<Mirrored, MirrorError> {
-    let result = sqlx::query("INSERT INTO project_deadlines (id,project_id,title,due_at,authority_kind,authority,source,source_document_id,owner_person_id,status,calendar_role,category,internal_lead_days,client_lead_days,replay_key,inserted_at,updated_at,description,calendar_sequence) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) ON CONFLICT (id) DO UPDATE SET project_id=EXCLUDED.project_id,title=EXCLUDED.title,description=EXCLUDED.description,calendar_sequence=EXCLUDED.calendar_sequence,due_at=EXCLUDED.due_at,authority_kind=EXCLUDED.authority_kind,authority=EXCLUDED.authority,source=EXCLUDED.source,source_document_id=EXCLUDED.source_document_id,owner_person_id=EXCLUDED.owner_person_id,status=EXCLUDED.status,calendar_role=EXCLUDED.calendar_role,category=EXCLUDED.category,internal_lead_days=EXCLUDED.internal_lead_days,client_lead_days=EXCLUDED.client_lead_days,replay_key=EXCLUDED.replay_key,inserted_at=EXCLUDED.inserted_at,updated_at=EXCLUDED.updated_at WHERE (project_deadlines.project_id,project_deadlines.title,project_deadlines.due_at,project_deadlines.authority_kind,project_deadlines.authority,project_deadlines.source,project_deadlines.source_document_id,project_deadlines.owner_person_id,project_deadlines.status,project_deadlines.calendar_role,project_deadlines.category,project_deadlines.internal_lead_days,project_deadlines.client_lead_days,project_deadlines.replay_key,project_deadlines.inserted_at,project_deadlines.updated_at,project_deadlines.description,project_deadlines.calendar_sequence) IS DISTINCT FROM (EXCLUDED.project_id,EXCLUDED.title,EXCLUDED.due_at,EXCLUDED.authority_kind,EXCLUDED.authority,EXCLUDED.source,EXCLUDED.source_document_id,EXCLUDED.owner_person_id,EXCLUDED.status,EXCLUDED.calendar_role,EXCLUDED.category,EXCLUDED.internal_lead_days,EXCLUDED.client_lead_days,EXCLUDED.replay_key,EXCLUDED.inserted_at,EXCLUDED.updated_at,EXCLUDED.description,EXCLUDED.calendar_sequence)")
+    let result = sqlx::query("INSERT INTO project_deadlines (id,project_id,title,due_at,authority_kind,authority,source,source_document_id,owner_person_id,status,calendar_role,category,internal_lead_days,client_lead_days,replay_key,inserted_at,updated_at,description,calendar_sequence) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) ON CONFLICT (id) DO NOTHING")
         .bind(row.id).bind(row.project_id).bind(&row.title).bind(row.due_at).bind(&row.authority_kind).bind(&row.authority).bind(&row.source)
         .bind(row.source_document_id).bind(row.owner_person_id).bind(&row.status).bind(&row.calendar_role).bind(&row.category)
         .bind(row.internal_lead_days).bind(row.client_lead_days).bind(&row.replay_key).bind(micros(row.inserted_at)).bind(micros(row.updated_at)).bind(&row.description).bind(row.calendar_sequence)
@@ -218,15 +229,11 @@ pub async fn mirror(
     let MirrorKey::ProjectDeadline(id) = key else {
         return Err(MirrorError::Source);
     };
+    if !super::source_import_allowed(pg, "project_deadlines").await? {
+        return Ok(Mirrored::Unchanged);
+    }
     let Some(row) = source_one(surreal, *id).await? else {
-        return Ok(changed(
-            sqlx::query("DELETE FROM project_deadlines WHERE id=$1")
-                .bind(id)
-                .execute(&pg.0)
-                .await?
-                .rows_affected(),
-            Mirrored::Deleted,
-        ));
+        return Ok(Mirrored::Unchanged);
     };
     ensure_parent(
         surreal,
@@ -245,6 +252,9 @@ pub async fn mirror(
     upsert(pg, &row).await
 }
 pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
+    if crate::postgres_backfill::family::active_for_table(pg, "project_deadlines").await? {
+        return Ok(ParityReport { tables: vec![] });
+    }
     Ok(ParityReport {
         tables: vec![super::compare(
             "project_deadlines",
@@ -254,6 +264,9 @@ pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport
     })
 }
 pub async fn reconcile(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
+    if crate::postgres_backfill::family::active_for_table(pg, "project_deadlines").await? {
+        return Ok(ParityReport { tables: vec![] });
+    }
     let a = source(surreal).await?;
     let b = target(pg).await?;
     let keys: Vec<_> = a

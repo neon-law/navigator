@@ -1,26 +1,17 @@
 //! `notation_events` — the append-only journal of every state-machine
 //! transition for every Notation, and every query against it.
 //!
-//! # This table lives in SurrealDB
-//!
-//! `notation_events` moved with wave five of #1093 (ENG-121), in the
-//! satellite-ring slice — the heaviest-referenced of the seven, since every
-//! workflow/questionnaire signal and the trust ledger and re-ask journal all
-//! append through it.
-//!
-//! Each row is the on-disk shape of a
-//! [`workflows::WorkflowEvent`](../../../workflows/src/runtime.rs). Restate is
-//! the durable source of truth in production; this table holds the
-//! projection the application queries. The "current state" of a given
-//! `(notation_id, machine_kind)` is the `to_state` of the latest row ordered
-//! by id — see [`latest_for_kind`].
+//! PostgreSQL serves the application journal after verified scoped enrollment.
+//! Each row records a state-machine transition. The current state of a
+//! `(notation_id, machine_kind)` is the `to_state` of its latest row ordered
+//! by id — see [`latest_for_kind`]. Captured Source rows remain readable
+//! only through the explicit import compatibility context.
 //!
 //! # Append-only
 //!
-//! SurrealDB has no trigger in
-//! our usage, so the guarantee lives in this module's shape: [`append_event`]
-//! is the only writer, and there is no update or no delete export at all —
-//! the `sent_emails` precedent. `no_update_or_delete_is_exported` pins it.
+//! [`append_event`] is the public writer; transaction-owned review decisions
+//! use the same canonical event constructor. Neither seam exposes update or
+//! delete. `no_update_or_delete_is_exported` checks the public API.
 //!
 //! `payload` is opaque JSON *text*, not a native object: a questionnaire
 //! event can carry client answer content, so it must never be logged or
@@ -160,16 +151,61 @@ fn many(mut response: surrealdb::IndexedResults) -> Result<Vec<NotationEvent>, N
         .collect())
 }
 
+fn native_event(
+    record: TransitionRecord<'_>,
+    respondent: Uuid,
+    template_id: Uuid,
+) -> NotationEvent {
+    let acting_person_id = resolve_acting_person(&record, respondent);
+    let payload = record.payload_json.or_else(|| {
+        (record.machine_kind == MACHINE_WORKFLOW)
+            .then(|| workflow_payload(acting_person_id, template_id))
+    });
+    let now = Utc::now();
+    NotationEvent {
+        id: Uuid::now_v7(),
+        notation_id: record.notation_id,
+        acting_person_id,
+        template_version_id: template_id,
+        machine_kind: record.machine_kind.to_owned(),
+        from_state: record.from_state.to_owned(),
+        to_state: record.to_state.to_owned(),
+        condition: record.condition.to_owned(),
+        payload,
+        recorded_at: record.recorded_at.to_owned(),
+        inserted_at: now,
+        updated_at: now,
+    }
+}
+
+/// Append the same canonical event in a caller-owned transaction holding its Notation lock.
+pub(crate) async fn append_on(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    record: TransitionRecord<'_>,
+) -> Result<NotationEvent, NotationEventError> {
+    let (respondent, template): (Uuid, Uuid) =
+        sqlx::query_as("SELECT person_id,template_id FROM notation WHERE id=$1")
+            .bind(record.notation_id)
+            .fetch_one(&mut **tx)
+            .await
+            .map_err(matter::MatterAuthorityError::from)?;
+    let event = native_event(record, respondent, template);
+    Ok(matter::upsert_on(
+        &mut **tx,
+        TABLE,
+        serde_json::to_value(event).map_err(matter::MatterAuthorityError::from)?,
+    )
+    .await?)
+}
+
 /// Append one row. No unique index guards this insert — each call mints
 /// its own fresh id — so, like [`crate::answers::record`], nothing here
 /// retries a transaction conflict: an append-only table with no unique
 /// index has no row for two writers to contend over.
 ///
-/// Reads the notation back from SurrealDB (rather than joining, since the
-/// engine does not validate a `record<…>` link) for two things this row
-/// needs that the caller doesn't always have: `person_id` (the respondent
-/// attribution fallback) and `template_id` (pinned onto
-/// `template_version_id`).
+/// Reads the admitted Notation's respondent and immutable Template version
+/// for attribution and version pinning. The transactional seam uses that
+/// same context inside its caller's Notation lock.
 ///
 /// # Errors
 ///
@@ -179,45 +215,28 @@ pub async fn append_event(
     db: &SurrealDb,
     record: TransitionRecord<'_>,
 ) -> Result<NotationEvent, NotationEventError> {
-    let authority = matter::authority_for(TABLE).await?;
-    let (respondent, template_id) = if let Some(pg) = &authority {
-        crate::postgres::notations::notation_context(pg, record.notation_id)
-            .await?
-            .ok_or(crate::notations::NotationError::NotFound(
-                record.notation_id,
-            ))?
-    } else {
-        let notation = crate::notations::find_by_id(db, record.notation_id)
-            .await?
-            .ok_or(crate::notations::NotationError::NotFound(
-                record.notation_id,
-            ))?;
-        (notation.person_id, notation.template_id)
-    };
-    let acting_person_id = resolve_acting_person(&record, respondent);
+    if let Some(pg) = matter::authority_for(TABLE).await? {
+        let (respondent, template_id) =
+            crate::postgres::notations::notation_context(&pg, record.notation_id)
+                .await?
+                .ok_or(crate::notations::NotationError::NotFound(
+                    record.notation_id,
+                ))?;
+        return Ok(
+            matter::upsert(&pg, TABLE, &native_event(record, respondent, template_id)).await?,
+        );
+    }
+    let notation = crate::notations::find_by_id(db, record.notation_id)
+        .await?
+        .ok_or(crate::notations::NotationError::NotFound(
+            record.notation_id,
+        ))?;
+    let template_id = notation.template_id;
+    let acting_person_id = resolve_acting_person(&record, notation.person_id);
     let payload = record.payload_json.or_else(|| {
         (record.machine_kind == MACHINE_WORKFLOW)
             .then(|| workflow_payload(acting_person_id, template_id))
     });
-
-    if let Some(pg) = authority {
-        let now = Utc::now();
-        let event = NotationEvent {
-            id: Uuid::now_v7(),
-            notation_id: record.notation_id,
-            acting_person_id,
-            template_version_id: template_id,
-            machine_kind: record.machine_kind.to_owned(),
-            from_state: record.from_state.to_owned(),
-            to_state: record.to_state.to_owned(),
-            condition: record.condition.to_owned(),
-            payload,
-            recorded_at: record.recorded_at.to_owned(),
-            inserted_at: now,
-            updated_at: now,
-        };
-        return Ok(matter::upsert(&pg, TABLE, &event).await?);
-    }
     let id = Uuid::now_v7();
     let mut response = db
         .query(format!(

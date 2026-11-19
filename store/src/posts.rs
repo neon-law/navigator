@@ -3,10 +3,10 @@
 //! The `post` row is the Post: its Markdown, schedule, captions, and
 //! social links live in the database. The historical Posts are applied from
 //! `store/seeds/neon/Post.yaml` by [`seed_post`], which only creates a
-//! missing Post. [`import_source`] is the one write seam and keeps a Post's
+//! missing Post. [`import_source`] keeps a Post's
 //! stable Brand+slug identity, so the worker's `published` promotion, the row
 //! id every `social_publication` receipt is keyed by, and the receipts
-//! themselves survive an edit.
+//! themselves survive an edit. [`publish_scheduled`] records worker completion through the same PostgreSQL authority.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -238,6 +238,16 @@ pub enum PostError {
         current: DateTime<Utc>,
         requested: DateTime<Utc>,
     },
+}
+
+/// Record completed publication only while the Post remains scheduled.
+/// Missing, held, and already published rows are idempotent no-ops.
+pub async fn publish_scheduled(_source: &SurrealDb, post_id: Uuid) -> Result<(), PostError> {
+    let pg = authority::authority()
+        .await?
+        .ok_or_else(|| PostError::Db("PostgreSQL publication authority is unavailable".into()))?;
+    authority::execute(&pg, sqlx::query("UPDATE post SET status='published',updated_at=now() WHERE id=$1 AND status='scheduled'").bind(post_id)).await?;
+    Ok(())
 }
 
 fn scheduled_is_live(status: &str, publish_at: Option<DateTime<Utc>>, now: DateTime<Utc>) -> bool {

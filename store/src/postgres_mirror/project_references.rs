@@ -126,7 +126,7 @@ pub(super) async fn mirror(
     let Some(image) = source_rows(surreal, Some(key)).await?.pop() else {
         // A reference SurrealDB lacks is no evidence once PostgreSQL holds
         // the table: copy, never delete.
-        if crate::postgres_graph::holds("project_reference").await {
+        if crate::postgres_graph::holds("project_reference") {
             return Err(MirrorError::GraphAuthority);
         }
         let MirrorKey::ProjectReference {
@@ -212,7 +212,7 @@ async fn target_rows(pg: &PostgresDb) -> Result<Vec<ReferenceImage>, MirrorError
 
 /// Compare every Project Reference in both stores. Reports name keys only.
 pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
-    let graph_authoritative = crate::postgres_graph::holds("project_reference").await;
+    let graph_authoritative = crate::postgres_graph::holds("project_reference");
     if graph_authoritative && !super::compares_authoritative(pg).await? {
         return Ok(ParityReport { tables: Vec::new() });
     }

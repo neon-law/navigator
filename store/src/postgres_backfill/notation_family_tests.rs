@@ -47,6 +47,9 @@ impl Source for CapturedNotation {
                 references: vec![],
                 reset_fact_differences: vec![],
                 foreign_keys_hold: foreign_keys_hold(pg, family).await?,
+                project_lifecycle: None,
+                sent_email_union: None,
+                journal_handoff: None,
                 asset_union: Some(AssetUnionProof {
                     proven_native_target_only: usize::from(self.known_native),
                     unknown_target_only: usize::from(!self.known_native),
@@ -179,7 +182,7 @@ async fn handoff_case(known_native: bool, old_global_complete: bool) {
                     &absent, &pg, &key
                 ))
                 .await,
-                Err(crate::postgres_mirror::MirrorError::MatterAuthority)
+                Ok(crate::postgres_mirror::Mirrored::Unchanged)
             ));
         }
         let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM notation WHERE id=$1")
@@ -286,6 +289,9 @@ impl Source for FrozenSourceNotes {
                 references: vec![],
                 reset_fact_differences: vec![],
                 foreign_keys_hold: foreign_keys_hold(pg, family).await?,
+                project_lifecycle: None,
+                sent_email_union: None,
+                journal_handoff: None,
                 asset_union: Some(AssetUnionProof {
                     full_metadata_compared: true,
                     ..Default::default()

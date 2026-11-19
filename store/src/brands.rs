@@ -471,7 +471,7 @@ pub async fn create(
     actor_person_id: Option<Uuid>,
     input: &NewBrand,
 ) -> Result<Brand, BrandError> {
-    if crate::postgres::tenancy::enabled()? {
+    if crate::postgres::tenancy::enabled() {
         if let Some(hex) = input.primary_color.as_deref() {
             validate_primary_hex(hex)?;
         }
@@ -550,7 +550,7 @@ pub(crate) async fn seed_upsert(
     input: &NewBrand,
     website_url: Option<&str>,
 ) -> Result<Brand, BrandError> {
-    if crate::postgres::tenancy::enabled()? {
+    if crate::postgres::tenancy::enabled() {
         return Box::pin(crate::postgres::tenancy::seed_brand(input, website_url)).await;
     }
     match create_unchecked(surreal, input).await {
@@ -608,7 +608,7 @@ async fn mirrored(surreal: &SurrealDb, brand: Option<Brand>) -> Option<Brand> {
 
 /// Find a brand by id.
 pub async fn find_by_id(surreal: &SurrealDb, id: Uuid) -> Result<Option<Brand>, BrandError> {
-    if crate::postgres::tenancy::enabled()? {
+    if crate::postgres::tenancy::enabled() {
         return Ok(Box::pin(crate::postgres::tenancy::find_brand(id)).await?);
     }
     let mut response = surreal
@@ -622,7 +622,7 @@ pub async fn find_by_id(surreal: &SurrealDb, id: Uuid) -> Result<Option<Brand>, 
 
 /// Find a brand by its unique key.
 pub async fn find_by_key(surreal: &SurrealDb, key: &str) -> Result<Option<Brand>, BrandError> {
-    if crate::postgres::tenancy::enabled()? {
+    if crate::postgres::tenancy::enabled() {
         return Ok(Box::pin(crate::postgres::tenancy::brand_by_key(key)).await?);
     }
     let mut response = surreal
@@ -648,7 +648,7 @@ pub async fn find_by_key_for_actor(
     actor_person_id: Option<Uuid>,
     key: &str,
 ) -> Result<Brand, BrandError> {
-    if crate::postgres::tenancy::enabled()? {
+    if crate::postgres::tenancy::enabled() {
         return Box::pin(crate::postgres::tenancy::brand_for_actor(
             actor_role,
             actor_person_id,
@@ -687,7 +687,7 @@ pub async fn find_by_key_for_actor(
 /// Every system-wide brand (`firm_id IS NONE`), name then id — the set
 /// every Firm sees regardless of its own scoped brands.
 pub async fn system_wide(surreal: &SurrealDb) -> Result<Vec<Brand>, BrandError> {
-    if crate::postgres::tenancy::enabled()? {
+    if crate::postgres::tenancy::enabled() {
         return Ok(Box::pin(crate::postgres::tenancy::system_brands()).await?);
     }
     let mut response = surreal
@@ -704,7 +704,7 @@ pub async fn system_wide(surreal: &SurrealDb) -> Result<Vec<Brand>, BrandError> 
 /// Owner inventory [`visible_for_actor`] lists alongside [`system_wide`]. Never
 /// used for a Firm-scoped viewer's own listing, which stays [`for_firm`].
 pub async fn all_firm_scoped(surreal: &SurrealDb) -> Result<Vec<Brand>, BrandError> {
-    if crate::postgres::tenancy::enabled()? {
+    if crate::postgres::tenancy::enabled() {
         return Ok(Box::pin(crate::postgres::tenancy::all_firm_brands()).await?);
     }
     let mut response = surreal
@@ -729,7 +729,7 @@ pub async fn visible_for_actor(
     actor_role: Role,
     actor_person_id: Option<Uuid>,
 ) -> Result<Vec<Brand>, BrandError> {
-    if crate::postgres::tenancy::enabled()? {
+    if crate::postgres::tenancy::enabled() {
         return Ok(Box::pin(crate::postgres::tenancy::visible_brands_for_actor(
             actor_role,
             actor_person_id,
@@ -765,7 +765,7 @@ pub async fn visible_for_actor(
 /// Every brand scoped to this Firm — never another Firm's, and never the
 /// system-wide set (use [`system_wide`] for that).
 pub async fn for_firm(surreal: &SurrealDb, firm_id: Uuid) -> Result<Vec<Brand>, BrandError> {
-    if crate::postgres::tenancy::enabled()? {
+    if crate::postgres::tenancy::enabled() {
         return Ok(Box::pin(crate::postgres::tenancy::brands_for_firm(firm_id)).await?);
     }
     let mut response = surreal
@@ -788,7 +788,7 @@ pub async fn update(
     brand_id: Uuid,
     input: &BrandEdit,
 ) -> Result<Brand, BrandError> {
-    if crate::postgres::tenancy::enabled()? {
+    if crate::postgres::tenancy::enabled() {
         if let Some(Some(hex)) = input.primary_color.as_ref() {
             validate_primary_hex(hex)?;
         }
@@ -878,7 +878,7 @@ pub async fn set_logo(
     object_key: &str,
     content_type: &str,
 ) -> Result<Brand, BrandError> {
-    if crate::postgres::tenancy::enabled()? {
+    if crate::postgres::tenancy::enabled() {
         return Box::pin(crate::postgres::tenancy::set_brand_logo(
             actor_role,
             actor_person_id,
@@ -930,7 +930,7 @@ pub async fn set_font(
     if !FONT_LICENCES.contains(&licence) {
         return Err(BrandError::InvalidFontLicence(licence.to_string()));
     }
-    if crate::postgres::tenancy::enabled()? {
+    if crate::postgres::tenancy::enabled() {
         return Box::pin(crate::postgres::tenancy::set_brand_font(
             actor_role,
             actor_person_id,
@@ -981,7 +981,7 @@ pub async fn set_website_url(
     if actor_role != Role::Owner {
         return Err(BrandError::NotAuthorized);
     }
-    if crate::postgres::tenancy::enabled()? {
+    if crate::postgres::tenancy::enabled() {
         return Box::pin(crate::postgres::tenancy::set_brand_website(
             brand_id,
             website_url,
@@ -1059,7 +1059,7 @@ pub async fn delete(
     actor_person_id: Option<Uuid>,
     brand_id: Uuid,
 ) -> Result<(), BrandError> {
-    if crate::postgres::tenancy::enabled()? {
+    if crate::postgres::tenancy::enabled() {
         return Box::pin(crate::postgres::tenancy::delete_brand(
             actor_role,
             actor_person_id,

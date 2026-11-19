@@ -5,7 +5,7 @@ use word::matter::Matter;
 
 use super::*;
 use crate::postgres_mirror::tests::{connect, fresh_schema, synthetic_entity, test_postgres};
-use crate::{matter_captions, matter_pages};
+use crate::{matter_captions, matter_pages::MatterPage};
 
 fn page(slug: &str, client: Option<&[&str]>) -> PageEntry {
     let mut lenses = BTreeMap::new();
@@ -120,6 +120,46 @@ async fn source_project(surreal: &SurrealDb, firm_id: Option<Uuid>) -> Uuid {
     .id
 }
 
+async fn captured_project(surreal: &SurrealDb, owned: bool) -> (Uuid, Option<Uuid>) {
+    let entity = synthetic_entity(surreal).await;
+    let firm = if owned {
+        let id = Uuid::now_v7();
+        let now = Utc::now().to_rfc3339();
+        surreal.query("CREATE $id SET name='Captured Firm',slug=$slug,status='active',entity_id=$entity,inserted_at=$now,updated_at=$now")
+            .bind(("id",record_id("firm",id))).bind(("slug",id.to_string())).bind(("entity",record_id("entity",entity))).bind(("now",now)).await.unwrap().check().unwrap();
+        Some(id)
+    } else {
+        None
+    };
+    let id = Uuid::now_v7();
+    let now = Utc::now().to_rfc3339();
+    surreal.query("CREATE $id SET code=$code,name='Captured Pages',brand='neon',status='open',entity_id=$entity,firm_id=$firm,inserted_at=$now,updated_at=$now")
+        .bind(("id",record_id("project",id))).bind(("code",id.to_string())).bind(("entity",record_id("entity",entity))).bind(("firm",firm.map(|id|record_id("firm",id)))).bind(("now",now)).await.unwrap().check().unwrap();
+    (id, firm)
+}
+async fn captured_pages(
+    surreal: &SurrealDb,
+    project: Uuid,
+    pages: &[PageEntry],
+) -> Vec<MatterPage> {
+    let mut rows = Vec::new();
+    for (position, entry) in pages.iter().enumerate() {
+        let id = Uuid::now_v7();
+        let now = Utc::now().to_rfc3339();
+        let lens = |key: &str| entry.lenses.get(key).cloned();
+        surreal.query("CREATE $id SET project_id=$project,slug=$slug,kind=$kind,title=$title,draft=$draft,document_revision=$revision,media=$media,position=$position,client_sections=$client,lawyer_sections=$lawyer,clerk_sections=$clerk,synced_at=$now")
+            .bind(("id",record_id("matter_page",id))).bind(("project",record_id("project",project))).bind(("slug",entry.slug.clone())).bind(("kind",entry.kind.clone())).bind(("title",entry.title.clone())).bind(("draft",entry.draft.clone())).bind(("revision",entry.document_revision.clone())).bind(("media",serde_json::json!(entry.media))).bind(("position",i64::try_from(position).unwrap())).bind(("client",lens("client"))).bind(("lawyer",lens("lawyer"))).bind(("clerk",lens("clerk"))).bind(("now",now.clone())).await.unwrap().check().unwrap();
+        rows.push(MatterPage {
+            id,
+            project_id: project,
+            entry: entry.clone(),
+            position: i64::try_from(position).unwrap(),
+            synced_at: now,
+        });
+    }
+    rows
+}
+
 async fn stored_pages(pg: &PostgresDb, project_id: Uuid) -> Vec<PageImage> {
     target_pages(pg, Some(project_id))
         .await
@@ -160,108 +200,118 @@ fn an_unreadable_sync_timestamp_is_refused() {
 }
 
 #[tokio::test]
-async fn a_whole_set_sync_converges_replays_and_drops_removed_pages() {
-    let Some((options, database)) = fresh_schema().await else {
-        return;
-    };
-    let pg = connect(&options, &database).await;
-    let surreal = crate::test_support::mem_surreal().await;
-    let firm_id = source_firm(&surreal).await;
-    let project_id = source_project(&surreal, Some(firm_id)).await;
-
-    let revision = Uuid::now_v7().to_string();
-    let mut declared = pages();
-    let timeline = &mut declared[1];
-    timeline.kind = "whatsapp_timeline".into();
-    timeline.draft = None;
-    timeline.document_revision = Some(revision.clone());
-    timeline.lenses.insert(
-        "lawyer".to_string(),
-        ["whatsapp_timeline", "boundary_note", "provenance_statement"]
-            .map(String::from)
-            .to_vec(),
-    );
-    let synced = matter_pages::replace_for_project(&surreal, project_id, &declared)
-        .await
-        .unwrap();
-    assert_eq!(
-        mirror(&surreal, &pg, &pages_key(project_id)).await.unwrap(),
-        Mirrored::Written
-    );
-    assert_eq!(
-        mirror(&surreal, &pg, &pages_key(project_id)).await.unwrap(),
-        Mirrored::Unchanged,
-        "a replay writes nothing"
-    );
-    let stored = stored_pages(&pg, project_id).await;
-    assert_eq!(
-        stored.iter().map(|page| page.id).collect::<Vec<_>>(),
-        synced.iter().map(|page| page.id).collect::<Vec<_>>(),
-        "source identities and declared order survive"
-    );
-    assert_eq!(stored[0].slug, "timeline");
-    assert_eq!(stored[0].position, 0);
-    assert_eq!(stored[1].position, 1);
-    assert_eq!(
-        synced[1].entry.document_revision.as_deref(),
-        Some(revision.as_str())
-    );
-    assert_eq!(
-        stored[1].document_revision.as_deref(),
-        Some(revision.as_str())
-    );
-    assert_eq!(stored[0].firm_id, Some(firm_id));
-    assert_eq!(stored[0].draft.as_deref(), Some("drafts/timeline.md"));
-    assert_eq!(
-        stored[0].client_sections.as_deref(),
-        Some(
-            CLIENT
-                .iter()
-                .map(|s| (*s).to_string())
-                .collect::<Vec<_>>()
-                .as_slice()
-        )
-    );
-    assert_eq!(
-        stored[1].client_sections, None,
-        "an undeclared lens stays undeclared"
-    );
-    assert_eq!(stored[1].clerk_sections, None);
-    assert_eq!(
-        stored[0].synced_at,
-        synced_at(&synced[0].synced_at),
-        "the sync timestamp is preserved"
-    );
-    assert!(parity(&surreal, &pg).await.unwrap().is_clean());
-
-    // A re-sync that reorders and drops a page replaces the whole set.
-    let resynced =
-        matter_pages::replace_for_project(&surreal, project_id, &[page("deadlines", None)])
+async fn captured_pages_keep_identities_order_and_actual_row_counts() {
+    super::super::from_source(super::super::during_initial_copy(async {
+        let Some((options, database)) = fresh_schema().await else {
+            return;
+        };
+        let pg = connect(&options, &database).await;
+        let source = crate::test_support::mem_surreal().await;
+        let (project, firm) = captured_project(&source, true).await;
+        let mut declared = pages();
+        let revision = Uuid::now_v7().to_string();
+        declared[1].kind = "whatsapp_timeline".into();
+        declared[1].draft = None;
+        declared[1].document_revision = Some(revision.clone());
+        let capture = captured_pages(&source, project, &declared).await;
+        let missing = scoped_page_references(&source, &pg).await.unwrap();
+        assert_eq!(missing.len(), 2);
+        assert!(missing.iter().all(|row| row.source_orphans == 0
+            && row.postgres_missing == 2
+            && row.newly_target_missing == 2));
+        assert_eq!(
+            mirror(&source, &pg, &pages_key(project)).await.unwrap(),
+            Mirrored::Written
+        );
+        assert_eq!(
+            mirror(&source, &pg, &pages_key(project)).await.unwrap(),
+            Mirrored::Unchanged
+        );
+        sqlx::query("UPDATE project SET name='Native parent' WHERE id=$1")
+            .bind(project)
+            .execute(pg.pool())
             .await
             .unwrap();
-    assert_eq!(
-        mirror(&surreal, &pg, &pages_key(project_id)).await.unwrap(),
-        Mirrored::Written
-    );
-    let stored = stored_pages(&pg, project_id).await;
-    assert_eq!(stored.len(), 1, "the removed page leaves PostgreSQL");
-    assert_eq!(stored[0].id, resynced[0].id);
-    assert_eq!(
-        (stored[0].slug.as_str(), stored[0].position),
-        ("deadlines", 0)
-    );
+        assert_eq!(
+            mirror(&source, &pg, &pages_key(project)).await.unwrap(),
+            Mirrored::Unchanged
+        );
+        let name: String = sqlx::query_scalar("SELECT name FROM project WHERE id=$1")
+            .bind(project)
+            .fetch_one(pg.pool())
+            .await
+            .unwrap();
+        assert_eq!(name, "Native parent");
+        assert!(scoped_page_references(&source, &pg)
+            .await
+            .unwrap()
+            .is_empty());
+        let stored = stored_pages(&pg, project).await;
+        assert_eq!(
+            stored.iter().map(|row| row.id).collect::<Vec<_>>(),
+            capture.iter().map(|row| row.id).collect::<Vec<_>>()
+        );
+        assert_eq!(stored[0].firm_id, firm);
+        assert_eq!(
+            stored[0].client_sections.as_deref(),
+            Some(
+                CLIENT
+                    .iter()
+                    .map(|s| (*s).to_owned())
+                    .collect::<Vec<_>>()
+                    .as_slice()
+            )
+        );
+        assert!(stored[1].client_sections.is_none());
+        assert_eq!(
+            stored[1].document_revision.as_deref(),
+            Some(revision.as_str())
+        );
+        assert_eq!(stored[0].synced_at, synced_at(&capture[0].synced_at));
+        let report = scoped_page_parity(&source, &pg).await.unwrap();
+        assert!(report.divergent.is_empty());
+        assert_eq!((report.source_rows, report.target_rows), (2, 2));
+        source
+            .query("DELETE matter_page WHERE project_id=$project")
+            .bind(("project", record_id("project", project)))
+            .await
+            .unwrap()
+            .check()
+            .unwrap();
+        assert_eq!(
+            mirror(&source, &pg, &pages_key(project)).await.unwrap(),
+            Mirrored::Unchanged
+        );
+        let report = scoped_page_parity(&source, &pg).await.unwrap();
+        assert_eq!((report.source_rows, report.target_rows), (0, 2));
+        assert_eq!(report.divergent, vec![pages_key(project)]);
+        assert_eq!(stored_pages(&pg, project).await, stored);
+        pg.pool().close().await;
+    }))
+    .await;
+}
 
-    // The matter-delete cascade empties the set.
-    matter_pages::delete_for_project(&surreal, project_id)
-        .await
-        .unwrap();
-    assert_eq!(
-        mirror(&surreal, &pg, &pages_key(project_id)).await.unwrap(),
-        Mirrored::Deleted
-    );
-    assert!(stored_pages(&pg, project_id).await.is_empty());
-    assert!(parity(&surreal, &pg).await.unwrap().is_clean());
-    pg.0.close().await;
+#[tokio::test]
+async fn page_refresh_preserves_target_only_rows_and_refuses_changed_ownership() {
+    super::super::from_source(super::super::during_initial_copy(async {
+        let Some((options,database))=fresh_schema().await else{return;};let pg=connect(&options,&database).await;
+        let source=crate::test_support::mem_surreal().await;let(project,_)=captured_project(&source,true).await;let capture=captured_pages(&source,project,&pages()).await;
+        mirror(&source,&pg,&pages_key(project)).await.unwrap();
+        sqlx::query("INSERT INTO matter_page(id,project_id,firm_id,slug,kind,title,position,synced_at) SELECT $1,id,firm_id,'native','docket_deadline_board','Native',2,now() FROM project WHERE id=$2").bind(Uuid::now_v7()).bind(project).execute(pg.pool()).await.unwrap();
+        source.query("UPDATE $id SET title='Captured refresh'").bind(("id",record_id("matter_page",capture[0].id))).await.unwrap().check().unwrap();
+        // Initial copy cannot overwrite a target version. Authorized refresh updates captured identities only.
+        mirror(&source,&pg,&pages_key(project)).await.unwrap();assert_eq!(stored_pages(&pg,project).await[0].title,"Page timeline");
+        let images=source_pages(&source,Some(project)).await.unwrap().remove(&project).unwrap();
+        write_pages(&source,&pg,project,&images,ImportMode::Refresh).await.unwrap();let stored=stored_pages(&pg,project).await;assert_eq!(stored.len(),3);assert_eq!(stored[0].title,"Captured refresh");
+        let report=scoped_page_parity(&source,&pg).await.unwrap();assert_eq!((report.source_rows,report.target_rows),(2,3));assert_eq!(report.divergent,vec![pages_key(project)]);
+        let (_,other_firm)=captured_project(&source,true).await;let other_firm=other_firm.unwrap();
+        super::super::mirror(&source,&pg,&MirrorKey::Firm(other_firm)).await.unwrap();
+        source.query("UPDATE $id SET firm_id=$firm").bind(("id",record_id("project",project))).bind(("firm",record_id("firm",other_firm))).await.unwrap().check().unwrap();
+        let changed=source_pages(&source,Some(project)).await.unwrap().remove(&project).unwrap();
+        assert!(write_pages(&source,&pg,project,&changed,ImportMode::Refresh).await.is_err());assert_eq!(stored_pages(&pg,project).await,stored);
+        let refs=scoped_page_references(&source,&pg).await.unwrap();assert_eq!(refs.len(),1);assert_eq!(refs[0].field,"firm_id");assert_eq!((refs[0].source_orphans,refs[0].postgres_missing,refs[0].newly_target_missing),(0,2,2));
+        pg.pool().close().await;
+    })).await;
 }
 
 fn synced_at(text: &str) -> DateTime<Utc> {
@@ -345,7 +395,7 @@ async fn a_caption_round_trips_its_nested_fields_and_an_explicit_empty_block_rem
 }
 
 #[tokio::test]
-async fn parity_names_divergent_projects_and_reconcile_repairs_them() {
+async fn parity_preserves_unknown_page_drift_while_reconciling_captions() {
     let Some((options, database)) = fresh_schema().await else {
         return;
     };
@@ -353,9 +403,7 @@ async fn parity_names_divergent_projects_and_reconcile_repairs_them() {
     let surreal = crate::test_support::mem_surreal().await;
     let firm_id = source_firm(&surreal).await;
     let project_id = source_project(&surreal, Some(firm_id)).await;
-    matter_pages::replace_for_project(&surreal, project_id, &pages())
-        .await
-        .unwrap();
+    captured_pages(&surreal, project_id, &pages()).await;
     matter_captions::replace_for_project(&surreal, project_id, Some(&matter("00CV3")))
         .await
         .unwrap();
@@ -396,39 +444,38 @@ async fn parity_names_divergent_projects_and_reconcile_repairs_them() {
     let drift = parity(&surreal, &pg).await.unwrap();
     assert_eq!(drift.tables[0].divergent, vec![pages_key(project_id)]);
     assert_eq!(drift.tables[1].divergent, vec![caption_key(project_id)]);
-    assert!(reconcile(&surreal, &pg).await.unwrap().is_clean());
+    assert!(!reconcile(&surreal, &pg).await.unwrap().is_clean());
     let stored = stored_pages(&pg, project_id).await;
     assert_eq!(
         stored
             .iter()
             .map(|page| page.slug.as_str())
             .collect::<Vec<_>>(),
-        ["timeline", "deadlines"]
+        ["deadlines", "timeline", "stray"]
     );
-    assert_eq!(stored[0].title, "Page timeline");
-    assert!(reconcile(&surreal, &pg).await.unwrap().is_clean());
+    assert_eq!(stored[1].title, "Tampered");
+    assert!(!reconcile(&surreal, &pg).await.unwrap().is_clean());
     pg.0.close().await;
 }
 
 #[tokio::test]
 async fn rows_outside_their_projects_firm_are_refused() {
-    let Some((options, database)) = fresh_schema().await else {
-        return;
-    };
-    let pg = connect(&options, &database).await;
-    let surreal = crate::test_support::mem_surreal().await;
-    let owner = source_firm(&surreal).await;
-    let other = source_firm(&surreal).await;
-    let project_id = source_project(&surreal, Some(owner)).await;
-    matter_pages::replace_for_project(&surreal, project_id, &pages())
-        .await
-        .unwrap();
-    mirror(&surreal, &pg, &pages_key(project_id)).await.unwrap();
-    crate::postgres_mirror::tenancy::mirror(&surreal, &pg, &MirrorKey::Firm(other))
-        .await
-        .unwrap();
+    super::super::from_source(super::super::during_initial_copy(async {
+        let Some((options, database)) = fresh_schema().await else {
+            return;
+        };
+        let pg = connect(&options, &database).await;
+        let surreal = crate::test_support::mem_surreal().await;
+        let (project_id, _) = captured_project(&surreal, true).await;
+        let (_, other) = captured_project(&surreal, true).await;
+        let other = other.unwrap();
+        captured_pages(&surreal, project_id, &pages()).await;
+        mirror(&surreal, &pg, &pages_key(project_id)).await.unwrap();
+        crate::postgres_mirror::tenancy::mirror(&surreal, &pg, &MirrorKey::Firm(other))
+            .await
+            .unwrap();
 
-    let cross_firm = sqlx::query(
+        let cross_firm = sqlx::query(
         "INSERT INTO matter_page (id, project_id, firm_id, slug, kind, title, position, synced_at) \
          VALUES ($1, $2, $3, 'elsewhere', 'docket_deadline_board', 'Elsewhere', 5, now())",
     )
@@ -438,47 +485,47 @@ async fn rows_outside_their_projects_firm_are_refused() {
     .execute(&pg.0)
     .await
     .unwrap_err();
-    assert_eq!(
-        MirrorError::from(cross_firm).to_string(),
-        "PostgreSQL refused the row (SQLSTATE 23503)"
-    );
-    let cross_caption = sqlx::query(
-        "INSERT INTO matter_caption (id, project_id, firm_id, court, case_number, \
+        assert_eq!(
+            MirrorError::from(cross_firm).to_string(),
+            "PostgreSQL refused the row (SQLSTATE 23503)"
+        );
+        let cross_caption = sqlx::query(
+            "INSERT INTO matter_caption (id, project_id, firm_id, court, case_number, \
          judicial_officer, department, filed_on, parties, counsel, synced_at) \
          VALUES ($1, $2, $3, '{}', '', '', '', '', '[]', '{}', now())",
-    )
-    .bind(Uuid::now_v7())
-    .bind(project_id)
-    .bind(other)
-    .execute(&pg.0)
-    .await
-    .unwrap_err();
-    assert_eq!(
-        MirrorError::from(cross_caption).to_string(),
-        "PostgreSQL refused the row (SQLSTATE 23503)"
-    );
-    assert!(
-        sqlx::query("UPDATE matter_page SET firm_id = $1 WHERE project_id = $2")
-            .bind(other)
-            .bind(project_id)
-            .execute(&pg.0)
-            .await
-            .is_err()
-    );
-
-    // A Project with no Firm has no owner to prove: refused and reported.
-    let unowned = source_project(&surreal, None).await;
-    matter_pages::replace_for_project(&surreal, unowned, &pages())
+        )
+        .bind(Uuid::now_v7())
+        .bind(project_id)
+        .bind(other)
+        .execute(&pg.0)
         .await
-        .unwrap();
-    assert!(matches!(
-        mirror(&surreal, &pg, &pages_key(unowned)).await,
-        Err(MirrorError::Source)
-    ));
-    let report = reconcile(&surreal, &pg).await.unwrap();
-    assert_eq!(report.tables[0].divergent, vec![pages_key(unowned)]);
-    assert!(stored_pages(&pg, unowned).await.is_empty());
-    pg.0.close().await;
+        .unwrap_err();
+        assert_eq!(
+            MirrorError::from(cross_caption).to_string(),
+            "PostgreSQL refused the row (SQLSTATE 23503)"
+        );
+        assert!(
+            sqlx::query("UPDATE matter_page SET firm_id = $1 WHERE project_id = $2")
+                .bind(other)
+                .bind(project_id)
+                .execute(&pg.0)
+                .await
+                .is_err()
+        );
+
+        // A Project with no Firm has no owner to prove: refused and reported.
+        let (unowned, _) = captured_project(&surreal, false).await;
+        captured_pages(&surreal, unowned, &pages()).await;
+        assert!(matches!(
+            mirror(&surreal, &pg, &pages_key(unowned)).await,
+            Err(MirrorError::Source)
+        ));
+        let report = reconcile(&surreal, &pg).await.unwrap();
+        assert_eq!(report.tables[0].divergent, vec![pages_key(unowned)]);
+        assert!(stored_pages(&pg, unowned).await.is_empty());
+        pg.0.close().await;
+    }))
+    .await;
 }
 
 /// The hook reads the process environment and the process-wide pool, so each
@@ -542,13 +589,6 @@ async fn matter_sync_hook_probe() {
     let firm_id = source_firm(&surreal).await;
     let project_id = source_project(&surreal, Some(firm_id)).await;
 
-    // Every write succeeds in SurrealDB whatever PostgreSQL does.
-    matter_pages::replace_for_project(&surreal, project_id, &pages())
-        .await
-        .unwrap();
-    let kept = matter_pages::replace_for_project(&surreal, project_id, &[page("deadlines", None)])
-        .await
-        .unwrap();
     matter_captions::replace_for_project(&surreal, project_id, Some(&matter("00CV4")))
         .await
         .unwrap();
@@ -559,12 +599,6 @@ async fn matter_sync_hook_probe() {
     matter_captions::replace_for_project(&surreal, cleared_project, None)
         .await
         .unwrap();
-    assert_eq!(
-        matter_pages::list_for_project(&surreal, project_id)
-            .await
-            .unwrap(),
-        kept
-    );
 
     if case == "mirrored" {
         let port: u16 = std::env::var("NAVIGATOR_POSTGRES_PORT")
@@ -582,12 +616,6 @@ async fn matter_sync_hook_probe() {
             &std::env::var("NAVIGATOR_POSTGRES_DATABASE").unwrap(),
         )
         .await;
-        let stored = stored_pages(&pg, project_id).await;
-        assert_eq!(
-            stored.iter().map(|page| page.id).collect::<Vec<_>>(),
-            [kept[0].id],
-            "the hook mirrored the whole replacement"
-        );
         let captions = target_captions(&pg).await.unwrap();
         assert_eq!(captions[&project_id].case_number, "00CV4");
         assert!(

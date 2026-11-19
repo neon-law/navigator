@@ -1,25 +1,18 @@
-//! Shared test infrastructure for every workspace crate that exercises
-//! the `store` schema.
+//! Shared synthetic infrastructure for workspace tests and explicit development smoke harnesses.
 //!
-//! # The pattern
+//! PostgreSQL actor tests use [`with_postgres`]: each walk owns a freshly
+//! created database with canonical schema and empty-history enrollment before
+//! fixture data. [`PostgresFixture`] exposes that same lifecycle to a harness
+//! which must pass explicit connection options or share its database with a
+//! child process. Ordinary application startup never calls these constructors.
 //!
-//! Each test opens its own embedded, memory-backed SurrealDB inside the
-//! test process — [`mem_surreal`] — and applies the `DEFINE` schema to it.
-//! Nothing is shared between tests and nothing outlives the process, so
-//! the whole suite runs in parallel with no cross-test collisions, no
-//! container, and no cleanup. `cargo test` needs no configuration and no
-//! Docker.
+//! Legacy import and extraction tests explicitly use [`mem_surreal`] or
+//! [`server_surreal`]. The latter needs configured Source coordinates;
+//! `NAV_REQUIRE_SURREAL=1` turns a missing compatibility server into a failure.
 //!
-//! The one exception is a test that spawns the `navigator` binary: a
-//! subprocess cannot reach an in-process engine, so [`server_surreal`]
-//! opens a *server-mode* database instead and hands back the coordinates
-//! to point that process at. It skips when no endpoint is configured,
-//! which `NAV_REQUIRE_SURREAL=1` turns into a failure so CI stays honest.
-//!
-//! The rest of this module is seeds: the small fixtures — an entity, a
-//! matter, a person, a notation — that most tests need before they can
-//! assert anything.
+//! The remaining helpers build synthetic domain records for each test.
 
+use anyhow::Context as _;
 use uuid::Uuid;
 
 /// Seed validated completed enrollment evidence for a synthetic PostgreSQL fixture.
@@ -30,6 +23,13 @@ pub async fn seed_postgres_family(
     family: crate::postgres_backfill::family::Family,
 ) {
     crate::postgres_backfill::family::activate_fixture(pg, family).await;
+}
+
+/// Run a historical import fixture against its explicit legacy Source rows.
+/// Ordinary application fixtures use [`with_postgres`]; this preserves the
+/// existing operator import context without changing production admission.
+pub async fn with_source_import<T>(test: impl std::future::Future<Output = T>) -> T {
+    crate::postgres_mirror::from_source(test).await
 }
 
 /// Synthetic Twilio registry and credential fixtures shared by route tests.
@@ -898,3 +898,170 @@ pub async fn ingest_fi_message_on(
         }
     }
 }
+
+/// An exclusively owned, freshly created synthetic PostgreSQL database.
+///
+/// Canonical schema and empty-history receipts are installed before any fixture
+/// data. Construction never accepts an existing target database. Call `close`
+/// after all consumers have drained; it drops only this resource's minted name.
+pub struct PostgresFixture {
+    admin: crate::postgres::PostgresDb,
+    pg: crate::postgres::PostgresDb,
+    database: String,
+}
+
+impl PostgresFixture {
+    /// Create a unique database using explicit administrative connection options.
+    ///
+    /// # Errors
+    /// Returns connection, creation, or canonical fixture initialization failures.
+    pub async fn create(options: sqlx::postgres::PgConnectOptions) -> anyhow::Result<Self> {
+        Self::create_with_connections(options.clone(), options).await
+    }
+
+    /// Create a fresh fixture with independently routed administration and data connections.
+    ///
+    /// Both options must address the same PostgreSQL server. Separate transports keep
+    /// closing a fixture connection from interrupting its administrative cleanup.
+    ///
+    /// # Errors
+    /// Returns connection, creation, or canonical fixture initialization failures.
+    pub async fn create_with_connections(
+        admin_options: sqlx::postgres::PgConnectOptions,
+        fixture_options: sqlx::postgres::PgConnectOptions,
+    ) -> anyhow::Result<Self> {
+        let admin = crate::postgres::PostgresDb::connect(admin_options)
+            .await
+            .context("connect synthetic fixture administration")?;
+        let database = format!("native_test_{}", Uuid::now_v7().simple());
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {database}")))
+            .execute(admin.pool())
+            .await
+            .context("create owned synthetic fixture database")?;
+        let prepared = prepare_postgres_fixture(fixture_options.database(&database))
+            .await
+            .with_context(|| format!("initialize owned synthetic fixture {database}"));
+        match prepared {
+            Ok(pg) => Ok(Self {
+                admin,
+                pg,
+                database,
+            }),
+            Err(error) => {
+                let cleanup = drop_postgres_fixture(&admin, &database).await;
+                admin.pool().close().await;
+                Err(fixture_setup_failure(error, cleanup))
+            }
+        }
+    }
+
+    /// The fixture's native PostgreSQL connection.
+    #[must_use]
+    pub const fn postgres(&self) -> &crate::postgres::PostgresDb {
+        &self.pg
+    }
+
+    /// The generated database name, for a child process sharing this fixture.
+    #[must_use]
+    pub fn database(&self) -> &str {
+        &self.database
+    }
+
+    /// Drain the fixture's pool and delete its exclusively owned database.
+    ///
+    /// Consuming the resource prevents a second cleanup through this handle.
+    ///
+    /// # Errors
+    /// Returns a drop failure when another consumer has not drained.
+    pub async fn close(self) -> anyhow::Result<()> {
+        self.pg.pool().close().await;
+        let dropped = drop_postgres_fixture(&self.admin, &self.database).await;
+        self.admin.pool().close().await;
+        dropped
+    }
+}
+
+/// Cleanup must not replace the failure which caused initialization to unwind.
+fn fixture_setup_failure(error: anyhow::Error, cleanup: anyhow::Result<()>) -> anyhow::Error {
+    match cleanup {
+        Ok(()) => error,
+        Err(cleanup) => error.context(format!("owned fixture cleanup also failed: {cleanup:#}")),
+    }
+}
+
+async fn drop_postgres_fixture(
+    admin: &crate::postgres::PostgresDb,
+    database: &str,
+) -> anyhow::Result<()> {
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP DATABASE {database}")))
+        .execute(admin.pool())
+        .await
+        .context("drop owned synthetic fixture database")?;
+    Ok(())
+}
+
+async fn prepare_postgres_fixture(
+    options: sqlx::postgres::PgConnectOptions,
+) -> anyhow::Result<crate::postgres::PostgresDb> {
+    let pg = crate::postgres::PostgresDb::connect(options)
+        .await
+        .context("connect newly created synthetic fixture")?;
+    let initialized = async {
+        sqlx::raw_sql("CREATE EXTENSION IF NOT EXISTS age; LOAD 'age';")
+            .execute(pg.pool()).await.context("initialize synthetic fixture AGE extension")?;
+        sqlx::raw_sql(crate::postgres_schema::canonical_schema())
+            .execute(pg.pool()).await.context("apply synthetic fixture canonical schema")?;
+        sqlx::query("INSERT INTO mirror_backfill_run(id,batch_size,status,scope,completed_at) VALUES ($1,1,'completed','global',now())")
+            .bind(Uuid::new_v4()).execute(pg.pool()).await
+            .context("initialize fresh synthetic fixture global history")?;
+        for family in crate::postgres_backfill::family::Family::all() {
+            seed_postgres_family(&pg, *family).await;
+        }
+        anyhow::Ok(())
+    }.await;
+    if let Err(error) = initialized {
+        pg.pool().close().await;
+        return Err(error);
+    }
+    Ok(pg)
+}
+
+/// Each actor walk uses its own enrolled PostgreSQL database, with no Source handle.
+pub fn with_postgres(
+    test: impl std::future::Future<Output = ()>,
+) -> impl std::future::Future<Output = ()> {
+    let test = Box::pin(test);
+    async move {
+        use crate::postgres::PostgresDb;
+        use futures::FutureExt as _;
+        use sqlx::postgres::{PgConnectOptions, PgSslMode};
+        let Ok(port) = std::env::var("NAVIGATOR_TEST_POSTGRES_PORT") else {
+            assert_ne!(std::env::var("NAV_REQUIRE_POSTGRES").as_deref(), Ok("1"));
+            return;
+        };
+        let database =
+            std::env::var("NAVIGATOR_TEST_POSTGRES_DATABASE").unwrap_or_else(|_| "smoke".into());
+        let options = PgConnectOptions::new()
+            .host("127.0.0.1")
+            .port(port.parse().unwrap())
+            .username("postgres")
+            .password("synthetic")
+            .database(&database)
+            .ssl_mode(PgSslMode::Disable)
+            .options([("session_preload_libraries", "age")]);
+        let fixture = PostgresFixture::create(options).await.unwrap();
+        let result = std::panic::AssertUnwindSafe(PostgresDb::with_test_db(
+            fixture.postgres().clone(),
+            test,
+        ))
+        .catch_unwind()
+        .await;
+        fixture.close().await.unwrap();
+        if let Err(panic) = result {
+            std::panic::resume_unwind(panic);
+        }
+    }
+}
+
+#[cfg(test)]
+mod postgres_tests;

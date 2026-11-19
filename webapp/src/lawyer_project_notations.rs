@@ -155,9 +155,9 @@ async fn add_creation_failures(
     rows: &mut Vec<ProjectNotationRow>,
     project_id: uuid::Uuid,
 ) -> Result<(), String> {
-    if let Some(db) = attempts::database()
+    let db = attempts::database()
         .await
-        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())?;
     {
         for (code, failed_at) in attempts::unresolved(&db, project_id)
             .await

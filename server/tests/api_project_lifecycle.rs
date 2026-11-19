@@ -19,6 +19,16 @@ struct Fixture {
     lawyer: Uuid,
 }
 
+async fn enroll_fixture_history(pg: &PostgresDb, with_notation: bool) {
+    sqlx::query("INSERT INTO mirror_backfill_run(id,batch_size,status,scope,completed_at) VALUES($1,1,'completed','global',now())")
+        .bind(Uuid::now_v7()).execute(pg.pool()).await.unwrap();
+    for family in store::postgres_backfill::family::Family::all() {
+        if with_notation || *family != store::postgres_backfill::family::Family::Notation {
+            store::test_support::seed_postgres_family(pg, *family).await;
+        }
+    }
+}
+
 impl Fixture {
     async fn new(
         provider: Option<std::sync::Arc<dyn portal::signature::SignatureProvider>>,
@@ -59,13 +69,7 @@ impl Fixture {
             .execute(pg.pool())
             .await
             .unwrap();
-        if enrolled {
-            store::test_support::seed_postgres_family(
-                &pg,
-                store::postgres_backfill::family::Family::Notation,
-            )
-            .await;
-        }
+        enroll_fixture_history(&pg, enrolled).await;
         let jurisdiction = Uuid::now_v7();
         let entity_type = Uuid::now_v7();
         let entity = Uuid::now_v7();

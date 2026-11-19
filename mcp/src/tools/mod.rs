@@ -712,9 +712,6 @@ impl From<store::persons::PersonError> for ToolError {
             | E::MicrosoftSubjectTaken
             | E::AppleSubjectTaken => ToolError::Conflict(err.to_string()),
             E::Postgres(_) => ToolError::Internal("PostgreSQL People authority failed".into()),
-            E::PostgresProjection(_) => ToolError::Internal(
-                "PostgreSQL Person change committed but compatibility projection failed".into(),
-            ),
             E::Db(_) | E::WriteReturnedNothing => ToolError::Internal(err.to_string()),
         }
     }
@@ -769,15 +766,6 @@ mod tests {
         assert!(matches!(
             unavailable,
             ToolError::Internal(message) if message == "PostgreSQL People authority failed"
-        ));
-
-        let projection: ToolError =
-            store::persons::PersonError::PostgresProjection("secret projection detail".into())
-                .into();
-        assert!(matches!(
-            projection,
-            ToolError::Internal(message)
-                if message == "PostgreSQL Person change committed but compatibility projection failed"
         ));
     }
 

@@ -2325,13 +2325,17 @@ async fn ensure_dev_project(
     description: &str,
     brand: &str,
 ) -> anyhow::Result<Uuid> {
+    // Matter Pages must inherit their actual Brand owner's Firm at creation.
+    let firm_id = crate::firms::firm_id_for_brand_key(surreal, brand)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("sample Brand has no Firm ownership seat"))?;
     let input = crate::projects::NewProject {
         code: code.to_string(),
         name: name.to_string(),
         status: "open".to_string(),
         brand: brand.to_string(),
         entity_id,
-        firm_id: None,
+        firm_id: Some(firm_id),
         // A dev matter's governing jurisdiction is a lawyer's call, so the
         // seed leaves it unset rather than asserting one.
         jurisdiction_id: None,
@@ -4184,6 +4188,36 @@ pub async fn seed_no_charge_fee_clause(
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn startup_seed_replays_on_postgres_without_a_source_handle() {
+        crate::test_support::with_postgres(async {
+            let source = crate::surreal::SurrealDb::uninitialized();
+            let root = tempfile::tempdir().unwrap();
+            let storage: std::sync::Arc<dyn cloud::StorageService> =
+                std::sync::Arc::new(cloud::FsStorage::new(root.path()).await.unwrap());
+            for environment in [
+                crate::DeploymentEnvironment::Production,
+                crate::DeploymentEnvironment::Dev,
+            ] {
+                Box::pin(super::seed_environment_with(
+                    &source,
+                    &storage,
+                    environment,
+                    super::BrandSeed::Neon,
+                ))
+                .await
+                .unwrap();
+            }
+            let pg = crate::postgres::PostgresDb::application().await.unwrap();
+            let projects: i64 = sqlx::query_scalar("SELECT count(*) FROM project")
+                .fetch_one(pg.pool())
+                .await
+                .unwrap();
+            assert_eq!(projects, 3);
+        })
+        .await;
+    }
+
     /// The reference seeds converge under the PostgreSQL catalog authority:
     /// a second boot writes nothing and SurrealDB receives no row.
     #[tokio::test]

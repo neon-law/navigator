@@ -1,12 +1,12 @@
 # Archives
 
-`archives` is the durable export service for Navigator's operational data. It snapshots SurrealDB tables to Parquet,
+`archives` is the durable export service for Navigator's operational data. It snapshots PostgreSQL tables to Parquet,
 records cloud-cost data when configured, and reports each scheduled run to firm operators.
 
 It serves deployment operators and analysts who need recoverable, queryable history without placing reporting work on
-the application database. Restate hosts the workflow in `workflows-service` by default. With
-`NAVIGATOR_DBOS_ARCHIVES_ENABLED`, the DBOS executor in `web` hosts it instead and adds the whole-PostgreSQL export.
-Neither needs a separate long-running archive service.
+the application database. The retained Restate worker hosts the workflow in `workflows-service`. With
+`NAVIGATOR_DBOS_ARCHIVES_ENABLED`, the DBOS executor in `web` hosts it instead. Both use PostgreSQL by default. Neither
+needs a separate long-running archive service.
 
 See [Iceberg archive](../docs/iceberg-archive.md) for the data contract, [scheduled jobs](../docs/cronjobs.md) for the
 runtime shape, and the crate source for implementation details.
@@ -35,16 +35,20 @@ storage credential and **refuses to write** when the match cannot be confirmed: 
 before any object is written. The Slack digest then annotates the archive project and pins its console links with
 `?project=`. Leave it unset for an in-project bucket and on non-GCS backends.
 
-When `NAVIGATOR_POSTGRES_HOST` is set, the snapshot step requires reviewed coverage for Navigator and Forgejo. Both
-databases must export successfully before a paired completion manifest is written. Each retains its own MVCC watermark.
-Missing inventory, inaccessible relations, schema drift, or failed Iceberg metadata publication records a PostgreSQL
-failure in the digest. The SurrealDB snapshot has its own outcome. See PostgreSQL coverage below.
+The default PostgreSQL snapshot requires reviewed coverage for Navigator and Forgejo. Both databases must export
+successfully before a paired completion manifest is written. Each retains its own MVCC watermark. Missing inventory,
+inaccessible relations, schema drift, or failed Iceberg metadata publication records a PostgreSQL failure in the digest.
+Explicit `all` mode records a separate Source snapshot outcome. See PostgreSQL coverage below.
 
-DBOS Archives requires PostgreSQL coverage. Set `NAVIGATOR_ARCHIVE_SOURCE=postgres` to extract only PostgreSQL without
-opening a SurrealDB connection. This mode requires `NAVIGATOR_POSTGRES_HOST`; paired coverage, reader credentials and
-TLS configuration remain mandatory. The default, or `all`, retains SurrealDB extraction and any configured PostgreSQL
-export. Other values fail. Select PostgreSQL-only extraction only after reconciling the authoritative data; it does not
-export rows still held solely in SurrealDB. The combined Restate worker still needs SurrealDB for its other services.
+An unset `NAVIGATOR_ARCHIVE_SOURCE`, or `postgres`, requires completed PostgreSQL application handoff before opening
+archive storage. It opens no SurrealDB connection. PostgreSQL host, reviewed paired coverage, reader credentials and TLS
+configuration remain mandatory. Explicit `all` enables legacy extraction and raw PostgreSQL access for compatibility;
+only that mode may omit PostgreSQL when its host and paired settings are absent. Other values fail.
+
+Physical backup/WAL procedures and the raw PostgreSQL generation exporter remain available independently of application
+admission and SurrealDB availability. PostgreSQL selection does not recover rows still held solely in SurrealDB;
+retiring its separate backup requires reconciliation and recovery proof. Ordinary application and worker startup require
+PostgreSQL application admission and use inert Source handles.
 
 A PostgreSQL failure is journaled for digest delivery and terminates that invocation. Repair its configuration or source
 and start a new invocation; replay retains the failed extraction outcome.

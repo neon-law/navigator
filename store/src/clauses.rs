@@ -5,8 +5,8 @@
 //! is never rewritten: a change adds a version, and `is_current` marks the
 //! newest active version of each code. Retired versions remain readable. The table is a shared catalog, owned by no
 //! Firm or Project. `navigator-migrate` seeds it after applying migrations;
-//! without `NAVIGATOR_POSTGRES_HOST` the seed is skipped and callers read the
-//! embedded library through `rules::clauses`.
+//! without `NAVIGATOR_POSTGRES_HOST` the operator seed is skipped. Application
+//! readers require validated PostgreSQL; offline CLI inspection explicitly reads the bundle.
 
 use std::collections::BTreeMap;
 
@@ -166,48 +166,46 @@ pub struct CatalogClause {
     pub aliases: Vec<String>,
 }
 
-/// Every Clause version, ordered by code and version: the PostgreSQL read
-/// model when `NAVIGATOR_POSTGRES_HOST` names a reachable server, otherwise the
-/// embedded library. The single read path for the CLI and the lawyer-tier Clauses
-/// page.
+/// Every stored Clause version, ordered by code and version.
+/// Application reads require validated PostgreSQL history and never replace a
+/// configured catalog with the bundled library when the database is unavailable.
 ///
 /// # Errors
-/// Returns a PostgreSQL configuration or query error, or an invalid embedded
-/// library. An unreachable server falls back to the embedded library.
+/// PostgreSQL admission, query, or stored Clause decoding failed.
 pub async fn catalog() -> Result<Vec<CatalogClause>, ClauseError> {
-    if std::env::var_os("NAVIGATOR_POSTGRES_HOST").is_some() {
-        match PostgresDb::from_env().await {
-            Ok(db) => {
-                return list(&db)
-                    .await?
-                    .into_iter()
-                    .map(|clause| {
-                        Ok(CatalogClause {
-                            retired_at: clause.retired_at,
-                            inputs: serde_json::from_value(clause.inputs)
-                                .map_err(|error| ClauseError::Library(error.to_string()))?,
-                            code: clause.code,
-                            version: clause.version,
-                            kind: clause.kind,
-                            body: clause.body,
-                            is_current: clause.is_current,
-                            heading: clause.heading,
-                            aliases: clause
-                                .aliases
-                                .map(|aliases| {
-                                    serde_json::from_value::<Vec<String>>(aliases)
-                                        .map_err(|error| ClauseError::Library(error.to_string()))
-                                })
-                                .transpose()?
-                                .unwrap_or_default(),
-                        })
+    let db = PostgresDb::application().await?;
+    list(&db)
+        .await?
+        .into_iter()
+        .map(|clause| {
+            Ok(CatalogClause {
+                retired_at: clause.retired_at,
+                inputs: serde_json::from_value(clause.inputs)
+                    .map_err(|error| ClauseError::Library(error.to_string()))?,
+                code: clause.code,
+                version: clause.version,
+                kind: clause.kind,
+                body: clause.body,
+                is_current: clause.is_current,
+                heading: clause.heading,
+                aliases: clause
+                    .aliases
+                    .map(|aliases| {
+                        serde_json::from_value::<Vec<String>>(aliases)
+                            .map_err(|error| ClauseError::Library(error.to_string()))
                     })
-                    .collect();
-            }
-            Err(PostgresError::Connection) => {}
-            Err(error) => return Err(error.into()),
-        }
-    }
+                    .transpose()?
+                    .unwrap_or_default(),
+            })
+        })
+        .collect()
+}
+
+/// The bundled library for explicit offline CLI inspection, without opening a store.
+///
+/// # Errors
+/// The embedded Clause library is invalid.
+pub fn bundled_catalog() -> Result<Vec<CatalogClause>, ClauseError> {
     let library = rules::clauses::library_clauses().map_err(ClauseError::Library)?;
     let mut newest = BTreeMap::<String, i32>::new();
     for clause in library.iter().filter(|clause| clause.retired_at.is_none()) {
@@ -360,12 +358,9 @@ pub async fn seed_library_from_env() -> Result<Option<SeedReport>, ClauseError> 
 
 #[cfg(test)]
 mod tests {
-    #[tokio::test]
-    async fn the_embedded_library_answers_when_no_postgres_is_configured() {
-        if std::env::var_os("NAVIGATOR_POSTGRES_HOST").is_some() {
-            return;
-        }
-        let catalog = super::catalog().await.unwrap();
+    #[test]
+    fn the_explicit_offline_bundle_preserves_versions_and_retirement() {
+        let catalog = super::bundled_catalog().unwrap();
         let versions: Vec<_> = catalog
             .iter()
             .filter(|clause| clause.code == "nevada_engagement_arbitration")

@@ -14,7 +14,7 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use portal::{AppState, SessionStore};
 use store::persons::Role;
-use store::test_support::mem_surreal;
+use store::postgres::PostgresDb;
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -167,11 +167,35 @@ fn repo_store() -> repos::RepoStore {
     repos::RepoStore::new(root)
 }
 
+async fn seed_fixture_entity_and_brand(pg: &PostgresDb) -> Uuid {
+    let jurisdiction = Uuid::now_v7();
+    let entity_type = Uuid::now_v7();
+    let entity_id = Uuid::now_v7();
+    sqlx::query("INSERT INTO jurisdiction(id,name) VALUES ($1,'Synthetic Jurisdiction')")
+        .bind(jurisdiction)
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO entity_type(id,name) VALUES ($1,'Synthetic Entity Type')")
+        .bind(entity_type)
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO entity(id,name,entity_type_id,jurisdiction_id) VALUES ($1,'Synthetic Entity',$2,$3)")
+        .bind(entity_id).bind(entity_type).bind(jurisdiction).execute(pg.pool()).await.unwrap();
+    sqlx::query("INSERT INTO brand(name,brand_key) VALUES ('Synthetic Brand','neon')")
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    entity_id
+}
+
 async fn build_fixture() -> Fixture {
     let repo_guard = REPO_ENV_LOCK.lock().await;
     repo_store();
-    let surreal = mem_surreal().await;
-    let entity_id = store::test_support::seed_entity(&surreal).await;
+    let surreal = store::surreal::SurrealDb::uninitialized();
+    let pg = PostgresDb::application().await.unwrap();
+    let entity_id = seed_fixture_entity_and_brand(&pg).await;
     let project = store::projects::create(
         &surreal,
         &store::projects::NewProject {
@@ -292,28 +316,31 @@ async fn json_array_len(resp: axum::http::Response<Body>) -> usize {
 
 #[tokio::test]
 async fn list_projects_is_scoped_to_the_caller() {
-    let fx = build_fixture().await;
+    store::test_support::with_postgres(async {
+        let fx = build_fixture().await;
 
-    let mine = get(&fx, "/app/api/projects", Some(&fx.lawyer)).await;
-    assert_eq!(mine.status(), StatusCode::OK);
-    assert_eq!(
-        json_array_len(mine).await,
-        1,
-        "the participant sees their matter"
-    );
+        let mine = get(&fx, "/app/api/projects", Some(&fx.lawyer)).await;
+        assert_eq!(mine.status(), StatusCode::OK);
+        assert_eq!(
+            json_array_len(mine).await,
+            1,
+            "the participant sees their matter"
+        );
 
-    let theirs = get(&fx, "/app/api/projects", Some(&fx.outsider)).await;
-    assert_eq!(theirs.status(), StatusCode::OK);
-    assert_eq!(
-        json_array_len(theirs).await,
-        0,
-        "a non-participant sees none"
-    );
+        let theirs = get(&fx, "/app/api/projects", Some(&fx.outsider)).await;
+        assert_eq!(theirs.status(), StatusCode::OK);
+        assert_eq!(
+            json_array_len(theirs).await,
+            0,
+            "a non-participant sees none"
+        );
 
-    assert_eq!(
-        get(&fx, "/app/api/projects", None).await.status(),
-        StatusCode::UNAUTHORIZED
-    );
+        assert_eq!(
+            get(&fx, "/app/api/projects", None).await.status(),
+            StatusCode::UNAUTHORIZED
+        );
+    })
+    .await;
 }
 
 /// The Firm-private integration coordinates are the reason
@@ -325,121 +352,130 @@ async fn list_projects_is_scoped_to_the_caller() {
 /// keeps this a redaction rather than a column nobody reads.
 #[tokio::test]
 async fn a_client_project_payload_redacts_the_firm_private_coordinates() {
-    let fx = build_fixture().await;
+    store::test_support::with_postgres(async {
+        let fx = build_fixture().await;
 
-    let client_view = project_json(&fx, Some(&fx.client)).await;
-    for field in [
-        "private_notion_page_url",
-        "internal_slack_channel_id",
-        "internal_slack_channel_url",
-        "calendar_id",
-        "firm_id",
-        "repository_url",
-        "drive_folder_id",
-        "git_initialized_at",
-        "forge_provisioned_at",
-        "closed_at",
-    ] {
-        assert!(
-            client_view.get(field).is_none(),
-            "a client payload must not carry `{field}`: {client_view}"
+        let client_view = project_json(&fx, Some(&fx.client)).await;
+        for field in [
+            "private_notion_page_url",
+            "internal_slack_channel_id",
+            "internal_slack_channel_url",
+            "calendar_id",
+            "firm_id",
+            "repository_url",
+            "drive_folder_id",
+            "git_initialized_at",
+            "forge_provisioned_at",
+            "closed_at",
+        ] {
+            assert!(
+                client_view.get(field).is_none(),
+                "a client payload must not carry `{field}`: {client_view}"
+            );
+        }
+        assert_eq!(
+            client_view.get("code").and_then(serde_json::Value::as_str),
+            Some(fx.project_code.as_str()),
+            "the client still reads the matter itself"
         );
-    }
-    assert_eq!(
-        client_view.get("code").and_then(serde_json::Value::as_str),
-        Some(fx.project_code.as_str()),
-        "the client still reads the matter itself"
-    );
-    assert_eq!(
-        client_view
-            .get("booking_url")
-            .and_then(serde_json::Value::as_str),
-        Some(BOOKING_URL),
-        "the client reads the booking link: {client_view}"
-    );
+        assert_eq!(
+            client_view
+                .get("booking_url")
+                .and_then(serde_json::Value::as_str),
+            Some(BOOKING_URL),
+            "the client reads the booking link: {client_view}"
+        );
 
-    let firm_view = project_json(&fx, Some(&fx.lawyer)).await;
-    assert_eq!(
-        firm_view
-            .get("private_notion_page_url")
-            .and_then(serde_json::Value::as_str),
-        Some(PRIVATE_NOTION),
-        "the firm tier still reads the private page: {firm_view}"
-    );
-    assert_eq!(
-        firm_view
-            .get("internal_slack_channel_id")
-            .and_then(serde_json::Value::as_str),
-        Some(INTERNAL_SLACK_ID),
-        "the firm tier still reads the private channel id: {firm_view}"
-    );
-    assert_eq!(
-        firm_view
-            .get("calendar_id")
-            .and_then(serde_json::Value::as_str),
-        Some(PROJECT_CALENDAR),
-        "the firm tier still reads the calendar id: {firm_view}"
-    );
+        let firm_view = project_json(&fx, Some(&fx.lawyer)).await;
+        assert_eq!(
+            firm_view
+                .get("private_notion_page_url")
+                .and_then(serde_json::Value::as_str),
+            Some(PRIVATE_NOTION),
+            "the firm tier still reads the private page: {firm_view}"
+        );
+        assert_eq!(
+            firm_view
+                .get("internal_slack_channel_id")
+                .and_then(serde_json::Value::as_str),
+            Some(INTERNAL_SLACK_ID),
+            "the firm tier still reads the private channel id: {firm_view}"
+        );
+        assert_eq!(
+            firm_view
+                .get("calendar_id")
+                .and_then(serde_json::Value::as_str),
+            Some(PROJECT_CALENDAR),
+            "the firm tier still reads the calendar id: {firm_view}"
+        );
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn matter_reads_are_scoped() {
-    let fx = build_fixture().await;
-    let pid = fx.project_id;
+    store::test_support::with_postgres(async {
+        let fx = build_fixture().await;
+        let pid = fx.project_id;
 
-    for path in [
-        format!("/app/api/projects/{pid}"),
-        format!("/app/api/projects/{pid}/participants"),
-        format!("/app/api/projects/{pid}/notations"),
-        format!("/app/api/notations/{}", fx.notation_id),
-    ] {
-        assert_eq!(
-            get(&fx, &path, Some(&fx.lawyer)).await.status(),
-            StatusCode::OK,
-            "{path}"
-        );
-        assert_eq!(
-            get(&fx, &path, Some(&fx.outsider)).await.status(),
-            StatusCode::NOT_FOUND,
-            "{path} out of scope"
-        );
-        assert_eq!(
-            get(&fx, &path, None).await.status(),
-            StatusCode::UNAUTHORIZED,
-            "{path} anon"
-        );
-    }
+        for path in [
+            format!("/app/api/projects/{pid}"),
+            format!("/app/api/projects/{pid}/participants"),
+            format!("/app/api/projects/{pid}/notations"),
+            format!("/app/api/notations/{}", fx.notation_id),
+        ] {
+            assert_eq!(
+                get(&fx, &path, Some(&fx.lawyer)).await.status(),
+                StatusCode::OK,
+                "{path}"
+            );
+            assert_eq!(
+                get(&fx, &path, Some(&fx.outsider)).await.status(),
+                StatusCode::NOT_FOUND,
+                "{path} out of scope"
+            );
+            assert_eq!(
+                get(&fx, &path, None).await.status(),
+                StatusCode::UNAUTHORIZED,
+                "{path} anon"
+            );
+        }
 
-    // A client on the matter reads it too.
-    assert_eq!(
-        get(&fx, &format!("/app/api/projects/{pid}"), Some(&fx.client))
-            .await
-            .status(),
-        StatusCode::OK
-    );
+        // A client on the matter reads it too.
+        assert_eq!(
+            get(&fx, &format!("/app/api/projects/{pid}"), Some(&fx.client))
+                .await
+                .status(),
+            StatusCode::OK
+        );
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn notation_answers_are_lawyer_only_and_matter_scoped() {
-    let fx = build_fixture().await;
-    let path = format!("/app/api/notations/{}/answers", fx.notation_id);
+    store::test_support::with_postgres(async {
+        let fx = build_fixture().await;
+        let path = format!("/app/api/notations/{}/answers", fx.notation_id);
 
-    assert_eq!(
-        get(&fx, &path, Some(&fx.lawyer)).await.status(),
-        StatusCode::OK
-    );
-    assert_eq!(
-        get(&fx, &path, Some(&fx.client)).await.status(),
-        StatusCode::FORBIDDEN
-    );
-    assert_eq!(
-        get(&fx, &path, Some(&fx.outsider)).await.status(),
-        StatusCode::NOT_FOUND
-    );
-    assert_eq!(
-        get(&fx, &path, None).await.status(),
-        StatusCode::UNAUTHORIZED
-    );
+        assert_eq!(
+            get(&fx, &path, Some(&fx.lawyer)).await.status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            get(&fx, &path, Some(&fx.client)).await.status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            get(&fx, &path, Some(&fx.outsider)).await.status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            get(&fx, &path, None).await.status(),
+            StatusCode::UNAUTHORIZED
+        );
+    })
+    .await;
 }
 
 /// A one-matter input, enough to produce a stored finance aggregate.
@@ -490,63 +526,69 @@ async fn post(fx: &Fixture, path: &str, auth: Option<&str>) -> axum::http::Respo
 
 #[tokio::test]
 async fn finance_read_is_404_until_a_run_stores_a_result_then_matches_the_contract() {
-    let fx = build_fixture().await;
-    let path = format!("/app/api/projects/{}/finance", fx.project_id);
+    store::test_support::with_postgres(async {
+        let fx = build_fixture().await;
+        let path = format!("/app/api/projects/{}/finance", fx.project_id);
 
-    assert_eq!(
-        get(&fx, &path, Some(&fx.lawyer)).await.status(),
-        StatusCode::NOT_FOUND,
-        "no run yet: the portal falls back to its fixture on a 404"
-    );
+        assert_eq!(
+            get(&fx, &path, Some(&fx.lawyer)).await.status(),
+            StatusCode::NOT_FOUND,
+            "no run yet: the portal falls back to its fixture on a 404"
+        );
 
-    store::finance_aggregate::upsert(&fx.surreal, fx.project_id, &finance_report("run-1"))
-        .await
-        .unwrap();
+        store::finance_aggregate::upsert(&fx.surreal, fx.project_id, &finance_report("run-1"))
+            .await
+            .unwrap();
 
-    for bearer in [&fx.lawyer, &fx.client] {
-        let resp = get(&fx, &path, Some(bearer)).await;
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let report: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(report["source"], "workflow");
-        assert_eq!(report["run_id"], "run-1");
-        assert_eq!(report["totals"]["collected_cents"], 1_000_000);
-        assert_eq!(report["totals"]["overhead_cents"], 280_000);
-        assert_eq!(report["by_attorney"][0]["home_state"], "A");
-    }
+        for bearer in [&fx.lawyer, &fx.client] {
+            let resp = get(&fx, &path, Some(bearer)).await;
+            assert_eq!(resp.status(), StatusCode::OK);
+            let body = resp.into_body().collect().await.unwrap().to_bytes();
+            let report: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(report["source"], "workflow");
+            assert_eq!(report["run_id"], "run-1");
+            assert_eq!(report["totals"]["collected_cents"], 1_000_000);
+            assert_eq!(report["totals"]["overhead_cents"], 280_000);
+            assert_eq!(report["by_attorney"][0]["home_state"], "A");
+        }
 
-    // Same scope rule as the other Project reads: a miss is a bare 404.
-    assert_eq!(
-        get(&fx, &path, Some(&fx.outsider)).await.status(),
-        StatusCode::NOT_FOUND
-    );
-    assert_eq!(
-        get(&fx, &path, None).await.status(),
-        StatusCode::UNAUTHORIZED
-    );
+        // Same scope rule as the other Project reads: a miss is a bare 404.
+        assert_eq!(
+            get(&fx, &path, Some(&fx.outsider)).await.status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            get(&fx, &path, None).await.status(),
+            StatusCode::UNAUTHORIZED
+        );
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn finance_run_is_lawyer_tier_and_matter_scoped() {
-    let fx = build_fixture().await;
-    let path = format!("/app/api/projects/{}/finance/run", fx.project_id);
+    store::test_support::with_postgres(async {
+        let fx = build_fixture().await;
+        let path = format!("/app/api/projects/{}/finance/run", fx.project_id);
 
-    assert_eq!(
-        post(&fx, &path, Some(&fx.client)).await.status(),
-        StatusCode::FORBIDDEN
-    );
-    assert_eq!(
-        post(&fx, &path, Some(&fx.clerk)).await.status(),
-        StatusCode::FORBIDDEN
-    );
-    assert_eq!(
-        post(&fx, &path, Some(&fx.outsider)).await.status(),
-        StatusCode::NOT_FOUND
-    );
-    assert_eq!(
-        post(&fx, &path, None).await.status(),
-        StatusCode::UNAUTHORIZED
-    );
+        assert_eq!(
+            post(&fx, &path, Some(&fx.client)).await.status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            post(&fx, &path, Some(&fx.clerk)).await.status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            post(&fx, &path, Some(&fx.outsider)).await.status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            post(&fx, &path, None).await.status(),
+            StatusCode::UNAUTHORIZED
+        );
+    })
+    .await;
 }
 
 fn commit_board_sources(fx: &Fixture, files: &[(&str, &[u8])]) {
@@ -579,6 +621,7 @@ async fn inventory_json(fx: &Fixture) -> serde_json::Value {
 
 #[tokio::test]
 async fn notation_inventory_lists_unpersisted_repository_blueprints_and_current_workflows() {
+    store::test_support::with_postgres(async {
     let fx = build_fixture().await;
     let body = b"---\nkind: memo\nworkflow:\n  BEGIN:\n    created: lawyer_review\n  lawyer_review:\n    approved: END\n  END: {}\n---\n\nSynthetic draft.\n";
     commit_board_sources(
@@ -642,214 +685,240 @@ async fn notation_inventory_lists_unpersisted_repository_blueprints_and_current_
         beta["workflow_states"],
         serde_json::json!(["BEGIN", "lawyer_review", "generate_pdf__memo", "END"])
     );
+    }).await;
 }
 
 #[tokio::test]
 async fn notation_inventory_keeps_started_workflows_pinned_when_repository_main_changes() {
-    let fx = build_fixture().await;
-    let body = include_str!("../../templates/notations/neon_law/onboarding__letter.md");
-    commit_board_sources(&fx, &[("drafts/onboarding__letter.md", body.as_bytes())]);
-    let pinned = store::template_source::persist_from_repo(
-        &fx.surreal,
-        &fx.storage,
-        &repo_store(),
-        fx.project_id,
-        "onboarding__letter",
-    )
-    .await
-    .unwrap()
-    .template;
-    let respondent = store::notations::find_by_id(&fx.surreal, fx.notation_id)
+    store::test_support::with_postgres(async {
+        let fx = build_fixture().await;
+        let body = include_str!("../../templates/notations/neon_law/onboarding__letter.md");
+        commit_board_sources(&fx, &[("drafts/onboarding__letter.md", body.as_bytes())]);
+        let pinned = store::template_source::persist_from_repo(
+            &fx.surreal,
+            &fx.storage,
+            &repo_store(),
+            fx.project_id,
+            "onboarding__letter",
+        )
         .await
         .unwrap()
-        .unwrap()
-        .person_id;
-    let run = store::notations::create(
-        &fx.surreal,
-        &store::notations::NewNotation::new(pinned.id, respondent, fx.project_id, "lawyer_review"),
-    )
-    .await
-    .unwrap();
-    let inventory = inventory_json(&fx).await;
-    let same: Vec<_> = inventory
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|row| row["template_code"] == "onboarding__letter")
-        .collect();
-    assert_eq!(
-        same.len(),
-        1,
-        "an already started source version must not gain a duplicate no-run row"
-    );
-    assert_eq!(same[0]["notation_id"], run.id.to_string());
-
-    let revised = body.replace("generate_pdf__retainer_pdf", "generate_pdf__engagement_pdf");
-    commit_board_sources(&fx, &[("drafts/onboarding__letter.md", revised.as_bytes())]);
-    let inventory = inventory_json(&fx).await;
-    let same: Vec<_> = inventory
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|row| row["template_code"] == "onboarding__letter")
-        .collect();
-    assert_eq!(same.len(), 2);
-    let started = same
-        .iter()
-        .find(|row| row["notation_id"] == run.id.to_string())
-        .unwrap();
-    let current = same
-        .iter()
-        .find(|row| row["notation_id"].is_null())
-        .unwrap();
-    assert!(started["workflow_states"]
-        .as_array()
-        .unwrap()
-        .contains(&serde_json::json!("generate_pdf__retainer_pdf")));
-    assert!(started["template_stale"].as_bool().unwrap());
-    assert!(current["workflow_states"]
-        .as_array()
-        .unwrap()
-        .contains(&serde_json::json!("generate_pdf__engagement_pdf")));
-    assert!(!current["template_stale"].as_bool().unwrap());
-    assert_eq!(
-        store::templates::resolve(&fx.surreal, Some(fx.project_id), "onboarding__letter")
+        .template;
+        let respondent = store::notations::find_by_id(&fx.surreal, fx.notation_id)
             .await
             .unwrap()
             .unwrap()
-            .id,
-        pinned.id,
-        "reading main must not replace the persisted version"
-    );
+            .person_id;
+        let run = store::notations::create(
+            &fx.surreal,
+            &store::notations::NewNotation::new(
+                pinned.id,
+                respondent,
+                fx.project_id,
+                "lawyer_review",
+            ),
+        )
+        .await
+        .unwrap();
+        let inventory = inventory_json(&fx).await;
+        let same: Vec<_> = inventory
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row["template_code"] == "onboarding__letter")
+            .collect();
+        assert_eq!(
+            same.len(),
+            1,
+            "an already started source version must not gain a duplicate no-run row"
+        );
+        assert_eq!(same[0]["notation_id"], run.id.to_string());
+
+        let revised = body.replace("generate_pdf__retainer_pdf", "generate_pdf__engagement_pdf");
+        commit_board_sources(&fx, &[("drafts/onboarding__letter.md", revised.as_bytes())]);
+        let inventory = inventory_json(&fx).await;
+        let same: Vec<_> = inventory
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row["template_code"] == "onboarding__letter")
+            .collect();
+        assert_eq!(same.len(), 2);
+        let started = same
+            .iter()
+            .find(|row| row["notation_id"] == run.id.to_string())
+            .unwrap();
+        let current = same
+            .iter()
+            .find(|row| row["notation_id"].is_null())
+            .unwrap();
+        assert!(started["workflow_states"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("generate_pdf__retainer_pdf")));
+        assert!(started["template_stale"].as_bool().unwrap());
+        assert!(current["workflow_states"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("generate_pdf__engagement_pdf")));
+        assert!(!current["template_stale"].as_bool().unwrap());
+        assert_eq!(
+            store::templates::resolve(&fx.surreal, Some(fx.project_id), "onboarding__letter")
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            pinned.id,
+            "reading main must not replace the persisted version"
+        );
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn notation_inventory_flags_a_run_without_a_pinned_digest_through_the_template_binding() {
-    let fx = build_fixture().await;
-    let body = include_str!("../../templates/notations/neon_law/onboarding__letter.md");
-    commit_board_sources(&fx, &[("drafts/onboarding__letter.md", body.as_bytes())]);
-    let pinned = store::template_source::persist_from_repo(
-        &fx.surreal,
-        &fx.storage,
-        &repo_store(),
-        fx.project_id,
-        "onboarding__letter",
-    )
-    .await
-    .unwrap()
-    .template;
-    let respondent = store::notations::find_by_id(&fx.surreal, fx.notation_id)
+    store::test_support::with_postgres(async {
+        let fx = build_fixture().await;
+        let body = include_str!("../../templates/notations/neon_law/onboarding__letter.md");
+        commit_board_sources(&fx, &[("drafts/onboarding__letter.md", body.as_bytes())]);
+        let pinned = store::template_source::persist_from_repo(
+            &fx.surreal,
+            &fx.storage,
+            &repo_store(),
+            fx.project_id,
+            "onboarding__letter",
+        )
         .await
         .unwrap()
-        .unwrap()
-        .person_id;
-    let run = store::notations::create(
-        &fx.surreal,
-        &store::notations::NewNotation::new(pinned.id, respondent, fx.project_id, "lawyer_review"),
-    )
-    .await
-    .unwrap();
-    // A run opened before per-run digests existed carries no pinned
-    // digest of its own; staleness must still resolve through the
-    // store-template binding it was opened against.
-    fx.surreal
-        .query("UPDATE $id UNSET template_body_sha256")
-        .bind(("id", store::surreal::record_id("notation", run.id)))
+        .template;
+        let respondent = store::notations::find_by_id(&fx.surreal, fx.notation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .person_id;
+        let run = store::notations::create(
+            &fx.surreal,
+            &store::notations::NewNotation::new(
+                pinned.id,
+                respondent,
+                fx.project_id,
+                "lawyer_review",
+            ),
+        )
         .await
-        .unwrap()
-        .check()
         .unwrap();
-    let revised = body.replace("generate_pdf__retainer_pdf", "generate_pdf__engagement_pdf");
-    commit_board_sources(&fx, &[("drafts/onboarding__letter.md", revised.as_bytes())]);
-    let inventory = inventory_json(&fx).await;
-    let started: Vec<_> = inventory
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|row| row["template_code"] == "onboarding__letter" && !row["notation_id"].is_null())
-        .collect();
-    assert_eq!(started.len(), 1);
-    assert!(
-        started[0]["template_stale"].as_bool().unwrap(),
-        "a run without its own digest must still flag stale through the template binding"
-    );
+        // A run opened before per-run digests existed carries no pinned
+        // digest of its own; staleness must still resolve through the
+        // store-template binding it was opened against.
+        sqlx::query("UPDATE notation SET template_body_sha256 = NULL WHERE id = $1")
+            .bind(run.id)
+            .execute(PostgresDb::application().await.unwrap().pool())
+            .await
+            .unwrap();
+        let revised = body.replace("generate_pdf__retainer_pdf", "generate_pdf__engagement_pdf");
+        commit_board_sources(&fx, &[("drafts/onboarding__letter.md", revised.as_bytes())]);
+        let inventory = inventory_json(&fx).await;
+        let started: Vec<_> = inventory
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| {
+                row["template_code"] == "onboarding__letter" && !row["notation_id"].is_null()
+            })
+            .collect();
+        assert_eq!(started.len(), 1);
+        assert!(
+            started[0]["template_stale"].as_bool().unwrap(),
+            "a run without its own digest must still flag stale through the template binding"
+        );
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn notation_inventory_refuses_an_unreadable_repository_instead_of_showing_an_empty_board() {
-    let fx = build_fixture().await;
-    std::fs::write(
-        repo_store().path_for_code(&fx.project_code),
-        "not a repository",
-    )
-    .unwrap();
-    let path = format!("/app/api/projects/{}/notation-inventory", fx.project_id);
-    assert_eq!(
-        get(&fx, &path, Some(&fx.lawyer)).await.status(),
-        StatusCode::INTERNAL_SERVER_ERROR
-    );
-    std::fs::remove_file(repo_store().path_for_code(&fx.project_code)).unwrap();
-    commit_board_sources(
-        &fx,
-        &[(
-            "drafts/broken.md",
-            b"---\nkind: memo\nworkflow: invalid\n---\n\nSynthetic draft.\n",
-        )],
-    );
-    assert_eq!(
-        get(&fx, &path, Some(&fx.lawyer)).await.status(),
-        StatusCode::INTERNAL_SERVER_ERROR,
-        "a malformed workflow must not appear as an empty workflow"
-    );
+    store::test_support::with_postgres(async {
+        let fx = build_fixture().await;
+        std::fs::write(
+            repo_store().path_for_code(&fx.project_code),
+            "not a repository",
+        )
+        .unwrap();
+        let path = format!("/app/api/projects/{}/notation-inventory", fx.project_id);
+        assert_eq!(
+            get(&fx, &path, Some(&fx.lawyer)).await.status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        std::fs::remove_file(repo_store().path_for_code(&fx.project_code)).unwrap();
+        commit_board_sources(
+            &fx,
+            &[(
+                "drafts/broken.md",
+                b"---\nkind: memo\nworkflow: invalid\n---\n\nSynthetic draft.\n",
+            )],
+        );
+        assert_eq!(
+            get(&fx, &path, Some(&fx.lawyer)).await.status(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "a malformed workflow must not appear as an empty workflow"
+        );
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn notation_inventory_reads_a_never_pushed_matter_without_creating_its_repository() {
-    // The deployed `neon` image has no `git`, so the board must not provision
-    // a bare repository just to find it empty (release 26.10.26's KIND gate).
-    let fx = build_fixture().await;
-    let path = format!("/app/api/projects/{}/notation-inventory", fx.project_id);
-    assert_eq!(
-        get(&fx, &path, Some(&fx.lawyer)).await.status(),
-        StatusCode::OK
-    );
-    assert!(
-        !repo_store().path_for_code(&fx.project_code).exists(),
-        "reading the board must not create the Project repository"
-    );
+    store::test_support::with_postgres(async {
+        // The deployed `neon` image has no `git`, so the board must not provision
+        // a bare repository just to find it empty (release 26.10.26's KIND gate).
+        let fx = build_fixture().await;
+        let path = format!("/app/api/projects/{}/notation-inventory", fx.project_id);
+        assert_eq!(
+            get(&fx, &path, Some(&fx.lawyer)).await.status(),
+            StatusCode::OK
+        );
+        assert!(
+            !repo_store().path_for_code(&fx.project_code).exists(),
+            "reading the board must not create the Project repository"
+        );
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn notation_inventory_is_lawyer_only_and_matter_scoped() {
-    let fx = build_fixture().await;
-    let path = format!("/app/api/projects/{}/notation-inventory", fx.project_id);
+    store::test_support::with_postgres(async {
+        let fx = build_fixture().await;
+        let path = format!("/app/api/projects/{}/notation-inventory", fx.project_id);
 
-    let lawyer_inventory = get(&fx, &path, Some(&fx.lawyer)).await;
-    assert_eq!(lawyer_inventory.status(), StatusCode::OK);
-    let body = lawyer_inventory
-        .into_body()
-        .collect()
-        .await
-        .unwrap()
-        .to_bytes();
-    let inventory: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(inventory.as_array().unwrap().len(), 1);
-    assert_eq!(inventory[0]["notation_id"], fx.notation_id.to_string());
-    assert_eq!(inventory[0]["template_code"], "test__read_walk");
-    assert_eq!(inventory[0]["respondent_email"], "client@example.com");
+        let lawyer_inventory = get(&fx, &path, Some(&fx.lawyer)).await;
+        assert_eq!(lawyer_inventory.status(), StatusCode::OK);
+        let body = lawyer_inventory
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes();
+        let inventory: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(inventory.as_array().unwrap().len(), 1);
+        assert_eq!(inventory[0]["notation_id"], fx.notation_id.to_string());
+        assert_eq!(inventory[0]["template_code"], "test__read_walk");
+        assert_eq!(inventory[0]["respondent_email"], "client@example.com");
 
-    assert_eq!(
-        get(&fx, &path, Some(&fx.client)).await.status(),
-        StatusCode::FORBIDDEN
-    );
-    assert_eq!(
-        get(&fx, &path, Some(&fx.outsider)).await.status(),
-        StatusCode::NOT_FOUND
-    );
-    assert_eq!(
-        get(&fx, &path, None).await.status(),
-        StatusCode::UNAUTHORIZED
-    );
+        assert_eq!(
+            get(&fx, &path, Some(&fx.client)).await.status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            get(&fx, &path, Some(&fx.outsider)).await.status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            get(&fx, &path, None).await.status(),
+            StatusCode::UNAUTHORIZED
+        );
+    })
+    .await;
 }
 
 /// The notation inventory and the filed answers are matter *content*, so the
@@ -860,85 +929,97 @@ async fn notation_inventory_is_lawyer_only_and_matter_scoped() {
 /// they could name the matter's UUID changes nothing.
 #[tokio::test]
 async fn private_notation_reads_require_participation_from_every_tier() {
-    let fx = build_fixture().await;
-    let inventory = format!("/app/api/projects/{}/notation-inventory", fx.project_id);
-    let answers = format!("/app/api/notations/{}/answers", fx.notation_id);
+    store::test_support::with_postgres(async {
+        let fx = build_fixture().await;
+        let inventory = format!("/app/api/projects/{}/notation-inventory", fx.project_id);
+        let answers = format!("/app/api/notations/{}/answers", fx.notation_id);
 
-    for path in [&inventory, &answers] {
-        for (label, auth) in [
-            ("unassigned owner", &fx.unassigned_owner),
-            ("unassigned admin", &fx.unassigned_admin),
-            ("unassigned lawyer", &fx.outsider),
-        ] {
+        for path in [&inventory, &answers] {
+            for (label, auth) in [
+                ("unassigned owner", &fx.unassigned_owner),
+                ("unassigned admin", &fx.unassigned_admin),
+                ("unassigned lawyer", &fx.outsider),
+            ] {
+                assert_eq!(
+                    get(&fx, path, Some(auth)).await.status(),
+                    StatusCode::NOT_FOUND,
+                    "{label} must not read {path} without a participation row"
+                );
+            }
+
             assert_eq!(
-                get(&fx, path, Some(auth)).await.status(),
-                StatusCode::NOT_FOUND,
-                "{label} must not read {path} without a participation row"
+                get(&fx, path, Some(&fx.participating_admin)).await.status(),
+                StatusCode::OK,
+                "an admin seated on the matter still reads {path}"
             );
         }
-
-        assert_eq!(
-            get(&fx, path, Some(&fx.participating_admin)).await.status(),
-            StatusCode::OK,
-            "an admin seated on the matter still reads {path}"
-        );
-    }
+    })
+    .await;
 }
 
 /// Clerk is the supervised non-lawyer tier, not a narrower Lawyer, so it is
 /// refused at the extractor rather than scoped at the matter — 403, not 404.
 #[tokio::test]
 async fn private_notation_reads_refuse_the_clerk_tier() {
-    let fx = build_fixture().await;
+    store::test_support::with_postgres(async {
+        let fx = build_fixture().await;
 
-    for path in [
-        format!("/app/api/projects/{}/notation-inventory", fx.project_id),
-        format!("/app/api/notations/{}/answers", fx.notation_id),
-    ] {
-        assert_eq!(
-            get(&fx, &path, Some(&fx.clerk)).await.status(),
-            StatusCode::FORBIDDEN,
-            "{path} is lawyer-tier, and a clerk is not lawyer tier"
-        );
-    }
+        for path in [
+            format!("/app/api/projects/{}/notation-inventory", fx.project_id),
+            format!("/app/api/notations/{}/answers", fx.notation_id),
+        ] {
+            assert_eq!(
+                get(&fx, &path, Some(&fx.clerk)).await.status(),
+                StatusCode::FORBIDDEN,
+                "{path} is lawyer-tier, and a clerk is not lawyer tier"
+            );
+        }
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn playbook_reads_are_lawyer_only() {
-    let fx = build_fixture().await;
+    store::test_support::with_postgres(async {
+        let fx = build_fixture().await;
 
-    let list = get(&fx, "/app/api/playbooks", Some(&fx.lawyer)).await;
-    assert_eq!(list.status(), StatusCode::OK);
-    assert_eq!(json_array_len(list).await, 1);
+        let list = get(&fx, "/app/api/playbooks", Some(&fx.lawyer)).await;
+        assert_eq!(list.status(), StatusCode::OK);
+        assert_eq!(json_array_len(list).await, 1);
 
-    assert_eq!(
-        get(&fx, "/app/api/playbooks", Some(&fx.client))
-            .await
-            .status(),
-        StatusCode::FORBIDDEN
-    );
-    assert_eq!(
-        get(&fx, "/app/api/playbooks", None).await.status(),
-        StatusCode::UNAUTHORIZED
-    );
+        assert_eq!(
+            get(&fx, "/app/api/playbooks", Some(&fx.client))
+                .await
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            get(&fx, "/app/api/playbooks", None).await.status(),
+            StatusCode::UNAUTHORIZED
+        );
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn contract_review_read_is_gated() {
-    let fx = build_fixture().await;
-    // No review seeded; an unknown id is 404 for a lawyer, 403 for a client, 401
-    // for anonymous — exercising the tier gate and the non-disclosing miss.
-    let path = format!("/app/api/contract-reviews/{}", Uuid::now_v7());
-    assert_eq!(
-        get(&fx, &path, Some(&fx.lawyer)).await.status(),
-        StatusCode::NOT_FOUND
-    );
-    assert_eq!(
-        get(&fx, &path, Some(&fx.client)).await.status(),
-        StatusCode::FORBIDDEN
-    );
-    assert_eq!(
-        get(&fx, &path, None).await.status(),
-        StatusCode::UNAUTHORIZED
-    );
+    store::test_support::with_postgres(async {
+        let fx = build_fixture().await;
+        // No review seeded; an unknown id is 404 for a lawyer, 403 for a client, 401
+        // for anonymous — exercising the tier gate and the non-disclosing miss.
+        let path = format!("/app/api/contract-reviews/{}", Uuid::now_v7());
+        assert_eq!(
+            get(&fx, &path, Some(&fx.lawyer)).await.status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            get(&fx, &path, Some(&fx.client)).await.status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            get(&fx, &path, None).await.status(),
+            StatusCode::UNAUTHORIZED
+        );
+    })
+    .await;
 }

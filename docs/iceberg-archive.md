@@ -1,12 +1,11 @@
 # Iceberg archive — design
 
-Status: **writer landed and wired for both lanes** (`archives::iceberg::author_snapshot`) — the scheduled `Archives`
-workflow's `iceberg_telemetry` phase (`archives/src/workflow.rs`) promotes every table declared in Navigator's SurrealDB
-schema (the `application/` lane) alongside `otel_logs`, `otel_traces`, and `otel_metrics` (the `telemetry/` lane) to
-Iceberg tables every run. BigLake registration is the remaining step. This doc names every table, its partitioning, the
-GCS layout, the BigQuery wiring, and the retention policy.
+The scheduled `Archives` workflow exports reviewed PostgreSQL coverage for Navigator and Forgejo by default. Its
+`iceberg_telemetry` phase promotes `otel_logs`, `otel_traces`, and `otel_metrics` from the `telemetry/` lane. Explicit
+`NAVIGATOR_ARCHIVE_SOURCE=all` compatibility runs also snapshot SurrealDB tables into the `application/` lane. This doc
+names the sources, partitioning, object layout, BigQuery wiring, and retention policy.
 
-The current archive CronJobs fire at **05:55 and 17:55 UTC** each day. The application lane writes one full-table file
+The archive schedule has **05:55 and 17:55 UTC** slots each day. The optional application lane writes a full-table file
 under `application/<table>/data/dt=<date>/run=<HHMM>/snapshot.parquet` for each scheduled time. Promotion selects that
 run prefix, so its current Iceberg snapshot includes one extraction rather than both daily full-table copies. Telemetry
 still promotes the day's collector files. Both phases use the dedicated archive storage handle. The Slack bot posts the
@@ -32,10 +31,10 @@ by chaining from the prior `v<N>.metadata.json` (`TableMetadataBuilder::new_from
 
 ## Why
 
-The scheduled [`Archives`](durable-workflows.md) Restate workflow snapshots every table declared in Navigator's
-SurrealDB schema to **Parquet** on GCS (`archives/src/snapshot.rs`, `archives/src/parquet_io.rs`). The objects live
-under a table and date prefix in the dedicated archive bucket. Application snapshots additionally select their scheduled
-run; collector telemetry keeps its existing date prefix:
+The scheduled [`Archives`](durable-workflows.md) workflow writes typed PostgreSQL rows and coverage metadata to the
+dedicated archive bucket. Its explicit SurrealDB compatibility source writes full-table Parquet snapshots under a table
+and date prefix (`archives/src/snapshot.rs`, `archives/src/parquet_io.rs`). Those application snapshots select their
+scheduled run; collector telemetry keeps its existing date prefix:
 
 ```text
 gs://<archive-bucket>/application/<table>/data/dt=<yyyy-mm-dd>/run=<HHMM>/snapshot.parquet
@@ -80,22 +79,33 @@ append-only [per-Project git repos](project-repositories.md) and never rewrites 
 Adding a table to that schema adds it to the analytical lake in the same build; a read failure remains visible in the
 scheduled summary rather than becoming an unregistered-table gap.
 
-Each run writes a **full snapshot** of the current SurrealDB table, then the `iceberg_telemetry` workflow phase promotes
-it to an Iceberg table under the `application/` lane, reusing the same `author_snapshot` / `author_iceberg_for_prefix`
+Each explicit `all` run writes a **full snapshot** of the current SurrealDB table. The `iceberg_telemetry` phase
+promotes it to an Iceberg table under the `application/` lane, reusing `author_snapshot` / `author_iceberg_for_prefix`
 writer described above. Record links land as stable `table:key` strings and datetimes as RFC 3339 strings, because the
 Parquet contract is nullable UTF-8 columns. Point-in-time queries come from Iceberg's snapshot log, not from diffing.
 These are binding records: the snapshot log is never pruned (`expire_before_ms: None`), unlike the telemetry lane below.
 
 ### PostgreSQL coverage generations
 
-The `snapshot` step requires reviewed Navigator and Forgejo inventories when PostgreSQL is configured. Supply
-`NAVIGATOR_ARCHIVE_COVERAGE` with both manifests and the separate `NAVIGATOR_ARCHIVE_FORGEJO_USER` and
-`NAVIGATOR_ARCHIVE_FORGEJO_PASSWORD` credentials. `NAVIGATOR_ARCHIVE_POSTGRES_USER` and
-`NAVIGATOR_ARCHIVE_POSTGRES_PASSWORD` set the Navigator login; unset, it reuses the `NAVIGATOR_POSTGRES_*` login. The
-deployed shape is under [Where it runs](#where-it-runs). Forgejo uses database `forgejo` on the same server with the
-same TLS settings. Missing configuration, denied reads, or source failures record a PostgreSQL failure in the digest and
-terminate the invocation. Completed SurrealDB snapshots remain available. Recovery requires a new invocation because
-replay retains the journaled extraction outcome.
+Unset `NAVIGATOR_ARCHIVE_SOURCE` and `postgres` select PostgreSQL alone. Normal scheduled publication requires the
+application's completed storage handoff before object storage is opened; table coverage alone does not establish
+authority. Missing PostgreSQL configuration, incomplete handoff, and unknown source selectors fail closed without
+falling back to SurrealDB.
+
+The `snapshot` step requires reviewed Navigator and Forgejo inventories. Supply `NAVIGATOR_ARCHIVE_COVERAGE` with both
+manifests and the separate `NAVIGATOR_ARCHIVE_FORGEJO_USER` and `NAVIGATOR_ARCHIVE_FORGEJO_PASSWORD` credentials.
+`NAVIGATOR_ARCHIVE_POSTGRES_USER` and `NAVIGATOR_ARCHIVE_POSTGRES_PASSWORD` set the Navigator login; unset, it reuses
+the `NAVIGATOR_POSTGRES_*` login. The deployed shape is under [Where it runs](#where-it-runs). Forgejo uses database
+`forgejo` on the same server with the same TLS settings. Missing configuration, denied reads, or source failures record
+a PostgreSQL failure in the digest and terminate the invocation. In explicit `all` compatibility runs, completed
+SurrealDB snapshots remain available. Recovery requires a new invocation because replay retains the journaled extraction
+outcome.
+
+Explicit `all` exports remain available during migration and recovery without normal application admission. If the
+PostgreSQL host and all paired archive settings are absent, that mode may export SurrealDB alone; it provides no
+PostgreSQL coverage evidence. Raw PostgreSQL export helpers, physical base backups, WAL archiving, and the restore drill
+do not require application admission or a reachable SurrealDB server. Selecting PostgreSQL here does not retire the
+separate SurrealDB backup: retirement also requires verified data handoff and recovery evidence.
 
 The same rule holds for every table with rows: a table that fails to write fails the run. The digest is posted first,
 opening with `Iceberg data export FAILED`, the failure count, and one line per failing table with the first line of its
@@ -274,8 +284,9 @@ boot with the switch on and any coverage setting or the Slack bot missing. The r
 `Archives:<UTC slot>` workflow ids, and step names (`snapshot`, `cost`, `iceberg_telemetry`, `email`). Each successful
 slot publishes `postgres/_paired/<generation>.json` last.
 
-With the switch off, the `archives-trigger` CronJob still starts the Restate workflow on `workflows-service`. That pod
-has no PostgreSQL login, so it exports SurrealDB and telemetry only.
+With the switch off, the `archives-trigger` CronJob starts the retained Restate workflow on `workflows-service`. It uses
+the same PostgreSQL default and requires its connection and coverage settings. An operator can explicitly select `all`
+for compatibility exports; a SurrealDB-only outcome does not establish PostgreSQL recovery.
 
 The `navigator_archive` login holds `pg_read_all_data` and `CONNECT` on both databases. It reads every relation the
 manifest names, including `dbos`, AGE's catalogs, the migration ledger, and large objects, and it can write nothing. The

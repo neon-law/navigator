@@ -50,7 +50,7 @@ pub struct HostRuntime {
 }
 
 /// Build the shared Navigator host runtime from the process environment:
-/// resolve config, connect + migrate + seed the database, configure object
+/// resolve config, validate PostgreSQL history and seed the database, configure object
 /// storage and content, and assemble [`AppState`].
 ///
 /// The caller owns telemetry init (a per-binary service name) and the
@@ -91,54 +91,12 @@ pub async fn build_from_env(brand_seed: store::seed::BrandSeed) -> anyhow::Resul
     crate::config::enforce_deployment_invariants(cfg.environment, |k| std::env::var(k).ok())
         .context("deployment environment invariants")?;
 
-    if let Some(postgres) = store::postgres::PostgresDb::configured()
+    // Application admission verifies the existing migration and activation history.
+    // Legacy imports and schema changes belong to explicit operator commands.
+    store::postgres::PostgresDb::application()
         .await
-        .context("connecting PostgreSQL for runtime readiness")?
-    {
-        store::postgres_backfill::family::require_runtime_scopes(&postgres)
-            .await
-            .context("verifying PostgreSQL runtime activation receipts")?;
-    }
-
-    // The second store. Its schema is applied rather than migrated —
-    // one idempotent `DEFINE` file converged on every boot, which is
-    // what `store::schema::apply` documents itself for. There is no
-    // fallback: `SurrealConfig::from_env` fails closed, so a missing
-    // endpoint stops the boot here instead of surfacing later as a
-    // password-reset link that cannot be minted.
-    let surreal = store::surreal::connect_from_env()
-        .await
-        .context("connecting SurrealDB")?;
-    store::schema::apply(&surreal)
-        .await
-        .context("applying the SurrealDB schema")?;
-    tracing::info!(
-        version = store::schema::SCHEMA_VERSION,
-        "surreal schema applied"
-    );
-
-    // The Firm journal lives in PostgreSQL when a host is configured and in
-    // SurrealDB's `journal_entry` table otherwise. With PostgreSQL, the
-    // temporary import copies those SurrealDB rows on every boot before
-    // accepting requests; journal requests then write only to PostgreSQL.
-    let postgres_journal = store::firm_journal::JournalStore::postgres_configured();
-    tracing::info!(
-        backend = store::firm_journal::JournalStore::selected_backend(postgres_journal),
-        "firm journal backend selected"
-    );
-    if postgres_journal {
-        let postgres = store::postgres::PostgresDb::from_env()
-            .await
-            .context("connecting PostgreSQL journal")?;
-        let report = store::journal_startup_migration::import(&surreal, &postgres)
-            .await
-            .context("importing legacy journal into PostgreSQL")?;
-        tracing::info!(
-            imported = report.imported,
-            triage = report.triage.len(),
-            "legacy journal import completed"
-        );
-    }
+        .context("verify PostgreSQL application authority")?;
+    let surreal = store::surreal::SurrealDb::uninitialized();
 
     // Object storage is created before the seed because template bodies
     // are now seeded into blob storage (not an inline column).

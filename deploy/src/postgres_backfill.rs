@@ -469,18 +469,46 @@ fn run_json(report: &RunReport) -> serde_json::Value {
             if let Some(proof) = &table.asset_union { value["asset_union"] = json!(proof); }
             if let Some(proof) = &table.reset_union { value["reset_union"] = json!(proof); }
             if let Some(proof) = &table.template_pins { value["template_pins"] = json!(proof); }
+            if let Some(proof) = &table.project_lifecycle { value["project_lifecycle"] = json!(proof); }
+            if let Some(proof) = &table.sent_email_union { value["sent_email_union"] = json!(proof); }
+            if let Some(proof) = &table.journal_handoff { value["journal_handoff"] = json!(proof); }
             value
         }).collect::<Vec<_>>(),
     })
 }
 
+fn write_application_proof(out: &mut String, table: &store::postgres_backfill::ParityTableReport) {
+    use std::fmt::Write as _;
+    if let Some(proof) = &table.sent_email_union {
+        let _ = writeln!(out, "Sent Email handoff: captured {} overlaps {} purged {} native-only {} missing {} differing {}",
+            table.surreal, proof.compared_overlaps, proof.excluded_purged, proof.native_target_only,
+            proof.source_only_remaining, proof.differing_overlaps);
+    }
+    if let Some(proof) = &table.journal_handoff {
+        let _ = writeln!(out, "Journal handoff: captured {} represented {} PostgreSQL {} native-only {} unresolved {} integrity failures {}",
+            proof.source_rows, proof.represented_source_rows, proof.target_rows,
+            proof.native_target_only, proof.unresolved_source_rows, proof.target_integrity_failures);
+    }
+}
+
 fn write_family_proof(out: &mut String, table: &store::postgres_backfill::ParityTableReport) {
     use std::fmt::Write as _;
+    write_application_proof(out, table);
     if let Some(proof) = &table.template_pins {
         let _ = writeln!(
             out,
             "Template pins: compared {} differences {}",
             proof.compared, proof.differences
+        );
+    }
+    if let Some(proof) = &table.project_lifecycle {
+        let _ = writeln!(
+            out,
+            "Project lifecycle: overlaps {} retained native {} unresolved {} target-only {}",
+            proof.compared_overlaps,
+            proof.retained_native_projections,
+            proof.unresolved_overlaps,
+            proof.target_only
         );
     }
     if let Some(proof) = &table.asset_union {
@@ -893,6 +921,9 @@ mod tests {
                 asset_union: None,
                 reset_union: None,
                 template_pins: None,
+                project_lifecycle: None,
+                sent_email_union: None,
+                journal_handoff: None,
             }],
             unresolved_references: vec![],
         };
@@ -936,6 +967,9 @@ mod tests {
                 asset_union: None,
                 reset_union: None,
                 template_pins: None,
+                project_lifecycle: None,
+                sent_email_union: None,
+                journal_handoff: None,
             }],
             unresolved_references: vec![],
         };
@@ -1047,6 +1081,9 @@ mod tests {
                 asset_union: None,
                 reset_union: None,
                 template_pins: None,
+                project_lifecycle: None,
+                sent_email_union: None,
+                journal_handoff: None,
             }],
             unresolved_references: vec![],
         };
@@ -1081,6 +1118,9 @@ mod tests {
                 asset_union: None,
                 reset_union: None,
                 template_pins: None,
+                project_lifecycle: None,
+                sent_email_union: None,
+                journal_handoff: None,
             }],
             unresolved_references: vec![store::postgres_mirror::records::UnresolvedReference {
                 table: "relationship",

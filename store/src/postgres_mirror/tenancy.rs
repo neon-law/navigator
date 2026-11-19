@@ -25,7 +25,6 @@ use uuid::Uuid;
 
 use super::{changed, identity, MirrorError, MirrorKey, Mirrored, ParityReport, TableParity};
 use crate::postgres::PostgresDb;
-use crate::postgres_shadow::{compare_row, Comparison, ShadowKey};
 use crate::surreal::SurrealDb;
 
 const FIRM_COLUMNS: &[&str] = &[
@@ -121,6 +120,20 @@ const PARTICIPATION_COLUMNS: &[&str] = &[
 
 /// An upsert keyed on `id` that writes only when a column differs.
 pub(super) fn upsert_sql(table: &str, columns: &[&str]) -> String {
+    use crate::postgres_backfill::family::Family;
+    if matches!(
+        Family::for_table(table),
+        Some(Family::Identity | Family::Tenancy)
+    ) {
+        let placeholders = (1..=columns.len())
+            .map(|index| format!("${index}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return format!(
+            "INSERT INTO {table} ({}) VALUES ({placeholders}) ON CONFLICT DO NOTHING",
+            columns.join(", ")
+        );
+    }
     let placeholders = (1..=columns.len())
         .map(|index| format!("${index}"))
         .collect::<Vec<_>>()
@@ -188,56 +201,6 @@ statement!(
     PARTICIPATION_SELECT,
     select_sql("person_project_role", PARTICIPATION_COLUMNS)
 );
-
-statement!(
-    FIRM_BY_ID,
-    format!("{} WHERE id = $1", select_sql("firm", FIRM_COLUMNS))
-);
-statement!(
-    PROJECT_BY_ID,
-    format!("{} WHERE id = $1", select_sql("project", PROJECT_COLUMNS))
-);
-statement!(
-    PROJECT_BY_CODE,
-    format!("{} WHERE code = $1", select_sql("project", PROJECT_COLUMNS))
-);
-
-/// Compare one Firm read by id with PostgreSQL's row, through the mirror's
-/// Firm image.
-pub(crate) async fn shadow_firm(
-    pg: &PostgresDb,
-    id: Uuid,
-    source: Option<&crate::firms::Firm>,
-) -> Result<Comparison, MirrorError> {
-    let source = source.map(FirmImage::from_source).transpose()?;
-    compare_row(
-        pg,
-        FIRM_BY_ID.as_str(),
-        ShadowKey::Id(id),
-        source,
-        FirmImage::from_row,
-        |image| image.id,
-    )
-    .await
-}
-
-/// Compare one Project read, by id or by code, with PostgreSQL's row for
-/// the same lookup, through the mirror's Project image.
-pub(crate) async fn shadow_project(
-    pg: &PostgresDb,
-    key: ShadowKey,
-    source: Option<&crate::projects::Project>,
-) -> Result<Comparison, MirrorError> {
-    let source = source.map(ProjectImage::from_source).transpose()?;
-    let sql = match key {
-        ShadowKey::Id(_) => PROJECT_BY_ID.as_str(),
-        ShadowKey::Text(_) => PROJECT_BY_CODE.as_str(),
-    };
-    compare_row(pg, sql, key, source, ProjectImage::from_row, |image| {
-        image.id
-    })
-    .await
-}
 
 /// A Surreal RFC 3339 timestamp at PostgreSQL's microsecond precision.
 pub(super) fn timestamp(text: &str) -> Result<DateTime<Utc>, MirrorError> {
@@ -436,6 +399,14 @@ struct ProjectImage {
 }
 
 impl ProjectImage {
+    fn lifecycle(&self) -> crate::postgres::project_lifecycle::LifecycleProjection {
+        crate::postgres::project_lifecycle::LifecycleProjection {
+            status: self.status.clone(),
+            closed_at: self.closed_at.clone(),
+            closure_reason: self.closure_reason.clone(),
+        }
+    }
+
     fn from_source(project: &crate::projects::Project) -> Result<Self, MirrorError> {
         Ok(Self {
             id: project.id,
@@ -612,6 +583,10 @@ pub(super) async fn mirror(
     pg: &PostgresDb,
     key: &MirrorKey,
 ) -> Result<Mirrored, MirrorError> {
+    if !super::source_import_allowed(pg, key.table()).await? {
+        return Ok(Mirrored::Unchanged);
+    }
+
     // Keep the row writer's provider/store futures off callers' stack frames.
     Box::pin(mirror_inner(surreal, pg, key)).await
 }
@@ -634,7 +609,7 @@ async fn mirror_inner(
                     }
                     upsert_firm(pg, &image).await
                 }
-                None => delete(pg, "DELETE FROM firm WHERE id = $1", *id).await,
+                None => Ok(Mirrored::Unchanged),
             }
         }
         MirrorKey::Brand(id) => {
@@ -643,7 +618,7 @@ async fn mirror_inner(
                 .map_err(|_| MirrorError::Source)?;
             match source {
                 Some(brand) => upsert_brand(pg, &BrandImage::from_source(&brand)?).await,
-                None => delete(pg, "DELETE FROM brand WHERE id = $1", *id).await,
+                None => Ok(Mirrored::Unchanged),
             }
         }
         MirrorKey::FirmBrand { brand_key } => {
@@ -653,11 +628,7 @@ async fn mirror_inner(
             if let Some(row) = source {
                 return upsert_firm_brand(pg, &FirmBrandImage::from_source(&row)?).await;
             }
-            let deleted = sqlx::query("DELETE FROM firm_brand WHERE brand_key = $1")
-                .bind(brand_key)
-                .execute(&pg.0)
-                .await?;
-            Ok(changed(deleted.rows_affected(), Mirrored::Deleted))
+            Ok(Mirrored::Unchanged)
         }
         MirrorKey::Project(id) => {
             let source = crate::projects::find_by_id_in_surreal(surreal, *id)
@@ -669,7 +640,7 @@ async fn mirror_inner(
                     identity::ensure(surreal, pg, MirrorKey::Entity(image.entity_id)).await?;
                     upsert_project(pg, &image).await
                 }
-                None => delete_project(pg, *id).await,
+                None => Ok(Mirrored::Unchanged),
             }
         }
         MirrorKey::FirmMembership { person_id, firm_id } => {
@@ -681,13 +652,7 @@ async fn mirror_inner(
                 identity::ensure(surreal, pg, MirrorKey::Person(image.person_id)).await?;
                 return upsert_membership(pg, &image).await;
             }
-            let deleted =
-                sqlx::query("DELETE FROM person_firm_role WHERE person_id = $1 AND firm_id = $2")
-                    .bind(person_id)
-                    .bind(firm_id)
-                    .execute(&pg.0)
-                    .await?;
-            Ok(changed(deleted.rows_affected(), Mirrored::Deleted))
+            Ok(Mirrored::Unchanged)
         }
         MirrorKey::ProjectParticipation(id) => {
             let source = crate::projects::participation_by_id_in_surreal(surreal, *id)
@@ -699,7 +664,7 @@ async fn mirror_inner(
                     identity::ensure(surreal, pg, MirrorKey::Person(image.person_id)).await?;
                     upsert_participation(pg, &image).await
                 }
-                None => delete(pg, "DELETE FROM person_project_role WHERE id = $1", *id).await,
+                None => Ok(Mirrored::Unchanged),
             }
         }
         // `super::mirror` routes only tenancy keys here.
@@ -707,19 +672,8 @@ async fn mirror_inner(
     }
 }
 
-async fn delete(pg: &PostgresDb, sql: &'static str, id: Uuid) -> Result<Mirrored, MirrorError> {
-    let deleted = sqlx::query(sql).bind(id).execute(&pg.0).await?;
-    Ok(changed(deleted.rows_affected(), Mirrored::Deleted))
-}
-
 async fn upsert_firm(pg: &PostgresDb, firm: &FirmImage) -> Result<Mirrored, MirrorError> {
     let mut tx = pg.0.begin().await?;
-    let stale = sqlx::query("DELETE FROM firm WHERE slug = $1 AND id <> $2")
-        .bind(&firm.slug)
-        .bind(firm.id)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
     let written = sqlx::query(FIRM_UPSERT.as_str())
         .bind(firm.id)
         .bind(&firm.name)
@@ -732,17 +686,11 @@ async fn upsert_firm(pg: &PostgresDb, firm: &FirmImage) -> Result<Mirrored, Mirr
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
-    Ok(changed(stale + written.rows_affected(), Mirrored::Written))
+    Ok(changed(written.rows_affected(), Mirrored::Written))
 }
 
 async fn upsert_brand(pg: &PostgresDb, brand: &BrandImage) -> Result<Mirrored, MirrorError> {
     let mut tx = pg.0.begin().await?;
-    let stale = sqlx::query("DELETE FROM brand WHERE brand_key = $1 AND id <> $2")
-        .bind(&brand.brand_key)
-        .bind(brand.id)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
     let written = sqlx::query(BRAND_UPSERT.as_str())
         .bind(brand.id)
         .bind(&brand.name)
@@ -765,17 +713,11 @@ async fn upsert_brand(pg: &PostgresDb, brand: &BrandImage) -> Result<Mirrored, M
         .await?
         .rows_affected();
     tx.commit().await?;
-    Ok(changed(stale + written, Mirrored::Written))
+    Ok(changed(written, Mirrored::Written))
 }
 
 async fn upsert_firm_brand(pg: &PostgresDb, row: &FirmBrandImage) -> Result<Mirrored, MirrorError> {
     let mut tx = pg.0.begin().await?;
-    let stale = sqlx::query("DELETE FROM firm_brand WHERE brand_key = $1 AND id <> $2")
-        .bind(&row.brand_key)
-        .bind(row.id)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
     let written = sqlx::query(FIRM_BRAND_UPSERT.as_str())
         .bind(row.id)
         .bind(row.firm_id)
@@ -786,7 +728,7 @@ async fn upsert_firm_brand(pg: &PostgresDb, row: &FirmBrandImage) -> Result<Mirr
         .await?
         .rows_affected();
     tx.commit().await?;
-    Ok(changed(stale + written, Mirrored::Written))
+    Ok(changed(written, Mirrored::Written))
 }
 
 /// Write one whole Project row, every column as given, the way an archive
@@ -794,28 +736,28 @@ async fn upsert_firm_brand(pg: &PostgresDb, row: &FirmBrandImage) -> Result<Mirr
 pub(crate) async fn put_project(
     pg: &PostgresDb,
     project: &crate::projects::Project,
-) -> Result<(), MirrorError> {
-    upsert_project(pg, &ProjectImage::from_source(project)?).await?;
-    Ok(())
+) -> Result<crate::assets::RowRestore, MirrorError> {
+    let expected = ProjectImage::from_source(project)?;
+    let written = upsert_project(pg, &expected).await?;
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "{} WHERE id=$1",
+        PROJECT_SELECT.as_str()
+    )))
+    .bind(project.id)
+    .fetch_optional(pg.pool())
+    .await?;
+    let actual = row.as_ref().map(ProjectImage::from_row).transpose()?;
+    Ok(if actual.as_ref() != Some(&expected) {
+        crate::assets::RowRestore::Conflict
+    } else if matches!(written, Mirrored::Written) {
+        crate::assets::RowRestore::Created
+    } else {
+        crate::assets::RowRestore::Identical
+    })
 }
 
 async fn upsert_project(pg: &PostgresDb, project: &ProjectImage) -> Result<Mirrored, MirrorError> {
     let mut tx = pg.0.begin().await?;
-    let stale = sqlx::query(
-        "DELETE FROM person_project_role WHERE project_id IN \
-         (SELECT id FROM project WHERE code = $1 AND id <> $2)",
-    )
-    .bind(&project.code)
-    .bind(project.id)
-    .execute(&mut *tx)
-    .await?
-    .rows_affected()
-        + sqlx::query("DELETE FROM project WHERE code = $1 AND id <> $2")
-            .bind(&project.code)
-            .bind(project.id)
-            .execute(&mut *tx)
-            .await?
-            .rows_affected();
     let written = sqlx::query(PROJECT_UPSERT.as_str())
         .bind(project.id)
         .bind(&project.code)
@@ -857,23 +799,7 @@ async fn upsert_project(pg: &PostgresDb, project: &ProjectImage) -> Result<Mirro
         .await?
         .rows_affected();
     tx.commit().await?;
-    Ok(changed(stale + written, Mirrored::Written))
-}
-
-async fn delete_project(pg: &PostgresDb, id: Uuid) -> Result<Mirrored, MirrorError> {
-    let mut tx = pg.0.begin().await?;
-    let participations = sqlx::query("DELETE FROM person_project_role WHERE project_id = $1")
-        .bind(id)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
-    let projects = sqlx::query("DELETE FROM project WHERE id = $1")
-        .bind(id)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
-    tx.commit().await?;
-    Ok(changed(participations + projects, Mirrored::Deleted))
+    Ok(changed(written, Mirrored::Written))
 }
 
 async fn upsert_membership(
@@ -881,15 +807,6 @@ async fn upsert_membership(
     role: &MembershipImage,
 ) -> Result<Mirrored, MirrorError> {
     let mut tx = pg.0.begin().await?;
-    let stale = sqlx::query(
-        "DELETE FROM person_firm_role WHERE person_id = $1 AND firm_id = $2 AND id <> $3",
-    )
-    .bind(role.person_id)
-    .bind(role.firm_id)
-    .bind(role.id)
-    .execute(&mut *tx)
-    .await?
-    .rows_affected();
     let written = sqlx::query(MEMBERSHIP_UPSERT.as_str())
         .bind(role.id)
         .bind(role.person_id)
@@ -902,7 +819,7 @@ async fn upsert_membership(
         .await?
         .rows_affected();
     tx.commit().await?;
-    Ok(changed(stale + written, Mirrored::Written))
+    Ok(changed(written, Mirrored::Written))
 }
 
 async fn upsert_participation(
@@ -910,15 +827,6 @@ async fn upsert_participation(
     role: &ParticipationImage,
 ) -> Result<Mirrored, MirrorError> {
     let mut tx = pg.0.begin().await?;
-    let stale = sqlx::query(
-        "DELETE FROM person_project_role WHERE person_id = $1 AND project_id = $2 AND id <> $3",
-    )
-    .bind(role.person_id)
-    .bind(role.project_id)
-    .bind(role.id)
-    .execute(&mut *tx)
-    .await?
-    .rows_affected();
     let written = sqlx::query(PARTICIPATION_UPSERT.as_str())
         .bind(role.id)
         .bind(role.person_id)
@@ -932,7 +840,7 @@ async fn upsert_participation(
         .await?
         .rows_affected();
     tx.commit().await?;
-    Ok(changed(stale + written, Mirrored::Written))
+    Ok(changed(written, Mirrored::Written))
 }
 
 /// One table's comparison. A source row whose timestamp cannot be read is
@@ -1017,25 +925,54 @@ fn firm_brand_key(brand_key: &str) -> MirrorKey {
     reason = "six tables compared in one parent-first list"
 )]
 pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
-    let firms = crate::firms::all(surreal).await.map_err(source)?;
-    let mut brands = crate::brands::system_wide(surreal).await.map_err(source)?;
-    brands.extend(
-        crate::brands::all_firm_scoped(surreal)
+    let mut active = std::collections::BTreeSet::new();
+    for table in crate::postgres_backfill::family::Family::Tenancy.tables() {
+        if crate::postgres_backfill::family::active_for_table(pg, table).await? {
+            active.insert(*table);
+        }
+    }
+    let firms = if active.contains("firm") {
+        Vec::new()
+    } else {
+        crate::firms::all(surreal).await.map_err(source)?
+    };
+    let mut brands = Vec::new();
+    if !active.contains("brand") {
+        brands.extend(crate::brands::system_wide(surreal).await.map_err(source)?);
+        brands.extend(
+            crate::brands::all_firm_scoped(surreal)
+                .await
+                .map_err(source)?,
+        );
+    }
+    let firm_brands = if active.contains("firm_brand") {
+        Vec::new()
+    } else {
+        crate::firms::all_firm_brands(surreal)
             .await
-            .map_err(source)?,
-    );
-    let firm_brands = crate::firms::all_firm_brands(surreal)
-        .await
-        .map_err(source)?;
-    let projects = crate::projects::all(surreal).await.map_err(source)?;
-    let memberships = crate::firms::all_memberships(surreal)
-        .await
-        .map_err(source)?;
-    let participations = crate::projects::all_participations(surreal)
-        .await
-        .map_err(source)?;
+            .map_err(source)?
+    };
+    let projects = if active.contains("project") {
+        Vec::new()
+    } else {
+        crate::projects::all(surreal).await.map_err(source)?
+    };
+    let memberships = if active.contains("person_firm_role") {
+        Vec::new()
+    } else {
+        crate::firms::all_memberships(surreal)
+            .await
+            .map_err(source)?
+    };
+    let participations = if active.contains("person_project_role") {
+        Vec::new()
+    } else {
+        crate::projects::all_participations(surreal)
+            .await
+            .map_err(source)?
+    };
 
-    let tables = vec![
+    let mut tables = vec![
         compare(
             "firm",
             &images(&firms, firm_key, FirmImage::from_source),
@@ -1116,7 +1053,102 @@ pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport
             .await?,
         ),
     ];
+    tables.retain(|table| !active.contains(table.table));
     Ok(ParityReport { tables })
+}
+
+/// Compare Tenancy history while retaining only independently verified lifecycle ownership.
+pub(crate) async fn scoped_parity(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+) -> Result<
+    (
+        ParityReport,
+        crate::postgres_backfill::family::ProjectLifecycleProof,
+    ),
+    MirrorError,
+> {
+    let mut report = parity(surreal, pg).await?;
+    let source = images(
+        &crate::projects::all(surreal).await.map_err(source)?,
+        |project| MirrorKey::Project(project.id),
+        ProjectImage::from_source,
+    );
+    let target = target(
+        pg,
+        PROJECT_SELECT.as_str(),
+        ProjectImage::from_row,
+        |project| MirrorKey::Project(project.id),
+    )
+    .await?;
+    let mut proof = crate::postgres_backfill::family::ProjectLifecycleProof {
+        full_metadata_compared: true,
+        ledger_projections_checked: true,
+        ..Default::default()
+    };
+    let mut divergent = Vec::new();
+    for (key, expected) in &source {
+        if let Some(actual) = target.get(key) {
+            proof.compared_overlaps += 1;
+            let history = crate::postgres::project_lifecycle::verified_projection_history(
+                pg,
+                actual.id,
+                &actual.lifecycle(),
+            )
+            .await?;
+            if expected.as_ref().is_some_and(|expected| {
+                history.as_ref().is_some_and(|states| {
+                    if actual == expected {
+                        return true;
+                    }
+                    if !states.contains(&expected.lifecycle()) {
+                        return false;
+                    }
+                    let mut preserved = actual.clone();
+                    preserved.status.clone_from(&expected.status);
+                    preserved.closed_at.clone_from(&expected.closed_at);
+                    preserved
+                        .closure_reason
+                        .clone_from(&expected.closure_reason);
+                    preserved == *expected
+                })
+            }) {
+                if expected.as_ref() != Some(actual) {
+                    proof.retained_native_projections += 1;
+                }
+            } else {
+                proof.unresolved_overlaps += 1;
+                divergent.push(key.clone());
+            }
+        } else {
+            proof.source_only_remaining += 1;
+            divergent.push(key.clone());
+        }
+    }
+    for (key, project) in target.iter().filter(|(key, _)| !source.contains_key(*key)) {
+        // Target-only rows remain blocking even if their own ledger is coherent.
+        crate::postgres::project_lifecycle::verified_projection_history(
+            pg,
+            project.id,
+            &project.lifecycle(),
+        )
+        .await?;
+        proof.target_only += 1;
+        divergent.push(key.clone());
+    }
+    let project = TableParity {
+        table: "project",
+        source_rows: source.len(),
+        target_rows: target.len(),
+        divergent,
+    };
+    let slot = report
+        .tables
+        .iter_mut()
+        .find(|table| table.table == "project")
+        .ok_or(MirrorError::Source)?;
+    *slot = project;
+    Ok((report, proof))
 }
 
 /// Re-mirror every divergent tenancy row from SurrealDB, then compare again.
@@ -1153,3 +1185,7 @@ pub(super) async fn remirror(surreal: &SurrealDb, pg: &PostgresDb, report: &Pari
 #[cfg(test)]
 #[path = "tenancy_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tenancy_family_tests.rs"]
+pub(crate) mod family_tests;

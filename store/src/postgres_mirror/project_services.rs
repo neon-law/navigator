@@ -171,15 +171,20 @@ async fn ensure_parent(
         _ => return Err(MirrorError::Source),
     };
     if !exists {
+        if super::backfilled(pg).await?
+            || crate::postgres_backfill::family::active_for_table(pg, table).await?
+        {
+            return Err(MirrorError::MatterAuthority);
+        }
         match key {
             MirrorKey::Project(_) => {
-                super::tenancy::mirror(surreal, pg, &key).await?;
+                super::from_source(super::tenancy::mirror(surreal, pg, &key)).await?;
             }
             MirrorKey::Asset(_) => {
-                super::documents::mirror(surreal, pg, &key).await?;
+                super::from_source(super::documents::mirror(surreal, pg, &key)).await?;
             }
             MirrorKey::Person(_) | MirrorKey::Entity(_) => {
-                super::identity::mirror(surreal, pg, &key).await?;
+                super::from_source(super::identity::mirror(surreal, pg, &key)).await?;
             }
             MirrorKey::SentEmail(_) => {
                 super::sent_emails::mirror(surreal, pg, id).await?;
@@ -237,25 +242,7 @@ async fn upsert(pg: &PostgresDb, row: &ProjectServiceImage) -> Result<Mirrored, 
          recipient_entity_id,counsel_for,method,served_on,address,declarant,declarant_person_id,\
          letter_id,sent_email_id,inserted_at,updated_at) \
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) \
-         ON CONFLICT (id) DO UPDATE SET project_id=EXCLUDED.project_id,\
-         document_id=EXCLUDED.document_id,recipient=EXCLUDED.recipient,\
-         recipient_person_id=EXCLUDED.recipient_person_id,\
-         recipient_entity_id=EXCLUDED.recipient_entity_id,counsel_for=EXCLUDED.counsel_for,\
-         method=EXCLUDED.method,served_on=EXCLUDED.served_on,address=EXCLUDED.address,\
-         declarant=EXCLUDED.declarant,declarant_person_id=EXCLUDED.declarant_person_id,\
-         letter_id=EXCLUDED.letter_id,sent_email_id=EXCLUDED.sent_email_id,\
-         inserted_at=EXCLUDED.inserted_at,updated_at=EXCLUDED.updated_at \
-         WHERE (project_service.project_id,project_service.document_id,project_service.recipient,\
-         project_service.recipient_person_id,project_service.recipient_entity_id,\
-         project_service.counsel_for,project_service.method,project_service.served_on,\
-         project_service.address,project_service.declarant,project_service.declarant_person_id,\
-         project_service.letter_id,project_service.sent_email_id,project_service.inserted_at,\
-         project_service.updated_at) IS DISTINCT FROM \
-         (EXCLUDED.project_id,EXCLUDED.document_id,EXCLUDED.recipient,\
-         EXCLUDED.recipient_person_id,EXCLUDED.recipient_entity_id,EXCLUDED.counsel_for,\
-         EXCLUDED.method,EXCLUDED.served_on,EXCLUDED.address,EXCLUDED.declarant,\
-         EXCLUDED.declarant_person_id,EXCLUDED.letter_id,EXCLUDED.sent_email_id,\
-         EXCLUDED.inserted_at,EXCLUDED.updated_at)",
+         ON CONFLICT (id) DO NOTHING",
     )
     .bind(row.id)
     .bind(row.project_id)
@@ -286,15 +273,11 @@ pub async fn mirror(
     let MirrorKey::ProjectService(id) = key else {
         return Err(MirrorError::Source);
     };
+    if !super::source_import_allowed(pg, "project_service").await? {
+        return Ok(Mirrored::Unchanged);
+    }
     let Some(row) = source_one(surreal, *id).await? else {
-        return Ok(changed(
-            sqlx::query("DELETE FROM project_service WHERE id=$1")
-                .bind(id)
-                .execute(&pg.0)
-                .await?
-                .rows_affected(),
-            Mirrored::Deleted,
-        ));
+        return Ok(Mirrored::Unchanged);
     };
 
     ensure_parent(
@@ -344,6 +327,9 @@ pub async fn mirror(
 }
 
 pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
+    if crate::postgres_backfill::family::active_for_table(pg, "project_service").await? {
+        return Ok(ParityReport { tables: vec![] });
+    }
     Ok(ParityReport {
         tables: vec![super::compare(
             "project_service",
@@ -354,6 +340,9 @@ pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport
 }
 
 pub async fn reconcile(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
+    if crate::postgres_backfill::family::active_for_table(pg, "project_service").await? {
+        return Ok(ParityReport { tables: vec![] });
+    }
     let source = source(surreal).await?;
     let target = target(pg).await?;
     let keys: Vec<_> = source

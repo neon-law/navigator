@@ -61,7 +61,7 @@ impl LeadStatus {
 }
 
 /// One captured public contact request.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct Lead {
     pub id: Uuid,
     pub email: String,
@@ -107,7 +107,7 @@ pub struct NewConsentEvent {
 /// One immutable consent event, oldest first in [`consent_history`]. An event
 /// captured before the callback choice existed carries no callback wording
 /// and no consent to a call.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct ConsentEvent {
     pub id: Uuid,
     pub lead_id: Uuid,
@@ -194,6 +194,8 @@ impl ConsentEventRow {
 /// Errors reading or writing public lead records.
 #[derive(Debug, thiserror::Error)]
 pub enum LeadError {
+    #[error(transparent)]
+    Postgres(#[from] crate::postgres::matter::MatterAuthorityError),
     #[error("database: {0}")]
     Db(#[from] surrealdb::Error),
     #[error("writing a lead returned no usable row")]
@@ -232,6 +234,10 @@ pub fn mask_phone(phone: Option<&str>) -> String {
 /// the later admin queue can retain a brand-scoped request without making a
 /// mailbox an identity key.
 pub async fn record(db: &SurrealDb, new: &NewLead) -> Result<Lead, LeadError> {
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
+        return crate::postgres::leads::record(&pg, new, None).await;
+    }
+
     let email = new.email.trim().to_string();
     let email_lower = email.to_lowercase();
     let now = Utc::now();
@@ -291,6 +297,10 @@ pub async fn record_consent_event(
     new: &NewLead,
     event: &NewConsentEvent,
 ) -> Result<Lead, LeadError> {
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
+        return crate::postgres::leads::record(&pg, new, Some(event)).await;
+    }
+
     let email = new.email.trim().to_string();
     let email_lower = email.to_lowercase();
     let now = Utc::now();
@@ -367,6 +377,16 @@ pub async fn consent_history(
     db: &SurrealDb,
     lead_id: Uuid,
 ) -> Result<Vec<ConsentEvent>, LeadError> {
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
+        return Ok(crate::postgres::matter::select(
+            &pg,
+            CONSENT_TABLE,
+            serde_json::json!({"lead_id": lead_id}),
+            &["consented_at", "id"],
+        )
+        .await?);
+    }
+
     let mut response = db
         .query(format!(
             "SELECT {CONSENT_SELECT}, time::floor(consented_at, 1us) AS chronology_at FROM {CONSENT_TABLE} \
@@ -387,6 +407,17 @@ pub async fn latest_consent_event(
     db: &SurrealDb,
     lead_id: Uuid,
 ) -> Result<Option<ConsentEvent>, LeadError> {
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
+        let rows: Vec<ConsentEvent> = crate::postgres::matter::select(
+            &pg,
+            CONSENT_TABLE,
+            serde_json::json!({"lead_id": lead_id}),
+            &["consented_at DESC", "id DESC"],
+        )
+        .await?;
+        return Ok(rows.into_iter().next());
+    }
+
     let mut response = db
         .query(format!(
             "SELECT {CONSENT_SELECT}, time::floor(consented_at, 1us) AS chronology_at FROM {CONSENT_TABLE} \
@@ -401,6 +432,16 @@ pub async fn latest_consent_event(
 
 /// List leads newest first for the later admin queue.
 pub async fn list(db: &SurrealDb) -> Result<Vec<Lead>, LeadError> {
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
+        return Ok(crate::postgres::matter::select(
+            &pg,
+            TABLE,
+            serde_json::json!({}),
+            &["updated_at DESC", "id DESC"],
+        )
+        .await?);
+    }
+
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} ORDER BY updated_at DESC, id DESC"
@@ -413,6 +454,10 @@ pub async fn list(db: &SurrealDb) -> Result<Vec<Lead>, LeadError> {
 
 /// One lead by id.
 pub async fn find(db: &SurrealDb, id: Uuid) -> Result<Option<Lead>, LeadError> {
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
+        return Ok(crate::postgres::matter::find(&pg, TABLE, serde_json::json!({"id": id})).await?);
+    }
+
     let mut response = db
         .query(format!("SELECT {SELECT} FROM ONLY $id"))
         .bind(("id", record_id(TABLE, id)))
@@ -481,6 +526,15 @@ async fn apply_status(
     existing: Lead,
     status: LeadStatus,
 ) -> Result<Lead, LeadError> {
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
+        let row: serde_json::Value = sqlx::query_scalar("UPDATE lead AS r SET status=$2, unsubscribed_at=CASE WHEN $2='unsubscribed' THEN COALESCE(unsubscribed_at,now()) ELSE unsubscribed_at END, updated_at=now() WHERE id=$1 RETURNING to_jsonb(r)")
+            .bind(existing.id).bind(status.as_str()).fetch_optional(pg.pool()).await
+            .map_err(crate::postgres::matter::MatterAuthorityError::from)?.ok_or(LeadError::WriteReturnedNothing)?;
+        return serde_json::from_value(row)
+            .map_err(crate::postgres::matter::MatterAuthorityError::from)
+            .map_err(LeadError::from);
+    }
+
     let now = Utc::now();
     let unsubscribed_at = if status == LeadStatus::Unsubscribed {
         Some(existing.unsubscribed_at.unwrap_or(now))
@@ -510,6 +564,10 @@ async fn apply_status(
 }
 
 async fn link_converted(db: &SurrealDb, lead_id: Uuid, person_id: Uuid) -> Result<Lead, LeadError> {
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
+        return crate::postgres::matter::update(&pg, TABLE, serde_json::json!({"id": lead_id}), serde_json::json!({"status": "converted", "person_id": person_id, "updated_at": Utc::now()})).await?.into_iter().next().ok_or(LeadError::WriteReturnedNothing);
+    }
+
     let now = Utc::now();
     let mut response = db
         .query(format!(

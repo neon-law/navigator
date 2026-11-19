@@ -70,3 +70,12 @@ pub(crate) async fn activate_family(
 ) {
     crate::postgres_backfill::family::activate_fixture(pg, family).await;
 }
+
+/// Enroll the actual synthetic database before application-facade tests.
+pub(crate) async fn activate_application(pg: &PostgresDb) {
+    sqlx::query("INSERT INTO mirror_backfill_run (id,batch_size,status,scope,completed_at) VALUES ($1,1,'completed','global',now())")
+        .bind(Uuid::new_v4()).execute(pg.pool()).await.unwrap();
+    for family in crate::postgres_backfill::family::Family::all() {
+        activate_family(pg, *family).await;
+    }
+}

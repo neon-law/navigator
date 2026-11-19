@@ -35,7 +35,7 @@ use uuid::Uuid;
 use sqlx::{postgres::PgRow, AssertSqlSafe, Row};
 
 use crate::git_access_tokens::hash_token;
-use crate::postgres::identity::{self as authority, AuthorityError, EMAIL_TOKEN};
+use crate::postgres::identity::{self as authority, AuthorityError};
 use crate::surreal::{record_id, SurrealDb};
 
 /// The token in a "reset your password" email. Claiming it lets the
@@ -163,7 +163,7 @@ pub async fn mint(
         .await
         .map_err(AuthorityError::from)?;
         let token = from_pg(&row).map_err(AuthorityError::from)?;
-        authority::project(&pg, db, &EMAIL_TOKEN, id).await?;
+
         return Ok(token);
     }
     let mut response = db
@@ -266,7 +266,7 @@ pub async fn consume(db: &SurrealDb, token_id: Uuid, now: DateTime<Utc>) -> Resu
         .execute(&pg.0)
         .await
         .map_err(AuthorityError::from)?;
-        authority::project(&pg, db, &EMAIL_TOKEN, token_id).await?;
+
         return Ok(());
     }
     db.query(format!(

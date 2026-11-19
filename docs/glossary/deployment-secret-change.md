@@ -15,6 +15,7 @@ deployment separately. Saving a change does not deploy it, verify provider crede
 
 Firm integration secrets and Brand account OAuth tokens remain separate stores with their existing authorization.
 
-The table is `deployment_secret_change`.
+The table is `deployment_secret_change`. PostgreSQL retains the exact authenticated timestamp spelling in
+`inserted_at_text`; `inserted_at` is its queryable instant. Encryption and decryption use the preserved text.
 
 Schema: [`deployment_secret_change`](../../store/postgres/schema.sql).

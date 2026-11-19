@@ -252,9 +252,9 @@ pub fn sweep(person: Option<&str>, dry_run: bool) -> Result<()> {
                 cloud::forgejo_user_keys::NAVIGATOR_FORGEJO_KEY_SYNC_TOKEN_ENV,
             )
         })?;
-        let surreal = store::surreal::connect_from_env()
+        let surreal = crate::application_store()
             .await
-            .map_err(|error| anyhow!("surreal: {error}"))?;
+            .map_err(|error| anyhow!("postgres: {error}"))?;
         let pg = store::postgres::PostgresDb::from_env()
             .await
             .map_err(|error| anyhow!("{error}"))?;

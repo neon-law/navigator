@@ -31,6 +31,7 @@ mod notation_kinds;
 mod notations_preview;
 mod notices;
 mod ops_private_terms;
+mod postgres_admission;
 mod postgres_backfill;
 mod postgres_mirror;
 mod project_preview;
@@ -1696,10 +1697,8 @@ enum OpsCmd {
     /// prove one stored export can be restored into a disposable namespace.
     #[command(subcommand)]
     SurrealArchive(SurrealArchiveCmd),
-    /// PostgreSQL mirror parity and reconcile against `SurrealDB`.
-    ///
-    /// Reads the same `NAVIGATOR_SURREAL_*` and `NAVIGATOR_POSTGRES_*`
-    /// variables `web` reads. Reports name rows by UUID only.
+    /// PostgreSQL application admission, explicit imports, and compatibility diagnostics.
+    /// Reports contain only counts and UUIDs.
     #[command(subcommand)]
     Postgres(postgres_mirror::PostgresCmd),
     /// Check a `deployments/` tree without changing anything or decrypting
@@ -3657,18 +3656,17 @@ fn devx_result(result: anyhow::Result<()>) -> ExitCode {
     }
 }
 
-/// The person store the CLI reads and writes. `persons` moved to
-/// `SurrealDB` with ENG-19, so every command that resolves a person opens
-/// this handle. The endpoint comes from
-/// `NAVIGATOR_SURREAL_*`, the same coordinates `web` uses.
-async fn open_surreal() -> Result<store::surreal::SurrealDb, ExitCode> {
-    match store::surreal::connect_from_env().await {
-        Ok(db) => Ok(db),
-        Err(e) => {
-            eprintln!("navigator: surreal: {e}");
-            Err(ExitCode::from(2))
-        }
-    }
+/// Admit operator commands to the activated PostgreSQL application store.
+async fn application_store() -> anyhow::Result<store::surreal::SurrealDb> {
+    store::postgres::PostgresDb::application().await?;
+    Ok(store::surreal::SurrealDb::uninitialized())
+}
+
+async fn open_application_store() -> Result<store::surreal::SurrealDb, ExitCode> {
+    application_store().await.map_err(|error| {
+        eprintln!("hudson: postgres: {error}");
+        ExitCode::from(2)
+    })
 }
 
 /// Resolve the `person` argument — a Person UUID or an email (primary or
@@ -3690,7 +3688,7 @@ async fn resolve_person_id(
 /// Run `hudson person` — direct store access for one Person's phones.
 async fn run_person(action: PersonCmd) -> ExitCode {
     let PersonCmd::Phone { action } = action;
-    let db = match open_surreal().await {
+    let db = match open_application_store().await {
         Ok(db) => db,
         Err(exit) => return exit,
     };
@@ -3793,7 +3791,7 @@ async fn run_person(action: PersonCmd) -> ExitCode {
 use cli::notation_render::{run_render, run_word_redline};
 
 async fn run_catalog_seed(dir: &std::path::Path) -> ExitCode {
-    let surreal = match open_surreal().await {
+    let surreal = match open_application_store().await {
         Ok(s) => s,
         Err(code) => return code,
     };
@@ -3838,7 +3836,7 @@ async fn run_synthetic_portfolio(target: Option<String>, apply: bool) -> ExitCod
             return ExitCode::from(2);
         }
     };
-    let surreal = match open_surreal().await {
+    let surreal = match open_application_store().await {
         Ok(s) => s,
         Err(code) => return code,
     };

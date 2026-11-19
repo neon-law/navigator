@@ -14,9 +14,10 @@ use sqlx::Row;
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
-use super::tenancy::{compare, select_sql, target, upsert_sql};
-use super::{changed, MirrorError, MirrorKey, Mirrored, ParityReport};
+use super::tenancy::{compare, select_sql, target};
+use super::{changed, MirrorError, MirrorKey, Mirrored, ParityReport, TableParity};
 use crate::postgres::PostgresDb;
+use crate::postgres_backfill::family::{self, ImportMode};
 use crate::surreal::{record_id, record_uuid, SurrealDb};
 
 const COLUMNS: &[&str] = &[
@@ -38,7 +39,7 @@ const COLUMNS: &[&str] = &[
 ];
 const SOURCE_FIELDS: &str = "id, code, title, respondent_type, project_id, firm_id, is_current, \
     asset_id, form_code, kind, source_commit_sha, body_sha256, current_key, inserted_at, updated_at";
-static UPSERT: LazyLock<String> = LazyLock::new(|| upsert_sql("template", COLUMNS));
+const INSERT: &str = "INSERT INTO template (id,code,title,respondent_type,project_id,firm_id,is_current,asset_id,form_code,kind,source_commit_sha,body_sha256,current_key,inserted_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) ON CONFLICT (id) DO NOTHING";
 static SELECT: LazyLock<String> = LazyLock::new(|| select_sql("template", COLUMNS));
 
 #[derive(SurrealValue)]
@@ -88,13 +89,27 @@ impl TemplateImage {
     fn from_source(row: TemplateSource) -> Result<Self, MirrorError> {
         let inserted_at: DateTime<Utc> = row.inserted_at.into();
         let updated_at: DateTime<Utc> = row.updated_at.into();
+        let project_id = optional_id(row.project_id)?;
+        let firm_id = optional_id(row.firm_id)?;
+        let scope = match (project_id, firm_id) {
+            (Some(id), None) => crate::templates::Scope::Project(id),
+            (None, Some(id)) => crate::templates::Scope::Firm(id),
+            (None, None) => crate::templates::Scope::Shared,
+            _ => return Err(MirrorError::Source),
+        };
+        let expected_key = row
+            .is_current
+            .then(|| crate::templates::current_key_in(scope, &row.code));
+        if row.current_key != expected_key {
+            return Err(MirrorError::Source);
+        }
         Ok(Self {
             id: record_uuid(&row.id).ok_or(MirrorError::Source)?,
             code: row.code,
             title: row.title,
             respondent_type: row.respondent_type,
-            project_id: optional_id(row.project_id)?,
-            firm_id: optional_id(row.firm_id)?,
+            project_id,
+            firm_id,
             is_current: row.is_current,
             asset_id: optional_id(row.asset_id)?,
             form_code: row.form_code,
@@ -105,6 +120,14 @@ impl TemplateImage {
             inserted_at: inserted_at.trunc_subsecs(6),
             updated_at: updated_at.trunc_subsecs(6),
         })
+    }
+
+    fn same_version(&self, other: &Self) -> bool {
+        let mut version = self.clone();
+        version.is_current = other.is_current;
+        version.current_key.clone_from(&other.current_key);
+        version.updated_at = other.updated_at;
+        version == *other
     }
 
     fn from_row(row: &sqlx::postgres::PgRow) -> Result<Self, sqlx::Error> {
@@ -152,6 +175,7 @@ async fn source_all(surreal: &SurrealDb) -> Result<Vec<TemplateImage>, MirrorErr
 async fn ensure_parent(
     surreal: &SurrealDb,
     pg: &PostgresDb,
+    mode: ImportMode,
     exists_sql: &'static str,
     id: Uuid,
     key: MirrorKey,
@@ -161,13 +185,51 @@ async fn ensure_parent(
         .fetch_one(&pg.0)
         .await?;
     if !exists {
+        if mode != ImportMode::InsertMissing {
+            return Err(MirrorError::Source);
+        }
         Box::pin(super::mirror(surreal, pg, &key)).await?;
     }
     Ok(())
 }
 
-async fn upsert(pg: &PostgresDb, image: &TemplateImage) -> Result<Mirrored, MirrorError> {
-    let result = sqlx::query(UPSERT.as_str())
+async fn verify_pins(pg: &PostgresDb, image: &TemplateImage) -> Result<(), MirrorError> {
+    let mismatch: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM notation WHERE template_id=$1 AND (template_source_commit_sha IS DISTINCT FROM $2 OR template_body_sha256 IS DISTINCT FROM $3))")
+        .bind(image.id).bind(&image.source_commit_sha).bind(&image.body_sha256)
+        .fetch_one(pg.pool()).await?;
+    if mismatch {
+        return Err(MirrorError::Source);
+    }
+    Ok(())
+}
+
+async fn upsert(
+    pg: &PostgresDb,
+    image: &TemplateImage,
+    mode: ImportMode,
+) -> Result<Mirrored, MirrorError> {
+    verify_pins(pg, image).await?;
+    let mut tx = pg.pool().begin().await?;
+    let existing = sqlx::query("SELECT * FROM template WHERE id=$1 FOR UPDATE")
+        .bind(image.id)
+        .fetch_optional(&mut *tx)
+        .await?;
+    if let Some(existing) = existing {
+        let existing = TemplateImage::from_row(&existing)?;
+        if !existing.same_version(image) {
+            return Err(MirrorError::Source);
+        }
+        let result = if mode == ImportMode::Refresh {
+            sqlx::query("UPDATE template SET is_current=$2,current_key=$3,updated_at=$4 WHERE id=$1 AND (is_current,current_key,updated_at) IS DISTINCT FROM ($2,$3,$4)")
+                .bind(image.id).bind(image.is_current).bind(&image.current_key).bind(image.updated_at)
+                .execute(&mut *tx).await?.rows_affected()
+        } else {
+            0
+        };
+        tx.commit().await?;
+        return Ok(changed(result, Mirrored::Written));
+    }
+    let result = sqlx::query(INSERT)
         .bind(image.id)
         .bind(&image.code)
         .bind(&image.title)
@@ -183,75 +245,97 @@ async fn upsert(pg: &PostgresDb, image: &TemplateImage) -> Result<Mirrored, Mirr
         .bind(&image.current_key)
         .bind(image.inserted_at)
         .bind(image.updated_at)
-        .execute(&pg.0)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
     Ok(changed(result.rows_affected(), Mirrored::Written))
 }
 
-/// Make PostgreSQL's Template row match SurrealDB, mirroring its parents on
-/// demand. The source row and its key are read again after every invocation.
+/// Import captured version identities without replacing PostgreSQL history.
 pub async fn mirror(
     surreal: &SurrealDb,
     pg: &PostgresDb,
     id: Uuid,
 ) -> Result<Mirrored, MirrorError> {
-    let Some(image) = source_one(surreal, id).await? else {
-        let deleted = sqlx::query("DELETE FROM template WHERE id = $1")
-            .bind(id)
-            .execute(&pg.0)
+    let mode = family::import_mode(pg, "template").await?;
+    if mode == ImportMode::Refuse {
+        return Err(MirrorError::MatterAuthority);
+    }
+    super::from_source(async {
+        let image = source_one(surreal, id).await?.ok_or(MirrorError::Source)?;
+        if let Some(project_id) = image.project_id {
+            ensure_parent(
+                surreal,
+                pg,
+                mode,
+                "SELECT EXISTS (SELECT 1 FROM project WHERE id = $1)",
+                project_id,
+                MirrorKey::Project(project_id),
+            )
             .await?;
-        return Ok(changed(deleted.rows_affected(), Mirrored::Deleted));
-    };
-    if let Some(project_id) = image.project_id {
-        ensure_parent(
-            surreal,
-            pg,
-            "SELECT EXISTS (SELECT 1 FROM project WHERE id = $1)",
-            project_id,
-            MirrorKey::Project(project_id),
-        )
-        .await?;
-    }
-    if let Some(firm_id) = image.firm_id {
-        ensure_parent(
-            surreal,
-            pg,
-            "SELECT EXISTS (SELECT 1 FROM firm WHERE id = $1)",
-            firm_id,
-            MirrorKey::Firm(firm_id),
-        )
-        .await?;
-    }
-    if let Some(asset_id) = image.asset_id {
-        ensure_parent(
-            surreal,
-            pg,
-            "SELECT EXISTS (SELECT 1 FROM asset WHERE id = $1)",
-            asset_id,
-            MirrorKey::Asset(asset_id),
-        )
-        .await?;
-    }
-    upsert(pg, &image).await
+        }
+        if let Some(firm_id) = image.firm_id {
+            ensure_parent(
+                surreal,
+                pg,
+                mode,
+                "SELECT EXISTS (SELECT 1 FROM firm WHERE id = $1)",
+                firm_id,
+                MirrorKey::Firm(firm_id),
+            )
+            .await?;
+        }
+        if let Some(asset_id) = image.asset_id {
+            ensure_parent(
+                surreal,
+                pg,
+                mode,
+                "SELECT EXISTS (SELECT 1 FROM asset WHERE id = $1)",
+                asset_id,
+                MirrorKey::Asset(asset_id),
+            )
+            .await?;
+        }
+        upsert(pg, &image, mode).await
+    })
+    .await
 }
 
-/// Compare every Template version in both stores.
-pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
-    let source: BTreeMap<_, _> = source_all(surreal)
-        .await?
+async fn compare_images(
+    pg: &PostgresDb,
+    images: Vec<TemplateImage>,
+) -> Result<TableParity, MirrorError> {
+    let source: BTreeMap<_, _> = images
         .into_iter()
         .map(|image| (MirrorKey::Template(image.id), Some(image)))
         .collect();
-    let target: BTreeMap<_, _> = target(pg, SELECT.as_str(), TemplateImage::from_row, |image| {
+    let target = target(pg, SELECT.as_str(), TemplateImage::from_row, |image| {
         MirrorKey::Template(image.id)
     })
     .await?;
+    Ok(compare("template", &source, &target))
+}
+
+/// Compare every retained version without treating absence as deletion evidence.
+pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
     Ok(ParityReport {
-        tables: vec![compare("template", &source, &target)],
+        tables: vec![scoped_parity(surreal, pg).await?],
     })
 }
 
-/// Repair template rows which differ, then return the remaining parity gaps.
+/// Validate native Notation pins even when no Template row needs copying.
+pub(crate) async fn scoped_parity(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+) -> Result<TableParity, MirrorError> {
+    let images = source_all(surreal).await?;
+    for image in &images {
+        verify_pins(pg, image).await?;
+    }
+    compare_images(pg, images).await
+}
+
+/// Preserve unknown version drift while repairing only authorized current pointers.
 pub async fn reconcile(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
     let before = parity(surreal, pg).await?;
     let source_images: BTreeMap<_, _> = source_all(surreal)

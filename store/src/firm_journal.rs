@@ -25,43 +25,24 @@ pub enum JournalError {
 /// The environment variable whose presence selects the PostgreSQL journal.
 pub const POSTGRES_HOST_ENV: &str = "NAVIGATOR_POSTGRES_HOST";
 
-/// Where Journal Entries live. PostgreSQL when [`POSTGRES_HOST_ENV`] is set;
-/// otherwise SurrealDB's `journal_entry` table, the same rows the PostgreSQL
-/// startup import copies once PostgreSQL is configured. Both stores run the
-/// same command checks; reconciliation evidence, audits, and signals exist
-/// only in PostgreSQL.
+/// Immutable Journal Entries. Ordinary applications use PostgreSQL; the
+/// explicitly constructed legacy variant remains available to migration tools.
 #[derive(Debug, Clone)]
 pub enum JournalStore {
     Postgres(PostgresDb),
     Surreal(SurrealDb),
 }
 impl JournalStore {
-    /// The backend name for a deployment with or without a PostgreSQL host.
-    #[must_use]
-    pub fn selected_backend(postgres_configured: bool) -> &'static str {
-        if postgres_configured {
-            "postgresql"
-        } else {
-            "surrealdb"
-        }
-    }
-    /// Whether this process is configured for the PostgreSQL journal.
-    #[must_use]
-    pub fn postgres_configured() -> bool {
-        std::env::var_os(POSTGRES_HOST_ENV).is_some()
-    }
-    /// Select the store from the environment. A configured but unreachable
-    /// PostgreSQL is an error, never a silent fall back to SurrealDB.
-    pub async fn from_env(surreal: &SurrealDb) -> Result<Self, crate::postgres::PostgresError> {
-        if Self::postgres_configured() {
-            Ok(Self::Postgres(PostgresDb::from_env().await?))
-        } else {
-            Ok(Self::Surreal(surreal.clone()))
-        }
+    /// Require PostgreSQL and its complete application activation history.
+    pub async fn from_env(_surreal: &SurrealDb) -> Result<Self, crate::postgres::PostgresError> {
+        Ok(Self::Postgres(PostgresDb::application().await?))
     }
     #[must_use]
     pub fn backend(&self) -> &'static str {
-        Self::selected_backend(matches!(self, Self::Postgres(_)))
+        match self {
+            Self::Postgres(_) => "postgresql",
+            Self::Surreal(_) => "surrealdb",
+        }
     }
     /// The PostgreSQL journal, for commands that exist only there.
     pub fn postgres(&self) -> Result<&PostgresDb, JournalError> {
@@ -248,7 +229,7 @@ impl Unit {
                     _ => {
                         return Err(invalid(
                             "unsupported fiat precision; add verified currency metadata",
-                        ))
+                        ));
                     }
                 };
                 if *decimals != expected {
@@ -258,7 +239,7 @@ impl Unit {
             Self::Crypto {
                 network, contract, ..
             } if network.trim().is_empty() || contract.trim().is_empty() => {
-                return Err(invalid("crypto requires network and token/native identity"))
+                return Err(invalid("crypto requires network and token/native identity"));
             }
             _ => {}
         }
@@ -548,7 +529,9 @@ impl JournalEntry {
                 && (p.project_id.is_none()
                     || !self.links.iter().any(|l| l.kind == LinkKind::Engagement))
             {
-                return Err(invalid("client costs require Project allocation and verified signed engagement evidence"));
+                return Err(invalid(
+                    "client costs require Project allocation and verified signed engagement evidence",
+                ));
             }
             if p.category == Category::Reimbursement
                 && !self.links.iter().any(|l| l.kind == LinkKind::Repayment)
@@ -811,7 +794,8 @@ async fn validate_posting_evidence(
     }
     Ok(())
 }
-fn validate_repayment(entry: &JournalEntry, all: &[JournalEntry]) -> Result<(), JournalError> {
+/// The existing command shape for a non-reversal reimbursement.
+pub(crate) fn repayment_target(entry: &JournalEntry) -> Result<Option<Uuid>, JournalError> {
     if entry
         .postings
         .iter()
@@ -828,6 +812,7 @@ fn validate_repayment(entry: &JournalEntry, all: &[JournalEntry]) -> Result<(), 
                 "one repayment command must identify exactly one cost entry",
             ));
         }
+        let target = costs[0].target_id;
         let mut repayment_allocations = BTreeSet::new();
         for posting in entry
             .postings
@@ -840,10 +825,17 @@ fn validate_repayment(entry: &JournalEntry, all: &[JournalEntry]) -> Result<(), 
                 ));
             }
         }
+        return Ok(Some(target));
+    }
+    Ok(None)
+}
+
+fn validate_repayment(entry: &JournalEntry, all: &[JournalEntry]) -> Result<(), JournalError> {
+    if let Some(target) = repayment_target(entry)? {
         let all = &all;
         let cost = all
             .iter()
-            .find(|e| e.id == costs[0].target_id)
+            .find(|e| e.id == target)
             .ok_or_else(|| invalid("original cost entry missing"))?;
         if all.iter().any(|entry| entry.reversal_of == Some(cost.id)) {
             return Err(invalid("reimbursement original cost has been reversed"));
@@ -897,7 +889,8 @@ fn validate_repayment(entry: &JournalEntry, all: &[JournalEntry]) -> Result<(), 
     }
     Ok(())
 }
-fn validate_history(entry: &JournalEntry, all: &[JournalEntry]) -> Result<(), JournalError> {
+/// Validate the canonical evidence required by a source movement.
+pub(crate) fn validate_movement_evidence(entry: &JournalEntry) -> Result<(), JournalError> {
     if entry.reversal_of.is_none() {
         for posting in entry
             .postings
@@ -924,25 +917,54 @@ fn validate_history(entry: &JournalEntry, all: &[JournalEntry]) -> Result<(), Jo
             }
         }
     }
+    Ok(())
+}
+
+/// Whether a source identifies a movement with a unique active Journal Entry.
+pub(crate) fn is_movement_source(source: &SourceReference) -> bool {
+    matches!(
+        source.object_type.as_str(),
+        "transaction"
+            | "transfer"
+            | "network_fee"
+            | "bank_transaction"
+            | "payment"
+            | "bank_transfer"
+    )
+}
+
+/// Whether every posting is the exact canonical negation at the same position.
+pub(crate) fn negates_postings(original: &[Posting], reversal: &[Posting]) -> bool {
+    original.len() == reversal.len()
+        && !original.iter().zip(reversal).any(|(a, b)| {
+            a.account != b.account
+                || a.ownership != b.ownership
+                || a.restrictions != b.restrictions
+                || a.category != b.category
+                || a.unit != b.unit
+                || a.project_id != b.project_id
+                || quantity(&a.quantity).ok().and_then(i128::checked_neg)
+                    != quantity(&b.quantity).ok()
+        })
+}
+
+fn validate_history(entry: &JournalEntry, all: &[JournalEntry]) -> Result<(), JournalError> {
+    validate_movement_evidence(entry)?;
     if !entry.sources.is_empty() && entry.reversal_of.is_none() {
         let all = &all;
-        for source in entry.sources.iter().filter(|s| {
-            matches!(
-                s.object_type.as_str(),
-                "transaction"
-                    | "transfer"
-                    | "network_fee"
-                    | "bank_transaction"
-                    | "payment"
-                    | "bank_transfer"
-            )
-        }) {
+        for source in entry
+            .sources
+            .iter()
+            .filter(|source| is_movement_source(source))
+        {
             if all.iter().any(|old| {
                 old.key != entry.key
                     && old.sources.contains(source)
                     && !all.iter().any(|r| r.reversal_of == Some(old.id))
             }) {
-                return Err(invalid("source movement already has an active journal event; allocate within that event"));
+                return Err(invalid(
+                    "source movement already has an active journal event; allocate within that event",
+                ));
             }
         }
     }
@@ -952,18 +974,7 @@ fn validate_history(entry: &JournalEntry, all: &[JournalEntry]) -> Result<(), Jo
             .iter()
             .find(|e| e.id == original)
             .ok_or_else(|| invalid("reversal target missing in Firm"))?;
-        if original.postings.len() != entry.postings.len()
-            || original.postings.iter().zip(&entry.postings).any(|(a, b)| {
-                a.account != b.account
-                    || a.ownership != b.ownership
-                    || a.restrictions != b.restrictions
-                    || a.category != b.category
-                    || a.unit != b.unit
-                    || a.project_id != b.project_id
-                    || quantity(&a.quantity).ok().and_then(i128::checked_neg)
-                        != quantity(&b.quantity).ok()
-            })
-        {
+        if !negates_postings(&original.postings, &entry.postings) {
             return Err(invalid("reversal must negate original postings exactly"));
         }
         if all.iter().any(|e| e.reversal_of == Some(original.id)) {
@@ -982,12 +993,22 @@ pub async fn entries(pg: &PostgresDb, firm: Uuid) -> Result<Vec<JournalEntry>, J
     .await?;
     Ok(rows.into_iter().map(|(e,)| e.0).collect())
 }
+/// The same Firm-bound identity used by native source-reference insertion.
+pub(crate) fn source_reference_id(
+    firm: Uuid,
+    source: &SourceReference,
+) -> Result<String, JournalError> {
+    Ok(digest(
+        format!("{firm}:{}", serde_json::to_string(source)?).as_bytes(),
+    ))
+}
+
 pub(crate) async fn persist_source(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     firm: Uuid,
     s: &SourceReference,
 ) -> Result<String, JournalError> {
-    let id = digest(format!("{firm}:{}", serde_json::to_string(s)?).as_bytes());
+    let id = source_reference_id(firm, s)?;
     sqlx::query("INSERT INTO journal_source_reference(id,firm_id,provider,provider_scope,account,object_type,external_id,locator,payload) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(id) DO NOTHING").bind(&id).bind(firm).bind(&s.provider).bind(&s.scope).bind(&s.account).bind(&s.object_type).bind(&s.external_id).bind(&s.locator).bind(sqlx::types::Json(s)).execute(&mut **tx).await?;
     Ok(id)
 }
@@ -1884,6 +1905,36 @@ pub async fn signals(
 #[cfg(test)]
 mod tests {
     use super::{parse_decimal, quantity, Reconciliation, SourceReference, Unit};
+
+    #[tokio::test]
+    async fn journal_environment_requires_activated_postgres_without_source() {
+        use crate::postgres::{PostgresDb, PostgresError};
+        let Some((options, database)) = crate::postgres_mirror::tests::fresh_schema().await else {
+            return;
+        };
+        let pg = crate::postgres_mirror::tests::connect(&options, &database).await;
+        let source = crate::surreal::SurrealDb::uninitialized();
+        PostgresDb::with_test_db(pg.clone(), async {
+            assert!(matches!(
+                super::JournalStore::from_env(&source).await,
+                Err(PostgresError::History)
+            ));
+            crate::postgres::fixtures::activate_application(&pg).await;
+            let journal = super::JournalStore::from_env(&source).await.unwrap();
+            assert!(journal.entries(uuid::Uuid::nil()).await.unwrap().is_empty());
+            sqlx::query(
+                "UPDATE mirror_backfill_run SET status = 'running', completed_at = NULL WHERE scope = 'application:1'",
+            )
+            .execute(pg.pool())
+            .await
+            .unwrap();
+            assert!(matches!(
+                super::JournalStore::from_env(&source).await,
+                Err(PostgresError::History)
+            ));
+        })
+        .await;
+    }
 
     fn reference() -> SourceReference {
         SourceReference {

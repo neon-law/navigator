@@ -3,6 +3,8 @@
 //! Approval and revocation events are append-only. The current approval row
 //! is updated in place, while the audit table preserves who changed it.
 
+use crate::postgres::summary_sender_approvals::ApprovalAudit;
+
 use chrono::{DateTime, Utc};
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
@@ -16,7 +18,7 @@ use crate::{
 pub const TABLE: &str = "summary_sender_approval";
 const AUDIT_TABLE: &str = "summary_sender_approval_event";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct SummarySenderApproval {
     pub id: Uuid,
     pub firm_id: Uuid,
@@ -30,6 +32,8 @@ pub struct SummarySenderApproval {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ApprovalError {
+    #[error(transparent)]
+    Postgres(#[from] crate::postgres::matter::MatterAuthorityError),
     #[error("not authorized")]
     NotAuthorized,
     #[error("sender email must belong to an email-confirmed Person")]
@@ -98,6 +102,12 @@ pub async fn is_approved(
     if !is_current_client_dri(db, project_id, person_id).await? {
         return Ok(false);
     }
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
+        let found: Option<serde_json::Value> = crate::postgres::matter::find(&pg, TABLE,
+            serde_json::json!({"firm_id": firm_id,"project_id": project_id,"provider_account": provider_account,
+                "person_id": person_id,"sender_email": email.trim().to_ascii_lowercase(),"status": "approved"})).await?;
+        return Ok(found.is_some());
+    }
     let mut response = db.query(format!("SELECT VALUE id FROM {TABLE} WHERE firm_id = $firm AND project_id = $project AND provider_account = $account AND person_id = $person AND sender_email = $email AND status = 'approved' LIMIT 1"))
         .bind(("firm", record_id(crate::firms::TABLE, firm_id)))
         .bind(("project", record_id(crate::projects::PROJECT_TABLE, project_id)))
@@ -116,6 +126,16 @@ pub async fn list_for_firm(
     firm_id: Uuid,
 ) -> Result<Vec<SummarySenderApproval>, ApprovalError> {
     authorize(db, role, actor, firm_id).await?;
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
+        return Ok(crate::postgres::matter::select(
+            &pg,
+            TABLE,
+            serde_json::json!({"firm_id": firm_id}),
+            &["updated_at DESC", "id DESC"],
+        )
+        .await?);
+    }
+
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE firm_id = $firm ORDER BY updated_at DESC"
@@ -137,6 +157,16 @@ pub async fn audit_history_for_firm(
     firm_id: Uuid,
 ) -> Result<Vec<ApprovalEvent>, ApprovalError> {
     authorize(db, role, actor, firm_id).await?;
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
+        return Ok(crate::postgres::matter::select(
+            &pg,
+            AUDIT_TABLE,
+            serde_json::json!({"firm_id": firm_id}),
+            &["inserted_at DESC", "id DESC"],
+        )
+        .await?);
+    }
+
     let mut response = db.query(format!("SELECT id, firm_id, actor_person_id, project_id, provider_account, sender_email, person_id, action, inserted_at FROM {AUDIT_TABLE} WHERE firm_id = $firm ORDER BY inserted_at DESC"))
         .bind(("firm", record_id(crate::firms::TABLE, firm_id)))
         .await.and_then(surrealdb::IndexedResults::check)?;
@@ -147,7 +177,7 @@ pub async fn audit_history_for_firm(
         .collect())
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct ApprovalEvent {
     pub id: Uuid,
     pub actor_person_id: Uuid,
@@ -200,6 +230,18 @@ pub async fn approve(
         .filter(|person| person.email_confirmed)
         .ok_or(ApprovalError::SenderNotVerified)?;
     validate_project_sender(db, firm_id, project_id, person.id).await?;
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
+        return crate::postgres::summary_sender_approvals::approve(
+            &pg,
+            actor,
+            firm_id,
+            project_id,
+            provider_account,
+            &email,
+            person.id,
+        )
+        .await;
+    }
     let identity_changed = find_by_identity(db, firm_id, project_id, provider_account, &email)
         .await?
         .is_some_and(|existing| existing.person_id != person.id);
@@ -251,6 +293,12 @@ async fn find_by_identity(
     provider_account: &str,
     email: &str,
 ) -> Result<Option<SummarySenderApproval>, ApprovalError> {
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
+        return Ok(crate::postgres::matter::find(&pg, TABLE, serde_json::json!({
+            "firm_id": firm_id,"project_id": project_id,"provider_account": provider_account,"sender_email": email,
+        })).await?);
+    }
+
     let mut response = db.query(format!("SELECT {SELECT} FROM {TABLE} WHERE firm_id = $firm AND project_id = $project AND provider_account = $account AND sender_email = $email LIMIT 1"))
         .bind(("firm", record_id(crate::firms::TABLE, firm_id)))
         .bind(("project", record_id(crate::projects::PROJECT_TABLE, project_id)))
@@ -268,6 +316,10 @@ pub async fn revoke(
     approval_id: Uuid,
 ) -> Result<(), ApprovalError> {
     authorize(db, role, Some(actor), firm_id).await?;
+    if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
+        return crate::postgres::summary_sender_approvals::revoke(&pg, actor, firm_id, approval_id)
+            .await;
+    }
     let mut response = db
         .query(format!(
             "SELECT {SELECT} FROM {TABLE} WHERE id = $id AND firm_id = $firm LIMIT 1"
@@ -376,17 +428,6 @@ async fn validate_project_sender(
         return Err(ApprovalError::SenderNotClientDri);
     }
     Ok(())
-}
-
-struct ApprovalAudit<'a> {
-    id: Uuid,
-    firm_id: Uuid,
-    actor: Uuid,
-    project_id: Option<Uuid>,
-    account: &'a str,
-    email: &'a str,
-    person: Uuid,
-    action: &'a str,
 }
 
 async fn audit(db: &SurrealDb, event: ApprovalAudit<'_>) -> Result<(), ApprovalError> {

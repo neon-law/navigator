@@ -75,6 +75,9 @@ pub(crate) async fn brand_key_exists(
     struct BrandKeyRow {
         brand_key: String,
     }
+    if crate::postgres::tenancy::enabled() {
+        return Ok(Box::pin(crate::postgres::tenancy::brand_key_exists(brand_key)).await?);
+    }
     let mut response = surreal
         .query("SELECT brand_key FROM brand WHERE brand_key = $brand_key LIMIT 1")
         .bind(("brand_key", brand_key.to_string()))
@@ -447,7 +450,7 @@ where
 /// [`FirmError::InvalidSlug`], and one whose slug another Firm already holds
 /// as [`FirmError::DuplicateSlug`]; no suffix is added to make it fit.
 pub async fn create(surreal: &SurrealDb, input: &NewFirm) -> Result<Firm, FirmError> {
-    if crate::postgres::tenancy::enabled()? {
+    if crate::postgres::tenancy::enabled() {
         return Box::pin(crate::postgres::tenancy::create_firm(input)).await;
     }
     if crate::entities::find_by_id(surreal, input.entity_id)
@@ -520,7 +523,7 @@ pub async fn create(surreal: &SurrealDb, input: &NewFirm) -> Result<Firm, FirmEr
 
 /// Find the firm identified by `id`.
 pub async fn find_by_id(surreal: &SurrealDb, id: Uuid) -> Result<Option<Firm>, FirmError> {
-    if crate::postgres::tenancy::enabled()? {
+    if crate::postgres::tenancy::enabled() {
         return Ok(Box::pin(crate::postgres::tenancy::find_firm(id)).await?);
     }
     let mut response = surreal
@@ -530,7 +533,6 @@ pub async fn find_by_id(surreal: &SurrealDb, id: Uuid) -> Result<Option<Firm>, F
         .and_then(surrealdb::IndexedResults::check)?;
     let row: Option<FirmRow> = response.take(0)?;
     let firm = row.and_then(FirmRow::into_firm);
-    crate::postgres_shadow::firm_read(id, firm.as_ref());
     Ok(firm)
 }
 
@@ -539,7 +541,7 @@ pub async fn find_by_entity_id(
     surreal: &SurrealDb,
     entity_id: Uuid,
 ) -> Result<Option<Firm>, FirmError> {
-    if crate::postgres::tenancy::enabled()? {
+    if crate::postgres::tenancy::enabled() {
         return Ok(Box::pin(crate::postgres::tenancy::firm_by_entity(entity_id)).await?);
     }
     let mut response = surreal
@@ -555,7 +557,7 @@ pub async fn find_by_entity_id(
 
 /// Every firm, name then id.
 pub async fn all(surreal: &SurrealDb) -> Result<Vec<Firm>, FirmError> {
-    if crate::postgres::tenancy::enabled()? {
+    if crate::postgres::tenancy::enabled() {
         return Ok(Box::pin(crate::postgres::tenancy::all_firms()).await?);
     }
     let mut response = surreal
@@ -728,7 +730,7 @@ pub async fn update(
     firm_id: Uuid,
     input: &FirmEdit,
 ) -> Result<Firm, FirmError> {
-    if crate::postgres::tenancy::enabled()? {
+    if crate::postgres::tenancy::enabled() {
         return Box::pin(crate::postgres::tenancy::update_firm(
             actor_role,
             actor_person_id,
@@ -811,7 +813,7 @@ pub async fn delete(
     actor_person_id: Option<Uuid>,
     firm_id: Uuid,
 ) -> Result<(), FirmError> {
-    if crate::postgres::tenancy::enabled()? {
+    if crate::postgres::tenancy::enabled() {
         return Box::pin(crate::postgres::tenancy::delete_firm(
             actor_role,
             actor_person_id,
@@ -879,7 +881,7 @@ pub async fn add_membership(
     surreal: &SurrealDb,
     input: &NewPersonFirmRole,
 ) -> Result<PersonFirmRole, FirmError> {
-    if crate::postgres::tenancy::enabled()? {
+    if crate::postgres::tenancy::enabled() {
         return Box::pin(crate::postgres::tenancy::add_membership(input)).await;
     }
     let person = crate::persons::find_by_id(surreal, input.person_id)
@@ -928,7 +930,7 @@ pub async fn membership_for_person(
     person_id: Uuid,
     firm_id: Uuid,
 ) -> Result<Option<PersonFirmRole>, FirmError> {
-    if crate::postgres::tenancy::enabled()? {
+    if crate::postgres::tenancy::enabled() {
         return Ok(Box::pin(crate::postgres::tenancy::membership(person_id, firm_id)).await?);
     }
     let mut response = surreal
@@ -949,7 +951,7 @@ pub async fn memberships_for_person(
     surreal: &SurrealDb,
     person_id: Uuid,
 ) -> Result<Vec<PersonFirmRole>, FirmError> {
-    if crate::postgres::tenancy::enabled()? {
+    if crate::postgres::tenancy::enabled() {
         return Ok(Box::pin(crate::postgres::tenancy::memberships_for_person(person_id)).await?);
     }
     let mut response = surreal
@@ -974,7 +976,7 @@ pub async fn memberships_for_firm(
     surreal: &SurrealDb,
     firm_id: Uuid,
 ) -> Result<Vec<PersonFirmRole>, FirmError> {
-    if crate::postgres::tenancy::enabled()? {
+    if crate::postgres::tenancy::enabled() {
         return Ok(Box::pin(crate::postgres::tenancy::memberships_for_firm(firm_id)).await?);
     }
     let mut response = surreal
@@ -1006,7 +1008,7 @@ pub async fn update_membership(
     firm_id: Uuid,
     membership: FirmMembership,
 ) -> Result<PersonFirmRole, FirmError> {
-    if crate::postgres::tenancy::enabled()? {
+    if crate::postgres::tenancy::enabled() {
         return Box::pin(crate::postgres::tenancy::update_membership(
             actor_role,
             actor_person_id,
@@ -1076,7 +1078,7 @@ async fn remove_membership_row(
     person_id: Uuid,
     firm_id: Uuid,
 ) -> Result<(), FirmError> {
-    if crate::postgres::tenancy::enabled()? {
+    if crate::postgres::tenancy::enabled() {
         return Box::pin(crate::postgres::tenancy::remove_membership(
             actor_role,
             actor_person_id,
@@ -1126,6 +1128,9 @@ pub async fn visible_person_ids(
     .await?;
     if firm_ids.is_empty() {
         return Ok(Vec::new());
+    }
+    if crate::postgres::tenancy::enabled() {
+        return Ok(Box::pin(crate::postgres::tenancy::visible_person_ids(&firm_ids)).await?);
     }
     let firm_records: Vec<_> = firm_ids
         .iter()
@@ -1279,7 +1284,7 @@ pub async fn attach_brand(
     firm_id: Uuid,
     brand_key: &str,
 ) -> Result<(), FirmError> {
-    if crate::postgres::tenancy::enabled()? {
+    if crate::postgres::tenancy::enabled() {
         if actor_role != Role::Owner {
             return Err(FirmError::NotAuthorized);
         }
@@ -1305,6 +1310,9 @@ pub(crate) async fn attach_brand_row(
     firm_id: Uuid,
     brand_key: &str,
 ) -> Result<(), FirmError> {
+    if crate::postgres::tenancy::enabled() {
+        return Box::pin(crate::postgres::tenancy::attach_brand(firm_id, brand_key)).await;
+    }
     if !brand_key_exists(surreal, brand_key).await? {
         return Err(FirmError::UnknownBrand(brand_key.to_string()));
     }
@@ -1369,7 +1377,7 @@ pub async fn brand_keys_for_firm(
     struct BrandRow {
         brand_key: String,
     }
-    if crate::postgres::tenancy::enabled()? {
+    if crate::postgres::tenancy::enabled() {
         let keys = Box::pin(crate::postgres::tenancy::firm_brand_keys(firm_id)).await?;
         return Ok(in_registry_order(keys));
     }
@@ -1396,7 +1404,7 @@ pub async fn firm_id_for_brand_key(
     struct FirmIdRow {
         firm_id: surrealdb::types::RecordId,
     }
-    if crate::postgres::tenancy::enabled()? {
+    if crate::postgres::tenancy::enabled() {
         return Ok(Box::pin(crate::postgres::tenancy::firm_for_brand_key(brand_key)).await?);
     }
     let mut response = surreal
@@ -1449,7 +1457,7 @@ pub async fn firm_brand_for_key(
     surreal: &SurrealDb,
     brand_key: &str,
 ) -> Result<Option<FirmBrand>, FirmError> {
-    if crate::postgres::tenancy::enabled()? {
+    if crate::postgres::tenancy::enabled() {
         return Ok(Box::pin(crate::postgres::tenancy::firm_brand_row_for_key(brand_key)).await?);
     }
     let mut response = surreal
@@ -1465,7 +1473,7 @@ pub async fn firm_brand_for_key(
 
 /// Every `firm_brand` row, by Brand key.
 pub async fn all_firm_brands(surreal: &SurrealDb) -> Result<Vec<FirmBrand>, FirmError> {
-    if crate::postgres::tenancy::enabled()? {
+    if crate::postgres::tenancy::enabled() {
         return Ok(Box::pin(crate::postgres::tenancy::all_firm_brand_rows()).await?);
     }
     let mut response = surreal
@@ -1483,7 +1491,7 @@ pub async fn all_firm_brands(surreal: &SurrealDb) -> Result<Vec<FirmBrand>, Firm
 
 /// Every membership row on every Firm.
 pub async fn all_memberships(surreal: &SurrealDb) -> Result<Vec<PersonFirmRole>, FirmError> {
-    if crate::postgres::tenancy::enabled()? {
+    if crate::postgres::tenancy::enabled() {
         return Ok(Box::pin(crate::postgres::tenancy::all_memberships()).await?);
     }
     let mut response = surreal
@@ -1534,7 +1542,7 @@ pub async fn attach_own_brand(
     let firm_id = brand
         .firm_id
         .ok_or_else(|| FirmError::BrandHasNoFirm(brand_key.to_string()))?;
-    if crate::postgres::tenancy::enabled()? {
+    if crate::postgres::tenancy::enabled() {
         let pg = crate::postgres::PostgresDb::from_env()
             .await
             .map_err(crate::postgres::tenancy::TenancyError::from)?;
@@ -1562,7 +1570,7 @@ pub async fn detach_brand(
     firm_id: Uuid,
     brand_key: &str,
 ) -> Result<(), FirmError> {
-    if crate::postgres::tenancy::enabled()? {
+    if crate::postgres::tenancy::enabled() {
         let pg = crate::postgres::PostgresDb::from_env()
             .await
             .map_err(crate::postgres::tenancy::TenancyError::from)?;
@@ -1615,7 +1623,7 @@ pub async fn move_brand(
     brand_key: &str,
     target_firm_id: Uuid,
 ) -> Result<(), FirmError> {
-    if crate::postgres::tenancy::enabled()? {
+    if crate::postgres::tenancy::enabled() {
         if actor_role != Role::Owner {
             return Err(FirmError::NotAuthorized);
         }
@@ -1688,6 +1696,14 @@ pub async fn backfill_unowned_projects(
         if find_by_id(surreal, firm_id).await?.is_none() {
             return Err(FirmError::NoSuchFirm(firm_id));
         }
+    }
+    if crate::postgres::tenancy::enabled() {
+        return Ok(
+            Box::pin(crate::postgres::tenancy::backfill_unowned_projects(
+                fallback_firm_id,
+            ))
+            .await?,
+        );
     }
     let mut response = surreal
         .query("SELECT id, brand FROM project WHERE firm_id IS NONE")
@@ -1762,7 +1778,7 @@ pub async fn appoint_admin_dri(
     firm_id: Uuid,
     person_id: Uuid,
 ) -> Result<PersonFirmRole, FirmError> {
-    let result = if crate::postgres::tenancy::enabled()? {
+    let result = if crate::postgres::tenancy::enabled() {
         Box::pin(crate::postgres::tenancy::appoint_admin_dri(
             actor_role, firm_id, person_id,
         ))
@@ -1813,10 +1829,10 @@ async fn appoint_admin_dri_inner(
     {
         crate::firm_capability::FirmCapabilityDecision::Allowed => {}
         crate::firm_capability::FirmCapabilityDecision::FirmNotFound => {
-            return Err(FirmError::NoSuchFirm(firm_id))
+            return Err(FirmError::NoSuchFirm(firm_id));
         }
         crate::firm_capability::FirmCapabilityDecision::Forbidden => {
-            return Err(FirmError::NotAuthorized)
+            return Err(FirmError::NotAuthorized);
         }
     }
 
@@ -1949,18 +1965,10 @@ pub async fn admin_dri_invariant_report(
         if firm.status != "active" {
             continue;
         }
-        let mut response = surreal
-            .query(format!(
-                "SELECT {MEMBERSHIP_SELECT} FROM {MEMBERSHIP_TABLE} \
-                 WHERE firm_id = $firm_id AND is_dri = true ORDER BY inserted_at, id"
-            ))
-            .bind(("firm_id", record_id(TABLE, firm.id)))
-            .await
-            .and_then(surrealdb::IndexedResults::check)?;
-        let rows: Vec<PersonFirmRoleRow> = response.take(0)?;
-        let dris: Vec<PersonFirmRole> = rows
+        let dris: Vec<PersonFirmRole> = memberships_for_firm(surreal, firm.id)
+            .await?
             .into_iter()
-            .filter_map(PersonFirmRoleRow::into_role)
+            .filter(|role| role.is_dri)
             .collect();
         let problem = if dris.is_empty() {
             Some(AdminDriProblem::Missing)

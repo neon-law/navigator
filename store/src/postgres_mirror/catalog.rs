@@ -721,47 +721,51 @@ async fn mirror_row<C: Catalog>(
 }
 
 /// Make PostgreSQL's copy of one catalog row match SurrealDB's.
-pub(super) async fn mirror(
-    surreal: &SurrealDb,
-    pg: &PostgresDb,
-    key: &MirrorKey,
-) -> Result<Mirrored, MirrorError> {
-    if !super::initial_copy() {
-        return Ok(Mirrored::Unchanged);
-    }
-    match key {
-        MirrorKey::Authority(id) => mirror_row::<AuthorityImage>(surreal, pg, *id).await,
-        MirrorKey::GlossaryTerm(id) => mirror_row::<GlossaryTermImage>(surreal, pg, *id).await,
-        MirrorKey::Question(id) => mirror_row::<QuestionImage>(surreal, pg, *id).await,
-        MirrorKey::NotationPackage(id) => {
-            mirror_row::<NotationPackageImage>(surreal, pg, *id).await
+pub(super) fn mirror<'a>(
+    surreal: &'a SurrealDb,
+    pg: &'a PostgresDb,
+    key: &'a MirrorKey,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Mirrored, MirrorError>> + Send + 'a>>
+{
+    Box::pin(async move {
+        if !super::initial_copy() || super::backfilled(pg).await? {
+            return Ok(Mirrored::Unchanged);
         }
-        MirrorKey::NotationPackageTemplate(id) => {
-            let Some(member) = source_one::<PackageTemplateImage>(surreal, *id).await? else {
-                return delete::<PackageTemplateImage>(pg, *id).await;
-            };
-            let held: bool =
-                sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM notation_package WHERE id = $1)")
-                    .bind(member.package_id)
-                    .fetch_one(&pg.0)
-                    .await?;
-            if !held {
-                mirror_row::<NotationPackageImage>(surreal, pg, member.package_id).await?;
+        match key {
+            MirrorKey::Authority(id) => mirror_row::<AuthorityImage>(surreal, pg, *id).await,
+            MirrorKey::GlossaryTerm(id) => mirror_row::<GlossaryTermImage>(surreal, pg, *id).await,
+            MirrorKey::Question(id) => mirror_row::<QuestionImage>(surreal, pg, *id).await,
+            MirrorKey::NotationPackage(id) => {
+                mirror_row::<NotationPackageImage>(surreal, pg, *id).await
             }
-            let template_held: bool =
-                sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM template WHERE id = $1)")
-                    .bind(member.template_id)
-                    .fetch_one(&pg.0)
-                    .await?;
-            if !template_held {
-                super::templates::mirror(surreal, pg, member.template_id).await?;
+            MirrorKey::NotationPackageTemplate(id) => {
+                let Some(member) = source_one::<PackageTemplateImage>(surreal, *id).await? else {
+                    return delete::<PackageTemplateImage>(pg, *id).await;
+                };
+                let held: bool = sqlx::query_scalar(
+                    "SELECT EXISTS (SELECT 1 FROM notation_package WHERE id = $1)",
+                )
+                .bind(member.package_id)
+                .fetch_one(&pg.0)
+                .await?;
+                if !held {
+                    mirror_row::<NotationPackageImage>(surreal, pg, member.package_id).await?;
+                }
+                let template_held: bool =
+                    sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM template WHERE id = $1)")
+                        .bind(member.template_id)
+                        .fetch_one(&pg.0)
+                        .await?;
+                if !template_held {
+                    super::templates::mirror(surreal, pg, member.template_id).await?;
+                }
+                upsert(pg, &member).await
             }
-            upsert(pg, &member).await
+            MirrorKey::NotationRate(id) => mirror_row::<NotationRateImage>(surreal, pg, *id).await,
+            // `super::mirror` routes only catalog keys here.
+            _ => Err(MirrorError::Source),
         }
-        MirrorKey::NotationRate(id) => mirror_row::<NotationRateImage>(surreal, pg, *id).await,
-        // `super::mirror` routes only catalog keys here.
-        _ => Err(MirrorError::Source),
-    }
+    })
 }
 
 async fn table<C: Catalog>(

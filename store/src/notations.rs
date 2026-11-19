@@ -16,7 +16,6 @@ use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
 use crate::postgres::matter;
-use crate::postgres_shadow::{notation_exists_read, notation_rows_read, NotationShape};
 use crate::surreal::{record_id, record_uuid, retry, SurrealDb};
 
 /// The table these rows live in.
@@ -496,7 +495,6 @@ pub async fn find_by_id(db: &SurrealDb, id: Uuid) -> Result<Option<Notation>, No
         .await
         .and_then(surrealdb::IndexedResults::check)?;
     let notation = one(response)?;
-    crate::postgres_shadow::notation_read(id, notation.as_ref());
     Ok(notation)
 }
 
@@ -532,7 +530,6 @@ pub async fn list_by_project(
         .await
         .and_then(surrealdb::IndexedResults::check)?;
     let rows = many(response)?;
-    notation_rows_read(NotationShape::ByProject(project_id), &rows);
     Ok(rows)
 }
 
@@ -567,7 +564,6 @@ pub async fn list_by_projects(
         .await
         .and_then(surrealdb::IndexedResults::check)?;
     let rows = many(response)?;
-    notation_rows_read(NotationShape::ByProjects(project_ids.to_vec()), &rows);
     Ok(rows)
 }
 
@@ -656,7 +652,6 @@ pub async fn list_by_person(
         .await
         .and_then(surrealdb::IndexedResults::check)?;
     let rows = many(response)?;
-    notation_rows_read(NotationShape::ByPerson(person_id), &rows);
     Ok(rows)
 }
 
@@ -683,7 +678,6 @@ pub async fn list_all(db: &SurrealDb) -> Result<Vec<Notation>, NotationError> {
         .await
         .and_then(surrealdb::IndexedResults::check)?;
     let rows = many(response)?;
-    notation_rows_read(NotationShape::All, &rows);
     Ok(rows)
 }
 
@@ -718,14 +712,6 @@ pub async fn find_by_project_template_person(
         .await
         .and_then(surrealdb::IndexedResults::check)?;
     let notation = one(response)?;
-    notation_rows_read(
-        NotationShape::ByProjectTemplatePerson {
-            project_id,
-            template_id,
-            person_id,
-        },
-        notation.as_slice(),
-    );
     Ok(notation)
 }
 
@@ -755,7 +741,6 @@ pub async fn exists_for_project(db: &SurrealDb, project_id: Uuid) -> Result<bool
         .and_then(surrealdb::IndexedResults::check)?;
     let ids: Vec<surrealdb::types::RecordId> = response.take(0)?;
     let exists = !ids.is_empty();
-    notation_exists_read(project_id, exists);
     Ok(exists)
 }
 

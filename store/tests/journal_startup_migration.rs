@@ -34,35 +34,29 @@ async fn postgres() -> Option<(PostgresDb, sqlx::PgPool)> {
     let setup = sqlx::PgPool::connect_with(options.clone().database(&database))
         .await
         .unwrap();
-    let pg = PostgresDb::connect(options.database(&database))
+    sqlx::raw_sql("CREATE EXTENSION IF NOT EXISTS age; LOAD 'age';")
+        .execute(&setup)
         .await
         .unwrap();
+    let pg = PostgresDb::connect(
+        options
+            .options([("session_preload_libraries", "age")])
+            .database(&database),
+    )
+    .await
+    .unwrap();
     pg.migrate_embedded(None).await.unwrap();
     Some((pg, setup))
 }
 async fn firm(db: &store::surreal::SurrealDb) -> Uuid {
-    let admin = store::persons::create(
-        db,
-        &store::persons::NewPerson::with_role(
-            "Synthetic administrator",
-            format!("admin-{}@example.com", Uuid::now_v7()),
-            store::persons::Role::Admin,
-        ),
-    )
-    .await
-    .unwrap();
-    store::firms::create(
-        db,
-        &store::firms::NewFirm {
-            name: "Synthetic accounting firm".into(),
-            status: "active".into(),
-            entity_id: store::test_support::seed_entity(db).await,
-            admin_dri_person_id: admin.id,
-        },
-    )
-    .await
-    .unwrap()
-    .id
+    // The explicit importer reads historical Source rows, independent of
+    // ordinary application accessors and their PostgreSQL admission checks.
+    let id = Uuid::now_v7();
+    db.query("CREATE $id SET name='Synthetic accounting firm', slug=$slug, status='active', inserted_at='2026-10-10T00:00:00Z', updated_at='2026-10-10T00:00:00Z'")
+        .bind(("id", store::surreal::record_id("firm", id)))
+        .bind(("slug", store::firms::slug::derive(&format!("fixture-{}", id.simple()))))
+        .await.unwrap().check().unwrap();
+    id
 }
 
 fn entry(firm: Uuid, key: &str) -> JournalEntry {
@@ -107,7 +101,8 @@ async fn legacy(db: &store::surreal::SurrealDb, entry: &JournalEntry, timestamp:
         .unwrap()
         .check()
         .unwrap();
-    db.query("CREATE journal_entry CONTENT {firm_id:$firm, command_key:$key, payload:$payload, inserted_at:$timestamp}")
+    db.query("CREATE $id CONTENT {firm_id:$firm, command_key:$key, payload:$payload, inserted_at:$timestamp}")
+        .bind(("id", store::surreal::record_id("journal_entry", entry.id)))
         .bind(("firm", entry.firm_id.to_string())).bind(("key", entry.key.clone()))
         .bind(("payload", serde_json::to_string(entry).unwrap()))
         .bind(("timestamp", timestamp.map(str::to_owned)))
@@ -196,17 +191,26 @@ async fn startup_import_preserves_identity_timestamps_and_reversal_order_then_re
 }
 
 #[tokio::test]
-async fn startup_import_refuses_changed_postgres_record_and_rolls_back_entire_batch() {
+async fn operator_import_refuses_changed_source_and_rolls_back_entire_batch() {
     let Some((pg, _pool)) = postgres().await else {
         return;
     };
     let db = store::test_support::mem_surreal().await;
     let firm = firm(&db).await;
     let original = entry(firm, "collision");
-    post(&db, &pg, &original).await.unwrap();
+    legacy(&db, &original, Some("2026-10-10T00:00:00Z")).await;
+    store::journal_startup_migration::import(&db, &pg)
+        .await
+        .unwrap();
     let mut altered = original.clone();
     altered.memo = "Altered historical source".into();
-    legacy(&db, &altered, Some("2026-10-10T00:00:00Z")).await;
+    db.query("UPDATE $id SET payload=$payload")
+        .bind(("id", store::surreal::record_id("journal_entry", altered.id)))
+        .bind(("payload", serde_json::to_string(&altered).unwrap()))
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
     legacy(
         &db,
         &entry(firm, "must-roll-back"),
@@ -342,4 +346,117 @@ async fn source_overflow_fails_visibly_without_importing_a_partial_subset() {
         Err(JournalError::Invalid(message)) if message.contains("1000"))
     );
     assert!(entries(&pg, firm).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn raw_capture_preserves_physical_identity_and_refuses_payload_aliases() {
+    let db = store::test_support::mem_surreal().await;
+    let firm = firm(&db).await;
+    let original = entry(firm, "physical-identity");
+    legacy(&db, &original, Some("2026-10-12T00:00:00Z")).await;
+    let rows = store::journal_startup_migration::capture(&db)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, original.id);
+    let mut alias = entry(firm, "payload-alias");
+    alias.id = original.id;
+    db.query("CREATE $id CONTENT {firm_id:$firm,command_key:$key,payload:$payload,inserted_at:'2026-10-12T00:00:00Z'}")
+        .bind(("id",store::surreal::record_id("journal_entry",Uuid::new_v4())))
+        .bind(("firm",firm.to_string())).bind(("key",alias.key.clone()))
+        .bind(("payload",serde_json::to_string(&alias).unwrap())).await.unwrap().check().unwrap();
+    assert!(store::journal_startup_migration::capture(&db)
+        .await
+        .is_err());
+}
+
+#[tokio::test]
+async fn operator_import_waits_for_native_firm_lock_before_reading_history() {
+    let Some((pg, pool)) = postgres().await else {
+        return;
+    };
+    let db = store::test_support::mem_surreal().await;
+    let firm = firm(&db).await;
+    let original = entry(firm, "already-imported");
+    legacy(&db, &original, Some("2026-10-12T00:00:00Z")).await;
+    store::journal_startup_migration::import(&db, &pg)
+        .await
+        .unwrap();
+    let incoming = entry(firm, "pending-after-native-lock");
+    legacy(&db, &incoming, Some("2026-10-12T00:00:01Z")).await;
+    let mut native = pg.pool().begin().await.unwrap();
+    sqlx::query("SELECT id FROM firm WHERE id=$1 FOR UPDATE")
+        .bind(firm)
+        .execute(&mut *native)
+        .await
+        .unwrap();
+    let source = db.clone();
+    let importing_pg = pg.clone();
+    let mut importing = tokio::spawn(async move {
+        store::journal_startup_migration::import(&source, &importing_pg).await
+    });
+    let waiting = async {
+        loop {
+            let blocked:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%FROM firm WHERE id%FOR UPDATE%')")
+                .fetch_one(&pool).await.unwrap();
+            if blocked {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    };
+    tokio::select! {
+        result=&mut importing=>panic!("operator import completed before native Firm lock release: {result:?}"),
+        result=tokio::time::timeout(std::time::Duration::from_secs(10),waiting)=>result.expect("operator must wait on the native Firm row lock"),
+    }
+    sqlx::query("UPDATE firm SET name='Native metadata retained' WHERE id=$1")
+        .bind(firm)
+        .execute(&mut *native)
+        .await
+        .unwrap();
+    native.commit().await.unwrap();
+    assert_eq!(importing.await.unwrap().unwrap().imported, 1);
+    let name: String = sqlx::query_scalar("SELECT name FROM firm WHERE id=$1")
+        .bind(firm)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(name, "Native metadata retained");
+    assert_eq!(entries(&pg, firm).await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn operator_import_is_firm_scoped_and_keeps_source_unchanged() {
+    let Some((pg, _pool)) = postgres().await else {
+        return;
+    };
+    let db = store::test_support::mem_surreal().await;
+    // A selected Firm's explicit import must not parse or import another
+    // Firm's malformed history, and must leave the Source unchanged.
+    let selected = self::firm(&db).await;
+    let selected_entry = entry(selected, "selected-firm");
+    legacy(&db, &selected_entry, Some("2026-10-11T01:05:00Z")).await;
+    let outside = self::firm(&db).await;
+    db.query("CREATE journal_entry SET firm_id=$firm, command_key='unreviewed-outside-firm', payload='not-json', inserted_at='2026-10-11T01:05:00Z'")
+        .bind(("firm", outside.to_string())).await.unwrap().check().unwrap();
+    let report = store::journal_startup_migration::import_firm(&db, &pg, selected)
+        .await
+        .unwrap();
+    assert_eq!(report.imported, 1);
+    assert!(report.triage.is_empty());
+    assert_eq!(entries(&pg, selected).await.unwrap(), vec![selected_entry]);
+    assert!(entries(&pg, outside).await.unwrap().is_empty());
+    assert_eq!(
+        store::journal_startup_migration::import_firm(&db, &pg, selected)
+            .await
+            .unwrap()
+            .imported,
+        0
+    );
+    let mut source = db
+        .query("SELECT count() AS total FROM journal_entry GROUP ALL")
+        .await
+        .unwrap();
+    let count: Vec<Count> = source.take(0).unwrap();
+    assert_eq!(count[0].total, 2);
 }

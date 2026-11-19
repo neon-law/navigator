@@ -53,6 +53,14 @@ mod inbox_triage;
 #[path = "common/private_chart.rs"]
 mod private_chart;
 
+/// Browser fixtures require activated PostgreSQL history before creating any records.
+async fn postgres_browser_store() -> anyhow::Result<store::surreal::SurrealDb> {
+    store::postgres::PostgresDb::application()
+        .await
+        .context("require PostgreSQL browser fixture history")?;
+    Ok(store::surreal::SurrealDb::uninitialized())
+}
+
 /// Browser fixtures use the live catalog so their record links satisfy PostgreSQL constraints.
 async fn seed_browser_entity(db: &store::surreal::SurrealDb) -> Uuid {
     let entity_type = store::entity_types::find_by_name(db, "C-Corp")
@@ -1111,9 +1119,9 @@ async fn visit_acceptance_scenario(c: &Client, id: &str) -> (u16, Result<(), Str
 /// Apply the explicit staging fixture to the task's KIND store, bridge the
 /// Rauthy actors, and publish the generated portal bundle for browser access.
 async fn prepare_browser_fixture() -> anyhow::Result<(usize, usize)> {
-    let surreal = store::surreal::connect_from_env()
+    let surreal = postgres_browser_store()
         .await
-        .context("connect to task KIND store")?;
+        .context("require activated task PostgreSQL store")?;
     let storage = cloud::from_env().await.context("connect to task storage")?;
     let first = store::synthetic_portfolio::apply(
         &surreal,
@@ -1153,9 +1161,9 @@ async fn client_can_continue_pending_intake_from_the_matter_page() {
     let Some(c) = new_client_or_skip().await else {
         return;
     };
-    let surreal = store::surreal::connect_from_env()
+    let surreal = postgres_browser_store()
         .await
-        .expect("connect to the port-forwarded SurrealDB");
+        .expect("require activated PostgreSQL fixture");
     let client = store::persons::find_by_email_ci(&surreal, "client@neonlaw.com")
         .await
         .expect("look up the browser-harness client person")
@@ -1442,9 +1450,9 @@ async fn lawyer_walks_the_full_retainer_questionnaire_end_to_end() {
         );
     }
 
-    let surreal = store::surreal::connect_from_env()
+    let surreal = postgres_browser_store()
         .await
-        .expect("connect to the port-forwarded SurrealDB");
+        .expect("require activated PostgreSQL fixture");
     let notation = store::notations::find_by_id(&surreal, notation_id)
         .await
         .unwrap()
@@ -2229,9 +2237,9 @@ async fn lawyer_walks_the_whole_questionnaire_with_the_keyboard_alone() {
     wait_for_text(&c, "Awaiting attorney review", Duration::from_secs(20)).await;
     c.close().await.unwrap();
 
-    let surreal = store::surreal::connect_from_env()
+    let surreal = postgres_browser_store()
         .await
-        .expect("connect to the port-forwarded SurrealDB");
+        .expect("require activated PostgreSQL fixture");
     let answers = store::answers::for_notation(&surreal, notation_id)
         .await
         .expect("read the notation's answer history");
@@ -2815,9 +2823,9 @@ async fn client_walks_the_whole_intake_with_the_keyboard_alone() {
     let Some(c) = new_client_or_skip().await else {
         return;
     };
-    let surreal = store::surreal::connect_from_env()
+    let surreal = postgres_browser_store()
         .await
-        .expect("connect to the port-forwarded SurrealDB");
+        .expect("require activated PostgreSQL fixture");
     let client = store::persons::find_by_email_ci(&surreal, "client@neonlaw.com")
         .await
         .expect("look up the browser-harness client person")
@@ -3366,7 +3374,7 @@ async fn email_review_exposes_a_project_proposal_without_a_conversation_assignme
         return;
     };
     login_as_lawyer(&c).await;
-    let db = store::surreal::connect_from_env().await.unwrap();
+    let db = postgres_browser_store().await.unwrap();
     let (project_id, review_id) = seed_inbox_filing_review(&db).await;
     c.goto(&format!("{}/app/inbox/triage", base_url()))
         .await
@@ -3405,7 +3413,7 @@ async fn a_lawyer_can_approve_one_inbox_message_for_internal_filing() {
         return;
     };
     login_as_lawyer(&c).await;
-    let db = store::surreal::connect_from_env().await.unwrap();
+    let db = postgres_browser_store().await.unwrap();
     let (project_id, review_id) = seed_inbox_filing_review(&db).await;
 
     c.goto(&format!("{}/app/inbox/triage", base_url()))
@@ -3466,7 +3474,7 @@ async fn a_lawyer_can_approve_one_inbox_attachment_with_an_explicit_kind() {
         return;
     };
     login_as_lawyer(&client).await;
-    let db = store::surreal::connect_from_env().await.unwrap();
+    let db = postgres_browser_store().await.unwrap();
     let (project_id, review_id) = seed_inbox_filing_review(&db).await;
     let review = store::inbox_triage::find_by_id(&db, review_id)
         .await
@@ -3614,7 +3622,7 @@ async fn lawyer_workbench_card_opens_the_unified_inbox() {
         return;
     };
     login_as_lawyer(&c).await;
-    let db = store::surreal::connect_from_env().await.unwrap();
+    let db = postgres_browser_store().await.unwrap();
     let saved = seed_inbox_walkthrough(
         &db,
         "synthetic-receiving-account",
@@ -3714,7 +3722,7 @@ async fn firm_inbox_displays_the_email_date_and_links_a_text_to_a_contact() {
         return;
     };
     login_as_owner(&c).await;
-    let db = store::surreal::connect_from_env().await.unwrap();
+    let db = postgres_browser_store().await.unwrap();
     let email = format!("inbox-{}@example.test", Uuid::now_v7());
     let mail = seed_inbox_walkthrough(
         &db,
@@ -3802,7 +3810,7 @@ async fn project_inbox_opens_a_full_email_thread_with_application_chrome() {
         return;
     };
     login_as_lawyer(&c).await;
-    let db = store::surreal::connect_from_env().await.unwrap();
+    let db = postgres_browser_store().await.unwrap();
     let firm = store::firms::firm_id_for_brand_key(&db, "neon")
         .await
         .unwrap()
@@ -3879,9 +3887,9 @@ async fn the_blog_merges_its_listings_and_the_catalog_explains_video_eligibility
     let Some(c) = new_client_or_skip().await else {
         return;
     };
-    let surreal = store::surreal::connect_from_env()
+    let surreal = postgres_browser_store()
         .await
-        .expect("connect to the port-forwarded SurrealDB");
+        .expect("require activated PostgreSQL fixture");
     let tag = Uuid::now_v7().simple().to_string();
     let video = format!("img/neon/social/e2e-{tag}.mp4");
     store::posts::record_video(&surreal, "neon", &video, 1080, 1920)
@@ -4045,9 +4053,9 @@ async fn admin_adds_a_person_through_the_people_form() {
 
     // The list may not show the row (firm scoping, see above), so read the
     // store directly for the proof that the POST actually wrote the person.
-    let surreal = store::surreal::connect_from_env()
+    let surreal = postgres_browser_store()
         .await
-        .expect("connect to the port-forwarded SurrealDB");
+        .expect("require activated PostgreSQL fixture");
     let created = store::persons::find_by_email_ci(&surreal, &email)
         .await
         .expect("look up the created person")
@@ -4066,9 +4074,9 @@ async fn admin_uploads_an_avatar_and_sees_the_profile_menu() {
     let Some(c) = new_client_or_skip().await else {
         return;
     };
-    let surreal = store::surreal::connect_from_env()
+    let surreal = postgres_browser_store()
         .await
-        .expect("connect to the port-forwarded SurrealDB");
+        .expect("require activated PostgreSQL fixture");
     let person = store::persons::create(
         &surreal,
         &store::persons::NewPerson::with_role(
@@ -4271,9 +4279,9 @@ async fn admin_edits_matter_participation_from_the_project_workbench() {
         return;
     };
     // The store the running `web` reads.
-    let surreal = store::surreal::connect_from_env()
+    let surreal = postgres_browser_store()
         .await
-        .expect("connect to the port-forwarded SurrealDB");
+        .expect("require activated PostgreSQL fixture");
     login_as_admin(&c).await;
     let admin = store::persons::find_by_email_ci(&surreal, "admin@neonlaw.com")
         .await
@@ -4510,9 +4518,9 @@ async fn lawyer_uploads_several_documents_at_once_from_the_project_page() {
     let Some(c) = new_client_or_skip().await else {
         return;
     };
-    let surreal = store::surreal::connect_from_env()
+    let surreal = postgres_browser_store()
         .await
-        .expect("connect to the port-forwarded SurrealDB");
+        .expect("require activated PostgreSQL fixture");
     let project_code = seed_lawyer_upload_project(&surreal).await;
 
     // Real files on disk — chromedriver uploads from the filesystem, so
@@ -4851,9 +4859,9 @@ async fn notation_questionnaire_has_no_horizontal_overflow_at_any_checked_width(
     let Some(c) = new_client_or_skip().await else {
         return;
     };
-    let surreal = store::surreal::connect_from_env()
+    let surreal = postgres_browser_store()
         .await
-        .expect("connect to the port-forwarded SurrealDB");
+        .expect("require activated PostgreSQL fixture");
     let client = store::persons::find_by_email_ci(&surreal, "client@neonlaw.com")
         .await
         .expect("look up the browser-harness client person")
@@ -5397,9 +5405,9 @@ async fn clients_sharing_a_project_can_see_each_others_avatar() {
     let Some(admin_browser) = new_client_or_skip().await else {
         return;
     };
-    let surreal = store::surreal::connect_from_env()
+    let surreal = postgres_browser_store()
         .await
-        .expect("connect to the port-forwarded SurrealDB");
+        .expect("require activated PostgreSQL fixture");
     let client = store::persons::find_by_email_ci(&surreal, "client@neonlaw.com")
         .await
         .expect("look up the browser-harness client person")
@@ -5460,9 +5468,9 @@ async fn clients_on_different_projects_cannot_see_each_others_avatar() {
     let Some(admin_browser) = new_client_or_skip().await else {
         return;
     };
-    let surreal = store::surreal::connect_from_env()
+    let surreal = postgres_browser_store()
         .await
-        .expect("connect to the port-forwarded SurrealDB");
+        .expect("require activated PostgreSQL fixture");
     let unique = Uuid::now_v7();
     let entity_id = seed_browser_entity(&surreal).await;
     let project = store::projects::create(
@@ -5516,9 +5524,9 @@ async fn an_unassigned_firm_tier_and_client_cannot_see_an_avatar() {
     let Some(admin_browser) = new_client_or_skip().await else {
         return;
     };
-    let surreal = store::surreal::connect_from_env()
+    let surreal = postgres_browser_store()
         .await
-        .expect("connect to the port-forwarded SurrealDB");
+        .expect("require activated PostgreSQL fixture");
     let unique = Uuid::now_v7();
     let synthetic_lawyer = store::persons::create(
         &surreal,
@@ -6128,9 +6136,9 @@ async fn every_sample_matter_page_renders_in_the_client_and_lawyer_lens() {
     let Some(c) = new_client_or_skip().await else {
         return;
     };
-    let surreal = store::surreal::connect_from_env()
+    let surreal = postgres_browser_store()
         .await
-        .expect("connect to the port-forwarded SurrealDB");
+        .expect("require activated PostgreSQL fixture");
     let declared = store_sample_pages(&surreal).await;
 
     for (lens, login) in [("client", true), ("lawyer", false)] {

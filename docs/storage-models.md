@@ -1,130 +1,132 @@
 # Storage models and writes
 
-Use PostgreSQL models for new storage work. Name tables from the [glossary](glossary/README.md), use relational
+PostgreSQL is the application storage authority. Name tables from the [glossary](glossary/README.md), use relational
 constraints, and add ordered migrations under `store/postgres/migrations/`. The consolidated model is
 [`store/postgres/schema.sql`](../store/postgres/schema.sql); SQLx owns the migration ledger. Apply migrations with
 `navigator-migrate` before serving requests. [PostgreSQL tooling](postgres-tooling.md) covers the driver and runner.
 
-Write through the domain accessor. Prefer its PostgreSQL path where supported and configured. A mirror records a copy;
-enabling mirroring alone does not transfer write authority. Keep the active accessor until its domain has a verified
-cutover, including parent rows, parity, and unsupported operations.
+Write through the domain accessor. Ordinary application reads and writes require PostgreSQL configuration and completed
+historical enrollment. Missing configuration, unavailable PostgreSQL, or invalid history returns an error; ordinary
+operations do not fall back to SurrealDB or copy their committed writes into it.
+
+## Historical admission
+
+`PostgresDb::application` checks the completed global import and every current scoped activation. A database with tables
+but no valid handoff cannot serve application requests. Each scope names an exact versioned set:
+
+| Scope | Enrollment |
+| --- | --- |
+| `satellites:1` | Thirteen matter satellite tables |
+| `notation:1` | Eight Notation, Answer, Asset, and document tables |
+| `identity:1` | Nine Person, Entity, mailbox, and identity-detail tables |
+| `tenancy:1` | Six Firm, Brand, Project, and membership tables |
+| `application:1` | Sixteen Template, communication, Deadline, page, secret, audit, and Journal tables |
+
+The registry in `store::postgres_backfill::family` owns the table sets. Existing completed scopes retain their sealed
+receipts and checkpoints. A later enrollment does not reinterpret an earlier receipt as proof of newly switched tables.
+Import preserves native rows and refuses unresolved references or divergent overlap; activation requires the registered
+scope's complete proof. See the [scoped enrollment procedure](postgres-tooling.md#scoped-family-enrollment).
+
+Explicit migrations, imports, diagnostics, and raw recovery connect through `PostgresDb::from_env` before application
+admission is possible. That operator connection does not activate a database. Source reads belong to the explicit
+importer context, with verified capture and the required source quiescence; matching counts alone do not prove parity.
+Activated PostgreSQL rows cannot be overwritten or deleted by replaying an older source.
 
 ## People
 
-`store::persons` selects PostgreSQL when `NAVIGATOR_POSTGRES_PEOPLE_AUTHORITY` is `1` or `true`. Person and mailbox
-claims commit together through `store::postgres::people`; successful writes project compatibility rows for callers whose
-other records still use those links. A configured PostgreSQL failure returns an error. It does not fall back to another
-writer. Alias emails are mailbox claims, and a Person merge moves every PostgreSQL row that links the dropped Person in
-one transaction after the SurrealDB records move. The people directory reads the `person_directory` and
-`firm_visible_person` views in one query; without the authority it reads people, memberships and Firms once each.
+`store::persons` uses `store::postgres::people`. Person and mailbox claims commit together, aliases retain claim
+ownership, and a merge moves PostgreSQL references transactionally. Identity detail uses `store::postgres::identity`:
+addresses, credentials, email tokens, entities, delegates, external identities, and phones. The people directory reads
+the `person_directory` and `firm_visible_person` views.
 
-The same switch moves identity detail to PostgreSQL through `store::postgres::identity`: addresses, credentials, email
-tokens, entities, Person delegates, external identities, and Person phones. Each committed write is projected into
-SurrealDB with any Firm anchor claim. Under the switch the legacy mirror never copies these rows back into PostgreSQL.
+## Tenancy
 
-An Attorney Calendar (`person_calendar`) is written in PostgreSQL whenever the host is set. A lawyer-tier sign-in
-records the Workspace address as the primary calendar when the Person row is already there and no primary is recorded.
+`store::postgres::tenancy` owns Firms, Brands, Firm Brands, Firm memberships, Projects, and Project participation.
+Identity and tenancy require their exact scoped handoffs; application writes create no SurrealDB compatibility copy. An
+Attorney Calendar (`person_calendar`) is PostgreSQL-native. A lawyer-tier sign-in records the Workspace address as
+primary when the Person exists and has no primary calendar.
 
 ## Relationship graph
 
-Wherever PostgreSQL is configured it holds the graph tables: `entity_role`, `relationship`, `project_reference`,
-`disclosure`, and the append-only `relationship_log`. Their writes and reads run on PostgreSQL, the edges land in
-`navigator_graph`, and the conflict check traverses it in Apache AGE. The mirror backfill copies their Surreal-era rows
-across but never deletes one PostgreSQL holds. A deployment without PostgreSQL keeps them in SurrealDB. Follow the [AGE
-graph runbook](age-graph-runbook.md) for extension setup, migrations, backfill, parity, and cutover.
+PostgreSQL holds `entity_role`, `relationship`, `project_reference`, `disclosure`, and the append-only
+`relationship_log`. Edges are projected into `navigator_graph`, and conflict checks traverse Apache AGE. Relationship
+Log entries remain distinct from graph edges; their actor and Project references must exist before an append. Explicit
+historical import preserves native graph rows. Follow the [AGE graph runbook](age-graph-runbook.md) for extension setup,
+migrations, backfill, and parity.
 
 ## Project lifecycle
 
-After applying the Project Status Transition migration, set `NAVIGATOR_POSTGRES_PROJECT_LIFECYCLE_AUTHORITY=1` on all
-lifecycle writers together. PostgreSQL commits each [Project Status Transition](glossary/project-status-transition.md)
-with the Project's current status and retention start. The existing Project mirror supplies the parent row and the first
-transition records the known starting state. Status reads use the PostgreSQL projection for enrolled Projects. The
-lifecycle command also refreshes the SurrealDB compatibility projection. If that refresh fails, retry the same
-transition to repair it. Keep lifecycle authority enabled once a deployment has recorded transitions.
-
-## Onboarding execution
-
-Onboarding filing and the Project's [Official](glossary/official.md) reading require PostgreSQL. Filing commits the
-document, its execution evidence, and revision visibility in one PostgreSQL transaction after object storage accepts the
-bytes. Signature requests and provider completion updates use PostgreSQL whenever its host is configured. The
-compatibility mirror preserves PostgreSQL onboarding documents and signature records.
-
-Apply the signature Notation-reference migration before deploying these writers. Existing Project, Notation, Template,
-and encrypted Firm DocuSign connection records must be present in PostgreSQL before execution can be verified.
+PostgreSQL commits each [Project Status Transition](glossary/project-status-transition.md) with the Project's current
+status and retention start. Historical enrollment checks the transition chain and terminal projection while preserving
+native lifecycle decisions and unrelated Project fields, without inferring timestamp witnesses. Lifecycle commands
+return PostgreSQL failures and create no SurrealDB projection.
 
 ## Matter records
 
-With PostgreSQL configured, newly enrolled matter accessors require their completed versioned [Mirror
-Backfill](glossary/mirror-backfill.md) receipt and then read and write PostgreSQL only. Missing or invalid historical
-import evidence blocks application readiness and operations. The generic `store::postgres::matter` seam owns statutory
-deadlines, Notation drafts, estate assets, cap-table holdings, fiduciary roles, Git repositories and access tokens,
-expunge records and requests, playbooks, contract reviews, authority uses, citations, attestations, Project modules,
-testimonials, and social OAuth attempts. `store::postgres::captions` owns Matter Caption replacement with the
-Project/Firm constraint. Parent authorization and identity reads retain their own authorities.
+Notation history, Answers, version pins, Assets, and document revisions use their PostgreSQL accessors. Document writes
+retain object-before-row ordering: object storage accepts the bytes before PostgreSQL records their identity, evidence,
+and visibility. Template versions referenced by Notations, events, and packages must exist before their constraints can
+be applied; never invent a version or delete a pin to make migration pass.
 
-Configured PostgreSQL failures return errors. Atomic patches preserve unrelated columns, JSONB values retain JSON null,
-and capability toggles commit with their Relationship Log audit. OAuth callback consumption returns its verifier once
-and erases the stored verifier in the same statement. Person merges discover orphan-tolerant links through the canonical
-record metadata as well as catalog foreign keys.
+`store::postgres::matter` owns statutory deadlines, Notation drafts, estate assets, cap-table holdings, fiduciary roles,
+Git repositories and access tokens, expunge records and requests, playbooks, contract reviews, authority uses,
+citations, attestations, Project modules, testimonials, and social OAuth attempts. `store::postgres::captions` owns
+Matter Caption replacement with the Project/Firm constraint. Matter Pages and Notation document comments are
+PostgreSQL-native and preserve their Project, Asset, and Notation boundaries.
 
-Compatibility mirrors cannot overwrite or delete activated rows. Existing authorities retain their first-global-import
-contract; the thirteen satellite tables use explicit versioned enrollment, including databases whose global import
-already completed. See the [scoped enrollment procedure](postgres-tooling.md#scoped-family-enrollment). The encrypted
-deployment-change accessor retains its compatibility authority: its authenticated timestamp requires exact source
-preservation before cutover.
+Atomic patches preserve unrelated columns, JSONB values retain JSON null, and capability toggles commit with their
+Relationship Log audit. OAuth callback consumption returns its verifier once and erases it in the same statement. Person
+merges account for orphan-tolerant links through canonical record metadata as well as catalog foreign keys.
 
 ## Catalogs
 
-Wherever `NAVIGATOR_POSTGRES_HOST` is set, the shared catalogs (Authorities, Entity Types, Glossary Terms,
-Jurisdictions, Notation packages and their templates, Notation rates, and Questions) are read and written in PostgreSQL
-through `store::postgres::catalog`, retaining their existing first-global-import contract.
-
-Every deployment sets the host. A process without it, today only the SurrealDB test harness, still reads both from
-SurrealDB.
+Shared Authorities, Entity Types, Glossary Terms, Jurisdictions, Notation packages, rates, and Questions use
+`store::postgres::catalog`. These retain their global-import contract within application admission. Versioned Templates
+use `store::postgres::templates` and the Application handoff; their bodies remain in Assets.
 
 ## Signatures and verifications
 
-`store::postgres::signatures` owns provider Signature envelopes, Notarizations, and citation Verifications whenever the
-PostgreSQL host is configured. Provider request indexes resolve replay races, and independent verification axes retain
-the draft revision they attest to. These accessors share the configured-backend failure and insert-only import rules.
+`store::postgres::signatures` owns Signature envelopes, Notarizations, and citation Verifications. Provider request
+indexes resolve replay races, and independent verification axes retain the draft revision they attest to. Existing
+Project, Notation, Template, and encrypted Firm connection records must be present before execution can be verified.
 
 ## Communications and email
 
-Whenever `NAVIGATOR_POSTGRES_HOST` is set, `store::communications`, `store::email_conversations`,
-`store::email_receipts`, and `store::email_deliveries` read and write PostgreSQL only: the `communication`,
-`email_conversation`, `email_conversation_message`, `email_receipt`, `email_delivery`, and `email_delivery_attempt`
-tables. The first [Mirror Backfill](postgres-tooling.md#mirror-backfill) inserts missing history. Parity skips those
-tables after the first completed run. Without a host, SurrealDB is the fallback. The unique indexes decide replay races,
-and a delivery's reservation commits with its attempt. Parent rows (Project, Person, Firm, Notation, Asset) must exist
-in PostgreSQL. A retention purge refuses while an Inbox Message or a Notation source still names a Communication it
-would delete. The Inbox tables follow the same rule. The Inbox displays and sorts email threads by the latest recorded
-email send time, with the Conversation update time as a fallback when no email date is available.
+Communications, email conversations, receipts, deliveries, and delivery attempts use PostgreSQL. Unique indexes decide
+replay races, and a delivery reservation commits with its attempt. Parent Project, Person, Firm, Notation, and Asset
+rows must exist. Retention refuses to delete a Communication still named by an Inbox Message or Notation source.
 
-The Project Inbox also reads synced Matter Page tabs and Asset metadata from PostgreSQL when the host is set. A
-Message's attachment links retain their provider order and names, and live filed Assets can also appear through their
-Message provenance. Attachment bytes are fetched from object storage after the Project and Message access checks. The
-Matter Page and Asset writers populate these PostgreSQL projections through the existing mirror, with backfill and
-reconciliation covering historical rows and interrupted writes.
+Inbox conversations, Messages, assignments, ingress, attachments, and triage use PostgreSQL. The Inbox sorts email
+threads by the latest recorded send time, falling back to the Conversation update time. Attachment links keep provider
+order and names; object bytes are read only after Project and Message access checks.
+
+Mailrooms, Letters, Leads and consent history, Project Deadlines, Project Services, and summary-sender approval history
+join Templates, pages, comments, encrypted secrets, Sent Email, and the Firm journal in Application enrollment. Sent
+Email handoff distinguishes retained source rows, native-only audit history, and proven retention purges. Import and
+purge use the same UTC-day lock so an older source cannot resurrect a purged day. Journal handoff checks immutable
+headers, postings, references, causal history, and source containment without rewriting native history. See the [Firm
+journal](firm-journal.md).
 
 ## Brand and social content
 
-Whenever `NAVIGATOR_POSTGRES_HOST` is set, `store::posts`, `store::social_handles`, `store::social_publications`,
-`store::social_accounts`, and `store::social_account_selections` read and write PostgreSQL only, through
-`store::postgres::social`: the `post`, `blog_video`, `social_handle`, `social_publication`, `social_account`, and
-`social_account_selection` tables. Without a host, SurrealDB is the fallback. The unique indexes decide races: a Post's
-Brand and slug, a Blog Video's object key, a Social Publication's Post and provider (one sender is admitted), and a
-Social Account's Brand, provider, and account. These tables are held on the same terms as the matter records: only the
-first [Mirror Backfill](postgres-tooling.md#mirror-backfill) copies SurrealDB's rows in, and after it parity compares
-nothing. Brand authority still reads the Brand and Firm from their own authority, and the Brand, Firm, and Person rows
-must exist in PostgreSQL.
+Posts, Blog Videos, Social Handles, Social Publications, Social Accounts, and account selections use
+`store::postgres::social`. Brand and slug, object-key, publication, and account indexes decide races. Brand, Firm, and
+Person parents must exist in PostgreSQL; source import cannot overwrite their native authority.
 
-## Other domains
+## Encrypted configuration
 
-The [Firm journal](firm-journal.md) documents its backend selection and PostgreSQL-only reconciliation features.
-[Tasks](glossary/task.md), [Case Stages](glossary/case-stage.md), and [Purchases](glossary/purchase.md) have
-PostgreSQL-native models. Their referenced parent rows must exist in PostgreSQL before a write can succeed.
+Firm integration secrets preserve encrypted versions and their authenticated context. Deployment Secret Changes retain
+the exact source timestamp used by encryption as well as their PostgreSQL representation. Migration does not decrypt and
+re-encrypt history to align timestamps. [Tasks](glossary/task.md), [Case Stages](glossary/case-stage.md), and
+[Purchases](glossary/purchase.md) also have PostgreSQL-native models.
 
-For domains still using the compatibility engine, retain their accessor and migration safeguards. See [SurrealDB
-compatibility](surreal-compatibility.md) and the [mirror coverage
-inventory](postgres-tooling.md#postgresql-mirror-tables-and-reconciliation). A PostgreSQL schema link in the glossary
-describes a model, not a claim that every deployment reads and writes that table there.
+## Recovery and compatibility
+
+Scheduled [archives](iceberg-archive.md) default to admitted PostgreSQL. Explicit compatibility exports and independent
+raw PostgreSQL recovery remain available before application activation. Physical base backups, WAL archives, and Iceberg
+coverage generations have separate recovery evidence; selecting PostgreSQL does not establish a successful restore.
+
+[SurrealDB compatibility](surreal-compatibility.md) covers retained source operations. A schema link, passing fixture,
+or merged port does not establish a deployed data cutover or permit retiring recovery access. Reconcile historical data,
+verify Source-unavailable application behavior and recovery, and retain required durable-work handover before removing
+the old services.

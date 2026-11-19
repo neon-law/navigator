@@ -495,18 +495,9 @@ impl SocialPublisherService {
         if !failed && !unknown {
             let surreal = self.publisher.surreal.clone();
             ctx.run(move || async move {
-                surreal
-                    .query("UPDATE $id SET status = 'published', updated_at = time::now() WHERE status = 'scheduled'")
-                    .bind(("id", store::surreal::record_id("post", post_id)))
+                store::posts::publish_scheduled(&surreal, post_id)
                     .await
-                    .map_err(HandlerError::from)?
-                    .check()
-                    .map_err(HandlerError::from)?;
-                store::postgres_mirror::after_write(
-                    &surreal,
-                    store::postgres_mirror::MirrorKey::Post(post_id),
-                )
-                .await;
+                    .map_err(|error| HandlerError::from(anyhow::Error::new(error)))?;
                 Ok(())
             })
             .name("publish-blog-article-without-social-destinations")
