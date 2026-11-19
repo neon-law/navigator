@@ -483,6 +483,7 @@ purchase:
       renewal_terms: >-
         {amount} USD is charged now and automatically every month until you cancel. Cancel renewal online at
         {cancel_url} before your next charge. Stripe cancellation preserves the current paid period.
+        Court and government filing fees are billed separately at actual cost.
         Cancelling renewal does not end an attorney-client relationship or cancel an existing invoice.
         Any refund rights under applicable law or your engagement agreement remain.
       account_code: "200"
@@ -496,6 +497,7 @@ purchase:
       renewal_terms: >-
         {amount} USD is charged now and automatically every year until you cancel. Cancel renewal online at
         {cancel_url} before your next charge. Stripe cancellation preserves the current paid period.
+        Court and government filing fees are billed separately at actual cost.
         Cancelling renewal does not end an attorney-client relationship or cancel an existing invoice.
         Any refund rights under applicable law or your engagement agreement remain.
       account_code: "200"
