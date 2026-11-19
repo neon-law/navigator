@@ -35,6 +35,7 @@ billing information needed to administer your purchase with the provider, which 
 privacy policy. Before subscribing, you see the price, billing period, renewal terms, and cancellation method beside the
 payment control and choose whether to agree. You can stop renewal online from [Consultations and plans](/purchases).
 Stripe cancellation preserves the current paid period; it does not end a legal engagement or erase an existing invoice.
+Cancelling renewal does not limit refund rights under applicable law or your engagement agreement.
 
 ## How We Use Your Information
 

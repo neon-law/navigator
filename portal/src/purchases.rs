@@ -484,6 +484,12 @@ async fn page_content(
         .iter()
         .map(|offering| {
             let mut row = offering_row(copy, offering, &own, waived);
+            if offering.cadence != OfferingCadence::Once
+                && row.action == OfferingAction::Buy
+                && !crate::subscription_purchases::enabled()
+            {
+                row.action = OfferingAction::Unavailable;
+            }
             if session.role != Role::Client
                 && matches!(
                     row.action,

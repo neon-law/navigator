@@ -50,6 +50,27 @@ and engagement records remain. Existing Xero renewal must be stopped before open
 period ends; payment details and consent are not transferred automatically. Cancellation of billing does not end an
 attorney-client relationship.
 
+### Configure and verify hosted subscriptions
+
+New Checkout requires `STRIPE_SUBSCRIPTIONS=1` in addition to the existing `STRIPE_DEFAULT` deployment switch and the
+Firm's `STRIPE_OPERATING_APP_KEY`. The new switch does not disable reconciliation or cancellation of existing purchases.
+Apply the [PostgreSQL migrations](postgres-tooling.md) before enabling it.
+
+The catalog includes legal services and an annual prepayment. This operating-account integration does not allocate
+unearned fees to trust or determine when fees are earned. Before live activation, the responsible lawyer approves the
+account destination, applicable engagement terms and disclosures, and refund handling. Do not enable it for fees that
+require trust handling this integration does not provide. Cancellation preserves any refund rights under applicable law
+or the engagement agreement. See [California Rule
+1.15](https://www.calbar.ca.gov/sites/default/files/portals/0/documents/rules/Rule_1.15.pdf) for one jurisdiction's
+advance flat-fee conditions; that example does not resolve another jurisdiction's duties.
+
+Configure the public terms and privacy URLs on the intended Stripe account. Stripe's [policy
+settings](https://docs.stripe.com/payments/checkout/customization/policies) describe its required terms acceptance.
+Verify a synthetic purchase in Stripe's sandbox: confirm the server grants only paid access, renewal terms appear at
+payment and on invoices, cancellation stops renewal while preserving the paid period, and overdue access still permits
+cancellation. Development and staging accept test keys; live production requires a live key. Do not transfer a legacy
+Xero payment method or consent as part of re-enrollment.
+
 ## Copyright notices
 
 DMCA agent designation is an external registration, not something a code change can establish. An authorized operator

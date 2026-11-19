@@ -14,14 +14,16 @@ fn refused() -> BillingError {
     BillingError::Provider("subscription billing unavailable or requires reconciliation".into())
 }
 
+fn checkout_enabled(activation: Option<&str>) -> bool {
+    activation == Some("1")
+}
+
 pub(crate) fn enabled() -> bool {
-    store::firm_secrets::stripe_billing_enabled(IntegrationSecretKind::StripeOperatingAppKey)
+    checkout_enabled(std::env::var("STRIPE_SUBSCRIPTIONS").ok().as_deref())
+        && store::firm_secrets::stripe_billing_enabled(IntegrationSecretKind::StripeOperatingAppKey)
 }
 
 async fn credential(surreal: &SurrealDb, firm: Uuid) -> Result<ResolvedCredential, BillingError> {
-    if !enabled() {
-        return Err(refused());
-    }
     let kms = crate::integrations::runtime_kms_from_env().await;
     store::firm_secrets::resolve_firm_credential(
         surreal,
@@ -78,6 +80,9 @@ pub(crate) async fn checkout(
     new: &purchases::NewPurchase,
     terms: &str,
 ) -> Result<String, BillingError> {
+    if !enabled() {
+        return Err(refused());
+    }
     let firm = current_firm(surreal).await?;
     let key = credential(surreal, firm).await?;
     let stripe = client(&key)?;
@@ -300,6 +305,14 @@ pub(crate) async fn cancel(
 mod tests {
     use super::*;
     use purchases::{Cadence, PurchaseState, StripePurchase};
+
+    #[test]
+    fn draft_billing_configuration_does_not_implicitly_enable_recurring_charges() {
+        for activation in [None, Some(""), Some("0"), Some("false"), Some("true")] {
+            assert!(!checkout_enabled(activation));
+        }
+        assert!(checkout_enabled(Some("1")));
+    }
 
     fn purchase(now: DateTime<Utc>) -> Purchase {
         Purchase {
