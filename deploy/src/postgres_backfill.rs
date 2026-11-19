@@ -492,8 +492,8 @@ fn write_application_proof(out: &mut String, table: &store::postgres_backfill::P
 }
 
 fn write_family_proof(out: &mut String, table: &store::postgres_backfill::ParityTableReport) {
-    write_application_proof(out, table);
     use std::fmt::Write as _;
+    write_application_proof(out, table);
     if let Some(proof) = &table.template_pins {
         let _ = writeln!(
             out,
