@@ -257,12 +257,14 @@ impl Variant {
 
     /// The caption layout this paper carries for a `jurisdiction:`.
     /// Washington superior-court paper prints counsel's office in the
-    /// footer and no counsel block; every other puts counsel's block on
+    /// footer and no counsel block; a Nevada pleading carries Clark
+    /// County's caption (LAW-243); every other puts counsel's block on
     /// lines 1–7 over the trial caption.
     #[must_use]
-    pub fn caption_style(self, _jurisdiction: &str) -> word::matter::CaptionStyle {
+    pub fn caption_style(self, jurisdiction: &str) -> word::matter::CaptionStyle {
         match (self, jurisdiction.trim()) {
             (Variant::WashingtonSuperior, _) => word::matter::CaptionStyle::Washington,
+            (_, "NV") => word::matter::CaptionStyle::Nevada,
             _ => word::matter::CaptionStyle::Trial,
         }
     }

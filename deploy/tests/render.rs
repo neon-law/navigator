@@ -801,6 +801,48 @@ fn a_pleading_renders_court_geometry_calibrated_by_its_jurisdiction() {
     }
 }
 
+/// LAW-243: a Nevada pleading prints its filing code above the counsel
+/// block and a Clark County caption: `Case No.` and `Dept. No.`, `vs.`, and
+/// none of the trial lines.
+#[test]
+fn a_nevada_pleading_prints_the_clark_county_caption() {
+    let work = TempDir::new().unwrap();
+    write_matter(&work);
+    let template = pleading_fixture("NV").replacen(
+        "jurisdiction: NV\n",
+        "jurisdiction: NV\ndocument_code: SAO\n",
+        1,
+    );
+    let src = write(&work, "stipulation.md", &template);
+    let out = work.path().join("stipulation.pdf");
+    let result = render_pdf(&[
+        "--preview".as_ref(),
+        src.as_os_str(),
+        "--out".as_ref(),
+        out.as_ref(),
+    ]);
+    assert!(
+        result.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let bytes = fs::read(&out).unwrap();
+    for (text, count) in [
+        ("SAO", 1),
+        ("Dept. No. 12", 1),
+        ("vs.", 1),
+        ("Judge:", 0),
+        ("Action Filed", 0),
+        ("Trial Date", 0),
+    ] {
+        assert_eq!(
+            pdf::occurrence_count(&bytes, text).unwrap(),
+            count,
+            "{text}"
+        );
+    }
+}
+
 /// One part of a `.docx` package, read back out of the zip.
 fn docx_part(bytes: &[u8], name: &str) -> String {
     use std::io::Read as _;

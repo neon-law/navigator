@@ -269,6 +269,7 @@ pub fn filing_from(contents: &str) -> Filing {
         hearing_date: field("hearing_date"),
         hearing_time: field("hearing_time"),
         reservation_id: field("reservation_id"),
+        document_code: field("document_code"),
     }
 }
 

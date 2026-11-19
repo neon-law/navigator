@@ -102,8 +102,12 @@ pub struct Matter {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CaptionStyle {
     /// Counsel block top left, `Case No.`, department, judge, and the
-    /// action-filed and trial dates (California, Nevada, federal).
+    /// action-filed and trial dates (California, federal).
     Trial,
+    /// Nevada district court (LAW-243): counsel block top left, a right
+    /// cell of only `Case No.` and `Dept. No.`, and the parties joined by
+    /// `vs.`. The paper's title prints once, as the body's own heading.
+    Nevada,
     /// Washington superior court (GR 14): no counsel block above the
     /// caption — counsel's office prints in every page's footer — and a
     /// right cell of `No.` and the title.
@@ -122,6 +126,9 @@ pub struct Filing {
     pub hearing_date: Option<String>,
     pub hearing_time: Option<String>,
     pub reservation_id: Option<String>,
+    /// The court's filing code (`SAO`, `NOA`, `NEOJ`), printed as the first
+    /// line above the counsel block (LAW-243).
+    pub document_code: Option<String>,
 }
 
 const MONTHS: [&str; 12] = [
@@ -389,7 +396,7 @@ fn office_lines(counsel: &Counsel) -> Vec<String> {
     lines
 }
 
-fn party_lines(parties: &[Party]) -> Vec<String> {
+fn party_lines(parties: &[Party], versus: &str) -> Vec<String> {
     let mut groups: Vec<(&str, Vec<&Party>)> = Vec::new();
     for party in parties {
         match groups.last_mut() {
@@ -405,7 +412,7 @@ fn party_lines(parties: &[Party]) -> Vec<String> {
         let stop = if index == last { "." } else { "," };
         lines.push(format!("{role}{plural}{stop}"));
         if index != last {
-            lines.push("v.".to_string());
+            lines.push(versus.to_string());
         }
     }
     lines
@@ -431,16 +438,25 @@ pub fn compose(matter: &Matter, filing: &Filing, style: CaptionStyle) -> Caption
         matter.case_number.as_str()
     };
     let mut case = vec![match style {
-        CaptionStyle::Trial => format!("Case No. {number}"),
+        CaptionStyle::Trial | CaptionStyle::Nevada => format!("Case No. {number}"),
         CaptionStyle::Washington => format!("No. {number}"),
     }];
-    if !blank(&matter.department) {
-        case.push(format!("Dept. {}", assignment(&matter.department)));
+    if style == CaptionStyle::Nevada {
+        let department = if blank(&matter.department) {
+            FILL.to_string()
+        } else {
+            assignment(&matter.department).to_string()
+        };
+        case.push(format!("Dept. No. {department}"));
+    } else {
+        if !blank(&matter.department) {
+            case.push(format!("Dept. {}", assignment(&matter.department)));
+        }
+        if !blank(&matter.judicial_officer) {
+            case.push(format!("Judge: {}", assignment(&matter.judicial_officer)));
+        }
+        case.push(filing.caption_title.clone());
     }
-    if !blank(&matter.judicial_officer) {
-        case.push(format!("Judge: {}", assignment(&matter.judicial_officer)));
-    }
-    case.push(filing.caption_title.clone());
     if filing.has_hearing() {
         let shown = |value: &Option<String>| value.clone().unwrap_or_else(|| FILL.to_string());
         let date = filing
@@ -464,15 +480,23 @@ pub fn compose(matter: &Matter, filing: &Filing, style: CaptionStyle) -> Caption
                 .unwrap_or_else(|| "None set".to_string())
         ));
     }
+    let versus = if style == CaptionStyle::Nevada {
+        "vs."
+    } else {
+        "v."
+    };
     let parties = if blank(&matter.in_re) {
-        party_lines(&matter.parties)
+        party_lines(&matter.parties, versus)
     } else {
         in_re_lines(&matter.in_re, &matter.parties)
     };
-    let (counsel, office) = match style {
-        CaptionStyle::Trial => (counsel_lines(&matter.counsel), Vec::new()),
+    let (mut counsel, office) = match style {
+        CaptionStyle::Trial | CaptionStyle::Nevada => (counsel_lines(&matter.counsel), Vec::new()),
         CaptionStyle::Washington => (Vec::new(), office_lines(&matter.counsel)),
     };
+    if let Some(code) = filing.document_code.as_deref().filter(|code| !blank(code)) {
+        counsel.insert(0, code.trim().to_string());
+    }
     Caption {
         counsel,
         court: matter.court.clone(),
@@ -531,6 +555,40 @@ mod tests {
             footer_title: "NOTICE".into(),
             ..Filing::default()
         }
+    }
+
+    /// LAW-243: a Clark County caption carries the filing code above the
+    /// counsel block, only `Case No.` and `Dept. No.` on the right, and
+    /// `vs.` between the sides; the title prints once, in the body.
+    #[test]
+    fn a_nevada_caption_matches_a_clark_county_paper() {
+        let mut m = matter();
+        m.court = vec![
+            "DISTRICT COURT".into(),
+            "FAMILY DIVISION".into(),
+            "CLARK COUNTY, NEVADA".into(),
+        ];
+        m.trial_on = Some("2026-09-01".into());
+        let mut f = filing();
+        f.document_code = Some("SAO".into());
+        let caption = compose(&m, &f, CaptionStyle::Nevada);
+        assert_eq!(caption.counsel[0], "SAO");
+        assert!(
+            caption.counsel[1].contains("Pat Sample"),
+            "{:?}",
+            caption.counsel
+        );
+        assert_eq!(caption.case, vec!["Case No. 00CV000000", "Dept. No. 12"]);
+        assert!(caption.parties.contains(&"vs.".to_string()));
+        assert!(!caption.parties.contains(&"v.".to_string()));
+
+        m.department = String::new();
+        let trial = compose(&m, &filing(), CaptionStyle::Trial);
+        assert!(!trial.counsel.contains(&"SAO".to_string()));
+        assert_eq!(
+            compose(&m, &f, CaptionStyle::Nevada).case[1],
+            format!("Dept. No. {FILL}")
+        );
     }
 
     #[test]
