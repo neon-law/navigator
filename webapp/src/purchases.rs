@@ -197,12 +197,23 @@ fn OfferingDecision(row: OfferingRow, content: PurchasePageContent, csrf_token: 
         },
         OfferingAction::Invoiced { pay_url } => rsx! {
             p { class: "purchases__status", role: "status", "{content.invoiced}" }
+            {renewal_controls(&row, &content, &csrf_token)}
             if let Some(pay_url) = pay_url {
                 a { class: "nav-btn nav-btn--primary", href: "{pay_url}", rel: "noopener", "{content.pay_label}" }
             }
         },
         OfferingAction::Active => rsx! {
             p { class: "purchases__status", role: "status", "{content.active}" }
+            {renewal_controls(&row, &content, &csrf_token)}
+            if row.id == "consultation" {
+                a { class: "nav-btn nav-btn--primary", href: "/consultation", "{content.book_label}" }
+            }
+        },
+    }
+}
+
+fn renewal_controls(row: &OfferingRow, content: &PurchasePageContent, csrf_token: &str) -> Element {
+    rsx! {
             if let Some(terms) = row.renewal_terms.as_ref() {
                 p { class: "purchases__renewal", "{terms}" }
             }
@@ -217,10 +228,6 @@ fn OfferingDecision(row: OfferingRow, content: PurchasePageContent, csrf_token: 
                     button { r#type: "submit", class: "nav-btn nav-btn--secondary", "{content.cancel_label}" }
                 }
             }
-            if row.id == "consultation" {
-                a { class: "nav-btn nav-btn--primary", href: "/consultation", "{content.book_label}" }
-            }
-        },
     }
 }
 
@@ -274,6 +281,19 @@ mod tests {
         );
         dom.rebuild_in_place();
         dioxus_ssr::render(&dom)
+    }
+
+    #[test]
+    fn an_unpaid_subscription_can_be_cancelled_without_another_checkout() {
+        let mut page = content(OfferingAction::Invoiced { pay_url: None }, None);
+        page.offerings[0].cancel_purchase_id = Some("synthetic".into());
+        page.offerings[0].renewal_terms = Some("Accepted terms".into());
+        let html = render(page);
+        assert!(html.contains("action=\"/purchases/synthetic/cancel\""));
+        assert!(html.contains("name=\"_csrf\""));
+        assert!(html.contains("Cancel renewal"));
+        assert!(html.contains("Accepted terms"));
+        assert!(!html.contains("Buy ·"));
     }
 
     #[test]

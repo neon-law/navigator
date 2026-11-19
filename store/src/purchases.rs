@@ -521,12 +521,20 @@ pub async fn sync_stripe(
         "UPDATE purchase SET state = 'active', activated_at = COALESCE(activated_at, $6), \
          stripe_customer_id = $2, stripe_subscription_id = $3, stripe_period_end = $4, \
          stripe_cancel_at_period_end = $5, updated_at = $6, \
-         renewal_cancelled_at = CASE WHEN $5 OR $4 <= $6 THEN COALESCE(renewal_cancelled_at, $6) ELSE NULL END \
+         renewal_cancelled_at = CASE WHEN $5 THEN COALESCE(renewal_cancelled_at, $6) ELSE NULL END \
          WHERE id = $1 AND stripe_checkout_session_id IS NOT NULL \
          AND (stripe_customer_id IS NULL OR stripe_customer_id = $2) \
          AND (stripe_subscription_id IS NULL OR stripe_subscription_id = $3) RETURNING {COLUMNS}"
-    ))).bind(id).bind(observation.customer).bind(observation.subscription).bind(observation.paid_through).bind(observation.cancelling).bind(now)
-      .fetch_optional(pg.pool()).await?.ok_or(PurchaseError::NotFound)?;
+    )))
+    .bind(id)
+    .bind(observation.customer)
+    .bind(observation.subscription)
+    .bind(observation.paid_through)
+    .bind(observation.cancelling)
+    .bind(now)
+    .fetch_optional(pg.pool())
+    .await?
+    .ok_or(PurchaseError::NotFound)?;
     from_row(&row)
 }
 

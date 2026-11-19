@@ -509,13 +509,18 @@ fn offering_row(
     waived: bool,
 ) -> OfferingRow {
     let mine = own.iter().filter(|p| p.offering == offering.id);
-    let open = mine
-        .clone()
-        .find(|p| matches!(p.state, PurchaseState::Invoicing | PurchaseState::Invoiced));
+    let open = mine.clone().find(|p| {
+        matches!(p.state, PurchaseState::Invoicing | PurchaseState::Invoiced)
+            || (crate::subscription_purchases::unsettled_renewal(p) && !p.is_active(Utc::now()))
+    });
     let in_force = mine.clone().any(|p| p.is_active(Utc::now()));
     let action = if let Some(open) = open {
         OfferingAction::Invoiced {
-            pay_url: open.invoice_url.clone(),
+            pay_url: if open.state == PurchaseState::Active {
+                None
+            } else {
+                open.invoice_url.clone()
+            },
         }
     } else if in_force {
         OfferingAction::Active
@@ -524,9 +529,13 @@ fn offering_row(
     } else {
         OfferingAction::Buy
     };
-    let active_stripe = mine
+    let current_stripe = mine
         .clone()
-        .find(|p| p.is_active(Utc::now()))
+        .find(|p| {
+            p.is_active(Utc::now())
+                || crate::subscription_purchases::unsettled_renewal(p)
+                || matches!(p.state, PurchaseState::Invoicing | PurchaseState::Invoiced)
+        })
         .and_then(|p| p.stripe.as_ref());
     OfferingRow {
         id: offering.id.clone(),
@@ -536,14 +545,17 @@ fn offering_row(
         recurring: offering.cadence != OfferingCadence::Once,
         cancel_purchase_id: mine
             .clone()
-            .find(|p| p.is_active(Utc::now()) && p.cadence != Cadence::Once)
+            .find(|p| {
+                (p.is_active(Utc::now()) || crate::subscription_purchases::unsettled_renewal(p))
+                    && p.cadence != Cadence::Once
+            })
             .map(|p| p.id.to_string()),
         cancellation_pending: mine.clone().any(|p| {
             p.is_active(Utc::now())
                 && (p.renewal_cancelled_at.is_some()
                     || p.stripe.as_ref().is_some_and(|s| s.cancel_at_period_end))
         }),
-        paid_through: active_stripe
+        paid_through: current_stripe
             .and_then(|stripe| stripe.period_end)
             .or_else(|| {
                 mine.clone()
@@ -551,8 +563,8 @@ fn offering_row(
                     .and_then(|p| p.access_ends_at)
             })
             .map(|end| end.format("%Y-%m-%d %H:%M").to_string()),
-        renewal_terms: if action == OfferingAction::Active {
-            active_stripe.map(|stripe| stripe.renewal_terms.clone())
+        renewal_terms: if action == OfferingAction::Active || current_stripe.is_some() {
+            current_stripe.map(|stripe| stripe.renewal_terms.clone())
         } else {
             renewal_terms(offering)
         },
@@ -1097,6 +1109,33 @@ mod tests {
         assert!(row.action == OfferingAction::Complimentary);
         assert_eq!(row.price, "$100");
         assert_eq!(row.name, consultation.name);
+    }
+
+    #[test]
+    fn an_overdue_subscription_keeps_its_cancellation_control_and_accepted_terms() {
+        let copy = bundled_copy();
+        let offering = &copy.offerings[1];
+        let mut existing = purchase(offering, PurchaseState::Active);
+        let now = Utc::now();
+        existing.stripe = Some(purchases::StripePurchase {
+            firm_id: uuid::Uuid::new_v4(),
+            account_id: "acct_synthetic".into(),
+            checkout_session_id: Some("cs_test_synthetic".into()),
+            customer_id: Some("cus_synthetic".into()),
+            subscription_id: Some("sub_synthetic".into()),
+            period_end: Some(now - TimeDelta::days(1)),
+            cancel_at_period_end: false,
+            renewal_terms: "Accepted renewal terms".into(),
+            consented_at: now,
+        });
+        let row = offering_row(&copy, offering, &[existing.clone()], false);
+        assert!(matches!(
+            row.action,
+            OfferingAction::Invoiced { pay_url: None }
+        ));
+        assert_eq!(row.cancel_purchase_id, Some(existing.id.to_string()));
+        assert_eq!(row.renewal_terms.as_deref(), Some("Accepted renewal terms"));
+        assert!(!existing.is_active(now));
     }
 
     #[test]

@@ -52,6 +52,26 @@ async fn current_firm(surreal: &SurrealDb) -> Result<Uuid, BillingError> {
         .ok_or_else(refused)
 }
 
+pub(crate) fn unsettled_renewal(purchase: &Purchase) -> bool {
+    purchase.state == purchases::PurchaseState::Active
+        && purchase.renewal_cancelled_at.is_none()
+        && purchase
+            .stripe
+            .as_ref()
+            .is_some_and(|s| s.subscription_id.is_some())
+}
+
+fn conflicts_with_checkout(purchase: &Purchase, now: DateTime<Utc>) -> bool {
+    purchase.cadence != purchases::Cadence::Once
+        && (purchase.is_active(now)
+            || unsettled_renewal(purchase)
+            || (purchase.stripe.is_none()
+                && matches!(
+                    purchase.state,
+                    purchases::PurchaseState::Invoicing | purchases::PurchaseState::Invoiced
+                )))
+}
+
 pub(crate) async fn checkout(
     surreal: &SurrealDb,
     pg: &PostgresDb,
@@ -68,10 +88,7 @@ pub(crate) async fn checkout(
     let own = purchases::for_person(pg, new.person_id)
         .await
         .map_err(|_| refused())?;
-    if own
-        .iter()
-        .any(|p| p.cadence != purchases::Cadence::Once && p.is_active(now))
-    {
+    if own.iter().any(|p| conflicts_with_checkout(p, now)) {
         return Err(refused());
     }
     let purchase = purchases::open_stripe(
@@ -157,7 +174,11 @@ fn observation<'a>(
         customer: &subscription.customer,
         subscription: &subscription.id,
         paid_through,
-        cancelling: subscription.cancel_at_period_end,
+        cancelling: subscription.cancel_at_period_end
+            || matches!(
+                subscription.status.as_str(),
+                "canceled" | "incomplete_expired"
+            ),
     })
 }
 
@@ -322,6 +343,23 @@ mod tests {
     }
 
     #[test]
+    fn pending_legacy_and_expired_but_renewable_plans_block_a_second_checkout() {
+        let now = Utc::now();
+        let mut existing = purchase(now);
+        existing.stripe.as_mut().unwrap().period_end = Some(now - TimeDelta::days(1));
+        assert!(!existing.is_active(now));
+        assert!(conflicts_with_checkout(&existing, now));
+        existing.renewal_cancelled_at = Some(now);
+        assert!(!conflicts_with_checkout(&existing, now));
+        existing.stripe = None;
+        existing.renewal_cancelled_at = None;
+        existing.state = PurchaseState::Invoiced;
+        assert!(conflicts_with_checkout(&existing, now));
+        existing.cadence = Cadence::Once;
+        assert!(!conflicts_with_checkout(&existing, now));
+    }
+
+    #[test]
     fn an_unpaid_unconsented_or_foreign_checkout_cannot_activate_a_purchase() {
         let purchase = purchase(Utc::now());
         let response = serde_json::json!({"id":"cs_test_synthetic", "livemode":false, "status":"complete", "payment_status":"paid",
@@ -378,7 +416,13 @@ mod tests {
                 .paid_through
                 > now + TimeDelta::days(29)
         );
+        subscription.cancel_at_period_end = false;
         subscription.status = "past_due".into();
+        assert!(
+            !observation(&purchase, &subscription, now)
+                .unwrap()
+                .cancelling
+        );
         assert_eq!(
             observation(&purchase, &subscription, now)
                 .unwrap()
@@ -386,6 +430,11 @@ mod tests {
             now + TimeDelta::days(10)
         );
         subscription.status = "canceled".into();
+        assert!(
+            observation(&purchase, &subscription, now)
+                .unwrap()
+                .cancelling
+        );
         assert_eq!(
             observation(&purchase, &subscription, now)
                 .unwrap()

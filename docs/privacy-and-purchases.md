@@ -36,10 +36,12 @@ customer invoice footer carries the same terms. The Purchase retains the accepte
 account before Checkout starts.
 
 One Person cannot open concurrent monthly and yearly Stripe subscriptions. Retries use the Purchase's idempotency key.
-An uncertain attempt outside the safe retry window requires reconciliation. A provider redirect alone never activates
-access: server-side checks confirm the Purchase reference, account, customer, payment, consent, price, and cadence.
-Access ends at the last verified paid period. The durable payment schedule and the purchase and subscription pages
-refresh Stripe status; a provider outage does not extend access.
+An overdue plan keeps its reservation until Stripe confirms renewal has stopped, and its online cancellation control
+remains available. Pending legacy Xero plans also block a second recurring checkout until reconciled. An uncertain
+attempt outside the safe retry window requires reconciliation. A provider redirect alone never activates access: server-
+side checks confirm the Purchase reference, account, customer, payment, consent, price, and cadence. Access ends at the
+last verified paid period. The durable payment schedule and the purchase and subscription pages refresh Stripe status; a
+provider outage does not extend access.
 
 The authenticated purchase page offers online cancellation. Cancellation requires the session's own Purchase, CSRF, and
 provider confirmation. Stripe stops future renewals and preserves the paid period. Xero cancellation reads the current

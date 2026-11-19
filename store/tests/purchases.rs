@@ -195,8 +195,32 @@ async fn for_offerings_lists_same_day_legal_purchases_in_every_state_and_no_othe
         .all(|p| purchases::SAME_DAY_LEGAL_OFFERINGS.contains(&p.offering.as_str())));
 }
 
+async fn pending_stripe(pg: &PostgresDb, now: chrono::DateTime<Utc>) -> purchases::Purchase {
+    let row = purchases::open_stripe(
+        pg,
+        &plan(Uuid::new_v4()),
+        now,
+        purchases::StripeAdmission {
+            firm_id: Uuid::new_v4(),
+            account_id: "acct_synthetic",
+            terms: "Accepted terms",
+        },
+    )
+    .await
+    .unwrap();
+    purchases::record_stripe_checkout(
+        pg,
+        row.id,
+        "cs_test_synthetic",
+        "https://checkout.stripe.com/c/pay/synthetic",
+        now,
+    )
+    .await
+    .unwrap()
+}
+
 #[tokio::test]
-async fn stripe_checkout_retains_consent_and_only_verified_paid_time_grants_access() {
+async fn stripe_checkout_retains_consent_and_refuses_a_changed_offer() {
     let Some(pg) = database().await else { return };
     let now = Utc::now();
     let new = plan(Uuid::new_v4());
@@ -245,7 +269,15 @@ async fn stripe_checkout_retains_consent_and_only_verified_paid_time_grants_acce
     .unwrap();
     assert_eq!(checkout.state, PurchaseState::Invoiced);
     assert!(!checkout.is_active(now));
-    let end = now + TimeDelta::days(30);
+    pg.pool().close().await;
+}
+
+#[tokio::test]
+async fn verified_paid_time_and_cancellation_preserve_subscription_identity() {
+    let Some(pg) = database().await else { return };
+    let now = Utc.with_ymd_and_hms(2026, 11, 18, 12, 0, 0).unwrap();
+    let row = pending_stripe(&pg, now).await;
+    let end = Utc.with_ymd_and_hms(2026, 12, 1, 0, 0, 0).unwrap();
     let active = purchases::sync_stripe(
         &pg,
         row.id,
@@ -297,6 +329,8 @@ async fn stripe_checkout_retains_consent_and_only_verified_paid_time_grants_acce
     .await
     .unwrap();
     assert!(cancelling.is_active(now));
+    assert!(cancelling.is_active(end - TimeDelta::seconds(1)));
+    assert!(!cancelling.is_active(end));
     assert!(cancelling.stripe.unwrap().cancel_at_period_end);
     let first = purchases::get(&pg, row.id)
         .await
@@ -312,6 +346,49 @@ async fn stripe_checkout_retains_consent_and_only_verified_paid_time_grants_acce
             .renewal_cancelled_at,
         first
     );
+    pg.pool().close().await;
+}
+
+#[tokio::test]
+async fn an_overdue_subscription_keeps_its_reservation_until_renewal_stops() {
+    let Some(pg) = database().await else { return };
+    let now = Utc::now();
+    let row = pending_stripe(&pg, now).await;
+    let new = plan(row.person_id);
+    let binding = row.stripe.as_ref().unwrap();
+    let firm = binding.firm_id;
+    let terms = binding.renewal_terms.as_str();
+    let end = now;
+    let overdue = purchases::sync_stripe(
+        &pg,
+        row.id,
+        purchases::StripeObservation {
+            customer: "cus_synthetic",
+            subscription: "sub_synthetic",
+            paid_through: end,
+            cancelling: false,
+        },
+        end,
+    )
+    .await
+    .unwrap();
+    assert!(overdue.renewal_cancelled_at.is_none());
+    let mut competing = new.clone();
+    competing.offering = "annual".into();
+    competing.cadence = Cadence::Year;
+    assert!(purchases::open_stripe(
+        &pg,
+        &competing,
+        end,
+        purchases::StripeAdmission {
+            firm_id: firm,
+            account_id: "acct_synthetic",
+            terms,
+        }
+    )
+    .await
+    .is_err());
+    assert!(!overdue.is_active(now));
     pg.pool().close().await;
 }
 
