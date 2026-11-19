@@ -1,9 +1,10 @@
-//! Best-effort mirror of encrypted Firm integration-secret versions.
+//! Insert-only transfer of captured encrypted Firm integration-secret versions.
+//! Existing PostgreSQL versions and revocation metadata are never rewritten by import.
 
 use super::{MirrorError, MirrorKey, Mirrored, ParityReport, TableParity};
 use crate::{
     postgres::PostgresDb,
-    surreal::{record_uuid, SurrealDb},
+    surreal::{SurrealDb, record_uuid},
 };
 use chrono::{DateTime, Utc};
 use sqlx::Row;
@@ -116,10 +117,10 @@ async fn target(pg: &PostgresDb, firm_id: Uuid) -> Result<BTreeMap<Uuid, Image>,
         }))).collect()
 }
 
-async fn upsert(pg: &PostgresDb, r: &Image) -> Result<(), MirrorError> {
-    sqlx::query("INSERT INTO firm_integration_secret (id,firm_id,provider,kind,version,ciphertext,wrapped_dek,kms_key_version,kms_context,status,actor_id,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT (firm_id,provider,kind,version) DO UPDATE SET id=EXCLUDED.id,ciphertext=EXCLUDED.ciphertext,wrapped_dek=EXCLUDED.wrapped_dek,kms_key_version=EXCLUDED.kms_key_version,kms_context=EXCLUDED.kms_context,status=EXCLUDED.status,actor_id=EXCLUDED.actor_id,created_at=EXCLUDED.created_at,updated_at=EXCLUDED.updated_at WHERE (firm_integration_secret.id,firm_integration_secret.ciphertext,firm_integration_secret.wrapped_dek,firm_integration_secret.kms_key_version,firm_integration_secret.kms_context,firm_integration_secret.status,firm_integration_secret.actor_id,firm_integration_secret.created_at,firm_integration_secret.updated_at) IS DISTINCT FROM (EXCLUDED.id,EXCLUDED.ciphertext,EXCLUDED.wrapped_dek,EXCLUDED.kms_key_version,EXCLUDED.kms_context,EXCLUDED.status,EXCLUDED.actor_id,EXCLUDED.created_at,EXCLUDED.updated_at)")
+async fn insert_missing(pg: &PostgresDb, r: &Image) -> Result<bool, MirrorError> {
+    let result = sqlx::query("INSERT INTO firm_integration_secret (id,firm_id,provider,kind,version,ciphertext,wrapped_dek,kms_key_version,kms_context,status,actor_id,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT DO NOTHING")
         .bind(r.id).bind(r.firm_id).bind(&r.provider).bind(&r.kind).bind(r.version).bind(&r.ciphertext).bind(&r.wrapped_dek).bind(&r.kms_key_version).bind(&r.kms_context).bind(&r.status).bind(r.actor_id).bind(r.created_at).bind(r.updated_at).execute(&pg.0).await?;
-    Ok(())
+    Ok(result.rows_affected() != 0)
 }
 
 pub async fn mirror(
@@ -127,28 +128,13 @@ pub async fn mirror(
     pg: &PostgresDb,
     firm_id: Uuid,
 ) -> Result<Mirrored, MirrorError> {
+    if !super::source_import_allowed(pg, "firm_integration_secret").await? {
+        return Ok(Mirrored::Unchanged);
+    }
     let rows = source(surreal, firm_id).await?;
-    for row in rows.values() {
-        super::identity::mirror(surreal, pg, &MirrorKey::Person(row.actor_id)).await?;
-    }
-    if !rows.is_empty() {
-        super::tenancy::mirror(surreal, pg, &MirrorKey::Firm(firm_id)).await?;
-    }
-    let src = rows;
-    let dst = target(pg, firm_id).await?;
     let mut changed = false;
-    for (id, row) in &src {
-        if dst.get(id) != Some(row) {
-            upsert(pg, row).await?;
-            changed = true;
-        }
-    }
-    for id in dst.keys().filter(|id| !src.contains_key(id)) {
-        sqlx::query("DELETE FROM firm_integration_secret WHERE id=$1")
-            .bind(id)
-            .execute(&pg.0)
-            .await?;
-        changed = true;
+    for row in rows.values() {
+        changed |= insert_missing(pg, row).await?;
     }
     Ok(if changed {
         Mirrored::Written
@@ -158,6 +144,9 @@ pub async fn mirror(
 }
 
 pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
+    if crate::postgres_backfill::family::active_for_table(pg, "firm_integration_secret").await? {
+        return Ok(ParityReport { tables: Vec::new() });
+    }
     compare_all(surreal, pg).await
 }
 async fn compare_all(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
@@ -207,13 +196,13 @@ async fn compare_all(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityRepor
     })
 }
 pub async fn reconcile(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
-    let report = compare_all(surreal, pg).await?;
+    let report = parity(surreal, pg).await?;
     for key in report.divergent().cloned().collect::<Vec<_>>() {
         if let MirrorKey::FirmIntegrationSecrets(id) = key {
             mirror(surreal, pg, id).await?;
         }
     }
-    compare_all(surreal, pg).await
+    parity(surreal, pg).await
 }
 
 #[cfg(test)]

@@ -91,10 +91,12 @@ async fn people_create_alias_and_merge_do_not_require_source() {
                 .id,
             keep.id
         );
-        assert!(crate::persons::find_by_id(&source, drop.id)
-            .await
-            .unwrap()
-            .is_none());
+        assert!(
+            crate::persons::find_by_id(&source, drop.id)
+                .await
+                .unwrap()
+                .is_none()
+        );
         assert_eq!(
             crate::persons::find_by_any_email(&source, "ALIAS@example.invalid")
                 .await
@@ -146,27 +148,78 @@ async fn deployment_change_retains_exact_authenticated_timestamp_bytes() {
         .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].inserted_at, timestamp);
-        assert!(crate::deployment_secret_changes::open(&kms, &rows[0])
-            .await
-            .is_ok_and(|value| value == "synthetic-value"));
+        assert!(
+            crate::deployment_secret_changes::open(&kms, &rows[0])
+                .await
+                .is_ok_and(|value| value == "synthetic-value")
+        );
         let mut changed = rows[0].clone();
         changed.inserted_at = "2026-11-18T14:04:03.123456Z".into();
-        assert!(crate::deployment_secret_changes::open(&kms, &changed)
-            .await
-            .is_err());
+        assert!(
+            crate::deployment_secret_changes::open(&kms, &changed)
+                .await
+                .is_err()
+        );
         sqlx::query("UPDATE deployment_secret_change SET inserted_at_text=NULL")
             .execute(pg.pool())
             .await
             .unwrap();
-        assert!(crate::deployment_secret_changes::latest(
-            &source,
-            crate::persons::Role::Owner,
-            crate::DeploymentEnvironment::Production
-        )
-        .await
-        .is_err());
+        assert!(
+            crate::deployment_secret_changes::latest(
+                &source,
+                crate::persons::Role::Owner,
+                crate::DeploymentEnvironment::Production
+            )
+            .await
+            .is_err()
+        );
     })
     .await;
+}
+
+#[tokio::test]
+async fn completed_secret_import_replay_never_reads_source_or_changes_native_history() {
+    let (pg, actor, _, _, firm) = application_fixture().await;
+    let id = uuid::Uuid::now_v7();
+    sqlx::query("INSERT INTO firm_integration_secret (id,firm_id,provider,kind,version,ciphertext,wrapped_dek,kms_key_version,kms_context,status,actor_id,created_at,updated_at) VALUES ($1,$2,'xero','xero_client_secret',1,'synthetic-native-ciphertext','synthetic-native-wrap','synthetic-key','synthetic-native-context','revoked',$3,now(),now())")
+        .bind(id).bind(firm).bind(actor).execute(pg.pool()).await.unwrap();
+    let before: serde_json::Value =
+        sqlx::query_scalar("SELECT to_jsonb(r) FROM firm_integration_secret r WHERE id=$1")
+            .bind(id)
+            .fetch_one(pg.pool())
+            .await
+            .unwrap();
+    let source = crate::surreal::SurrealDb::uninitialized();
+    use crate::postgres_mirror::{Mirrored, during_initial_copy, firm_secrets, from_source};
+    assert_eq!(
+        from_source(during_initial_copy(firm_secrets::mirror(
+            &source, &pg, firm
+        )))
+        .await
+        .unwrap(),
+        Mirrored::Unchanged
+    );
+    assert!(
+        firm_secrets::parity(&source, &pg)
+            .await
+            .unwrap()
+            .tables
+            .is_empty()
+    );
+    assert!(
+        from_source(during_initial_copy(firm_secrets::reconcile(&source, &pg)))
+            .await
+            .unwrap()
+            .tables
+            .is_empty()
+    );
+    let after: serde_json::Value =
+        sqlx::query_scalar("SELECT to_jsonb(r) FROM firm_integration_secret r WHERE id=$1")
+            .bind(id)
+            .fetch_one(pg.pool())
+            .await
+            .unwrap();
+    assert_eq!(after, before);
 }
 
 #[test]
@@ -444,10 +497,12 @@ async fn person_merge_rejects_foreign_primary_claim_and_handles_phone_only_peopl
                 persons::PersonError::EmailTaken
             ))
         ));
-        assert!(persons::find_by_id(&source, dropped.id)
-            .await
-            .unwrap()
-            .is_some());
+        assert!(
+            persons::find_by_id(&source, dropped.id)
+                .await
+                .unwrap()
+                .is_some()
+        );
         assert_eq!(
             persons::find_by_any_email(&source, "claim-alias@example.invalid")
                 .await
@@ -625,10 +680,12 @@ async fn deadline_changed_replay_advances_revision_and_preserves_cancellation() 
             deadlines::find(&source, project, first.id).await.unwrap(),
             Some(cancelled)
         );
-        assert!(deadlines::find(&source, uuid::Uuid::new_v4(), first.id)
-            .await
-            .unwrap()
-            .is_none());
+        assert!(
+            deadlines::find(&source, uuid::Uuid::new_v4(), first.id)
+                .await
+                .unwrap()
+                .is_none()
+        );
     })
     .await;
 }
