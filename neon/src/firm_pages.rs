@@ -1814,12 +1814,6 @@ pub fn firm_public_dioxus_routers(state: &AppState) -> Vec<Router> {
     ));
     routers.push(portal::catalog_workshop_command_routes(state));
     let services_catalog = locales::services_catalog(branding);
-    routers.push(portal::purchases::routes(
-        state,
-        services_catalog
-            .as_ref()
-            .map(|catalog| catalog.purchase.clone()),
-    ));
     routers.push(portal::start_door::routes(
         state,
         services_catalog,
