@@ -312,15 +312,16 @@ async fn run_host(
             crate::dbos_social_publisher::enabled(lookup)
                 .map_err(anyhow::Error::msg)
                 .context("validate DBOS social registration flags")?;
-        let finance_claim_postgres = if finance_aggregate_enabled || notation_enabled {
-            Some(
-                store::postgres::PostgresDb::from_env()
-                    .await
-                    .context("connect PostgreSQL for DBOS request identity claims")?,
-            )
-        } else {
-            None
-        };
+        let finance_claim_postgres =
+            if finance_aggregate_enabled || notation_enabled || email_summary_enabled {
+                Some(
+                    store::postgres::PostgresDb::from_env()
+                        .await
+                        .context("connect PostgreSQL for DBOS request identity claims")?,
+                )
+            } else {
+                None
+            };
         let dbos_ingress_token = if finance_aggregate_enabled
             || reconcile_enabled
             || nightly_project_update_enabled
@@ -840,6 +841,9 @@ async fn run_host(
         } else {
             None
         };
+        let recovery_version = settings.config().app_version.ok_or_else(|| {
+            anyhow::anyhow!("summary recovery requires the configured DBOS version")
+        })?;
         let dbos_ingress_for_registration = Arc::clone(&dbos_ingress);
         Some(
             dbos_engine::Executor::launch_hosting_with(
@@ -917,6 +921,24 @@ async fn run_host(
                         ));
                     }
                     if let Some(context) = email_summary_context {
+                        let postgres = finance_claim_postgres.clone().ok_or_else(|| {
+                            dbos::Error::Config("summary recovery requires PostgreSQL".into())
+                        })?;
+                        let recovery = crate::dbos_email_summary::recovery::register(
+                            dbos,
+                            postgres.clone(),
+                            recovery_version.clone(),
+                        )?;
+                        if let Some(token) = dbos_ingress_token.as_ref() {
+                            registered_ingress.email_summary_recovery =
+                                Some(crate::dbos_email_summary::recovery::RecoveryIngress::new(
+                                    token.clone(),
+                                    dbos.clone(),
+                                    postgres,
+                                    recovery,
+                                    recovery_version.clone(),
+                                ));
+                        }
                         let workflow = crate::dbos_email_summary::register(dbos, context)?;
                         if let Some(token) = dbos_ingress_token.as_ref() {
                             registered_ingress.email_summary =

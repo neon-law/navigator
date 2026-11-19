@@ -19,6 +19,8 @@ use crate::email_summary::{
     SenderGate, SummaryProviders,
 };
 
+pub mod recovery;
+
 pub const WORKFLOW: &str = "EmailSummary";
 pub const ENABLED_ENV: &str = "NAVIGATOR_DBOS_EMAIL_SUMMARY_ENABLED";
 

@@ -473,6 +473,45 @@ pub const RESTATE_INGRESS_URL_ENV: &str = "RESTATE_INGRESS_URL";
 /// The optional Restate Cloud bearer.
 pub const RESTATE_AUTH_TOKEN_ENV: &str = "RESTATE_AUTH_TOKEN";
 
+/// Queue one idempotent, authenticated EmailSummary recovery operation.
+///
+/// # Errors
+/// Returns transport or selected-ingress rejection without falling back to Restate.
+pub async fn start_dbos_email_summary_recovery(
+    ingress: &str,
+    token: &str,
+    request: &EmailSummaryRecoveryRequest,
+) -> Result<(), TriggerError> {
+    start_dbos_at(
+        ingress,
+        token,
+        "/internal/dbos/email-summary/recover",
+        request,
+    )
+    .await
+}
+
+/// One explicitly identified operator repair, retaining the archived receipt and request.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct EmailSummaryRecoveryRequest {
+    pub operation_id: uuid::Uuid,
+    pub from_recovery: Option<uuid::Uuid>,
+    pub after_failed_result: Option<String>,
+    pub request: crate::EmailSummaryRequest,
+}
+
+/// Global operation identity; reuse for another receipt is a request-claim conflict.
+#[must_use]
+pub fn email_summary_recovery_id(operation: uuid::Uuid) -> String {
+    format!("EmailSummaryRecovery:{operation}")
+}
+
+/// A deterministic child identity makes a lost fork acknowledgement recoverable.
+#[must_use]
+pub fn email_summary_recovery_child(receipt: uuid::Uuid, operation: uuid::Uuid) -> String {
+    format!("EmailSummary:{receipt}:recovery:{operation}")
+}
+
 /// The `EmailSummary` rollout switch. Default off; the Restate lane keeps
 /// serving until cutover flips it.
 pub const EMAIL_SUMMARY_ENABLED_ENV: &str = "NAVIGATOR_DBOS_EMAIL_SUMMARY_ENABLED";

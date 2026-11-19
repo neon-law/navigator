@@ -155,34 +155,44 @@ Restate admits **at most one invocation per workflow key**. The key choice *is* 
 - **Manual runs** key on a unique `manual-<uuid>`, so every click actually executes and notifies — a test button that
   deduped against the nightly run would look broken.
 
-## Redriving a completed run
+## Recovering an EmailSummary run
 
-Restate admits at most one invocation per workflow key, so a run that *completed* — even with a bounded provider failure
-such as `input_digest_mismatch` — can't be resubmitted through its normal trigger. `EmailSummary` keys on the receipt
-id, and intake only submits on the inbound webhook: SendGrid never re-POSTs a message that already got a 202.
+`hudson ops email-summary redrive --receipt <receipt-id>` uses the selected EmailSummary engine and the same
+`EmailSummaryConfig::request_for` input as intake. It reuses the archived receipt, Letter, Project, channel, provider
+configuration, and digest. It creates no second receipt or archive. Diagnostics contain status words only.
 
-`hudson ops email-summary redrive --receipt <uuid>` recovers that case:
+### DBOS
 
-1. Refuses when the receipt's Slack delivery is already `confirmed` — this can never risk a second post. When the
-   confirmed post was a provider-failure notice (`Failure: ...` in the channel), `--after-failed-result <actor>` vouches
-   for it: the delivery row records no provider outcome, so the operator's name is stored as `reconciled_by` with
-   reconciliation `redrive_after_failed_result`, and the delivery reopens only after the purge succeeds so the new run
-   posts the real summary.
-2. Purges the retained, completed invocation for that receipt id's workflow key.
-3. Resubmits the identical `EmailSummaryRequest` intake would have built (same project, channel, provider models, and
-   digest — `workflows::EmailSummaryConfig::request_for` is the one construction path both intake and a redrive use, so
-   they can't diverge on run configuration the way intake and the worker once diverged on digest framing).
+With `NAVIGATOR_DBOS_EMAIL_SUMMARY_ENABLED=true`, add `--recovery-id <operation-id>`. Retain that UUID and repeat it
+after a lost response. The authenticated worker binds it to the exact request, operator assertion, recorded source
+stages, version, and actual target. A retry joins that operation; changing its receipt, input, or operator assertion is
+refused. The command reports that recovery was queued, not that the summary has finished.
 
-It never creates a second receipt, letter, or archive — those are digest-keyed in SurrealDB already and a redrive never
-touches them. Output is status words only — whether anything was purged, and that the run was resubmitted — never a
-receipt id, an invocation id, a summary, a letter, or any client content. The operator already supplied the receipt as
-the command argument.
+The internal `EmailSummaryRecovery` controller uses the EmailSummary selector. A receipt row lock admits one recovery
+owner and records any authorized failure-notice reopening in the same transaction. Another operation can take ownership
+only after the previous controller and its actual target have a verified terminal outcome, or after an explicit retry of
+a parked target. `--from-recovery <previous-operation-id>` names that previous repair; it never guesses a source from
+timestamp order.
 
-It reads the same environment a deployment's own `web`/worker already source — `NAVIGATOR_SURREAL_*` for the database,
-`NAVIGATOR_SUMMARY_*` / `RESTATE_BROKER_URL` for the summary-lane configuration, and `RESTATE_ADMIN_URL` /
-`RESTATE_ADMIN_TOKEN` / `RESTATE_AUTH_TOKEN` for Restate itself — so there is no separate `--deployment` flag to keep in
-sync with it; source the target deployment's environment first, the same way an operator would before any other `ops`
-command that reaches a live cluster.
+A completed provider-failure result retries the recorded provider stage. Reopening its confirmed failure notice also
+requires `--after-failed-result <actor>`, recorded in the delivery audit. A failed delivery with a successful provider
+checkpoint retries delivery without repeating that provider stage. An interrupted confirmed delivery stays confirmed. A
+recorded unknown delivery requires the existing audited authorize-resend operation before retry; an outcome still
+`unknown` or `sending` remains quarantined.
+
+Unhandled workflow errors retry their recorded failed stage. Explicit recovery of canceled or parked work resumes its
+existing checkpoints. The controller verifies compatible version, typed input, stage identity, and fork origin; it never
+deletes workflow history or starts again from an arbitrary step. DBOS recovery can repeat a step that performed an
+effect before losing its checkpoint, so completed checkpoints and native delivery receipts remain separate controls. See
+[executor ownership](dbos-durability.md#several-replicas) before recovering work from a replaced pod.
+
+### Restate
+
+With the DBOS EmailSummary selector off, the command retains the Restate purge-and-resubmit path and requires no
+recovery UUID. Operators first verify that the retained invocation has completed in the selected environment. A
+confirmed failure notice requires `--after-failed-result <actor>`; the delivery reopens after the purge. The command
+then submits the identical receipt-keyed request. This path requires its Restate ingress and admin credentials and is
+separate from DBOS recovery.
 
 ## Auth: two tokens, two ports
 

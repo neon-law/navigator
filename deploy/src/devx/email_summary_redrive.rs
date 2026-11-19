@@ -1,24 +1,8 @@
-//! `hudson ops email-summary redrive --receipt <uuid> [--after-failed-result <actor>]` — re-run a
-//! completed `EmailSummary` Restate workflow for one receipt (ENG-888).
+//! Explicit receipt-preserving recovery on the selected EmailSummary engine.
 //!
-//! A workflow key admits at most one invocation. A run that completed with a
-//! bounded provider failure (for example `input_digest_mismatch`) can't be
-//! resubmitted through intake — `SendGrid` never re-POSTs a message that
-//! already got a 202 — so an operator needs a way to purge the retained,
-//! completed invocation and resubmit the identical request under the same
-//! key. This never creates a second receipt, letter, or archive: those are
-//! digest-keyed in `SurrealDB` already and this command never touches them.
-//!
-//! Diagnostics are status words only: this module never writes a receipt
-//! id, an invocation id, an email body, a summary, or any letter/archive
-//! content. The operator already supplied the receipt as the command
-//! argument.
-//!
-//! The exact admin-API shape (`sys_invocation` introspection then a purge)
-//! mirrors Restate's documented invocation-lifecycle model but is exercised
-//! here only against a `wiremock` double, not a live cluster — confirm
-//! against a real environment (staging) before depending on it in
-//! production.
+//! DBOS queues an idempotent recovery operation through its authenticated ingress.
+//! Restate frees a completed invocation key before resubmitting the same request.
+//! Diagnostics contain status words only, never receipt identifiers or content.
 
 use anyhow::{bail, Context, Result};
 use uuid::Uuid;
@@ -27,44 +11,72 @@ const SERVICE: &str = "EmailSummary";
 const HANDLER: &str = "run";
 
 /// `hudson ops email-summary redrive --receipt <uuid>`.
-pub fn run(receipt: Uuid, after_failed_result: Option<&str>) -> Result<()> {
+pub fn run(
+    receipt: Uuid,
+    after_failed_result: Option<&str>,
+    recovery_id: Option<Uuid>,
+    from_recovery: Option<Uuid>,
+) -> Result<()> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .context("build tokio runtime")?;
-    runtime.block_on(redrive(receipt, after_failed_result))
+    runtime.block_on(redrive(
+        receipt,
+        after_failed_result,
+        recovery_id,
+        from_recovery,
+    ))
 }
 
-async fn redrive(receipt_id: Uuid, after_failed_result: Option<&str>) -> Result<()> {
+async fn redrive(
+    receipt_id: Uuid,
+    after_failed_result: Option<&str>,
+    recovery_id: Option<Uuid>,
+    from_recovery: Option<Uuid>,
+) -> Result<()> {
     let surreal = crate::application_store()
         .await
         .context("verify PostgreSQL application authority")?;
     let config = workflows::EmailSummaryConfig::from_env()
         .context("configure inbound email summary lane")?
         .with_context(|| "NAVIGATOR_SUMMARY_ENABLED is not set; nothing to redrive against")?;
-    // The purge-and-resubmit flow below is Restate's invocation lifecycle.
-    // While the EmailSummary switch selects the worker's DBOS lane (or the
-    // switch is on with an incomplete ingress), new runs never land on
-    // Restate, and the DBOS ingress exposes no discard route — so refuse
-    // rather than purge a lane the workflow no longer runs on.
-    match workflows::trigger::service_target(
+    let target = workflows::trigger::service_target(
         workflows::trigger::EMAIL_SUMMARY_ENABLED_ENV,
         std::env::var(workflows::trigger::EMAIL_SUMMARY_ENABLED_ENV)
             .ok()
             .as_deref(),
         std::env::var(workflows::trigger::DBOS_INGRESS_URL_ENV).ok(),
         std::env::var(workflows::trigger::DBOS_INGRESS_TOKEN_ENV).ok(),
-    ) {
-        Ok(workflows::trigger::ServiceTarget::Restate) => {}
-        Ok(workflows::trigger::ServiceTarget::Dbos { .. }) => bail!(
-            "{} is enabled: the EmailSummary workflow runs on the DBOS lane, \
-             and redrive's Restate purge-and-resubmit flow does not apply to it",
-            workflows::trigger::EMAIL_SUMMARY_ENABLED_ENV
-        ),
-        Err(error) => bail!(
-            "{error}: the EmailSummary switch is on, so redrive's Restate \
-             purge-and-resubmit flow does not apply"
-        ),
+    )
+    .context("configure the selected summary recovery ingress")?;
+    if let workflows::trigger::ServiceTarget::Dbos { ingress, token } = target {
+        let operation_id = recovery_id
+            .context("--recovery-id is required for DBOS; reuse it when retrying this operation")?;
+        let receipt = store::email_receipts::find_by_id(&surreal, receipt_id)
+            .await
+            .context("load the receipt")?
+            .context("receipt not found")?;
+        let request = config
+            .request_for(receipt_id, &receipt.raw_digest)
+            .context("build the summary request")?;
+        workflows::trigger::start_dbos_email_summary_recovery(
+            &ingress,
+            &token,
+            &workflows::trigger::EmailSummaryRecoveryRequest {
+                operation_id,
+                from_recovery,
+                after_failed_result: after_failed_result.map(str::to_owned),
+                request,
+            },
+        )
+        .await
+        .context("queue the selected DBOS recovery")?;
+        println!("EmailSummary recovery queued");
+        return Ok(());
+    }
+    if recovery_id.is_some() || from_recovery.is_some() {
+        bail!("recovery identity options require the DBOS EmailSummary selection");
     }
     let admin_url = std::env::var("RESTATE_ADMIN_URL")
         .context("RESTATE_ADMIN_URL is required to purge the completed invocation")?;
