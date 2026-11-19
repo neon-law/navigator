@@ -478,6 +478,7 @@ fn run_json(report: &RunReport) -> serde_json::Value {
 }
 
 fn write_application_proof(out: &mut String, table: &store::postgres_backfill::ParityTableReport) {
+    use std::fmt::Write as _;
     if let Some(proof) = &table.sent_email_union {
         let _ = writeln!(out, "Sent Email handoff: captured {} overlaps {} purged {} native-only {} missing {} differing {}",
             table.surreal, proof.compared_overlaps, proof.excluded_purged, proof.native_target_only,
