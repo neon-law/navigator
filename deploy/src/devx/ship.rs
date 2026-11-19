@@ -469,6 +469,7 @@ where
     substitutions.extend(archives_substitutions(&get));
     substitutions.extend(replica_substitutions(deployment, &get)?);
     substitutions.push(dbos_only_patch(deployment, &get)?);
+    substitutions.extend(cohost_resource_substitutions(&get)?);
     // Not in PLAINTEXT_SUBSTITUTIONS and not read from `get` at all: the additional brand
     // hosts this deployment's environment serves come from the compiled
     // `views::brand::BrandKey` registry, keyed off the `NAVIGATOR_PUBLIC_HOST`
@@ -579,40 +580,16 @@ where
         .unwrap_or_else(|| "0.0.0.0:9083".into())
         .parse::<std::net::SocketAddr>()
         .context("parse cohost WORKFLOWS_SERVICE_HEALTH_LISTEN")?;
-    ensure!(listen.port() != 0 && (listen.ip().is_loopback() || listen.ip().is_unspecified()),
-        "cohost WORKFLOWS_SERVICE_HEALTH_LISTEN must bind loopback or an unspecified address with a fixed port");
-    let loopback = if listen.ip().is_unspecified() {
-        if listen.is_ipv4() {
-            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
-        } else {
-            std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST)
-        }
-    } else {
-        listen.ip()
-    };
-    let ingress =
-        non_empty_env(workflows::trigger::DBOS_INGRESS_URL_ENV, get).unwrap_or_else(|| {
-            format!(
-                "http://{}",
-                std::net::SocketAddr::new(loopback, listen.port())
-            )
-        });
+    ensure!(listen.port() != 0 && listen.port() != 3001 && listen.ip() == std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
+        "cohost WORKFLOWS_SERVICE_HEALTH_LISTEN must bind 0.0.0.0 at a fixed non-web port so scheduled trigger pods can connect");
+    let ingress = non_empty_env(workflows::trigger::DBOS_INGRESS_URL_ENV, get)
+        .unwrap_or_else(|| format!("http://127.0.0.1:{}", listen.port()));
     let url = url::Url::parse(&ingress).context("parse cohost NAVIGATOR_DBOS_INGRESS_URL")?;
     let local = url.host_str().is_some_and(|host| {
-        if host == "localhost" {
-            return loopback == std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
-                || loopback == std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST);
-        }
-        host.trim_matches(['[', ']'])
-            .parse::<std::net::IpAddr>()
-            .is_ok_and(|ip| {
-                ip.is_loopback()
-                    && if listen.ip().is_unspecified() {
-                        ip.is_ipv4() == listen.is_ipv4()
-                    } else {
-                        ip == listen.ip()
-                    }
-            })
+        host == "localhost"
+            || host
+                .parse::<std::net::Ipv4Addr>()
+                .is_ok_and(|ip| ip.is_loopback())
     });
     ensure!(url.scheme() == "http" && local && url.port_or_known_default() == Some(listen.port()) &&
         url.username().is_empty() && url.password().is_none() && matches!(url.path(), "" | "/") &&
@@ -653,6 +630,20 @@ where
         let worker_rule = 1 + additional_brand_hosts(&host).len();
         let _ = write!(value, "  - target:\n      kind: Ingress\n      name: navigator-web-gke\n    patch: |\n      - op: remove\n        path: /spec/rules/{worker_rule}\n");
         value.push_str("  - target:\n      kind: Deployment\n      name: navigator-web\n    patch: |\n      apiVersion: apps/v1\n      kind: Deployment\n      metadata:\n        name: navigator-web\n      spec:\n        template:\n          spec:\n            containers:\n              - name: web\n                env:\n                  - name: RESTATE_IDENTITY_KEY\n                    $patch: delete\n");
+        let namespace = required_coordinate(deployment, "NAVIGATOR_K8S_NAMESPACE", get)?;
+        let internal = serde_json::to_string(&format!(
+            "http://{DBOS_INTERNAL_SERVICE}.{namespace}.svc.cluster.local:9083"
+        ))?;
+        let secret = serde_json::to_string(&required_coordinate(
+            deployment,
+            "NAVIGATOR_WEB_SECRET_NAME",
+            get,
+        )?)?;
+        let token = workflows::trigger::DBOS_INGRESS_TOKEN_ENV;
+        let url = workflows::trigger::DBOS_INGRESS_URL_ENV;
+        for (cronjob, flag) in COHOST_TRIGGERS {
+            let _ = write!(value, "  - target:\n      kind: CronJob\n      name: {cronjob}\n    patch: |\n      apiVersion: batch/v1\n      kind: CronJob\n      metadata:\n        name: {cronjob}\n      spec:\n        jobTemplate:\n          spec:\n            template:\n              metadata:\n                labels:\n                  app: {cronjob}\n              spec:\n                containers:\n                  - name: {cronjob}\n                    env:\n                      - $patch: replace\n                      - name: {flag}\n                        value: \"true\"\n                      - name: {url}\n                        value: {internal}\n                      - name: {token}\n                        valueFrom:\n                          secretKeyRef:\n                            name: {secret}\n                            key: {token}\n                      - name: RUST_LOG\n                        value: info\n");
+        }
     }
     Ok(Substitution {
         token: DBOS_ONLY_PATCH_TOKEN,
@@ -779,20 +770,56 @@ const DBOS_SCHEDULES: [DbosSchedule; 6] = [
 
 /// These schedules are registered only by the embedded workflow host. A
 /// selector alone must not retire a trigger from the separate-worker profile.
-const COHOST_CRONJOBS: [RetiredCronJob; 3] = [
-    retired(
+const COHOST_CRONJOBS: [RetiredCronJob; 1] = [retired(
+    "social-publish-reconciler-trigger",
+    "  - cron-social-publish-reconciler-trigger.yaml\n",
+)];
+
+const COHOST_TRIGGERS: [(&str, &str); 2] = [
+    (
         "nightly-project-update-trigger",
-        "  - cron-nightly-project-update-trigger.yaml\n",
+        "NAVIGATOR_DBOS_NIGHTLY_PROJECT_UPDATE_ENABLED",
     ),
-    retired(
-        "social-publish-reconciler-trigger",
-        "  - cron-social-publish-reconciler-trigger.yaml\n",
-    ),
-    retired(
+    (
         "youtube-comments-poll-trigger",
-        "  - cron-youtube-comments-poll-trigger.yaml\n",
+        "NAVIGATOR_DBOS_YOUTUBE_COMMENTS_POLLER_ENABLED",
     ),
 ];
+const DBOS_INTERNAL_RESOURCE_TOKEN: &str = "  # NAVIGATOR_DBOS_INTERNAL_RESOURCE\n";
+const DBOS_INTERNAL_PORT_TOKEN: &str = "YOUR_DBOS_COHOST_PORT";
+const DBOS_INTERNAL_SERVICE: &str = "navigator-web-dbos";
+
+fn cohost_resource_substitutions<F>(get: &F) -> Result<Vec<Substitution>>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let native = dbos_only_profile(get)?;
+    let port = if native {
+        cohost_ingress(get)?
+            .0
+            .parse::<std::net::SocketAddr>()
+            .context("parse validated cohost listener")?
+            .port()
+    } else {
+        9083
+    };
+    Ok(vec![
+        Substitution {
+            token: DBOS_INTERNAL_RESOURCE_TOKEN,
+            env: store::workflow_engine::COHOST_ENV,
+            value: if native {
+                "  - dbos-internal.yaml\n".into()
+            } else {
+                String::new()
+            },
+        },
+        Substitution {
+            token: DBOS_INTERNAL_PORT_TOKEN,
+            env: "WORKFLOWS_SERVICE_HEALTH_LISTEN",
+            value: port.to_string(),
+        },
+    ])
+}
 
 /// The switch that moves Archives onto the DBOS executor in `web`. Beyond
 /// the shared schedule switch, it gives `web` the archive login and the
@@ -8289,11 +8316,15 @@ mod tests {
                     .iter()
                     .filter(|object| object["kind"].as_str() == Some("CronJob"))
                     .map(|object| object["metadata"]["name"].as_str().unwrap())
-                    .collect::<Vec<_>>();
+                    .collect::<BTreeSet<_>>();
                 assert_eq!(
                     cronjobs,
-                    vec!["surreal-archive"],
-                    "native schedules leave no Restate trigger"
+                    BTreeSet::from([
+                        "nightly-project-update-trigger",
+                        "surreal-archive",
+                        "youtube-comments-poll-trigger"
+                    ]),
+                    "registered endpoints without timer loops retain their CronJobs"
                 );
                 for kind in [
                     "Deployment",
@@ -8374,6 +8405,149 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one rendered contract checks both native trigger cadences, authentication and internal network routing"
+    )]
+    fn native_cron_triggers_preserve_cadences_and_reach_only_the_internal_cohost_service() {
+        let mixed = rendered_manifests(env_getter(FULL_ENV));
+        assert!(
+            !mixed.contains(&format!("name: {DBOS_INTERNAL_SERVICE}")),
+            "the mixed topology has no new internal endpoint or policy"
+        );
+        for port in [9083_u16, 9191] {
+            let get = |key: &str| {
+                if key == "WORKFLOWS_SERVICE_HEALTH_LISTEN" {
+                    Some(format!("0.0.0.0:{port}"))
+                } else {
+                    native_ship_env(key)
+                }
+            };
+            let manifests = rendered_manifests(&get);
+            let service = manifest_doc(&manifests, "Service", DBOS_INTERNAL_SERVICE);
+            assert_eq!(service["spec"]["type"].as_str(), Some("ClusterIP"));
+            assert_eq!(
+                service["spec"]["selector"]["app"].as_str(),
+                Some(WEB_DEPLOYMENT)
+            );
+            assert_eq!(service["spec"]["ports"][0]["port"].as_u64(), Some(9083));
+            assert_eq!(
+                service["spec"]["ports"][0]["targetPort"].as_u64(),
+                Some(u64::from(port))
+            );
+            assert!(service["spec"].get("externalIPs").is_none());
+            let namespace = service["metadata"]["namespace"].as_str().unwrap();
+            let internal =
+                format!("http://{DBOS_INTERNAL_SERVICE}.{namespace}.svc.cluster.local:9083");
+            let ingress = manifest_doc(&manifests, "Ingress", "navigator-web-gke");
+            assert!(!serde_yaml::to_string(&ingress)
+                .unwrap()
+                .contains(DBOS_INTERNAL_SERVICE));
+            let policy = manifest_doc(&manifests, "NetworkPolicy", DBOS_INTERNAL_SERVICE);
+            assert_eq!(
+                policy["spec"]["podSelector"]["matchLabels"]["app"].as_str(),
+                Some(WEB_DEPLOYMENT)
+            );
+            assert_eq!(
+                policy["spec"]["ingress"][0]["ports"][0]["port"].as_u64(),
+                Some(3001)
+            );
+            assert_eq!(
+                policy["spec"]["ingress"][1]["ports"][0]["port"].as_u64(),
+                Some(u64::from(port))
+            );
+            let peers = policy["spec"]["ingress"][1]["from"].as_sequence().unwrap();
+            assert_eq!(peers.len(), 2);
+            let allowed = peers
+                .iter()
+                .map(|peer| {
+                    assert!(
+                        peer.get("namespaceSelector").is_none(),
+                        "pod selectors remain same-namespace"
+                    );
+                    peer["podSelector"]["matchLabels"]["app"].as_str().unwrap()
+                })
+                .collect::<BTreeSet<_>>();
+            assert_eq!(
+                allowed,
+                COHOST_TRIGGERS
+                    .iter()
+                    .map(|(name, _)| *name)
+                    .collect::<BTreeSet<_>>()
+            );
+            for ((cronjob, flag), cadence) in COHOST_TRIGGERS
+                .into_iter()
+                .zip(["55 5 * * *", "*/15 * * * *"])
+            {
+                let original = manifest_doc(&mixed, "CronJob", cronjob);
+                let native = manifest_doc(&manifests, "CronJob", cronjob);
+                assert_eq!(native["spec"]["schedule"].as_str(), Some(cadence));
+                for key in [
+                    "schedule",
+                    "timeZone",
+                    "suspend",
+                    "startingDeadlineSeconds",
+                    "concurrencyPolicy",
+                ] {
+                    assert_eq!(
+                        native["spec"][key], original["spec"][key],
+                        "{cronjob}:{key}"
+                    );
+                }
+                let template = &native["spec"]["jobTemplate"]["spec"]["template"];
+                assert_eq!(
+                    template["metadata"]["labels"]["app"].as_str(),
+                    Some(cronjob)
+                );
+                let container = &template["spec"]["containers"][0];
+                let before =
+                    &original["spec"]["jobTemplate"]["spec"]["template"]["spec"]["containers"][0];
+                for key in ["command", "args", "image"] {
+                    assert_eq!(container[key], before[key], "{cronjob}:{key}");
+                }
+                let env = container["env"].as_sequence().unwrap();
+                assert!(!env
+                    .iter()
+                    .any(|entry| entry["name"].as_str().unwrap().starts_with("RESTATE_")));
+                let entry = |key: &str| {
+                    env.iter()
+                        .find(|entry| entry["name"].as_str() == Some(key))
+                        .unwrap()
+                };
+                assert_eq!(entry(flag)["value"].as_str(), Some("true"));
+                assert!(entry(flag).get("valueFrom").is_none());
+                assert_eq!(
+                    entry(workflows::trigger::DBOS_INGRESS_URL_ENV)["value"].as_str(),
+                    Some(internal.as_str())
+                );
+                assert!(entry(workflows::trigger::DBOS_INGRESS_URL_ENV)
+                    .get("valueFrom")
+                    .is_none());
+                let token = entry(workflows::trigger::DBOS_INGRESS_TOKEN_ENV);
+                assert!(token.get("value").is_none());
+                assert_eq!(
+                    token["valueFrom"]["secretKeyRef"]["key"].as_str(),
+                    Some(workflows::trigger::DBOS_INGRESS_TOKEN_ENV)
+                );
+                assert_eq!(
+                    token["valueFrom"]["secretKeyRef"]["name"].as_str(),
+                    native_ship_env("NAVIGATOR_WEB_SECRET_NAME").as_deref()
+                );
+                assert_ne!(
+                    token["valueFrom"]["secretKeyRef"]["optional"].as_bool(),
+                    Some(true)
+                );
+            }
+        }
+        for listen in ["127.0.0.1:9083", "0.0.0.0:3001", "0.0.0.0:0", "[::1]:9083"] {
+            assert!(cohost_ingress(
+                &|key| (key == "WORKFLOWS_SERVICE_HEALTH_LISTEN").then(|| listen.into())
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
     fn cohost_ingress_rejects_removed_workers_and_preserves_matching_loopback_overrides() {
         for ingress in [
             "https://workflows.example.invalid",
@@ -8389,13 +8563,13 @@ mod tests {
             .is_err());
         }
         let get = |key: &str| match key {
-            "WORKFLOWS_SERVICE_HEALTH_LISTEN" => Some("127.0.0.1:9191".into()),
+            "WORKFLOWS_SERVICE_HEALTH_LISTEN" => Some("0.0.0.0:9191".into()),
             workflows::trigger::DBOS_INGRESS_URL_ENV => Some("http://127.0.0.1:9191/".into()),
             _ => None,
         };
         assert_eq!(
             cohost_ingress(&get).unwrap(),
-            ("127.0.0.1:9191".into(), "http://127.0.0.1:9191".into())
+            ("0.0.0.0:9191".into(), "http://127.0.0.1:9191".into())
         );
     }
 

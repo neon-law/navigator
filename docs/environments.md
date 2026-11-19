@@ -273,7 +273,7 @@ ingress override must remain a loopback origin matching `WORKFLOWS_SERVICE_HEALT
 refused. `NAVIGATOR_DBOS_INGRESS_TOKEN` stays in the deployment Secret and is never rendered as plaintext.
 
 This profile renders the selectors into web, omits the separate worker and its proxy, network resources and certificate,
-and moves its scheduled triggers to DBOS. Image rolls, restarts and rollout waits target web, and Restate registration
+and moves supported schedule loops to DBOS. Image rolls, restarts and rollout waits target web, and Restate registration
 is skipped. The operational archive ServiceAccount remains. The default topology keeps its separate worker and required
 Restate registration while retained work drains.
 
@@ -281,3 +281,13 @@ Select this profile only after verifying retained Restate work has drained and r
 Ingress removes the worker's public route. Omitting desired objects does not delete existing resources, so ship does not
 prune the worker, cancel old invocations or certify an empty Restate journal. Retire retained resources through a
 separately authorized operator step. The profile does not change backup retention or image publication.
+
+Nightly Project updates and YouTube polling retain their daily and fifteen-minute CronJobs: these native endpoints do
+not own timer loops. Their authenticated requests use the cluster-internal `navigator-web-dbos` Service, never a CronJob
+pod's loopback address. The cohost listener must bind `0.0.0.0` at a fixed port distinct from web's port; a custom port
+reaches both Service and NetworkPolicy. The native policy preserves web's existing port and admits DBOS traffic only
+from those two same-namespace trigger pod selectors. No external Ingress exposes the DBOS endpoint.
+
+Engine selection also enables some native timer loops, including the weekly BillingCanary and daily invoice reconcile.
+Before selecting the complete profile, compare each environment's approved activation and cadence with those loops;
+previously manual or disabled provider workflows must not be treated as already approved merely because they are native.
