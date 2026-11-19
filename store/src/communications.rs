@@ -1407,11 +1407,15 @@ mod tests {
     }
 
     /// LAW-140: the schema accepts `call` and refuses a channel it does not
-    /// list; a call is internal by default, so the client-visible read
-    /// excludes it while the firm read carries its structure; agreements
-    /// stay unconfirmed until an email Communication confirms them.
+    /// list; a call hides from the client-visible read unless
+    /// `client_visible` is set, while the firm read carries its structure;
+    /// agreements stay unconfirmed until an email Communication confirms
+    /// them.
     #[tokio::test]
-    async fn a_call_is_logged_internal_with_agreements_until_an_email_confirms_them() {
+    async fn a_call_is_logged_with_agreements_until_an_email_confirms_them() {
+        // LAW-424: the row's top-level direction is the call's own now,
+        // so this fixture (outbound, opposing counsel, not shared) no
+        // longer reads `internal`.
         use super::{confirm_agreements, record_call, CallDetails, NewCall};
         let surreal = crate::surreal::test_support::mem().await;
         let project_id = crate::test_support::seed_project_surreal(&surreal, "Test Matter").await;
@@ -1447,7 +1451,8 @@ mod tests {
         .await
         .expect("log the call");
         assert_eq!(call.channel, "call");
-        assert_eq!(call.direction, "internal");
+        assert_eq!(call.direction, "outbound");
+        assert_eq!(call.counterparty_role.as_deref(), Some("opposing_counsel"));
         assert_eq!(call.call.as_ref().unwrap().duration_minutes, Some(20));
         assert_eq!(call.agreements[0].status, "unconfirmed");
         assert!(call.has_unconfirmed_agreements());
@@ -1510,6 +1515,47 @@ mod tests {
                 .is_err(),
             "only a call carries agreements"
         );
+    }
+
+    /// A logged call reads as the call that happened (LAW-424): the row's
+    /// top-level `direction` and `counterparty_role` are the call's own
+    /// flags, even when the firm keeps the note internal.
+    #[tokio::test]
+    async fn a_logged_call_carries_its_direction_and_role_at_the_top_level() {
+        use super::{for_project_client_visible, record_call, CallDetails, NewCall};
+        let surreal = crate::surreal::test_support::mem().await;
+        let project_id = crate::test_support::seed_project_surreal(&surreal, "Test Matter").await;
+
+        let call = record_call(
+            &surreal,
+            &NewCall {
+                project_id,
+                counterparty: "client@example.com".into(),
+                body: "Discussed the engagement.".into(),
+                at: "2026-10-09T15:00:00-07:00".into(),
+                call: CallDetails {
+                    direction: "inbound".into(),
+                    counterparty_role: "client".into(),
+                    duration_minutes: Some(20),
+                    recorded: "none".into(),
+                    meet_and_confer: None,
+                    ..CallDetails::default()
+                },
+                agreements: vec![],
+                ..NewCall::default()
+            },
+        )
+        .await
+        .expect("log the call");
+        assert_eq!(call.direction, "inbound");
+        assert_eq!(call.counterparty_role.as_deref(), Some("client"));
+        assert_eq!(call.call.as_ref().unwrap().direction, "inbound");
+
+        // The firm kept the note internal, so the client lens hides it.
+        assert!(for_project_client_visible(&surreal, project_id)
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]
