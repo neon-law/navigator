@@ -18,6 +18,21 @@ pub(super) async fn database() -> Option<(PostgresDb, SurrealDb, Uuid, Uuid, Uui
     Some((pg, source, actor, project, firm))
 }
 
+pub(super) async fn database_with_domain_parents(
+) -> Option<(PostgresDb, SurrealDb, Uuid, Uuid, Uuid)> {
+    let (options, database) = fresh_schema().await?;
+    let pg = connect(&options, &database).await;
+    let (source, actor, project) =
+        crate::postgres_mirror::tenancy::family_tests::enrolled_source_with_domain_parents(&pg)
+            .await;
+    let firm = sqlx::query_scalar("SELECT firm_id FROM project WHERE id=$1")
+        .bind(project)
+        .fetch_one(pg.pool())
+        .await
+        .unwrap();
+    Some((pg, source, actor, project, firm))
+}
+
 fn event(firm: Uuid, actor: Uuid, key: &str) -> JournalEntry {
     JournalEntry {
         id: Uuid::now_v7(),

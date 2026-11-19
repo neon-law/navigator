@@ -15,13 +15,18 @@ struct Capture {
 }
 
 async fn capture(pg: &PostgresDb) -> Capture {
+    capture_with_domain_parents(pg, false).await
+}
+
+async fn capture_with_domain_parents(pg: &PostgresDb, domain_parents: bool) -> Capture {
     let source = crate::surreal::test_support::unmigrated().await;
     super::super::from_source(crate::schema::apply(&source))
         .await
         .unwrap();
     let entity = synthetic_entity(&source).await;
-    import_predecessor_histories(&source, pg).await;
-    let prior = sealed_prior_family_histories(pg).await;
+    if !domain_parents {
+        import_predecessor_histories(&source, pg).await;
+    }
     let (actor, project) = super::super::from_source(async {
         let actor = crate::persons::create(
             &source,
@@ -97,6 +102,11 @@ async fn capture(pg: &PostgresDb) -> Capture {
     ))
     .await
     .unwrap();
+    if domain_parents {
+        captured_domain_parents(&source, actor, project).await;
+        import_predecessor_histories(&source, pg).await;
+    }
+    let prior = sealed_prior_family_histories(pg).await;
     let receipt = verified_family_capture(&source).await;
     let identity = backfill::start_family(&source, pg, Family::Identity, receipt, 10, None, true)
         .await
@@ -110,8 +120,48 @@ async fn capture(pg: &PostgresDb) -> Capture {
     }
 }
 
+async fn captured_domain_parents(source: &SurrealDb, actor: Uuid, project: Uuid) {
+    let asset = Uuid::now_v7();
+    source.query("CREATE $id SET storage_key='synthetic/domain-parent',content_type='application/pdf',byte_size=25,sha256_hex=$sha,project_id=$project,filename='synthetic-parent.pdf',visibility='internal'")
+        .bind(("id", crate::surreal::record_id("asset", asset)))
+        .bind(("project", crate::surreal::record_id("project", project)))
+        .bind(("sha", crate::assets::sha256_hex(b"Synthetic parent document")))
+        .await.unwrap().check().unwrap();
+    let firm: Option<surrealdb::types::RecordId> = source
+        .query("SELECT VALUE firm_id FROM ONLY $id")
+        .bind(("id", crate::surreal::record_id("project", project)))
+        .await
+        .unwrap()
+        .check()
+        .unwrap()
+        .take(0)
+        .unwrap();
+    let conversation = Uuid::now_v7();
+    source.query("CREATE $id SET firm_id=$firm,project_id=$project,channel='email',external_address='synthetic@example.invalid',provider_account='synthetic',unread=true")
+        .bind(("id", crate::surreal::record_id("inbox_conversation", conversation)))
+        .bind(("firm", firm.unwrap()))
+        .bind(("project", crate::surreal::record_id("project", project)))
+        .await.unwrap().check().unwrap();
+    source.query("CREATE $id SET conversation_id=$conversation,direction='inbound',body='Synthetic captured message',author_person_id=$actor,delivery_state='received',occurred_at='2026-11-18T12:00:00Z'")
+        .bind(("id", crate::surreal::record_id("message", Uuid::now_v7())))
+        .bind(("conversation", crate::surreal::record_id("inbox_conversation", conversation)))
+        .bind(("actor", crate::surreal::record_id("person", actor)))
+        .await.unwrap().check().unwrap();
+}
+
+pub(crate) async fn enrolled_source_with_domain_parents(
+    pg: &PostgresDb,
+) -> (SurrealDb, Uuid, Uuid) {
+    let captured = capture_with_domain_parents(pg, true).await;
+    enroll_tenancy(pg, captured).await
+}
+
 pub(crate) async fn enrolled_source(pg: &PostgresDb) -> (SurrealDb, Uuid, Uuid) {
     let captured = capture(pg).await;
+    enroll_tenancy(pg, captured).await
+}
+
+async fn enroll_tenancy(pg: &PostgresDb, captured: Capture) -> (SurrealDb, Uuid, Uuid) {
     let receipt = verified_family_capture(&captured.source).await;
     let completed = backfill::start_family(
         &captured.source,
