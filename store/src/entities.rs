@@ -1210,42 +1210,67 @@ pub async fn delete_unless_firm_anchor(
 /// The tables that reference `id`, with how many rows each holds. Empty
 /// when the entity is free to delete.
 ///
-/// Nothing in the engine refuses a delete that strands a reference, so
-/// the check is an explicit read *before* the write. The counts are
-/// reported rather than a bare boolean so the operator sees which rows to
-/// detach.
+/// Counts precede deletion so the operator sees which references to detach,
+/// rather than only a foreign-key refusal. PostgreSQL counts come from one
+/// committed statement snapshot; explicit Source reads retain their query path.
 ///
 /// # Errors
 ///
-/// [`EntityError::Db`] if any count fails.
+/// [`EntityError::Authority`] for PostgreSQL admission or query failure;
+/// [`EntityError::Db`] for a Source query failure.
 pub async fn dependents(db: &SurrealDb, id: Uuid) -> Result<Vec<Dependent>, EntityError> {
-    let mut response = db
-        .query(
-            "SELECT VALUE count() FROM project WHERE entity_id = $id GROUP ALL;
-             SELECT VALUE count() FROM address WHERE entity_id = $id GROUP ALL;
-             SELECT VALUE count() FROM entity_role WHERE out = $id GROUP ALL;
-             SELECT VALUE count() FROM relationship WHERE in = $id OR out = $id GROUP ALL;
-             SELECT VALUE count() FROM project_reference WHERE out = $id GROUP ALL;",
-        )
-        .bind(("id", record_id(TABLE, id)))
-        .await
-        .and_then(surrealdb::IndexedResults::check)?;
+    let counts = if let Some(pg) = authority::authority().await? {
+        // Match the canonical typed graph endpoints, including their table
+        // discriminator: a Person with the same UUID is not this Entity.
+        let (projects, addresses, roles, relationships, references): (i64, i64, i64, i64, i64) =
+            sqlx::query_as(
+                "SELECT (SELECT count(*) FROM project WHERE entity_id=$1), \
+                 (SELECT count(*) FROM address WHERE entity_id=$1), \
+                 (SELECT count(*) FROM entity_role WHERE entity_id=$1), \
+                 (SELECT count(*) FROM relationship WHERE \
+                    (\"in\"->>'tb'='entity' AND \"in\"->'id'->>'Uuid'=$2) OR \
+                    (\"out\"->>'tb'='entity' AND \"out\"->'id'->>'Uuid'=$2)), \
+                 (SELECT count(*) FROM project_reference WHERE entity_id=$1)",
+            )
+            .bind(id)
+            .bind(id.to_string())
+            .fetch_one(pg.pool())
+            .await
+            .map_err(pg_error)?;
+        [projects, addresses, roles, relationships, references]
+    } else {
+        let mut response = db
+            .query(
+                "SELECT VALUE count() FROM project WHERE entity_id = $id GROUP ALL;
+                 SELECT VALUE count() FROM address WHERE entity_id = $id GROUP ALL;
+                 SELECT VALUE count() FROM entity_role WHERE out = $id GROUP ALL;
+                 SELECT VALUE count() FROM relationship WHERE in = $id OR out = $id GROUP ALL;
+                 SELECT VALUE count() FROM project_reference WHERE out = $id GROUP ALL;",
+            )
+            .bind(("id", record_id(TABLE, id)))
+            .await
+            .and_then(surrealdb::IndexedResults::check)?;
 
-    // `GROUP ALL` over an empty table yields no row at all, not a zero,
-    // so the absent case is the common one and must read as none.
-    let mut found = Vec::new();
-    for (index, (singular, plural)) in DEPENDENT_TABLES.iter().enumerate() {
-        let counted: Option<i64> = response.take(index)?;
-        let count = usize::try_from(counted.unwrap_or(0)).unwrap_or(0);
-        if count > 0 {
-            found.push(Dependent {
+        // `GROUP ALL` on an empty Source table yields no row.
+        let mut counts = [0; DEPENDENT_TABLES.len()];
+        for (index, count) in counts.iter_mut().enumerate() {
+            let counted: Option<i64> = response.take(index)?;
+            *count = counted.unwrap_or(0);
+        }
+        counts
+    };
+    Ok(DEPENDENT_TABLES
+        .iter()
+        .zip(counts)
+        .filter_map(|(&(singular, plural), counted)| {
+            let count = usize::try_from(counted).unwrap_or(0);
+            (count > 0).then_some(Dependent {
                 singular,
                 plural,
                 count,
-            });
-        }
-    }
-    Ok(found)
+            })
+        })
+        .collect())
 }
 
 /// One table still pointing at an entity, and how many of its rows do.
@@ -1272,8 +1297,8 @@ impl Dependent {
     }
 }
 
-/// The Surreal-resident tables that reference `entity`, in the order
-/// [`dependents`] counts them — which is the order its statements run,
+/// The reference categories in the order [`dependents`] counts them,
+/// shared by its PostgreSQL and explicit Source queries,
 /// so the two cannot drift apart silently.
 const DEPENDENT_TABLES: [(&str, &str); 5] = [
     ("project", "projects"),
