@@ -32,10 +32,16 @@ default-filter = "not package(features)"
 # own process, and every `cloud` test that builds an AWS SDK client
 # loads platform certs, so cap that package's process concurrency.
 platform-certs = { max-threads = 2 }
+# Fresh canonical schemas compete for PostgreSQL shared DDL locks.
+canonical-postgres-fixtures = { max-threads = 2 }
 
 [[profile.default.overrides]]
 filter = "package(cloud)"
 test-group = "platform-certs"
+
+[[profile.default.overrides]]
+filter = "binary(/^(project_native_delete|brand_move_mirror|firm_journal|api_reads|postgres_startup|entity_native_delete|practice_preview_native|native_cron_ingress)$/)"
+test-group = "canonical-postgres-fixtures"
 
 [profile.ci]
 # Retry a failing test up to twice with exponential backoff + jitter.

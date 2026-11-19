@@ -314,6 +314,8 @@ const FORBIDDEN_DOCUMENT_EXTENSIONS: &[&str] = &["doc", "docx", "odt", "pdf"];
 /// findings before any correction is applied.
 /// `court-filing-drafts` (LAW-239) marks every draft of a court filing
 /// counsel will sign and clears the marks to finalize it.
+/// `matter-calendar-events` names every matter calendar after its Project
+/// code and titles each event with that code, a colon, and then the event.
 /// The canonical bytes live in `project-scaffold` so this CLI's scaffold and
 /// the server-side repository seeding write the same copies.
 pub use project_scaffold::SYNCED_SKILLS;

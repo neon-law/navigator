@@ -56,10 +56,6 @@ pub const PUBLIC_PATHS: &[&str] = &[
     "/explainers/process",
     "/explainers/documents",
     "/start/{service_id}",
-    // A signed-in Client's consultations and plans, and the one-Offering buy
-    // command beneath it. Gated like `/start/{service_id}` above.
-    "/purchases",
-    "/purchases/{offering}",
     "/disputes",
     // Answers a 301 to `/`, like `/personal` above: the business counsel
     // page is retired.

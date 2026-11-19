@@ -141,9 +141,9 @@ Keep client identities and matter facts out of every reminder beyond what the pr
 
 ## 6. Calendar mirror (optional)
 
-Mirror a Deadline to Google Calendar only when the lawyer asks and names the calendar. Use a neutral title (the action
-and the Project code), put the matter-page link in the description, and leave out client names and case facts. Never
-invent a court video link; copy one only from the court's own notice.
+Mirror a Deadline to Google Calendar only when the lawyer asks and names the calendar. Title the event as the
+`matter-calendar-events` skill says: the Project code, a colon, then the action. Put the matter-page link in the
+description, and leave client names and case facts out of the title.
 
 ## 7. Court appearance registration is separate
 

@@ -82,6 +82,13 @@ async fn assert_clean_empty(app: &axum::Router, host: &str, key: BrandKey) {
 }
 
 #[tokio::test]
+async fn purchases_is_unpublished_on_the_software_site() {
+    let app = router(CanonicalHost::new(None)).await;
+    let response = get(&app, "www.neonlaw.com", "/purchases").await;
+    assert_eq!(response.status(), 404);
+}
+
+#[tokio::test]
 async fn testimonials_and_home_are_cleanly_empty_for_every_brand() {
     let app = router(CanonicalHost::new(None)).await;
     // A held-out brand's public hosts stay unpublished. The local port map

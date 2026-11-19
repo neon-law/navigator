@@ -2740,24 +2740,22 @@ mod tests {
         );
     }
 
-    /// The home is the Navigator page: it gives Notation its own band, links
-    /// the Legal Aid offer, and its only call to action stars the repository.
+    /// The home tells the Navigator software story and links its detailed guide.
     #[test]
-    fn neon_home_presents_navigator_and_asks_only_for_a_star() {
-        const REPO: &str = "https://github.com/neon-law/navigator";
+    fn neon_home_presents_navigator_as_software() {
         let content = neon_home(&views::brand::DEFAULT_BRANDING, None);
-        assert_eq!(content.tagline, "Exacting agentic lawyering.");
+        assert_eq!(content.tagline, "Legal work, with the lawyer in control.");
         let hero = content.hero_cta.as_ref().expect("hero action");
         assert_eq!(
             (hero.href.as_str(), hero.label.as_str()),
-            (REPO, "Star the repo")
+            ("/navigator", "Explore Navigator")
         );
         let mut anchors = Vec::new();
         for band in &content.bands {
             match band {
                 Band::Cta { action, .. } => {
-                    let action = action.as_ref().expect("the closing band stars the repo");
-                    assert_eq!(action.href, REPO);
+                    let action = action.as_ref().expect("the closing band links Navigator");
+                    assert_eq!(action.href, "/navigator");
                 }
                 Band::Cards { anchor, .. } | Band::Steps { anchor, .. } => {
                     anchors.push(anchor.as_str());
@@ -2768,8 +2766,17 @@ mod tests {
         }
         assert!(anchors.contains(&"notation"), "{anchors:?}");
         let text = serde_yaml::to_string(&content).expect("home serializes");
+        assert!(text.contains("open source under MIT OR Apache-2.0"));
+        assert!(text.contains("/navigator#download"));
         assert!(text.contains("/legal-aid"));
-        assert!(!text.contains("open source"));
+        for retired in [
+            "Attorneys for the Ambitious",
+            "$5,000",
+            "$50",
+            "Book Consultation",
+        ] {
+            assert!(!text.contains(retired), "the home still markets {retired}");
+        }
         for retired in [
             "/nautilus",
             "Nautilus",
