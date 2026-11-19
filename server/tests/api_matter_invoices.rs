@@ -455,6 +455,19 @@ async fn the_hourly_path_bills_time_and_confirmed_costs_once() {
     assert_eq!(receipt["consumed_costs"], 1);
     assert_eq!(receipt["flat_fee"], false);
 
+    let calls = create_calls(&fx);
+    let cost_line = calls[0]
+        .1
+        .line_items
+        .iter()
+        .find(|line| line.description == format!("{} — {}", confirmed.description, confirmed.payee))
+        .expect("the confirmed filing cost is itemized");
+    assert_eq!(cost_line.quantity, 1);
+    assert_eq!(
+        cost_line.unit_amount_cents, confirmed.amount_cents,
+        "pass through without markup"
+    );
+
     // The Xero Reference names the matter — the ingest convention.
     let project = store::projects::find_by_id(&fx.surreal, fx.project_id)
         .await
