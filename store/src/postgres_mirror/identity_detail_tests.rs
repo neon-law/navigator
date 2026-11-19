@@ -2,6 +2,10 @@ use super::*;
 use crate::delegations::{Basis, NewDelegation, NoticeChannel};
 use crate::external_identities::ExternalSystem;
 use crate::postgres_mirror::tests::{connect, fresh_schema};
+use crate::postgres_mirror::tests::{
+    import_predecessor_histories, sealed_prior_family_histories as sealed_old_histories,
+    verified_family_capture as verified_capture,
+};
 use crate::test_support::mem_surreal;
 
 async fn person(source: &SurrealDb) -> Uuid {
@@ -440,62 +444,6 @@ async fn scoped_comparisons_do_not_read_unregistered_catalog_or_graph_rows() {
     assert!(scoped_parity(&source, &pg).await.unwrap().is_clean());
 }
 
-async fn verified_capture(
-    source: &SurrealDb,
-) -> crate::postgres_backfill::family::VerifiedSourceReceipt {
-    use futures::StreamExt;
-    use sha2::Digest;
-    let before = crate::postgres_backfill::source_archive_inventory(source)
-        .await
-        .unwrap();
-    let mut stream = source.export(()).await.unwrap();
-    let mut filter = crate::schema::export_filter::ExportFilter::new(
-        crate::schema::derived_tables()
-            .into_iter()
-            .map(|table| table.name),
-    );
-    let mut bytes = Vec::new();
-    while let Some(chunk) = stream.next().await {
-        filter
-            .feed(&chunk.unwrap(), &mut |part| bytes.extend_from_slice(part))
-            .unwrap();
-    }
-    filter
-        .finish(&mut |part| bytes.extend_from_slice(part))
-        .unwrap();
-    assert_eq!(
-        before,
-        crate::postgres_backfill::source_archive_inventory(source)
-            .await
-            .unwrap()
-    );
-    let fingerprint = crate::postgres_backfill::source_archive_fingerprint(source)
-        .await
-        .unwrap();
-    assert_eq!(
-        fingerprint,
-        (
-            u64::try_from(bytes.len()).unwrap(),
-            hex::encode(sha2::Sha256::digest(&bytes))
-        )
-    );
-    crate::postgres_backfill::family::SourceReceipt {
-        format_version: 1,
-        consistency: "operator_quiesced".into(),
-        export_bytes: fingerprint.0,
-        export_sha256: fingerprint.1,
-        schema_sha256: before.1,
-        table_counts: before.0,
-    }
-    .verify_export(&bytes)
-    .unwrap()
-}
-
-async fn sealed_old_histories(pg: &PostgresDb) -> serde_json::Value {
-    sqlx::query_scalar("SELECT jsonb_build_object('runs',(SELECT jsonb_agg(to_jsonb(r) ORDER BY r.scope,r.id) FROM mirror_backfill_run r WHERE r.scope IN ('satellites:1','notation:1')),'checkpoints',(SELECT jsonb_agg(to_jsonb(c) ORDER BY c.run_id,c.mirror) FROM mirror_backfill_checkpoint c JOIN mirror_backfill_run r ON r.id=c.run_id WHERE r.scope IN ('satellites:1','notation:1')))")
-        .fetch_one(pg.pool()).await.unwrap()
-}
-
 struct DriverCapture {
     source: SurrealDb,
     person: Uuid,
@@ -504,7 +452,6 @@ struct DriverCapture {
 }
 
 async fn driver_capture(pg: &PostgresDb) -> DriverCapture {
-    use crate::postgres_backfill::{self as backfill, family::Family};
     let source = crate::surreal::test_support::unmigrated().await;
     super::super::from_source(crate::schema::apply(&source))
         .await
@@ -514,19 +461,7 @@ async fn driver_capture(pg: &PostgresDb) -> DriverCapture {
         .await
         .unwrap()
         .unwrap();
-    let global = Box::pin(backfill::start(&source, pg, 100, None))
-        .await
-        .unwrap();
-    assert!(global.is_clean(), "{global:?}");
-    for family in [Family::Satellites, Family::Notation] {
-        let receipt = verified_capture(&source).await;
-        let old = Box::pin(backfill::start_family(
-            &source, pg, family, receipt, 1, None, true,
-        ))
-        .await
-        .unwrap();
-        assert!(old.is_clean(), "{old:?}");
-    }
+    import_predecessor_histories(&source, pg).await;
     let old_history = sealed_old_histories(pg).await;
     let first = person(&source).await;
     let second = person(&source).await;

@@ -1,5 +1,5 @@
 use super::*;
-use crate::posts::{import_source, SourceCaptions, SourcePost};
+use crate::posts::{SourceCaptions, SourcePost, import_source};
 use crate::test_support;
 use sqlx::postgres::{PgConnectOptions, PgSslMode};
 use std::process::Command;
@@ -626,10 +626,12 @@ async fn write_hook_probe() {
                     .await
                     .unwrap();
             assert_eq!(stored, (Some(dangling_project_id), "outgoing".into()));
-            assert!(mailrooms_letters::parity(&surreal, &pg)
-                .await
-                .unwrap()
-                .is_clean());
+            assert!(
+                mailrooms_letters::parity(&surreal, &pg)
+                    .await
+                    .unwrap()
+                    .is_clean()
+            );
             // Person and Entity writes mirror themselves; a Firm command
             // mirrors the Firm and its Admin DRI membership.
             crate::persons::edit(
@@ -2234,4 +2236,78 @@ fn a_failed_comparison_names_its_mirror_and_table() {
         error.to_string(),
         "mirror source_domain_records: table citation: the SurrealDB source row could not be read"
     );
+}
+
+pub(crate) async fn verified_family_capture(
+    source: &SurrealDb,
+) -> crate::postgres_backfill::family::VerifiedSourceReceipt {
+    use futures::StreamExt;
+    use sha2::Digest;
+    let before = crate::postgres_backfill::source_archive_inventory(source)
+        .await
+        .unwrap();
+    let mut stream = source.export(()).await.unwrap();
+    let mut filter = crate::schema::export_filter::ExportFilter::new(
+        crate::schema::derived_tables()
+            .into_iter()
+            .map(|table| table.name),
+    );
+    let mut bytes = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        filter
+            .feed(&chunk.unwrap(), &mut |part| bytes.extend_from_slice(part))
+            .unwrap();
+    }
+    filter
+        .finish(&mut |part| bytes.extend_from_slice(part))
+        .unwrap();
+    assert_eq!(
+        before,
+        crate::postgres_backfill::source_archive_inventory(source)
+            .await
+            .unwrap()
+    );
+    let fingerprint = crate::postgres_backfill::source_archive_fingerprint(source)
+        .await
+        .unwrap();
+    assert_eq!(
+        fingerprint,
+        (
+            u64::try_from(bytes.len()).unwrap(),
+            hex::encode(sha2::Sha256::digest(&bytes))
+        )
+    );
+    crate::postgres_backfill::family::SourceReceipt {
+        format_version: 1,
+        consistency: "operator_quiesced".into(),
+        export_bytes: fingerprint.0,
+        export_sha256: fingerprint.1,
+        schema_sha256: before.1,
+        table_counts: before.0,
+    }
+    .verify_export(&bytes)
+    .unwrap()
+}
+
+pub(crate) async fn sealed_prior_family_histories(pg: &PostgresDb) -> serde_json::Value {
+    sqlx::query_scalar("SELECT jsonb_build_object('runs',(SELECT jsonb_agg(to_jsonb(r) ORDER BY r.scope,r.id) FROM mirror_backfill_run r WHERE r.scope IN ('satellites:1','notation:1')),'checkpoints',(SELECT jsonb_agg(to_jsonb(c) ORDER BY c.run_id,c.mirror) FROM mirror_backfill_checkpoint c JOIN mirror_backfill_run r ON r.id=c.run_id WHERE r.scope IN ('satellites:1','notation:1')))")
+        .fetch_one(pg.pool()).await.unwrap()
+}
+
+/// Actual global and sealed-scope transfers before testing a later family cutover.
+pub(crate) async fn import_predecessor_histories(source: &SurrealDb, pg: &PostgresDb) {
+    use crate::postgres_backfill::{self as backfill, family::Family};
+    let global = Box::pin(backfill::start(source, pg, 100, None))
+        .await
+        .unwrap();
+    assert!(global.is_clean(), "{global:?}");
+    for family in [Family::Satellites, Family::Notation] {
+        let receipt = verified_family_capture(source).await;
+        let completed = Box::pin(backfill::start_family(
+            source, pg, family, receipt, 1, None, true,
+        ))
+        .await
+        .unwrap();
+        assert!(completed.is_clean(), "{completed:?}");
+    }
 }

@@ -23,9 +23,9 @@ use chrono::{DateTime, NaiveDate, SubsecRound, Utc};
 use sqlx::Row;
 use uuid::Uuid;
 
-use super::{changed, identity, MirrorError, MirrorKey, Mirrored, ParityReport, TableParity};
+use super::{MirrorError, MirrorKey, Mirrored, ParityReport, TableParity, changed, identity};
 use crate::postgres::PostgresDb;
-use crate::postgres_shadow::{compare_row, Comparison, ShadowKey};
+use crate::postgres_shadow::{Comparison, ShadowKey, compare_row};
 use crate::surreal::SurrealDb;
 
 const FIRM_COLUMNS: &[&str] = &[
@@ -1236,3 +1236,7 @@ pub(super) async fn remirror(surreal: &SurrealDb, pg: &PostgresDb, report: &Pari
 #[cfg(test)]
 #[path = "tenancy_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tenancy_family_tests.rs"]
+mod family_tests;
