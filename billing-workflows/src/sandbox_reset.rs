@@ -358,7 +358,6 @@ mod tests {
     use billing::StubBillingProvider;
     use sqlx::postgres::{PgConnectOptions, PgSslMode};
     use sqlx::{AssertSqlSafe, PgPool};
-    use store::purchases::PurchaseState;
     use store::purchases::{Cadence, NewPurchase};
     use store::sandbox_usage::MeterDecision;
     use store::surreal::test_support::mem;
