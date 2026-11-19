@@ -665,6 +665,15 @@ async fn firm_member(
     state: &ApiState,
     session: &crate::session::SessionData,
 ) -> Result<bool, ApiError> {
+    Ok(!google_firms(state, session).await?.is_empty())
+}
+
+/// The caller's Firms that chose Google Workspace as the main email. A Firm
+/// without that choice has no Attorney Calendar surface.
+async fn google_firms(
+    state: &ApiState,
+    session: &crate::session::SessionData,
+) -> Result<Vec<Uuid>, ApiError> {
     let firms = store::firm_capability::allowed_firm_ids(
         &state.surreal,
         session.role,
@@ -673,7 +682,9 @@ async fn firm_member(
     )
     .await
     .map_err(|error| ApiError::Db(error.to_string()))?;
-    Ok(!firms.is_empty())
+    store::firms::with_google_calendar(&state.surreal, firms)
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))
 }
 
 async fn project_attorneys(
@@ -700,7 +711,12 @@ async fn project_attorneys(
     )
     .await
     .map_err(|error| ApiError::Db(error.to_string()))?;
-    if !allowed.is_allowed() {
+    if !allowed.is_allowed()
+        || store::firms::with_google_calendar(&state.surreal, vec![firm_id])
+            .await
+            .map_err(|error| ApiError::Db(error.to_string()))?
+            .is_empty()
+    {
         return Err(ApiError::NotFound);
     }
     let participates = store::projects::can_access_as_lawyer_in_surreal(
@@ -745,14 +761,7 @@ async fn firm_attorneys(
     state: &ApiState,
     session: &crate::session::SessionData,
 ) -> Result<Vec<Attorney>, ApiError> {
-    let firms = store::firm_capability::allowed_firm_ids(
-        &state.surreal,
-        session.role,
-        session.person_id,
-        store::firm_capability::FirmCapability::ReadAttorneyCalendars,
-    )
-    .await
-    .map_err(|error| ApiError::Db(error.to_string()))?;
+    let firms = google_firms(state, session).await?;
     if firms.is_empty() {
         return Err(ApiError::NotFound);
     }

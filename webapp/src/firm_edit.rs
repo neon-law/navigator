@@ -359,16 +359,16 @@ fn edit_form(view: &FirmEditView) -> Element {
         }
         if view.role == ViewerRole::Owner {
             FormCard {
-                title: "Google Workspace Calendar".to_string(),
+                title: "Google Calendar".to_string(),
                 action: format!("/app/admin/firms/{}/edit", view.id),
                 submit_label: "Save Calendar owner".to_string(),
                 heading: Heading::H2,
                 csrf_token: Some(view.csrf_token.clone()),
                 fields: vec![Field::email(
-                    "Calendar owner account",
+                    "Google Workspace main email",
                     "google_workspace_calendar_owner",
                     view.google_workspace_calendar_owner.clone().unwrap_or_default(),
-                ).help("This Workspace mailbox creates and owns the Firm’s Project Calendars. Leave blank to disable Calendar.")],
+                ).help("Choosing a Google Workspace mailbox makes Google the Firm’s main email and turns on Google Calendar: this mailbox creates and owns the Firm’s Project Calendars. Gmail addresses are not supported. Leave blank to turn Calendar off.")],
             }
         }
     }
