@@ -155,3 +155,137 @@ async fn an_unavailable_configured_pool_does_not_fall_back_to_source() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn removing_participation_finishes_on_postgres_and_preserves_other_projects() {
+    store::test_support::with_postgres(async {
+        let db = SurrealDb::uninitialized();
+        let (project, person) = fixture(&db).await;
+        let (other_project, other_person) = fixture(&db).await;
+        let role = projects::add_participation(&db, project, person, "lawyer")
+            .await
+            .unwrap();
+        let other = projects::add_participation(&db, other_project, other_person, "lawyer")
+            .await
+            .unwrap();
+        projects::remove_participation(&db, role.id).await.unwrap();
+        assert!(projects::participation_by_id(&db, role.id)
+            .await
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            projects::participation_by_id(&db, other.id).await.unwrap(),
+            Some(other)
+        );
+        projects::remove_participation(&db, role.id).await.unwrap();
+        projects::remove_participation(&db, Uuid::new_v4())
+            .await
+            .unwrap();
+        assert!(projects::participations_for_project(&db, project)
+            .await
+            .unwrap()
+            .is_empty());
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn native_participation_removal_keeps_the_last_lawyer_guard_and_absent_error() {
+    use store::participation::{self, DriActor, RemoveParticipantError};
+    store::test_support::with_postgres(async {
+        let db = SurrealDb::uninitialized();
+        let (project, first) = fixture(&db).await;
+        projects::designate_dri_in_surreal(&db, project, first, projects::DriSide::Lawyer)
+            .await
+            .unwrap();
+        let first_row = projects::participation_for_person(&db, first, project)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            participation::remove_participant(&db, project, first_row.id, DriActor::Person(first))
+                .await,
+            Err(RemoveParticipantError::DriLockout)
+        ));
+        assert_eq!(
+            projects::participation_by_id(&db, first_row.id)
+                .await
+                .unwrap(),
+            Some(first_row.clone())
+        );
+        let second = store::persons::create(
+            &db,
+            &store::persons::NewPerson::with_role(
+                "Synthetic lawyer",
+                format!("synthetic-{}@example.com", Uuid::new_v4()),
+                Role::Lawyer,
+            ),
+        )
+        .await
+        .unwrap();
+        projects::designate_dri_in_surreal(&db, project, second.id, projects::DriSide::Lawyer)
+            .await
+            .unwrap();
+        let second_row = projects::participation_for_person(&db, second.id, project)
+            .await
+            .unwrap()
+            .unwrap();
+        participation::remove_participant(&db, project, first_row.id, DriActor::Person(second.id))
+            .await
+            .unwrap();
+        assert!(projects::participation_by_id(&db, first_row.id)
+            .await
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            projects::participation_by_id(&db, second_row.id)
+                .await
+                .unwrap(),
+            Some(second_row)
+        );
+        assert!(matches!(
+            participation::remove_participant(
+                &db,
+                project,
+                first_row.id,
+                DriActor::Person(second.id)
+            )
+            .await,
+            Err(RemoveParticipantError::NotFound)
+        ));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn participation_removal_refuses_failed_postgres_admission_without_source_fallback() {
+    store::test_support::with_postgres(async {
+        let db = SurrealDb::uninitialized();
+        let (project, person) = fixture(&db).await;
+        let role = projects::add_participation(&db, project, person, "lawyer")
+            .await
+            .unwrap();
+        let pg = PostgresDb::application().await.unwrap();
+        let observer = sqlx::PgPool::connect_with(pg.pool().connect_options().as_ref().clone())
+            .await
+            .unwrap();
+        pg.pool().close().await;
+        assert!(matches!(
+            projects::remove_participation(&db, role.id).await,
+            Err(projects::ProjectStoreError::Tenancy(
+                store::postgres::tenancy::TenancyError::Postgres(
+                    store::postgres::PostgresError::History
+                )
+            ))
+        ));
+        let remains: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM person_project_role WHERE id=$1)")
+                .bind(role.id)
+                .fetch_one(&observer)
+                .await
+                .unwrap();
+        assert!(remains);
+        observer.close().await;
+    })
+    .await;
+}

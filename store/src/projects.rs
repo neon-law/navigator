@@ -871,11 +871,10 @@ pub async fn remove_participation(
     surreal: &SurrealDb,
     role_id: Uuid,
 ) -> Result<(), ProjectStoreError> {
-    let pg = authority().await?;
-    if let Some(pg) = &pg {
-        Box::pin(crate::postgres::participation::remove_on(pg, role_id))
+    if let Some(pg) = authority().await? {
+        return Box::pin(crate::postgres::participation::remove_on(&pg, role_id))
             .await
-            .map_err(|error| pg_participation_error(error, Uuid::nil(), Uuid::nil()))?;
+            .map_err(|error| pg_participation_error(error, Uuid::nil(), Uuid::nil()));
     }
     writing_project(|| {
         surreal
@@ -883,10 +882,7 @@ pub async fn remove_participation(
             .bind(("id", record_id(PERSON_PROJECT_ROLE_TABLE, role_id)))
     })
     .await?;
-    if pg.is_none() {
-        crate::postgres_mirror::after_write(surreal, MirrorKey::ProjectParticipation(role_id))
-            .await;
-    }
+    crate::postgres_mirror::after_write(surreal, MirrorKey::ProjectParticipation(role_id)).await;
     Ok(())
 }
 
