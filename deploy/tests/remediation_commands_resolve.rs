@@ -62,14 +62,28 @@ use std::path::Path;
 
 /// The prefixes the codebase writes an invocation with. `navigator` and
 /// `hudson` are the installed binaries; `cli` and `deploy` are the
-/// crate spellings from `cargo run -p <crate> --`, which take the same path
-/// after the `--`. `hudson` carries every `navigator` command, so
-/// all four resolve against its tree, and a plain `navigator` invocation must
-/// additionally name a verb the lean binary kept.
+/// crate spellings from `cargo run -p <crate> --`, which select their matching
+/// binary after the `--`.
 const PREFIXES: &[&str] = &["navigator", "hudson", "cli", "deploy"];
 
 /// The prefixes that name the lean `navigator`.
 const LEAN_PREFIXES: &[&str] = &["navigator", "cli"];
+
+/// The binary named by an operator-facing invocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Binary {
+    Navigator,
+    Hudson,
+}
+
+impl Binary {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Navigator => "navigator",
+            Self::Hudson => "hudson",
+        }
+    }
+}
 
 /// A floor on what the scan finds, so an extractor that quietly stops matching
 /// fails loudly instead of passing over an empty set. The real count is
@@ -89,6 +103,8 @@ struct Invocation {
     line: usize,
     /// The invocation as written, without its backticks.
     literal: String,
+    /// The installed CLI whose command tree this invocation names.
+    binary: Binary,
     /// The leading run of subcommand-shaped tokens, prefix word dropped.
     path: Vec<String>,
 }
@@ -235,6 +251,23 @@ fn subcommand_path(literal: &str) -> Option<Vec<String>> {
     (!path.is_empty()).then_some(path)
 }
 
+fn invocation_binary(literal: &str) -> Binary {
+    let prefix = literal
+        .split_whitespace()
+        .find(|token| names_the_binary(token))
+        .and_then(|token| {
+            token
+                .rsplit(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+                .next()
+        })
+        .unwrap_or_default();
+    match prefix {
+        "navigator" | "cli" => Binary::Navigator,
+        "hudson" | "deploy" => Binary::Hudson,
+        _ => unreachable!("subcommand_path found a known binary prefix"),
+    }
+}
+
 /// A plain `navigator` invocation must name a verb the lean binary kept: an
 /// operator following `navigator ops ship` on a Mac with only the Homebrew
 /// `navigator` hits an unknown command.
@@ -262,7 +295,7 @@ fn lean_verb(literal: &str, path: &[String]) -> Result<(), String> {
     if moved {
         Err(format!(
             "`{}` is a `hudson` command; the lean `navigator` does not carry it",
-            spelled(path)
+            spelled(Binary::Navigator, path)
         ))
     } else {
         Ok(())
@@ -283,6 +316,7 @@ fn invocations_in(file: &str, source: &str, doc_comments_count: bool) -> Vec<Inv
                         file: file.to_string(),
                         line: unit.line,
                         literal: literal.to_string(),
+                        binary: invocation_binary(literal),
                         path,
                     })
                 })
@@ -355,71 +389,62 @@ fn command_names(help: &str) -> Vec<String> {
     names
 }
 
-/// What the real binary accepts at `path`, memoized so a tree of invocations
+/// What the named binary accepts at `path`, memoized so a tree of invocations
 /// costs one `--help` run per distinct node rather than one per invocation.
-/// Combine Navigator's application tree with Hudson's operator tree.
-fn node_at(cache: &mut BTreeMap<Vec<String>, Node>, path: &[String]) -> Node {
-    if let Some(hit) = cache.get(path) {
+fn node_at(
+    cache: &mut BTreeMap<(Binary, Vec<String>), Node>,
+    binary: Binary,
+    path: &[String],
+) -> Node {
+    let key = (binary, path.to_vec());
+    if let Some(hit) = cache.get(&key) {
         return hit.clone();
     }
 
     let mut args: Vec<&str> = path.iter().map(String::as_str).collect();
     args.push("--help");
-    let output = Command::cargo_bin("hudson")
-        .expect("build the navigator binary")
+    let output = Command::cargo_bin(binary.as_str())
+        .unwrap_or_else(|_| panic!("build the {} binary", binary.as_str()))
         .args(&args)
         .output()
-        .expect("run navigator --help");
+        .unwrap_or_else(|_| panic!("run {} --help", binary.as_str()));
     assert!(
         output.status.success(),
-        "`navigator {} --help` failed:\n{}",
+        "`{} {} --help` failed:\n{}",
+        binary.as_str(),
         path.join(" "),
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let operator_help = String::from_utf8_lossy(&output.stdout);
-    let mut tree = cli::navigator_command();
-    let mut application = true;
-    for part in path {
-        if let Some(next) = tree.find_subcommand(part).cloned() {
-            tree = next;
-        } else {
-            application = false;
-            break;
-        }
-    }
-    let application_help = application.then(|| tree.render_long_help().to_string());
-    let mut children = command_names(&operator_help);
-    if let Some(help) = &application_help {
-        children.extend(command_names(help));
-        children.sort();
-        children.dedup();
-    }
+    let help = String::from_utf8_lossy(&output.stdout);
     let node = Node {
-        children,
-        takes_positional: takes_positional(&operator_help)
-            || application_help.as_deref().is_some_and(takes_positional),
+        children: command_names(&help),
+        takes_positional: takes_positional(&help),
     };
-    cache.insert(path.to_vec(), node.clone());
+    cache.insert(key, node.clone());
     node
 }
 
 /// Where the walk currently is, spelled the way an operator would type it.
-fn spelled(path: &[String]) -> String {
+fn spelled(binary: Binary, path: &[String]) -> String {
     if path.is_empty() {
-        "hudson".to_string()
+        binary.as_str().to_string()
     } else {
-        format!("hudson {}", path.join(" "))
+        format!("{} {}", binary.as_str(), path.join(" "))
     }
 }
 
 /// Walk `path` against the real tree. `Err` names the token that does not
 /// resolve and what the binary accepts there instead.
-fn resolve(cache: &mut BTreeMap<Vec<String>, Node>, path: &[String]) -> Result<(), String> {
+fn resolve(
+    cache: &mut BTreeMap<(Binary, Vec<String>), Node>,
+    binary: Binary,
+    path: &[String],
+) -> Result<(), String> {
     let mut walked: Vec<String> = Vec::new();
 
     for token in path {
-        let node = node_at(cache, &walked);
+        let node = node_at(cache, binary, &walked);
 
         if node.children.is_empty() {
             // A leaf that takes a positional consumes the rest as a value:
@@ -431,20 +456,20 @@ fn resolve(cache: &mut BTreeMap<Vec<String>, Node>, path: &[String]) -> Result<(
                 Err(format!(
                     "`{}` has no subcommands and takes no argument, so `{token}` \
                      is not something an operator can type after it",
-                    spelled(&walked)
+                    spelled(binary, &walked)
                 ))
             };
         }
 
         if !node.children.contains(token) {
-            // Hudson keeps application compatibility groups hidden from help.
-            // Probe the actual parser before calling a hidden group missing.
+            // Hudson keeps compatibility groups hidden from help. Probe the
+            // named binary before calling a hidden group missing.
             if walked.is_empty()
-                && Command::cargo_bin("hudson")
-                    .expect("build Hudson")
+                && Command::cargo_bin(binary.as_str())
+                    .unwrap_or_else(|_| panic!("build the {} binary", binary.as_str()))
                     .args([token.as_str(), "--help"])
                     .output()
-                    .expect("read compatibility help")
+                    .unwrap_or_else(|_| panic!("read {} compatibility help", binary.as_str()))
                     .status
                     .success()
             {
@@ -453,7 +478,7 @@ fn resolve(cache: &mut BTreeMap<Vec<String>, Node>, path: &[String]) -> Result<(
             }
             return Err(format!(
                 "`{token}` is not a subcommand of `{}`, which offers: {}",
-                spelled(&walked),
+                spelled(binary, &walked),
                 node.children.join(", ")
             ));
         }
@@ -560,7 +585,7 @@ fn every_command_named_in_operator_facing_text_resolves() {
     let failures: Vec<String> = invocations
         .iter()
         .filter_map(|invocation| {
-            resolve(&mut cache, &invocation.path)
+            resolve(&mut cache, invocation.binary, &invocation.path)
                 .and_then(|()| lean_verb(&invocation.literal, &invocation.path))
                 .err()
                 .map(|why| {
@@ -595,7 +620,7 @@ fn every_command_named_in_operator_facing_text_resolves() {
 #[test]
 fn the_help_parser_still_reads_the_top_level_commands() {
     let mut cache = BTreeMap::new();
-    let root = node_at(&mut cache, &[]);
+    let root = node_at(&mut cache, Binary::Hudson, &[]);
 
     for expected in ["dev", "notation", "ops", "project", "site"] {
         assert!(
@@ -618,19 +643,22 @@ fn the_guard_rejects_a_command_that_does_not_exist() {
     let mut cache = BTreeMap::new();
 
     let stale = subcommand_path("cli coupon create").expect("an invocation");
-    let why = resolve(&mut cache, &stale).expect_err("`coupon` is not a subcommand");
+    let why =
+        resolve(&mut cache, Binary::Navigator, &stale).expect_err("`coupon` is not a subcommand");
     assert!(
-        why.contains("`coupon` is not a subcommand of `hudson`"),
+        why.contains("`coupon` is not a subcommand of `navigator`"),
         "the failure must name the token and where it was looked up: {why}"
     );
 
     // A command that is real, just nested deeper, must not resolve at the
     // wrong depth. Being real elsewhere must not make it resolve here.
     let shallow = subcommand_path("cli notation create").expect("an invocation");
-    resolve(&mut cache, &shallow).expect_err("`notation` is nested under `site`");
+    resolve(&mut cache, Binary::Navigator, &shallow)
+        .expect_err("`notation` is nested under `site`");
 
     let create = subcommand_path("navigator site notation create").expect("an invocation");
-    resolve(&mut cache, &create).expect("headless Notation creation is a visible CLI command");
+    resolve(&mut cache, Binary::Navigator, &create)
+        .expect("headless Notation creation is a visible CLI command");
 }
 
 /// `notation` carries visible clap aliases (`drafts`, `templates`; see
@@ -646,7 +674,7 @@ fn the_guard_rejects_a_command_that_does_not_exist() {
 #[test]
 fn a_visible_alias_does_not_widen_this_files_own_literal_roster() {
     let mut cache = BTreeMap::new();
-    let root = node_at(&mut cache, &[]);
+    let root = node_at(&mut cache, Binary::Navigator, &[]);
     assert!(
         root.children.iter().any(|name| name == "notation"),
         "the aliased row must still read as `notation`: {:?}",
@@ -671,7 +699,8 @@ fn a_visible_alias_does_not_widen_this_files_own_literal_roster() {
 fn an_argument_after_a_leaf_command_is_not_a_missing_subcommand() {
     let mut cache = BTreeMap::new();
     let path = subcommand_path("navigator site import person").expect("an invocation");
-    resolve(&mut cache, &path).expect("`person` is import's model-name argument");
+    resolve(&mut cache, Binary::Navigator, &path)
+        .expect("`person` is import's model-name argument");
 }
 
 /// The other half of that rule, and the reason it is not simply "stop at a
@@ -682,7 +711,8 @@ fn an_argument_after_a_leaf_command_is_not_a_missing_subcommand() {
 fn a_trailing_word_on_a_leaf_that_takes_no_argument_does_not_resolve() {
     let mut cache = BTreeMap::new();
     let path = subcommand_path("hudson ops doctor check").expect("an invocation");
-    let why = resolve(&mut cache, &path).expect_err("`ops doctor` takes no positional");
+    let why =
+        resolve(&mut cache, Binary::Hudson, &path).expect_err("`ops doctor` takes no positional");
     assert!(
         why.contains("takes no argument"),
         "the failure must say why the trailing word cannot be typed: {why}"

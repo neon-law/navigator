@@ -306,7 +306,7 @@ mod tests {
     /// (`rust/cleartext-logging`); the verb's report must not print one.
     #[test]
     fn the_mirror_report_does_not_echo_the_version_flag() {
-        let source = include_str!("release.rs");
+        let source = include_str!("forgejo_release.rs");
         let run = &source[source.find("pub fn run(").unwrap()..];
         let run = &run[..run.find("\n}\n").unwrap()];
         for line in run.lines().filter(|line| line.contains("println!")) {
