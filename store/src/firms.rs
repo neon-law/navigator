@@ -1305,6 +1305,9 @@ pub(crate) async fn attach_brand_row(
     firm_id: Uuid,
     brand_key: &str,
 ) -> Result<(), FirmError> {
+    if crate::postgres::tenancy::enabled() {
+        return Box::pin(crate::postgres::tenancy::attach_brand(firm_id, brand_key)).await;
+    }
     if !brand_key_exists(surreal, brand_key).await? {
         return Err(FirmError::UnknownBrand(brand_key.to_string()));
     }

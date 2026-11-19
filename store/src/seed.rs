@@ -2325,13 +2325,17 @@ async fn ensure_dev_project(
     description: &str,
     brand: &str,
 ) -> anyhow::Result<Uuid> {
+    // Matter Pages must inherit their actual Brand owner's Firm at creation.
+    let firm_id = crate::firms::firm_id_for_brand_key(surreal, brand)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("sample Brand has no Firm ownership seat"))?;
     let input = crate::projects::NewProject {
         code: code.to_string(),
         name: name.to_string(),
         status: "open".to_string(),
         brand: brand.to_string(),
         entity_id,
-        firm_id: None,
+        firm_id: Some(firm_id),
         // A dev matter's governing jurisdiction is a lawyer's call, so the
         // seed leaves it unset rather than asserting one.
         jurisdiction_id: None,
