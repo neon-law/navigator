@@ -3,7 +3,7 @@
 
 use std::process::ExitCode;
 
-use store::postgres::{PostgresDb, PostgresError};
+use store::postgres::PostgresDb;
 
 struct ListedClause {
     code: String,
@@ -87,24 +87,21 @@ async fn list_sources() -> Result<Vec<ListedClause>, String> {
 
 async fn show_source(source: &str) -> Result<String, String> {
     if std::env::var_os("NAVIGATOR_POSTGRES_HOST").is_some() {
-        match PostgresDb::from_env().await {
-            Ok(db) => {
-                let (code, version) = parse_source(source)?;
-                let clause = store::clauses::get(&db, code, version)
-                    .await
-                    .map_err(|error| error.to_string())?
-                    .ok_or_else(|| format!("unknown Clause version `{source}`"))?;
-                return serde_yaml::to_string(&serde_json::json!({
-                    "retired_at": clause.retired_at,
-                    "kind": clause.kind,
-                    "inputs": clause.inputs,
-                    "body": clause.body,
-                }))
-                .map_err(|error| error.to_string());
-            }
-            Err(PostgresError::Connection) => {}
-            Err(error) => return Err(error.to_string()),
-        }
+        let db = PostgresDb::application()
+            .await
+            .map_err(|error| error.to_string())?;
+        let (code, version) = parse_source(source)?;
+        let clause = store::clauses::get(&db, code, version)
+            .await
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| format!("unknown Clause version `{source}`"))?;
+        return serde_yaml::to_string(&serde_json::json!({
+            "retired_at": clause.retired_at,
+            "kind": clause.kind,
+            "inputs": clause.inputs,
+            "body": clause.body,
+        }))
+        .map_err(|error| error.to_string());
     }
     rules::clauses::show(source)
 }

@@ -73,7 +73,7 @@ fn retired_versions_are_labelled_and_remain_readable() {
 }
 
 #[test]
-fn unavailable_postgres_falls_back_to_the_bundled_catalog() {
+fn configured_unavailable_postgres_refuses_list_and_show() {
     let list = Command::cargo_bin("hudson")
         .unwrap()
         .env("NAVIGATOR_POSTGRES_HOST", "127.0.0.1")
@@ -85,9 +85,8 @@ fn unavailable_postgres_falls_back_to_the_bundled_catalog() {
         .args(["clause", "list"])
         .output()
         .unwrap();
-    assert!(list.status.success());
-    let listed = String::from_utf8(list.stdout).unwrap();
-    assert!(listed.contains("california_employment@1 — letter — current"));
+    assert!(!list.status.success());
+    assert!(list.stdout.is_empty());
 
     let show = Command::cargo_bin("hudson")
         .unwrap()
@@ -100,9 +99,8 @@ fn unavailable_postgres_falls_back_to_the_bundled_catalog() {
         .args(["clause", "show", "engagement_arbitration@1"])
         .output()
         .unwrap();
-    assert!(show.status.success());
-    let clause: serde_yaml::Value = serde_yaml::from_slice(&show.stdout).unwrap();
-    assert_eq!(clause["kind"], "onboarding");
+    assert!(!show.status.success());
+    assert!(show.stdout.is_empty());
 }
 
 #[test]
