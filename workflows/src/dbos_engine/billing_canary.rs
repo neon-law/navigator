@@ -202,10 +202,18 @@ mod tests {
     #[test]
     fn schedule_activation_is_separate_strict_and_preserves_the_standalone_default() {
         assert!(super::schedule_enabled(&|_| None).unwrap());
-        assert!(!super::schedule_enabled(&|_| Some("false".into())).unwrap());
-        assert!(super::schedule_enabled(&|_| Some("true".into())).unwrap());
+        assert!(!super::schedule_enabled(&|key| {
+            (key == super::SCHEDULE_ENABLED_ENV).then(|| "false".into())
+        })
+        .unwrap());
+        assert!(super::schedule_enabled(&|key| {
+            (key == super::SCHEDULE_ENABLED_ENV).then(|| "true".into())
+        })
+        .unwrap());
         assert_eq!(
-            super::schedule_enabled(&|_| Some("invalid".into())),
+            super::schedule_enabled(&|key| {
+                (key == super::SCHEDULE_ENABLED_ENV).then(|| "invalid".into())
+            }),
             Err(super::SettingsError::Invalid(super::SCHEDULE_ENABLED_ENV))
         );
         let error = super::Context::from_lookup(|key| {

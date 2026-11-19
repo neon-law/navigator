@@ -288,11 +288,19 @@ mod tests {
     #[test]
     fn timer_activation_is_independent_strict_and_preserves_the_existing_default() {
         assert!(super::schedule_enabled(&|_| None).unwrap());
-        assert!(!super::schedule_enabled(&|_| Some("false".into())).unwrap());
-        assert!(super::schedule_enabled(&|_| Some("true".into())).unwrap());
-        assert!(super::schedule_enabled(&|_| Some("invalid".into()))
-            .unwrap_err()
-            .contains(super::SCHEDULE_ENABLED_ENV));
+        assert!(!super::schedule_enabled(&|key| {
+            (key == super::SCHEDULE_ENABLED_ENV).then(|| "false".into())
+        })
+        .unwrap());
+        assert!(super::schedule_enabled(&|key| {
+            (key == super::SCHEDULE_ENABLED_ENV).then(|| "true".into())
+        })
+        .unwrap());
+        assert!(super::schedule_enabled(&|key| {
+            (key == super::SCHEDULE_ENABLED_ENV).then(|| "invalid".into())
+        })
+        .unwrap_err()
+        .contains(super::SCHEDULE_ENABLED_ENV));
         let error = Context::from_env(
             store::surreal::SurrealDb::uninitialized(),
             Arc::new(workflows::CapturingSlackBot::new()),
@@ -354,19 +362,19 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn a_live_context_refuses_to_build_without_xero_configuration() {
+    #[test]
+    fn a_live_context_refuses_to_build_without_xero_configuration() {
         // The suite never configures XERO_*, so the first refusal is the
         // provider's, before any Slack setting is consulted.
         if billing::XeroBillingProvider::from_env().is_some() {
             return;
         }
-        let surreal = store::test_support::mem_surreal().await;
+        let surreal = store::surreal::SurrealDb::uninitialized();
         let refused = Context::from_env(
             surreal,
             Arc::new(workflows::CapturingSlackBot::new()),
             true,
-            |_| Some("configured".into()),
+            |_| None,
         );
         assert_eq!(
             refused.err(),
