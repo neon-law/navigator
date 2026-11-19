@@ -469,6 +469,7 @@ fn run_json(report: &RunReport) -> serde_json::Value {
             if let Some(proof) = &table.asset_union { value["asset_union"] = json!(proof); }
             if let Some(proof) = &table.reset_union { value["reset_union"] = json!(proof); }
             if let Some(proof) = &table.template_pins { value["template_pins"] = json!(proof); }
+            if let Some(proof) = &table.project_lifecycle { value["project_lifecycle"] = json!(proof); }
             value
         }).collect::<Vec<_>>(),
     })
@@ -481,6 +482,16 @@ fn write_family_proof(out: &mut String, table: &store::postgres_backfill::Parity
             out,
             "Template pins: compared {} differences {}",
             proof.compared, proof.differences
+        );
+    }
+    if let Some(proof) = &table.project_lifecycle {
+        let _ = writeln!(
+            out,
+            "Project lifecycle: overlaps {} retained native {} unresolved {} target-only {}",
+            proof.compared_overlaps,
+            proof.retained_native_projections,
+            proof.unresolved_overlaps,
+            proof.target_only
         );
     }
     if let Some(proof) = &table.asset_union {
@@ -893,6 +904,7 @@ mod tests {
                 asset_union: None,
                 reset_union: None,
                 template_pins: None,
+                project_lifecycle: None,
             }],
             unresolved_references: vec![],
         };
@@ -936,6 +948,7 @@ mod tests {
                 asset_union: None,
                 reset_union: None,
                 template_pins: None,
+                project_lifecycle: None,
             }],
             unresolved_references: vec![],
         };
@@ -1047,6 +1060,7 @@ mod tests {
                 asset_union: None,
                 reset_union: None,
                 template_pins: None,
+                project_lifecycle: None,
             }],
             unresolved_references: vec![],
         };
@@ -1081,6 +1095,7 @@ mod tests {
                 asset_union: None,
                 reset_union: None,
                 template_pins: None,
+                project_lifecycle: None,
             }],
             unresolved_references: vec![store::postgres_mirror::records::UnresolvedReference {
                 table: "relationship",

@@ -877,6 +877,8 @@ pub struct ParityTableReport {
     pub reset_union: Option<family::ResetUnionProof>,
     /// Referenced Template pins checked against the frozen capture.
     pub template_pins: Option<family::TemplatePinProof>,
+    /// Verified lifecycle ownership retained on overlapping Project rows.
+    pub project_lifecycle: Option<family::ProjectLifecycleProof>,
 }
 
 /// A run's state, read back from its checkpoints.
@@ -1073,6 +1075,7 @@ async fn parity_report(
                 asset_union: None,
                 reset_union: None,
                 template_pins: None,
+                project_lifecycle: None,
             });
         }
     }
@@ -1678,11 +1681,21 @@ impl FamilySource<'_> {
         (
             Vec<crate::postgres_mirror::TableParity>,
             Option<family::AssetUnionProof>,
+            Option<family::ProjectLifecycleProof>,
         ),
         BackfillError,
     > {
         let mut tables = Vec::new();
         let mut asset_union = None;
+        if selected == family::Family::Tenancy {
+            let (report, proof) =
+                crate::postgres_mirror::tenancy::scoped_parity(self.surreal, pg).await?;
+            return Ok((report.tables, None, Some(proof)));
+        }
+        if selected == family::Family::Identity {
+            tables.extend(crate::postgres_mirror::identity::scoped_parity(self.surreal, pg).await?.tables);
+            tables.extend(crate::postgres_mirror::identity_detail::scoped_parity(self.surreal, pg).await?.tables);
+        }
         if selected == family::Family::Notation {
             tables.extend(
                 crate::postgres_mirror::workflow::parity(self.surreal, pg)
@@ -1697,6 +1710,8 @@ impl FamilySource<'_> {
         }
         for name in selected.tables() {
             match *name {
+                "entity" | "person" | "address" | "credential" | "email_token"
+                | "person_delegate" | "person_external_identity" | "person_mailbox" => {}
                 "notation" | "answer" | "notation_event" | "notation_clause" => {}
                 "asset" => {
                     let (table, proof) =
@@ -1704,6 +1719,9 @@ impl FamilySource<'_> {
                     tables.push(table);
                     asset_union = Some(proof);
                 }
+                "template" => tables.push(
+                    crate::postgres_mirror::templates::scoped_parity(self.surreal, pg).await?,
+                ),
                 "attestation" => tables.extend(
                     crate::postgres_mirror::attestations::parity(self.surreal, pg)
                         .await?
@@ -1719,7 +1737,7 @@ impl FamilySource<'_> {
                 ),
             }
         }
-        Ok((tables, asset_union))
+        Ok((tables, asset_union, None))
     }
 }
 
@@ -1734,7 +1752,7 @@ impl family::Source for FamilySource<'_> {
             let before = source_archive_inventory(self.surreal)
                 .await
                 .map_err(|_| BackfillError::SourceInventory)?;
-            let (tables, asset_union) = self.comparisons(pg, selected).await?;
+            let (tables, asset_union, project_lifecycle) = self.comparisons(pg, selected).await?;
             let references = crate::postgres_mirror::records::scoped_references(
                 self.surreal,
                 pg,
@@ -1769,6 +1787,7 @@ impl family::Source for FamilySource<'_> {
                 })
                 .collect::<Result<_, BackfillError>>()?;
             Ok(family::Snapshot {
+                project_lifecycle,
                 asset_union,
                 reset_union,
                 template_pins: if selected == family::Family::Notation {
@@ -1946,6 +1965,16 @@ async fn resume_family_locked(
                     proof.unresolved_overlaps,
                     proof.unknown_target_only,
                 )
+            } else if let Some(proof) = snapshot
+                .project_lifecycle
+                .as_ref()
+                .filter(|_| table.table == "project")
+            {
+                (
+                    proof.source_only_remaining,
+                    proof.unresolved_overlaps,
+                    proof.target_only,
+                )
             } else {
                 let drift = crate::postgres_mirror::drift(pg, table).await?;
                 (drift.missing, drift.differing, drift.extra)
@@ -1975,6 +2004,10 @@ async fn resume_family_locked(
                     .template_pins
                     .clone()
                     .filter(|_| table.table == "notation"),
+                project_lifecycle: snapshot
+                    .project_lifecycle
+                    .clone()
+                    .filter(|_| table.table == "project"),
             });
         }
         report.unresolved_references = snapshot.references;

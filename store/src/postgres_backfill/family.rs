@@ -378,6 +378,7 @@ pub(super) async fn completed_proof(
             template_pins: (*table == "notation")
                 .then_some(proof.template_pins)
                 .flatten(),
+            project_lifecycle: proof.project_lifecycle,
         });
     }
     Ok((tables, references))
@@ -568,6 +569,40 @@ impl AssetUnionProof {
     }
 }
 
+/// Exact Project overlap accounting after validating the complete lifecycle ledger.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectLifecycleProof {
+    pub source_only_remaining: usize,
+    pub compared_overlaps: usize,
+    pub retained_native_projections: usize,
+    pub unresolved_overlaps: usize,
+    pub target_only: usize,
+    pub full_metadata_compared: bool,
+    pub ledger_projections_checked: bool,
+}
+
+impl ProjectLifecycleProof {
+    fn valid(&self, source: usize, target: usize, differences: usize) -> bool {
+        self.full_metadata_compared
+            && self.ledger_projections_checked
+            && self
+                .source_only_remaining
+                .checked_add(self.compared_overlaps)
+                == Some(source)
+            && self.compared_overlaps.checked_add(self.target_only) == Some(target)
+            && self
+                .retained_native_projections
+                .checked_add(self.unresolved_overlaps)
+                .is_some_and(|count| count <= self.compared_overlaps)
+            && self
+                .source_only_remaining
+                .checked_add(self.unresolved_overlaps)
+                .and_then(|count| count.checked_add(self.target_only))
+                == Some(differences)
+    }
+}
+
 /// Extra PostgreSQL reset protection proven by independently native Assets.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -605,6 +640,7 @@ pub(super) struct Snapshot {
     pub asset_union: Option<AssetUnionProof>,
     pub reset_union: Option<ResetUnionProof>,
     pub template_pins: Option<TemplatePinProof>,
+    pub project_lifecycle: Option<ProjectLifecycleProof>,
 }
 
 impl Snapshot {
@@ -618,10 +654,28 @@ impl Snapshot {
             && self.tables.len() == expected.len()
             && actual == expected
             && match family {
-                Family::Satellites | Family::Application | Family::Identity | Family::Tenancy => {
+                Family::Satellites | Family::Application | Family::Identity => {
                     self.asset_union.is_none()
                         && self.reset_union.is_none()
                         && self.template_pins.is_none()
+                        && self.project_lifecycle.is_none()
+                }
+                Family::Tenancy => {
+                    self.asset_union.is_none()
+                        && self.reset_union.is_none()
+                        && self.template_pins.is_none()
+                        && self
+                            .tables
+                            .iter()
+                            .find(|table| table.table == "project")
+                            .zip(self.project_lifecycle.as_ref())
+                            .is_some_and(|(table, proof)| {
+                                proof.valid(
+                                    table.source_rows,
+                                    table.target_rows,
+                                    table.divergent.len(),
+                                )
+                            })
                 }
                 Family::Notation => {
                     self.tables
@@ -637,7 +691,8 @@ impl Snapshot {
                         })
                 }
             }
-            && (family != Family::Notation || self.template_pins.is_some())
+            && (family != Family::Notation
+                || (self.template_pins.is_some() && self.project_lifecycle.is_none()))
             && self.tables.iter().all(|table| {
                 table.divergent.iter().all(|key| key.table() == table.table)
                     && self.raw_counts.get(table.table) == Some(&table.source_rows)
@@ -666,6 +721,12 @@ impl Snapshot {
                 .iter()
                 .all(|reference| reference.newly_target_missing == 0)
             && self.reset_fact_differences.is_empty()
+            && self.project_lifecycle.as_ref().is_none_or(|proof| {
+                self.tables
+                    .iter()
+                    .find(|table| table.table == "project")
+                    .is_some_and(|table| proof.valid(table.source_rows, table.target_rows, 0))
+            })
             && self.template_pins.as_ref().is_none_or(|proof| {
                 proof.clean(self.raw_counts.get("notation").copied().unwrap_or_default())
             })
@@ -824,6 +885,10 @@ pub(super) async fn advance_with(
                     .flatten(),
                 reset_union: final_snapshot.reset_union.clone(),
                 template_pins: final_snapshot.template_pins.clone(),
+                project_lifecycle: final_snapshot
+                    .project_lifecycle
+                    .clone()
+                    .filter(|_| table.table == "project"),
             })
             .map_err(|_| FamilyError::Receipt)?;
             sqlx::query("UPDATE mirror_backfill_checkpoint SET completed_at = now(), verification = $3, failed = 0, updated_at = now() WHERE run_id = $1 AND mirror = $2")
@@ -948,6 +1013,8 @@ struct Verification {
     reset_union: Option<ResetUnionProof>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     template_pins: Option<TemplatePinProof>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    project_lifecycle: Option<ProjectLifecycleProof>,
 }
 
 impl Verification {
@@ -961,11 +1028,25 @@ impl Verification {
                 self.target_rows == captured && self.asset_union.is_none()
             }
             && match family {
-                Family::Satellites | Family::Application | Family::Identity | Family::Tenancy => {
-                    self.reset_union.is_none() && self.template_pins.is_none()
+                Family::Satellites | Family::Application | Family::Identity => {
+                    self.reset_union.is_none()
+                        && self.template_pins.is_none()
+                        && self.project_lifecycle.is_none()
+                }
+                Family::Tenancy => {
+                    self.reset_union.is_none()
+                        && self.template_pins.is_none()
+                        && if table == "project" {
+                            self.project_lifecycle.as_ref().is_some_and(|proof| {
+                                proof.valid(captured, self.target_rows, self.differences)
+                            })
+                        } else {
+                            self.project_lifecycle.is_none()
+                        }
                 }
                 Family::Notation => {
-                    self.reset_facts_checked
+                    self.project_lifecycle.is_none()
+                        && self.reset_facts_checked
                         && self.reset_union.as_ref().is_some_and(|proof| {
                             proof.retained_native_protections <= proof.compared
                         })
@@ -1055,6 +1136,14 @@ pub(crate) async fn activate_fixture(pg: &PostgresDb, family: Family) {
                 compared: usize::try_from(template_count).unwrap(),
                 differences: 0,
             }),
+            project_lifecycle: (family == Family::Tenancy && *table == "project").then_some(
+                ProjectLifecycleProof {
+                    compared_overlaps: count,
+                    full_metadata_compared: true,
+                    ledger_projections_checked: true,
+                    ..Default::default()
+                },
+            ),
         };
         sqlx::query("INSERT INTO mirror_backfill_checkpoint (run_id, mirror, completed_at, verification) VALUES ($1, $2, now(), $3)")
             .bind(run).bind(checkpoint(table)).bind(serde_json::to_value(proof).unwrap()).execute(&mut *tx).await.unwrap();

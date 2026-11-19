@@ -450,6 +450,14 @@ struct ProjectImage {
 }
 
 impl ProjectImage {
+    fn lifecycle(&self) -> crate::postgres::project_lifecycle::LifecycleProjection {
+        crate::postgres::project_lifecycle::LifecycleProjection {
+            status: self.status.clone(),
+            closed_at: self.closed_at.clone(),
+            closure_reason: self.closure_reason.clone(),
+        }
+    }
+
     fn from_source(project: &crate::projects::Project) -> Result<Self, MirrorError> {
         Ok(Self {
             id: project.id,
@@ -968,25 +976,54 @@ fn firm_brand_key(brand_key: &str) -> MirrorKey {
     reason = "six tables compared in one parent-first list"
 )]
 pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
-    let firms = crate::firms::all(surreal).await.map_err(source)?;
-    let mut brands = crate::brands::system_wide(surreal).await.map_err(source)?;
-    brands.extend(
-        crate::brands::all_firm_scoped(surreal)
+    let mut active = std::collections::BTreeSet::new();
+    for table in crate::postgres_backfill::family::Family::Tenancy.tables() {
+        if crate::postgres_backfill::family::active_for_table(pg, table).await? {
+            active.insert(*table);
+        }
+    }
+    let firms = if active.contains("firm") {
+        Vec::new()
+    } else {
+        crate::firms::all(surreal).await.map_err(source)?
+    };
+    let mut brands = Vec::new();
+    if !active.contains("brand") {
+        brands.extend(crate::brands::system_wide(surreal).await.map_err(source)?);
+        brands.extend(
+            crate::brands::all_firm_scoped(surreal)
+                .await
+                .map_err(source)?,
+        );
+    }
+    let firm_brands = if active.contains("firm_brand") {
+        Vec::new()
+    } else {
+        crate::firms::all_firm_brands(surreal)
             .await
-            .map_err(source)?,
-    );
-    let firm_brands = crate::firms::all_firm_brands(surreal)
-        .await
-        .map_err(source)?;
-    let projects = crate::projects::all(surreal).await.map_err(source)?;
-    let memberships = crate::firms::all_memberships(surreal)
-        .await
-        .map_err(source)?;
-    let participations = crate::projects::all_participations(surreal)
-        .await
-        .map_err(source)?;
+            .map_err(source)?
+    };
+    let projects = if active.contains("project") {
+        Vec::new()
+    } else {
+        crate::projects::all(surreal).await.map_err(source)?
+    };
+    let memberships = if active.contains("person_firm_role") {
+        Vec::new()
+    } else {
+        crate::firms::all_memberships(surreal)
+            .await
+            .map_err(source)?
+    };
+    let participations = if active.contains("person_project_role") {
+        Vec::new()
+    } else {
+        crate::projects::all_participations(surreal)
+            .await
+            .map_err(source)?
+    };
 
-    let tables = vec![
+    let mut tables = vec![
         compare(
             "firm",
             &images(&firms, firm_key, FirmImage::from_source),
@@ -1067,7 +1104,102 @@ pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport
             .await?,
         ),
     ];
+    tables.retain(|table| !active.contains(table.table));
     Ok(ParityReport { tables })
+}
+
+/// Compare Tenancy history while retaining only independently verified lifecycle ownership.
+pub(crate) async fn scoped_parity(
+    surreal: &SurrealDb,
+    pg: &PostgresDb,
+) -> Result<
+    (
+        ParityReport,
+        crate::postgres_backfill::family::ProjectLifecycleProof,
+    ),
+    MirrorError,
+> {
+    let mut report = parity(surreal, pg).await?;
+    let source = images(
+        &crate::projects::all(surreal).await.map_err(source)?,
+        |project| MirrorKey::Project(project.id),
+        ProjectImage::from_source,
+    );
+    let target = target(
+        pg,
+        PROJECT_SELECT.as_str(),
+        ProjectImage::from_row,
+        |project| MirrorKey::Project(project.id),
+    )
+    .await?;
+    let mut proof = crate::postgres_backfill::family::ProjectLifecycleProof {
+        full_metadata_compared: true,
+        ledger_projections_checked: true,
+        ..Default::default()
+    };
+    let mut divergent = Vec::new();
+    for (key, expected) in &source {
+        if let Some(actual) = target.get(key) {
+            proof.compared_overlaps += 1;
+            let history = crate::postgres::project_lifecycle::verified_projection_history(
+                pg,
+                actual.id,
+                &actual.lifecycle(),
+            )
+            .await?;
+            if expected.as_ref().is_some_and(|expected| {
+                history.as_ref().is_some_and(|states| {
+                    if actual == expected {
+                        return true;
+                    }
+                    if !states.contains(&expected.lifecycle()) {
+                        return false;
+                    }
+                    let mut preserved = actual.clone();
+                    preserved.status.clone_from(&expected.status);
+                    preserved.closed_at.clone_from(&expected.closed_at);
+                    preserved
+                        .closure_reason
+                        .clone_from(&expected.closure_reason);
+                    preserved == *expected
+                })
+            }) {
+                if expected.as_ref() != Some(actual) {
+                    proof.retained_native_projections += 1;
+                }
+            } else {
+                proof.unresolved_overlaps += 1;
+                divergent.push(key.clone());
+            }
+        } else {
+            proof.source_only_remaining += 1;
+            divergent.push(key.clone());
+        }
+    }
+    for (key, project) in target.iter().filter(|(key, _)| !source.contains_key(*key)) {
+        // Target-only rows remain blocking even if their own ledger is coherent.
+        crate::postgres::project_lifecycle::verified_projection_history(
+            pg,
+            project.id,
+            &project.lifecycle(),
+        )
+        .await?;
+        proof.target_only += 1;
+        divergent.push(key.clone());
+    }
+    let project = TableParity {
+        table: "project",
+        source_rows: source.len(),
+        target_rows: target.len(),
+        divergent,
+    };
+    let slot = report
+        .tables
+        .iter_mut()
+        .find(|table| table.table == "project")
+        .ok_or(MirrorError::Source)?;
+    *slot = project;
+    Ok((report, proof))
 }
 
 /// Re-mirror every divergent tenancy row from SurrealDB, then compare again.

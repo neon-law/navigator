@@ -78,6 +78,7 @@ fn an_existing_source_orphan_cannot_mask_a_different_missing_postgres_parent() {
         asset_union: None,
         reset_union: None,
         template_pins: None,
+        project_lifecycle: None,
     };
     assert!(!snapshot.clean());
 }
@@ -162,6 +163,7 @@ impl super::Source for FrozenRows {
                 asset_union: None,
                 reset_union: None,
                 template_pins: None,
+                project_lifecycle: None,
             })
         })
     }
@@ -753,4 +755,79 @@ fn native_asset_extras_cannot_cancel_unknown_rows_or_overlapping_drift() {
     assert!(!proof.valid(2, 6, 0));
     proof.proven_native_target_only = usize::MAX;
     assert!(!proof.valid(2, 0, 0));
+}
+
+#[test]
+fn lifecycle_accounting_cannot_overflow_or_mask_unresolved_overlap() {
+    let proof = super::ProjectLifecycleProof {
+        compared_overlaps: 1,
+        retained_native_projections: 1,
+        full_metadata_compared: true,
+        ledger_projections_checked: true,
+        ..Default::default()
+    };
+    assert!(proof.valid(1, 1, 0));
+    let unresolved = super::ProjectLifecycleProof {
+        unresolved_overlaps: 1,
+        ..proof.clone()
+    };
+    assert!(!unresolved.valid(1, 1, 1));
+    let overflow = super::ProjectLifecycleProof {
+        source_only_remaining: 1,
+        compared_overlaps: usize::MAX,
+        full_metadata_compared: true,
+        ledger_projections_checked: true,
+        ..Default::default()
+    };
+    assert!(!overflow.valid(0, usize::MAX, 1));
+    let unchecked = super::ProjectLifecycleProof {
+        ledger_projections_checked: false,
+        ..proof
+    };
+    assert!(!unchecked.valid(1, 1, 0));
+}
+
+#[tokio::test]
+async fn sealed_scopes_reject_lifecycle_extension_without_changing_their_receipts() {
+    for family in [Family::Satellites, Family::Notation] {
+        let (options, database) = crate::postgres_mirror::tests::fresh_schema()
+            .await
+            .expect("required PostgreSQL");
+        let pg = crate::postgres_mirror::tests::connect(&options, &database).await;
+        super::activate_fixture(&pg, family).await;
+        let (run, table, original): (uuid::Uuid, String, serde_json::Value) = sqlx::query_as(
+            "SELECT r.id,c.mirror,c.verification FROM mirror_backfill_run r JOIN mirror_backfill_checkpoint c ON c.run_id=r.id WHERE r.scope=$1 ORDER BY c.mirror LIMIT 1")
+            .bind(family.scope()).fetch_one(pg.pool()).await.unwrap();
+        assert!(original.get("project_lifecycle").is_none());
+        let mut corrupted = original.clone();
+        corrupted["project_lifecycle"] = serde_json::to_value(super::ProjectLifecycleProof {
+            full_metadata_compared: true,
+            ledger_projections_checked: true,
+            ..Default::default()
+        })
+        .unwrap();
+        sqlx::query(
+            "UPDATE mirror_backfill_checkpoint SET verification=$3 WHERE run_id=$1 AND mirror=$2",
+        )
+        .bind(run)
+        .bind(&table)
+        .bind(corrupted)
+        .execute(pg.pool())
+        .await
+        .unwrap();
+        assert!(matches!(
+            super::require_scope(&pg, family).await,
+            Err(super::FamilyError::Receipt)
+        ));
+        sqlx::query(
+            "UPDATE mirror_backfill_checkpoint SET verification=$3 WHERE run_id=$1 AND mirror=$2",
+        )
+        .bind(run)
+        .bind(table)
+        .bind(original)
+        .execute(pg.pool())
+        .await
+        .unwrap();
+        super::require_scope(&pg, family).await.unwrap();
+    }
 }
