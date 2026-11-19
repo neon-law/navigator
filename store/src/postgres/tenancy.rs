@@ -542,11 +542,7 @@ pub async fn attach_brand(firm_id: Uuid, brand_key: &str) -> Result<(), firms::F
     if find_firm_on(&pg, firm_id).await?.is_none() {
         return Err(firms::FirmError::NoSuchFirm(firm_id));
     }
-    let brand_exists: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM brand WHERE brand_key=$1)")
-            .bind(brand_key)
-            .fetch_one(pg.pool())
-            .await?;
+    let brand_exists = brand_key_exists_on(&pg, brand_key).await?;
     if !brand_exists {
         return Err(firms::FirmError::UnknownBrand(brand_key.to_string()));
     }
@@ -758,6 +754,21 @@ pub async fn brand_by_key(key: &str) -> Result<Option<brands::Brand>, TenancyErr
     let row = sqlx::query("SELECT id,name,brand_key,firm_id,primary_color,accent_color,typeface,is_law_firm,legal_entity,logo_object_key,logo_content_type,font_family,font_object_key,font_licence,website_url,inserted_at,updated_at FROM brand WHERE brand_key=$1 LIMIT 1")
         .bind(key).fetch_optional(pg.pool()).await?;
     row.as_ref().map(brand).transpose()
+}
+
+pub(crate) async fn brand_key_exists(key: &str) -> Result<bool, TenancyError> {
+    brand_key_exists_on(&db().await?, key).await
+}
+
+async fn brand_key_exists_on(
+    pg: &crate::postgres::PostgresDb,
+    key: &str,
+) -> Result<bool, TenancyError> {
+    sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM brand WHERE brand_key=$1)")
+        .bind(key)
+        .fetch_one(pg.pool())
+        .await
+        .map_err(Into::into)
 }
 
 pub async fn brands_for_firm(firm_id: Uuid) -> Result<Vec<brands::Brand>, TenancyError> {

@@ -739,3 +739,50 @@ async fn firm_directory_and_ownership_backfill_are_native_and_isolated() {
         assert!(owners.contains(&(other_project, Some(other_firm))));
     })).await;
 }
+
+#[tokio::test]
+async fn high_level_matter_open_requires_attestation_and_native_brand_ownership() {
+    use crate::{entities, firms, persons, projects};
+    let (pg, actor, _, existing_project, firm) = application_fixture().await;
+    Box::pin(PostgresDb::with_test_db(pg.clone(), async {
+        let source = crate::surreal::SurrealDb::uninitialized();
+        let brand: String = sqlx::query_scalar("SELECT brand FROM project WHERE id=$1")
+            .bind(existing_project).fetch_one(pg.pool()).await.unwrap();
+        firms::ensure_brand(&source, firm, &brand).await.unwrap();
+        let (entity_type_id, jurisdiction_id): (uuid::Uuid, uuid::Uuid) = sqlx::query_as("SELECT entity_type_id,jurisdiction_id FROM entity WHERE id=(SELECT entity_id FROM project WHERE id=$1)")
+            .bind(existing_project).fetch_one(pg.pool()).await.unwrap();
+        sqlx::query("UPDATE jurisdiction SET code=$2,jurisdiction_type='state' WHERE id=$1")
+            .bind(jurisdiction_id).bind(jurisdiction_id.to_string()).execute(pg.pool()).await.unwrap();
+        let entity = entities::create(&source, &entities::NewEntity {
+            name: "Synthetic open client entity".into(), entity_type_id, jurisdiction_id,
+            phone: None, url: None, xero_id: None, firm_anchor_key: None,
+        }).await.unwrap();
+        let client = persons::create(&source, &persons::NewPerson::new("Synthetic open client", "open-client@example.invalid")).await.unwrap();
+        let mut command = projects::OpenMatterCommand {
+            firm_id: Some(firm), name: "Synthetic native opening".into(), code: "native-opening".into(),
+            client_id: client.id, entity_id: entity.id, jurisdiction_id: Some(jurisdiction_id),
+            description: None, brand, attestation: false, acting_person_id: actor, closed_at: None,
+        };
+        assert!(matches!(projects::open_matter(&source, &command).await, Err(projects::OpenMatterError::AttestationRequired)));
+        assert!(projects::find_by_code(&source, &command.code).await.unwrap().is_none());
+        command.attestation = true;
+        command.firm_id = Some(uuid::Uuid::new_v4());
+        assert!(matches!(projects::open_matter(&source, &command).await, Err(projects::OpenMatterError::Invalid(_))));
+        assert!(projects::find_by_code(&source, &command.code).await.unwrap().is_none());
+        command.firm_id = Some(firm);
+        let opened = projects::open_matter(&source, &command).await.unwrap();
+        assert_eq!(opened.firm_id, Some(firm));
+        let roles = projects::participations_for_project(&source, opened.id).await.unwrap();
+        assert_eq!(roles.len(), 2);
+        assert!(roles.iter().any(|row| row.person_id == actor && row.is_lawyer_dri));
+        assert!(roles.iter().any(|row| row.person_id == client.id && row.is_client_dri));
+        let attestations: i64 = sqlx::query_scalar("SELECT count(*) FROM relationship_log WHERE subject_type='project' AND subject_id=$1 AND actor_person_id=$2 AND action='conflict_attestation'")
+            .bind(opened.id).bind(actor).fetch_one(pg.pool()).await.unwrap();
+        assert_eq!(attestations, 1);
+        assert!(matches!(projects::open_matter(&source, &command).await, Err(projects::OpenMatterError::CodeConflict)));
+        assert_eq!(projects::participations_for_project(&source, opened.id).await.unwrap(), roles);
+        let after: i64 = sqlx::query_scalar("SELECT count(*) FROM relationship_log WHERE subject_type='project' AND subject_id=$1 AND action='conflict_attestation'")
+            .bind(opened.id).fetch_one(pg.pool()).await.unwrap();
+        assert_eq!(after, 1);
+    })).await;
+}

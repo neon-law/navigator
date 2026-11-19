@@ -71,6 +71,9 @@ pub(crate) async fn brand_key_exists(
     surreal: &SurrealDb,
     brand_key: &str,
 ) -> Result<bool, FirmError> {
+    if crate::postgres::tenancy::enabled() {
+        return Ok(Box::pin(crate::postgres::tenancy::brand_key_exists(brand_key)).await?);
+    }
     #[derive(SurrealValue)]
     struct BrandKeyRow {
         brand_key: String,
