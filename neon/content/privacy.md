@@ -37,6 +37,8 @@ payment control and choose whether to agree. You can stop renewal online from [C
 Stripe cancellation preserves the current paid period; it does not end a legal engagement or erase an existing invoice.
 Cancelling renewal does not limit refund rights under applicable law or your engagement agreement.
 
+Court and government filing fees are billed separately at actual cost and itemized on your matter invoice.
+
 ## How We Use Your Information
 
 We use the information we collect to provide and improve our services. **We do not sell your personal information**, and
