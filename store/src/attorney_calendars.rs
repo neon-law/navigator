@@ -83,6 +83,9 @@ pub async fn record_sign_in(person_id: Uuid, email: &str) -> Result<(), Attorney
     if !is_valid_calendar_id(email) {
         return Err(AttorneyCalendarError::InvalidId);
     }
+    if crate::firms::is_consumer_gmail(email) {
+        return Ok(());
+    }
     let held: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM person WHERE id = $1)")
         .bind(person_id)
         .fetch_one(pg.pool())

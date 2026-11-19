@@ -2205,3 +2205,14 @@ async fn the_forgejo_repository_path_is_the_firm_slug_then_the_project_code() {
     .unwrap();
     assert_eq!(forgejo::repository_path(&renamed, &owned).unwrap(), path);
 }
+
+#[test]
+fn consumer_gmail_is_not_a_google_workspace_mailbox() {
+    for domain in ["gmail.com", "GMAIL.com", "googlemail.com"] {
+        assert!(is_consumer_gmail(&format!("ada@{domain}")), "{domain}");
+    }
+    for domain in ["example.com", "gmail.example.com"] {
+        assert!(!is_consumer_gmail(&format!("ada@{domain}")), "{domain}");
+    }
+    assert!(!is_consumer_gmail("gmail.com"));
+}

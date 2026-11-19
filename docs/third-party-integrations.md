@@ -138,11 +138,14 @@ names the gap.
   `NAVIGATOR_NOTION_DATABASE_ID`. The operator creates the runtime key and grants the runtime service account
   `roles/cloudkms.cryptoKeyEncrypterDecrypter` on it through Workload Identity. A pod with no application-default
   credential for the key reports that gap instead.
-- **Calendar** uses the Google Workspace mailbox an Owner selects in Firm Settings. Guieb & Shook can bootstrap the
-  choice from the deployment's `NAVIGATOR_CALENDAR_NEON_LAW_OWNER` coordinate until an Owner saves it. Navigator names
-  new calendars `staging-<project-code>` on staging and `<project-code>` on production. It checks the environment marker
+- **Calendar** is Google Calendar only, and only for a Firm whose Owner chose Google Workspace as its main email by
+  selecting a mailbox in Firm Settings; consumer Gmail addresses are refused. Guieb & Shook can bootstrap the choice
+  from the deployment's `NAVIGATOR_CALENDAR_NEON_LAW_OWNER` coordinate until an Owner saves it. Navigator names new
+  calendars `staging-<project-code>` on staging and `<project-code>` on production. It checks the environment marker
   before adoption. Verify ownership and environment before migrating existing Calendar IDs. Workspace Admin grants the
-  deployment's Drive service-account client ID the `https://www.googleapis.com/auth/calendar` scope. The web workload
+  deployment's Drive service-account client ID the `https://www.googleapis.com/auth/calendar` scope; Attorney Calendar
+  reads also need `https://www.googleapis.com/auth/calendar.freebusy` and
+  `https://www.googleapis.com/auth/calendar.readonly`, and a missing one reads as `Insufficient scope`. The web workload
   signs delegation through Workload Identity and the Token Creator grant from `ops gcp setup`.
 - **Contacts** ([Member Contacts](glossary/member-contacts.md)) uses the Drive delegation configuration and acts as each
   firm member. Workspace Admin grants the service-account client ID the `https://www.googleapis.com/auth/contacts`

@@ -283,6 +283,8 @@ pub enum FirmError {
     CalendarSettingsUnavailable,
     #[error("Enter a valid Google Workspace mailbox address.")]
     InvalidCalendarOwner,
+    #[error("Gmail addresses are not supported. Choose a Google Workspace mailbox on the Firm's own domain.")]
+    GmailCalendarOwner,
     #[error("no person {0}")]
     NoSuchPerson(Uuid),
     #[error("person {0} is a client and cannot hold a firm membership")]
@@ -405,7 +407,9 @@ impl FirmError {
             Self::ThemeBrandNotOwned(_, _) => {
                 "The portal theme must be one of this firm's own brands.".to_string()
             }
-            Self::CalendarSettingsUnavailable | Self::InvalidCalendarOwner => self.to_string(),
+            Self::CalendarSettingsUnavailable
+            | Self::InvalidCalendarOwner
+            | Self::GmailCalendarOwner => self.to_string(),
             Self::Db(_)
             | Self::Postgres(_)
             | Self::PostgresSql(_)
@@ -650,6 +654,35 @@ pub async fn calendar_owner(
         .map(|_| owner))
 }
 
+/// Whether `address` is a consumer Gmail address. Calendar runs on Google
+/// Workspace delegation, which a consumer account cannot grant.
+#[must_use]
+pub fn is_consumer_gmail(address: &str) -> bool {
+    address.rsplit_once('@').is_some_and(|(_, domain)| {
+        let domain = domain.trim();
+        domain.eq_ignore_ascii_case("gmail.com") || domain.eq_ignore_ascii_case("googlemail.com")
+    })
+}
+
+/// The Firms among `firm_ids` whose Owner chose Google Workspace as the main
+/// email by saving a Calendar owner mailbox. Calendar surfaces exist only for
+/// these Firms.
+///
+/// # Errors
+/// [`FirmError`] when a Firm's Calendar settings cannot be read.
+pub async fn with_google_calendar(
+    surreal: &SurrealDb,
+    firm_ids: Vec<Uuid>,
+) -> Result<Vec<Uuid>, FirmError> {
+    let mut chosen = Vec::new();
+    for firm_id in firm_ids {
+        if calendar_owner(surreal, firm_id).await?.is_some() {
+            chosen.push(firm_id);
+        }
+    }
+    Ok(chosen)
+}
+
 /// Save the Owner's Google Workspace mailbox choice. A blank choice disables Calendar
 /// for the Firm and suppresses the deployment bootstrap.
 pub async fn set_calendar_owner(
@@ -680,6 +713,9 @@ pub async fn set_calendar_owner(
         });
         if !valid || value.len() > 254 {
             return Err(FirmError::InvalidCalendarOwner);
+        }
+        if is_consumer_gmail(value) {
+            return Err(FirmError::GmailCalendarOwner);
         }
         Some(value)
     };
