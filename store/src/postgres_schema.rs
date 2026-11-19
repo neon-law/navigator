@@ -1703,6 +1703,10 @@ mod tests {
             ("20261118160000_purchase_stripe.sql", include_str!("../postgres/migrations/20261118160000_purchase_stripe.sql")),
 
             ("20261118210000_preserve_deployment_change_context.sql", include_str!("../postgres/migrations/20261118210000_preserve_deployment_change_context.sql")),
+            (
+                "20261119010000_create_project_pull_request_notice.sql",
+                include_str!("../postgres/migrations/20261119010000_create_project_pull_request_notice.sql"),
+            ),
         ])
         .expect("timestamped migration assembles");
         assert_eq!(canonical_schema().trim(), assembled.trim());

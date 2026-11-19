@@ -4552,6 +4552,10 @@ pub async fn projects_create_named(
             created.status,
             created.entity_id,
         );
+        // A Project opened closed has nothing to provision.
+        if closed_at.is_none() {
+            crate::projects::setup::after_create(&base, &token, created.id, &created.code).await;
+        }
         println!(
             "{}",
             palette::dim(format!(
@@ -9272,6 +9276,95 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
+
+        assert_eq!(
+            projects_create(
+                Some(&server_uri),
+                "Acme Formation",
+                "acme-formation",
+                "client@example.com",
+                Some("Acme LLC"),
+                None,
+                true,
+                None,
+            )
+            .await,
+            ExitCode::SUCCESS
+        );
+    }
+
+    /// Opening a Project finishes by running the same idempotent setup the
+    /// `project setup` command runs: one call to the surfaces door and to each
+    /// integration door, against the Project that was just created. A
+    /// Project created closed gets none of it.
+    #[tokio::test(flavor = "current_thread")]
+    async fn projects_create_runs_setup_for_the_new_project() {
+        let _lock = CREDENTIALS_ENV_LOCK.lock().await;
+        let server = MockServer::start().await;
+        let server_uri = server.uri();
+        let _env = CredentialsEnv::new(&server_uri);
+        let client_id = Uuid::now_v7();
+        let entity_id = Uuid::now_v7();
+        let project_id = Uuid::now_v7();
+        Mock::given(method("GET"))
+            .and(path("/app/api/people"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"id": client_id, "email": "client@example.com", "name": "Acme Client", "role": "client"}],
+                "links": {},
+                "meta": {"page": {"size": 50}}
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/app/api/entities"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"id": entity_id, "name": "Acme LLC"}
+            ])))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/app/api/projects"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "id": project_id,
+                "name": "Acme Formation",
+                "code": "acme-formation",
+                "status": "open",
+                "entity_id": entity_id,
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(format!("/app/api/project-surfaces/{project_id}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "code": "acme-formation",
+                "documents_prefix": "projects/acme-formation/documents",
+                "drive_folder_id": null,
+                "drive_status": "created",
+                "repository_url": null,
+                "repository_status": "created",
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        for door in [
+            "slack/ensure",
+            "calendar/ensure",
+            "contacts/sync",
+            "notion/ensure",
+        ] {
+            Mock::given(method("POST"))
+                .and(path(format!("/app/api/integrations/{door}")))
+                .and(body_json(
+                    serde_json::json!({ "project_code": "acme-formation" }),
+                ))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "results": [{"project_code": "acme-formation", "outcome": "created"}]
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
 
         assert_eq!(
             projects_create(

@@ -548,6 +548,13 @@
     },
     {
       "extra_column": null,
+      "extra_table": "project_pull_request_notice",
+      "missing_column": null,
+      "missing_table": null,
+      "table": null
+    },
+    {
+      "extra_column": null,
       "extra_table": "project_source_import",
       "missing_column": null,
       "missing_table": null,
@@ -2109,7 +2116,7 @@
   },
   "target": {
     "name": "PostgreSQL",
-    "table_count": 176,
+    "table_count": 177,
     "tables": {
       "address": {
         "columns": {
@@ -5464,6 +5471,19 @@
           "person",
           "project"
         ]
+      },
+      "project_pull_request_notice": {
+        "columns": {
+          "channel_id": "TEXT",
+          "inserted_at": "TIMESTAMPTZ",
+          "message_ts": "TEXT",
+          "number": "INTEGER",
+          "project_id": "UUID",
+          "updated_at": "TIMESTAMPTZ"
+        },
+        "foreign_keys": [],
+        "name": "project_pull_request_notice",
+        "references": []
       },
       "project_reference": {
         "columns": {

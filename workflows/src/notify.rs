@@ -259,6 +259,13 @@ pub trait SlackBot: Send + Sync {
         let _ = channel_id;
         Err(SlackBotError::Api(ARCHIVE_UNSUPPORTED.to_string()))
     }
+    /// Unarchive a channel of a reopened Project. `Ok(true)` when this call
+    /// unarchived it; `Ok(false)` when it was not archived or Slack no longer
+    /// knows it, so a nightly re-run is a no-op.
+    async fn unarchive_channel(&self, channel_id: &str) -> Result<bool, SlackBotError> {
+        let _ = channel_id;
+        Err(SlackBotError::Api(ARCHIVE_UNSUPPORTED.to_string()))
+    }
 }
 
 /// The error code an implementor that cannot archive channels returns.
@@ -690,6 +697,19 @@ impl SlackBot for SlackBotClient {
         }
     }
 
+    async fn unarchive_channel(&self, channel_id: &str) -> Result<bool, SlackBotError> {
+        let response: InviteResponse = self
+            .post("conversations.unarchive", &json!({ "channel": channel_id }))
+            .await?;
+        match (response.ok, response.error.as_deref()) {
+            (true, _) => Ok(true),
+            (false, Some("not_archived" | "channel_not_found")) => Ok(false),
+            (false, error) => Err(SlackBotError::Api(
+                error.unwrap_or("unknown_error").to_string(),
+            )),
+        }
+    }
+
     async fn post_message_with_receipt(
         &self,
         channel_id: &str,
@@ -1078,6 +1098,12 @@ impl SlackBot for CapturingSlackBot {
             .expect("Slack bot lock poisoned")
             .push((channel_id.to_string(), text.to_string()));
         Ok(())
+    }
+
+    /// The capture holds no archived channels, so there is never one to
+    /// unarchive.
+    async fn unarchive_channel(&self, _channel_id: &str) -> Result<bool, SlackBotError> {
+        Ok(false)
     }
 
     async fn user_id_by_email(&self, _email: &str) -> Result<Option<String>, SlackBotError> {
@@ -2366,6 +2392,43 @@ mod tests {
             let outcome = bot.archive_channel("C123").await;
             match expected {
                 Ok(archived) => assert_eq!(outcome.expect(body), archived, "{body}"),
+                Err(code) => assert!(
+                    matches!(&outcome, Err(super::SlackBotError::Api(message)) if message == code),
+                    "{body}: {outcome:?}"
+                ),
+            }
+        }
+    }
+
+    /// A reopened Project's channel is unarchived once; Slack's answer for an
+    /// active or vanished channel is the steady state, not a failure, and any
+    /// other refusal is surfaced as itself.
+    #[tokio::test]
+    async fn unarchiving_is_idempotent_and_surfaces_real_refusals() {
+        use wiremock::matchers::{body_partial_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        for (body, expected) in [
+            (r#"{"ok":true}"#, Ok(true)),
+            (r#"{"ok":false,"error":"not_archived"}"#, Ok(false)),
+            (r#"{"ok":false,"error":"channel_not_found"}"#, Ok(false)),
+            (
+                r#"{"ok":false,"error":"not_in_channel"}"#,
+                Err("not_in_channel"),
+            ),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/conversations.unarchive"))
+                .and(body_partial_json(serde_json::json!({ "channel": "C123" })))
+                .respond_with(ResponseTemplate::new(200).set_body_string(body))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let bot = SlackBotClient::with_base_url("xoxb-test", server.uri());
+            let outcome = bot.unarchive_channel("C123").await;
+            match expected {
+                Ok(unarchived) => assert_eq!(outcome.expect(body), unarchived, "{body}"),
                 Err(code) => assert!(
                     matches!(&outcome, Err(super::SlackBotError::Api(message)) if message == code),
                     "{body}: {outcome:?}"

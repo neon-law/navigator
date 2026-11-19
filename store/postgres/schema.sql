@@ -5002,3 +5002,16 @@ CREATE UNIQUE INDEX purchase_one_stripe_subscription ON purchase (person_id)
 -- Migration: 20261118210000_preserve_deployment_change_context.sql
 -- The authenticated envelope includes the exact timestamp spelling, not its instant.
 ALTER TABLE deployment_secret_change ADD COLUMN inserted_at_text TEXT;
+
+-- Migration: 20261119010000_create_project_pull_request_notice.sql
+-- One Slack message per Project pull request: where the notice was posted, so
+-- each later report of the same pull request edits that message in place.
+CREATE TABLE project_pull_request_notice (
+    project_id UUID NOT NULL,
+    number INTEGER NOT NULL CHECK (number > 0),
+    channel_id TEXT NOT NULL CHECK (channel_id <> ''),
+    message_ts TEXT NOT NULL CHECK (message_ts <> ''),
+    inserted_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (project_id, number)
+);

@@ -586,6 +586,11 @@ navigator project setup <code>        # one Project, one outcome per resource
 navigator project setup --all --json  # every Project visible to this login
 ```
 
+`navigator project create` runs the same setup as its last step, so a new Project gets its surfaces without a second
+command. It prints one row per resource and never fails the open: a resource whose runtime is not configured reports
+that, and the Project stays open until `navigator project setup <code>` converges it. A Project opened already closed is
+not set up.
+
 Setup composes the surface reconcile door, Slack ensure door, and Notion ensure door. It does not accept provider
 credentials or open a database connection. The doors keep their existing admin, visible-Project, and owning-Firm
 `FirmCapability::UseIntegrations` checks. Text prints one row per resource; `--json` returns one structured resource

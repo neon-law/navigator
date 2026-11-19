@@ -40,6 +40,12 @@ pub mod forgejo_push_webhook_journal;
 #[cfg(test)]
 mod forgejo_push_webhook_journal_tests;
 
+/// Where each Project pull request's Slack notice was posted, so later
+/// reports edit it in place.
+pub mod pull_request_notices;
+#[cfg(test)]
+mod pull_request_notices_tests;
+
 /// PostgreSQL-authoritative Inbox ingest, deduplication, threading,
 /// attribution, and renderer reads.
 pub mod inbox;

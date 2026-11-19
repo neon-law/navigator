@@ -58,10 +58,17 @@ which an Owner may itself be.
 Slack is connected **once per Firm**. The Firm's `slack_bot_token` is the one bot every Project in that Firm uses:
 `navigator project setup` creates or adopts the Project's private channel with it, the main-push notice a Project
 repository's `cd` posts goes through it, and the Nightly Project Update repairs membership and writes the channel canvas
-with it. The channel is named from the Project code by environment — `navigator-<code>` in production, `staging-<code>`
-on a simulated-matters deployment — and a channel found under its recorded id but another name is renamed back. Opening
-a Project in a Firm that has connected Slack needs no further Slack step; a Project whose Firm has not stored the token
-reports `credential_missing`, and the worker refuses to post rather than borrowing another token. The deployment-wide
+with it. Each pull request in a Project repository keeps one message in that channel: `project-gate.yml` posts it on the
+first run and edits it in place on every later run, merge, or close, listing the Pointers it files and calling out each
+one it makes `visibility: client` as a client release. A closed or archived Project's channel is archived, never
+deleted, because its history is part of the matter's record, and a reopened Project's channel is unarchived: `POST
+/app/api/projects/{id}/lifecycle` does it right after the status changes, `POST /app/api/integrations/slack/lifecycle`
+does it for one Project or for every Project the caller may use (`all`), with `dry_run` to list what it would change,
+and the Nightly Project Update repeats it as the backstop. Each change is logged against the Project. The channel is
+named from the Project code by environment — `navigator-<code>` in production, `staging-<code>` on a simulated-matters
+deployment — and a channel found under its recorded id but another name is renamed back. Opening a Project in a Firm
+that has connected Slack needs no further Slack step; a Project whose Firm has not stored the token reports
+`credential_missing`, and the worker refuses to post rather than borrowing another token. The deployment-wide
 `SLACK_BOT_TOKEN` serves only the deployment's own channels (`#general`, `#finance`, the messages channels).
 
 ### Deployment Slack app

@@ -38,6 +38,7 @@ pub mod gcs;
 pub mod kms;
 pub mod notion;
 pub mod notion_reconcile;
+pub mod pull_request_notice;
 pub mod redirect;
 pub mod s3;
 pub mod slack;
@@ -83,10 +84,10 @@ pub use notion_reconcile::{
 };
 pub use s3::{S3Storage, S3StorageConfig};
 pub use slack::{
-    blocks_to_fallback_text, channel_url as slack_channel_url, ensure_private_channel,
-    labels_slack_from_staging_env, labels_slack_from_staging_from, outbound_slack_text, FakeSlack,
-    SlackChannel as FirmSlackChannel, SlackClient, SlackError, SlackMemberId, SlackService,
-    SLACK_STAGING_MARK,
+    blocks_to_fallback_text, channel_url as slack_channel_url, converge_recorded_channel,
+    ensure_private_channel, labels_slack_from_staging_env, labels_slack_from_staging_from,
+    outbound_slack_text, ChannelLifecycle, FakeSlack, SlackChannel as FirmSlackChannel,
+    SlackClient, SlackError, SlackMemberId, SlackService, SLACK_STAGING_MARK,
 };
 pub use speech::{GoogleSpeechConfig, GoogleSpeechTranscriptProvider, SpeechError};
 pub use vertex::{

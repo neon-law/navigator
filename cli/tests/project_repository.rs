@@ -353,8 +353,9 @@ fn the_reusable_gate_runs_the_gate_exactly_once() {
         vec!["verify"],
         "the gate belongs to `verify` alone:\n{source}"
     );
-    // `notify` posts the push-to-`main` notice after the three checks and
-    // before the required `ci` roll-up, which does not depend on it.
+    // `notify` posts the push-to-`main` notice and `notify-pull-request`
+    // keeps the pull request's one message, both after the three checks and
+    // before the required `ci` roll-up, which depends on neither.
     let names: Vec<&str> = jobs.keys().filter_map(|key| key.as_str()).collect();
     assert_eq!(
         names,
@@ -364,6 +365,7 @@ fn the_reusable_gate_runs_the_gate_exactly_once() {
             "documents",
             "seeds",
             "notify",
+            "notify-pull-request",
             "ci"
         ]
     );

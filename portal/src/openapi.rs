@@ -2150,6 +2150,31 @@ fn canonical_document(base: &str) -> Value {
             }
           }
         },
+        "/app/api/integrations/slack/lifecycle": {
+          "post": {
+            "summary": "Keep each Project's private Slack channel archived when closed and active when open (admin)",
+            "description":
+              "Brings each selected Project's recorded private channel in step with the Project's status: the channel of a `closed` or `archived` Project is archived, and the archived channel of an `open` Project is unarchived. Archiving keeps the channel's history, which is part of the matter's record; nothing here deletes a channel. The channel is found by its recorded id, never by name, and a Project with no recorded channel reports `no_channel` rather than being provisioned. A dry run reports `would_archive` or `would_unarchive` and changes nothing. Each change is logged against the Project. Outcomes: `archived`, `unarchived`, `unchanged`, `would_archive`, `would_unarchive`, `no_channel`, `recorded_resource_missing`, `provider_unavailable`, and the resolution outcomes. Authorization: admin-tier, plus `use_integrations` on the Project's owning Firm.",
+            "requestBody": { "required": true, "content": { "application/json": {
+              "schema": { "$ref": "#/components/schemas/SlackLifecycleRequest" }
+            } } },
+            "responses": {
+              "200": { "description": "One outcome per selected Project", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/IntegrationReport" } } } },
+              "400": { "description": "The selector is not accepted", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } },
+              "401": { "description": "No authenticated session", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } },
+              "403": { "description": "Authenticated caller is not admin-tier", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } },
+              "404": { "description": "No Project with that code is visible to the caller, or the caller may not use its Firm's integrations — the two answer identically on purpose", "content": { "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiError" }
+              } } }
+            }
+          }
+        },
         "/app/api/project-repositories": {
           "get": {
             "summary": "Reconcile every matter against the repository it records (admin)",
@@ -2617,7 +2642,7 @@ fn canonical_document(base: &str) -> Value {
                that door opens the firm-signed closing-letter notation and leaves the status flip to \
                the walk that follows, while this one flips `status`/`closed_at` immediately and opens \
                no notation. A close or archive also makes the Project's shared calendar read-only and \
-               clears its booking link, best-effort. `closed_at` is derived from `transition` and optional \
+               clears its booking link, and archives its recorded private Slack channel, best-effort; a reopen unarchives the channel. `closed_at` is derived from `transition` and optional \
                `effective_at`, never posted directly. An effective time must be RFC 3339, not be in the future, and not \
                precede matter-open. Without one, an existing close stamp is preserved. Re-applying \
                the same transition and effective time is idempotent; supplying a different valid \
@@ -3897,6 +3922,52 @@ fn canonical_document(base: &str) -> Value {
               "409": { "description": "The Project's Firm has not connected Slack, or this deployment cannot unseal Firm credentials; `outcome` carries the integration slug and nothing was queued", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
               "500": { "description": "The notice could not be queued", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
               "503": { "description": "No Restate ingress is configured", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }
+            }
+          }
+        },
+        "/app/api/projects/{id}/events/pull-request": {
+          "post": {
+            "summary": "Report a pull request in a Project repository",
+            "description":
+              "A Project repository's CI reports one pull-request run. Authorization: the document-scoped CI session minted for exactly this Project; any other session returns 403. The first report of a pull request posts one message to the Project's recorded private channel with the owning Firm's Slack bot; every later report of the same `number` edits that message in place. Each Pointer the pull request makes `visibility: client` is called out on its own line as a client release. The door never creates the channel: a Project without one, or whose Firm has not connected Slack, is refused with 409.",
+            "parameters": [
+              { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+            ],
+            "requestBody": { "required": true, "content": { "application/json": { "schema": {
+              "type": "object",
+              "required": ["number", "title", "url", "author_login", "stage"],
+              "additionalProperties": false,
+              "properties": {
+                "number": { "type": "integer", "minimum": 1 },
+                "title": { "type": "string", "maxLength": 512, "description": "One line; rendered as escaped plain text" },
+                "url": { "type": "string", "format": "uri", "description": "The pull request, https" },
+                "author_login": { "type": "string", "description": "The author's GitHub or Forgejo login" },
+                "stage": { "type": "string", "enum": ["checks_passed", "checks_failed", "merged", "closed"] },
+                "pointers": { "type": "array", "maxItems": 50, "items": {
+                  "type": "object",
+                  "required": ["slug", "visibility"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "slug": { "type": "string", "description": "The Pointer's path below blobs/, without .yaml" },
+                    "visibility": { "type": "string", "enum": ["internal", "client"] },
+                    "client_release": { "type": "boolean", "description": "The pull request makes this Pointer visibility client" }
+                  }
+                } }
+              }
+            } } } },
+            "responses": {
+              "200": { "description": "The notice was posted or edited", "content": { "application/json": { "schema": {
+                "type": "object",
+                "required": ["outcome"],
+                "properties": { "outcome": { "type": "string", "enum": ["posted", "updated"] } }
+              } } } },
+              "400": { "description": "A field is malformed", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "401": { "description": "No authenticated session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "403": { "description": "Not the document-scoped CI session for this Project", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "404": { "description": "No such Project", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "409": { "description": "The Project has no private channel, or its Firm has not connected Slack; nothing was sent", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "500": { "description": "The notice record could not be read or written", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+              "502": { "description": "Slack did not accept the notice", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }
             }
           }
         },
@@ -6041,6 +6112,18 @@ fn canonical_document(base: &str) -> Value {
                        "description": "Reconcile every Project visible to the caller — the same participation-scoped lens `GET /app/api/projects` uses." },
               "dry_run": { "type": "boolean", "default": false,
                            "description": "Plan the mirror without making writes — the door answers what it would insert, patch, and delete." }
+            }
+          },
+          "SlackLifecycleRequest": {
+            "type": "object",
+            "description": "The ensure door's selector with a dry-run flag beside it: `project_code` and `all` follow the same exactly-one rule.",
+            "properties": {
+              "project_code": { "type": ["string", "null"],
+                                "description": "One Project code. Omit when `all` is true." },
+              "all": { "type": "boolean", "default": false,
+                       "description": "Act on every Project visible to the caller." },
+              "dry_run": { "type": "boolean", "default": false,
+                           "description": "Report what would be archived or unarchived without changing any channel." }
             }
           },
           "SlackIntegrationRequest": {

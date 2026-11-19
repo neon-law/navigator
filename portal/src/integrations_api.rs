@@ -704,6 +704,207 @@ pub(crate) async fn slack_notify_door(
     }
 }
 
+/// `{ "project_code": "…", "all": false, "dry_run": true }` for the Slack
+/// lifecycle door.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SlackLifecycleRequest {
+    #[serde(default)]
+    project_code: Option<String>,
+    #[serde(default)]
+    all: bool,
+    #[serde(default)]
+    dry_run: bool,
+}
+
+/// `POST /app/api/integrations/slack/lifecycle` — bring each selected
+/// Project's recorded private channel in step with the Project's status: a
+/// closed or archived Project's channel is archived, an open Project's
+/// archived channel is unarchived. Archiving keeps the channel's history,
+/// which is part of the matter's record; nothing here deletes a channel. The
+/// channel is found by its recorded id, never by name, and a Project with no
+/// recorded channel is reported, not provisioned. A dry run reports
+/// `would_archive` or `would_unarchive` and changes nothing. Each change is
+/// logged against the Project.
+pub(crate) async fn slack_lifecycle_door(
+    State(state): State<ApiState>,
+    authed: AdminSession,
+    Json(request): Json<SlackLifecycleRequest>,
+) -> Result<Response, ApiError> {
+    let selector = ProjectSelector {
+        project_code: request.project_code,
+        all: request.all,
+    };
+    let mut results = Vec::new();
+    for project in targets(&state, &authed, &selector).await? {
+        results.push(
+            converge_project_channel(&state, authed.0.person_id, &project, request.dry_run).await,
+        );
+    }
+    Ok(report(results))
+}
+
+/// Bring one Project's recorded channel in step with its status. The
+/// lifecycle door runs it for each selected Project; the lifecycle move
+/// (`POST /app/api/projects/{id}/lifecycle`) runs it right after the status
+/// changes, so a close or a reopen does not wait for a sweep.
+pub(crate) async fn converge_project_channel(
+    state: &ApiState,
+    actor_person_id: Option<uuid::Uuid>,
+    project: &store::projects::Project,
+    dry_run: bool,
+) -> ProjectOutcome {
+    let slack = match state
+        .integration_providers
+        .slack(&state.surreal, project.id)
+        .await
+    {
+        Ok(slack) => slack,
+        Err(error) => return unavailable(project, &error),
+    };
+    let open = project.status == "open";
+    let Some(channel_id) = project.internal_slack_channel_id.clone() else {
+        return ProjectOutcome::plain(project.code.clone(), "no_channel");
+    };
+    let _guard =
+        ensure_lock(workflows::IntegrationJob::slack(project.id, &project.code).job_id).await;
+    let outcome =
+        match cloud::converge_recorded_channel(slack.as_ref(), &channel_id, open, dry_run).await {
+            Ok(cloud::ChannelLifecycle::Archived) => "archived",
+            Ok(cloud::ChannelLifecycle::Unarchived) => "unarchived",
+            Ok(cloud::ChannelLifecycle::Unchanged) => "unchanged",
+            Ok(cloud::ChannelLifecycle::WouldArchive) => "would_archive",
+            Ok(cloud::ChannelLifecycle::WouldUnarchive) => "would_unarchive",
+            Ok(cloud::ChannelLifecycle::Missing) => "recorded_resource_missing",
+            Err(_) => "provider_unavailable",
+        };
+    match outcome {
+        "archived" => {
+            log_channel_change(state, actor_person_id, project, "slack_channel_archived").await;
+        }
+        "unarchived" => {
+            log_channel_change(state, actor_person_id, project, "slack_channel_unarchived").await;
+        }
+        _ => {}
+    }
+    ProjectOutcome::plain(project.code.clone(), outcome)
+}
+
+/// Record one channel change on the Project's Relationship Log. A log write
+/// that fails is reported in the server log and never undoes the change.
+async fn log_channel_change(
+    state: &ApiState,
+    actor_person_id: Option<uuid::Uuid>,
+    project: &store::projects::Project,
+    action: &str,
+) {
+    let entry = store::relationship_logs::NewRelationshipLog {
+        actor_person_id,
+        subject_type: "project".to_string(),
+        subject_id: project.id,
+        action: action.to_string(),
+        detail: format!("Project status {}", project.status),
+        project_id: Some(project.id),
+    };
+    if let Err(error) = store::relationship_logs::record(&state.surreal, &entry).await {
+        tracing::warn!(project_id = %project.id, %error, "slack channel change not logged");
+    }
+}
+
+/// A refusal the CI step prints, so a lost notice never reads as delivered.
+fn pull_request_refusal(status: StatusCode, error: &str, message: &str) -> Response {
+    (
+        status,
+        Json(serde_json::json!({ "error": error, "message": message })),
+    )
+        .into_response()
+}
+
+/// `POST /app/api/projects/{id}/events/pull-request` — a Project repository's
+/// CI reports one pull-request run. The caller is the document-scoped CI
+/// session minted for exactly this Project; any other session is refused with
+/// 403. The first report of a pull request posts one message to the Project's
+/// recorded private channel with the owning Firm's Slack bot; every later
+/// report edits that message in place, so the channel holds one line per pull
+/// request. The door never provisions the channel: a Project without one is
+/// refused with 409 until `navigator project setup` creates it.
+pub(crate) async fn pull_request_event_door(
+    State(state): State<ApiState>,
+    authed: crate::api::AuthedSession,
+    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
+    Json(event): Json<cloud::pull_request_notice::PullRequestEvent>,
+) -> Result<Response, ApiError> {
+    match &authed.0.scope {
+        Some(crate::session::SessionScope::Document(scope)) if scope.project_id == id => {}
+        _ => return Err(ApiError::Forbidden),
+    }
+    if let Err(message) = event.validate() {
+        return Ok(crate::api::bad_request("invalid_event", message));
+    }
+    let project = store::projects::find_by_id(&state.surreal, id)
+        .await
+        .map_err(|error| ApiError::Db(error.to_string()))?
+        .ok_or(ApiError::NotFound)?;
+    let slack = match state.integration_providers.slack(&state.surreal, id).await {
+        Ok(slack) => slack,
+        Err(error) => {
+            return Ok(pull_request_refusal(
+                StatusCode::CONFLICT,
+                "slack_not_connected",
+                &format!("the pull request notice was not sent: {error}"),
+            ))
+        }
+    };
+    let Some(channel_id) = project.internal_slack_channel_id.clone() else {
+        return Ok(pull_request_refusal(
+            StatusCode::CONFLICT,
+            "no_channel",
+            "the Project has no private Slack channel yet; run `navigator project setup`",
+        ));
+    };
+    let pg = store::postgres::PostgresDb::from_env()
+        .await
+        .map_err(|_| ApiError::Db("pull request notice storage is unavailable".into()))?;
+    // Two runs of one pull request must not both post: the second waits and
+    // edits what the first recorded.
+    let _guard = ensure_lock(format!("pull-request:{id}:{}", event.number)).await;
+    let recorded = store::postgres::pull_request_notices::find(&pg, id, event.number)
+        .await
+        .map_err(|_| ApiError::Db("pull request notice read failed".into()))?
+        .filter(|notice| notice.channel_id == channel_id)
+        .map(|notice| notice.message_ts);
+    let Ok(published) = cloud::pull_request_notice::publish(
+        slack.as_ref(),
+        &channel_id,
+        recorded.as_deref(),
+        &event,
+    )
+    .await
+    else {
+        return Ok(pull_request_refusal(
+            StatusCode::BAD_GATEWAY,
+            "provider_unavailable",
+            "Slack did not accept the pull request notice",
+        ));
+    };
+    store::postgres::pull_request_notices::record(
+        &pg,
+        id,
+        event.number,
+        &store::postgres::pull_request_notices::PullRequestNotice {
+            channel_id,
+            message_ts: published.ts().to_string(),
+        },
+    )
+    .await
+    .map_err(|_| ApiError::Db("pull request notice write failed".into()))?;
+    let outcome = match published {
+        cloud::pull_request_notice::Published::Posted(_) => "posted",
+        cloud::pull_request_notice::Published::Updated(_) => "updated",
+    };
+    Ok(Json(serde_json::json!({ "outcome": outcome })).into_response())
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CalendarEventsRequest {

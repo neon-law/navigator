@@ -70,9 +70,9 @@ pub struct SeedScope {
 }
 
 /// The read-only fields and routes needed by `navigator project gate --check`
-/// for one minted Project, plus the one write a Project repository's CI makes
-/// on a push to `main`: the main-push notice door, which posts to the
-/// Project's own private channel and touches no matter record. It does not
+/// for one minted Project, plus the two notices a Project repository's CI
+/// sends: the main-push and pull-request doors, which post to the Project's
+/// own private channel and touch no matter record. It does not
 /// authorize document bytes or any other route.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -100,7 +100,12 @@ impl SessionScope {
             Self::Seed(scope) => method == "POST" && path == scope.endpoint,
             Self::Document(scope) => {
                 (method == "POST"
-                    && path == format!("/app/api/projects/{}/events/main-push", scope.project_id))
+                    && (path == format!("/app/api/projects/{}/events/main-push", scope.project_id)
+                        || path
+                            == format!(
+                                "/app/api/projects/{}/events/pull-request",
+                                scope.project_id
+                            )))
                     || method == "GET"
                         && (path == "/app/api/projects"
                             || path
@@ -360,6 +365,25 @@ mod tests {
 
     fn store() -> SessionStore {
         SessionStore::new("test-key-not-for-production")
+    }
+
+    /// A document-scoped CI session may send its own Project's two notices
+    /// and nothing for another Project.
+    #[test]
+    fn a_document_scope_posts_only_its_own_projects_notices() {
+        let id = uuid::Uuid::now_v7();
+        let scope = super::SessionScope::Document(super::DocumentScope {
+            project_id: id,
+            project_code: "sample".to_string(),
+        });
+        for event in ["main-push", "pull-request"] {
+            let path = format!("/app/api/projects/{id}/events/{event}");
+            assert!(scope.allows_request("POST", &path), "{path}");
+            assert!(!scope.allows_request("GET", &path), "{path}");
+            let other = format!("/app/api/projects/{}/events/{event}", uuid::Uuid::now_v7());
+            assert!(!scope.allows_request("POST", &other), "{other}");
+        }
+        assert!(!scope.allows_request("POST", &format!("/app/api/projects/{id}/events/other")));
     }
 
     #[test]
