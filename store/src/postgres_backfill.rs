@@ -2194,3 +2194,6 @@ async fn resume_family_locked(
 
 #[cfg(test)]
 mod application_family_tests;
+
+#[cfg(test)]
+mod application_native_boundary_tests;
