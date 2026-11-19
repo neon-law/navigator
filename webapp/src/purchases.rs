@@ -173,7 +173,7 @@ fn OfferingDecision(row: OfferingRow, content: PurchasePageContent, csrf_token: 
                     if let Some(terms) = row.renewal_terms.as_ref() {
                         p { id: "renewal-{row.id}", class: "purchases__renewal", "{terms}" }
                         label {
-                            input { r#type: "checkbox", name: "renewal_consent", value: "accepted", required: true, "aria-describedby": "renewal-{row.id}" }
+                            input { class: "nav-checkbox", r#type: "checkbox", name: "renewal_consent", value: "accepted", required: true, "aria-describedby": "renewal-{row.id}" }
                             "{content.renewal_consent_label}"
                         }
                     } else {

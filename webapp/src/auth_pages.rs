@@ -378,7 +378,7 @@ fn AuthPage(props: AuthPageProps) -> Element {
                             form { class: "auth-form", method: "post", action: "/auth/signup/age",
                                 input { r#type: "hidden", name: "csrf_token", value: "{csrf}" }
                                 label { r#for: "signup-age", {crate::public_chrome::marketing_copy("signup.age_label")} }
-                                input { id: "signup-age", name: "age", r#type: "number", min: "0", max: "120", required: true, autocomplete: "off" }
+                                input { class: "nav-input", id: "signup-age", name: "age", r#type: "number", min: "0", max: "120", required: true, autocomplete: "off" }
                                 button { r#type: "submit", class: "nav-btn nav-btn--primary", {crate::public_chrome::marketing_copy("signup.age_continue")} }
                             }
                         }
