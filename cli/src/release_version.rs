@@ -115,6 +115,7 @@ fn set_workspace_version(manifest: &str, version: &str) -> Result<String, String
 ///
 /// `version` is required and never defaulted. The shape is checked first, so a
 /// name the release would refuse fails here instead of after a tag exists.
+#[must_use]
 pub fn run(manifest_path: &Path, version: &str, no_commit: bool) -> ExitCode {
     let version = version.trim().to_string();
     if version.is_empty() {

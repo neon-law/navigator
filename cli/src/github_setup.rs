@@ -1191,6 +1191,7 @@ pub struct GitHubClient {
 impl GitHubClient {
     /// A client against a mock API base, for tests outside this module.
     #[doc(hidden)]
+    #[must_use]
     pub fn for_test(api_base: &str, repository: &str) -> Self {
         Self {
             http: reqwest::Client::new(),
@@ -1229,10 +1230,12 @@ impl GitHubClient {
         })
     }
 
+    #[must_use]
     pub fn url(&self, path: &str) -> String {
         format!("{}{}", self.api_base, path)
     }
 
+    #[must_use]
     pub fn repo_path(&self, suffix: &str) -> String {
         format!("/repos/{}{}", self.repository, suffix)
     }

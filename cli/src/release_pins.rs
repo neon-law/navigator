@@ -309,6 +309,7 @@ fn relative(root: &Path, path: &Path) -> String {
 }
 
 /// `navigator release pins`.
+#[must_use]
 pub fn run(root: &Path) -> ExitCode {
     let report = match scan(root) {
         Ok(report) => report,

@@ -26,6 +26,7 @@ use chrono::{DateTime, Utc};
 use crate::release_check::{fetch_tags, release_tags};
 
 /// Entry point for `navigator release default-tag`.
+#[must_use]
 pub fn run(now: DateTime<Utc>, repo: &Path, fetch: bool) -> ExitCode {
     match suggest(now, repo, fetch) {
         Ok(Some(tag)) => {

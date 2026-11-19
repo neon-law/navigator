@@ -64,6 +64,7 @@ impl Outcome {
 }
 
 /// Entry point for `navigator release check`.
+#[must_use]
 pub fn run(manifest_path: &Path, repo: &Path, fetch: bool, github_output: bool) -> ExitCode {
     let outcome = match check(manifest_path, repo, fetch) {
         Ok(outcome) => outcome,
