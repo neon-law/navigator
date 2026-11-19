@@ -182,7 +182,7 @@ async fn handoff_case(known_native: bool, old_global_complete: bool) {
                     &absent, &pg, &key
                 ))
                 .await,
-                Err(crate::postgres_mirror::MirrorError::MatterAuthority)
+                Ok(crate::postgres_mirror::Mirrored::Unchanged)
             ));
         }
         let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM notation WHERE id=$1")

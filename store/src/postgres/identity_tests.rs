@@ -352,13 +352,20 @@ async fn people_authority_owns_identity_detail_aliases_and_merges() {
                 .len(),
             1
         );
-        let granted_at: Option<String> =
+        let granted_at: Option<chrono::DateTime<chrono::Utc>> =
             sqlx::query_scalar("SELECT granted_at FROM person_delegate WHERE id=$1")
                 .bind(delegation.id)
                 .fetch_optional(pg.pool())
                 .await
                 .unwrap();
-        assert!(granted_at.is_some_and(|at| chrono::DateTime::parse_from_rfc3339(&at).is_ok()));
+        assert_eq!(
+            granted_at,
+            Some(
+                chrono::DateTime::parse_from_rfc3339(&delegation.granted_at)
+                    .unwrap()
+                    .with_timezone(&chrono::Utc)
+            )
+        );
 
         // The legacy mirror never copies a projection back over PostgreSQL.
         for key in [
