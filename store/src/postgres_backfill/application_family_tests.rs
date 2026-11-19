@@ -408,3 +408,157 @@ async fn proven_purged_missing_audit_does_not_resurrect_or_require_its_deleted_p
 async fn unpurged_captured_audit_refuses_a_missing_native_project_without_resurrection() {
     captured_email_with_deleted_native_parent(false).await;
 }
+
+async fn encrypted_source_change(
+    source: &SurrealDb,
+    kms: &cloud::FakeKms,
+    actor: Uuid,
+    key: &str,
+) -> (Uuid, crate::deployment_secret_changes::EncryptedChange) {
+    use base64::Engine as _;
+    use cloud::RuntimeKms as _;
+    let id = Uuid::now_v7();
+    let actor = actor.to_string().to_uppercase();
+    let at = "2026-11-18T09:04:03.123456789-05:00";
+    let context = cloud::KmsContext::new(
+        id,
+        "production-sops-change",
+        format!("{key}\n{at}\n{actor}"),
+    );
+    let data_key = [17; 32];
+    let wrapped = kms.wrap_data_key(&data_key, &context).await.unwrap();
+    let ciphertext = cloud::seal(b"synthetic-value", &data_key, &context).unwrap();
+    let base64 = base64::engine::general_purpose::STANDARD;
+    let row = crate::deployment_secret_changes::EncryptedChange {
+        request_id: id.to_string(),
+        actor_id: actor,
+        key: key.into(),
+        ciphertext: base64.encode(ciphertext),
+        wrapped_key: base64.encode(wrapped.ciphertext),
+        kms_key_version: wrapped.key_version,
+        inserted_at: at.into(),
+    };
+    source.query("CREATE $id SET request_id=$request,actor_id=$actor,key=$key,ciphertext=$ciphertext,wrapped_key=$wrapped,kms_key_version=$version,inserted_at=$at")
+        .bind(("id", crate::surreal::record_id("deployment_secret_change", id)))
+        .bind(("request", row.request_id.clone())).bind(("actor", row.actor_id.clone()))
+        .bind(("key", row.key.clone())).bind(("ciphertext", row.ciphertext.clone()))
+        .bind(("wrapped", row.wrapped_key.clone())).bind(("version", row.kms_key_version.clone()))
+        .bind(("at", row.inserted_at.clone())).await.unwrap().check().unwrap();
+    (id, row)
+}
+
+#[tokio::test]
+async fn captured_encrypted_changes_decrypt_with_exact_original_context_after_enrollment() {
+    use chrono::SubsecRound as _;
+    let Some((pg, source, actor, _, _)) = database_with_domain_parents().await else {
+        return;
+    };
+    let kms = cloud::FakeKms::new("synthetic-runtime-key");
+    let (_, fresh) =
+        encrypted_source_change(&source, &kms, actor, "NAVIGATOR_META_APP_SECRET").await;
+    let (existing, historical) =
+        encrypted_source_change(&source, &kms, actor, "NAVIGATOR_THREADS_APP_SECRET").await;
+    let updated: Option<String> = source
+        .query("SELECT VALUE <string>updated_at FROM ONLY $id")
+        .bind((
+            "id",
+            crate::surreal::record_id("deployment_secret_change", existing),
+        ))
+        .await
+        .unwrap()
+        .check()
+        .unwrap()
+        .take(0)
+        .unwrap();
+    let inserted = chrono::DateTime::parse_from_rfc3339(&historical.inserted_at)
+        .unwrap()
+        .with_timezone(&chrono::Utc)
+        .trunc_subsecs(6);
+    let updated = chrono::DateTime::parse_from_rfc3339(&updated.unwrap())
+        .unwrap()
+        .with_timezone(&chrono::Utc)
+        .trunc_subsecs(6);
+    // An earlier target image lacks the authenticated raw timestamp column.
+    // Only an exact captured overlap may fill those missing original bytes.
+    sqlx::query("INSERT INTO deployment_secret_change (id,request_id,actor_id,key,ciphertext,wrapped_key,kms_key_version,inserted_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)")
+        .bind(existing).bind(&historical.request_id).bind(&historical.actor_id).bind(&historical.key)
+        .bind(&historical.ciphertext).bind(&historical.wrapped_key).bind(&historical.kms_key_version)
+        .bind(inserted).bind(updated).execute(pg.pool()).await.unwrap();
+    let before: serde_json::Value = sqlx::query_scalar(
+        "SELECT to_jsonb(r)-'inserted_at_text' FROM deployment_secret_change r WHERE id=$1",
+    )
+    .bind(existing)
+    .fetch_one(pg.pool())
+    .await
+    .unwrap();
+    let prior = prior_histories(&pg).await;
+    let receipt = verified_family_capture(&source).await;
+    let started = start_family(
+        &source,
+        &pg,
+        family::Family::Application,
+        receipt,
+        1,
+        Some(1),
+        false,
+    )
+    .await
+    .unwrap();
+    let completed = resume_family(
+        &source,
+        &pg,
+        family::Family::Application,
+        started.run_id,
+        None,
+        true,
+    )
+    .await
+    .unwrap();
+    assert!(completed.is_clean(), "{completed:?}");
+    let table = completed
+        .parity
+        .iter()
+        .find(|table| table.table == "deployment_secret_change")
+        .unwrap();
+    assert_eq!((table.surreal, table.postgres), (2, 2));
+    let after: serde_json::Value = sqlx::query_scalar(
+        "SELECT to_jsonb(r)-'inserted_at_text' FROM deployment_secret_change r WHERE id=$1",
+    )
+    .bind(existing)
+    .fetch_one(pg.pool())
+    .await
+    .unwrap();
+    assert!(
+        before == after,
+        "authenticated overlap fields must remain unchanged"
+    );
+    PostgresDb::with_test_db(pg.clone(), async {
+        let rows = crate::deployment_secret_changes::latest(
+            &SurrealDb::uninitialized(),
+            crate::persons::Role::Owner,
+            crate::DeploymentEnvironment::Production,
+        )
+        .await
+        .unwrap();
+        assert_eq!(rows.len(), 2);
+        for expected in [&fresh, &historical] {
+            let actual = rows
+                .iter()
+                .find(|row| row.request_id == expected.request_id)
+                .unwrap();
+            assert_eq!(actual.inserted_at, expected.inserted_at);
+            assert_eq!(actual.actor_id, expected.actor_id);
+            assert!(crate::deployment_secret_changes::open(&kms, actual)
+                .await
+                .is_ok_and(|value| value == "synthetic-value"));
+            let mut normalized = actual.clone();
+            normalized.inserted_at = inserted.to_rfc3339();
+            assert!(crate::deployment_secret_changes::open(&kms, &normalized)
+                .await
+                .is_err());
+        }
+    })
+    .await;
+    assert_eq!(prior_histories(&pg).await, prior);
+    pg.pool().close().await;
+}
