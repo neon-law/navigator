@@ -135,6 +135,11 @@ struct Fixture {
 async fn fixture() -> Fixture {
     let pg = store::postgres::PostgresDb::from_env().await.unwrap();
     pg.migrate_embedded(None).await.unwrap();
+    store::test_support::seed_postgres_family(
+        &pg,
+        store::postgres_backfill::family::Family::Notation,
+    )
+    .await;
     let surreal = mem_surreal().await;
     let project_id = source_project(&surreal).await;
     let client = store::persons::create(

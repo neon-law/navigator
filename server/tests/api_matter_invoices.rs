@@ -73,21 +73,26 @@ async fn invoice_store() -> Option<&'static str> {
                 .await
                 .unwrap();
             admin.close().await;
-            let setup = sqlx::PgPool::connect_with(options.database(&database))
+            let setup = store::postgres::PostgresDb::connect(options.database(&database))
                 .await
                 .unwrap();
             // The graph migration needs the AGE extension, which only a
             // superuser creates: the lane's superuser init path stands in
             // for the application's `roles.sql`.
             sqlx::raw_sql("CREATE EXTENSION IF NOT EXISTS age; LOAD 'age';")
-                .execute(&setup)
+                .execute(setup.pool())
                 .await
                 .unwrap();
             sqlx::raw_sql(store::postgres_schema::canonical_schema())
-                .execute(&setup)
+                .execute(setup.pool())
                 .await
                 .unwrap();
-            setup.close().await;
+            store::test_support::seed_postgres_family(
+                &setup,
+                store::postgres_backfill::family::Family::Notation,
+            )
+            .await;
+            setup.pool().close().await;
             std::env::set_var("NAVIGATOR_POSTGRES_HOST", "127.0.0.1");
             std::env::set_var("NAVIGATOR_POSTGRES_PORT", &port);
             std::env::set_var("NAVIGATOR_POSTGRES_USER", "postgres");
@@ -163,26 +168,20 @@ async fn seed_matter(surreal: &store::surreal::SurrealDb, code: &str) -> Uuid {
     project.id
 }
 
-/// A live project-scoped Document for a cost receipt — the row the cost
-/// command validates against (`store::assets`, the same shape
-/// `seed_body_asset` seeds, plus the matter link and kind).
-async fn seed_receipt_asset(surreal: &store::surreal::SurrealDb, project_id: Uuid) -> Uuid {
+/// A live project-scoped receipt Document in its PostgreSQL authority.
+async fn seed_receipt_asset(pg: &store::postgres::PostgresDb, project_id: Uuid) -> Uuid {
     let id = Uuid::now_v7();
-    surreal
-        .query(
-            "CREATE $id SET project_id = $project, kind = 'receipt', \
-             filename = 'receipt.pdf', storage_key = $key, \
-             content_type = 'application/pdf', byte_size = 128, sha256_hex = $sha, \
-             source = 'upload', visibility = 'internal', metadata = NONE",
-        )
-        .bind(("id", store::surreal::record_id("asset", id)))
-        .bind(("project", store::surreal::record_id("project", project_id)))
-        .bind(("key", format!("blobs/{}", Uuid::now_v7().simple())))
-        .bind(("sha", store::assets::sha256_hex(b"receipt-bytes")))
-        .await
-        .unwrap()
-        .check()
-        .unwrap();
+    sqlx::query(
+        "INSERT INTO asset(id,project_id,kind,filename,storage_key,content_type,byte_size,sha256_hex,source,visibility) \
+         VALUES ($1,$2,'receipt','receipt.pdf',$3,'application/pdf',128,$4,'upload','internal')",
+    )
+    .bind(id)
+    .bind(project_id)
+    .bind(format!("blobs/{}", Uuid::now_v7().simple()))
+    .bind(store::assets::sha256_hex(b"receipt-bytes"))
+    .execute(pg.pool())
+    .await
+    .unwrap();
     id
 }
 
@@ -224,7 +223,7 @@ async fn seed_cost(
     amount_cents: i64,
     confirm: bool,
 ) -> store::project_costs::ProjectCost {
-    let receipt_document_id = seed_receipt_asset(surreal, project_id).await;
+    let receipt_document_id = seed_receipt_asset(pg, project_id).await;
     let cost = Box::pin(store::project_costs::create(
         surreal,
         pg,
@@ -454,6 +453,19 @@ async fn the_hourly_path_bills_time_and_confirmed_costs_once() {
     assert_eq!(receipt["consumed_time_entries"], 2);
     assert_eq!(receipt["consumed_costs"], 1);
     assert_eq!(receipt["flat_fee"], false);
+
+    let calls = create_calls(&fx);
+    let cost_line = calls[0]
+        .1
+        .line_items
+        .iter()
+        .find(|line| line.description == format!("{} — {}", confirmed.description, confirmed.payee))
+        .expect("the confirmed filing cost is itemized");
+    assert_eq!(cost_line.quantity, 1);
+    assert_eq!(
+        cost_line.unit_amount_cents, confirmed.amount_cents,
+        "pass through without markup"
+    );
 
     // The Xero Reference names the matter — the ingest convention.
     let project = store::projects::find_by_id(&fx.surreal, fx.project_id)
@@ -704,7 +716,7 @@ async fn a_cost_in_another_currency_is_refused() {
     let pg = store::postgres::PostgresDb::from_env().await.unwrap();
     // A confirmed, unbilled cost in euros: the matter bills in USD, so the
     // composition refuses the raise rather than silently converting.
-    let receipt_document_id = seed_receipt_asset(&fx.surreal, fx.project_id).await;
+    let receipt_document_id = seed_receipt_asset(&pg, fx.project_id).await;
     let cost = Box::pin(store::project_costs::create(
         &fx.surreal,
         &pg,

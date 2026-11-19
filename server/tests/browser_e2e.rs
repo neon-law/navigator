@@ -2479,7 +2479,13 @@ async fn slash_opens_the_destination_palette_and_escape_restores_focus() {
     );
     assert_eq!(
         state["rows"],
-        serde_json::json!(["/app/projects", "/app/team", "/app/inbox", "/app/profile"]),
+        serde_json::json!([
+            "/app/projects",
+            "/app/team",
+            "/app/inbox",
+            "/purchases",
+            "/app/profile"
+        ]),
         "the lawyer's palette is not the lawyer's destination set: {state}"
     );
     assert_eq!(
@@ -2749,7 +2755,7 @@ async fn the_client_portal_palette_behaves_like_the_firm_app() {
     assert_eq!(state["filterFocused"], true, "{state}");
     assert_eq!(
         state["rows"],
-        serde_json::json!(["/app/projects", "/app/profile"]),
+        serde_json::json!(["/app/projects", "/purchases", "/app/profile"]),
         "the client's palette is not the client's destination set: {state}"
     );
 

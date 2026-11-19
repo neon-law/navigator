@@ -338,7 +338,7 @@ pub const INVOICE_CURRENCY: &str = "USD";
 /// anything is raised — a preview that changed re-opens the review instead of
 /// billing charges nobody saw. Inputs are the effective compose sets: the
 /// remaining fee, the covered-time-filtered entries, and the confirmed
-/// unbilled costs, each with the fields that shape the money.
+/// unbilled costs, including the amount, payee, wording, and cost date.
 #[must_use]
 pub fn preview_digest(
     entries: &[crate::time_entries::TimeEntry],
@@ -352,18 +352,30 @@ pub fn preview_digest(
     if let Some(fee) = flat_fee_cents {
         let _ = write!(canonical, "fee:{fee};");
     }
+    // Length-prefix free text so punctuation cannot move a field boundary.
     for entry in entries {
         let _ = write!(
             canonical,
-            "t:{};{};{};{};",
-            entry.id, entry.minutes, entry.rate_cents_per_hour, entry.description
+            "t:{};{};{};{};{}:{};",
+            entry.id,
+            entry.minutes,
+            entry.rate_cents_per_hour,
+            entry.performed_on,
+            entry.description.len(),
+            entry.description
         );
     }
     for cost in costs {
         let _ = write!(
             canonical,
-            "c:{};{};{};",
-            cost.id, cost.amount_cents, cost.description
+            "c:{};{};{};{}:{};{}:{};",
+            cost.id,
+            cost.amount_cents,
+            cost.occurred_on,
+            cost.description.len(),
+            cost.description,
+            cost.payee.len(),
+            cost.payee
         );
     }
     let digest = Sha256::digest(canonical.as_bytes());
@@ -446,10 +458,39 @@ mod tests {
         let renamed = [an_entry(90, "Drafted the motion to dismiss")];
         assert_ne!(preview_digest(&renamed, &costs, Some(48_000)), composed());
 
+        let mut rescheduled = entries.clone();
+        rescheduled[0].performed_on = "2026-11-05".parse().unwrap();
+        assert_ne!(
+            preview_digest(&rescheduled, &costs, Some(48_000)),
+            composed()
+        );
+
         let cheaper = [a_cost(11_000, "Filing fee")];
         assert_ne!(preview_digest(&entries, &cheaper, Some(48_000)), composed());
 
+        let mut redirected = costs.clone();
+        redirected[0].payee = "Synthetic County Clerk".to_string();
+        assert_ne!(
+            preview_digest(&entries, &redirected, Some(48_000)),
+            composed()
+        );
+
+        let mut redated = costs.clone();
+        redated[0].occurred_on = "2026-11-05".parse().unwrap();
+        assert_ne!(preview_digest(&entries, &redated, Some(48_000)), composed());
+
         assert_ne!(preview_digest(&entries, &costs, Some(47_000)), composed());
         assert_ne!(preview_digest(&entries, &costs, None), composed());
+    }
+
+    #[test]
+    fn cost_review_distinguishes_delimiters_inside_description_and_payee() {
+        let first = [a_cost(40_200, "Filing fee;County")];
+        let mut second = [a_cost(40_200, "Filing fee")];
+        second[0].payee = format!("County;{}", first[0].payee);
+        assert_ne!(
+            preview_digest(&[], &first, None),
+            preview_digest(&[], &second, None)
+        );
     }
 }

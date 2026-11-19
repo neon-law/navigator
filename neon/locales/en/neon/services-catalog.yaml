@@ -475,23 +475,29 @@ purchase:
       complimentary_with_google: true
     - id: delete-your-data-monthly
       name: Delete Your Data, monthly
-      blurb: Data removal, privacy protection, and basic form filings such as an LLC, billed every month. Government fees are separate.
+      blurb: >-
+        Data removal, privacy protection, and basic form filings such as an LLC, billed every month.
+        Court and government filing fees are billed separately at actual cost.
       amount: "$29"
       cadence: month
       renewal_terms: >-
         {amount} USD is charged now and automatically every month until you cancel. Cancel renewal online at
         {cancel_url} before your next charge. Stripe cancellation preserves the current paid period.
+        Court and government filing fees are billed separately at actual cost.
         Cancelling renewal does not end an attorney-client relationship or cancel an existing invoice.
         Any refund rights under applicable law or your engagement agreement remain.
       account_code: "200"
     - id: delete-your-data-annual
       name: Delete Your Data, prepaid year
-      blurb: Data removal, privacy protection, and basic form filings such as an LLC, prepaid for a full year. Government fees are separate.
+      blurb: >-
+        Data removal, privacy protection, and basic form filings such as an LLC, prepaid for a full year.
+        Court and government filing fees are billed separately at actual cost.
       amount: "$290"
       cadence: year
       renewal_terms: >-
         {amount} USD is charged now and automatically every year until you cancel. Cancel renewal online at
         {cancel_url} before your next charge. Stripe cancellation preserves the current paid period.
+        Court and government filing fees are billed separately at actual cost.
         Cancelling renewal does not end an attorney-client relationship or cancel an existing invoice.
         Any refund rights under applicable law or your engagement agreement remain.
       account_code: "200"
