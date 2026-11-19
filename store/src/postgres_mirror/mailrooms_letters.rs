@@ -1,12 +1,10 @@
 //! Physical Mailroom and Letter rows in the PostgreSQL mirror.
 //!
-//! SurrealDB remains authoritative. The same source UUID and exact source
-//! fields are copied to PostgreSQL after successful source writes; address
-//! and mailroom parents are mirrored before their children. Project ids on
-//! Letters remain nullable and intentionally have no PostgreSQL foreign key:
-//! historical rows may omit them and the source writer does not validate them.
+//! Explicit historical imports copy missing rows without overwriting native data.
+//! Persisted Application ownership blocks Source access, even during forced replay.
+//! Historical Letter Project ids remain nullable and have no foreign key.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use sqlx::Row;
@@ -141,6 +139,12 @@ pub(super) async fn mirror(
     pg: &PostgresDb,
     key: &MirrorKey,
 ) -> Result<Mirrored, MirrorError> {
+    if !matches!(key, MirrorKey::Mailroom(_) | MirrorKey::Letter(_)) {
+        return Err(MirrorError::Source);
+    }
+    if !super::source_import_allowed(pg, key.table()).await? {
+        return Ok(Mirrored::Unchanged);
+    }
     match key {
         MirrorKey::Mailroom(id) => mirror_mailroom(surreal, pg, *id).await,
         MirrorKey::Letter(id) => mirror_letter(surreal, pg, *id).await,
@@ -153,22 +157,30 @@ async fn mirror_mailroom(
     pg: &PostgresDb,
     id: Uuid,
 ) -> Result<Mirrored, MirrorError> {
-    let Some(row) = crate::mailrooms::find_by_id(surreal, id)
+    let Some(row) = super::from_source(crate::mailrooms::find_by_id(surreal, id))
         .await
         .map_err(source_error)?
     else {
-        let result = sqlx::query("DELETE FROM mailroom WHERE id=$1")
-            .bind(id)
-            .execute(&pg.0)
-            .await?;
-        return Ok(changed(result.rows_affected(), Mirrored::Deleted));
+        return Ok(Mirrored::Unchanged);
     };
     let row = MailroomImage::from(row);
-    super::identity_detail::mirror(surreal, pg, &MirrorKey::Address(row.address_id)).await?;
-    let query = sqlx::query(sqlx::AssertSqlSafe(upsert_sql(
-        "mailroom",
-        MAILROOM_COLUMNS,
-    )));
+    let address_exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM address WHERE id=$1)")
+            .bind(row.address_id)
+            .fetch_one(pg.pool())
+            .await?;
+    if !address_exists {
+        if super::backfilled(pg).await?
+            || crate::postgres_backfill::family::active_for_table(pg, "address").await?
+        {
+            return Err(MirrorError::MatterAuthority);
+        }
+        super::identity_detail::mirror(surreal, pg, &MirrorKey::Address(row.address_id)).await?;
+    }
+    let query = sqlx::query(super::held_write(
+        true,
+        &upsert_sql("mailroom", MAILROOM_COLUMNS),
+    ));
     let result = row.bind(query).execute(&pg.0).await?;
     Ok(changed(result.rows_affected(), Mirrored::Written))
 }
@@ -178,28 +190,42 @@ async fn mirror_letter(
     pg: &PostgresDb,
     id: Uuid,
 ) -> Result<Mirrored, MirrorError> {
-    let Some(row) = crate::letters::find_by_id(surreal, id)
+    let Some(row) = super::from_source(crate::letters::find_by_id(surreal, id))
         .await
         .map_err(source_error)?
     else {
-        let result = sqlx::query("DELETE FROM letter WHERE id=$1")
-            .bind(id)
-            .execute(&pg.0)
-            .await?;
-        return Ok(changed(result.rows_affected(), Mirrored::Deleted));
+        return Ok(Mirrored::Unchanged);
     };
     let row = LetterImage::from(row);
-    mirror_mailroom(surreal, pg, row.mailroom_id).await?;
-    let query = sqlx::query(sqlx::AssertSqlSafe(upsert_sql("letter", LETTER_COLUMNS)));
+    let mailroom_exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM mailroom WHERE id=$1)")
+            .bind(row.mailroom_id)
+            .fetch_one(pg.pool())
+            .await?;
+    if !mailroom_exists {
+        if super::backfilled(pg).await?
+            || crate::postgres_backfill::family::active_for_table(pg, "mailroom").await?
+        {
+            return Err(MirrorError::MatterAuthority);
+        }
+        mirror_mailroom(surreal, pg, row.mailroom_id).await?;
+    }
+    let query = sqlx::query(super::held_write(
+        true,
+        &upsert_sql("letter", LETTER_COLUMNS),
+    ));
     let result = row.bind(query).execute(&pg.0).await?;
     Ok(changed(result.rows_affected(), Mirrored::Written))
 }
 
 pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
-    let mailrooms = crate::mailrooms::list_all(surreal)
+    if crate::postgres_backfill::family::active_for_table(pg, "mailroom").await? {
+        return Ok(ParityReport { tables: vec![] });
+    }
+    let mailrooms = super::from_source(crate::mailrooms::list_all(surreal))
         .await
         .map_err(source_error)?;
-    let letters = crate::letters::list_all(surreal)
+    let letters = super::from_source(crate::letters::list_all(surreal))
         .await
         .map_err(source_error)?;
     let source_mailrooms: BTreeMap<_, _> = mailrooms
@@ -241,55 +267,10 @@ pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport
 
 pub async fn reconcile(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
     let before = parity(surreal, pg).await?;
-    let mailroom_ids: BTreeSet<_> = crate::mailrooms::list_all(surreal)
-        .await
-        .map_err(source_error)?
-        .into_iter()
-        .map(|row| row.id)
-        .collect();
-    let letter_ids: BTreeSet<_> = crate::letters::list_all(surreal)
-        .await
-        .map_err(source_error)?
-        .into_iter()
-        .map(|row| row.id)
-        .collect();
-
-    // Remove only rows no longer present at the source. Children go first
-    // so removed Mailrooms can be deleted, and stale natural keys are freed
-    // before replacement rows are upserted after an in-memory source reset.
-    for key in before
-        .divergent()
-        .filter(|key| matches!(key, MirrorKey::Letter(id) if !letter_ids.contains(id)))
-    {
-        if let Err(error) = mirror(surreal, pg, key).await {
-            tracing::warn!(key = %key, error = %error, "PostgreSQL reconcile could not mirror the row");
-        }
-    }
-    for key in before
-        .divergent()
-        .filter(|key| matches!(key, MirrorKey::Mailroom(id) if !mailroom_ids.contains(id)))
-    {
-        if let Err(error) = mirror(surreal, pg, key).await {
-            tracing::warn!(key = %key, error = %error, "PostgreSQL reconcile could not mirror the row");
-        }
-    }
-
-    // Write parents before children once stale identifiers and unique names
-    // have been released.
-    for key in before
-        .divergent()
-        .filter(|key| matches!(key, MirrorKey::Mailroom(id) if mailroom_ids.contains(id)))
-    {
-        if let Err(error) = mirror(surreal, pg, key).await {
-            tracing::warn!(key = %key, error = %error, "PostgreSQL reconcile could not mirror the row");
-        }
-    }
-    for key in before
-        .divergent()
-        .filter(|key| matches!(key, MirrorKey::Letter(id) if letter_ids.contains(id)))
-    {
-        if let Err(error) = mirror(surreal, pg, key).await {
-            tracing::warn!(key = %key, error = %error, "PostgreSQL reconcile could not mirror the row");
+    // Parent tables appear first. Conflicts and target-only rows remain held evidence.
+    for table in ["mailroom", "letter"] {
+        for key in before.divergent().filter(|key| key.table() == table) {
+            mirror(surreal, pg, key).await?;
         }
     }
     parity(surreal, pg).await

@@ -1927,3 +1927,6 @@ fn row_id(key: &MirrorKey) -> Option<Uuid> {
 mod blog_videos_tests;
 #[cfg(test)]
 pub(crate) mod tests;
+
+#[cfg(test)]
+mod application_replay_tests;

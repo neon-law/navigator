@@ -204,7 +204,7 @@ fn event_from_row(row: &PgRow) -> Result<ApprovalEventImage, sqlx::Error> {
 }
 
 async fn upsert_approval(pg: &PostgresDb, row: &ApprovalImage) -> Result<Mirrored, MirrorError> {
-    let result = sqlx::query("INSERT INTO summary_sender_approval (id, firm_id, project_id, provider_account, person_id, sender_email, status, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (id) DO UPDATE SET firm_id=EXCLUDED.firm_id, project_id=EXCLUDED.project_id, provider_account=EXCLUDED.provider_account, person_id=EXCLUDED.person_id, sender_email=EXCLUDED.sender_email, status=EXCLUDED.status, updated_at=EXCLUDED.updated_at WHERE (summary_sender_approval.firm_id, summary_sender_approval.project_id, summary_sender_approval.provider_account, summary_sender_approval.person_id, summary_sender_approval.sender_email, summary_sender_approval.status, summary_sender_approval.updated_at) IS DISTINCT FROM (EXCLUDED.firm_id, EXCLUDED.project_id, EXCLUDED.provider_account, EXCLUDED.person_id, EXCLUDED.sender_email, EXCLUDED.status, EXCLUDED.updated_at)")
+    let result = sqlx::query("INSERT INTO summary_sender_approval (id, firm_id, project_id, provider_account, person_id, sender_email, status, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (id) DO NOTHING")
         .bind(row.id).bind(row.firm_id).bind(row.project_id).bind(&row.provider_account).bind(row.person_id).bind(&row.sender_email).bind(&row.status).bind(micros(row.updated_at)).execute(&pg.0).await?;
     Ok(changed(result.rows_affected(), Mirrored::Written))
 }
@@ -243,11 +243,18 @@ async fn ensure_parent(
         _ => return Err(MirrorError::Source),
     };
     if !exists {
+        if super::backfilled(pg).await?
+            || crate::postgres_backfill::family::active_for_table(pg, table).await?
+        {
+            return Err(MirrorError::MatterAuthority);
+        }
         match key {
             MirrorKey::Firm(_) | MirrorKey::Project(_) => {
-                super::tenancy::mirror(surreal, pg, &key).await?
+                super::from_source(super::tenancy::mirror(surreal, pg, &key)).await?
             }
-            MirrorKey::Person(_) => super::identity::mirror(surreal, pg, &key).await?,
+            MirrorKey::Person(_) => {
+                super::from_source(super::identity::mirror(surreal, pg, &key)).await?
+            }
             _ => return Err(MirrorError::Source),
         };
     }
@@ -287,17 +294,19 @@ pub async fn mirror(
     pg: &PostgresDb,
     key: &MirrorKey,
 ) -> Result<Mirrored, MirrorError> {
+    if !matches!(
+        key,
+        MirrorKey::SummarySenderApproval(_) | MirrorKey::SummarySenderApprovalEvent(_)
+    ) {
+        return Err(MirrorError::Source);
+    }
+    if !super::source_import_allowed(pg, key.table()).await? {
+        return Ok(Mirrored::Unchanged);
+    }
     match key {
         MirrorKey::SummarySenderApproval(id) => {
             let Some(row) = source_approval(surreal, *id).await? else {
-                return Ok(changed(
-                    sqlx::query("DELETE FROM summary_sender_approval WHERE id=$1")
-                        .bind(id)
-                        .execute(&pg.0)
-                        .await?
-                        .rows_affected(),
-                    Mirrored::Deleted,
-                ));
+                return Ok(Mirrored::Unchanged);
             };
             ensure_approval_parents(surreal, pg, row.firm_id, row.project_id, row.person_id)
                 .await?;
@@ -324,6 +333,9 @@ pub async fn mirror(
 }
 
 pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
+    if crate::postgres_backfill::family::active_for_table(pg, "summary_sender_approval").await? {
+        return Ok(ParityReport { tables: vec![] });
+    }
     let approvals = super::compare(
         "summary_sender_approval",
         &source_approvals(surreal).await?,
@@ -339,6 +351,9 @@ pub async fn parity(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport
     })
 }
 pub async fn reconcile(surreal: &SurrealDb, pg: &PostgresDb) -> Result<ParityReport, MirrorError> {
+    if crate::postgres_backfill::family::active_for_table(pg, "summary_sender_approval").await? {
+        return Ok(ParityReport { tables: vec![] });
+    }
     let source = source_approvals(surreal).await?;
     let target = target_approvals(pg).await?;
     for key in divergent(&source, &target) {

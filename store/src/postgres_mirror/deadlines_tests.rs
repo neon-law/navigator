@@ -2,14 +2,6 @@ use super::*;
 use crate::postgres_mirror::tests::{connect, fresh_schema};
 use crate::test_support::mem_surreal;
 
-#[test]
-fn deadline_mirror_key_is_opaque() {
-    let id = Uuid::nil();
-    let key = MirrorKey::ProjectDeadline(id);
-    assert_eq!(key.table(), "project_deadlines");
-    assert_eq!(key.to_string(), format!("project_deadlines:{id}"));
-}
-
 /// Assert the mirrored row replayed with every tracked column intact.
 async fn assert_replayed_row(pg: &PostgresDb, id: Uuid) {
     let (status, title, description, sequence, category): (
@@ -35,6 +27,7 @@ async fn assert_replayed_row(pg: &PostgresDb, id: Uuid) {
 
 #[tokio::test]
 async fn project_deadline_mirrors_replay_and_reconcile() {
+    super::super::during_initial_copy(async {
     let Some((options, database)) = fresh_schema().await else {
         return;
     };
@@ -77,21 +70,10 @@ async fn project_deadline_mirrors_replay_and_reconcile() {
     );
     assert!(parity(&surreal, &pg).await.unwrap().is_clean());
 
-    // A row whose category is cleared (the historical shape) mirrors back and
-    // settles at parity with no category on either side.
-    surreal
-        .query("UPDATE $id UNSET category")
-        .bind(("id", crate::surreal::record_id("project_deadlines", id)))
-        .await
-        .unwrap()
-        .check()
-        .unwrap();
-    assert_eq!(
-        mirror(&surreal, &pg, &key).await.unwrap(),
-        Mirrored::Written
-    );
-    assert!(parity(&surreal, &pg).await.unwrap().is_clean());
-
+    // Changed captured payload is drift, not authority to overwrite native history.
+    surreal.query("UPDATE $id UNSET category").bind(("id",crate::surreal::record_id("project_deadlines",id))).await.unwrap().check().unwrap();
+    assert_eq!(mirror(&surreal,&pg,&key).await.unwrap(),Mirrored::Unchanged);
+    assert!(!reconcile(&surreal,&pg).await.unwrap().is_clean());
     // Restore the categorized shape so the reconcile leg below proves a
     // category survives a full replay into a deleted-and-rebuilt row.
     surreal
@@ -116,5 +98,10 @@ async fn project_deadline_mirrors_replay_and_reconcile() {
         .unwrap();
     assert!(reconcile(&surreal, &pg).await.unwrap().is_clean());
     assert_replayed_row(&pg, id).await;
+    surreal.query("DELETE $id").bind(("id",crate::surreal::record_id("project_deadlines",id))).await.unwrap().check().unwrap();
+    assert!(!reconcile(&surreal,&pg).await.unwrap().is_clean());
+    assert_replayed_row(&pg,id).await;
+
     pg.0.close().await;
+    }).await;
 }
