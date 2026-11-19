@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
-use crate::surreal::{record_id, record_uuid, SurrealDb};
+use crate::postgres::project_deadlines::{Normalized, StoredDeadline};
+use crate::surreal::{SurrealDb, record_id, record_uuid};
 pub use model::project_deadlines::CATEGORIES;
 
 pub const STATUS_OPEN: &str = "open";
@@ -101,8 +102,7 @@ impl DeadlineRow {
     }
 }
 
-const SELECT: &str =
-    "id, project_id, title, description, due_at, authority_kind, authority, source, \
+const SELECT: &str = "id, project_id, title, description, due_at, authority_kind, authority, source, \
      source_document_id, owner_person_id, status, calendar_role, category, \
      internal_lead_days, client_lead_days, replay_key, inserted_at, updated_at, calendar_sequence";
 
@@ -158,20 +158,6 @@ pub struct DeadlinePatch {
     pub category: Option<Option<String>>,
     pub internal_lead_days: Option<Option<i64>>,
     pub client_lead_days: Option<Option<i64>>,
-}
-
-struct Normalized {
-    title: Option<String>,
-    description: Option<String>,
-    due_at: String,
-    authority_kind: String,
-    authority: String,
-    source: String,
-    calendar_role: String,
-    category: Option<String>,
-    internal_lead_days: Option<i64>,
-    client_lead_days: Option<i64>,
-    replay_key: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -429,17 +415,6 @@ async fn find_replay(
     Ok(row.and_then(DeadlineRow::into_deadline))
 }
 
-#[derive(Clone, Copy)]
-struct StoredDeadline<'a> {
-    normalized: &'a Normalized,
-    source_document_id: Option<Uuid>,
-    owner_person_id: Option<Uuid>,
-    status: &'a str,
-    expected_status: Option<&'a str>,
-    expected_updated_at: Option<&'a str>,
-    inserted_at: &'a str,
-}
-
 async fn persist(
     surreal: &SurrealDb,
     id: Uuid,
@@ -447,7 +422,7 @@ async fn persist(
     stored: &StoredDeadline<'_>,
 ) -> Result<Deadline, DeadlineError> {
     if let Some(pg) = crate::postgres::matter::authority_for("project_deadlines").await? {
-        return persist_postgres(&pg, id, project_id, stored).await;
+        return crate::postgres::project_deadlines::persist(&pg, id, project_id, stored).await;
     }
 
     let StoredDeadline {
@@ -722,117 +697,10 @@ pub async fn reopen(
     transition(surreal, project_id, id, STATUS_OPEN).await
 }
 
-fn same_payload(row: &Deadline, stored: &StoredDeadline<'_>, status: &str, same_due: bool) -> bool {
-    let n = stored.normalized;
-    row.title == n.title
-        && row.description == n.description
-        && same_due
-        && row.authority_kind == n.authority_kind
-        && row.authority == n.authority
-        && row.source == n.source
-        && row.calendar_role == n.calendar_role
-        && row.category == n.category
-        && row.internal_lead_days == n.internal_lead_days
-        && row.client_lead_days == n.client_lead_days
-        && row.replay_key == n.replay_key
-        && row.source_document_id == stored.source_document_id
-        && row.owner_person_id == stored.owner_person_id
-        && row.status == status
-}
-
-/// A Project lock serializes replay identity, lifecycle checks, and calendar revision.
-async fn persist_postgres(
-    pg: &crate::postgres::PostgresDb,
-    requested_id: Uuid,
-    project: Uuid,
-    stored: &StoredDeadline<'_>,
-) -> Result<Deadline, DeadlineError> {
-    use crate::postgres::matter::{self, MatterAuthorityError as PgError};
-    let n = stored.normalized;
-    let mut tx = pg.pool().begin().await.map_err(PgError::from)?;
-    sqlx::query("SELECT pg_advisory_xact_lock(1312902739, hashtext($1::text))")
-        .bind(project)
-        .execute(&mut *tx)
-        .await
-        .map_err(PgError::from)?;
-    let old: Option<(serde_json::Value, bool)> = sqlx::query_as("SELECT to_jsonb(d), d.due_at IS NOT DISTINCT FROM $4::timestamptz FROM project_deadlines d WHERE project_id=$1 AND (id=$2 OR ($3::text IS NOT NULL AND replay_key=$3)) ORDER BY id LIMIT 1 FOR UPDATE")
-        .bind(project).bind(requested_id).bind(&n.replay_key).bind(&n.due_at)
-        .fetch_optional(&mut *tx).await.map_err(PgError::from)?;
-    let (old, same_due) = old.map_or((None, false), |(row, same_due)| (Some(row), same_due));
-    let old: Option<Deadline> = old
-        .map(serde_json::from_value)
-        .transpose()
-        .map_err(PgError::from)?;
-    if stored
-        .expected_updated_at
-        .is_some_and(|expected| old.as_ref().is_none_or(|row| row.updated_at != expected))
-    {
-        return Err(DeadlineError::Conflict);
-    }
-    if stored
-        .expected_status
-        .is_some_and(|expected| old.as_ref().is_none_or(|row| row.status != expected))
-    {
-        return Err(DeadlineError::Conflict);
-    }
-    if stored.expected_status.is_none()
-        && old
-            .as_ref()
-            .is_some_and(|row| row.status == STATUS_CANCELLED)
-    {
-        return Err(DeadlineError::Invalid(
-            "cancelled deadline must be reopened before replay".into(),
-        ));
-    }
-    let status = if stored.expected_status.is_none() {
-        old.as_ref()
-            .map_or(stored.status, |row| row.status.as_str())
-    } else {
-        stored.status
-    };
-    // Identical retries do not create another calendar notification revision.
-    if let Some(existing) = old
-        .as_ref()
-        .filter(|row| same_payload(row, stored, status, same_due))
-    {
-        return Ok(existing.clone());
-    }
-    let sequence = old
-        .as_ref()
-        .map(|row| {
-            row.calendar_sequence
-                .unwrap_or_else(|| {
-                    DateTime::parse_from_rfc3339(&row.updated_at)
-                        .map_or(0, |time| time.timestamp().max(0))
-                })
-                .checked_add(1)
-                .filter(|sequence| *sequence <= i64::from(i32::MAX))
-                .ok_or_else(|| DeadlineError::Invalid("calendar revision is exhausted".into()))
-        })
-        .transpose()?
-        .unwrap_or(0);
-    let id = old.as_ref().map_or(requested_id, |row| row.id);
-    let inserted = old
-        .as_ref()
-        .map_or(stored.inserted_at, |row| row.inserted_at.as_str());
-    let row = serde_json::json!({
-        "id": id, "project_id": project, "title": n.title, "description": n.description,
-        "due_at": n.due_at, "authority_kind": n.authority_kind, "authority": n.authority,
-        "source": n.source, "source_document_id": stored.source_document_id,
-        "owner_person_id": stored.owner_person_id, "status": status, "calendar_role": n.calendar_role,
-        "category": n.category, "internal_lead_days": n.internal_lead_days,
-        "client_lead_days": n.client_lead_days, "replay_key": n.replay_key,
-        "calendar_sequence": sequence, "inserted_at": inserted, "updated_at": chrono::Utc::now(),
-    });
-    let result = matter::upsert_on(&mut *tx, "project_deadlines", row).await?;
-    tx.commit().await.map_err(PgError::from)?;
-    Ok(result)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::projects::{create as create_project, NewProject};
+    use crate::projects::{NewProject, create as create_project};
     use crate::test_support::mem_surreal;
 
     fn sample(project_id: Uuid) -> NewDeadline {

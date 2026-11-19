@@ -3,6 +3,8 @@
 //! Approval and revocation events are append-only. The current approval row
 //! is updated in place, while the audit table preserves who changed it.
 
+use crate::postgres::summary_sender_approvals::ApprovalAudit;
+
 use chrono::{DateTime, Utc};
 use surrealdb::types::SurrealValue;
 use uuid::Uuid;
@@ -10,7 +12,7 @@ use uuid::Uuid;
 use crate::{
     firm_capability::{self, FirmCapability, FirmCapabilityDecision},
     persons::{self, Role},
-    surreal::{record_id, record_uuid, SurrealDb},
+    surreal::{SurrealDb, record_id, record_uuid},
 };
 
 pub const TABLE: &str = "summary_sender_approval";
@@ -229,7 +231,7 @@ pub async fn approve(
         .ok_or(ApprovalError::SenderNotVerified)?;
     validate_project_sender(db, firm_id, project_id, person.id).await?;
     if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
-        return approve_postgres(
+        return crate::postgres::summary_sender_approvals::approve(
             &pg,
             actor,
             firm_id,
@@ -315,7 +317,8 @@ pub async fn revoke(
 ) -> Result<(), ApprovalError> {
     authorize(db, role, Some(actor), firm_id).await?;
     if let Some(pg) = crate::postgres::matter::authority_for(TABLE).await? {
-        return revoke_postgres(&pg, actor, firm_id, approval_id).await;
+        return crate::postgres::summary_sender_approvals::revoke(&pg, actor, firm_id, approval_id)
+            .await;
     }
     let mut response = db
         .query(format!(
@@ -427,17 +430,6 @@ async fn validate_project_sender(
     Ok(())
 }
 
-struct ApprovalAudit<'a> {
-    id: Uuid,
-    firm_id: Uuid,
-    actor: Uuid,
-    project_id: Option<Uuid>,
-    account: &'a str,
-    email: &'a str,
-    person: Uuid,
-    action: &'a str,
-}
-
 async fn audit(db: &SurrealDb, event: ApprovalAudit<'_>) -> Result<(), ApprovalError> {
     db.query("CREATE $id SET firm_id = $firm, project_id = $project, actor_person_id = $actor, provider_account = $account, sender_email = $email, person_id = $person, action = $action".to_string())
         .bind(("id", record_id(AUDIT_TABLE, event.id))).bind(("firm", record_id(crate::firms::TABLE, event.firm_id))).bind(("actor", record_id("person", event.actor)))
@@ -452,137 +444,12 @@ async fn audit(db: &SurrealDb, event: ApprovalAudit<'_>) -> Result<(), ApprovalE
     Ok(())
 }
 
-async fn audit_postgres(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    event: ApprovalAudit<'_>,
-) -> Result<(), ApprovalError> {
-    sqlx::query("INSERT INTO summary_sender_approval_event (id,firm_id,actor_person_id,project_id,provider_account,sender_email,person_id,action,inserted_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now())")
-        .bind(event.id).bind(event.firm_id).bind(event.actor).bind(event.project_id)
-        .bind(event.account).bind(event.email).bind(event.person).bind(event.action)
-        .execute(&mut **tx).await.map_err(crate::postgres::matter::MatterAuthorityError::from)?;
-    Ok(())
-}
-
-async fn approve_postgres(
-    pg: &crate::postgres::PostgresDb,
-    actor: Uuid,
-    firm: Uuid,
-    project: Uuid,
-    account: &str,
-    email: &str,
-    person: Uuid,
-) -> Result<SummarySenderApproval, ApprovalError> {
-    use crate::postgres::matter::{self, MatterAuthorityError as PgError};
-    let mut tx = pg.pool().begin().await.map_err(PgError::from)?;
-    sqlx::query("SELECT pg_advisory_xact_lock(1312902740, hashtext($1::text))")
-        .bind(serde_json::json!([firm, project, account, email]).to_string())
-        .execute(&mut *tx)
-        .await
-        .map_err(PgError::from)?;
-    let locked: Option<Uuid> =
-        sqlx::query_scalar("SELECT id FROM project WHERE id=$1 AND firm_id=$2 FOR SHARE")
-            .bind(project)
-            .bind(firm)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(PgError::from)?;
-    if locked.is_none() {
-        return Err(ApprovalError::SenderNotClientDri);
-    }
-    let valid: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM person p JOIN person_project_role r ON r.person_id=p.id WHERE p.id=$1 AND p.email_confirmed AND lower(p.email::text)=$2 AND r.project_id=$3 AND r.is_client_dri)")
-        .bind(person).bind(email).bind(project).fetch_one(&mut *tx).await.map_err(PgError::from)?;
-    if !valid {
-        return Err(ApprovalError::SenderNotVerified);
-    }
-    let existing: Option<serde_json::Value> = sqlx::query_scalar("SELECT to_jsonb(r) FROM summary_sender_approval r WHERE firm_id=$1 AND project_id=$2 AND provider_account=$3 AND sender_email=$4 FOR UPDATE")
-        .bind(firm).bind(project).bind(account).bind(email).fetch_optional(&mut *tx).await.map_err(PgError::from)?;
-    let existing: Option<SummarySenderApproval> = existing
-        .map(serde_json::from_value)
-        .transpose()
-        .map_err(PgError::from)?;
-    if existing.as_ref().is_some_and(|row| row.person_id != person) {
-        return Err(ApprovalError::SenderNotVerified);
-    }
-    let id = existing.as_ref().map_or_else(Uuid::now_v7, |row| row.id);
-    let row = matter::upsert_on(
-        &mut *tx,
-        TABLE,
-        serde_json::json!({"id": id,"firm_id": firm,
-        "project_id": project,"provider_account": account,"person_id": person,"sender_email": email,
-        "status": "approved","updated_at": Utc::now()}),
-    )
-    .await?;
-    audit_postgres(
-        &mut tx,
-        ApprovalAudit {
-            id: Uuid::now_v7(),
-            firm_id: firm,
-            actor,
-            project_id: Some(project),
-            account,
-            email,
-            person,
-            action: "approved",
-        },
-    )
-    .await?;
-    tx.commit().await.map_err(PgError::from)?;
-    Ok(row)
-}
-
-async fn revoke_postgres(
-    pg: &crate::postgres::PostgresDb,
-    actor: Uuid,
-    firm: Uuid,
-    id: Uuid,
-) -> Result<(), ApprovalError> {
-    use crate::postgres::matter::MatterAuthorityError as PgError;
-    let mut tx = pg.pool().begin().await.map_err(PgError::from)?;
-    let previous: Option<serde_json::Value> = sqlx::query_scalar(
-        "SELECT to_jsonb(r) FROM summary_sender_approval r WHERE id=$1 AND firm_id=$2 FOR UPDATE",
-    )
-    .bind(id)
-    .bind(firm)
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(PgError::from)?;
-    let Some(previous) = previous else {
-        return Ok(());
-    };
-    let previous: SummarySenderApproval =
-        serde_json::from_value(previous).map_err(PgError::from)?;
-    if previous.status == "revoked" {
-        return Ok(());
-    }
-    sqlx::query("UPDATE summary_sender_approval SET status='revoked',updated_at=now() WHERE id=$1")
-        .bind(id)
-        .execute(&mut *tx)
-        .await
-        .map_err(PgError::from)?;
-    audit_postgres(
-        &mut tx,
-        ApprovalAudit {
-            id: Uuid::now_v7(),
-            firm_id: firm,
-            actor,
-            project_id: previous.project_id,
-            account: &previous.provider_account,
-            email: &previous.sender_email,
-            person: previous.person_id,
-            action: "revoked",
-        },
-    )
-    .await?;
-    tx.commit().await.map_err(PgError::from)?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
         firms::{FirmMembership, NewFirm, NewPersonFirmRole},
-        persons::{set_email_confirmed, NewPerson},
+        persons::{NewPerson, set_email_confirmed},
         surreal::test_support::mem,
     };
 
@@ -648,49 +515,57 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(is_approved(
-            &db,
-            firm,
-            project,
-            "sendgrid-account",
-            approval.person_id,
-            "sender@example.com"
-        )
-        .await
-        .unwrap());
-        assert!(!is_approved(
-            &db,
-            firm,
-            project,
-            "other-account",
-            approval.person_id,
-            "sender@example.com"
-        )
-        .await
-        .unwrap());
-        assert!(!is_approved(
-            &db,
-            Uuid::now_v7(),
-            project,
-            "sendgrid-account",
-            approval.person_id,
-            "sender@example.com"
-        )
-        .await
-        .unwrap());
+        assert!(
+            is_approved(
+                &db,
+                firm,
+                project,
+                "sendgrid-account",
+                approval.person_id,
+                "sender@example.com"
+            )
+            .await
+            .unwrap()
+        );
+        assert!(
+            !is_approved(
+                &db,
+                firm,
+                project,
+                "other-account",
+                approval.person_id,
+                "sender@example.com"
+            )
+            .await
+            .unwrap()
+        );
+        assert!(
+            !is_approved(
+                &db,
+                Uuid::now_v7(),
+                project,
+                "sendgrid-account",
+                approval.person_id,
+                "sender@example.com"
+            )
+            .await
+            .unwrap()
+        );
         revoke(&db, Role::Admin, actor, firm, approval.id)
             .await
             .unwrap();
-        assert!(!is_approved(
-            &db,
-            firm,
-            project,
-            "sendgrid-account",
-            approval.person_id,
-            "sender@example.com"
-        )
-        .await
-        .unwrap());
+        assert!(
+            !is_approved(
+                &db,
+                firm,
+                project,
+                "sendgrid-account",
+                approval.person_id,
+                "sender@example.com"
+            )
+            .await
+            .unwrap()
+        );
         let mut events = db.query("SELECT action, inserted_at FROM summary_sender_approval_event ORDER BY inserted_at").await.unwrap().check().unwrap();
         let rows: Vec<serde_json::Value> = events.take(0).unwrap();
         assert_eq!(rows.len(), 2);
@@ -806,26 +681,30 @@ mod tests {
             .await,
             Err(ApprovalError::SenderNotVerified | ApprovalError::SenderNotClientDri)
         ));
-        assert!(is_approved(
-            &db,
-            firm,
-            project,
-            "sendgrid-account",
-            first.person_id,
-            "sender@example.com"
-        )
-        .await
-        .unwrap());
-        assert!(!is_approved(
-            &db,
-            firm,
-            project,
-            "sendgrid-account",
-            replacement.id,
-            "sender@example.com"
-        )
-        .await
-        .unwrap());
+        assert!(
+            is_approved(
+                &db,
+                firm,
+                project,
+                "sendgrid-account",
+                first.person_id,
+                "sender@example.com"
+            )
+            .await
+            .unwrap()
+        );
+        assert!(
+            !is_approved(
+                &db,
+                firm,
+                project,
+                "sendgrid-account",
+                replacement.id,
+                "sender@example.com"
+            )
+            .await
+            .unwrap()
+        );
     }
 
     #[tokio::test]
@@ -856,16 +735,18 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(approval.project_id, Some(project_id));
-        assert!(!is_approved(
-            &db,
-            firm,
-            other_project.id,
-            "sendgrid-account",
-            sender_id,
-            "sender@example.com",
-        )
-        .await
-        .unwrap());
+        assert!(
+            !is_approved(
+                &db,
+                firm,
+                other_project.id,
+                "sendgrid-account",
+                sender_id,
+                "sender@example.com",
+            )
+            .await
+            .unwrap()
+        );
         let participation = crate::projects::participation_for_person(&db, sender_id, project_id)
             .await
             .unwrap()
@@ -877,15 +758,17 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(!is_approved(
-            &db,
-            firm,
-            project_id,
-            "sendgrid-account",
-            sender_id,
-            "sender@example.com",
-        )
-        .await
-        .unwrap());
+        assert!(
+            !is_approved(
+                &db,
+                firm,
+                project_id,
+                "sendgrid-account",
+                sender_id,
+                "sender@example.com",
+            )
+            .await
+            .unwrap()
+        );
     }
 }

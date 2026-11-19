@@ -1,6 +1,6 @@
 //! PostgreSQL runtime connection for the Firm journal. Credentials are discrete
 //! environment values and never form a printable connection string.
-use include_dir::{include_dir, Dir};
+use include_dir::{Dir, include_dir};
 use sqlx::migrate::{Migration, MigrationType, Migrator};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgSslMode};
 use sqlx::{AssertSqlSafe, PgPool, SqlSafeStr};
@@ -59,9 +59,13 @@ pub(crate) mod notations;
 /// PostgreSQL Project participation ledger, preparatory to application authority.
 pub mod participation;
 
+pub(crate) mod firm_secrets;
+pub(crate) mod leads;
+pub(crate) mod project_deadlines;
 pub mod project_lifecycle;
 /// Native Project records; application authority remains guarded.
 pub mod projects;
+pub(crate) mod summary_sender_approvals;
 
 /// PostgreSQL authority for Posts, Blog Videos, Social Handles, Social
 /// Publications, Social Accounts, and their saved selections.
