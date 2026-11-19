@@ -80,8 +80,8 @@ pub const WORKFLOW: &str = "NotationTransition";
 const STEP_MAX_ATTEMPTS: u32 = 3;
 
 /// The owning PostgreSQL pool for machine state and business accessors, a
-/// compatibility-shaped store handle, and the email/storage services used by
-/// checkpointed steps. Each worker callback binds its own admitted application pool.
+/// compatibility-shaped store handle, and checkpointed email/storage services.
+/// Each workflow callback binds its admitted application pool; inline steps inherit it.
 #[derive(Clone)]
 pub struct Context {
     surreal: SurrealDb,
@@ -286,26 +286,17 @@ pub type NotationTransitionWorkflow =
 pub fn register(dbos: &dbos::DBOS, context: Context) -> dbos::Result<NotationTransitionWorkflow> {
     dbos.register_workflow(WORKFLOW, move |request: TransitionRequest| {
         let context = context.clone();
-        application_callback(context.postgres.clone(), async move {
-            transition(context, request).await
+        // The SDK detaches workflow execution, but awaits step bodies inline.
+        // Bind the owning pool here; ordinary application accessors recheck history.
+        Box::pin(async move {
+            PostgresDb::with_application_db(context.postgres.clone(), transition(context, request))
+                .await
+                .map_err(|_| {
+                    dbos::Error::Application(NotationTransitionError::Store(
+                        "PostgreSQL application admission unavailable".to_owned(),
+                    ))
+                })?
         })
-    })
-}
-
-// SDK-spawned workflows and step bodies do not inherit another task's pool.
-// This binding preserves ordinary application history and changes no durable step.
-fn application_callback<T>(
-    postgres: PostgresDb,
-    body: impl std::future::Future<Output = dbos::Result<T, NotationTransitionError>>,
-) -> impl std::future::Future<Output = dbos::Result<T, NotationTransitionError>> {
-    Box::pin(async move {
-        PostgresDb::with_application_db(postgres, body)
-            .await
-            .map_err(|_| {
-                dbos::Error::Application(NotationTransitionError::Store(
-                    "PostgreSQL application admission unavailable".to_owned(),
-                ))
-            })?
     })
 }
 
@@ -542,7 +533,7 @@ async fn read_machine(
     dbos::step_with("read-machine", retryable_steps(), move || {
         let postgres = context.postgres.clone();
         let token = token.clone();
-        application_callback(context.postgres.clone(), async move {
+        async move {
             store::notation_machine_state::read(&postgres, notation_id, &token)
                 .await
                 .map_err(|error| dbos::Error::Application(store_error(error)))?
@@ -552,7 +543,7 @@ async fn read_machine(
                         machine_kind: token.clone(),
                     })
                 })
-        })
+        }
     })
     .await
 }
@@ -576,7 +567,7 @@ async fn apply_transition_step(
         let token = token.clone();
         let from = from.clone();
         let next = next.clone();
-        application_callback(context.postgres.clone(), async move {
+        async move {
             match store::notation_machine_state::apply_transition(
                 &postgres,
                 notation_id,
@@ -594,7 +585,7 @@ async fn apply_transition_step(
                 )),
                 Err(error) => Err(dbos::Error::Application(store_error(error))),
             }
-        })
+        }
     })
     .await
 }
@@ -608,12 +599,12 @@ async fn record_funnel_step(
 ) -> dbos::Result<(), NotationTransitionError> {
     dbos::step_with("record-funnel-step", retryable_steps(), move || {
         let surreal = context.surreal.clone();
-        application_callback(context.postgres.clone(), async move {
+        async move {
             record_notation_funnel_step(&surreal, notation_id, step)
                 .await
                 .map_err(NotationTransitionError::from_logic)
                 .map_err(dbos::Error::Application)
-        })
+        }
     })
     .await
 }
@@ -631,7 +622,7 @@ async fn send_notification_step(
     dbos::step_with("send-review-notification", retryable_steps(), move || {
         let surreal = context.surreal.clone();
         let email = Arc::clone(&context.email);
-        application_callback(context.postgres.clone(), async move {
+        async move {
             let target = review_notification_target(&surreal, project_id, recipient_id)
                 .await
                 .map_err(NotationTransitionError::from_logic)
@@ -648,7 +639,7 @@ async fn send_notification_step(
             .await
             .map_err(NotationTransitionError::from_logic)
             .map_err(dbos::Error::Application)
-        })
+        }
     })
     .await
 }
@@ -680,7 +671,7 @@ async fn start_machine(
         let postgres = context.postgres.clone();
         let token = token.clone();
         let spec = spec.clone();
-        application_callback(context.postgres.clone(), async move {
+        async move {
             store::notation_machine_state::start_machine(
                 &postgres,
                 notation_id,
@@ -690,7 +681,7 @@ async fn start_machine(
             )
             .await
             .map_err(|error| dbos::Error::Application(store_error(error)))
-        })
+        }
     })
     .await?;
 
@@ -750,7 +741,7 @@ async fn signal(
                 let surreal = surreal.clone();
                 let state = state.clone();
                 let value = value.clone();
-                application_callback(context.postgres.clone(), async move {
+                async move {
                     let deps = StepDeps::new(email, storage).with_surreal(surreal);
                     let started = std::time::Instant::now();
                     let result = dispatch_step(&deps, notation_id, &state, value.as_deref()).await;
@@ -767,7 +758,7 @@ async fn signal(
                             "dispatch: {error}"
                         )))
                     })
-                })
+                }
             })
             .await?
         } else {
@@ -793,7 +784,7 @@ async fn signal(
             let to_str = to_str.clone();
             let condition = condition_for_step.clone();
             let payload = journal_payload.clone();
-            application_callback(context.postgres.clone(), async move {
+            async move {
                 let recorded_at = chrono::Utc::now().to_rfc3339();
                 append_event(
                     &surreal,
@@ -815,7 +806,7 @@ async fn signal(
                     )))
                 })
                 .map(|_| ())
-            })
+            }
         })
         .await?;
 
@@ -832,12 +823,12 @@ async fn signal(
                 retryable_steps(),
                 move || {
                     let surreal = context.surreal.clone();
-                    application_callback(context.postgres.clone(), async move {
+                    async move {
                         resolve_review_notification_plan(&surreal, notation_id, hop)
                             .await
                             .map_err(NotationTransitionError::from_logic)
                             .map_err(dbos::Error::Application)
-                    })
+                    }
                 },
             )
             .await?;
@@ -865,7 +856,7 @@ async fn signal(
             let surreal = context.surreal.clone();
             dbos::step_with("close-matter", retryable_steps(), move || {
                 let surreal = surreal.clone();
-                application_callback(context.postgres.clone(), async move {
+                async move {
                     workflows::close_matter(&surreal, notation_id)
                         .await
                         .map_err(|error| {
@@ -873,7 +864,7 @@ async fn signal(
                                 "close: {error}"
                             )))
                         })
-                })
+                }
             })
             .await?;
         }
@@ -891,14 +882,14 @@ async fn signal(
         dbos::step_with("publish-approval-state", retryable_steps(), move || {
             let surreal = surreal.clone();
             let approved_state = approved_state.clone();
-            application_callback(context.postgres.clone(), async move {
+            async move {
                 store::notations::update_state(&surreal, notation_id, &approved_state)
                     .await
                     .map(|_| ())
                     .map_err(|error| {
                         dbos::Error::Application(NotationTransitionError::Store(error.to_string()))
                     })
-            })
+            }
         })
         .await?;
     }
@@ -947,7 +938,7 @@ async fn back(
         let surreal = context.surreal.clone();
         let token = token_owned.clone();
         let from = from.clone();
-        application_callback(context.postgres.clone(), async move {
+        async move {
             let events = store::notation_events::for_notation(&surreal, notation_id)
                 .await
                 .map_err(|error| {
@@ -994,7 +985,7 @@ async fn back(
                 )))
             })?;
             Ok(previous)
-        })
+        }
     })
     .await?;
 
