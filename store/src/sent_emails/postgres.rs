@@ -16,7 +16,7 @@
 
 use chrono::{DateTime, Months, NaiveDate, Utc};
 use sha2::{Digest, Sha256};
-use sqlx::{postgres::PgRow, Row};
+use sqlx::{Row, postgres::PgRow};
 use uuid::Uuid;
 
 use super::{NewSentEmail, Page, SentEmail, SentEmailError};
@@ -79,7 +79,7 @@ pub async fn record(pg: &PostgresDb, new: &NewSentEmail) -> Result<SentEmail, Se
 
 /// One page of the trail, newest first, with `requested` clamped into range.
 /// The count and the fetch share one `REPEATABLE READ` snapshot, and
-/// `project_ids` scopes both, exactly as the SurrealDB pager does.
+/// `project_ids` scopes both queries to the same Project set.
 ///
 /// # Errors
 ///
@@ -324,8 +324,26 @@ pub async fn purge(
     Ok(report)
 }
 
+/// Serialize historical insertion and retention decisions for one actual UTC day.
+/// Callers select read-committed isolation before acquiring locks and retain them
+/// through commit so marker reads observe any preceding purge or import.
+pub(crate) async fn lock_retention_day(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    day: NaiveDate,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("SELECT pg_advisory_xact_lock(1312902742,$1)")
+        .bind(chrono::Datelike::num_days_from_ce(&day))
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
 async fn purge_day(pg: &PostgresDb, day: NaiveDate) -> Result<DayPurge, SentEmailError> {
     let mut tx = pg.0.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+        .execute(&mut *tx)
+        .await?;
+    lock_retention_day(&mut tx, day).await?;
     let ledger: Option<(i64, String)> = sqlx::query_as(
         "SELECT row_count, content_sha256 FROM sent_email_export \
          WHERE day = $1 AND purged_at IS NULL FOR UPDATE",
@@ -336,9 +354,8 @@ async fn purge_day(pg: &PostgresDb, day: NaiveDate) -> Result<DayPurge, SentEmai
     let Some((row_count, digest)) = ledger else {
         return Ok(DayPurge::NotExported);
     };
-    // `FOR SHARE` holds the day's rows still while they are counted; an
-    // insert for the day cannot land between the digest and the delete,
-    // because new rows are this year's, not a day this old.
+    // The shared day lock excludes historical imports until the purge marker commits.
+    // Row locks retain the exported identities while their digest is checked.
     let ids: Vec<Uuid> = sqlx::query_scalar(
         "SELECT id FROM sent_email WHERE (sent_at AT TIME ZONE 'UTC')::date = $1 \
          ORDER BY sent_at, id FOR SHARE",
