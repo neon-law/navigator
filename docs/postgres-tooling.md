@@ -113,14 +113,14 @@ unchanged. Repair the source-backed mirror and retry; never invent a version or 
 
 ## PostgreSQL mirror tables and reconciliation
 
-Application reads and writes use PostgreSQL. Missing configuration or incomplete authority history stops ordinary
-access before a Source connection. [Storage models and writes](storage-models.md) describes native ownership,
-authorization, and transaction boundaries.
+Application reads and writes use PostgreSQL. Missing configuration or incomplete authority history stops ordinary access
+before a Source connection. [Storage models and writes](storage-models.md) describes native ownership, authorization,
+and transaction boundaries.
 
 [`store::postgres_mirror`](../store/src/postgres_mirror.rs) retains explicit captured-history adapters. Global history
 and the five disjoint scoped families bind their registered tables to verified captures. A completed receipt fences
-Source import and reconciliation before Source access, including under an explicit Source-read context. A missing
-native parent after ownership transfer is a refusal, not permission to restore it from old Source data.
+Source import and reconciliation before Source access, including under an explicit Source-read context. A missing native
+parent after ownership transfer is a refusal, not permission to restore it from old Source data.
 
 | Historical group | Captured behavior |
 | --- | --- |
@@ -136,16 +136,16 @@ native parent after ownership transfer is a refusal, not permission to restore i
 | Sent Email | Compare retained history; admit missing rows only with the exact proven retention exclusion |
 | Journal | Prove every captured event represented and all retained native projections and history coherent |
 
-Comparisons retain canonical columns, nested values, nullable references, and PostgreSQL timestamp precision.
-Invalid identities or timestamps fail closed rather than being dropped or assigned substitutes. Encrypted values retain
-their exact authenticated context and ciphertext; import does not decrypt or normalize authenticated text. Mailbox
-reports contain Person ids and claim counts, never mailbox strings. Other reports contain ids, counts, and sanitized
-reasons rather than client content or secret values.
+Comparisons retain canonical columns, nested values, nullable references, and PostgreSQL timestamp precision. Invalid
+identities or timestamps fail closed rather than being dropped or assigned substitutes. Encrypted values retain their
+exact authenticated context and ciphertext; import does not decrypt or normalize authenticated text. Mailbox reports
+contain Person ids and claim counts, never mailbox strings. Other reports contain ids, counts, and sanitized reasons
+rather than client content or secret values.
 
 The explicit import command uses the existing enrollment ledger and its captured Source. It does not grant ordinary
 application requests an alternative storage path. Pending import policies preserve each family's immutable history,
-native ownership exceptions, and unresolved-reference checks; a clean table count alone cannot certify transfer.
-See [scoped enrollment](#scoped-family-enrollment) for the verified capture and activation protocol.
+native ownership exceptions, and unresolved-reference checks; a clean table count alone cannot certify transfer. See
+[scoped enrollment](#scoped-family-enrollment) for the verified capture and activation protocol.
 
 Normal deployment runs the PostgreSQL-only application readiness Job before application rollout. It requires global
 history and every current scoped receipt. Only successful admission retires the obsolete automatic mirror-recovery
@@ -311,10 +311,10 @@ writer cutoff.
 
 ## Shadow reads
 
-A [Shadow Read](glossary/shadow-read.md) compares two query implementations while one answers the caller.
-Navigator application reads use PostgreSQL directly. They do not sample a second store or contact SurrealDB for
-runtime comparisons. Missing authority history fails closed before the read.
+A [Shadow Read](glossary/shadow-read.md) compares two query implementations while one answers the caller. Navigator
+application reads use PostgreSQL directly. They do not sample a second store or contact SurrealDB for runtime
+comparisons. Missing authority history fails closed before the read.
 
-Explicit captured imports verify table images, references, immutable pins, and protected native history through
-`hudson ops postgres mirror`. Those operator checks use the captured Source and PostgreSQL parity adapters,
-separate from ordinary application requests.
+Explicit captured imports verify table images, references, immutable pins, and protected native history through `hudson
+ops postgres mirror`. Those operator checks use the captured Source and PostgreSQL parity adapters, separate from
+ordinary application requests.
