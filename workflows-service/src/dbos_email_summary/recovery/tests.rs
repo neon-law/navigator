@@ -23,7 +23,7 @@ struct Case {
     slack: Arc<workflows::CapturingSlackBot>,
     slack_http: Option<MockServer>,
     provider: MockServer,
-    _files: tempfile::TempDir,
+    files: tempfile::TempDir,
 }
 
 async fn summary_entity(source: &store::surreal::SurrealDb) -> Uuid {
@@ -174,7 +174,7 @@ async fn archived_request(
     .await
     .unwrap()
     .receipt;
-    let request = workflows::EmailSummaryRequest {
+    workflows::EmailSummaryRequest {
         receipt_id: receipt.id,
         matter_project_id: Some(project),
         project_id: "synthetic-project".into(),
@@ -187,8 +187,7 @@ async fn archived_request(
             digest,
         )
         .unwrap(),
-    };
-    request
+    }
 }
 
 impl Case {
@@ -272,7 +271,7 @@ impl Case {
             slack,
             slack_http,
             provider,
-            _files: files,
+            files,
         }
     }
 
@@ -708,7 +707,12 @@ async fn committed_fork_survives_lost_controller_acknowledgement_without_repeati
 #[tokio::test]
 async fn recorded_sender_error_recovers_its_named_stage_and_rejects_incompatible_version() {
     with_case(|case| async move {
-        std::fs::remove_file(case._files.path().join("inbound/synthetic.eml")).unwrap();
+        cloud::FsStorage::new(case.files.path())
+            .await
+            .unwrap()
+            .delete("inbound/synthetic.eml")
+            .await
+            .unwrap();
         let source_id = super::super::workflow_id(case.request.receipt_id);
         assert!(matches!(
             case.summary
@@ -728,7 +732,7 @@ async fn recorded_sender_error_recovers_its_named_stage_and_rejects_incompatible
             validate_source(&source, &case.request, "incompatible-version"),
             Err(RecoveryError::Version)
         ));
-        let storage = cloud::FsStorage::new(case._files.path()).await.unwrap();
+        let storage = cloud::FsStorage::new(case.files.path()).await.unwrap();
         storage
             .put("inbound/synthetic.eml", ARCHIVE, "message/rfc822")
             .await
@@ -773,7 +777,7 @@ async fn delivery_error_recovery_reuses_the_successful_provider_checkpoint() {
     with_case(|case| async move {
         Mock::given(method("POST"))
             .respond_with(RemoveArchiveAfterProvider {
-                path: case._files.path().join("inbound/synthetic.eml"),
+                path: case.files.path().join("inbound/synthetic.eml.bin"),
             })
             .expect(1)
             .mount(&case.provider)
@@ -800,7 +804,7 @@ async fn delivery_error_recovery_reuses_the_successful_provider_checkpoint() {
         assert!(original
             .iter()
             .any(|step| step.step_name == "deliver-slack" && step.error.is_some()));
-        let storage = cloud::FsStorage::new(case._files.path()).await.unwrap();
+        let storage = cloud::FsStorage::new(case.files.path()).await.unwrap();
         storage
             .put("inbound/synthetic.eml", ARCHIVE, "message/rfc822")
             .await
@@ -909,13 +913,13 @@ async fn a_preexisting_child_without_the_recovery_claim_cannot_reopen_delivery()
             case.provider.received_requests().await.unwrap().len(),
             provider_calls
         );
-        let state: String =
+        let delivery_state: String =
             sqlx::query_scalar("SELECT state FROM email_delivery WHERE receipt_id=$1")
                 .bind(case.request.receipt_id)
                 .fetch_one(case.pg.pool())
                 .await
                 .unwrap();
-        assert_eq!(state, store::email_deliveries::CONFIRMED);
+        assert_eq!(delivery_state, store::email_deliveries::CONFIRMED);
         assert_eq!(case.slack.posted_messages().len(), 1);
     })
     .await;
@@ -1009,23 +1013,58 @@ async fn unknown_delivery_requires_native_resend_authorization_and_reuses_provid
         .await
         .unwrap();
         slack.reset().await;
-        Mock::given(method("POST"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(
+        for threaded in [false, true] {
+            Mock::given(method("POST"))
+                .and(move |request: &wiremock::Request| {
+                    let body: serde_json::Value = request.body_json().unwrap();
+                    body["channel"] == "C-SYNTHETIC"
+                        && if threaded {
+                            body["thread_ts"] == "123.4"
+                        } else {
+                            body.get("thread_ts").is_none()
+                        }
+                })
+                .respond_with(ResponseTemplate::new(200).set_body_json(
                     serde_json::json!({"ok":true,"channel":"C-SYNTHETIC","ts":"123.4"}),
-                ),
-            )
-            .expect(1)
-            .mount(slack)
-            .await;
+                ))
+                .expect(1)
+                .mount(slack)
+                .await;
+        }
         assert_eq!(case.submit(&command, true).await, StatusCode::ACCEPTED);
         let recovered = case.complete(&command).await;
         assert!(matches!(recovered.action, Action::ReconciledDelivery(_)));
         assert_eq!(case.provider.received_requests().await.unwrap().len(), 1);
-        assert_eq!(slack.received_requests().await.unwrap().len(), 1);
+        let delivered = slack.received_requests().await.unwrap();
+        assert_eq!(delivered.len(), 2);
+        let bodies: Vec<serde_json::Value> = delivered
+            .iter()
+            .map(|request| request.body_json().unwrap())
+            .collect();
+        let root = bodies
+            .iter()
+            .find(|body| body.get("thread_ts").is_none())
+            .unwrap();
+        let reply = bodies
+            .iter()
+            .find(|body| body["thread_ts"] == "123.4")
+            .unwrap();
+        assert_eq!(
+            root["client_msg_id"],
+            format!("summary-{}", case.request.receipt_id)
+        );
+        assert!(reply.get("client_msg_id").is_none());
+        assert_ne!(root["text"], reply["text"]);
         assert_eq!(case.submit(&command, true).await, StatusCode::ACCEPTED);
         case.complete(&command).await;
-        assert_eq!(slack.received_requests().await.unwrap().len(), 1);
+        let replayed: Vec<serde_json::Value> = slack
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .map(|request| request.body_json().unwrap())
+            .collect();
+        assert_eq!(replayed, bodies);
     })
     .await;
 }
@@ -1041,7 +1080,7 @@ async fn committed_child_without_fork_acknowledgement_is_retrieved_by_its_owned_
         assert_eq!(ownership::current_operation(&case.pg,case.request.receipt_id).await.unwrap(),Some(command.operation_id));
         let operation=read_record(&case.dbos,&email_summary_recovery_id(command.operation_id)).await.unwrap().unwrap();
         let bound=decode_recovery_input(&operation).unwrap();
-        let step=match bound.action { Action::RetryProvider(step)=>step,_=>panic!("expected a provider-failure repair") };
+        let Action::RetryProvider(step) = bound.action else { panic!("expected a provider-failure repair") };
         // Reconstruct the durable state of a committed fork whose acknowledgement
         // is missing: native admission and its immutable operation claim exist,
         // the exact child exists, and this controller has no fork checkpoint.

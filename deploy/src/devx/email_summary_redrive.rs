@@ -1,4 +1,4 @@
-//! Explicit receipt-preserving recovery on the selected EmailSummary engine.
+//! Explicit receipt-preserving recovery on the selected `EmailSummary` engine.
 //!
 //! DBOS queues an idempotent recovery operation through its authenticated ingress.
 //! Restate frees a completed invocation key before resubmitting the same request.

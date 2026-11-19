@@ -105,9 +105,7 @@ fn validate_delivery<'a>(
         };
         if state != "not_attempted"
             || !*recorded
-            || !actor
-                .as_deref()
-                .is_some_and(|actor| !actor.trim().is_empty())
+            || actor.as_deref().is_none_or(|actor| actor.trim().is_empty())
             || reason.as_deref() != Some("operator_authorized_resend")
         {
             return Err(RecoveryError::Quarantined);
@@ -115,7 +113,6 @@ fn validate_delivery<'a>(
         return Ok(None);
     }
     match state.map(|state| state.0.as_str()) {
-        Some("sending" | "unknown") => Err(RecoveryError::Quarantined),
         Some("confirmed") => match rule {
             DeliveryRule::PreserveConfirmed => Ok(None),
             DeliveryRule::RetryFailureNotice(actor) => {
@@ -142,7 +139,8 @@ pub async fn preflight(
     expected_digest: &str,
     rule: DeliveryRule<'_>,
 ) -> Result<(), RecoveryError> {
-    let row:Option<(String,Option<String>,Option<String>,Option<String>,bool)>=sqlx::query_as(
+    type PreflightRow = (String, Option<String>, Option<String>, Option<String>, bool);
+    let row: Option<PreflightRow> = sqlx::query_as(
         "SELECT r.raw_digest,d.state,d.reconciled_by,d.reconciliation,d.reconciled_at IS NOT NULL FROM email_receipt r LEFT JOIN email_delivery d ON d.receipt_id=r.id WHERE r.id=$1")
         .bind(receipt).fetch_optional(pg.pool()).await.map_err(RecoveryError::Database)?;
     let (digest, state, actor, reason, recorded) = row.ok_or(RecoveryError::NotFound)?;

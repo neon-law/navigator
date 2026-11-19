@@ -1,4 +1,4 @@
-//! Explicit, receipt-owned EmailSummary recovery. No workflow rows are reset or deleted.
+//! Explicit, receipt-owned `EmailSummary` recovery. No workflow rows are reset or deleted.
 
 use dbos::sysdb::types::{StepRecord, WorkflowFilter, WorkflowRecord, WorkflowStatus};
 use serde::{Deserialize, Serialize};
@@ -12,7 +12,7 @@ use workflows::ProviderDelivery;
 use super::EmailSummaryError;
 use crate::email_summary::EmailSummaryReport;
 
-/// An internal operation selected by the same switch as the EmailSummary workflow.
+/// An internal operation selected by the same switch as the `EmailSummary` workflow.
 pub const WORKFLOW: &str = "EmailSummaryRecovery";
 pub type RecoveryWorkflow = dbos::WorkflowRef<RecoveryInput, RecoveryReport, RecoveryError>;
 
@@ -148,10 +148,10 @@ fn validate_source(
     let base = super::workflow_id(request.receipt_id);
     let prefix = format!("{base}:recovery:");
     if record.workflow_id != base
-        && !record
+        && record
             .workflow_id
             .strip_prefix(&prefix)
-            .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+            .is_none_or(|id| uuid::Uuid::parse_str(id).is_err())
     {
         return Err(RecoveryError::Conflict);
     }
@@ -230,7 +230,7 @@ async fn recorded(id: &str) -> dbos::Result<WorkflowRecord, RecoveryError> {
     })
     .await?
     .pop()
-    .ok_or_else(|| dbos::Error::Application(RecoveryError::Conflict))
+    .ok_or(dbos::Error::Application(RecoveryError::Conflict))
 }
 
 /// Register the internal controller without capturing its own DBOS instance.
@@ -244,6 +244,43 @@ pub fn register(
         let version = version.clone();
         async move { run(pg, version, request).await }
     })
+}
+
+async fn verify_previous_target(
+    input: &RecoveryInput,
+    version: &str,
+    owner: uuid::Uuid,
+    receipt: uuid::Uuid,
+) -> dbos::Result<(), RecoveryError> {
+    let previous = recorded(&email_summary_recovery_id(owner)).await?;
+    let previous_input = decode_recovery_input(&previous)?;
+    verify_previous(&previous, &previous_input, owner, receipt)?;
+    let candidate = &previous_input.target_workflow_id;
+    let previous_child = dbos::list_workflows(&WorkflowFilter {
+        workflow_ids: vec![candidate],
+        limit: Some(1),
+        ..Default::default()
+    })
+    .await?
+    .pop();
+    match previous_child {
+        Some(child)
+            if target_can_handoff(child.status)
+                && child.workflow_id == input.source_workflow_id =>
+        {
+            validate_source(&child, &input.command.request, version)?;
+            if child.workflow_id != previous_input.source_workflow_id
+                && child.forked_from.as_deref() != Some(previous_input.source_workflow_id.as_str())
+            {
+                return Err(RecoveryError::Conflict.into());
+            }
+        }
+        None if previous.status != WorkflowStatus::Success
+            && !matches!(previous_input.action, Action::Resume)
+            && previous_input.source_workflow_id == input.source_workflow_id => {}
+        _ => return Err(RecoveryError::Admission.into()),
+    }
+    Ok(())
 }
 
 async fn run(
@@ -263,35 +300,7 @@ async fn run(
     }
     let expected_owner = input.command.from_recovery;
     if let Some(owner) = expected_owner {
-        let previous = recorded(&email_summary_recovery_id(owner)).await?;
-        let previous_input = decode_recovery_input(&previous)?;
-        verify_previous(&previous, &previous_input, owner, receipt)?;
-        let candidate = &previous_input.target_workflow_id;
-        let previous_child = dbos::list_workflows(&WorkflowFilter {
-            workflow_ids: vec![candidate],
-            limit: Some(1),
-            ..Default::default()
-        })
-        .await?
-        .pop();
-        match previous_child {
-            Some(child)
-                if target_can_handoff(child.status)
-                    && child.workflow_id == input.source_workflow_id =>
-            {
-                validate_source(&child, &input.command.request, &version)?;
-                if child.workflow_id != previous_input.source_workflow_id
-                    && child.forked_from.as_deref()
-                        != Some(previous_input.source_workflow_id.as_str())
-                {
-                    return Err(RecoveryError::Conflict.into());
-                }
-            }
-            None if previous.status != WorkflowStatus::Success
-                && !matches!(previous_input.action, Action::Resume)
-                && previous_input.source_workflow_id == input.source_workflow_id => {}
-            _ => return Err(RecoveryError::Admission.into()),
-        }
+        verify_previous_target(&input, &version, owner, receipt).await?;
     }
     if !matches!(action, Action::Resume) {
         let child = email_summary_recovery_child(receipt, operation);

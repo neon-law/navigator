@@ -2252,7 +2252,7 @@ enum EmailSummaryCmd {
     /// Read-only pipeline check: fail on overdue receipts or failed/unknown delivery.
     Health,
 
-    /// Recover one archived EmailSummary on its selected durable engine.
+    /// Recover one archived `EmailSummary` on its selected durable engine.
     /// DBOS uses an explicit recovery identity and preserves recorded inputs/checkpoints.
     /// Restate purges a completed invocation before resubmitting the same request.
     /// Confirmed failure notices require --after-failed-result; uncertain deliveries

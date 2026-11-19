@@ -639,19 +639,11 @@ pub fn add_routes(router: Router, ingress: WorkerIngress) -> Router {
     } else {
         router
     };
-    let router = if let Some(email_summary) = ingress.email_summary {
-        router.route(
-            "/internal/dbos/email-summary",
-            post(start_email_summary).with_state(email_summary),
-        )
-    } else {
-        router
-    };
-    let router = if let Some(recovery) = ingress.email_summary_recovery {
-        router.merge(crate::dbos_email_summary::recovery::router(recovery))
-    } else {
-        router
-    };
+    let router = add_email_summary_routes(
+        router,
+        ingress.email_summary,
+        ingress.email_summary_recovery,
+    );
     let router = if let Some(alert) = ingress.inbound_message_alert {
         router.route(
             "/internal/dbos/inbound-message-alert",
@@ -719,6 +711,26 @@ pub fn add_routes(router: Router, ingress: WorkerIngress) -> Router {
         router
     };
     router.layer(axum::extract::DefaultBodyLimit::max(MAX_BODY_BYTES))
+}
+
+fn add_email_summary_routes(
+    router: Router,
+    summary: Option<EmailSummaryIngress>,
+    recovery: Option<crate::dbos_email_summary::recovery::RecoveryIngress>,
+) -> Router {
+    let router = if let Some(summary) = summary {
+        router.route(
+            "/internal/dbos/email-summary",
+            post(start_email_summary).with_state(summary),
+        )
+    } else {
+        router
+    };
+    if let Some(recovery) = recovery {
+        router.merge(crate::dbos_email_summary::recovery::router(recovery))
+    } else {
+        router
+    }
 }
 
 /// The notation virtual object's eight routes: the Restate object's seven
