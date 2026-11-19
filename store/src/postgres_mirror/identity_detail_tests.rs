@@ -644,3 +644,47 @@ async fn real_identity_driver_refuses_native_overlap_drift() {
 async fn real_identity_driver_refuses_native_target_only_rows() {
     refused_identity_driver(ExistingIdentity::TargetOnly).await;
 }
+
+#[tokio::test]
+async fn entity_role_first_global_copy_preserves_its_explicit_endpoints_and_replay() {
+    let (options, database) = fresh_schema().await.expect("required PostgreSQL fixture");
+    let pg = connect(&options, &database).await;
+    assert!(!super::super::backfilled(&pg).await.unwrap());
+    let source = super::super::from_source(mem_surreal()).await;
+    let holder = person(&source).await;
+    let entity = crate::postgres_mirror::tests::synthetic_entity(&source).await;
+    let captured = crate::entity_roles::grant_in_surreal(&source, holder, entity, "manages")
+        .await
+        .unwrap();
+    let key = MirrorKey::EntityRole {
+        person_id: holder,
+        entity_id: entity,
+        role: "manages".into(),
+    };
+    assert_eq!(import(&source, &pg, &key).await.unwrap(), Mirrored::Written);
+    let canonical: (Uuid, Uuid, String, DateTime<Utc>, DateTime<Utc>) =
+        sqlx::query_as("SELECT person_id,entity_id,role,inserted_at,updated_at FROM entity_role")
+            .fetch_one(pg.pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        canonical,
+        (
+            holder,
+            entity,
+            "manages".into(),
+            super::super::micros(captured.inserted_at),
+            super::super::micros(captured.updated_at),
+        )
+    );
+    assert_eq!(
+        import(&source, &pg, &key).await.unwrap(),
+        Mirrored::Unchanged
+    );
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM entity_role")
+        .fetch_one(pg.pool())
+        .await
+        .unwrap();
+    assert_eq!(rows, 1);
+    pg.pool().close().await;
+}
