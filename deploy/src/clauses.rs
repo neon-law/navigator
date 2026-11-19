@@ -64,8 +64,12 @@ pub fn show(source: &str) -> ExitCode {
 }
 
 async fn list_sources() -> Result<Vec<ListedClause>, String> {
-    store::clauses::catalog()
-        .await
+    let catalog = if std::env::var_os("NAVIGATOR_POSTGRES_HOST").is_some() {
+        store::clauses::catalog().await
+    } else {
+        store::clauses::bundled_catalog()
+    };
+    catalog
         .map(|clauses| {
             clauses
                 .into_iter()

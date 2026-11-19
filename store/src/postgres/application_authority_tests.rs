@@ -91,12 +91,10 @@ async fn people_create_alias_and_merge_do_not_require_source() {
                 .id,
             keep.id
         );
-        assert!(
-            crate::persons::find_by_id(&source, drop.id)
-                .await
-                .unwrap()
-                .is_none()
-        );
+        assert!(crate::persons::find_by_id(&source, drop.id)
+            .await
+            .unwrap()
+            .is_none());
         assert_eq!(
             crate::persons::find_by_any_email(&source, "ALIAS@example.invalid")
                 .await
@@ -148,38 +146,32 @@ async fn deployment_change_retains_exact_authenticated_timestamp_bytes() {
         .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].inserted_at, timestamp);
-        assert!(
-            crate::deployment_secret_changes::open(&kms, &rows[0])
-                .await
-                .is_ok_and(|value| value == "synthetic-value")
-        );
+        assert!(crate::deployment_secret_changes::open(&kms, &rows[0])
+            .await
+            .is_ok_and(|value| value == "synthetic-value"));
         let mut changed = rows[0].clone();
         changed.inserted_at = "2026-11-18T14:04:03.123456Z".into();
-        assert!(
-            crate::deployment_secret_changes::open(&kms, &changed)
-                .await
-                .is_err()
-        );
+        assert!(crate::deployment_secret_changes::open(&kms, &changed)
+            .await
+            .is_err());
         sqlx::query("UPDATE deployment_secret_change SET inserted_at_text=NULL")
             .execute(pg.pool())
             .await
             .unwrap();
-        assert!(
-            crate::deployment_secret_changes::latest(
-                &source,
-                crate::persons::Role::Owner,
-                crate::DeploymentEnvironment::Production
-            )
-            .await
-            .is_err()
-        );
+        assert!(crate::deployment_secret_changes::latest(
+            &source,
+            crate::persons::Role::Owner,
+            crate::DeploymentEnvironment::Production
+        )
+        .await
+        .is_err());
     })
     .await;
 }
 
 #[tokio::test]
 async fn completed_secret_import_replay_never_reads_source_or_changes_native_history() {
-    use crate::postgres_mirror::{Mirrored, during_initial_copy, firm_secrets, from_source};
+    use crate::postgres_mirror::{during_initial_copy, firm_secrets, from_source, Mirrored};
     let (pg, actor, _, _, firm) = application_fixture().await;
     let id = uuid::Uuid::now_v7();
     sqlx::query("INSERT INTO firm_integration_secret (id,firm_id,provider,kind,version,ciphertext,wrapped_dek,kms_key_version,kms_context,status,actor_id,created_at,updated_at) VALUES ($1,$2,'xero','xero_client_secret',1,'synthetic-native-ciphertext','synthetic-native-wrap','synthetic-key','synthetic-native-context','revoked',$3,now(),now())")
@@ -199,13 +191,11 @@ async fn completed_secret_import_replay_never_reads_source_or_changes_native_his
         .unwrap(),
         Mirrored::Unchanged
     );
-    assert!(
-        firm_secrets::parity(&source, &pg)
-            .await
-            .unwrap()
-            .tables
-            .is_empty()
-    );
+    assert!(firm_secrets::parity(&source, &pg)
+        .await
+        .unwrap()
+        .tables
+        .is_empty());
     assert!(
         from_source(during_initial_copy(firm_secrets::reconcile(&source, &pg)))
             .await
@@ -224,7 +214,7 @@ async fn completed_secret_import_replay_never_reads_source_or_changes_native_his
 
 #[tokio::test]
 async fn deployment_context_transfer_only_fills_missing_original_bytes_on_identical_rows() {
-    use crate::postgres_mirror::{Mirrored, during_initial_copy, records};
+    use crate::postgres_mirror::{during_initial_copy, records, Mirrored};
     let (options, database) = crate::postgres_mirror::tests::fresh_schema()
         .await
         .expect("required PostgreSQL fixture");
@@ -612,12 +602,10 @@ async fn person_merge_rejects_foreign_primary_claim_and_handles_phone_only_peopl
                 persons::PersonError::EmailTaken
             ))
         ));
-        assert!(
-            persons::find_by_id(&source, dropped.id)
-                .await
-                .unwrap()
-                .is_some()
-        );
+        assert!(persons::find_by_id(&source, dropped.id)
+            .await
+            .unwrap()
+            .is_some());
         assert_eq!(
             persons::find_by_any_email(&source, "claim-alias@example.invalid")
                 .await
@@ -795,12 +783,10 @@ async fn deadline_changed_replay_advances_revision_and_preserves_cancellation() 
             deadlines::find(&source, project, first.id).await.unwrap(),
             Some(cancelled)
         );
-        assert!(
-            deadlines::find(&source, uuid::Uuid::new_v4(), first.id)
-                .await
-                .unwrap()
-                .is_none()
-        );
+        assert!(deadlines::find(&source, uuid::Uuid::new_v4(), first.id)
+            .await
+            .unwrap()
+            .is_none());
     })
     .await;
 }
@@ -957,4 +943,92 @@ async fn high_level_matter_open_requires_attestation_and_native_brand_ownership(
             .bind(opened.id).fetch_one(pg.pool()).await.unwrap();
         assert_eq!(after, 1);
     })).await;
+}
+
+#[tokio::test]
+async fn clause_catalog_requires_history_and_never_hides_custom_versions_on_failure() {
+    let (options, database) = crate::postgres_mirror::tests::fresh_schema()
+        .await
+        .expect("required PostgreSQL fixture");
+    let pg = crate::postgres_mirror::tests::connect(&options, &database).await;
+    PostgresDb::with_test_db(pg.clone(), async {
+        assert!(matches!(
+            crate::clauses::catalog().await,
+            Err(crate::clauses::ClauseError::Postgres(
+                PostgresError::History
+            ))
+        ));
+        super::fixtures::activate_application(&pg).await;
+        let mut custom = rules::clauses::library_clauses().unwrap().remove(0);
+        custom.code = "synthetic_custom_catalog".into();
+        custom.version = 1;
+        custom.retired_at = None;
+        custom.body = "Synthetic custom Clause version".into();
+        crate::clauses::seed(&pg, &[custom]).await.unwrap();
+        let rows = crate::clauses::catalog().await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].code, "synthetic_custom_catalog");
+        assert_eq!(rows[0].body, "Synthetic custom Clause version");
+        sqlx::query("ALTER TABLE clause RENAME TO synthetic_unavailable_clause")
+            .execute(pg.pool())
+            .await
+            .unwrap();
+        assert!(matches!(
+            crate::clauses::catalog().await,
+            Err(crate::clauses::ClauseError::Query)
+        ));
+        assert!(crate::clauses::bundled_catalog()
+            .unwrap()
+            .iter()
+            .all(|clause| clause.code != "synthetic_custom_catalog"));
+    })
+    .await;
+    pg.pool().close().await;
+}
+
+#[tokio::test]
+async fn notation_creation_history_never_skips_unconfigured_or_incomplete_application_admission() {
+    use super::notation_creation_attempts as attempts;
+    let (options, database) = crate::postgres_mirror::tests::fresh_schema()
+        .await
+        .expect("required PostgreSQL fixture");
+    let pg = crate::postgres_mirror::tests::connect(&options, &database).await;
+    PostgresDb::with_test_db(pg.clone(), async {
+        assert!(matches!(
+            attempts::database().await,
+            Err(PostgresError::History)
+        ));
+        super::fixtures::activate_application(&pg).await;
+        let (person, notation, _) = super::fixtures::workflow_fixture(&pg).await;
+        let project = sqlx::query_scalar("SELECT project_id FROM notation WHERE id=$1")
+            .bind(notation)
+            .fetch_one(pg.pool())
+            .await
+            .unwrap();
+        let admitted = attempts::database().await.unwrap();
+        attempts::record_failure(&admitted, project, "synthetic", person)
+            .await
+            .unwrap();
+        assert_eq!(
+            attempts::unresolved(&admitted, project)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(attempts::unresolved(&admitted, uuid::Uuid::now_v7())
+            .await
+            .unwrap()
+            .is_empty());
+        sqlx::query("DELETE FROM mirror_backfill_checkpoint WHERE mirror='table:journal_entry'")
+            .execute(pg.pool())
+            .await
+            .unwrap();
+        assert!(matches!(
+            attempts::database().await,
+            Err(PostgresError::History)
+        ));
+    })
+    .await;
+    pg.pool().close().await;
 }

@@ -3,12 +3,9 @@
 use super::{PostgresDb, PostgresError};
 use uuid::Uuid;
 
-/// Return the configured store, if the deployment has PostgreSQL.
-pub async fn database() -> Result<Option<PostgresDb>, PostgresError> {
-    if std::env::var_os("NAVIGATOR_POSTGRES_HOST").is_none() {
-        return Ok(None);
-    }
-    PostgresDb::from_env().await.map(Some)
+/// Admit creation history through the same PostgreSQL proof as the application.
+pub async fn database() -> Result<PostgresDb, PostgresError> {
+    PostgresDb::application().await
 }
 
 pub async fn record_failure(
