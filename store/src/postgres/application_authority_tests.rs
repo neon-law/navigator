@@ -703,3 +703,39 @@ async fn deadline_identical_replay_compares_the_stored_instant_and_precision() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn firm_directory_and_ownership_backfill_are_native_and_isolated() {
+    use crate::{firms, persons, projects};
+    let (pg, actor, _, project, firm) = application_fixture().await;
+    Box::pin(PostgresDb::with_test_db(pg.clone(), async {
+        let source = crate::surreal::SurrealDb::uninitialized();
+        let (outsider, other_note, _) = super::fixtures::workflow_fixture(&pg).await;
+        let (other_firm, other_project) = super::fixtures::firm_for_notation(&pg, other_note).await;
+        let brand: String = sqlx::query_scalar("SELECT brand FROM project WHERE id=$1")
+            .bind(project).fetch_one(pg.pool()).await.unwrap();
+        firms::ensure_brand(&source, firm, &brand).await.unwrap();
+        firms::ensure_brand(&source, firm, &brand).await.unwrap();
+        assert!(matches!(firms::ensure_brand(&source, other_firm, &brand).await,
+            Err(firms::FirmError::DuplicateBrand)));
+        sqlx::query("INSERT INTO person_firm_role(id,person_id,firm_id,membership,is_dri) VALUES($1,$2,$3,'admin',true)")
+            .bind(uuid::Uuid::new_v4()).bind(actor).bind(firm).execute(pg.pool()).await.unwrap();
+        let client = persons::create(&source, &persons::NewPerson::new("Synthetic Contact", "firm-contact@example.invalid")).await.unwrap();
+        projects::add_participation(&source, project, client.id, "client").await.unwrap();
+        let visible = firms::visible_person_ids(&source, actor).await.unwrap();
+        assert!(visible.contains(&actor));
+        assert!(visible.contains(&client.id));
+        assert!(!visible.contains(&outsider));
+        let report = firms::admin_dri_invariant_report(&source).await.unwrap();
+        assert!(report.iter().find(|row| row.firm_id == firm).unwrap().problem.is_none());
+        assert!(matches!(report.iter().find(|row| row.firm_id == other_firm).unwrap().problem,
+            Some(firms::AdminDriProblem::Missing)));
+        sqlx::query("UPDATE project SET firm_id=NULL WHERE id=$1").bind(project).execute(pg.pool()).await.unwrap();
+        assert_eq!(firms::backfill_unowned_projects(&source, None).await.unwrap(), 1);
+        assert_eq!(firms::backfill_unowned_projects(&source, None).await.unwrap(), 0);
+        let owners: Vec<(uuid::Uuid, Option<uuid::Uuid>)> = sqlx::query_as("SELECT id,firm_id FROM project WHERE id=ANY($1::uuid[]) ORDER BY id")
+            .bind(vec![project, other_project]).fetch_all(pg.pool()).await.unwrap();
+        assert!(owners.contains(&(project, Some(firm))));
+        assert!(owners.contains(&(other_project, Some(other_firm))));
+    })).await;
+}

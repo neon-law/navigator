@@ -583,6 +583,18 @@ pub async fn firm_brand_keys(firm_id: Uuid) -> Result<Vec<String>, TenancyError>
         .map_err(Into::into)
 }
 
+pub(crate) async fn visible_person_ids(firms: &[Uuid]) -> Result<Vec<Uuid>, TenancyError> {
+    let pg = db().await?;
+    sqlx::query_scalar("SELECT person_id FROM person_firm_role WHERE firm_id=ANY($1::uuid[]) UNION SELECT r.person_id FROM person_project_role r JOIN project p ON p.id=r.project_id WHERE p.firm_id=ANY($1::uuid[]) ORDER BY person_id")
+        .bind(firms).fetch_all(pg.pool()).await.map_err(Into::into)
+}
+
+pub(crate) async fn backfill_unowned_projects(fallback: Option<Uuid>) -> Result<u64, TenancyError> {
+    let pg = db().await?;
+    Ok(sqlx::query("WITH owners AS (SELECT p.id,COALESCE(b.firm_id,$1::uuid) AS firm_id FROM project p LEFT JOIN firm_brand b ON b.brand_key=p.brand WHERE p.firm_id IS NULL) UPDATE project p SET firm_id=o.firm_id FROM owners o WHERE p.id=o.id AND p.firm_id IS NULL AND o.firm_id IS NOT NULL")
+        .bind(fallback).execute(pg.pool()).await?.rows_affected())
+}
+
 pub async fn firm_for_brand_key(brand_key: &str) -> Result<Option<Uuid>, TenancyError> {
     let pg = db().await?;
     sqlx::query_scalar("SELECT firm_id FROM firm_brand WHERE brand_key=$1")

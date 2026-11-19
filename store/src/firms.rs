@@ -1127,6 +1127,9 @@ pub async fn visible_person_ids(
     if firm_ids.is_empty() {
         return Ok(Vec::new());
     }
+    if crate::postgres::tenancy::enabled() {
+        return Ok(Box::pin(crate::postgres::tenancy::visible_person_ids(&firm_ids)).await?);
+    }
     let firm_records: Vec<_> = firm_ids
         .iter()
         .copied()
@@ -1692,6 +1695,14 @@ pub async fn backfill_unowned_projects(
             return Err(FirmError::NoSuchFirm(firm_id));
         }
     }
+    if crate::postgres::tenancy::enabled() {
+        return Ok(
+            Box::pin(crate::postgres::tenancy::backfill_unowned_projects(
+                fallback_firm_id,
+            ))
+            .await?,
+        );
+    }
     let mut response = surreal
         .query("SELECT id, brand FROM project WHERE firm_id IS NONE")
         .await?;
@@ -1952,18 +1963,10 @@ pub async fn admin_dri_invariant_report(
         if firm.status != "active" {
             continue;
         }
-        let mut response = surreal
-            .query(format!(
-                "SELECT {MEMBERSHIP_SELECT} FROM {MEMBERSHIP_TABLE} \
-                 WHERE firm_id = $firm_id AND is_dri = true ORDER BY inserted_at, id"
-            ))
-            .bind(("firm_id", record_id(TABLE, firm.id)))
-            .await
-            .and_then(surrealdb::IndexedResults::check)?;
-        let rows: Vec<PersonFirmRoleRow> = response.take(0)?;
-        let dris: Vec<PersonFirmRole> = rows
+        let dris: Vec<PersonFirmRole> = memberships_for_firm(surreal, firm.id)
+            .await?
             .into_iter()
-            .filter_map(PersonFirmRoleRow::into_role)
+            .filter(|role| role.is_dri)
             .collect();
         let problem = if dris.is_empty() {
             Some(AdminDriProblem::Missing)
