@@ -308,7 +308,6 @@ mod tests {
             ("NAVIGATOR_CLAMD_ADDR", "clamav:3310"),
             ("NAVIGATOR_STORAGE_BACKEND", "gcs"),
             ("NAVIGATOR_APPLICATIONS_BUCKET", "proj-applications"),
-            ("NAVIGATOR_SURREAL_ARCHIVES_BUCKET", "proj-surreal-archives"),
             ("SLACK_BOT_TOKEN", "xoxb-test"),
             ("NAVIGATOR_EMAIL_BACKEND", "sendgrid"),
             ("NAVIGATOR_SIGNATURE_PROVIDER", "docusign"),
@@ -336,10 +335,6 @@ mod tests {
             ("NAVIGATOR_POSTGRES_DATABASE", "navigator"),
             ("NAVIGATOR_POSTGRES_USER", "navigator_app"),
             ("NAVIGATOR_POSTGRES_PASSWORD", "secret"),
-            (
-                "NAVIGATOR_SURREAL_ARCHIVES_BUCKET",
-                "example-surreal-archives",
-            ),
         ]));
         assert!(result.is_ok(), "{result:?}");
     }
@@ -361,18 +356,6 @@ mod tests {
     }
 
     #[test]
-    fn prod_invariants_require_the_surreal_archive_bucket() {
-        let mut pairs = full_with_jwks();
-        pairs.retain(|(key, _)| *key != "NAVIGATOR_SURREAL_ARCHIVES_BUCKET");
-
-        let err = production_invariants(lookup(&pairs)).unwrap_err();
-        assert!(err
-            .violations
-            .iter()
-            .any(|violation| violation.starts_with("NAVIGATOR_SURREAL_ARCHIVES_BUCKET")));
-    }
-
-    #[test]
     fn prod_invariants_require_the_google_oauth_client_allowlist() {
         // Unset, `google_oauth` degrades to a pass-through and
         // `mcp_principal` never injects a `Principal` — so Navigator MCP's
@@ -383,7 +366,6 @@ mod tests {
             ("NAVIGATOR_CLAMD_ADDR", "clamav:3310"),
             ("NAVIGATOR_STORAGE_BACKEND", "gcs"),
             ("NAVIGATOR_APPLICATIONS_BUCKET", "proj-applications"),
-            ("NAVIGATOR_SURREAL_ARCHIVES_BUCKET", "proj-surreal-archives"),
             ("SLACK_BOT_TOKEN", "xoxb-test"),
             ("NAVIGATOR_EMAIL_BACKEND", "sendgrid"),
             ("NAVIGATOR_SIGNATURE_PROVIDER", "docusign"),
@@ -561,10 +543,6 @@ mod tests {
             ("NAVIGATOR_POSTGRES_DATABASE", "navigator"),
             ("NAVIGATOR_POSTGRES_USER", "navigator_app"),
             ("NAVIGATOR_POSTGRES_PASSWORD", "secret"),
-            (
-                "NAVIGATOR_SURREAL_ARCHIVES_BUCKET",
-                "example-surreal-archives",
-            ),
         ]
     }
 
@@ -657,7 +635,6 @@ mod tests {
             ("NAVIGATOR_CLAMD_ADDR", "clamav:3310"),
             ("NAVIGATOR_STORAGE_BACKEND", "fs"),
             ("NAVIGATOR_APPLICATIONS_BUCKET", "proj-applications"),
-            ("NAVIGATOR_SURREAL_ARCHIVES_BUCKET", "proj-surreal-archives"),
             ("SLACK_BOT_TOKEN", "xoxb-test"),
             ("NAVIGATOR_EMAIL_BACKEND", "sendgrid"),
             ("NAVIGATOR_SIGNATURE_PROVIDER", "docusign"),
@@ -709,7 +686,6 @@ mod tests {
             ("NAVIGATOR_CLAMD_ADDR", "clamav:3310"),
             ("NAVIGATOR_STORAGE_BACKEND", "gcs"),
             ("NAVIGATOR_APPLICATIONS_BUCKET", "proj-applications"),
-            ("NAVIGATOR_SURREAL_ARCHIVES_BUCKET", "proj-surreal-archives"),
             ("SLACK_BOT_TOKEN", "xoxb-test"),
             ("NAVIGATOR_EMAIL_BACKEND", "sendgrid"),
             ("NAVIGATOR_SIGNATURE_PROVIDER", "docusign"),
@@ -786,7 +762,6 @@ mod tests {
             ("NAVIGATOR_CLAMD_ADDR", "clamav:3310"),
             ("NAVIGATOR_STORAGE_BACKEND", "gcs"),
             ("NAVIGATOR_APPLICATIONS_BUCKET", "proj-applications"),
-            ("NAVIGATOR_SURREAL_ARCHIVES_BUCKET", "proj-surreal-archives"),
             ("SESSION_SECRET", SECRET32),
             // Not integration-tier: `web` cannot boot without a PostgreSQL
             // handle, so the harness supplies the coordinates exactly as
