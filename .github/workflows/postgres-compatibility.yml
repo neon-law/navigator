@@ -146,7 +146,9 @@ jobs:
             if bash -c 'echo > /dev/tcp/127.0.0.1/25432' 2>/dev/null; then break; fi
             sleep 1
           done
-          cargo test -p store --test firm_journal --test firm_journal_compatibility --test journal_startup_migration --test postgres_tooling --test brand_move_mirror
+          cargo test -p store --features store/surreal-compatibility \
+            --test firm_journal --test firm_journal_compatibility \
+            --test journal_startup_migration --test postgres_tooling --test brand_move_mirror
       - name: Application and DBOS state survive image replacement and dump restore
         env:
           KUBECONFIG: /tmp/postgres-kind.config
