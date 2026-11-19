@@ -261,7 +261,6 @@ pub async fn create(
     for key in [
         crate::postgres_mirror::MirrorKey::Project(project_id),
         crate::postgres_mirror::MirrorKey::Person(actor_id),
-        crate::postgres_mirror::MirrorKey::Asset(input.receipt_document_id),
     ] {
         crate::postgres_mirror::mirror(surreal, pg, &key).await?;
     }
