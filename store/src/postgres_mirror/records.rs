@@ -1118,6 +1118,8 @@ pub(super) const TABLES: &[Table] = &[
             "id",
             "person_id",
             "entity_id",
+            "line1",
+            "line2",
             "city",
             "region",
             "postal_code",
