@@ -5,7 +5,7 @@ use workflows_service::dbos_ingress::{NotationIngress, WorkerIngress};
 use workflows_service::dbos_notation::{self, Context};
 #[path = "support/native_database.rs"]
 mod support;
-use support::{APP_VERSION, DEADLINE, database};
+use support::{database, APP_VERSION, DEADLINE};
 
 async fn assert_read_boundary(origin: &str, notation_id: uuid::Uuid) {
     let current = format!("{origin}/notation/{notation_id}/workflow_current_state");
@@ -199,3 +199,8 @@ async fn a_pending_notation_start_recovers_after_the_executor_stops() {
     resumed.shutdown().await;
     db.close().await;
 }
+
+#[path = "dbos/notation.rs"]
+mod persisted;
+#[path = "support/persisted_notation.rs"]
+mod persisted_fixture;

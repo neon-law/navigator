@@ -19,7 +19,6 @@ mod heartbeat;
 mod inbound_triage;
 mod manual_schedules;
 mod nightly_project_update;
-mod notation;
 mod notation_reset;
 mod profit_digest;
 mod project_calendar;
