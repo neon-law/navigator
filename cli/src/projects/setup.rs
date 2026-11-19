@@ -188,6 +188,36 @@ fn one_integration_result(results: &[IntegrationOutcome]) -> Result<IntegrationO
     }
 }
 
+/// Finish opening a Project by running the same idempotent setup `navigator
+/// project setup` runs, so a new Project gets its Drive folder, repository,
+/// Slack channel, shared calendar, contacts, and Notion page without anyone
+/// remembering a second command. It prints one line per resource and never
+/// fails the open: a resource whose runtime is not configured reports that,
+/// and the Project stays open. Returns whether every resource succeeded.
+pub async fn after_create(base: &str, token: &str, id: uuid::Uuid, code: &str) -> bool {
+    let project = VisibleProject {
+        id,
+        code: code.to_string(),
+        firm_id: None,
+        brand: None,
+    };
+    let report = SetupReport {
+        results: vec![setup_one(base, token, &project).await],
+    };
+    print_report(&report, false);
+    let complete = report
+        .results
+        .iter()
+        .flat_map(|project| project.resources.values())
+        .all(succeeded);
+    if !complete {
+        println!(
+            "The Project is open; setup is incomplete. Fix the lines above, then run `navigator project setup {code}`."
+        );
+    }
+    complete
+}
+
 /// Resolve `--host` and the Project code against `navigator.yaml` in `dir`
 /// before touching the network. A repository root already names both, the
 /// same way `project gate` reads them, so a bare `navigator project setup`
