@@ -40,7 +40,7 @@ async fn postgres() -> Option<PostgresDb> {
 // Historical Firm rows deliberately remain distinct from the target's parents.
 async fn source_firm(db: &store::surreal::SurrealDb) -> (Uuid, String) {
     let id = Uuid::now_v7();
-    let slug = format!("synthetic-{}", id.simple());
+    let slug = format!("firm-{}", id.simple());
     db.query("CREATE $id SET name='Synthetic accounting firm', slug=$slug, status='active', inserted_at=$at, updated_at=$at")
         .bind(("id", store::surreal::record_id("firm", id)))
         .bind(("slug", slug.clone()))
