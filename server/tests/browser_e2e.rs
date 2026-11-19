@@ -638,86 +638,6 @@ async fn home_page_renders() {
 }
 
 #[tokio::test]
-async fn login_submits_each_valid_stage_once_without_clicking_submitters() {
-    use axum::{response::Html, routing::get, Router};
-
-    let Some(c) = new_client_or_skip().await else {
-        return;
-    };
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let origin = format!("http://{}", listener.local_addr().unwrap());
-    let app = Router::new().route(
-        "/auth/login",
-        get(|| async {
-            Html(
-                r#"<!doctype html><title>Login: </title>
-                <form id="login">
-                  <input name="email" type="email" required>
-                  <button id="continue" type="submit" onclick="window.clicks++">Continue</button>
-                  <button type="submit" hidden>Hidden</button>
-                  <button type="submit" disabled>Disabled</button>
-                </form>
-                <button type="submit">Unassociated</button>
-                <script>
-                  window.clicks = 0;
-                  window.stages = [];
-                  const form = document.querySelector('form');
-                  const submitter = document.querySelector('#continue');
-                  form.addEventListener('submit', event => {
-                    event.preventDefault();
-                    window.stages.push({
-                      name: form.elements[0].name,
-                      valid: form.checkValidity(),
-                      associated: event.submitter.form === form,
-                      submitter: event.submitter.id
-                    });
-                    if (form.elements[0].name === 'email') {
-                      const password = document.createElement('input');
-                      password.type = 'password';
-                      password.name = 'password';
-                      password.required = true;
-                      form.elements[0].replaceWith(password);
-                    } else {
-                      history.replaceState(null, '', '/signed-in');
-                    }
-                  });
-                  form.requestSubmit(submitter);
-                  window.invalidStageWasRefused = window.stages.length === 0;
-                </script>"#,
-            )
-        }),
-    );
-    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    features::webdriver::login_as_at(
-        &c,
-        &origin,
-        "synthetic@example.com",
-        "synthetic-password",
-        "/signed-in",
-    )
-    .await;
-    let observed = c
-        .execute(
-            "return {clicks: window.clicks, stages: window.stages, \
-             invalidStageWasRefused: window.invalidStageWasRefused};",
-            vec![],
-        )
-        .await
-        .unwrap();
-    c.close().await.unwrap();
-    server.abort();
-    assert_eq!(observed["clicks"], 0);
-    assert_eq!(observed["invalidStageWasRefused"], true);
-    assert_eq!(
-        observed["stages"],
-        serde_json::json!([
-            {"name": "email", "valid": true, "associated": true, "submitter": "continue"},
-            {"name": "password", "valid": true, "associated": true, "submitter": "continue"}
-        ])
-    );
-}
-
-#[tokio::test]
 async fn design_page_renders_the_dioxus_gallery() {
     // The /design gallery is a shared Navigator tool behind the session
     // boundary (#732) and renders the Dioxus Components, styled by the Dioxus
@@ -6490,4 +6410,91 @@ async fn lawyer_walks_the_basic_will_through_the_matter_workflow() {
     // retainer walk waits for.
     let _ = (notation_id, journal_values);
     c.close().await.unwrap();
+}
+
+#[cfg(test)]
+mod login_form_tests {
+    use features::webdriver::new_client_or_skip;
+    use uuid::Uuid;
+
+    #[tokio::test]
+    async fn login_submits_each_valid_stage_once_without_clicking_submitters() {
+        use axum::{response::Html, routing::get, Router};
+
+        let Some(c) = new_client_or_skip().await else {
+            return;
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let app = Router::new().route(
+            "/auth/login",
+            get(|| async {
+                Html(
+                    r#"<!doctype html><title>Login: </title>
+                    <form id="login">
+                      <input name="email" type="email" required>
+                      <button id="continue" type="submit" onclick="window.clicks++">Continue</button>
+                      <button type="submit" hidden>Hidden</button>
+                      <button type="submit" disabled>Disabled</button>
+                    </form>
+                    <button type="submit">Unassociated</button>
+                    <script>
+                      window.clicks = 0;
+                      window.stages = [];
+                      const form = document.querySelector('form');
+                      const submitter = document.querySelector('#continue');
+                      form.addEventListener('submit', event => {
+                        event.preventDefault();
+                        window.stages.push({
+                          name: form.elements[0].name,
+                          valid: form.checkValidity(),
+                          associated: event.submitter.form === form,
+                          submitter: event.submitter.id
+                        });
+                        if (form.elements[0].name === 'email') {
+                          const password = document.createElement('input');
+                          password.type = 'password';
+                          password.name = 'password';
+                          password.required = true;
+                          form.elements[0].replaceWith(password);
+                        } else {
+                          history.replaceState(null, '', '/signed-in');
+                        }
+                      });
+                      form.requestSubmit(submitter);
+                      window.invalidStageWasRefused = window.stages.length === 0;
+                    </script>"#,
+                )
+            }),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let password = Uuid::new_v4().to_string();
+        features::webdriver::login_as_at(
+            &c,
+            &origin,
+            "synthetic@example.com",
+            &password,
+            "/signed-in",
+        )
+        .await;
+        let observed = c
+            .execute(
+                "return {clicks: window.clicks, stages: window.stages, \
+                 invalidStageWasRefused: window.invalidStageWasRefused};",
+                vec![],
+            )
+            .await
+            .unwrap();
+        c.close().await.unwrap();
+        server.abort();
+        assert_eq!(observed["clicks"], 0);
+        assert_eq!(observed["invalidStageWasRefused"], true);
+        assert_eq!(
+            observed["stages"],
+            serde_json::json!([
+                {"name": "email", "valid": true, "associated": true, "submitter": "continue"},
+                {"name": "password", "valid": true, "associated": true, "submitter": "continue"}
+            ])
+        );
+    }
 }
