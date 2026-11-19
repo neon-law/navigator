@@ -100,3 +100,5 @@ patches:
       metadata:
         name: navigator-web
         namespace: navigator
+
+  # NAVIGATOR_DBOS_ONLY_PATCHES

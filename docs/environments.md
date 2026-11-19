@@ -260,3 +260,24 @@ archive](iceberg-archive.md)).
 - [`deployment-secrets`](deployment-secrets.md) — the `deployments/` tree: coordinates, SOPS key material, and apply.
 - [`dns`](dns.md) — idempotent DNSimple reconciliation.
 - [`gitops`](gitops.md) — release creation and the ordered per-deployment rollout.
+
+## DBOS-only workflow hosting
+
+A deployment explicitly selects the native cohost with `NAVIGATOR_WORKFLOWS_IN_WEB="true"`,
+`NAVIGATOR_DBOS_ENABLED="true"`, and `NAVIGATOR_WORKFLOW_ENGINE="dbos"`. Ship requires every registered direct and
+indirect caller's DBOS selector to be explicitly true in the deployment coordinates. A missing, false, or malformed
+selector refuses the plan before mutation; enabling the executor alone never proves complete caller ownership. Runtime
+mixed cohosting still requires Restate; ship deliberately requires complete caller ownership before selecting this
+topology. Authenticated submissions use the cohost's loopback listener, by default `http://127.0.0.1:9083`. An explicit
+ingress override must remain a loopback origin matching `WORKFLOWS_SERVICE_HEALTH_LISTEN`; an old external worker URL is
+refused. `NAVIGATOR_DBOS_INGRESS_TOKEN` stays in the deployment Secret and is never rendered as plaintext.
+
+This profile renders the selectors into web, omits the separate worker and its proxy, network resources and certificate,
+and moves its scheduled triggers to DBOS. Image rolls, restarts and rollout waits target web, and Restate registration
+is skipped. The operational archive ServiceAccount remains. The default topology keeps its separate worker and required
+Restate registration while retained work drains.
+
+Select this profile only after verifying retained Restate work has drained and recovery is accepted: applying its
+Ingress removes the worker's public route. Omitting desired objects does not delete existing resources, so ship does not
+prune the worker, cancel old invocations or certify an empty Restate journal. Retire retained resources through a
+separately authorized operator step. The profile does not change backup retention or image publication.

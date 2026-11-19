@@ -37,6 +37,8 @@ namespace: navigator
 # placeholders: `ops ship` drops each one when its `NAVIGATOR_DBOS_*_ENABLED`
 # switch moves that workflow onto the DBOS executor in `web`, and deletes the
 # live CronJob in the same roll.
+# The complete DBOS cohost also retires nightly Project updates, social publication
+# reconciliation and YouTube polling; a selector alone does not retire those triggers.
 resources:
   - cron-archives-trigger.yaml
   - cron-surreal-archive.yaml
