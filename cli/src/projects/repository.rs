@@ -17,7 +17,7 @@
 //! ├── blobs/             # *.yaml Blobs only, one per document; bytes stay in the store
 //! ├── documents/         # Git-ignored; the bytes each Blob names, staged or pulled down
 //! ├── seeds/             # lookup_fields / records YAML for `navigator site import`
-//! ├── .gitignore         # ignores documents/, notes/, and mail/, the local working folders
+//! ├── .gitignore         # ignores root documents/, notes/, and mail/, the local working folders
 //! ├── AGENTS.md
 //! ├── README.md
 //! └── navigator.yaml     # the Project this repository declares
@@ -79,7 +79,7 @@ const NOTES_DIRECTORY: &str = "notes";
 /// The git-ignored working folder for email bodies, drafts, and sent copies;
 /// see [`ROOT_GITIGNORE`].
 const MAIL_DIRECTORY: &str = "mail";
-/// The root `.gitignore` the scaffold writes. `notes/` holds call notes and
+/// The root `.gitignore` the scaffold writes. `/notes/` holds call notes and
 /// memos fed to `navigator project communication create --body-file`; the
 /// Communication is the record and its body lives in the store, never in Git.
 /// A Notation is a database record, so there is no `notations/` folder.
@@ -101,9 +101,16 @@ const MAIL_DIRECTORY: &str = "mail";
 /// the server-side repository seeding write the same bytes.
 pub use project_scaffold::ROOT_GITIGNORE;
 /// The [`ROOT_GITIGNORE`] lines whose absence is an error rather than drift:
-/// without them a document's bytes, a rendered pleading, a downloaded
-/// exhibit, or a handoff note can be committed (LAW-181).
-const ROOT_GITIGNORE_PROTECTIONS: &[&str] = &["/documents/", "*.pdf", "*.docx", "*.local"];
+/// without them private matter records or document bytes can be committed
+/// (LAW-181).
+const ROOT_GITIGNORE_PROTECTIONS: &[&str] = &[
+    "/documents/",
+    "/notes/",
+    "/mail/",
+    "*.pdf",
+    "*.docx",
+    "*.local",
+];
 /// The Git-ignored document bytes; see [`crate::document_sync::DOCUMENT_DIRECTORY`].
 const DOCUMENT_DIRECTORY: &str = crate::document_sync::DOCUMENT_DIRECTORY;
 /// The committed Blobs; see [`crate::document_sync::POINTER_DIRECTORY`].
@@ -2373,7 +2380,7 @@ fn root_gitignore_drift(
         errors.push(Finding::at(
             path,
             format!(
-                "{TRACKED_FILE_CODE}: `.gitignore` lacks {}; without {} a document's bytes, a legal file, or a handoff note can be committed; {repair}",
+                "{TRACKED_FILE_CODE}: `.gitignore` lacks {}; without {} private matter records or document bytes can be committed; {repair}",
                 quote(&missing),
                 quote(&unprotected)
             ),
@@ -2396,11 +2403,15 @@ fn repair_root_gitignore(root: &Path, repaired: &mut Vec<String>) -> anyhow::Res
     }
     let canonical: std::collections::BTreeSet<&str> =
         ROOT_GITIGNORE.lines().map(str::trim).collect();
+    let obsolete = ["notes/", "mail/"];
     let kept: Vec<&str> = current
         .lines()
         .filter(|line| {
             let line = line.trim();
-            !line.is_empty() && !line.starts_with('#') && !canonical.contains(line)
+            !line.is_empty()
+                && !line.starts_with('#')
+                && !canonical.contains(line)
+                && !obsolete.contains(&line)
         })
         .collect();
     let mut contents = ROOT_GITIGNORE.to_string();
@@ -5485,7 +5496,7 @@ jobs:
         let root = tempfile::tempdir().unwrap();
         fs::write(
             root.path().join(".gitignore"),
-            "notes/\nnode_modules\ndist\n",
+            "notes/\nmail/\nnode_modules\ndist\n",
         )
         .unwrap();
         let mut repaired = Vec::new();
@@ -5494,8 +5505,10 @@ jobs:
         let contents = fs::read_to_string(root.path().join(".gitignore")).unwrap();
         assert!(contents.starts_with(ROOT_GITIGNORE), "{contents}");
         assert!(contents.ends_with("node_modules\ndist\n"), "{contents}");
-        assert_eq!(contents.matches("notes/").count(), 1, "{contents}");
-        assert_eq!(contents.matches("mail/").count(), 1, "{contents}");
+        assert!(contents.lines().any(|line| line == "/notes/"), "{contents}");
+        assert!(contents.lines().any(|line| line == "/mail/"), "{contents}");
+        assert!(!contents.lines().any(|line| line == "notes/"), "{contents}");
+        assert!(!contents.lines().any(|line| line == "mail/"), "{contents}");
         assert!(missing_root_gitignore_lines(&contents).is_empty());
 
         let mut again = Vec::new();

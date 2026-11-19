@@ -1658,8 +1658,8 @@ pub enum ProjectRepositoryCmd {
         dry_run: bool,
     },
     /// Land this checkout's change and follow it through the merge loop:
-    /// preflight, branch, signed commit, push, the review request ready for
-    /// review, merge-when-green armed and read back, the required check
+    /// read-only live-document preflight, branch, signed commit, push, the
+    /// review request ready for review, merge-when-green armed and read back, the required check
     /// watched to a verdict, the merge commit captured, and the deployment
     /// run for the merge commit watched to a verdict.
     Push {

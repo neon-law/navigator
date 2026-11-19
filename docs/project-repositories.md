@@ -31,7 +31,7 @@ holds that Project's notation templates and application workspaces side by side:
 ├── notes/             # git-ignored call notes and memos for Communication bodies
 ├── seeds/             # lookup_fields / records YAML for `navigator site import`
 ├── .agents/skills/    # kept identical to Navigator's own canonical copies
-├── .gitignore         # ignores /documents/ and notes/
+├── .gitignore         # ignores root /documents/, /notes/, and /mail/
 ├── AGENTS.md
 ├── LICENSE.md
 └── README.md
@@ -782,6 +782,13 @@ Every Project repository follows one branch contract:
   the client is meant to read that document. Treat every change to `visibility: client` as a deliberate client-release
   decision. For each Deadline, choose deliberately whether it is internal or client-visible and review that choice.
 - Publishing a page or a Draft means merging its pull request.
+
+`navigator project repository push` checks the live document ledger with the local site session before it branches,
+stages files, or opens a pull request. The check writes nothing. It prints every Pointer path it would create or repair,
+including paths Git currently ignores, and stops for review. If a root ignore rule hides a Pointer, restore canonical
+rules with `navigator project repository sync-skills`. Then run `navigator project gate --check` to reconcile the
+checkout, review the YAML under `blobs/`, and retry. Root `/mail/` and `/notes/` rules keep private material out of Git
+without hiding a Pointer under `blobs/mail/`.
 
 The forge enforces the branch and merge settings; client-visibility decisions remain part of human review. Project
 repositories use GitHub for CI/CD where configured, and GitHub branch protection and merge settings carry those

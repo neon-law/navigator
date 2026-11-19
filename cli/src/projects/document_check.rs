@@ -140,6 +140,25 @@ pub async fn run(dir: &Path, ci: bool, deep: bool) -> Result<Outcome> {
     check_with(dir, &client, Some(&remint), false, deep).await
 }
 
+/// Read the live document ledger with the local site session and report every
+/// checkout edit a publish preflight would need. This stays read-only while
+/// using the same credentials as the local `project gate --check` command.
+pub async fn publish_preflight(dir: &Path) -> Result<Outcome> {
+    let (project, host) = crate::document_sync::read_manifest(dir)?;
+    let host = host
+        .filter(|host| !host.trim().is_empty())
+        .ok_or_else(|| anyhow!("navigator.yaml names no host"))?;
+    let client = DocumentClient::connect(Some(&host), &project).await?;
+    publish_preflight_with(dir, &client).await
+}
+
+/// Evaluate the same publish preflight with an already authenticated client.
+/// Kept separate so isolated repository tests exercise the live-data path
+/// without credentials or a deployed Project.
+pub async fn publish_preflight_with(dir: &Path, client: &DocumentClient) -> Result<Outcome> {
+    check_with(dir, client, None, false, false).await
+}
+
 /// Mint a fresh bearer for the same deployment and Project.
 pub type Remint =
     Box<dyn Fn() -> futures::future::BoxFuture<'static, Result<String>> + Send + Sync>;
@@ -2017,27 +2036,126 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_live_document_with_no_pointer_fails_under_ci() {
+    async fn a_live_mail_document_reports_its_pointer_path_without_writing_it() {
         let (server, project_id, asset_id) = server().await;
         let dir = tempfile::tempdir().unwrap();
+        gitignore(dir.path());
+        let repository = std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        assert!(repository.success());
+        write_tree(
+            dir.path(),
+            "mail/private.eml",
+            "Synthetic private message.\n",
+        );
+        let root_mail_ignored = std::process::Command::new("git")
+            .args(["check-ignore", "--quiet", "mail/private.eml"])
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        assert!(root_mail_ignored.success(), "root mail/ remains private");
         mount_integrity(
             &server,
             project_id,
-            serde_json::json!({ "assets": [asset(asset_id, Some("pleadings/summons.pdf"), true, None)] }),
+            serde_json::json!({ "assets": [asset(asset_id, Some("mail/message/file.pdf"), true, None)] }),
         )
         .await;
-        mount_revisions(&server, project_id, "pleadings/summons.pdf", asset_id, SHA).await;
+        mount_revisions(&server, project_id, "mail/message/file.pdf", asset_id, SHA).await;
 
         let outcome = check(dir.path(), &client(&server, project_id), false, false)
             .await
             .unwrap();
 
         assert!(outcome.errors.is_empty(), "{:?}", outcome.errors);
-        assert!(outcome.fixes.iter().any(|fix| {
-            fix.path == "blobs/pleadings/summons.pdf.yaml" && fix.action == WRITE_POINTER
-        }));
+        assert_eq!(
+            outcome.fixes,
+            vec![CheckFix {
+                path: "blobs/mail/message/file.pdf.yaml".to_string(),
+                action: WRITE_POINTER.to_string(),
+            }]
+        );
         assert!(outcome.rejects(true));
         assert!(!dir.path().join("blobs").exists());
+        let ignored = std::process::Command::new("git")
+            .args([
+                "check-ignore",
+                "--quiet",
+                "blobs/mail/message/file.pdf.yaml",
+            ])
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        assert!(
+            !ignored.success(),
+            "a Pointer below blobs/ must be stageable"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_clean_isolated_version_bump_passes_against_live_document_metadata() {
+        let (server, project_id, asset_id) = server().await;
+        let dir = tempfile::tempdir().unwrap();
+        gitignore(dir.path());
+        write_tree(
+            dir.path(),
+            "Cargo.toml",
+            "[workspace.package]\nversion = \"26.11.20\"\n",
+        );
+        write_tree(
+            dir.path(),
+            "blobs/mail/message/file.pdf.yaml",
+            &pointer_yaml(asset_id, SHA),
+        );
+        let git = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .args(["-c", "user.name=Test", "-c", "user.email=test@example.test"])
+                .args(args)
+                .current_dir(dir.path())
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {args:?}");
+        };
+        git(&["init", "--quiet"]);
+        git(&["add", "-A"]);
+        git(&["commit", "--quiet", "-m", "isolated version bump"]);
+        let tracked = std::process::Command::new("git")
+            .args([
+                "ls-files",
+                "--error-unmatch",
+                "blobs/mail/message/file.pdf.yaml",
+            ])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert!(
+            tracked.status.success(),
+            "the mail Pointer must be tracked: {}",
+            String::from_utf8_lossy(&tracked.stderr)
+        );
+        mount_integrity(
+            &server,
+            project_id,
+            serde_json::json!({ "assets": [asset(asset_id, Some("mail/message/file.pdf"), true, None)] }),
+        )
+        .await;
+        mount_revisions(&server, project_id, "mail/message/file.pdf", asset_id, SHA).await;
+
+        let outcome = publish_preflight_with(dir.path(), &client(&server, project_id))
+            .await
+            .unwrap();
+
+        assert!(outcome.errors.is_empty(), "{:?}", outcome.errors);
+        assert!(outcome.fixes.is_empty(), "{:?}", outcome.fixes);
+        let status = std::process::Command::new("git")
+            .args(["status", "--porcelain", "--untracked-files=all"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert!(status.status.success());
+        assert!(status.stdout.is_empty(), "{:?}", status.stdout);
     }
 
     /// ENG-862: a pointer the lawyer removed is a pending deletion. The check
