@@ -30,6 +30,33 @@ async fn firm(db: &store::surreal::SurrealDb) -> Uuid {
     .id
 }
 
+async fn project_brand(db: &store::surreal::SurrealDb, firm: Uuid) -> String {
+    let admin = store::firms::memberships_for_firm(db, firm)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|membership| membership.is_dri && membership.membership == "admin")
+        .expect("the native Firm fixture has its appointed Admin DRI");
+    let key = format!("synthetic-{}", Uuid::now_v7().simple());
+    store::brands::create(
+        db,
+        store::persons::Role::Admin,
+        Some(admin.person_id),
+        &store::brands::NewBrand {
+            name: format!("Synthetic Brand {key}"),
+            key: key.clone(),
+            firm_id: Some(firm),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    store::firms::attach_brand(db, store::persons::Role::Owner, None, firm, &key)
+        .await
+        .unwrap();
+    key
+}
+
 async fn entity(db: &store::surreal::SurrealDb) -> Uuid {
     let suffix = Uuid::now_v7();
     let jurisdiction = store::jurisdictions::create(
@@ -164,6 +191,7 @@ async fn firm_allocation_and_receipt_boundaries_are_checked_in_store_commands() 
                 code: "foreign".into(),
                 name: "Foreign synthetic project".into(),
                 firm_id: Some(other),
+                brand: project_brand(&db, other).await,
                 entity_id: entity(&db).await,
                 ..Default::default()
             },
@@ -242,6 +270,7 @@ async fn reconciliation_preview_missing_source_and_approved_retry_are_audited() 
                 status: "open".into(),
                 entity_id: entity(&db).await,
                 firm_id: Some(firm),
+                brand: project_brand(&db, firm).await,
                 ..Default::default()
             },
         )
@@ -438,6 +467,7 @@ async fn concurrent_repayments_cannot_exceed_reviewed_project_costs() {
                 status: "open".into(),
                 entity_id: entity(&db).await,
                 firm_id: Some(firm),
+                brand: project_brand(&db, firm).await,
                 ..Default::default()
             },
         )
