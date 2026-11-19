@@ -775,4 +775,55 @@ mod tests {
             "{text}"
         );
     }
+
+    #[test]
+    fn an_agency_filing_in_a_docketless_matter_is_exempt_not_unresolved() {
+        let rows = manifest(
+            &[Filing {
+                slug: "2026.11.19_irs-receipt.pdf".into(),
+                asset_id: "a".into(),
+            }],
+            &[],
+        );
+        assert_eq!(rows.len(), 1);
+        assert!(
+            rows[0].reason.as_deref().unwrap().contains("agency filing"),
+            "{rows:?}"
+        );
+        assert!(
+            rows[0].reason.as_deref().unwrap().contains("no docket"),
+            "{rows:?}"
+        );
+        let text = render(&rows);
+        assert!(text.contains("EXEMPT"), "{text}");
+        assert!(!text.contains("UNRESOLVED"), "{text}");
+        assert!(
+            text.ends_with("1 filing(s), 0 unresolved; nothing was renamed\n"),
+            "{text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_does_not_refuse_a_docketless_matter_whose_only_filing_is_exempt() {
+        let server = wiremock::MockServer::start().await;
+        let c = entries::Coordinates {
+            base: server.uri(),
+            token: "fixture".into(),
+            project_id: uuid::Uuid::now_v7(),
+            project_code: "sample".into(),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let result = apply_names(
+            &c,
+            dir.path(),
+            &[Filing {
+                slug: "2026.11.19_irs-receipt.pdf".into(),
+                asset_id: "a".into(),
+            }],
+            &[],
+        )
+        .await;
+        assert!(result.is_ok(), "an exempt agency filing blocks no rename");
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
 }
