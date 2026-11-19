@@ -1775,7 +1775,20 @@ fn hold_fixture_writers(
         for resource in held.keys() {
             let state: serde_json::Value =
                 serde_json::from_str(&kube.output(&["get", resource, "-o", "json"])?)?;
-            observed &= super::postgres_fixture::writer_observed_stopped(&state);
+            observed &= if state["kind"] == "RestateDeployment" {
+                let workloads = serde_json::from_str(&kube.output(&[
+                    "get",
+                    "deployments,replicasets",
+                    "-o",
+                    "json",
+                ])?)?;
+                let all_pods = serde_json::from_str(&kube.output(&["get", "pods", "-o", "json"])?)?;
+                super::postgres_fixture::restate_writer_observed_stopped(
+                    &state, &workloads, &all_pods,
+                )
+            } else {
+                super::postgres_fixture::writer_observed_stopped(&state)
+            };
         }
         if observed && pods["items"].as_array().is_some_and(Vec::is_empty) {
             break;

@@ -224,7 +224,7 @@ pub(super) fn require_fresh_source(counts: &BTreeMap<String, i64>) -> Result<()>
     Ok(())
 }
 
-pub(super) fn writer_observed_stopped(state: &serde_json::Value) -> bool {
+fn writer_stop_request_observed(state: &serde_json::Value) -> bool {
     let Some(generation) = state["metadata"]["generation"].as_u64() else {
         return false;
     };
@@ -232,7 +232,121 @@ pub(super) fn writer_observed_stopped(state: &serde_json::Value) -> bool {
         && state["status"]["observedGeneration"]
             .as_u64()
             .is_some_and(|seen| seen >= generation)
-        && state["status"]["replicas"].as_u64().unwrap_or(0) == 0
+}
+
+pub(super) fn writer_observed_stopped(state: &serde_json::Value) -> bool {
+    writer_stop_request_observed(state) && state["status"]["replicas"].as_u64().unwrap_or(0) == 0
+}
+
+fn owned_writer_uids(
+    root: &str,
+    workloads: &[serde_json::Value],
+) -> std::collections::BTreeSet<String> {
+    let mut owned = std::collections::BTreeSet::from([root.to_owned()]);
+    loop {
+        let previous = owned.len();
+        let descendants = workloads
+            .iter()
+            .filter(|workload| has_writer_owner(workload, &owned))
+            .filter_map(|workload| workload["metadata"]["uid"].as_str())
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        owned.extend(descendants);
+        if owned.len() == previous {
+            return owned;
+        }
+    }
+}
+
+fn has_writer_owner(state: &serde_json::Value, owned: &std::collections::BTreeSet<String>) -> bool {
+    state["metadata"]["ownerReferences"]
+        .as_array()
+        .is_some_and(|owners| {
+            owners
+                .iter()
+                .any(|owner| owner["uid"].as_str().is_some_and(|uid| owned.contains(uid)))
+        })
+}
+
+fn stopped_controlled_workload(
+    workload: &serde_json::Value,
+    root: &str,
+    workloads: &[serde_json::Value],
+    lineage: &std::collections::BTreeSet<String>,
+) -> bool {
+    let Some(owners) = workload["metadata"]["ownerReferences"].as_array() else {
+        return false;
+    };
+    let mut controllers = owners
+        .iter()
+        .filter(|owner| owner["controller"].as_bool() == Some(true));
+    let Some(owner) = controllers.next() else {
+        return false;
+    };
+    if controllers.next().is_some() {
+        return false;
+    }
+    let Some(owner_uid) = owner["uid"].as_str() else {
+        return false;
+    };
+    let linked = match (workload["kind"].as_str(), owner["kind"].as_str()) {
+        (Some("Deployment" | "ReplicaSet"), Some("RestateDeployment")) => owner_uid == root,
+        (Some("ReplicaSet"), Some("Deployment")) => {
+            lineage.contains(owner_uid)
+                && workloads.iter().any(|parent| {
+                    parent["kind"] == "Deployment"
+                        && parent["metadata"]["uid"].as_str() == Some(owner_uid)
+                })
+        }
+        _ => false,
+    };
+    linked
+        && writer_observed_stopped(workload)
+        && workload["status"]["replicas"].as_u64() == Some(0)
+        && workload["status"]
+            .get("terminatingReplicas")
+            .is_none_or(|value| value.as_u64() == Some(0))
+}
+
+/// Restate's aggregate counters can remain stale after its admin API rejects discovery.
+/// Prove quiescence from the observed request and every UID-linked controller workload.
+pub(super) fn restate_writer_observed_stopped(
+    state: &serde_json::Value,
+    workloads: &serde_json::Value,
+    pods: &serde_json::Value,
+) -> bool {
+    if state["kind"] != "RestateDeployment" || !writer_stop_request_observed(state) {
+        return false;
+    }
+    let (Some(uid), Some(name), Some(workloads), Some(pods)) = (
+        state["metadata"]["uid"]
+            .as_str()
+            .filter(|uid| !uid.is_empty()),
+        state["metadata"]["name"]
+            .as_str()
+            .filter(|name| !name.is_empty()),
+        workloads["items"].as_array(),
+        pods["items"].as_array(),
+    ) else {
+        return false;
+    };
+    let owned = owned_writer_uids(uid, workloads);
+    let belongs = |value: &serde_json::Value| {
+        value["metadata"]["labels"]["app"].as_str() == Some(name) || has_writer_owner(value, &owned)
+    };
+    let mut observed_workload = false;
+    for workload in workloads.iter().filter(|workload| belongs(workload)) {
+        observed_workload = true;
+        if !workload["metadata"]["uid"]
+            .as_str()
+            .is_some_and(|id| !id.is_empty() && owned.contains(id))
+            || !stopped_controlled_workload(workload, uid, workloads, &owned)
+        {
+            return false;
+        }
+    }
+    (observed_workload || state["status"]["replicas"].as_u64() == Some(0))
+        && !pods.iter().any(belongs)
 }
 
 /// Validate the fixture's advertised origin against its actual local workloads.
@@ -396,6 +510,148 @@ mod tests {
         state["status"]["replicas"] = serde_json::json!(0);
         state["spec"]["replicas"] = serde_json::json!(1);
         assert!(!writer_observed_stopped(&state));
+    }
+
+    fn held_restate_writer() -> (serde_json::Value, serde_json::Value, serde_json::Value) {
+        (
+            serde_json::json!({
+                "kind":"RestateDeployment",
+                "metadata":{"uid":"writer-uid","name":"worker","generation":2},
+                "spec":{"replicas":0},
+                "status":{"observedGeneration":2,"replicas":1}
+            }),
+            serde_json::json!({"items":[{
+                "kind":"ReplicaSet",
+                "metadata":{"uid":"replicaset-uid","generation":3,"labels":{"app":"worker"},
+                    "ownerReferences":[{"uid":"writer-uid","kind":"RestateDeployment","controller":true}]},
+                "spec":{"replicas":0},
+                "status":{"observedGeneration":3,"replicas":0,"terminatingReplicas":0}
+            }]}),
+            serde_json::json!({"items":[]}),
+        )
+    }
+
+    #[test]
+    fn stale_restate_counts_require_observed_owned_zero_workloads() {
+        let (state, workloads, pods) = held_restate_writer();
+        assert!(!writer_observed_stopped(&state));
+        assert!(restate_writer_observed_stopped(&state, &workloads, &pods));
+        assert!(!restate_writer_observed_stopped(
+            &state,
+            &serde_json::json!({"items":[]}),
+            &pods
+        ));
+        for (pointer, value) in [
+            ("/metadata/generation", serde_json::json!(3)),
+            ("/metadata/uid", serde_json::Value::Null),
+            ("/kind", serde_json::json!("Unknown")),
+            ("/spec/replicas", serde_json::json!(1)),
+        ] {
+            let mut invalid = state.clone();
+            *invalid.pointer_mut(pointer).unwrap() = value;
+            assert!(!restate_writer_observed_stopped(
+                &invalid, &workloads, &pods
+            ));
+        }
+        assert!(!restate_writer_observed_stopped(
+            &state,
+            &serde_json::json!({}),
+            &pods
+        ));
+        assert!(!restate_writer_observed_stopped(
+            &state,
+            &workloads,
+            &serde_json::json!({})
+        ));
+    }
+
+    #[test]
+    fn restate_capture_refuses_live_terminating_or_unobserved_children() {
+        let (state, workloads, pods) = held_restate_writer();
+        for (pointer, value) in [
+            ("/spec/replicas", serde_json::json!(1)),
+            ("/status/replicas", serde_json::json!(1)),
+            ("/status/replicas", serde_json::Value::Null),
+            ("/status/observedGeneration", serde_json::json!(2)),
+            ("/status/terminatingReplicas", serde_json::json!(1)),
+            ("/status/terminatingReplicas", serde_json::json!("unknown")),
+            ("/kind", serde_json::json!("Unknown")),
+        ] {
+            let mut invalid = workloads.clone();
+            *invalid["items"][0].pointer_mut(pointer).unwrap() = value;
+            assert!(!restate_writer_observed_stopped(&state, &invalid, &pods));
+        }
+    }
+
+    #[test]
+    fn restate_capture_refuses_missing_or_foreign_controller_ownership() {
+        let (state, workloads, pods) = held_restate_writer();
+        for (pointer, value) in [
+            ("/metadata/uid", serde_json::Value::Null),
+            ("/metadata/ownerReferences", serde_json::json!([])),
+            (
+                "/metadata/ownerReferences/0/uid",
+                serde_json::json!("foreign-uid"),
+            ),
+            (
+                "/metadata/ownerReferences/0/controller",
+                serde_json::json!(false),
+            ),
+            (
+                "/metadata/ownerReferences/0/kind",
+                serde_json::json!("Unknown"),
+            ),
+        ] {
+            let mut invalid = workloads.clone();
+            *invalid["items"][0].pointer_mut(pointer).unwrap() = value;
+            assert!(!restate_writer_observed_stopped(&state, &invalid, &pods));
+        }
+    }
+
+    #[test]
+    fn restate_capture_follows_uids_beyond_labels_and_checks_writer_pods() {
+        let (state, mut workloads, mut pods) = held_restate_writer();
+        workloads["items"][0]["metadata"]["labels"]["app"] = serde_json::json!("other-label");
+        assert!(restate_writer_observed_stopped(&state, &workloads, &pods));
+        workloads["items"][0]["spec"]["replicas"] = serde_json::json!(1);
+        assert!(!restate_writer_observed_stopped(&state, &workloads, &pods));
+        workloads["items"][0]["spec"]["replicas"] = serde_json::json!(0);
+        pods["items"] =
+            serde_json::json!([{"metadata":{"ownerReferences":[{"uid":"replicaset-uid"}]}}]);
+        assert!(!restate_writer_observed_stopped(&state, &workloads, &pods));
+        pods["items"][0]["metadata"]["deletionTimestamp"] =
+            serde_json::json!("2026-01-01T00:00:00Z");
+        assert!(!restate_writer_observed_stopped(&state, &workloads, &pods));
+        pods["items"] = serde_json::json!([{"metadata":{"labels":{"app":"worker"}}}]);
+        assert!(!restate_writer_observed_stopped(&state, &workloads, &pods));
+        pods["items"] = serde_json::json!([{"metadata":{"labels":{"app":"unrelated"}}}]);
+        assert!(restate_writer_observed_stopped(&state, &workloads, &pods));
+    }
+
+    #[test]
+    fn restate_capture_checks_deployments_and_transitive_replica_sets() {
+        let (state, mut workloads, pods) = held_restate_writer();
+        let mut deployment = workloads["items"][0].clone();
+        deployment["kind"] = serde_json::json!("Deployment");
+        deployment["metadata"]["uid"] = serde_json::json!("deployment-uid");
+        workloads["items"][0]["metadata"]["ownerReferences"][0] = serde_json::json!({
+            "uid":"deployment-uid","kind":"Deployment","controller":true
+        });
+        workloads["items"].as_array_mut().unwrap().push(deployment);
+        assert!(restate_writer_observed_stopped(&state, &workloads, &pods));
+        workloads["items"][1]["status"]["observedGeneration"] = serde_json::json!(2);
+        assert!(!restate_writer_observed_stopped(&state, &workloads, &pods));
+        workloads["items"][1]["status"]["observedGeneration"] = serde_json::json!(3);
+        workloads["items"][1]["metadata"]["ownerReferences"][0]["uid"] =
+            serde_json::json!("foreign-uid");
+        workloads["items"][1]["metadata"]["labels"]["app"] = serde_json::json!("unrelated");
+        workloads["items"][0]["metadata"]["ownerReferences"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "uid":"writer-uid","kind":"RestateDeployment","controller":false
+            }));
+        assert!(!restate_writer_observed_stopped(&state, &workloads, &pods));
     }
 
     #[test]
