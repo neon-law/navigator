@@ -385,14 +385,49 @@ pub fn run(host: Option<&str>, project_code: Option<&str>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let diagnosis = diagnose(&Probe {
+    let mut diagnosis = diagnose(&Probe {
         env: &|key| std::env::var(key).ok(),
         credentials: &creds,
         now: now_secs(),
         host,
         project_code,
     });
+    let local = crate::projects::manifest::read(std::path::Path::new("."));
+    diagnosis
+        .checks
+        .extend(project_code.and_then(|code| drive_link_check(code, local.as_ref())));
     report(&diagnosis)
+}
+
+/// The Drive folder a checkout of `code` links in its `navigator.yaml`. A
+/// matter whose folders exist but are never named is found only by a title
+/// search, so an unlinked Project warns. Outside a checkout of `code` there
+/// is nothing local to read and no check is reported.
+fn drive_link_check(
+    code: &str,
+    local: Option<&crate::projects::manifest::Manifest>,
+) -> Option<Check> {
+    let local = local.filter(|manifest| manifest.project.as_deref() == Some(code))?;
+    Some(
+        match local
+            .drive_folder_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+        {
+            Some(id) => Check::ok(
+                "drive folder link",
+                format!("https://drive.google.com/drive/folders/{id}"),
+            ),
+            None => Check::warn(
+                "drive folder link",
+                format!(
+                    "navigator.yaml links no Drive folder; link the matter's folder with \
+                     `navigator project set {code} --drive-folder <link>`"
+                ),
+            ),
+        },
+    )
 }
 
 fn now_secs() -> i64 {
@@ -823,5 +858,32 @@ mod tests {
         assert!(diagnosis.check("project folder").is_none());
         assert!(diagnosis.check("project repository").is_none());
         assert!(diagnosis.check("portal mount").is_none());
+    }
+
+    #[test]
+    fn a_checkout_without_a_drive_folder_link_warns() {
+        let manifest = |yaml: &str| {
+            let root = tempfile::TempDir::new().unwrap();
+            std::fs::write(root.path().join("navigator.yaml"), yaml).unwrap();
+            crate::projects::manifest::read(root.path()).unwrap()
+        };
+        let unlinked =
+            manifest("version: 26.11.1\nproject:\n  host: https://example.test\n  name: acme\n");
+        let check = drive_link_check("acme", Some(&unlinked)).unwrap();
+        assert_eq!(check.status, Status::Warn);
+        assert!(check
+            .detail
+            .contains("navigator project set acme --drive-folder <link>"));
+        let linked = manifest(
+            "version: 26.11.1\nproject:\n  host: https://example.test\n  name: acme\n  drive_folder_id: synthetic-folder\n",
+        );
+        let check = drive_link_check("acme", Some(&linked)).unwrap();
+        assert_eq!(check.status, Status::Ok);
+        assert_eq!(
+            check.detail,
+            "https://drive.google.com/drive/folders/synthetic-folder"
+        );
+        assert!(drive_link_check("other", Some(&linked)).is_none());
+        assert!(drive_link_check("acme", None).is_none());
     }
 }

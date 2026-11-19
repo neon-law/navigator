@@ -98,6 +98,10 @@ fn print_status(value: &serde_json::Value) {
     ] {
         println!("{field}: {}", value[field].as_str().unwrap_or("none"));
     }
+    match value["drive_folder_id"].as_str() {
+        Some(id) => println!("drive folder: https://drive.google.com/drive/folders/{id}"),
+        None => println!("drive folder: none linked"),
+    }
     if let Some(history) = value["history"].as_array() {
         println!("status history:");
         for entry in history {

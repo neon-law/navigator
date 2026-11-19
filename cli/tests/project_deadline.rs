@@ -634,8 +634,54 @@ async fn deadline_sync_fails_when_the_provider_cannot_apply_the_report() {
         ])
         .assert()
         .failure()
-        .stdout(predicates::str::contains("acme: provider_unavailable"));
+        .stdout(predicates::str::contains("acme: provider_unavailable"))
+        .stderr(predicates::str::contains(
+            "nothing was duplicated; `navigator project deadline sync --project acme` again",
+        ));
     server.verify().await;
+}
+
+/// A Project with no calendar says so and names the provisioning step,
+/// whether the pass was applied or only planned.
+#[tokio::test]
+async fn deadline_sync_names_an_unprovisioned_calendar() {
+    for dry_run in [false, true] {
+        let server = MockServer::start().await;
+        let root = TempDir::new().unwrap();
+        let host = server.uri();
+        let credentials = credentials(root.path(), &host);
+        mount_projects(&server).await;
+        mount_mirror(
+            &server,
+            json!({"results": [{
+                "project_code": "acme",
+                "outcome": "calendar_unprovisioned",
+                "detail": "no calendar recorded; creating it failed with provider_unauthorized"
+            }]}),
+            200,
+        )
+        .await;
+        let mut args = vec!["project", "deadline", "sync", "--project", "acme"];
+        if dry_run {
+            args.push("--dry-run");
+        }
+        args.extend(["--host", host.as_str()]);
+
+        Command::cargo_bin("navigator")
+            .unwrap()
+            .current_dir(root.path())
+            .env("NAVIGATOR_CREDENTIALS_FILE", &credentials)
+            .args(&args)
+            .assert()
+            .failure()
+            .stdout(predicates::str::contains(
+                "acme: calendar_unprovisioned — no calendar recorded; \
+                 creating it failed with provider_unauthorized",
+            ))
+            .stderr(predicates::str::contains(
+                "acme: the Project has no calendar yet",
+            ));
+    }
 }
 
 /// A door answer without its results array is a failure, not a silent pass.

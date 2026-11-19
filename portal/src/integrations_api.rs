@@ -910,6 +910,18 @@ pub(crate) async fn mirror_one(
     let Ok(_guard) = calendar_lock(project.id).await else {
         return ProjectOutcome::plain(project.code.clone(), "provider_unavailable");
     };
+    let recorded = project
+        .calendar_id
+        .as_deref()
+        .is_some_and(|id| !id.trim().is_empty());
+    // A dry run with no recorded calendar has nothing to read, so it asks
+    // the provider the question the applied pass asks first: a plan that
+    // the provider would refuse is not a plan.
+    if dry_run && !recorded {
+        if let Err(error) = calendar.find_calendar(&project.code).await {
+            return mirror_failure(project.code.clone(), recorded, &error);
+        }
+    }
     match store::deadline_calendar::reconcile(
         &state.surreal,
         calendar.as_ref(),
@@ -919,20 +931,7 @@ pub(crate) async fn mirror_one(
     )
     .await
     {
-        Ok(report) => {
-            if !report.failures.is_empty() {
-                tracing::warn!(
-                    project_id = %project.id,
-                    failures = report.failures.len(),
-                    "Deadline Calendar reconcile has pending events"
-                );
-            }
-            ProjectOutcome::with_detail(
-                project.code.clone(),
-                report.outcome.slug(),
-                store::deadline_calendar::report_line(&report),
-            )
-        }
+        Ok(report) => mirror_outcome(project.code.clone(), &report),
         Err(store::deadline_calendar::MirrorError::Calendar(
             cloud::CalendarError::AmbiguousSummary { count },
         )) => ProjectOutcome::with_detail(
@@ -940,7 +939,66 @@ pub(crate) async fn mirror_one(
             "duplicate",
             format!("{count} calendars carry this code"),
         ),
+        Err(store::deadline_calendar::MirrorError::Calendar(error)) => {
+            mirror_failure(project.code.clone(), recorded, &error)
+        }
         Err(_) => ProjectOutcome::plain(project.code.clone(), "provider_unavailable"),
+    }
+}
+
+/// A finished pass. Rows the provider refused are writes that did not
+/// happen, so the pass reports `mirror_incomplete` with one line per row.
+fn mirror_outcome(
+    project_code: String,
+    report: &store::deadline_calendar::MirrorReport,
+) -> ProjectOutcome {
+    let mut line = store::deadline_calendar::report_line(report);
+    if report.dry_run && report.creates_calendar {
+        line.push_str("; creates or adopts the Project calendar first");
+    }
+    if report.failures.is_empty() {
+        return ProjectOutcome::with_detail(project_code, report.outcome.slug(), line);
+    }
+    tracing::warn!(
+        failures = report.failures.len(),
+        "Deadline Calendar reconcile has pending events"
+    );
+    for failure in &report.failures {
+        line.push_str("; ");
+        line.push_str(failure);
+    }
+    ProjectOutcome::with_detail(project_code, "mirror_incomplete", line)
+}
+
+/// The outcome a provider refusal reports. With no recorded calendar the
+/// Project's calendar was never provisioned, and that is what the lawyer
+/// needs to hear; the provider's class rides in the detail.
+fn mirror_failure(
+    project_code: String,
+    recorded: bool,
+    error: &cloud::CalendarError,
+) -> ProjectOutcome {
+    let cause = calendar_failure_slug(error);
+    if recorded {
+        return ProjectOutcome::plain(project_code, cause);
+    }
+    ProjectOutcome::with_detail(
+        project_code,
+        "calendar_unprovisioned",
+        format!("no calendar recorded; creating it failed with {cause}"),
+    )
+}
+
+/// Sort a provider refusal into the operator's next step: an unconfigured
+/// runtime, a delegation the Workspace refuses, or a failure a retry clears.
+const fn calendar_failure_slug(error: &cloud::CalendarError) -> &'static str {
+    match error {
+        cloud::CalendarError::MissingConfig(_) => "runtime_not_configured",
+        cloud::CalendarError::Authentication
+        | cloud::CalendarError::Api {
+            status: 401 | 403, ..
+        } => "provider_unauthorized",
+        _ => "provider_unavailable",
     }
 }
 
@@ -959,4 +1017,89 @@ fn report(results: Vec<ProjectOutcome>) -> Response {
 
 fn report_one(outcome: ProjectOutcome) -> Response {
     report(vec![outcome])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{calendar_failure_slug, mirror_failure, mirror_outcome};
+    use store::deadline_calendar::{MirrorOutcome, MirrorReport};
+
+    #[test]
+    fn a_provider_refusal_names_its_class() {
+        use cloud::CalendarError;
+        assert_eq!(
+            calendar_failure_slug(&CalendarError::Authentication),
+            "provider_unauthorized"
+        );
+        assert_eq!(
+            calendar_failure_slug(&CalendarError::Api {
+                action: "finding a calendar",
+                status: 403
+            }),
+            "provider_unauthorized"
+        );
+        assert_eq!(
+            calendar_failure_slug(&CalendarError::Api {
+                action: "finding a calendar",
+                status: 503
+            }),
+            "provider_unavailable"
+        );
+        assert_eq!(
+            calendar_failure_slug(&CalendarError::MissingConfig("owner".into())),
+            "runtime_not_configured"
+        );
+    }
+
+    #[test]
+    fn a_failure_without_a_recorded_calendar_is_unprovisioned() {
+        let error = cloud::CalendarError::Api {
+            action: "creating a calendar",
+            status: 403,
+        };
+        let unprovisioned = mirror_failure("acme".into(), false, &error);
+        assert_eq!(unprovisioned.outcome, "calendar_unprovisioned");
+        assert_eq!(
+            unprovisioned.detail.as_deref(),
+            Some("no calendar recorded; creating it failed with provider_unauthorized")
+        );
+        let recorded = mirror_failure("acme".into(), true, &error);
+        assert_eq!(recorded.outcome, "provider_unauthorized");
+        assert_eq!(recorded.detail, None);
+    }
+
+    #[test]
+    fn refused_rows_make_the_pass_incomplete() {
+        let mut report = MirrorReport {
+            outcome: MirrorOutcome::Mirrored,
+            in_sync: 2,
+            ..MirrorReport::default()
+        };
+        assert_eq!(mirror_outcome("acme".into(), &report).outcome, "mirrored");
+        report
+            .failures
+            .push("deadline 1: Calendar API returned 500 while inserting an event".into());
+        let incomplete = mirror_outcome("acme".into(), &report);
+        assert_eq!(incomplete.outcome, "mirror_incomplete");
+        assert_eq!(
+            incomplete.detail.as_deref(),
+            Some(
+                "mirrored upserted=0 in_sync=2 deleted=0 failed=1; \
+                 deadline 1: Calendar API returned 500 while inserting an event"
+            )
+        );
+    }
+
+    #[test]
+    fn a_calendarless_plan_says_it_creates_the_calendar() {
+        let report = MirrorReport {
+            dry_run: true,
+            creates_calendar: true,
+            ..MirrorReport::default()
+        };
+        assert_eq!(
+            mirror_outcome("acme".into(), &report).detail.as_deref(),
+            Some("mirrored upserted=0 in_sync=0 deleted=0 (dry run); creates or adopts the Project calendar first")
+        );
+    }
 }
