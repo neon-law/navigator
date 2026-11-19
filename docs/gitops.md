@@ -571,6 +571,10 @@ ahead of it. The tag job sits between `integration` and every publisher, so:
 `release check` reports a version whose tag already names *this very commit* as publishable, so re-running the whole
 workflow republishes rather than skipping every job and reporting success for having done nothing.
 
+**Only the bump commit publishes.** A merge whose first parent already carried the same unreleased version reports
+`publishable=false`, so a red release is not rebuilt by every merge behind it. To release a fix merged after a red bump,
+bump again (the next `-rc.N`).
+
 ### Releasing twice in one day
 
 Nothing forbids it, and no special spelling is required — the calendar is not a rule. Two ordinary ways to name a second
