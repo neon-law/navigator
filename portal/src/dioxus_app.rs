@@ -5833,17 +5833,18 @@ mod tests {
         );
     }
 
-    /// The public-page utility links reproduce the navbar's auth block:
-    /// anonymous → Sign in; signed-in → Projects, Purchases, and Sign out, whatever the
-    /// tier.
+    /// Only the purchase document permits form redirects to payment hosts.
     #[test]
     fn purchase_form_redirects_admit_only_payment_hosts_on_the_purchase_document() {
-        let base = super::csp_with_nonce("nonce", None, false, false, false);
+        let nonce = uuid::Uuid::new_v4().simple().to_string();
+        let base = super::csp_with_nonce(&nonce, None, false, false, false);
         let purchase = super::purchase_form_policy("/purchases", base.clone());
         assert!(
             purchase.contains("form-action 'self' https://checkout.stripe.com https://in.xero.com")
         );
-        assert!(purchase.contains("script-src 'self' 'nonce-nonce' 'wasm-unsafe-eval';"));
+        assert!(purchase.contains(&format!(
+            "script-src 'self' 'nonce-{nonce}' 'wasm-unsafe-eval';"
+        )));
         for path in [
             "/auth/signup",
             "/auth/login",
@@ -5854,6 +5855,8 @@ mod tests {
         }
     }
 
+    /// Public utility links match the navbar: anonymous → Sign in;
+    /// signed-in → Projects, Purchases, and Sign out at every tier.
     #[test]
     fn public_utility_links_match_the_navigation_auth_block() {
         use crate::session::SessionData;

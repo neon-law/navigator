@@ -452,7 +452,7 @@ purchase:
   title: Consultations and plans
   intro: >-
     Buy a consultation or a Delete Your Data plan here. Consultations are invoiced in Xero.
-    Recurring plans use Stripe Checkout and turn on after payment.
+    Recurring plans begin after payment through our secure checkout.
   complimentary: >-
     You signed in with Google using the address you confirmed, so your
     consultation is free. Booking one is optional.

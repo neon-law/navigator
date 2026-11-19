@@ -2057,6 +2057,9 @@ mod tests {
                 "signup.invalid",
                 "signup.rejected",
                 "signup.signin_required",
+                "signup.age_label",
+                "signup.age_continue",
+                "signup.age_blocked",
                 "world.description",
                 "world.intro",
             ]

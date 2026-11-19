@@ -731,7 +731,11 @@ async fn signup_without_an_age_decision_never_contacts_the_provider() {
         let response = post_signup(
             &app,
             &cookie,
-            form_body("new@example.org", &test_password("new-account"), &csrf),
+            form_body(
+                "new@example.org",
+                &test_password(&uuid::Uuid::new_v4().to_string()),
+                &csrf,
+            ),
         )
         .await;
         assert!(!has_session(&response));
@@ -793,7 +797,11 @@ async fn under_thirteen_cannot_retry_with_an_older_age_or_post_credentials() {
     let response = post_signup(
         &app,
         &blocked_cookie,
-        form_body("new@example.org", &test_password("new-account"), &csrf),
+        form_body(
+            "new@example.org",
+            &test_password(&uuid::Uuid::new_v4().to_string()),
+            &csrf,
+        ),
     )
     .await;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
