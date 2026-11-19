@@ -4772,7 +4772,7 @@ async fn refresh_project_envelopes(
         .signature_provider
         .for_project(&state.surreal, id)
         .await
-        .map_err(internal)?;
+        .map_err(ApiError::SignatureUnavailable)?;
     let provider =
         crate::firm_docusign::resolved(scoped.as_ref(), state.signature_provider.as_ref());
     let lane = lock().await?;
@@ -4838,7 +4838,7 @@ async fn adopt_envelope(
         .signature_provider
         .for_project(db, id)
         .await
-        .map_err(internal)?;
+        .map_err(ApiError::SignatureUnavailable)?;
     let provider =
         crate::firm_docusign::resolved(scoped.as_ref(), state.signature_provider.as_ref());
     let mut envelope = provider
@@ -6161,7 +6161,7 @@ async fn verified_upload_metadata(
         .signature_provider
         .for_project(db, project_id)
         .await
-        .map_err(internal)?;
+        .map_err(ApiError::SignatureUnavailable)?;
     let provider =
         crate::firm_docusign::resolved(scoped.as_ref(), state.signature_provider.as_ref());
     let envelope = provider
@@ -9553,6 +9553,10 @@ pub enum ApiError {
     /// expected outcome of a fleet-wide backfill sweep, reported per Project
     /// rather than a bare internal fault.
     ForgejoUnavailable(String),
+    /// The Project's Firm has no DocuSign connection this deployment can
+    /// use. The message names the failed check, never a credential byte;
+    /// a Firm administrator fixes it by saving the connection.
+    SignatureUnavailable(crate::signature::SignatureError),
     /// A collection request the caller can correct: an unadvertised filter
     /// or sort field, a `page[size]` out of range, or a stale cursor.
     ListInvalid(store::listing::ListError),
@@ -10723,6 +10727,17 @@ impl IntoResponse for ApiError {
             // an internal fault: the door answers a classifiable 422 whose
             // message names the missing coordinates, so a fleet-wide
             // backfill sweep can record the skip per Project and continue.
+            Self::SignatureUnavailable(error) => {
+                tracing::warn!(error = %error, "api: DocuSign connection unavailable");
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(serde_json::json!({
+                        "error": "docusign_unavailable",
+                        "message": error.to_string(),
+                    })),
+                )
+                    .into_response()
+            }
             Self::ForgejoUnavailable(missing) => (
                 StatusCode::UNPROCESSABLE_ENTITY,
                 Json(serde_json::json!({
@@ -11552,6 +11567,32 @@ mod tests {
             .as_str()
             .expect("the message names the missing pieces")
             .contains("forgejo_access_token"));
+    }
+
+    /// A Firm without a usable DocuSign connection is configuration the
+    /// Firm administrator fixes, so the door answers `503
+    /// docusign_unavailable` naming the failed check, not a bare 500.
+    #[tokio::test]
+    async fn a_firm_without_a_docusign_connection_is_503_docusign_unavailable() {
+        let response = ApiError::SignatureUnavailable(crate::signature::SignatureError::Provider(
+            "The Firm's DocuSign connection is unavailable: the Project has no owning Firm".into(),
+        ))
+        .into_response();
+
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::SERVICE_UNAVAILABLE
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("the 503 response body should be readable");
+        let json: serde_json::Value =
+            serde_json::from_slice(&body).expect("the 503 response should be JSON");
+        assert_eq!(json["error"], "docusign_unavailable");
+        assert!(json["message"]
+            .as_str()
+            .expect("the message names the failed check")
+            .contains("no owning Firm"));
     }
 
     #[tokio::test]
