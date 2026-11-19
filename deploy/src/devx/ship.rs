@@ -466,6 +466,7 @@ where
     });
     substitutions.push(web_patch_substitution(deployment, &get, &DBOS_WEB_PATCH)?);
     substitutions.extend(dbos_schedule_substitutions(deployment, &get)?);
+    substitutions.push(timer_env_substitution(&get)?);
     substitutions.extend(archives_substitutions(&get));
     substitutions.extend(replica_substitutions(deployment, &get)?);
     substitutions.push(dbos_only_patch(deployment, &get)?);
@@ -1019,6 +1020,7 @@ where
             "            - name: {key}\n              value: {quoted}\n"
         );
     }
+
     let secret = serde_json::to_string(&required_coordinate(
         deployment,
         "NAVIGATOR_WEB_SECRET_NAME",
@@ -1062,6 +1064,34 @@ where
         }
     }
     Ok(env)
+}
+
+const DBOS_TIMER_ENV_TOKEN: &str = "            # NAVIGATOR_DBOS_TIMER_ENV\n";
+
+fn timer_env_substitution<F>(get: &F) -> Result<Substitution>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    use std::fmt::Write as _;
+    let native = dbos_only_profile(get)?;
+    let mut value = String::new();
+    for key in [
+        workflows::flags::BILLING_CANARY_SCHEDULE_ENABLED_ENV,
+        workflows::flags::RECONCILE_INVOICES_SCHEDULE_ENABLED_ENV,
+    ] {
+        if native || get(key).is_some() {
+            let enabled = workflows::flags::schedule_enabled(key, get)?;
+            let _ = write!(
+                value,
+                "            - name: {key}\n              value: \"{enabled}\"\n"
+            );
+        }
+    }
+    Ok(Substitution {
+        token: DBOS_TIMER_ENV_TOKEN,
+        env: store::workflow_engine::COHOST_ENV,
+        value,
+    })
 }
 
 /// The secret each switched-on schedule needs before `web` can boot with it.
@@ -3654,6 +3684,24 @@ fn offline_ship_plan(
                  replaces"
             ));
             operations.push("smoke-check the public host".to_owned());
+        }
+    }
+    if cfg.dbos_only {
+        for key in [
+            workflows::flags::BILLING_CANARY_SCHEDULE_ENABLED_ENV,
+            workflows::flags::RECONCILE_INVOICES_SCHEDULE_ENABLED_ENV,
+        ] {
+            let enabled = workflows::flags::schedule_enabled(key, &|name| {
+                deployment.coordinates.get(name).cloned()
+            })?;
+            operations.push(format!(
+                "{key}: automatic timer {} (manual DBOS starts remain registered)",
+                if enabled {
+                    "enabled by explicit opt-in"
+                } else {
+                    "disabled"
+                }
+            ));
         }
     }
     print_offline_ship_plan(
@@ -8586,6 +8634,84 @@ mod tests {
             assert!(renders_cronjob(&manifests, retired.cronjob));
         }
         assert!(manifests.contains("name: workflows-service"));
+    }
+
+    #[test]
+    fn native_timer_loops_default_off_and_require_explicit_valid_activation() {
+        for key in [
+            workflows::flags::BILLING_CANARY_SCHEDULE_ENABLED_ENV,
+            workflows::flags::RECONCILE_INVOICES_SCHEDULE_ENABLED_ENV,
+        ] {
+            for (configured, expected) in [
+                (None, "false"),
+                (Some("false"), "false"),
+                (Some("true"), "true"),
+            ] {
+                let manifests = rendered_manifests(|name| {
+                    if name == key {
+                        configured.map(str::to_owned)
+                    } else {
+                        native_ship_env(name)
+                    }
+                });
+                let web = manifest_doc(&manifests, "Deployment", WEB_DEPLOYMENT);
+                assert_eq!(web_env_value(&web, key).as_deref(), Some(expected));
+            }
+            let error = resolve_substitutions_for_deployment("synthetic", "26.1.1", |name| {
+                if name == key {
+                    Some("invalid".into())
+                } else {
+                    native_ship_env(name)
+                }
+            })
+            .err()
+            .unwrap();
+            assert!(error.to_string().contains(key));
+        }
+    }
+
+    #[test]
+    fn mixed_hosts_keep_timer_defaults_and_honor_explicit_timer_coordinates() {
+        for key in [
+            workflows::flags::BILLING_CANARY_SCHEDULE_ENABLED_ENV,
+            workflows::flags::RECONCILE_INVOICES_SCHEDULE_ENABLED_ENV,
+        ] {
+            let get = |name: &str| {
+                if name == NAVIGATOR_DBOS_ENABLED {
+                    Some("true".into())
+                } else {
+                    env_getter(FULL_ENV)(name)
+                }
+            };
+            let defaults = rendered_manifests(&get);
+            let web = manifest_doc(&defaults, "Deployment", WEB_DEPLOYMENT);
+            assert!(
+                web_env_value(&web, key).is_none(),
+                "omission preserves the runtime mixed default"
+            );
+            for value in ["true", "false"] {
+                let manifests = rendered_manifests(|name| {
+                    if name == key {
+                        Some(value.into())
+                    } else {
+                        get(name)
+                    }
+                });
+                for deployment in [WEB_DEPLOYMENT, WORKFLOWS_DEPLOYMENT] {
+                    let object = manifest_doc(&manifests, "Deployment", deployment);
+                    let containers = object["spec"]["template"]["spec"]["containers"]
+                        .as_sequence()
+                        .unwrap();
+                    let found = containers
+                        .iter()
+                        .filter_map(|container| container["env"].as_sequence())
+                        .flat_map(|env| env.iter())
+                        .find(|entry| entry["name"].as_str() == Some(key))
+                        .unwrap();
+                    assert_eq!(found["value"].as_str(), Some(value));
+                }
+            }
+        }
     }
 
     #[test]

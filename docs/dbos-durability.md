@@ -103,13 +103,16 @@ A separate worker remains optional: `NAVIGATOR_WORKFLOW_ENGINE=dbos` launches th
 `workflows-service` Restate endpoint, keeping unported services, event handlers, and virtual objects reachable while
 DBOS workflows are enabled individually.
 
-`NAVIGATOR_DBOS_BILLING_CANARY_ENABLED=true` independently registers the weekly `BillingCanary` schedule in either host.
-It uses the Sunday 14:00 UTC slot as its deterministic workflow identity, so both hosts and restarted replicas join the
+`NAVIGATOR_DBOS_BILLING_CANARY_ENABLED=true` registers `BillingCanary` in either host. Automatic weekly starts are
+controlled independently by `NAVIGATOR_DBOS_BILLING_CANARY_SCHEDULE_ENABLED`; false keeps manual starts registered. It
+uses the Sunday 14:00 UTC slot as its deterministic workflow identity, so both hosts and restarted replicas join the
 same run. The Xero step resolves one fixed system contact twice; the provider's stable email find-or-create behavior
 prevents a second contact if the call repeats before its checkpoint. This adapter does not accept a DBOS Effect Key. The
 Slack operations notice is at least once: a crash after Slack accepts it and before the `email` checkpoint can post it
 again. The switch defaults off, and enabling it requires the configured Xero provider and Slack webhook. The existing
-Restate service and CronJob remain in place during this staged rollout.
+Restate service remains available in mixed deployments. Standalone and mixed hosts retain their existing automatic start
+default when the new control is omitted. Complete native cohosting defaults the timer off even outside ship; ship also
+renders that choice explicitly, and activation requires opt-in.
 
 ### One application container
 
@@ -479,6 +482,15 @@ tomorrow. `ops ship` renders the switch and removes `billing-digest-trigger` fro
 rollout, then deletes that CronJob after applying the new release. An enabled, configured digest requires
 `SLACK_WEBHOOK_URL`. Webhook delivery has no idempotency key, so a crash after Slack accepts a message but before DBOS
 checkpoints the step can repeat the notice.
+
+## Invoice reconciliation timer activation
+
+`NAVIGATOR_DBOS_RECONCILE_INVOICES_ENABLED` selects native registration and manual ingress.
+`NAVIGATOR_DBOS_RECONCILE_INVOICES_SCHEDULE_ENABLED` separately controls its daily 11:00 UTC timer. False keeps manual
+DBOS reconciliation available. Existing standalone and mixed hosts retain their automatic-start default when the control
+is omitted. Complete native cohosting defaults off even outside ship; the native ship profile explicitly renders false
+unless deployment coordinates opt in with true. Malformed timer settings are refused before live provider construction.
+The offline ship plan reports both timer states.
 
 ## Not yet decided
 

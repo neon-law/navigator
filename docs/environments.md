@@ -280,7 +280,9 @@ Restate registration while retained work drains.
 Select this profile only after verifying retained Restate work has drained and recovery is accepted: applying its
 Ingress removes the worker's public route. Omitting desired objects does not delete existing resources, so ship does not
 prune the worker, cancel old invocations or certify an empty Restate journal. Retire retained resources through a
-separately authorized operator step. The profile does not change backup retention or image publication.
+separately authorized operator step. The profile does not change backup retention or image publication. Native routing
+does not migrate paused invocations, virtual-object state or retained journals. Preserve and reconcile that history
+explicitly before retirement, including work owned by handlers outside the current native registry.
 
 Nightly Project updates and YouTube polling retain their daily and fifteen-minute CronJobs: these native endpoints do
 not own timer loops. Their authenticated requests use the cluster-internal `navigator-web-dbos` Service, never a CronJob
@@ -288,6 +290,10 @@ pod's loopback address. The cohost listener must bind `0.0.0.0` at a fixed port 
 reaches both Service and NetworkPolicy. The native policy preserves web's existing port and admits DBOS traffic only
 from those two same-namespace trigger pod selectors. No external Ingress exposes the DBOS endpoint.
 
-Engine selection also enables some native timer loops, including the weekly BillingCanary and daily invoice reconcile.
-Before selecting the complete profile, compare each environment's approved activation and cadence with those loops;
-previously manual or disabled provider workflows must not be treated as already approved merely because they are native.
+Native ship keeps automatic BillingCanary and invoice reconciliation starts off by default while registering their
+manual DBOS routes. Opt in explicitly with `NAVIGATOR_DBOS_BILLING_CANARY_SCHEDULE_ENABLED=true` or
+`NAVIGATOR_DBOS_RECONCILE_INVOICES_SCHEDULE_ENABLED=true`; false keeps the timer off, and malformed values are refused.
+The offline plan reports these choices. Complete native cohosting defaults these timers off even outside ship;
+standalone and mixed hosts retain their existing automatic-start defaults. Before selecting the complete profile,
+compare other timer loops with each environment's approved activation and cadence. Manual or disabled provider workflows
+need an explicit activation decision independent of their engine selection.

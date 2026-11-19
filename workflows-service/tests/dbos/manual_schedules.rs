@@ -72,10 +72,10 @@ async fn manual_schedule_retries_join_and_distinct_clicks_run_separately() {
         &Settings::from_lookup(database.lookup()).unwrap(),
         Arc::new(CapturingNotifier::new()),
         Schedules {
-            billing_canary: Some(billing_canary::Context::new(
-                Arc::new(contacts.clone()),
-                Arc::new(notices.clone()),
-            )),
+            billing_canary: Some(
+                billing_canary::Context::new(Arc::new(contacts.clone()), Arc::new(notices.clone()))
+                    .with_schedule_enabled(false),
+            ),
             ..Default::default()
         },
     )
@@ -127,6 +127,12 @@ async fn manual_schedule_retries_join_and_distinct_clicks_run_separately() {
             "a repeated start joins the first notification"
         );
     }
+    let automatic: i64 = sqlx::query_scalar("SELECT count(*) FROM dbos.workflow_status WHERE name='BillingCanary' AND workflow_uuid LIKE 'BillingCanary-%'")
+        .fetch_one(&database.pool).await.unwrap();
+    assert_eq!(
+        automatic, 0,
+        "manual DBOS starts remain usable without an automatic weekly run"
+    );
     executor.shutdown().await;
     database.pool.close().await;
 }
