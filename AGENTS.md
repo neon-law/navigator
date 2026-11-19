@@ -29,6 +29,9 @@ archives.
 
 ## Current contracts
 
+Treat applicable [Covenants](docs/glossary/covenant.md) as constraints on every change. Preserve stronger compatible
+protections and take conflicts between duties to a lawyer.
+
 Describe the system in the present tense. Git holds decision history and superseded behavior. State the reason for a
 current constraint once, at its source.
 

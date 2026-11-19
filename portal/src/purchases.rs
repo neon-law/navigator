@@ -8,21 +8,13 @@
 //!   Person — the address they confirmed as a lead. [`complimentary`] is that
 //!   rule. A session opened by an email link ([`crate::lead_confirm`]) or any
 //!   other door does not earn it.
-//! - **Buy.** Every other Offering, and the consultation for everyone else,
-//!   is bought: [`buy`] records the Purchase durably, then raises an
-//!   `AUTHORISED` Xero invoice keyed on the Purchase id. Once its identifier
-//!   is recorded, retries reuse that invoice. The Client pays through
-//!   Xero's online invoice page.
-//! - **Active.** [`activate_if_paid`] turns the Purchase on once Xero reports
-//!   the invoice `PAID`. A subscription's renewals are then handed to a Xero
-//!   repeating invoice that Xero raises and emails itself. The DBOS
-//!   `PurchaseActivation` schedule runs this every five minutes; the page
-//!   also runs it for the viewer's own open invoices, so a Client who has
-//!   just paid sees the result on reload.
-//!
-//! Lawyers generate matter invoices through the Project invoice command.
-//! This module owns self-serve purchases and bills the Client's selected
-//! Offering at its published price.
+//! - **Buy.** Consultations are invoiced in Xero; recurring plans use hosted
+//!   Stripe Checkout with explicit renewal consent and online cancellation.
+//! - **Active.** Provider-verified payment turns the Purchase on. Stripe access
+//!   also requires an unexpired paid period. The durable refresh queue and the
+//!   purchase page refresh provider status.
+//! - **Cancel.** Every authenticated Person can stop their own renewal after
+//!   provider confirmation. A role change cannot block cancellation.
 
 use std::sync::Arc;
 
@@ -205,6 +197,9 @@ pub async fn activate_if_paid(
     purchase: &Purchase,
     now: DateTime<Utc>,
 ) -> Result<bool, String> {
+    if purchase.stripe.is_some() {
+        return Ok(false);
+    }
     if purchase.state == PurchaseState::Active {
         return Ok(true);
     }
@@ -262,16 +257,25 @@ pub async fn activate_if_paid(
     Ok(true)
 }
 
-/// The DBOS `PurchaseActivation` schedule's view of the store and Xero.
+/// The DBOS `PurchaseActivation` schedule's view of provider payments and renewals.
 pub struct StoreActivationSource {
     pg: PostgresDb,
     billing: Arc<dyn billing::BillingProvider>,
+    surreal: store::surreal::SurrealDb,
 }
 
 impl StoreActivationSource {
     #[must_use]
-    pub fn new(pg: PostgresDb, billing: Arc<dyn billing::BillingProvider>) -> Self {
-        Self { pg, billing }
+    pub fn new(
+        pg: PostgresDb,
+        billing: Arc<dyn billing::BillingProvider>,
+        surreal: store::surreal::SurrealDb,
+    ) -> Self {
+        Self {
+            pg,
+            billing,
+            surreal,
+        }
     }
 }
 
@@ -280,16 +284,29 @@ impl workflows::dbos_engine::purchase_activation::ActivationSource for StoreActi
     async fn invoiced(
         &self,
     ) -> Result<Vec<uuid::Uuid>, workflows::dbos_engine::purchase_activation::ActivationError> {
-        purchases::invoiced(&self.pg, workflows::dbos_engine::purchase_activation::BATCH)
-            .await
-            .map(|rows| rows.into_iter().map(|purchase| purchase.id).collect())
-            .map_err(|_| workflows::dbos_engine::purchase_activation::ActivationError::Queue)
+        purchases::payment_refresh_queue(
+            &self.pg,
+            workflows::dbos_engine::purchase_activation::BATCH,
+        )
+        .await
+        .map(|rows| rows.into_iter().map(|purchase| purchase.id).collect())
+        .map_err(|_| workflows::dbos_engine::purchase_activation::ActivationError::Queue)
     }
 
     async fn activate(&self, purchase_id: uuid::Uuid) -> Result<bool, String> {
         let purchase = purchases::get(&self.pg, purchase_id)
             .await
             .map_err(|error| error.to_string())?;
+        if purchase.stripe.is_some() {
+            let result =
+                crate::subscription_purchases::sync(&self.surreal, &self.pg, &purchase).await;
+            purchases::touch(&self.pg, purchase.id, Utc::now())
+                .await
+                .map_err(|_| "purchase refresh failed".to_owned())?;
+            return result
+                .map(|fresh| fresh.is_active(Utc::now()))
+                .map_err(|_| "subscription payment was not confirmed".to_owned());
+        }
         activate_if_paid(&self.pg, self.billing.as_ref(), &purchase, Utc::now()).await
     }
 }
@@ -308,6 +325,8 @@ struct PageState {
 struct BuyForm {
     #[serde(default)]
     _csrf: String,
+    #[serde(default)]
+    renewal_consent: String,
 }
 
 /// Build the purchase page and its buy command. `copy` is the mounted
@@ -338,6 +357,7 @@ fn routes_with(state: &AppState, copy: Option<PurchaseCopy>, xero: bool) -> Rout
         ));
     let command = Router::new()
         .route(BUY_PATH, post(post_buy))
+        .route("/purchases/{purchase}/cancel", post(post_cancel))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .route_layer(from_fn_with_state(
             (state.sessions.clone(), CsrfMode::Strict),
@@ -368,14 +388,18 @@ async fn inject_csrf(mut req: Request, next: Next) -> Response {
     next.run(req).await
 }
 
-async fn client(state: &PageState, session: &SessionData) -> Option<Person> {
-    if session.role != Role::Client {
-        return None;
-    }
+async fn own_person(state: &PageState, session: &SessionData) -> Option<Person> {
     store::persons::find_by_id(&state.app.surreal, session.person_id?)
         .await
         .ok()
         .flatten()
+}
+
+async fn client(state: &PageState, session: &SessionData) -> Option<Person> {
+    if session.role != Role::Client {
+        return None;
+    }
+    own_person(state, session).await
 }
 
 async fn inject_page_content(
@@ -395,6 +419,10 @@ async fn inject_page_content(
 
 fn shell(copy: &PurchaseCopy) -> PurchasePageContent {
     PurchasePageContent {
+        renewal_consent_label: copy.renewal_consent_label.clone(),
+        cancel_label: copy.cancel_label.clone(),
+        renewal_stopped: copy.renewal_stopped.clone(),
+        paid_through_label: copy.paid_through_label.clone(),
         title: copy.title.clone(),
         intro: copy.intro.clone(),
         complimentary: copy.complimentary.clone(),
@@ -418,9 +446,8 @@ async fn page_content(
     copy: &PurchaseCopy,
     session: &SessionData,
 ) -> PurchasePageContent {
-    let (Some(person), true, Ok(pg)) = (
-        client(state, session).await,
-        state.xero,
+    let (Some(person), Ok(pg)) = (
+        own_person(state, session).await,
         PostgresDb::from_env().await,
     ) else {
         return shell(copy);
@@ -444,11 +471,35 @@ async fn page_content(
             }
         }
     }
+    for purchase in own.iter_mut().filter(|p| p.stripe.is_some()) {
+        if let Ok(fresh) =
+            crate::subscription_purchases::sync(&state.app.surreal, &pg, purchase).await
+        {
+            *purchase = fresh;
+        }
+    }
     let waived = complimentary(session, &person.email);
     let rows = copy
         .offerings
         .iter()
-        .map(|offering| offering_row(copy, offering, &own, waived))
+        .map(|offering| {
+            let mut row = offering_row(copy, offering, &own, waived);
+            if offering.cadence != OfferingCadence::Once
+                && row.action == OfferingAction::Buy
+                && !crate::subscription_purchases::enabled()
+            {
+                row.action = OfferingAction::Unavailable;
+            }
+            if session.role != Role::Client
+                && matches!(
+                    row.action,
+                    OfferingAction::Buy | OfferingAction::Complimentary
+                )
+            {
+                row.action = OfferingAction::Unavailable;
+            }
+            row
+        })
         .collect();
     PurchasePageContent {
         available: true,
@@ -464,13 +515,18 @@ fn offering_row(
     waived: bool,
 ) -> OfferingRow {
     let mine = own.iter().filter(|p| p.offering == offering.id);
-    let open = mine
-        .clone()
-        .find(|p| matches!(p.state, PurchaseState::Invoicing | PurchaseState::Invoiced));
-    let in_force = mine.clone().any(|p| p.state == PurchaseState::Active);
+    let open = mine.clone().find(|p| {
+        matches!(p.state, PurchaseState::Invoicing | PurchaseState::Invoiced)
+            || (crate::subscription_purchases::unsettled_renewal(p) && !p.is_active(Utc::now()))
+    });
+    let in_force = mine.clone().any(|p| p.is_active(Utc::now()));
     let action = if let Some(open) = open {
         OfferingAction::Invoiced {
-            pay_url: open.invoice_url.clone(),
+            pay_url: if open.state == PurchaseState::Active {
+                None
+            } else {
+                open.invoice_url.clone()
+            },
         }
     } else if in_force {
         OfferingAction::Active
@@ -479,11 +535,45 @@ fn offering_row(
     } else {
         OfferingAction::Buy
     };
+    let current_stripe = mine
+        .clone()
+        .find(|p| {
+            p.is_active(Utc::now())
+                || crate::subscription_purchases::unsettled_renewal(p)
+                || matches!(p.state, PurchaseState::Invoicing | PurchaseState::Invoiced)
+        })
+        .and_then(|p| p.stripe.as_ref());
     OfferingRow {
         id: offering.id.clone(),
         name: offering.name.clone(),
         blurb: offering.blurb.clone(),
         price: price_label(offering),
+        recurring: offering.cadence != OfferingCadence::Once,
+        cancel_purchase_id: mine
+            .clone()
+            .find(|p| {
+                (p.is_active(Utc::now()) || crate::subscription_purchases::unsettled_renewal(p))
+                    && p.cadence != Cadence::Once
+            })
+            .map(|p| p.id.to_string()),
+        cancellation_pending: mine.clone().any(|p| {
+            p.is_active(Utc::now())
+                && (p.renewal_cancelled_at.is_some()
+                    || p.stripe.as_ref().is_some_and(|s| s.cancel_at_period_end))
+        }),
+        paid_through: current_stripe
+            .and_then(|stripe| stripe.period_end)
+            .or_else(|| {
+                mine.clone()
+                    .find(|p| p.is_active(Utc::now()))
+                    .and_then(|p| p.access_ends_at)
+            })
+            .map(|end| end.format("%Y-%m-%d %H:%M").to_string()),
+        renewal_terms: if action == OfferingAction::Active || current_stripe.is_some() {
+            current_stripe.map(|stripe| stripe.renewal_terms.clone())
+        } else {
+            renewal_terms(offering)
+        },
         google_hint: (offering.complimentary_with_google
             && !waived
             && action == OfferingAction::Buy)
@@ -492,11 +582,36 @@ fn offering_row(
     }
 }
 
+fn renewal_terms(offering: &OfferingCopy) -> Option<String> {
+    offering
+        .renewal_terms
+        .as_deref()
+        .filter(|terms| !terms.trim().is_empty())
+        .map(|terms| {
+            terms.replace("{amount}", &offering.amount).replace(
+                "{cancel_url}",
+                &format!(
+                    "{}/purchases",
+                    views::brand::base_url().trim_end_matches('/')
+                ),
+            )
+        })
+}
+
+fn renewal_accepted(offering: &OfferingCopy, form: &BuyForm) -> bool {
+    offering.cadence == OfferingCadence::Once
+        || (offering
+            .renewal_terms
+            .as_deref()
+            .is_some_and(|terms| !terms.trim().is_empty())
+            && form.renewal_consent == "accepted")
+}
+
 async fn post_buy(
     State(state): State<PageState>,
     Extension(session): Extension<SessionData>,
     Path(offering_id): Path<String>,
-    Form(_form): Form<BuyForm>,
+    Form(form): Form<BuyForm>,
 ) -> Response {
     let Some(copy) = state.copy.as_ref() else {
         return StatusCode::NOT_FOUND.into_response();
@@ -507,6 +622,9 @@ async fn post_buy(
     let Some(person) = client(&state, &session).await else {
         return (StatusCode::FORBIDDEN, copy.refusal.clone()).into_response();
     };
+    if !renewal_accepted(offering, &form) {
+        return (StatusCode::BAD_REQUEST, copy.refusal.clone()).into_response();
+    }
     let Ok(pg) = PostgresDb::from_env().await else {
         audit(&person, &offering.id, "rejected_unavailable");
         return Redirect::to(PURCHASES_PATH).into_response();
@@ -524,6 +642,26 @@ async fn post_buy(
                 tracing::error!(error = %error, "complimentary purchase failed");
                 Redirect::to(PURCHASES_PATH).into_response()
             }
+        };
+    }
+    if offering.cadence != OfferingCadence::Once {
+        let Some(terms) = renewal_terms(offering) else {
+            return StatusCode::BAD_REQUEST.into_response();
+        };
+        return match crate::subscription_purchases::checkout(
+            &state.app.surreal,
+            &pg,
+            &new_purchase(&person, offering),
+            &terms,
+        )
+        .await
+        {
+            Ok(url) => Redirect::to(&url).into_response(),
+            Err(_) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Subscription checkout is unavailable. Please reload or contact our office.",
+            )
+                .into_response(),
         };
     }
     if !state.xero {
@@ -548,6 +686,55 @@ async fn post_buy(
             audit(&person, &offering.id, "failed");
             Redirect::to(PURCHASES_PATH).into_response()
         }
+    }
+}
+
+async fn post_cancel(
+    State(state): State<PageState>,
+    Extension(session): Extension<SessionData>,
+    Path(id): Path<uuid::Uuid>,
+) -> Response {
+    let Some(person) = own_person(&state, &session).await else {
+        return StatusCode::FORBIDDEN.into_response();
+    };
+    let Ok(pg) = PostgresDb::from_env().await else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let Ok(purchase) = purchases::get(&pg, id).await else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if purchase.person_id != person.id || purchase.cadence == Cadence::Once {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    if purchase.renewal_cancelled_at.is_some() {
+        return Redirect::to(PURCHASES_PATH).into_response();
+    }
+    let result = if purchase.stripe.is_some() {
+        crate::subscription_purchases::cancel(&state.app.surreal, &pg, &purchase).await
+    } else if let Some(repeating) = purchase.xero_repeating_invoice_id.as_deref() {
+        match state
+            .app
+            .billing_provider
+            .cancel_repeating_invoice(repeating)
+            .await
+        {
+            Ok(end) => purchases::record_xero_cancelled(&pg, id, end, Utc::now())
+                .await
+                .map_err(|_| {
+                    billing::BillingError::Provider("cancellation needs reconciliation".into())
+                }),
+            Err(error) => Err(error),
+        }
+    } else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    match result {
+        Ok(()) => Redirect::to(PURCHASES_PATH).into_response(),
+        Err(_) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Cancellation was not confirmed. Please try again or contact our office.",
+        )
+            .into_response(),
     }
 }
 
@@ -596,6 +783,49 @@ mod tests {
             &session(Some("oidc"), "someone@example.com"),
             client
         ));
+    }
+
+    #[test]
+    fn renewal_disclosure_uses_the_current_catalog_price_and_a_direct_cancellation_url() {
+        let copy = bundled_copy();
+        let mut offering = copy.offerings[1].clone();
+        offering.amount = "$45".into();
+        let terms = renewal_terms(&offering).unwrap();
+        assert!(terms.contains("$45 USD"));
+        assert!(!terms.contains("$29 USD"));
+        assert!(terms.contains(&format!(
+            "{}/purchases",
+            views::brand::base_url().trim_end_matches('/')
+        )));
+        assert!(!terms.contains("{amount}") && !terms.contains("{cancel_url}"));
+    }
+
+    #[test]
+    fn recurring_checkout_requires_published_terms_and_explicit_consent() {
+        let copy = bundled_copy();
+        let mut offering = copy
+            .offerings
+            .iter()
+            .find(|o| o.cadence == OfferingCadence::Month)
+            .unwrap()
+            .clone();
+        let accepted = BuyForm {
+            renewal_consent: "accepted".into(),
+            ..BuyForm::default()
+        };
+        offering.renewal_terms = None;
+        assert!(!renewal_accepted(&offering, &accepted));
+        offering.renewal_terms = Some("   ".into());
+        assert!(!renewal_accepted(&offering, &accepted));
+        offering.renewal_terms =
+            Some("Renews monthly. Cancel online before the next invoice.".into());
+        assert!(!renewal_accepted(&offering, &BuyForm::default()));
+        assert!(renewal_accepted(&offering, &accepted));
+        offering.cadence = OfferingCadence::Year;
+        assert!(!renewal_accepted(&offering, &BuyForm::default()));
+        offering.cadence = OfferingCadence::Once;
+        offering.renewal_terms = None;
+        assert!(renewal_accepted(&offering, &BuyForm::default()));
     }
 
     #[test]
@@ -819,6 +1049,9 @@ mod tests {
             xero_repeating_invoice_id: None,
             inserted_at: now,
             updated_at: now,
+            stripe: None,
+            renewal_cancelled_at: None,
+            access_ends_at: None,
             activated_at: None,
         }
     }
@@ -882,6 +1115,33 @@ mod tests {
         assert!(row.action == OfferingAction::Complimentary);
         assert_eq!(row.price, "$100");
         assert_eq!(row.name, consultation.name);
+    }
+
+    #[test]
+    fn an_overdue_subscription_keeps_its_cancellation_control_and_accepted_terms() {
+        let copy = bundled_copy();
+        let offering = &copy.offerings[1];
+        let mut existing = purchase(offering, PurchaseState::Active);
+        let now = Utc::now();
+        existing.stripe = Some(purchases::StripePurchase {
+            firm_id: uuid::Uuid::new_v4(),
+            account_id: "acct_synthetic".into(),
+            checkout_session_id: Some("cs_test_synthetic".into()),
+            customer_id: Some("cus_synthetic".into()),
+            subscription_id: Some("sub_synthetic".into()),
+            period_end: Some(now - TimeDelta::days(1)),
+            cancel_at_period_end: false,
+            renewal_terms: "Accepted renewal terms".into(),
+            consented_at: now,
+        });
+        let row = offering_row(&copy, offering, &[existing.clone()], false);
+        assert!(matches!(
+            row.action,
+            OfferingAction::Invoiced { pay_url: None }
+        ));
+        assert_eq!(row.cancel_purchase_id, Some(existing.id.to_string()));
+        assert_eq!(row.renewal_terms.as_deref(), Some("Accepted renewal terms"));
+        assert!(!existing.is_active(now));
     }
 
     #[test]
@@ -1005,6 +1265,87 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cancellation_refuses_another_persons_purchase_before_any_provider_call() {
+        let Some(pg) = database().await else {
+            return;
+        };
+        let copy = bundled_copy();
+        let (app, person) = mounted(Some(copy.clone()), true).await;
+        let foreign = client_person().await;
+        let purchase =
+            purchases::open(&pg, &new_purchase(&foreign, &copy.offerings[1]), Utc::now())
+                .await
+                .unwrap();
+        let id = purchase.id;
+        PostgresDb::with_test_db(pg.clone(), async {
+            let (status, _, _) = send(
+                &app,
+                "POST",
+                &format!("/purchases/{id}/cancel"),
+                &bearer(Some(person.id), Role::Client),
+            )
+            .await;
+            assert_eq!(status, StatusCode::NOT_FOUND);
+            assert!(purchases::get(&pg, id)
+                .await
+                .unwrap()
+                .renewal_cancelled_at
+                .is_none());
+        })
+        .await;
+        pg.pool().close().await;
+    }
+
+    #[tokio::test]
+    async fn a_role_change_does_not_block_an_owners_cancellation_retry() {
+        let Some(pg) = database().await else {
+            return;
+        };
+        let copy = bundled_copy();
+        let (app, person) = mounted(Some(copy.clone()), true).await;
+        let purchase = purchases::open(&pg, &new_purchase(&person, &copy.offerings[1]), Utc::now())
+            .await
+            .unwrap();
+        purchases::record_renewal_cancelled(&pg, purchase.id, Utc::now())
+            .await
+            .unwrap();
+        PostgresDb::with_test_db(pg.clone(), async {
+            for role in [
+                Role::Client,
+                Role::Clerk,
+                Role::Lawyer,
+                Role::Admin,
+                Role::Owner,
+            ] {
+                let (status, location, _) = send(
+                    &app,
+                    "POST",
+                    &format!("/purchases/{}/cancel", purchase.id),
+                    &bearer(Some(person.id), role),
+                )
+                .await;
+                assert_eq!(status, StatusCode::SEE_OTHER);
+                assert_eq!(location, PURCHASES_PATH);
+            }
+        })
+        .await;
+        pg.pool().close().await;
+    }
+
+    #[tokio::test]
+    async fn recurring_purchase_refuses_missing_consent_before_invoicing() {
+        let (app, person) = mounted(Some(bundled_copy()), true).await;
+        let (status, _, _) = send(
+            &app,
+            "POST",
+            "/purchases/delete-your-data-monthly",
+            &bearer(Some(person.id), Role::Client),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
     async fn buying_refuses_an_unknown_offering_and_a_viewer_who_is_not_the_client() {
         let (app, person) = mounted(None, true).await;
         let client = bearer(Some(person.id), Role::Client);
@@ -1037,7 +1378,7 @@ mod tests {
         let (status, location, _) = send(
             &app,
             "POST",
-            "/purchases/delete-your-data-monthly",
+            "/purchases/consultation",
             &bearer(Some(person.id), Role::Client),
         )
         .await;

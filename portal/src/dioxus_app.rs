@@ -399,18 +399,33 @@ pub(crate) async fn dioxus_document_head(req: Request, next: Next) -> Response {
 
     let captcha = renders_hcaptcha(&html);
     let tiles = renders_astro_island(&html);
-    if let Ok(csp) = HeaderValue::from_str(&csp_with_nonce(
+    let policy = csp_with_nonce(
         &nonce,
         crate::asset_csp_origin(),
         analytics.is_some(),
         captcha,
         tiles,
-    )) {
+    );
+    if let Ok(csp) = HeaderValue::from_str(&purchase_form_policy(&path, policy)) {
         parts.headers.insert(header::CONTENT_SECURITY_POLICY, csp);
     }
     // The body length changed; drop any stale content-length so axum recomputes.
     parts.headers.remove(header::CONTENT_LENGTH);
     Response::from_parts(parts, Body::from(html))
+}
+
+/// Browsers apply form-action to payment redirects as well as the initial
+/// same-origin POST. Only the purchase document may continue to payment hosts.
+fn purchase_form_policy(path: &str, policy: String) -> String {
+    if path == crate::purchases::PURCHASES_PATH {
+        policy.replacen(
+            "form-action 'self'",
+            "form-action 'self' https://checkout.stripe.com https://in.xero.com",
+            1,
+        )
+    } else {
+        policy
+    }
 }
 
 /// Whether this deployment's matters are sample, read once at startup.
@@ -1028,12 +1043,11 @@ pub(crate) fn public_utility_links(
     if session.is_none() {
         return vec![link("Sign in", "/auth/login")];
     }
-    // One destination for every tier: the matter surface. The nav used to name
-    // the viewer — Clerk, Lawyer, Admin — which is the same mistake the URL
-    // prefixes made. What a caller can do is decided by their role at the
-    // handler; it does not need to be advertised as a separate door.
+    // Matter work and personal purchase management remain reachable at every
+    // tier, so a role change never hides the cancellation door.
     vec![
         link("Projects", "/app/projects"),
+        link("Purchases", "/purchases"),
         link("Sign out", "/auth/logout"),
     ]
 }
@@ -5819,9 +5833,30 @@ mod tests {
         );
     }
 
-    /// The public-page utility links reproduce the navbar's auth block:
-    /// anonymous → Sign in; signed-in → Projects and Sign out, whatever the
-    /// tier.
+    /// Only the purchase document permits form redirects to payment hosts.
+    #[test]
+    fn purchase_form_redirects_admit_only_payment_hosts_on_the_purchase_document() {
+        let nonce = uuid::Uuid::new_v4().simple().to_string();
+        let base = super::csp_with_nonce(&nonce, None, false, false, false);
+        let purchase = super::purchase_form_policy("/purchases", base.clone());
+        assert!(
+            purchase.contains("form-action 'self' https://checkout.stripe.com https://in.xero.com")
+        );
+        assert!(purchase.contains(&format!(
+            "script-src 'self' 'nonce-{nonce}' 'wasm-unsafe-eval';"
+        )));
+        for path in [
+            "/auth/signup",
+            "/auth/login",
+            "/app/profile",
+            "/purchases/other",
+        ] {
+            assert_eq!(super::purchase_form_policy(path, base.clone()), base);
+        }
+    }
+
+    /// Public utility links match the navbar: anonymous → Sign in;
+    /// signed-in → Projects, Purchases, and Sign out at every tier.
     #[test]
     fn public_utility_links_match_the_navigation_auth_block() {
         use crate::session::SessionData;
@@ -5835,9 +5870,8 @@ mod tests {
         // into the same portal the firm does.
         assert_eq!(hrefs(public_utility_links(None)), ["/auth/login"]);
 
-        // Every signed-in tier gets the same two links. The nav does not name
-        // the viewer: a per-role desk link is how a "which surface am I
-        // allowed on" question leaks back into the chrome.
+        // Role-specific work stays behind route authorization; personal
+        // purchases and cancellation remain reachable at every tier.
         let session = |role| SessionData::fresh("viewer", role);
         for role in [
             Role::Client,
@@ -5848,7 +5882,7 @@ mod tests {
         ] {
             assert_eq!(
                 hrefs(public_utility_links(Some(&session(role)))),
-                ["/app/projects", "/auth/logout"],
+                ["/app/projects", "/purchases", "/auth/logout"],
                 "{role:?} gets the one matter surface"
             );
         }

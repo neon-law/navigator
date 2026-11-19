@@ -381,7 +381,7 @@ mod tests {
     };
     use crate::postgres::PostgresDb;
     use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgSslMode};
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
     use uuid::Uuid;
 
     /// A disposable database on the test PostgreSQL server, migrated to
@@ -546,27 +546,25 @@ mod tests {
 
         // A second holder blocks until the first releases, then proceeds —
         // the virtual object's one-at-a-time guarantee, observed.
+        let (attempting, attempted) = tokio::sync::oneshot::channel();
         let holder = tokio::spawn({
             let pg = pg.clone();
             async move {
-                let started = Instant::now();
+                attempting
+                    .send(())
+                    .expect("signal the second holder's attempt");
                 let lane = acquire_lane(&pg, notation).await.expect("second holder");
-                let waited = started.elapsed();
                 lane.commit().await.expect("second holder commits");
-                waited
             }
         });
+        attempted.await.expect("second holder started");
         tokio::time::sleep(Duration::from_millis(200)).await;
         assert!(
             !holder.is_finished(),
             "the second holder must still be waiting on the lane"
         );
         lane.commit().await.expect("first holder commits");
-        let waited = holder.await.expect("second holder task");
-        assert!(
-            waited >= Duration::from_millis(200),
-            "the second holder ran only after the first released: {waited:?}"
-        );
+        holder.await.expect("second holder task");
 
         // A lane held across a full wait budget fails bounded, and the
         // failing acquisition leaves no lock behind.

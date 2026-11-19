@@ -445,18 +445,22 @@ start:
 # names, and account codes are attorney-set. A consultation is free for a
 # Client who signs in with Google using the address they confirmed.
 purchase:
+  renewal_consent_label: I agree to the renewal and cancellation terms above.
+  cancel_label: Cancel renewal
+  renewal_stopped: Renewal is stopped. Existing invoices and your legal engagement are unchanged.
+  paid_through_label: Paid access ends
   title: Consultations and plans
   intro: >-
-    Buy a consultation or a Delete Your Data plan here. We send the invoice
-    from Xero, and your purchase turns on as soon as it is paid.
+    Buy a consultation or a Delete Your Data plan here. Consultations are invoiced in Xero.
+    Recurring plans begin after payment through our secure checkout.
   complimentary: >-
     You signed in with Google using the address you confirmed, so your
     consultation is free. Booking one is optional.
   google_hint: Sign in with Google using this address and your consultation is free.
   book_label: Book a consultation
   buy_label: Buy
-  pay_label: View and pay the invoice
-  invoiced: Invoice sent. This turns on when the invoice is paid.
+  pay_label: Continue to payment
+  invoiced: Payment pending. This turns on when payment is confirmed.
   active: Active
   refusal: Online purchases are not available right now. Please contact our office and we will help you directly.
   offerings:
@@ -474,10 +478,20 @@ purchase:
       blurb: Data removal, privacy protection, and basic form filings such as an LLC, billed every month. Government fees are separate.
       amount: "$29"
       cadence: month
+      renewal_terms: >-
+        {amount} USD is charged now and automatically every month until you cancel. Cancel renewal online at
+        {cancel_url} before your next charge. Stripe cancellation preserves the current paid period.
+        Cancelling renewal does not end an attorney-client relationship or cancel an existing invoice.
+        Any refund rights under applicable law or your engagement agreement remain.
       account_code: "200"
     - id: delete-your-data-annual
       name: Delete Your Data, prepaid year
       blurb: Data removal, privacy protection, and basic form filings such as an LLC, prepaid for a full year. Government fees are separate.
       amount: "$290"
       cadence: year
+      renewal_terms: >-
+        {amount} USD is charged now and automatically every year until you cancel. Cancel renewal online at
+        {cancel_url} before your next charge. Stripe cancellation preserves the current paid period.
+        Cancelling renewal does not end an attorney-client relationship or cancel an existing invoice.
+        Any refund rights under applicable law or your engagement agreement remain.
       account_code: "200"

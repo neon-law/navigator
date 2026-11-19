@@ -37,6 +37,9 @@ billing batch retains the account and invoice identity so a retry cannot silentl
 draft does not create a Xero receivable or settle time and expenses. The Stripe path does not collect payments or
 calculate a card surcharge.
 
+Recurring Offerings use a separate hosted Checkout path with renewal consent and online cancellation. Its activation,
+fee-handling prerequisites, and verification are in [privacy and recurring purchases](privacy-and-purchases.md).
+
 ## One connection per organisation (the contrast with DocuSign)
 
 DocuSign promotes **one app** across environments — at Go-Live the integration key is *copied*, so demo and production

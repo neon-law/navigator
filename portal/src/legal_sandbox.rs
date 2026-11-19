@@ -13,7 +13,7 @@
 //! boundary resolved (a browser cookie or a CLI bearer blob), or — for a
 //! deployment with an enforced OIDC verifier — by the [`AuthClaims`] a raw
 //! bearer JWT carries. Either way the identity resolves to a `persons` row,
-//! and the caller's Xero-backed Purchases answer the question: an active
+//! and the caller's verified Purchases answer the question: an active
 //! Purchase of a Same Day Legal offering opens the composer, anything else sees the
 //! preview. The decision itself is pure: [`access_for`] over the caller's
 //! Purchases.
@@ -43,7 +43,7 @@ use serde::Deserialize;
 use store::assistant_turns::{self, NewTurn, TurnKind};
 use store::persons::{self, Person};
 use store::postgres::PostgresDb;
-use store::purchases::{self, Purchase, PurchaseState};
+use store::purchases::{self, Purchase};
 use store::sandbox_usage::billing_period;
 use store::surreal::SurrealDb;
 use webapp::sandbox::SandboxView;
@@ -95,13 +95,13 @@ pub fn is_same_day_offering(offering: &str) -> bool {
 
 /// The gate's decision over a caller's Purchases: the active Purchase of a
 /// Same Day Legal offering is the whole test. An `invoiced`-but-unpaid subscription
-/// is not yet in force — the Purchase ledger turns it `active` only when Xero
-/// reports the invoice paid — so it previews, like no subscription at all.
+/// is not in force. Provider-verified payment activates it; a Stripe plan also
+/// requires an unexpired verified paid period. Otherwise the preview renders.
 #[must_use]
 pub fn access_for(purchases: &[Purchase]) -> SandboxAccess {
     if purchases
         .iter()
-        .any(|p| p.state == PurchaseState::Active && is_same_day_offering(&p.offering))
+        .any(|p| p.is_active(chrono::Utc::now()) && is_same_day_offering(&p.offering))
     {
         SandboxAccess::Subscribed
     } else {
@@ -286,7 +286,16 @@ async fn access_for_caller(state: &SandboxGateState, caller: &Caller) -> Access 
         return (SandboxAccess::Preview, Some(person_id));
     };
     match purchases::for_person(&pg, person_id).await {
-        Ok(purchases) => (access_for(&purchases), Some(person_id)),
+        Ok(mut purchases) => {
+            for purchase in purchases.iter_mut().filter(|p| p.stripe.is_some()) {
+                if let Ok(fresh) =
+                    crate::subscription_purchases::sync(&state.surreal, &pg, purchase).await
+                {
+                    *purchase = fresh;
+                }
+            }
+            (access_for(&purchases), Some(person_id))
+        }
         Err(e) => {
             tracing::warn!(person = %person_id, error = %e, "sandbox gate: Purchase ledger unreadable; rendering the preview");
             (SandboxAccess::Preview, Some(person_id))
@@ -750,6 +759,9 @@ mod tests {
             xero_repeating_invoice_id: None,
             inserted_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
+            stripe: None,
+            renewal_cancelled_at: None,
+            access_ends_at: None,
             activated_at: None,
         }
     }

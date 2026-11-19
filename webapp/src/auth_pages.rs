@@ -65,9 +65,14 @@ pub const CONTACT_US: &str = "Contact us";
 
 #[derive(Clone, PartialEq, Eq)]
 enum Page {
+    SignupAge {
+        csrf: String,
+        blocked: bool,
+    },
     Signup {
         csrf: String,
         error: Option<SignupError>,
+        providers: Vec<SignInProvider>,
     },
     Login {
         return_to: String,
@@ -189,13 +194,29 @@ impl SignupError {
     }
 }
 
+/// Ask age before showing fields that collect account details.
+pub fn signup_age(csrf: &str, blocked: bool) -> Html<String> {
+    render(
+        &crate::public_chrome::marketing_copy("signup.title"),
+        Page::SignupAge {
+            csrf: csrf.into(),
+            blocked,
+        },
+    )
+}
+
 /// Account creation uses the same signed-CSRF and native form conventions as sign-in.
-pub fn signup(csrf: &str, error: Option<SignupError>) -> Html<String> {
+pub fn signup(
+    csrf: &str,
+    error: Option<SignupError>,
+    providers: &[SignInProvider],
+) -> Html<String> {
     render(
         &crate::public_chrome::marketing_copy("signup.title"),
         Page::Signup {
             csrf: csrf.into(),
             error,
+            providers: providers.to_vec(),
         },
     )
 }
@@ -349,7 +370,20 @@ fn AuthPage(props: AuthPageProps) -> Element {
                             p { "Not expecting this? " a { class: "nav-btn nav-btn--secondary", href: "/contact", "{CONTACT_US}" } }
                         }
                     },
-                    Page::Signup { csrf, error } => rsx! {
+                    Page::SignupAge { csrf, blocked } => rsx! {
+                        h1 { {crate::public_chrome::marketing_copy("signup.title")} }
+                        if blocked {
+                            p { role: "alert", {crate::public_chrome::marketing_copy("signup.age_blocked")} }
+                        } else {
+                            form { class: "auth-form", method: "post", action: "/auth/signup/age",
+                                input { r#type: "hidden", name: "csrf_token", value: "{csrf}" }
+                                label { r#for: "signup-age", {crate::public_chrome::marketing_copy("signup.age_label")} }
+                                input { class: "nav-input", id: "signup-age", name: "age", r#type: "number", min: "0", max: "120", required: true, autocomplete: "off" }
+                                button { r#type: "submit", class: "nav-btn nav-btn--primary", {crate::public_chrome::marketing_copy("signup.age_continue")} }
+                            }
+                        }
+                    },
+                    Page::Signup { csrf, error, providers } => rsx! {
                         h1 { {crate::public_chrome::marketing_copy("signup.title")} }
                         p { {crate::public_chrome::marketing_copy("signup.body")} }
                         if let Some(error) = error { p { class: "nav-alert nav-alert--danger", "{error.message()}" } }
@@ -358,6 +392,12 @@ fn AuthPage(props: AuthPageProps) -> Element {
                             {email_field().render()}
                             {Field::password(crate::public_chrome::marketing_copy("signup.password_label"), "password").required().autocomplete("new-password").render()}
                             button { r#type: "submit", class: "nav-btn nav-btn--primary", {crate::public_chrome::marketing_copy("signup.action")} }
+                        }
+                        for provider in providers.iter() {
+                            a { class: "nav-btn nav-btn--secondary nav-btn--oauth", href: "{provider.href}",
+                                {provider_icon(&provider.label)}
+                                span { "{provider.label}" }
+                            }
                         }
                         p { {crate::public_chrome::marketing_copy("signup.notice")} }
                         p { a { href: "/auth/login", {crate::public_chrome::marketing_copy("signup.existing")} } }

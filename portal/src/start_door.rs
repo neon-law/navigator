@@ -757,22 +757,21 @@ mod tests {
         session
     }
 
-    async fn post_direct(
-        state: &AppState,
+    fn post_direct<'a>(
+        state: &'a AppState,
         catalog: views::locales::services::ServicesCatalog,
         session: SessionData,
-        service_id: &str,
-        template: Option<&str>,
-    ) -> Response {
-        post_direct_with_headers(
+        service_id: &'a str,
+        template: Option<&'a str>,
+    ) -> impl std::future::Future<Output = Response> + 'a {
+        Box::pin(post_direct_with_headers(
             state,
             catalog,
             session,
             service_id,
             template,
             axum::http::HeaderMap::new(),
-        )
-        .await
+        ))
     }
 
     async fn post_direct_with_headers(

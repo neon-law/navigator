@@ -100,6 +100,57 @@ async fn seed_browser_project_on_firm(
     .expect("create the browser Project with an existing Entity")
 }
 
+/// Signup asks only age first and keeps an under-13 refusal across reloads.
+#[tokio::test]
+async fn signup_age_screen_precedes_credentials_and_blocks_back_button_retries() {
+    let Some(c) = new_client_or_skip().await else {
+        return;
+    };
+    c.goto(&format!("{}/auth/signup", base_url()))
+        .await
+        .unwrap();
+    let age = c
+        .find(Locator::Css("input[name='age']"))
+        .await
+        .expect("neutral age screen");
+    assert!(c
+        .find_all(Locator::Css("input[name='email'], input[name='password']"))
+        .await
+        .unwrap()
+        .is_empty());
+    age.send_keys("12").await.unwrap();
+    c.find(Locator::Css(
+        "form[action='/auth/signup/age'] button[type='submit']",
+    ))
+    .await
+    .unwrap()
+    .click()
+    .await
+    .unwrap();
+    c.wait()
+        .at_most(Duration::from_secs(10))
+        .for_element(Locator::Css("[role='alert']"))
+        .await
+        .unwrap();
+    c.refresh().await.unwrap();
+    assert!(c
+        .find_all(Locator::Css(
+            "input[name='age'], input[name='email'], input[name='password']"
+        ))
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(!c
+        .find(Locator::Css("[role='alert']"))
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap()
+        .is_empty());
+    c.close().await.unwrap();
+}
+
 /// Same Day Legal's origin for the browser suite, e.g. `http://localhost:<port>`.
 const SAME_DAY_LEGAL_BASE_URL_ENV: &str = "NAV_SAME_DAY_LEGAL_BASE_URL";
 

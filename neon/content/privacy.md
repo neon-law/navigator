@@ -1,4 +1,4 @@
-_Last updated: November 5, 2026._
+_Last updated: November 18, 2026._
 
 Privacy is a fundamental human right. This policy explains what we collect, why we collect it, who we share it with, and
 the choices you have.
@@ -24,6 +24,18 @@ and UTM parameters), your browser and operating system type, your device type, a
 region, or city). It does not use cookies and does not store your IP address: the address is used only to distinguish
 unique visits in an aggregate count and is never stored. We cannot use this data to identify you, and we do not use it
 for advertising.
+
+We do not use session replay or record your keystrokes. Website fonts are hosted with our own assets rather than loaded
+from Google's font servers.
+
+## Billing Information
+
+We use Stripe Checkout for recurring plans and Xero for consultations; matter billing may also use Stripe. We share
+billing information needed to administer your purchase with the provider, which handles payment details under its own
+privacy policy. Before subscribing, you see the price, billing period, renewal terms, and cancellation method beside the
+payment control and choose whether to agree. You can stop renewal online from [Consultations and plans](/purchases).
+Stripe cancellation preserves the current paid period; it does not end a legal engagement or erase an existing invoice.
+Cancelling renewal does not limit refund rights under applicable law or your engagement agreement.
 
 ## How We Use Your Information
 
@@ -97,7 +109,11 @@ we will notify you as required by applicable law.
 
 ## Children's Privacy
 
-Our services are not directed to children under 13, and we do not knowingly collect personal information from them.
+Our services are not directed to children under 13. Before showing the email and password signup fields, we ask your
+age. We keep only an eligibility decision in a signed cookie for 30 minutes; we do not save the age you enter or ask for
+your birth date. An under-13 response blocks online account creation for that cookie's lifetime. New accounts through an
+identity provider also require this decision before an account is created. This screen is not identity verification or
+parental consent. A parent or guardian can contact our office about legal help for a child.
 
 ## Changes to This Policy
 
