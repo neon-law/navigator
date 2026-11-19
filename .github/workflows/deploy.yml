@@ -1110,7 +1110,13 @@ jobs:
           step: "wait for rollouts, ClamAV readiness, and run attachment smoke checks"
       - name: wait for rollouts, ClamAV readiness, and run attachment smoke checks
         timeout-minutes: 90
-        run: cargo run -p hudson -- dev e2e
+        # The seed check counts Questions, which PostgreSQL holds once it is
+        # configured, so it reads through the bootstrap's connection.
+        run: |
+          set -a
+          source .devx/postgres/env
+          set +a
+          cargo run -p hudson -- dev e2e
 
       - uses: ./.github/actions/slack-progress
         timeout-minutes: 90
