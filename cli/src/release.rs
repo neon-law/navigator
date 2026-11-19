@@ -208,7 +208,7 @@ pub fn standing(
 /// This is a NAME, not a validity claim. It is `pub` because
 /// [`crate::release_default_tag`] and [`crate::cut_release`] are the callers
 /// with a clock to give it — an operator names a release explicitly, through
-/// `ops release version --tag`, and that command never reads one. See
+/// `navigator release version --tag`, and that command never reads one. See
 /// [`default_tag`] for where this fits.
 #[must_use]
 pub fn today_tag(now: DateTime<Utc>) -> String {
@@ -224,7 +224,7 @@ fn date_tag(date: NaiveDate) -> String {
 /// candidate named decades ahead.
 const LOOKAHEAD_DAYS: u32 = 366;
 
-/// The version `ops cut-release` writes and `ops release-default-tag`
+/// The version `ops cut-release` writes and `navigator release default-tag`
 /// suggests when the operator names none.
 ///
 /// Today's UTC `YY.M.D` while no release at or past it is published. Once

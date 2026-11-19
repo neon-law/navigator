@@ -147,6 +147,21 @@ enum Command {
         #[command(subcommand)]
         action: SiteCmd,
     },
+    /// Prepare and verify a Navigator release.
+    Release {
+        #[command(subcommand)]
+        action: ReleaseCmd,
+    },
+    /// Reconcile GitHub repository workflows and policy.
+    Github {
+        #[command(subcommand)]
+        action: GithubCmd,
+    },
+    /// Maintain Forgejo release mirrors.
+    Forgejo {
+        #[command(subcommand)]
+        action: ForgejoCmd,
+    },
     /// Read a Project Calendar, attorney free/busy, or the signed-in attorney's events.
     Calendar {
         #[command(subcommand)]
@@ -171,6 +186,132 @@ enum Command {
         #[command(subcommand)]
         action: crate::glossary::GlossaryCmd,
     },
+}
+
+#[derive(Subcommand)]
+enum ReleaseCmd {
+    /// Suggest the next date-based release tag.
+    DefaultTag {
+        #[arg(long, default_value = ".")]
+        repo: PathBuf,
+        #[arg(long)]
+        no_fetch: bool,
+    },
+    /// Compare the workspace version with published tags.
+    Check {
+        #[arg(long, default_value = "Cargo.toml")]
+        manifest_path: PathBuf,
+        #[arg(long, default_value = ".")]
+        repo: PathBuf,
+        #[arg(long)]
+        no_fetch: bool,
+        #[arg(long)]
+        github_output: bool,
+    },
+    /// Check self-referencing action pins.
+    Pins {
+        #[arg(long, default_value = ".")]
+        root: PathBuf,
+    },
+    /// Set the workspace release version and refresh Cargo.lock.
+    Version {
+        #[arg(long)]
+        tag: String,
+        #[arg(long, default_value = "Cargo.toml")]
+        manifest_path: PathBuf,
+        #[arg(long)]
+        no_commit: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum GithubCmd {
+    /// Reconcile repository policy and Project workflows.
+    Setup {
+        repository: Option<String>,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long, default_value = published_cli_version())]
+        action_version: String,
+        #[arg(long, default_value = projects::repository::DEFAULT_WORKFLOW_HOME)]
+        workflow_home: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum ForgejoCmd {
+    Release {
+        #[command(subcommand)]
+        action: ForgejoReleaseCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum ForgejoReleaseCmd {
+    /// Mirror a published Navigator release to Forgejo.
+    Mirror {
+        #[arg(long)]
+        url: String,
+        #[arg(long)]
+        version: String,
+    },
+}
+
+fn run_release(action: ReleaseCmd) -> ExitCode {
+    match action {
+        ReleaseCmd::DefaultTag { repo, no_fetch } => {
+            crate::release_default_tag::run(chrono::Utc::now(), &repo, !no_fetch)
+        }
+        ReleaseCmd::Check {
+            manifest_path,
+            repo,
+            no_fetch,
+            github_output,
+        } => crate::release_check::run(&manifest_path, &repo, !no_fetch, github_output),
+        ReleaseCmd::Pins { root } => crate::release_pins::run(&root),
+        ReleaseCmd::Version {
+            tag,
+            manifest_path,
+            no_commit,
+        } => crate::release_version::run(&manifest_path, &tag, no_commit),
+    }
+}
+
+fn run_github(action: GithubCmd) -> ExitCode {
+    match action {
+        GithubCmd::Setup {
+            repository,
+            dry_run,
+            action_version,
+            workflow_home,
+        } => {
+            let result =
+                crate::github_setup::RepositoryTarget::resolve(repository).and_then(|target| {
+                    crate::github_setup::run(&target, dry_run, &action_version, &workflow_home)
+                });
+            match result {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => {
+                    eprintln!("navigator: github setup: {error:#}");
+                    ExitCode::from(2)
+                }
+            }
+        }
+    }
+}
+
+fn run_forgejo(action: ForgejoCmd) -> ExitCode {
+    match action {
+        ForgejoCmd::Release {
+            action: ForgejoReleaseCmd::Mirror { url, version },
+        } => match crate::forgejo_release::run(&url, &version) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("navigator: forgejo release mirror: {error:#}");
+                ExitCode::from(2)
+            }
+        },
+    }
 }
 
 /// The Notation envelope verbs a lawyer runs from a Project checkout.
@@ -500,6 +641,9 @@ fn run() -> ExitCode {
         Command::Relationship { action } => runtime().block_on(relationship_log::run(action)),
         Command::Glossary { action } => crate::glossary::run(action),
         Command::Site { action } => run_site(action),
+        Command::Release { action } => run_release(action),
+        Command::Github { action } => run_github(action),
+        Command::Forgejo { action } => run_forgejo(action),
         Command::Calendar { action } => run_calendar(action, &runtime()),
     }
 }
@@ -650,7 +794,7 @@ pub fn cli_version() -> &'static str {
     env!("NAVIGATOR_CLI_VERSION")
 }
 
-/// The version `ops github setup`'s `--action-version` pins a reconciled
+/// The version `navigator github setup`'s `--action-version` pins a reconciled
 /// Project repository's generated gate to by default — [`cli_version`]
 /// narrowed to the sources that name an *actually published* release, never
 /// the bare `CARGO_PKG_VERSION` fallback `build.rs` uses so `--version` still

@@ -66,7 +66,7 @@ source.
 
 This is also the exact command every Project repository's generated CI gate runs against its own tree — see
 [`project-repositories.md`](project-repositories.md) for the thin `ci.yml`/`cd.yml` callers a Project repository carries
-and how `ops github setup` reconciles them. On a Project repository, the same run also closes `.github/` to exactly
+and how `navigator github setup` reconciles them. On a Project repository, the same run closes `.github/` to exactly
 `.github/CODEOWNERS`, the two thin workflow callers `.github/workflows/ci.yml` and `.github/workflows/cd.yml`, and
 `.github/workflows/automerge.yml`: any other path there is a finding naming the exact path and the closed set it fell
 outside of. Each caller is checked structurally against its canonical generator — permitted trigger, permissions, jobs,

@@ -18,7 +18,7 @@ commit holds the version, `Cargo.lock`, and action pins. A red browser gate merg
 2. **Name it.** When the operator names no version, run:
 
    ```bash
-   cargo run -p hudson --quiet -- ops release-default-tag
+   navigator release default-tag
    ```
 
    It prints today's UTC `D` while `D` is unpublished. A published `D-rc.*` leaves today's name free. Once `D` is
@@ -38,7 +38,7 @@ commit holds the version, `Cargo.lock`, and action pins. A red browser gate merg
    `accessibility_e2e`, and `notation_preview_layout` on one store, with `--test-threads=1`, in that order. A green run
    skips the next step.
 
-4. **Merge a red suite in its own pull request before the release.** Stop the cut. Keep `ops release version` off
+4. **Merge a red suite in its own pull request before the release.** Stop the cut. Keep `navigator release version` off
    the fix branch. The release diff stays the version bump.
 
    Read failures in suite order. The suites share the seeded Lawyer and the Firm graph. A test that promotes
@@ -58,9 +58,9 @@ commit holds the version, `Cargo.lock`, and action pins. A red browser gate merg
 5. **Write and verify.**
 
    ```bash
-   cargo run -p hudson --quiet -- ops release version --tag <version>
-   cargo run -p hudson --quiet -- ops release pins
-   cargo run -p hudson --quiet -- ops release check
+   navigator release version --tag <version>
+   navigator release pins
+   navigator release check
    cargo metadata --locked --format-version 1 > /dev/null
    ```
 
@@ -78,8 +78,8 @@ Run this only when asked, after the tag is published, with the CLI from that rel
 repository:
 
 ```bash
-hudson ops github setup <owner>/<repo> --action-version <version> --dry-run
-hudson ops github setup <owner>/<repo> --action-version <version>
+navigator github setup <owner>/<repo> --action-version <version> --dry-run
+navigator github setup <owner>/<repo> --action-version <version>
 ```
 
 That pull request writes `ci.yml`, `cd.yml`, the `navigator.yaml` version pin, and missing or drifted canonical Agent

@@ -258,7 +258,7 @@ jobs:
       # a skipped `rust`. `gate` is unconditional and its result is required
       # with no skip allowance, and it has already built the CLI above.
       - name: do the self-referencing action pins name the workspace version
-        run: "${CARGO_TARGET_DIR:-target}/debug/hudson ops release pins"
+        run: "${CARGO_TARGET_DIR:-target}/debug/navigator release pins"
       # Source CI uses only synthetic deployment rows. The private deployment
       # tree is supplied by operators through NAVIGATOR_DEPLOYMENTS_DIR.
       - name: validate the SOPS key inventory
@@ -585,6 +585,8 @@ jobs:
       # `${CARGO_TARGET_DIR:-target}`, not `./target`: the step above may have
       # moved the build directory onto the larger disk.
       - name: build navigator CLI
+        run: cargo build -p cli --bin navigator --quiet
+      - name: build Hudson operator CLI
         run: cargo build -p hudson --quiet
       # Before the clean below deletes this binary: every test that starts no
       # SurrealDB engine, the coverage regex, and the `features` targets.
@@ -609,7 +611,7 @@ jobs:
       # ordinary PR and only have anything to say when a bump is involved.
       #
       - name: is the workspace version a releasable one
-        run: "${CARGO_TARGET_DIR:-target}/debug/hudson ops release check"
+        run: "${CARGO_TARGET_DIR:-target}/debug/navigator release check"
       # `ops notices --check` is here now. It could not be while `notices_for`
       # read "this crate's source is absent" and "this crate ships no licence
       # file" as the same empty result: `Cargo.lock` is deliberately
@@ -648,7 +650,7 @@ jobs:
       # builds with `--locked` in four places. A bump that carried only
       # `Cargo.toml` would fail those builds AFTER the release tag exists, which
       # is the one failure in the pipeline that cannot be re-run away.
-      # `ops release version` refreshes both files together; this is the check
+      # `navigator release version` refreshes both files together; this is the check
       # that proves it happened.
       - name: does Cargo.lock agree with the manifest
         run: cargo metadata --locked --no-deps --format-version 1 > /dev/null
@@ -1069,7 +1071,7 @@ jobs:
         if: always()
         run: df -h
 
-  # The merge gate, and the only check `ops github setup` requires.
+  # The merge gate, and the only check `navigator github setup` requires.
   #
   # This job runs nothing. It exists so the required status check has a name
   # that never changes: every repository the Firm administers terminates its
@@ -1083,7 +1085,7 @@ jobs:
   # goes on waiting for the old one, which never arrives. That does not read as
   # a broken gate — the pull request simply sits on an expected check forever,
   # or, if the rule is dropped to fix it, merges with nothing enforced at all.
-  # `hudson ops github setup` asserts this job exists before it will bind
+  # `navigator github setup` asserts this job exists before it will bind
   # the gate, so the two halves cannot drift apart.
   #
   # `if: always()` with an explicit result test, rather than a bare `needs:`.

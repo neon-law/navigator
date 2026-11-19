@@ -191,7 +191,7 @@ gh auth login --git-protocol ssh --web
 
 Relay the printed one-time code verbatim, keep the process alive through browser login, then recheck auth.
 
-GitHub policy reconciliation runs one repository at a time: `hudson ops github setup [repository]` takes an `owner/name`
+GitHub policy reconciliation runs one repository at a time: `navigator github setup [repository]` takes an `owner/name`
 slug, falling back to `GITHUB_REPOSITORY` and then this checkout's `origin`. There is no `--all` mode — reconcile
 deliberately, one at a time. Start with `--dry-run`, and rerun it after applying: a second dry run reporting no drift is
 the only proof the reconcile converged. See [`gitops.md`](gitops.md#codified-merge-gate) for the policy each repository

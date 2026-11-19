@@ -5,7 +5,7 @@
 #   preflight.sh [remote]
 #
 # IT TAKES NO VERSION, and that is the change. The version is whatever
-# `[workspace.package].version` says: `ops release version` wrote it, this script
+# `[workspace.package].version` says: `navigator release version` wrote it, this script
 # checks it, `ci.yml` checks it again on the pull request, and `deploy.yml` reads
 # it on merge. One value, read in four places, named in one.
 #
@@ -15,8 +15,8 @@
 # WHAT IT NO LONGER DOES, because the pipeline stopped asking:
 #
 #   - validate a `YY.M.D` shape or its date. The shape is semver's, checked by
-#     `ops release check`; the calendar is a convention with no enforcement.
-#   - prove the name is unspent on the remote. `ops release check` compares the
+#     `navigator release check`; the calendar is a convention with no enforcement.
+#   - prove the name is unspent on the remote. `navigator release check` compares the
 #     version against every release tag, which is the same question asked better.
 #   - prove HEAD is reachable from `origin/main`. A merge to `main` is what
 #     publishes, so the release source cannot be anything else.
@@ -40,7 +40,7 @@ echo "    ok"
 # (nothing to publish — you have not bumped yet), or it is BEHIND one already
 # published, which fails.
 echo "==> is the workspace version a release?"
-cargo run -p hudson --quiet -- ops release check --no-fetch
+navigator release check --no-fetch
 
 echo "==> notices must travel with the distributed binary"
 # `cargo fetch` first, and it is load-bearing. `ops notices` reads licence text
@@ -55,12 +55,12 @@ cargo fetch --locked
 cargo run -p hudson --quiet -- ops notices --check
 
 # `deploy.yml` builds the release with `--locked` in three places, and `--locked`
-# refuses a lock the manifest has moved past. `ops release version` refreshes
+# refuses a lock the manifest has moved past. `navigator release version` refreshes
 # both files together; this proves it happened.
 echo "==> Cargo.lock must agree with the manifest"
 if ! cargo metadata --locked --format-version 1 >/dev/null 2>&1; then
     echo "FAIL: Cargo.lock does not match Cargo.toml." >&2
-    echo "      Re-run: cargo run -p hudson -- ops release version --tag <version>" >&2
+    echo "      Re-run: navigator release version --tag <version>" >&2
     exit 1
 fi
 echo "    ok"
@@ -72,14 +72,14 @@ echo "    ok"
 # `navigator-install` at 26.9.16, a tag predating the action, and every job
 # needing the CLI died at action resolution.
 #
-# `ops release version` sweeps them as it writes the manifest, so this is a
+# `navigator release version` sweeps them as it writes the manifest, so this is a
 # verification rather than a chore: it proves the bump commit carried the pins
-# with it. The rule lives in `deploy/src/release_pins.rs`, and `ci.yml` runs this
+# with it. The rule lives in `cli/src/release_pins.rs`, and `ci.yml` runs this
 # same command in its always-run gate, so a stale pin is a red pull request days
 # before a release cut would have been the first to see it, and neither path can
 # hold its own idea of what a stale pin is.
 echo "==> the self-referencing action pins must name this version"
-cargo run -p hudson --quiet -- ops release pins
+navigator release pins
 
 echo "==> the workspace gate"
 cargo nextest run --workspace

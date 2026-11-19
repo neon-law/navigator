@@ -394,7 +394,7 @@ fn every_publishable_release_is_dispatched_to_the_tap() {
 /// made once with the release grammar itself: four hand-transcribed copies, one
 /// of which ordered `26.8.22-hotfix.22` above `26.8.22`.
 ///
-/// So the tap job reads one boolean `ops release check` already answered and
+/// So the tap job reads one boolean `navigator release check` already answered and
 /// never learns to recognise a version by itself. The shape question now lives
 /// entirely in the tap, which is the component that acts on the answer.
 #[test]

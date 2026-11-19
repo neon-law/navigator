@@ -641,7 +641,7 @@ single-process guarantee, backed underneath by the provider adapters' own idempo
 Navigator spells no organization in its source, and one forge host: the named default
 `cloud::workspace::DEFAULT_GIT_HOST`. `NAVIGATOR_GITHUB_ORG` names the organization this deployment's *own* automation
 occupies, and `NAVIGATOR_GIT_HOST` names the host it lives on. The two are one `(host, organization)` coordinate — where
-this deployment's Project repositories are created, and the boundary `ops github setup` refuses a governance write
+this deployment's Project repositories are created, and the boundary `navigator github setup` refuses a governance write
 outside. Two organizations are admissible on a governance write: the public one holding Navigator itself, and this
 deployment's own. A remote in neither is refused before a token is read. The portal reads the same organization as the
 one GitHub owner whose CI runs may bind to a Project recorded at its Forgejo URL ([the GitHub
@@ -673,10 +673,9 @@ is a two-valued dev/production switch and cannot name a deployment.
 A Project may record no repository at all, and that is correct rather than degraded: a matter opens before anyone
 creates its source, so `project.repository_url` is nullable and the lawyer matter page simply omits the pointer.
 
-Nothing invents one to fill the gap. That is the whole difference from the derivation this replaced — a composed
-coordinate always existed, so it rendered a confident link whether or not the repository did, and when the forge host
-fell back to a public default it aimed that link at a namespace the Firm does not control. `ops github setup` documented
-having no public fallback while the pointer that actually served users had one.
+`repository_url` supplies the Project source link. When it is absent, the Project page omits that link. In Forgejo mode,
+the recorded URL must match the configured host, Firm, and Project code; in GitHub mode, the page shows the recorded
+URL.
 
 | State | Answer |
 | --- | --- |
@@ -785,10 +784,9 @@ Every Project repository follows one branch contract:
 - Publishing a page or a Draft means merging its pull request.
 
 The forge enforces the branch and merge settings; client-visibility decisions remain part of human review. Project
-repositories are moving to a Forgejo forge with a GitHub account connected to it, and the forge's branch protection and
-merge settings carry those controls. `hudson ops github setup` is deprecated. Until the move completes, it keeps the
-existing GitHub repositories on this contract. A local pre-commit hook that runs `navigator project gate` is a
-convenience only: a contributor can skip it, so it never stands in for the required check.
+repositories use GitHub for CI/CD where configured, and GitHub branch protection and merge settings carry those
+controls. `navigator github setup` reconciles the repository contract. A local pre-commit hook that runs `navigator
+project gate` is a convenience only: a contributor can skip it, so it never stands in for the required check.
 
 The canonical `AGENTS.md` states the same contract, including deliberate client-visibility review and PR readiness. A
 change to it reaches each Project repository when that repository runs `navigator project repository sync-skills` at its
@@ -798,8 +796,8 @@ next CLI bump.
 
 A Project repository's `ci.yml` and `cd.yml` are thin callers of Navigator's reusable workflows, pinned to one exact
 release tag. `navigator.yaml` carries the same CLI version; the gate reads it after checkout and before downloading the
-the CLI. `ops github setup` reconciles both callers and the manifest pin, and does not resolve `latest`. Validate does
-not check that the pin exists on the registry. A tag that was never published fails on the run that downloads it.
+the CLI. `navigator github setup` reconciles both callers and the manifest pin, and does not resolve `latest`. Validate
+does not check that the pin exists on the registry. A tag that was never published fails on the run that downloads it.
 
 ```yaml
 jobs:
@@ -808,7 +806,8 @@ jobs:
 ```
 
 No `with:` block: the reusable workflow reads `project`/`host` from the caller's own checked-out `navigator.yaml`, so
-the pinned tag in `uses:` is the only value a caller repeats. `ops github setup` refuses a caller that declares one.
+the pinned tag in `uses:` is the only value a caller repeats. `navigator github setup` refuses a caller that declares
+one.
 
 The caller is pull-request-only and has no permissions or inherited secrets. A called workflow cannot widen the token
 the caller grants it, so fork PRs cannot mint OIDC credentials; the reusable gate's live jobs remain main-only, and
@@ -816,8 +815,8 @@ the caller grants it, so fork PRs cannot mint OIDC credentials; the reusable gat
 actually run. The `ci` job is the required check, but because it *calls* a reusable workflow rather than running its own
 steps, GitHub posts no check run under its own name at all — it posts one per job inside the *called* workflow, named
 `<caller job id> / <called job id>`. `project-gate.yml`'s own terminal job is spelled `ci` too, so the required status
-check `ops github setup` binds a Project repository's ruleset to is the compound context `ci / ci`, not the bare `ci` a
-repository whose `ci.yml` runs its own steps (like Navigator's own) requires.
+check `navigator github setup` binds a Project repository's ruleset to is the compound context `ci / ci`, not the bare
+`ci` a repository whose `ci.yml` runs its own steps (like Navigator's own) requires.
 
 The reusable gate workflow declares three feeder jobs — verify, documents, and seeds — for the Project check. A
 malformed manifest is reported against `navigator.yaml` and stops the template pass, so one bad map cannot produce
@@ -846,7 +845,7 @@ because it needs a reachable deployment.
 **There is no path filter, and that is deliberate.** A filtered job that skips reports success for work it never did,
 and a required check a skip can satisfy is not a gate. So every job always runs and each half no-ops over a repository
 that does not carry it, rather than being skipped. The required job is spelled `ci`, which is the one context `navigator
-ops github setup` binds — and, because a **skipped** job reports no result at all, that job asserts each feeder job's
+github setup` binds — and, because a **skipped** job reports no result at all, that job asserts each feeder job's
 `result` explicitly rather than trusting a bare `needs:`, which a skip would satisfy silently.
 
 What the gate proves:
@@ -867,8 +866,8 @@ Pin both callers to an exact immutable release tag (`YY.M.D`, `YY.M.D-rc.N`, or 
 actually published: a `uses:` at a ref that does not exist fails the run outright with "unable to resolve action", and
 unlike a renamed repository — which GitHub redirects, so the old spelling keeps working — a missing ref has nothing to
 redirect to. The shape rule is machine-checkable and `validate` enforces it; whether the tag exists is not, which is why
-`ops github setup`'s `--action-version` derives the pin from a confirmed release rather than accepting a version someone
-typed from memory.
+`navigator github setup`'s `--action-version` derives the pin from a confirmed release rather than accepting a version
+someone typed from memory.
 
 ## The retained publish caller
 
@@ -883,7 +882,7 @@ every existing `cd.yml` keeps passing, and its deprecated `project`/`host` input
 `.github/actions/application-publish` action, the per-Project publisher service accounts, and the
 `NAVIGATOR_APP_PUBLISHER_*` repository variables are gone with it.
 
-The thin caller workflow lives in the Project repository. `ops github setup` writes and reconciles
+The thin caller workflow lives in the Project repository. `navigator github setup` writes and reconciles
 `.github/workflows/cd.yml` for a confirmed Project repository, so it never hand-copies a job implementation:
 
 ```yaml
@@ -921,14 +920,14 @@ manifest, the Drafts, and the commit under `.devx/sample-projects/<code>/`. The 
 `pages:`, persists each Draft pinned to that commit, opens the matter's Notations, and writes the records each declared
 section reads (`store::seed`'s sample records), so every page renders from the store.
 
-The example at `docs/examples/sample-portal-publish.yml` is the same thin `cd.yml` caller `ops github setup` reconciles
-a Project repository's caller to. It passes only the release pin; it contains no build script, Python, bucket name, or
-credential.
+The example at `docs/examples/sample-portal-publish.yml` is the same thin `cd.yml` caller `navigator github setup`
+reconciles a Project repository's caller to. It passes only the release pin; it contains no build script, Python, bucket
+name, or credential.
 
 The CLI parser refuses unknown manifest keys by naming the accepted set.
 
 The shared reusable-workflow home is this Navigator repository today. A Project repository consumes one `uses:` line for
-CI and one for CD; it does not copy the job implementations or any Python helper. `ops github setup` accepts a
+CI and one for CD; it does not copy the job implementations or any Python helper. `navigator github setup` accepts a
 `--workflow-home <owner>/<repo>` override (default: the current source slug) that repoints both `uses:` lines and the
 required-check binding. The sample snapshots on GitHub are public with Actions disabled: they are a seed source for
 local development, and their workflow files are shown, not run. GitHub does not let a public repository call a private
@@ -971,10 +970,10 @@ does each synced skill. Restore missing or drifted canonical skills and `AGENTS.
 sync-skills`; it writes only those canonical paths and preserves custom skills. Run `navigator project gate` afterward
 to verify the repository.
 
-For a Project version-bump PR, use the CLI from the exact target release. `ops github setup` then includes missing or
-drifted canonical Agent Skills with the workflow and manifest pins. The canonical skill text is embedded in that binary;
-custom skills remain untouched. A different `--action-version` updates pins but prints a diagnostic requiring the
-matching release CLI for skills. Follow the fleet sweep in the [`cut-release`
+For a Project version-bump PR, use the CLI from the exact target release. `navigator github setup` then includes missing
+or drifted canonical Agent Skills with the workflow and manifest pins. The canonical skill text is embedded in that
+binary; custom skills remain untouched. A different `--action-version` updates pins but prints a diagnostic requiring
+the matching release CLI for skills. Follow the fleet sweep in the [`cut-release`
 skill](../.agents/skills/cut-release/SKILL.md#fleet-sweep).
 
 Drift in a synced skill, `AGENTS.md`, or `.claude/settings.json` is repaired with `navigator project repository
@@ -983,11 +982,11 @@ carrying a retired `.claude/skills/` relocates it by hand: confirm each file's b
 move it under `.agents/skills/` by hand, then delete the `.claude/` content other than root `settings.json`. The gate
 refuses retired mirrors by name until they are gone.
 
-`ops github setup --action-version YY.M.D` writes and reconciles a confirmed Project repository's `ci.yml`, `cd.yml`,
-and `navigator.yaml` version pin in one pull request, preserving all other manifest content. A retry repairs a partial
-update on the same branch and reuses its pull request; once the pins and applicable canonical skills converge, another
-run writes nothing. `--action-version` defaults to the release the running `navigator` reports as its own version — but
-only when this binary can actually vouch for that version: a downloaded release binary, or one built with
+`navigator github setup --action-version YY.M.D` writes and reconciles a confirmed Project repository's `ci.yml`,
+`cd.yml`, and `navigator.yaml` version pin in one pull request, preserving all other manifest content. A retry repairs a
+partial update on the same branch and reuses its pull request; once the pins and applicable canonical skills converge,
+another run writes nothing. `--action-version` defaults to the release the running `navigator` reports as its own
+version — but only when this binary can actually vouch for that version: a downloaded release binary, or one built with
 `NAVIGATOR_RELEASE_TAG` set, both of which can only report a version this repository has already published. A plain
 local build cannot make that promise: `[workspace.package].version` is bumped on `main` days before the matching tag
 exists. It carries no default, so `--action-version` must be named explicitly. A value that is not an exact release tag

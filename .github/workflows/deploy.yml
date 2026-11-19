@@ -6,7 +6,7 @@ name: deploy
 # reports it. In strict order:
 #
 #   0. release-version — DECIDE whether this commit is a release, by running
-#      `hudson ops release check`. It reads `[workspace.package].version` and
+#      `navigator release check`. It reads `[workspace.package].version` and
 #      compares it against every release tag in the repository, using semver's
 #      own ordering. Three answers, and the middle one is the ordinary case:
 #
@@ -304,15 +304,15 @@ jobs:
       # contention that starved the gate's Rust cache before.
       #
       # THE BOOTSTRAP CAVEAT, accepted deliberately: the checker is release
-      # N-1's, so a change to `ops release check` itself governs from the
+      # N-1's, so a change to `navigator release check` itself governs from the
       # release AFTER the one that lands it. That is tolerable because the
       # decision is a comparison of the manifest against the tags, both of which
       # this run supplies — the binary carries the rule, not the data. `ci.yml`
-      # runs the in-tree `ops release check` on every pull request, so a change
+      # runs the in-tree `navigator release check` on every pull request, so a change
       # to the rule is still proved on the branch that makes it.
       #
       # A change to the COMMAND'S SHAPE (not just its rule) is the sharper case:
-      # release N-1's binary may not even parse `ops release check` — a CLI
+      # release N-1's binary may not even parse `navigator release check` — a CLI
       # hierarchy refactor can rename or renest it mid-cycle, same as any other
       # subcommand. The probe below catches that before trusting the binary,
       # and reports `ready=false` so the fallback below compiles the current
@@ -353,12 +353,11 @@ jobs:
               exit 0
           fi
           tmp="$(mktemp -d)"
-          # `ops` ships in `hudson`. A release cut before the rename ships it as
-          # `navigator-deploy`, and one cut before the CLI split ships it inside
-          # `navigator`; take the first archive the release carries and install
-          # it under the name the decision step below calls.
+          # Prefer the Navigator archive. Older releases may carry only a
+          # Hudson archive; that binary fails the command probe and the current
+          # Navigator CLI is built from source below.
           asset=""
-          for bin in hudson navigator-deploy navigator; do
+          for bin in navigator hudson navigator-deploy; do
               if gh release download "${tag}" --repo "${REPO}" \
                   --pattern "${bin}-${tag}-linux.tar.gz" --dir "${tmp}" --clobber; then
                   asset="${bin}-${tag}-linux.tar.gz"
@@ -372,11 +371,11 @@ jobs:
           fi
           tar -xzf "${tmp}/${asset}" -C "${tmp}" "${bin}"
           install -d "${RUNNER_TEMP}/navigator-bin"
-          install -m 0755 "${tmp}/${bin}" "${RUNNER_TEMP}/navigator-bin/hudson"
+          install -m 0755 "${tmp}/${bin}" "${RUNNER_TEMP}/navigator-bin/navigator"
           echo "${RUNNER_TEMP}/navigator-bin" >> "${GITHUB_PATH}"
-          echo "${bin} ${tag} installed: $("${RUNNER_TEMP}/navigator-bin/hudson" --version)"
-          if ! "${RUNNER_TEMP}/navigator-bin/hudson" ops release check --help >/dev/null 2>&1; then
-              echo "::notice::navigator ${tag} does not recognize this commit's 'ops release check' invocation; building the checker from source"
+          echo "${bin} ${tag} installed: $("${RUNNER_TEMP}/navigator-bin/navigator" --version)"
+          if ! "${RUNNER_TEMP}/navigator-bin/navigator" release check --help >/dev/null 2>&1; then
+              echo "::notice::navigator ${tag} does not recognize this commit's 'navigator release check' invocation; building the checker from source"
               echo "ready=false" >> "$GITHUB_OUTPUT"
               exit 0
           fi
@@ -397,7 +396,7 @@ jobs:
           # checker is one release behind the tree BY DESIGN, so this is the
           # normal case for any output the tree adds, not an unlucky one.
           #
-          # A NON-ZERO EXIT IS NOT READ AS A VERDICT HERE. `ops release check`
+          # A NON-ZERO EXIT IS NOT READ AS A VERDICT HERE. `navigator release check`
           # also exits non-zero on a version that REGRESSES below one already
           # published, which must fail the release rather than this probe — so
           # that outcome falls back to the source build, which reaches the same
@@ -406,7 +405,7 @@ jobs:
           # the step below is what publishes the answer.
           probe="$(mktemp)"
           if ! GITHUB_OUTPUT="${probe}" \
-              "${RUNNER_TEMP}/navigator-bin/hudson" ops release check \
+              "${RUNNER_TEMP}/navigator-bin/navigator" release check \
               --github-output --no-fetch >/dev/null 2>&1; then
               echo "::notice::navigator ${tag} could not answer the release question; building the checker from source"
               echo "ready=false" >> "$GITHUB_OUTPUT"
@@ -437,7 +436,7 @@ jobs:
         with:
           toolchain: 1.98.0
       # THE WHOLE RELEASE DECISION, in one step so the job has one place to read
-      # its outputs from. `ops release check` reads
+      # its outputs from. `navigator release check` reads
       # `[workspace.package].version`, lists every release tag, and compares them
       # with semver's own ordering — see `deploy/src/release_check.rs` for why the
       # tags are the anchor rather than the previous commit's manifest.
@@ -492,9 +491,9 @@ jobs:
           real_output="${GITHUB_OUTPUT}"
           export GITHUB_OUTPUT="${decision}"
           if [ "${CHECKER_READY}" = "true" ]; then
-              hudson ops release check --github-output
+              navigator release check --github-output
           else
-              cargo run --locked -p hudson --quiet -- ops release check --github-output
+              cargo run --locked -p cli --quiet -- release check --github-output
           fi
           export GITHUB_OUTPUT="${real_output}"
 
@@ -2589,6 +2588,29 @@ jobs:
           webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
           tag: "${{ needs.release-version.outputs.tag }}"
           stage: "release-cli-build-linux"
+          step: "prove the release workflow is in Navigator"
+      - name: prove the release workflow is in Navigator
+        timeout-minutes: 10
+        env:
+          TAG: ${{ needs.release-version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          bin=target/x86_64-unknown-linux-musl/release/navigator
+          "${bin}" github setup --help | grep -qF "[default: ${TAG}]"
+          "${bin}" forgejo release mirror --help >/dev/null
+          "${bin}" release default-tag --help >/dev/null
+          "${bin}" release check --help >/dev/null
+          "${bin}" release pins --help >/dev/null
+          "${bin}" release version --help >/dev/null
+          "${bin}" project repository push --help >/dev/null
+          "${bin}" project repository repair-mirror --help >/dev/null
+          "${bin}" project repository reconcile --help >/dev/null
+      - uses: ./.github/actions/slack-progress
+        timeout-minutes: 90
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          tag: "${{ needs.release-version.outputs.tag }}"
+          stage: "release-cli-build-linux"
           step: "package the Linux CLI"
       - name: package the Linux CLI
         timeout-minutes: 90
@@ -2696,6 +2718,29 @@ jobs:
         env:
           NAVIGATOR_RELEASE_TAG: ${{ needs.release-version.outputs.tag }}
         run: cargo build --locked --release -p cli --bin navigator
+      - uses: ./.github/actions/slack-progress
+        timeout-minutes: 90
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          tag: "${{ needs.release-version.outputs.tag }}"
+          stage: "release-cli-build-macos"
+          step: "prove the macOS CLI exposes the release workflow"
+      - name: prove the macOS CLI exposes the release workflow
+        timeout-minutes: 10
+        env:
+          TAG: ${{ needs.release-version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          bin=target/release/navigator
+          "${bin}" github setup --help | grep -qF "[default: ${TAG}]"
+          "${bin}" forgejo release mirror --help >/dev/null
+          "${bin}" release default-tag --help >/dev/null
+          "${bin}" release check --help >/dev/null
+          "${bin}" release pins --help >/dev/null
+          "${bin}" release version --help >/dev/null
+          "${bin}" project repository push --help >/dev/null
+          "${bin}" project repository repair-mirror --help >/dev/null
+          "${bin}" project repository reconcile --help >/dev/null
       # ENG-115: a Developer ID signing identity, its .p12, and a notarization
       # API key are operator-provisioned secrets that do not exist yet. This
       # step is the only place that inspects them, so every step below reads

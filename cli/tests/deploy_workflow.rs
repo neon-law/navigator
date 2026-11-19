@@ -320,7 +320,7 @@ fn deploy_workflow_references_no_workflow_inputs() {
 /// publishable version. `a_hotfix_is_dispatched_to_the_tap` holds that half.
 ///
 /// Which versions ARE prereleases is not a spelling rule this workflow knows.
-/// `ops release check` reports `prerelease` from `Version::pre`, so any semver
+/// `navigator release check` reports `prerelease` from `Version::pre`, so any semver
 /// prerelease (`-hotfix.3`, `-rc.1`) is flagged, and the workflow reads the
 /// answer instead of matching a suffix.
 #[test]
@@ -432,8 +432,8 @@ fn the_release_decision_is_one_rust_guard_over_the_manifest() {
         .join("\n");
 
     assert!(
-        script.contains("ops release check --github-output"),
-        "release-version must decide the release by running `ops release check`, which reads \
+        script.contains("navigator release check --github-output"),
+        "release-version must decide the release by running `navigator release check`, which reads \
          `[workspace.package].version` and compares it against the release tags"
     );
 
@@ -587,7 +587,7 @@ fn the_release_tag_is_created_between_the_proof_and_the_publish() {
 /// The tag this workflow CREATES must be one the `release-tags` ruleset
 /// protects.
 ///
-/// `deploy/src/devx/github_setup.rs` restricts `refs/tags/[0-9]*.[0-9]*.[0-9]*`
+/// `cli/src/github_setup.rs` restricts `refs/tags/[0-9]*.[0-9]*.[0-9]*`
 /// against deletion, update, and non-fast-forward with no bypass actor. That is
 /// what makes a published version's ref immutable — and it only binds if the
 /// name this job creates matches the glob. A version that fell outside it would
@@ -596,7 +596,7 @@ fn the_release_tag_is_created_between_the_proof_and_the_publish() {
 #[test]
 fn the_created_tag_matches_the_protected_glob() {
     let glob = "refs/tags/[0-9]*.[0-9]*.[0-9]*";
-    let setup = repo_file("deploy/src/devx/github_setup.rs");
+    let setup = repo_file("cli/src/github_setup.rs");
     assert!(
         setup.contains(glob),
         "the `release-tags` ruleset must still protect `{glob}`"
@@ -1104,14 +1104,14 @@ fn build_exports_an_actions_cache_scope_only_where_publish_service_reads_it() {
 /// the very front of the release train where nothing else can start.
 ///
 /// The published Linux archive is the same code, already built. Downloading it
-/// keeps the rule in exactly one place — `deploy/src/release_check.rs` — while
+/// keeps the rule in exactly one place — `cli/src/release_check.rs` — while
 /// removing the compile.
 ///
 /// **The bootstrap caveat is real and accepted.** The checker is release N-1's,
-/// so a change to `ops release check` itself governs from the release AFTER the
+/// so a change to `navigator release check` itself governs from the release AFTER the
 /// one that lands it. That is tolerable because the binary carries the rule
 /// while the run supplies the data — the manifest and the tags are both read
-/// fresh — and because `ci.yml` runs the in-tree `ops release check` on every
+/// fresh — and because `ci.yml` runs the in-tree `navigator release check` on every
 /// pull request, so a change to the rule is proved on the branch that makes it.
 #[test]
 fn the_release_decision_runs_a_published_binary_rather_than_a_compile() {
@@ -1124,8 +1124,8 @@ fn the_release_decision_runs_a_published_binary_rather_than_a_compile() {
          compiling the CLI to answer a yes/no question is ~8 minutes of latency on every merge"
     );
     assert!(
-        job.contains("hudson ops release check --github-output"),
-        "the downloaded binary must answer the question through the same `ops release check` \
+        job.contains("navigator release check --github-output"),
+        "the downloaded binary must answer the question through the same `navigator release check` \
          command, so the release rule lives in one place"
     );
 }
@@ -1164,7 +1164,7 @@ fn an_unavailable_checker_falls_back_to_building_from_source() {
     let job = release_version_job(&workflow);
 
     assert!(
-        job.contains("cargo run --locked -p hudson --quiet -- ops release check --github-output"),
+        job.contains("cargo run --locked -p cli --quiet -- release check --github-output"),
         "`release-version` must keep the in-tree fallback: a download that failed must compile \
          the checker, never answer the release question by default"
     );
@@ -1468,9 +1468,9 @@ fn the_checker_installs_the_binary_the_release_decision_runs() {
     let command = decision
         .lines()
         .map(str::trim)
-        .find(|line| line.ends_with("ops release check --github-output"))
+        .find(|line| line.ends_with("navigator release check --github-output"))
         .and_then(|line| line.split_whitespace().next())
-        .expect("the decision step runs `<binary> ops release check --github-output`");
+        .expect("the decision step runs `navigator release check --github-output`");
     let checker = run_of("checker");
     assert!(
         checker.contains(&format!("\"${{RUNNER_TEMP}}/navigator-bin/{command}\"")),
@@ -1820,7 +1820,7 @@ fn only_the_bump_commit_publishes_an_unreleased_version() {
     let bin = scratch.path().join("bin");
     std::fs::create_dir_all(&repo).expect("repo directory");
     std::fs::create_dir_all(&bin).expect("stub bin directory");
-    let stub = bin.join("hudson");
+    let stub = bin.join("navigator");
     std::fs::write(
         &stub,
         "#!/bin/sh\nprintf 'tag=1.0.1\\npublishable=true\\nprerelease=false\\n' >> \"$GITHUB_OUTPUT\"\n",
