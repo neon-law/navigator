@@ -5894,6 +5894,7 @@
       "cli/src/legal_plans.rs",
       "cli/src/letterhead.rs",
       "cli/src/login.rs",
+      "cli/src/mail.rs",
       "cli/src/matter_site.rs",
       "cli/src/notation_kinds.rs",
       "cli/src/notation_render.rs",

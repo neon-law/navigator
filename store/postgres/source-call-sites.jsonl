@@ -126,7 +126,7 @@
 {"file":"cli/src/mail.rs","line":476,"function":"list_threads","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/mail.rs","line":481,"function":"list_threads","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/mail.rs","line":681,"function":"ordered_gmail_messages","operation":"insert","sql_operations":[],"tables":["message"],"transaction":false}
-{"file":"cli/src/mail.rs","line":2314,"function":"runtime_signature_on","operation":"query","sql_operations":[],"tables":[],"transaction":false}
+{"file":"cli/src/mail.rs","line":2319,"function":"runtime_signature_on","operation":"query","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/mail/login.rs","line":417,"function":"prompt_hidden","operation":"insert","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/pii_audit.rs","line":399,"function":"audit_tree","operation":"query","sql_operations":[],"tables":[],"transaction":false}
 {"file":"cli/src/projects/communication.rs","line":91,"function":"list","operation":"query","sql_operations":[],"tables":[],"transaction":false}
