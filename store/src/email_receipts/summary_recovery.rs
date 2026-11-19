@@ -173,3 +173,6 @@ pub async fn current_operation(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod interrupted_tests;
