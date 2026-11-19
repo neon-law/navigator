@@ -987,3 +987,33 @@ async fn unknown_delivery_requires_native_resend_authorization_and_reuses_provid
     })
     .await;
 }
+
+#[tokio::test]
+async fn committed_child_without_fork_acknowledgement_is_retrieved_by_its_owned_operation() {
+    with_case(|case|async move {
+        case.failed_summary().await;
+        let command=case.command();
+        let gate=CheckpointGate::install(&case,command.operation_id,false).await;
+        assert_eq!(case.submit(&command,true).await,StatusCode::ACCEPTED);
+        wait_for(&case,"SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query ILIKE '%operation_outputs%' AND $1::text IS NOT NULL)",command.operation_id).await;
+        assert_eq!(ownership::current_operation(&case.pg,case.request.receipt_id).await.unwrap(),Some(command.operation_id));
+        let operation=read_record(&case.dbos,&email_summary_recovery_id(command.operation_id)).await.unwrap().unwrap();
+        let bound=decode_recovery_input(&operation).unwrap();
+        let step=match bound.action { Action::RetryProvider(step)=>step,_=>panic!("expected a provider-failure repair") };
+        // Reconstruct the durable state of a committed fork whose acknowledgement
+        // is missing: native admission and its immutable operation claim exist,
+        // the exact child exists, and this controller has no fork checkpoint.
+        case.dbos.fork_with::<EmailSummaryReport,EmailSummaryError>(dbos::Fork {original_id:&bound.source_workflow_id,start_step:step,forked_id:Some(&bound.target_workflow_id)},dbos::ForkOptions::default()).await.unwrap().result().await.unwrap();
+        let acknowledged:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM dbos.operation_outputs WHERE workflow_uuid=$1 AND function_name='DBOS.forkWorkflow')").bind(email_summary_recovery_id(command.operation_id)).fetch_one(case.pg.pool()).await.unwrap();
+        assert!(!acknowledged);
+        gate.unblock(&case).await;
+        let report=case.complete(&command).await;
+        assert_eq!(report.target_workflow_id,bound.target_workflow_id);
+        assert_eq!(case.provider.received_requests().await.unwrap().len(),1);
+        assert_eq!(case.slack.posted_messages().len(),2);
+        assert_eq!(case.submit(&command,true).await,StatusCode::ACCEPTED);
+        case.complete(&command).await;
+        assert_eq!(case.provider.received_requests().await.unwrap().len(),1);
+        assert_eq!(case.slack.posted_messages().len(),2);
+    }).await;
+}
