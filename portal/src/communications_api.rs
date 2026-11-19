@@ -149,10 +149,10 @@ fn inbox_message_id(source_ref: &str) -> Option<&str> {
 }
 
 /// An unknown direction is the caller's mistake — a 400, not a silent empty
-/// list. A row projected from the Inbox carries its message direction; a
-/// call row's `direction` is its visibility (`internal` unless shared), so
-/// `direction=internal` and `direction=outbound` partition the same log the
-/// client lens already partitions.
+/// list. A row projected from the Inbox carries its message direction, and
+/// since LAW-424 a call row's `direction` is the call's own, so
+/// `direction=internal` selects only internal notes; call sharing lives on
+/// the row's `call.client_visible` and the client lens reads it there.
 fn validate_direction(direction: Option<&str>) -> Result<Option<&str>, ApiError> {
     let Some(direction) = direction.map(str::trim).filter(|d| !d.is_empty()) else {
         return Ok(None);
@@ -525,6 +525,7 @@ pub(crate) async fn create_communication(
                             .trim()
                             .to_string(),
                         meet_and_confer: input.meet_and_confer,
+                        client_visible: input.client_visible,
                     },
                     agreements: input.agreements,
                     client_visible: input.client_visible,

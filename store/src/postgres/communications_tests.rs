@@ -521,6 +521,7 @@ async fn communications_live_in_postgres() {
                         duration_minutes: Some(15),
                         recorded: "none".into(),
                         meet_and_confer: Some("discovery".into()),
+                        client_visible: false,
                     },
                     agreements: vec!["Extend the deadline".into()],
                     ..NewCall::default()
