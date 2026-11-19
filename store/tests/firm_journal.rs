@@ -35,7 +35,9 @@ async fn project_brand(db: &store::surreal::SurrealDb, firm: Uuid) -> String {
         .await
         .unwrap()
         .into_iter()
-        .find(|membership| membership.is_dri && membership.membership == "admin")
+        .find(|membership| {
+            membership.is_dri && membership.membership == store::firms::FirmMembership::Admin
+        })
         .expect("the native Firm fixture has its appointed Admin DRI");
     let key = format!("synthetic-{}", Uuid::now_v7().simple());
     store::brands::create(
