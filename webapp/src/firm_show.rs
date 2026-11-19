@@ -119,6 +119,9 @@ pub struct FirmFields {
     /// The linked Entity's employer identification number.
     #[serde(default)]
     pub ein: Option<String>,
+    /// The e-signature provider this Firm's brands sign through, as a label.
+    #[serde(default)]
+    pub esign_provider: String,
     pub brand_keys: Vec<String>,
     /// The current Admin DRI's name and email, when exactly one eligible
     /// designation exists.
@@ -309,6 +312,14 @@ pub async fn get_firm_show() -> Result<FirmShowView, ServerFnError> {
         .and_then(|metadata| metadata.get("ein"))
         .and_then(serde_json::Value::as_str)
         .map(str::to_string);
+    let esign_provider = match store::firm_esign::for_firm(firm.id)
+        .await
+        .map_err(|error| ServerFnError::new(error.to_string()))?
+    {
+        store::signatures::SignatureProvider::DocuSign => "DocuSign",
+        store::signatures::SignatureProvider::DropboxSign => "Dropbox Sign",
+    }
+    .to_string();
     let brand_keys = store::firms::brand_keys_for_firm(&surreal, firm.id)
         .await
         .map_err(|error| ServerFnError::new(error.to_string()))?;
@@ -556,6 +567,7 @@ pub async fn get_firm_show() -> Result<FirmShowView, ServerFnError> {
             status: firm.status,
             entity_name,
             ein,
+            esign_provider,
             brand_keys,
             admin_dri,
             admin_dri_problem,
@@ -656,6 +668,11 @@ pub fn firm_show_body(view: &FirmShowView) -> Element {
                     p { class: "firm-ein", style: "font-size: 1.25rem; font-weight: 600;",
                         "Employer identification number (EIN): "
                         span { style: "font-variant-numeric: tabular-nums; user-select: all;", "{ein}" }
+                    }
+                }
+                if !fields.esign_provider.is_empty() {
+                    p { class: "firm-esign-provider",
+                        "E-signature provider: {fields.esign_provider}"
                     }
                 }
                 if fields.can_edit {

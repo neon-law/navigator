@@ -10,7 +10,12 @@ use crate::{
     postgres::PostgresDb,
 };
 
-/// Projects with a completed DocuSign UUID in authoritative PostgreSQL evidence.
+/// Projects whose onboarding letter is executed, from verified PostgreSQL evidence.
+///
+/// Two sources count. A completed e-signature request from any provider in
+/// [`crate::signatures::SignatureProvider`] counts. So does a live `onboarding` asset whose
+/// server-stamped `verified_onboarding_envelope_id` equals its DocuSign envelope UUID. A committed
+/// pointer alone is not evidence: anyone with repository access can write one.
 pub async fn official_projects(
     pg: &PostgresDb,
     projects: &[Uuid],
@@ -21,26 +26,105 @@ pub async fn official_projects(
     )
     .await
     .map_err(|error| sqlx::Error::Configuration(Box::new(error)))?;
-    let rows: Vec<(Uuid, String)> = sqlx::query_as(
-        "SELECT n.project_id, s.provider_id FROM signature s
+    let providers: Vec<&str> = crate::signatures::SignatureProvider::ALL
+        .iter()
+        .map(crate::signatures::SignatureProvider::as_str)
+        .collect();
+    let rows: Vec<(Uuid, String, String)> = sqlx::query_as(
+        "SELECT n.project_id, s.provider, s.provider_id FROM signature s
          JOIN notation n ON n.id=s.notation_id JOIN template t ON t.id=n.template_id
          WHERE n.project_id=ANY($1) AND t.kind='onboarding'
-           AND s.provider='docusign' AND s.state='completed' AND s.signed_at IS NOT NULL
+           AND s.provider=ANY($2) AND s.state='completed' AND s.signed_at IS NOT NULL
          UNION
-         SELECT project_id, metadata->>'docusign_envelope_id' FROM asset
+         SELECT project_id, 'docusign', metadata->>'docusign_envelope_id' FROM asset
          WHERE project_id=ANY($1) AND kind='onboarding' AND deleted_at IS NULL
            AND metadata->>'verified_onboarding_envelope_id'=metadata->>'docusign_envelope_id'",
+    )
+    .bind(projects)
+    .bind(&providers)
+    .fetch_all(pg.pool())
+    .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(project, provider, id)| {
+            evidence_id_is_valid(&provider, &id).then_some(project)
+        })
+        .collect())
+}
+
+/// Whether a provider's request id can stand as execution evidence. DocuSign envelope ids are
+/// non-nil UUIDs. Another provider's id need only be present.
+fn evidence_id_is_valid(provider: &str, id: &str) -> bool {
+    if provider == "docusign" {
+        Uuid::parse_str(id).is_ok_and(|id| !id.is_nil())
+    } else {
+        !id.trim().is_empty()
+    }
+}
+
+#[cfg(test)]
+mod evidence_tests {
+    use super::evidence_id_is_valid;
+
+    #[test]
+    fn a_docusign_id_must_be_a_real_uuid_and_another_providers_id_must_be_present() {
+        assert!(evidence_id_is_valid(
+            "docusign",
+            "be7c549b-29fc-8c65-8185-fd527ff4e506"
+        ));
+        assert!(!evidence_id_is_valid("docusign", "x"));
+        assert!(!evidence_id_is_valid(
+            "docusign",
+            "00000000-0000-0000-0000-000000000000"
+        ));
+        assert!(evidence_id_is_valid("dropbox_sign", "c3f1a9e0d2b4"));
+        assert!(!evidence_id_is_valid("dropbox_sign", "  "));
+    }
+}
+
+/// Where a pitch's e-signature request stands, for the lawyer dashboard pill.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EsignSummary {
+    /// The provider key, such as `docusign` or `dropbox_sign`.
+    pub provider: String,
+    /// The provider's envelope or request id.
+    pub provider_id: String,
+    /// `requested`, `declined`, `voided` or `expired`.
+    pub state: String,
+}
+
+/// The latest unexecuted onboarding e-signature request per project, for projects that have one.
+pub async fn pending_esign(
+    pg: &PostgresDb,
+    projects: &[Uuid],
+) -> Result<std::collections::HashMap<Uuid, EsignSummary>, sqlx::Error> {
+    crate::postgres_backfill::family::require_scope(
+        pg,
+        crate::postgres_backfill::family::Family::Notation,
+    )
+    .await
+    .map_err(|error| sqlx::Error::Configuration(Box::new(error)))?;
+    let rows: Vec<(Uuid, String, String, String)> = sqlx::query_as(
+        "SELECT DISTINCT ON (n.project_id) n.project_id, s.provider, s.provider_id, s.state
+         FROM signature s JOIN notation n ON n.id=s.notation_id
+         JOIN template t ON t.id=n.template_id
+         WHERE n.project_id=ANY($1) AND t.kind='onboarding' AND s.state<>'completed'
+         ORDER BY n.project_id, s.id DESC",
     )
     .bind(projects)
     .fetch_all(pg.pool())
     .await?;
     Ok(rows
         .into_iter()
-        .filter_map(|(project, envelope)| {
-            Uuid::parse_str(&envelope)
-                .ok()
-                .filter(|id| !id.is_nil())
-                .map(|_| project)
+        .map(|(project, provider, provider_id, state)| {
+            (
+                project,
+                EsignSummary {
+                    provider,
+                    provider_id,
+                    state,
+                },
+            )
         })
         .collect())
 }

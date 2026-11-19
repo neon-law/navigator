@@ -64,6 +64,9 @@ pub struct FirmEditView {
     /// The Firm's Portal Theme Brand key; `None` keeps each host's own look.
     #[serde(default)]
     pub google_workspace_calendar_owner: Option<String>,
+    /// The Firm's e-signature provider key (`docusign` or `dropbox_sign`).
+    #[serde(default)]
+    pub esign_provider: String,
     pub portal_theme_brand_key: Option<String>,
     /// The Brands this Firm owns, the only ones the theme picker offers.
     #[serde(default)]
@@ -109,6 +112,7 @@ fn store_role(role: ViewerRole) -> store::persons::Role {
 /// exactly as `store::firms::update` itself authorizes: Owner edits every
 /// Firm; an Admin edits only a Firm they hold an admin `person_firm_role` on.
 #[server]
+#[allow(clippy::too_many_lines)]
 pub async fn get_firm_edit_form() -> Result<FirmEditView, ServerFnError> {
     let role = crate::admin_listing::require_admin().await?;
     let axum::extract::Path(id) =
@@ -197,8 +201,10 @@ pub async fn get_firm_edit_form() -> Result<FirmEditView, ServerFnError> {
     } else {
         None
     };
+    let esign_provider = esign_provider_key(id).await?;
     Ok(FirmEditView {
         found: true,
+        esign_provider,
         google_workspace_calendar_owner,
         name: firm.name,
         status: firm.status,
@@ -213,6 +219,14 @@ pub async fn get_firm_edit_form() -> Result<FirmEditView, ServerFnError> {
         dri_candidates,
         ..base
     })
+}
+
+#[cfg(feature = "server")]
+async fn esign_provider_key(firm_id: uuid::Uuid) -> Result<String, ServerFnError> {
+    store::firm_esign::for_firm(firm_id)
+        .await
+        .map(|provider| provider.as_str().to_string())
+        .map_err(|error| ServerFnError::new(error.to_string()))
 }
 
 /// The Brands this Firm owns: the only choices for its Portal Theme Brand.
@@ -263,6 +277,10 @@ async fn admin_dri_choices(
 }
 
 const STATUS_CHOICES: [&str; 3] = ["active", "suspended", "archived"];
+
+/// The e-signature providers a Firm can pick: stored key, then label.
+const ESIGN_PROVIDER_CHOICES: [(&str, &str); 2] =
+    [("docusign", "DocuSign"), ("dropbox_sign", "Dropbox Sign")];
 
 fn entity_options(entities: &[FirmEntityOption]) -> Vec<Choice> {
     let mut options = vec![Choice::new("", "—")];
@@ -357,6 +375,24 @@ fn edit_form(view: &FirmEditView) -> Element {
             csrf_token: Some(view.csrf_token.clone()),
             fields,
         }
+        FormCard {
+            title: "E-signature provider".to_string(),
+            action: format!("/app/admin/firms/{}/edit", view.id),
+            submit_label: "Save provider".to_string(),
+            heading: Heading::H2,
+            csrf_token: Some(view.csrf_token.clone()),
+            fields: vec![Field::select(
+                "Provider",
+                "esign_provider",
+                ESIGN_PROVIDER_CHOICES
+                    .iter()
+                    .map(|(key, label)| Choice::new(*key, *label))
+                    .collect(),
+                Some(view.esign_provider.clone()),
+            )
+            .required()
+            .help("Every brand this Firm owns sends engagement letters and other signature requests through this provider.")],
+        }
         if view.role == ViewerRole::Owner {
             FormCard {
                 title: "Google Calendar".to_string(),
@@ -442,6 +478,7 @@ mod tests {
                 name: "Guieb & Shook PC".to_string(),
             }],
             google_workspace_calendar_owner: Some("calendar@example.test".to_string()),
+            esign_provider: "docusign".to_string(),
             portal_theme_brand_key: Some("guieb-shook".to_string()),
             owned_brands: vec![
                 FirmBrandOption {
