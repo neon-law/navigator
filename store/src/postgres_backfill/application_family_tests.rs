@@ -284,3 +284,112 @@ async fn cached_journal_capture_cannot_borrow_a_different_receipt_fingerprint() 
 async fn source_payload_change_before_application_activation_refuses() {
     mismatched_cached_capture(false).await;
 }
+
+async fn captured_email_with_deleted_native_parent(purged: bool) {
+    use crate::sent_emails::postgres::{self as native, DayExport};
+    let Some((pg, source, _, project, _)) = database().await else {
+        return;
+    };
+    let message = message(Some(project));
+    let id = captured_email(&source, &message).await;
+    // A native deletion must not be undone from a stale compatibility parent.
+    sqlx::query("DELETE FROM person_project_role WHERE project_id=$1")
+        .bind(project)
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM project WHERE id=$1")
+        .bind(project)
+        .execute(pg.pool())
+        .await
+        .unwrap();
+    if purged {
+        let day = message.sent_at.date_naive();
+        native::record_export(
+            &pg,
+            &DayExport {
+                day,
+                row_count: 0,
+                content_sha256: native::content_sha256([]),
+                data_file: "gs://synthetic/empty-day.parquet".into(),
+                snapshot_id: 1,
+                metadata_version: 1,
+                exported_at: chrono::Utc::now(),
+                purged_at: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            native::purge(&pg, chrono::Utc::now()).await.unwrap(),
+            vec![(
+                day,
+                native::DayPurge::Purged {
+                    deleted: 0,
+                    retained: 0
+                }
+            )]
+        );
+    }
+    let receipt = verified_family_capture(&source).await;
+    let report = start_family(
+        &source,
+        &pg,
+        family::Family::Application,
+        receipt,
+        10,
+        None,
+        true,
+    )
+    .await
+    .unwrap();
+    let audit = report
+        .parity
+        .iter()
+        .find(|row| row.table == "sent_email")
+        .unwrap();
+    let proof = audit.sent_email_union.as_ref().unwrap();
+    if purged {
+        assert!(report.is_clean(), "{report:?}");
+        assert_eq!(proof.excluded_purged, 1);
+        assert_eq!(proof.source_only_remaining, 0);
+        assert!(report
+            .unresolved_references
+            .iter()
+            .all(|reference| reference.table != "sent_email"));
+    } else {
+        assert_eq!(report.status, RunStatus::Paused);
+        assert_eq!(proof.excluded_purged, 0);
+        assert_eq!(proof.source_only_remaining, 1);
+        let reference = report
+            .unresolved_references
+            .iter()
+            .find(|reference| reference.table == "sent_email" && reference.field == "project_id")
+            .unwrap();
+        assert_eq!(reference.newly_target_missing, 1);
+        assert!(family::require_scope(&pg, family::Family::Application)
+            .await
+            .is_err());
+    }
+    for (table, id) in [("project", project), ("sent_email", id)] {
+        let count: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT count(*) FROM {table} WHERE id=$1"
+        )))
+        .bind(id)
+        .fetch_one(pg.pool())
+        .await
+        .unwrap();
+        assert_eq!(count, 0);
+    }
+    pg.pool().close().await;
+}
+
+#[tokio::test]
+async fn proven_purged_missing_audit_does_not_resurrect_or_require_its_deleted_project() {
+    captured_email_with_deleted_native_parent(true).await;
+}
+
+#[tokio::test]
+async fn unpurged_captured_audit_refuses_a_missing_native_project_without_resurrection() {
+    captured_email_with_deleted_native_parent(false).await;
+}

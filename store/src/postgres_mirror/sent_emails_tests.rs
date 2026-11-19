@@ -140,3 +140,146 @@ async fn sent_email_audit_replays_preserve_history_and_report_drift() {
     }).await;
     pg.0.close().await;
 }
+
+fn retained_message() -> crate::sent_emails::NewSentEmail {
+    crate::sent_emails::NewSentEmail {
+        recipient: "recipient@example.invalid".into(),
+        subject: "Synthetic audit".into(),
+        sender: "sender@example.invalid".into(),
+        project_id: None,
+        person_id: None,
+        template_slug: None,
+        body: "Synthetic history".into(),
+        outcome: "sent".into(),
+        sg_message_id: None,
+        sent_at: "2024-01-02T12:00:00Z".parse().unwrap(),
+    }
+}
+
+async fn exported_day(pg: &PostgresDb, day: NaiveDate) {
+    use crate::sent_emails::postgres::{self as native, DayExport};
+    let rows = native::day_rows(pg, day).await.unwrap();
+    native::record_export(
+        pg,
+        &DayExport {
+            day,
+            row_count: u64::try_from(rows.len()).unwrap(),
+            content_sha256: native::content_sha256(rows.iter().map(|row| row.id)),
+            data_file: "gs://synthetic/sent-email.parquet".into(),
+            snapshot_id: 1,
+            metadata_version: 1,
+            exported_at: Utc::now(),
+            purged_at: None,
+        },
+    )
+    .await
+    .unwrap();
+}
+
+async fn day_waiters(pg: &PostgresDb, day: NaiveDate, expected: i64) {
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let waiting: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND database=(SELECT oid FROM pg_database WHERE datname=current_database()) AND classid::bigint=1312902742 AND objid::bigint=$1 AND NOT granted")
+                .bind(i64::from(chrono::Datelike::num_days_from_ce(&day)))
+                .fetch_one(pg.pool()).await.unwrap();
+            if waiting == expected { break; }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }).await.expect("both retention operations must reach the shared day lock");
+}
+
+#[tokio::test]
+async fn purge_winning_before_import_prevents_resurrection() {
+    use crate::sent_emails::postgres::{self as native, DayPurge};
+    let Some((options, database)) = fresh_schema().await else {
+        return;
+    };
+    let pg = connect(&options, &database).await;
+    let source = super::super::from_source(crate::test_support::mem_surreal()).await;
+    let captured = captured_message(&source, &retained_message()).await;
+    let day = captured.sent_at.date_naive();
+    assert_eq!(
+        super::super::during_initial_copy(mirror(&source, &pg, captured.id))
+            .await
+            .unwrap(),
+        Mirrored::Written
+    );
+    exported_day(&pg, day).await;
+    let mut gate = pg.pool().begin().await.unwrap();
+    native::lock_retention_day(&mut gate, day).await.unwrap();
+    let purge_pg = pg.clone();
+    let purge = tokio::spawn(async move { native::purge(&purge_pg, Utc::now()).await.unwrap() });
+    day_waiters(&pg, day, 1).await;
+    let import_pg = pg.clone();
+    let import_source = source.clone();
+    let import = tokio::spawn(async move {
+        super::super::during_initial_copy(mirror(&import_source, &import_pg, captured.id))
+            .await
+            .unwrap()
+    });
+    day_waiters(&pg, day, 2).await;
+    gate.commit().await.unwrap();
+    assert_eq!(
+        purge.await.unwrap(),
+        vec![(
+            day,
+            DayPurge::Purged {
+                deleted: 1,
+                retained: 0
+            }
+        )]
+    );
+    assert_eq!(import.await.unwrap(), Mirrored::Unchanged);
+    assert_eq!(native::day_rows(&pg, day).await.unwrap().len(), 0);
+    assert!(parity(&source, &pg).await.unwrap().is_clean());
+    pg.pool().close().await;
+}
+
+#[tokio::test]
+async fn import_winning_before_purge_refuses_a_stale_export() {
+    use crate::sent_emails::postgres::{self as native, DayPurge};
+    let Some((options, database)) = fresh_schema().await else {
+        return;
+    };
+    let pg = connect(&options, &database).await;
+    let source = super::super::from_source(crate::test_support::mem_surreal()).await;
+    let captured = captured_message(&source, &retained_message()).await;
+    let day = captured.sent_at.date_naive();
+    exported_day(&pg, day).await;
+    let mut gate = pg.pool().begin().await.unwrap();
+    native::lock_retention_day(&mut gate, day).await.unwrap();
+    let import_pg = pg.clone();
+    let import_source = source.clone();
+    let import = tokio::spawn(async move {
+        super::super::during_initial_copy(mirror(&import_source, &import_pg, captured.id))
+            .await
+            .unwrap()
+    });
+    day_waiters(&pg, day, 1).await;
+    let purge_pg = pg.clone();
+    let purge = tokio::spawn(async move { native::purge(&purge_pg, Utc::now()).await.unwrap() });
+    day_waiters(&pg, day, 2).await;
+    gate.commit().await.unwrap();
+    assert_eq!(import.await.unwrap(), Mirrored::Written);
+    assert_eq!(purge.await.unwrap(), vec![(day, DayPurge::NotExported)]);
+    assert_eq!(native::day_rows(&pg, day).await.unwrap().len(), 1);
+    exported_day(&pg, day).await;
+    assert_eq!(
+        native::purge(&pg, Utc::now()).await.unwrap(),
+        vec![(
+            day,
+            DayPurge::Purged {
+                deleted: 1,
+                retained: 0
+            }
+        )]
+    );
+    assert_eq!(
+        super::super::during_initial_copy(mirror(&source, &pg, captured.id))
+            .await
+            .unwrap(),
+        Mirrored::Unchanged
+    );
+    assert!(native::day_rows(&pg, day).await.unwrap().is_empty());
+    pg.pool().close().await;
+}
