@@ -7531,12 +7531,19 @@ mod tests {
     where
         F: Fn(&str) -> Option<String>,
     {
+        rendered_deployment(WEB_DEPLOYMENT, get)
+    }
+
+    fn rendered_deployment<F>(name: &str, get: F) -> serde_yaml::Value
+    where
+        F: Fn(&str) -> Option<String>,
+    {
         let subs = resolve_substitutions_for_deployment("synthetic-deployment", "26.9.16", get)
             .expect("synthetic environment resolves");
         let rendered = render_manifests_with(&subs).expect("render succeeds");
         let manifests = kustomize_build(&rendered.path().join(GKE_KUSTOMIZE_SUBPATH))
             .expect("rendered GKE manifests build");
-        manifest_doc(&manifests, "Deployment", WEB_DEPLOYMENT)
+        manifest_doc(&manifests, "Deployment", name)
     }
 
     fn rendered_web_env_entries<F>(get: F) -> Vec<serde_yaml::Value>
@@ -7697,10 +7704,38 @@ mod tests {
 
     #[test]
     fn web_postgres_adds_verify_full_app_login_from_its_own_secret() {
-        let deployment = rendered_web_deployment(env_getter(FULL_ENV));
+        assert_application_postgres_client(
+            &rendered_web_deployment(env_getter(FULL_ENV)),
+            "web",
+            "PORT",
+        );
+    }
+
+    #[test]
+    fn worker_postgres_adds_verify_full_app_login_without_replacing_its_proxy() {
+        let deployment = rendered_deployment(WORKFLOWS_DEPLOYMENT, env_getter(FULL_ENV));
+        assert_application_postgres_client(&deployment, "worker", "NAVIGATOR_GCP_PROJECT_ID");
+        let pod = &deployment["spec"]["template"]["spec"];
+        assert!(pod["containers"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .any(|container| container["name"].as_str() == Some("envoy")));
+        assert!(pod["volumes"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .any(|volume| volume["name"].as_str() == Some("envoy-config")));
+    }
+
+    fn assert_application_postgres_client(
+        deployment: &serde_yaml::Value,
+        container_name: &str,
+        retained_env: &str,
+    ) {
         let namespace = deployment["metadata"]["namespace"]
             .as_str()
-            .expect("namespaced web")
+            .expect("namespaced application")
             .to_owned();
         let template = &deployment["spec"]["template"];
         assert_eq!(
@@ -7708,13 +7743,13 @@ mod tests {
             Some("true"),
             "the PostgreSQL NetworkPolicy admits only labelled clients"
         );
-        let web = template["spec"]["containers"]
+        let app = template["spec"]["containers"]
             .as_sequence()
             .expect("containers")
             .iter()
-            .find(|container| container["name"].as_str() == Some("web"))
-            .expect("web container");
-        let env = web["env"].as_sequence().expect("env list");
+            .find(|container| container["name"].as_str() == Some(container_name))
+            .expect("application container");
+        let env = app["env"].as_sequence().expect("env list");
         let value = |name: &str| {
             env.iter()
                 .find(|entry| entry["name"].as_str() == Some(name))
@@ -7749,10 +7784,10 @@ mod tests {
         );
         assert!(
             env.iter()
-                .any(|entry| entry["name"].as_str() == Some("PORT")),
-            "the web-env.yaml list survives the PostgreSQL patch"
+                .any(|entry| entry["name"].as_str() == Some(retained_env)),
+            "the workload environment survives the PostgreSQL patch"
         );
-        let mount = web["volumeMounts"]
+        let mount = app["volumeMounts"]
             .as_sequence()
             .expect("volume mounts")
             .iter()

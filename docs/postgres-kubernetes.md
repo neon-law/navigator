@@ -77,7 +77,7 @@ that signs in as the bootstrap superuser.
 | Login | Used by | May |
 | --- | --- | --- |
 | `navigator_owner` | Migration Job, Mirror Backfill | Own the database and schema, run DDL, rebuild the graph |
-| `navigator_app` | `web`, mirror Job | Connect; `SELECT`, `INSERT`, `UPDATE`, `DELETE` rows and use sequences |
+| `navigator_app` | `web`, worker, mirror Job | Connect; `SELECT`, `INSERT`, `UPDATE`, `DELETE` rows and use sequences |
 | `navigator_backup` | WAL archive, base backups | `REPLICATION` only; no database privileges |
 | `navigator_dbos` | `web` with DBOS on | Own `dbos`; database `CONNECT` and `CREATE`; nothing on `public` |
 | `navigator_archive` | `web` with Archives on DBOS | `pg_read_all_data`; `CONNECT` on both databases; no writes |
@@ -99,7 +99,7 @@ and server certificate. It adds the four client keys as a set. Each projects to 
 | --- | --- | --- |
 | `navigator-postgres-auth` | `password` | Server, roles Job |
 | `navigator-postgres-tls` | `tls.crt`, `tls.key` | Server |
-| `navigator-postgres-app` | `password`, `ca.crt` | `web`, readiness Job, mirror Job, roles Job |
+| `navigator-postgres-app` | `password`, `ca.crt` | `web`, worker, readiness Job, mirror Job, roles Job |
 | `navigator-postgres-migrator` | `password`, `ca.crt` | `navigator-migrate`, roles Job |
 | `navigator-postgres-backup` | `password`, `ca.crt` | WAL archive, base backups, roles Job |
 | `navigator-postgres-dbos` | `password`, `ca.crt` | `web` (DBOS opt-in), roles Job (optional mount) |

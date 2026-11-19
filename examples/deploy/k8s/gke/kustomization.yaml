@@ -60,6 +60,11 @@ patches:
     target:
       kind: Deployment
       name: workflows-service
+  # Apply after workflows-env.yaml replaces the worker environment list.
+  - path: postgres/worker/worker-postgres.yaml
+    target:
+      kind: Deployment
+      name: workflows-service
   - path: patches/web-image.yaml
     target:
       kind: Deployment
