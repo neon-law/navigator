@@ -32,10 +32,11 @@
 //! and credential is synthetic. Shells out to `kubectl` and `git`
 //! and talks HTTP to a port-forward, so it is excluded from the coverage gate.
 
-use std::io::{BufRead, BufReader};
+use std::collections::VecDeque;
+use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, ensure, Context, Result};
@@ -85,6 +86,7 @@ jobs:\n  proof:\n    runs-on: self-hosted\n    steps:\n      \
 struct Forward {
     child: Child,
     origin: String,
+    stderr: Arc<Mutex<VecDeque<u8>>>,
 }
 
 impl Forward {
@@ -101,9 +103,13 @@ impl Forward {
             .args(port_forward_args(target, port))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn()
             .context("spawn kubectl port-forward")?;
+        let stderr = Arc::new(Mutex::new(VecDeque::new()));
+        let errors = child.stderr.take().context("port-forward stderr")?;
+        let captured = Arc::clone(&stderr);
+        std::thread::spawn(move || capture_forward_stderr(errors, &captured));
         let stdout = child.stdout.take().context("port-forward stdout")?;
         let mut lines = BufReader::new(stdout).lines();
         let port = loop {
@@ -120,7 +126,45 @@ impl Forward {
         Ok(Self {
             child,
             origin: format!("http://127.0.0.1:{port}"),
+            stderr,
         })
+    }
+
+    /// Observe the owned child before Drop terminates it; never format its command or environment.
+    fn failure_context(&mut self, phase: &str) -> String {
+        let status = match self.child.try_wait() {
+            Ok(Some(status)) => status.to_string(),
+            Ok(None) => "running".into(),
+            Err(_) => "status unavailable".into(),
+        };
+        let stderr = self.stderr.lock().map_or_else(
+            |_| "stderr unavailable".into(),
+            |tail| {
+                String::from_utf8_lossy(&tail.iter().copied().collect::<Vec<_>>())
+                    .trim()
+                    .to_owned()
+            },
+        );
+        format!("{phase}; owned forward {status}; stderr tail: {stderr}")
+    }
+}
+
+/// Retain only the final diagnostic bytes, even for a long-lived forwarding process.
+fn capture_forward_stderr(mut input: impl Read, output: &Mutex<VecDeque<u8>>) {
+    let mut chunk = [0; 512];
+    while let Ok(count) = input.read(&mut chunk) {
+        if count == 0 {
+            break;
+        }
+        let Ok(mut tail) = output.lock() else {
+            break;
+        };
+        for byte in &chunk[..count] {
+            if tail.len() >= 8192 {
+                tail.pop_front();
+            }
+            tail.push_back(*byte);
+        }
     }
 }
 
@@ -1497,14 +1541,25 @@ async fn seeded_repository_path(
     kube: &Kube,
     seed: &Seed,
 ) -> Result<store::firms::forgejo::RepositoryPath> {
-    let fixture = SmokePostgres::create(kube, seed).await?;
+    let mut fixture = SmokePostgres::create(kube, seed).await?;
     let source = store::surreal::SurrealDb::uninitialized();
     let seeded = store::postgres::PostgresDb::with_test_db(
         fixture.fixture.postgres().clone(),
         seed_firm_project(&source),
     )
-    .await;
+    .await
+    .with_context(|| {
+        fixture
+            .forward
+            .failure_context("seed the native smoke Firm, Brand, and Project")
+    });
     let closed = fixture.close().await;
+    let seeded = seeded.map_err(|error| match &closed {
+        Ok(()) => error,
+        Err(cleanup) => error.context(format!(
+            "owned smoke fixture cleanup also failed: {cleanup:#}"
+        )),
+    });
     let path = seeded?.path;
     closed?;
     Ok(path)
@@ -1519,7 +1574,7 @@ struct SmokePostgres {
 
 impl SmokePostgres {
     async fn create(kube: &Kube, seed: &Seed) -> Result<Self> {
-        let forward = Forward::open_target(kube, POSTGRES_POD, 5432)?;
+        let mut forward = Forward::open_target(kube, POSTGRES_POD, 5432)?;
         let port = reqwest::Url::parse(&forward.origin)?
             .port()
             .context("PostgreSQL forward port")?;
@@ -1531,17 +1586,33 @@ impl SmokePostgres {
             .database("postgres")
             .ssl_mode(PgSslMode::Require)
             .options([("session_preload_libraries", "age")]);
-        let fixture = store::test_support::PostgresFixture::create(options).await?;
-        let grants = grant_smoke_runtime(&fixture).await;
+        let fixture = store::test_support::PostgresFixture::create(options)
+            .await
+            .with_context(|| {
+                forward.failure_context("initialize the fresh smoke PostgreSQL fixture")
+            })?;
+        let grants = grant_smoke_runtime(&fixture)
+            .await
+            .context("grant fresh smoke PostgreSQL runtime access");
         if let Err(error) = grants {
-            fixture.close().await?;
-            return Err(error);
+            let cleanup = fixture.close().await;
+            let original = match cleanup {
+                Ok(()) => error,
+                Err(cleanup) => error.context(format!(
+                    "owned smoke fixture cleanup also failed: {cleanup:#}"
+                )),
+            };
+            return Err(original
+                .context(forward.failure_context("configure the fresh smoke PostgreSQL fixture")));
         }
         Ok(Self { fixture, forward })
     }
 
-    async fn close(self) -> Result<()> {
-        let closed = self.fixture.close().await;
+    async fn close(mut self) -> Result<()> {
+        let closed = self.fixture.close().await.with_context(|| {
+            self.forward
+                .failure_context("close the owned smoke PostgreSQL fixture")
+        });
         drop(self.forward);
         closed
     }
@@ -2611,3 +2682,23 @@ exit 23
 #[cfg(test)]
 #[path = "smoke_postgres_tests.rs"]
 mod postgres_tests;
+
+#[cfg(test)]
+mod forward_diagnostics_tests {
+    #[test]
+    fn forwarding_stderr_keeps_the_last_error_without_unbounded_old_output() {
+        let mut input = b"obsolete startup diagnostic\n".to_vec();
+        input.extend(vec![b'x'; 20_000]);
+        input.extend_from_slice(b"\nfinal transport diagnostic");
+        let output = super::Mutex::new(super::VecDeque::new());
+        super::capture_forward_stderr(std::io::Cursor::new(input), &output);
+        let bytes: Vec<u8> = output.into_inner().unwrap().into_iter().collect();
+        assert!(
+            bytes.len() <= 8192,
+            "owned forward diagnostics must stay bounded"
+        );
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(text.ends_with("final transport diagnostic"));
+        assert!(!text.contains("obsolete startup diagnostic"));
+    }
+}

@@ -12,6 +12,7 @@
 //!
 //! The remaining helpers build synthetic domain records for each test.
 
+use anyhow::Context as _;
 use uuid::Uuid;
 
 /// Seed validated completed enrollment evidence for a synthetic PostgreSQL fixture.
@@ -908,11 +909,14 @@ impl PostgresFixture {
     /// # Errors
     /// Returns connection, creation, or canonical fixture initialization failures.
     pub async fn create(options: sqlx::postgres::PgConnectOptions) -> anyhow::Result<Self> {
-        let admin = crate::postgres::PostgresDb::connect(options.clone()).await?;
+        let admin = crate::postgres::PostgresDb::connect(options.clone())
+            .await
+            .context("connect synthetic fixture administration")?;
         let database = format!("native_test_{}", Uuid::now_v7().simple());
         sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {database}")))
             .execute(admin.pool())
-            .await?;
+            .await
+            .context("create owned synthetic fixture database")?;
         let prepared = prepare_postgres_fixture(options.database(&database)).await;
         match prepared {
             Ok(pg) => Ok(Self {
@@ -921,9 +925,9 @@ impl PostgresFixture {
                 database,
             }),
             Err(error) => {
-                drop_postgres_fixture(&admin, &database).await?;
+                let cleanup = drop_postgres_fixture(&admin, &database).await;
                 admin.pool().close().await;
-                Err(error)
+                Err(fixture_setup_failure(error, cleanup))
             }
         }
     }
@@ -954,27 +958,39 @@ impl PostgresFixture {
     }
 }
 
+/// Cleanup must not replace the failure which caused initialization to unwind.
+fn fixture_setup_failure(error: anyhow::Error, cleanup: anyhow::Result<()>) -> anyhow::Error {
+    match cleanup {
+        Ok(()) => error,
+        Err(cleanup) => error.context(format!("owned fixture cleanup also failed: {cleanup:#}")),
+    }
+}
+
 async fn drop_postgres_fixture(
     admin: &crate::postgres::PostgresDb,
     database: &str,
 ) -> anyhow::Result<()> {
     sqlx::query(sqlx::AssertSqlSafe(format!("DROP DATABASE {database}")))
         .execute(admin.pool())
-        .await?;
+        .await
+        .context("drop owned synthetic fixture database")?;
     Ok(())
 }
 
 async fn prepare_postgres_fixture(
     options: sqlx::postgres::PgConnectOptions,
 ) -> anyhow::Result<crate::postgres::PostgresDb> {
-    let pg = crate::postgres::PostgresDb::connect(options).await?;
+    let pg = crate::postgres::PostgresDb::connect(options)
+        .await
+        .context("connect newly created synthetic fixture")?;
     let initialized = async {
         sqlx::raw_sql("CREATE EXTENSION IF NOT EXISTS age; LOAD 'age';")
-            .execute(pg.pool()).await?;
+            .execute(pg.pool()).await.context("initialize synthetic fixture AGE extension")?;
         sqlx::raw_sql(crate::postgres_schema::canonical_schema())
-            .execute(pg.pool()).await?;
+            .execute(pg.pool()).await.context("apply synthetic fixture canonical schema")?;
         sqlx::query("INSERT INTO mirror_backfill_run(id,batch_size,status,scope,completed_at) VALUES ($1,1,'completed','global',now())")
-            .bind(Uuid::new_v4()).execute(pg.pool()).await?;
+            .bind(Uuid::new_v4()).execute(pg.pool()).await
+            .context("initialize fresh synthetic fixture global history")?;
         for family in crate::postgres_backfill::family::Family::all() {
             seed_postgres_family(&pg, *family).await;
         }
