@@ -435,12 +435,10 @@ async fn scoped_comparisons_do_not_read_unregistered_catalog_or_graph_rows() {
     let source = super::super::from_source(mem_surreal()).await;
     source.query("REMOVE TABLE jurisdiction; REMOVE TABLE entity_type; REMOVE TABLE entity_role; DEFINE TABLE jurisdiction SCHEMALESS; DEFINE TABLE entity_type SCHEMALESS; DEFINE TABLE entity_role SCHEMALESS; CREATE jurisdiction:malformed SET name=123; CREATE entity_type:malformed SET name=123; CREATE entity_role:malformed SET inserted_at='not-a-time'")
         .await.unwrap().check().unwrap();
-    assert!(
-        identity::scoped_parity(&source, &pg)
-            .await
-            .unwrap()
-            .is_clean()
-    );
+    assert!(identity::scoped_parity(&source, &pg)
+        .await
+        .unwrap()
+        .is_clean());
     assert!(scoped_parity(&source, &pg).await.unwrap().is_clean());
 }
 
@@ -568,12 +566,10 @@ async fn real_identity_driver_imports_all_nine_then_replays_without_source() {
     let activated = advance_identity_driver(&pg, &captured, ExistingIdentity::None).await;
     assert!(activated.is_clean(), "{activated:?}");
     assert_eq!(activated.parity.len(), 9);
-    assert!(
-        activated
-            .parity
-            .iter()
-            .all(|table| table.surreal > 0 && table.surreal == table.postgres)
-    );
+    assert!(activated
+        .parity
+        .iter()
+        .all(|table| table.surreal > 0 && table.surreal == table.postgres));
     let claims = activated
         .parity
         .iter()

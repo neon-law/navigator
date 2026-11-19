@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::{
     firm_capability::{self, FirmCapability, FirmCapabilityDecision},
     persons::{self, Role},
-    surreal::{SurrealDb, record_id, record_uuid},
+    surreal::{record_id, record_uuid, SurrealDb},
 };
 
 pub const TABLE: &str = "summary_sender_approval";
@@ -449,7 +449,7 @@ mod tests {
     use super::*;
     use crate::{
         firms::{FirmMembership, NewFirm, NewPersonFirmRole},
-        persons::{NewPerson, set_email_confirmed},
+        persons::{set_email_confirmed, NewPerson},
         surreal::test_support::mem,
     };
 
@@ -515,57 +515,49 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(
-            is_approved(
-                &db,
-                firm,
-                project,
-                "sendgrid-account",
-                approval.person_id,
-                "sender@example.com"
-            )
-            .await
-            .unwrap()
-        );
-        assert!(
-            !is_approved(
-                &db,
-                firm,
-                project,
-                "other-account",
-                approval.person_id,
-                "sender@example.com"
-            )
-            .await
-            .unwrap()
-        );
-        assert!(
-            !is_approved(
-                &db,
-                Uuid::now_v7(),
-                project,
-                "sendgrid-account",
-                approval.person_id,
-                "sender@example.com"
-            )
-            .await
-            .unwrap()
-        );
+        assert!(is_approved(
+            &db,
+            firm,
+            project,
+            "sendgrid-account",
+            approval.person_id,
+            "sender@example.com"
+        )
+        .await
+        .unwrap());
+        assert!(!is_approved(
+            &db,
+            firm,
+            project,
+            "other-account",
+            approval.person_id,
+            "sender@example.com"
+        )
+        .await
+        .unwrap());
+        assert!(!is_approved(
+            &db,
+            Uuid::now_v7(),
+            project,
+            "sendgrid-account",
+            approval.person_id,
+            "sender@example.com"
+        )
+        .await
+        .unwrap());
         revoke(&db, Role::Admin, actor, firm, approval.id)
             .await
             .unwrap();
-        assert!(
-            !is_approved(
-                &db,
-                firm,
-                project,
-                "sendgrid-account",
-                approval.person_id,
-                "sender@example.com"
-            )
-            .await
-            .unwrap()
-        );
+        assert!(!is_approved(
+            &db,
+            firm,
+            project,
+            "sendgrid-account",
+            approval.person_id,
+            "sender@example.com"
+        )
+        .await
+        .unwrap());
         let mut events = db.query("SELECT action, inserted_at FROM summary_sender_approval_event ORDER BY inserted_at").await.unwrap().check().unwrap();
         let rows: Vec<serde_json::Value> = events.take(0).unwrap();
         assert_eq!(rows.len(), 2);
@@ -681,30 +673,26 @@ mod tests {
             .await,
             Err(ApprovalError::SenderNotVerified | ApprovalError::SenderNotClientDri)
         ));
-        assert!(
-            is_approved(
-                &db,
-                firm,
-                project,
-                "sendgrid-account",
-                first.person_id,
-                "sender@example.com"
-            )
-            .await
-            .unwrap()
-        );
-        assert!(
-            !is_approved(
-                &db,
-                firm,
-                project,
-                "sendgrid-account",
-                replacement.id,
-                "sender@example.com"
-            )
-            .await
-            .unwrap()
-        );
+        assert!(is_approved(
+            &db,
+            firm,
+            project,
+            "sendgrid-account",
+            first.person_id,
+            "sender@example.com"
+        )
+        .await
+        .unwrap());
+        assert!(!is_approved(
+            &db,
+            firm,
+            project,
+            "sendgrid-account",
+            replacement.id,
+            "sender@example.com"
+        )
+        .await
+        .unwrap());
     }
 
     #[tokio::test]
@@ -735,18 +723,16 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(approval.project_id, Some(project_id));
-        assert!(
-            !is_approved(
-                &db,
-                firm,
-                other_project.id,
-                "sendgrid-account",
-                sender_id,
-                "sender@example.com",
-            )
-            .await
-            .unwrap()
-        );
+        assert!(!is_approved(
+            &db,
+            firm,
+            other_project.id,
+            "sendgrid-account",
+            sender_id,
+            "sender@example.com",
+        )
+        .await
+        .unwrap());
         let participation = crate::projects::participation_for_person(&db, sender_id, project_id)
             .await
             .unwrap()
@@ -758,17 +744,15 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(
-            !is_approved(
-                &db,
-                firm,
-                project_id,
-                "sendgrid-account",
-                sender_id,
-                "sender@example.com",
-            )
-            .await
-            .unwrap()
-        );
+        assert!(!is_approved(
+            &db,
+            firm,
+            project_id,
+            "sendgrid-account",
+            sender_id,
+            "sender@example.com",
+        )
+        .await
+        .unwrap());
     }
 }

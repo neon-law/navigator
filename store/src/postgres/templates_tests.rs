@@ -1,6 +1,6 @@
 //! PostgreSQL-only Template version and isolation boundaries.
-use crate::postgres::PostgresDb;
 use crate::postgres::fixtures::{activate_application, firm_for_notation, workflow_fixture};
+use crate::postgres::PostgresDb;
 use crate::postgres_backfill::family::Family;
 use crate::postgres_mirror::tests::{connect, fresh_schema};
 use crate::template_source::TemplateSourceError;
@@ -135,17 +135,13 @@ async fn template_versions_keep_the_first_provenance_and_pinned_notation() {
                 .len(),
             2
         );
-        assert!(
-            templates::find_by_ids(&unavailable, &[])
-                .await
-                .unwrap()
-                .is_empty()
-        );
-        assert!(
-            templates::exists_for_project(&unavailable, project)
-                .await
-                .unwrap()
-        );
+        assert!(templates::find_by_ids(&unavailable, &[])
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(templates::exists_for_project(&unavailable, project)
+            .await
+            .unwrap());
         assert_eq!(
             templates::body(&unavailable, &storage, &retired)
                 .await
@@ -228,24 +224,20 @@ async fn template_scope_resolution_keeps_other_firms_private() {
             .await
             .unwrap();
         assert_scope_title(&unavailable, Some(unowned), "Other firm").await;
-        assert!(
-            templates::list_current(&unavailable)
-                .await
-                .unwrap()
-                .iter()
-                .all(|row| row.firm_id.is_none())
-        );
+        assert!(templates::list_current(&unavailable)
+            .await
+            .unwrap()
+            .iter()
+            .all(|row| row.firm_id.is_none()));
         assert!(
             templates::resolve_in(&unavailable, Scope::Firm(Uuid::new_v4()), "scoped")
                 .await
                 .unwrap()
                 .is_none()
         );
-        assert!(
-            !templates::exists_for_project(&unavailable, Uuid::new_v4())
-                .await
-                .unwrap()
-        );
+        assert!(!templates::exists_for_project(&unavailable, Uuid::new_v4())
+            .await
+            .unwrap());
     })
     .await;
     pg.pool().close().await;
@@ -459,12 +451,10 @@ async fn every_changed_spec_field_appends_and_whitespace_kind_is_normalized() {
             .unwrap()
             .into_model();
         assert_eq!(saved.kind, None);
-        assert!(
-            templates::find_by_id(&unavailable, Uuid::new_v4())
-                .await
-                .unwrap()
-                .is_none()
-        );
+        assert!(templates::find_by_id(&unavailable, Uuid::new_v4())
+            .await
+            .unwrap()
+            .is_none());
     })
     .await;
     pg.pool().close().await;
@@ -811,12 +801,10 @@ async fn repository_errors_and_invalid_drafts_refuse_persistence() {
                 ));
             }
         }
-        assert!(
-            templates::list_for_project(&unavailable, project)
-                .await
-                .unwrap()
-                .is_empty()
-        );
+        assert!(templates::list_for_project(&unavailable, project)
+            .await
+            .unwrap()
+            .is_empty());
     })
     .await;
     pg.pool().close().await;

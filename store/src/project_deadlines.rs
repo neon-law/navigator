@@ -9,7 +9,7 @@ use surrealdb::types::SurrealValue;
 use uuid::Uuid;
 
 use crate::postgres::project_deadlines::{Normalized, StoredDeadline};
-use crate::surreal::{SurrealDb, record_id, record_uuid};
+use crate::surreal::{record_id, record_uuid, SurrealDb};
 pub use model::project_deadlines::CATEGORIES;
 
 pub const STATUS_OPEN: &str = "open";
@@ -102,7 +102,8 @@ impl DeadlineRow {
     }
 }
 
-const SELECT: &str = "id, project_id, title, description, due_at, authority_kind, authority, source, \
+const SELECT: &str =
+    "id, project_id, title, description, due_at, authority_kind, authority, source, \
      source_document_id, owner_person_id, status, calendar_role, category, \
      internal_lead_days, client_lead_days, replay_key, inserted_at, updated_at, calendar_sequence";
 
@@ -700,7 +701,7 @@ pub async fn reopen(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::projects::{NewProject, create as create_project};
+    use crate::projects::{create as create_project, NewProject};
     use crate::test_support::mem_surreal;
 
     fn sample(project_id: Uuid) -> NewDeadline {

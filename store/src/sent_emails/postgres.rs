@@ -16,7 +16,7 @@
 
 use chrono::{DateTime, Months, NaiveDate, Utc};
 use sha2::{Digest, Sha256};
-use sqlx::{Row, postgres::PgRow};
+use sqlx::{postgres::PgRow, Row};
 use uuid::Uuid;
 
 use super::{NewSentEmail, Page, SentEmail, SentEmailError};

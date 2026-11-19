@@ -1,7 +1,7 @@
 //! Serialized encrypted Firm integration-secret rotation.
 
 use crate::firm_secrets::{IntegrationProvider, IntegrationSecretKind, SecretStoreError};
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use cloud::{KmsContext, RuntimeKms};
 use uuid::Uuid;
 

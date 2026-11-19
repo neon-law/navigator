@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256};
 use store::{
     firm_journal::*,
     journal_startup_migration::{
-        CapturedJournalRow, JournalDifferenceReason as Reason, handoff_captured,
+        handoff_captured, CapturedJournalRow, JournalDifferenceReason as Reason,
     },
     postgres::PostgresDb,
 };
@@ -214,12 +214,10 @@ async fn source_only_and_unknown_timestamps_block_even_existing_native_overlaps(
                 ),
                 (1, 0, 1)
             );
-            assert!(
-                report
-                    .differences
-                    .iter()
-                    .any(|d| d.reason == Reason::SourceTimestamp)
-            );
+            assert!(report
+                .differences
+                .iter()
+                .any(|d| d.reason == Reason::SourceTimestamp));
         }
         let missing = event(firm, "missing");
         let report = handoff_captured(&[captured(&missing, Some(AT))], &pg)
@@ -251,11 +249,9 @@ async fn physical_identity_outer_fields_and_duplicate_capture_rows_are_rejected(
         let mut bad = original.clone();
         bad.command_key = "different-private-key".into();
         assert!(handoff_captured(&[bad], &pg).await.is_err());
-        assert!(
-            handoff_captured(&[original.clone(), original], &pg)
-                .await
-                .is_err()
-        );
+        assert!(handoff_captured(&[original.clone(), original], &pg)
+            .await
+            .is_err());
     })
     .await;
 }
@@ -266,12 +262,10 @@ async fn known_legacy_provenance_preserves_offset_nanoseconds_and_exact_capture_
         let entry = event(firm(&pg).await, "legacy");
         insert(&pg, &entry, Some(AT)).await;
         let before = standing(&pg).await;
-        assert!(
-            handoff_captured(&[captured(&entry, Some(AT))], &pg)
-                .await
-                .unwrap()
-                .is_clean()
-        );
+        assert!(handoff_captured(&[captured(&entry, Some(AT))], &pg)
+            .await
+            .unwrap()
+            .is_clean());
         let equivalent = DateTime::parse_from_rfc3339(AT)
             .unwrap()
             .with_timezone(&Utc)
@@ -283,12 +277,10 @@ async fn known_legacy_provenance_preserves_offset_nanoseconds_and_exact_capture_
             !report.is_clean(),
             "legacy evidence retains exact original Source text"
         );
-        assert!(
-            report
-                .differences
-                .iter()
-                .any(|d| d.reason == Reason::LegacyProvenance)
-        );
+        assert!(report
+            .differences
+            .iter()
+            .any(|d| d.reason == Reason::LegacyProvenance));
         assert_eq!(before, standing(&pg).await);
     })
     .await;
@@ -350,12 +342,10 @@ async fn reversal_then_replacement_is_clean_but_balanced_wrong_reversal_is_not()
         let report = handoff_captured(&[], &pg).await.unwrap();
         assert!(!report.is_clean());
         assert_eq!(report.target_integrity_failures, 1);
-        assert!(
-            report
-                .differences
-                .iter()
-                .any(|d| d.entry_id == Some(wrong.id) && d.reason == Reason::ReversalNegation)
-        );
+        assert!(report
+            .differences
+            .iter()
+            .any(|d| d.entry_id == Some(wrong.id) && d.reason == Reason::ReversalNegation));
     })
     .await;
 }
@@ -388,12 +378,10 @@ async fn missing_cross_firm_and_cyclic_causal_parents_block_without_chronology_g
             .unwrap();
         assert!(!report.is_clean());
         assert_eq!(report.unresolved_source_rows, 2);
-        assert!(
-            report
-                .differences
-                .iter()
-                .any(|d| d.reason == Reason::ReversalCycle)
-        );
+        assert!(report
+            .differences
+            .iter()
+            .any(|d| d.reason == Reason::ReversalCycle));
     })
     .await;
 }
@@ -569,18 +557,14 @@ async fn repayment_shape_missing_cross_firm_and_overflowing_cost_evidence_are_re
         }
         let report = handoff_captured(&[], &pg).await.unwrap();
         assert_eq!(report.target_integrity_failures, 5);
-        assert!(
-            report
-                .differences
-                .iter()
-                .any(|d| d.entry_id == Some(missing.id) && d.reason == Reason::RepaymentCost)
-        );
-        assert!(
-            report
-                .differences
-                .iter()
-                .any(|d| d.entry_id == Some(duplicate.id) && d.reason == Reason::RepaymentShape)
-        );
+        assert!(report
+            .differences
+            .iter()
+            .any(|d| d.entry_id == Some(missing.id) && d.reason == Reason::RepaymentCost));
+        assert!(report
+            .differences
+            .iter()
+            .any(|d| d.entry_id == Some(duplicate.id) && d.reason == Reason::RepaymentShape));
         let mut overflow = cost(firm_id, "overflow-cost", Uuid::new_v4());
         overflow.postings[0].quantity = i128::MAX.to_string();
         overflow.postings[1].quantity = (-i128::MAX).to_string();
@@ -594,12 +578,10 @@ async fn repayment_shape_missing_cross_firm_and_overflowing_cost_evidence_are_re
         insert(&pg, &attempt, None).await;
         let report = handoff_captured(&[], &pg).await.unwrap();
         assert_eq!(report.target_integrity_failures, 6);
-        assert!(
-            report
-                .differences
-                .iter()
-                .any(|d| d.entry_id == Some(attempt.id) && d.reason == Reason::RepaymentCost)
-        );
+        assert!(report
+            .differences
+            .iter()
+            .any(|d| d.entry_id == Some(attempt.id) && d.reason == Reason::RepaymentCost));
     })
     .await;
 }

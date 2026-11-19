@@ -1,4 +1,4 @@
-use super::{NewSentEmail, SentEmailError, all, page, record};
+use super::{all, page, record, NewSentEmail, SentEmailError};
 use crate::{
     postgres::{PostgresDb, PostgresError},
     surreal::SurrealDb,
@@ -273,12 +273,10 @@ async fn a_scoped_page_counts_and_fetches_only_its_own_projects() {
         let scoped = page(&db, 1, 10, Some(&[visible])).await.unwrap();
         assert_eq!(scoped.total_pages, 1);
         assert_eq!(scoped.rows.len(), 3, "only the visible project's rows");
-        assert!(
-            scoped
-                .rows
-                .iter()
-                .all(|row| row.project_id == Some(visible))
-        );
+        assert!(scoped
+            .rows
+            .iter()
+            .all(|row| row.project_id == Some(visible)));
 
         let unscoped = page(&db, 1, 10, None).await.unwrap();
         assert_eq!(unscoped.rows.len(), 6, "Owner/Admin still see every row");

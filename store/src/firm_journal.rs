@@ -82,10 +82,10 @@ impl JournalStore {
 /// Firm and command key, with an RFC 3339 insertion timestamp.
 mod surreal_journal {
     use super::{
-        JournalEntry, JournalError, check_command, entry_digest, validate_history,
-        validate_posting_evidence, validate_repayment,
+        check_command, entry_digest, validate_history, validate_posting_evidence,
+        validate_repayment, JournalEntry, JournalError,
     };
-    use crate::surreal::{SurrealDb, record_id};
+    use crate::surreal::{record_id, SurrealDb};
     use serde::Deserialize;
     use surrealdb::types::SurrealValue;
     use uuid::Uuid;
@@ -1904,7 +1904,7 @@ pub async fn signals(
 
 #[cfg(test)]
 mod tests {
-    use super::{Reconciliation, SourceReference, Unit, parse_decimal, quantity};
+    use super::{parse_decimal, quantity, Reconciliation, SourceReference, Unit};
 
     #[tokio::test]
     async fn journal_environment_requires_activated_postgres_without_source() {

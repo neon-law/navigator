@@ -37,9 +37,9 @@ use surrealdb::types::{RecordId, SurrealValue};
 use uuid::Uuid;
 
 use super::tenancy::{compare, remirror, select_sql, source, upsert_sql};
-use super::{MirrorError, MirrorKey, Mirrored, ParityReport, TableParity, changed, micros};
+use super::{changed, micros, MirrorError, MirrorKey, Mirrored, ParityReport, TableParity};
 use crate::postgres::PostgresDb;
-use crate::surreal::{SurrealDb, record_id, record_uuid};
+use crate::surreal::{record_id, record_uuid, SurrealDb};
 
 type PgQuery<'q> = sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>;
 type PgRow = sqlx::postgres::PgRow;

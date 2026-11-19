@@ -4,7 +4,7 @@
 //! module is the only store seam that can turn a Project's `firm_id` into one
 //! provider credential, and it never serializes the resolved value.
 
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use cloud::{KmsContext, KmsError, RuntimeKms, WrappedDataKey};
 use serde::Serialize;
 use surrealdb::types::SurrealValue;
@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::firm_capability::{FirmCapability, FirmCapabilityDecision};
 use crate::persons::Role;
-use crate::surreal::{SurrealDb, record_id, record_uuid};
+use crate::surreal::{record_id, record_uuid, SurrealDb};
 
 const TABLE: &str = "firm_integration_secret";
 const FIRM_TABLE: &str = "firm";
@@ -1017,7 +1017,7 @@ fn secret_from_pg(row: &sqlx::postgres::PgRow) -> Result<SecretRow, SecretStoreE
 
 #[cfg(test)]
 mod tests {
-    use super::{IntegrationProvider, IntegrationSecretKind, ResolvedCredential, zeroize};
+    use super::{zeroize, IntegrationProvider, IntegrationSecretKind, ResolvedCredential};
 
     #[test]
     fn stripe_billing_checks_only_the_gate_for_that_route() {

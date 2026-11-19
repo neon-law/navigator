@@ -1,5 +1,5 @@
 use super::*;
-use crate::posts::{SourceCaptions, SourcePost, import_source};
+use crate::posts::{import_source, SourceCaptions, SourcePost};
 use crate::test_support;
 use sqlx::postgres::{PgConnectOptions, PgSslMode};
 use std::process::Command;
@@ -626,12 +626,10 @@ async fn write_hook_probe() {
                     .await
                     .unwrap();
             assert_eq!(stored, (Some(dangling_project_id), "outgoing".into()));
-            assert!(
-                mailrooms_letters::parity(&surreal, &pg)
-                    .await
-                    .unwrap()
-                    .is_clean()
-            );
+            assert!(mailrooms_letters::parity(&surreal, &pg)
+                .await
+                .unwrap()
+                .is_clean());
             // Person and Entity writes mirror themselves; a Firm command
             // mirrors the Firm and its Admin DRI membership.
             crate::persons::edit(

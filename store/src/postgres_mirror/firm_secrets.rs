@@ -4,7 +4,7 @@
 use super::{MirrorError, MirrorKey, Mirrored, ParityReport, TableParity};
 use crate::{
     postgres::PostgresDb,
-    surreal::{SurrealDb, record_uuid},
+    surreal::{record_uuid, SurrealDb},
 };
 use chrono::{DateTime, Utc};
 use sqlx::Row;

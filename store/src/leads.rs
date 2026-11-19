@@ -12,7 +12,7 @@ use surrealdb::types::{RecordId, SurrealValue};
 use uuid::Uuid;
 
 use crate::persons::{self, ContactUpdate, NewPerson, PersonError};
-use crate::surreal::{SurrealDb, record_id, record_uuid};
+use crate::surreal::{record_id, record_uuid, SurrealDb};
 
 const TABLE: &str = "lead";
 const CONSENT_TABLE: &str = "lead_consent";
@@ -609,9 +609,9 @@ mod tests {
     use chrono::Utc;
 
     use super::{
-        CONSENT_TABLE, LeadError, LeadStatus, NewConsentEvent, NewLead, consent_history, convert,
-        find, latest_consent_event, link_person, list, mask_phone, record, record_consent_event,
-        set_status,
+        consent_history, convert, find, latest_consent_event, link_person, list, mask_phone,
+        record, record_consent_event, set_status, LeadError, LeadStatus, NewConsentEvent, NewLead,
+        CONSENT_TABLE,
     };
     use crate::persons::{self, NewPerson, Role};
     use crate::surreal::record_id;
@@ -731,12 +731,10 @@ mod tests {
         assert_eq!(written.email_lower, "visitor@example.com");
         assert_eq!(written.status, "new");
         assert_eq!(written.submissions, 1);
-        assert!(
-            crate::persons::find_by_email_ci(&db, "visitor@example.com")
-                .await
-                .unwrap()
-                .is_none()
-        );
+        assert!(crate::persons::find_by_email_ci(&db, "visitor@example.com")
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]

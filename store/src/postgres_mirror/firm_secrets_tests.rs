@@ -86,12 +86,10 @@ async fn encrypted_secret_pending_copy_preserves_native_versions_and_rejects_dri
             .unwrap(),
         Mirrored::Unchanged
     );
-    assert!(
-        !super::super::during_initial_copy(reconcile(&source, &pg))
-            .await
-            .unwrap()
-            .is_clean()
-    );
+    assert!(!super::super::during_initial_copy(reconcile(&source, &pg))
+        .await
+        .unwrap()
+        .is_clean());
     assert_eq!(target(&pg, firm).await.unwrap(), original);
     let second = Uuid::now_v7();
     source.query("CREATE $id SET firm_id=$firm, provider='xero', kind='xero_client_secret', version=2, ciphertext='synthetic-second-version', wrapped_dek='synthetic-second-wrap', kms_key_version='synthetic-key-version', kms_context='synthetic-second-context', status='active', actor_id=$actor, created_at=$now, updated_at=$now")
@@ -119,12 +117,10 @@ async fn encrypted_secret_pending_copy_preserves_native_versions_and_rejects_dri
         .unwrap()
         .check()
         .unwrap();
-    assert!(
-        !super::super::during_initial_copy(reconcile(&source, &pg))
-            .await
-            .unwrap()
-            .is_clean()
-    );
+    assert!(!super::super::during_initial_copy(reconcile(&source, &pg))
+        .await
+        .unwrap()
+        .is_clean());
     assert_eq!(target(&pg, firm).await.unwrap(), with_second);
     pg.pool().close().await;
 }
